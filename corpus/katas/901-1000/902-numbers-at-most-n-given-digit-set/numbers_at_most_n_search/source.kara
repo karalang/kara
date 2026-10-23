@@ -1,0 +1,131 @@
+// LeetCode #902: Numbers At Most N Given Digit Set -- a binary search on
+// the count.
+//
+// The j-th smallest number made of the set's digits is j written in
+// bijective base d, each place's digit 1 to d standing for the set's
+// digit of that rank. The count is the largest j whose number is at most
+// n, so search j between 0 and d^1 + ... + d^k, the count of all numbers
+// with at most as many digits as n. O(log n * log n).
+
+fn jth_number(set: Vec[i64], j: i64) -> i64 {
+    let d = set.len();
+    let mut rest = j;
+    let mut value = 0;
+    let mut place = 1;
+    while rest > 0 {
+        rest -= 1;
+        value += set[rest % d] * place;
+        place *= 10;
+        rest /= d;
+    }
+    value
+}
+
+fn at_most_n_given_digit_set(digits: Vec[String], n: i64) -> i64 {
+    let mut set: Vec[i64] = Vec.new();
+    for digit in digits.iter() {
+        set.push(i64.parse(digit).unwrap());
+    }
+    let d = set.len();
+    let k = n.to_string().len();
+    let mut hi = 0;
+    let mut p = 1;
+    for _ in 0..k {
+        p *= d;
+        hi += p;
+    }
+    let mut lo = 0;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if jth_number(set, mid) <= n {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digit_set(s: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for c in s.chars() {
+        out.push(c.to_string());
+    }
+    out
+}
+
+fn show(s: Str, n: i64) {
+    let digits = digit_set(s);
+    let mut listed = String.new();
+    for i in 0..digits.len() {
+        if i > 0 {
+            listed.push_str(", ");
+        }
+        listed.push_str(f"\"{digits[i]}\"");
+    }
+    println(f"digits = [{listed}], n = {n} -> {at_most_n_given_digit_set(digits, n)}");
+}
+
+// a random set of the digits 1 to 9, each in it with chance `keep` in 9,
+// at least one, in increasing order
+fn random_set(seed: mut ref i64, keep: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for c in 1..10 {
+        if next_random(mut seed) % 9 < keep {
+            out.push(c.to_string());
+        }
+    }
+    if out.is_empty() {
+        out.push((1 + next_random(mut seed) % 9).to_string());
+    }
+    out
+}
+
+// n from 1 to 10^9: random with 1 to 10 digits, or every digit from the
+// set but one, which is random
+fn random_n(seed: mut ref i64, digits: Vec[String], from_set: bool) -> i64 {
+    let len = 1 + next_random(mut seed) % 10;
+    let mut n = 0;
+    let odd = next_random(mut seed) % len;
+    for i in 0..len {
+        let d = if from_set and i != odd {
+            i64.parse(digits[next_random(mut seed) % digits.len()]).unwrap()
+        } else {
+            next_random(mut seed) % 10
+        };
+        n = n * 10 + d;
+    }
+    n.max(1).min(1000000000)
+}
+
+fn main() {
+    show("1357", 100);
+    show("149", 1000000000);
+    show("7", 8);
+    show("5", 5);
+    show("5", 4);
+    show("123456789", 1000000000);
+    show("19", 919);
+    show("2468", 2468);
+    show("3", 1);
+    // random cases: sets of every size, n random or made of the set's
+    // digits but one
+    let mut seed = 902;
+    let mut check = 0;
+    let mut sum = 0;
+    for c in 0..2000 {
+        let digits = random_set(mut seed, 1 + c % 9);
+        let n = random_n(mut seed, digits, c % 2 == 0);
+        let got = at_most_n_given_digit_set(digits, n);
+        sum += got;
+        check = (check * 1000003 + got) % 1000000007;
+    }
+    println(f"2000 cases: counts summing to {sum}, checksum {check}");
+}

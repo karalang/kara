@@ -1,0 +1,393 @@
+// LeetCode #902: Numbers At Most N Given Digit Set -- differential test
+// of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: given an array of digits sorted in non-decreasing order,
+// you can write numbers using each digits[i] as many times as you want.
+// Return the number of positive integers that can be generated that are
+// less than or equal to a given integer n.
+
+// ---- the ★ arm: lengths, then the digits of n from the left ---------------
+fn star_at_most_n_given_digit_set(digits: Vec[String], n: i64) -> i64 {
+    let s = n.to_string().bytes().to_vec();
+    let k = s.len();
+    let d = digits.len();
+    let mut count = 0;
+    let mut power = 1;
+    for _ in 1..k {
+        power *= d;
+        count += power;
+    }
+    for i in 0..k {
+        let rest = k - i - 1;
+        let mut ways = 1;
+        for _ in 0..rest {
+            ways *= d;
+        }
+        let mut smaller = 0;
+        let mut equal = false;
+        for digit in digits.iter() {
+            let c = digit.bytes()[0];
+            if c < s[i] {
+                smaller += 1;
+            } else if c == s[i] {
+                equal = true;
+            }
+        }
+        count += smaller * ways;
+        if not equal {
+            return count;
+        }
+    }
+    count + 1
+}
+
+// ---- the dp arm: a table from the right -----------------------------------
+fn dp_at_most_n_given_digit_set(digits: Vec[String], n: i64) -> i64 {
+    let s = n.to_string().bytes().to_vec();
+    let k = s.len();
+    let mut set: Vec[u8] = Vec.new();
+    for digit in digits.iter() {
+        set.push(digit.bytes()[0]);
+    }
+    let d = set.len();
+    let mut ways: Vec[i64] = Vec.filled(k + 1, 0);
+    ways[k] = 1;
+    let mut power = 1;
+    let mut i = k - 1;
+    while i >= 0 {
+        for c in set.iter() {
+            if *c < s[i] {
+                ways[i] += power;
+            } else if *c == s[i] {
+                ways[i] += ways[i + 1];
+            }
+        }
+        power *= d;
+        i -= 1;
+    }
+    let mut shorter = 0;
+    let mut p = 1;
+    for _ in 1..k {
+        p *= d;
+        shorter += p;
+    }
+    ways[0] + shorter
+}
+
+// ---- the bijective arm: bijective base d ----------------------------------
+fn bijective_at_most_n_given_digit_set(digits: Vec[String], n: i64) -> i64 {
+    let s = n.to_string().bytes().to_vec();
+    let k = s.len();
+    let mut set: Vec[u8] = Vec.new();
+    for digit in digits.iter() {
+        set.push(digit.bytes()[0]);
+    }
+    let d = set.len();
+    // the rank of the digit in the set, or 0, and of the largest below it
+    let mut ranks: Vec[i64] = Vec.filled(k, 0);
+    let mut i = 0;
+    while i < k {
+        let mut rank = 0;
+        let mut below = 0;
+        for j in 0..d {
+            if set[j] == s[i] {
+                rank = j + 1;
+            } else if set[j] < s[i] {
+                below = j + 1;
+            }
+        }
+        if rank > 0 {
+            ranks[i] = rank;
+            i += 1;
+            continue;
+        }
+        let mut at = i;
+        if below > 0 {
+            ranks[i] = below;
+        } else {
+            at = i - 1;
+            while at >= 0 and ranks[at] == 1 {
+                at -= 1;
+            }
+            if at < 0 {
+                // one place fewer, every digit the largest
+                let mut value = 0;
+                for _ in 1..k {
+                    value = value * d + d;
+                }
+                return value;
+            }
+            ranks[at] -= 1;
+        }
+        for j in at + 1..k {
+            ranks[j] = d;
+        }
+        break;
+    }
+    let mut value = 0;
+    for r in ranks.iter() {
+        value = value * d + *r;
+    }
+    value
+}
+
+// ---- the search arm: a binary search on the count -------------------------
+fn search_jth_number(set: Vec[i64], j: i64) -> i64 {
+    let d = set.len();
+    let mut rest = j;
+    let mut value = 0;
+    let mut place = 1;
+    while rest > 0 {
+        rest -= 1;
+        value += set[rest % d] * place;
+        place *= 10;
+        rest /= d;
+    }
+    value
+}
+
+fn search_at_most_n_given_digit_set(digits: Vec[String], n: i64) -> i64 {
+    let mut set: Vec[i64] = Vec.new();
+    for digit in digits.iter() {
+        set.push(i64.parse(digit).unwrap());
+    }
+    let d = set.len();
+    let k = n.to_string().len();
+    let mut hi = 0;
+    let mut p = 1;
+    for _ in 0..k {
+        p *= d;
+        hi += p;
+    }
+    let mut lo = 0;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if search_jth_number(set, mid) <= n {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+// ---- the recursive arm: choosing digits place by place --------------------
+fn recursive_choose(set: Vec[u8], s: Vec[u8], i: i64, held: bool) -> i64 {
+    if not held {
+        return recursive_free(set.len(), s.len() - i);
+    }
+    if i == s.len() {
+        return 1;
+    }
+    let mut count = 0;
+    for c in set.iter() {
+        if *c < s[i] {
+            count += recursive_choose(set, s, i + 1, false);
+        } else if *c == s[i] {
+            count += recursive_choose(set, s, i + 1, true);
+        }
+    }
+    count
+}
+
+fn recursive_free(d: i64, places: i64) -> i64 {
+    if places == 0 { 1 } else { d * recursive_free(d, places - 1) }
+}
+
+fn recursive_at_most_n_given_digit_set(digits: Vec[String], n: i64) -> i64 {
+    let s = n.to_string().bytes().to_vec();
+    let mut set: Vec[u8] = Vec.new();
+    for digit in digits.iter() {
+        set.push(digit.bytes()[0]);
+    }
+    let mut count = recursive_choose(set, s, 0, true);
+    for len in 1..s.len() {
+        count += recursive_free(set.len(), len);
+    }
+    count
+}
+
+fn arm(x: i64, digits: Vec[String], n: i64) -> i64 {
+    match x {
+        0 => star_at_most_n_given_digit_set(digits.clone(), n),
+        1 => dp_at_most_n_given_digit_set(digits.clone(), n),
+        2 => bijective_at_most_n_given_digit_set(digits.clone(), n),
+        3 => search_at_most_n_given_digit_set(digits.clone(), n),
+        _ => recursive_at_most_n_given_digit_set(digits.clone(), n),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// whether every digit of m is one of the set's
+fn written_with(digits: Vec[String], m: i64) -> bool {
+    let mut allowed: Vec[bool] = Vec.filled(10, false);
+    for d in digits.iter() {
+        allowed[i64.parse(d).unwrap()] = true;
+    }
+    let mut rest = m;
+    while rest > 0 {
+        if not allowed[rest % 10] {
+            return false;
+        }
+        rest /= 10;
+    }
+    true
+}
+
+// every positive integer up to n tried
+fn literal(digits: Vec[String], n: i64) -> i64 {
+    let mut count = 0;
+    for m in 1..n + 1 {
+        if written_with(digits, m) {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random set of the digits 1 to 9, each in it with chance `keep` in 9,
+// at least one, in increasing order
+fn random_set(seed: mut ref i64, keep: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for c in 1..10 {
+        if next_random(mut seed) % 9 < keep {
+            out.push(c.to_string());
+        }
+    }
+    if out.is_empty() {
+        out.push((1 + next_random(mut seed) % 9).to_string());
+    }
+    out
+}
+
+// n from 1 to `most`: random with 1 to `places` digits, or every digit
+// from the set but one, which is random
+fn random_n(seed: mut ref i64, digits: Vec[String], from_set: bool, places: i64, most: i64) -> i64 {
+    let len = 1 + next_random(mut seed) % places;
+    let mut n = 0;
+    let odd = next_random(mut seed) % len;
+    for i in 0..len {
+        let d = if from_set and i != odd {
+            i64.parse(digits[next_random(mut seed) % digits.len()]).unwrap()
+        } else {
+            next_random(mut seed) % 10
+        };
+        n = n * 10 + d;
+    }
+    n.max(1).min(most)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, digits: Vec[String], n: i64, small: bool) {
+    let want = if small { literal(digits, n) } else { 0 };
+    let d = digits.len();
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, digits, n));
+    }
+    // P3: a digit taken out of the set, if it has two, and one put in
+    let mut fewer = digits.clone();
+    if d > 1 {
+        fewer.remove(next_random(mut seed) % d);
+    }
+    let mut more: Vec[String] = Vec.new();
+    let extra = 1 + next_random(mut seed) % 9;
+    for c in 1..10 {
+        let s = c.to_string();
+        if c == extra or digits.contains(s) {
+            more.push(s);
+        }
+    }
+    // P4: k places of 9, and k places of the largest digit of the set
+    let k = 1 + next_random(mut seed) % 9;
+    let largest = i64.parse(digits[d - 1]).unwrap();
+    let mut nines = 0;
+    let mut tops = 0;
+    let mut geometric = 0;
+    let mut power = 1;
+    for _ in 0..k {
+        nines = nines * 10 + 9;
+        tops = tops * 10 + largest;
+        power *= d;
+        geometric += power;
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's count
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: one more for n + 1 exactly when n + 1 is written with the
+        // set's digits, and otherwise the same
+        let step = if written_with(digits, n + 1) { 1 } else { 0 };
+        check(mut t, 2, arm(x, digits, n + 1) == got + step);
+        // P3: no more with a digit fewer, no fewer with a digit more
+        check(mut t, 3, arm(x, fewer, n) <= got and arm(x, more, n) >= got);
+        // P4: d + d^2 + ... + d^k up to k nines, and the same up to k of
+        // the largest digit
+        check(mut t, 4, arm(x, digits, nines) == geometric and arm(x, digits, tops) == geometric);
+        // P5: a number up to 10n + 9 with two places or more is one up to
+        // n with a digit of the set after it, so d * (count + 1) in all;
+        // and up to 10n, d * (count up to n - 1, plus 1)
+        let before = if n == 1 { 0 } else { arm(x, digits, n - 1) };
+        check(mut t, 5, arm(x, digits, 10 * n + 9) == d * (got + 1) and arm(x, digits, 10 * n) == d * (before + 1));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 902;
+    let mut cases = 0;
+    let mut sets = 0;
+    // n up to 1000 against the statement; then up to 10^9; sets of every
+    // size, n random or made of the set's digits but one
+    for c in 0..3200 {
+        let small = c < 3000;
+        let digits = random_set(mut seed, 1 + c % 9);
+        let n = if small { random_n(mut seed, digits, c % 2 == 0, 4, 1000) } else { random_n(mut seed, digits, c % 2 == 0, 10, 1000000000) };
+        cases += 1;
+        sets += digits.len();
+        properties(mut t, mut seed, digits, n, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {sets} digits in the sets, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

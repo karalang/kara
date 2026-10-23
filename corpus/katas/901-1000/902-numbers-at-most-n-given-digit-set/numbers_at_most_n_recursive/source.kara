@@ -1,0 +1,129 @@
+// LeetCode #902: Numbers At Most N Given Digit Set -- choosing digits
+// place by place.
+//
+// Count the numbers as long as n by choosing their digits from the left,
+// recursively, keeping whether the digits so far are n's own: while they
+// are, a digit of the set may be below n's digit there (and the rest is
+// then free) or equal to it (and the next place is still held to n's);
+// once below, the places left have d choices each, counted at once. The shorter numbers are
+// counted the same way with the length free from the start.
+// O(log n * d).
+
+fn choose(set: Vec[u8], s: Vec[u8], i: i64, held: bool) -> i64 {
+    if not held {
+        return free(set.len(), s.len() - i);
+    }
+    if i == s.len() {
+        return 1;
+    }
+    let mut count = 0;
+    for c in set.iter() {
+        if *c < s[i] {
+            count += choose(set, s, i + 1, false);
+        } else if *c == s[i] {
+            count += choose(set, s, i + 1, true);
+        }
+    }
+    count
+}
+
+fn free(d: i64, places: i64) -> i64 {
+    if places == 0 { 1 } else { d * free(d, places - 1) }
+}
+
+fn at_most_n_given_digit_set(digits: Vec[String], n: i64) -> i64 {
+    let s = n.to_string().bytes().to_vec();
+    let mut set: Vec[u8] = Vec.new();
+    for digit in digits.iter() {
+        set.push(digit.bytes()[0]);
+    }
+    let mut count = choose(set, s, 0, true);
+    for len in 1..s.len() {
+        count += free(set.len(), len);
+    }
+    count
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digit_set(s: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for c in s.chars() {
+        out.push(c.to_string());
+    }
+    out
+}
+
+fn show(s: Str, n: i64) {
+    let digits = digit_set(s);
+    let mut listed = String.new();
+    for i in 0..digits.len() {
+        if i > 0 {
+            listed.push_str(", ");
+        }
+        listed.push_str(f"\"{digits[i]}\"");
+    }
+    println(f"digits = [{listed}], n = {n} -> {at_most_n_given_digit_set(digits, n)}");
+}
+
+// a random set of the digits 1 to 9, each in it with chance `keep` in 9,
+// at least one, in increasing order
+fn random_set(seed: mut ref i64, keep: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for c in 1..10 {
+        if next_random(mut seed) % 9 < keep {
+            out.push(c.to_string());
+        }
+    }
+    if out.is_empty() {
+        out.push((1 + next_random(mut seed) % 9).to_string());
+    }
+    out
+}
+
+// n from 1 to 10^9: random with 1 to 10 digits, or every digit from the
+// set but one, which is random
+fn random_n(seed: mut ref i64, digits: Vec[String], from_set: bool) -> i64 {
+    let len = 1 + next_random(mut seed) % 10;
+    let mut n = 0;
+    let odd = next_random(mut seed) % len;
+    for i in 0..len {
+        let d = if from_set and i != odd {
+            i64.parse(digits[next_random(mut seed) % digits.len()]).unwrap()
+        } else {
+            next_random(mut seed) % 10
+        };
+        n = n * 10 + d;
+    }
+    n.max(1).min(1000000000)
+}
+
+fn main() {
+    show("1357", 100);
+    show("149", 1000000000);
+    show("7", 8);
+    show("5", 5);
+    show("5", 4);
+    show("123456789", 1000000000);
+    show("19", 919);
+    show("2468", 2468);
+    show("3", 1);
+    // random cases: sets of every size, n random or made of the set's
+    // digits but one
+    let mut seed = 902;
+    let mut check = 0;
+    let mut sum = 0;
+    for c in 0..2000 {
+        let digits = random_set(mut seed, 1 + c % 9);
+        let n = random_n(mut seed, digits, c % 2 == 0);
+        let got = at_most_n_given_digit_set(digits, n);
+        sum += got;
+        check = (check * 1000003 + got) % 1000000007;
+    }
+    println(f"2000 cases: counts summing to {sum}, checksum {check}");
+}
