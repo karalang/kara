@@ -1,0 +1,21 @@
+n = 1 -> true
+n = 10 -> false
+n = 16 -> true
+n = 61 -> true
+n = 46 -> true
+n = 64 -> true
+n = 128 -> true
+n = 821 -> true
+n = 218 -> true
+n = 24 -> false
+n = 125 -> true
+n = 1024 -> true
+n = 2014 -> true
+n = 4021 -> true
+n = 536870912 -> true
+n = 102356789 -> true
+n = 1000000000 -> false
+n = 999999999 -> false
+n from 1 to 100000: 376 true, checksum 109958299
+20000 random n up to 10^9: 7 true
+600 shuffled powers of two: 600 true, checksum 557869031

@@ -1,0 +1,44 @@
+// LeetCode #869: Reordered Power of 2 -- bench program: the ★ arm (digit
+// counts) on every n from 1 to 1,000,000.
+//
+// A reordering keeps exactly the digits of n, so n can be reordered into
+// a power of two when some power of two has the same count of each digit
+// 0 to 9; a power of two never starts with 0, so the reordering it names
+// is allowed. Only 2^0 to 2^29 need comparing with n's counts: 2^30 has
+// ten digits, and the one ten-digit n allowed, 10^9, has other digits.
+// O(30 * digits).
+
+fn reordered_power_of_2(n: i64) -> bool {
+    let want = digit_counts(n);
+    let mut power = 1;
+    for _ in 0..30 {
+        if digit_counts(power) == want {
+            return true;
+        }
+        power *= 2;
+    }
+    false
+}
+
+fn digit_counts(x: i64) -> Vec[i64] {
+    let mut counts: Vec[i64] = Vec.filled(10, 0);
+    let mut rest = x;
+    while rest > 0 {
+        counts[rest % 10] += 1;
+        rest /= 10;
+    }
+    counts
+}
+
+fn main() {
+    let limit = 1000000;
+    let mut count = 0;
+    let mut check = 0;
+    for n in 1..limit + 1 {
+        if reordered_power_of_2(n) {
+            count += 1;
+            check = (check * 31 + n) % 1000000007;
+        }
+    }
+    println(f"n from 1 to {limit}: {count} true, checksum {check}");
+}

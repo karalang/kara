@@ -1,0 +1,109 @@
+// LeetCode #869: Reordered Power of 2 -- digit counts.
+//
+// A reordering keeps exactly the digits of n, so n can be reordered into
+// a power of two when some power of two has the same count of each digit
+// 0 to 9; a power of two never starts with 0, so the reordering it names
+// is allowed. Only 2^0 to 2^29 need comparing with n's counts: 2^30 has
+// ten digits, and the one ten-digit n allowed, 10^9, has other digits.
+// O(30 * digits).
+
+fn reordered_power_of_2(n: i64) -> bool {
+    let want = digit_counts(n);
+    let mut power = 1;
+    for _ in 0..30 {
+        if digit_counts(power) == want {
+            return true;
+        }
+        power *= 2;
+    }
+    false
+}
+
+fn digit_counts(x: i64) -> Vec[i64] {
+    let mut counts: Vec[i64] = Vec.filled(10, 0);
+    let mut rest = x;
+    while rest > 0 {
+        counts[rest % 10] += 1;
+        rest /= 10;
+    }
+    counts
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random n from 1 to 10^9, LeetCode's range
+fn random_n(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % 1000000000 + 1
+}
+
+// the digits of x in a random order with no leading 0
+fn shuffled(seed: mut ref i64, x: i64) -> i64 {
+    let mut digits = x.to_string().bytes().to_vec();
+    let len = digits.len();
+    loop {
+        for i in 1..len {
+            let j = next_random(mut seed) % (i + 1);
+            digits.swap(i, j);
+        }
+        if digits[0] != b'0' {
+            break;
+        }
+    }
+    let mut y = 0;
+    for b in digits.iter() {
+        y = y * 10 + (*b - b'0') as i64;
+    }
+    y
+}
+
+fn show(n: i64) {
+    println(f"n = {n} -> {reordered_power_of_2(n)}");
+}
+
+fn main() {
+    show(1);
+    show(10);
+    for n in [16, 61, 46, 64, 128, 821, 218, 24, 125, 1024, 2014, 4021, 536870912, 102356789, 1000000000, 999999999] {
+        show(n);
+    }
+    // every n from 1 to 100000
+    let mut count = 0;
+    let mut check = 0;
+    for n in 1..100001 {
+        if reordered_power_of_2(n) {
+            count += 1;
+            check = (check * 31 + n) % 1000000007;
+        }
+    }
+    println(f"n from 1 to 100000: {count} true, checksum {check}");
+    // random n up to 10^9, and every power of two shuffled
+    let mut seed = 869;
+    count = 0;
+    for _ in 0..20000 {
+        if reordered_power_of_2(random_n(mut seed)) {
+            count += 1;
+        }
+    }
+    println(f"20000 random n up to 10^9: {count} true");
+    count = 0;
+    check = 0;
+    let mut power = 1;
+    for _ in 0..30 {
+        for _ in 0..20 {
+            let n = shuffled(mut seed, power);
+            if reordered_power_of_2(n) {
+                count += 1;
+            }
+            check = (check * 31 + n) % 1000000007;
+        }
+        power *= 2;
+    }
+    println(f"600 shuffled powers of two: {count} true, checksum {check}");
+}

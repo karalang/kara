@@ -1,0 +1,340 @@
+// LeetCode #869: Reordered Power of 2 -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: whether the digits of n can be put in some order, the
+// leading digit not zero, so that the number they make is a power of two.
+// ---- the ★ arm: digit counts ----------------------------------------------
+fn star_reordered_power_of_2(n: i64) -> bool {
+    let want = star_digit_counts(n);
+    let mut power = 1;
+    for _ in 0..30 {
+        if star_digit_counts(power) == want {
+            return true;
+        }
+        power *= 2;
+    }
+    false
+}
+
+fn star_digit_counts(x: i64) -> Vec[i64] {
+    let mut counts: Vec[i64] = Vec.filled(10, 0);
+    let mut rest = x;
+    while rest > 0 {
+        counts[rest % 10] += 1;
+        rest /= 10;
+    }
+    counts
+}
+
+// ---- the sorted arm: sorted digit strings ---------------------------------
+fn sorted_reordered_power_of_2(n: i64) -> bool {
+    let want = sorted_sorted_digits(n);
+    for k in 0..31 {
+        if sorted_sorted_digits(1 << k) == want {
+            return true;
+        }
+    }
+    false
+}
+
+fn sorted_sorted_digits(x: i64) -> String {
+    let mut bytes = x.to_string().bytes().to_vec();
+    bytes.sort();
+    String.from_utf8(bytes).unwrap()
+}
+
+// ---- the trie arm: arranging the digits, guided by the powers -------------
+fn trie_reordered_power_of_2(n: i64) -> bool {
+    let digits = n.to_string();
+    let length = digits.len();
+    let mut prefixes: Set[String] = Set.new();
+    let mut power = 1;
+    for _ in 0..31 {
+        let s = power.to_string();
+        if s.len() == length {
+            for end in 1..length + 1 {
+                prefixes.insert(s[0..end].to_string());
+            }
+        }
+        power *= 2;
+    }
+    let mut counts: Vec[i64] = Vec.filled(10, 0);
+    for b in digits.bytes() {
+        counts[(b - b'0') as i64] += 1;
+    }
+    trie_place(String.new(), mut counts, length, prefixes)
+}
+
+// whether `prefix` extends, with the unused digits in `counts`, to a
+// power of two of `length` digits
+fn trie_place(prefix: String, counts: mut ref Vec[i64], length: i64, prefixes: Set[String]) -> bool {
+    if prefix.len() == length {
+        return true;
+    }
+    for d in 0..10 {
+        if counts[d] > 0 {
+            let next = f"{prefix}{d}";
+            if prefixes.contains(next) {
+                counts[d] -= 1;
+                let found = trie_place(next, mut counts, length, prefixes);
+                counts[d] += 1;
+                if found {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---- the primes arm: a product of primes ----------------------------------
+fn primes_reordered_power_of_2(n: i64) -> bool {
+    let want = primes_signature(n);
+    let mut power = 1;
+    while power <= 1000000000 {
+        if primes_signature(power) == want {
+            return true;
+        }
+        power *= 2;
+    }
+    false
+}
+
+fn primes_signature(x: i64) -> i64 {
+    let primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29];
+    let mut product = 1;
+    let mut rest = x;
+    while rest > 0 {
+        product *= primes[rest % 10];
+        rest /= 10;
+    }
+    product
+}
+
+// ---- the packed arm: packed counts in a set -------------------------------
+fn packed_reordered_power_of_2(n: i64) -> bool {
+    let mut powers: Set[i64] = Set.new();
+    for k in 0..31 {
+        powers.insert(packed_packed_counts(1 << k));
+    }
+    powers.contains(packed_packed_counts(n))
+}
+
+fn packed_packed_counts(x: i64) -> i64 {
+    let mut packed = 0;
+    let mut rest = x;
+    while rest > 0 {
+        packed += 1 << (4 * (rest % 10));
+        rest /= 10;
+    }
+    packed
+}
+
+fn arm(a: i64, n: i64) -> bool {
+    match a {
+        0 => star_reordered_power_of_2(n),
+        1 => sorted_reordered_power_of_2(n),
+        2 => trie_reordered_power_of_2(n),
+        3 => primes_reordered_power_of_2(n),
+        _ => packed_reordered_power_of_2(n),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+fn literal_power_of_two(x: i64) -> bool {
+    let mut rest = x;
+    while rest > 1 and rest % 2 == 0 {
+        rest /= 2;
+    }
+    rest == 1
+}
+
+// whether some order of the unused digits, after `value`, makes a power
+// of two
+fn literal_orders(digits: Vec[i64], used: mut ref Vec[bool], placed: i64, value: i64) -> bool {
+    if placed == digits.len() {
+        return literal_power_of_two(value);
+    }
+    for i in 0..digits.len() {
+        if not used[i] and not (placed == 0 and digits[i] == 0) {
+            used[i] = true;
+            let found = literal_orders(digits, mut used, placed + 1, value * 10 + digits[i]);
+            used[i] = false;
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// every order of n's digits with a nonzero leading digit, tried in turn
+fn literal_reordered(n: i64) -> bool {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.insert(0, rest % 10);
+        rest /= 10;
+    }
+    let mut used: Vec[bool] = Vec.filled(digits.len(), false);
+    literal_orders(digits, mut used, 0, 0)
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_n(seed: mut ref i64, limit: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % limit + 1
+}
+
+fn digits_of(x: i64) -> Vec[i64] {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = x;
+    while rest > 0 {
+        digits.insert(0, rest % 10);
+        rest /= 10;
+    }
+    digits
+}
+
+fn number_of(digits: Vec[i64]) -> i64 {
+    let mut x = 0;
+    for d in digits.iter() {
+        x = x * 10 + *d;
+    }
+    x
+}
+
+// the digits of x in a random order with no leading 0
+fn shuffled(seed: mut ref i64, x: i64) -> i64 {
+    let mut digits = digits_of(x);
+    loop {
+        for i in 1..digits.len() {
+            let j = next_random(mut seed) % (i + 1);
+            digits.swap(i, j);
+        }
+        if digits[0] != 0 {
+            break;
+        }
+    }
+    number_of(digits)
+}
+
+// the digits of x from largest to smallest
+fn largest(x: i64) -> i64 {
+    let mut digits = digits_of(x);
+    digits.sort();
+    digits.reverse();
+    number_of(digits)
+}
+
+// the digits of x from smallest to largest, the smallest nonzero digit
+// moved to the front
+fn smallest(x: i64) -> i64 {
+    let mut digits = digits_of(x);
+    digits.sort();
+    let mut first = 0;
+    while digits[first] == 0 {
+        first += 1;
+    }
+    let lead = digits.remove(first);
+    digits.insert(0, lead);
+    number_of(digits)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one n, each over the five arms (P1 only when
+// `literal`); returns 1 when the ★ arm answers true
+fn properties(t: mut ref Tally, seed: mut ref i64, n: i64, literal: bool) -> i64 {
+    let want = if literal { literal_reordered(n) } else { false };
+    let other = shuffled(mut seed, n);
+    let mut power = 1;
+    for _ in 0..next_random(mut seed) % 30 {
+        power *= 2;
+    }
+    let power_shuffled = shuffled(mut seed, power);
+    let mut star = 0;
+    for a in 0..5 {
+        let got = arm(a, n);
+        if a == 0 and got {
+            star = 1;
+        }
+        // P1: the statement's answer
+        if literal {
+            check(mut t, 1, got == want);
+        }
+        // P2: a random order of the digits gives the same answer
+        check(mut t, 2, arm(a, other) == got);
+        // P3: the digits from largest to smallest give the same answer
+        check(mut t, 3, arm(a, largest(n)) == got);
+        // P4: a multiple of 3 is never true (2^k never is, and the digit
+        // sum keeps n's remainder by 3)
+        if n % 3 == 0 {
+            check(mut t, 4, not got);
+        }
+        // P5: a power of two's digits in a random order are true
+        check(mut t, 5, arm(a, power_shuffled));
+        // P6: the smallest order with no leading 0 gives the same answer
+        check(mut t, 6, arm(a, smallest(n)) == got);
+    }
+    star
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut count = 0;
+    let mut trues = 0;
+    let mut seed = 869;
+    // every n from 1 to 10000, against the statement
+    for n in 1..10001 {
+        count += 1;
+        trues += properties(mut t, mut seed, n, true);
+    }
+    // random n of up to seven digits, against the statement
+    for _ in 0..100 {
+        count += 1;
+        trues += properties(mut t, mut seed, random_n(mut seed, 10000000), true);
+    }
+    // every power of two up to 10^9, against the statement
+    let mut power = 1;
+    while power <= 1000000000 {
+        count += 1;
+        trues += properties(mut t, mut seed, power, power < 10000000);
+        power *= 2;
+    }
+    // random n up to 10^9
+    for _ in 0..1000 {
+        count += 1;
+        trues += properties(mut t, mut seed, random_n(mut seed, 1000000000), false);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{count} values of n, {trues} true, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
