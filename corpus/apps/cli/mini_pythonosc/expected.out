@@ -1,0 +1,803 @@
+== build go x2f6375652f31322f676f 
+args []
+dgram 2f6375652f31322f676f00002c000000
+msg '/cue/12/go' [] size 16
+str /cue/12/go 
+== build fader x2f6d697865722f63682f332f6661646572 f0.75
+args [('f', 0.75)]
+dgram 2f6d697865722f63682f332f66616465720000002c6600003f400000
+msg '/mixer/ch/3/fader' [0.75] size 28
+str /mixer/ch/3/fader 0.75
+== build mute x2f6d697865722f63682f332f6d757465 T
+args [('T', True)]
+dgram 2f6d697865722f63682f332f6d757465000000002c540000
+msg '/mixer/ch/3/mute' [True] size 24
+str /mixer/ch/3/mute True
+== build unmute x2f6d697865722f63682f332f6d757465 F
+args [('F', False)]
+dgram 2f6d697865722f63682f332f6d757465000000002c460000
+msg '/mixer/ch/3/mute' [False] size 24
+str /mixer/ch/3/mute False
+== build dimmer x2f6c696768742f64696d6d65722f37 i255
+args [('i', 255)]
+dgram 2f6c696768742f64696d6d65722f37002c690000000000ff
+msg '/light/dimmer/7' [255] size 24
+str /light/dimmer/7 255
+== build name x2f6375652f31322f6e616d65 s416374203220e280942053746f726d
+args [('s', 'Act 2 — Storm')]
+dgram 2f6375652f31322f6e616d65000000002c730000416374203220e280942053746f726d00
+msg '/cue/12/name' ['Act 2 — Storm'] size 36
+str /cue/12/name Act 2 — Storm
+== build rgb x2f6c696768742f6c65642f312f636f6c6f72 i4278255360@r
+args [('r', 4278255360)]
+dgram 2f6c696768742f6c65642f312f636f6c6f7200002c720000ff00ff00
+msg '/light/led/1/color' [4278255360] size 28
+str /light/led/1/color 4278255360
+== build note x2f6d6964692f6f7574 m0,144,60,100
+args [('m', (0, 144, 60, 100))]
+dgram 2f6d6964692f6f75740000002c6d000000903c64
+msg '/midi/out' [(0, 144, 60, 100)] size 20
+str /midi/out (0, 144, 60, 100)
+== build xy x2f746f7563686f73632f787931 f0.1 f-0.5
+args [('f', 0.1), ('f', -0.5)]
+dgram 2f746f7563686f73632f7879310000002c6666003dcccccdbf000000
+msg '/touchosc/xy1' [0.10000000149011612, -0.5] size 28
+str /touchosc/xy1 0.10000000149011612 -0.5
+== build all x2f746573742f616c6c i-7 f3.25 s6f6b b010203 T F N m1,2,3,4 f2.5@d i9000000000 i-2147483648 i2147483647
+args [('i', -7), ('f', 3.25), ('s', 'ok'), ('b', b'\x01\x02\x03'), ('T', True), ('F', False), ('N', None), ('m', (1, 2, 3, 4)), ('d', 2.5), ('h', 9000000000), ('h', -2147483648), ('i', 2147483647)]
+dgram 2f746573742f616c6c0000002c6966736254464e6d64686869000000fffffff9405000006f6b000000000003010203000102030440040000000000000000000218711a00ffffffff800000007fffffff
+msg '/test/all' [-7, 3.25, 'ok', b'\x01\x02\x03', True, False, None, (1, 2, 3, 4), 2.5, 9000000000, -2147483648, 2147483647] size 80
+str /test/all -7 3.25 ok b'\x01\x02\x03' True False None (1, 2, 3, 4) 2.5 9000000000 -2147483648 2147483647
+== build arr x2f7363656e652f726563616c6c ( i1 i2 ( f1.5 s6162 ) ) i3
+args [('[', None), ('i', 1), ('i', 2), ('[', None), ('f', 1.5), ('s', 'ab'), (']', None), (']', None), ('i', 3)]
+dgram 2f7363656e652f726563616c6c0000002c5b69695b66735d5d69000000000001000000023fc000006162000000000003
+msg '/scene/recall' [[1, 2, [1.5, 'ab']], 3] size 48
+str /scene/recall [1, 2, [1.5, 'ab']] 3
+== build typed x2f7363656e652f6c6576656c73 ( i1 f2 s78 )@<f,d,s>
+args [('[', None), ('f', 1), ('d', 2.0), ('s', 'x'), (']', None)]
+dgram 2f7363656e652f6c6576656c730000002c5b6664735d00003f800000400000000000000078000000
+msg '/scene/levels' [[1.0, 2.0, 'x']] size 40
+str /scene/levels [1.0, 2.0, 'x']
+== build chars x2f6f73632f6368617273 s686579@<s,s>
+args [('[', None), ('s', 'h'), ('s', 'e'), (']', None)]
+dgram 2f6f73632f636861727300002c5b73735d0000006800000065000000
+msg '/osc/chars' [['h', 'e']] size 28
+str /osc/chars ['h', 'e']
+== build short x2f6f73632f7a6970 ( i1 i2 i3 )@<i,f>
+args [('[', None), ('i', 1), ('f', 2), (']', None)]
+dgram 2f6f73632f7a6970000000002c5b69665d0000000000000140000000
+msg '/osc/zip' [[1, 2.0]] size 28
+str /osc/zip [1, 2.0]
+== build blob x2f646174612f626c6f62 b0102030405
+args [('b', b'\x01\x02\x03\x04\x05')]
+dgram 2f646174612f626c6f6200002c620000000000050102030405000000
+msg '/data/blob' [b'\x01\x02\x03\x04\x05'] size 28
+str /data/blob b'\x01\x02\x03\x04\x05'
+== build blob4 x2f646174612f626c6f6234 b09080706
+args [('b', b'\t\x08\x07\x06')]
+dgram 2f646174612f626c6f6234002c6200000000000409080706
+msg '/data/blob4' [b'\t\x08\x07\x06'] size 24
+str /data/blob4 b'\t\x08\x07\x06'
+== build emptys x2f646174612f656d707479 s
+args [('s', '')]
+dgram 2f646174612f656d707479002c73000000000000
+msg '/data/empty' [''] size 20
+str /data/empty 
+== build pad3 x2f616263 s78797a
+args [('s', 'xyz')]
+dgram 2f616263000000002c73000078797a00
+msg '/abc' ['xyz'] size 16
+str /abc xyz
+== build pad4 x2f61626364 s7778797a
+args [('s', 'wxyz')]
+dgram 2f616263640000002c7300007778797a00000000
+msg '/abcd' ['wxyz'] size 20
+str /abcd wxyz
+== build utf8 x2f7469746c65732fc3bc6ec3af636f6465 se697a5e69cace8aa9e sf09f8ead
+args [('s', '日本語'), ('s', '🎭')]
+dgram 2f7469746c65732fc3bc6ec3af636f64650000002c737300e697a5e69cace8aa9e000000f09f8ead00000000
+msg '/titles/ünïcode' ['日本語', '🎭'] size 44
+str /titles/ünïcode 日本語 🎭
+== build dbl x2f636c6f636b2f6472696674 f0.1@d i3@d T@d
+args [('d', 0.1), ('d', 3), ('d', True)]
+dgram 2f636c6f636b2f6472696674000000002c646464000000003fb999999999999a40080000000000003ff0000000000000
+msg '/clock/drift' [0.1, 3.0, 1.0] size 48
+str /clock/drift 0.1 3.0 1.0
+== build ints x2f636f756e746572 f2.0@i
+args [('i', 2.0)]
+error osc_message_builder.BuildError: Could not build the message: Wrong argument value passed: required argument is not an integer
+== build - x2f6261642f696e74 i2147483648@i
+args [('i', 2147483648)]
+error osc_message_builder.BuildError: Could not build the message: Wrong argument value passed: 'i' format requires -2147483648 <= number <= 2147483647
+== build - x2f6261642f696e7432 s3132@i
+args [('i', '12')]
+error osc_message_builder.BuildError: Could not build the message: Wrong argument value passed: required argument is not an integer
+== build - x2f6261642f72676261 i-1@r
+args [('r', -1)]
+error osc_message_builder.BuildError: Could not build the message: Wrong argument value passed: 'I' format requires 0 <= number <= 4294967295
+== build - x2f6261642f7267626132 i4294967296@r
+args [('r', 4294967296)]
+error osc_message_builder.BuildError: Could not build the message: Wrong argument value passed: 'I' format requires 0 <= number <= 4294967295
+== build rgbaok x2f726762612f6f6b T@r i0@r
+args [('r', True), ('r', 0)]
+dgram 2f726762612f6f6b000000002c7272000000000100000000
+msg '/rgba/ok' [1, 0] size 24
+str /rgba/ok 1 0
+== build - x2f6261642f666c6f6174 s78@f
+args [('f', 'x')]
+error osc_message_builder.BuildError: Could not build the message: Wrong argument value passed: required argument is not a float
+== build - x2f6261642f666c6f617432 f1e300
+args [('f', 1e+300)]
+error OverflowError: float too large to pack with f format
+== build fl x2f666c6f61742f65646765 f3.4028234663852886e+38 f1e-46 f-0.0 finf fnan f16777217.0 f0.30000000000000004 i16777217@f
+args [('f', 3.4028234663852886e+38), ('f', 1e-46), ('f', -0.0), ('f', inf), ('f', nan), ('f', 16777217.0), ('f', 0.30000000000000004), ('f', 16777217)]
+dgram 2f666c6f61742f65646765002c66666666666666660000007f7fffff00000000800000007f8000007fc000004b8000003e99999a4b800000
+msg '/float/edge' [3.4028234663852886e+38, 0.0, -0.0, inf, nan, 16777216.0, 0.30000001192092896, 16777216.0] size 56
+str /float/edge 3.4028234663852886e+38 0.0 -0.0 inf nan 16777216.0 0.30000001192092896 16777216.0
+== build - x2f6261642f646f75626c65 N@d
+args [('d', None)]
+error osc_message_builder.BuildError: Could not build the message: Wrong argument value passed: required argument is not a float
+== build - x2f6261642f737472696e67 i5@s
+args [('s', 5)]
+error osc_message_builder.BuildError: Could not build the message: Incorrect string, could not encode 'int' object has no attribute 'encode'
+== build - x2f6261642f737472696e6732 N@s
+args [('s', None)]
+error osc_message_builder.BuildError: Could not build the message: Incorrect string, could not encode 'NoneType' object has no attribute 'encode'
+== build - x2f6261642f737472696e6733 ( i1 )@s
+args [('s', [1])]
+error osc_message_builder.BuildError: Could not build the message: Incorrect string, could not encode 'list' object has no attribute 'encode'
+== build - x2f6261642f626c6f62 b
+args [('b', b'')]
+error osc_message_builder.BuildError: Could not build the message: Blob value cannot be empty
+== build - x2f6261642f626c6f6232 s@b
+args [('b', '')]
+error osc_message_builder.BuildError: Could not build the message: Blob value cannot be empty
+== build - x2f6261642f626c6f6233 i0@b
+args [('b', 0)]
+error osc_message_builder.BuildError: Could not build the message: Blob value cannot be empty
+== build - x2f6261642f626c6f6234 i5@b
+args [('b', 5)]
+error TypeError: object of type 'int' has no len()
+== build - x2f6261642f626c6f6235 s616263@b
+args [('b', 'abc')]
+error TypeError: can't concat str to bytes
+== build - x2f6261642f626c6f6236 ( i1 )@b
+args [('b', [1])]
+error TypeError: can't concat list to bytes
+== build - x2f6261642f6d696469 u1,2,3
+error ValueError: Inferred arg_value type is not supported
+== build - x2f6261642f6d69646932 u1,2,3@m
+args [('m', (1, 2, 3))]
+error osc_message_builder.BuildError: Could not build the message: MIDI message length is invalid
+== build - x2f6261642f6d69646933 i5@m
+args [('m', 5)]
+error TypeError: object of type 'int' has no len()
+== build - x2f6261642f6d69646934 s61626364@m
+args [('m', 'abcd')]
+error TypeError: unsupported operand type(s) for &: 'str' and 'int'
+== build midib x2f6d6964692f6279746573 b903c6400@m ( i1 i300 i-1 i2 )@m
+args [('m', b'\x90<d\x00'), ('m', [1, 300, -1, 2])]
+dgram 2f6d6964692f6279746573002c6d6d00903c6400012cff02
+msg '/midi/bytes' [(144, 60, 100, 0), (1, 44, 255, 2)] size 24
+str /midi/bytes (144, 60, 100, 0) (1, 44, 255, 2)
+== build - x2f6261642f74797065 i1@t
+error ValueError: arg_type must be one of ('f', 'd', 'i', 'h', 'b', 's', 'r', 'm', 'T', 'F', 'N'), or an array of valid types
+== build - x2f6261642f7479706532 i1@<i,x>
+error ValueError: arg_type must be one of ('f', 'd', 'i', 'h', 'b', 's', 'r', 'm', 'T', 'F', 'N'), or an array of valid types
+== build - x2f6261642f69746572 i5@<i>
+error TypeError: 'int' object is not iterable
+== build emptyty x2f656d7074792f74797065 i5@<>
+args [('i', 5)]
+dgram 2f656d7074792f74797065002c69000000000005
+msg '/empty/type' [5] size 20
+str /empty/type 5
+== build nested x2f612f62 ( ( ( N ) ) )
+args [('[', None), ('[', None), ('[', None), ('N', None), (']', None), (']', None), (']', None)]
+dgram 2f612f62000000002c5b5b5b4e5d5d5d00000000
+msg '/a/b' [[[[None]]]] size 20
+str /a/b [[[None]]]
+== build emptyl x2f6c6973742f656d707479 ( )
+args [('[', None), (']', None)]
+dgram 2f6c6973742f656d707479002c5b5d00
+msg '/list/empty' [[]] size 16
+str /list/empty []
+== build nul x2f6e756c2f696e73696465 s6100626364656667
+args [('s', 'a\x00bcdefg')]
+dgram 2f6e756c2f696e73696465002c730000610062636465666700000000
+msg '/nul/inside' ['a'] size 28
+str /nul/inside a
+== build - - i1
+args [('i', 1)]
+error osc_message_builder.BuildError: OSC addresses cannot be empty
+== build - x i1
+args [('i', 1)]
+error osc_message_builder.BuildError: OSC addresses cannot be empty
+== build comma x2c 
+args []
+dgram 2c0000002c000000
+msg ',' [] size 8
+str , 
+== build bang x2f62616e67 N N
+args [('N', None), ('N', None)]
+dgram 2f62616e670000002c4e4e00
+msg '/bang' [None, None] size 12
+str /bang None None
+== bmsg x2f6375652f312f676f -
+dgram 2f6375652f312f676f0000002c000000
+msg '/cue/1/go' [] size 16
+str /cue/1/go 
+== bmsg x2f76 i5
+dgram 2f7600002c69000000000005
+msg '/v' [5] size 12
+str /v 5
+== bmsg x2f76 s74657874
+dgram 2f7600002c7300007465787400000000
+msg '/v' ['text'] size 16
+str /v text
+== bmsg x2f76 b0102
+dgram 2f7600002c6200000000000201020000
+msg '/v' [b'\x01\x02'] size 16
+str /v b'\x01\x02'
+== bmsg x2f76 ( i1 f2.5 )
+dgram 2f7600002c6966000000000140200000
+msg '/v' [1, 2.5] size 16
+str /v 1 2.5
+== bmsg x2f76 m1,2,3,4
+dgram 2f7600002c6969696900000000000001000000020000000300000004
+msg '/v' [1, 2, 3, 4] size 28
+str /v 1 2 3 4
+== bmsg x2f76 N
+dgram 2f7600002c4e0000
+msg '/v' [None] size 8
+str /v None
+== bmsg x2f76 s
+dgram 2f7600002c000000
+msg '/v' [] size 8
+str /v 
+== bmsg x2f76 ( )
+dgram 2f7600002c000000
+msg '/v' [] size 8
+str /v 
+== bmsg x2f76 ( ( i1 ) )
+dgram 2f7600002c5b695d0000000000000001
+msg '/v' [[1]] size 16
+str /v [1]
+== bmsg x2f76 T
+dgram 2f7600002c540000
+msg '/v' [True] size 8
+str /v True
+== bmsg x2f76 u1,2,3
+dgram 2f7600002c69696900000000000000010000000200000003
+msg '/v' [1, 2, 3] size 24
+str /v 1 2 3
+== bmsg x i1
+error osc_message_builder.BuildError: OSC addresses cannot be empty
+== parse 2f6375652f352f676f000000
+msg '/cue/5/go' [] size 12
+str /cue/5/go 
+== parse 2f7800002c000000
+msg '/x' [] size 8
+str /x 
+== parse 2f7800002c690000ffffffd6
+msg '/x' [-42] size 12
+str /x -42
+== parse 2f7800002c696866640000000000000100000100000000003f0000003f50624dd2f1a9fc
+msg '/x' [1, 1099511627776, 0.5, 0.001] size 36
+str /x 1 1099511627776 0.5 0.001
+== parse 2f7800002c736200686900000000000301020300
+msg '/x' ['hi', b'\x01\x02\x03'] size 20
+str /x hi b'\x01\x02\x03'
+== parse 2f7800002c726d00ff8000c00190407f
+msg '/x' [4286578880, (1, 144, 64, 127)] size 16
+str /x 4286578880 (1, 144, 64, 127)
+== parse 2f7800002c54464e00000000
+msg '/x' [True, False, None] size 12
+str /x True False None
+== parse 2f7800002c5b695b665d5d000000000740000000
+msg '/x' [[7, [2.0]]] size 20
+str /x [7, [2.0]]
+== parse 2f7800002c740000e93c7f0080000000
+msg '/x' [(datetime.datetime(2024, 1, 1, 0, 0), 2147483648)] size 16
+str /x (datetime.datetime(2024, 1, 1, 0, 0), 2147483648)
+== parse 2f7800002c7400000000000000000001
+msg '/x' [(datetime.datetime(1900, 1, 1, 0, 0), 1)] size 16
+str /x (datetime.datetime(1900, 1, 1, 0, 0), 1)
+== parse 2f7800002c740000ffffffffffffffff
+msg '/x' [(datetime.datetime(2036, 2, 7, 6, 28, 15), 4294967295)] size 16
+str /x (datetime.datetime(2036, 2, 7, 6, 28, 15), 4294967295)
+== parse 2f7800002c6600003f80
+msg '/x' [1.0] size 10
+str /x 1.0
+== parse 2f7800002c660000
+msg '/x' [0.0] size 8
+str /x 0.0
+== parse 2f7800002c6900000001
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Datagram is too short'))
+== parse 2f7800002c64000000000000000000
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Datagram is too short'))
+== parse 2f7800002c68000000000000
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Datagram is too short'))
+== parse 2f7800002c730000616263
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Could not parse datagram index out of range'))
+== parse 2f7800002c73000061626364
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Could not parse datagram index out of range'))
+== parse 2f7800002c620000000000080102
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Datagram is too short.'))
+== parse 2f7800002c6266000000000107
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Could not parse datagram unpack requires a buffer of 4 bytes'))
+== parse 2f7800002c626900ffffffec0000000500000006
+msg '/x' [b'', 5] size 20
+str /x b'' 5
+== parse 2f7800002c626400fffffff40000000000000000
+msg '/x' [b'', 5.060255570541027e-80] size 20
+str /x b'' 5.060255570541027e-80
+== parse 2f7800006900000000000001
+error osc_message.ParseError: OSC Type Tag String must start with a comma, got: i
+== parse 2f7800002c69695b000000000000000100000002
+error osc_message.ParseError: Missing closing bracket in type tag: ii[
+== parse 2f7800002c695d0000000001
+error osc_message.ParseError: Unexpected closing bracket in type tag: i]
+== parse 2f7800002c71690000000009
+log WARNING:root:Unhandled parameter type: q
+msg '/x' [9] size 12
+str /x 9
+== parse 2f7800002c635300
+log WARNING:root:Unhandled parameter type: c
+log WARNING:root:Unhandled parameter type: S
+msg '/x' [] size 8
+str /x 
+== parse 2f7469746c65732f636166c3a90000002c7300006372c3a86d650000
+msg '/titles/café' ['crème'] size 28
+str /titles/café crème
+== parse 2f61
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Could not parse datagram index out of range'))
+== parse -
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Could not parse datagram index out of range'))
+== parse 2f616263
+error osc_message.ParseError: ('Found incorrect datagram, ignoring it', ParseError('Could not parse datagram index out of range'))
+== parse 2f78000000000000
+error osc_message.ParseError: OSC Type Tag String must start with a comma, got: 
+== parse 2f7800002c6600007f800000
+msg '/x' [inf] size 12
+str /x inf
+== parse 2f7800002c6666000000000180000000
+msg '/x' [1.401298464324817e-45, -0.0] size 16
+str /x 1.401298464324817e-45 -0.0
+== parse 2f7800002c6600007fc00000
+msg '/x' [nan] size 12
+str /x nan
+== bundle b1 imm go fader
+dgram 2362756e646c65000000000000000001000000102f6375652f31322f676f00002c0000000000001c2f6d697865722f63682f332f66616465720000002c6600003f400000
+bundle ts 0 n 2 size 68
+  msg '/cue/12/go' [] size 16
+  str /cue/12/go 
+  msg '/mixer/ch/3/fader' [0.75] size 28
+  str /mixer/ch/3/fader 0.75
+== bundle b2 f1700000000.25 mute b1
+dgram 2362756e646c6500e8fe6f8040000000000000182f6d697865722f63682f332f6d757465000000002c540000000000442362756e646c65000000000000000001000000102f6375652f31322f676f00002c0000000000001c2f6d697865722f63682f332f66616465720000002c6600003f400000
+bundle ts 1700000000.25 n 2 size 116
+  msg '/mixer/ch/3/mute' [True] size 24
+  str /mixer/ch/3/mute True
+  bundle ts 0 n 2 size 68
+    msg '/cue/12/go' [] size 16
+    str /cue/12/go 
+    msg '/mixer/ch/3/fader' [0.75] size 28
+    str /mixer/ch/3/fader 0.75
+== bundle b3 i1700000010 dimmer
+dgram 2362756e646c6500e8fe6f8a00000000000000182f6c696768742f64696d6d65722f37002c690000000000ff
+bundle ts 1700000010.0 n 1 size 44
+  msg '/light/dimmer/7' [255] size 24
+  str /light/dimmer/7 255
+== bundle b4 f0.0 go
+dgram 2362756e646c65000000000000000001000000102f6375652f31322f676f00002c000000
+bundle ts 0 n 1 size 36
+  msg '/cue/12/go' [] size 16
+  str /cue/12/go 
+== bundle b5 i0 
+dgram 2362756e646c65000000000000000001
+bundle ts 0 n 0 size 16
+== bundle b6 f1.5 b2 b3 name
+dgram 2362756e646c650083aa7e8180000000000000742362756e646c6500e8fe6f8040000000000000182f6d697865722f63682f332f6d757465000000002c540000000000442362756e646c65000000000000000001000000102f6375652f31322f676f00002c0000000000001c2f6d697865722f63682f332f66616465720000002c6600003f4000000000002c2362756e646c6500e8fe6f8a00000000000000182f6c696768742f64696d6d65722f37002c690000000000ff000000242f6375652f31322f6e616d65000000002c730000416374203220e280942053746f726d00
+bundle ts 1.5 n 3 size 224
+  bundle ts 1700000000.25 n 2 size 116
+    msg '/mixer/ch/3/mute' [True] size 24
+    str /mixer/ch/3/mute True
+    bundle ts 0 n 2 size 68
+      msg '/cue/12/go' [] size 16
+      str /cue/12/go 
+      msg '/mixer/ch/3/fader' [0.75] size 28
+      str /mixer/ch/3/fader 0.75
+  bundle ts 1700000010.0 n 1 size 44
+    msg '/light/dimmer/7' [255] size 24
+    str /light/dimmer/7 255
+  msg '/cue/12/name' ['Act 2 — Storm'] size 36
+  str /cue/12/name Act 2 — Storm
+== bundle - f-2208988801.0 go
+error struct.error: 'Q' format requires 0 <= number <= 18446744073709551615
+== bundle - fnan go
+error ValueError: cannot convert float NaN to integer
+== bundle - finf go
+error OverflowError: cannot convert float infinity to integer
+== bundle - f1e20 go
+error struct.error: 'Q' format requires 0 <= number <= 18446744073709551615
+== bundle b7 f-2208988800.0 go
+dgram 2362756e646c65000000000000000000000000102f6375652f31322f676f00002c000000
+bundle ts -2208988800.0 n 1 size 36
+  msg '/cue/12/go' [] size 16
+  str /cue/12/go 
+== bundle b8 f2085978495.9999998 go
+error struct.error: 'Q' format requires 0 <= number <= 18446744073709551615
+== bparse 2362756e646c65000000000000000001
+bundle ts 0 n 0 size 16
+== bparse 2362756e646c650000000000
+error osc_bundle.ParseError: Could not get the date from the datagram: Datagram is too short
+== bparse 2362756e646c6500
+error osc_bundle.ParseError: Could not get the date from the datagram: Datagram is too short
+== bparse 2362756e646c650000000000000000010000000c2f6100002c69000000000001
+bundle ts 0 n 1 size 32
+  msg '/a' [1] size 12
+  str /a 1
+== bparse 2362756e646c65000000000000000001000000082f61000000000000
+error osc_bundle.ParseError: Could not parse a content datagram: OSC Type Tag String must start with a comma, got: 
+== bparse 2362756e646c65000000000000000001000000087a7a7a7a7a7a7a7a
+log WARNING:root:Could not identify content type of dgram b'zzzzzzzz'
+bundle ts 0 n 0 size 28
+== bparse 2362756e646c650000000000000000010000
+error osc_bundle.ParseError: Could not parse a content datagram: Datagram is too short
+== bparse 2362756e646c65000000000000000001000000402f610000
+bundle ts 0 n 1 size 24
+  msg '/a' [] size 4
+  str /a 
+== bparse 2362756e646c65000000000000000001000000102362756e646c65000000
+error osc_bundle.ParseError: Could not get the date from the datagram: Datagram is too short
+== bparse 2362756e646c65000000000000000001000000082f61000069000000
+error osc_bundle.ParseError: Could not parse a content datagram: OSC Type Tag String must start with a comma, got: i
+== bparse 2362756e646c6500e8a8f8c040000000000000082f620000
+bundle ts 1694399040.25 n 1 size 24
+  msg '/b' [] size 4
+  str /b 
+== packet 1700000005.5 2f6375652f312f676f000000
+at 1700000005.5
+  msg '/cue/1/go' [] size 12
+  str /cue/1/go 
+== packet 1700000005.5 -
+error osc_packet.ParseError: OSC Packet should at least contain an OscMessage or an OscBundle.
+== packet 1700000005.5 7a7a
+error osc_packet.ParseError: OSC Packet should at least contain an OscMessage or an OscBundle.
+== packet 1700000005.5 2362756e646c65000000000000000001000000082f61000069000000
+error osc_packet.ParseError: Could not parse packet Could not parse a content datagram: OSC Type Tag String must start with a comma, got: i
+== packet 1700000005.5 2f7800002c69000000
+error osc_packet.ParseError: Could not parse packet ('Found incorrect datagram, ignoring it', ParseError('Datagram is too short'))
+== ntp tontp imm
+0000000000000001
+== ntp tontp i0
+0000000000000001
+== ntp tontp f1700000000.5
+e8fe6f8080000000
+== ntp tontp i-2208988800
+0000000000000000
+== ntp tontp i-2208988801
+error struct.error: 'Q' format requires 0 <= number <= 18446744073709551615
+== ntp tontp f2085978495.0
+ffffffff00000000
+== ntp tontp f2085978496.0
+error struct.error: 'Q' format requires 0 <= number <= 18446744073709551615
+== ntp tontp fnan
+error ValueError: cannot convert float NaN to integer
+== ntp tontp f-inf
+error OverflowError: cannot convert float infinity to integer
+== ntp tontp f1e-10
+83aa7e8000000000
+== ntp tontp f123.456
+83aa7efb74bc6800
+== ntp tosys 0000000000000000
+-2208988800.0
+== ntp tosys 8000000000000000
+-61505152.0
+== ntp tosys e8a8f8c040000000
+1694399040.25
+== ntp tosys ffffffffffffffff
+2085978496.0
+== ntp tosys 0102
+error ntp.NtpError: unpack requires a buffer of 8 bytes
+== ntp tosys -
+error ntp.NtpError: unpack requires a buffer of 8 bytes
+== ntp parse 0
+Timestamp(seconds=0, fraction=0)
+== ntp parse 1
+Timestamp(seconds=0, fraction=1)
+== ntp parse 4294967296
+Timestamp(seconds=1, fraction=0)
+== ntp parse 18446744073709551615
+Timestamp(seconds=4294967295, fraction=4294967295)
+== ntp parse 16827547062009102336
+Timestamp(seconds=3917968613, fraction=2419621888)
+== slip enc -
+c0c0
+== slip enc 010203
+c0010203c0
+== slip enc c0
+c0dbdcc0
+== slip enc db
+c0dbddc0
+== slip enc c0db
+c0dbdcdbddc0
+== slip enc 68656c6c6fc0776f726c64db
+c068656c6c6fdbdc776f726c64dbddc0
+== slip enc dbdc
+c0dbdddcc0
+== slip dec c00102c0
+0102
+== slip valid c00102c0
+True
+== slip dec c0dbdcdbddc0
+c0db
+== slip valid c0dbdcdbddc0
+True
+== slip dec c0c0c0
+(empty)
+== slip valid c0c0c0
+True
+== slip dec -
+(empty)
+== slip valid -
+True
+== slip dec c0dbc0
+error slip.ProtocolError: b'\xc0\xdb\xc0'
+== slip valid c0dbc0
+False
+== slip dec dbdb
+error slip.ProtocolError: b'\xdb\xdb'
+== slip valid dbdb
+False
+== slip dec c0db
+error slip.ProtocolError: b'\xc0\xdb'
+== slip valid c0db
+False
+== slip dec 0102
+0102
+== slip valid 0102
+True
+== slip dec c001c002c0
+error slip.ProtocolError: b'\xc0\x01\xc0\x02\xc0'
+== slip valid c001c002c0
+False
+== slip dec c0c001c0c0
+01
+== slip valid c0c001c0c0
+True
+== slip dec dbdddbdc
+dbc0
+== slip valid dbdddbdc
+True
+== slip dec c0dbddc0c0
+db
+== slip valid c0dbddc0c0
+True
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/1/fader
+['/mixer/ch/1/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/?/fader
+['/mixer/ch/1/fader', '/mixer/ch/2/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/*/fader
+['/mixer/ch/1/fader', '/mixer/ch/2/fader', '/mixer/ch/10/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/1*
+['/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[12]/fader
+['/mixer/ch/1/fader', '/mixer/ch/2/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[!1]/fader
+['/mixer/ch/2/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[0-9]/fader
+['/mixer/ch/1/fader', '/mixer/ch/2/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[0-9][0-9]/fader
+['/mixer/ch/10/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/{ch,bus}/*
+['/mixer/bus/a', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/{1,10}/fader
+['/mixer/ch/1/fader', '/mixer/ch/10/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /cue/12/{go,name}
+['/cue/12/go', '/cue/12/name']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /*/*/*
+['/mixer/bus/a', '/light/dimmer/7', '/cue/12/go', '/cue/12/name', '/cue/*/go', '/light/dim+er/7']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /*
+['/a.b', '/odd-name', '/x+y', '/a.c']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x *
+[]
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/1/*e*
+['/mixer/ch/1/fader', '/mixer/ch/1/mute', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /a.b
+['/a.b']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /a?b
+['/a.b']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /a[.]b
+['/a.b']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /odd-name
+['/odd-name']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /odd[-]name
+['/odd-name']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /x+y
+['/x+y']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /[a-c].b
+['/a.b']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[]/fader
+[]
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[z-a]/fader
+[]
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[!]/fader
+[]
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /cue/{}/go
+['/cue/*/go']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /cue/{12,}/go
+['/cue/12/go', '/cue/*/go']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[1-]/fader
+['/mixer/ch/1/fader', '/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /light/dimmer/7
+['/light/dimmer/7']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /light/dimmmer/7
+[]
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /opt/x
+[]
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /op/x
+[]
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/bus/a/b
+['/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /a.c
+['/a.c']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /abc
+[]
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/1/fader/
+['/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/ch/[\]/fader
+['/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /[^m]ixer/bus/a
+['/mixer/bus/a']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/b(us)/a
+['/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /mixer/b$/a
+['/mixer/*']
+== match /mixer/ch/1/fader | /mixer/ch/2/fader | /mixer/ch/10/fader | /mixer/ch/1/mute | /mixer/bus/a | /light/dimmer/7 | /cue/12/go | /cue/12/name | /a.b | a/b | /odd-name | /x+y | /mixer/* | /cue/*/go | /light/dim+er/7 | /a.c | /opt?/x /cue/12/go?
+[]
+== serve udp 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log 2f6d697865722f63682f312f66616465720000002c6600003f000000,2f6d697865722f63682f342f66616465720000002c6600003e800000,2f6375652f31322f676f00002c000000,2f6375652f332f676f0000002c000000,2f756e6b6e6f776e2f616464720000002c69000000000001,2f77686f000000002c69000000000002,2f6d697865722f63682f5b312d325d2f66616465720000002c6600003f800000,2f6d697865722f2a2f312f6661646572000000002c66000000000000,7a7a7a7a,2362756e646c65000000000000000001000000102f6375652f31322f676f00002c0000000000001c2f6d697865722f63682f312f66616465720000002c6600003e000000,2362756e646c6500e8fe6f8780000000000000102f6375652f332f676f0000002c000000000000302362756e646c6500e8fe6f86000000000000001c2f6d697865722f63682f322f66616465720000002c6600003f0000000000001c2f6d697865722f63682f312f66616465720000002c6600003f400000,2362756e646c6500e3088e8000000000000000102f6375652f372f676f0000002c000000,2f626164000000002c000000,2f6d697865722f63682f312f66616465720000002c73000078000000,2f656d70747900002c000000,2f6375652f31322f676f00002c69000000,
+<< 2f6d697865722f63682f312f66616465720000002c6600003f000000
+  log('/mixer/ch/1/fader', 0.5)
+  echo('/mixer/ch/1/fader', 0.5)
+>> 2f6563686f0000002c6600003f000000 /echo 0.5
+<< 2f6d697865722f63682f342f66616465720000002c6600003e800000
+  log('/mixer/ch/4/fader', 0.25)
+<< 2f6375652f31322f676f00002c000000
+  ack('/cue/12/go',)
+  log('/cue/12/go', [1, 'stage-left'])
+>> 2f61636b000000002c000000 /ack 
+<< 2f6375652f332f676f0000002c000000
+  ack('/cue/3/go',)
+>> 2f61636b000000002c000000 /ack 
+<< 2f756e6b6e6f776e2f616464720000002c69000000000001
+  log('/unknown/addr', 1)
+<< 2f77686f000000002c69000000000002
+  who(('192.168.1.20', 53000), '/who', 2)
+>> 2f7365656e0000002c7369003139322e3136382e312e3230000000000000cf08 /seen 192.168.1.20 53000
+<< 2f6d697865722f63682f5b312d325d2f66616465720000002c6600003f800000
+  log('/mixer/ch/[1-2]/fader', 1.0)
+  echo('/mixer/ch/[1-2]/fader', 1.0)
+>> 2f6563686f0000002c6600003f800000 /echo 1.0
+<< 2f6d697865722f2a2f312f6661646572000000002c66000000000000
+  echo('/mixer/*/1/fader', 0.0)
+>> 2f6563686f0000002c66000000000000 /echo 0.0
+<< 7a7a7a7a
+ignored
+<< 2362756e646c65000000000000000001000000102f6375652f31322f676f00002c0000000000001c2f6d697865722f63682f312f66616465720000002c6600003e000000
+  ack('/cue/12/go',)
+  log('/cue/12/go', [1, 'stage-left'])
+  log('/mixer/ch/1/fader', 0.125)
+  echo('/mixer/ch/1/fader', 0.125)
+>> 2f61636b000000002c000000 /ack 
+>> 2f6563686f0000002c6600003e000000 /echo 0.125
+<< 2362756e646c6500e8fe6f8780000000000000102f6375652f332f676f0000002c000000000000302362756e646c6500e8fe6f86000000000000001c2f6d697865722f63682f322f66616465720000002c6600003f0000000000001c2f6d697865722f63682f312f66616465720000002c6600003f400000
+  sleep 1.0
+  log('/mixer/ch/2/fader', 0.5)
+  sleep 1.5
+  ack('/cue/3/go',)
+  log('/mixer/ch/1/fader', 0.75)
+  echo('/mixer/ch/1/fader', 0.75)
+>> 2f61636b000000002c000000 /ack 
+>> 2f6563686f0000002c6600003f400000 /echo 0.75
+<< 2362756e646c6500e3088e8000000000000000102f6375652f372f676f0000002c000000
+  ack('/cue/7/go',)
+>> 2f61636b000000002c000000 /ack 
+<< 2f626164000000002c000000
+  bad('/bad',)
+error ValueError: Inferred arg_value type is not supported
+<< 2f6d697865722f63682f312f66616465720000002c73000078000000
+  log('/mixer/ch/1/fader', 'x')
+  echo('/mixer/ch/1/fader', 'x')
+>> 2f6563686f0000002c73000078000000 /echo x
+<< 2f656d70747900002c000000
+  empty('/empty',)
+error osc_message_builder.BuildError: OSC addresses cannot be empty
+<< 2f6375652f31322f676f00002c69000000
+<< (empty)
+ignored
+== serve udp 1700000005.0 strict 0 | map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log 2362756e646c6500e8fe6f8900000000000000102f6375652f332f676f0000002c0000000000001c2f6d697865722f63682f312f66616465720000002c6600003f000000
+<< 2362756e646c6500e8fe6f8900000000000000102f6375652f332f676f0000002c0000000000001c2f6d697865722f63682f312f66616465720000002c6600003f000000
+  ack('/cue/3/go',)
+  log('/mixer/ch/1/fader', 0.5)
+  echo('/mixer/ch/1/fader', 0.5)
+>> 2f61636b000000002c000000 /ack 
+>> 2f6563686f0000002c6600003f000000 /echo 0.5
+== serve udp 1700000005.0 map /cue/1/go log | unmap /cue/1/go log | unmap /cue/9/go log | unmap /never ack | default ack | map /m log | map /m log | unmap /m log 2f6375652f312f676f0000002c000000,2f6375652f392f676f0000002c000000,2f6e6576657200002c000000,2f6f7468657200002c000000,2f6d00002c69000000000001
+unmap error: Address '/cue/9/go' doesn't have handler '<log>' mapped to it
+unmap error: Address '/never' doesn't have handler '<ack>' mapped to it
+<< 2f6375652f312f676f0000002c000000
+<< 2f6375652f392f676f0000002c000000
+<< 2f6e6576657200002c000000
+<< 2f6f7468657200002c000000
+  ack('/other',)
+>> 2f61636b000000002c000000 /ack 
+<< 2f6d00002c69000000000001
+  log('/m', 1)
+== serve udp 1700000005.0 map /a log | default - 2f6100002c000000,2f6200002c000000
+<< 2f6100002c000000
+  log('/a',)
+<< 2f6200002c000000
+== serve tcp10 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log 0000001c2f6d697865722f63682f312f66616465720000002c6600003f000000000000102f6375652f31322f676f00002c0000000000000c2f77686f000000002c000000
+<< 2f6d697865722f63682f312f66616465720000002c6600003f000000
+  log('/mixer/ch/1/fader', 0.5)
+  echo('/mixer/ch/1/fader', 0.5)
+>> 000000102f6563686f0000002c6600003f000000 /echo 0.5
+<< 2f6375652f31322f676f00002c000000
+  ack('/cue/12/go',)
+  log('/cue/12/go', [1, 'stage-left'])
+>> 0000000c2f61636b000000002c000000 /ack 
+<< 2f77686f000000002c000000
+  who(('192.168.1.20', 53000), '/who')
+>> 000000202f7365656e0000002c7369003139322e3136382e312e3230000000000000cf08 /seen 192.168.1.20 53000
+closed
+== serve tcp10 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log 0000001c2f6d697865722f63682f312f66616465720000002c6600003f000000000000102f6375652f31322f676f00002c0000000000000c2f77686f000000002c000000000000
+<< 2f6d697865722f63682f312f66616465720000002c6600003f000000
+  log('/mixer/ch/1/fader', 0.5)
+  echo('/mixer/ch/1/fader', 0.5)
+>> 000000102f6563686f0000002c6600003f000000 /echo 0.5
+<< 2f6375652f31322f676f00002c000000
+  ack('/cue/12/go',)
+  log('/cue/12/go', [1, 'stage-left'])
+>> 0000000c2f61636b000000002c000000 /ack 
+<< 2f77686f000000002c000000
+  who(('192.168.1.20', 53000), '/who')
+>> 000000202f7365656e0000002c7369003139322e3136382e312e3230000000000000cf08 /seen 192.168.1.20 53000
+closed
+== serve tcp10 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log 000000282f6375652f31322f676f00002c000000
+closed
+== serve tcp10 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log 000000082f626164000000002c0000000000000c2f6375652f31322f676f00002c000000
+<< 2f62616400000000
+  bad('/bad',)
+error ValueError: Inferred arg_value type is not supported
+== serve tcp11 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log c02f6d697865722f63682f312f66616465720000002c6600003f000000c0c02f6375652f332f676f0000002c000000c0c02f77686f000000002c62000000000002dbdcdbdd0000c0
+<< 2f6d697865722f63682f312f66616465720000002c6600003f000000
+  log('/mixer/ch/1/fader', 0.5)
+  echo('/mixer/ch/1/fader', 0.5)
+>> c02f6563686f0000002c6600003f000000c0 /echo 0.5
+<< 2f6375652f332f676f0000002c000000
+  ack('/cue/3/go',)
+>> c02f61636b000000002c000000c0 /ack 
+<< 2f77686f000000002c62000000000002c0db0000
+  who(('192.168.1.20', 53000), '/who', b'\xc0\xdb')
+>> c02f7365656e0000002c7369003139322e3136382e312e3230000000000000cf08c0 /seen 192.168.1.20 53000
+closed
+== serve tcp11 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log c02f6375652f31322f676f00002c000000c0c0dbc0
+error slip.ProtocolError: b'\xdb\xc0'
+== serve tcp11 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log c02f6375652f31322f676f00002c000000
+<< 2f6375652f31322f676f00002c000000
+  ack('/cue/12/go',)
+  log('/cue/12/go', [1, 'stage-left'])
+>> c02f61636b000000002c000000c0 /ack 
+closed
+== serve tcp11 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log c0c0c02f6d697865722f63682f312f66616465720000002c6600003f000000c0
+<< (empty)
+<< 2f6d697865722f63682f312f66616465720000002c6600003f000000
+  log('/mixer/ch/1/fader', 0.5)
+  echo('/mixer/ch/1/fader', 0.5)
+>> c02f6563686f0000002c6600003f000000c0 /echo 0.5
+closed
+== serve tcp11 1700000005.0 map /mixer/ch/*/fader log | map /mixer/ch/1/fader echo | map /cue/*/go ack | map /cue/12/go log i1 s73746167652d6c656674 | mapr /who who | map /bad bad | map /empty empty | default log c02f626164000000002c000000c0c02f6375652f31322f676f00002c000000c0
+<< 2f626164000000002c000000
+  bad('/bad',)
+error ValueError: Inferred arg_value type is not supported

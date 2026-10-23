@@ -1,0 +1,2563 @@
+// mini_pythonosc: python-osc 1.10.2 (Unlicense, attwad),
+// the Open Sound Control library that lighting desks, QLab, TouchOSC and
+// digital mixers are driven from, ported module by module: the type
+// codecs of parsing/osc_types.py, the NTP helpers, OscMessage and its
+// builder, OscBundle and its builder, OscPacket, SLIP framing and the
+// Dispatcher with its address-pattern matching, then the UDP, TCP 1.0 and
+// TCP 1.1 server loops replayed over captured traffic.
+//
+// The jobs come from data/jobs.tsv (embedded by gen_kara.py). Each job
+// prints "== " and its fields, then what the library returns or raises;
+// an exception prints as "error <module.Class>: <message>".
+//
+// No compiler gaps were hit.
+
+// ------------------------------------------------------------ values
+
+// A Python value as python-osc sees it. Stamp is the (datetime, fraction)
+// tuple get_timetag returns, the datetime held as seconds since 1900.
+#[derive(Clone)]
+enum Val {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bytes(Vec[u8]),
+    Bool(bool),
+    Nil,
+    Tuple(Vec[Val]),
+    List(Vec[Val]),
+    Stamp(i64, i64),
+}
+
+// An explicit argument type: a type letter, or a list of types.
+#[derive(Clone)]
+enum Ty {
+    Code(String),
+    Many(Vec[Ty]),
+}
+
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: ref String, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+const TYPES_PARSE: String = "osc_types.ParseError";
+const TYPES_BUILD: String = "osc_types.BuildError";
+const MSG_PARSE: String = "osc_message.ParseError";
+const BUILDER_ERR: String = "osc_message_builder.BuildError";
+const BUNDLE_PARSE: String = "osc_bundle.ParseError";
+const PACKET_PARSE: String = "osc_packet.ParseError";
+
+fn type_name(v: ref Val) -> String {
+    match v {
+        Val.Int(_) => "int".to_string(),
+        Val.Float(_) => "float".to_string(),
+        Val.Str(_) => "str".to_string(),
+        Val.Bytes(_) => "bytes".to_string(),
+        Val.Bool(_) => "bool".to_string(),
+        Val.Nil => "NoneType".to_string(),
+        Val.Tuple(_) => "tuple".to_string(),
+        Val.List(_) => "list".to_string(),
+        Val.Stamp(_, _) => "tuple".to_string(),
+    }
+}
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Int(n) => *n != 0,
+        Val.Float(x) => *x != 0.0,
+        Val.Str(s) => not s.is_empty(),
+        Val.Bytes(b) => not b.is_empty(),
+        Val.Bool(b) => *b,
+        Val.Nil => false,
+        Val.Tuple(xs) => not xs.is_empty(),
+        Val.List(xs) => not xs.is_empty(),
+        Val.Stamp(_, _) => true,
+    }
+}
+
+fn hex_digit(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'a' + n - 10 }
+}
+
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let quote = if b.contains(b'\'') and not b.contains(b'"') { b'"' } else { b'\'' };
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(quote);
+    for c in b.iter() {
+        let c = *c;
+        if c == quote or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex_digit(c / 16));
+            out.push(hex_digit(c % 16));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    String.from_utf8(out).unwrap()
+}
+
+// Python's str repr. Every non-ASCII character is taken as printable.
+fn str_repr(s: ref String) -> String {
+    let b = s.bytes();
+    let quote = if b.contains(b'\'') and not b.contains(b'"') { b'"' } else { b'\'' };
+    let mut out: Vec[u8] = Vec.new();
+    out.push(quote);
+    for c in b.iter() {
+        let c = *c;
+        if c == quote or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex_digit(c / 16));
+            out.push(hex_digit(c % 16));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    String.from_utf8(out).unwrap()
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn is_inf(x: f64) -> bool {
+    x == 1.0 / 0.0 or x == -1.0 / 0.0
+}
+
+// Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+fn civil(days: i64) -> (i64, i64, i64) {
+    let z = days + 719468;
+    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+// repr((datetime(1900, 1, 1) + timedelta(seconds=secs), frac))
+fn stamp_repr(secs: i64, frac: i64) -> String {
+    let (y, m, d) = civil(secs / 86400 - 25567);
+    let rem = secs % 86400;
+    let h = rem / 3600;
+    let mi = rem % 3600 / 60;
+    let s = rem % 60;
+    let dt = if s != 0 {
+        f"datetime.datetime({y}, {m}, {d}, {h}, {mi}, {s})"
+    } else {
+        f"datetime.datetime({y}, {m}, {d}, {h}, {mi})"
+    };
+    f"({dt}, {frac})"
+}
+
+fn join_repr(xs: ref Vec[Val]) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs.iter() {
+        if not first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(repr(x));
+    }
+    out
+}
+
+fn repr(v: ref Val) -> String {
+    match v {
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => float_repr(*x),
+        Val.Str(s) => str_repr(s),
+        Val.Bytes(b) => bytes_repr(b),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Nil => "None".to_string(),
+        Val.Tuple(xs) => {
+            if xs.len() == 1 {
+                f"({repr(xs[0])},)"
+            } else {
+                f"({join_repr(xs)})"
+            }
+        }
+        Val.List(xs) => f"[{join_repr(xs)}]",
+        Val.Stamp(s, f) => stamp_repr(*s, *f),
+    }
+}
+
+fn str_of(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => repr(v),
+    }
+}
+
+// ------------------------------------------------------------ bytes
+
+fn norm(i: i64, n: i64) -> i64 {
+    if i < 0 {
+        let j = i + n;
+        if j < 0 { 0 } else { j }
+    } else if i > n {
+        n
+    } else {
+        i
+    }
+}
+
+// d[a:b] with Python's slice rules, negative indices included.
+fn pyslice(d: ref Vec[u8], a: i64, b: i64) -> Vec[u8] {
+    let x = norm(a, d.len());
+    let y = norm(b, d.len());
+    if x >= y { Vec.new() } else { d[x..y].to_vec() }
+}
+
+// len(d[a:])
+fn len_from(d: ref Vec[u8], a: i64) -> i64 {
+    d.len() - norm(a, d.len())
+}
+
+fn pymod(a: i64, m: i64) -> i64 {
+    let r = a % m;
+    if r < 0 { r + m } else { r }
+}
+
+fn starts(d: ref Vec[u8], p: ref Vec[u8]) -> bool {
+    if d.len() < p.len() {
+        return false;
+    }
+    let mut i: i64 = 0;
+    while i < p.len() {
+        if d[i] != p[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn same(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    a.len() == b.len() and starts(a, b)
+}
+
+fn hex(d: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in d.iter() {
+        out.push(hex_digit(*c / 16));
+        out.push(hex_digit(*c % 16));
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_value(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push((hex_value(b[i]) * 16 + hex_value(b[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn be(d: ref Vec[u8]) -> u64 {
+    let mut v: u64 = 0;
+    for c in d.iter() {
+        v = (v << 8) | (*c as u64);
+    }
+    v
+}
+
+fn put_be(out: mut ref Vec[u8], v: u64, n: i64) {
+    let mut k = n - 1;
+    while k >= 0 {
+        out.push(((v >> ((k * 8) as u64)) & 255) as u8);
+        k -= 1;
+    }
+}
+
+fn bundle_prefix() -> Vec[u8] {
+    vec![b'#', b'b', b'u', b'n', b'd', b'l', b'e', 0]
+}
+
+fn immediately() -> Vec[u8] {
+    vec![0, 0, 0, 0, 0, 0, 0, 1]
+}
+
+// ------------------------------------------------------------ osc_types
+
+fn too_short() -> Exc {
+    exc(TYPES_PARSE, "Datagram is too short".to_string())
+}
+
+// dgram[i : i + n] for struct.unpack, which wants exactly n bytes.
+fn fixed(d: ref Vec[u8], start: i64, n: i64) -> Result[Vec[u8], Exc] {
+    if len_from(d, start) < n {
+        return Err(too_short());
+    }
+    let s = pyslice(d, start, start + n);
+    if s.len() != n {
+        return Err(exc(TYPES_PARSE, f"Could not parse datagram unpack requires a buffer of {n} bytes"));
+    }
+    Ok(s)
+}
+
+fn get_string(d: ref Vec[u8], start: i64) -> Result[(String, i64), Exc] {
+    if start < 0 {
+        return Err(exc(TYPES_PARSE, "start_index < 0".to_string()));
+    }
+    let mut off: i64 = 0;
+    loop {
+        if start + off >= d.len() {
+            return Err(exc(TYPES_PARSE, "Could not parse datagram index out of range".to_string()));
+        }
+        if d[start + off] == 0 {
+            break;
+        }
+        off += 1;
+    }
+    let mut total = off + 1;
+    if total % 4 != 0 {
+        total += 4 - total % 4;
+    }
+    if start + total > d.len() {
+        return Err(too_short());
+    }
+    match String.from_utf8(d[start..start + off].to_vec()) {
+        Ok(s) => Ok((s, start + total)),
+        Err(_) => Err(exc("UnicodeDecodeError", "'utf-8' codec can't decode the string".to_string())),
+    }
+}
+
+fn get_int(d: ref Vec[u8], start: i64) -> Result[(i64, i64), Exc] {
+    let b = fixed(d, start, 4)?;
+    let u = be(b) as i64;
+    let v = if u >= 2147483648 { u - 4294967296 } else { u };
+    Ok((v, start + 4))
+}
+
+fn get_int64(d: ref Vec[u8], start: i64) -> Result[(i64, i64), Exc] {
+    let b = fixed(d, start, 8)?;
+    Ok((be(b) as i64, start + 8))
+}
+
+fn get_uint64(d: ref Vec[u8], start: i64) -> Result[(u64, i64), Exc] {
+    let b = fixed(d, start, 8)?;
+    Ok((be(b), start + 8))
+}
+
+fn get_timetag(d: ref Vec[u8], start: i64) -> Result[(Val, i64), Exc] {
+    if len_from(d, start) < 8 {
+        return Err(too_short());
+    }
+    let (t, _) = get_uint64(d, start)?;
+    Ok((Val.Stamp((t >> 32) as i64, (t & 4294967295) as i64), start + 8))
+}
+
+// Reaktor sends floats short, so a short float is padded with zeros.
+fn get_float(d: ref Vec[u8], start: i64) -> Result[(f64, i64), Exc] {
+    let have = len_from(d, start);
+    let s = if have < 4 {
+        let mut p = d.clone();
+        let mut k = have;
+        while k < 4 {
+            p.push(0);
+            k += 1;
+        }
+        pyslice(p, start, start + 4)
+    } else {
+        pyslice(d, start, start + 4)
+    };
+    if s.len() != 4 {
+        return Err(exc(TYPES_PARSE, "Could not parse datagram unpack requires a buffer of 4 bytes".to_string()));
+    }
+    let bits = be(s) as u32;
+    Ok((bits.bits_as_f32() as f64, start + 4))
+}
+
+fn get_double(d: ref Vec[u8], start: i64) -> Result[(f64, i64), Exc] {
+    let b = fixed(d, start, 8)?;
+    Ok((be(b).bits_as_f64(), start + 8))
+}
+
+fn get_blob(d: ref Vec[u8], start: i64) -> Result[(Vec[u8], i64), Exc] {
+    let (size, int_offset) = get_int(d, start)?;
+    let total = size + pymod(0 - size, 4);
+    let end = int_offset + size;
+    if end - start > len_from(d, start) {
+        return Err(exc(TYPES_PARSE, "Datagram is too short.".to_string()));
+    }
+    Ok((pyslice(d, int_offset, int_offset + size), int_offset + total))
+}
+
+fn get_rgba(d: ref Vec[u8], start: i64) -> Result[(i64, i64), Exc] {
+    let b = fixed(d, start, 4)?;
+    Ok((be(b) as i64, start + 4))
+}
+
+fn get_midi(d: ref Vec[u8], start: i64) -> Result[(Val, i64), Exc] {
+    let b = fixed(d, start, 4)?;
+    let mut items: Vec[Val] = Vec.new();
+    for c in b.iter() {
+        items.push(Val.Int(*c as i64));
+    }
+    Ok((Val.Tuple(items), start + 4))
+}
+
+// A bundle's time: IMMEDIATELY (the int 0) or seconds since 1970.
+#[derive(Clone)]
+enum Ts {
+    Imm,
+    At(f64),
+}
+
+fn ts_repr(t: ref Ts) -> String {
+    match t {
+        Ts.Imm => "0".to_string(),
+        Ts.At(x) => float_repr(*x),
+    }
+}
+
+fn ntp_to_seconds(t: u64) -> f64 {
+    (t as f64) * (1.0 / 4294967296.0) - 2208988800.0
+}
+
+fn get_date(d: ref Vec[u8], start: i64) -> Result[(Ts, i64), Exc] {
+    if same(pyslice(d, start, start + 8), immediately()) {
+        return Ok((Ts.Imm, start + 8));
+    }
+    if len_from(d, start) < 8 {
+        return Err(too_short());
+    }
+    let (t, next) = get_uint64(d, start)?;
+    Ok((Ts.At(ntp_to_seconds(t)), next))
+}
+
+// A timestamp given to write_date: an int or a float, as Python passes it.
+#[derive(Clone)]
+enum When {
+    I(i64),
+    F(f64),
+}
+
+fn write_date(w: ref When) -> Result[Vec[u8], Exc] {
+    let x = match w {
+        When.I(n) => {
+            if *n == 0 {
+                return Ok(immediately());
+            }
+            ((*n + 2208988800) as f64) * 4294967296.0
+        }
+        When.F(f) => {
+            if *f == 0.0 {
+                return Ok(immediately());
+            }
+            (*f + 2208988800.0) * 4294967296.0
+        }
+    };
+    if x != x {
+        return Err(exc("ValueError", "cannot convert float NaN to integer".to_string()));
+    }
+    if is_inf(x) {
+        return Err(exc("OverflowError", "cannot convert float infinity to integer".to_string()));
+    }
+    if x <= -1.0 or x >= 18446744073709551616.0 {
+        return Err(exc("struct.error", "'Q' format requires 0 <= number <= 18446744073709551615".to_string()));
+    }
+    let u: u64 = if x >= 9223372036854775808.0 {
+        ((x - 9223372036854775808.0) as i64) as u64 + 9223372036854775808
+    } else {
+        (x as i64) as u64
+    };
+    let mut out: Vec[u8] = Vec.new();
+    put_be(mut out, u, 8);
+    Ok(out)
+}
+
+fn int_of(v: ref Val) -> Option[i64] {
+    match v {
+        Val.Int(n) => Some(*n),
+        Val.Bool(b) => Some(if *b { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+fn float_of(v: ref Val) -> Option[f64] {
+    match v {
+        Val.Int(n) => Some(*n as f64),
+        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Val.Float(x) => Some(*x),
+        _ => None,
+    }
+}
+
+fn wrong(msg: ref String) -> Exc {
+    exc(TYPES_BUILD, f"Wrong argument value passed: {msg}")
+}
+
+fn pad4(out: mut ref Vec[u8]) {
+    let diff = 4 - out.len() % 4;
+    let mut k: i64 = 0;
+    while k < diff {
+        out.push(0);
+        k += 1;
+    }
+}
+
+fn write_string(v: ref Val) -> Result[Vec[u8], Exc] {
+    match v {
+        Val.Str(s) => {
+            let mut out: Vec[u8] = s.bytes().to_vec();
+            pad4(mut out);
+            Ok(out)
+        }
+        _ => Err(exc(TYPES_BUILD, f"Incorrect string, could not encode '{type_name(v)}' object has no attribute 'encode'")),
+    }
+}
+
+fn write_int(v: ref Val) -> Result[Vec[u8], Exc] {
+    match int_of(v) {
+        None => Err(wrong("required argument is not an integer")),
+        Some(n) => {
+            if n < -2147483648 or n > 2147483647 {
+                return Err(wrong("'i' format requires -2147483648 <= number <= 2147483647"));
+            }
+            let mut out: Vec[u8] = Vec.new();
+            put_be(mut out, (n & 4294967295) as u64, 4);
+            Ok(out)
+        }
+    }
+}
+
+fn write_int64(v: ref Val) -> Result[Vec[u8], Exc] {
+    match int_of(v) {
+        None => Err(wrong("required argument is not an integer")),
+        Some(n) => {
+            let mut out: Vec[u8] = Vec.new();
+            put_be(mut out, n as u64, 8);
+            Ok(out)
+        }
+    }
+}
+
+fn write_float(v: ref Val) -> Result[Vec[u8], Exc] {
+    match float_of(v) {
+        None => Err(wrong("required argument is not a float")),
+        Some(x) => {
+            let bits = x.to_bits32();
+            if not is_inf(x) and x == x and (bits & 0x7fffffff) == 0x7f800000 {
+                return Err(exc("OverflowError", "float too large to pack with f format".to_string()));
+            }
+            let mut out: Vec[u8] = Vec.new();
+            put_be(mut out, bits as u64, 4);
+            Ok(out)
+        }
+    }
+}
+
+fn write_double(v: ref Val) -> Result[Vec[u8], Exc] {
+    match float_of(v) {
+        None => Err(wrong("required argument is not a float")),
+        Some(x) => {
+            let mut out: Vec[u8] = Vec.new();
+            put_be(mut out, x.to_bits(), 8);
+            Ok(out)
+        }
+    }
+}
+
+fn write_blob(v: ref Val) -> Result[Vec[u8], Exc] {
+    if not truthy(v) {
+        return Err(exc(TYPES_BUILD, "Blob value cannot be empty".to_string()));
+    }
+    match v {
+        Val.Bytes(b) => {
+            let mut out = write_int(Val.Int(b.len()))?;
+            for c in b.iter() {
+                out.push(*c);
+            }
+            while out.len() % 4 != 0 {
+                out.push(0);
+            }
+            Ok(out)
+        }
+        Val.Str(_) | Val.List(_) | Val.Tuple(_) | Val.Stamp(_, _) => {
+            Err(exc("TypeError", f"can't concat {type_name(v)} to bytes"))
+        }
+        _ => Err(exc("TypeError", f"object of type '{type_name(v)}' has no len()")),
+    }
+}
+
+fn write_rgba(v: ref Val) -> Result[Vec[u8], Exc] {
+    match int_of(v) {
+        None => Err(wrong("required argument is not an integer")),
+        Some(n) => {
+            if n < 0 or n > 4294967295 {
+                return Err(wrong("'I' format requires 0 <= number <= 4294967295"));
+            }
+            let mut out: Vec[u8] = Vec.new();
+            put_be(mut out, n as u64, 4);
+            Ok(out)
+        }
+    }
+}
+
+fn str_chars(s: ref String) -> Vec[Val] {
+    let mut out: Vec[Val] = Vec.new();
+    for c in s.chars() {
+        let mut one = String.new();
+        one.push(c);
+        out.push(Val.Str(one));
+    }
+    out
+}
+
+// iter(v) as zip and the MIDI writer walk it.
+fn items_of(v: ref Val) -> Result[Vec[Val], Exc] {
+    match v {
+        Val.Str(s) => Ok(str_chars(s)),
+        Val.Bytes(b) => {
+            let mut out: Vec[Val] = Vec.new();
+            for c in b.iter() {
+                out.push(Val.Int(*c as i64));
+            }
+            Ok(out)
+        }
+        Val.List(xs) => Ok(xs.clone()),
+        Val.Tuple(xs) => Ok(xs.clone()),
+        // (datetime, fraction): the datetime stands in as the Stamp itself,
+        // which nothing in python-osc accepts either.
+        Val.Stamp(s, f) => Ok(vec![Val.Stamp(*s, *f), Val.Int(*f)]),
+        _ => Err(exc("TypeError", f"'{type_name(v)}' object is not iterable")),
+    }
+}
+
+fn write_midi(v: ref Val) -> Result[Vec[u8], Exc] {
+    let items = match v {
+        Val.Int(_) | Val.Float(_) | Val.Bool(_) | Val.Nil => {
+            return Err(exc("TypeError", f"object of type '{type_name(v)}' has no len()"));
+        }
+        _ => items_of(v)?,
+    };
+    if items.len() != 4 {
+        return Err(exc(TYPES_BUILD, "MIDI message length is invalid".to_string()));
+    }
+    let mut value: i64 = 0;
+    let mut pos: i64 = 0;
+    for it in items.iter() {
+        match int_of(it) {
+            Some(n) => value += (n & 255) << ((8 * (3 - pos)) as i64),
+            None => {
+                return Err(exc("TypeError", f"unsupported operand type(s) for &: '{type_name(it)}' and 'int'"));
+            }
+        }
+        pos += 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    put_be(mut out, value as u64, 4);
+    Ok(out)
+}
+
+// ------------------------------------------------------------ OscMessage
+
+#[derive(Clone)]
+struct Msg {
+    dgram: Vec[u8],
+    address: String,
+    params: Vec[Val],
+}
+
+// Where the output, the collected log records and the fake clock live.
+struct World {
+    out: String,
+    log: Vec[String],
+    clock: f64,
+}
+
+fn tail(s: ref String) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for c in s.chars() {
+        if not first {
+            out.push(c);
+        }
+        first = false;
+    }
+    out
+}
+
+fn parse_body(d: ref Vec[u8], w: mut ref World) -> Result[(String, Vec[Val]), Exc] {
+    let (address, i0) = get_string(d, 0)?;
+    if len_from(d, i0) == 0 {
+        return Ok((address, Vec.new()));
+    }
+    let (tag, i1) = get_string(d, i0)?;
+    let mut index = i1;
+    if not tag.starts_with(",") {
+        return Err(exc(MSG_PARSE, f"OSC Type Tag String must start with a comma, got: {tag}"));
+    }
+    let tt = tail(tag);
+    let mut stack: Vec[Vec[Val]] = Vec.new();
+    stack.push(Vec.new());
+    for c in tt.chars() {
+        let mut val = Val.Nil;
+        if c == 'i' {
+            let (n, j) = get_int(d, index)?;
+            val = Val.Int(n);
+            index = j;
+        } else if c == 'h' {
+            let (n, j) = get_int64(d, index)?;
+            val = Val.Int(n);
+            index = j;
+        } else if c == 'f' {
+            let (x, j) = get_float(d, index)?;
+            val = Val.Float(x);
+            index = j;
+        } else if c == 'd' {
+            let (x, j) = get_double(d, index)?;
+            val = Val.Float(x);
+            index = j;
+        } else if c == 's' {
+            let (s, j) = get_string(d, index)?;
+            val = Val.Str(s);
+            index = j;
+        } else if c == 'b' {
+            let (b, j) = get_blob(d, index)?;
+            val = Val.Bytes(b);
+            index = j;
+        } else if c == 'r' {
+            let (n, j) = get_rgba(d, index)?;
+            val = Val.Int(n);
+            index = j;
+        } else if c == 'm' {
+            let (m, j) = get_midi(d, index)?;
+            val = m;
+            index = j;
+        } else if c == 't' {
+            let (t, j) = get_timetag(d, index)?;
+            val = t;
+            index = j;
+        } else if c == 'T' {
+            val = Val.Bool(true);
+        } else if c == 'F' {
+            val = Val.Bool(false);
+        } else if c == 'N' {
+            val = Val.Nil;
+        } else if c == '[' {
+            stack.push(Vec.new());
+            continue;
+        } else if c == ']' {
+            if stack.len() < 2 {
+                return Err(exc(MSG_PARSE, f"Unexpected closing bracket in type tag: {tt}"));
+            }
+            let top = stack.pop().unwrap();
+            let mut parent = stack.pop().unwrap();
+            parent.push(Val.List(top));
+            stack.push(parent);
+            continue;
+        } else {
+            w.log.push(f"WARNING:root:Unhandled parameter type: {c}");
+            continue;
+        }
+        let mut cur = stack.pop().unwrap();
+        cur.push(val);
+        stack.push(cur);
+    }
+    if stack.len() != 1 {
+        return Err(exc(MSG_PARSE, f"Missing closing bracket in type tag: {tt}"));
+    }
+    Ok((address, stack.pop().unwrap()))
+}
+
+fn parse_message(d: own Vec[u8], w: mut ref World) -> Result[Msg, Exc] {
+    match parse_body(d, mut w) {
+        Ok((address, params)) => Ok(Msg { dgram: d, address: address, params: params }),
+        Err(e) => {
+            if e.kind == TYPES_PARSE {
+                Err(exc(MSG_PARSE, f"('Found incorrect datagram, ignoring it', ParseError({str_repr(e.msg)}))"))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn is_message(d: ref Vec[u8]) -> bool {
+    d.len() > 0 and d[0] == b'/'
+}
+
+fn msg_str(m: ref Msg) -> String {
+    let mut out = m.address.clone();
+    out.push_str(" ");
+    let mut first = true;
+    for p in m.params.iter() {
+        if not first {
+            out.push_str(" ");
+        }
+        first = false;
+        out.push_str(str_of(p));
+    }
+    out
+}
+
+// ------------------------------------------------------------ OscMessageBuilder
+
+struct Builder {
+    address: Val,
+    args: Vec[(String, Val)],
+}
+
+fn valid_type(t: ref Ty) -> bool {
+    match t {
+        Ty.Code(s) => {
+            s == "f" or s == "d" or s == "i" or s == "h" or s == "b" or s == "s" or s == "r" or s == "m" or s == "T" or s == "F" or s == "N"
+        }
+        Ty.Many(ts) => {
+            for x in ts.iter() {
+                if not valid_type(x) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+}
+
+fn ty_truthy(t: ref Ty) -> bool {
+    match t {
+        Ty.Code(s) => not s.is_empty(),
+        Ty.Many(ts) => not ts.is_empty(),
+    }
+}
+
+fn code(s: ref String) -> Ty {
+    Ty.Code(s.to_string())
+}
+
+fn bit_length_over_31(n: i64) -> bool {
+    n >= 2147483648 or n <= -2147483648
+}
+
+fn get_arg_type(v: ref Val) -> Result[Ty, Exc] {
+    match v {
+        Val.Str(_) => Ok(code("s")),
+        Val.Bytes(_) => Ok(code("b")),
+        Val.Bool(b) => Ok(if *b { code("T") } else { code("F") }),
+        Val.Int(n) => Ok(if bit_length_over_31(*n) { code("h") } else { code("i") }),
+        Val.Float(_) => Ok(code("f")),
+        Val.Tuple(xs) => {
+            if xs.len() == 4 {
+                Ok(code("m"))
+            } else {
+                Err(exc("ValueError", "Inferred arg_value type is not supported".to_string()))
+            }
+        }
+        Val.List(xs) => {
+            let mut ts: Vec[Ty] = Vec.new();
+            for x in xs.iter() {
+                ts.push(get_arg_type(x)?);
+            }
+            Ok(Ty.Many(ts))
+        }
+        Val.Nil => Ok(code("N")),
+        Val.Stamp(_, _) => Err(exc("ValueError", "Inferred arg_value type is not supported".to_string())),
+    }
+}
+
+fn add_arg(b: mut ref Builder, v: own Val, t: own Option[Ty]) -> Result[(), Exc] {
+    let given = match t {
+        Some(ty) => if ty_truthy(ty) { Some(ty) } else { None },
+        None => None,
+    };
+    let ty = match given {
+        Some(ty) => {
+            if not valid_type(ty) {
+                return Err(exc("ValueError", "arg_type must be one of ('f', 'd', 'i', 'h', 'b', 's', 'r', 'm', 'T', 'F', 'N'), or an array of valid types".to_string()));
+            }
+            ty
+        }
+        None => get_arg_type(v)?,
+    };
+    match ty {
+        Ty.Many(ts) => {
+            b.args.push(("[".to_string(), Val.Nil));
+            let items = items_of(v)?;
+            let mut k: i64 = 0;
+            while k < items.len() and k < ts.len() {
+                add_arg(mut b, items[k].clone(), Some(ts[k].clone()))?;
+                k += 1;
+            }
+            b.args.push(("]".to_string(), Val.Nil));
+        }
+        Ty.Code(c) => b.args.push((c, v)),
+    }
+    Ok(())
+}
+
+fn args_repr(b: ref Builder) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    let mut first = true;
+    for (t, v) in b.args.iter() {
+        if not first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(f"({str_repr(t)}, {repr(v)})");
+    }
+    out.push_str("]");
+    out
+}
+
+fn build_dgram(b: ref Builder) -> Result[Vec[u8], Exc] {
+    let mut d = write_string(b.address)?;
+    if b.args.is_empty() {
+        for c in write_string(Val.Str(",".to_string()))?.iter() {
+            d.push(*c);
+        }
+        return Ok(d);
+    }
+    let mut tags = ",".to_string();
+    for (t, _) in b.args.iter() {
+        tags.push_str(t);
+    }
+    for c in write_string(Val.Str(tags))?.iter() {
+        d.push(*c);
+    }
+    for (t, v) in b.args.iter() {
+        let part = if t == "s" {
+            write_string(v)?
+        } else if t == "i" {
+            write_int(v)?
+        } else if t == "h" {
+            write_int64(v)?
+        } else if t == "f" {
+            write_float(v)?
+        } else if t == "d" {
+            write_double(v)?
+        } else if t == "b" {
+            write_blob(v)?
+        } else if t == "r" {
+            write_rgba(v)?
+        } else if t == "m" {
+            write_midi(v)?
+        } else if t == "T" or t == "F" or t == "[" or t == "]" or t == "N" {
+            continue;
+        } else {
+            return Err(exc(BUILDER_ERR, f"Incorrect parameter type found {t}"));
+        };
+        for c in part.iter() {
+            d.push(*c);
+        }
+    }
+    Ok(d)
+}
+
+fn build(b: ref Builder, w: mut ref World) -> Result[Msg, Exc] {
+    if not truthy(b.address) {
+        return Err(exc(BUILDER_ERR, "OSC addresses cannot be empty".to_string()));
+    }
+    match build_dgram(b) {
+        Ok(d) => parse_message(d, mut w),
+        Err(e) => {
+            if e.kind == TYPES_BUILD {
+                Err(exc(BUILDER_ERR, f"Could not build the message: {e.msg}"))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+// build_msg(address, value=''), as the clients and servers call it.
+fn build_msg(address: own Val, value: own Option[Val], w: mut ref World) -> Result[Msg, Exc] {
+    let mut b = Builder { address: address, args: Vec.new() };
+    let values: Vec[Val] = match value {
+        None => Vec.new(),
+        Some(v) => match v {
+            Val.Str(s) => if s.is_empty() { Vec.new() } else { vec![Val.Str(s)] },
+            Val.List(xs) => xs,
+            Val.Tuple(xs) => xs,
+            Val.Stamp(s, f) => vec![Val.Stamp(s, f), Val.Int(f)],
+            other => vec![other],
+        },
+    };
+    for v in values.into_iter() {
+        add_arg(mut b, v, None)?;
+    }
+    build(b, mut w)
+}
+
+// ------------------------------------------------------------ OscBundle
+
+#[derive(Clone)]
+enum Content {
+    M(Msg),
+    B(Bundle),
+}
+
+#[derive(Clone)]
+struct Bundle {
+    dgram: Vec[u8],
+    ts: Ts,
+    contents: Vec[Content],
+}
+
+fn parse_contents(d: ref Vec[u8], start: i64, w: mut ref World) -> Result[Vec[Content], Exc] {
+    let mut index = start;
+    let mut out: Vec[Content] = Vec.new();
+    while len_from(d, index) > 0 {
+        let (size, j) = get_int(d, index)?;
+        index = j;
+        let c = pyslice(d, index, index + size);
+        index += size;
+        if starts(c, bundle_prefix()) {
+            out.push(Content.B(parse_bundle(c, mut w)?));
+        } else if is_message(c) {
+            out.push(Content.M(parse_message(c, mut w)?));
+        } else {
+            w.log.push(f"WARNING:root:Could not identify content type of dgram {bytes_repr(c)}");
+        }
+    }
+    Ok(out)
+}
+
+fn parse_bundle(d: own Vec[u8], w: mut ref World) -> Result[Bundle, Exc] {
+    let (ts, index) = match get_date(d, 8) {
+        Ok(r) => r,
+        Err(e) => {
+            if e.kind == TYPES_PARSE {
+                return Err(exc(BUNDLE_PARSE, f"Could not get the date from the datagram: {e.msg}"));
+            }
+            return Err(e);
+        }
+    };
+    match parse_contents(d, index, mut w) {
+        Ok(contents) => Ok(Bundle { dgram: d, ts: ts, contents: contents }),
+        Err(e) => {
+            if e.kind == TYPES_PARSE or e.kind == MSG_PARSE {
+                Err(exc(BUNDLE_PARSE, f"Could not parse a content datagram: {e.msg}"))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn content_dgram(c: ref Content) -> Vec[u8] {
+    match c {
+        Content.M(m) => m.dgram.clone(),
+        Content.B(b) => b.dgram.clone(),
+    }
+}
+
+fn build_bundle(when: ref When, items: ref Vec[Content], w: mut ref World) -> Result[Bundle, Exc] {
+    let mut d = bundle_prefix();
+    for c in write_date(when)?.iter() {
+        d.push(*c);
+    }
+    for it in items.iter() {
+        let dg = content_dgram(it);
+        put_be(mut d, dg.len() as u64, 4);
+        for c in dg.iter() {
+            d.push(*c);
+        }
+    }
+    parse_bundle(d, mut w)
+}
+
+// ------------------------------------------------------------ OscPacket
+
+#[derive(Clone)]
+struct Timed {
+    time: f64,
+    msg: Msg,
+}
+
+fn timed_of(b: ref Bundle, now: f64, out: mut ref Vec[Timed]) {
+    for c in b.contents.iter() {
+        match c {
+            Content.M(m) => {
+                let t = match b.ts {
+                    Ts.Imm => now,
+                    Ts.At(x) => if x < now { now } else { x },
+                };
+                out.push(Timed { time: t, msg: m.clone() });
+            }
+            Content.B(inner) => timed_of(inner, now, mut out),
+        }
+    }
+}
+
+fn parse_packet(d: own Vec[u8], w: mut ref World) -> Result[Vec[Timed], Exc] {
+    let now = w.clock;
+    let parsed = if starts(d, bundle_prefix()) {
+        match parse_bundle(d, mut w) {
+            Ok(b) => {
+                let mut v: Vec[Timed] = Vec.new();
+                timed_of(b, now, mut v);
+                // sorted(key=time) is stable
+                let mut i: i64 = 1;
+                while i < v.len() {
+                    let mut j = i;
+                    while j > 0 and v[j - 1].time > v[j].time {
+                        let a = v[j - 1].clone();
+                        v[j - 1] = v[j].clone();
+                        v[j] = a;
+                        j -= 1;
+                    }
+                    i += 1;
+                }
+                Ok(v)
+            }
+            Err(e) => Err(e),
+        }
+    } else if is_message(d) {
+        match parse_message(d, mut w) {
+            Ok(m) => Ok(vec![Timed { time: now, msg: m }]),
+            Err(e) => Err(e),
+        }
+    } else {
+        return Err(exc(PACKET_PARSE, "OSC Packet should at least contain an OscMessage or an OscBundle.".to_string()));
+    };
+    match parsed {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if e.kind == BUNDLE_PARSE or e.kind == MSG_PARSE {
+                Err(exc(PACKET_PARSE, f"Could not parse packet {e.msg}"))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ SLIP
+
+fn strip_end(p: ref Vec[u8]) -> Vec[u8] {
+    let mut a: i64 = 0;
+    let mut b = p.len();
+    while a < b and p[a] == 0xc0 {
+        a += 1;
+    }
+    while b > a and p[b - 1] == 0xc0 {
+        b -= 1;
+    }
+    p[a..b].to_vec()
+}
+
+// bytes.replace: non-overlapping, left to right.
+fn replace_bytes(d: ref Vec[u8], from: ref Vec[u8], to: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < d.len() {
+        let mut hit = i + from.len() <= d.len();
+        let mut k: i64 = 0;
+        while hit and k < from.len() {
+            if d[i + k] != from[k] {
+                hit = false;
+            }
+            k += 1;
+        }
+        if hit {
+            for c in to.iter() {
+                out.push(*c);
+            }
+            i += from.len();
+        } else {
+            out.push(d[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn slip_valid(packet: ref Vec[u8]) -> bool {
+    let p = strip_end(packet);
+    if p.contains(0xc0) {
+        return false;
+    }
+    if p.len() > 0 and p[p.len() - 1] == 0xdb {
+        return false;
+    }
+    let mut i: i64 = 0;
+    while i + 1 < p.len() {
+        if p[i] == 0xdb and p[i + 1] != 0xdc and p[i + 1] != 0xdd {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn slip_decode(packet: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    if not slip_valid(packet) {
+        return Err(exc("slip.ProtocolError", bytes_repr(packet)));
+    }
+    let p = strip_end(packet);
+    let p = replace_bytes(p, vec![0xdb, 0xdc], vec![0xc0]);
+    Ok(replace_bytes(p, vec![0xdb, 0xdd], vec![0xdb]))
+}
+
+fn slip_encode(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = replace_bytes(msg, vec![0xdb], vec![0xdb, 0xdd]);
+    let m = replace_bytes(m, vec![0xc0], vec![0xdb, 0xdc]);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(0xc0);
+    for c in m.iter() {
+        out.push(*c);
+    }
+    out.push(0xc0);
+    out
+}
+
+// ------------------------------------------------------------ regular expressions
+
+// The subset of Python's re that the dispatcher's patterns use: literals,
+// escapes, ".", classes with ranges and negation, groups with "|", the
+// "*", "+" and "?" repeats (lazy or not), "^" and "$". A match is a yes or
+// no, so a Pike VM answers it without backtracking.
+#[derive(Clone)]
+enum Node {
+    Lit(char),
+    Any,
+    Set(bool, Vec[(char, char)]),
+    Group(Vec[Vec[Piece]]),
+    Bol,
+    Eol,
+}
+
+#[derive(Clone)]
+struct Piece {
+    node: Node,
+    min: i64,
+    max: i64,
+    repeated: bool,
+}
+
+struct ReParser {
+    cs: Vec[char],
+    pos: i64,
+}
+
+fn parse_class(p: mut ref ReParser) -> Result[Node, String] {
+    let n = p.cs.len();
+    let mut neg = false;
+    if p.pos < n and p.cs[p.pos] == '^' {
+        neg = true;
+        p.pos += 1;
+    }
+    let mut items: Vec[(char, char)] = Vec.new();
+    loop {
+        if p.pos >= n {
+            return Err("unterminated character set".to_string());
+        }
+        let mut this = p.cs[p.pos];
+        p.pos += 1;
+        if this == ']' and not items.is_empty() {
+            break;
+        }
+        if this == '\\' {
+            if p.pos >= n {
+                return Err("bad escape (end of pattern)".to_string());
+            }
+            this = p.cs[p.pos];
+            p.pos += 1;
+        }
+        if p.pos < n and p.cs[p.pos] == '-' {
+            p.pos += 1;
+            if p.pos >= n {
+                return Err("unterminated character set".to_string());
+            }
+            let mut that = p.cs[p.pos];
+            p.pos += 1;
+            if that == ']' {
+                items.push((this, this));
+                items.push(('-', '-'));
+                break;
+            }
+            if that == '\\' {
+                if p.pos >= n {
+                    return Err("bad escape (end of pattern)".to_string());
+                }
+                that = p.cs[p.pos];
+                p.pos += 1;
+            }
+            if (that as i64) < (this as i64) {
+                return Err(f"bad character range {this}-{that}");
+            }
+            items.push((this, that));
+        } else {
+            items.push((this, this));
+        }
+    }
+    Ok(Node.Set(neg, items))
+}
+
+fn parse_alt(p: mut ref ReParser, depth: i64) -> Result[Vec[Vec[Piece]], String] {
+    let mut alts: Vec[Vec[Piece]] = Vec.new();
+    let mut seq: Vec[Piece] = Vec.new();
+    loop {
+        if p.pos >= p.cs.len() {
+            if depth > 0 {
+                return Err("missing ), unterminated subpattern".to_string());
+            }
+            alts.push(seq);
+            return Ok(alts);
+        }
+        let c = p.cs[p.pos];
+        if c == '|' {
+            p.pos += 1;
+            alts.push(seq);
+            seq = Vec.new();
+            continue;
+        }
+        if c == ')' {
+            if depth == 0 {
+                return Err("unbalanced parenthesis".to_string());
+            }
+            p.pos += 1;
+            alts.push(seq);
+            return Ok(alts);
+        }
+        if c == '*' or c == '+' or c == '?' {
+            if seq.is_empty() {
+                return Err("nothing to repeat".to_string());
+            }
+            let mut last = seq.pop().unwrap();
+            match last.node {
+                Node.Bol | Node.Eol => return Err("nothing to repeat".to_string()),
+                _ => {}
+            }
+            if last.repeated {
+                return Err("multiple repeat".to_string());
+            }
+            p.pos += 1;
+            last.min = if c == '+' { 1 } else { 0 };
+            last.max = if c == '?' { 1 } else { -1 };
+            last.repeated = true;
+            if p.pos < p.cs.len() and p.cs[p.pos] == '?' {
+                p.pos += 1;
+            }
+            seq.push(last);
+            continue;
+        }
+        p.pos += 1;
+        let node = if c == '(' {
+            Node.Group(parse_alt(mut p, depth + 1)?)
+        } else if c == '[' {
+            parse_class(mut p)?
+        } else if c == '.' {
+            Node.Any
+        } else if c == '^' {
+            Node.Bol
+        } else if c == '$' {
+            Node.Eol
+        } else if c == '\\' {
+            if p.pos >= p.cs.len() {
+                return Err("bad escape (end of pattern)".to_string());
+            }
+            let e = p.cs[p.pos];
+            p.pos += 1;
+            Node.Lit(e)
+        } else {
+            Node.Lit(c)
+        };
+        seq.push(Piece { node: node, min: 1, max: 1, repeated: false });
+    }
+}
+
+#[derive(Clone)]
+enum Inst {
+    Ch(char),
+    Any,
+    Set(i64),
+    Split(i64, i64),
+    Jmp(i64),
+    Bol,
+    Eol,
+    Done,
+}
+
+struct Re {
+    prog: Vec[Inst],
+    sets: Vec[(bool, Vec[(char, char)])],
+}
+
+fn emit_node(r: mut ref Re, n: ref Node) {
+    match n {
+        Node.Lit(c) => r.prog.push(Inst.Ch(*c)),
+        Node.Any => r.prog.push(Inst.Any),
+        Node.Set(neg, items) => {
+            r.sets.push((*neg, items.clone()));
+            r.prog.push(Inst.Set(r.sets.len() - 1));
+        }
+        Node.Group(alts) => emit_alts(mut r, alts),
+        Node.Bol => r.prog.push(Inst.Bol),
+        Node.Eol => r.prog.push(Inst.Eol),
+    }
+}
+
+fn emit_piece(r: mut ref Re, p: ref Piece) {
+    let mut k: i64 = 0;
+    while k < p.min {
+        emit_node(mut r, p.node);
+        k += 1;
+    }
+    if p.max == -1 {
+        let l = r.prog.len();
+        r.prog.push(Inst.Split(0, 0));
+        emit_node(mut r, p.node);
+        r.prog.push(Inst.Jmp(l));
+        r.prog[l] = Inst.Split(l + 1, r.prog.len());
+    } else {
+        while k < p.max {
+            let l = r.prog.len();
+            r.prog.push(Inst.Split(0, 0));
+            emit_node(mut r, p.node);
+            r.prog[l] = Inst.Split(l + 1, r.prog.len());
+            k += 1;
+        }
+    }
+}
+
+fn emit_alts(r: mut ref Re, alts: ref Vec[Vec[Piece]]) {
+    let mut jumps: Vec[i64] = Vec.new();
+    let mut a: i64 = 0;
+    while a < alts.len() {
+        if a + 1 < alts.len() {
+            let l = r.prog.len();
+            r.prog.push(Inst.Split(0, 0));
+            for p in alts[a].iter() {
+                emit_piece(mut r, p);
+            }
+            jumps.push(r.prog.len());
+            r.prog.push(Inst.Jmp(0));
+            r.prog[l] = Inst.Split(l + 1, r.prog.len());
+        } else {
+            for p in alts[a].iter() {
+                emit_piece(mut r, p);
+            }
+        }
+        a += 1;
+    }
+    let end = r.prog.len();
+    for j in jumps.iter() {
+        r.prog[*j] = Inst.Jmp(end);
+    }
+}
+
+fn re_compile(pattern: ref String) -> Result[Re, String] {
+    let mut p = ReParser { cs: pattern.chars().collect(), pos: 0 };
+    let alts = parse_alt(mut p, 0)?;
+    let mut r = Re { prog: Vec.new(), sets: Vec.new() };
+    emit_alts(mut r, alts);
+    r.prog.push(Inst.Done);
+    Ok(r)
+}
+
+fn in_set(r: ref Re, k: i64, c: char) -> bool {
+    let (neg, items) = r.sets[k].clone();
+    let x = c as i64;
+    let mut hit = false;
+    for (lo, hi) in items.iter() {
+        if x >= (*lo as i64) and x <= (*hi as i64) {
+            hit = true;
+        }
+    }
+    hit != neg
+}
+
+fn add_thread(r: ref Re, list: mut ref Vec[i64], mark: mut ref Vec[i64], pc: i64, pos: i64, s: ref Vec[char]) {
+    let n = s.len();
+    let mut stack: Vec[i64] = vec![pc];
+    while not stack.is_empty() {
+        let x = stack.pop().unwrap();
+        if mark[x] == pos {
+            continue;
+        }
+        mark[x] = pos;
+        match r.prog[x].clone() {
+            Inst.Jmp(t) => stack.push(t),
+            Inst.Split(a, b) => {
+                stack.push(b);
+                stack.push(a);
+            }
+            Inst.Bol => {
+                if pos == 0 {
+                    stack.push(x + 1);
+                }
+            }
+            Inst.Eol => {
+                if pos == n or (pos == n - 1 and s[pos] == '\n') {
+                    stack.push(x + 1);
+                }
+            }
+            _ => list.push(x),
+        }
+    }
+}
+
+// re.match: does the pattern match at the start of s?
+fn re_match(r: ref Re, s: ref Vec[char]) -> bool {
+    let n = s.len();
+    let mut mark: Vec[i64] = Vec.new();
+    let mut k: i64 = 0;
+    while k < r.prog.len() {
+        mark.push(-1);
+        k += 1;
+    }
+    let mut clist: Vec[i64] = Vec.new();
+    add_thread(r, mut clist, mut mark, 0, 0, s);
+    let mut pos: i64 = 0;
+    while pos <= n {
+        let mut nlist: Vec[i64] = Vec.new();
+        for pc in clist.iter() {
+            let pc = *pc;
+            let step = match r.prog[pc].clone() {
+                Inst.Done => return true,
+                Inst.Ch(c) => pos < n and s[pos] == c,
+                Inst.Any => pos < n and s[pos] != '\n',
+                Inst.Set(k) => pos < n and in_set(r, k, s[pos]),
+                _ => false,
+            };
+            if step {
+                add_thread(r, mut nlist, mut mark, pc + 1, pos + 1, s);
+            }
+        }
+        if nlist.is_empty() {
+            return false;
+        }
+        clist = nlist;
+        pos += 1;
+    }
+    false
+}
+
+// ------------------------------------------------------------ Dispatcher
+
+#[derive(Clone)]
+struct Handler {
+    cb: String,
+    args: Vec[Val],
+    reply: bool,
+}
+
+struct Dispatcher {
+    addrs: Vec[String],
+    handlers: Vec[Vec[Handler]],
+    default: Option[Handler],
+    strict: bool,
+}
+
+fn val_eq(a: ref Val, b: ref Val) -> bool {
+    match (float_of(a), float_of(b)) {
+        (Some(x), Some(y)) => return x == y,
+        _ => {}
+    }
+    match (a, b) {
+        (Val.Str(x), Val.Str(y)) => x == y,
+        (Val.Bytes(x), Val.Bytes(y)) => same(x, y),
+        (Val.Nil, Val.Nil) => true,
+        (Val.List(x), Val.List(y)) => vals_eq(x, y),
+        (Val.Tuple(x), Val.Tuple(y)) => vals_eq(x, y),
+        (Val.Stamp(s1, f1), Val.Stamp(s2, f2)) => *s1 == *s2 and *f1 == *f2,
+        _ => false,
+    }
+}
+
+fn vals_eq(a: ref Vec[Val], b: ref Vec[Val]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i: i64 = 0;
+    while i < a.len() {
+        if not val_eq(a[i], b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// self._map[address], which a defaultdict creates on first access.
+fn slot(d: mut ref Dispatcher, address: ref String) -> i64 {
+    let mut i: i64 = 0;
+    while i < d.addrs.len() {
+        if d.addrs[i] == *address {
+            return i;
+        }
+        i += 1;
+    }
+    d.addrs.push(address.clone());
+    d.handlers.push(Vec.new());
+    d.addrs.len() - 1
+}
+
+fn map_handler(d: mut ref Dispatcher, address: ref String, h: own Handler) {
+    let k = slot(mut d, address);
+    let mut hs = d.handlers[k].clone();
+    hs.push(h);
+    d.handlers[k] = hs;
+}
+
+fn unmap_handler(d: mut ref Dispatcher, address: ref String, cb: ref String) -> Result[(), Exc] {
+    let k = slot(mut d, address);
+    let mut hs = d.handlers[k].clone();
+    let mut i: i64 = 0;
+    while i < hs.len() {
+        if hs[i].cb == *cb and hs[i].args.is_empty() and not hs[i].reply {
+            hs.remove(i);
+            d.handlers[k] = hs;
+            return Ok(());
+        }
+        i += 1;
+    }
+    Err(exc("ValueError", f"Address '{address}' doesn't have handler '<{cb}>' mapped to it"))
+}
+
+fn has_char(set: ref String, c: char) -> bool {
+    for x in set.chars() {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+// The regular expression handlers_for_address builds from an OSC pattern.
+fn osc_regex(address: ref String) -> String {
+    let cs: Vec[char] = address.chars().collect();
+    let n = cs.len();
+    let mut out = "^".to_string();
+    let mut i: i64 = 0;
+    while i < n {
+        let c = cs[i];
+        if c == '*' {
+            out.push_str("[^/]*");
+        } else if c == '?' {
+            out.push_str("[^/]");
+        } else if c == '[' {
+            out.push('[');
+            i += 1;
+            if i < n and cs[i] == '!' {
+                out.push('^');
+                i += 1;
+            }
+            while i < n and cs[i] != ']' {
+                if has_char("\\^$.|()+*?", cs[i]) {
+                    out.push('\\');
+                }
+                out.push(cs[i]);
+                i += 1;
+            }
+            out.push(']');
+        } else if c == '{' {
+            out.push('(');
+            i += 1;
+            while i < n and cs[i] != '}' {
+                let ch = cs[i];
+                if ch == ',' {
+                    out.push('|');
+                } else if has_char("\\^$.|()[]+*?", ch) {
+                    out.push('\\');
+                    out.push(ch);
+                } else {
+                    out.push(ch);
+                }
+                i += 1;
+            }
+            out.push(')');
+        } else if has_char("\\^$.|()[]+?", c) {
+            out.push('\\');
+            out.push(c);
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out.push('$');
+    out
+}
+
+fn handlers_for_address(d: ref Dispatcher, pattern: ref String) -> Result[Vec[Handler], Exc] {
+    let mut out: Vec[Handler] = Vec.new();
+    let re = match re_compile(osc_regex(pattern)) {
+        Ok(r) => r,
+        Err(_) => return Ok(out),
+    };
+    let pcs: Vec[char] = pattern.chars().collect();
+    let mut matched = false;
+    let mut i: i64 = 0;
+    while i < d.addrs.len() {
+        let addr = d.addrs[i].clone();
+        let acs: Vec[char] = addr.chars().collect();
+        let mut hit = re_match(re, acs);
+        if not hit and addr.contains("*") {
+            let mut raw = addr.replace("*", ".*?");
+            raw.push('$');
+            match re_compile(raw) {
+                Ok(r2) => hit = re_match(r2, pcs),
+                Err(m) => return Err(exc("PatternError", m)),
+            }
+        }
+        if hit {
+            for h in d.handlers[i].iter() {
+                out.push(h.clone());
+            }
+            matched = true;
+        }
+        i += 1;
+    }
+    if not matched {
+        if let Some(h) = d.default {
+            out.push(h.clone());
+        }
+    }
+    Ok(out)
+}
+
+fn client() -> Val {
+    Val.Tuple(vec![Val.Str("192.168.1.20".to_string()), Val.Int(53000)])
+}
+
+fn item(v: ref Val, i: i64) -> Val {
+    match v {
+        Val.Tuple(xs) => xs[i].clone(),
+        Val.List(xs) => xs[i].clone(),
+        Val.Str(s) => str_chars(s)[i].clone(),
+        _ => Val.Nil,
+    }
+}
+
+// The six callbacks the jobs map: each prints its call and returns.
+fn callback(name: ref String, a: ref Vec[Val]) -> Val {
+    if name == "echo" {
+        let mut xs = vec![Val.Str("/echo".to_string())];
+        let mut i: i64 = 1;
+        while i < a.len() {
+            xs.push(a[i].clone());
+            i += 1;
+        }
+        Val.Tuple(xs)
+    } else if name == "ack" {
+        Val.Str("/ack".to_string())
+    } else if name == "bad" {
+        Val.Tuple(vec![Val.Str("/bad".to_string()), Val.Tuple(vec![Val.Int(1), Val.Int(2), Val.Int(3)])])
+    } else if name == "empty" {
+        Val.Str("".to_string())
+    } else if name == "who" {
+        Val.Tuple(vec![Val.Str("/seen".to_string()), item(a[0], 0), item(a[0], 1)])
+    } else {
+        Val.Nil
+    }
+}
+
+fn invoke(h: ref Handler, m: ref Msg, w: mut ref World) -> Val {
+    let mut a: Vec[Val] = Vec.new();
+    if h.reply {
+        a.push(client());
+    }
+    a.push(Val.Str(m.address.clone()));
+    if not h.args.is_empty() {
+        a.push(Val.List(h.args.clone()));
+    }
+    for p in m.params.iter() {
+        a.push(p.clone());
+    }
+    let shown = repr(Val.Tuple(a.clone()));
+    w.out.push_str(f"  {h.cb}{shown}\n");
+    callback(h.cb, a)
+}
+
+fn call_handlers(d: ref Dispatcher, data: own Vec[u8], w: mut ref World) -> Result[Vec[Val], Exc] {
+    let mut results: Vec[Val] = Vec.new();
+    let msgs = match parse_packet(data, mut w) {
+        Ok(v) => v,
+        Err(e) => {
+            if e.kind == PACKET_PARSE {
+                return Ok(results);
+            }
+            return Err(e);
+        }
+    };
+    for tm in msgs.iter() {
+        let now = w.clock;
+        if d.strict and tm.time > now {
+            let dt = tm.time - now;
+            w.out.push_str(f"  sleep {float_repr(dt)}\n");
+            w.clock += dt;
+        }
+        for h in handlers_for_address(d, tm.msg.address)?.iter() {
+            let r = invoke(h, tm.msg, mut w);
+            match r {
+                Val.Nil => {}
+                _ => results.push(r),
+            }
+        }
+    }
+    Ok(results)
+}
+
+// A server's reply: build_msg(r[0], r[1:]), with r made a list if it is
+// not a tuple.
+fn reply_msg(r: ref Val, w: mut ref World) -> Result[Msg, Exc] {
+    match r {
+        Val.Tuple(xs) => {
+            let mut rest: Vec[Val] = Vec.new();
+            let mut i: i64 = 1;
+            while i < xs.len() {
+                rest.push(xs[i].clone());
+                i += 1;
+            }
+            build_msg(xs[0].clone(), Some(Val.Tuple(rest)), mut w)
+        }
+        _ => build_msg(r.clone(), Some(Val.List(Vec.new())), mut w),
+    }
+}
+
+// ------------------------------------------------------------ the jobs' grammar
+
+struct Cursor {
+    toks: Vec[String],
+    pos: i64,
+}
+
+fn parse_type(t: ref String) -> Ty {
+    if t.starts_with("<") {
+        let inner = t[1..t.len() - 1].to_string();
+        let mut ts: Vec[Ty] = Vec.new();
+        if not inner.is_empty() {
+            for part in inner.split(",") {
+                ts.push(parse_type(part.to_string()));
+            }
+        }
+        return Ty.Many(ts);
+    }
+    Ty.Code(t.clone())
+}
+
+fn atom(t: ref String) -> Val {
+    let k = t[0..1].to_string();
+    let rest = t[1..].to_string();
+    if k == "i" {
+        Val.Int(i64.parse(rest).unwrap())
+    } else if k == "f" {
+        Val.Float(f64.parse(rest).unwrap())
+    } else if k == "s" {
+        Val.Str(String.from_utf8(unhex(rest)).unwrap())
+    } else if k == "b" {
+        Val.Bytes(unhex(rest))
+    } else if k == "T" {
+        Val.Bool(true)
+    } else if k == "F" {
+        Val.Bool(false)
+    } else if k == "N" {
+        Val.Nil
+    } else {
+        let mut xs: Vec[Val] = Vec.new();
+        for part in rest.split(",") {
+            xs.push(Val.Int(i64.parse(part.to_string()).unwrap()));
+        }
+        Val.Tuple(xs)
+    }
+}
+
+fn parse_one(c: mut ref Cursor) -> (Val, Option[Ty]) {
+    let t = c.toks[c.pos].clone();
+    c.pos += 1;
+    if t == "(" {
+        let mut items: Vec[Val] = Vec.new();
+        while not c.toks[c.pos].starts_with(")") {
+            let (v, _) = parse_one(mut c);
+            items.push(v);
+        }
+        let close = c.toks[c.pos].clone();
+        c.pos += 1;
+        let ty = if close.starts_with(")@") { Some(parse_type(close[2..].to_string())) } else { None };
+        return (Val.List(items), ty);
+    }
+    match t.split_once("@") {
+        Some((v, ty)) => (atom(v.to_string()), Some(parse_type(ty.to_string()))),
+        None => (atom(t), None),
+    }
+}
+
+fn parse_args(text: ref String) -> Vec[(Val, Option[Ty])] {
+    let mut toks: Vec[String] = Vec.new();
+    if not text.is_empty() {
+        for p in text.split(" ") {
+            toks.push(p.to_string());
+        }
+    }
+    let mut c = Cursor { toks: toks, pos: 0 };
+    let mut out: Vec[(Val, Option[Ty])] = Vec.new();
+    while c.pos < c.toks.len() {
+        out.push(parse_one(mut c));
+    }
+    out
+}
+
+fn addr_of(f: ref String) -> Val {
+    if f == "-" { Val.Nil } else { Val.Str(String.from_utf8(unhex(f[1..].to_string())).unwrap()) }
+}
+
+fn when_of(f: ref String) -> When {
+    if f == "imm" {
+        When.I(0)
+    } else if f.starts_with("i") {
+        When.I(i64.parse(f[1..].to_string()).unwrap())
+    } else {
+        When.F(f64.parse(f[1..].to_string()).unwrap())
+    }
+}
+
+fn hex_or_empty(f: ref String) -> Vec[u8] {
+    if f == "-" { Vec.new() } else { unhex(f) }
+}
+
+// ------------------------------------------------------------ printing
+
+fn show_msg(m: ref Msg, ind: ref String, w: mut ref World) {
+    w.out.push_str(f"{ind}msg {str_repr(m.address)} [{join_repr(m.params)}] size {m.dgram.len()}\n");
+    w.out.push_str(f"{ind}str {msg_str(m)}\n");
+}
+
+fn show_bundle(b: ref Bundle, ind: ref String, w: mut ref World) {
+    w.out.push_str(f"{ind}bundle ts {ts_repr(b.ts)} n {b.contents.len()} size {b.dgram.len()}\n");
+    let inner = f"{ind}  ";
+    for c in b.contents.iter() {
+        match c {
+            Content.M(m) => show_msg(m, inner, mut w),
+            Content.B(x) => show_bundle(x, inner, mut w),
+        }
+    }
+}
+
+fn flush_log(w: mut ref World) {
+    for line in w.log.iter() {
+        w.out.push_str(f"log {line}\n");
+    }
+    w.log = Vec.new();
+}
+
+fn show_err(e: ref Exc, w: mut ref World) {
+    flush_log(mut w);
+    w.out.push_str(f"error {e.kind}: {e.msg}\n");
+}
+
+// ------------------------------------------------------------ servers
+
+fn make_dispatcher(setup: ref String, w: mut ref World) -> Dispatcher {
+    let mut ops: Vec[String] = Vec.new();
+    for op in setup.split("\x1f") {
+        ops.push(op.to_string());
+    }
+    let mut d = Dispatcher { addrs: Vec.new(), handlers: Vec.new(), default: None, strict: true };
+    let mut start: i64 = 0;
+    if not ops.is_empty() and ops[0] == "strict 0" {
+        d.strict = false;
+        start = 1;
+    }
+    let mut i = start;
+    while i < ops.len() {
+        let mut p: Vec[String] = Vec.new();
+        for x in ops[i].split(" ") {
+            p.push(x.to_string());
+        }
+        if p[0] == "map" {
+            let mut rest = String.new();
+            let mut k: i64 = 3;
+            while k < p.len() {
+                if k > 3 {
+                    rest.push_str(" ");
+                }
+                rest.push_str(p[k]);
+                k += 1;
+            }
+            let mut args: Vec[Val] = Vec.new();
+            for (v, _) in parse_args(rest).into_iter() {
+                args.push(v);
+            }
+            map_handler(mut d, p[1], Handler { cb: p[2].clone(), args: args, reply: false });
+        } else if p[0] == "mapr" {
+            map_handler(mut d, p[1], Handler { cb: p[2].clone(), args: Vec.new(), reply: true });
+        } else if p[0] == "unmap" {
+            if let Err(e) = unmap_handler(mut d, p[1], p[2]) {
+                w.out.push_str(f"unmap error: {e.msg}\n");
+            }
+        } else if p[0] == "default" {
+            d.default = if p[1] == "-" { None } else { Some(Handler { cb: p[1].clone(), args: Vec.new(), reply: false }) };
+        }
+        i += 1;
+    }
+    d
+}
+
+fn serve_udp(d: ref Dispatcher, stream: ref String, w: mut ref World) {
+    for dg in stream.split(",") {
+        let dg = dg.to_string();
+        if dg.is_empty() {
+            w.out.push_str("<< (empty)\n");
+        } else {
+            w.out.push_str(f"<< {dg}\n");
+        }
+        let data = unhex(dg);
+        if not (starts(data, bundle_prefix()) or is_message(data)) {
+            w.out.push_str("ignored\n");
+            continue;
+        }
+        match call_handlers(d, data, mut w) {
+            Ok(results) => {
+                for r in results.iter() {
+                    match reply_msg(r, mut w) {
+                        Ok(m) => w.out.push_str(f">> {hex(m.dgram)} {msg_str(m)}\n"),
+                        Err(e) => {
+                            show_err(e, mut w);
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => show_err(e, mut w),
+        }
+        flush_log(mut w);
+    }
+}
+
+// A socket that hands out the captured bytes, at most n at a time.
+struct Sock {
+    data: Vec[u8],
+    pos: i64,
+}
+
+fn recv(s: mut ref Sock, n: i64) -> Vec[u8] {
+    let chunk = pyslice(s.data, s.pos, s.pos + n);
+    s.pos += chunk.len();
+    chunk
+}
+
+fn recv_count(s: mut ref Sock, count: i64) -> Vec[u8] {
+    let mut buf: Vec[u8] = Vec.new();
+    let mut left = count;
+    while left > 0 {
+        let more = recv(mut s, left);
+        if more.is_empty() {
+            return Vec.new();
+        }
+        left -= more.len();
+        for c in more.iter() {
+            buf.push(*c);
+        }
+    }
+    buf
+}
+
+fn serve_tcp10(d: ref Dispatcher, stream: ref String, w: mut ref World) -> Result[(), Exc] {
+    let mut sock = Sock { data: unhex(stream), pos: 0 };
+    loop {
+        let lengthbuf = recv_count(mut sock, 4);
+        if lengthbuf.is_empty() {
+            break;
+        }
+        let data = recv_count(mut sock, be(lengthbuf) as i64);
+        if data.is_empty() {
+            break;
+        }
+        w.out.push_str(f"<< {hex(data)}\n");
+        for r in call_handlers(d, data, mut w)?.iter() {
+            let m = reply_msg(r, mut w)?;
+            let mut wire: Vec[u8] = Vec.new();
+            put_be(mut wire, m.dgram.len() as u64, 4);
+            for c in m.dgram.iter() {
+                wire.push(*c);
+            }
+            w.out.push_str(f">> {hex(wire)} {msg_str(m)}\n");
+        }
+    }
+    w.out.push_str("closed\n");
+    Ok(())
+}
+
+fn split_end_end(buf: ref Vec[u8]) -> Vec[Vec[u8]] {
+    let mut parts: Vec[Vec[u8]] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < buf.len() {
+        if i + 1 < buf.len() and buf[i] == 0xc0 and buf[i + 1] == 0xc0 {
+            parts.push(cur);
+            cur = Vec.new();
+            i += 2;
+        } else {
+            cur.push(buf[i]);
+            i += 1;
+        }
+    }
+    parts.push(cur);
+    parts
+}
+
+fn serve_tcp11(d: ref Dispatcher, stream: ref String, w: mut ref World) -> Result[(), Exc] {
+    let mut sock = Sock { data: unhex(stream), pos: 0 };
+    loop {
+        let mut buf = recv(mut sock, 4096);
+        if buf.is_empty() {
+            break;
+        }
+        while buf[buf.len() - 1] != 0xc0 {
+            let more = recv(mut sock, 4096);
+            if more.is_empty() {
+                break;
+            }
+            for c in more.iter() {
+                buf.push(*c);
+            }
+        }
+        let mut packets: Vec[Vec[u8]] = Vec.new();
+        for p in split_end_end(buf).iter() {
+            packets.push(slip_decode(p)?);
+        }
+        for p in packets.iter() {
+            if p.is_empty() {
+                w.out.push_str("<< (empty)\n");
+            } else {
+                w.out.push_str(f"<< {hex(p)}\n");
+            }
+            for r in call_handlers(d, p.clone(), mut w)?.iter() {
+                let m = reply_msg(r, mut w)?;
+                w.out.push_str(f">> {hex(slip_encode(m.dgram))} {msg_str(m)}\n");
+            }
+        }
+    }
+    w.out.push_str("closed\n");
+    Ok(())
+}
+
+// ------------------------------------------------------------ jobs
+
+fn label_of(labels: ref Map[String, Content], name: ref String) -> Content {
+    labels.get(name).unwrap().clone()
+}
+
+fn run_job(f: ref Vec[String], labels: mut ref Map[String, Content], w: mut ref World) -> Result[(), Exc] {
+    let kind = f[0].clone();
+    if kind == "build" {
+        let mut b = Builder { address: addr_of(f[2]), args: Vec.new() };
+        for (v, t) in parse_args(f[3]).into_iter() {
+            add_arg(mut b, v, t)?;
+        }
+        w.out.push_str(f"args {args_repr(b)}\n");
+        let m = build(b, mut w)?;
+        w.out.push_str(f"dgram {hex(m.dgram)}\n");
+        show_msg(m, "", mut w);
+        if f[1] != "-" {
+            labels.insert(f[1].clone(), Content.M(m));
+        }
+    } else if kind == "bmsg" {
+        let value = if f[2] == "-" {
+            None
+        } else {
+            let (v, _) = parse_args(f[2])[0].clone();
+            Some(v)
+        };
+        let m = build_msg(addr_of(f[1]), value, mut w)?;
+        w.out.push_str(f"dgram {hex(m.dgram)}\n");
+        show_msg(m, "", mut w);
+    } else if kind == "parse" {
+        let m = parse_message(hex_or_empty(f[1]), mut w)?;
+        flush_log(mut w);
+        show_msg(m, "", mut w);
+    } else if kind == "bundle" {
+        let mut items: Vec[Content] = Vec.new();
+        if not f[3].is_empty() {
+            for lab in f[3].split(" ") {
+                items.push(label_of(labels, lab.to_string()));
+            }
+        }
+        let bu = build_bundle(when_of(f[2]), items, mut w)?;
+        flush_log(mut w);
+        w.out.push_str(f"dgram {hex(bu.dgram)}\n");
+        show_bundle(bu, "", mut w);
+        if f[1] != "-" {
+            labels.insert(f[1].clone(), Content.B(bu));
+        }
+    } else if kind == "bparse" {
+        let bu = parse_bundle(unhex(f[1]), mut w)?;
+        flush_log(mut w);
+        show_bundle(bu, "", mut w);
+    } else if kind == "packet" {
+        w.clock = f64.parse(f[1].clone()).unwrap();
+        let msgs = parse_packet(hex_or_empty(f[2]), mut w)?;
+        flush_log(mut w);
+        for tm in msgs.iter() {
+            w.out.push_str(f"at {float_repr(tm.time)}\n");
+            show_msg(tm.msg, "  ", mut w);
+        }
+    } else if kind == "ntp" {
+        if f[1] == "tontp" {
+            let d = write_date(when_of(f[2]))?;
+            w.out.push_str(f"{hex(d)}\n");
+        } else if f[1] == "tosys" {
+            let d = hex_or_empty(f[2]);
+            if d.len() != 8 {
+                return Err(exc("ntp.NtpError", "unpack requires a buffer of 8 bytes".to_string()));
+            }
+            w.out.push_str(f"{float_repr(ntp_to_seconds(be(d)))}\n");
+        } else {
+            let t = u64.parse(f[2].clone()).unwrap();
+            w.out.push_str(f"Timestamp(seconds={t >> 32}, fraction={t & 4294967295})\n");
+        }
+    } else if kind == "slip" {
+        let data = hex_or_empty(f[2]);
+        if f[1] == "enc" {
+            w.out.push_str(f"{hex(slip_encode(data))}\n");
+        } else if f[1] == "dec" {
+            let d = slip_decode(data)?;
+            if d.is_empty() {
+                w.out.push_str("(empty)\n");
+            } else {
+                w.out.push_str(f"{hex(d)}\n");
+            }
+        } else if slip_valid(data) {
+            w.out.push_str("True\n");
+        } else {
+            w.out.push_str("False\n");
+        }
+    } else if kind == "match" {
+        let mut d = Dispatcher { addrs: Vec.new(), handlers: Vec.new(), default: None, strict: true };
+        for m in f[1].split("\x1f") {
+            let m = m.to_string();
+            map_handler(mut d, m, Handler { cb: "log".to_string(), args: vec![Val.Str(m.clone())], reply: false });
+        }
+        let mut names: Vec[Val] = Vec.new();
+        for h in handlers_for_address(d, f[2])?.iter() {
+            names.push(h.args[0].clone());
+        }
+        w.out.push_str(f"[{join_repr(names)}]\n");
+    } else if kind == "serve" {
+        let d = make_dispatcher(f[3], mut w);
+        w.clock = f64.parse(f[2].clone()).unwrap();
+        if f[1] == "udp" {
+            serve_udp(d, f[4], mut w);
+        } else if f[1] == "tcp10" {
+            serve_tcp10(d, f[4], mut w)?;
+        } else {
+            serve_tcp11(d, f[4], mut w)?;
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    let mut w = World { out: String.new(), log: Vec.new(), clock: 0.0 };
+    let mut labels: Map[String, Content] = Map.new();
+    for line in jobs_text().split("\n") {
+        if line.is_empty() {
+            continue;
+        }
+        let mut f: Vec[String] = Vec.new();
+        for x in line.split("\t") {
+            f.push(x.to_string());
+        }
+        let header = line.replace("\t", " ").replace("\x1f", " | ");
+        w.out.push_str(f"== {header}\n");
+        if let Err(e) = run_job(f, mut labels, mut w) {
+            show_err(e, mut w);
+        }
+        flush_log(mut w);
+    }
+    print(w.out);
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("build\tgo\tx2f6375652f31322f676f\t\n");
+    s.push_str("build\tfader\tx2f6d697865722f63682f332f6661646572\tf0.75\n");
+    s.push_str("build\tmute\tx2f6d697865722f63682f332f6d757465\tT\n");
+    s.push_str("build\tunmute\tx2f6d697865722f63682f332f6d757465\tF\n");
+    s.push_str("build\tdimmer\tx2f6c696768742f64696d6d65722f37\ti255\n");
+    s.push_str("build\tname\tx2f6375652f31322f6e616d65\ts416374203220e280942053746f726d\n");
+    s.push_str("build\trgb\tx2f6c696768742f6c65642f312f636f6c6f72\ti4278255360@r\n");
+    s.push_str("build\tnote\tx2f6d6964692f6f7574\tm0,144,60,100\n");
+    s.push_str("build\txy\tx2f746f7563686f73632f787931\tf0.1 f-0.5\n");
+    s.push_str("build\tall\tx2f746573742f616c6c\ti-7 f3.25 s6f6b b010203 T F N m1,2,3,4 f2.5@d i9000000000 i-2147483648 i2147483647\n");
+    s.push_str("build\tarr\tx2f7363656e652f726563616c6c\t( i1 i2 ( f1.5 s6162 ) ) i3\n");
+    s.push_str("build\ttyped\tx2f7363656e652f6c6576656c73\t( i1 f2 s78 )@<f,d,s>\n");
+    s.push_str("build\tchars\tx2f6f73632f6368617273\ts686579@<s,s>\n");
+    s.push_str("build\tshort\tx2f6f73632f7a6970\t( i1 i2 i3 )@<i,f>\n");
+    s.push_str("build\tblob\tx2f646174612f626c6f62\tb0102030405\n");
+    s.push_str("build\tblob4\tx2f646174612f626c6f6234\tb09080706\n");
+    s.push_str("build\temptys\tx2f646174612f656d707479\ts\n");
+    s.push_str("build\tpad3\tx2f616263\ts78797a\n");
+    s.push_str("build\tpad4\tx2f61626364\ts7778797a\n");
+    s.push_str("build\tutf8\tx2f7469746c65732fc3bc6ec3af636f6465\tse697a5e69cace8aa9e sf09f8ead\n");
+    s.push_str("build\tdbl\tx2f636c6f636b2f6472696674\tf0.1@d i3@d T@d\n");
+    s.push_str("build\tints\tx2f636f756e746572\tf2.0@i\n");
+    s.push_str("build\t-\tx2f6261642f696e74\ti2147483648@i\n");
+    s.push_str("build\t-\tx2f6261642f696e7432\ts3132@i\n");
+    s.push_str("build\t-\tx2f6261642f72676261\ti-1@r\n");
+    s.push_str("build\t-\tx2f6261642f7267626132\ti4294967296@r\n");
+    s.push_str("build\trgbaok\tx2f726762612f6f6b\tT@r i0@r\n");
+    s.push_str("build\t-\tx2f6261642f666c6f6174\ts78@f\n");
+    s.push_str("build\t-\tx2f6261642f666c6f617432\tf1e300\n");
+    s.push_str("build\tfl\tx2f666c6f61742f65646765\tf3.4028234663852886e+38 f1e-46 f-0.0 finf fnan f16777217.0 f0.30000000000000004 i16777217@f\n");
+    s.push_str("build\t-\tx2f6261642f646f75626c65\tN@d\n");
+    s.push_str("build\t-\tx2f6261642f737472696e67\ti5@s\n");
+    s.push_str("build\t-\tx2f6261642f737472696e6732\tN@s\n");
+    s.push_str("build\t-\tx2f6261642f737472696e6733\t( i1 )@s\n");
+    s.push_str("build\t-\tx2f6261642f626c6f62\tb\n");
+    s.push_str("build\t-\tx2f6261642f626c6f6232\ts@b\n");
+    s.push_str("build\t-\tx2f6261642f626c6f6233\ti0@b\n");
+    s.push_str("build\t-\tx2f6261642f626c6f6234\ti5@b\n");
+    s.push_str("build\t-\tx2f6261642f626c6f6235\ts616263@b\n");
+    s.push_str("build\t-\tx2f6261642f626c6f6236\t( i1 )@b\n");
+    s.push_str("build\t-\tx2f6261642f6d696469\tu1,2,3\n");
+    s.push_str("build\t-\tx2f6261642f6d69646932\tu1,2,3@m\n");
+    s.push_str("build\t-\tx2f6261642f6d69646933\ti5@m\n");
+    s.push_str("build\t-\tx2f6261642f6d69646934\ts61626364@m\n");
+    s.push_str("build\tmidib\tx2f6d6964692f6279746573\tb903c6400@m ( i1 i300 i-1 i2 )@m\n");
+    s.push_str("build\t-\tx2f6261642f74797065\ti1@t\n");
+    s.push_str("build\t-\tx2f6261642f7479706532\ti1@<i,x>\n");
+    s.push_str("build\t-\tx2f6261642f69746572\ti5@<i>\n");
+    s.push_str("build\temptyty\tx2f656d7074792f74797065\ti5@<>\n");
+    s.push_str("build\tnested\tx2f612f62\t( ( ( N ) ) )\n");
+    s.push_str("build\temptyl\tx2f6c6973742f656d707479\t( )\n");
+    s.push_str("build\tnul\tx2f6e756c2f696e73696465\ts6100626364656667\n");
+    s.push_str("build\t-\t-\ti1\n");
+    s.push_str("build\t-\tx\ti1\n");
+    s.push_str("build\tcomma\tx2c\t\n");
+    s.push_str("build\tbang\tx2f62616e67\tN N\n");
+    s.push_str("bmsg\tx2f6375652f312f676f\t-\n");
+    s.push_str("bmsg\tx2f76\ti5\n");
+    s.push_str("bmsg\tx2f76\ts74657874\n");
+    s.push_str("bmsg\tx2f76\tb0102\n");
+    s.push_str("bmsg\tx2f76\t( i1 f2.5 )\n");
+    s.push_str("bmsg\tx2f76\tm1,2,3,4\n");
+    s.push_str("bmsg\tx2f76\tN\n");
+    s.push_str("bmsg\tx2f76\ts\n");
+    s.push_str("bmsg\tx2f76\t( )\n");
+    s.push_str("bmsg\tx2f76\t( ( i1 ) )\n");
+    s.push_str("bmsg\tx2f76\tT\n");
+    s.push_str("bmsg\tx2f76\tu1,2,3\n");
+    s.push_str("bmsg\tx\ti1\n");
+    s.push_str("parse\t2f6375652f352f676f000000\n");
+    s.push_str("parse\t2f7800002c000000\n");
+    s.push_str("parse\t2f7800002c690000ffffffd6\n");
+    s.push_str("parse\t2f7800002c696866640000000000000100000100000000003f0000003f50624dd2f1a9fc\n");
+    s.push_str("parse\t2f7800002c736200686900000000000301020300\n");
+    s.push_str("parse\t2f7800002c726d00ff8000c00190407f\n");
+    s.push_str("parse\t2f7800002c54464e00000000\n");
+    s.push_str("parse\t2f7800002c5b695b665d5d000000000740000000\n");
+    s.push_str("parse\t2f7800002c740000e93c7f0080000000\n");
+    s.push_str("parse\t2f7800002c7400000000000000000001\n");
+    s.push_str("parse\t2f7800002c740000ffffffffffffffff\n");
+    s.push_str("parse\t2f7800002c6600003f80\n");
+    s.push_str("parse\t2f7800002c660000\n");
+    s.push_str("parse\t2f7800002c6900000001\n");
+    s.push_str("parse\t2f7800002c64000000000000000000\n");
+    s.push_str("parse\t2f7800002c68000000000000\n");
+    s.push_str("parse\t2f7800002c730000616263\n");
+    s.push_str("parse\t2f7800002c73000061626364\n");
+    s.push_str("parse\t2f7800002c620000000000080102\n");
+    s.push_str("parse\t2f7800002c6266000000000107\n");
+    s.push_str("parse\t2f7800002c626900ffffffec0000000500000006\n");
+    s.push_str("parse\t2f7800002c626400fffffff40000000000000000\n");
+    s.push_str("parse\t2f7800006900000000000001\n");
+    s.push_str("parse\t2f7800002c69695b000000000000000100000002\n");
+    s.push_str("parse\t2f7800002c695d0000000001\n");
+    s.push_str("parse\t2f7800002c71690000000009\n");
+    s.push_str("parse\t2f7800002c635300\n");
+    s.push_str("parse\t2f7469746c65732f636166c3a90000002c7300006372c3a86d650000\n");
+    s.push_str("parse\t2f61\n");
+    s.push_str("parse\t-\n");
+    s.push_str("parse\t2f616263\n");
+    s.push_str("parse\t2f78000000000000\n");
+    s.push_str("parse\t2f7800002c6600007f800000\n");
+    s.push_str("parse\t2f7800002c6666000000000180000000\n");
+    s.push_str("parse\t2f7800002c6600007fc00000\n");
+    s.push_str("bundle\tb1\timm\tgo fader\n");
+    s.push_str("bundle\tb2\tf1700000000.25\tmute b1\n");
+    s.push_str("bundle\tb3\ti1700000010\tdimmer\n");
+    s.push_str("bundle\tb4\tf0.0\tgo\n");
+    s.push_str("bundle\tb5\ti0\t\n");
+    s.push_str("bundle\tb6\tf1.5\tb2 b3 name\n");
+    s.push_str("bundle\t-\tf-2208988801.0\tgo\n");
+    s.push_str("bundle\t-\tfnan\tgo\n");
+    s.push_str("bundle\t-\tfinf\tgo\n");
+    s.push_str("bundle\t-\tf1e20\tgo\n");
+    s.push_str("bundle\tb7\tf-2208988800.0\tgo\n");
+    s.push_str("bundle\tb8\tf2085978495.9999998\tgo\n");
+    s.push_str("bparse\t2362756e646c65000000000000000001\n");
+    s.push_str("bparse\t2362756e646c650000000000\n");
+    s.push_str("bparse\t2362756e646c6500\n");
+    s.push_str("bparse\t2362756e646c650000000000000000010000000c2f6100002c69000000000001\n");
+    s.push_str("bparse\t2362756e646c65000000000000000001000000082f61000000000000\n");
+    s.push_str("bparse\t2362756e646c65000000000000000001000000087a7a7a7a7a7a7a7a\n");
+    s.push_str("bparse\t2362756e646c650000000000000000010000\n");
+    s.push_str("bparse\t2362756e646c65000000000000000001000000402f610000\n");
+    s.push_str("bparse\t2362756e646c65000000000000000001000000102362756e646c65000000\n");
+    s.push_str("bparse\t2362756e646c65000000000000000001000000082f61000069000000\n");
+    s.push_str("bparse\t2362756e646c6500e8a8f8c040000000000000082f620000\n");
+    s.push_str("packet\t1700000005.5\t2f6375652f312f676f000000\n");
+    s.push_str("packet\t1700000005.5\t-\n");
+    s.push_str("packet\t1700000005.5\t7a7a\n");
+    s.push_str("packet\t1700000005.5\t2362756e646c65000000000000000001000000082f61000069000000\n");
+    s.push_str("packet\t1700000005.5\t2f7800002c69000000\n");
+    s.push_str("ntp\ttontp\timm\n");
+    s.push_str("ntp\ttontp\ti0\n");
+    s.push_str("ntp\ttontp\tf1700000000.5\n");
+    s.push_str("ntp\ttontp\ti-2208988800\n");
+    s.push_str("ntp\ttontp\ti-2208988801\n");
+    s.push_str("ntp\ttontp\tf2085978495.0\n");
+    s.push_str("ntp\ttontp\tf2085978496.0\n");
+    s.push_str("ntp\ttontp\tfnan\n");
+    s.push_str("ntp\ttontp\tf-inf\n");
+    s.push_str("ntp\ttontp\tf1e-10\n");
+    s.push_str("ntp\ttontp\tf123.456\n");
+    s.push_str("ntp\ttosys\t0000000000000000\n");
+    s.push_str("ntp\ttosys\t8000000000000000\n");
+    s.push_str("ntp\ttosys\te8a8f8c040000000\n");
+    s.push_str("ntp\ttosys\tffffffffffffffff\n");
+    s.push_str("ntp\ttosys\t0102\n");
+    s.push_str("ntp\ttosys\t-\n");
+    s.push_str("ntp\tparse\t0\n");
+    s.push_str("ntp\tparse\t1\n");
+    s.push_str("ntp\tparse\t4294967296\n");
+    s.push_str("ntp\tparse\t18446744073709551615\n");
+    s.push_str("ntp\tparse\t16827547062009102336\n");
+    s.push_str("slip\tenc\t-\n");
+    s.push_str("slip\tenc\t010203\n");
+    s.push_str("slip\tenc\tc0\n");
+    s.push_str("slip\tenc\tdb\n");
+    s.push_str("slip\tenc\tc0db\n");
+    s.push_str("slip\tenc\t68656c6c6fc0776f726c64db\n");
+    s.push_str("slip\tenc\tdbdc\n");
+    s.push_str("slip\tdec\tc00102c0\n");
+    s.push_str("slip\tvalid\tc00102c0\n");
+    s.push_str("slip\tdec\tc0dbdcdbddc0\n");
+    s.push_str("slip\tvalid\tc0dbdcdbddc0\n");
+    s.push_str("slip\tdec\tc0c0c0\n");
+    s.push_str("slip\tvalid\tc0c0c0\n");
+    s.push_str("slip\tdec\t-\n");
+    s.push_str("slip\tvalid\t-\n");
+    s.push_str("slip\tdec\tc0dbc0\n");
+    s.push_str("slip\tvalid\tc0dbc0\n");
+    s.push_str("slip\tdec\tdbdb\n");
+    s.push_str("slip\tvalid\tdbdb\n");
+    s.push_str("slip\tdec\tc0db\n");
+    s.push_str("slip\tvalid\tc0db\n");
+    s.push_str("slip\tdec\t0102\n");
+    s.push_str("slip\tvalid\t0102\n");
+    s.push_str("slip\tdec\tc001c002c0\n");
+    s.push_str("slip\tvalid\tc001c002c0\n");
+    s.push_str("slip\tdec\tc0c001c0c0\n");
+    s.push_str("slip\tvalid\tc0c001c0c0\n");
+    s.push_str("slip\tdec\tdbdddbdc\n");
+    s.push_str("slip\tvalid\tdbdddbdc\n");
+    s.push_str("slip\tdec\tc0dbddc0c0\n");
+    s.push_str("slip\tvalid\tc0dbddc0c0\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/1/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/?/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/*/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/1*\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[12]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[!1]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[0-9]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[0-9][0-9]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/{ch,bus}/*\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/{1,10}/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/cue/12/{go,name}\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/*/*/*\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/*\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t*\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/1/*e*\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/a.b\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/a?b\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/a[.]b\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/odd-name\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/odd[-]name\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/x+y\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/[a-c].b\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[z-a]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[!]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/cue/{}/go\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/cue/{12,}/go\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[1-]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/light/dimmer/7\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/light/dimmmer/7\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/opt/x\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/op/x\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/bus/a/b\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/a.c\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/abc\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/1/fader/\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/ch/[\\]/fader\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/[^m]ixer/bus/a\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/b(us)/a\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/mixer/b$/a\n");
+    s.push_str("match\t/mixer/ch/1/fader\x1f/mixer/ch/2/fader\x1f/mixer/ch/10/fader\x1f/mixer/ch/1/mute\x1f/mixer/bus/a\x1f/light/dimmer/7\x1f/cue/12/go\x1f/cue/12/name\x1f/a.b\x1fa/b\x1f/odd-name\x1f/x+y\x1f/mixer/*\x1f/cue/*/go\x1f/light/dim+er/7\x1f/a.c\x1f/opt?/x\t/cue/12/go?\n");
+    s.push_str("serve\tudp\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\t2f6d697865722f63682f312f66616465720000002c6600003f000000,2f6d697865722f63682f342f66616465720000002c6600003e800000,2f6375652f31322f676f00002c000000,2f6375652f332f676f0000002c000000,2f756e6b6e6f776e2f616464720000002c69000000000001,2f77686f000000002c69000000000002,2f6d697865722f63682f5b312d325d2f66616465720000002c6600003f800000,2f6d697865722f2a2f312f6661646572000000002c66000000000000,7a7a7a7a,2362756e646c65000000000000000001000000102f6375652f31322f676f00002c0000000000001c2f6d697865722f63682f312f66616465720000002c6600003e000000,2362756e646c6500e8fe6f8780000000000000102f6375652f332f676f0000002c000000000000302362756e646c6500e8fe6f86000000000000001c2f6d697865722f63682f322f66616465720000002c6600003f0000000000001c2f6d697865722f63682f312f66616465720000002c6600003f400000,2362756e646c6500e3088e8000000000000000102f6375652f372f676f0000002c000000,2f626164000000002c000000,2f6d697865722f63682f312f66616465720000002c73000078000000,2f656d70747900002c000000,2f6375652f31322f676f00002c69000000,\n");
+    s.push_str("serve\tudp\t1700000005.0\tstrict 0\x1fmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\t2362756e646c6500e8fe6f8900000000000000102f6375652f332f676f0000002c0000000000001c2f6d697865722f63682f312f66616465720000002c6600003f000000\n");
+    s.push_str("serve\tudp\t1700000005.0\tmap /cue/1/go log\x1funmap /cue/1/go log\x1funmap /cue/9/go log\x1funmap /never ack\x1fdefault ack\x1fmap /m log\x1fmap /m log\x1funmap /m log\t2f6375652f312f676f0000002c000000,2f6375652f392f676f0000002c000000,2f6e6576657200002c000000,2f6f7468657200002c000000,2f6d00002c69000000000001\n");
+    s.push_str("serve\tudp\t1700000005.0\tmap /a log\x1fdefault -\t2f6100002c000000,2f6200002c000000\n");
+    s.push_str("serve\ttcp10\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\t0000001c2f6d697865722f63682f312f66616465720000002c6600003f000000000000102f6375652f31322f676f00002c0000000000000c2f77686f000000002c000000\n");
+    s.push_str("serve\ttcp10\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\t0000001c2f6d697865722f63682f312f66616465720000002c6600003f000000000000102f6375652f31322f676f00002c0000000000000c2f77686f000000002c000000000000\n");
+    s.push_str("serve\ttcp10\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\t000000282f6375652f31322f676f00002c000000\n");
+    s.push_str("serve\ttcp10\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\t000000082f626164000000002c0000000000000c2f6375652f31322f676f00002c000000\n");
+    s.push_str("serve\ttcp11\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\tc02f6d697865722f63682f312f66616465720000002c6600003f000000c0c02f6375652f332f676f0000002c000000c0c02f77686f000000002c62000000000002dbdcdbdd0000c0\n");
+    s.push_str("serve\ttcp11\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\tc02f6375652f31322f676f00002c000000c0c0dbc0\n");
+    s.push_str("serve\ttcp11\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\tc02f6375652f31322f676f00002c000000\n");
+    s.push_str("serve\ttcp11\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\tc0c0c02f6d697865722f63682f312f66616465720000002c6600003f000000c0\n");
+    s.push_str("serve\ttcp11\t1700000005.0\tmap /mixer/ch/*/fader log\x1fmap /mixer/ch/1/fader echo\x1fmap /cue/*/go ack\x1fmap /cue/12/go log i1 s73746167652d6c656674\x1fmapr /who who\x1fmap /bad bad\x1fmap /empty empty\x1fdefault log\tc02f626164000000002c000000c0c02f6375652f31322f676f00002c000000c0\n");
+    s
+}
