@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9371 / 9532 = 98.3%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 7660 / 7789 = 98.3%.
-- Every classified non-deferred program (context): 15698 / 16912 = 92.8%.
-- Bench variants (outside the gate): 216 / 874 = 24.7%; timeouts 599.
+- Every classified non-deferred program (context): 15699 / 16912 = 92.8%.
+- Bench variants (outside the gate): 217 / 874 = 24.8%; timeouts 598.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5289 / 5411 = 97.7%; failing mir-gap 47, check-refuses 41, e-not-refused 28, e-differs 4, b-fix-incomplete 2.
 - Deferred (class d): 736; outside the slice (`post-m1:*`): 1095.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -62,7 +62,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (3724): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (3725): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -3781,6 +3781,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/801-900/896-monotonic-array/bench/is_monotonic`
 - `katas/801-900/897-increasing-order-search-tree/differential`
 - `katas/801-900/897-increasing-order-search-tree/increasing_bst`
+- `katas/801-900/898-bitwise-ors-of-subarrays/bench/subarray_bitwise_ors`
 - `katas/801-900/898-bitwise-ors-of-subarrays/differential`
 - `katas/801-900/898-bitwise-ors-of-subarrays/subarray_bitwise_ors`
 - `katas/801-900/898-bitwise-ors-of-subarrays/subarray_bitwise_ors_sorted`
