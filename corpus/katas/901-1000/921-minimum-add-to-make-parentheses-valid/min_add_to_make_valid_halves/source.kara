@@ -1,0 +1,92 @@
+// LeetCode #921: Minimum Add to Make Parentheses Valid -- divide and
+// conquer.
+//
+// Any stretch of the string, with its matched pairs taken out, is some
+// ')' followed by some '('. Two neighbouring stretches combine by matching
+// the left one's '(' with the right one's ')': as many as the smaller of
+// the two counts. Split the string in halves down to single characters
+// and combine on the way up. O(n), O(log n) deep.
+
+struct Unmatched {
+    closes: i64,
+    opens: i64,
+}
+
+fn summary(chars: Vec[u8], lo: i64, hi: i64) -> Unmatched {
+    if hi - lo == 1 {
+        return if chars[lo] == b'(' { Unmatched { closes: 0, opens: 1 } } else { Unmatched { closes: 1, opens: 0 } };
+    }
+    let mid = (lo + hi) / 2;
+    let a = summary(chars, lo, mid);
+    let b = summary(chars, mid, hi);
+    let matched = a.opens.min(b.closes);
+    Unmatched { closes: a.closes + b.closes - matched, opens: a.opens - matched + b.opens }
+}
+
+fn min_add_to_make_valid(s: String) -> i64 {
+    let chars = s.bytes().to_vec();
+    let u = summary(chars, 0, chars.len());
+    u.closes + u.opens
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    println(f"\"{s}\": {min_add_to_make_valid(s)}");
+}
+
+// n parentheses, '(' with chance lean / 100
+fn random_string(seed: mut ref i64, n: i64, lean: i64) -> String {
+    let mut bytes: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        bytes.push(if next_random(mut seed) % 100 < lean { b'(' } else { b')' });
+    }
+    String.from_utf8(bytes).unwrap()
+}
+
+fn repeat(piece: String, times: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..times {
+        out = out + piece;
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's two examples
+    show("())");
+    show("(((");
+    // valid; closed before opened; nested; mixed
+    show("()");
+    show(")(");
+    show("(()())");
+    show("()))((");
+    show(")))");
+    show("(()))(()");
+    show("((((");
+    show("())(()");
+    // 500 random strings of 1 to 1000, leaning from ')' to '('
+    let mut seed = 921;
+    let mut sum = 0;
+    let mut check = 0;
+    for r in 0..500 {
+        let n = 1 + next_random(mut seed) % 1000;
+        let s = random_string(mut seed, n, 30 + r % 41);
+        let a = min_add_to_make_valid(s);
+        sum += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"500 random strings: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest, 1000 characters
+    let opens = repeat("(", 1000);
+    let closes = repeat(")", 1000);
+    let pairs = repeat("()", 500);
+    let flipped = repeat(")(", 500);
+    let nested = repeat("(", 500) + repeat(")", 500);
+    println(f"1000 '(': {min_add_to_make_valid(opens)}, 1000 ')': {min_add_to_make_valid(closes)}, \"()\" x 500: {min_add_to_make_valid(pairs)}, \")(\" x 500: {min_add_to_make_valid(flipped)}, nested 500 deep: {min_add_to_make_valid(nested)}");
+}

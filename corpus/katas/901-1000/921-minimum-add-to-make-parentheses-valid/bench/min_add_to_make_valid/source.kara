@@ -1,0 +1,55 @@
+// LeetCode #921: Minimum Add to Make Parentheses Valid -- bench: one count
+// of the open parentheses.
+//
+// Read left to right, keeping the number of '(' still open. A ')' closes
+// one of them, or, when none is open, needs a '(' added before it. At the
+// end each '(' still open needs a ')' added after it. Every added
+// parenthesis is forced, so their sum is the least. O(n), O(1) space.
+
+fn min_add_to_make_valid(s: String) -> i64 {
+    let mut open = 0;
+    let mut added = 0;
+    for c in s.bytes() {
+        if c == b'(' {
+            open += 1;
+        } else if open > 0 {
+            open -= 1;
+        } else {
+            added += 1;
+        }
+    }
+    added + open
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 100;
+    let count = 1000;
+    let n = 1000;
+    let mut seed = 921;
+    // count strings of n parentheses, built once, leaning from ')' to '('
+    let mut strings: Vec[String] = Vec.new();
+    for i in 0..count {
+        let lean = 30 + i % 41;
+        let mut bytes: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            bytes.push(if next_random(mut seed) % 100 < lean { b'(' } else { b')' });
+        }
+        strings.push(String.from_utf8(bytes).unwrap());
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        // each round visits every string, starting from a different one
+        for i in 0..count {
+            let a = min_add_to_make_valid(strings[(r + i) % count]);
+            total += a;
+            check = (check * 1000003 + a) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} strings of {n}: answers summing to {total}, checksum {check}");
+}

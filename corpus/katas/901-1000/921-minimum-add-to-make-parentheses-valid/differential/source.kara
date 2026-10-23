@@ -1,0 +1,290 @@
+// LeetCode #921: Minimum Add to Make Parentheses Valid -- differential
+// test of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: a parentheses string is valid if and only if it is the
+// empty string, it can be written as AB (A concatenated with B), where A
+// and B are valid strings, or it can be written as (A), where A is a
+// valid string. You are given a parentheses string s. In one move, you
+// can insert a parenthesis at any position of the string. Return the
+// minimum number of moves required to make s valid.
+
+// ---- the ★ arm: one count of the open parentheses -------------------------
+fn star_min_add_to_make_valid(s: String) -> i64 {
+    let mut open = 0;
+    let mut added = 0;
+    for c in s.bytes() {
+        if c == b'(' {
+            open += 1;
+        } else if open > 0 {
+            open -= 1;
+        } else {
+            added += 1;
+        }
+    }
+    added + open
+}
+
+// ---- the stack arm: a stack of the parentheses not yet matched ------------
+fn stack_min_add_to_make_valid(s: String) -> i64 {
+    let mut stack: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c == b')' and stack.len() > 0 and stack[stack.len() - 1] == b'(' {
+            stack.pop();
+        } else {
+            stack.push(c);
+        }
+    }
+    stack.len()
+}
+
+// ---- the pairs arm: matched pairs taken out until none is left ------------
+fn pairs_min_add_to_make_valid(s: String) -> i64 {
+    let mut chars = s.bytes().to_vec();
+    loop {
+        let mut kept: Vec[u8] = Vec.new();
+        let mut i = 0;
+        while i < chars.len() {
+            if i + 1 < chars.len() and chars[i] == b'(' and chars[i + 1] == b')' {
+                i += 2;
+            } else {
+                kept.push(chars[i]);
+                i += 1;
+            }
+        }
+        if kept.len() == chars.len() {
+            return kept.len();
+        }
+        chars = kept;
+    }
+}
+
+// ---- the prefix arm: the lowest point of the running balance --------------
+fn prefix_min_add_to_make_valid(s: String) -> i64 {
+    let mut balance = 0;
+    let mut lowest = 0;
+    for c in s.bytes() {
+        balance += if c == b'(' { 1 } else { -1 };
+        lowest = lowest.min(balance);
+    }
+    let front = -lowest;
+    front + balance + front
+}
+
+// ---- the halves arm: divide and conquer -----------------------------------
+struct HalvesUnmatched {
+    closes: i64,
+    opens: i64,
+}
+
+fn halves_summary(chars: Vec[u8], lo: i64, hi: i64) -> HalvesUnmatched {
+    if hi - lo == 1 {
+        return if chars[lo] == b'(' { HalvesUnmatched { closes: 0, opens: 1 } } else { HalvesUnmatched { closes: 1, opens: 0 } };
+    }
+    let mid = (lo + hi) / 2;
+    let a = halves_summary(chars, lo, mid);
+    let b = halves_summary(chars, mid, hi);
+    let matched = a.opens.min(b.closes);
+    HalvesUnmatched { closes: a.closes + b.closes - matched, opens: a.opens - matched + b.opens }
+}
+
+fn halves_min_add_to_make_valid(s: String) -> i64 {
+    let chars = s.bytes().to_vec();
+    let u = halves_summary(chars, 0, chars.len());
+    u.closes + u.opens
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, s: String) -> i64 {
+    if x == 0 {
+        star_min_add_to_make_valid(s)
+    } else if x == 1 {
+        stack_min_add_to_make_valid(s)
+    } else if x == 2 {
+        pairs_min_add_to_make_valid(s)
+    } else if x == 3 {
+        prefix_min_add_to_make_valid(s)
+    } else {
+        halves_min_add_to_make_valid(s)
+    }
+}
+
+// Every valid string of each even length up to 2 * top, from the
+// statement's rules: the empty string, AB, and (A). Each non-empty valid
+// string is (A) followed by B for exactly one split, so building it that
+// way lists each once.
+fn valid_strings(top: i64) -> Vec[Vec[String]] {
+    let mut by_half: Vec[Vec[String]] = Vec.new();
+    let mut empty: Vec[String] = Vec.new();
+    empty.push(String.new());
+    by_half.push(empty);
+    for m in 1..top + 1 {
+        let mut these: Vec[String] = Vec.new();
+        for i in 0..m {
+            for a in by_half[i].iter() {
+                for b in by_half[m - 1 - i].iter() {
+                    these.push("(" + a + ")" + b);
+                }
+            }
+        }
+        by_half.push(these);
+    }
+    by_half
+}
+
+fn is_subsequence(s: String, t: String) -> bool {
+    let sb = s.bytes().to_vec();
+    let mut i = 0;
+    for c in t.bytes() {
+        if i < sb.len() and sb[i] == c {
+            i += 1;
+        }
+    }
+    i == sb.len()
+}
+
+// The statement read literally: the fewest parentheses added so that the
+// result is valid, that is, the shortest valid string that holds s in
+// order with the added ones among it.
+fn literal(s: String, valid: ref Vec[Vec[String]]) -> i64 {
+    let n = s.len();
+    let mut d = 0;
+    loop {
+        if (n + d) % 2 == 0 {
+            for t in valid[(n + d) / 2].iter() {
+                if is_subsequence(s, t) {
+                    return d;
+                }
+            }
+        }
+        d += 1;
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n parentheses, '(' with chance lean / 100
+fn random_string(seed: mut ref i64, n: i64, lean: i64) -> String {
+    let mut bytes: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        bytes.push(if next_random(mut seed) % 100 < lean { b'(' } else { b')' });
+    }
+    String.from_utf8(bytes).unwrap()
+}
+
+// s read backwards with each parenthesis turned round
+fn mirrored(s: String) -> String {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        out.push(if b[i] == b'(' { b')' } else { b'(' });
+        i -= 1;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// s with "()" put in before position p
+fn with_pair(s: String, p: i64) -> String {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() + 1 {
+        if i == p {
+            out.push(b'(');
+            out.push(b')');
+        }
+        if i < b.len() {
+            out.push(b[i]);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, s: String, small: bool, valid: ref Vec[Vec[String]]) {
+    let n = s.len();
+    let want = if small { literal(s, valid) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, s));
+    }
+    let flipped = mirrored(s);
+    let padded = with_pair(s, next_random(mut seed) % (n + 1));
+    let other_n = 1 + next_random(mut seed) % (n + 1);
+    let other_lean = next_random(mut seed) % 101;
+    let other = random_string(mut seed, other_n, other_lean);
+    let joined = s + other;
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's fewest additions
+        if small {
+            check(mut t, 1, a == want);
+        }
+        // P2: between 0 and n, and of n's parity, as a valid string is even
+        check(mut t, 2, a >= 0 and a <= n and (n - a) % 2 == 0);
+        // P3: the string read backwards with each parenthesis turned round
+        check(mut t, 3, arm(x, flipped) == a);
+        // P4: a matched "()" put in anywhere changes nothing
+        check(mut t, 4, arm(x, padded) == a);
+        // P5: s followed by another string needs at most the two answers
+        // added, and at least their difference
+        let b = arm(x, other);
+        let c = arm(x, joined);
+        check(mut t, 5, c <= a + b and c >= a - b and c >= b - a);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let valid = valid_strings(8);
+    let mut seed = 921;
+    let mut cases = 0;
+    let mut chars = 0;
+    let mut sum = 0;
+    // 1 to 8 parentheses against the statement, then 1 to 1000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 1000 };
+        let lean = 20 + next_random(mut seed) % 61;
+        let s = random_string(mut seed, n, lean);
+        cases += 1;
+        chars += n;
+        sum += star_min_add_to_make_valid(s);
+        properties(mut t, mut seed, s, small, valid);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} strings, {chars} parentheses, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

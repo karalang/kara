@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/921-minimum-add-to-make-parentheses-valid/min_add_to_make_valid_pairs.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "a6e363aa4"
+extracted_src = "3343e261"
+model_rev = "aafbe785"
+model_src = "3343e261"
