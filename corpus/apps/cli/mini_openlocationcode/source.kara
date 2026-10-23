@@ -1,0 +1,691 @@
+// mini_openlocationcode — Google's Open Location Code library 1.0.1
+// (openlocationcode/openlocationcode.py), the "Plus Codes" Google Maps shows
+// in place of a street address ("8FVC9G8F+6X" is a 14 m square in Zurich).
+// It ports encode at every code length, decode to the library's CodeArea,
+// isValid / isShort / isFull, shorten against a reference point, and
+// recoverNearest, with the library's exact ValueError messages.
+//
+// The library leans on Python's round(x, n): encode snaps the scaled
+// coordinate with round(..., 6) before truncating it, and decode rounds every
+// corner with round(..., 14). py_round reproduces that exactly: it expands the
+// double as m / 2^k (multiplying by two is exact), rounds m * 10^n / 2^k half
+// to even in i128, writes the result as a decimal string and parses it back,
+// which is the correctly rounded conversion CPython's round() also ends with.
+// Every other float operation is the library's own, in the library's order,
+// so decode prints the library's exact CodeArea repr, float noise included.
+// jobs_text() holds data/jobs.tsv.
+
+const ALPHABET: Str = "23456789CFGHJMPQRVWX";
+
+struct CodeArea {
+    lat_lo: f64,
+    lng_lo: f64,
+    lat_hi: f64,
+    lng_hi: f64,
+    lat_center: f64,
+    lng_center: f64,
+    code_length: i64,
+}
+
+// ----------------------------------------------------------- small helpers
+
+fn split_on(s: String, sep: u8) -> Vec[String] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    out
+}
+
+fn to_i64(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == b'-' {
+        neg = true;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < b.len() {
+        v = v * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn to_f64(s: String) -> f64 {
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0.0,
+    }
+}
+
+fn bytes_str(b: Vec[u8]) -> String {
+    String.from_utf8(b).unwrap_or("?".to_string())
+}
+
+fn upper(c: u8) -> u8 {
+    if c >= b'a' and c <= b'z' { c - 32 } else { c }
+}
+
+// CODE_ALPHABET_.find(c), with c already upper-cased.
+fn alpha_index(c: u8) -> i64 {
+    let a = ALPHABET.bytes().to_vec();
+    let mut i = 0;
+    let mut at = -1;
+    while i < a.len() {
+        if a[i] == c {
+            at = i;
+            i = a.len();
+        }
+        i += 1;
+    }
+    at
+}
+
+fn alpha_at(i: i64) -> u8 {
+    ALPHABET.bytes().to_vec()[i]
+}
+
+fn find_byte(b: Vec[u8], c: u8) -> i64 {
+    let mut i = 0;
+    let mut at = -1;
+    while i < b.len() {
+        if b[i] == c {
+            at = i;
+            i = b.len();
+        }
+        i += 1;
+    }
+    at
+}
+
+fn rfind_byte(b: Vec[u8], c: u8) -> i64 {
+    let mut i = b.len() - 1;
+    let mut at = -1;
+    while i >= 0 {
+        if b[i] == c {
+            at = i;
+            i = -1;
+        }
+        i -= 1;
+    }
+    at
+}
+
+fn count_byte(b: Vec[u8], c: u8) -> i64 {
+    let mut n = 0;
+    for x in b {
+        if x == c {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn pow_i(base: i64, e: i64) -> i64 {
+    let mut v = 1;
+    let mut i = 0;
+    while i < e {
+        v = v * base;
+        i += 1;
+    }
+    v
+}
+
+// ------------------------------------------------------- Python's round()
+
+fn py_round(x: f64, nd: i64) -> f64 {
+    if x == 0.0 {
+        return x;
+    }
+    let neg = x < 0.0;
+    let a = if neg { -x } else { x };
+    let mut k = 0;
+    let mut y = a;
+    while y != y.floor() {
+        y = y * 2.0;
+        k += 1;
+    }
+    let m = (y as i64) as i128;
+    let mut q: i128 = 0;
+    if k < 101 {
+        let mut num = m;
+        let mut i = 0;
+        while i < nd {
+            num = num * 10;
+            i += 1;
+        }
+        let mut den: i128 = 1;
+        i = 0;
+        while i < k {
+            den = den * 2;
+            i += 1;
+        }
+        q = num / den;
+        let r = num - q * den;
+        if 2 * r > den or (2 * r == den and q % 2 == 1) {
+            q += 1;
+        }
+    }
+    let mut s = f"{q}";
+    while s.len() <= nd {
+        s = f"0{s}";
+    }
+    let text = f"{s.substring(0, s.len() - nd)}.{s.substring(s.len() - nd, s.len())}";
+    let v = to_f64(text);
+    if neg { -v } else { v }
+}
+
+// ------------------------------------------------------------- validation
+
+fn is_valid(code: String) -> bool {
+    let b = code.bytes().to_vec();
+    let sep = find_byte(b.clone(), b'+');
+    if count_byte(b.clone(), b'+') > 1 {
+        return false;
+    }
+    if b.len() == 1 {
+        return false;
+    }
+    if sep == -1 or sep > 8 or sep % 2 == 1 {
+        return false;
+    }
+    let pad = find_byte(b.clone(), b'0');
+    if pad != -1 {
+        if sep < 8 {
+            return false;
+        }
+        if pad == 0 {
+            return false;
+        }
+        let rpad = rfind_byte(b.clone(), b'0') + 1;
+        let mut zeros = 0;
+        let mut i = pad;
+        while i < rpad {
+            if b[i] == b'0' {
+                zeros += 1;
+            }
+            i += 1;
+        }
+        if (rpad - pad) % 2 == 1 or zeros != rpad - pad {
+            return false;
+        }
+        if b[b.len() - 1] != b'+' {
+            return false;
+        }
+    }
+    if b.len() - sep - 1 == 1 {
+        return false;
+    }
+    for c in b {
+        if alpha_index(upper(c)) < 0 and c != b'+' and c != b'0' {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_short(code: String) -> bool {
+    if not is_valid(code) {
+        return false;
+    }
+    let sep = find_byte(code.bytes().to_vec(), b'+');
+    sep >= 0 and sep < 8
+}
+
+fn is_full(code: String) -> bool {
+    if not is_valid(code) {
+        return false;
+    }
+    if is_short(code) {
+        return false;
+    }
+    let b = code.bytes().to_vec();
+    if alpha_index(upper(b[0])) * 20 >= 180 {
+        return false;
+    }
+    if alpha_index(upper(b[1])) * 20 >= 360 {
+        return false;
+    }
+    true
+}
+
+// --------------------------------------------------------------- encoding
+
+fn clip_latitude(lat: f64) -> f64 {
+    if lat > 90.0 {
+        90.0
+    } else if lat < -90.0 {
+        -90.0
+    } else {
+        lat
+    }
+}
+
+fn normalize_longitude(lng: f64) -> f64 {
+    let mut v = lng;
+    while v < -180.0 {
+        v = v + 360.0;
+    }
+    while v >= 180.0 {
+        v = v - 360.0;
+    }
+    v
+}
+
+fn latitude_precision(n: i64) -> f64 {
+    if n <= 10 {
+        let e = ((n as f64) / -2.0 + 2.0).floor();
+        (20.0).pow(e)
+    } else {
+        (20.0).pow(-3.0) / (pow_i(5, n - 10) as f64)
+    }
+}
+
+fn encode(latitude: f64, longitude: f64, code_length: i64) -> Result[String, String] {
+    if code_length < 2 or (code_length < 10 and code_length % 2 == 1) {
+        return Err(f"ValueError: Invalid Open Location Code length - {code_length}");
+    }
+    let n = if code_length > 15 { 15 } else { code_length };
+    let mut lat = clip_latitude(latitude);
+    let lng = normalize_longitude(longitude);
+    if lat == 90.0 {
+        lat = lat - latitude_precision(n);
+    }
+    let mut lat_val = py_round((lat + 90.0) * 25000000.0, 6) as i64;
+    let mut lng_val = py_round((lng + 180.0) * 8192000.0, 6) as i64;
+    // Built back to front, as the library prepends.
+    let mut rev: Vec[u8] = Vec.new();
+    if n > 10 {
+        let mut i = 0;
+        while i < 5 {
+            rev.push(alpha_at((lat_val % 5) * 4 + lng_val % 4));
+            lat_val = lat_val / 5;
+            lng_val = lng_val / 4;
+            i += 1;
+        }
+    } else {
+        lat_val = lat_val / 3125;
+        lng_val = lng_val / 1024;
+    }
+    let mut i = 0;
+    while i < 5 {
+        rev.push(alpha_at(lng_val % 20));
+        rev.push(alpha_at(lat_val % 20));
+        lat_val = lat_val / 20;
+        lng_val = lng_val / 20;
+        i += 1;
+    }
+    let mut code: Vec[u8] = Vec.new();
+    let mut j = rev.len() - 1;
+    while j >= 0 {
+        code.push(rev[j]);
+        if code.len() == 8 {
+            code.push(b'+');
+        }
+        j -= 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if n >= 8 {
+        let mut t = 0;
+        while t < n + 1 {
+            out.push(code[t]);
+            t += 1;
+        }
+    } else {
+        let mut t = 0;
+        while t < n {
+            out.push(code[t]);
+            t += 1;
+        }
+        while t < 8 {
+            out.push(b'0');
+            t += 1;
+        }
+        out.push(b'+');
+    }
+    Ok(bytes_str(out))
+}
+
+// --------------------------------------------------------------- decoding
+
+fn new_area(lat_lo: f64, lng_lo: f64, lat_hi: f64, lng_hi: f64, n: i64) -> CodeArea {
+    let mut ca = lat_lo + (lat_hi - lat_lo) / 2.0;
+    if 90.0 < ca {
+        ca = 90.0;
+    }
+    let mut co = lng_lo + (lng_hi - lng_lo) / 2.0;
+    if 180.0 < co {
+        co = 180.0;
+    }
+    CodeArea { lat_lo: lat_lo, lng_lo: lng_lo, lat_hi: lat_hi, lng_hi: lng_hi, lat_center: ca, lng_center: co, code_length: n }
+}
+
+fn decode(code: String) -> Result[CodeArea, String] {
+    if not is_full(code) {
+        return Err(f"ValueError: Passed Open Location Code is not a valid full code - {code}");
+    }
+    let mut c: Vec[u8] = Vec.new();
+    for x in code.bytes().to_vec() {
+        if x != b'+' and x != b'0' and c.len() < 15 {
+            c.push(upper(x));
+        }
+    }
+    let mut normal_lat = -720000;
+    let mut normal_lng = -1440000;
+    let mut grid_lat = 0;
+    let mut grid_lng = 0;
+    let mut digits = if c.len() < 10 { c.len() } else { 10 };
+    let mut pv = 160000;
+    let mut i = 0;
+    while i < digits {
+        normal_lat += alpha_index(c[i]) * pv;
+        normal_lng += alpha_index(c[i + 1]) * pv;
+        if i < digits - 2 {
+            pv = pv / 20;
+        }
+        i += 2;
+    }
+    let mut lat_precision = (pv as f64) / 8000.0;
+    let mut lng_precision = (pv as f64) / 8000.0;
+    if c.len() > 10 {
+        let mut rowpv = 625;
+        let mut colpv = 256;
+        digits = c.len();
+        i = 10;
+        while i < digits {
+            let dv = alpha_index(c[i]);
+            grid_lat += (dv / 4) * rowpv;
+            grid_lng += (dv % 4) * colpv;
+            if i < digits - 1 {
+                rowpv = rowpv / 5;
+                colpv = colpv / 4;
+            }
+            i += 1;
+        }
+        lat_precision = (rowpv as f64) / 25000000.0;
+        lng_precision = (colpv as f64) / 8192000.0;
+    }
+    let lat = (normal_lat as f64) / 8000.0 + (grid_lat as f64) / 25000000.0;
+    let lng = (normal_lng as f64) / 8000.0 + (grid_lng as f64) / 8192000.0;
+    Ok(new_area(py_round(lat, 14), py_round(lng, 14), py_round(lat + lat_precision, 14), py_round(lng + lng_precision, 14), c.len()))
+}
+
+fn area_repr(a: CodeArea) -> String {
+    f"[{a.lat_lo}, {a.lng_lo}, {a.lat_hi}, {a.lng_hi}, {a.lat_center}, {a.lng_center}, {a.code_length}]"
+}
+
+// ----------------------------------------------------- shorten and recover
+
+fn upper_str(code: String) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in code.bytes().to_vec() {
+        out.push(upper(c));
+    }
+    bytes_str(out)
+}
+
+fn abs_f(x: f64) -> f64 {
+    if x < 0.0 { -x } else { x }
+}
+
+fn shorten(code: String, latitude: f64, longitude: f64) -> Result[String, String] {
+    if not is_full(code) {
+        return Err(f"ValueError: Passed code is not valid and full: {code}");
+    }
+    if find_byte(code.bytes().to_vec(), b'0') != -1 {
+        return Err(f"ValueError: Cannot shorten padded codes: {code}");
+    }
+    let up = upper_str(code.clone());
+    let area = match decode(up.clone()) {
+        Ok(a) => a,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    let lat = clip_latitude(latitude);
+    let lng = normalize_longitude(longitude);
+    let dlat = abs_f(area.lat_center - lat);
+    let dlng = abs_f(area.lng_center - lng);
+    let coderange = if dlng > dlat { dlng } else { dlat };
+    let resolutions = [20.0, 1.0, 0.05, 0.0025, 0.000125];
+    let mut i = 3;
+    while i > 0 {
+        if coderange < resolutions[i] * 0.3 {
+            return Ok(up.substring((i + 1) * 2, up.len()));
+        }
+        i -= 1;
+    }
+    Ok(up)
+}
+
+fn recover_nearest(code: String, ref_lat: f64, ref_lng: f64) -> Result[String, String] {
+    if is_full(code) {
+        return Ok(upper_str(code.clone()));
+    }
+    if not is_short(code) {
+        return Err(f"ValueError: Passed short code is not valid - {code}");
+    }
+    let rlat = clip_latitude(ref_lat);
+    let rlng = normalize_longitude(ref_lng);
+    let up = upper_str(code.clone());
+    let padding_length = 8 - find_byte(up.bytes().to_vec(), b'+');
+    let resolution = (20.0).pow(2.0 - (padding_length as f64) / 2.0);
+    let half_resolution = resolution / 2.0;
+    let prefix = match encode(rlat, rlng, 10) {
+        Ok(s) => s.substring(0, padding_length),
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    let area = match decode(f"{prefix}{up}") {
+        Ok(a) => a,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    let mut ca = area.lat_center;
+    let mut co = area.lng_center;
+    if rlat + half_resolution < ca and ca - resolution >= -90.0 {
+        ca -= resolution;
+    } else if rlat - half_resolution > ca and ca + resolution <= 90.0 {
+        ca += resolution;
+    }
+    if rlng + half_resolution < co {
+        co -= resolution;
+    } else if rlng - half_resolution > co {
+        co += resolution;
+    }
+    encode(ca, co, area.code_length)
+}
+
+// --------------------------------------------------------------- the jobs
+
+fn tf(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn unwrap_str(r: Result[String, String]) -> String {
+    match r {
+        Ok(s) => s.clone(),
+        Err(e) => e.clone(),
+    }
+}
+
+fn run_job(f: Vec[String]) -> String {
+    let op = f[0].clone();
+    if op == "enc" {
+        let n = if f.len() > 3 { to_i64(f[3].clone()) } else { 10 };
+        unwrap_str(encode(to_f64(f[1].clone()), to_f64(f[2].clone()), n))
+    } else if op == "dec" {
+        match decode(f[1].clone()) {
+            Ok(a) => area_repr(a),
+            Err(e) => e,
+        }
+    } else if op == "chk" {
+        let c = f[1].clone();
+        f"{tf(is_valid(c))} {tf(is_short(c))} {tf(is_full(c))}"
+    } else if op == "sho" {
+        unwrap_str(shorten(f[1].clone(), to_f64(f[2].clone()), to_f64(f[3].clone())))
+    } else if op == "rec" {
+        unwrap_str(recover_nearest(f[1].clone(), to_f64(f[2].clone()), to_f64(f[3].clone())))
+    } else {
+        "unknown op".to_string()
+    }
+}
+
+fn op_name(op: String) -> String {
+    if op == "enc" {
+        "encode".to_string()
+    } else if op == "dec" {
+        "decode".to_string()
+    } else if op == "chk" {
+        "check".to_string()
+    } else if op == "sho" {
+        "shorten".to_string()
+    } else {
+        "recoverNearest".to_string()
+    }
+}
+
+fn main_run() -> String {
+    let mut out = String.new();
+    for line in split_on(jobs_text(), b'\n') {
+        if line.len() > 0 {
+            let f = split_on(line, b'\t');
+            out.push_str(op_name(f[0].clone()));
+            out.push_str("(");
+            let mut i = 1;
+            while i < f.len() {
+                if i > 1 {
+                    out.push_str(", ");
+                }
+                out.push_str(f[i]);
+                i += 1;
+            }
+            out.push_str(") => ");
+            out.push_str(run_job(f));
+            out.push_str("\n");
+        }
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("enc\t47.365590\t8.524997\n");
+    s.push_str("enc\t47.365590\t8.524997\t11\n");
+    s.push_str("enc\t47.365590\t8.524997\t12\n");
+    s.push_str("enc\t47.365590\t8.524997\t15\n");
+    s.push_str("enc\t47.365590\t8.524997\t16\n");
+    s.push_str("enc\t47.365590\t8.524997\t8\n");
+    s.push_str("enc\t47.365590\t8.524997\t6\n");
+    s.push_str("enc\t47.365590\t8.524997\t4\n");
+    s.push_str("enc\t47.365590\t8.524997\t2\n");
+    s.push_str("enc\t47.365590\t8.524997\t9\n");
+    s.push_str("enc\t47.365590\t8.524997\t1\n");
+    s.push_str("enc\t47.365590\t8.524997\t7\n");
+    s.push_str("enc\t20.375\t2.775\n");
+    s.push_str("enc\t20.3700625\t2.7821875\t11\n");
+    s.push_str("enc\t51.3701125\t-1.217765625\t11\n");
+    s.push_str("enc\t-41.2730625\t174.7859375\t11\n");
+    s.push_str("enc\t37.539669125\t-122.375069724\t15\n");
+    s.push_str("enc\t-37.8136\t144.9631\n");
+    s.push_str("enc\t35.6895\t139.6917\t11\n");
+    s.push_str("enc\t-33.9249\t18.4241\t13\n");
+    s.push_str("enc\t40.7128\t-74.006\t14\n");
+    s.push_str("enc\t1.286785\t103.854503\t10\n");
+    s.push_str("enc\t90\t1\n");
+    s.push_str("enc\t90\t1\t4\n");
+    s.push_str("enc\t90\t1\t11\n");
+    s.push_str("enc\t92\t1\n");
+    s.push_str("enc\t-90\t1\n");
+    s.push_str("enc\t-95\t-185\n");
+    s.push_str("enc\t0\t180\n");
+    s.push_str("enc\t0\t-180\n");
+    s.push_str("enc\t1\t540\t11\n");
+    s.push_str("enc\t1\t-540\n");
+    s.push_str("enc\t89.99999\t179.99999\t15\n");
+    s.push_str("enc\t0\t0\n");
+    s.push_str("dec\t8FVC9G8F+6X\n");
+    s.push_str("dec\t8FVC9G8F+6XR\n");
+    s.push_str("dec\t8fvc9g8f+6x\n");
+    s.push_str("dec\t8FVC0000+\n");
+    s.push_str("dec\t8F000000+\n");
+    s.push_str("dec\t7FG49QCJ+2VXGJ\n");
+    s.push_str("dec\t7FG49QCJ+2VXGJRQ\n");
+    s.push_str("dec\tCFX30000+\n");
+    s.push_str("dec\t22222222+22\n");
+    s.push_str("dec\tCFX3X2X2+X2\n");
+    s.push_str("dec\t9C3W9QCJ+2VX\n");
+    s.push_str("dec\t4VCPPQGP+Q9\n");
+    s.push_str("dec\t9G8F+6X\n");
+    s.push_str("dec\t8FVC9G8+6X\n");
+    s.push_str("dec\tWF8Q0000+\n");
+    s.push_str("chk\t8FWC2345+G6\n");
+    s.push_str("chk\t8FWC2345+G6G\n");
+    s.push_str("chk\t8fwc2345+\n");
+    s.push_str("chk\t8FWCX400+\n");
+    s.push_str("chk\tWC2345+G6g\n");
+    s.push_str("chk\t2345+G6\n");
+    s.push_str("chk\t45+G6\n");
+    s.push_str("chk\t+G6\n");
+    s.push_str("chk\tG+\n");
+    s.push_str("chk\t+\n");
+    s.push_str("chk\t8FWC2345+G\n");
+    s.push_str("chk\t8FWC2_45+G6\n");
+    s.push_str("chk\t8FWC2345+G6+\n");
+    s.push_str("chk\t8FWC2300+G6\n");
+    s.push_str("chk\tWC2300+G6g\n");
+    s.push_str("chk\tWC2345+G\n");
+    s.push_str("chk\t8FWC00+\n");
+    s.push_str("chk\t80WC0000+\n");
+    s.push_str("chk\t8FWC000+\n");
+    s.push_str("chk\t8FWC2345\n");
+    s.push_str("chk\tX2222222+\n");
+    s.push_str("chk\t2X222222+\n");
+    s.push_str("chk\tC2222222+\n");
+    s.push_str("chk\t2W222222+\n");
+    s.push_str("chk\t\n");
+    s.push_str("sho\t9C3W9QCJ+2VX\t51.3701125\t-1.217765625\n");
+    s.push_str("sho\t9C3W9QCJ+2VX\t51.3708675\t-1.217765625\n");
+    s.push_str("sho\t9C3W9QCJ+2VX\t51.3693575\t-1.217765625\n");
+    s.push_str("sho\t9C3W9QCJ+2VX\t51.3701125\t-1.218520625\n");
+    s.push_str("sho\t9C3W9QCJ+2VX\t51.3701125\t-1.217010625\n");
+    s.push_str("sho\t9C3W9QCJ+2VX\t51.3701125\t-1.17\n");
+    s.push_str("sho\t9C3W9QCJ+2VX\t51.0\t-1.2\n");
+    s.push_str("sho\t9C3W9QCJ+2VX\t60.0\t10.0\n");
+    s.push_str("sho\t8FJFW222+\t42.899\t9.012\n");
+    s.push_str("sho\t8FVC9G8F+6X\t47.4\t8.6\n");
+    s.push_str("sho\t8FVC0000+\t47.4\t8.6\n");
+    s.push_str("sho\t9G8F+6X\t47.4\t8.6\n");
+    s.push_str("rec\t9G8F+6X\t47.4\t8.6\n");
+    s.push_str("rec\t8F+6X\t47.4\t8.6\n");
+    s.push_str("rec\t+2VX\t51.3708675\t-1.217765625\n");
+    s.push_str("rec\tCJ+2VX\t51.3701125\t-1.217765625\n");
+    s.push_str("rec\t9QCJ+2VX\t51.3701125\t-1.217765625\n");
+    s.push_str("rec\tXQP5+\t47.0\t8.0\n");
+    s.push_str("rec\t2222+22\t89.6\t0.0\n");
+    s.push_str("rec\t2222+22\t-89.6\t179.9\n");
+    s.push_str("rec\tQXXX+XX\t89.9\t179.9\n");
+    s.push_str("rec\tXXXX+XX\t-89.9\t-179.9\n");
+    s.push_str("rec\t8FVC9G8F+6X\t0\t0\n");
+    s.push_str("rec\t8fvc9g8f+6x\t0\t0\n");
+    s.push_str("rec\t9G8F+6Y\t47.4\t8.6\n");
+    s.push_str("rec\t9G8+6X\t47.4\t8.6\n");
+    s
+}
