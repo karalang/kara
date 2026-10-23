@@ -1,0 +1,341 @@
+// LeetCode #871: Minimum Number of Refueling Stops -- differential test of
+// the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: the fewest stations a car must stop at to drive from 0
+// to target, starting with start_fuel, one unit of fuel per unit of
+// distance, taking all of a station's fuel at a stop; -1 when no choice
+// of stops gets there.
+// ---- the ★ arm: a heap of the stations passed -----------------------------
+fn star_min_refuel_stops(target: i64, start_fuel: i64, stations: Vec[(i64, i64)]) -> i64 {
+    let mut passed: PriorityQueue[i64] = PriorityQueue.max_first();
+    let mut reach = start_fuel;
+    let mut stops = 0;
+    let mut next = 0;
+    while reach < target {
+        while next < stations.len() and stations[next].0 <= reach {
+            passed.push(stations[next].1);
+            next += 1;
+        }
+        match passed.pop() {
+            Some(fuel) => {
+                reach += fuel;
+                stops += 1;
+            }
+            None => return -1,
+        }
+    }
+    stops
+}
+
+// ---- the reach arm: the farthest reach for each number of stops -----------
+fn reach_min_refuel_stops(target: i64, start_fuel: i64, stations: Vec[(i64, i64)]) -> i64 {
+    let n = stations.len();
+    let mut reach: Vec[i64] = Vec.filled(n + 1, 0);
+    reach[0] = start_fuel;
+    for i in 0..n {
+        let (position, fuel) = stations[i];
+        for t in (0..i + 1).rev() {
+            if reach[t] >= position and reach[t] + fuel > reach[t + 1] {
+                reach[t + 1] = reach[t] + fuel;
+            }
+        }
+    }
+    for t in 0..n + 1 {
+        if reach[t] >= target {
+            return t;
+        }
+    }
+    -1
+}
+
+// ---- the table arm: a table over stations and stops -----------------------
+fn table_min_refuel_stops(target: i64, start_fuel: i64, stations: Vec[(i64, i64)]) -> i64 {
+    let n = stations.len();
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    let mut first: Vec[i64] = Vec.filled(n + 1, -1);
+    first[0] = start_fuel;
+    best.push(first);
+    for i in 0..n {
+        let (position, fuel) = stations[i];
+        let mut row: Vec[i64] = Vec.filled(n + 1, -1);
+        for k in 0..n + 1 {
+            row[k] = best[i][k];
+            if k > 0 and best[i][k - 1] >= position and best[i][k - 1] + fuel > row[k] {
+                row[k] = best[i][k - 1] + fuel;
+            }
+        }
+        best.push(row);
+    }
+    for k in 0..n + 1 {
+        if best[n][k] >= target {
+            return k;
+        }
+    }
+    -1
+}
+
+// ---- the scan arm: the richest station in reach, found by a scan ----------
+fn scan_min_refuel_stops(target: i64, start_fuel: i64, stations: Vec[(i64, i64)]) -> i64 {
+    let mut used: Vec[bool] = Vec.filled(stations.len(), false);
+    let mut reach = start_fuel;
+    let mut stops = 0;
+    while reach < target {
+        let mut pick = -1;
+        for i in 0..stations.len() {
+            if not used[i] and stations[i].0 <= reach and (pick < 0 or stations[i].1 > stations[pick].1) {
+                pick = i;
+            }
+        }
+        if pick < 0 {
+            return -1;
+        }
+        used[pick] = true;
+        reach += stations[pick].1;
+        stops += 1;
+    }
+    stops
+}
+
+// ---- the sorted arm: a sorted list of the stations passed -----------------
+fn sorted_min_refuel_stops(target: i64, start_fuel: i64, stations: Vec[(i64, i64)]) -> i64 {
+    let mut passed: Vec[i64] = Vec.new();
+    let mut reach = start_fuel;
+    let mut stops = 0;
+    let mut next = 0;
+    while reach < target {
+        while next < stations.len() and stations[next].0 <= reach {
+            let fuel = stations[next].1;
+            let mut lo = 0;
+            let mut hi = passed.len();
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if passed[mid] < fuel {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            passed.insert(lo, fuel);
+            next += 1;
+        }
+        match passed.pop() {
+            Some(fuel) => {
+                reach += fuel;
+                stops += 1;
+            }
+            None => return -1,
+        }
+    }
+    stops
+}
+
+fn arm(a: i64, target: i64, start_fuel: i64, stations: Vec[(i64, i64)]) -> i64 {
+    match a {
+        0 => star_min_refuel_stops(target, start_fuel, stations),
+        1 => reach_min_refuel_stops(target, start_fuel, stations),
+        2 => table_min_refuel_stops(target, start_fuel, stations),
+        3 => scan_min_refuel_stops(target, start_fuel, stations),
+        _ => sorted_min_refuel_stops(target, start_fuel, stations),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// whether the car reaches the target stopping at exactly the stations
+// whose bit is set in `stops`, driving station by station
+fn literal_reaches(target: i64, start_fuel: i64, stations: Vec[(i64, i64)], stops: i64) -> bool {
+    let mut fuel = start_fuel;
+    let mut at = 0;
+    for i in 0..stations.len() {
+        let (position, gain) = stations[i];
+        fuel -= position - at;
+        at = position;
+        if fuel < 0 {
+            return false;
+        }
+        if stops / (1 << i) % 2 == 1 {
+            fuel += gain;
+        }
+    }
+    fuel - (target - at) >= 0
+}
+
+// the fewest stops over every set of stations to stop at, or -1
+fn literal_min_stops(target: i64, start_fuel: i64, stations: Vec[(i64, i64)]) -> i64 {
+    let mut best = -1;
+    for stops in 0..(1 << stations.len()) {
+        if literal_reaches(target, start_fuel, stations, stops) {
+            let count = stops.count_ones() as i64;
+            if best < 0 or count < best {
+                best = count;
+            }
+        }
+    }
+    best
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_below(seed: mut ref i64, limit: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % limit
+}
+
+fn random_stations(seed: mut ref i64, n: i64, target: i64, max_fuel: i64) -> Vec[(i64, i64)] {
+    let mut positions: Vec[i64] = Vec.new();
+    if target > 1 {
+        for _ in 0..n {
+            positions.push(random_below(mut seed, target - 1) + 1);
+        }
+    }
+    positions.sort();
+    positions.dedup();
+    let mut stations: Vec[(i64, i64)] = Vec.new();
+    for p in positions.iter() {
+        stations.push((*p, random_below(mut seed, max_fuel) + 1));
+    }
+    stations
+}
+
+// whether a answer `a` is no more stops than `b`, -1 counting as more
+// than any number
+fn no_more(a: i64, b: i64) -> bool {
+    b < 0 or (a >= 0 and a <= b)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one case, each over the five arms (P1 only when
+// `literal`); returns the ★ arm's answer
+fn properties(t: mut ref Tally, seed: mut ref i64, target: i64, start_fuel: i64, stations: Vec[(i64, i64)], literal: bool) -> i64 {
+    let want = if literal { literal_min_stops(target, start_fuel, stations) } else { 0 };
+    let more_fuel = start_fuel + random_below(mut seed, target) + 1;
+    // a station at a position not yet taken, if there is one
+    let mut added = stations.clone();
+    if target > 1 {
+        let position = random_below(mut seed, target - 1) + 1;
+        let mut taken = false;
+        for i in 0..stations.len() {
+            if stations[i].0 == position {
+                taken = true;
+            }
+        }
+        if not taken {
+            let mut at = 0;
+            while at < added.len() and added[at].0 < position {
+                at += 1;
+            }
+            added.insert(at, (position, random_below(mut seed, target) + 1));
+        }
+    }
+    // a shorter target, the stations at or past it dropped
+    let shorter = random_below(mut seed, target) + 1;
+    let mut before: Vec[(i64, i64)] = Vec.new();
+    for i in 0..stations.len() {
+        if stations[i].0 < shorter {
+            before.push(stations[i]);
+        }
+    }
+    let mut tripled: Vec[(i64, i64)] = Vec.new();
+    let mut total_fuel = start_fuel;
+    for i in 0..stations.len() {
+        tripled.push((stations[i].0 * 3, stations[i].1 * 3));
+    }
+    let mut every_reaches = true;
+    for i in 0..stations.len() {
+        if total_fuel < stations[i].0 {
+            every_reaches = false;
+        }
+        total_fuel += stations[i].1;
+    }
+    if total_fuel < target {
+        every_reaches = false;
+    }
+    let mut star = 0;
+    for a in 0..5 {
+        let got = arm(a, target, start_fuel, stations);
+        if a == 0 {
+            star = got;
+        }
+        // P1: the statement's answer
+        if literal {
+            check(mut t, 1, got == want);
+        }
+        // P2: more starting fuel never needs more stops
+        check(mut t, 2, no_more(arm(a, target, more_fuel, stations), got));
+        // P3: one more station never needs more stops
+        check(mut t, 3, no_more(arm(a, target, start_fuel, added), got));
+        // P4: a shorter trip never needs more stops
+        check(mut t, 4, no_more(arm(a, shorter, start_fuel, before), got));
+        // P5: 0 exactly when the start fuel is enough, -1 exactly when
+        // stopping everywhere still falls short
+        check(mut t, 5, (got == 0) == (start_fuel >= target) and (got == -1) == not every_reaches);
+        // P6: every distance and amount of fuel tripled gives the same answer
+        check(mut t, 6, arm(a, target * 3, start_fuel * 3, tripled) == got);
+    }
+    star
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut count = 0;
+    let mut total = 0;
+    let mut unreachable = 0;
+    let mut seed = 871;
+    // small cases, against the statement
+    for k in 0..1500 {
+        let target = random_below(mut seed, 60) + 1;
+        let start_fuel = random_below(mut seed, target + 5) + 1;
+        let stations = random_stations(mut seed, k % 10, target, 25);
+        count += 1;
+        let answer = properties(mut t, mut seed, target, start_fuel, stations, true);
+        if answer < 0 {
+            unreachable += 1;
+        } else {
+            total += answer;
+        }
+    }
+    // larger cases, distances up to 10^6
+    for k in 0..200 {
+        let target = random_below(mut seed, 1000000) + 1;
+        let start_fuel = random_below(mut seed, target / 20 + 1) + 1;
+        let max_fuel = if k % 2 == 0 { target / 10 + 1 } else { target / 40 + 1 };
+        let stations = random_stations(mut seed, random_below(mut seed, 60) + 1, target, max_fuel);
+        count += 1;
+        let answer = properties(mut t, mut seed, target, start_fuel, stations, false);
+        if answer < 0 {
+            unreachable += 1;
+        } else {
+            total += answer;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{count} cases, stops sum to {total}, {unreachable} unreachable, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
