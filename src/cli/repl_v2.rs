@@ -11,10 +11,12 @@ use super::*;
 /// not what the cells before it printed again.
 pub(crate) const CELL_START: &str = "@@karac-repl-cell@@";
 
-/// What a cell's run printed.
+/// What a cell's run printed, and the bindings its program passed to
+/// [`crate::mir::interp::REPL_SNAPSHOT_FN`] at its end.
 pub(crate) struct Ran {
     pub stdout: String,
     pub stderr: String,
+    pub bindings: Vec<crate::mir::interp::ReplBinding>,
 }
 
 /// Why a cell did not run to the end: its diagnostics, or a panic's message,
@@ -41,11 +43,19 @@ pub(crate) fn check(source: &str) -> Result<(), Vec<String>> {
 /// Checks `source` and runs its `main` on the MIR interpreter. The output
 /// before the [`CELL_START`] line is the replay's and is dropped.
 pub(crate) fn run_cell(source: &str) -> Result<Ran, Failed> {
+    check(source).map_err(|errors| Failed {
+        stdout: String::new(),
+        errors,
+    })?;
+    run_checked(source)
+}
+
+/// [`run_cell`] of a program [`check`] has accepted.
+pub(crate) fn run_checked(source: &str) -> Result<Ran, Failed> {
     let failed = |errors: Vec<String>| Failed {
         stdout: String::new(),
         errors,
     };
-    check(source).map_err(failed)?;
     crate::mir::interp::set_source_name("<repl>");
     let source = source.to_string();
     // The MIR interpreter drops a long chain by recursion, so it runs on a
@@ -55,16 +65,13 @@ pub(crate) fn run_cell(source: &str) -> Result<Ran, Failed> {
         .spawn(move || {
             let l = crate::mir::lower::build_source(&source)?;
             crate::mir::lower::par_check(&l)?;
-            Ok::<_, String>(crate::mir::interp::run_untraced(
-                &l.program,
-                &l.tys,
-                "main",
-                vec![],
-            ))
+            Ok::<_, String>(crate::mir::interp::collect_repl_bindings(|| {
+                crate::mir::interp::run_untraced(&l.program, &l.tys, "main", vec![])
+            }))
         })
         .expect("failed to spawn the MIR interpreter thread")
         .join();
-    let r = match run {
+    let (r, bindings) = match run {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return Err(failed(vec![format!("error[mir]: {e}")])),
         Err(_) => {
@@ -83,6 +90,7 @@ pub(crate) fn run_cell(source: &str) -> Result<Ran, Failed> {
         (_, Some(0)) => Ok(Ran {
             stdout,
             stderr: r.stderr,
+            bindings,
         }),
         (crate::mir::interp::Outcome::Error(e), _) => Err(Failed {
             stdout,

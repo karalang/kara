@@ -643,6 +643,7 @@ fn run_with(
             .and_then(|v| v.parse().ok())
             .unwrap_or(MAX_STEPS),
         snapshots: Default::default(),
+        repl_bindings: REPL_BINDINGS.with(|b| b.borrow_mut().take()),
         forgotten: Vec::new(),
         snapshot_bytes: 0,
         sweep_at: SWEEP_FLOOR,
@@ -726,6 +727,9 @@ fn run_with(
             Err(Stop::Error(e)) => Outcome::Error(e),
         }
     };
+    if let Some(b) = it.repl_bindings.take() {
+        REPL_BINDINGS.with(|r| *r.borrow_mut() = Some(b));
+    }
     RunResult {
         output: it.output,
         stderr: it.stderr,
@@ -733,6 +737,29 @@ fn run_with(
         outcome,
         resumes: it.resumes,
     }
+}
+
+/// The function a REPL cell's program calls with each of its top-level
+/// bindings at its end (`crate::cli::repl_v2`), so the next cell can be
+/// given their values instead of replaying the cells that made them.
+pub const REPL_SNAPSHOT_FN: &str = "__karac_repl_snapshot";
+
+/// A binding a REPL cell ended with: its name, and its type and value as
+/// source, or `None` when the value cannot be written so.
+pub type ReplBinding = (String, Option<(String, String)>);
+
+thread_local! {
+    static REPL_BINDINGS: std::cell::RefCell<Option<Vec<ReplBinding>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f`, collecting the bindings the program it runs passes to
+/// [`REPL_SNAPSHOT_FN`].
+pub fn collect_repl_bindings<T>(f: impl FnOnce() -> T) -> (T, Vec<ReplBinding>) {
+    REPL_BINDINGS.with(|b| *b.borrow_mut() = Some(Vec::new()));
+    let r = f();
+    let got = REPL_BINDINGS.with(|b| b.borrow_mut().take());
+    (r, got.unwrap_or_default())
 }
 
 /// The unary float function `method` of `x`, at `f64` when `wide`, else
@@ -983,6 +1010,9 @@ struct Interp<'a> {
     /// of a `String`): not leaks, and kept until nothing refers to them
     /// ([`Interp::sweep_snapshots`]).
     snapshots: rustc_hash::FxHashSet<AllocId>,
+    /// What a REPL cell's [`REPL_SNAPSHOT_FN`] calls recorded, when this
+    /// run collects them ([`collect_repl_bindings`]).
+    repl_bindings: Option<Vec<ReplBinding>>,
     /// The values `forget` took: what they own stays allocated by design,
     /// so the exit check counts it as held.
     forgotten: Vec<Value>,
@@ -1198,6 +1228,9 @@ impl<'a> Interp<'a> {
                 body.arg_count,
                 args.len()
             ));
+        }
+        if self.repl_bindings.is_some() && name.starts_with(REPL_SNAPSHOT_FN) {
+            self.record_repl_binding(body, &args)?;
         }
         if self.frames.len() >= MAX_DEPTH {
             // A compiled program's stack guard reports it so and aborts
@@ -9661,6 +9694,190 @@ impl<'a> Interp<'a> {
             format!("{name} {{ {} }}", parts.join(", "))
         } else {
             format!("{name}({})", parts.join(", "))
+        })
+    }
+
+    /// A call of the REPL's [`REPL_SNAPSHOT_FN`]: its binding's name and,
+    /// when the value can be written as source, its type and value.
+    fn record_repl_binding(&mut self, body: &Body, args: &[Value]) -> R<()> {
+        let (Some(name), Some(v)) = (args.first(), args.get(1)) else {
+            return Ok(());
+        };
+        let name = self.display(name)?;
+        let mut ty = body.locals[2].ty;
+        let mut v = v.clone();
+        // The binding is lent to the call (D5): read through the loan.
+        if let (TyKind::Ref(t), Value::Ref(addr)) = (self.tys.kind(ty), &v) {
+            ty = t;
+            v = self.slot(addr)?;
+        }
+        let source = match (self.source_ty(ty), self.source_of(&v, ty)) {
+            (Some(t), Some(v)) => Some((t, v)),
+            _ => None,
+        };
+        if let Some(b) = self.repl_bindings.as_mut() {
+            b.push((name, source));
+        }
+        Ok(())
+    }
+
+    /// `ty` as the program spells it, for a type [`Interp::source_of`] can
+    /// write a value of.
+    fn source_ty(&self, ty: Ty) -> Option<String> {
+        let list =
+            |ts: &[Ty]| -> Option<Vec<String>> { ts.iter().map(|&t| self.source_ty(t)).collect() };
+        Some(match self.tys.kind(ty) {
+            TyKind::Bool => "bool".into(),
+            TyKind::Char => "char".into(),
+            TyKind::Int(i) => i.name().into(),
+            TyKind::Float(f @ (crate::mir::ty::FloatTy::F32 | crate::mir::ty::FloatTy::F64)) => {
+                f.name().into()
+            }
+            TyKind::Unit => "()".into(),
+            TyKind::Str => "Str".into(),
+            TyKind::Tuple(ts) if ts.len() == 1 => format!("({},)", list(&ts)?[0]),
+            TyKind::Tuple(ts) => format!("({})", list(&ts)?.join(", ")),
+            TyKind::Array(e, n) if !self.tys.is_vector(ty) => {
+                format!("Array[{}, {n}]", self.source_ty(e)?)
+            }
+            TyKind::Intrinsic(i) => match i {
+                IntrinsicTy::String => "String".into(),
+                IntrinsicTy::Vec(e) => format!("Vec[{}]", self.source_ty(e)?),
+                IntrinsicTy::VecDeque(e) => format!("VecDeque[{}]", self.source_ty(e)?),
+                IntrinsicTy::Set(e) => format!("Set[{}]", self.source_ty(e)?),
+                IntrinsicTy::Map(k, v) => {
+                    format!("Map[{}, {}]", self.source_ty(k)?, self.source_ty(v)?)
+                }
+                IntrinsicTy::SortedMap(k, v) => {
+                    format!("SortedMap[{}, {}]", self.source_ty(k)?, self.source_ty(v)?)
+                }
+                _ => return None,
+            },
+            TyKind::Adt(_) => {
+                let (adt, args) = self.tys.tcx().adt_of(ty)?;
+                if adt.user || matches!(adt.name.as_str(), "Option" | "Result") {
+                    match args.is_empty() {
+                        true => adt.name.clone(),
+                        false => format!("{}[{}]", adt.name, list(&args)?.join(", ")),
+                    }
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    /// `v`, of type `ty`, as a source expression that builds it again, or
+    /// `None` for a value that cannot be written so (a function, a
+    /// `shared` handle, a file).
+    fn source_of(&mut self, v: &Value, ty: Ty) -> Option<String> {
+        self.source_ty(ty)?;
+        let list = |me: &mut Self, items: &[Value], tys: &[Ty]| -> Option<Vec<String>> {
+            items
+                .iter()
+                .zip(tys)
+                .map(|(x, &t)| me.source_of(x, t))
+                .collect()
+        };
+        Some(match (self.tys.kind(ty), v) {
+            (TyKind::Bool, Value::Bool(b)) => b.to_string(),
+            (TyKind::Char, Value::Char(c)) => format!("{c:?}"),
+            (TyKind::Int(IntTy::U128), Value::Int(i)) => format!("{}u128", *i as u128),
+            (TyKind::Int(i), Value::Int(n)) => format!("{n}{}", i.name()),
+            (TyKind::Float(f), Value::Float(x)) if x.is_finite() => {
+                let shown = match f {
+                    crate::mir::ty::FloatTy::F32 => format!("{:?}", *x as f32),
+                    _ => format!("{x:?}"),
+                };
+                // `1e300` needs a point to read as a float.
+                let shown = match shown.split_once('e') {
+                    Some((m, e)) if !m.contains('.') => format!("{m}.0e{e}"),
+                    _ => shown,
+                };
+                format!("{shown}{}", f.name())
+            }
+            (TyKind::Unit, _) => "()".into(),
+            (TyKind::Str | TyKind::Intrinsic(IntrinsicTy::String), _) => {
+                format!("{:?}", self.display(v).ok()?)
+            }
+            (TyKind::Tuple(ts), Value::Agg(fs)) if ts.len() == 1 => {
+                format!("({},)", list(self, fs, &ts)?[0])
+            }
+            (TyKind::Tuple(ts), Value::Agg(fs)) => format!("({})", list(self, fs, &ts)?.join(", ")),
+            (TyKind::Array(e, _), Value::Agg(fs)) => {
+                format!("[{}]", list(self, fs, &vec![e; fs.len()])?.join(", "))
+            }
+            (TyKind::Intrinsic(IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e)), Value::Box(id)) => {
+                let off = self.deque_off(*id);
+                let fs = self.vec_elems(*id).ok()?[off..].to_vec();
+                match fs.is_empty() {
+                    true => format!("{}.new()", self.source_ty(ty)?.split('[').next()?),
+                    false => format!("[{}]", list(self, &fs, &vec![e; fs.len()])?.join(", ")),
+                }
+            }
+            (TyKind::Intrinsic(IntrinsicTy::Set(e)), Value::Box(id)) => {
+                let fs = self.table_entries(*id).ok()?;
+                let shown = list(self, &fs, &vec![e; fs.len()])?;
+                match shown.is_empty() {
+                    true => "Set.new()".into(),
+                    false => format!("Set.from([{}])", shown.join(", ")),
+                }
+            }
+            (
+                TyKind::Intrinsic(IntrinsicTy::Map(kt, vt) | IntrinsicTy::SortedMap(kt, vt)),
+                Value::Box(id),
+            ) => {
+                let entries = self.table_entries(*id).ok()?;
+                let mut parts = Vec::with_capacity(entries.len());
+                for e in &entries {
+                    let Value::Agg(pair) = e else {
+                        return None;
+                    };
+                    let k = self.source_of(&pair[0], kt)?;
+                    let v = self.source_of(&pair[1], vt)?;
+                    parts.push(format!("{k}: {v}"));
+                }
+                match parts.is_empty() {
+                    true => format!("{}.new()", self.source_ty(ty)?.split('[').next()?),
+                    false => format!("[{}]", parts.join(", ")),
+                }
+            }
+            (TyKind::Adt(a), Value::Agg(fs) | Value::Variant(_, fs)) => {
+                let adt = self.tys.adt(a);
+                let k = match v {
+                    Value::Variant(k, _) => Some(*k),
+                    _ => None,
+                };
+                let var = adt.variants.get(k.unwrap_or(0) as usize)?;
+                let mut parts = Vec::with_capacity(fs.len());
+                for (i, f) in fs.iter().enumerate() {
+                    let t = self.tys.field_ty(ty, k, i as u32)?;
+                    parts.push(self.source_of(f, t)?);
+                }
+                let named = var.fields.iter().any(|(n, _)| n.parse::<u32>().is_err());
+                let head = match (adt.is_enum, adt.user) {
+                    (true, true) => format!("{}.{}", adt.name, var.name),
+                    (true, false) => var.name.clone(),
+                    (false, _) => adt.name.clone(),
+                };
+                if named {
+                    let fields: Vec<String> = var
+                        .fields
+                        .iter()
+                        .zip(&parts)
+                        .map(|((n, _), p)| format!("{n}: {p}"))
+                        .collect();
+                    format!("{head} {{ {} }}", fields.join(", "))
+                } else if parts.is_empty() && adt.is_enum {
+                    head
+                } else if parts.is_empty() {
+                    return None;
+                } else {
+                    format!("{head}({})", parts.join(", "))
+                }
+            }
+            _ => return None,
         })
     }
 

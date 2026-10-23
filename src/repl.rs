@@ -70,6 +70,82 @@ use util::*;
 /// expression without its `;` (`println(x)`), which a later cell's replay
 /// would run into. The `;` goes on a line of its own, past any trailing
 /// comment, and only where it makes the cell parse.
+/// A top-level binding a v2 cell ended with, written as source
+/// (`Session::v2_values`).
+#[derive(Clone, Debug)]
+struct V2Value {
+    name: String,
+    mutable: bool,
+    ty: String,
+    value: String,
+}
+
+/// Whether the `let` statement `slice` binds `name` as `mut`.
+fn binds_mut(slice: &str, name: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut rest = slice;
+    while let Some(at) = rest.find("mut") {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + 3..].trim_start();
+        if !before.is_some_and(ident)
+            && after.starts_with(name)
+            && !after[name.len()..].starts_with(ident)
+        {
+            return true;
+        }
+        rest = &rest[at + 3..];
+    }
+    false
+}
+
+/// The values `live` (the bindings a cell ended with) take from what its
+/// program recorded, or `None` when one is missing or cannot be written
+/// as source.
+fn v2_values_of(
+    live: &[(String, bool)],
+    got: &[crate::mir::interp::ReplBinding],
+) -> Option<Vec<V2Value>> {
+    if got.len() != live.len() {
+        return None;
+    }
+    live.iter()
+        .zip(got)
+        .map(|((name, mutable), (got_name, source))| {
+            let (ty, value) = source.clone()?;
+            (got_name == name).then(|| V2Value {
+                name: name.clone(),
+                mutable: *mutable,
+                ty,
+                value,
+            })
+        })
+        .collect()
+}
+
+/// The bindings whose recording in `synthetic` the errors `errs` are all
+/// at (a binding the cell moved away), or none when any error is
+/// elsewhere.
+fn moved_at_snapshot(synthetic: &str, errs: &[String]) -> Vec<String> {
+    let at = regex::Regex::new(r"<repl>:(\d+):").expect("valid regex");
+    let call = format!("{}(\"", crate::mir::interp::REPL_SNAPSHOT_FN);
+    let src_lines: Vec<&str> = synthetic.lines().collect();
+    let mut names = Vec::new();
+    for e in errs {
+        let line = at
+            .captures(e)
+            .and_then(|c| c[1].parse::<usize>().ok())
+            .and_then(|l| src_lines.get(l.wrapping_sub(1)));
+        let name = line
+            .and_then(|l| l.strip_prefix(call.as_str()))
+            .and_then(|rest| rest.split('"').next());
+        match name {
+            Some(n) => names.push(n.to_string()),
+            None => return Vec::new(),
+        }
+    }
+    names
+}
+
 fn terminated(cell_src: &str) -> String {
     let src = cell_src.trim_end();
     let with = format!("{src}\n;");
@@ -467,6 +543,15 @@ pub struct Session {
     /// are recomputed each cell rather than snapshotted; see the module
     /// docs for the caveat.
     persistent_lets: Vec<String>,
+    /// v2: the top-level bindings the last cell ended with, as source
+    /// (B-2026-10-23-6). The next cell starts from these instead of
+    /// replaying `persistent_lets`, so the cells that built them do not
+    /// run again. `None` when some value could not be written as source,
+    /// or a provider scope ran: the next cell replays.
+    v2_values: Option<Vec<V2Value>>,
+    /// What the running cell's [`Session::v2_values`] become if it is
+    /// accepted.
+    v2_pending: Option<Vec<V2Value>>,
     /// 1-based origin cell index for each entry in `persistent_lets`. Length
     /// is invariant-equal to `persistent_lets.len()`. Recorded so the
     /// REPL-aware diagnostic-rendering path can map a span landing inside
@@ -722,6 +807,8 @@ impl Session {
             items_source: String::new(),
             cell_history: Vec::new(),
             persistent_lets: Vec::new(),
+            v2_values: Some(Vec::new()),
+            v2_pending: None,
             persistent_let_origin: Vec::new(),
             cell_byte_ranges: Vec::new(),
             auto_clone: false,
@@ -1712,7 +1799,7 @@ impl Session {
         let max_iters = self.persistent_lets.len() + 8;
         let mut notes: Vec<String> = Vec::new();
         for _ in 0..=max_iters {
-            let synthetic = self.build_synthetic_cell(cell_src);
+            let synthetic = self.build_synthetic_cell(cell_src, None);
             let mut parsed = crate::parse(&synthetic);
             if !parsed.errors.is_empty() {
                 return Err(WrapperOutcome::errors(
@@ -2957,10 +3044,51 @@ impl Session {
         capture: bool,
     ) -> Result<WrapperOutcome, WrapperOutcome> {
         use std::io::Write;
-        let synthetic = self.build_synthetic_cell(cell_src);
         let lines =
             |s: &str| -> Vec<String> { s.split_inclusive('\n').map(|l| l.to_string()).collect() };
-        match crate::cli::repl_v2::run_cell(&synthetic) {
+        self.v2_pending = None;
+        let mut run = None;
+        // The cell's program with its bindings recorded at its end, unless
+        // a provider scope is open. A binding the cell moved away cannot be
+        // recorded: it is left out, as it is out of scope. When the
+        // program is refused for anything else, the cell runs as a replay
+        // of the cells before it, whose diagnostics name the cells
+        // (a use of a moved binding names the cell that moved it).
+        if self.provider_stack.is_empty() {
+            let mut live = self.v2_live_bindings(cell_src);
+            for _ in 0..2 {
+                let synthetic = self.build_synthetic_cell(cell_src, Some(&live));
+                if !crate::parse(&synthetic).errors.is_empty() {
+                    break;
+                }
+                match crate::cli::repl_v2::check(&synthetic) {
+                    Ok(()) => {
+                        let r = crate::cli::repl_v2::run_checked(&synthetic);
+                        if let Ok(ran) = &r {
+                            self.v2_pending = v2_values_of(&live, &ran.bindings);
+                        }
+                        run = Some((synthetic, r));
+                        break;
+                    }
+                    Err(errs) => {
+                        let moved = moved_at_snapshot(&synthetic, &errs);
+                        if moved.is_empty() {
+                            break;
+                        }
+                        live.retain(|(n, _)| !moved.contains(n));
+                    }
+                }
+            }
+        }
+        let (synthetic, r) = match run {
+            Some(run) => run,
+            None => {
+                let synthetic = self.build_synthetic_cell(cell_src, None);
+                let r = crate::cli::repl_v2::run_cell(&synthetic);
+                (synthetic, r)
+            }
+        };
+        match r {
             Ok(mut ran) => {
                 ran.stderr = self.relabel_v2(&synthetic, &ran.stderr);
                 if capture {
@@ -3039,15 +3167,65 @@ impl Session {
             .into_owned()
     }
 
-    fn build_synthetic_cell(&mut self, cell_src: &str) -> String {
+    /// The top-level bindings in scope at the end of `cell_src` (v2), each
+    /// with whether it is `mut`, in the order they were first bound.
+    fn v2_live_bindings(&self, cell_src: &str) -> Vec<(String, bool)> {
+        fn bind(live: &mut Vec<(String, bool)>, l: &CellLet) {
+            let mut names: Vec<&String> = l.names.iter().collect();
+            names.sort();
+            for n in names {
+                let m = binds_mut(&l.slice, n);
+                match live.iter_mut().find(|(x, _)| x == n) {
+                    Some(e) => e.1 = m,
+                    None => live.push((n.clone(), m)),
+                }
+            }
+        }
+        let mut live: Vec<(String, bool)> = Vec::new();
+        match &self.v2_values {
+            Some(vs) => live.extend(vs.iter().map(|v| (v.name.clone(), v.mutable))),
+            None => {
+                for prior in &self.persistent_lets {
+                    for l in scan_top_level_lets(prior) {
+                        bind(&mut live, &l);
+                    }
+                }
+            }
+        }
+        for l in scan_top_level_lets(cell_src) {
+            bind(&mut live, &l);
+        }
+        live
+    }
+
+    /// The program a cell runs as. With `snap` (v2), the bindings in scope
+    /// at its end, each with whether it is `mut`: the program starts from
+    /// [`Session::v2_values`] when there are some, instead of replaying
+    /// the earlier cells, and ends by passing each binding to
+    /// [`crate::mir::interp::REPL_SNAPSHOT_FN`].
+    fn build_synthetic_cell(&mut self, cell_src: &str, snap: Option<&[(String, bool)]>) -> String {
+        let snap_fn = crate::mir::interp::REPL_SNAPSHOT_FN;
         let mut s = String::new();
         s.push_str(&strip_main(&self.items_source));
         if !s.is_empty() && !s.ends_with('\n') {
             s.push('\n');
         }
+        if snap.is_some() {
+            s.push_str(&format!("fn {snap_fn}[T](name: Str, value: T) {{}}\n"));
+        }
         s.push_str("fn main() {\n");
         let mut ranges: Vec<(usize, Range<usize>)> = Vec::new();
-        for (i, prior_let) in self.persistent_lets.iter().enumerate() {
+        let values = self.v2_values.as_ref().filter(|_| snap.is_some());
+        for v in values.into_iter().flatten() {
+            let m = if v.mutable { "mut " } else { "" };
+            s.push_str(&format!("let {m}{}: {} = {};\n", v.name, v.ty, v.value));
+        }
+        let replayed = if values.is_some() {
+            &[][..]
+        } else {
+            &self.persistent_lets[..]
+        };
+        for (i, prior_let) in replayed.iter().enumerate() {
             let start = s.len();
             s.push_str(prior_let);
             if !prior_let.ends_with('\n') {
@@ -3099,6 +3277,9 @@ impl Session {
         if cell_idx > 0 {
             ranges.push((cell_idx, body_start..body_end));
         }
+        for (name, _) in snap.into_iter().flatten() {
+            s.push_str(&format!("{snap_fn}(\"{name}\", {name});\n"));
+        }
         s.push_str("}\n");
         self.cell_byte_ranges = ranges;
         s
@@ -3117,6 +3298,9 @@ impl Session {
     /// a span landing inside the replayed slice back to the originating
     /// cell.
     fn capture_new_lets(&mut self, cell_src: &str) {
+        if self.v2 {
+            self.v2_values = self.v2_pending.take();
+        }
         // Cell index = `cell_history.len()` because the caller pushed the
         // current cell's source before invoking the wrapper pipeline.
         let cell_idx = self.cell_history.len();
@@ -3221,6 +3405,7 @@ impl Session {
     /// clear keeps the two stores in sync).
     pub fn reset_persistent_lets(&mut self) {
         self.persistent_lets.clear();
+        self.v2_values = Some(Vec::new());
         self.persistent_let_origin.clear();
         self.persistent_let_provider_scope.clear();
         self.let_snapshots.clear();
@@ -3743,6 +3928,8 @@ impl Session {
             }
         }
         self.persistent_lets = kept_lets;
+        // The bindings the scope's cells made are gone: replay what is left.
+        self.v2_values = None;
         self.persistent_let_origin = kept_origin;
         self.persistent_let_provider_scope = kept_scope;
 

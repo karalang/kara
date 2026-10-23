@@ -247,3 +247,103 @@ fn repl_v2_refuses_auto_clone_without_legacy() {
         "{stderr}"
     );
 }
+
+/// The number of times the cells have appended to the file `path`.
+fn appended(path: &std::path::Path) -> usize {
+    std::fs::read_to_string(path).map_or(0, |s| s.len())
+}
+
+/// A later cell starts from the values the cells before it ended with, so
+/// what those cells did (here, append to a file) is not done again
+/// (B-2026-10-23-6).
+#[test]
+fn repl_v2_does_not_run_an_earlier_cell_again() {
+    let dir = std::env::temp_dir().join(format!("karac-repl-v2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("once.txt");
+    let _ = std::fs::remove_file(&path);
+    let p = path.display();
+    let mut s = session();
+    let r = s.evaluate_cell_captured(&format!(
+        "let mut n: i64 = {{ File.append(\"{p}\").unwrap().write(\"x\".bytes()).unwrap(); 5 }};"
+    ));
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    for cell in ["n = n + 1;", "n = n * 10;", "println(n);"] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+    }
+    assert_eq!(s.evaluate_cell_captured("println(n);").stdout, "60\n");
+    assert_eq!(appended(&path), 1, "the first cell ran again");
+    // A binding moved away is out of scope after its cell, and a use of
+    // it names the cell that moved it; neither runs the first cell again.
+    let r = s.evaluate_cell_captured("let w = String.from(\"a\"); let t = w;");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(w);");
+    assert!(
+        r.errors.join("\n").contains("moved at cell 6:1:"),
+        "{:?}",
+        r.errors
+    );
+    let r = s.evaluate_cell_captured("let w = 7;");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(s.evaluate_cell_captured("println(n + w);").stdout, "67\n");
+    assert_eq!(s.evaluate_cell_captured("println(t);").stdout, "a\n");
+    assert_eq!(appended(&path), 1, "the first cell ran again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Each kind of value a cell can end with reaches the next cell intact.
+#[test]
+fn repl_v2_carries_each_kind_of_value() {
+    let dir = std::env::temp_dir().join(format!("karac-repl-v2k-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("once.txt");
+    let _ = std::fs::remove_file(&path);
+    let mut s = session();
+    let mut out = String::new();
+    let first = format!(
+        "let mut s = {{ File.append(\"{}\").unwrap().write(\"x\".bytes()).unwrap(); \"a\\\"b\\n\\u{{301}}\".to_string() }};",
+        path.display()
+    );
+    for cell in [
+        "struct P { name: String, xs: Vec[u8] }",
+        first.as_str(),
+        "enum E { A, B(i64, String), C { w: f64 } }",
+        "let m: Map[String, Vec[i64]] = [\"k\": [1, 2], \"j\": Vec.new()];",
+        "let st: Set[i64] = Set.from([3, 4]);",
+        "let o: Option[(i64, String)] = Some((1, \"x\".to_string()));",
+        "let p = P { name: \"n\".to_string(), xs: [1, 2] };",
+        "let es: Vec[E] = [E.A, E.B(-3, \"q\".to_string()), E.C { w: 0.1 }];",
+        "let t: (u8, char, bool) = (7, '\\'', true);",
+        "let sm: SortedMap[i64, String] = [2: \"b\".to_string(), 1: \"a\".to_string()];",
+        "let f: f32 = 0.1; let g: f64 = 1e300; let big: u128 = 340282366920938463463374607431768211455u128;",
+        "let mn: i64 = -9223372036854775808; let a: Array[i64, 2] = [5, 6];",
+        "let r: Result[i64, String] = Err(\"bad\".to_string());",
+        "println(s.len()); println(m[\"k\"][1]); println(m[\"j\"].len()); println(st.contains(4));",
+        "println(p.name); println(p.xs[1]); println(es.len()); println(t.0); println(t.1); println(sm[1]);",
+        "println(f); println(g); println(big); println(mn); println(a[1]);",
+        "match o { Some((n, w)) => println(f\"{n} {w}\"), None => println(\"none\") }",
+        "match es[1] { E.B(n, w) => println(f\"{n} {w}\"), _ => println(\"other\") }",
+        "match es[2] { E.C { w } => println(w), _ => println(\"other\") }",
+        "match r { Ok(_) => println(\"ok\"), Err(e) => println(e) }",
+    ] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "cell {cell:?}: {:?}", r.errors);
+        out.push_str(&r.stdout);
+    }
+    assert_eq!(
+        out,
+        "6\n2\n0\ntrue\nn\n2\n3\n7\n'\na\n0.1\n1e+300\n\
+         340282366920938463463374607431768211455\n-9223372036854775808\n6\n\
+         1 x\n-3 q\n0.1\nbad\n"
+    );
+    assert_eq!(appended(&path), 1, "an earlier cell ran again");
+    // A closure cannot be written as source: the cell after it replays.
+    s.evaluate_cell_captured("let add = |x: i64| x + 1;");
+    assert_eq!(
+        s.evaluate_cell_captured("println(add(s.len()));").stdout,
+        "7\n"
+    );
+    assert_eq!(appended(&path), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
