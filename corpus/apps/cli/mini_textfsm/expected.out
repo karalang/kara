@@ -1,0 +1,39 @@
+=== version ===
+HEADER	Hostname	Model	Version
+ROW	router1		15.2(4)M3,
+ROW	router1	WS-C3750	
+=== ifaces ===
+HEADER	Interface	Status	Proto
+ROW	Gi0/0	up	up
+ROW	Gi0/1	down	down
+=== routes ===
+HEADER	Network	NextHop
+ROW	10.0.0.0/24	[192.168.1.1, 192.168.1.2, 192.168.1.3]
+=== twostate ===
+HEADER	User	Shell
+ROW	alice	/bin/bash
+ROW	bob	/bin/zsh
+=== clearall ===
+HEADER	A	B
+ROW	1	2
+ROW	3	4
+=== keyed ===
+HEADER	Port	Desc
+ROW	22	ssh
+ROW	80	http
+ROW	443	https
+=== errcase ===
+ERROR	Error: "boom". Rule Line: 5. Input Line: FATAL here.
+=== filldown ===
+HEADER	Section	Item
+ROW	alpha	one
+ROW	alpha	two
+ROW	beta	three
+ROW	beta	
+=== eofrec ===
+HEADER	Name	Age
+ROW	Alice	30
+=== fanout ===
+HEADER	Proto	Count
+ROW	tcp	5
+ROW	udp	9
