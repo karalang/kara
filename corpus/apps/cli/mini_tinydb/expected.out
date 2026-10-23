@@ -1,0 +1,1356 @@
+
+# Getting started
+> db = TinyDB('data/db/db.json')
+> db.insert({'type': 'apple', 'count': 7})
+1
+> db.insert({'type': 'peach', 'count': 3})
+2
+> db.all()
+[{'type': 'apple', 'count': 7}, {'type': 'peach', 'count': 3}]
+> len(db)
+2
+> Fruit = Query()
+> db.search(Fruit.type == 'peach')
+[{'type': 'peach', 'count': 3}]
+> db.search(Fruit.count > 5)
+[{'type': 'apple', 'count': 7}]
+> db.update({'count': 10}, Fruit.type == 'apple')
+[1]
+> db.all()
+[{'type': 'apple', 'count': 10}, {'type': 'peach', 'count': 3}]
+> db.remove(Fruit.count < 5)
+[2]
+> db.all()
+[{'type': 'apple', 'count': 10}]
+> db/db.json
+  db/db.json (1 lines)
+  | {"_default": {"1": {"type": "apple", "count": 10}}}
+> db.truncate()
+None
+> db.all()
+[]
+> db/db.json
+  db/db.json (1 lines)
+  | {"_default": {}}
+> db.insert({'name': 'John', 'age': 22})
+1
+> db.insert({'name': 'Mary', 'age': 31})
+2
+> User = Query()
+> db.search(User.name == 'John')
+[{'name': 'John', 'age': 22}]
+> db.search(User.age > 30)
+[{'name': 'Mary', 'age': 31}]
+> db.search(where('name') == 'Mary')
+[{'name': 'Mary', 'age': 31}]
+> db.get(User.name == 'Mary')
+{'name': 'Mary', 'age': 31}
+> db.get(User.name == 'Nobody')
+None
+> db.contains(User.name == 'John')
+True
+> db.count(User.age >= 22)
+2
+> sorted(db.tables())
+['_default']
+> db/db.json
+  db/db.json (1 lines)
+  | {"_default": {"1": {"name": "John", "age": 22}, "2": {"name": "Mary", "age": 31}}}
+
+# Queries: comparisons and paths
+> db = TinyDB(storage=MemoryStorage)
+> db.insert_multiple([{'name': 'Ann', 'age': 34, 'city': 'Berlin', 'score': 4.5}, {'name': 'Bo', 'age': 27, 'city': 'Paris', 'score': 3}, {'name': 'Cy', 'age': 41, 'city': 'Berlin'}, {'name': 'Di', 'age': '19', 'city': 'Seoul', 'score': 2.0}, {'name': 'Ed', 'city': None, 'score': True}])
+[1, 2, 3, 4, 5]
+> q = Query()
+> db.search(q.city == 'Berlin')
+[{'name': 'Ann', 'age': 34, 'city': 'Berlin', 'score': 4.5}, {'name': 'Cy', 'age': 41, 'city': 'Berlin'}]
+> db.search(q.city != 'Berlin')
+[{'name': 'Bo', 'age': 27, 'city': 'Paris', 'score': 3}, {'name': 'Di', 'age': '19', 'city': 'Seoul', 'score': 2.0}, {'name': 'Ed', 'city': None, 'score': True}]
+> db.search(q.city == None)
+[{'name': 'Ed', 'city': None, 'score': True}]
+> db.search(q.score == 3)
+[{'name': 'Bo', 'age': 27, 'city': 'Paris', 'score': 3}]
+> db.search(q.score == 3.0)
+[{'name': 'Bo', 'age': 27, 'city': 'Paris', 'score': 3}]
+> db.search(q.score == 1)
+[{'name': 'Ed', 'city': None, 'score': True}]
+> db.search(q.score == 2)
+[{'name': 'Di', 'age': '19', 'city': 'Seoul', 'score': 2.0}]
+> db.search(q.score >= 3)
+[{'name': 'Ann', 'age': 34, 'city': 'Berlin', 'score': 4.5}, {'name': 'Bo', 'age': 27, 'city': 'Paris', 'score': 3}]
+> db.search(q.score > 2.5)
+[{'name': 'Ann', 'age': 34, 'city': 'Berlin', 'score': 4.5}, {'name': 'Bo', 'age': 27, 'city': 'Paris', 'score': 3}]
+> db.search(q.age < 30)
+error TypeError: '<' not supported between instances of 'str' and 'int'
+> db.search(q.age <= 34)
+error TypeError: '<=' not supported between instances of 'str' and 'int'
+> db.search(q.name > 'B')
+[{'name': 'Bo', 'age': 27, 'city': 'Paris', 'score': 3}, {'name': 'Cy', 'age': 41, 'city': 'Berlin'}, {'name': 'Di', 'age': '19', 'city': 'Seoul', 'score': 2.0}, {'name': 'Ed', 'city': None, 'score': True}]
+> db.search(q.name >= 'Cy')
+[{'name': 'Cy', 'age': 41, 'city': 'Berlin'}, {'name': 'Di', 'age': '19', 'city': 'Seoul', 'score': 2.0}, {'name': 'Ed', 'city': None, 'score': True}]
+> db.search(q.city < 'P')
+error TypeError: '<' not supported between instances of 'NoneType' and 'str'
+> db.search(q.missing == 1)
+[]
+> db.search(q.missing != 1)
+[]
+> db.search(q['name'] == 'Ann')
+[{'name': 'Ann', 'age': 34, 'city': 'Berlin', 'score': 4.5}]
+> db.search(q.name.first == 'A')
+[]
+> db.search(where('city') == 'Seoul')
+[{'name': 'Di', 'age': '19', 'city': 'Seoul', 'score': 2.0}]
+
+# Queries: nested documents
+> db = TinyDB(storage=MemoryStorage)
+> db.insert({'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']})
+1
+> db.insert({'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']})
+2
+> db.insert({'name': 'Cy', 'address': 'unknown', 'langs': 'en'})
+3
+> db.insert({'name': 'Di', 'address': None, 'langs': []})
+4
+> q = Query()
+> db.search(q.address.city == 'Berlin')
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}]
+> db.search(q.address.geo.lat > 50)
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}]
+> db.search(q.address.city.exists())
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}, {'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}]
+> db.search(q.address.exists())
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}, {'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}, {'name': 'Cy', 'address': 'unknown', 'langs': 'en'}, {'name': 'Di', 'address': None, 'langs': []}]
+> db.search(q['address']['city'] == 'Paris')
+[{'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}]
+> db.search(q.langs == ['fr'])
+[{'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}]
+> db.search(q.langs == [])
+[{'name': 'Di', 'address': None, 'langs': []}]
+> db.search(q.langs == 'en')
+[{'name': 'Cy', 'address': 'unknown', 'langs': 'en'}]
+> db.search(q.langs.lang == 'en')
+[]
+> db.search(q.address == {'city': 'Paris'})
+[{'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}]
+> db.search(q.address != {'city': 'Paris'})
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}, {'name': 'Cy', 'address': 'unknown', 'langs': 'en'}, {'name': 'Di', 'address': None, 'langs': []}]
+
+# Queries: logic
+> db.search((q.name == 'Ann') | (q.name == 'Bo'))
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}, {'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}]
+> db.search((q.address.city == 'Berlin') & (q.langs == ['de', 'en']))
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}]
+> db.search(~(q.name == 'Ann'))
+[{'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}, {'name': 'Cy', 'address': 'unknown', 'langs': 'en'}, {'name': 'Di', 'address': None, 'langs': []}]
+> db.search(~q.address.city.exists())
+[{'name': 'Cy', 'address': 'unknown', 'langs': 'en'}, {'name': 'Di', 'address': None, 'langs': []}]
+> db.search((q.name == 'Ann') & ~(q.name == 'Ann'))
+[]
+> db.search(~~(q.name == 'Cy'))
+[{'name': 'Cy', 'address': 'unknown', 'langs': 'en'}]
+> db.search((q.name == 'Ann') | (q.name == 'Bo') | (q.name == 'Cy'))
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}, {'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}, {'name': 'Cy', 'address': 'unknown', 'langs': 'en'}]
+> db.search(q.noop())
+[{'name': 'Ann', 'address': {'city': 'Berlin', 'geo': {'lat': 52.5, 'lon': 13.4}}, 'langs': ['de', 'en']}, {'name': 'Bo', 'address': {'city': 'Paris'}, 'langs': ['fr']}, {'name': 'Cy', 'address': 'unknown', 'langs': 'en'}, {'name': 'Di', 'address': None, 'langs': []}]
+> db.search(q.noop() & (q.name == 'Di'))
+[{'name': 'Di', 'address': None, 'langs': []}]
+> db.search(~q.noop())
+[]
+
+# Queries: matches, search and test
+> db = TinyDB(storage=MemoryStorage)
+> db.insert_multiple([{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}, {'name': 'Bob', 'email': None}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}])
+[1, 2, 3, 4]
+> q = Query()
+> db.search(q.name.matches('J'))
+[{'name': 'John Smith', 'email': 'john@example.com'}]
+> db.search(q.name.matches('j'))
+[{'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}]
+> db.search(q.name.matches('[Jj]'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}]
+> db.search(q.name.matches('j', flags=re.IGNORECASE))
+[{'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}]
+> db.search(q.name.matches('John'))
+[{'name': 'John Smith', 'email': 'john@example.com'}]
+> db.search(q.name.search('John'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.search('o[a-z]+n'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.matches('.*son$'))
+[{'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.matches('[A-Z][a-z]+ [A-Z][a-z]+$'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.matches('\\w+$'))
+[{'name': 'Bob', 'email': None}]
+> db.search(q.email.search('@example\\.(com|org)'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.email.search('example', re.I))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.email.matches('[a-z]+@'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.nick.matches('4'))
+[]
+> db.search(q.name.search('^B'))
+[{'name': 'Bob', 'email': None}]
+> db.search(q.name.search('b$'))
+[{'name': 'Bob', 'email': None}]
+> db.search(q.name.matches('(Bob|jane)'))
+[{'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}, {'name': 'Bob', 'email': None}]
+> db.search(q.name.matches('a{2,}'))
+[]
+> db.search(q.name.search('[^a-z ]{2}'))
+[]
+> db.search(q.name.search('\\s'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.search('\\S+\\s+\\S+n$'))
+[{'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.matches('.{3}$'))
+[{'name': 'Bob', 'email': None}]
+> db.search(q.name.search('o.?n'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.search('J.*?n'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.email.matches('\\w+@\\w+\\.\\w{3}'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.test(starts_with, 'J'))
+[{'name': 'John Smith', 'email': 'john@example.com'}]
+> db.search(q.name.test(starts_with, 'j'))
+[{'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}]
+> db.search(q.email.test(is_none))
+[{'name': 'Bob', 'email': None}]
+> db.search(q.nick.test(is_even))
+[{'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.name.map(lower).matches('j'))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}]
+> db.search(q.name.map(lower) == 'bob')
+[{'name': 'Bob', 'email': None}]
+> db.search(q.name.map(words).test(longer_than, 1))
+[{'name': 'John Smith', 'email': 'john@example.com'}, {'name': 'jane doe', 'email': 'jane@EXAMPLE.org'}, {'name': 'Alice Johnson', 'email': 'alice@example.com', 'nick': 42}]
+> db.search(q.email.map(lower).search('example.org'))
+error AttributeError: 'NoneType' object has no attribute 'lower'
+
+# Queries: lists
+> db = TinyDB(storage=MemoryStorage)
+> db.insert_multiple([{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}, {'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}, {'name': 'Cy', 'tags': [], 'groups': []}, {'name': 'Di', 'tags': 'dev', 'groups': 'none'}, {'name': 'Ed', 'tags': {'dev': 1}, 'groups': None}])
+[1, 2, 3, 4, 5]
+> q = Query()
+> db.search(q.tags.any(['ops', 'dev']))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}, {'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}, {'name': 'Ed', 'tags': {'dev': 1}, 'groups': None}]
+> db.search(q.tags.any(['admin']))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}]
+> db.search(q.tags.any(['d', 'v']))
+[{'name': 'Di', 'tags': 'dev', 'groups': 'none'}]
+> db.search(q.tags.all(['admin', 'ops']))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}]
+> db.search(q.tags.all(['dev']))
+[{'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}, {'name': 'Di', 'tags': 'dev', 'groups': 'none'}, {'name': 'Ed', 'tags': {'dev': 1}, 'groups': None}]
+> db.search(q.tags.all([]))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}, {'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}, {'name': 'Cy', 'tags': [], 'groups': []}, {'name': 'Di', 'tags': 'dev', 'groups': 'none'}, {'name': 'Ed', 'tags': {'dev': 1}, 'groups': None}]
+> db.search(q.tags.any([]))
+[]
+> db.search(q.groups.any(q.name == 'root'))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}]
+> db.search(q.groups.any(q.level > 1))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}]
+> db.search(q.groups.all(q.name == 'staff'))
+[{'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}, {'name': 'Cy', 'tags': [], 'groups': []}]
+> db.search(q.groups.all(q.level >= 1))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}, {'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}, {'name': 'Cy', 'tags': [], 'groups': []}]
+> db.search(q.groups.any(q.name.exists()))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}, {'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}]
+> db.search(q.name.one_of(['Ann', 'Cy', 'Zed']))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}, {'name': 'Cy', 'tags': [], 'groups': []}]
+> db.search(q.tags.one_of([['dev'], 'dev']))
+[{'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}, {'name': 'Di', 'tags': 'dev', 'groups': 'none'}]
+> db.search(q.tags.one_of('dev'))
+error TypeError: 'in <string>' requires string as left operand, not list
+> db.search(q.fragment({'name': 'Bo'}))
+[{'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}]
+> db.search(q.fragment({'name': 'Bo', 'tags': ['dev']}))
+[{'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}]
+> db.search(q.fragment({'tags': []}))
+[{'name': 'Cy', 'tags': [], 'groups': []}]
+> db.search(q.fragment({}))
+[{'name': 'Ann', 'tags': ['admin', 'ops'], 'groups': [{'name': 'staff', 'level': 2}, {'name': 'root', 'level': 9}]}, {'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}, {'name': 'Cy', 'tags': [], 'groups': []}, {'name': 'Di', 'tags': 'dev', 'groups': 'none'}, {'name': 'Ed', 'tags': {'dev': 1}, 'groups': None}]
+> db.search(q.groups.fragment({'name': 'staff'}))
+error TypeError: argument of type 'NoneType' is not iterable
+> db.search(q.groups.any(q.fragment({'name': 'staff', 'level': 1})))
+[{'name': 'Bo', 'tags': ['dev'], 'groups': [{'name': 'staff', 'level': 1}]}]
+
+# Queries: errors
+> db.search(q.tags.any(q.missing == 1))
+[]
+> db.search(q)
+error RuntimeError: Empty query was evaluated
+> db.search(Query())
+error RuntimeError: Empty query was evaluated
+> Query() == 1
+error ValueError: Query has no path
+> db.search(q.name > 3)
+error TypeError: '>' not supported between instances of 'str' and 'int'
+> db.search(q.tags < 'z')
+error TypeError: '<' not supported between instances of 'list' and 'str'
+> db.search(q.tags.matches('d'))
+[{'name': 'Di', 'tags': 'dev', 'groups': 'none'}]
+> db.search(q.groups.any(q.level < 'x'))
+error TypeError: '<' not supported between instances of 'int' and 'str'
+> q.exists()
+error ValueError: Query has no path
+> db.search(q.name.test(boom))
+error ValueError: boom: Ann
+> db.count(q.name == 'Ann')
+1
+> db.count(q.tags.any(['dev', 'ops']))
+3
+> db.get(q.name == 'Ann')['tags']
+['admin', 'ops']
+> db.get(q.name == 'Zed')
+None
+
+# Queries: equality, hashing and repr
+> a = Query().name == 'Ann'
+> b = where('name') == 'Ann'
+> a
+QueryImpl('==', ('name',), 'Ann')
+> b
+QueryImpl('==', ('name',), 'Ann')
+> a == b
+True
+> Query().age > 3
+QueryImpl('>', ('age',), 3)
+> Query().age >= 3.5
+QueryImpl('>=', ('age',), 3.5)
+> Query().address.city.exists()
+QueryImpl('exists', ('address', 'city'))
+> Query().tags.any(['a', 'b'])
+QueryImpl('any', ('tags',), ('a', 'b'))
+> Query().tags.all(['a'])
+QueryImpl('all', ('tags',), ('a',))
+> Query().name.one_of(['x'])
+QueryImpl('one_of', ('name',), ('x',))
+> Query().name.matches('a+')
+QueryImpl('matches', ('name',), 'a+')
+> Query().name.search('b', re.I)
+QueryImpl('search', ('name',), 'b')
+> Query().fragment({'a': 1, 'b': [2]})
+QueryImpl('fragment', {'a': 1, 'b': (2,)})
+> Query().name
+Query()
+> Query()
+Query()
+> Query().noop()
+QueryImpl()
+> ~(Query().x == 1)
+QueryImpl('not', ('==', ('x',), 1))
+> ~~(Query().x == 1)
+QueryImpl('not', ('not', ('==', ('x',), 1)))
+> ((Query().a == 1) & (Query().b == 2)) == ((Query().b == 2) & (Query().a == 1))
+True
+> ((Query().a == 1) | (Query().b == 2)) == ((Query().b == 2) | (Query().a == 1))
+True
+> ((Query().a == 1) & (Query().b == 2)) == ((Query().a == 1) | (Query().b == 2))
+False
+> (Query().a == 1) == (Query().a == 1.0)
+True
+> (Query().a == 1) == (Query().a == True)
+True
+> (Query().a == [1, 2]) == (Query().a == (1, 2))
+True
+> (Query().a == 1) == (Query().b == 1)
+False
+> (Query().a == 1) == 1
+False
+> (Query().a == 1).is_cacheable()
+True
+> Query().a.map(lower).is_cacheable()
+False
+> (Query().a.map(lower) == 'x').is_cacheable()
+False
+> ((Query().a.map(lower) == 'x') & (Query().b == 1)).is_cacheable()
+False
+> (Query().a.test(is_even)).is_cacheable()
+True
+> (Query().a.test(is_even)) == (Query().a.test(is_even))
+True
+> (Query().a.test(is_even)) == (Query().a.test(starts_with))
+False
+> (Query().a.test(starts_with, 'x')) == (Query().a.test(starts_with, 'y'))
+False
+> (Query().a == {'k': 1}) == (Query().a == {'k': 1})
+True
+
+# Tables
+> db = TinyDB('data/db/tables.json')
+> sorted(db.tables())
+[]
+> users = db.table('users')
+> orders = db.table('orders')
+> sorted(db.tables())
+[]
+> users.insert({'name': 'Ann'})
+1
+> sorted(db.tables())
+['users']
+> orders.insert_multiple([{'item': 'lamp', 'qty': 2}, {'item': 'cable', 'qty': 5}])
+[1, 2]
+> db.insert({'note': 'default table'})
+1
+> sorted(db.tables())
+['_default', 'orders', 'users']
+> users.name
+users
+> db.table('users') is users
+True
+> len(users)
+1
+> len(orders)
+2
+> len(db)
+1
+> orders.all()
+[{'item': 'lamp', 'qty': 2}, {'item': 'cable', 'qty': 5}]
+> list(orders)
+[{'item': 'lamp', 'qty': 2}, {'item': 'cable', 'qty': 5}]
+> db.table('users').all()
+[{'name': 'Ann'}]
+> db/tables.json
+  db/tables.json (1 lines)
+  | {"users": {"1": {"name": "Ann"}}, "orders": {"1": {"item": "lamp", "qty": 2}, "2": {"item": "cable", "qty": 5}}, "_default": {"1": {"note": "default table"}}}
+> db.drop_table('orders')
+None
+> sorted(db.tables())
+['_default', 'users']
+> orders.all()
+[]
+> db.table('orders') is orders
+False
+> db.table('orders').all()
+[]
+> db.drop_table('nothing')
+None
+> db/tables.json
+  db/tables.json (1 lines)
+  | {"users": {"1": {"name": "Ann"}}, "_default": {"1": {"note": "default table"}}}
+> db.drop_tables()
+None
+> sorted(db.tables())
+[]
+> users.all()
+[]
+> db/tables.json
+  db/tables.json (1 lines)
+  | {}
+> users.insert({'name': 'Bo'})
+2
+> users.all()
+[{'name': 'Bo'}]
+> db.table('users').all()
+[{'name': 'Bo'}]
+> empty = db.table('empty', persist_empty=True)
+> sorted(db.tables())
+['empty', 'users']
+> db/tables.json
+  db/tables.json (1 lines)
+  | {"users": {"2": {"name": "Bo"}}, "empty": {}}
+> db.close()
+None
+
+# Document IDs
+> db = TinyDB(storage=MemoryStorage)
+> db.insert({'n': 1})
+1
+> db.insert({'n': 2})
+2
+> db.insert_multiple([{'n': 3}, {'n': 4}])
+[3, 4]
+> db.remove(doc_ids=[4])
+[4]
+> db.insert({'n': 5})
+5
+> db.get(doc_id=5)
+{'n': 5}
+> db.get(doc_id=4)
+None
+> db.get(doc_id=5).doc_id
+5
+> ids(db.all())
+[1, 2, 3, 5]
+> db.insert(Document({'n': 12}, doc_id=12))
+12
+> db.insert({'n': 13})
+13
+> db.insert(Document({'n': 1}, doc_id=1))
+error ValueError: Document with ID 1 already exists
+> db.insert_multiple([{'n': 14}, Document({'n': 2}, doc_id=2)])
+error ValueError: Document with ID 2 already exists
+> ids(db.all())
+[1, 2, 3, 5, 12, 13]
+> db.insert_multiple([Document({'n': 20}, doc_id=20), {'n': 21}])
+[20, 15]
+> ids(db.all())
+[1, 2, 3, 5, 12, 13, 20, 15]
+> db.insert(['not', 'a', 'mapping'])
+error ValueError: Document is not a Mapping
+> db.insert_multiple([{'n': 30}, 'x'])
+error ValueError: Document is not a Mapping
+> ids(db.all())
+[1, 2, 3, 5, 12, 13, 20, 15]
+> db.truncate()
+None
+> db.insert({'n': 'after truncate'})
+1
+> db.all()
+[{'n': 'after truncate'}]
+> t = TinyDB(storage=MemoryStorage).table('t')
+> t.insert(Document({'a': 1}, doc_id=7))
+7
+> t.insert({'a': 2})
+8
+> ids(t.all())
+[7, 8]
+> db = TinyDB('data/db/ids.json')
+> db.insert_multiple([{'n': 1}, {'n': 2}, {'n': 3}])
+[1, 2, 3]
+> db.remove(doc_ids=[3])
+[3]
+> db.insert({'n': 4})
+4
+> db/ids.json
+  db/ids.json (1 lines)
+  | {"_default": {"1": {"n": 1}, "2": {"n": 2}, "4": {"n": 4}}}
+> db.close()
+None
+> db2 = TinyDB('data/db/ids.json')
+> db2.remove(doc_ids=[4])
+[4]
+> db2.insert({'n': 5})
+3
+> ids(db2.all())
+[1, 2, 3]
+> db/ids.json
+  db/ids.json (1 lines)
+  | {"_default": {"1": {"n": 1}, "2": {"n": 2}, "3": {"n": 5}}}
+
+# get and contains
+> db = TinyDB(storage=MemoryStorage)
+> db.insert_multiple([{'k': 'a'}, {'k': 'b'}, {'k': 'c'}, {'k': 'b'}])
+[1, 2, 3, 4]
+> q = Query()
+> db.get(q.k == 'b')
+{'k': 'b'}
+> db.get(q.k == 'b').doc_id
+2
+> db.get(doc_id=3)
+{'k': 'c'}
+> db.get(doc_id='3')
+{'k': 'c'}
+> db.get(doc_id=9)
+None
+> db.get(doc_ids=[1, 3, 9])
+[{'k': 'a'}, {'k': 'c'}]
+> db.get(doc_ids=['2', 4])
+[{'k': 'b'}, {'k': 'b'}]
+> db.get(doc_ids=[])
+[]
+> ids(db.get(doc_ids=[4, 1]))
+[1, 4]
+> db.get()
+error RuntimeError: You have to pass either cond or doc_id or doc_ids
+> db.get(q.k == 'b', doc_id=1)
+{'k': 'a'}
+> db.contains(q.k == 'c')
+True
+> db.contains(q.k == 'z')
+False
+> db.contains(doc_id=2)
+True
+> db.contains(doc_id=7)
+False
+> db.contains()
+error RuntimeError: You have to pass either cond or doc_id
+> db.count(q.k == 'b')
+2
+> db.count(q.k.exists())
+4
+
+# update
+> db = TinyDB(storage=MemoryStorage)
+> db.insert_multiple([{'name': 'Ann', 'age': 30, 'visits': 1}, {'name': 'Bo', 'age': 25}, {'name': 'Cy', 'age': 40, 'visits': 5}])
+[1, 2, 3]
+> q = Query()
+> db.update({'city': 'Berlin'}, q.name == 'Ann')
+[1]
+> db.update({'age': 26, 'city': 'Paris'}, q.name == 'Bo')
+[2]
+> db.update({'flag': True})
+[1, 2, 3]
+> db.all()
+[{'name': 'Ann', 'age': 30, 'visits': 1, 'city': 'Berlin', 'flag': True}, {'name': 'Bo', 'age': 26, 'city': 'Paris', 'flag': True}, {'name': 'Cy', 'age': 40, 'visits': 5, 'flag': True}]
+> db.update(increment('visits'), q.visits.exists())
+[1, 3]
+> db.update(decrement('age'), q.age > 30)
+[3]
+> db.update(add('age', 10), q.name == 'Bo')
+[2]
+> db.update(subtract('visits', 2), q.name == 'Cy')
+[3]
+> db.update(set('city', 'Rome'), q.city == 'Paris')
+[2]
+> db.update(delete('flag'), q.name == 'Ann')
+[1]
+> db.all()
+[{'name': 'Ann', 'age': 30, 'visits': 2, 'city': 'Berlin'}, {'name': 'Bo', 'age': 36, 'city': 'Rome', 'flag': True}, {'name': 'Cy', 'age': 39, 'visits': 4, 'flag': True}]
+> db.update(add('name', '!'), q.name == 'Ann')
+[1]
+> db.update(add('missing', 1), q.name == 'Ann')
+[]
+> db.update(increment('age'), q.name == 'Ann')
+[]
+> db.update(delete('nothing'), q.name == 'Bo')
+error KeyError: 'nothing'
+> db.all()
+[{'name': 'Ann!', 'age': 30, 'visits': 2, 'city': 'Berlin'}, {'name': 'Bo', 'age': 36, 'city': 'Rome', 'flag': True}, {'name': 'Cy', 'age': 39, 'visits': 4, 'flag': True}]
+> db.update({'age': 99}, doc_ids=[1, 3])
+[1, 3]
+> db.update({'age': 100}, doc_ids=[7])
+error KeyError: 7
+> db.update(set('age', 1), doc_ids=[2])
+[2]
+> db.update(shout)
+[1, 2, 3]
+> db.all()
+[{'name': 'ANN!', 'age': 99, 'visits': 2, 'city': 'Berlin'}, {'name': 'BO', 'age': 1, 'city': 'Rome', 'flag': True}, {'name': 'CY', 'age': 99, 'visits': 4, 'flag': True}]
+> db.update({'x': 1}, q.name == 'Nobody')
+[]
+> db.update({'x': 1}, q.name == 'BO', doc_ids=[1])
+[1]
+> db.all()
+[{'name': 'ANN!', 'age': 99, 'visits': 2, 'city': 'Berlin', 'x': 1}, {'name': 'BO', 'age': 1, 'city': 'Rome', 'flag': True}, {'name': 'CY', 'age': 99, 'visits': 4, 'flag': True}]
+
+# update_multiple and upsert
+> db = TinyDB(storage=MemoryStorage)
+> db.insert_multiple([{'name': 'Ann', 'n': 1}, {'name': 'Bo', 'n': 2}, {'name': 'Cy', 'n': 3}])
+[1, 2, 3]
+> q = Query()
+> db.update_multiple([({'n': 10}, q.name == 'Ann'), ({'n': 20}, q.name == 'Bo')])
+[1, 2]
+> db.update_multiple([(increment('n'), q.n > 5), (set('big', True), q.n > 15)])
+[1, 2, 2]
+> db.all()
+[{'name': 'Ann', 'n': 11}, {'name': 'Bo', 'n': 21, 'big': True}, {'name': 'Cy', 'n': 3}]
+> db.update_multiple([({'tag': 'a'}, q.n.exists()), ({'tag': 'b'}, q.n > 15)])
+[1, 2, 2, 3]
+> db.all()
+[{'name': 'Ann', 'n': 11, 'tag': 'a'}, {'name': 'Bo', 'n': 21, 'big': True, 'tag': 'b'}, {'name': 'Cy', 'n': 3, 'tag': 'a'}]
+> db.update_multiple([])
+[]
+> db.upsert({'name': 'Cy', 'n': 30}, q.name == 'Cy')
+[3]
+> db.upsert({'name': 'Di', 'n': 4}, q.name == 'Di')
+[4]
+> db.upsert({'name': 'Ed'})
+error ValueError: If you don't specify a search query, you must specify a doc_id. Hint: use a table.Document object.
+> db.upsert(Document({'name': 'Ann', 'n': 11}, doc_id=1))
+[1]
+> db.upsert(Document({'name': 'Zed'}, doc_id=9))
+[9]
+> db.upsert(Document({'name': 'Bo', 'n': 21}, doc_id=2), q.name == 'Nobody')
+[2]
+> db.all()
+[{'name': 'Ann', 'n': 11, 'tag': 'a'}, {'name': 'Bo', 'n': 21, 'big': True, 'tag': 'b'}, {'name': 'Cy', 'n': 30, 'tag': 'a'}, {'name': 'Di', 'n': 4}, {'name': 'Zed'}]
+> ids(db.all())
+[1, 2, 3, 4, 9]
+> db.insert({'name': 'Fay'})
+10
+
+# remove and truncate
+> db = TinyDB(storage=MemoryStorage)
+> db.insert_multiple([{'n': 1}, {'n': 2}, {'n': 3}, {'n': 4}, {'n': 5}])
+[1, 2, 3, 4, 5]
+> q = Query()
+> db.remove(q.n > 3)
+[4, 5]
+> db.remove(doc_ids=[1, 2])
+[1, 2]
+> db.all()
+[{'n': 3}]
+> db.remove(doc_ids=[9])
+error KeyError: 9
+> db.remove(q.n == 99)
+[]
+> db.remove()
+error RuntimeError: Use truncate() to remove all documents
+> db.remove(doc_ids=[])
+[]
+> db.truncate()
+None
+> len(db)
+0
+> db.insert({'n': 6})
+1
+
+# The query cache
+> db = TinyDB(storage=MemoryStorage)
+> db.insert_multiple([{'name': 'Ann', 'age': 30}, {'name': 'Bo', 'age': 1}, {'name': 'Cy', 'age': True}])
+[1, 2, 3]
+> q = Query()
+> t = db.table('_default')
+> t._query_cache.length
+0
+> r1 = db.search(q.age == 1)
+> r1
+[{'name': 'Bo', 'age': 1}, {'name': 'Cy', 'age': True}]
+> t._query_cache.length
+1
+> db.search(q.age == True)
+[{'name': 'Bo', 'age': 1}, {'name': 'Cy', 'age': True}]
+> db.search(q.age == 1.0)
+[{'name': 'Bo', 'age': 1}, {'name': 'Cy', 'age': True}]
+> t._query_cache.length
+1
+> r2 = db.search(q.age == 1)
+> r1 is r2
+False
+> r1[0] is r2[0]
+True
+> r1[0]['age'] = 2
+> db.search(q.age == 1)
+[{'name': 'Bo', 'age': 2}, {'name': 'Cy', 'age': True}]
+> db.all()
+[{'name': 'Ann', 'age': 30}, {'name': 'Bo', 'age': 1}, {'name': 'Cy', 'age': True}]
+> db.search(q.age > 10)
+[{'name': 'Ann', 'age': 30}]
+> t._query_cache.length
+2
+> db.insert({'name': 'Di', 'age': 1})
+4
+> t._query_cache.length
+0
+> db.search(q.age == 1)
+[{'name': 'Bo', 'age': 1}, {'name': 'Cy', 'age': True}, {'name': 'Di', 'age': 1}]
+> db.search(q.name.map(lower) == 'di')
+[{'name': 'Di', 'age': 1}]
+> t._query_cache.length
+1
+> db.search(q.name.test(starts_with, 'D'))
+[{'name': 'Di', 'age': 1}]
+> t._query_cache.length
+2
+> db.clear_cache()
+None
+> t._query_cache.length
+0
+> db = TinyDB(storage=MemoryStorage)
+> t = db.table('small', cache_size=2)
+> t.insert_multiple([{'v': 1}, {'v': 2}, {'v': 3}])
+[1, 2, 3]
+> q = Query()
+> t.search(q.v == 1)
+[{'v': 1}]
+> t.search(q.v == 2)
+[{'v': 2}]
+> t.search(q.v == 3)
+[{'v': 3}]
+> t._query_cache.length
+2
+> t._query_cache.lru
+[QueryImpl('==', ('v',), 2), QueryImpl('==', ('v',), 3)]
+> t.search(q.v == 2)
+[{'v': 2}]
+> t._query_cache.lru
+[QueryImpl('==', ('v',), 3), QueryImpl('==', ('v',), 2)]
+> t.search(q.v == 9)
+[]
+> t._query_cache.lru
+[QueryImpl('==', ('v',), 2), QueryImpl('==', ('v',), 9)]
+> t.search(q.v == 9)
+[]
+> t._query_cache.lru
+[QueryImpl('==', ('v',), 2), QueryImpl('==', ('v',), 9)]
+> t.search(q.v == 3)
+[{'v': 3}]
+> t._query_cache.lru
+[QueryImpl('==', ('v',), 9), QueryImpl('==', ('v',), 3)]
+> u = db.table('nocache', cache_size=0)
+> u.insert({'v': 1})
+1
+> u.search(q.v == 1)
+[{'v': 1}]
+> u._query_cache.length
+0
+
+# LRUCache and freeze
+> c = LRUCache(capacity=3)
+> c['a'] = 1
+> c['b'] = 2
+> c['c'] = 3
+> c.lru
+['a', 'b', 'c']
+> c['a']
+1
+> c.lru
+['b', 'c', 'a']
+> c['d'] = 4
+> c.lru
+['c', 'a', 'd']
+> c.get('b')
+None
+> c.get('b', 'none')
+none
+> c['b']
+error KeyError: 'b'
+> len(c)
+3
+> c.length
+3
+> c['a'] = 0
+> c.lru
+['c', 'd', 'a']
+> c['a']
+0
+> c.get('a')
+0
+> c['e'] = 5
+> c.lru
+['d', 'a', 'e']
+> c['e'] = 6
+> c.lru
+['d', 'a', 'e']
+> c.get('e')
+6
+> c.lru
+['d', 'a', 'e']
+> c.clear()
+None
+> c.lru
+[]
+> u = LRUCache()
+> u['x'] = None
+> u.get('x', 'gone')
+gone
+> u['x']
+error KeyError: 'x'
+> u.length
+1
+> freeze({'a': [1, {'b': 2}], 'c': 3})
+{'a': (1, {'b': 2}), 'c': 3}
+> freeze([1, [2, 3]])
+(1, (2, 3))
+> freeze('s')
+s
+> freeze({'a': 1}) == {'a': 1}
+True
+> freeze([1, 2]) == (1, 2)
+True
+> hash(freeze({'b': 1, 'a': 2})) == hash(freeze({'a': 2, 'b': 1}))
+True
+> f = freeze({'a': 1})
+> f.update({'b': 2})
+error TypeError: object is immutable
+> f.pop('a')
+error TypeError: object is immutable
+> f.clear()
+error TypeError: object is immutable
+> f
+{'a': 1}
+
+# MemoryStorage shares the objects it is given
+> db = TinyDB(storage=MemoryStorage)
+> doc = {'name': 'Ann', 'tags': ['a'], 'meta': {'v': 1}}
+> db.insert(doc)
+1
+> db.all()
+[{'name': 'Ann', 'tags': ['a'], 'meta': {'v': 1}}]
+> db.storage.read()
+{'_default': {'1': {'name': 'Ann', 'tags': ['a'], 'meta': {'v': 1}}}}
+> doc['tags'].append('b')
+> doc['name'] = 'Changed'
+> db.all()
+[{'name': 'Ann', 'tags': ['a', 'b'], 'meta': {'v': 1}}]
+> d = db.get(doc_id=1)
+> d['meta']['v'] = 2
+> d['name'] = 'Local'
+> db.all()
+[{'name': 'Ann', 'tags': ['a', 'b'], 'meta': {'v': 2}}]
+> d
+{'name': 'Local', 'tags': ['a', 'b'], 'meta': {'v': 2}}
+> db.storage.memory['_default']['1'] is db.storage.read()['_default']['1']
+True
+> db = TinyDB('data/db/copy.json')
+> doc = {'name': 'Ann', 'tags': ['a']}
+> db.insert(doc)
+1
+> doc['tags'].append('b')
+> db.all()
+[{'name': 'Ann', 'tags': ['a']}]
+> d = db.get(doc_id=1)
+> d['tags'].append('c')
+> db.all()
+[{'name': 'Ann', 'tags': ['a']}]
+> db/copy.json
+  db/copy.json (1 lines)
+  | {"_default": {"1": {"name": "Ann", "tags": ["a"]}}}
+
+# JSONStorage options
+> db = TinyDB('data/db/pretty.json', indent=2, sort_keys=True)
+> db.insert({'name': 'Ann', 'age': 34, 'tags': ['ops', 'admin'], 'meta': {}, 'empty': [], 'nested': {'z': 1, 'a': [1.5, None, True]}})
+1
+> db.insert({'name': 'Bo'})
+2
+> db/pretty.json
+  db/pretty.json (25 lines)
+  | {
+  |   "_default": {
+  |     "1": {
+  |       "age": 34,
+  |       "empty": [],
+  |       "meta": {},
+  |       "name": "Ann",
+  |       "nested": {
+  |         "a": [
+  |           1.5,
+  |           null,
+  |           true
+  |         ],
+  |         "z": 1
+  |       },
+  |       "tags": [
+  |         "ops",
+  |         "admin"
+  |       ]
+  |     },
+  |     "2": {
+  |       "name": "Bo"
+  |     }
+  |   }
+  | }
+> db.close()
+None
+> db = TinyDB('data/db/compact.json', separators=(',', ':'))
+> db.insert({'name': 'Ann', 'tags': ['x', 'y']})
+1
+> db/compact.json
+  db/compact.json (1 lines)
+  | {"_default":{"1":{"name":"Ann","tags":["x","y"]}}}
+> db = TinyDB('data/db/text.json')
+> db.insert({'name': 'Zoë', 'quote': 'say "hi"', 'path': 'a\\b', 'tab': 'a\tb', 'line': 'a\nb'})
+1
+> db/text.json
+  db/text.json (1 lines)
+  | {"_default": {"1": {"name": "Zo\u00eb", "quote": "say \"hi\"", "path": "a\\b", "tab": "a\tb", "line": "a\nb"}}}
+> db.all()
+[{'name': 'Zoë', 'quote': 'say "hi"', 'path': 'a\\b', 'tab': 'a\tb', 'line': 'a\nb'}]
+> db.get(doc_id=1)['name']
+Zoë
+> db = TinyDB('data/db/numbers.json')
+> db.insert({'i': -7, 'big': 9007199254740993, 'f': 0.1, 'g': 1e-07, 'h': 2.5e+20, 'z': 0.0, 'n': -1.25, 'e': 100.0})
+1
+> db/numbers.json
+  db/numbers.json (1 lines)
+  | {"_default": {"1": {"i": -7, "big": 9007199254740993, "f": 0.1, "g": 1e-07, "h": 2.5e+20, "z": 0.0, "n": -1.25, "e": 100.0}}}
+> db.all()
+[{'i': -7, 'big': 9007199254740993, 'f': 0.1, 'g': 1e-07, 'h': 2.5e+20, 'z': 0.0, 'n': -1.25, 'e': 100.0}]
+> db = TinyDB('data/db/order.json')
+> db.insert({'b': 1, 'a': 2, 'c': {'y': 1, 'x': 2}})
+1
+> db.insert({'a': 3})
+2
+> db/order.json
+  db/order.json (1 lines)
+  | {"_default": {"1": {"b": 1, "a": 2, "c": {"y": 1, "x": 2}}, "2": {"a": 3}}}
+> db.all()
+[{'b': 1, 'a': 2, 'c': {'y': 1, 'x': 2}}, {'a': 3}]
+
+# JSONStorage files
+> TinyDB('data/nowhere/db.json')
+error FileNotFoundError: [Errno 2] No such file or directory: 'data/nowhere/db.json'
+> db = TinyDB('data/db/deep/er/db.json', create_dirs=True)
+> db.insert({'ok': True})
+1
+> db/deep/er/db.json
+  db/deep/er/db.json (1 lines)
+  | {"_default": {"1": {"ok": true}}}
+> db.close()
+None
+> ro = TinyDB('data/db/deep/er/db.json', access_mode='r')
+> ro.all()
+[{'ok': True}]
+> ro.insert({'ok': False})
+error OSError: Cannot write to the database. Access mode is "r"
+> ro.all()
+[{'ok': True}]
+> db/deep/er/db.json
+  db/deep/er/db.json (1 lines)
+  | {"_default": {"1": {"ok": true}}}
+> TinyDB('data/db/missing.json', access_mode='r')
+error FileNotFoundError: [Errno 2] No such file or directory: 'data/db/missing.json'
+> db = TinyDB('data/db/empty.json')
+> db/empty.json
+  db/empty.json (1 lines)
+  | 
+> db.storage.read()
+None
+> db.all()
+[]
+> sorted(db.tables())
+[]
+> len(db)
+0
+> db.insert({'a': 1})
+1
+> db.storage.read()
+{'_default': {'1': {'a': 1}}}
+> db.drop_tables()
+None
+> db/empty.json
+  db/empty.json (1 lines)
+  | {}
+> db.storage.read()
+{}
+
+# CachingMiddleware
+> db = TinyDB('data/db/cached.json', storage=CachingMiddleware(JSONStorage))
+> db.insert({'n': 1})
+1
+> db.insert({'n': 2})
+2
+> db.all()
+[{'n': 1}, {'n': 2}]
+> db/cached.json
+  db/cached.json (1 lines)
+  | 
+> db.storage._cache_modified_count
+2
+> db.storage.flush()
+None
+> db/cached.json
+  db/cached.json (1 lines)
+  | {"_default": {"1": {"n": 1}, "2": {"n": 2}}}
+> db.storage._cache_modified_count
+0
+> db.update({'n': 3}, doc_ids=[1])
+[1]
+> db/cached.json
+  db/cached.json (1 lines)
+  | {"_default": {"1": {"n": 1}, "2": {"n": 2}}}
+> db.close()
+None
+> db/cached.json
+  db/cached.json (1 lines)
+  | {"_default": {"1": {"n": 3}, "2": {"n": 2}}}
+> again = TinyDB('data/db/cached.json', storage=CachingMiddleware(JSONStorage))
+> again.all()
+[{'n': 3}, {'n': 2}]
+> again.storage.flush()
+None
+> again.close()
+None
+> mem = TinyDB(storage=CachingMiddleware(MemoryStorage))
+> mem.insert({'n': 1})
+1
+> mem.storage.storage.read()
+None
+> mem.storage.flush()
+None
+> mem.storage.storage.read()
+{'_default': {'1': {'n': 1}}}
+> mem.all()
+[{'n': 1}]
+
+# Programs
+> import contacts.csv db/contacts.json
+  inserted 10 documents: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  db/contacts.json (115 lines)
+  | {
+  |   "_default": {
+  |     "1": {
+  |       "name": "Ann Lee",
+  |       "email": "ann@example.com",
+  |       "age": 34,
+  |       "city": "Berlin",
+  |       "tags": [
+  |         "admin",
+  |         "ops"
+  |       ],
+  |       "score": 4.5,
+  |       "active": true
+  |     },
+  |     "2": {
+  |       "name": "Bo Brown",
+  |       "email": "bo@example.org",
+  |       "age": 27,
+  |       "city": "Paris",
+  |       "tags": [
+  |         "dev"
+  |       ],
+  |       "score": 3.25,
+  |       "active": true
+  |     },
+  |     "3": {
+  |       "name": "Cy Ng",
+  |       "email": "cy@example.com",
+  |       "age": 41,
+  |       "city": "Berlin",
+  |       "tags": [
+  |         "ops",
+  |         "oncall"
+  |       ],
+  |       "score": 5.0,
+  |       "active": false
+  |     },
+  |     "4": {
+  |       "name": "Di Park",
+  |       "email": null,
+  |       "age": 19,
+  |       "city": "Seoul",
+  |       "tags": [
+  |         "dev",
+  |         "intern"
+  |       ],
+  |       "score": 2.75,
+  |       "active": true
+  |     },
+  |     "5": {
+  |       "name": "Ed Ruiz",
+  |       "email": "ed@example.net",
+  |       "age": 52,
+  |       "city": "Madrid",
+  |       "tags": [],
+  |       "score": 1.5,
+  |       "active": false
+  |     },
+  |     "6": {
+  |       "name": "Fay Okoro",
+  |       "email": "fay@example.com",
+  |       "age": 30,
+  |       "city": "Lagos",
+  |       "tags": [
+  |         "dev",
+  |         "ops"
+  |       ],
+  |       "score": 4.0,
+  |       "active": true
+  |     },
+  |     "7": {
+  |       "name": "Gus Holm",
+  |       "email": "gus@example.org",
+  |       "city": "Oslo",
+  |       "tags": [
+  |         "sales"
+  |       ],
+  |       "active": true
+  |     },
+  |     "8": {
+  |       "name": "Hal Ito",
+  |       "email": "hal@example.com",
+  |       "age": 27,
+  |       "city": "Tokyo",
+  |       "tags": [
+  |         "dev",
+  |         "admin"
+  |       ],
+  |       "score": 3.75,
+  |       "active": true
+  |     },
+  |     "9": {
+  |       "name": "Ida Berg",
+  |       "email": "ida@example.com",
+  |       "age": 65,
+  |       "city": "Berlin",
+  |       "tags": [
+  |         "retired"
+  |       ],
+  |       "score": 0.5,
+  |       "active": false
+  |     },
+  |     "10": {
+  |       "name": "Jo Diaz",
+  |       "email": "jo@example.com",
+  |       "age": 23,
+  |       "city": "Paris",
+  |       "tags": [
+  |         "intern"
+  |       ],
+  |       "score": 2.0,
+  |       "active": true
+  |     }
+  |   }
+  | }
+> report queries.tsv db/contacts.json out/report.txt
+  out/report.txt (17 lines)
+  | berliners: 3 (Ann Lee, Cy Ng, Ida Berg)
+  | adults_in_paris: 1 (Bo Brown)
+  | ops_people: 3 (Ann Lee, Cy Ng, Fay Okoro)
+  | dev_or_admin: 5 (Ann Lee, Bo Brown, Di Park, Fay Okoro, Hal Ito)
+  | no_email: 1 (Di Park)
+  | example_com: 6 (Ann Lee, Cy Ng, Fay Okoro, Hal Ito, Ida Berg, Jo Diaz)
+  | not_active: 3 (Cy Ng, Ed Ruiz, Ida Berg)
+  | senior: 2 (Ed Ruiz, Ida Berg)
+  | young_devs: 3 (Bo Brown, Di Park, Hal Ito)
+  | with_score: 9 (Ann Lee, Bo Brown, Cy Ng, Di Park, Ed Ruiz, Fay Okoro, Hal Ito, Ida Berg, Jo Diaz)
+  | named_with_o: 4 (Bo Brown, Fay Okoro, Gus Holm, Hal Ito)
+  | in_cities: 3 (Fay Okoro, Gus Holm, Hal Ito)
+  | all_tags: 1 (Fay Okoro)
+  | top_scores: 4 (Ann Lee, Cy Ng, Fay Okoro, Ida Berg)
+  | broken: error TypeError: '>=' not supported between instances of 'int' and 'str'
+  | nobody: 0 ()
+  | 
+> apply updates.tsv db/contacts.json
+  increment visits where city == Berlin -> error KeyError: 'visits'
+  set visits where city == Berlin | city == Paris -> [1, 2, 3, 9, 10]
+  increment visits where visits exists -> [1, 2, 3, 9, 10]
+  add score where tags has dev -> [2, 4, 6, 8]
+  set city where name == Ed Ruiz -> [5]
+  delete email where active == false -> [3, 5, 9]
+  subtract age where age > 60 -> [9]
+  decrement visits where visits >= 2 -> [1, 2, 3, 9, 10]
+  set tags where tags == [] -> [5]
+  delete phone where name == Ann Lee -> error KeyError: 'phone'
+  set reviewed where - -> [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  db/contacts.json (127 lines)
+  | {
+  |   "_default": {
+  |     "1": {
+  |       "name": "Ann Lee",
+  |       "email": "ann@example.com",
+  |       "age": 34,
+  |       "city": "Berlin",
+  |       "tags": [
+  |         "admin",
+  |         "ops"
+  |       ],
+  |       "score": 4.5,
+  |       "active": true,
+  |       "visits": 1,
+  |       "reviewed": true
+  |     },
+  |     "2": {
+  |       "name": "Bo Brown",
+  |       "email": "bo@example.org",
+  |       "age": 27,
+  |       "city": "Paris",
+  |       "tags": [
+  |         "dev"
+  |       ],
+  |       "score": 3.5,
+  |       "active": true,
+  |       "visits": 1,
+  |       "reviewed": true
+  |     },
+  |     "3": {
+  |       "name": "Cy Ng",
+  |       "age": 41,
+  |       "city": "Berlin",
+  |       "tags": [
+  |         "ops",
+  |         "oncall"
+  |       ],
+  |       "score": 5.0,
+  |       "active": false,
+  |       "visits": 1,
+  |       "reviewed": true
+  |     },
+  |     "4": {
+  |       "name": "Di Park",
+  |       "email": null,
+  |       "age": 19,
+  |       "city": "Seoul",
+  |       "tags": [
+  |         "dev",
+  |         "intern"
+  |       ],
+  |       "score": 3.0,
+  |       "active": true,
+  |       "reviewed": true
+  |     },
+  |     "5": {
+  |       "name": "Ed Ruiz",
+  |       "age": 52,
+  |       "city": "Lisbon",
+  |       "tags": null,
+  |       "score": 1.5,
+  |       "active": false,
+  |       "reviewed": true
+  |     },
+  |     "6": {
+  |       "name": "Fay Okoro",
+  |       "email": "fay@example.com",
+  |       "age": 30,
+  |       "city": "Lagos",
+  |       "tags": [
+  |         "dev",
+  |         "ops"
+  |       ],
+  |       "score": 4.25,
+  |       "active": true,
+  |       "reviewed": true
+  |     },
+  |     "7": {
+  |       "name": "Gus Holm",
+  |       "email": "gus@example.org",
+  |       "city": "Oslo",
+  |       "tags": [
+  |         "sales"
+  |       ],
+  |       "active": true,
+  |       "reviewed": true
+  |     },
+  |     "8": {
+  |       "name": "Hal Ito",
+  |       "email": "hal@example.com",
+  |       "age": 27,
+  |       "city": "Tokyo",
+  |       "tags": [
+  |         "dev",
+  |         "admin"
+  |       ],
+  |       "score": 4.0,
+  |       "active": true,
+  |       "reviewed": true
+  |     },
+  |     "9": {
+  |       "name": "Ida Berg",
+  |       "age": 64,
+  |       "city": "Berlin",
+  |       "tags": [
+  |         "retired"
+  |       ],
+  |       "score": 0.5,
+  |       "active": false,
+  |       "visits": 1,
+  |       "reviewed": true
+  |     },
+  |     "10": {
+  |       "name": "Jo Diaz",
+  |       "email": "jo@example.com",
+  |       "age": 23,
+  |       "city": "Paris",
+  |       "tags": [
+  |         "intern"
+  |       ],
+  |       "score": 2.0,
+  |       "active": true,
+  |       "visits": 1,
+  |       "reviewed": true
+  |     }
+  |   }
+  | }
+> report queries.tsv db/contacts.json out/report2.txt
+  out/report2.txt (17 lines)
+  | berliners: 3 (Ann Lee, Cy Ng, Ida Berg)
+  | adults_in_paris: 1 (Bo Brown)
+  | ops_people: 3 (Ann Lee, Cy Ng, Fay Okoro)
+  | dev_or_admin: 5 (Ann Lee, Bo Brown, Di Park, Fay Okoro, Hal Ito)
+  | no_email: 1 (Di Park)
+  | example_com: 4 (Ann Lee, Fay Okoro, Hal Ito, Jo Diaz)
+  | not_active: 3 (Cy Ng, Ed Ruiz, Ida Berg)
+  | senior: 2 (Ed Ruiz, Ida Berg)
+  | young_devs: 3 (Bo Brown, Di Park, Hal Ito)
+  | with_score: 9 (Ann Lee, Bo Brown, Cy Ng, Di Park, Ed Ruiz, Fay Okoro, Hal Ito, Ida Berg, Jo Diaz)
+  | named_with_o: 4 (Bo Brown, Fay Okoro, Gus Holm, Hal Ito)
+  | in_cities: 3 (Fay Okoro, Gus Holm, Hal Ito)
+  | all_tags: 1 (Fay Okoro)
+  | top_scores: 5 (Ann Lee, Cy Ng, Fay Okoro, Hal Ito, Ida Berg)
+  | broken: error TypeError: '>=' not supported between instances of 'int' and 'str'
+  | nobody: 0 ()
+  | 

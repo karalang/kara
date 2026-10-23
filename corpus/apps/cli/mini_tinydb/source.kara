@@ -1,0 +1,4390 @@
+// mini_tinydb: a port of TinyDB 4.8.2 (MIT; Markus Siemens), the
+// document database that scripts, bots, desktop tools and small services
+// embed when they want to keep JSON records on disk without running a
+// database server. It replays data/jobs.tsv (see mk.py): the README's
+// tutorial, then each part of the library alone (queries over paths,
+// nested documents, logic, regular expressions, custom tests and lists,
+// query equality and hashing, tables, document IDs, get, update, upsert
+// and remove, the query cache, LRUCache and freeze, MemoryStorage,
+// JSONStorage and CachingMiddleware) and three programs: a CSV importer,
+// a saved-query report runner and a batch updater, which write JSON and
+// text files under data/ and print them back.
+//
+// A job is a Python expression over the library's API, so the port
+// carries a small Python evaluator. TinyDB hands out Python objects and
+// relies on which of them are shared: MemoryStorage keeps the very dicts
+// it is given, the query cache keeps the documents it returned, and an
+// update mutates documents in place before it writes them back. The port
+// therefore keeps every list and dict in an arena, so a Python reference
+// is an index and sharing is exactly the library's.
+
+// ------------------------------------------------------------ text helpers
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        bytes.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+        k += 2;
+    }
+    bytes
+}
+
+fn hex_string(s: ref String) -> String {
+    match String.from_utf8(hex_bytes(s)) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    }
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+// str.split(sep) for a separator of any length.
+fn split_str(s: ref String, sep: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut rest = s.clone();
+    loop {
+        match rest.find(sep) {
+            Some(i) => {
+                out.push(rest.substring(0, i));
+                rest = rest.substring(i + sep.len(), rest.len());
+            }
+            None => {
+                out.push(rest);
+                return out;
+            }
+        }
+    }
+}
+
+// str.split(sep, 1)
+fn split_once(s: ref String, sep: Str) -> Vec[String] {
+    match s.find(sep) {
+        Some(i) => vec![s.substring(0, i), s.substring(i + sep.len(), s.len())],
+        None => vec![s.clone()],
+    }
+}
+
+// str.split(" ", n): at most n splits.
+fn split_n(s: ref String, n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == ' ' and out.len() < n {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn join_strs(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(x);
+        first = false;
+    }
+    out
+}
+
+fn all_digits(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if c < '0' or c > '9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn atoi(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Ok(n) => n,
+        Err(_) => 0,
+    }
+}
+
+fn lower_char(c: char) -> char {
+    if c >= 'A' and c <= 'Z' {
+        match char.try_from(c as i64 + 32) {
+            Ok(d) => d,
+            Err(_) => c,
+        }
+    } else {
+        c
+    }
+}
+
+fn upper_char(c: char) -> char {
+    if c >= 'a' and c <= 'z' {
+        match char.try_from(c as i64 - 32) {
+            Ok(d) => d,
+            Err(_) => c,
+        }
+    } else {
+        c
+    }
+}
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex4(n: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    let mut out = String.new();
+    let mut shift = 4096;
+    while shift > 0 {
+        out.push(ds[(n / shift) % 16]);
+        shift = shift / 16;
+    }
+    out
+}
+
+// repr() of a str.
+fn str_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if (c as i64) < 32 or c as i64 == 127 {
+            let n = c as i64;
+            let ds: Vec[char] = HEX.chars().collect();
+            out.push_str("\\x");
+            out.push(ds[n / 16]);
+            out.push(ds[n % 16]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+// ------------------------------------------------------------ errors
+
+// A Python exception: its class and str() of it.
+#[derive(Clone)]
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+fn type_error(msg: own String) -> Exc {
+    exc("TypeError", msg)
+}
+
+fn value_error(msg: own String) -> Exc {
+    exc("ValueError", msg)
+}
+
+fn runtime_error(msg: Str) -> Exc {
+    exc("RuntimeError", msg.to_string())
+}
+
+// ------------------------------------------------------------ values
+
+// A Python value. Lists, tuples, dicts, sets and every object of the
+// library live in the arena and are referred to by index, so `is` and
+// sharing work as in Python. A Fn is a function, class or module the
+// script names; a Meth is a method bound to an arena object.
+#[derive(Clone)]
+enum Val {
+    Non,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Ref(i64),
+    Fn(String),
+    Meth(i64, String),
+}
+
+fn s_(s: Str) -> Val {
+    Val.Str(s.to_string())
+}
+
+fn sv(s: ref String) -> Val {
+    Val.Str(s.clone())
+}
+
+fn is_none(v: ref Val) -> bool {
+    match v {
+        Val.Non => true,
+        _ => false,
+    }
+}
+
+fn is_str(v: ref Val) -> bool {
+    match v {
+        Val.Str(_) => true,
+        _ => false,
+    }
+}
+
+fn str_of(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn ref_id(v: ref Val) -> i64 {
+    match v {
+        Val.Ref(i) => *i,
+        _ => -1,
+    }
+}
+
+fn is_num(v: ref Val) -> bool {
+    match v {
+        Val.Bool(_) => true,
+        Val.Int(_) => true,
+        Val.Float(_) => true,
+        _ => false,
+    }
+}
+
+fn is_float(v: ref Val) -> bool {
+    match v {
+        Val.Float(_) => true,
+        _ => false,
+    }
+}
+
+fn int_of(v: ref Val) -> i64 {
+    match v {
+        Val.Bool(b) => if *b { 1 } else { 0 },
+        Val.Int(n) => *n,
+        Val.Float(x) => *x as i64,
+        _ => 0,
+    }
+}
+
+fn float_of(v: ref Val) -> f64 {
+    match v {
+        Val.Bool(b) => if *b { 1.0 } else { 0.0 },
+        Val.Int(n) => *n as f64,
+        Val.Float(x) => *x,
+        _ => 0.0,
+    }
+}
+
+// ------------------------------------------------------------ the arena
+
+const K_LIST: i64 = 1;
+const K_TUPLE: i64 = 2;
+const K_DICT: i64 = 3;
+const K_FDICT: i64 = 4;
+const K_DOC: i64 = 5;
+const K_FSET: i64 = 6;
+const K_SET: i64 = 7;
+const K_QUERY: i64 = 10;
+const K_QI: i64 = 11;
+const K_DB: i64 = 20;
+const K_TABLE: i64 = 21;
+const K_LRU: i64 = 22;
+const K_MEM: i64 = 23;
+const K_JSON: i64 = 24;
+const K_CMW: i64 = 25;
+const K_TRANS: i64 = 26;
+
+// One Python object. ks/vs are a dict's keys and values in insertion
+// order (vs alone is a list's, tuple's or set's items, or a query's path);
+// a, b and c, n and s are the attributes each kind documents where it is
+// made.
+#[derive(Clone)]
+struct Obj {
+    k: i64,
+    ks: Vec[Val],
+    vs: Vec[Val],
+    a: Val,
+    b: Val,
+    c: Val,
+    n: i64,
+    s: String,
+}
+
+struct A {
+    objs: Vec[Obj],
+}
+
+fn arena_new() -> A {
+    A { objs: Vec.new() }
+}
+
+fn new_obj(a: mut ref A, k: i64) -> i64 {
+    a.objs.push(Obj { k: k, ks: Vec.new(), vs: Vec.new(), a: Val.Non, b: Val.Non, c: Val.Non, n: 0, s: String.new() });
+    a.objs.len() - 1
+}
+
+fn kind(a: ref A, v: ref Val) -> i64 {
+    match v {
+        Val.Ref(i) => a.objs[*i].k,
+        _ => -1,
+    }
+}
+
+fn seq_val(a: mut ref A, k: i64, xs: own Vec[Val]) -> Val {
+    let id = new_obj(mut a, k);
+    a.objs[id].vs = xs;
+    Val.Ref(id)
+}
+
+fn lst(a: mut ref A, xs: own Vec[Val]) -> Val {
+    seq_val(mut a, K_LIST, xs)
+}
+
+fn tup(a: mut ref A, xs: own Vec[Val]) -> Val {
+    seq_val(mut a, K_TUPLE, xs)
+}
+
+fn new_dict(a: mut ref A, k: i64, ks: own Vec[Val], vs: own Vec[Val]) -> Val {
+    let id = new_obj(mut a, k);
+    a.objs[id].ks = ks;
+    a.objs[id].vs = vs;
+    Val.Ref(id)
+}
+
+fn empty_dict(a: mut ref A) -> Val {
+    new_dict(mut a, K_DICT, Vec.new(), Vec.new())
+}
+
+fn is_seq_kind(k: i64) -> bool {
+    k == K_LIST or k == K_TUPLE
+}
+
+fn is_dict_kind(k: i64) -> bool {
+    k == K_DICT or k == K_FDICT or k == K_DOC
+}
+
+fn is_set_kind(k: i64) -> bool {
+    k == K_FSET or k == K_SET
+}
+
+fn is_query_kind(k: i64) -> bool {
+    k == K_QUERY or k == K_QI
+}
+
+fn items(a: ref A, v: ref Val) -> Vec[Val] {
+    match v {
+        Val.Ref(i) => a.objs[*i].vs.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn keys(a: ref A, v: ref Val) -> Vec[Val] {
+    match v {
+        Val.Ref(i) => a.objs[*i].ks.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn identical(x: ref Val, y: ref Val) -> bool {
+    match x {
+        Val.Ref(i) => match y {
+            Val.Ref(j) => *i == *j,
+            _ => false,
+        },
+        Val.Non => is_none(y),
+        Val.Bool(p) => match y {
+            Val.Bool(q) => *p == *q,
+            _ => false,
+        },
+        Val.Fn(f) => match y {
+            Val.Fn(g) => f == g,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+// ------------------------------------------------------------ Python's rules
+
+fn type_name(a: ref A, v: ref Val) -> String {
+    let n = match v {
+        Val.Non => "NoneType",
+        Val.Bool(_) => "bool",
+        Val.Int(_) => "int",
+        Val.Float(_) => "float",
+        Val.Str(_) => "str",
+        Val.Fn(_) => "function",
+        Val.Meth(_, _) => "method",
+        Val.Ref(i) => {
+            let k = a.objs[*i].k;
+            if k == K_LIST {
+                "list"
+            } else if k == K_TUPLE {
+                "tuple"
+            } else if k == K_DICT {
+                "dict"
+            } else if k == K_FDICT {
+                "FrozenDict"
+            } else if k == K_DOC {
+                "Document"
+            } else if k == K_FSET {
+                "frozenset"
+            } else if k == K_SET {
+                "set"
+            } else if k == K_QUERY {
+                "Query"
+            } else if k == K_QI {
+                "QueryInstance"
+            } else if k == K_DB {
+                "TinyDB"
+            } else if k == K_TABLE {
+                "Table"
+            } else if k == K_LRU {
+                "LRUCache"
+            } else if k == K_MEM {
+                "MemoryStorage"
+            } else if k == K_JSON {
+                "JSONStorage"
+            } else if k == K_CMW {
+                "CachingMiddleware"
+            } else {
+                "function"
+            }
+        }
+    };
+    n.to_string()
+}
+
+fn truthy(a: ref A, v: ref Val) -> bool {
+    match v {
+        Val.Non => false,
+        Val.Bool(b) => *b,
+        Val.Int(n) => *n != 0,
+        Val.Float(x) => *x != 0.0,
+        Val.Str(s) => s.len() > 0,
+        Val.Ref(i) => {
+            let k = a.objs[*i].k;
+            if is_seq_kind(k) or is_set_kind(k) or k == K_LRU {
+                a.objs[*i].vs.len() > 0
+            } else if is_dict_kind(k) {
+                a.objs[*i].ks.len() > 0
+            } else {
+                true
+            }
+        }
+        _ => true,
+    }
+}
+
+// The hash value a query was built with (None when it is not cacheable).
+fn qhash(a: ref A, v: ref Val) -> Val {
+    match v {
+        Val.Ref(i) => a.objs[*i].a.clone(),
+        _ => Val.Non,
+    }
+}
+
+// x == y
+fn py_eq(a: ref A, x: ref Val, y: ref Val) -> bool {
+    if is_num(x) and is_num(y) {
+        if is_float(x) or is_float(y) {
+            return float_of(x) == float_of(y);
+        }
+        return int_of(x) == int_of(y);
+    }
+    match x {
+        Val.Non => is_none(y),
+        Val.Str(s) => match y {
+            Val.Str(t) => s == t,
+            _ => false,
+        },
+        Val.Fn(f) => match y {
+            Val.Fn(g) => f == g,
+            _ => false,
+        },
+        Val.Meth(i, m) => match y {
+            Val.Meth(j, n) => *i == *j and m == n,
+            _ => false,
+        },
+        Val.Ref(i) => match y {
+            Val.Ref(j) => obj_eq(a, *i, *j),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+// Not named ref_eq: a top-level fn of that name is checked against the
+// prelude intrinsic instead (B-2026-10-23-10).
+fn obj_eq(a: ref A, i: i64, j: i64) -> bool {
+    if i == j {
+        return true;
+    }
+    let ki = a.objs[i].k;
+    let kj = a.objs[j].k;
+    if is_seq_kind(ki) {
+        if ki != kj or a.objs[i].vs.len() != a.objs[j].vs.len() {
+            return false;
+        }
+        let mut n = 0;
+        while n < a.objs[i].vs.len() {
+            if not py_eq(a, a.objs[i].vs[n], a.objs[j].vs[n]) {
+                return false;
+            }
+            n += 1;
+        }
+        return true;
+    }
+    if is_dict_kind(ki) {
+        if not is_dict_kind(kj) or a.objs[i].ks.len() != a.objs[j].ks.len() {
+            return false;
+        }
+        let mut n = 0;
+        while n < a.objs[i].ks.len() {
+            let at = find_key(a, j, a.objs[i].ks[n]);
+            if at < 0 or not py_eq(a, a.objs[i].vs[n], a.objs[j].vs[at]) {
+                return false;
+            }
+            n += 1;
+        }
+        return true;
+    }
+    if is_set_kind(ki) {
+        if not is_set_kind(kj) or a.objs[i].vs.len() != a.objs[j].vs.len() {
+            return false;
+        }
+        for x in a.objs[i].vs {
+            if not seq_has(a, a.objs[j].vs, x) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if is_query_kind(ki) and is_query_kind(kj) {
+        return py_eq(a, a.objs[i].a, a.objs[j].a);
+    }
+    false
+}
+
+fn seq_has(a: ref A, xs: ref Vec[Val], x: ref Val) -> bool {
+    for y in xs {
+        if py_eq(a, y, x) {
+            return true;
+        }
+    }
+    false
+}
+
+// The index of a key in a dict-like object, or -1.
+fn find_key(a: ref A, o: i64, k: ref Val) -> i64 {
+    let mut n = 0;
+    while n < a.objs[o].ks.len() {
+        if py_eq(a, a.objs[o].ks[n], k) {
+            return n;
+        }
+        n += 1;
+    }
+    -1
+}
+
+fn dict_get(a: ref A, d: ref Val, k: ref Val) -> Option[Val] {
+    let o = ref_id(d);
+    let at = find_key(a, o, k);
+    if at < 0 {
+        None
+    } else {
+        Some(a.objs[o].vs[at].clone())
+    }
+}
+
+fn dict_set(a: mut ref A, d: ref Val, k: ref Val, v: ref Val) {
+    let o = ref_id(d);
+    let at = find_key(a, o, k);
+    if at < 0 {
+        a.objs[o].ks.push(k.clone());
+        a.objs[o].vs.push(v.clone());
+    } else {
+        a.objs[o].vs[at] = v.clone();
+    }
+}
+
+fn dict_del(a: mut ref A, d: ref Val, k: ref Val) -> bool {
+    let o = ref_id(d);
+    let at = find_key(a, o, k);
+    if at < 0 {
+        return false;
+    }
+    a.objs[o].ks.remove(at);
+    a.objs[o].vs.remove(at);
+    true
+}
+
+// dict(m): a new dict with m's items.
+fn dict_copy(a: mut ref A, k: i64, d: ref Val) -> Val {
+    let ks = keys(a, d);
+    let vs = items(a, d);
+    new_dict(mut a, k, ks, vs)
+}
+
+// A new Document holding m's items.
+fn document(a: mut ref A, d: ref Val, doc_id: ref Val) -> Val {
+    let v = dict_copy(mut a, K_DOC, d);
+    let o = ref_id(v);
+    a.objs[o].a = doc_id.clone();
+    v
+}
+
+fn key_error(a: ref A, k: ref Val) -> Exc {
+    exc("KeyError", repr(a, k))
+}
+
+fn hashable_check(a: ref A, v: ref Val) -> Result[(), Exc] {
+    let k = kind(a, v);
+    if k == K_LIST or k == K_DICT or k == K_DOC or k == K_SET {
+        let t = type_name(a, v);
+        return Err(type_error(f"unhashable type: '{t}'"));
+    }
+    Ok(())
+}
+
+// item in container
+fn contains(a: ref A, c: ref Val, x: ref Val) -> Result[bool, Exc] {
+    match c {
+        Val.Str(s) => {
+            return match x {
+                Val.Str(t) => Ok(s.contains(t.as_str())),
+                _ => {
+                    let t = type_name(a, x);
+                    Err(type_error(f"'in <string>' requires string as left operand, not {t}"))
+                }
+            };
+        }
+        _ => {}
+    }
+    let k = kind(a, c);
+    if is_seq_kind(k) or is_set_kind(k) {
+        return Ok(seq_has(a, a.objs[ref_id(c)].vs, x));
+    }
+    if is_dict_kind(k) or k == K_LRU {
+        hashable_check(a, x)?;
+        return Ok(find_key(a, ref_id(c), x) >= 0);
+    }
+    let t = type_name(a, c);
+    Err(type_error(f"argument of type '{t}' is not iterable"))
+}
+
+// hasattr(obj, '__iter__')
+fn is_sequence(a: ref A, v: ref Val) -> bool {
+    if is_str(v) {
+        return true;
+    }
+    let k = kind(a, v);
+    is_seq_kind(k) or is_dict_kind(k) or is_set_kind(k) or k == K_LRU or k == K_TABLE or k == K_DB
+}
+
+fn cmp_names(a: ref A, op: Str, x: ref Val, y: ref Val) -> Exc {
+    let tx = type_name(a, x);
+    let ty = type_name(a, y);
+    type_error(f"'{op}' not supported between instances of '{tx}' and '{ty}'")
+}
+
+fn op_holds(op: Str, c: i64) -> bool {
+    if op == "<" {
+        c < 0
+    } else if op == "<=" {
+        c <= 0
+    } else if op == ">" {
+        c > 0
+    } else {
+        c >= 0
+    }
+}
+
+// x <op> y for <, <=, > and >=.
+fn py_cmp(a: ref A, op: Str, x: ref Val, y: ref Val) -> Result[bool, Exc] {
+    if is_num(x) and is_num(y) {
+        if is_float(x) or is_float(y) {
+            let p = float_of(x);
+            let q = float_of(y);
+            let c = if p < q { -1 } else if p > q { 1 } else { 0 };
+            return Ok(op_holds(op, c));
+        }
+        let p = int_of(x);
+        let q = int_of(y);
+        let c = if p < q { -1 } else if p > q { 1 } else { 0 };
+        return Ok(op_holds(op, c));
+    }
+    match x {
+        Val.Str(s) => {
+            return match y {
+                Val.Str(t) => {
+                    let c = if s < t { -1 } else if s > t { 1 } else { 0 };
+                    Ok(op_holds(op, c))
+                }
+                _ => Err(cmp_names(a, op, x, y)),
+            };
+        }
+        _ => {}
+    }
+    let kx = kind(a, x);
+    if is_seq_kind(kx) and kind(a, y) == kx {
+        let xs = items(a, x);
+        let ys = items(a, y);
+        let mut n = 0;
+        while n < xs.len() and n < ys.len() {
+            if not py_eq(a, xs[n], ys[n]) {
+                return py_cmp(a, op, xs[n], ys[n]);
+            }
+            n += 1;
+        }
+        let c = if xs.len() < ys.len() { -1 } else if xs.len() > ys.len() { 1 } else { 0 };
+        return Ok(op_holds(op, c));
+    }
+    Err(cmp_names(a, op, x, y))
+}
+
+// The values `for e in v` walks.
+fn iter_vals(a: mut ref A, v: ref Val) -> Result[Vec[Val], Exc] {
+    match v {
+        Val.Str(s) => {
+            let mut out: Vec[Val] = Vec.new();
+            for c in s.chars() {
+                let mut t = String.new();
+                t.push(c);
+                out.push(Val.Str(t));
+            }
+            return Ok(out);
+        }
+        _ => {}
+    }
+    let k = kind(a, v);
+    if is_seq_kind(k) or is_set_kind(k) {
+        return Ok(items(a, v));
+    }
+    if is_dict_kind(k) or k == K_LRU {
+        return Ok(keys(a, v));
+    }
+    if k == K_TABLE {
+        return table_docs(mut a, v);
+    }
+    if k == K_DB {
+        let t = default_table(mut a, v)?;
+        return table_docs(mut a, t);
+    }
+    let t = type_name(a, v);
+    Err(type_error(f"'{t}' object is not iterable"))
+}
+
+// ------------------------------------------------------------ repr and str
+
+fn join_reprs(a: ref A, xs: ref Vec[Val]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in xs {
+        parts.push(repr(a, x));
+    }
+    join_strs(parts, ", ")
+}
+
+fn repr(a: ref A, v: ref Val) -> String {
+    match v {
+        Val.Non => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => f"{x}",
+        Val.Str(s) => str_repr(s),
+        Val.Fn(f) => f"<function {f}>",
+        Val.Meth(_, m) => f"<bound method {m}>",
+        Val.Ref(i) => {
+            let o = a.objs[*i].clone();
+            if o.k == K_LIST {
+                let s = join_reprs(a, o.vs);
+                f"[{s}]"
+            } else if o.k == K_TUPLE {
+                let s = join_reprs(a, o.vs);
+                if o.vs.len() == 1 { f"({s},)" } else { f"({s})" }
+            } else if is_dict_kind(o.k) {
+                let mut parts: Vec[String] = Vec.new();
+                let mut n = 0;
+                while n < o.ks.len() {
+                    let k = repr(a, o.ks[n]);
+                    let x = repr(a, o.vs[n]);
+                    parts.push(f"{k}: {x}");
+                    n += 1;
+                }
+                let s = join_strs(parts, ", ");
+                f"{{{s}}}"
+            } else if o.k == K_FSET {
+                if o.vs.len() == 0 {
+                    "frozenset()".to_string()
+                } else {
+                    let s = join_reprs(a, o.vs);
+                    f"frozenset({{{s}}})"
+                }
+            } else if o.k == K_SET {
+                if o.vs.len() == 0 {
+                    "set()".to_string()
+                } else {
+                    let s = join_reprs(a, o.vs);
+                    f"{{{s}}}"
+                }
+            } else if o.k == K_QUERY {
+                "Query()".to_string()
+            } else if o.k == K_QI {
+                let h = repr(a, o.a);
+                f"QueryImpl{h}"
+            } else {
+                let t = type_name(a, v);
+                f"<{t} object>"
+            }
+        }
+    }
+}
+
+// str(v)
+fn pystr(a: ref A, v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => repr(a, v),
+    }
+}
+
+// ------------------------------------------------------------ hash and freeze
+
+const HMOD: i64 = 1000000007;
+
+fn str_hash(s: ref String) -> i64 {
+    let mut h = 7;
+    for c in s.chars() {
+        h = (h * 131 + c as i64) % HMOD;
+    }
+    h
+}
+
+// hash(v): a value of its own, equal wherever Python's hashes are equal
+// (1, 1.0 and True, and a FrozenDict whatever its order).
+fn py_hash(a: ref A, v: ref Val) -> Result[i64, Exc] {
+    match v {
+        Val.Non => return Ok(17),
+        Val.Bool(b) => return Ok(if *b { 1 } else { 0 }),
+        Val.Int(n) => return Ok(((*n % HMOD) + HMOD) % HMOD),
+        Val.Float(x) => {
+            let t = *x as i64;
+            if t as f64 == *x {
+                return Ok(((t % HMOD) + HMOD) % HMOD);
+            }
+            return Ok(str_hash(f"{x}"));
+        }
+        Val.Str(s) => return Ok(str_hash(s)),
+        Val.Fn(f) => return Ok(str_hash(f)),
+        Val.Meth(i, m) => return Ok((str_hash(m) + *i) % HMOD),
+        Val.Ref(_) => {}
+    }
+    hashable_check(a, v)?;
+    let o = a.objs[ref_id(v)].clone();
+    if o.k == K_TUPLE {
+        let mut h = 31;
+        for x in o.vs {
+            h = (h * 1000003 % HMOD + py_hash(a, x)?) % HMOD;
+        }
+        return Ok(h);
+    }
+    if o.k == K_FDICT {
+        let mut h = 53;
+        let mut n = 0;
+        while n < o.ks.len() {
+            let kh = py_hash(a, o.ks[n])?;
+            let vh = py_hash(a, o.vs[n])?;
+            h = (h + kh * 7919 % HMOD + vh) % HMOD;
+            n += 1;
+        }
+        return Ok(h);
+    }
+    if o.k == K_FSET {
+        let mut h = 71;
+        for x in o.vs {
+            h = (h + py_hash(a, x)?) % HMOD;
+        }
+        return Ok(h);
+    }
+    if is_query_kind(o.k) {
+        return py_hash(a, o.a);
+    }
+    Ok(ref_id(v) % HMOD)
+}
+
+// utils.freeze(obj)
+fn freeze(a: mut ref A, v: ref Val) -> Val {
+    let k = kind(a, v);
+    if is_dict_kind(k) {
+        let ks = keys(a, v);
+        let mut vs: Vec[Val] = Vec.new();
+        for x in items(a, v) {
+            vs.push(freeze(mut a, x));
+        }
+        return new_dict(mut a, K_FDICT, ks, vs);
+    }
+    if k == K_LIST {
+        let mut vs: Vec[Val] = Vec.new();
+        for x in items(a, v) {
+            vs.push(freeze(mut a, x));
+        }
+        return tup(mut a, vs);
+    }
+    if k == K_SET {
+        let vs = items(a, v);
+        return seq_val(mut a, K_FSET, vs);
+    }
+    v.clone()
+}
+
+// frozenset(xs), without duplicates.
+fn fset(a: mut ref A, xs: ref Vec[Val]) -> Val {
+    let mut out: Vec[Val] = Vec.new();
+    for x in xs {
+        if not seq_has(a, out, x) {
+            out.push(x.clone());
+        }
+    }
+    seq_val(mut a, K_FSET, out)
+}
+
+// ------------------------------------------------------------ regular expressions
+
+// Query.matches() and Query.search() call re.match and re.search and only
+// ask whether there is a match, so this is a small backtracking matcher
+// for the part of Python's syntax the script uses: literals, ".", classes
+// with ranges and negation, \w \s \d and their negations, the four
+// quantifiers (lazy or not), anchors, groups and alternation, with
+// re.IGNORECASE.
+
+const R_CHAR: i64 = 0;
+const R_ANY: i64 = 1;
+const R_CLASS: i64 = 2;
+const R_BOL: i64 = 3;
+const R_EOL: i64 = 4;
+const R_SEQ: i64 = 5;
+const R_ALT: i64 = 6;
+const R_REP: i64 = 7;
+
+// A class item is three numbers: 0 and a range, or 1..6 for \w \s \d \W
+// \S \D.
+#[derive(Clone)]
+struct RNode {
+    k: i64,
+    c: char,
+    cls: Vec[i64],
+    neg: bool,
+    kids: Vec[i64],
+    lo: i64,
+    hi: i64,
+}
+
+struct RxParser {
+    cs: Vec[char],
+    i: i64,
+    nodes: Vec[RNode],
+}
+
+fn rnode(p: mut ref RxParser, k: i64) -> i64 {
+    p.nodes.push(RNode { k: k, c: ' ', cls: Vec.new(), neg: false, kids: Vec.new(), lo: 0, hi: 0 });
+    p.nodes.len() - 1
+}
+
+fn rpeek(p: ref RxParser) -> char {
+    if p.i < p.cs.len() { p.cs[p.i] } else { '\0' }
+}
+
+fn r_alt(p: mut ref RxParser) -> i64 {
+    let first = r_seq(mut p);
+    if rpeek(p) != '|' {
+        return first;
+    }
+    let mut kids = vec![first];
+    while p.i < p.cs.len() and rpeek(p) == '|' {
+        p.i += 1;
+        kids.push(r_seq(mut p));
+    }
+    let n = rnode(mut p, R_ALT);
+    p.nodes[n].kids = kids;
+    n
+}
+
+fn r_num(p: mut ref RxParser) -> i64 {
+    let mut n = -1;
+    while p.i < p.cs.len() and rpeek(p) >= '0' and rpeek(p) <= '9' {
+        let d = rpeek(p) as i64 - 48;
+        n = if n < 0 { d } else { n * 10 + d };
+        p.i += 1;
+    }
+    n
+}
+
+fn r_seq(p: mut ref RxParser) -> i64 {
+    let mut kids: Vec[i64] = Vec.new();
+    while p.i < p.cs.len() and rpeek(p) != '|' and rpeek(p) != ')' {
+        let atom = r_atom(mut p);
+        let mut lo = -2;
+        let mut hi = -1;
+        let c = rpeek(p);
+        if c == '*' {
+            lo = 0;
+            p.i += 1;
+        } else if c == '+' {
+            lo = 1;
+            p.i += 1;
+        } else if c == '?' {
+            lo = 0;
+            hi = 1;
+            p.i += 1;
+        } else if c == '{' {
+            let save = p.i;
+            p.i += 1;
+            let m = r_num(mut p);
+            let mut ok = m >= 0;
+            let mut top = m;
+            if ok and rpeek(p) == ',' {
+                p.i += 1;
+                top = r_num(mut p);
+            }
+            if ok and rpeek(p) == '}' {
+                p.i += 1;
+                lo = m;
+                hi = top;
+            } else {
+                ok = false;
+            }
+            if not ok {
+                p.i = save;
+            }
+        }
+        if lo == -2 {
+            kids.push(atom);
+            continue;
+        }
+        if rpeek(p) == '?' {
+            p.i += 1;
+        }
+        let r = rnode(mut p, R_REP);
+        p.nodes[r].kids = vec![atom];
+        p.nodes[r].lo = lo;
+        p.nodes[r].hi = hi;
+        kids.push(r);
+    }
+    let n = rnode(mut p, R_SEQ);
+    p.nodes[n].kids = kids;
+    n
+}
+
+fn esc_class(c: char) -> i64 {
+    if c == 'w' {
+        1
+    } else if c == 's' {
+        2
+    } else if c == 'd' {
+        3
+    } else if c == 'W' {
+        4
+    } else if c == 'S' {
+        5
+    } else if c == 'D' {
+        6
+    } else {
+        0
+    }
+}
+
+fn esc_char(c: char) -> char {
+    if c == 'n' {
+        '\n'
+    } else if c == 't' {
+        '\t'
+    } else if c == 'r' {
+        '\r'
+    } else {
+        c
+    }
+}
+
+fn r_atom(p: mut ref RxParser) -> i64 {
+    let c = rpeek(p);
+    p.i += 1;
+    if c == '(' {
+        if rpeek(p) == '?' and p.i + 1 < p.cs.len() and p.cs[p.i + 1] == ':' {
+            p.i += 2;
+        }
+        let inner = r_alt(mut p);
+        if rpeek(p) == ')' {
+            p.i += 1;
+        }
+        return inner;
+    }
+    if c == '[' {
+        let n = rnode(mut p, R_CLASS);
+        if rpeek(p) == '^' {
+            p.nodes[n].neg = true;
+            p.i += 1;
+        }
+        let mut cls: Vec[i64] = Vec.new();
+        let mut first = true;
+        while p.i < p.cs.len() and (rpeek(p) != ']' or first) {
+            first = false;
+            let mut lo = rpeek(p);
+            p.i += 1;
+            if lo == '\\' {
+                let e = rpeek(p);
+                p.i += 1;
+                let k = esc_class(e);
+                if k > 0 {
+                    cls.push(k);
+                    cls.push(0);
+                    cls.push(0);
+                    continue;
+                }
+                lo = esc_char(e);
+            }
+            let mut hi = lo;
+            if rpeek(p) == '-' and p.i + 1 < p.cs.len() and p.cs[p.i + 1] != ']' {
+                p.i += 1;
+                hi = rpeek(p);
+                p.i += 1;
+                if hi == '\\' {
+                    hi = esc_char(rpeek(p));
+                    p.i += 1;
+                }
+            }
+            cls.push(0);
+            cls.push(lo as i64);
+            cls.push(hi as i64);
+        }
+        p.i += 1;
+        p.nodes[n].cls = cls;
+        return n;
+    }
+    if c == '.' {
+        return rnode(mut p, R_ANY);
+    }
+    if c == '^' {
+        return rnode(mut p, R_BOL);
+    }
+    if c == '$' {
+        return rnode(mut p, R_EOL);
+    }
+    if c == '\\' {
+        let e = rpeek(p);
+        p.i += 1;
+        let k = esc_class(e);
+        if k > 0 {
+            let n = rnode(mut p, R_CLASS);
+            p.nodes[n].cls = vec![k, 0, 0];
+            return n;
+        }
+        let n = rnode(mut p, R_CHAR);
+        p.nodes[n].c = esc_char(e);
+        return n;
+    }
+    let n = rnode(mut p, R_CHAR);
+    p.nodes[n].c = c;
+    n
+}
+
+const I_CHAR: i64 = 0;
+const I_ANY: i64 = 1;
+const I_CLASS: i64 = 2;
+const I_BOL: i64 = 3;
+const I_EOL: i64 = 4;
+const I_SPLIT: i64 = 5;
+const I_JMP: i64 = 6;
+const I_MATCH: i64 = 7;
+
+#[derive(Clone)]
+struct Ins {
+    op: i64,
+    c: char,
+    x: i64,
+    y: i64,
+}
+
+fn emit(nodes: ref Vec[RNode], id: i64, prog: mut ref Vec[Ins]) {
+    let nd = nodes[id].clone();
+    if nd.k == R_CHAR {
+        prog.push(Ins { op: I_CHAR, c: nd.c, x: 0, y: 0 });
+    } else if nd.k == R_ANY {
+        prog.push(Ins { op: I_ANY, c: ' ', x: 0, y: 0 });
+    } else if nd.k == R_CLASS {
+        prog.push(Ins { op: I_CLASS, c: ' ', x: id, y: 0 });
+    } else if nd.k == R_BOL {
+        prog.push(Ins { op: I_BOL, c: ' ', x: 0, y: 0 });
+    } else if nd.k == R_EOL {
+        prog.push(Ins { op: I_EOL, c: ' ', x: 0, y: 0 });
+    } else if nd.k == R_SEQ {
+        for k in nd.kids {
+            emit(nodes, k, mut prog);
+        }
+    } else if nd.k == R_ALT {
+        let mut jumps: Vec[i64] = Vec.new();
+        let mut n = 0;
+        while n < nd.kids.len() {
+            if n + 1 < nd.kids.len() {
+                let split = prog.len();
+                prog.push(Ins { op: I_SPLIT, c: ' ', x: split + 1, y: 0 });
+                emit(nodes, nd.kids[n], mut prog);
+                jumps.push(prog.len());
+                prog.push(Ins { op: I_JMP, c: ' ', x: 0, y: 0 });
+                prog[split].y = prog.len();
+            } else {
+                emit(nodes, nd.kids[n], mut prog);
+            }
+            n += 1;
+        }
+        for j in jumps {
+            prog[j].x = prog.len();
+        }
+    } else {
+        let kid = nd.kids[0];
+        let mut n = 0;
+        while n < nd.lo {
+            emit(nodes, kid, mut prog);
+            n += 1;
+        }
+        if nd.hi < 0 {
+            let top = prog.len();
+            prog.push(Ins { op: I_SPLIT, c: ' ', x: top + 1, y: 0 });
+            emit(nodes, kid, mut prog);
+            prog.push(Ins { op: I_JMP, c: ' ', x: top, y: 0 });
+            prog[top].y = prog.len();
+        } else {
+            let mut splits: Vec[i64] = Vec.new();
+            while n < nd.hi {
+                splits.push(prog.len());
+                prog.push(Ins { op: I_SPLIT, c: ' ', x: prog.len() + 1, y: 0 });
+                emit(nodes, kid, mut prog);
+                n += 1;
+            }
+            for s in splits {
+                prog[s].y = prog.len();
+            }
+        }
+    }
+}
+
+fn is_word(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c as i64 > 127
+}
+
+fn is_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c as i64 == 11 or c as i64 == 12
+}
+
+fn class_has(cls: ref Vec[i64], c: char) -> bool {
+    let n = c as i64;
+    let mut k = 0;
+    while k + 2 < cls.len() {
+        let t = cls[k];
+        let hit = if t == 0 {
+            n >= cls[k + 1] and n <= cls[k + 2]
+        } else if t == 1 {
+            is_word(c)
+        } else if t == 2 {
+            is_space(c)
+        } else if t == 3 {
+            c >= '0' and c <= '9'
+        } else if t == 4 {
+            not is_word(c)
+        } else if t == 5 {
+            not is_space(c)
+        } else {
+            not (c >= '0' and c <= '9')
+        };
+        if hit {
+            return true;
+        }
+        k += 3;
+    }
+    false
+}
+
+fn class_match(nd: ref RNode, c: char, icase: bool) -> bool {
+    let mut hit = class_has(nd.cls, c);
+    if not hit and icase {
+        hit = class_has(nd.cls, lower_char(c)) or class_has(nd.cls, upper_char(c));
+    }
+    if nd.neg { not hit } else { hit }
+}
+
+fn bt(prog: ref Vec[Ins], nodes: ref Vec[RNode], start: i64, s: ref Vec[char], from: i64, icase: bool) -> bool {
+    let mut pc = start;
+    let mut i = from;
+    let n = s.len();
+    loop {
+        let ins = prog[pc].clone();
+        if ins.op == I_CHAR {
+            if i >= n {
+                return false;
+            }
+            let ok = if icase { lower_char(s[i]) == lower_char(ins.c) } else { s[i] == ins.c };
+            if not ok {
+                return false;
+            }
+            i += 1;
+            pc += 1;
+        } else if ins.op == I_ANY {
+            if i >= n or s[i] == '\n' {
+                return false;
+            }
+            i += 1;
+            pc += 1;
+        } else if ins.op == I_CLASS {
+            if i >= n or not class_match(nodes[ins.x], s[i], icase) {
+                return false;
+            }
+            i += 1;
+            pc += 1;
+        } else if ins.op == I_BOL {
+            if i != 0 {
+                return false;
+            }
+            pc += 1;
+        } else if ins.op == I_EOL {
+            if not (i == n or (i == n - 1 and s[i] == '\n')) {
+                return false;
+            }
+            pc += 1;
+        } else if ins.op == I_SPLIT {
+            if bt(prog, nodes, ins.x, s, i, icase) {
+                return true;
+            }
+            pc = ins.y;
+        } else if ins.op == I_JMP {
+            pc = ins.x;
+        } else {
+            return true;
+        }
+    }
+}
+
+// re.match (anchored) or re.search: is there a match?
+fn re_find(pat: ref String, subject: ref String, flags: i64, anchored: bool) -> bool {
+    let mut p = RxParser { cs: pat.chars().collect(), i: 0, nodes: Vec.new() };
+    let root = r_alt(mut p);
+    let mut prog: Vec[Ins] = Vec.new();
+    emit(p.nodes, root, mut prog);
+    prog.push(Ins { op: I_MATCH, c: ' ', x: 0, y: 0 });
+    let s: Vec[char] = subject.chars().collect();
+    let icase = flags % 4 >= 2;
+    if anchored {
+        return bt(prog, p.nodes, 0, s, 0, icase);
+    }
+    let mut from = 0;
+    while from <= s.len() {
+        if bt(prog, p.nodes, 0, s, from, icase) {
+            return true;
+        }
+        from += 1;
+    }
+    false
+}
+
+// ------------------------------------------------------------ JSON
+
+// json.dumps's options as JSONStorage passes them on.
+#[derive(Clone)]
+struct JOpt {
+    indent: i64,
+    item_sep: String,
+    key_sep: String,
+    sort_keys: bool,
+}
+
+fn json_str(s: ref String, out: mut ref String) {
+    out.push('"');
+    for c in s.chars() {
+        let n = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n < 32 or n > 126 {
+            if n > 65535 {
+                let v = n - 65536;
+                let hi = hex4(55296 + v / 1024);
+                let lo = hex4(56320 + v % 1024);
+                out.push_str(f"\\u{hi}\\u{lo}");
+            } else {
+                let h = hex4(n);
+                out.push_str(f"\\u{h}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+}
+
+fn newline_indent(o: ref JOpt, level: i64, out: mut ref String) {
+    out.push('\n');
+    let mut k = 0;
+    while k < o.indent * level {
+        out.push(' ');
+        k += 1;
+    }
+}
+
+fn json_key(a: ref A, k: ref Val) -> Result[String, Exc] {
+    match k {
+        Val.Str(s) => Ok(s.clone()),
+        Val.Int(n) => Ok(f"{n}"),
+        Val.Float(x) => Ok(f"{x}"),
+        Val.Bool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
+        Val.Non => Ok("null".to_string()),
+        _ => {
+            let t = type_name(a, k);
+            Err(type_error(f"keys must be str, int, float, bool or None, not {t}"))
+        }
+    }
+}
+
+fn json_enc(a: ref A, v: ref Val, o: ref JOpt, level: i64, out: mut ref String) -> Result[(), Exc] {
+    match v {
+        Val.Non => {
+            out.push_str("null");
+            return Ok(());
+        }
+        Val.Bool(b) => {
+            out.push_str(if *b { "true" } else { "false" });
+            return Ok(());
+        }
+        Val.Int(n) => {
+            out.push_str(f"{n}");
+            return Ok(());
+        }
+        Val.Float(x) => {
+            out.push_str(f"{x}");
+            return Ok(());
+        }
+        Val.Str(s) => {
+            json_str(s, mut out);
+            return Ok(());
+        }
+        _ => {}
+    }
+    let k = kind(a, v);
+    if is_seq_kind(k) {
+        let xs = items(a, v);
+        if xs.len() == 0 {
+            out.push_str("[]");
+            return Ok(());
+        }
+        out.push('[');
+        if o.indent >= 0 {
+            newline_indent(o, level + 1, mut out);
+        }
+        let mut first = true;
+        for x in xs {
+            if not first {
+                out.push_str(o.item_sep);
+                if o.indent >= 0 {
+                    newline_indent(o, level + 1, mut out);
+                }
+            }
+            first = false;
+            json_enc(a, x, o, level + 1, mut out)?;
+        }
+        if o.indent >= 0 {
+            newline_indent(o, level, mut out);
+        }
+        out.push(']');
+        return Ok(());
+    }
+    if is_dict_kind(k) {
+        let ks = keys(a, v);
+        let vs = items(a, v);
+        if ks.len() == 0 {
+            out.push_str("{}");
+            return Ok(());
+        }
+        let mut names: Vec[String] = Vec.new();
+        for key in ks {
+            names.push(json_key(a, key)?);
+        }
+        let mut order: Vec[i64] = Vec.new();
+        let mut n = 0;
+        while n < names.len() {
+            order.push(n);
+            n += 1;
+        }
+        if o.sort_keys {
+            let mut i = 1;
+            while i < order.len() {
+                let mut j = i;
+                while j > 0 and names[order[j]] < names[order[j - 1]] {
+                    let t = order[j];
+                    order[j] = order[j - 1];
+                    order[j - 1] = t;
+                    j -= 1;
+                }
+                i += 1;
+            }
+        }
+        out.push('{');
+        if o.indent >= 0 {
+            newline_indent(o, level + 1, mut out);
+        }
+        let mut first = true;
+        for at in order {
+            if not first {
+                out.push_str(o.item_sep);
+                if o.indent >= 0 {
+                    newline_indent(o, level + 1, mut out);
+                }
+            }
+            first = false;
+            json_str(names[at], mut out);
+            out.push_str(o.key_sep);
+            json_enc(a, vs[at], o, level + 1, mut out)?;
+        }
+        if o.indent >= 0 {
+            newline_indent(o, level, mut out);
+        }
+        out.push('}');
+        return Ok(());
+    }
+    let t = type_name(a, v);
+    Err(type_error(f"Object of type {t} is not JSON serializable"))
+}
+
+struct JsonParser {
+    cs: Vec[char],
+    i: i64,
+}
+
+fn jp_ws(p: mut ref JsonParser) {
+    while p.i < p.cs.len() and is_space(p.cs[p.i]) {
+        p.i += 1;
+    }
+}
+
+fn jp_err(p: ref JsonParser) -> Exc {
+    let at = p.i;
+    exc("JSONDecodeError", f"Expecting value: char {at}")
+}
+
+fn jp_hex(p: mut ref JsonParser) -> i64 {
+    let mut n = 0;
+    let mut k = 0;
+    while k < 4 and p.i < p.cs.len() {
+        n = n * 16 + hex_val(p.cs[p.i]);
+        p.i += 1;
+        k += 1;
+    }
+    n
+}
+
+fn jp_string(p: mut ref JsonParser) -> Result[String, Exc] {
+    p.i += 1;
+    let mut out = String.new();
+    while p.i < p.cs.len() {
+        let c = p.cs[p.i];
+        p.i += 1;
+        if c == '"' {
+            return Ok(out);
+        }
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let e = p.cs[p.i];
+        p.i += 1;
+        if e == 'u' {
+            let mut n = jp_hex(mut p);
+            if n >= 55296 and n < 56320 and p.i + 1 < p.cs.len() and p.cs[p.i] == '\\' and p.cs[p.i + 1] == 'u' {
+                p.i += 2;
+                let lo = jp_hex(mut p);
+                n = 65536 + (n - 55296) * 1024 + (lo - 56320);
+            }
+            match char.try_from(n) {
+                Ok(ch) => out.push(ch),
+                Err(_) => return Err(jp_err(p)),
+            }
+        } else if e == 'n' {
+            out.push('\n');
+        } else if e == 't' {
+            out.push('\t');
+        } else if e == 'r' {
+            out.push('\r');
+        } else if e == 'b' {
+            out.push(char.try_from(8).unwrap());
+        } else if e == 'f' {
+            out.push(char.try_from(12).unwrap());
+        } else {
+            out.push(e);
+        }
+    }
+    Err(jp_err(p))
+}
+
+fn jp_word(p: mut ref JsonParser, w: Str) -> bool {
+    let ws: Vec[char] = w.chars().collect();
+    let mut k = 0;
+    while k < ws.len() {
+        if p.i + k >= p.cs.len() or p.cs[p.i + k] != ws[k] {
+            return false;
+        }
+        k += 1;
+    }
+    p.i += ws.len();
+    true
+}
+
+fn jp_value(a: mut ref A, p: mut ref JsonParser) -> Result[Val, Exc] {
+    jp_ws(mut p);
+    if p.i >= p.cs.len() {
+        return Err(jp_err(p));
+    }
+    let c = p.cs[p.i];
+    if c == '{' {
+        p.i += 1;
+        let d = empty_dict(mut a);
+        jp_ws(mut p);
+        if p.i < p.cs.len() and p.cs[p.i] == '}' {
+            p.i += 1;
+            return Ok(d);
+        }
+        loop {
+            jp_ws(mut p);
+            let k = jp_string(mut p)?;
+            jp_ws(mut p);
+            p.i += 1;
+            let v = jp_value(mut a, mut p)?;
+            dict_set(mut a, d, Val.Str(k), v);
+            jp_ws(mut p);
+            if p.i < p.cs.len() and p.cs[p.i] == ',' {
+                p.i += 1;
+                continue;
+            }
+            p.i += 1;
+            return Ok(d);
+        }
+    }
+    if c == '[' {
+        p.i += 1;
+        let mut xs: Vec[Val] = Vec.new();
+        jp_ws(mut p);
+        if p.i < p.cs.len() and p.cs[p.i] == ']' {
+            p.i += 1;
+            return Ok(lst(mut a, xs));
+        }
+        loop {
+            xs.push(jp_value(mut a, mut p)?);
+            jp_ws(mut p);
+            if p.i < p.cs.len() and p.cs[p.i] == ',' {
+                p.i += 1;
+                continue;
+            }
+            p.i += 1;
+            return Ok(lst(mut a, xs));
+        }
+    }
+    if c == '"' {
+        return Ok(Val.Str(jp_string(mut p)?));
+    }
+    if jp_word(mut p, "true") {
+        return Ok(Val.Bool(true));
+    }
+    if jp_word(mut p, "false") {
+        return Ok(Val.Bool(false));
+    }
+    if jp_word(mut p, "null") {
+        return Ok(Val.Non);
+    }
+    let mut s = String.new();
+    let mut float = false;
+    while p.i < p.cs.len() {
+        let d = p.cs[p.i];
+        if (d >= '0' and d <= '9') or d == '-' or d == '+' {
+            s.push(d);
+        } else if d == '.' or d == 'e' or d == 'E' {
+            float = true;
+            s.push(d);
+        } else {
+            break;
+        }
+        p.i += 1;
+    }
+    if s.len() == 0 {
+        return Err(jp_err(p));
+    }
+    if float {
+        return match f64.parse(s.clone()) {
+            Ok(x) => Ok(Val.Float(x)),
+            Err(_) => Err(jp_err(p)),
+        };
+    }
+    match i64.parse(s.clone()) {
+        Ok(n) => Ok(Val.Int(n)),
+        Err(_) => Err(jp_err(p)),
+    }
+}
+
+fn json_load(a: mut ref A, text: ref String) -> Result[Val, Exc] {
+    let mut p = JsonParser { cs: text.chars().collect(), i: 0 };
+    jp_value(mut a, mut p)
+}
+
+// ------------------------------------------------------------ queries
+
+// A Query (K_QUERY) is a path (vs: field names, or functions from map())
+// and its hash value (a). Calling one raises, as an empty Query does in
+// the library; comparing one or calling a test method on it makes a
+// QueryInstance (K_QI): the test's name (s), the path (vs), the hash value
+// (a) and the test's operands (b and c, n for regex flags). and/or keep
+// their two queries in b and c, not keeps its one in b.
+
+fn new_query(a: mut ref A, path: own Vec[Val], hash: own Val) -> Val {
+    let id = new_obj(mut a, K_QUERY);
+    a.objs[id].vs = path;
+    a.objs[id].a = hash;
+    Val.Ref(id)
+}
+
+// Query()
+fn query0(a: mut ref A) -> Val {
+    let h = tup(mut a, vec![Val.Non]);
+    new_query(mut a, Vec.new(), h)
+}
+
+fn cacheable(a: ref A, q: ref Val) -> bool {
+    not is_none(qhash(a, q))
+}
+
+fn path_tuple(a: mut ref A, q: ref Val) -> Val {
+    let path = items(a, q);
+    tup(mut a, path)
+}
+
+// Query.__getattr__ and __getitem__: the path one field longer.
+fn q_attr(a: mut ref A, q: ref Val, name: ref String) -> Val {
+    let mut path = items(a, q);
+    path.push(sv(name));
+    let h = if cacheable(a, q) {
+        let pt = tup(mut a, path.clone());
+        tup(mut a, vec![s_("path"), pt])
+    } else {
+        Val.Non
+    };
+    new_query(mut a, path, h)
+}
+
+// Query._generate_test: a QueryInstance over this query's path.
+fn gen_test(a: mut ref A, q: ref Val, test: Str, hashval: ref Val, allow_empty: bool) -> Result[i64, Exc] {
+    let path = items(a, q);
+    if path.len() == 0 and not allow_empty {
+        return Err(value_error("Query has no path".to_string()));
+    }
+    let id = new_obj(mut a, K_QI);
+    a.objs[id].s = test.to_string();
+    a.objs[id].vs = path;
+    a.objs[id].a = if cacheable(a, q) { hashval.clone() } else { Val.Non };
+    Ok(id)
+}
+
+// query == rhs, query != rhs and the four orderings.
+fn q_compare(a: mut ref A, q: ref Val, op: Str, rhs: ref Val) -> Result[Val, Exc] {
+    let pt = path_tuple(mut a, q);
+    let r = if op == "==" or op == "!=" { freeze(mut a, rhs) } else { rhs.clone() };
+    let h = tup(mut a, vec![s_(op), pt, r]);
+    let id = gen_test(mut a, q, op, h, false)?;
+    a.objs[id].b = rhs.clone();
+    Ok(Val.Ref(id))
+}
+
+fn qi_new(a: mut ref A, test: Str, l: ref Val, r: ref Val, h: own Val) -> Val {
+    let id = new_obj(mut a, K_QI);
+    a.objs[id].s = test.to_string();
+    a.objs[id].b = l.clone();
+    a.objs[id].c = r.clone();
+    a.objs[id].a = h;
+    Val.Ref(id)
+}
+
+// QueryInstance.__and__ and __or__
+fn qi_logic(a: mut ref A, op: Str, l: ref Val, r: ref Val) -> Val {
+    let h = if cacheable(a, l) and cacheable(a, r) {
+        let s = fset(mut a, vec![qhash(a, l), qhash(a, r)]);
+        tup(mut a, vec![s_(op), s])
+    } else {
+        Val.Non
+    };
+    qi_new(mut a, op, l, r, h)
+}
+
+// QueryInstance.__invert__
+fn qi_not(a: mut ref A, q: ref Val) -> Val {
+    let h = if cacheable(a, q) { tup(mut a, vec![s_("not"), qhash(a, q)]) } else { Val.Non };
+    qi_new(mut a, "not", q, Val.Non, h)
+}
+
+fn is_callable(a: ref A, v: ref Val) -> bool {
+    match v {
+        Val.Fn(_) => true,
+        Val.Meth(_, _) => true,
+        Val.Ref(_) => {
+            let k = kind(a, v);
+            is_query_kind(k) or k == K_TRANS or k == K_CMW
+        }
+        _ => false,
+    }
+}
+
+// Query's test methods.
+fn q_method(a: mut ref A, q: ref Val, name: ref String, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    if name == "is_cacheable" {
+        return Ok(Val.Bool(cacheable(a, q)));
+    }
+    if name == "noop" {
+        let h = tup(mut a, Vec.new());
+        return Ok(qi_new(mut a, "noop", Val.Non, Val.Non, h));
+    }
+    if name == "map" {
+        let mut path = items(a, q);
+        path.push(arg(args, kws, 0, "fn"));
+        return Ok(new_query(mut a, path, Val.Non));
+    }
+    let pt = path_tuple(mut a, q);
+    if name == "exists" {
+        let h = tup(mut a, vec![s_("exists"), pt]);
+        let id = gen_test(mut a, q, "exists", h, false)?;
+        return Ok(Val.Ref(id));
+    }
+    if name == "matches" or name == "search" {
+        let regex = arg(args, kws, 0, "regex");
+        let flags = arg(args, kws, 1, "flags");
+        let h = tup(mut a, vec![sv(name), pt, regex.clone()]);
+        let id = gen_test(mut a, q, name.as_str(), h, false)?;
+        a.objs[id].b = regex;
+        a.objs[id].n = int_of(flags);
+        return Ok(Val.Ref(id));
+    }
+    if name == "test" {
+        let func = args[0].clone();
+        let mut rest: Vec[Val] = Vec.new();
+        let mut n = 1;
+        while n < args.len() {
+            rest.push(args[n].clone());
+            n += 1;
+        }
+        let at = tup(mut a, rest);
+        let h = tup(mut a, vec![s_("test"), pt, func.clone(), at.clone()]);
+        let id = gen_test(mut a, q, "test", h, false)?;
+        a.objs[id].b = func;
+        a.objs[id].c = at;
+        return Ok(Val.Ref(id));
+    }
+    if name == "any" or name == "all" {
+        let cond = arg(args, kws, 0, "cond");
+        let fz = freeze(mut a, cond);
+        let h = tup(mut a, vec![sv(name), pt, fz]);
+        let test = if is_callable(a, cond) {
+            if name == "any" { "any_q" } else { "all_q" }
+        } else {
+            if name == "any" { "any_l" } else { "all_l" }
+        };
+        let id = gen_test(mut a, q, test, h, false)?;
+        a.objs[id].b = cond;
+        return Ok(Val.Ref(id));
+    }
+    if name == "one_of" {
+        let xs = arg(args, kws, 0, "items");
+        let fz = freeze(mut a, xs);
+        let h = tup(mut a, vec![s_("one_of"), pt, fz]);
+        let id = gen_test(mut a, q, "one_of", h, false)?;
+        a.objs[id].b = xs;
+        return Ok(Val.Ref(id));
+    }
+    if name == "fragment" {
+        let d = arg(args, kws, 0, "document");
+        let fz = freeze(mut a, d);
+        let h = tup(mut a, vec![s_("fragment"), fz]);
+        let id = gen_test(mut a, q, "fragment", h, true)?;
+        a.objs[id].b = d;
+        return Ok(Val.Ref(id));
+    }
+    let t = type_name(a, q);
+    Err(exc("AttributeError", f"'{t}' object has no attribute '{name}'"))
+}
+
+fn caught(e: ref Exc) -> bool {
+    e.cls == "KeyError" or e.cls == "TypeError"
+}
+
+// cond(value)
+fn qi_call(a: mut ref A, q: ref Val, value: ref Val) -> Result[bool, Exc] {
+    let o = a.objs[ref_id(q)].clone();
+    if o.k == K_QUERY {
+        return Err(runtime_error("Empty query was evaluated"));
+    }
+    if o.s == "noop" {
+        return Ok(true);
+    }
+    if o.s == "and" {
+        return Ok(call_bool(mut a, o.b, value)? and call_bool(mut a, o.c, value)?);
+    }
+    if o.s == "or" {
+        return Ok(call_bool(mut a, o.b, value)? or call_bool(mut a, o.c, value)?);
+    }
+    if o.s == "not" {
+        return Ok(not call_bool(mut a, o.b, value)?);
+    }
+    // The runner: walk the path, where a KeyError or a TypeError means the
+    // document does not match; the test itself runs outside that.
+    let mut v = value.clone();
+    for part in o.vs {
+        match part {
+            Val.Str(_) => {
+                if not is_dict_kind(kind(a, v)) {
+                    return Ok(false);
+                }
+                match dict_get(a, v, part) {
+                    Some(x) => v = x,
+                    None => return Ok(false),
+                }
+            }
+            _ => {
+                match call_val(mut a, part, vec![v.clone()], Vec.new()) {
+                    Ok(x) => v = x,
+                    Err(e) => {
+                        if caught(e) {
+                            return Ok(false);
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+    run_test(mut a, o, v)
+}
+
+fn run_test(a: mut ref A, o: ref Obj, v: ref Val) -> Result[bool, Exc] {
+    let t = o.s.clone();
+    if t == "==" {
+        return Ok(py_eq(a, v, o.b));
+    }
+    if t == "!=" {
+        return Ok(not py_eq(a, v, o.b));
+    }
+    if t == "<" or t == "<=" or t == ">" or t == ">=" {
+        return py_cmp(a, t.as_str(), v, o.b);
+    }
+    if t == "exists" {
+        return Ok(true);
+    }
+    if t == "matches" or t == "search" {
+        return match v {
+            Val.Str(s) => Ok(re_find(str_of(o.b), s, o.n, t == "matches")),
+            _ => Ok(false),
+        };
+    }
+    if t == "test" {
+        let mut args = vec![v.clone()];
+        for x in items(a, o.c) {
+            args.push(x.clone());
+        }
+        let r = call_val(mut a, o.b, args, Vec.new())?;
+        return Ok(truthy(a, r));
+    }
+    if not is_sequence(a, v) and (t == "any_q" or t == "any_l" or t == "all_q" or t == "all_l") {
+        return Ok(false);
+    }
+    if t == "any_q" or t == "all_q" {
+        let want = t == "any_q";
+        for e in iter_vals(mut a, v)? {
+            if call_bool(mut a, o.b, e)? == want {
+                return Ok(want);
+            }
+        }
+        return Ok(not want);
+    }
+    if t == "any_l" {
+        for e in iter_vals(mut a, v)? {
+            if contains(a, o.b, e)? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    if t == "all_l" {
+        for e in iter_vals(mut a, o.b)? {
+            if not contains(a, v, e)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    if t == "one_of" {
+        return contains(a, o.b, v);
+    }
+    // fragment
+    for key in iter_vals(mut a, o.b)? {
+        if not contains(a, v, key)? {
+            return Ok(false);
+        }
+        let mine = subscript(mut a, v, key)?;
+        let want = subscript(mut a, o.b, key)?;
+        if not py_eq(a, mine, want) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+// The truth of f(x) for a query or any other callable.
+fn call_bool(a: mut ref A, f: ref Val, x: ref Val) -> Result[bool, Exc] {
+    if is_query_kind(kind(a, f)) {
+        return qi_call(mut a, f, x);
+    }
+    let r = call_val(mut a, f, vec![x.clone()], Vec.new())?;
+    Ok(truthy(a, r))
+}
+
+// ------------------------------------------------------------ arguments
+
+#[derive(Clone)]
+struct Karg {
+    k: String,
+    v: Val,
+}
+
+// The argument at position i or named `name`, else None.
+fn arg(args: ref Vec[Val], kws: ref Vec[Karg], i: i64, name: Str) -> Val {
+    if i >= 0 and i < args.len() {
+        return args[i].clone();
+    }
+    for kw in kws {
+        if kw.k == name {
+            return kw.v.clone();
+        }
+    }
+    Val.Non
+}
+
+fn has_arg(args: ref Vec[Val], kws: ref Vec[Karg], i: i64, name: Str) -> bool {
+    if i >= 0 and i < args.len() {
+        return true;
+    }
+    for kw in kws {
+        if kw.k == name {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ arithmetic
+
+fn py_add(a: mut ref A, x: ref Val, y: ref Val, op: Str) -> Result[Val, Exc] {
+    let sign = if op == "+" { 1 } else { -1 };
+    if is_num(x) and is_num(y) {
+        if is_float(x) or is_float(y) {
+            return Ok(Val.Float(float_of(x) + float_of(y) * sign as f64));
+        }
+        return Ok(Val.Int(int_of(x) + int_of(y) * sign));
+    }
+    if op == "+" {
+        match x {
+            Val.Str(s) => {
+                return match y {
+                    Val.Str(t) => Ok(Val.Str(f"{s}{t}")),
+                    _ => {
+                        let ty = type_name(a, y);
+                        Err(type_error(f"can only concatenate str (not \"{ty}\") to str"))
+                    }
+                };
+            }
+            _ => {}
+        }
+        if kind(a, x) == K_LIST and kind(a, y) == K_LIST {
+            let mut xs = items(a, x);
+            for e in items(a, y) {
+                xs.push(e.clone());
+            }
+            return Ok(lst(mut a, xs));
+        }
+    }
+    let tx = type_name(a, x);
+    let ty = type_name(a, y);
+    Err(type_error(f"unsupported operand type(s) for {op}: '{tx}' and '{ty}'"))
+}
+
+// v[k]
+fn subscript(a: mut ref A, v: ref Val, k: ref Val) -> Result[Val, Exc] {
+    let kd = kind(a, v);
+    if is_dict_kind(kd) {
+        hashable_check(a, k)?;
+        return match dict_get(a, v, k) {
+            Some(x) => Ok(x),
+            None => Err(key_error(a, k)),
+        };
+    }
+    if kd == K_LRU {
+        let x = lru_get(mut a, v, k);
+        if is_none(x) {
+            return Err(key_error(a, k));
+        }
+        return Ok(x);
+    }
+    if kd == K_QUERY {
+        return Ok(q_attr(mut a, v, str_of(k)));
+    }
+    if is_seq_kind(kd) {
+        let what = if kd == K_LIST { "list" } else { "tuple" };
+        if not (is_num(k) and not is_float(k)) {
+            let t = type_name(a, k);
+            return Err(type_error(f"{what} indices must be integers or slices, not {t}"));
+        }
+        let xs = items(a, v);
+        let mut i = int_of(k);
+        if i < 0 {
+            i += xs.len();
+        }
+        if i < 0 or i >= xs.len() {
+            return Err(exc("IndexError", f"{what} index out of range"));
+        }
+        return Ok(xs[i].clone());
+    }
+    match v {
+        Val.Str(s) => {
+            if not (is_num(k) and not is_float(k)) {
+                let t = type_name(a, k);
+                return Err(type_error(f"string indices must be integers, not '{t}'"));
+            }
+            let cs: Vec[char] = s.chars().collect();
+            let mut i = int_of(k);
+            if i < 0 {
+                i += cs.len();
+            }
+            if i < 0 or i >= cs.len() {
+                return Err(exc("IndexError", "string index out of range".to_string()));
+            }
+            let mut t = String.new();
+            t.push(cs[i]);
+            return Ok(Val.Str(t));
+        }
+        _ => {}
+    }
+    let t = type_name(a, v);
+    Err(type_error(f"'{t}' object is not subscriptable"))
+}
+
+// v[k] = x
+fn setitem(a: mut ref A, v: ref Val, k: ref Val, x: ref Val) -> Result[(), Exc] {
+    let kd = kind(a, v);
+    if kd == K_DICT or kd == K_DOC {
+        hashable_check(a, k)?;
+        dict_set(mut a, v, k, x);
+        return Ok(());
+    }
+    if kd == K_FDICT {
+        return Err(type_error("object is immutable".to_string()));
+    }
+    if kd == K_LRU {
+        lru_set(mut a, v, k, x);
+        return Ok(());
+    }
+    if kd == K_LIST {
+        let o = ref_id(v);
+        let mut i = int_of(k);
+        let n = a.objs[o].vs.len();
+        if i < 0 {
+            i += n;
+        }
+        if i < 0 or i >= n {
+            return Err(exc("IndexError", "list assignment index out of range".to_string()));
+        }
+        a.objs[o].vs[i] = x.clone();
+        return Ok(());
+    }
+    let t = type_name(a, v);
+    Err(type_error(f"'{t}' object does not support item assignment"))
+}
+
+// d.update(m)
+fn dict_update(a: mut ref A, d: ref Val, m: ref Val) -> Result[(), Exc] {
+    if kind(a, d) == K_FDICT {
+        return Err(type_error("object is immutable".to_string()));
+    }
+    let ks = keys(a, m);
+    let vs = items(a, m);
+    let mut n = 0;
+    while n < ks.len() {
+        dict_set(mut a, d, ks[n], vs[n]);
+        n += 1;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ LRUCache
+
+// utils.LRUCache: capacity (a, None for no limit) and an OrderedDict
+// (ks/vs).
+fn lru_new(a: mut ref A, cap: ref Val) -> Val {
+    let id = new_obj(mut a, K_LRU);
+    a.objs[id].a = cap.clone();
+    Val.Ref(id)
+}
+
+fn lru_to_end(a: mut ref A, o: i64, at: i64) {
+    let k = a.objs[o].ks.remove(at);
+    let v = a.objs[o].vs.remove(at);
+    a.objs[o].ks.push(k);
+    a.objs[o].vs.push(v);
+}
+
+// LRUCache.get(key): the value, moved to the end, or None.
+fn lru_get(a: mut ref A, c: ref Val, key: ref Val) -> Val {
+    let o = ref_id(c);
+    let at = find_key(a, o, key);
+    if at < 0 {
+        return Val.Non;
+    }
+    let v = a.objs[o].vs[at].clone();
+    if is_none(v) {
+        return Val.Non;
+    }
+    lru_to_end(mut a, o, at);
+    v
+}
+
+// LRUCache.set: a truthy old value is replaced and moved to the end;
+// otherwise the value is stored where the key was (or at the end) and the
+// oldest entry goes when the cache is over capacity.
+fn lru_set(a: mut ref A, c: ref Val, key: ref Val, v: ref Val) {
+    let o = ref_id(c);
+    let at = find_key(a, o, key);
+    if at >= 0 and truthy(a, a.objs[o].vs[at]) {
+        a.objs[o].vs[at] = v.clone();
+        lru_to_end(mut a, o, at);
+        return;
+    }
+    if at >= 0 {
+        a.objs[o].vs[at] = v.clone();
+    } else {
+        a.objs[o].ks.push(key.clone());
+        a.objs[o].vs.push(v.clone());
+    }
+    let cap = a.objs[o].a.clone();
+    if not is_none(cap) and a.objs[o].ks.len() > int_of(cap) {
+        a.objs[o].ks.remove(0);
+        a.objs[o].vs.remove(0);
+    }
+}
+
+fn lru_clear(a: mut ref A, c: ref Val) {
+    let o = ref_id(c);
+    a.objs[o].ks = Vec.new();
+    a.objs[o].vs = Vec.new();
+}
+
+// ------------------------------------------------------------ storages
+
+// MemoryStorage: memory (a). JSONStorage: the path (s), the access mode
+// (b), json.dumps's keyword arguments as a dict (c) and whether it was
+// closed (n). CachingMiddleware: the storage class (a), the storage it
+// made (b), the cache (c) and the count of writes since the last flush (n).
+
+fn no_such_file(path: ref String) -> Exc {
+    let p = str_repr(path);
+    exc("FileNotFoundError", f"[Errno 2] No such file or directory: {p}")
+}
+
+fn dirname(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut at = -1;
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '/' {
+            at = i;
+        }
+        i += 1;
+    }
+    if at < 0 { String.new() } else { path.substring(0, at) }
+}
+
+fn json_storage(a: mut ref A, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    let path = str_of(arg(args, kws, 0, "path"));
+    let create_dirs = truthy(a, arg(args, kws, 1, "create_dirs"));
+    let mode = if has_arg(args, kws, 3, "access_mode") { str_of(arg(args, kws, 3, "access_mode")) } else { "r+".to_string() };
+    let mut ks: Vec[Val] = Vec.new();
+    let mut vs: Vec[Val] = Vec.new();
+    for kw in kws {
+        if kw.k != "path" and kw.k != "create_dirs" and kw.k != "encoding" and kw.k != "access_mode" {
+            ks.push(sv(kw.k));
+            vs.push(kw.v.clone());
+        }
+    }
+    if mode.contains("+") or mode.contains("w") or mode.contains("a") {
+        if create_dirs {
+            let base = dirname(path);
+            if not fs.exists(base.clone()) {
+                if let Err(e) = fs.create_dir_all(base.clone()) {
+                    return Err(exc("OSError", f"{e}"));
+                }
+            }
+        }
+        if not fs.exists(path.clone()) {
+            if let Err(_) = fs.write(path.clone(), String.new()) {
+                return Err(no_such_file(path));
+            }
+        }
+    }
+    if not fs.exists(path.clone()) {
+        return Err(no_such_file(path));
+    }
+    let kw = new_dict(mut a, K_DICT, ks, vs);
+    let id = new_obj(mut a, K_JSON);
+    a.objs[id].s = path;
+    a.objs[id].b = Val.Str(mode);
+    a.objs[id].c = kw;
+    Ok(Val.Ref(id))
+}
+
+fn json_opts(a: ref A, kw: ref Val) -> JOpt {
+    let indent = match dict_get(a, kw, s_("indent")) {
+        Some(v) => if is_none(v) { -1 } else { int_of(v) },
+        None => -1,
+    };
+    let mut o = JOpt {
+        indent: indent,
+        item_sep: if indent >= 0 { ",".to_string() } else { ", ".to_string() },
+        key_sep: ": ".to_string(),
+        sort_keys: false,
+    };
+    if let Some(v) = dict_get(a, kw, s_("sort_keys")) {
+        o.sort_keys = truthy(a, v);
+    }
+    if let Some(v) = dict_get(a, kw, s_("separators")) {
+        let xs = items(a, v);
+        if xs.len() == 2 {
+            o.item_sep = str_of(xs[0]);
+            o.key_sep = str_of(xs[1]);
+        }
+    }
+    o
+}
+
+fn closed_file() -> Exc {
+    value_error("I/O operation on closed file.".to_string())
+}
+
+fn read_file(path: ref String) -> Result[String, Exc] {
+    match fs.read_bytes(path.clone()) {
+        Ok(b) => match String.from_utf8(b) {
+            Ok(s) => Ok(s),
+            Err(_) => Err(exc("UnicodeDecodeError", path.clone())),
+        },
+        Err(_) => Err(no_such_file(path)),
+    }
+}
+
+fn storage_read(a: mut ref A, st: ref Val) -> Result[Val, Exc] {
+    let o = ref_id(st);
+    let k = a.objs[o].k;
+    if k == K_MEM {
+        return Ok(a.objs[o].a.clone());
+    }
+    if k == K_JSON {
+        if a.objs[o].n == 1 {
+            return Err(closed_file());
+        }
+        let text = read_file(a.objs[o].s)?;
+        if text.len() == 0 {
+            return Ok(Val.Non);
+        }
+        return json_load(mut a, text);
+    }
+    if k == K_CMW {
+        if is_none(a.objs[o].c) {
+            let inner = a.objs[o].b.clone();
+            let got = storage_read(mut a, inner)?;
+            a.objs[o].c = got;
+        }
+        return Ok(a.objs[o].c.clone());
+    }
+    let t = type_name(a, st);
+    Err(exc("AttributeError", f"'{t}' object has no attribute 'read'"))
+}
+
+fn storage_write(a: mut ref A, st: ref Val, data: ref Val) -> Result[(), Exc] {
+    let o = ref_id(st);
+    let k = a.objs[o].k;
+    if k == K_MEM {
+        a.objs[o].a = data.clone();
+        return Ok(());
+    }
+    if k == K_JSON {
+        if a.objs[o].n == 1 {
+            return Err(closed_file());
+        }
+        let opts = json_opts(a, a.objs[o].c);
+        let mut text = String.new();
+        json_enc(a, data, opts, 0, mut text)?;
+        let mode = str_of(a.objs[o].b);
+        if not (mode.contains("+") or mode.contains("w") or mode.contains("a")) {
+            return Err(exc("OSError", f"Cannot write to the database. Access mode is \"{mode}\""));
+        }
+        if let Err(e) = fs.write(a.objs[o].s.clone(), text) {
+            return Err(exc("OSError", f"{e}"));
+        }
+        return Ok(());
+    }
+    if k == K_CMW {
+        a.objs[o].c = data.clone();
+        a.objs[o].n += 1;
+        if a.objs[o].n >= 1000 {
+            cmw_flush(mut a, st)?;
+        }
+        return Ok(());
+    }
+    let t = type_name(a, st);
+    Err(exc("AttributeError", f"'{t}' object has no attribute 'write'"))
+}
+
+fn cmw_flush(a: mut ref A, st: ref Val) -> Result[(), Exc] {
+    let o = ref_id(st);
+    if a.objs[o].n > 0 {
+        let inner = a.objs[o].b.clone();
+        let cache = a.objs[o].c.clone();
+        storage_write(mut a, inner, cache)?;
+        a.objs[o].n = 0;
+    }
+    Ok(())
+}
+
+fn storage_close(a: mut ref A, st: ref Val) -> Result[(), Exc] {
+    let o = ref_id(st);
+    let k = a.objs[o].k;
+    if k == K_JSON {
+        a.objs[o].n = 1;
+    } else if k == K_CMW {
+        cmw_flush(mut a, st)?;
+        let inner = a.objs[o].b.clone();
+        storage_close(mut a, inner)?;
+    }
+    Ok(())
+}
+
+// Calling a storage class: JSONStorage(path, ...) or MemoryStorage(), or
+// a CachingMiddleware, which makes its storage and returns itself.
+fn make_storage(a: mut ref A, cls: ref Val, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    match cls {
+        Val.Fn(name) => {
+            if name == "MemoryStorage" {
+                let id = new_obj(mut a, K_MEM);
+                return Ok(Val.Ref(id));
+            }
+            if name == "JSONStorage" {
+                return json_storage(mut a, args, kws);
+            }
+        }
+        _ => {}
+    }
+    if kind(a, cls) == K_CMW {
+        let o = ref_id(cls);
+        let inner_cls = a.objs[o].a.clone();
+        let inner = make_storage(mut a, inner_cls, args, kws)?;
+        a.objs[o].b = inner;
+        return Ok(cls.clone());
+    }
+    let t = type_name(a, cls);
+    Err(type_error(f"'{t}' object is not callable"))
+}
+
+// ------------------------------------------------------------ tables
+
+// A Table: its storage (a), name (s), query cache (b) and the next
+// document ID it will hand out (c, None when it must look).
+
+fn table_new(a: mut ref A, storage: ref Val, name: ref String, cache_size: ref Val, persist_empty: bool) -> Result[Val, Exc] {
+    let cache = lru_new(mut a, cache_size);
+    let id = new_obj(mut a, K_TABLE);
+    a.objs[id].a = storage.clone();
+    a.objs[id].s = name.clone();
+    a.objs[id].b = cache;
+    let t = Val.Ref(id);
+    if persist_empty {
+        let (tables, table) = begin_update(mut a, t)?;
+        a.objs[ref_id(table)].ks = Vec.new();
+        a.objs[ref_id(table)].vs = Vec.new();
+        end_update(mut a, t, tables, table)?;
+    }
+    Ok(t)
+}
+
+fn tbl_storage(a: ref A, t: ref Val) -> Val {
+    a.objs[ref_id(t)].a.clone()
+}
+
+fn tbl_name(a: ref A, t: ref Val) -> String {
+    a.objs[ref_id(t)].s.clone()
+}
+
+fn tbl_cache(a: ref A, t: ref Val) -> Val {
+    a.objs[ref_id(t)].b.clone()
+}
+
+// Table._read_table: the stored dict of this table (str IDs), or a new
+// empty one.
+fn read_table(a: mut ref A, t: ref Val) -> Result[Val, Exc] {
+    let st = tbl_storage(a, t);
+    let tables = storage_read(mut a, st)?;
+    if is_none(tables) {
+        return Ok(empty_dict(mut a));
+    }
+    match dict_get(a, tables, sv(tbl_name(a, t))) {
+        Some(d) => Ok(d),
+        None => Ok(empty_dict(mut a)),
+    }
+}
+
+fn int_key(k: ref Val) -> Val {
+    match k {
+        Val.Str(s) => Val.Int(atoi(s)),
+        _ => k.clone(),
+    }
+}
+
+fn id_str(a: ref A, v: ref Val) -> String {
+    pystr(a, v)
+}
+
+fn table_docs(a: mut ref A, t: ref Val) -> Result[Vec[Val], Exc] {
+    let table = read_table(mut a, t)?;
+    let ks = keys(a, table);
+    let vs = items(a, table);
+    let mut out: Vec[Val] = Vec.new();
+    let mut n = 0;
+    while n < ks.len() {
+        out.push(document(mut a, vs[n], int_key(ks[n])));
+        n += 1;
+    }
+    Ok(out)
+}
+
+// The first half of Table._update_table: the storage's data and a copy of
+// this table keyed by int IDs (holding the same document objects).
+fn begin_update(a: mut ref A, t: ref Val) -> Result[(Val, Val), Exc] {
+    let st = tbl_storage(a, t);
+    let mut tables = storage_read(mut a, st)?;
+    if is_none(tables) {
+        tables = empty_dict(mut a);
+    }
+    let raw = match dict_get(a, tables, sv(tbl_name(a, t))) {
+        Some(d) => d,
+        None => empty_dict(mut a),
+    };
+    let mut ks: Vec[Val] = Vec.new();
+    for k in keys(a, raw) {
+        ks.push(int_key(k));
+    }
+    let vs = items(a, raw);
+    let table = new_dict(mut a, K_DICT, ks, vs);
+    Ok((tables, table))
+}
+
+// The second half, once the updater has run: store the table back with
+// str IDs, write and clear the query cache.
+fn end_update(a: mut ref A, t: ref Val, tables: ref Val, table: ref Val) -> Result[(), Exc] {
+    let mut ks: Vec[Val] = Vec.new();
+    for k in keys(a, table) {
+        ks.push(Val.Str(id_str(a, k)));
+    }
+    let vs = items(a, table);
+    let stored = new_dict(mut a, K_DICT, ks, vs);
+    dict_set(mut a, tables, sv(tbl_name(a, t)), stored);
+    let st = tbl_storage(a, t);
+    storage_write(mut a, st, tables)?;
+    lru_clear(mut a, tbl_cache(a, t));
+    Ok(())
+}
+
+fn next_id(a: mut ref A, t: ref Val) -> Result[i64, Exc] {
+    let o = ref_id(t);
+    let cached = a.objs[o].c.clone();
+    if not is_none(cached) {
+        let n = int_of(cached);
+        a.objs[o].c = Val.Int(n + 1);
+        return Ok(n);
+    }
+    let table = read_table(mut a, t)?;
+    let mut top = 0;
+    for k in keys(a, table) {
+        let n = int_of(int_key(k));
+        if n > top {
+            top = n;
+        }
+    }
+    let n = top + 1;
+    a.objs[o].c = Val.Int(n + 1);
+    Ok(n)
+}
+
+fn is_mapping(a: ref A, v: ref Val) -> bool {
+    is_dict_kind(kind(a, v)) or kind(a, v) == K_LRU
+}
+
+fn doc_exists(a: ref A, id: ref Val) -> Exc {
+    let s = id_str(a, id);
+    value_error(f"Document with ID {s} already exists")
+}
+
+fn insert(a: mut ref A, t: ref Val, doc: ref Val) -> Result[Val, Exc] {
+    if not is_mapping(a, doc) {
+        return Err(value_error("Document is not a Mapping".to_string()));
+    }
+    let id = if kind(a, doc) == K_DOC {
+        a.objs[ref_id(t)].c = Val.Non;
+        a.objs[ref_id(doc)].a.clone()
+    } else {
+        Val.Int(next_id(mut a, t)?)
+    };
+    let (tables, table) = begin_update(mut a, t)?;
+    if find_key(a, ref_id(table), id) >= 0 {
+        return Err(doc_exists(a, id));
+    }
+    let copy = dict_copy(mut a, K_DICT, doc);
+    dict_set(mut a, table, id, copy);
+    end_update(mut a, t, tables, table)?;
+    Ok(id)
+}
+
+fn insert_multiple(a: mut ref A, t: ref Val, docs: ref Val) -> Result[Val, Exc] {
+    let mut ids: Vec[Val] = Vec.new();
+    let (tables, table) = begin_update(mut a, t)?;
+    for doc in iter_vals(mut a, docs)? {
+        if not is_mapping(a, doc) {
+            return Err(value_error("Document is not a Mapping".to_string()));
+        }
+        let id = if kind(a, doc) == K_DOC {
+            let id = a.objs[ref_id(doc)].a.clone();
+            if find_key(a, ref_id(table), id) >= 0 {
+                return Err(doc_exists(a, id));
+            }
+            id
+        } else {
+            Val.Int(next_id(mut a, t)?)
+        };
+        ids.push(id.clone());
+        let copy = dict_copy(mut a, K_DICT, doc);
+        dict_set(mut a, table, id, copy);
+    }
+    end_update(mut a, t, tables, table)?;
+    Ok(lst(mut a, ids))
+}
+
+fn search(a: mut ref A, t: ref Val, cond: ref Val) -> Result[Val, Exc] {
+    let cache = tbl_cache(a, t);
+    let cached = lru_get(mut a, cache, cond);
+    if not is_none(cached) {
+        let xs = items(a, cached);
+        return Ok(lst(mut a, xs));
+    }
+    let table = read_table(mut a, t)?;
+    let ks = keys(a, table);
+    let vs = items(a, table);
+    let mut docs: Vec[Val] = Vec.new();
+    let mut n = 0;
+    while n < ks.len() {
+        if call_bool(mut a, cond, vs[n])? {
+            docs.push(document(mut a, vs[n], int_key(ks[n])));
+        }
+        n += 1;
+    }
+    let keep = if is_query_kind(kind(a, cond)) { cacheable(a, cond) } else { true };
+    if keep {
+        let copy = lst(mut a, docs.clone());
+        lru_set(mut a, cache, cond, copy);
+    }
+    Ok(lst(mut a, docs))
+}
+
+fn get(a: mut ref A, t: ref Val, cond: ref Val, doc_id: ref Val, doc_ids: ref Val) -> Result[Val, Exc] {
+    let table = read_table(mut a, t)?;
+    if not is_none(doc_id) {
+        return match dict_get(a, table, Val.Str(id_str(a, doc_id))) {
+            Some(raw) => {
+                if is_none(raw) {
+                    Ok(Val.Non)
+                } else {
+                    Ok(document(mut a, raw, doc_id))
+                }
+            }
+            None => Ok(Val.Non),
+        };
+    }
+    if not is_none(doc_ids) {
+        let mut want: Vec[Val] = Vec.new();
+        for x in iter_vals(mut a, doc_ids)? {
+            want.push(Val.Str(id_str(a, x)));
+        }
+        let ks = keys(a, table);
+        let vs = items(a, table);
+        let mut out: Vec[Val] = Vec.new();
+        let mut n = 0;
+        while n < ks.len() {
+            if seq_has(a, want, ks[n]) {
+                out.push(document(mut a, vs[n], int_key(ks[n])));
+            }
+            n += 1;
+        }
+        return Ok(lst(mut a, out));
+    }
+    if not is_none(cond) {
+        let again = read_table(mut a, t)?;
+        let ks = keys(a, again);
+        let vs = items(a, again);
+        let mut n = 0;
+        while n < ks.len() {
+            if call_bool(mut a, cond, vs[n])? {
+                return Ok(document(mut a, vs[n], int_key(ks[n])));
+            }
+            n += 1;
+        }
+        return Ok(Val.Non);
+    }
+    Err(runtime_error("You have to pass either cond or doc_id or doc_ids"))
+}
+
+fn perform(a: mut ref A, fields: ref Val, table: ref Val, id: ref Val) -> Result[(), Exc] {
+    let doc = match dict_get(a, table, id) {
+        Some(d) => d,
+        None => return Err(key_error(a, id)),
+    };
+    if is_callable(a, fields) {
+        call_val(mut a, fields, vec![doc], Vec.new())?;
+        return Ok(());
+    }
+    dict_update(mut a, doc, fields)
+}
+
+fn update(a: mut ref A, t: ref Val, fields: ref Val, cond: ref Val, doc_ids: ref Val) -> Result[Val, Exc] {
+    let (tables, table) = begin_update(mut a, t)?;
+    let mut done: Vec[Val] = Vec.new();
+    if not is_none(doc_ids) {
+        done = iter_vals(mut a, doc_ids)?;
+        for id in done.clone() {
+            perform(mut a, fields, table, id)?;
+        }
+    } else {
+        for id in keys(a, table) {
+            let pass = if is_none(cond) {
+                true
+            } else {
+                let doc = dict_get(a, table, id).unwrap();
+                call_bool(mut a, cond, doc)?
+            };
+            if pass {
+                done.push(id.clone());
+                perform(mut a, fields, table, id)?;
+            }
+        }
+    }
+    end_update(mut a, t, tables, table)?;
+    Ok(lst(mut a, done))
+}
+
+fn update_multiple(a: mut ref A, t: ref Val, updates: ref Val) -> Result[Val, Exc] {
+    let (tables, table) = begin_update(mut a, t)?;
+    let pairs = iter_vals(mut a, updates)?;
+    let mut done: Vec[Val] = Vec.new();
+    for id in keys(a, table) {
+        for pair in pairs.clone() {
+            let fc = items(a, pair);
+            let doc = dict_get(a, table, id).unwrap();
+            if call_bool(mut a, fc[1], doc)? {
+                done.push(id.clone());
+                perform(mut a, fc[0], table, id)?;
+            }
+        }
+    }
+    end_update(mut a, t, tables, table)?;
+    Ok(lst(mut a, done))
+}
+
+fn upsert(a: mut ref A, t: ref Val, doc: ref Val, cond: ref Val) -> Result[Val, Exc] {
+    let doc_ids = if kind(a, doc) == K_DOC {
+        let id = a.objs[ref_id(doc)].a.clone();
+        lst(mut a, vec![id])
+    } else {
+        Val.Non
+    };
+    if is_none(doc_ids) and is_none(cond) {
+        return Err(value_error(
+            "If you don't specify a search query, you must specify a doc_id. Hint: use a table.Document object.".to_string()));
+    }
+    let updated = match update(mut a, t, doc, cond, doc_ids) {
+        Ok(v) => v,
+        Err(e) => {
+            if e.cls != "KeyError" {
+                return Err(e);
+            }
+            Val.Non
+        }
+    };
+    if truthy(a, updated) {
+        return Ok(updated);
+    }
+    let id = insert(mut a, t, doc)?;
+    Ok(lst(mut a, vec![id]))
+}
+
+fn remove(a: mut ref A, t: ref Val, cond: ref Val, doc_ids: ref Val) -> Result[Val, Exc] {
+    if not is_none(doc_ids) {
+        let (tables, table) = begin_update(mut a, t)?;
+        let ids = iter_vals(mut a, doc_ids)?;
+        for id in ids.clone() {
+            if not dict_del(mut a, table, id) {
+                return Err(key_error(a, id));
+            }
+        }
+        end_update(mut a, t, tables, table)?;
+        return Ok(lst(mut a, ids));
+    }
+    if not is_none(cond) {
+        let (tables, table) = begin_update(mut a, t)?;
+        let mut done: Vec[Val] = Vec.new();
+        for id in keys(a, table) {
+            let doc = dict_get(a, table, id).unwrap();
+            if call_bool(mut a, cond, doc)? {
+                done.push(id.clone());
+                dict_del(mut a, table, id);
+            }
+        }
+        end_update(mut a, t, tables, table)?;
+        return Ok(lst(mut a, done));
+    }
+    Err(runtime_error("Use truncate() to remove all documents"))
+}
+
+fn truncate(a: mut ref A, t: ref Val) -> Result[(), Exc] {
+    let (tables, table) = begin_update(mut a, t)?;
+    let o = ref_id(table);
+    a.objs[o].ks = Vec.new();
+    a.objs[o].vs = Vec.new();
+    end_update(mut a, t, tables, table)?;
+    a.objs[ref_id(t)].c = Val.Non;
+    Ok(())
+}
+
+fn table_len(a: mut ref A, t: ref Val) -> Result[i64, Exc] {
+    let table = read_table(mut a, t)?;
+    Ok(keys(a, table).len())
+}
+
+fn table_method(a: mut ref A, t: ref Val, name: ref String, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    if name == "insert" {
+        return insert(mut a, t, arg(args, kws, 0, "document"));
+    }
+    if name == "insert_multiple" {
+        return insert_multiple(mut a, t, arg(args, kws, 0, "documents"));
+    }
+    if name == "all" {
+        let docs = table_docs(mut a, t)?;
+        return Ok(lst(mut a, docs));
+    }
+    if name == "search" {
+        return search(mut a, t, arg(args, kws, 0, "cond"));
+    }
+    if name == "get" {
+        return get(mut a, t, arg(args, kws, 0, "cond"), arg(args, kws, 1, "doc_id"), arg(args, kws, 2, "doc_ids"));
+    }
+    if name == "contains" {
+        let doc_id = arg(args, kws, 1, "doc_id");
+        let cond = arg(args, kws, 0, "cond");
+        let got = if not is_none(doc_id) {
+            get(mut a, t, Val.Non, doc_id, Val.Non)?
+        } else if not is_none(cond) {
+            get(mut a, t, cond, Val.Non, Val.Non)?
+        } else {
+            return Err(runtime_error("You have to pass either cond or doc_id"));
+        };
+        return Ok(Val.Bool(not is_none(got)));
+    }
+    if name == "update" {
+        return update(mut a, t, arg(args, kws, 0, "fields"), arg(args, kws, 1, "cond"), arg(args, kws, 2, "doc_ids"));
+    }
+    if name == "update_multiple" {
+        return update_multiple(mut a, t, arg(args, kws, 0, "updates"));
+    }
+    if name == "upsert" {
+        return upsert(mut a, t, arg(args, kws, 0, "document"), arg(args, kws, 1, "cond"));
+    }
+    if name == "remove" {
+        return remove(mut a, t, arg(args, kws, 0, "cond"), arg(args, kws, 1, "doc_ids"));
+    }
+    if name == "truncate" {
+        truncate(mut a, t)?;
+        return Ok(Val.Non);
+    }
+    if name == "count" {
+        let found = search(mut a, t, arg(args, kws, 0, "cond"))?;
+        return Ok(Val.Int(items(a, found).len()));
+    }
+    if name == "clear_cache" {
+        lru_clear(mut a, tbl_cache(a, t));
+        return Ok(Val.Non);
+    }
+    Err(exc("AttributeError", f"'Table' object has no attribute '{name}'"))
+}
+
+fn is_table_method(name: ref String) -> bool {
+    for m in ["insert", "insert_multiple", "all", "search", "get", "contains", "update", "update_multiple", "upsert",
+        "remove", "truncate", "count", "clear_cache"] {
+        if name == m {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ TinyDB
+
+// A TinyDB: its storage (a) and the tables it has handed out, by name
+// (ks/vs).
+
+fn tinydb(a: mut ref A, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    let mut cls = Val.Fn("JSONStorage".to_string());
+    let mut rest: Vec[Karg] = Vec.new();
+    for kw in kws {
+        if kw.k == "storage" {
+            cls = kw.v.clone();
+        } else {
+            rest.push(kw.clone());
+        }
+    }
+    let st = make_storage(mut a, cls, args, rest)?;
+    let id = new_obj(mut a, K_DB);
+    a.objs[id].a = st;
+    Ok(Val.Ref(id))
+}
+
+fn db_table(a: mut ref A, db: ref Val, name: ref String, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    let o = ref_id(db);
+    let at = find_key(a, o, sv(name));
+    if at >= 0 {
+        return Ok(a.objs[o].vs[at].clone());
+    }
+    let size = if has_arg(args, kws, 1, "cache_size") { arg(args, kws, 1, "cache_size") } else { Val.Int(10) };
+    let persist = truthy(a, arg(args, kws, 2, "persist_empty"));
+    let st = a.objs[o].a.clone();
+    let t = table_new(mut a, st, name, size, persist)?;
+    dict_set(mut a, db, sv(name), t);
+    Ok(t)
+}
+
+fn default_table(a: mut ref A, db: ref Val) -> Result[Val, Exc] {
+    db_table(mut a, db, "_default".to_string(), Vec.new(), Vec.new())
+}
+
+fn db_method(a: mut ref A, db: ref Val, name: ref String, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    let o = ref_id(db);
+    let st = a.objs[o].a.clone();
+    if name == "table" {
+        return db_table(mut a, db, str_of(args[0]), args, kws);
+    }
+    if name == "tables" {
+        let data = storage_read(mut a, st)?;
+        let ks = if is_none(data) { Vec.new() } else { keys(a, data) };
+        return Ok(seq_val(mut a, K_SET, ks));
+    }
+    if name == "drop_tables" {
+        let d = empty_dict(mut a);
+        storage_write(mut a, st, d)?;
+        a.objs[o].ks = Vec.new();
+        a.objs[o].vs = Vec.new();
+        return Ok(Val.Non);
+    }
+    if name == "drop_table" {
+        let n = arg(args, kws, 0, "name");
+        dict_del(mut a, db, n);
+        let data = storage_read(mut a, st)?;
+        if is_none(data) {
+            return Ok(Val.Non);
+        }
+        if not dict_del(mut a, data, n) {
+            return Ok(Val.Non);
+        }
+        storage_write(mut a, st, data)?;
+        return Ok(Val.Non);
+    }
+    if name == "close" {
+        storage_close(mut a, st)?;
+        return Ok(Val.Non);
+    }
+    let t = default_table(mut a, db)?;
+    table_method(mut a, t, name, args, kws)
+}
+
+// ------------------------------------------------------------ operations
+
+// tinydb.operations: the transform's operation (s), field (a) and operand
+// (b).
+fn transform(a: mut ref A, op: Str, field: ref Val, x: ref Val) -> Val {
+    let id = new_obj(mut a, K_TRANS);
+    a.objs[id].s = op.to_string();
+    a.objs[id].a = field.clone();
+    a.objs[id].b = x.clone();
+    Val.Ref(id)
+}
+
+fn run_transform(a: mut ref A, tr: ref Val, doc: ref Val) -> Result[Val, Exc] {
+    let o = a.objs[ref_id(tr)].clone();
+    if o.s == "delete" {
+        if kind(a, doc) == K_FDICT {
+            return Err(type_error("object is immutable".to_string()));
+        }
+        if not dict_del(mut a, doc, o.a) {
+            return Err(key_error(a, o.a));
+        }
+        return Ok(Val.Non);
+    }
+    if o.s == "set" {
+        setitem(mut a, doc, o.a, o.b)?;
+        return Ok(Val.Non);
+    }
+    let old = subscript(mut a, doc, o.a)?;
+    let new = if o.s == "add" {
+        py_add(mut a, old, o.b, "+")?
+    } else if o.s == "subtract" {
+        py_add(mut a, old, o.b, "-")?
+    } else if o.s == "increment" {
+        py_add(mut a, old, Val.Int(1), "+")?
+    } else {
+        py_add(mut a, old, Val.Int(1), "-")?
+    };
+    setitem(mut a, doc, o.a, new)?;
+    Ok(Val.Non)
+}
+
+// ------------------------------------------------------------ attributes and calls
+
+fn no_attr(a: ref A, v: ref Val, name: ref String) -> Exc {
+    let t = type_name(a, v);
+    exc("AttributeError", f"'{t}' object has no attribute '{name}'")
+}
+
+fn is_query_method(name: ref String) -> bool {
+    for m in ["exists", "matches", "search", "test", "any", "all", "one_of", "fragment", "noop", "map", "is_cacheable"] {
+        if name == m {
+            return true;
+        }
+    }
+    false
+}
+
+fn one_of_names(name: ref String, names: ref Vec[String]) -> bool {
+    for n in names {
+        if n == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn names(xs: ref Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for x in xs {
+        out.push(x.to_string());
+    }
+    out
+}
+
+// v.name
+fn getattr_(a: mut ref A, v: ref Val, name: ref String) -> Result[Val, Exc] {
+    match v {
+        Val.Fn(f) => {
+            if f == "re" and (name == "IGNORECASE" or name == "I") {
+                return Ok(Val.Int(2));
+            }
+            return Err(no_attr(a, v, name));
+        }
+        Val.Ref(_) => {}
+        _ => return Err(no_attr(a, v, name)),
+    }
+    let id = ref_id(v);
+    let k = a.objs[id].k;
+    let meth = Val.Meth(id, name.clone());
+    if k == K_QUERY {
+        if is_query_method(name) {
+            return Ok(meth);
+        }
+        return Ok(q_attr(mut a, v, name));
+    }
+    if k == K_QI {
+        if name == "is_cacheable" {
+            return Ok(meth);
+        }
+        return Err(no_attr(a, v, name));
+    }
+    if k == K_DB {
+        if name == "storage" {
+            return Ok(a.objs[id].a.clone());
+        }
+        if one_of_names(name, names(vec!["table", "tables", "drop_tables", "drop_table", "close"])) {
+            return Ok(meth);
+        }
+        let t = default_table(mut a, v)?;
+        return getattr_(mut a, t, name);
+    }
+    if k == K_TABLE {
+        if is_table_method(name) {
+            return Ok(meth);
+        }
+        if name == "name" {
+            return Ok(Val.Str(a.objs[id].s.clone()));
+        }
+        if name == "storage" or name == "_storage" {
+            return Ok(a.objs[id].a.clone());
+        }
+        if name == "_query_cache" {
+            return Ok(a.objs[id].b.clone());
+        }
+        if name == "_next_id" {
+            return Ok(a.objs[id].c.clone());
+        }
+        return Err(no_attr(a, v, name));
+    }
+    if k == K_LRU {
+        if name == "lru" {
+            let ks = keys(a, v);
+            return Ok(lst(mut a, ks));
+        }
+        if name == "length" {
+            return Ok(Val.Int(a.objs[id].ks.len()));
+        }
+        if name == "capacity" {
+            return Ok(a.objs[id].a.clone());
+        }
+        if one_of_names(name, names(vec!["get", "set", "clear"])) {
+            return Ok(meth);
+        }
+        return Err(no_attr(a, v, name));
+    }
+    if k == K_MEM {
+        if name == "memory" {
+            return Ok(a.objs[id].a.clone());
+        }
+        if one_of_names(name, names(vec!["read", "write", "close"])) {
+            return Ok(meth);
+        }
+        return Err(no_attr(a, v, name));
+    }
+    if k == K_JSON {
+        if one_of_names(name, names(vec!["read", "write", "close"])) {
+            return Ok(meth);
+        }
+        if name == "kwargs" {
+            return Ok(a.objs[id].c.clone());
+        }
+        return Err(no_attr(a, v, name));
+    }
+    if k == K_CMW {
+        if name == "storage" {
+            return Ok(a.objs[id].b.clone());
+        }
+        if name == "_cache_modified_count" {
+            return Ok(Val.Int(a.objs[id].n));
+        }
+        if name == "cache" {
+            return Ok(a.objs[id].c.clone());
+        }
+        if one_of_names(name, names(vec!["read", "write", "flush", "close"])) {
+            return Ok(meth);
+        }
+        let inner = a.objs[id].b.clone();
+        if is_none(inner) {
+            return Err(no_attr(a, v, name));
+        }
+        return getattr_(mut a, inner, name);
+    }
+    if is_dict_kind(k) {
+        if k == K_DOC and name == "doc_id" {
+            return Ok(a.objs[id].a.clone());
+        }
+        if one_of_names(name, names(vec!["update", "pop", "clear", "get", "keys", "values", "setdefault", "popitem"])) {
+            return Ok(meth);
+        }
+        return Err(no_attr(a, v, name));
+    }
+    if k == K_LIST {
+        if name == "append" {
+            return Ok(meth);
+        }
+        return Err(no_attr(a, v, name));
+    }
+    Err(no_attr(a, v, name))
+}
+
+fn immutable() -> Exc {
+    type_error("object is immutable".to_string())
+}
+
+// obj.name(*args, **kws) for an arena object.
+fn method(a: mut ref A, id: i64, name: ref String, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    let v = Val.Ref(id);
+    let k = a.objs[id].k;
+    if is_query_kind(k) {
+        return q_method(mut a, v, name, args, kws);
+    }
+    if k == K_DB {
+        return db_method(mut a, v, name, args, kws);
+    }
+    if k == K_TABLE {
+        return table_method(mut a, v, name, args, kws);
+    }
+    if k == K_LRU {
+        if name == "get" {
+            let got = lru_get(mut a, v, arg(args, kws, 0, "key"));
+            if is_none(got) {
+                return Ok(arg(args, kws, 1, "default"));
+            }
+            return Ok(got);
+        }
+        if name == "set" {
+            lru_set(mut a, v, arg(args, kws, 0, "key"), arg(args, kws, 1, "value"));
+            return Ok(Val.Non);
+        }
+        lru_clear(mut a, v);
+        return Ok(Val.Non);
+    }
+    if k == K_MEM or k == K_JSON or k == K_CMW {
+        if name == "read" {
+            return storage_read(mut a, v);
+        }
+        if name == "write" {
+            storage_write(mut a, v, arg(args, kws, 0, "data"))?;
+            return Ok(Val.Non);
+        }
+        if name == "flush" {
+            cmw_flush(mut a, v)?;
+            return Ok(Val.Non);
+        }
+        storage_close(mut a, v)?;
+        return Ok(Val.Non);
+    }
+    if is_dict_kind(k) {
+        if name == "get" {
+            let key = arg(args, kws, 0, "key");
+            return match dict_get(a, v, key) {
+                Some(x) => Ok(x),
+                None => Ok(arg(args, kws, 1, "default")),
+            };
+        }
+        if name == "keys" {
+            let ks = keys(a, v);
+            return Ok(lst(mut a, ks));
+        }
+        if name == "values" {
+            let vs = items(a, v);
+            return Ok(lst(mut a, vs));
+        }
+        if k == K_FDICT {
+            return Err(immutable());
+        }
+        if name == "update" {
+            dict_update(mut a, v, arg(args, kws, 0, "e"))?;
+            return Ok(Val.Non);
+        }
+        if name == "pop" {
+            let key = arg(args, kws, 0, "k");
+            let got = dict_get(a, v, key);
+            return match got {
+                Some(x) => {
+                    dict_del(mut a, v, key);
+                    Ok(x)
+                }
+                None => {
+                    if args.len() > 1 {
+                        Ok(args[1].clone())
+                    } else {
+                        Err(key_error(a, key))
+                    }
+                }
+            };
+        }
+        if name == "clear" {
+            a.objs[id].ks = Vec.new();
+            a.objs[id].vs = Vec.new();
+            return Ok(Val.Non);
+        }
+        return Err(no_attr(a, v, name));
+    }
+    if k == K_LIST {
+        a.objs[id].vs.push(arg(args, kws, 0, "object"));
+        return Ok(Val.Non);
+    }
+    Err(no_attr(a, v, name))
+}
+
+fn py_len(a: mut ref A, v: ref Val) -> Result[i64, Exc] {
+    match v {
+        Val.Str(s) => return Ok(s.chars().count()),
+        _ => {}
+    }
+    let k = kind(a, v);
+    if is_seq_kind(k) or is_set_kind(k) {
+        return Ok(a.objs[ref_id(v)].vs.len());
+    }
+    if is_dict_kind(k) or k == K_LRU {
+        return Ok(a.objs[ref_id(v)].ks.len());
+    }
+    if k == K_TABLE {
+        return table_len(mut a, v);
+    }
+    if k == K_DB {
+        let t = default_table(mut a, v)?;
+        return table_len(mut a, t);
+    }
+    let t = type_name(a, v);
+    Err(type_error(f"object of type '{t}' has no len()"))
+}
+
+fn str_method(a: ref A, v: ref Val, name: Str) -> Result[String, Exc] {
+    match v {
+        Val.Str(s) => Ok(s.clone()),
+        _ => Err(no_attr(a, v, name.to_string())),
+    }
+}
+
+// The library's names and the helper functions the script uses.
+fn builtin(a: mut ref A, name: ref String, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
+    let x = arg(args, kws, 0, "x");
+    if name == "TinyDB" {
+        return tinydb(mut a, args, kws);
+    }
+    if name == "Query" {
+        return Ok(query0(mut a));
+    }
+    if name == "where" {
+        let q = query0(mut a);
+        return Ok(q_attr(mut a, q, str_of(x)));
+    }
+    if name == "JSONStorage" or name == "MemoryStorage" {
+        return make_storage(mut a, Val.Fn(name.clone()), args, kws);
+    }
+    if name == "CachingMiddleware" {
+        let id = new_obj(mut a, K_CMW);
+        a.objs[id].a = x;
+        return Ok(Val.Ref(id));
+    }
+    if name == "Document" {
+        return Ok(document(mut a, x, arg(args, kws, 1, "doc_id")));
+    }
+    if name == "LRUCache" {
+        return Ok(lru_new(mut a, arg(args, kws, 0, "capacity")));
+    }
+    if name == "freeze" {
+        return Ok(freeze(mut a, x));
+    }
+    if name == "add" or name == "subtract" or name == "set" {
+        return Ok(transform(mut a, name.as_str(), x, arg(args, kws, 1, "n")));
+    }
+    if name == "delete" or name == "increment" or name == "decrement" {
+        return Ok(transform(mut a, name.as_str(), x, Val.Non));
+    }
+    if name == "starts_with" {
+        let s = str_method(a, x, "startswith")?;
+        let p = str_of(args[1]);
+        return Ok(Val.Bool(s.starts_with(p.as_str())));
+    }
+    if name == "is_none" {
+        return Ok(Val.Bool(is_none(x)));
+    }
+    if name == "is_even" {
+        if not (is_num(x) and not is_float(x)) {
+            let t = type_name(a, x);
+            return Err(type_error(f"unsupported operand type(s) for %: '{t}' and 'int'"));
+        }
+        let n = int_of(x);
+        return Ok(Val.Bool(((n % 2) + 2) % 2 == 0));
+    }
+    if name == "lower" {
+        let s = str_method(a, x, "lower")?;
+        return Ok(Val.Str(s.to_lowercase()));
+    }
+    if name == "words" {
+        let s = str_method(a, x, "split")?;
+        let mut out: Vec[Val] = Vec.new();
+        for w in split_on(s, ' ') {
+            out.push(Val.Str(w.clone()));
+        }
+        return Ok(lst(mut a, out));
+    }
+    if name == "longer_than" {
+        let n = py_len(mut a, x)?;
+        return Ok(Val.Bool(n > int_of(args[1])));
+    }
+    if name == "boom" {
+        let s = pystr(a, x);
+        return Err(value_error(f"boom: {s}"));
+    }
+    if name == "shout" {
+        let old = subscript(mut a, x, s_("name"))?;
+        let s = str_method(a, old, "upper")?;
+        setitem(mut a, x, s_("name"), Val.Str(s.to_uppercase()))?;
+        return Ok(Val.Non);
+    }
+    if name == "ids" {
+        let mut out: Vec[Val] = Vec.new();
+        for d in iter_vals(mut a, x)? {
+            out.push(getattr_(mut a, d, "doc_id".to_string())?);
+        }
+        return Ok(lst(mut a, out));
+    }
+    if name == "sorted" {
+        let mut xs = iter_vals(mut a, x)?;
+        let mut i = 1;
+        while i < xs.len() {
+            let mut j = i;
+            while j > 0 and py_cmp(a, "<", xs[j], xs[j - 1])? {
+                let t = xs[j].clone();
+                xs[j] = xs[j - 1].clone();
+                xs[j - 1] = t;
+                j -= 1;
+            }
+            i += 1;
+        }
+        return Ok(lst(mut a, xs));
+    }
+    if name == "len" {
+        return Ok(Val.Int(py_len(mut a, x)?));
+    }
+    if name == "list" {
+        let xs = iter_vals(mut a, x)?;
+        return Ok(lst(mut a, xs));
+    }
+    if name == "hash" {
+        return Ok(Val.Int(py_hash(a, x)?));
+    }
+    Err(type_error(f"'{name}' is not callable"))
+}
+
+// f(*args, **kws)
+fn call_val(a: mut ref A, f: ref Val, args: own Vec[Val], kws: own Vec[Karg]) -> Result[Val, Exc] {
+    match f {
+        Val.Meth(id, name) => return method(mut a, *id, name, args, kws),
+        Val.Fn(name) => return builtin(mut a, name, args, kws),
+        _ => {}
+    }
+    let k = kind(a, f);
+    if is_query_kind(k) {
+        let x = arg(args, kws, 0, "value");
+        return Ok(Val.Bool(qi_call(mut a, f, x)?));
+    }
+    if k == K_TRANS {
+        return run_transform(mut a, f, arg(args, kws, 0, "doc"));
+    }
+    if k == K_CMW {
+        return make_storage(mut a, f, args, kws);
+    }
+    let t = type_name(a, f);
+    Err(type_error(f"'{t}' object is not callable"))
+}
+
+fn binop(a: mut ref A, op: Str, x: ref Val, y: ref Val) -> Result[Val, Exc] {
+    let kx = kind(a, x);
+    if op == "==" or op == "!=" {
+        if kx == K_QUERY {
+            return q_compare(mut a, x, op, y);
+        }
+        let same = py_eq(a, x, y);
+        return Ok(Val.Bool(if op == "==" { same } else { not same }));
+    }
+    if op == "<" or op == "<=" or op == ">" or op == ">=" {
+        if kx == K_QUERY {
+            return q_compare(mut a, x, op, y);
+        }
+        return Ok(Val.Bool(py_cmp(a, op, x, y)?));
+    }
+    if op == "&" or op == "|" {
+        if is_query_kind(kx) and is_query_kind(kind(a, y)) {
+            return Ok(qi_logic(mut a, if op == "&" { "and" } else { "or" }, x, y));
+        }
+    }
+    if op == "+" or op == "-" {
+        return py_add(mut a, x, y, op);
+    }
+    let tx = type_name(a, x);
+    let ty = type_name(a, y);
+    Err(type_error(f"unsupported operand type(s) for {op}: '{tx}' and '{ty}'"))
+}
+
+fn unop(a: mut ref A, op: Str, v: ref Val) -> Result[Val, Exc] {
+    if op == "~" and is_query_kind(kind(a, v)) {
+        return Ok(qi_not(mut a, v));
+    }
+    if is_num(v) {
+        if op == "-" {
+            return Ok(if is_float(v) { Val.Float(-float_of(v)) } else { Val.Int(-int_of(v)) });
+        }
+        if op == "+" {
+            return Ok(if is_float(v) { v.clone() } else { Val.Int(int_of(v)) });
+        }
+        if op == "~" and not is_float(v) {
+            return Ok(Val.Int(-int_of(v) - 1));
+        }
+    }
+    let t = type_name(a, v);
+    Err(type_error(f"bad operand type for unary {op}: '{t}'"))
+}
+
+// ------------------------------------------------------------ the environment
+
+struct Env {
+    names: Vec[String],
+    vals: Vec[Val],
+}
+
+fn env_new() -> Env {
+    let mut e = Env { names: Vec.new(), vals: Vec.new() };
+    for n in ["TinyDB", "Query", "where", "JSONStorage", "MemoryStorage", "CachingMiddleware", "Document", "LRUCache",
+        "freeze", "add", "decrement", "delete", "increment", "set", "subtract", "re", "starts_with", "is_none",
+        "is_even", "lower", "words", "longer_than", "boom", "shout", "ids", "sorted", "len", "list", "hash"] {
+        e.names.push(n.to_string());
+        e.vals.push(Val.Fn(n.to_string()));
+    }
+    e
+}
+
+fn env_get(e: ref Env, name: ref String) -> Result[Val, Exc] {
+    let mut n = 0;
+    while n < e.names.len() {
+        if e.names[n] == name {
+            return Ok(e.vals[n].clone());
+        }
+        n += 1;
+    }
+    Err(exc("NameError", f"name '{name}' is not defined"))
+}
+
+fn env_set(e: mut ref Env, name: ref String, v: ref Val) {
+    let mut n = 0;
+    while n < e.names.len() {
+        if e.names[n] == name {
+            e.vals[n] = v.clone();
+            return;
+        }
+        n += 1;
+    }
+    e.names.push(name.clone());
+    e.vals.push(v.clone());
+}
+
+// ------------------------------------------------------------ the evaluator
+
+const T_NAME: i64 = 1;
+const T_INT: i64 = 2;
+const T_FLOAT: i64 = 3;
+const T_STR: i64 = 4;
+const T_OP: i64 = 5;
+const T_END: i64 = 6;
+
+#[derive(Clone)]
+struct Tok {
+    k: i64,
+    s: String,
+}
+
+fn is_name_char(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_'
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn tokenize(src: ref String) -> Result[Vec[Tok], Exc] {
+    let cs: Vec[char] = src.chars().collect();
+    let n = cs.len();
+    let mut out: Vec[Tok] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let c = cs[i];
+        if c == ' ' {
+            i += 1;
+            continue;
+        }
+        if is_name_char(c) and not is_digit(c) {
+            let mut s = String.new();
+            while i < n and is_name_char(cs[i]) {
+                s.push(cs[i]);
+                i += 1;
+            }
+            out.push(Tok { k: T_NAME, s: s });
+            continue;
+        }
+        if is_digit(c) {
+            let mut s = String.new();
+            let mut float = false;
+            while i < n and (is_digit(cs[i]) or cs[i] == '.') {
+                if cs[i] == '.' {
+                    float = true;
+                }
+                s.push(cs[i]);
+                i += 1;
+            }
+            if i < n and (cs[i] == 'e' or cs[i] == 'E') {
+                float = true;
+                s.push(cs[i]);
+                i += 1;
+                if i < n and (cs[i] == '+' or cs[i] == '-') {
+                    s.push(cs[i]);
+                    i += 1;
+                }
+                while i < n and is_digit(cs[i]) {
+                    s.push(cs[i]);
+                    i += 1;
+                }
+            }
+            out.push(Tok { k: if float { T_FLOAT } else { T_INT }, s: s });
+            continue;
+        }
+        if c == '\'' or c == '"' {
+            let mut s = String.new();
+            i += 1;
+            while i < n and cs[i] != c {
+                if cs[i] == '\\' and i + 1 < n {
+                    let e = cs[i + 1];
+                    i += 2;
+                    if e == 'n' {
+                        s.push('\n');
+                    } else if e == 't' {
+                        s.push('\t');
+                    } else if e == 'r' {
+                        s.push('\r');
+                    } else if e == '\\' or e == '\'' or e == '"' {
+                        s.push(e);
+                    } else {
+                        s.push('\\');
+                        s.push(e);
+                    }
+                    continue;
+                }
+                s.push(cs[i]);
+                i += 1;
+            }
+            i += 1;
+            let k = out.len();
+            if k > 0 and out[k - 1].k == T_STR {
+                out[k - 1].s.push_str(s);
+            } else {
+                out.push(Tok { k: T_STR, s: s });
+            }
+            continue;
+        }
+        let two = if i + 1 < n {
+            let mut t = String.new();
+            t.push(c);
+            t.push(cs[i + 1]);
+            t
+        } else {
+            String.new()
+        };
+        if two == "==" or two == "!=" or two == "<=" or two == ">=" or two == "**" or two == "//" {
+            out.push(Tok { k: T_OP, s: two });
+            i += 2;
+            continue;
+        }
+        let mut s = String.new();
+        s.push(c);
+        out.push(Tok { k: T_OP, s: s });
+        i += 1;
+    }
+    out.push(Tok { k: T_END, s: String.new() });
+    Ok(out)
+}
+
+struct P {
+    toks: Vec[Tok],
+    i: i64,
+}
+
+fn peek_op(p: ref P, op: Str) -> bool {
+    p.toks[p.i].k == T_OP and p.toks[p.i].s == op
+}
+
+fn peek_name(p: ref P, name: Str) -> bool {
+    p.toks[p.i].k == T_NAME and p.toks[p.i].s == name
+}
+
+fn expect(p: mut ref P, op: Str) -> Result[(), Exc] {
+    if not peek_op(p, op) {
+        return Err(exc("SyntaxError", f"expected '{op}'"));
+    }
+    p.i += 1;
+    Ok(())
+}
+
+fn cmp_op(p: ref P) -> String {
+    let t = p.toks[p.i].clone();
+    if t.k == T_OP and (t.s == "==" or t.s == "!=" or t.s == "<" or t.s == ">" or t.s == "<=" or t.s == ">=") {
+        return t.s;
+    }
+    if t.k == T_NAME and t.s == "is" {
+        return t.s;
+    }
+    String.new()
+}
+
+fn test(p: mut ref P, a: mut ref A, e: ref Env) -> Result[Val, Exc] {
+    let mut l = bor(mut p, mut a, e)?;
+    loop {
+        let op = cmp_op(p);
+        if op.len() == 0 {
+            return Ok(l);
+        }
+        p.i += 1;
+        if op == "is" {
+            let neg = peek_name(p, "not");
+            if neg {
+                p.i += 1;
+            }
+            let r = bor(mut p, mut a, e)?;
+            let same = identical(l, r);
+            l = Val.Bool(if neg { not same } else { same });
+            continue;
+        }
+        let r = bor(mut p, mut a, e)?;
+        l = binop(mut a, op.as_str(), l, r)?;
+    }
+}
+
+fn bor(p: mut ref P, a: mut ref A, e: ref Env) -> Result[Val, Exc] {
+    let mut l = band(mut p, mut a, e)?;
+    while peek_op(p, "|") {
+        p.i += 1;
+        let r = band(mut p, mut a, e)?;
+        l = binop(mut a, "|", l, r)?;
+    }
+    Ok(l)
+}
+
+fn band(p: mut ref P, a: mut ref A, e: ref Env) -> Result[Val, Exc] {
+    let mut l = arith(mut p, mut a, e)?;
+    while peek_op(p, "&") {
+        p.i += 1;
+        let r = arith(mut p, mut a, e)?;
+        l = binop(mut a, "&", l, r)?;
+    }
+    Ok(l)
+}
+
+fn arith(p: mut ref P, a: mut ref A, e: ref Env) -> Result[Val, Exc] {
+    let mut l = factor(mut p, mut a, e)?;
+    while peek_op(p, "+") or peek_op(p, "-") {
+        let op = p.toks[p.i].s.clone();
+        p.i += 1;
+        let r = factor(mut p, mut a, e)?;
+        l = binop(mut a, op.as_str(), l, r)?;
+    }
+    Ok(l)
+}
+
+fn factor(p: mut ref P, a: mut ref A, e: ref Env) -> Result[Val, Exc] {
+    if peek_op(p, "-") or peek_op(p, "+") or peek_op(p, "~") {
+        let op = p.toks[p.i].s.clone();
+        p.i += 1;
+        let v = factor(mut p, mut a, e)?;
+        return unop(mut a, op.as_str(), v);
+    }
+    postfix(mut p, mut a, e)
+}
+
+fn call_args(p: mut ref P, a: mut ref A, e: ref Env) -> Result[(Vec[Val], Vec[Karg]), Exc] {
+    let mut args: Vec[Val] = Vec.new();
+    let mut kws: Vec[Karg] = Vec.new();
+    while not peek_op(p, ")") {
+        if p.toks[p.i].k == T_NAME and p.toks[p.i + 1].k == T_OP and p.toks[p.i + 1].s == "=" {
+            let k = p.toks[p.i].s.clone();
+            p.i += 2;
+            let v = test(mut p, mut a, e)?;
+            kws.push(Karg { k: k, v: v });
+        } else {
+            args.push(test(mut p, mut a, e)?);
+        }
+        if peek_op(p, ",") {
+            p.i += 1;
+        }
+    }
+    p.i += 1;
+    Ok((args, kws))
+}
+
+fn postfix(p: mut ref P, a: mut ref A, e: ref Env) -> Result[Val, Exc] {
+    let mut v = atom(mut p, mut a, e)?;
+    loop {
+        if peek_op(p, ".") {
+            p.i += 1;
+            let name = p.toks[p.i].s.clone();
+            p.i += 1;
+            v = getattr_(mut a, v, name)?;
+        } else if peek_op(p, "(") {
+            p.i += 1;
+            let (args, kws) = call_args(mut p, mut a, e)?;
+            v = call_val(mut a, v, args, kws)?;
+        } else if peek_op(p, "[") {
+            p.i += 1;
+            let k = test(mut p, mut a, e)?;
+            expect(mut p, "]")?;
+            v = subscript(mut a, v, k)?;
+        } else {
+            return Ok(v);
+        }
+    }
+}
+
+fn atom(p: mut ref P, a: mut ref A, e: ref Env) -> Result[Val, Exc] {
+    let t = p.toks[p.i].clone();
+    p.i += 1;
+    if t.k == T_NAME {
+        if t.s == "True" {
+            return Ok(Val.Bool(true));
+        }
+        if t.s == "False" {
+            return Ok(Val.Bool(false));
+        }
+        if t.s == "None" {
+            return Ok(Val.Non);
+        }
+        return env_get(e, t.s);
+    }
+    if t.k == T_INT {
+        return match i64.parse(t.s.clone()) {
+            Ok(n) => Ok(Val.Int(n)),
+            Err(_) => Err(exc("OverflowError", t.s.clone())),
+        };
+    }
+    if t.k == T_FLOAT {
+        return match f64.parse(t.s.clone()) {
+            Ok(x) => Ok(Val.Float(x)),
+            Err(_) => Err(exc("SyntaxError", t.s.clone())),
+        };
+    }
+    if t.k == T_STR {
+        return Ok(Val.Str(t.s));
+    }
+    if t.k == T_OP and t.s == "(" {
+        if peek_op(p, ")") {
+            p.i += 1;
+            return Ok(tup(mut a, Vec.new()));
+        }
+        let first = test(mut p, mut a, e)?;
+        if peek_op(p, ")") {
+            p.i += 1;
+            return Ok(first);
+        }
+        let mut xs = vec![first];
+        while peek_op(p, ",") {
+            p.i += 1;
+            if peek_op(p, ")") {
+                break;
+            }
+            xs.push(test(mut p, mut a, e)?);
+        }
+        expect(mut p, ")")?;
+        return Ok(tup(mut a, xs));
+    }
+    if t.k == T_OP and t.s == "[" {
+        let mut xs: Vec[Val] = Vec.new();
+        while not peek_op(p, "]") {
+            xs.push(test(mut p, mut a, e)?);
+            if peek_op(p, ",") {
+                p.i += 1;
+            }
+        }
+        p.i += 1;
+        return Ok(lst(mut a, xs));
+    }
+    if t.k == T_OP and t.s == "{" {
+        let d = empty_dict(mut a);
+        while not peek_op(p, "}") {
+            let k = test(mut p, mut a, e)?;
+            expect(mut p, ":")?;
+            let v = test(mut p, mut a, e)?;
+            hashable_check(a, k)?;
+            dict_set(mut a, d, k, v);
+            if peek_op(p, ",") {
+                p.i += 1;
+            }
+        }
+        p.i += 1;
+        return Ok(d);
+    }
+    Err(exc("SyntaxError", f"unexpected '{t.s}'"))
+}
+
+fn eval_src(a: mut ref A, e: ref Env, src: ref String) -> Result[Val, Exc] {
+    let toks = tokenize(src)?;
+    let mut p = P { toks: toks, i: 0 };
+    let v = test(mut p, mut a, e)?;
+    if p.toks[p.i].k != T_END {
+        return Err(exc("SyntaxError", "invalid syntax".to_string()));
+    }
+    Ok(v)
+}
+
+// ------------------------------------------------------------ the programs
+
+fn read_text(rel: ref String) -> Result[String, Exc] {
+    read_file(f"data/{rel}")
+}
+
+// Prints a file under data/ line by line, as it is on disk.
+fn cat(rel: ref String) -> Result[(), Exc] {
+    let text = read_text(rel)?;
+    let lines = split_on(text, '\n');
+    let n = lines.len();
+    println(f"  {rel} ({n} lines)");
+    for ln in lines {
+        println(f"  | {ln}");
+    }
+    Ok(())
+}
+
+fn write_back(rel: ref String, text: ref String) -> Result[(), Exc] {
+    let path = f"data/{rel}";
+    if let Err(e) = fs.create_dir_all(dirname(path)) {
+        return Err(exc("OSError", f"{e}"));
+    }
+    if let Err(e) = fs.write(path, text.clone()) {
+        return Err(exc("OSError", f"{e}"));
+    }
+    cat(rel)
+}
+
+fn tsv(rel: ref String) -> Result[Vec[Vec[String]], Exc] {
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    for ln in split_on(read_text(rel)?, '\n') {
+        if ln.len() > 0 and not ln.starts_with("#") {
+            rows.push(split_on(ln, '\t'));
+        }
+    }
+    Ok(rows)
+}
+
+// A value as the saved queries and the updates spell it.
+fn value_of(a: mut ref A, text: ref String) -> Val {
+    if text == "None" {
+        return Val.Non;
+    }
+    if text == "true" {
+        return Val.Bool(true);
+    }
+    if text == "false" {
+        return Val.Bool(false);
+    }
+    if text == "[]" {
+        return lst(mut a, Vec.new());
+    }
+    let body = if text.starts_with("-") { text.substring(1, text.len()) } else { text.clone() };
+    if all_digits(body) {
+        return Val.Int(atoi(text));
+    }
+    let parts = split_on(body, '.');
+    if parts.len() == 2 and all_digits(f"{parts[0]}{parts[1]}") {
+        return match f64.parse(text.clone()) {
+            Ok(x) => Val.Float(x),
+            Err(_) => sv(text),
+        };
+    }
+    sv(text)
+}
+
+fn strs_list(a: mut ref A, xs: ref Vec[String]) -> Val {
+    let mut vs: Vec[Val] = Vec.new();
+    for x in xs {
+        vs.push(sv(x));
+    }
+    lst(mut a, vs)
+}
+
+// "<field> <op> <value>" as a query.
+fn clause(a: mut ref A, text: ref String) -> Result[Val, Exc] {
+    let mut parts = split_n(text, 2);
+    while parts.len() < 3 {
+        parts.push(String.new());
+    }
+    let q = query0(mut a);
+    let f = q_attr(mut a, q, parts[0]);
+    let op = parts[1].clone();
+    let rest = parts[2].clone();
+    if op == "==" or op == "!=" or op == "<" or op == "<=" or op == ">" or op == ">=" {
+        let v = value_of(mut a, rest);
+        return q_compare(mut a, f, op.as_str(), v);
+    }
+    if op == "~" {
+        return q_method(mut a, f, "matches".to_string(), vec![sv(rest)], Vec.new());
+    }
+    if op == "has" {
+        let xs = strs_list(mut a, vec![rest]);
+        return q_method(mut a, f, "any".to_string(), vec![xs], Vec.new());
+    }
+    if op == "all" or op == "in" {
+        let xs = strs_list(mut a, split_on(rest, '|'));
+        let m = if op == "all" { "all" } else { "one_of" };
+        return q_method(mut a, f, m.to_string(), vec![xs], Vec.new());
+    }
+    if op == "exists" {
+        return q_method(mut a, f, "exists".to_string(), Vec.new(), Vec.new());
+    }
+    let r = str_repr(op);
+    Err(value_error(f"unknown operator {r}"))
+}
+
+fn parse_query(a: mut ref A, text: ref String) -> Result[Val, Exc] {
+    let mut out = Val.Non;
+    for alt in split_str(text, " | ") {
+        let mut q = Val.Non;
+        for c in split_str(alt, " & ") {
+            let one = clause(mut a, c)?;
+            q = if is_none(q) { one } else { qi_logic(mut a, "and", q, one) };
+        }
+        out = if is_none(out) { q } else { qi_logic(mut a, "or", out, q) };
+    }
+    Ok(out)
+}
+
+fn open_db(a: mut ref A, dbrel: ref String) -> Result[Val, Exc] {
+    tinydb(mut a, vec![Val.Str(f"data/{dbrel}")], vec![Karg { k: "indent".to_string(), v: Val.Int(2) }])
+}
+
+fn dbcall(a: mut ref A, db: ref Val, name: Str, args: own Vec[Val]) -> Result[Val, Exc] {
+    db_method(mut a, db, name.to_string(), args, Vec.new())
+}
+
+fn rec_get(ks: ref Vec[String], vs: ref Vec[String], name: Str) -> String {
+    let mut i = 0;
+    while i < ks.len() {
+        if ks[i] == name {
+            return vs[i].clone();
+        }
+        i += 1;
+    }
+    String.new()
+}
+
+// The importer: contacts.csv into a fresh table, with the CSV's IDs.
+fn import_csv(a: mut ref A, rel: ref String, dbrel: ref String) -> Result[(), Exc] {
+    let mut lines: Vec[String] = Vec.new();
+    for ln in split_on(read_text(rel)?, '\n') {
+        if ln.len() > 0 {
+            lines.push(ln.clone());
+        }
+    }
+    let header = split_on(lines[0], ',');
+    let mut docs: Vec[Val] = Vec.new();
+    let mut r = 1;
+    while r < lines.len() {
+        let cells = split_on(lines[r], ',');
+        let mut rec_k: Vec[String] = Vec.new();
+        let mut rec_v: Vec[String] = Vec.new();
+        let mut n = 0;
+        while n < header.len() and n < cells.len() {
+            rec_k.push(header[n].clone());
+            rec_v.push(cells[n].clone());
+            n += 1;
+        }
+        let doc = empty_dict(mut a);
+        dict_set(mut a, doc, s_("name"), Val.Str(rec_get(rec_k, rec_v, "name")));
+        let email = rec_get(rec_k, rec_v, "email");
+        dict_set(mut a, doc, s_("email"), if email.len() > 0 { Val.Str(email) } else { Val.Non });
+        let age = rec_get(rec_k, rec_v, "age");
+        if age.len() > 0 {
+            dict_set(mut a, doc, s_("age"), Val.Int(atoi(age)));
+        }
+        dict_set(mut a, doc, s_("city"), Val.Str(rec_get(rec_k, rec_v, "city")));
+        let tags = rec_get(rec_k, rec_v, "tags");
+        let tl = if tags.len() > 0 { strs_list(mut a, split_on(tags, ';')) } else { lst(mut a, Vec.new()) };
+        dict_set(mut a, doc, s_("tags"), tl);
+        let score = rec_get(rec_k, rec_v, "score");
+        if score.len() > 0 {
+            let x = match f64.parse(score.clone()) {
+                Ok(x) => x,
+                Err(_) => 0.0,
+            };
+            dict_set(mut a, doc, s_("score"), Val.Float(x));
+        }
+        dict_set(mut a, doc, s_("active"), Val.Bool(rec_get(rec_k, rec_v, "active") == "true"));
+        let id = Val.Int(atoi(rec_get(rec_k, rec_v, "id")));
+        docs.push(document(mut a, doc, id));
+        r += 1;
+    }
+    let db = open_db(mut a, dbrel)?;
+    dbcall(mut a, db, "truncate", Vec.new())?;
+    let dl = lst(mut a, docs);
+    let got = dbcall(mut a, db, "insert_multiple", vec![dl])?;
+    let n = items(a, got).len();
+    let s = repr(a, got);
+    println(f"  inserted {n} documents: {s}");
+    dbcall(mut a, db, "close", Vec.new())?;
+    cat(dbrel)
+}
+
+// The report runner: each saved query's count and names.
+fn report(a: mut ref A, rel: ref String, dbrel: ref String, outrel: ref String) -> Result[(), Exc] {
+    let db = open_db(mut a, dbrel)?;
+    let mut out: Vec[String] = Vec.new();
+    for row in tsv(rel)? {
+        let name = row[0].clone();
+        let text = row[1].clone();
+        let line = match report_line(mut a, db, text) {
+            Ok(s) => f"{name}: {s}",
+            Err(e) => {
+                let c = e.cls.clone();
+                let m = e.msg.clone();
+                f"{name}: error {c}: {m}"
+            }
+        };
+        out.push(line);
+    }
+    dbcall(mut a, db, "close", Vec.new())?;
+    let mut text = join_strs(out, "\n");
+    text.push('\n');
+    write_back(outrel, text)
+}
+
+fn report_line(a: mut ref A, db: ref Val, text: ref String) -> Result[String, Exc] {
+    let q = parse_query(mut a, text)?;
+    let docs = dbcall(mut a, db, "search", vec![q])?;
+    let mut names: Vec[String] = Vec.new();
+    for d in items(a, docs) {
+        let v = subscript(mut a, d, s_("name"))?;
+        names.push(pystr(a, v));
+    }
+    let again = parse_query(mut a, text)?;
+    let count = dbcall(mut a, db, "count", vec![again])?;
+    let n = int_of(count);
+    let s = join_strs(names, ", ");
+    Ok(f"{n} ({s})")
+}
+
+// The batch updater: one operation per line, over the matching documents.
+fn apply(a: mut ref A, rel: ref String, dbrel: ref String) -> Result[(), Exc] {
+    let db = open_db(mut a, dbrel)?;
+    for row in tsv(rel)? {
+        let op = row[0].clone();
+        let field = row[1].clone();
+        let cond = row[3].clone();
+        let value = value_of(mut a, row[2]);
+        match apply_line(mut a, db, op, field, value, cond) {
+            Ok(got) => {
+                let s = repr(a, got);
+                println(f"  {op} {field} where {cond} -> {s}");
+            }
+            Err(e) => {
+                let c = e.cls.clone();
+                let m = e.msg.clone();
+                println(f"  {op} {field} where {cond} -> error {c}: {m}");
+            }
+        }
+    }
+    dbcall(mut a, db, "close", Vec.new())?;
+    cat(dbrel)
+}
+
+fn apply_line(a: mut ref A, db: ref Val, op: ref String, field: ref String, value: ref Val, cond: ref String) -> Result[Val, Exc] {
+    let takes = op == "add" or op == "subtract" or op == "set";
+    let fields = transform(mut a, op.as_str(), sv(field), if takes { value.clone() } else { Val.Non });
+    if cond == "-" {
+        return dbcall(mut a, db, "update", vec![fields]);
+    }
+    let q = parse_query(mut a, cond)?;
+    dbcall(mut a, db, "update", vec![fields, q])
+}
+
+// ------------------------------------------------------------ jobs
+
+fn write_inputs() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        if let Err(e) = fs.write_bytes(f"data/{f[0]}", hex_bytes(f[1])) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// A fresh environment, and an empty data/db/.
+fn fresh() -> Env {
+    let _ = fs.remove_dir_all("data/db".to_string());
+    let _ = fs.create_dir_all("data/db".to_string());
+    env_new()
+}
+
+fn last_bracket(s: ref String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut at = -1;
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '[' {
+            at = i;
+        }
+        i += 1;
+    }
+    at
+}
+
+fn run_job(a: mut ref A, e: mut ref Env, kind_: ref String, src: ref String) -> Result[(), Exc] {
+    if kind_ == "let" {
+        let ls = split_once(src, " = ");
+        let lhs = ls[0].clone();
+        let v = eval_src(mut a, e, ls[1])?;
+        if lhs.ends_with("]") {
+            let k = last_bracket(lhs);
+            let target = eval_src(mut a, e, lhs.substring(0, k))?;
+            let key = eval_src(mut a, e, lhs.substring(k + 1, lhs.len() - 1))?;
+            setitem(mut a, target, key, v)?;
+        } else {
+            env_set(mut e, lhs.trim().to_string(), v);
+        }
+    } else if kind_ == "do" {
+        eval_src(mut a, e, src)?;
+    } else if kind_ == "show" {
+        let v = eval_src(mut a, e, src)?;
+        println(pystr(a, v));
+    } else if kind_ == "cat" {
+        cat(src)?;
+    } else if kind_ == "program" {
+        let args = split_on(src, ' ');
+        if args[0] == "import" {
+            import_csv(mut a, args[1], args[2])?;
+        } else if args[0] == "report" {
+            report(mut a, args[1], args[2], args[3])?;
+        } else if args[0] == "apply" {
+            apply(mut a, args[1], args[2])?;
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let mut a = arena_new();
+    let mut e = fresh();
+    for hex in split_on(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let ln = hex_string(hex);
+        let ks = split_once(ln, "\t");
+        let kind_ = ks[0].clone();
+        let src = ks[1].clone();
+        if kind_ == "#" {
+            println("");
+            println(f"# {src}");
+            continue;
+        }
+        if kind_ == "reset" {
+            a = arena_new();
+            e = fresh();
+            continue;
+        }
+        println(f"> {src}");
+        if let Err(x) = run_job(mut a, mut e, kind_, src) {
+            let c = x.cls.clone();
+            let m = x.msg.clone();
+            println(f"error {c}: {m}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("230947657474696e672073746172746564\n7265736574092d\n6c6574096462203d2054696e7944422827646174612f64622f64622e6a736f6e2729\n73686f770964622e696e73657274287b2774797065273a20276170706c65272c2027636f756e74273a20377d29\n73686f770964622e696e73657274287b2774797065273a20277065616368272c2027636f756e74273a20337d29\n73686f770964622e616c6c2829\n73686f77096c656e28646229\n6c6574094672756974203d2051756572792829\n73686f770964622e7365617263682846727569742e74797065203d3d202770656163682729\n73686f770964622e7365617263682846727569742e636f756e74203e203529\n73686f770964622e757064617465287b27636f756e74273a2031307d2c2046727569742e74797065203d3d20276170706c652729\n73686f770964622e616c6c2829\n73686f770964622e72656d6f76652846727569742e636f756e74203c203529\n73686f770964622e616c6c2829\n6361740964622f64622e6a736f6e\n73686f770964622e7472756e636174652829\n73686f770964622e616c6c2829\n6361740964622f64622e6a736f6e\n73686f770964622e696e73657274287b276e616d65273a20274a6f686e272c2027616765273a2032327d29\n73686f770964622e696e73657274287b276e616d65273a20274d617279272c2027616765273a2033317d29\n6c65740955736572203d2051756572792829\n73686f770964622e73656172636828557365722e6e616d65203d3d20274a6f686e2729\n73686f770964622e73656172636828557365722e616765203e20333029\n73686f770964622e73656172636828776865726528276e616d652729203d3d20274d6172792729\n73686f770964622e67657428557365722e6e616d65203d3d20274d6172792729\n73686f770964622e67657428557365722e6e616d65203d3d20274e6f626f64792729\n73686f770964622e636f6e7461696e7328557365722e6e616d65203d3d20274a6f686e2729\n73686f770964622e636f756e7428557365722e616765203e3d20323229\n73686f7709736f727465642864622e7461626c6573282929\n6361740964622f64622e6a736f6e\n2309517565726965733a20636f6d70617269736f6e7320616e64207061746873\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e616d65273a2027416e6e272c2027616765273a2033342c202763697479273a20274265726c696e272c202773636f7265273a20342e357d2c207b276e616d65273a2027426f272c2027616765273a2032372c202763697479273a20275061726973272c202773636f7265273a20337d2c207b276e616d65273a20274379272c2027616765273a2034312c202763697479273a20274265726c696e277d2c207b276e616d65273a20274469272c2027616765273a20273139272c202763697479273a202753656f756c272c202773636f7265273a20322e307d2c207b276e616d65273a20274564272c202763697479273a204e6f6e652c202773636f7265273a20547275657d5d29\n");
+    s.push_str("6c65740971203d2051756572792829\n73686f770964622e73656172636828712e63697479203d3d20274265726c696e2729\n73686f770964622e73656172636828712e6369747920213d20274265726c696e2729\n73686f770964622e73656172636828712e63697479203d3d204e6f6e6529\n73686f770964622e73656172636828712e73636f7265203d3d203329\n73686f770964622e73656172636828712e73636f7265203d3d20332e3029\n73686f770964622e73656172636828712e73636f7265203d3d203129\n73686f770964622e73656172636828712e73636f7265203d3d203229\n73686f770964622e73656172636828712e73636f7265203e3d203329\n73686f770964622e73656172636828712e73636f7265203e20322e3529\n73686f770964622e73656172636828712e616765203c20333029\n73686f770964622e73656172636828712e616765203c3d20333429\n73686f770964622e73656172636828712e6e616d65203e2027422729\n73686f770964622e73656172636828712e6e616d65203e3d202743792729\n73686f770964622e73656172636828712e63697479203c2027502729\n73686f770964622e73656172636828712e6d697373696e67203d3d203129\n73686f770964622e73656172636828712e6d697373696e6720213d203129\n73686f770964622e73656172636828715b276e616d65275d203d3d2027416e6e2729\n73686f770964622e73656172636828712e6e616d652e6669727374203d3d2027412729\n73686f770964622e7365617263682877686572652827636974792729203d3d202753656f756c2729\n2309517565726965733a206e657374656420646f63756d656e7473\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e73657274287b276e616d65273a2027416e6e272c202761646472657373273a207b2763697479273a20274265726c696e272c202767656f273a207b276c6174273a2035322e352c20276c6f6e273a2031332e347d7d2c20276c616e6773273a205b276465272c2027656e275d7d29\n73686f770964622e696e73657274287b276e616d65273a2027426f272c202761646472657373273a207b2763697479273a20275061726973277d2c20276c616e6773273a205b276672275d7d29\n73686f770964622e696e73657274287b276e616d65273a20274379272c202761646472657373273a2027756e6b6e6f776e272c20276c616e6773273a2027656e277d29\n73686f770964622e696e73657274287b276e616d65273a20274469272c202761646472657373273a204e6f6e652c20276c616e6773273a205b5d7d29\n");
+    s.push_str("6c65740971203d2051756572792829\n73686f770964622e73656172636828712e616464726573732e63697479203d3d20274265726c696e2729\n73686f770964622e73656172636828712e616464726573732e67656f2e6c6174203e20353029\n73686f770964622e73656172636828712e616464726573732e636974792e657869737473282929\n73686f770964622e73656172636828712e616464726573732e657869737473282929\n73686f770964622e73656172636828715b2761646472657373275d5b2763697479275d203d3d202750617269732729\n73686f770964622e73656172636828712e6c616e6773203d3d205b276672275d29\n73686f770964622e73656172636828712e6c616e6773203d3d205b5d29\n73686f770964622e73656172636828712e6c616e6773203d3d2027656e2729\n73686f770964622e73656172636828712e6c616e67732e6c616e67203d3d2027656e2729\n73686f770964622e73656172636828712e61646472657373203d3d207b2763697479273a20275061726973277d29\n73686f770964622e73656172636828712e6164647265737320213d207b2763697479273a20275061726973277d29\n2309517565726965733a206c6f676963\n73686f770964622e7365617263682828712e6e616d65203d3d2027416e6e2729207c2028712e6e616d65203d3d2027426f272929\n73686f770964622e7365617263682828712e616464726573732e63697479203d3d20274265726c696e272920262028712e6c616e6773203d3d205b276465272c2027656e275d2929\n73686f770964622e736561726368287e28712e6e616d65203d3d2027416e6e272929\n73686f770964622e736561726368287e712e616464726573732e636974792e657869737473282929\n73686f770964622e7365617263682828712e6e616d65203d3d2027416e6e27292026207e28712e6e616d65203d3d2027416e6e272929\n73686f770964622e736561726368287e7e28712e6e616d65203d3d20274379272929\n73686f770964622e7365617263682828712e6e616d65203d3d2027416e6e2729207c2028712e6e616d65203d3d2027426f2729207c2028712e6e616d65203d3d20274379272929\n73686f770964622e73656172636828712e6e6f6f70282929\n73686f770964622e73656172636828712e6e6f6f70282920262028712e6e616d65203d3d20274469272929\n73686f770964622e736561726368287e712e6e6f6f70282929\n2309517565726965733a206d6174636865732c2073656172636820616e642074657374\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n");
+    s.push_str("73686f770964622e696e736572745f6d756c7469706c65285b7b276e616d65273a20274a6f686e20536d697468272c2027656d61696c273a20276a6f686e406578616d706c652e636f6d277d2c207b276e616d65273a20276a616e6520646f65272c2027656d61696c273a20276a616e65404558414d504c452e6f7267277d2c207b276e616d65273a2027426f62272c2027656d61696c273a204e6f6e657d2c207b276e616d65273a2027416c696365204a6f686e736f6e272c2027656d61696c273a2027616c696365406578616d706c652e636f6d272c20276e69636b273a2034327d5d29\n6c65740971203d2051756572792829\n73686f770964622e73656172636828712e6e616d652e6d61746368657328274a272929\n73686f770964622e73656172636828712e6e616d652e6d61746368657328276a272929\n73686f770964622e73656172636828712e6e616d652e6d61746368657328275b4a6a5d272929\n73686f770964622e73656172636828712e6e616d652e6d61746368657328276a272c20666c6167733d72652e49474e4f5245434153452929\n73686f770964622e73656172636828712e6e616d652e6d61746368657328274a6f686e272929\n73686f770964622e73656172636828712e6e616d652e73656172636828274a6f686e272929\n73686f770964622e73656172636828712e6e616d652e73656172636828276f5b612d7a5d2b6e272929\n73686f770964622e73656172636828712e6e616d652e6d61746368657328272e2a736f6e24272929\n73686f770964622e73656172636828712e6e616d652e6d61746368657328275b412d5a5d5b612d7a5d2b205b412d5a5d5b612d7a5d2b24272929\n73686f770964622e73656172636828712e6e616d652e6d61746368657328275c5c772b24272929\n73686f770964622e73656172636828712e656d61696c2e7365617263682827406578616d706c655c5c2e28636f6d7c6f726729272929\n73686f770964622e73656172636828712e656d61696c2e73656172636828276578616d706c65272c2072652e492929\n73686f770964622e73656172636828712e656d61696c2e6d61746368657328275b612d7a5d2b40272929\n73686f770964622e73656172636828712e6e69636b2e6d617463686573282734272929\n73686f770964622e73656172636828712e6e616d652e73656172636828275e42272929\n73686f770964622e73656172636828712e6e616d652e73656172636828276224272929\n73686f770964622e73656172636828712e6e616d652e6d617463686573282728426f627c6a616e6529272929\n73686f770964622e73656172636828712e6e616d652e6d6174636865732827617b322c7d272929\n");
+    s.push_str("73686f770964622e73656172636828712e6e616d652e73656172636828275b5e612d7a205d7b327d272929\n73686f770964622e73656172636828712e6e616d652e73656172636828275c5c73272929\n73686f770964622e73656172636828712e6e616d652e73656172636828275c5c532b5c5c732b5c5c532b6e24272929\n73686f770964622e73656172636828712e6e616d652e6d61746368657328272e7b337d24272929\n73686f770964622e73656172636828712e6e616d652e73656172636828276f2e3f6e272929\n73686f770964622e73656172636828712e6e616d652e73656172636828274a2e2a3f6e272929\n73686f770964622e73656172636828712e656d61696c2e6d61746368657328275c5c772b405c5c772b5c5c2e5c5c777b337d272929\n73686f770964622e73656172636828712e6e616d652e74657374287374617274735f776974682c20274a272929\n73686f770964622e73656172636828712e6e616d652e74657374287374617274735f776974682c20276a272929\n73686f770964622e73656172636828712e656d61696c2e746573742869735f6e6f6e652929\n73686f770964622e73656172636828712e6e69636b2e746573742869735f6576656e2929\n73686f770964622e73656172636828712e6e616d652e6d6170286c6f776572292e6d61746368657328276a272929\n73686f770964622e73656172636828712e6e616d652e6d6170286c6f77657229203d3d2027626f622729\n73686f770964622e73656172636828712e6e616d652e6d617028776f726473292e74657374286c6f6e6765725f7468616e2c20312929\n73686f770964622e73656172636828712e656d61696c2e6d6170286c6f776572292e73656172636828276578616d706c652e6f7267272929\n2309517565726965733a206c69737473\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e616d65273a2027416e6e272c202774616773273a205b2761646d696e272c20276f7073275d2c202767726f757073273a205b7b276e616d65273a20277374616666272c20276c6576656c273a20327d2c207b276e616d65273a2027726f6f74272c20276c6576656c273a20397d5d7d2c207b276e616d65273a2027426f272c202774616773273a205b27646576275d2c202767726f757073273a205b7b276e616d65273a20277374616666272c20276c6576656c273a20317d5d7d2c207b276e616d65273a20274379272c202774616773273a205b5d2c202767726f757073273a205b5d7d2c207b276e616d65273a20274469272c202774616773273a2027646576272c202767726f757073273a20276e6f6e65277d2c207b276e616d65273a20274564272c202774616773273a207b27646576273a20317d2c202767726f757073273a204e6f6e657d5d29\n");
+    s.push_str("6c65740971203d2051756572792829\n73686f770964622e73656172636828712e746167732e616e79285b276f7073272c2027646576275d2929\n73686f770964622e73656172636828712e746167732e616e79285b2761646d696e275d2929\n73686f770964622e73656172636828712e746167732e616e79285b2764272c202776275d2929\n73686f770964622e73656172636828712e746167732e616c6c285b2761646d696e272c20276f7073275d2929\n73686f770964622e73656172636828712e746167732e616c6c285b27646576275d2929\n73686f770964622e73656172636828712e746167732e616c6c285b5d2929\n73686f770964622e73656172636828712e746167732e616e79285b5d2929\n73686f770964622e73656172636828712e67726f7570732e616e7928712e6e616d65203d3d2027726f6f74272929\n73686f770964622e73656172636828712e67726f7570732e616e7928712e6c6576656c203e20312929\n73686f770964622e73656172636828712e67726f7570732e616c6c28712e6e616d65203d3d20277374616666272929\n73686f770964622e73656172636828712e67726f7570732e616c6c28712e6c6576656c203e3d20312929\n73686f770964622e73656172636828712e67726f7570732e616e7928712e6e616d652e65786973747328292929\n73686f770964622e73656172636828712e6e616d652e6f6e655f6f66285b27416e6e272c20274379272c20275a6564275d2929\n73686f770964622e73656172636828712e746167732e6f6e655f6f66285b5b27646576275d2c2027646576275d2929\n73686f770964622e73656172636828712e746167732e6f6e655f6f662827646576272929\n73686f770964622e73656172636828712e667261676d656e74287b276e616d65273a2027426f277d2929\n73686f770964622e73656172636828712e667261676d656e74287b276e616d65273a2027426f272c202774616773273a205b27646576275d7d2929\n73686f770964622e73656172636828712e667261676d656e74287b2774616773273a205b5d7d2929\n73686f770964622e73656172636828712e667261676d656e74287b7d2929\n73686f770964622e73656172636828712e67726f7570732e667261676d656e74287b276e616d65273a20277374616666277d2929\n73686f770964622e73656172636828712e67726f7570732e616e7928712e667261676d656e74287b276e616d65273a20277374616666272c20276c6576656c273a20317d292929\n2309517565726965733a206572726f7273\n73686f770964622e73656172636828712e746167732e616e7928712e6d697373696e67203d3d20312929\n");
+    s.push_str("73686f770964622e736561726368287129\n73686f770964622e736561726368285175657279282929\n73686f770951756572792829203d3d2031\n73686f770964622e73656172636828712e6e616d65203e203329\n73686f770964622e73656172636828712e74616773203c20277a2729\n73686f770964622e73656172636828712e746167732e6d617463686573282764272929\n73686f770964622e73656172636828712e67726f7570732e616e7928712e6c6576656c203c202778272929\n73686f7709712e6578697374732829\n73686f770964622e73656172636828712e6e616d652e7465737428626f6f6d2929\n73686f770964622e636f756e7428712e6e616d65203d3d2027416e6e2729\n73686f770964622e636f756e7428712e746167732e616e79285b27646576272c20276f7073275d2929\n73686f770964622e67657428712e6e616d65203d3d2027416e6e27295b2774616773275d\n73686f770964622e67657428712e6e616d65203d3d20275a65642729\n2309517565726965733a20657175616c6974792c2068617368696e6720616e642072657072\n6c65740961203d20517565727928292e6e616d65203d3d2027416e6e27\n6c65740962203d20776865726528276e616d652729203d3d2027416e6e27\n73686f770961\n73686f770962\n73686f770961203d3d2062\n73686f7709517565727928292e616765203e2033\n73686f7709517565727928292e616765203e3d20332e35\n73686f7709517565727928292e616464726573732e636974792e6578697374732829\n73686f7709517565727928292e746167732e616e79285b2761272c202762275d29\n73686f7709517565727928292e746167732e616c6c285b2761275d29\n73686f7709517565727928292e6e616d652e6f6e655f6f66285b2778275d29\n73686f7709517565727928292e6e616d652e6d6174636865732827612b2729\n73686f7709517565727928292e6e616d652e736561726368282762272c2072652e4929\n73686f7709517565727928292e667261676d656e74287b2761273a20312c202762273a205b325d7d29\n73686f7709517565727928292e6e616d65\n73686f770951756572792829\n73686f7709517565727928292e6e6f6f702829\n73686f77097e28517565727928292e78203d3d203129\n73686f77097e7e28517565727928292e78203d3d203129\n73686f77092828517565727928292e61203d3d20312920262028517565727928292e62203d3d20322929203d3d202828517565727928292e62203d3d20322920262028517565727928292e61203d3d20312929\n73686f77092828517565727928292e61203d3d203129207c2028517565727928292e62203d3d20322929203d3d202828517565727928292e62203d3d203229207c2028517565727928292e61203d3d20312929\n");
+    s.push_str("73686f77092828517565727928292e61203d3d20312920262028517565727928292e62203d3d20322929203d3d202828517565727928292e61203d3d203129207c2028517565727928292e62203d3d20322929\n73686f770928517565727928292e61203d3d203129203d3d2028517565727928292e61203d3d20312e3029\n73686f770928517565727928292e61203d3d203129203d3d2028517565727928292e61203d3d205472756529\n73686f770928517565727928292e61203d3d205b312c20325d29203d3d2028517565727928292e61203d3d2028312c20322929\n73686f770928517565727928292e61203d3d203129203d3d2028517565727928292e62203d3d203129\n73686f770928517565727928292e61203d3d203129203d3d2031\n73686f770928517565727928292e61203d3d2031292e69735f636163686561626c652829\n73686f7709517565727928292e612e6d6170286c6f776572292e69735f636163686561626c652829\n73686f770928517565727928292e612e6d6170286c6f77657229203d3d20277827292e69735f636163686561626c652829\n73686f77092828517565727928292e612e6d6170286c6f77657229203d3d202778272920262028517565727928292e62203d3d203129292e69735f636163686561626c652829\n73686f770928517565727928292e612e746573742869735f6576656e29292e69735f636163686561626c652829\n73686f770928517565727928292e612e746573742869735f6576656e2929203d3d2028517565727928292e612e746573742869735f6576656e2929\n73686f770928517565727928292e612e746573742869735f6576656e2929203d3d2028517565727928292e612e74657374287374617274735f776974682929\n73686f770928517565727928292e612e74657374287374617274735f776974682c202778272929203d3d2028517565727928292e612e74657374287374617274735f776974682c202779272929\n73686f770928517565727928292e61203d3d207b276b273a20317d29203d3d2028517565727928292e61203d3d207b276b273a20317d29\n23095461626c6573\n7265736574092d\n6c6574096462203d2054696e7944422827646174612f64622f7461626c65732e6a736f6e2729\n73686f7709736f727465642864622e7461626c6573282929\n6c6574097573657273203d2064622e7461626c65282775736572732729\n6c6574096f7264657273203d2064622e7461626c6528276f72646572732729\n73686f7709736f727465642864622e7461626c6573282929\n73686f770975736572732e696e73657274287b276e616d65273a2027416e6e277d29\n");
+    s.push_str("73686f7709736f727465642864622e7461626c6573282929\n73686f77096f72646572732e696e736572745f6d756c7469706c65285b7b276974656d273a20276c616d70272c2027717479273a20327d2c207b276974656d273a20276361626c65272c2027717479273a20357d5d29\n73686f770964622e696e73657274287b276e6f7465273a202764656661756c74207461626c65277d29\n73686f7709736f727465642864622e7461626c6573282929\n73686f770975736572732e6e616d65\n73686f770964622e7461626c65282775736572732729206973207573657273\n73686f77096c656e28757365727329\n73686f77096c656e286f726465727329\n73686f77096c656e28646229\n73686f77096f72646572732e616c6c2829\n73686f77096c697374286f726465727329\n73686f770964622e7461626c652827757365727327292e616c6c2829\n6361740964622f7461626c65732e6a736f6e\n73686f770964622e64726f705f7461626c6528276f72646572732729\n73686f7709736f727465642864622e7461626c6573282929\n73686f77096f72646572732e616c6c2829\n73686f770964622e7461626c6528276f72646572732729206973206f7264657273\n73686f770964622e7461626c6528276f726465727327292e616c6c2829\n73686f770964622e64726f705f7461626c6528276e6f7468696e672729\n6361740964622f7461626c65732e6a736f6e\n73686f770964622e64726f705f7461626c65732829\n73686f7709736f727465642864622e7461626c6573282929\n73686f770975736572732e616c6c2829\n6361740964622f7461626c65732e6a736f6e\n73686f770975736572732e696e73657274287b276e616d65273a2027426f277d29\n73686f770975736572732e616c6c2829\n73686f770964622e7461626c652827757365727327292e616c6c2829\n6c657409656d707479203d2064622e7461626c652827656d707479272c20706572736973745f656d7074793d5472756529\n73686f7709736f727465642864622e7461626c6573282929\n6361740964622f7461626c65732e6a736f6e\n73686f770964622e636c6f73652829\n2309446f63756d656e7420494473\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e73657274287b276e273a20317d29\n73686f770964622e696e73657274287b276e273a20327d29\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e273a20337d2c207b276e273a20347d5d29\n73686f770964622e72656d6f766528646f635f6964733d5b345d29\n");
+    s.push_str("73686f770964622e696e73657274287b276e273a20357d29\n73686f770964622e67657428646f635f69643d3529\n73686f770964622e67657428646f635f69643d3429\n73686f770964622e67657428646f635f69643d35292e646f635f6964\n73686f77096964732864622e616c6c282929\n73686f770964622e696e7365727428446f63756d656e74287b276e273a2031327d2c20646f635f69643d31322929\n73686f770964622e696e73657274287b276e273a2031337d29\n73686f770964622e696e7365727428446f63756d656e74287b276e273a20317d2c20646f635f69643d312929\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e273a2031347d2c20446f63756d656e74287b276e273a20327d2c20646f635f69643d32295d29\n73686f77096964732864622e616c6c282929\n73686f770964622e696e736572745f6d756c7469706c65285b446f63756d656e74287b276e273a2032307d2c20646f635f69643d3230292c207b276e273a2032317d5d29\n73686f77096964732864622e616c6c282929\n73686f770964622e696e73657274285b276e6f74272c202761272c20276d617070696e67275d29\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e273a2033307d2c202778275d29\n73686f77096964732864622e616c6c282929\n73686f770964622e7472756e636174652829\n73686f770964622e696e73657274287b276e273a20276166746572207472756e63617465277d29\n73686f770964622e616c6c2829\n6c65740974203d2054696e7944422873746f726167653d4d656d6f727953746f72616765292e7461626c652827742729\n73686f7709742e696e7365727428446f63756d656e74287b2761273a20317d2c20646f635f69643d372929\n73686f7709742e696e73657274287b2761273a20327d29\n73686f770969647328742e616c6c282929\n7265736574092d\n6c6574096462203d2054696e7944422827646174612f64622f6964732e6a736f6e2729\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e273a20317d2c207b276e273a20327d2c207b276e273a20337d5d29\n73686f770964622e72656d6f766528646f635f6964733d5b335d29\n73686f770964622e696e73657274287b276e273a20347d29\n6361740964622f6964732e6a736f6e\n73686f770964622e636c6f73652829\n6c657409646232203d2054696e7944422827646174612f64622f6964732e6a736f6e2729\n73686f77096462322e72656d6f766528646f635f6964733d5b345d29\n73686f77096462322e696e73657274287b276e273a20357d29\n73686f7709696473286462322e616c6c282929\n");
+    s.push_str("6361740964622f6964732e6a736f6e\n230967657420616e6420636f6e7461696e73\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e736572745f6d756c7469706c65285b7b276b273a202761277d2c207b276b273a202762277d2c207b276b273a202763277d2c207b276b273a202762277d5d29\n6c65740971203d2051756572792829\n73686f770964622e67657428712e6b203d3d2027622729\n73686f770964622e67657428712e6b203d3d20276227292e646f635f6964\n73686f770964622e67657428646f635f69643d3329\n73686f770964622e67657428646f635f69643d27332729\n73686f770964622e67657428646f635f69643d3929\n73686f770964622e67657428646f635f6964733d5b312c20332c20395d29\n73686f770964622e67657428646f635f6964733d5b2732272c20345d29\n73686f770964622e67657428646f635f6964733d5b5d29\n73686f77096964732864622e67657428646f635f6964733d5b342c20315d2929\n73686f770964622e6765742829\n73686f770964622e67657428712e6b203d3d202762272c20646f635f69643d3129\n73686f770964622e636f6e7461696e7328712e6b203d3d2027632729\n73686f770964622e636f6e7461696e7328712e6b203d3d20277a2729\n73686f770964622e636f6e7461696e7328646f635f69643d3229\n73686f770964622e636f6e7461696e7328646f635f69643d3729\n73686f770964622e636f6e7461696e732829\n73686f770964622e636f756e7428712e6b203d3d2027622729\n73686f770964622e636f756e7428712e6b2e657869737473282929\n2309757064617465\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e616d65273a2027416e6e272c2027616765273a2033302c2027766973697473273a20317d2c207b276e616d65273a2027426f272c2027616765273a2032357d2c207b276e616d65273a20274379272c2027616765273a2034302c2027766973697473273a20357d5d29\n6c65740971203d2051756572792829\n73686f770964622e757064617465287b2763697479273a20274265726c696e277d2c20712e6e616d65203d3d2027416e6e2729\n73686f770964622e757064617465287b27616765273a2032362c202763697479273a20275061726973277d2c20712e6e616d65203d3d2027426f2729\n73686f770964622e757064617465287b27666c6167273a20547275657d29\n73686f770964622e616c6c2829\n");
+    s.push_str("73686f770964622e75706461746528696e6372656d656e74282776697369747327292c20712e7669736974732e657869737473282929\n73686f770964622e7570646174652864656372656d656e74282761676527292c20712e616765203e20333029\n73686f770964622e757064617465286164642827616765272c203130292c20712e6e616d65203d3d2027426f2729\n73686f770964622e7570646174652873756274726163742827766973697473272c2032292c20712e6e616d65203d3d202743792729\n73686f770964622e75706461746528736574282763697479272c2027526f6d6527292c20712e63697479203d3d202750617269732729\n73686f770964622e7570646174652864656c6574652827666c616727292c20712e6e616d65203d3d2027416e6e2729\n73686f770964622e616c6c2829\n73686f770964622e7570646174652861646428276e616d65272c20272127292c20712e6e616d65203d3d2027416e6e2729\n73686f770964622e7570646174652861646428276d697373696e67272c2031292c20712e6e616d65203d3d2027416e6e2729\n73686f770964622e75706461746528696e6372656d656e74282761676527292c20712e6e616d65203d3d2027416e6e2729\n73686f770964622e7570646174652864656c65746528276e6f7468696e6727292c20712e6e616d65203d3d2027426f2729\n73686f770964622e616c6c2829\n73686f770964622e757064617465287b27616765273a2039397d2c20646f635f6964733d5b312c20335d29\n73686f770964622e757064617465287b27616765273a203130307d2c20646f635f6964733d5b375d29\n73686f770964622e757064617465287365742827616765272c2031292c20646f635f6964733d5b325d29\n73686f770964622e7570646174652873686f757429\n73686f770964622e616c6c2829\n73686f770964622e757064617465287b2778273a20317d2c20712e6e616d65203d3d20274e6f626f64792729\n73686f770964622e757064617465287b2778273a20317d2c20712e6e616d65203d3d2027424f272c20646f635f6964733d5b315d29\n73686f770964622e616c6c2829\n23097570646174655f6d756c7469706c6520616e6420757073657274\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e616d65273a2027416e6e272c20276e273a20317d2c207b276e616d65273a2027426f272c20276e273a20327d2c207b276e616d65273a20274379272c20276e273a20337d5d29\n6c65740971203d2051756572792829\n");
+    s.push_str("73686f770964622e7570646174655f6d756c7469706c65285b287b276e273a2031307d2c20712e6e616d65203d3d2027416e6e27292c20287b276e273a2032307d2c20712e6e616d65203d3d2027426f27295d29\n73686f770964622e7570646174655f6d756c7469706c65285b28696e6372656d656e7428276e27292c20712e6e203e2035292c20287365742827626967272c2054727565292c20712e6e203e203135295d29\n73686f770964622e616c6c2829\n73686f770964622e7570646174655f6d756c7469706c65285b287b27746167273a202761277d2c20712e6e2e6578697374732829292c20287b27746167273a202762277d2c20712e6e203e203135295d29\n73686f770964622e616c6c2829\n73686f770964622e7570646174655f6d756c7469706c65285b5d29\n73686f770964622e757073657274287b276e616d65273a20274379272c20276e273a2033307d2c20712e6e616d65203d3d202743792729\n73686f770964622e757073657274287b276e616d65273a20274469272c20276e273a20347d2c20712e6e616d65203d3d202744692729\n73686f770964622e757073657274287b276e616d65273a20274564277d29\n73686f770964622e75707365727428446f63756d656e74287b276e616d65273a2027416e6e272c20276e273a2031317d2c20646f635f69643d312929\n73686f770964622e75707365727428446f63756d656e74287b276e616d65273a20275a6564277d2c20646f635f69643d392929\n73686f770964622e75707365727428446f63756d656e74287b276e616d65273a2027426f272c20276e273a2032317d2c20646f635f69643d32292c20712e6e616d65203d3d20274e6f626f64792729\n73686f770964622e616c6c2829\n73686f77096964732864622e616c6c282929\n73686f770964622e696e73657274287b276e616d65273a2027466179277d29\n230972656d6f766520616e64207472756e63617465\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e273a20317d2c207b276e273a20327d2c207b276e273a20337d2c207b276e273a20347d2c207b276e273a20357d5d29\n6c65740971203d2051756572792829\n73686f770964622e72656d6f766528712e6e203e203329\n73686f770964622e72656d6f766528646f635f6964733d5b312c20325d29\n73686f770964622e616c6c2829\n73686f770964622e72656d6f766528646f635f6964733d5b395d29\n73686f770964622e72656d6f766528712e6e203d3d20393929\n73686f770964622e72656d6f76652829\n");
+    s.push_str("73686f770964622e72656d6f766528646f635f6964733d5b5d29\n73686f770964622e7472756e636174652829\n73686f77096c656e28646229\n73686f770964622e696e73657274287b276e273a20367d29\n2309546865207175657279206361636865\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n73686f770964622e696e736572745f6d756c7469706c65285b7b276e616d65273a2027416e6e272c2027616765273a2033307d2c207b276e616d65273a2027426f272c2027616765273a20317d2c207b276e616d65273a20274379272c2027616765273a20547275657d5d29\n6c65740971203d2051756572792829\n6c65740974203d2064622e7461626c6528275f64656661756c742729\n73686f7709742e5f71756572795f63616368652e6c656e677468\n6c6574097231203d2064622e73656172636828712e616765203d3d203129\n73686f77097231\n73686f7709742e5f71756572795f63616368652e6c656e677468\n73686f770964622e73656172636828712e616765203d3d205472756529\n73686f770964622e73656172636828712e616765203d3d20312e3029\n73686f7709742e5f71756572795f63616368652e6c656e677468\n6c6574097232203d2064622e73656172636828712e616765203d3d203129\n73686f77097231206973207232\n73686f770972315b305d2069732072325b305d\n6c65740972315b305d5b27616765275d203d2032\n73686f770964622e73656172636828712e616765203d3d203129\n73686f770964622e616c6c2829\n73686f770964622e73656172636828712e616765203e20313029\n73686f7709742e5f71756572795f63616368652e6c656e677468\n73686f770964622e696e73657274287b276e616d65273a20274469272c2027616765273a20317d29\n73686f7709742e5f71756572795f63616368652e6c656e677468\n73686f770964622e73656172636828712e616765203d3d203129\n73686f770964622e73656172636828712e6e616d652e6d6170286c6f77657229203d3d202764692729\n73686f7709742e5f71756572795f63616368652e6c656e677468\n73686f770964622e73656172636828712e6e616d652e74657374287374617274735f776974682c202744272929\n73686f7709742e5f71756572795f63616368652e6c656e677468\n73686f770964622e636c6561725f63616368652829\n73686f7709742e5f71756572795f63616368652e6c656e677468\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n6c65740974203d2064622e7461626c652827736d616c6c272c2063616368655f73697a653d3229\n");
+    s.push_str("73686f7709742e696e736572745f6d756c7469706c65285b7b2776273a20317d2c207b2776273a20327d2c207b2776273a20337d5d29\n6c65740971203d2051756572792829\n73686f7709742e73656172636828712e76203d3d203129\n73686f7709742e73656172636828712e76203d3d203229\n73686f7709742e73656172636828712e76203d3d203329\n73686f7709742e5f71756572795f63616368652e6c656e677468\n73686f7709742e5f71756572795f63616368652e6c7275\n73686f7709742e73656172636828712e76203d3d203229\n73686f7709742e5f71756572795f63616368652e6c7275\n73686f7709742e73656172636828712e76203d3d203929\n73686f7709742e5f71756572795f63616368652e6c7275\n73686f7709742e73656172636828712e76203d3d203929\n73686f7709742e5f71756572795f63616368652e6c7275\n73686f7709742e73656172636828712e76203d3d203329\n73686f7709742e5f71756572795f63616368652e6c7275\n6c65740975203d2064622e7461626c6528276e6f6361636865272c2063616368655f73697a653d3029\n73686f7709752e696e73657274287b2776273a20317d29\n73686f7709752e73656172636828712e76203d3d203129\n73686f7709752e5f71756572795f63616368652e6c656e677468\n23094c5255436163686520616e6420667265657a65\n7265736574092d\n6c65740963203d204c525543616368652863617061636974793d3329\n6c657409635b2761275d203d2031\n6c657409635b2762275d203d2032\n6c657409635b2763275d203d2033\n73686f7709632e6c7275\n73686f7709635b2761275d\n73686f7709632e6c7275\n6c657409635b2764275d203d2034\n73686f7709632e6c7275\n73686f7709632e6765742827622729\n73686f7709632e676574282762272c20276e6f6e652729\n73686f7709635b2762275d\n73686f77096c656e286329\n73686f7709632e6c656e677468\n6c657409635b2761275d203d2030\n73686f7709632e6c7275\n73686f7709635b2761275d\n73686f7709632e6765742827612729\n6c657409635b2765275d203d2035\n73686f7709632e6c7275\n6c657409635b2765275d203d2036\n73686f7709632e6c7275\n73686f7709632e6765742827652729\n73686f7709632e6c7275\n73686f7709632e636c6561722829\n73686f7709632e6c7275\n6c65740975203d204c525543616368652829\n6c657409755b2778275d203d204e6f6e65\n73686f7709752e676574282778272c2027676f6e652729\n73686f7709755b2778275d\n73686f7709752e6c656e677468\n73686f7709667265657a65287b2761273a205b312c207b2762273a20327d5d2c202763273a20337d29\n");
+    s.push_str("73686f7709667265657a65285b312c205b322c20335d5d29\n73686f7709667265657a652827732729\n73686f7709667265657a65287b2761273a20317d29203d3d207b2761273a20317d\n73686f7709667265657a65285b312c20325d29203d3d2028312c203229\n73686f77096861736828667265657a65287b2762273a20312c202761273a20327d2929203d3d206861736828667265657a65287b2761273a20322c202762273a20317d2929\n6c65740966203d20667265657a65287b2761273a20317d29\n73686f7709662e757064617465287b2762273a20327d29\n73686f7709662e706f702827612729\n73686f7709662e636c6561722829\n73686f770966\n23094d656d6f727953746f726167652073686172657320746865206f626a6563747320697420697320676976656e\n7265736574092d\n6c6574096462203d2054696e7944422873746f726167653d4d656d6f727953746f7261676529\n6c657409646f63203d207b276e616d65273a2027416e6e272c202774616773273a205b2761275d2c20276d657461273a207b2776273a20317d7d\n73686f770964622e696e7365727428646f6329\n73686f770964622e616c6c2829\n73686f770964622e73746f726167652e726561642829\n646f09646f635b2774616773275d2e617070656e642827622729\n6c657409646f635b276e616d65275d203d20274368616e67656427\n73686f770964622e616c6c2829\n6c65740964203d2064622e67657428646f635f69643d3129\n6c657409645b276d657461275d5b2776275d203d2032\n6c657409645b276e616d65275d203d20274c6f63616c27\n73686f770964622e616c6c2829\n73686f770964\n73686f770964622e73746f726167652e6d656d6f72795b275f64656661756c74275d5b2731275d2069732064622e73746f726167652e7265616428295b275f64656661756c74275d5b2731275d\n7265736574092d\n6c6574096462203d2054696e7944422827646174612f64622f636f70792e6a736f6e2729\n6c657409646f63203d207b276e616d65273a2027416e6e272c202774616773273a205b2761275d7d\n73686f770964622e696e7365727428646f6329\n646f09646f635b2774616773275d2e617070656e642827622729\n73686f770964622e616c6c2829\n6c65740964203d2064622e67657428646f635f69643d3129\n646f09645b2774616773275d2e617070656e642827632729\n73686f770964622e616c6c2829\n6361740964622f636f70792e6a736f6e\n23094a534f4e53746f72616765206f7074696f6e73\n7265736574092d\n6c6574096462203d2054696e7944422827646174612f64622f7072657474792e6a736f6e272c20696e64656e743d322c20736f72745f6b6579733d5472756529\n");
+    s.push_str("73686f770964622e696e73657274287b276e616d65273a2027416e6e272c2027616765273a2033342c202774616773273a205b276f7073272c202761646d696e275d2c20276d657461273a207b7d2c2027656d707479273a205b5d2c20276e6573746564273a207b277a273a20312c202761273a205b312e352c204e6f6e652c20547275655d7d7d29\n73686f770964622e696e73657274287b276e616d65273a2027426f277d29\n6361740964622f7072657474792e6a736f6e\n73686f770964622e636c6f73652829\n6c6574096462203d2054696e7944422827646174612f64622f636f6d706163742e6a736f6e272c20736570617261746f72733d28272c272c20273a272929\n73686f770964622e696e73657274287b276e616d65273a2027416e6e272c202774616773273a205b2778272c202779275d7d29\n6361740964622f636f6d706163742e6a736f6e\n6c6574096462203d2054696e7944422827646174612f64622f746578742e6a736f6e2729\n73686f770964622e696e73657274287b276e616d65273a20275a6fc3ab272c202771756f7465273a20277361792022686922272c202770617468273a2027615c5c62272c2027746162273a2027615c7462272c20276c696e65273a2027615c6e62277d29\n6361740964622f746578742e6a736f6e\n73686f770964622e616c6c2829\n73686f770964622e67657428646f635f69643d31295b276e616d65275d\n6c6574096462203d2054696e7944422827646174612f64622f6e756d626572732e6a736f6e2729\n73686f770964622e696e73657274287b2769273a202d372c2027626967273a20393030373139393235343734303939332c202766273a20302e312c202767273a2031652d30372c202768273a20322e35652b32302c20277a273a20302e302c20276e273a202d312e32352c202765273a203130302e307d29\n6361740964622f6e756d626572732e6a736f6e\n73686f770964622e616c6c2829\n6c6574096462203d2054696e7944422827646174612f64622f6f726465722e6a736f6e2729\n73686f770964622e696e73657274287b2762273a20312c202761273a20322c202763273a207b2779273a20312c202778273a20327d7d29\n73686f770964622e696e73657274287b2761273a20337d29\n6361740964622f6f726465722e6a736f6e\n73686f770964622e616c6c2829\n23094a534f4e53746f726167652066696c6573\n7265736574092d\n73686f770954696e7944422827646174612f6e6f77686572652f64622e6a736f6e2729\n6c6574096462203d2054696e7944422827646174612f64622f646565702f65722f64622e6a736f6e272c206372656174655f646972733d5472756529\n");
+    s.push_str("73686f770964622e696e73657274287b276f6b273a20547275657d29\n6361740964622f646565702f65722f64622e6a736f6e\n73686f770964622e636c6f73652829\n6c657409726f203d2054696e7944422827646174612f64622f646565702f65722f64622e6a736f6e272c206163636573735f6d6f64653d27722729\n73686f7709726f2e616c6c2829\n73686f7709726f2e696e73657274287b276f6b273a2046616c73657d29\n73686f7709726f2e616c6c2829\n6361740964622f646565702f65722f64622e6a736f6e\n73686f770954696e7944422827646174612f64622f6d697373696e672e6a736f6e272c206163636573735f6d6f64653d27722729\n6c6574096462203d2054696e7944422827646174612f64622f656d7074792e6a736f6e2729\n6361740964622f656d7074792e6a736f6e\n73686f770964622e73746f726167652e726561642829\n73686f770964622e616c6c2829\n73686f7709736f727465642864622e7461626c6573282929\n73686f77096c656e28646229\n73686f770964622e696e73657274287b2761273a20317d29\n73686f770964622e73746f726167652e726561642829\n73686f770964622e64726f705f7461626c65732829\n6361740964622f656d7074792e6a736f6e\n73686f770964622e73746f726167652e726561642829\n230943616368696e674d6964646c6577617265\n7265736574092d\n6c6574096462203d2054696e7944422827646174612f64622f6361636865642e6a736f6e272c2073746f726167653d43616368696e674d6964646c6577617265284a534f4e53746f726167652929\n73686f770964622e696e73657274287b276e273a20317d29\n73686f770964622e696e73657274287b276e273a20327d29\n73686f770964622e616c6c2829\n6361740964622f6361636865642e6a736f6e\n73686f770964622e73746f726167652e5f63616368655f6d6f6469666965645f636f756e74\n73686f770964622e73746f726167652e666c7573682829\n6361740964622f6361636865642e6a736f6e\n73686f770964622e73746f726167652e5f63616368655f6d6f6469666965645f636f756e74\n73686f770964622e757064617465287b276e273a20337d2c20646f635f6964733d5b315d29\n6361740964622f6361636865642e6a736f6e\n73686f770964622e636c6f73652829\n6361740964622f6361636865642e6a736f6e\n6c657409616761696e203d2054696e7944422827646174612f64622f6361636865642e6a736f6e272c2073746f726167653d43616368696e674d6964646c6577617265284a534f4e53746f726167652929\n73686f7709616761696e2e616c6c2829\n");
+    s.push_str("73686f7709616761696e2e73746f726167652e666c7573682829\n73686f7709616761696e2e636c6f73652829\n6c6574096d656d203d2054696e7944422873746f726167653d43616368696e674d6964646c6577617265284d656d6f727953746f726167652929\n73686f77096d656d2e696e73657274287b276e273a20317d29\n73686f77096d656d2e73746f726167652e73746f726167652e726561642829\n73686f77096d656d2e73746f726167652e666c7573682829\n73686f77096d656d2e73746f726167652e73746f726167652e726561642829\n73686f77096d656d2e616c6c2829\n230950726f6772616d73\n7265736574092d\n70726f6772616d09696d706f727420636f6e74616374732e6373762064622f636f6e74616374732e6a736f6e\n70726f6772616d097265706f727420717565726965732e7473762064622f636f6e74616374732e6a736f6e206f75742f7265706f72742e747874\n70726f6772616d096170706c7920757064617465732e7473762064622f636f6e74616374732e6a736f6e\n70726f6772616d097265706f727420717565726965732e7473762064622f636f6e74616374732e6a736f6e206f75742f7265706f7274322e747874\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("contacts.csv 69642c6e616d652c656d61696c2c6167652c636974792c746167732c73636f72652c6163746976650a312c416e6e204c65652c616e6e406578616d706c652e636f6d2c33342c4265726c696e2c61646d696e3b6f70732c342e352c747275650a322c426f2042726f776e2c626f406578616d706c652e6f72672c32372c50617269732c6465762c332e32352c747275650a332c4379204e672c6379406578616d706c652e636f6d2c34312c4265726c696e2c6f70733b6f6e63616c6c2c352e302c66616c73650a342c4469205061726b2c2c31392c53656f756c2c6465763b696e7465726e2c322e37352c747275650a352c4564205275697a2c6564406578616d706c652e6e65742c35322c4d61647269642c2c312e352c66616c73650a362c466179204f6b6f726f2c666179406578616d706c652e636f6d2c33302c4c61676f732c6465763b6f70732c342e302c747275650a372c47757320486f6c6d2c677573406578616d706c652e6f72672c2c4f736c6f2c73616c65732c2c747275650a382c48616c2049746f2c68616c406578616d706c652e636f6d2c32372c546f6b796f2c6465763b61646d696e2c332e37352c747275650a392c49646120426572672c696461406578616d706c652e636f6d2c36352c4265726c696e2c726574697265642c302e352c66616c73650a31302c4a6f204469617a2c6a6f406578616d706c652e636f6d2c32332c50617269732c696e7465726e2c322e302c747275650a\nqueries.tsv 23206e616d650971756572790a6265726c696e6572730963697479203d3d204265726c696e0a6164756c74735f696e5f70617269730963697479203d3d205061726973202620616765203e3d2032350a6f70735f70656f706c65097461677320686173206f70730a6465765f6f725f61646d696e09746167732068617320646576207c2074616773206861732061646d696e0a6e6f5f656d61696c09656d61696c203d3d204e6f6e650a6578616d706c655f636f6d09656d61696c207e202e2a406578616d706c655c2e636f6d240a6e6f745f61637469766509616374697665203d3d2066616c73650a73656e696f7209616765203e2035300a796f756e675f6465767309616765203c2033302026207461677320686173206465760a776974685f73636f72650973636f7265206578697374730a6e616d65645f776974685f6f096e616d65207e205b412d5a5d5b612d7a5d2a202e2a6f2e2a0a696e5f636974696573096369747920696e204f736c6f7c546f6b796f7c4c61676f730a616c6c5f74616773097461677320616c6c206465767c6f70730a746f705f73636f7265730973636f7265203e3d20342e30207c20616765203e2036300a62726f6b656e09616765203e3d206f6c640a6e6f626f64790963697479203d3d2041746c616e7469730a\n");
+    s.push_str("updates.tsv 23206f7065726174696f6e096669656c640976616c75650977686572650a696e6372656d656e7409766973697473092d0963697479203d3d204265726c696e0a7365740976697369747309310963697479203d3d204265726c696e207c2063697479203d3d2050617269730a696e6372656d656e7409766973697473092d09766973697473206578697374730a6164640973636f726509302e3235097461677320686173206465760a7365740963697479094c6973626f6e096e616d65203d3d204564205275697a0a64656c65746509656d61696c092d09616374697665203d3d2066616c73650a737562747261637409616765093109616765203e2036300a64656372656d656e7409766973697473092d09766973697473203e3d20320a7365740974616773094e6f6e650974616773203d3d205b5d0a64656c6574650970686f6e65092d096e616d65203d3d20416e6e204c65650a7365740972657669657765640974727565092d0a\n");
+    s
+}
