@@ -12509,3 +12509,27 @@ fn a_mismatch_names_the_string_view_str() {
         "expected '(Str, i64)', found '(i64, i64)'",
     );
 }
+
+#[test]
+fn into_on_a_unit_variant_literal_converts() {
+    // B-2026-10-21-80: `A.Y.into()` parses as a call of the path `A.Y.into`
+    // and converts as `(A.Y).into()` does.
+    let src = "enum A { X, Y }\nenum B { P, Q }\n\
+               impl From[A] for B { fn from(a: own A) -> B { match a { A.X => B.P, A.Y => B.Q } } }\n\
+               fn main() {\n    let b: B = A.Y.into();\n    \
+               match b { B.P => println(\"P\"), B.Q => println(\"Q\") }\n}\n";
+    accepted("unit-variant-literal-into", src);
+    accepted_and_runs(
+        "parenthesised-variant-into",
+        &src.replace("A.Y.into()", "(A.Y).into()"),
+        "Q\n",
+    );
+    rejected(
+        "unit-variant-literal-into-no-impl",
+        &src.replace(
+            "let b: B = A.Y.into();",
+            "let b: B = A.Y.into();\n    let c: i64 = A.X.into();",
+        ),
+        "no `impl From[A] for i64` is in scope; cannot `.into()`",
+    );
+}

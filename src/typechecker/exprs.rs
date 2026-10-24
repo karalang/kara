@@ -6896,6 +6896,46 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn try_apply_into_coercion(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+        // `A.Y.into()` on a unit-variant literal parses as a call of the
+        // path `A.Y.into` (B-2026-07-13-4's shape); it converts exactly as
+        // `(A.Y).into()` does (B-2026-10-21-80).
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let ExprKind::Path {
+                segments,
+                generic_args: None,
+            } = &callee.kind
+            {
+                let is_unit_variant = segments.len() == 3
+                    && segments[2] == "into"
+                    && args.is_empty()
+                    && self.env.enums.get(&segments[0]).is_some_and(|einfo| {
+                        einfo.variants.iter().any(|(n, vi)| {
+                            n == &segments[1] && matches!(vi, super::types::VariantTypeInfo::Unit)
+                        })
+                    });
+                if is_unit_variant {
+                    let synth = Expr {
+                        id: expr.id,
+                        span: expr.span,
+                        kind: ExprKind::MethodCall {
+                            object: Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
+                                span: callee.span,
+                                kind: ExprKind::Path {
+                                    segments: segments[..2].to_vec(),
+                                    generic_args: None,
+                                },
+                            }),
+                            method: "into".to_string(),
+                            turbofish: None,
+                            args: Vec::new(),
+                            args_close_span: expr.span,
+                        },
+                    };
+                    return self.try_apply_into_coercion(&synth, expected);
+                }
+            }
+        }
         let ExprKind::MethodCall {
             object,
             method,
