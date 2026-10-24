@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| false-positive | 15 |
 | missing-feature | 15 |
-| false-positive | 14 |
 | diagnostics | 11 |
 | perf | 10 |
 | soundness | 4 |
+| run-vs-build | 4 |
 | miscompile | 3 |
-| run-vs-build | 3 |
 | other | 2 |
 | codegen-gap | 2 |
 
@@ -72,9 +72,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 26 |
-| codegen | 22 |
-| interp | 14 |
+| typecheck | 28 |
+| codegen | 23 |
+| interp | 15 |
 | mir | 9 |
 | runtime | 8 |
 | cli | 7 |
@@ -127,7 +127,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-23-21 | 2026-10-23 | cli | low | `karac check` on a project (no file) does not refuse the archived features (WASM exports, exported C ABI, GPU) or the M4a ones by name, as single-file `check` and `build` do; and `karac_jit_runner`'s `--repl-mode` and `--test-batch` paths are dead after the M3 deletion | — |
 | B-2026-10-24-1 | 2026-10-24 | cli+interp | low | The v2 REPL's remaining legacy-only pieces: `%show` and `--auto-clone` / `%set auto-clone` refuse on v2, `:provide` does not check that the provider implements the resource's trait until the next cell, and the `:provide` construction program still replays every earlier cell | — |
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
-| B-2026-10-24-4 | 2026-10-24 | mir | medium | The MIR builder refuses an adaptor called on a value of generic type `I: Iterator[Item = i64]`: `it.map(|x| x + 1).count()` checks, and `__mir-run` and `__mir-llvm-run` stop with "the method call `.map` with no resolved callee is not lowered yet" | — |
 | B-2026-10-24-6 | 2026-10-24 | mir-llvm+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 93 per word hash, against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
 | B-2026-10-24-7 | 2026-10-24 | typecheck | low | `c as i128` and `c as u128` on a `char` are refused with a bare "cannot cast 'char' to 'i128'", though `c as i64` and `c as u64` are accepted: integer_width_bits has no 128-bit entries, so check_cast_pair's char-to-wide-integer rule never sees them | — |
 | B-2026-10-24-8 | 2026-10-24 | mir | low | The MIR builder refuses `.into()` called straight on a unit-variant literal: `let b: B = A.Y.into();` checks (since eb790336d3), and `__mir-run` and `__mir-llvm-run` stop with "a call with no resolved callee is not lowered yet", while `(A.Y).into()` prints `Q` | — |
@@ -136,6 +135,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-11 | 2026-10-24 | mir | low | A `match` on a tuple of handle LOCALS that outlive it (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`, kata 558's `intersect`) still counts each handle into the built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads | — |
 | B-2026-10-24-12 | 2026-10-24 | parser | low | `karac fix` has no fix for `format!("..{}..", a, b)`: the error names the f-string to write but offers no edit, though a literal whose holes are all `{}` or `{:spec}` with one argument each maps one-to-one onto `f"..{a}..{b:spec}.."` | — |
 | B-2026-10-24-13 | 2026-10-24 | parser | low | The turbofish fix deletes `::<T>` / `::[T]` from `let x = it.collect::[Vec[char]]();` and leaves `let x = it.collect();`, which then fails E0238 "cannot infer type parameter 'C'": in a `let` with no annotation the fix should move the type onto the binding, as its own message tells the author to | — |
+| B-2026-10-24-15 | 2026-10-24 | typecheck+interp+codegen | low | A binding of a non-Copy payload from a `match` on a FIELD of a `mut ref` parameter (`match c.s { S.B(buf) => add(mut buf, 7) }`, `c: mut ref C`) is a `mut ref` under `karac check`, per core-semantics §4.6, but `ref` under the MIR typecheck, which refuses passing it as a `mut ref` argument; a method call through the same binding is accepted by both | — |
+| B-2026-10-24-16 | 2026-10-24 | typecheck | medium | `karac check` rejects `.collect()` after an item-preserving adaptor on a generic iterator: under `I: Iterator[Item = i64]`, `it.filter(|x| x % 2 == 0).collect()` and `it.take(2).collect()` into a `Vec[i64]` give "trait bound `C: FromIterator[ItemV]` is not satisfied; `Vec[i64]` implements `FromIterator[i64]`, not `FromIterator[ItemV]`" | — |
 
 ### Fixed
 
@@ -159,6 +160,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-22-44 | cli+codegen | medium | A v2 `karac test` failure from `assert_eq`/`assert_ne` carries no `left`/`right`: the MIR assertion aborts with "assertion failed: left != right" and… | 31c59a1eb5 |
 | B-2026-10-23-13 | codegen | low | (NOT SMALL, kata thread 2026-10-24: 3.4x on kata 951's tuple match of two Option[shared] params, 1.31 s vs 0.39 s for nested matches) A `match` on a… | a97412f163 |
 | B-2026-10-24-3 | interp+codegen | high | `v.push(m.get(k).unwrap())` into a `Vec[i64]` stores the ADDRESS of the map's value, not the value: on mir-llvm and `karac build --mir` the element p… | bd015b5c7c |
+| B-2026-10-24-4 | mir | medium | The MIR builder refuses an adaptor called on a value of generic type `I: Iterator[Item = i64]`: `it.map(\|x\| x + 1).count()` checks, and `__mir-run` a… | bc575797b1 |
 | B-2026-10-24-5 | mir | high | MIR borrowck lets the borrowed place change while a ref read through a borrowed struct's `mut ref` field is still live, a use-after-free that `karac… | 930b560ed5 |
 | B-2026-10-24-14 | runtime | medium | A growing `VecDeque` moves its elements into the new buffer one at a time on the compiled backends: RawDeque::grow (runtime/src/mir.rs) computes each… | d34614d017 |
 
