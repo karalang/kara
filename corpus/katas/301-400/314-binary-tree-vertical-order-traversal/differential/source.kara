@@ -393,8 +393,8 @@ fn right_spine(n: i64) -> Option[TreeNode] {
 
 fn perfect(depth: i64, counter: mut ref i64) -> Option[TreeNode] {
     if depth <= 0 { return None; }
-    *counter = counter + 1;
-    let v = counter;
+    *counter += 1;
+    let v = *counter;
     let l = perfect(depth - 1, mut counter);
     let r = perfect(depth - 1, mut counter);
     return node(v, l, r);

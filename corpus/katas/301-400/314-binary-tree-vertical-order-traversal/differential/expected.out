@@ -1,0 +1,11 @@
+cases 2282
+duplicate-value cases beyond the spec oracle 600
+P1 arm disagreements 0
+P2 permutation failures 0
+P3 column-range failures 0
+P4 placement failures 0
+P5 row-order failures 0
+P6 tie-break failures 0
+P7 mirror failures 0
+P8 closed-form failures 0
+DIFFERENTIAL OK
