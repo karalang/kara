@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/962-maximum-width-ramp/bench/max_width_ramp.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 962 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "d91a73159"
+classified_with = "941ebc386"
 extracted_src = "6dc95101"
