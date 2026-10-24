@@ -1,0 +1,77 @@
+// Benchmark: LeetCode #946 Validate Stack Sequences -- the ★ arm, the
+// stack replayed, on sequences of 1000 values, LeetCode's longest.
+// Mirrors validate_stack_sequences.c, .rs, .py and go-seq/.
+
+fn validate_stack_sequences(pushed: Vec[i64], popped: Vec[i64]) -> bool {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut j = 0;
+    for v in pushed.iter() {
+        stack.push(*v);
+        while stack.len() > 0 and stack[stack.len() - 1] == popped[j] {
+            stack.pop();
+            j += 1;
+        }
+    }
+    j == popped.len()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 2500;
+    let count = 20;
+    let n = 1000;
+    let mut seed = 946;
+    // the values 0 to 1000 in a random order, the first 1000 pushed, and
+    // the pops of a random run of pushes and pops, every second one with
+    // two neighbouring pops swapped
+    let mut pushes: Vec[Vec[i64]] = Vec.new();
+    let mut pops: Vec[Vec[i64]] = Vec.new();
+    for c in 0..count {
+        let mut all: Vec[i64] = Vec.new();
+        for v in 0..1001 {
+            all.push(v);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (1001 - i);
+            all.swap(i, j);
+        }
+        let mut pushed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            pushed.push(all[i]);
+        }
+        let mut stack: Vec[i64] = Vec.new();
+        let mut popped: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while popped.len() < n {
+            if i < n and (stack.len() == 0 or next_random(mut seed) % 2 == 0) {
+                stack.push(pushed[i]);
+                i += 1;
+            } else {
+                popped.push(stack.pop().unwrap());
+            }
+        }
+        if c % 2 == 1 {
+            let k = next_random(mut seed) % (n - 1);
+            popped.swap(k, k + 1);
+        }
+        pushes.push(pushed);
+        pops.push(popped);
+    }
+    let mut fits = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let k = (r + i) % count;
+            let ok = validate_stack_sequences(pushes[k], pops[k]);
+            if ok {
+                fits += 1;
+            }
+            check = (check * 31 + if ok { 1 } else { 2 }) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} pairs of sequences of {n} values: {fits} fit, checksum {check}");
+}

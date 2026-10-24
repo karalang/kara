@@ -1,0 +1,136 @@
+// LeetCode #946: Validate Stack Sequences -- the stack kept in place.
+//
+// The same replay with the stack written over a copy of the pushed values
+// themselves: the stack never holds more values than have been read, so
+// its top can live at an index that never passes the read position.
+// O(n) time, no second array but the copy.
+
+fn validate_stack_sequences(pushed: Vec[i64], popped: Vec[i64]) -> bool {
+    let mut a = pushed.clone();
+    let mut top = 0;
+    let mut j = 0;
+    for i in 0..a.len() {
+        a[top] = a[i];
+        top += 1;
+        while top > 0 and a[top - 1] == popped[j] {
+            top -= 1;
+            j += 1;
+        }
+    }
+    top == 0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n distinct values from 0 to 1000, in a random order.
+fn random_values(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut all: Vec[i64] = Vec.new();
+    for v in 0..1001 {
+        all.push(v);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (1001 - i);
+        all.swap(i, j);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        out.push(all[i]);
+    }
+    out
+}
+
+// The pops of a random run of pushes and pops.
+fn random_run(seed: mut ref i64, pushed: ref Vec[i64]) -> Vec[i64] {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while out.len() < pushed.len() {
+        if i < pushed.len() and (stack.len() == 0 or next_random(mut seed) % 2 == 0) {
+            stack.push(pushed[i]);
+            i += 1;
+        } else {
+            out.push(stack.pop().unwrap());
+        }
+    }
+    out
+}
+
+// A random order of the same values.
+fn shuffled(seed: mut ref i64, values: ref Vec[i64]) -> Vec[i64] {
+    let mut out = values.clone();
+    for i in 0..out.len() {
+        let j = i + next_random(mut seed) % (out.len() - i);
+        out.swap(i, j);
+    }
+    out
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{nums[i]}";
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![1, 2, 3, 4, 5], vec![4, 5, 3, 2, 1]],
+        vec![vec![1, 2, 3, 4, 5], vec![4, 3, 5, 1, 2]],
+        vec![vec![7], vec![7]],
+        vec![vec![1, 2], vec![2, 1]],
+        vec![vec![1, 2], vec![1, 2]],
+        vec![vec![2, 1, 0], vec![1, 2, 0]],
+        vec![vec![1, 2, 3], vec![3, 1, 2]],
+        vec![vec![0, 1, 2, 3], vec![1, 0, 3, 2]],
+    ];
+    for e in examples.iter() {
+        println(f"{show(e[0])} then {show(e[1])}: {validate_stack_sequences(e[0], e[1])}");
+    }
+    // 300 random cases of 1 to 12 values, half of them from a real run
+    let mut seed = 946;
+    let mut values = 0;
+    let mut fits = 0;
+    let mut check = 0;
+    for c in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let pushed = random_values(mut seed, n);
+        let popped = if c % 2 == 0 { random_run(mut seed, pushed) } else { shuffled(mut seed, pushed) };
+        let ok = validate_stack_sequences(pushed, popped);
+        values += n;
+        if ok {
+            fits += 1;
+        }
+        check = (check * 31 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"300 random cases of {values} values: {fits} fit, checksum {check}");
+    // LeetCode's longest, 1000 values
+    let pushed = random_values(mut seed, 1000);
+    let run = random_run(mut seed, pushed);
+    println(f"1000 values, a random run: {validate_stack_sequences(pushed, run)}");
+    let mut swapped = run.clone();
+    let mut k = 0;
+    while k + 1 < 1000 and validate_stack_sequences(pushed, swapped) {
+        swapped = run.clone();
+        swapped.swap(k, k + 1);
+        k += 37;
+    }
+    println(f"1000 values, the run with two pops swapped: {validate_stack_sequences(pushed, swapped)}");
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        reversed.push(pushed[999 - i]);
+    }
+    println(f"1000 values, popped in reverse: {validate_stack_sequences(pushed, reversed)}");
+    println(f"1000 values, popped as pushed: {validate_stack_sequences(pushed, pushed)}");
+    let mixed = shuffled(mut seed, pushed);
+    println(f"1000 values, popped in a random order: {validate_stack_sequences(pushed, mixed)}");
+}

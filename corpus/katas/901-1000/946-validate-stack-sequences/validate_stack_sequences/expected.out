@@ -1,0 +1,14 @@
+[1,2,3,4,5] then [4,5,3,2,1]: true
+[1,2,3,4,5] then [4,3,5,1,2]: false
+[7] then [7]: true
+[1,2] then [2,1]: true
+[1,2] then [1,2]: true
+[2,1,0] then [1,2,0]: true
+[1,2,3] then [3,1,2]: false
+[0,1,2,3] then [1,0,3,2]: true
+300 random cases of 1906 values: 200 fit, checksum 910645213
+1000 values, a random run: true
+1000 values, the run with two pops swapped: false
+1000 values, popped in reverse: true
+1000 values, popped as pushed: true
+1000 values, popped in a random order: false

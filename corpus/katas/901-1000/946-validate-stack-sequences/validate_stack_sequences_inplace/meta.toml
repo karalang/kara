@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/901-1000/946-validate-stack-sequences/validate_stack_sequences_inplace.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "mirror"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the kata's Python mirror, which every arm matches on __mir-run, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "4540c9238"
+extracted_src = "e2fce980"

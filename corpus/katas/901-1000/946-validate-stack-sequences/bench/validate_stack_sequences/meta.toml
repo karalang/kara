@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/946-validate-stack-sequences/bench/validate_stack_sequences.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "4540c9238"
+extracted_src = "c7c41b2a"
