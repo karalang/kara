@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/958-check-completeness-of-a-binary-tree/bench/is_complete_tree.kara"
+dedup_of = []
+tags = ["lib:vecdeque", "bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "4031a924b"
+extracted_src = "61287739"

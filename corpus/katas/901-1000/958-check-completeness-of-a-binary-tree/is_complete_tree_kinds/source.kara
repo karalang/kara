@@ -1,0 +1,274 @@
+// LeetCode #958: Check Completeness of a Binary Tree -- node kinds.
+//
+// In level order, a complete tree's nodes come as nodes with two
+// children, then at most one node with only a left child, then leaves;
+// no node has only a right child. Walk the nodes in level order and check
+// that the kinds come in that order: after the first node with fewer than
+// two children, every node must be a leaf. O(n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn is_complete_tree(root: Option[TreeNode]) -> bool {
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    if let Some(r) = root {
+        queue.push_back(r);
+    }
+    let mut leaves_only = false;
+    while let Some(node) = queue.pop_front() {
+        match (node.left, node.right) {
+            (Some(l), Some(r)) => {
+                if leaves_only {
+                    return false;
+                }
+                queue.push_back(l);
+                queue.push_back(r);
+            }
+            (Some(l), None) => {
+                if leaves_only {
+                    return false;
+                }
+                leaves_only = true;
+                queue.push_back(l);
+            }
+            (None, Some(_)) => return false,
+            (None, None) => leaves_only = true,
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+fn new_node(seed: mut ref i64) -> TreeNode {
+    TreeNode { val: 1 + next_random(mut seed) % 1000, left: None, right: None }
+}
+
+// The complete tree of n nodes: node i's children are nodes 2i + 1 and
+// 2i + 2.
+fn complete_tree(n: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if n == 0 {
+        return None;
+    }
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for _ in 0..n {
+        nodes.push(new_node(mut seed));
+    }
+    for i in 1..n {
+        let parent = nodes[(i - 1) / 2];
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i]);
+        } else {
+            parent.right = Some(nodes[i]);
+        }
+    }
+    Some(nodes[0])
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn random_tree(n: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if n == 0 {
+        return None;
+    }
+    let root = new_node(mut seed);
+    for _ in 1..n {
+        attach(root, new_node(mut seed), mut seed);
+    }
+    Some(root)
+}
+
+// The nodes in level order.
+fn in_order(root: TreeNode) -> Vec[TreeNode] {
+    let mut out: Vec[TreeNode] = vec![root];
+    let mut i = 0;
+    while i < out.len() {
+        let node = out[i];
+        if let Some(l) = node.left {
+            out.push(l);
+        }
+        if let Some(r) = node.right {
+            out.push(r);
+        }
+        i += 1;
+    }
+    out
+}
+
+// Node i of the complete tree is a left child (side 0) when i is odd.
+fn side_of(i: i64) -> i64 {
+    (i + 1) % 2
+}
+
+fn set_child(parent: TreeNode, side: i64, child: Option[TreeNode]) {
+    if side == 0 {
+        parent.left = child;
+    } else {
+        parent.right = child;
+    }
+}
+
+// The tree of a random case, by kind: 0 the complete tree of n nodes,
+// 1 the same with its last node moved to a random empty place, 2 the same
+// with a random leaf other than the root taken off, 3 a random tree, 4 the
+// complete tree with the children of a random node swapped.
+fn make_tree(kind: i64, n: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if kind == 3 {
+        return random_tree(n, mut seed);
+    }
+    let t = complete_tree(n, mut seed);
+    if n < 2 {
+        return t;
+    }
+    let root = t.unwrap();
+    let nodes = in_order(root);
+    if kind == 1 {
+        // the last node is node n - 1, its parent node (n - 2) / 2
+        let last = nodes[n - 1];
+        set_child(nodes[(n - 2) / 2], side_of(n - 1), None);
+        let mut parents: Vec[TreeNode] = Vec.new();
+        let mut sides: Vec[i64] = Vec.new();
+        for i in 0..n - 1 {
+            if nodes[i].left.is_none() {
+                parents.push(nodes[i]);
+                sides.push(0);
+            }
+            if nodes[i].right.is_none() {
+                parents.push(nodes[i]);
+                sides.push(1);
+            }
+        }
+        let k = next_random(mut seed) % parents.len();
+        set_child(parents[k], sides[k], Some(last));
+    } else if kind == 2 {
+        let mut leaves: Vec[i64] = Vec.new();
+        for i in 1..n {
+            if nodes[i].left.is_none() and nodes[i].right.is_none() {
+                leaves.push(i);
+            }
+        }
+        let i = leaves[next_random(mut seed) % leaves.len()];
+        set_child(nodes[(i - 1) / 2], side_of(i), None);
+    } else if kind == 4 {
+        let node = nodes[next_random(mut seed) % n];
+        let l = node.left;
+        node.left = node.right;
+        node.right = l;
+    }
+    t
+}
+
+fn size(t: ref Option[TreeNode]) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => 1 + size(node.left) + size(node.right),
+    }
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[Option[i64]]] = vec![
+        vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)],
+        vec![Some(1), Some(2), Some(3), Some(4), Some(5), None, Some(7)],
+        vec![Some(1)],
+        vec![Some(1), Some(2)],
+        vec![Some(1), None, Some(2)],
+        vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)],
+        vec![Some(1), Some(2), Some(3), Some(4), None, Some(6)],
+        vec![Some(1), Some(2), Some(3), None, None, Some(6), Some(7)],
+        vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8)],
+        vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), None, Some(8)],
+        vec![Some(1), Some(2), None, Some(3)],
+    ];
+    for i in 0..cases.len() {
+        println(f"case {i + 1}: {is_complete_tree(from_level_order(cases[i].clone()))}");
+    }
+    // 300 random trees of 1 to 12 nodes before their kind's change
+    let mut seed = 958;
+    let mut nodes = 0;
+    let mut yes = 0;
+    let mut by_kind: Vec[i64] = vec![0, 0, 0, 0, 0];
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let kind = next_random(mut seed) % 5;
+        let t = make_tree(kind, n, mut seed);
+        nodes += size(t);
+        let bit = if is_complete_tree(t) { 1 } else { 0 };
+        yes += bit;
+        by_kind[kind] += bit;
+        check = (check * 31 + bit + 1) % 1000000007;
+    }
+    println(f"300 random trees of {nodes} nodes: {yes} complete ({by_kind[0]}, {by_kind[1]}, {by_kind[2]}, {by_kind[3]}, {by_kind[4]} by kind), checksum {check}");
+    // LeetCode's largest trees, 100 nodes, one of each kind
+    for kind in 0..5 {
+        let t = make_tree(kind, 100, mut seed);
+        println(f"{size(t)} nodes, kind {kind}: {is_complete_tree(t)}");
+    }
+    // a path of 100 nodes, every child on the left
+    let mut path = TreeNode { val: 100, left: None, right: None };
+    for k in 1..100 {
+        path = TreeNode { val: 100 - k, left: Some(path), right: None };
+    }
+    println(f"a path of 100 nodes: {is_complete_tree(Some(path))}");
+}

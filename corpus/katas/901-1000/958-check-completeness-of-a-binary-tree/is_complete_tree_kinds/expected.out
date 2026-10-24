@@ -1,0 +1,18 @@
+case 1: true
+case 2: false
+case 3: true
+case 4: true
+case 5: false
+case 6: true
+case 7: false
+case 8: false
+case 9: true
+case 10: false
+case 11: false
+300 random trees of 1919 nodes: 150 complete (57, 19, 18, 18, 38 by kind), checksum 24717295
+100 nodes, kind 0: true
+100 nodes, kind 1: false
+99 nodes, kind 2: false
+100 nodes, kind 3: false
+100 nodes, kind 4: true
+a path of 100 nodes: false
