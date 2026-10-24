@@ -1,0 +1,425 @@
+== vehicle.dbc
+version 'KV7-2026.10'
+bus 'KV7_Powertrain': 'KV7 powertrain bus, 500 kbit/s'
+node VCU: comment 'Vehicle control unit', address 16
+node BMS: comment 'Battery management system', address 32
+node MCU: comment 'Motor control unit', address 48
+node OBC: comment None, address None
+node DASH: comment None, address None
+node GW: comment None, address None
+value table GearTable: 4=SPORT, 3=DRIVE, 2=NEUTRAL, 1=REVERSE, 0=PARK
+value table OnOff: 1=ON, 0=OFF
+message VCU_Status 0x100 standard, 8 bytes, senders ['VCU'], cycle 100, send type 'Cyclic'
+  comment 'Driver demand and vehicle state'
+  receivers ['DASH', 'GW', 'MCU'], multiplexed False
+  tree ['VehicleSpeed', 'Gear', 'ReadyFlag', 'DriveMode', 'AccelPedal', 'BrakePressure', 'Counter', 'Checksum']
+  VehicleSpeed: 0|16 little unsigned, range [0, 250], unit 'km/h', receivers ['DASH', 'MCU'], initial None
+    LinearConversion(scale=0.01, offset=0, is_float=False), scale 0.01, offset 0
+  Gear: 16|3 little unsigned, range [0, 4], unit None, receivers ['DASH', 'MCU'], initial None
+    NamedSignalConversion(scale=1, offset=0, choices={4: 'SPORT', 3: 'DRIVE', 2: 'NEUTRAL', 1: 'REVERSE', 0: 'PARK'}, is_float=False), scale 1, offset 0
+  ReadyFlag: 19|1 little unsigned, range [0, 1], unit None, receivers ['DASH'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+  DriveMode: 20|2 little unsigned, range [0, 2], unit None, receivers ['DASH'], initial None
+    NamedSignalConversion(scale=1, offset=0, choices={2: 'SNOW', 1: 'NORMAL', 0: 'ECO'}, is_float=False), scale 1, offset 0
+  AccelPedal: 24|8 little unsigned, range [0, 100], unit '%', receivers ['MCU'], initial None
+    LinearConversion(scale=0.4, offset=0, is_float=False), scale 0.4, offset 0
+  BrakePressure: 32|12 little unsigned, range [0, 400], unit 'bar', receivers ['MCU'], initial None
+    LinearConversion(scale=0.1, offset=0, is_float=False), scale 0.1, offset 0
+  Counter: 48|4 little unsigned, range [0, 15], unit None, receivers ['GW'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+  Checksum: 63|8 big unsigned, range [0, 255], unit None, receivers ['GW'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    comment 'Sum of bytes 0 to 6, inverted'
+message BMS_Pack 0x200 standard, 8 bytes, senders ['BMS'], cycle 100, send type 'Cyclic'
+  receivers ['DASH', 'VCU'], multiplexed False
+  tree ['PackVoltage', 'PackCurrent', 'StateOfCharge', 'MaxCellTemp', 'MinCellTemp', 'PackState', 'IsolationOk']
+  PackVoltage: 7|16 big unsigned, range [0, 900], unit 'V', receivers ['VCU', 'DASH'], initial None
+    LinearConversion(scale=0.1, offset=0, is_float=False), scale 0.1, offset 0
+  PackCurrent: 23|16 big signed, range [-3276.8, 3276.7], unit 'A', receivers ['VCU'], initial None
+    LinearConversion(scale=0.1, offset=0, is_float=False), scale 0.1, offset 0
+    comment 'Positive while discharging'
+  StateOfCharge: 39|8 big unsigned, range [0, 100], unit '%', receivers ['VCU', 'DASH'], initial None
+    LinearConversion(scale=0.5, offset=0, is_float=False), scale 0.5, offset 0
+  MaxCellTemp: 47|8 big unsigned, range [-40, 125], unit 'degC', receivers ['VCU'], initial None
+    LinearIntegerConversion(scale=1, offset=-40), scale 1, offset -40
+  MinCellTemp: 55|8 big unsigned, range [-40, 125], unit 'degC', receivers ['VCU'], initial None
+    LinearIntegerConversion(scale=1, offset=-40), scale 1, offset -40
+  PackState: 63|4 big unsigned, range [0, 5], unit None, receivers ['VCU'], initial None
+    NamedSignalConversion(scale=1, offset=0, choices={5: 'SHUTDOWN', 4: 'FAULT', 3: 'CHARGE', 2: 'DRIVE', 1: 'STANDBY', 0: 'INIT'}, is_float=False), scale 1, offset 0
+  IsolationOk: 59|1 big unsigned, range [0, 1], unit None, receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+message BMS_Cells 0x201 standard, 8 bytes, senders ['BMS'], cycle 250, send type 'Cyclic'
+  comment 'Cell voltages, three per frame, and the thermal page'
+  receivers ['VCU'], multiplexed True
+  tree [{'CellGroup': {0: ['CellVoltA', 'CellVoltB', 'CellVoltC'], 1: ['CellVoltD', 'CellVoltE', 'CellVoltF'], 2: ['CellVoltG', 'CellVoltH', 'CellVoltI'], 3: ['BalanceMask', 'CellTempAvg']}}, 'RollingCount']
+  CellGroup: 0|4 little unsigned, range [0, 3], unit None, receivers ['VCU'], initial None
+    NamedSignalConversion(scale=1, offset=0, choices={3: 'THERMAL', 2: 'CELLS_7_9', 1: 'CELLS_4_6', 0: 'CELLS_1_3'}, is_float=False), scale 1, offset 0
+    multiplexer
+    comment 'Selects what bytes 1 to 6 carry'
+  CellVoltA: 8|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [0]
+  CellVoltD: 8|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [1]
+  CellVoltG: 8|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [2]
+  BalanceMask: 8|12 little unsigned, range [None, None], unit None, receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [3]
+  CellVoltB: 24|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [0]
+  CellVoltE: 24|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [1]
+  CellVoltH: 24|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [2]
+  CellTempAvg: 24|8 little unsigned, range [-20, 107.5], unit 'degC', receivers ['VCU'], initial None
+    LinearConversion(scale=0.5, offset=-20, is_float=False), scale 0.5, offset -20
+    under CellGroup for [3]
+  CellVoltC: 40|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [0]
+  CellVoltF: 40|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [1]
+  CellVoltI: 40|16 little unsigned, range [0, 5000], unit 'mV', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+    under CellGroup for [2]
+  RollingCount: 60|4 little unsigned, range [0, 15], unit None, receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+message MCU_Motor 0x300 standard, 8 bytes, senders ['MCU'], cycle 50, send type 'Cyclic'
+  receivers ['DASH', 'GW', 'VCU'], multiplexed False
+  tree ['MotorRpm', 'MotorTorque', 'InverterTemp', 'MotorTemp', 'FaultCode', 'DeratePct']
+  MotorRpm: 0|16 little signed, range [-12000, 12000], unit 'rpm', receivers ['VCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+  MotorTorque: 16|12 little signed, range [-1000, 1000], unit 'Nm', receivers ['VCU'], initial None
+    LinearConversion(scale=0.5, offset=0, is_float=False), scale 0.5, offset 0
+  InverterTemp: 28|8 little unsigned, range [-40, 150], unit 'degC', receivers ['VCU'], initial None
+    LinearIntegerConversion(scale=1, offset=-40), scale 1, offset -40
+  MotorTemp: 36|8 little unsigned, range [-40, 180], unit 'degC', receivers ['VCU', 'DASH'], initial 60
+    LinearIntegerConversion(scale=1, offset=-40), scale 1, offset -40
+  FaultCode: 44|8 little unsigned, range [0, 255], unit None, receivers ['VCU', 'DASH', 'GW'], initial None
+    NamedSignalConversion(scale=1, offset=0, choices={17: 'RESOLVER', 3: 'UNDERVOLT', 2: 'OVERTEMP', 1: 'OVERCURRENT', 0: 'NONE'}, is_float=False), scale 1, offset 0
+    comment 'Latched; cleared by "key off"'
+  DeratePct: 52|7 little unsigned, range [0, 100], unit '%', receivers ['VCU'], initial None
+    LinearIntegerConversion(scale=2, offset=0), scale 2, offset 0
+message OBC_Charge 0x18ff50e5 extended, 8 bytes, senders ['OBC'], cycle 1000, send type 'Cyclic'
+  receivers ['BMS', 'DASH'], multiplexed False
+  tree ['ChargerVoltage', 'ChargerCurrent', 'ChargeState', 'TimeToFull', 'PlugTemp']
+  ChargerVoltage: 0|16 little unsigned, range [0, 1000], unit 'V', receivers ['BMS'], initial None
+    LinearConversion(scale=0.1, offset=0, is_float=False), scale 0.1, offset 0
+  ChargerCurrent: 16|16 little unsigned, range [-1600, 1676.75], unit 'A', receivers ['BMS'], initial None
+    LinearConversion(scale=0.05, offset=-1600, is_float=False), scale 0.05, offset -1600
+  ChargeState: 32|3 little unsigned, range [0, 4], unit None, receivers ['BMS', 'DASH'], initial None
+    NamedSignalConversion(scale=1, offset=0, choices={4: 'DONE', 3: 'CV', 2: 'CC', 1: 'PRECHARGE', 0: 'IDLE'}, is_float=False), scale 1, offset 0
+  TimeToFull: 40|16 little unsigned, range [0, 65534], unit 'min', receivers ['DASH'], initial 65535
+    IdentityConversion(is_float=False), scale 1, offset 0
+  PlugTemp: 56|8 little unsigned, range [-40, 120], unit 'degC', receivers ['BMS'], initial None
+    LinearIntegerConversion(scale=1, offset=-40), scale 1, offset -40
+message DASH_Odometer 0x400 standard, 6 bytes, senders ['DASH'], cycle 1000, send type 'Cyclic'
+  receivers ['GW'], multiplexed False
+  tree ['Odometer', 'TripA']
+  Odometer: 0|32 little unsigned, range [None, None], unit 'km', receivers ['GW'], initial None
+    LinearConversion(scale=0.1, offset=0, is_float=False), scale 0.1, offset 0
+  TripA: 32|16 little unsigned, range [0, 6553.5], unit 'km', receivers ['GW'], initial None
+    LinearConversion(scale=0.1, offset=0, is_float=False), scale 0.1, offset 0
+message GW_Diag 0x7df standard, 3 bytes, senders ['GW', 'DASH', 'VCU'], cycle None, send type 'Event'
+  receivers ['BMS', 'MCU', 'VCU'], multiplexed False
+  tree ['ServiceId', 'Did']
+  ServiceId: 0|8 little unsigned, range [0, 255], unit None, receivers ['VCU', 'BMS', 'MCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+  Did: 15|16 big unsigned, range [0, 65535], unit None, receivers ['VCU', 'BMS', 'MCU'], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+message TESTER_Ping 0x700 standard, 2 bytes, senders [], cycle None, send type 'IfActive'
+  receivers [], multiplexed False
+  tree ['PingSeq', 'PingFlags']
+  PingSeq: 0|8 little unsigned, range [0, 255], unit None, receivers [], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+  PingFlags: 8|8 little unsigned, range [None, None], unit None, receivers [], initial None
+    IdentityConversion(is_float=False), scale 1, offset 0
+== broken files
+bad_char.dbc: UnsupportedDatabaseFormatError: DBC: "Invalid syntax at line 11, column 39: " SG_ Right : 8|8@1+ (1,0) [0|0] "" ECU>>!<<#2""
+  not strict: UnsupportedDatabaseFormatError: DBC: "Invalid syntax at line 11, column 39: " SG_ Right : 8|8@1+ (1,0) [0|0] "" ECU>>!<<#2""
+bad_ext_id.dbc: UnsupportedDatabaseFormatError: DBC: "Extended frame id 0x60000000 is more than 29 bits in message Lamp."
+  not strict: UnsupportedDatabaseFormatError: DBC: "Extended frame id 0x60000000 is more than 29 bits in message Lamp."
+bad_mux_overlap.dbc: UnsupportedDatabaseFormatError: DBC: "The signals C and B are overlapping in message Lamp."
+  not strict: Lamp [{'Page': {0: ['A'], 1: ['B', 'C']}}]
+bad_nofit.dbc: UnsupportedDatabaseFormatError: DBC: "The signal Right does not fit in message Lamp."
+  not strict: Lamp ['Left', 'Right']
+bad_nofit_be.dbc: UnsupportedDatabaseFormatError: DBC: "The signal Right does not fit in message Lamp."
+  not strict: Lamp ['Left', 'Right']
+bad_overlap.dbc: UnsupportedDatabaseFormatError: DBC: "The signals Right and Left are overlapping in message Lamp."
+  not strict: Lamp ['Left', 'Right']
+bad_overlap_be.dbc: UnsupportedDatabaseFormatError: DBC: "The signals Fog and Head are overlapping in message Lamp."
+  not strict: Lamp ['Head', 'Fog']
+bad_std_id.dbc: UnsupportedDatabaseFormatError: DBC: "Standard frame id 0x800 is more than 11 bits in message Lamp."
+  not strict: UnsupportedDatabaseFormatError: DBC: "Standard frame id 0x800 is more than 11 bits in message Lamp."
+bad_string.dbc: UnsupportedDatabaseFormatError: DBC: "Invalid syntax at line 11, column 13: "CM_ BO_ 307 >>!<<"never closed;""
+  not strict: UnsupportedDatabaseFormatError: DBC: "Invalid syntax at line 11, column 13: "CM_ BO_ 307 >>!<<"never closed;""
+bad_syntax.dbc: UnsupportedDatabaseFormatError: DBC: "Invalid syntax at line 11, column 16: " SG_ Right : 8 >>!<<8@1+ (1,0) [0|0] "" ECU""
+  not strict: UnsupportedDatabaseFormatError: DBC: "Invalid syntax at line 11, column 16: " SG_ Right : 8 >>!<<8@1+ (1,0) [0|0] "" ECU""
+bad_zero_length.dbc: UnsupportedDatabaseFormatError: DBC: "The signal Left length 0 is not greater than 0 in message Lamp."
+  not strict: UnsupportedDatabaseFormatError: DBC: "The signal Left length 0 is not greater than 0 in message Lamp."
+== jobs
+> encode VCU_Status VehicleSpeed=88.5 Gear='DRIVE' ReadyFlag=1 DriveMode='ECO' AccelPedal=36.4 BrakePressure=0 Counter=7 Checksum=0
+  92220b5b00000700
+> encode VCU_Status VehicleSpeed=88 Gear=3 ReadyFlag=1 DriveMode=0 AccelPedal=36 BrakePressure=0.0 Counter=12.5 Checksum=255
+  60220b5a00000cff
+> encode VCU_Status -pad VehicleSpeed=0 Gear='PARK' ReadyFlag=0 DriveMode='NORMAL' AccelPedal=0 BrakePressure=12.3 Counter=0 Checksum=0
+  0000d0007bf0f000
+> encode VCU_Status VehicleSpeed=251 Gear='DRIVE' ReadyFlag=1 DriveMode='ECO' AccelPedal=0 BrakePressure=0 Counter=0 Checksum=0
+  EncodeError: Expected signal "VehicleSpeed" value smaller than or equal to 250 in message "VCU_Status", but got 251.
+> encode VCU_Status VehicleSpeed=-0.5 Gear='DRIVE' ReadyFlag=1 DriveMode='ECO' AccelPedal=0 BrakePressure=0 Counter=0 Checksum=0
+  EncodeError: Expected signal "VehicleSpeed" value greater than or equal to 0 in message "VCU_Status", but got -0.5.
+> encode VCU_Status VehicleSpeed=250.000001 Gear='DRIVE' ReadyFlag=1 DriveMode='ECO' AccelPedal=0 BrakePressure=0 Counter=0 Checksum=0
+  EncodeError: Expected signal "VehicleSpeed" value smaller than or equal to 250 in message "VCU_Status", but got 250.000001.
+> encode VCU_Status VehicleSpeed=10 Gear='TURBO' ReadyFlag=1 DriveMode='ECO' AccelPedal=0 BrakePressure=0 Counter=0 Checksum=0
+  KeyError: 'TURBO'
+> encode VCU_Status VehicleSpeed=10 Gear='DRIVE' ReadyFlag=1 AccelPedal=0 BrakePressure=0 Counter=0 Checksum=0
+  EncodeError: The signal "DriveMode" is required for encoding.
+> encode VCU_Status VehicleSpeed=10 Gear='DRIVE' ReadyFlag=1 DriveMode=1 AccelPedal=0 BrakePressure=0 Counter=0 Checksum=0 Horn=1
+  EncodeError: The following signals were specified but are not required to encode the message:{'Horn'}
+> encode VCU_Status -noscale VehicleSpeed=8850 Gear=3 ReadyFlag=1 DriveMode=0 AccelPedal=91 BrakePressure=0 Counter=7 Checksum=0
+  92220b5b00000700
+> encode VCU_Status -noscale VehicleSpeed=26000 Gear=3 ReadyFlag=1 DriveMode=0 AccelPedal=91 BrakePressure=0 Counter=7 Checksum=0
+  EncodeError: Expected signal "VehicleSpeed" value smaller than or equal to 250 in message "VCU_Status", but got 260.0.
+> encode VCU_Status -loose VehicleSpeed=700 Gear=3 ReadyFlag=1 DriveMode=0 AccelPedal=91 BrakePressure=0 Counter=7 Checksum=0
+  Error: "u16" requires 0 <= integer <= 65535 (got 70000)
+> encode VCU_Status -loose VehicleSpeed=10 Gear=9 ReadyFlag=1 DriveMode=0 AccelPedal=0 BrakePressure=0 Counter=0 Checksum=0
+  Error: "u3" requires 0 <= integer <= 7 (got 9)
+> encode VCU_Status -loose VehicleSpeed=10 Gear=3 ReadyFlag=1 AccelPedal=0 BrakePressure=0 Counter=0 Checksum=0
+  KeyError: 'DriveMode'
+> encode BMS_Pack PackVoltage=371.2 PackCurrent=-112.5 StateOfCharge=81.5 MaxCellTemp=29 MinCellTemp=24 PackState='DRIVE' IsolationOk=1
+  0e80fb9ba3454028
+> encode BMS_Pack -pad PackVoltage=371.2 PackCurrent=0.1 StateOfCharge=81 MaxCellTemp=25.5 MinCellTemp=-40 PackState='CHARGE' IsolationOk=0
+  0e800001a2420037
+> encode BMS_Pack PackVoltage=371.2 PackCurrent=-3276.8 StateOfCharge=100 MaxCellTemp=125 MinCellTemp=-40.5 PackState=5 IsolationOk=1
+  EncodeError: Expected signal "MinCellTemp" value greater than or equal to -40 in message "BMS_Pack", but got -40.5.
+> encode BMS_Pack PackVoltage=371.2 PackCurrent=3276.7 StateOfCharge=0.25 MaxCellTemp=24.5 MinCellTemp=-39.5 PackState=4 IsolationOk=1
+  0e807fff00400048
+> encode BMS_Pack -noscale PackVoltage=3712 PackCurrent=-1125 StateOfCharge=163 MaxCellTemp=69 MinCellTemp=64 PackState=2 IsolationOk=1
+  0e80fb9ba3454028
+> encode BMS_Pack -loose PackVoltage=371.2 PackCurrent=-3300 StateOfCharge=81 MaxCellTemp=29 MinCellTemp=24 PackState=2 IsolationOk=1
+  Error: "s16" requires -32768 <= integer <= 32767 (got -33000)
+> encode BMS_Cells CellGroup=0 CellVoltA=3671 CellVoltB=3668 CellVoltC=3675 RollingCount=3
+  00570e540e5b0e30
+> encode BMS_Cells CellGroup='THERMAL' BalanceMask=65 CellTempAvg=33.5 RollingCount=15
+  0341006b000000f0
+> encode BMS_Cells -pad CellGroup='CELLS_4_6' CellVoltD=3662 CellVoltE=3670 CellVoltF=3673 RollingCount=0
+  f14e0e560e590e0f
+> encode BMS_Cells CellGroup=4 CellVoltA=3671 CellVoltB=3668 CellVoltC=3675 RollingCount=3
+  EncodeError: A valid value for the multiplexer selector signal "CellGroup" is required: Expected one of {0, 1, 2 or 3}, but got 4
+> encode BMS_Cells CellGroup=1 CellVoltA=3671 CellVoltB=3668 CellVoltC=3675 RollingCount=3
+  EncodeError: The signal "CellVoltD" is required for encoding.
+> encode BMS_Cells CellGroup=2 CellVoltG=3659 CellVoltH=3669 RollingCount=3
+  EncodeError: The signal "CellVoltI" is required for encoding.
+> encode BMS_Cells CellGroup='CELLS_7_9' CellVoltG=3659 CellVoltH=3669 CellVoltI=5001 RollingCount=3
+  EncodeError: Expected signal "CellVoltI" value smaller than or equal to 5000 in message "BMS_Cells", but got 5001.
+> encode BMS_Cells -loose CellGroup=7 CellVoltA=1 RollingCount=1
+  EncodeError: Expected multiplexer id in {0, 1, 2 or 3}, for multiplexer "CellGroup" but got 7
+> encode BMS_Cells CellGroup='THERMAL' BalanceMask=4096 CellTempAvg=33.5 RollingCount=15
+  Error: "u12" requires 0 <= integer <= 4095 (got 4096)
+> encode BMS_Cells -loose CellGroup='THERMAL' BalanceMask=4096 CellTempAvg=33.5 RollingCount=15
+  Error: "u12" requires 0 <= integer <= 4095 (got 4096)
+> encode MCU_Motor MotorRpm=-850 MotorTorque=-62.5 InverterTemp=58 MotorTemp=63 FaultCode='NONE' DeratePct=0
+  aefc832f76060000
+> encode MCU_Motor MotorRpm=8640 MotorTorque=210 InverterTemp=61 MotorTemp=71 FaultCode='OVERTEMP' DeratePct=37
+  c021a451f6262001
+> encode MCU_Motor MotorRpm=8640 MotorTorque=210 InverterTemp=61 MotorTemp=71 FaultCode=99 DeratePct=38.0
+  c021a451f6363601
+> encode MCU_Motor MotorRpm=8640.5 MotorTorque=210.25 InverterTemp=61 MotorTemp=71 FaultCode=17 DeratePct=39
+  c021a451f6164101
+> encode MCU_Motor -noscale MotorRpm=-1 MotorTorque=-1 InverterTemp=0 MotorTemp=255 FaultCode=2 DeratePct=127
+  EncodeError: Expected signal "MotorTemp" value smaller than or equal to 180 in message "MCU_Motor", but got 215.
+> encode MCU_Motor MotorRpm=12001 MotorTorque=0 InverterTemp=61 MotorTemp=71 FaultCode=0 DeratePct=0
+  EncodeError: Expected signal "MotorRpm" value smaller than or equal to 12000 in message "MCU_Motor", but got 12001.
+> encode MCU_Motor -loose MotorRpm=-40000 MotorTorque=0 InverterTemp=61 MotorTemp=71 FaultCode=0 DeratePct=0
+  Error: "s16" requires -32768 <= integer <= 32767 (got -40000)
+> encode MCU_Motor -loose MotorRpm=0 MotorTorque=1100 InverterTemp=61 MotorTemp=71 FaultCode=0 DeratePct=0
+  Error: "s12" requires -2048 <= integer <= 2047 (got 2200)
+> encode MCU_Motor -loose MotorRpm=0 MotorTorque=0 InverterTemp=61 MotorTemp=71 FaultCode='SMOKE' DeratePct=0
+  KeyError: 'SMOKE'
+> encode OBC_Charge ChargerVoltage=372.5 ChargerCurrent=110 ChargeState='CC' TimeToFull=96 PlugTemp=23
+  8d0e98850260003f
+> encode OBC_Charge ChargerVoltage=0 ChargerCurrent=-1600 ChargeState='IDLE' TimeToFull=65534 PlugTemp=-40
+  0000000000feff00
+> encode OBC_Charge ChargerVoltage=0 ChargerCurrent=0.025 ChargeState='IDLE' TimeToFull=0 PlugTemp=0
+  0000007d00000028
+> encode OBC_Charge ChargerVoltage=0 ChargerCurrent=0.075 ChargeState=4 TimeToFull=0 PlugTemp=120.4
+  EncodeError: Expected signal "PlugTemp" value smaller than or equal to 120 in message "OBC_Charge", but got 120.4.
+> encode DASH_Odometer Odometer=123456.7 TripA=87.3
+  87d612006903
+> encode DASH_Odometer -pad Odometer=429496729.5 TripA=6553.5
+  ffffffffffff
+> encode DASH_Odometer Odometer=-1 TripA=0
+  Error: "u32" requires 0 <= integer <= 4294967295 (got -10)
+> encode DASH_Odometer -loose Odometer=-1 TripA=0
+  Error: "u32" requires 0 <= integer <= 4294967295 (got -10)
+> encode GW_Diag ServiceId=34 Did=61840
+  22f190
+> encode GW_Diag -pad ServiceId=25 Did=521
+  190209
+> encode TESTER_Ping PingSeq=42 PingFlags=3
+  2a03
+> encode Wiper_Status Speed=1
+  KeyError: 'Wiper_Status'
+> decode 0x100 2A22030E00000700
+  {'VehicleSpeed': 87.46000000000001, 'Gear': 'DRIVE', 'ReadyFlag': 0, 'DriveMode': 'ECO', 'AccelPedal': 5.6000000000000005, 'BrakePressure': 0.0, 'Counter': 7, 'Checksum': 0}
+> decode 0x100 2A22030E00000700 -nochoices
+  {'VehicleSpeed': 87.46000000000001, 'Gear': 3, 'ReadyFlag': 0, 'DriveMode': 0, 'AccelPedal': 5.6000000000000005, 'BrakePressure': 0.0, 'Counter': 7, 'Checksum': 0}
+> decode 0x100 2A22030E00000700 -noscale
+  {'VehicleSpeed': 8746, 'Gear': 'DRIVE', 'ReadyFlag': 0, 'DriveMode': 'ECO', 'AccelPedal': 14, 'BrakePressure': 0, 'Counter': 7, 'Checksum': 0}
+> decode 0x100 2A22030E00000700 -nochoices -noscale
+  {'VehicleSpeed': 8746, 'Gear': 3, 'ReadyFlag': 0, 'DriveMode': 0, 'AccelPedal': 14, 'BrakePressure': 0, 'Counter': 7, 'Checksum': 0}
+> decode 0x100 FFFFFFFFFFFFFFFF
+  {'VehicleSpeed': 655.35, 'Gear': 7, 'ReadyFlag': 1, 'DriveMode': 3, 'AccelPedal': 102.0, 'BrakePressure': 409.5, 'Counter': 15, 'Checksum': 255}
+> decode 0x100 2A2203 -trunc
+  {'VehicleSpeed': 87.46000000000001, 'Gear': 'DRIVE', 'ReadyFlag': 0, 'DriveMode': 'ECO'}
+> decode 0x100 2A22030E0000 -trunc
+  {'VehicleSpeed': 87.46000000000001, 'Gear': 'DRIVE', 'ReadyFlag': 0, 'DriveMode': 'ECO', 'AccelPedal': 5.6000000000000005, 'BrakePressure': 0.0}
+> decode 0x100 2A2203
+  DecodeError: Wrong data size: 3 instead of 8 bytes
+> decode 0x100 2A22030E0000070011223344
+  {'VehicleSpeed': 87.46000000000001, 'Gear': 'DRIVE', 'ReadyFlag': 0, 'DriveMode': 'ECO', 'AccelPedal': 5.6000000000000005, 'BrakePressure': 0.0, 'Counter': 7, 'Checksum': 0}
+> decode 0x200 0E80FB9AA3453C21
+  {'PackVoltage': 371.20000000000005, 'PackCurrent': -112.60000000000001, 'StateOfCharge': 81.5, 'MaxCellTemp': 29, 'MinCellTemp': 20, 'PackState': 'DRIVE', 'IsolationOk': 0}
+> decode 0x200 0E80FB9AA3453C21 -noscale
+  {'PackVoltage': 3712, 'PackCurrent': -1126, 'StateOfCharge': 163, 'MaxCellTemp': 69, 'MinCellTemp': 60, 'PackState': 'DRIVE', 'IsolationOk': 0}
+> decode 0x200 FFFF8000C8A5000F
+  {'PackVoltage': 6553.5, 'PackCurrent': -3276.8, 'StateOfCharge': 100.0, 'MaxCellTemp': 125, 'MinCellTemp': -40, 'PackState': 'INIT', 'IsolationOk': 1}
+> decode 0x200 0E80FB9AA3 -trunc
+  {'PackVoltage': 371.20000000000005, 'PackCurrent': -112.60000000000001, 'StateOfCharge': 81.5}
+> decode 0x200 0E80FB -trunc
+  {'PackVoltage': 371.20000000000005}
+> decode 0x201 F0570E540E5B0E00
+  {'CellGroup': 'CELLS_1_3', 'RollingCount': 0, 'CellVoltA': 3671, 'CellVoltB': 3668, 'CellVoltC': 3675}
+> decode 0x201 F3411001670000F0
+  {'CellGroup': 'THERMAL', 'RollingCount': 15, 'BalanceMask': 65, 'CellTempAvg': -19.5}
+> decode 0x201 F3411001670000F0 -nochoices
+  {'CellGroup': 3, 'RollingCount': 15, 'BalanceMask': 65, 'CellTempAvg': -19.5}
+> decode 0x201 F3411001670000F0 -noscale
+  {'CellGroup': 'THERMAL', 'RollingCount': 15, 'BalanceMask': 65, 'CellTempAvg': 1}
+> decode 0x201 0E570E540E5B0E00
+  DecodeError: expected multiplexer id 0, 1, 2 or 3, but got 14
+> decode 0x201 01 -trunc
+  {'CellGroup': 'CELLS_4_6'}
+> decode 0x201 F1 -trunc
+  {'CellGroup': 'CELLS_4_6'}
+> decode 0x201 F2 -trunc
+  {'CellGroup': 'CELLS_7_9'}
+> decode 0x300 AEFC830EBF46C000
+  {'MotorRpm': -850, 'MotorTorque': -190.5, 'InverterTemp': 200, 'MotorTemp': 67, 'FaultCode': 4, 'DeratePct': 24}
+> decode 0x300 C021A4E1F11D6302
+  {'MotorRpm': 8640, 'MotorTorque': 210.0, 'InverterTemp': -10, 'MotorTemp': 183, 'FaultCode': 49, 'DeratePct': 76}
+> decode 0x300 C021A4E1F1D06312
+  {'MotorRpm': 8640, 'MotorTorque': 210.0, 'InverterTemp': -10, 'MotorTemp': -25, 'FaultCode': 61, 'DeratePct': 76}
+> decode 0x300 C021A4E1F1D06312 -nochoices
+  {'MotorRpm': 8640, 'MotorTorque': 210.0, 'InverterTemp': -10, 'MotorTemp': -25, 'FaultCode': 61, 'DeratePct': 76}
+> decode 0x18FF50E5 8D0E30860200FF3F
+  {'ChargerVoltage': 372.5, 'ChargerCurrent': 117.60000000000014, 'ChargeState': 'CC', 'TimeToFull': 65280, 'PlugTemp': 23}
+> decode 0x18FF50E5 0000007D0060FFFF
+  {'ChargerVoltage': 0.0, 'ChargerCurrent': 0.0, 'ChargeState': 'IDLE', 'TimeToFull': 65376, 'PlugTemp': 215}
+> decode OBC_Charge 0000007D0060FFFF
+  {'ChargerVoltage': 0.0, 'ChargerCurrent': 0.0, 'ChargeState': 'IDLE', 'TimeToFull': 65376, 'PlugTemp': 215}
+> decode 0x400 87D61200690300
+  {'Odometer': 123456.70000000001, 'TripA': 87.30000000000001}
+> decode 0x400 FFFFFFFFFFFF
+  {'Odometer': 429496729.5, 'TripA': 6553.5}
+> decode 0x7DF 22F190
+  {'ServiceId': 34, 'Did': 61840}
+> decode 0x7DF 22F19000
+  {'ServiceId': 34, 'Did': 61840}
+> decode 0x700 2A03
+  {'PingSeq': 42, 'PingFlags': 3}
+> decode 0x7E8 62F1904B5637
+  KeyError: 2024
+> decode Wiper_Status 00
+  KeyError: 'Wiper_Status'
+== drive.log
+2781 lines, 2779 frames from 1729771200.005043, 2 unreadable lines: [813, 2041]
+unknown id 3A0: 12 frames
+unknown id 7E8: 3 frames
+VCU_Status: 600 frames, mean period 99.999 ms (cycle 100), longest gap 100.596 ms before 19.202
+  VehicleSpeed: 600 values in [0.0, 89.99]; last 0.0
+  Gear: PARK x240, DRIVE x300, SPORT x60; last 'PARK'
+  ReadyFlag: 600 values in [0, 1]; last 0
+  DriveMode: NORMAL x200, ECO x400; last 'ECO'
+  AccelPedal: 600 values in [0.0, 86.4]; last 0.0
+  BrakePressure: 600 values in [0.0, 195.0]; last 0.0
+  Counter: 600 values in [0, 15]; last 8
+  Checksum: 600 values in [0, 255]; last 247
+BMS_Pack: 600 frames, mean period 99.999 ms (cycle 100), longest gap 100.453 ms before 37.815
+  PackVoltage: 599 values in [353.90000000000003, 380.8]; last 380.70000000000005
+  PackCurrent: 599 values in [-111.0, 205.20000000000002]; last -109.7
+  StateOfCharge: 599 values in [76.5, 81.5]; last 79.0
+  MaxCellTemp: 599 values in [29, 38]; last 38
+  MinCellTemp: 599 values in [24, 27]; last 27
+  PackState: STANDBY x70, DRIVE x379, CHARGE x150; last 'CHARGE'
+  IsolationOk: 599 values in [1, 1]; last 1
+BMS_Cells: 240 frames, mean period 249.999 ms (cycle 250), longest gap 250.579 ms before 19.785
+  CellGroup: CELLS_1_3 x60, CELLS_4_6 x59, CELLS_7_9 x60, THERMAL x60; last 'THERMAL'
+  RollingCount: 239 values in [0, 15]; last 15
+  CellVoltA: 60 values in [3635, 3698]; last 3697
+  CellVoltB: 60 values in [3631, 3695]; last 3693
+  CellVoltC: 60 values in [3639, 3702]; last 3700
+  CellVoltD: 59 values in [3625, 3689]; last 3685
+  CellVoltE: 59 values in [3635, 3697]; last 3697
+  CellVoltF: 59 values in [3637, 3700]; last 3699
+  CellVoltG: 60 values in [3591, 3686]; last 3682
+  CellVoltH: 60 values in [3634, 3696]; last 3696
+  CellVoltI: 60 values in [3630, 3693]; last 3692
+  BalanceMask: 60 values in [0, 321]; last 65
+  CellTempAvg: 60 values in [27.0, 32.5]; last 32.5
+MCU_Motor: 1200 frames, mean period 49.999 ms (cycle 50), longest gap 50.288 ms before 11.100
+  MotorRpm: 1200 values in [0, 8639]; last 0
+  MotorTorque: 1200 values in [-152.5, 220.0]; last 0.0
+  InverterTemp: 1200 values in [58, 67]; last 67
+  MotorTemp: 1200 values in [62, 190]; last 75
+  FaultCode: NONE x1150, OVERTEMP x50; last 'NONE'
+  DeratePct: 1200 values in [0, 30]; last 0
+OBC_Charge: 60 frames, mean period 999.997 ms (cycle 1000), longest gap 1000.820 ms before 57.495
+  ChargerVoltage: 60 values in [0.0, 372.5]; last 372.5
+  ChargerCurrent: 60 values in [0.0, 110.0]; last 110.0
+  ChargeState: IDLE x45, PRECHARGE x2, CC x13; last 'CC'
+  TimeToFull: 60 values in [84, 65535]; last 84
+  PlugTemp: 60 values in [21, 26]; last 26
+DASH_Odometer: 60 frames, mean period 1000.007 ms (cycle 1000), longest gap 1000.686 ms before 49.695
+  Odometer: 60 values in [123456.70000000001, 123457.20000000001]; last 123457.20000000001
+  TripA: 60 values in [87.30000000000001, 87.80000000000001]; last 87.80000000000001
+GW_Diag: 3 frames, mean period 11649.148 ms (cycle None), longest gap 22796.533 ms before 33.295
+  ServiceId: 3 values in [25, 34]; last 25
+  Did: 3 values in [521, 61840]; last 521
+TESTER_Ping: 1 frames, mean period 0.000 ms (cycle None), longest gap 0.000 ms before 51.229
+  PingSeq: 1 values in [42, 42]; last 42
+  PingFlags: 1 values in [0, 0]; last 0
+decode errors: 2
+  25.285 BMS_Cells [092e0e370e380e50]: DecodeError: expected multiplexer id 0, 1, 2 or 3, but got 9
+  33.315 BMS_Pack [0eb3fdb39b]: DecodeError: Wrong data size: 5 instead of 8 bytes
+re-encode errors: 48
+  x47 from 0.495 OBC_Charge: EncodeError: Expected signal "TimeToFull" value smaller than or equal to 65534 in message "OBC_Charge", but got 65535.
+  x1 from 31.000 MCU_Motor: EncodeError: Expected signal "MotorTemp" value smaller than or equal to 180 in message "MCU_Motor", but got 190.
+re-encode mismatches: 1
+  37.701 VCU_Status [11084b00ee060a9d] re-encodes as [11080b00ee060a9d]
+checksum failures: 1
+  45.201 checksum 0xea, bytes say 0xfa
+counter gaps: 1
+  21.101 counter 2 -> 4
+state changes: 11
+  2.014 PackState STANDBY -> DRIVE
+  4.002 Gear PARK -> DRIVE
+  18.001 Gear DRIVE -> SPORT
+  24.001 Gear SPORT -> DRIVE
+  25.000 FaultCode NONE -> OVERTEMP
+  27.499 FaultCode OVERTEMP -> NONE
+  40.001 Gear DRIVE -> PARK
+  40.015 PackState DRIVE -> STANDBY
+  45.015 PackState STANDBY -> CHARGE
+  45.494 ChargeState IDLE -> PRECHARGE
+  47.494 ChargeState PRECHARGE -> CC
+distance 0.5842 km, pack energy 38.448 Wh, peak 72.62 kW, regen -42.27 kW, derated in 50 motor frames
+lowest cell G 3591 mV at 16.534, highest cell C 3702 mV at 49.034, spread 111 mV
+odometer 123456.70000000001 -> 123457.20000000001 km, 0.5 km on the dash
