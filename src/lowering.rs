@@ -2296,6 +2296,9 @@ impl<'a> Lowerer<'a> {
                 },
             };
         }
+        // The path's node, which the typechecker gave the receiver it
+        // synthesised (B-2026-10-24-40).
+        object.id = callee.id;
         Some(ExprKind::MethodCall {
             object: Box::new(object),
             method: segments[segments.len() - 1].clone(),

@@ -1399,6 +1399,11 @@ impl<'a> super::TypeChecker<'a> {
                         },
                     };
                 }
+                // The receiver takes the path's node, as lowering's rewrite
+                // does, so its type is recorded where ownership asks for it:
+                // `CODES.find(s)` on a `const CODES: Str` borrows `s` as a
+                // `Str` receiver's `find` does (B-2026-10-24-40).
+                synth_object.id = callee.id;
                 // No distinct close-paren leaf is reconstructed on this
                 // synthesized-`MethodCall` route (`local.method()` where `local`
                 // shadows a type name); `span` stands in for `args_close_span`.

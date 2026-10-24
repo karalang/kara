@@ -13125,3 +13125,22 @@ fn a_write_through_a_bare_parameter_fixes_to_mut_ref() {
         2,
     );
 }
+
+#[test]
+fn find_on_a_const_str_borrows_its_argument() {
+    // B-2026-10-24-40: `CODES.find(s)` parses as a path call that the
+    // typechecker dispatches as a method call on the `const`; its receiver
+    // now carries the path's node, so `find` reads `s` as it does on any
+    // `Str` receiver, an element argument included.
+    accepted_and_runs(
+        "const-str-find",
+        "const CODES: Str = \"LRI\";\n\
+         struct Origin { name: String }\n\
+         const HOME: Str = \"home\";\n\
+         fn main() {\n    let ch = \"R\".to_string();\n    let a = CODES.find(ch);\n    \
+         println(f\"{ch} {a.unwrap_or(9)}\");\n    let f: Vec[String] = [\"I\".to_string()].to_vec();\n    \
+         let b = CODES.find(f[0]);\n    let o = Origin { name: \"me\".to_string() };\n    \
+         println(f\"{b.unwrap_or(9)} {f.len()} {HOME.find(o.name).is_none()} {o.name}\");\n}\n",
+        "R 1\n2 1 false me\n",
+    );
+}
