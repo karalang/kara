@@ -1,0 +1,915 @@
+== meta | city.mmdb
+maxminddb.reader.Metadata(node_count=413, record_size=28, ip_version=6, database_type='GeoIP2-City', languages=['de', 'en', 'es', 'fr', 'ja', 'pt-BR', 'ru', 'zh-CN'], binary_format_major_version=2, binary_format_minor_version=0, build_epoch=1761264000, description={'en': 'Larkfield test City database', 'fr': 'Base de test des villes'})
+node_byte_size=7 search_tree_size=2891
+== meta | country.mmdb
+maxminddb.reader.Metadata(node_count=248, record_size=24, ip_version=4, database_type='GeoLite2-Country', languages=['de', 'en', 'es', 'fr', 'ja', 'pt-BR', 'ru', 'zh-CN'], binary_format_major_version=2, binary_format_minor_version=0, build_epoch=1761177600, description={'en': 'Larkfield test Country database'})
+node_byte_size=6 search_tree_size=1488
+== meta | asn.mmdb
+maxminddb.reader.Metadata(node_count=364, record_size=32, ip_version=6, database_type='GeoLite2-ASN', languages=['en'], binary_format_major_version=2, binary_format_minor_version=0, build_epoch=1761091200, description={'en': 'Larkfield test ASN database'})
+node_byte_size=8 search_tree_size=2912
+== meta | types.mmdb
+maxminddb.reader.Metadata(node_count=210, record_size=24, ip_version=6, database_type='MaxMind DB Decoder Test', languages=['en', 'zh'], binary_format_major_version=2, binary_format_minor_version=0, build_epoch=1761264000, description={'en': 'Test Database', 'zh': 'Test Database Chinese'})
+node_byte_size=6 search_tree_size=1260
+== get | city.mmdb | 81.2.69.142
+/27 {'city': {'geoname_id': 2643743, 'names': {'de': 'London', 'en': 'London', 'es': 'Londres', 'fr': 'Londres', 'ja': 'ロンドン', 'pt-BR': 'Londres', 'ru': 'Лондон', 'zh-CN': '伦敦'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'location': {'accuracy_radius': 10, 'latitude': 51.5142, 'longitude': -0.0931, 'time_zone': 'Europe/London'}, 'postal': {'code': 'EC1A'}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'subdivisions': [{'geoname_id': 6269131, 'iso_code': 'ENG', 'names': {'de': 'England', 'en': 'England', 'fr': 'Angleterre'}}]}
+== get | city.mmdb | 81.2.69.163
+/27 {'city': {'geoname_id': 2643743, 'names': {'de': 'London', 'en': 'London', 'es': 'Londres', 'fr': 'Londres', 'ja': 'ロンドン', 'pt-BR': 'Londres', 'ru': 'Лондон', 'zh-CN': '伦敦'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'location': {'accuracy_radius': 10, 'latitude': 51.5142, 'longitude': -0.0931, 'time_zone': 'Europe/London'}, 'postal': {'code': 'EC1A'}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'subdivisions': [{'geoname_id': 6269131, 'iso_code': 'ENG', 'names': {'de': 'England', 'en': 'England', 'fr': 'Angleterre'}}]}
+== get | city.mmdb | 81.2.70.1
+/23 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}}
+== get | city.mmdb | 2.125.160.217
+/29 {'city': {'geoname_id': 2643743, 'names': {'de': 'London', 'en': 'London', 'es': 'Londres', 'fr': 'Londres', 'ja': 'ロンドン', 'pt-BR': 'Londres', 'ru': 'Лондон', 'zh-CN': '伦敦'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'location': {'accuracy_radius': 10, 'latitude': 51.5142, 'longitude': -0.0931, 'time_zone': 'Europe/London'}, 'postal': {'code': 'EC1A'}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'subdivisions': [{'geoname_id': 6269131, 'iso_code': 'ENG', 'names': {'de': 'England', 'en': 'England', 'fr': 'Angleterre'}}]}
+== get | city.mmdb | 89.160.20.115
+/28 {'city': {'geoname_id': 2988507, 'names': {'de': 'Paris', 'en': 'Paris', 'es': 'París', 'fr': 'Paris', 'ja': 'パリ', 'pt-BR': 'Paris', 'ru': 'Париж', 'zh-CN': '巴黎'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}, 'location': {'accuracy_radius': 20, 'latitude': 48.8607, 'longitude': 2.3281, 'time_zone': 'Europe/Paris'}, 'postal': {'code': '75001'}, 'registered_country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}, 'subdivisions': [{'geoname_id': 3012874, 'iso_code': 'IDF', 'names': {'en': 'Île-de-France', 'fr': 'Île-de-France'}}, {'geoname_id': 2968815, 'iso_code': '75', 'names': {'en': 'Paris', 'fr': 'Paris'}}]}
+== get | city.mmdb | 89.160.20.200
+/25 {'city': {'geoname_id': 2988507, 'names': {'de': 'Paris', 'en': 'Paris', 'es': 'París', 'fr': 'Paris', 'ja': 'パリ', 'pt-BR': 'Paris', 'ru': 'Париж', 'zh-CN': '巴黎'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}, 'location': {'accuracy_radius': 20, 'latitude': 48.8607, 'longitude': 2.3281, 'time_zone': 'Europe/Paris'}, 'postal': {'code': '75001'}, 'registered_country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}, 'subdivisions': [{'geoname_id': 3012874, 'iso_code': 'IDF', 'names': {'en': 'Île-de-France', 'fr': 'Île-de-France'}}, {'geoname_id': 2968815, 'iso_code': '75', 'names': {'en': 'Paris', 'fr': 'Paris'}}]}
+== get | city.mmdb | 5.83.125.10
+/22 {'city': {'geoname_id': 2950159, 'names': {'de': 'Berlin', 'en': 'Berlin', 'es': 'Berlín', 'fr': 'Berlin', 'ja': 'ベルリン', 'ru': 'Берлин', 'zh-CN': '柏林'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'location': {'accuracy_radius': 50, 'latitude': 52.5196, 'longitude': 13.4069, 'time_zone': 'Europe/Berlin'}, 'postal': {'code': '10117'}, 'registered_country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'subdivisions': [{'geoname_id': 2950157, 'iso_code': 'BE', 'names': {'de': 'Land Berlin', 'en': 'Land Berlin'}}]}
+== get | city.mmdb | 5.83.130.1
+/20 {'city': {'geoname_id': 2867714, 'names': {'de': 'München', 'en': 'Munich', 'es': 'Múnich', 'fr': 'Munich', 'ja': 'ミュンヘン', 'ru': 'Мюнхен', 'zh-CN': '慕尼黑'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'location': {'accuracy_radius': 20, 'latitude': 48.1374, 'longitude': 11.5755, 'time_zone': 'Europe/Berlin'}, 'postal': {'code': '80331'}, 'registered_country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'subdivisions': [{'geoname_id': 2951839, 'iso_code': 'BY', 'names': {'de': 'Bayern', 'en': 'Bavaria', 'fr': 'Bavière'}}]}
+== get | city.mmdb | 5.83.150.9
+/20 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'registered_country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}}
+== get | city.mmdb | 31.11.33.1
+/18 {'city': {'geoname_id': 3094802, 'names': {'de': 'Krakau', 'en': 'Kraków', 'fr': 'Cracovie', 'ja': 'クラクフ', 'pt-BR': 'Cracóvia', 'ru': 'Краков'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 798544, 'is_in_european_union': True, 'iso_code': 'PL', 'names': {'de': 'Polen', 'en': 'Poland', 'es': 'Polonia', 'fr': 'Pologne', 'ja': 'ポーランド共和国', 'pt-BR': 'Polônia', 'ru': 'Польша', 'zh-CN': '波兰'}}, 'location': {'accuracy_radius': 100, 'latitude': 50.0614, 'longitude': 19.9366, 'time_zone': 'Europe/Warsaw'}, 'postal': {'code': '31-001'}, 'registered_country': {'geoname_id': 798544, 'is_in_european_union': True, 'iso_code': 'PL', 'names': {'de': 'Polen', 'en': 'Poland', 'es': 'Polonia', 'fr': 'Pologne', 'ja': 'ポーランド共和国', 'pt-BR': 'Polônia', 'ru': 'Польша', 'zh-CN': '波兰'}}, 'subdivisions': [{'geoname_id': 858787, 'iso_code': '12', 'names': {'de': 'Kleinpolen', 'en': 'Lesser Poland', 'fr': 'Petite-Pologne'}}]}
+== get | city.mmdb | 82.221.4.4
+/16 {'city': {'geoname_id': 3413829, 'names': {'de': 'Reykjavík', 'en': 'Reykjavik', 'fr': 'Reykjavik', 'ja': 'レイキャヴィーク', 'ru': 'Рейкьявик', 'zh-CN': '雷克雅未克'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2629691, 'iso_code': 'IS', 'names': {'de': 'Island', 'en': 'Iceland', 'es': 'Islandia', 'fr': 'Islande', 'ja': 'アイスランド共和国', 'pt-BR': 'Islândia', 'ru': 'Исландия', 'zh-CN': '冰岛'}}, 'location': {'accuracy_radius': 50, 'latitude': 64.1355, 'longitude': -21.8954, 'time_zone': 'Atlantic/Reykjavik'}, 'postal': {'code': '101'}, 'registered_country': {'geoname_id': 2629691, 'iso_code': 'IS', 'names': {'de': 'Island', 'en': 'Iceland', 'es': 'Islandia', 'fr': 'Islande', 'ja': 'アイスランド共和国', 'pt-BR': 'Islândia', 'ru': 'Исландия', 'zh-CN': '冰岛'}}, 'subdivisions': [{'geoname_id': 3426182, 'iso_code': '1', 'names': {'en': 'Capital Region'}}]}
+== get | city.mmdb | 126.1.2.3
+/12 {'city': {'geoname_id': 1850147, 'names': {'de': 'Tokio', 'en': 'Tokyo', 'es': 'Tokio', 'fr': 'Tokyo', 'ja': '東京', 'pt-BR': 'Tóquio', 'ru': 'Токио', 'zh-CN': '东京'}}, 'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'location': {'accuracy_radius': 5, 'latitude': 35.6893, 'longitude': 139.6899, 'time_zone': 'Asia/Tokyo'}, 'postal': {'code': '100-0001'}, 'registered_country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'subdivisions': [{'geoname_id': 1850144, 'iso_code': '13', 'names': {'en': 'Tokyo', 'ja': '東京都'}}]}
+== get | city.mmdb | 126.20.0.1
+/12 {'city': {'geoname_id': 1853909, 'names': {'de': 'Osaka', 'en': 'Osaka', 'fr': 'Osaka', 'ja': '大阪市', 'ru': 'Осака', 'zh-CN': '大阪'}}, 'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'location': {'accuracy_radius': 10, 'latitude': 34.6939, 'longitude': 135.5022, 'time_zone': 'Asia/Tokyo'}, 'postal': {'code': '530-0001'}, 'registered_country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'subdivisions': [{'geoname_id': 1853904, 'iso_code': '27', 'names': {'en': 'Osaka', 'ja': '大阪府'}}]}
+== get | city.mmdb | 49.40.1.2
+/11 {'city': {'geoname_id': 1275339, 'names': {'de': 'Mumbai', 'en': 'Mumbai', 'fr': 'Bombay', 'ja': 'ムンバイ', 'ru': 'Мумбаи', 'zh-CN': '孟买'}}, 'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1269750, 'iso_code': 'IN', 'names': {'de': 'Indien', 'en': 'India', 'es': 'India', 'fr': 'Inde', 'ja': 'インド', 'pt-BR': 'Índia', 'ru': 'Индия', 'zh-CN': '印度'}}, 'location': {'accuracy_radius': 20, 'latitude': 19.0728, 'longitude': 72.8826, 'time_zone': 'Asia/Kolkata'}, 'postal': {'code': '400001'}, 'registered_country': {'geoname_id': 1269750, 'iso_code': 'IN', 'names': {'de': 'Indien', 'en': 'India', 'es': 'India', 'fr': 'Inde', 'ja': 'インド', 'pt-BR': 'Índia', 'ru': 'Индия', 'zh-CN': '印度'}}, 'subdivisions': [{'geoname_id': 1264418, 'iso_code': 'MH', 'names': {'en': 'Maharashtra'}}]}
+== get | city.mmdb | 177.33.4.5
+/14 {'city': {'geoname_id': 3448439, 'names': {'de': 'São Paulo', 'en': 'São Paulo', 'es': 'São Paulo', 'fr': 'São Paulo', 'ja': 'サンパウロ', 'pt-BR': 'São Paulo', 'ru': 'Сан-Паулу', 'zh-CN': '圣保罗'}}, 'continent': {'code': 'SA', 'geoname_id': 6255150, 'names': {'de': 'Südamerika', 'en': 'South America', 'es': 'Sudamérica', 'fr': 'Amérique du Sud', 'ja': '南アメリカ', 'pt-BR': 'América do Sul', 'ru': 'Южная Америка', 'zh-CN': '南美洲'}}, 'country': {'geoname_id': 3469034, 'iso_code': 'BR', 'names': {'de': 'Brasilien', 'en': 'Brazil', 'es': 'Brasil', 'fr': 'Brésil', 'ja': 'ブラジル連邦共和国', 'pt-BR': 'Brasil', 'ru': 'Бразилия', 'zh-CN': '巴西'}}, 'location': {'accuracy_radius': 100, 'latitude': -23.5475, 'longitude': -46.6361, 'time_zone': 'America/Sao_Paulo'}, 'postal': {'code': '01000-000'}, 'registered_country': {'geoname_id': 3469034, 'iso_code': 'BR', 'names': {'de': 'Brasilien', 'en': 'Brazil', 'es': 'Brasil', 'fr': 'Brésil', 'ja': 'ブラジル連邦共和国', 'pt-BR': 'Brasil', 'ru': 'Бразилия', 'zh-CN': '巴西'}}, 'subdivisions': [{'geoname_id': 3448433, 'iso_code': 'SP', 'names': {'en': 'São Paulo', 'pt-BR': 'São Paulo'}}]}
+== get | city.mmdb | 177.37.0.1
+/14 {'continent': {'code': 'SA', 'geoname_id': 6255150, 'names': {'de': 'Südamerika', 'en': 'South America', 'es': 'Sudamérica', 'fr': 'Amérique du Sud', 'ja': '南アメリカ', 'pt-BR': 'América do Sul', 'ru': 'Южная Америка', 'zh-CN': '南美洲'}}, 'country': {'geoname_id': 3469034, 'iso_code': 'BR', 'names': {'de': 'Brasilien', 'en': 'Brazil', 'es': 'Brasil', 'fr': 'Brésil', 'ja': 'ブラジル連邦共和国', 'pt-BR': 'Brasil', 'ru': 'Бразилия', 'zh-CN': '巴西'}}, 'registered_country': {'geoname_id': 3469034, 'iso_code': 'BR', 'names': {'de': 'Brasilien', 'en': 'Brazil', 'es': 'Brasil', 'fr': 'Brésil', 'ja': 'ブラジル連邦共和国', 'pt-BR': 'Brasil', 'ru': 'Бразилия', 'zh-CN': '巴西'}}}
+== get | city.mmdb | 1.128.9.9
+/11 {'city': {'geoname_id': 2147714, 'names': {'de': 'Sydney', 'en': 'Sydney', 'fr': 'Sydney', 'ja': 'シドニー', 'pt-BR': 'Sydney', 'ru': 'Сидней', 'zh-CN': '悉尼'}}, 'continent': {'code': 'OC', 'geoname_id': 6255151, 'names': {'de': 'Ozeanien', 'en': 'Oceania', 'es': 'Oceanía', 'fr': 'Océanie', 'ja': 'オセアニア', 'pt-BR': 'Oceania', 'ru': 'Океания', 'zh-CN': '大洋洲'}}, 'country': {'geoname_id': 2077456, 'iso_code': 'AU', 'names': {'de': 'Australien', 'en': 'Australia', 'es': 'Australia', 'fr': 'Australie', 'ja': 'オーストラリア', 'pt-BR': 'Austrália', 'ru': 'Австралия', 'zh-CN': '澳大利亚'}}, 'location': {'accuracy_radius': 50, 'latitude': -33.8715, 'longitude': 151.2006, 'time_zone': 'Australia/Sydney'}, 'postal': {'code': '2000'}, 'registered_country': {'geoname_id': 2077456, 'iso_code': 'AU', 'names': {'de': 'Australien', 'en': 'Australia', 'es': 'Australia', 'fr': 'Australie', 'ja': 'オーストラリア', 'pt-BR': 'Austrália', 'ru': 'Австралия', 'zh-CN': '澳大利亚'}}, 'subdivisions': [{'geoname_id': 2155400, 'iso_code': 'NSW', 'names': {'en': 'New South Wales'}}]}
+== get | city.mmdb | 24.49.0.1
+/14 {'city': {'geoname_id': 6167865, 'names': {'de': 'Toronto', 'en': 'Toronto', 'es': 'Toronto', 'fr': 'Toronto', 'ja': 'トロント', 'pt-BR': 'Toronto', 'ru': 'Торонто', 'zh-CN': '多伦多'}}, 'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6251999, 'iso_code': 'CA', 'names': {'de': 'Kanada', 'en': 'Canada', 'es': 'Canadá', 'fr': 'Canada', 'ja': 'カナダ', 'pt-BR': 'Canadá', 'ru': 'Канада', 'zh-CN': '加拿大'}}, 'location': {'accuracy_radius': 20, 'latitude': 43.6547, 'longitude': -79.3623, 'time_zone': 'America/Toronto'}, 'postal': {'code': 'M5H'}, 'registered_country': {'geoname_id': 6251999, 'iso_code': 'CA', 'names': {'de': 'Kanada', 'en': 'Canada', 'es': 'Canadá', 'fr': 'Canada', 'ja': 'カナダ', 'pt-BR': 'Canadá', 'ru': 'Канада', 'zh-CN': '加拿大'}}, 'subdivisions': [{'geoname_id': 6093943, 'iso_code': 'ON', 'names': {'en': 'Ontario', 'fr': 'Ontario'}}]}
+== get | city.mmdb | 67.43.156.7
+/24 {'city': {'geoname_id': 5128581, 'names': {'de': 'New York City', 'en': 'New York', 'es': 'Nueva York', 'fr': 'New York', 'ja': 'ニューヨーク', 'pt-BR': 'Nova Iorque', 'ru': 'Нью-Йорк', 'zh-CN': '纽约'}}, 'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'location': {'accuracy_radius': 5, 'latitude': 40.7506, 'longitude': -73.9971, 'metro_code': 501, 'time_zone': 'America/New_York'}, 'postal': {'code': '10001'}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'subdivisions': [{'geoname_id': 5128638, 'iso_code': 'NY', 'names': {'en': 'New York', 'fr': 'New York'}}]}
+== get | city.mmdb | 67.43.157.200
+/24 {'city': {'geoname_id': 5809844, 'names': {'de': 'Seattle', 'en': 'Seattle', 'fr': 'Seattle', 'ja': 'シアトル', 'ru': 'Сиэтл', 'zh-CN': '西雅图'}}, 'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'location': {'accuracy_radius': 10, 'latitude': 47.6062, 'longitude': -122.3321, 'metro_code': 819, 'time_zone': 'America/Los_Angeles'}, 'postal': {'code': '98101'}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'subdivisions': [{'geoname_id': 5815135, 'iso_code': 'WA', 'names': {'en': 'Washington', 'fr': 'Washington'}}]}
+== get | city.mmdb | 105.113.0.9
+/12 {'city': {'geoname_id': 2332459, 'names': {'de': 'Lagos', 'en': 'Lagos', 'fr': 'Lagos', 'ja': 'ラゴス', 'ru': 'Лагос', 'zh-CN': '拉各斯'}}, 'continent': {'code': 'AF', 'geoname_id': 6255146, 'names': {'de': 'Afrika', 'en': 'Africa', 'es': 'África', 'fr': 'Afrique', 'ja': 'アフリカ', 'pt-BR': 'África', 'ru': 'Африка', 'zh-CN': '非洲'}}, 'country': {'geoname_id': 2328926, 'iso_code': 'NG', 'names': {'de': 'Nigeria', 'en': 'Nigeria', 'es': 'Nigeria', 'fr': 'Nigeria', 'ja': 'ナイジェリア連邦共和国', 'pt-BR': 'Nigéria', 'ru': 'Нигерия', 'zh-CN': '尼日利亚'}}, 'location': {'accuracy_radius': 200, 'latitude': 6.4541, 'longitude': 3.3947, 'time_zone': 'Africa/Lagos'}, 'registered_country': {'geoname_id': 2328926, 'iso_code': 'NG', 'names': {'de': 'Nigeria', 'en': 'Nigeria', 'es': 'Nigeria', 'fr': 'Nigeria', 'ja': 'ナイジェリア連邦共和国', 'pt-BR': 'Nigéria', 'ru': 'Нигерия', 'zh-CN': '尼日利亚'}}, 'subdivisions': [{'geoname_id': 2332453, 'iso_code': 'LA', 'names': {'en': 'Lagos'}}]}
+== get | city.mmdb | 41.81.2.3
+/13 {'city': {'geoname_id': 184745, 'names': {'de': 'Nairobi', 'en': 'Nairobi', 'fr': 'Nairobi', 'ja': 'ナイロビ', 'ru': 'Найроби', 'zh-CN': '内罗毕'}}, 'continent': {'code': 'AF', 'geoname_id': 6255146, 'names': {'de': 'Afrika', 'en': 'Africa', 'es': 'África', 'fr': 'Afrique', 'ja': 'アフリカ', 'pt-BR': 'África', 'ru': 'Африка', 'zh-CN': '非洲'}}, 'country': {'geoname_id': 192950, 'iso_code': 'KE', 'names': {'de': 'Kenia', 'en': 'Kenya', 'es': 'Kenia', 'fr': 'Kenya', 'ja': 'ケニア共和国', 'pt-BR': 'Quênia', 'ru': 'Кения', 'zh-CN': '肯尼亚'}}, 'location': {'accuracy_radius': 50, 'latitude': -1.2833, 'longitude': 36.8167, 'time_zone': 'Africa/Nairobi'}, 'postal': {'code': '00100'}, 'registered_country': {'geoname_id': 192950, 'iso_code': 'KE', 'names': {'de': 'Kenia', 'en': 'Kenya', 'es': 'Kenia', 'fr': 'Kenya', 'ja': 'ケニア共和国', 'pt-BR': 'Quênia', 'ru': 'Кения', 'zh-CN': '肯尼亚'}}, 'subdivisions': [{'geoname_id': 184742, 'iso_code': '110', 'names': {'en': 'Nairobi County'}}]}
+== get | city.mmdb | 216.160.83.58
+/29 {'city': {'geoname_id': 1850147, 'names': {'de': 'Tokio', 'en': 'Tokyo', 'es': 'Tokio', 'fr': 'Tokyo', 'ja': '東京', 'pt-BR': 'Tóquio', 'ru': 'Токио', 'zh-CN': '东京'}}, 'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'location': {'accuracy_radius': 5, 'latitude': 35.6893, 'longitude': 139.6899, 'time_zone': 'Asia/Tokyo'}, 'postal': {'code': '100-0001'}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'subdivisions': [{'geoname_id': 1850144, 'iso_code': '13', 'names': {'en': 'Tokyo', 'ja': '東京都'}}]}
+== get | city.mmdb | 214.78.121.9
+/22 {'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'traits': {'is_anycast': True}}
+== get | city.mmdb | 214.1.33.33
+/16 {'city': {'geoname_id': 2867714, 'names': {'de': 'München', 'en': 'Munich', 'es': 'Múnich', 'fr': 'Munich', 'ja': 'ミュンヘン', 'ru': 'Мюнхен', 'zh-CN': '慕尼黑'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'location': {'accuracy_radius': 20, 'latitude': 48.1374, 'longitude': 11.5755, 'time_zone': 'Europe/Berlin'}, 'postal': {'code': '80331'}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'represented_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}, 'type': 'military'}, 'subdivisions': [{'geoname_id': 2951839, 'iso_code': 'BY', 'names': {'de': 'Bayern', 'en': 'Bavaria', 'fr': 'Bavière'}}]}
+== get | city.mmdb | 2001:db8:100::1
+/40 {'city': {'geoname_id': 2643743, 'names': {'de': 'London', 'en': 'London', 'es': 'Londres', 'fr': 'Londres', 'ja': 'ロンドン', 'pt-BR': 'Londres', 'ru': 'Лондон', 'zh-CN': '伦敦'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'location': {'accuracy_radius': 10, 'latitude': 51.5142, 'longitude': -0.0931, 'time_zone': 'Europe/London'}, 'postal': {'code': 'EC1A'}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'subdivisions': [{'geoname_id': 6269131, 'iso_code': 'ENG', 'names': {'de': 'England', 'en': 'England', 'fr': 'Angleterre'}}]}
+== get | city.mmdb | 2001:DB8:200:ab::1
+/40 {'city': {'geoname_id': 2988507, 'names': {'de': 'Paris', 'en': 'Paris', 'es': 'París', 'fr': 'Paris', 'ja': 'パリ', 'pt-BR': 'Paris', 'ru': 'Париж', 'zh-CN': '巴黎'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}, 'location': {'accuracy_radius': 20, 'latitude': 48.8607, 'longitude': 2.3281, 'time_zone': 'Europe/Paris'}, 'postal': {'code': '75001'}, 'registered_country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}, 'subdivisions': [{'geoname_id': 3012874, 'iso_code': 'IDF', 'names': {'en': 'Île-de-France', 'fr': 'Île-de-France'}}, {'geoname_id': 2968815, 'iso_code': '75', 'names': {'en': 'Paris', 'fr': 'Paris'}}]}
+== get | city.mmdb | 2001:db8:300:0:0:0:0:1
+/40 {'city': {'geoname_id': 2950159, 'names': {'de': 'Berlin', 'en': 'Berlin', 'es': 'Berlín', 'fr': 'Berlin', 'ja': 'ベルリン', 'ru': 'Берлин', 'zh-CN': '柏林'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'location': {'accuracy_radius': 50, 'latitude': 52.5196, 'longitude': 13.4069, 'time_zone': 'Europe/Berlin'}, 'postal': {'code': '10117'}, 'registered_country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'subdivisions': [{'geoname_id': 2950157, 'iso_code': 'BE', 'names': {'de': 'Land Berlin', 'en': 'Land Berlin'}}]}
+== get | city.mmdb | 2001:db8:401::5
+/48 {'city': {'geoname_id': 1853909, 'names': {'de': 'Osaka', 'en': 'Osaka', 'fr': 'Osaka', 'ja': '大阪市', 'ru': 'Осака', 'zh-CN': '大阪'}}, 'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'location': {'accuracy_radius': 10, 'latitude': 34.6939, 'longitude': 135.5022, 'time_zone': 'Asia/Tokyo'}, 'postal': {'code': '530-0001'}, 'registered_country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'subdivisions': [{'geoname_id': 1853904, 'iso_code': '27', 'names': {'en': 'Osaka', 'ja': '大阪府'}}]}
+== get | city.mmdb | 2001:db8:4ff::1
+/41 {'city': {'geoname_id': 1850147, 'names': {'de': 'Tokio', 'en': 'Tokyo', 'es': 'Tokio', 'fr': 'Tokyo', 'ja': '東京', 'pt-BR': 'Tóquio', 'ru': 'Токио', 'zh-CN': '东京'}}, 'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'location': {'accuracy_radius': 5, 'latitude': 35.6893, 'longitude': 139.6899, 'time_zone': 'Asia/Tokyo'}, 'postal': {'code': '100-0001'}, 'registered_country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'subdivisions': [{'geoname_id': 1850144, 'iso_code': '13', 'names': {'en': 'Tokyo', 'ja': '東京都'}}]}
+== get | city.mmdb | 2001:db8:600::1
+/44 {'city': {'geoname_id': 5128581, 'names': {'de': 'New York City', 'en': 'New York', 'es': 'Nueva York', 'fr': 'New York', 'ja': 'ニューヨーク', 'pt-BR': 'Nova Iorque', 'ru': 'Нью-Йорк', 'zh-CN': '纽约'}}, 'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'location': {'accuracy_radius': 5, 'latitude': 40.7506, 'longitude': -73.9971, 'metro_code': 501, 'time_zone': 'America/New_York'}, 'postal': {'code': '10001'}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'subdivisions': [{'geoname_id': 5128638, 'iso_code': 'NY', 'names': {'en': 'New York', 'fr': 'New York'}}]}
+== get | city.mmdb | 2001:db8:61f::1
+/44 {'city': {'geoname_id': 5809844, 'names': {'de': 'Seattle', 'en': 'Seattle', 'fr': 'Seattle', 'ja': 'シアトル', 'ru': 'Сиэтл', 'zh-CN': '西雅图'}}, 'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'location': {'accuracy_radius': 10, 'latitude': 47.6062, 'longitude': -122.3321, 'metro_code': 819, 'time_zone': 'America/Los_Angeles'}, 'postal': {'code': '98101'}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'subdivisions': [{'geoname_id': 5815135, 'iso_code': 'WA', 'names': {'en': 'Washington', 'fr': 'Washington'}}]}
+== get | city.mmdb | 2001:db8:700::7
+/40 {'traits': {'is_satellite_provider': True}}
+== get | city.mmdb | ::ffff:81.2.69.142
+/123 {'city': {'geoname_id': 2643743, 'names': {'de': 'London', 'en': 'London', 'es': 'Londres', 'fr': 'Londres', 'ja': 'ロンドン', 'pt-BR': 'Londres', 'ru': 'Лондон', 'zh-CN': '伦敦'}}, 'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'location': {'accuracy_radius': 10, 'latitude': 51.5142, 'longitude': -0.0931, 'time_zone': 'Europe/London'}, 'postal': {'code': 'EC1A'}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'subdivisions': [{'geoname_id': 6269131, 'iso_code': 'ENG', 'names': {'de': 'England', 'en': 'England', 'fr': 'Angleterre'}}]}
+== get | city.mmdb | 2002:5153:4401::1
+/26 None
+== get | city.mmdb | 10.0.0.1
+/5 None
+== get | city.mmdb | 192.0.2.1
+/4 None
+== get | city.mmdb | ::
+/104 None
+== get | city.mmdb | ::1
+/104 None
+== get | city.mmdb | 2001:db8:ffff::1
+/33 None
+== get | city.mmdb | 8.8.8.8
+/5 None
+== get | country.mmdb | 81.2.69.142
+/27 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}}
+== get | country.mmdb | 126.20.0.1
+/12 {'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'registered_country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}}
+== get | country.mmdb | 214.1.33.33
+/16 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'represented_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}, 'type': 'military'}}
+== get | country.mmdb | 10.0.0.1
+/5 None
+== get | country.mmdb | 2001:db8:100::1
+ValueError: Error looking up 2001:db8:100::1. You attempted to look up an IPv6 address in an IPv4-only database.
+== get | country.mmdb | 1.2.3.4.5
+ValueError: '1.2.3.4.5' does not appear to be an IPv4 or IPv6 address
+== get | country.mmdb | 01.2.3.4
+ValueError: '01.2.3.4' does not appear to be an IPv4 or IPv6 address
+== get | country.mmdb | 1::2::3
+ValueError: '1::2::3' does not appear to be an IPv4 or IPv6 address
+== get | country.mmdb | 
+ValueError: '' does not appear to be an IPv4 or IPv6 address
+== get | country.mmdb | 2001:db8::g
+ValueError: '2001:db8::g' does not appear to be an IPv4 or IPv6 address
+== get | country.mmdb | fe80::1:2:3:4:5:6:7
+ValueError: 'fe80::1:2:3:4:5:6:7' does not appear to be an IPv4 or IPv6 address
+== get | asn.mmdb | 81.2.69.142
+/24 {'autonomous_system_number': 64496, 'autonomous_system_organization': 'Larkfield Telecom'}
+== get | asn.mmdb | 5.83.140.1
+/19 {'autonomous_system_number': 64500, 'autonomous_system_organization': 'Isar Kabel'}
+== get | asn.mmdb | 214.1.2.3
+/16 {'autonomous_system_number': 64511}
+== get | asn.mmdb | 2001:db8:600:1::1
+/40 {'autonomous_system_number': 65536, 'autonomous_system_organization': 'Hudson Transit v6'}
+== get | asn.mmdb | 177.38.0.1
+/13 {'autonomous_system_number': 64505, 'autonomous_system_organization': 'Paulista Dados'}
+== get | asn.mmdb | 8.8.8.8
+/5 None
+== get | types.mmdb | 1.1.1.1
+/32 {'array': [1, 2, 3], 'boolean': True, 'bytes': b'\x00\x00\x00*', 'double': 42.123456, 'float': 1.100000023841858, 'int32': -268435456, 'map': {'mapX': {'arrayX': [7, 8, 9], 'utf8_stringX': 'hello'}}, 'uint128': 1329227995784915872903807060280344576, 'uint16': 100, 'uint32': 268435456, 'uint64': 1152921504606846976, 'utf8_string': 'unicode! ☯ - ♫'}
+== get | types.mmdb | 1.1.1.3
+/31 {'array': [], 'boolean': False, 'bytes': b'', 'double': 0.0, 'float': 0.0, 'int32': 0, 'map': {}, 'uint128': 0, 'uint16': 0, 'uint32': 0, 'uint64': 0, 'utf8_string': ''}
+== get | types.mmdb | 1.1.1.5
+/30 {'double': inf, 'float': -inf, 'int32': 2147483647, 'uint128': 340282366920938463463374607431768211455, 'uint16': 65535, 'uint32': 4294967295, 'uint64': 18446744073709551615}
+== get | types.mmdb | 1.1.1.9
+/29 {'double': -0.0, 'float': -1.5, 'int32': -2147483648, 'nested': [[[]], {'a': [{'b': [True, False]}]}], 'small': [-1, 1, 3.4028234663852886e+38, 1e-300, 2.5e-08]}
+== get | types.mmdb | 1.1.1.20
+/28 {'long29': 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'long285': 'Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield ', 'unicode': 'ünïcödé 日本語 🚀', 'quote': 'it\'s "quoted"\n\ttab\\', 'bytes': b'\x00\xff\'"\\\n abc'}
+== get | types.mmdb | 1.1.1.32
+/32 {'again': {'array': [1, 2, 3], 'boolean': True, 'bytes': b'\x00\x00\x00*', 'double': 42.123456, 'float': 1.100000023841858, 'int32': -268435456, 'map': {'mapX': {'arrayX': [7, 8, 9], 'utf8_stringX': 'hello'}}, 'uint128': 1329227995784915872903807060280344576, 'uint16': 100, 'uint32': 268435456, 'uint64': 1152921504606846976, 'utf8_string': 'unicode! ☯ - ♫'}, 'map_again': {'mapX': {'arrayX': [7, 8, 9], 'utf8_stringX': 'hello'}}}
+== get | types.mmdb | 1.1.1.33
+/32 {'filler': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'}
+== get | types.mmdb | 1.1.1.66
+/26 {'ipv4_in_v6': 'compat'}
+== get | types.mmdb | ::1.1.1.66
+/122 {'ipv4_in_v6': 'compat'}
+== get | types.mmdb | 2001:db8::1
+/64 {'v6': True, 'uint16': 6}
+== get | types.mmdb | 2001:db8:0:1::1
+/64 {'v6': True, 'uint16': 7}
+== get | types.mmdb | 2001:db8:0:2::1
+/63 None
+== dump | asn.mmdb
+1.128.0.0/11 {'autonomous_system_number': 64506, 'autonomous_system_organization': 'Harbour Bridge Internet'}
+2.125.160.216/29 {'autonomous_system_number': 64497, 'autonomous_system_organization': 'Thames Broadband'}
+5.83.124.0/22 {'autonomous_system_number': 64499, 'autonomous_system_organization': 'Spree Netz'}
+5.83.128.0/19 {'autonomous_system_number': 64500, 'autonomous_system_organization': 'Isar Kabel'}
+24.48.0.0/14 {'autonomous_system_number': 64507, 'autonomous_system_organization': 'Lakeshore Cable'}
+31.11.0.0/18 {'autonomous_system_number': 64501, 'autonomous_system_organization': 'Wisła Online'}
+41.80.0.0/13 {'autonomous_system_number': 64510, 'autonomous_system_organization': 'Rift Valley Wireless'}
+49.32.0.0/11 {'autonomous_system_number': 64504, 'autonomous_system_organization': 'Arabian Sea Networks'}
+67.43.156.0/23 {'autonomous_system_number': 64508, 'autonomous_system_organization': 'Hudson Transit'}
+81.2.69.0/24 {'autonomous_system_number': 64496, 'autonomous_system_organization': 'Larkfield Telecom'}
+81.2.70.0/23 {'autonomous_system_number': 64496, 'autonomous_system_organization': 'Larkfield Telecom'}
+82.221.0.0/16 {'autonomous_system_number': 64502, 'autonomous_system_organization': 'Geysir Hosting'}
+89.160.20.0/24 {'autonomous_system_number': 64498, 'autonomous_system_organization': 'Seine Fibre'}
+105.112.0.0/12 {'autonomous_system_number': 64509, 'autonomous_system_organization': 'Lagoon Mobile'}
+126.0.0.0/11 {'autonomous_system_number': 64503, 'autonomous_system_organization': 'Kanto Mobile'}
+177.32.0.0/13 {'autonomous_system_number': 64505, 'autonomous_system_organization': 'Paulista Dados'}
+214.1.0.0/16 {'autonomous_system_number': 64511}
+214.78.120.0/22 {'autonomous_system_number': 65551, 'autonomous_system_organization': 'Anycast Resolver Collective'}
+2001:db8:100::/40 {'autonomous_system_number': 64496, 'autonomous_system_organization': 'Larkfield Telecom'}
+2001:db8:400::/39 {'autonomous_system_number': 64503, 'autonomous_system_organization': 'Kanto Mobile'}
+2001:db8:600::/40 {'autonomous_system_number': 65536, 'autonomous_system_organization': 'Hudson Transit v6'}
+21 networks
+== dump | country.mmdb
+1.128.0.0/11 {'continent': {'code': 'OC', 'geoname_id': 6255151, 'names': {'de': 'Ozeanien', 'en': 'Oceania', 'es': 'Oceanía', 'fr': 'Océanie', 'ja': 'オセアニア', 'pt-BR': 'Oceania', 'ru': 'Океания', 'zh-CN': '大洋洲'}}, 'country': {'geoname_id': 2077456, 'iso_code': 'AU', 'names': {'de': 'Australien', 'en': 'Australia', 'es': 'Australia', 'fr': 'Australie', 'ja': 'オーストラリア', 'pt-BR': 'Austrália', 'ru': 'Австралия', 'zh-CN': '澳大利亚'}}, 'registered_country': {'geoname_id': 2077456, 'iso_code': 'AU', 'names': {'de': 'Australien', 'en': 'Australia', 'es': 'Australia', 'fr': 'Australie', 'ja': 'オーストラリア', 'pt-BR': 'Austrália', 'ru': 'Австралия', 'zh-CN': '澳大利亚'}}}
+2.125.160.216/29 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}}
+5.83.124.0/22 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'registered_country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}}
+5.83.128.0/20 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'registered_country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}}
+5.83.144.0/20 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'registered_country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}}
+24.48.0.0/14 {'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6251999, 'iso_code': 'CA', 'names': {'de': 'Kanada', 'en': 'Canada', 'es': 'Canadá', 'fr': 'Canada', 'ja': 'カナダ', 'pt-BR': 'Canadá', 'ru': 'Канада', 'zh-CN': '加拿大'}}, 'registered_country': {'geoname_id': 6251999, 'iso_code': 'CA', 'names': {'de': 'Kanada', 'en': 'Canada', 'es': 'Canadá', 'fr': 'Canada', 'ja': 'カナダ', 'pt-BR': 'Canadá', 'ru': 'Канада', 'zh-CN': '加拿大'}}}
+31.11.0.0/18 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 798544, 'is_in_european_union': True, 'iso_code': 'PL', 'names': {'de': 'Polen', 'en': 'Poland', 'es': 'Polonia', 'fr': 'Pologne', 'ja': 'ポーランド共和国', 'pt-BR': 'Polônia', 'ru': 'Польша', 'zh-CN': '波兰'}}, 'registered_country': {'geoname_id': 798544, 'is_in_european_union': True, 'iso_code': 'PL', 'names': {'de': 'Polen', 'en': 'Poland', 'es': 'Polonia', 'fr': 'Pologne', 'ja': 'ポーランド共和国', 'pt-BR': 'Polônia', 'ru': 'Польша', 'zh-CN': '波兰'}}}
+41.80.0.0/13 {'continent': {'code': 'AF', 'geoname_id': 6255146, 'names': {'de': 'Afrika', 'en': 'Africa', 'es': 'África', 'fr': 'Afrique', 'ja': 'アフリカ', 'pt-BR': 'África', 'ru': 'Африка', 'zh-CN': '非洲'}}, 'country': {'geoname_id': 192950, 'iso_code': 'KE', 'names': {'de': 'Kenia', 'en': 'Kenya', 'es': 'Kenia', 'fr': 'Kenya', 'ja': 'ケニア共和国', 'pt-BR': 'Quênia', 'ru': 'Кения', 'zh-CN': '肯尼亚'}}, 'registered_country': {'geoname_id': 192950, 'iso_code': 'KE', 'names': {'de': 'Kenia', 'en': 'Kenya', 'es': 'Kenia', 'fr': 'Kenya', 'ja': 'ケニア共和国', 'pt-BR': 'Quênia', 'ru': 'Кения', 'zh-CN': '肯尼亚'}}}
+49.32.0.0/11 {'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1269750, 'iso_code': 'IN', 'names': {'de': 'Indien', 'en': 'India', 'es': 'India', 'fr': 'Inde', 'ja': 'インド', 'pt-BR': 'Índia', 'ru': 'Индия', 'zh-CN': '印度'}}, 'registered_country': {'geoname_id': 1269750, 'iso_code': 'IN', 'names': {'de': 'Indien', 'en': 'India', 'es': 'India', 'fr': 'Inde', 'ja': 'インド', 'pt-BR': 'Índia', 'ru': 'Индия', 'zh-CN': '印度'}}}
+67.43.156.0/24 {'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}}
+67.43.157.0/24 {'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}}
+81.2.69.0/25 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}}
+81.2.69.128/27 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}}
+81.2.69.160/27 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}}
+81.2.69.192/26 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}}
+81.2.70.0/23 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}, 'registered_country': {'geoname_id': 2635167, 'iso_code': 'GB', 'names': {'de': 'Vereinigtes Königreich', 'en': 'United Kingdom', 'es': 'Reino Unido', 'fr': 'Royaume-Uni', 'ja': 'イギリス', 'pt-BR': 'Reino Unido', 'ru': 'Великобритания', 'zh-CN': '英国'}}}
+82.221.0.0/16 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2629691, 'iso_code': 'IS', 'names': {'de': 'Island', 'en': 'Iceland', 'es': 'Islandia', 'fr': 'Islande', 'ja': 'アイスランド共和国', 'pt-BR': 'Islândia', 'ru': 'Исландия', 'zh-CN': '冰岛'}}, 'registered_country': {'geoname_id': 2629691, 'iso_code': 'IS', 'names': {'de': 'Island', 'en': 'Iceland', 'es': 'Islandia', 'fr': 'Islande', 'ja': 'アイスランド共和国', 'pt-BR': 'Islândia', 'ru': 'Исландия', 'zh-CN': '冰岛'}}}
+89.160.20.112/28 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}, 'registered_country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}}
+89.160.20.128/25 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}, 'registered_country': {'geoname_id': 3017382, 'is_in_european_union': True, 'iso_code': 'FR', 'names': {'de': 'Frankreich', 'en': 'France', 'es': 'Francia', 'fr': 'France', 'ja': 'フランス共和国', 'pt-BR': 'França', 'ru': 'Франция', 'zh-CN': '法国'}}}
+105.112.0.0/12 {'continent': {'code': 'AF', 'geoname_id': 6255146, 'names': {'de': 'Afrika', 'en': 'Africa', 'es': 'África', 'fr': 'Afrique', 'ja': 'アフリカ', 'pt-BR': 'África', 'ru': 'Африка', 'zh-CN': '非洲'}}, 'country': {'geoname_id': 2328926, 'iso_code': 'NG', 'names': {'de': 'Nigeria', 'en': 'Nigeria', 'es': 'Nigeria', 'fr': 'Nigeria', 'ja': 'ナイジェリア連邦共和国', 'pt-BR': 'Nigéria', 'ru': 'Нигерия', 'zh-CN': '尼日利亚'}}, 'registered_country': {'geoname_id': 2328926, 'iso_code': 'NG', 'names': {'de': 'Nigeria', 'en': 'Nigeria', 'es': 'Nigeria', 'fr': 'Nigeria', 'ja': 'ナイジェリア連邦共和国', 'pt-BR': 'Nigéria', 'ru': 'Нигерия', 'zh-CN': '尼日利亚'}}}
+126.0.0.0/12 {'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'registered_country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}}
+126.16.0.0/12 {'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'registered_country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}}
+177.32.0.0/14 {'continent': {'code': 'SA', 'geoname_id': 6255150, 'names': {'de': 'Südamerika', 'en': 'South America', 'es': 'Sudamérica', 'fr': 'Amérique du Sud', 'ja': '南アメリカ', 'pt-BR': 'América do Sul', 'ru': 'Южная Америка', 'zh-CN': '南美洲'}}, 'country': {'geoname_id': 3469034, 'iso_code': 'BR', 'names': {'de': 'Brasilien', 'en': 'Brazil', 'es': 'Brasil', 'fr': 'Brésil', 'ja': 'ブラジル連邦共和国', 'pt-BR': 'Brasil', 'ru': 'Бразилия', 'zh-CN': '巴西'}}, 'registered_country': {'geoname_id': 3469034, 'iso_code': 'BR', 'names': {'de': 'Brasilien', 'en': 'Brazil', 'es': 'Brasil', 'fr': 'Brésil', 'ja': 'ブラジル連邦共和国', 'pt-BR': 'Brasil', 'ru': 'Бразилия', 'zh-CN': '巴西'}}}
+177.36.0.0/14 {'continent': {'code': 'SA', 'geoname_id': 6255150, 'names': {'de': 'Südamerika', 'en': 'South America', 'es': 'Sudamérica', 'fr': 'Amérique du Sud', 'ja': '南アメリカ', 'pt-BR': 'América do Sul', 'ru': 'Южная Америка', 'zh-CN': '南美洲'}}, 'country': {'geoname_id': 3469034, 'iso_code': 'BR', 'names': {'de': 'Brasilien', 'en': 'Brazil', 'es': 'Brasil', 'fr': 'Brésil', 'ja': 'ブラジル連邦共和国', 'pt-BR': 'Brasil', 'ru': 'Бразилия', 'zh-CN': '巴西'}}, 'registered_country': {'geoname_id': 3469034, 'iso_code': 'BR', 'names': {'de': 'Brasilien', 'en': 'Brazil', 'es': 'Brasil', 'fr': 'Brésil', 'ja': 'ブラジル連邦共和国', 'pt-BR': 'Brasil', 'ru': 'Бразилия', 'zh-CN': '巴西'}}}
+214.1.0.0/16 {'continent': {'code': 'EU', 'geoname_id': 6255148, 'names': {'de': 'Europa', 'en': 'Europe', 'es': 'Europa', 'fr': 'Europe', 'ja': 'ヨーロッパ', 'pt-BR': 'Europa', 'ru': 'Европа', 'zh-CN': '欧洲'}}, 'country': {'geoname_id': 2921044, 'is_in_european_union': True, 'iso_code': 'DE', 'names': {'de': 'Deutschland', 'en': 'Germany', 'es': 'Alemania', 'fr': 'Allemagne', 'ja': 'ドイツ連邦共和国', 'pt-BR': 'Alemanha', 'ru': 'Германия', 'zh-CN': '德国'}}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'represented_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}, 'type': 'military'}}
+214.78.120.0/22 {'continent': {'code': 'NA', 'geoname_id': 6255149, 'names': {'de': 'Nordamerika', 'en': 'North America', 'es': 'Norteamérica', 'fr': 'Amérique du Nord', 'ja': '北アメリカ', 'pt-BR': 'América do Norte', 'ru': 'Северная Америка', 'zh-CN': '北美洲'}}, 'country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}}
+216.160.83.56/29 {'continent': {'code': 'AS', 'geoname_id': 6255147, 'names': {'de': 'Asien', 'en': 'Asia', 'es': 'Asia', 'fr': 'Asie', 'ja': 'アジア', 'pt-BR': 'Ásia', 'ru': 'Азия', 'zh-CN': '亚洲'}}, 'country': {'geoname_id': 1861060, 'iso_code': 'JP', 'names': {'de': 'Japan', 'en': 'Japan', 'es': 'Japón', 'fr': 'Japon', 'ja': '日本', 'pt-BR': 'Japão', 'ru': 'Япония', 'zh-CN': '日本'}}, 'registered_country': {'geoname_id': 6252001, 'iso_code': 'US', 'names': {'de': 'USA', 'en': 'United States', 'es': 'Estados Unidos', 'fr': 'États-Unis', 'ja': 'アメリカ合衆国', 'pt-BR': 'Estados Unidos', 'ru': 'США', 'zh-CN': '美国'}}}
+27 networks
+== dump | types.mmdb
+1.1.1.0/32 {'filler': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'}
+1.1.1.1/32 {'array': [1, 2, 3], 'boolean': True, 'bytes': b'\x00\x00\x00*', 'double': 42.123456, 'float': 1.100000023841858, 'int32': -268435456, 'map': {'mapX': {'arrayX': [7, 8, 9], 'utf8_stringX': 'hello'}}, 'uint128': 1329227995784915872903807060280344576, 'uint16': 100, 'uint32': 268435456, 'uint64': 1152921504606846976, 'utf8_string': 'unicode! ☯ - ♫'}
+1.1.1.2/31 {'array': [], 'boolean': False, 'bytes': b'', 'double': 0.0, 'float': 0.0, 'int32': 0, 'map': {}, 'uint128': 0, 'uint16': 0, 'uint32': 0, 'uint64': 0, 'utf8_string': ''}
+1.1.1.4/30 {'double': inf, 'float': -inf, 'int32': 2147483647, 'uint128': 340282366920938463463374607431768211455, 'uint16': 65535, 'uint32': 4294967295, 'uint64': 18446744073709551615}
+1.1.1.8/29 {'double': -0.0, 'float': -1.5, 'int32': -2147483648, 'nested': [[[]], {'a': [{'b': [True, False]}]}], 'small': [-1, 1, 3.4028234663852886e+38, 1e-300, 2.5e-08]}
+1.1.1.16/28 {'long29': 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'long285': 'Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield Larkfield ', 'unicode': 'ünïcödé 日本語 🚀', 'quote': 'it\'s "quoted"\n\ttab\\', 'bytes': b'\x00\xff\'"\\\n abc'}
+1.1.1.32/32 {'again': {'array': [1, 2, 3], 'boolean': True, 'bytes': b'\x00\x00\x00*', 'double': 42.123456, 'float': 1.100000023841858, 'int32': -268435456, 'map': {'mapX': {'arrayX': [7, 8, 9], 'utf8_stringX': 'hello'}}, 'uint128': 1329227995784915872903807060280344576, 'uint16': 100, 'uint32': 268435456, 'uint64': 1152921504606846976, 'utf8_string': 'unicode! ☯ - ♫'}, 'map_again': {'mapX': {'arrayX': [7, 8, 9], 'utf8_stringX': 'hello'}}}
+1.1.1.33/32 {'filler': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'}
+1.1.1.34/31 {'filler': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'}
+1.1.1.36/30 {'filler': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'}
+1.1.1.40/29 {'filler': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'}
+1.1.1.48/28 {'filler': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'}
+1.1.1.64/26 {'ipv4_in_v6': 'compat'}
+1.1.1.128/25 {'filler': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'}
+2001:db8::/64 {'v6': True, 'uint16': 6}
+2001:db8:0:1::/64 {'v6': True, 'uint16': 7}
+16 networks
+== networks | city.mmdb
+1.128.0.0/11 AU Sydney
+2.125.160.216/29 GB London
+5.83.124.0/22 DE Berlin
+5.83.128.0/20 DE Munich
+5.83.144.0/20 DE -
+24.48.0.0/14 CA Toronto
+31.11.0.0/18 PL Kraków
+41.80.0.0/13 KE Nairobi
+49.32.0.0/11 IN Mumbai
+67.43.156.0/24 US New York
+67.43.157.0/24 US Seattle
+81.2.69.0/25 GB London
+81.2.69.128/27 GB London
+81.2.69.160/27 GB London
+81.2.69.192/26 GB London
+81.2.70.0/23 GB -
+82.221.0.0/16 IS Reykjavik
+89.160.20.112/28 FR Paris
+89.160.20.128/25 FR Paris
+105.112.0.0/12 NG Lagos
+126.0.0.0/12 JP Tokyo
+126.16.0.0/12 JP Osaka
+177.32.0.0/14 BR São Paulo
+177.36.0.0/14 BR -
+214.1.0.0/16 DE Munich
+214.78.120.0/22 US -
+216.160.83.56/29 JP Tokyo
+2001:db8:100::/40 GB London
+2001:db8:200::/40 FR Paris
+2001:db8:300::/40 DE Berlin
+2001:db8:400::/48 JP Tokyo
+2001:db8:401::/48 JP Osaka
+2001:db8:402::/47 JP Tokyo
+2001:db8:404::/46 JP Tokyo
+2001:db8:408::/45 JP Tokyo
+2001:db8:410::/44 JP Tokyo
+2001:db8:420::/43 JP Tokyo
+2001:db8:440::/42 JP Tokyo
+2001:db8:480::/41 JP Tokyo
+2001:db8:500::/40 AU Sydney
+2001:db8:600::/44 US New York
+2001:db8:610::/44 US Seattle
+2001:db8:620::/43 US New York
+2001:db8:640::/42 US New York
+2001:db8:680::/41 US New York
+2001:db8:700::/40 -- -
+46 networks
+== city | city.mmdb | 81.2.69.142 | en
+city London geoname=2643743
+subdivision England (ENG) of 1 / ENG
+location 51.5142,-0.0931 radius=10 tz=Europe/London metro=-
+postal EC1A
+country United Kingdom (GB) eu=False geoname=2635167
+continent EU Europe
+registered United Kingdom (GB)
+represented - type=-
+traits ip 81.2.69.142 network 81.2.69.128/27 flags -
+== city | city.mmdb | 81.2.69.142 | fr,en
+city Londres geoname=2643743
+subdivision Angleterre (ENG) of 1 / ENG
+location 51.5142,-0.0931 radius=10 tz=Europe/London metro=-
+postal EC1A
+country Royaume-Uni (GB) eu=False geoname=2635167
+continent EU Europe
+registered Royaume-Uni (GB)
+represented - type=-
+traits ip 81.2.69.142 network 81.2.69.128/27 flags -
+== city | city.mmdb | 89.160.20.115 | ja,en
+city パリ geoname=2988507
+subdivision Paris (75) of 2 / IDF / 75
+location 48.8607,2.3281 radius=20 tz=Europe/Paris metro=-
+postal 75001
+country フランス共和国 (FR) eu=True geoname=3017382
+continent EU ヨーロッパ
+registered フランス共和国 (FR)
+represented - type=-
+traits ip 89.160.20.115 network 89.160.20.112/28 flags -
+== city | city.mmdb | 5.83.130.1 | de
+city München geoname=2867714
+subdivision Bayern (BY) of 1 / BY
+location 48.1374,11.5755 radius=20 tz=Europe/Berlin metro=-
+postal 80331
+country Deutschland (DE) eu=True geoname=2921044
+continent EU Europa
+registered Deutschland (DE)
+represented - type=-
+traits ip 5.83.130.1 network 5.83.128.0/20 flags -
+== city | city.mmdb | 31.11.33.1 | pt-BR,ru
+city Cracóvia geoname=3094802
+subdivision - (12) of 1 / 12
+location 50.0614,19.9366 radius=100 tz=Europe/Warsaw metro=-
+postal 31-001
+country Polônia (PL) eu=True geoname=798544
+continent EU Europa
+registered Polônia (PL)
+represented - type=-
+traits ip 31.11.33.1 network 31.11.0.0/18 flags -
+== city | city.mmdb | 126.20.0.1 | zh-CN
+city 大阪 geoname=1853909
+subdivision - (27) of 1 / 27
+location 34.6939,135.5022 radius=10 tz=Asia/Tokyo metro=-
+postal 530-0001
+country 日本 (JP) eu=False geoname=1861060
+continent AS 亚洲
+registered 日本 (JP)
+represented - type=-
+traits ip 126.20.0.1 network 126.16.0.0/12 flags -
+== city | city.mmdb | 177.33.4.5 | es,pt-BR
+city São Paulo geoname=3448439
+subdivision São Paulo (SP) of 1 / SP
+location -23.5475,-46.6361 radius=100 tz=America/Sao_Paulo metro=-
+postal 01000-000
+country Brasil (BR) eu=False geoname=3469034
+continent SA Sudamérica
+registered Brasil (BR)
+represented - type=-
+traits ip 177.33.4.5 network 177.32.0.0/14 flags -
+== city | city.mmdb | 216.160.83.58 | en
+city Tokyo geoname=1850147
+subdivision Tokyo (13) of 1 / 13
+location 35.6893,139.6899 radius=5 tz=Asia/Tokyo metro=-
+postal 100-0001
+country Japan (JP) eu=False geoname=1861060
+continent AS Asia
+registered United States (US)
+represented - type=-
+traits ip 216.160.83.58 network 216.160.83.56/29 flags -
+== city | city.mmdb | 214.78.121.9 | en
+city - geoname=-
+subdivision - of 0
+location -,- radius=- tz=- metro=-
+postal -
+country United States (US) eu=False geoname=6252001
+continent NA North America
+registered United States (US)
+represented - type=-
+traits ip 214.78.121.9 network 214.78.120.0/22 flags is_anycast
+== city | city.mmdb | 214.1.33.33 | en
+city Munich geoname=2867714
+subdivision Bavaria (BY) of 1 / BY
+location 48.1374,11.5755 radius=20 tz=Europe/Berlin metro=-
+postal 80331
+country Germany (DE) eu=True geoname=2921044
+continent EU Europe
+registered United States (US)
+represented United States (US) type=military
+traits ip 214.1.33.33 network 214.1.0.0/16 flags -
+== city | city.mmdb | 2001:db8:700::7 | en
+city - geoname=-
+subdivision - of 0
+location -,- radius=- tz=- metro=-
+postal -
+country - eu=False geoname=-
+continent - -
+registered -
+represented - type=-
+traits ip 2001:db8:700::7 network 2001:db8:700::/40 flags is_satellite_provider
+== city | city.mmdb | 67.43.156.7 | ru
+city Нью-Йорк geoname=5128581
+subdivision - (NY) of 1 / NY
+location 40.7506,-73.9971 radius=5 tz=America/New_York metro=501
+postal 10001
+country США (US) eu=False geoname=6252001
+continent NA Северная Америка
+registered США (US)
+represented - type=-
+traits ip 67.43.156.7 network 67.43.156.0/24 flags -
+== city | city.mmdb | 2001:db8:61f::1 | en
+city Seattle geoname=5809844
+subdivision Washington (WA) of 1 / WA
+location 47.6062,-122.3321 radius=10 tz=America/Los_Angeles metro=819
+postal 98101
+country United States (US) eu=False geoname=6252001
+continent NA North America
+registered United States (US)
+represented - type=-
+traits ip 2001:db8:61f::1 network 2001:db8:610::/44 flags -
+== city | city.mmdb | 5.83.150.9 | en
+city - geoname=-
+subdivision - of 0
+location -,- radius=- tz=- metro=-
+postal -
+country Germany (DE) eu=True geoname=2921044
+continent EU Europe
+registered Germany (DE)
+represented - type=-
+traits ip 5.83.150.9 network 5.83.144.0/20 flags -
+== city | city.mmdb | 105.113.0.9 | xx
+city - geoname=2332459
+subdivision - (LA) of 1 / LA
+location 6.4541,3.3947 radius=200 tz=Africa/Lagos metro=-
+postal -
+country - (NG) eu=False geoname=2328926
+continent AF -
+registered - (NG)
+represented - type=-
+traits ip 105.113.0.9 network 105.112.0.0/12 flags -
+== city | city.mmdb | 10.0.0.1 | en
+AddressNotFoundError: The address 10.0.0.1 is not in the database.
+== city | city.mmdb | 2001:db8:ffff::1 | en
+AddressNotFoundError: The address 2001:db8:ffff::1 is not in the database.
+== city | city.mmdb | ::ffff:81.2.69.142 | en
+city London geoname=2643743
+subdivision England (ENG) of 1 / ENG
+location 51.5142,-0.0931 radius=10 tz=Europe/London metro=-
+postal EC1A
+country United Kingdom (GB) eu=False geoname=2635167
+continent EU Europe
+registered United Kingdom (GB)
+represented - type=-
+traits ip ::ffff:81.2.69.142 network ::ffff:81.2.69.128/123 flags -
+== city | city.mmdb | nonsense | en
+ValueError: 'nonsense' does not appear to be an IPv4 or IPv6 address
+== country | country.mmdb | 81.2.69.142 | en
+country United Kingdom (GB) eu=False geoname=2635167
+continent EU Europe
+registered United Kingdom (GB)
+represented - type=-
+traits ip 81.2.69.142 network 81.2.69.128/27 flags -
+== country | country.mmdb | 214.1.33.33 | en
+country Germany (DE) eu=True geoname=2921044
+continent EU Europe
+registered United States (US)
+represented United States (US) type=military
+traits ip 214.1.33.33 network 214.1.0.0/16 flags -
+== country | country.mmdb | 10.0.0.1 | en
+AddressNotFoundError: The address 10.0.0.1 is not in the database.
+== country | city.mmdb | 81.2.69.142 | en
+TypeError: The country method cannot be used with the GeoIP2-City database
+== asn | city.mmdb | 81.2.69.142 | en
+TypeError: The asn method cannot be used with the GeoIP2-City database
+== city | asn.mmdb | 81.2.69.142 | en
+TypeError: The city method cannot be used with the GeoLite2-ASN database
+== asn | asn.mmdb | 81.2.69.142 | en
+AS64496 Larkfield Telecom network 81.2.69.0/24 ip 81.2.69.142
+== asn | asn.mmdb | 214.1.2.3 | en
+AS64511 - network 214.1.0.0/16 ip 214.1.2.3
+== asn | asn.mmdb | 2001:db8:600:1::1 | en
+AS65536 Hudson Transit v6 network 2001:db8:600::/40 ip 2001:db8:600:1::1
+== asn | asn.mmdb | 8.8.8.8 | en
+AddressNotFoundError: The address 8.8.8.8 is not in the database.
+== get | nometa.mmdb | 1.2.3.4
+InvalidDatabaseError: Error opening database file (nometa.mmdb). Is this a valid MaxMind DB file?
+== get | metalist.mmdb | 1.2.3.4
+InvalidDatabaseError: Error reading metadata in database file (metalist.mmdb).
+== get | metamissing.mmdb | 1.2.3.4
+KeyError: 'build_epoch'
+== get | rec20.mmdb | 1.2.3.4
+InvalidDatabaseError: Unknown record size: 20
+== get | corrupt.mmdb | 1.2.3.4
+InvalidDatabaseError: The MaxMind DB file's search tree is corrupt
+== get | badtype.mmdb | 1.2.3.4
+InvalidDatabaseError: Unexpected type number (12) encountered
+== get | baddouble.mmdb | 1.2.3.4
+InvalidDatabaseError: The MaxMind DB file's data section contains bad data (unknown data type or corrupt data)
+== get | badptr.mmdb | 1.2.3.4
+IndexError: index out of range
+== get | shallow.mmdb | 1.2.3.4
+InvalidDatabaseError: Invalid node in search tree
+== get | missing.mmdb | 1.2.3.4
+FileNotFoundError: [Errno 2] No such file or directory: 'missing.mmdb'
+== get | corrupt.mmdb | 1.2.4.4
+/24 {'a': 1}
+== get | badtype.mmdb | 1.2.4.4
+/24 {'a': 1}
+== get | country.mmdb | 2001:db8::1
+ValueError: Error looking up 2001:db8::1. You attempted to look up an IPv6 address in an IPv4-only database.
+== annotate | access.log
+1 31.11.26.0 PL Kraków AS64501
+2 31.11.59.107 PL Kraków AS64501
+3 2001:db8:700:0:0:0:72:e66a - - AS?
+4 2001:db8:401:0:0:0:0:26e2 JP Osaka AS64503
+5 67.43.157.135 US Seattle AS64508
+6 41.83.225.119 KE Nairobi AS64510
+7 2001:db8:401:0:0:0:3b:dcdb JP Osaka AS64503
+8 31.11.36.139 PL Kraków AS64501
+9 105.118.243.4 NG Lagos AS64509
+10 198.51.100.19 not found (192.0.0.0/4) AS?
+11 2001:db8:401:0:0:0:54:bb59 JP Osaka AS64503
+12 2001:db8:500:0:0:0:53:8da4 AU Sydney AS64503
+13 67.43.156.67 US New York AS64508
+14 41.80.186.29 KE Nairobi AS64510
+15 5.83.128.215 DE Munich AS64500
+16 2001:db8:500:0:0:0:22:54f1 AU Sydney AS64503
+17 214.78.121.232 US - AS65551
+18 2001:db8:400:0:0:0:5:8355 JP Tokyo AS64503
+19 126.1.173.156 JP Tokyo AS64503
+20 67.43.156.52 US New York AS64508
+21 198.51.100.122 not found (192.0.0.0/4) AS?
+22 126.14.26.134 JP Tokyo AS64503
+23 177.38.9.160 BR - AS64505
+24 2001:db8:200:0:0:0:18:45da FR Paris AS?
+25 214.78.122.179 US - AS65551
+26 82.221.131.181 IS Reykjavik AS64502
+27 89.160.20.119 FR Paris AS64498
+28 216.160.83.58 JP Tokyo AS?
+29 82.221.244.239 IS Reykjavik AS64502
+30 126.31.2.110 JP Osaka AS64503
+31 177.37.136.127 BR - AS64505
+32 177.34.207.110 BR São Paulo AS64505
+33 10.1.2.213 not found (8.0.0.0/5) AS?
+34 2001:db8:ffff:0:0:0:45:fe79 not found (2001:db8:8000::/33) AS?
+35 216.160.83.61 JP Tokyo AS?
+36 2001:DB8:100:0:0:0:4A:914C GB London AS64496
+37 1.152.226.138 AU Sydney AS64506
+38 2001:db8:700:0:0:0:13:ed09 - - AS?
+39 2001:db8:200:0:0:0:34:4d44 FR Paris AS?
+40 5.83.135.213 DE Munich AS64500
+41 10.1.2.143 not found (8.0.0.0/5) AS?
+42 214.78.120.138 US - AS65551
+43 2001:db8:200:0:0:0:3c:7523 FR Paris AS?
+44 5.83.154.78 DE - AS64500
+45 198.51.100.239 not found (192.0.0.0/4) AS?
+46 2001:db8:600:0:0:0:39:ee34 US New York AS65536
+47 2001:db8:610:0:0:0:3e:4984 US Seattle AS65536
+48 2001:DB8:200:0:0:0:6B:304 FR Paris AS?
+49 10.1.2.180 not found (8.0.0.0/5) AS?
+50 89.160.20.146 FR Paris AS64498
+51 216.160.83.60 JP Tokyo AS?
+52 126.31.129.78 JP Osaka AS64503
+53 1.133.25.85 AU Sydney AS64506
+54 2001:db8:500:0:0:0:11:3d98 AU Sydney AS64503
+55 2001:db8:100:0:0:0:59:7420 GB London AS64496
+56 2001:db8:401:0:0:0:3a:e833 JP Osaka AS64503
+57 2001:db8:700:0:0:0:5c:b35a - - AS?
+58 177.36.223.124 BR - AS64505
+59 81.2.69.62 GB London AS64496
+60 1.152.76.32 AU Sydney AS64506
+61 89.160.20.159 FR Paris AS64498
+62 2001:DB8:700:0:0:0:F:A354 - - AS?
+63 2001:db8:610:0:0:0:6b:7c13 US Seattle AS65536
+64 2001:db8:700:0:0:0:1:140c - - AS?
+65 67.43.157.236 US Seattle AS64508
+66 81.2.69.188 GB London AS64496
+67 2001:DB8:200:0:0:0:5E:623F FR Paris AS?
+68 82.221.86.151 IS Reykjavik AS64502
+69 126.9.21.224 JP Tokyo AS64503
+70 2001:db8:ffff:0:0:0:61:5b12 not found (2001:db8:8000::/33) AS?
+71 10.1.2.98 not found (8.0.0.0/5) AS?
+72 2001:db8:200:0:0:0:69:4661 FR Paris AS?
+73 10.1.2.26 not found (8.0.0.0/5) AS?
+74 49.32.84.55 IN Mumbai AS64504
+75 81.2.69.188 GB London AS64496
+76 67.43.157.10 US Seattle AS64508
+77 41.83.205.60 KE Nairobi AS64510
+line 78: 'not-an-ip' does not appear to be an IPv4 or IPv6 address
+79 82.221.214.15 IS Reykjavik AS64502
+80 198.51.100.32 not found (192.0.0.0/4) AS?
+81 41.81.73.126 KE Nairobi AS64510
+82 126.23.43.194 JP Osaka AS64503
+83 49.36.42.148 IN Mumbai AS64504
+84 5.83.156.5 DE - AS64500
+85 81.2.69.160 GB London AS64496
+86 2001:db8:700:0:0:0:6:7c8f - - AS?
+87 31.11.48.182 PL Kraków AS64501
+88 67.43.156.214 US New York AS64508
+89 5.83.125.170 DE Berlin AS64499
+90 2001:db8:600:0:0:0:5e:1a0c US New York AS65536
+91 2001:db8:300:0:0:0:4b:c60f DE Berlin AS?
+92 67.43.156.37 US New York AS64508
+93 5.83.127.59 DE Berlin AS64499
+94 216.160.83.63 JP Tokyo AS?
+95 81.2.69.201 GB London AS64496
+96 89.160.20.188 FR Paris AS64498
+97 89.160.20.118 FR Paris AS64498
+98 2001:db8:100:0:0:0:61:f3f1 GB London AS64496
+99 2001:DB8:200:0:0:0:B:3773 FR Paris AS?
+100 10.1.2.208 not found (8.0.0.0/5) AS?
+101 2001:db8:100:0:0:0:18:46cb GB London AS64496
+102 216.160.83.57 JP Tokyo AS?
+103 41.82.19.217 KE Nairobi AS64510
+104 2001:db8:300:0:0:0:1d:cc50 DE Berlin AS?
+105 126.6.39.63 JP Tokyo AS64503
+106 177.35.95.105 BR São Paulo AS64505
+107 192.168.7.112 not found (192.0.0.0/4) AS?
+108 126.26.119.226 JP Osaka AS64503
+109 2001:db8:500:0:0:0:45:1a67 AU Sydney AS64503
+110 192.168.7.52 not found (192.0.0.0/4) AS?
+111 5.83.135.139 DE Munich AS64500
+112 214.78.120.155 US - AS65551
+113 82.221.198.30 IS Reykjavik AS64502
+114 198.51.100.250 not found (192.0.0.0/4) AS?
+115 126.2.158.227 JP Tokyo AS64503
+116 1.148.131.246 AU Sydney AS64506
+117 2001:db8:300:0:0:0:45:3f5f DE Berlin AS?
+118 214.1.166.243 DE Munich AS64511
+119 105.123.157.213 NG Lagos AS64509
+120 126.29.202.20 JP Osaka AS64503
+121 126.12.157.75 JP Tokyo AS64503
+122 81.2.70.63 GB - AS64496
+123 5.83.125.131 DE Berlin AS64499
+124 89.160.20.150 FR Paris AS64498
+125 81.2.71.2 GB - AS64496
+126 214.78.123.103 US - AS65551
+127 1.137.144.178 AU Sydney AS64506
+128 5.83.128.37 DE Munich AS64500
+129 81.2.69.132 GB London AS64496
+130 192.168.7.224 not found (192.0.0.0/4) AS?
+131 81.2.69.161 GB London AS64496
+132 2001:db8:ffff:0:0:0:29:c1dc not found (2001:db8:8000::/33) AS?
+133 81.2.69.161 GB London AS64496
+134 2001:db8:700:0:0:0:2a:2a4 - - AS?
+135 81.2.71.150 GB - AS64496
+136 2001:db8:700:0:0:0:48:bc74 - - AS?
+137 89.160.20.123 FR Paris AS64498
+138 192.168.7.41 not found (192.0.0.0/4) AS?
+139 89.160.20.124 FR Paris AS64498
+140 177.32.190.125 BR São Paulo AS64505
+141 81.2.70.134 GB - AS64496
+142 5.83.154.247 DE - AS64500
+143 89.160.20.242 FR Paris AS64498
+144 2001:db8:100:0:0:0:3a:728e GB London AS64496
+145 67.43.157.55 US Seattle AS64508
+146 2001:db8:700:0:0:0:71:6c05 - - AS?
+147 2001:db8:ffff:0:0:0:60:df58 not found (2001:db8:8000::/33) AS?
+148 2001:db8:100:0:0:0:6:7c80 GB London AS64496
+149 177.37.81.87 BR - AS64505
+150 198.51.100.228 not found (192.0.0.0/4) AS?
+line 151: '300.12.4.1' does not appear to be an IPv4 or IPv6 address
+152 198.51.100.250 not found (192.0.0.0/4) AS?
+153 10.1.2.213 not found (8.0.0.0/5) AS?
+154 1.144.67.194 AU Sydney AS64506
+155 49.56.34.183 IN Mumbai AS64504
+156 2001:db8:600:0:0:0:3:1f6 US New York AS65536
+157 31.11.31.174 PL Kraków AS64501
+158 2001:db8:100:0:0:0:6c:c499 GB London AS64496
+159 2001:db8:500:0:0:0:1:f9d AU Sydney AS64503
+160 192.168.7.110 not found (192.0.0.0/4) AS?
+161 5.83.125.41 DE Berlin AS64499
+162 2001:db8:100:0:0:0:26:1efa GB London AS64496
+163 5.83.129.182 DE Munich AS64500
+164 89.160.20.112 FR Paris AS64498
+165 82.221.122.48 IS Reykjavik AS64502
+166 10.1.2.145 not found (8.0.0.0/5) AS?
+167 126.17.117.25 JP Osaka AS64503
+168 5.83.157.19 DE - AS64500
+169 41.85.95.105 KE Nairobi AS64510
+170 105.115.55.191 NG Lagos AS64509
+171 67.43.156.150 US New York AS64508
+172 105.119.140.105 NG Lagos AS64509
+173 81.2.71.210 GB - AS64496
+174 2001:db8:610:0:0:0:4a:6ea4 US Seattle AS65536
+175 67.43.157.18 US Seattle AS64508
+176 2001:db8:500:0:0:0:6a:fdc6 AU Sydney AS64503
+177 126.8.166.9 JP Tokyo AS64503
+178 67.43.156.225 US New York AS64508
+179 81.2.70.44 GB - AS64496
+180 126.27.178.201 JP Osaka AS64503
+181 82.221.84.176 IS Reykjavik AS64502
+182 24.51.198.20 CA Toronto AS64507
+183 2001:db8:700:0:0:0:e:1586 - - AS?
+184 2001:db8:400:0:0:0:7a:8914 JP Tokyo AS64503
+185 81.2.69.165 GB London AS64496
+186 192.168.7.222 not found (192.0.0.0/4) AS?
+187 5.83.128.191 DE Munich AS64500
+188 2001:db8:610:0:0:0:32:1a46 US Seattle AS65536
+189 2001:DB8:600:0:0:0:6A:5D52 US New York AS65536
+190 89.160.20.200 FR Paris AS64498
+191 2001:db8:300:0:0:0:19:b383 DE Berlin AS?
+192 2001:db8:300:0:0:0:5b:7753 DE Berlin AS?
+193 81.2.70.197 GB - AS64496
+194 89.160.20.170 FR Paris AS64498
+195 5.83.125.26 DE Berlin AS64499
+196 105.114.84.61 NG Lagos AS64509
+197 81.2.70.248 GB - AS64496
+198 89.160.20.123 FR Paris AS64498
+199 81.2.69.51 GB London AS64496
+200 24.48.252.73 CA Toronto AS64507
+201 126.10.186.97 JP Tokyo AS64503
+202 31.11.36.235 PL Kraków AS64501
+203 49.51.238.212 IN Mumbai AS64504
+204 198.51.100.129 not found (192.0.0.0/4) AS?
+205 105.119.96.192 NG Lagos AS64509
+206 24.48.132.247 CA Toronto AS64507
+207 105.121.149.229 NG Lagos AS64509
+208 41.81.58.84 KE Nairobi AS64510
+209 214.1.95.23 DE Munich AS64511
+210 105.124.137.225 NG Lagos AS64509
+211 105.122.98.137 NG Lagos AS64509
+212 2001:db8:300:0:0:0:73:d8a3 DE Berlin AS?
+213 2001:db8:200:0:0:0:65:6b1f FR Paris AS?
+214 81.2.69.170 GB London AS64496
+215 216.160.83.60 JP Tokyo AS?
+216 1.135.93.75 AU Sydney AS64506
+217 81.2.70.70 GB - AS64496
+218 5.83.145.25 DE - AS64500
+219 24.48.235.127 CA Toronto AS64507
+220 2001:db8:400:0:0:0:d:596a JP Tokyo AS64503
+221 2001:db8:610:0:0:0:30:292b US Seattle AS65536
+222 2001:DB8:600:0:0:0:14:4290 US New York AS65536
+223 2001:db8:401:0:0:0:55:9b00 JP Osaka AS64503
+224 2001:db8:401:0:0:0:5a:68a0 JP Osaka AS64503
+225 2001:db8:600:0:0:0:51:bc70 US New York AS65536
+226 2001:db8:100:0:0:0:38:4b6e GB London AS64496
+227 105.121.238.176 NG Lagos AS64509
+228 214.1.34.141 DE Munich AS64511
+229 24.51.140.180 CA Toronto AS64507
+230 81.2.70.228 GB - AS64496
+231 89.160.20.158 FR Paris AS64498
+232 89.160.20.118 FR Paris AS64498
+233 2001:db8:610:0:0:0:50:c3b6 US Seattle AS65536
+234 5.83.124.248 DE Berlin AS64499
+235 214.1.116.218 DE Munich AS64511
+236 2001:db8:200:0:0:0:2f:40dc FR Paris AS?
+237 89.160.20.251 FR Paris AS64498
+238 214.78.123.80 US - AS65551
+239 2001:db8:300:0:0:0:55:742f DE Berlin AS?
+240 67.43.157.72 US Seattle AS64508
+241 2001:db8:700:0:0:0:28:8548 - - AS?
+242 24.48.205.120 CA Toronto AS64507
+243 126.24.224.219 JP Osaka AS64503
+244 89.160.20.115 FR Paris AS64498
+245 2001:db8:600:0:0:0:4c:91bc US New York AS65536
+246 67.43.156.14 US New York AS64508
+247 67.43.156.126 US New York AS64508
+248 1.131.50.157 AU Sydney AS64506
+249 214.1.121.118 DE Munich AS64511
+250 105.117.203.179 NG Lagos AS64509
+251 41.85.60.184 KE Nairobi AS64510
+252 198.51.100.198 not found (192.0.0.0/4) AS?
+253 2.125.160.216 GB London AS64497
+254 67.43.157.8 US Seattle AS64508
+255 214.1.127.42 DE Munich AS64511
+256 31.11.5.110 PL Kraków AS64501
+257 126.13.125.65 JP Tokyo AS64503
+258 81.2.69.171 GB London AS64496
+259 2001:db8:500:0:0:0:42:d572 AU Sydney AS64503
+260 2001:db8:300:0:0:0:22:1735 DE Berlin AS?
+261 2001:db8:700:0:0:0:62:8090 - - AS?
+262 81.2.69.166 GB London AS64496
+263 5.83.155.127 DE - AS64500
+264 5.83.124.130 DE Berlin AS64499
+265 216.160.83.61 JP Tokyo AS?
+266 41.84.221.76 KE Nairobi AS64510
+267 2001:db8:200:0:0:0:60:16b4 FR Paris AS?
+268 5.83.134.201 DE Munich AS64500
+269 2001:db8:700:0:0:0:7e:28a9 - - AS?
+270 192.168.7.219 not found (192.0.0.0/4) AS?
+271 5.83.127.80 DE Berlin AS64499
+272 2.125.160.218 GB London AS64497
+273 2001:db8:400:0:0:0:3d:155d JP Tokyo AS64503
+274 2001:db8:200:0:0:0:5a:6d7f FR Paris AS?
+275 2001:db8:400:0:0:0:7e:cc7c JP Tokyo AS64503
+276 24.50.60.2 CA Toronto AS64507
+277 198.51.100.75 not found (192.0.0.0/4) AS?
+278 41.87.13.21 KE Nairobi AS64510
+279 41.87.155.172 KE Nairobi AS64510
+280 214.1.27.187 DE Munich AS64511
+281 5.83.128.5 DE Munich AS64500
+282 5.83.129.44 DE Munich AS64500
+283 2001:db8:400:0:0:0:1e:1ecc JP Tokyo AS64503
+284 49.53.135.211 IN Mumbai AS64504
+285 1.149.30.64 AU Sydney AS64506
+286 216.160.83.57 JP Tokyo AS?
+287 67.43.157.71 US Seattle AS64508
+288 5.83.125.62 DE Berlin AS64499
+289 2001:db8:200:0:0:0:62:70c4 FR Paris AS?
+290 1.145.140.142 AU Sydney AS64506
+291 214.78.122.247 US - AS65551
+292 81.2.69.134 GB London AS64496
+293 41.87.61.141 KE Nairobi AS64510
+294 67.43.156.203 US New York AS64508
+295 24.48.175.10 CA Toronto AS64507
+296 5.83.141.193 DE Munich AS64500
+297 2001:db8:400:0:0:0:5c:de4f JP Tokyo AS64503
+298 2001:db8:100:0:0:0:25:e387 GB London AS64496
+299 2001:DB8:610:0:0:0:42:A1B1 US Seattle AS65536
+300 2001:db8:200:0:0:0:62:bbbd FR Paris AS?
+301 1.137.105.24 AU Sydney AS64506
+302 81.2.69.202 GB London AS64496
+country DE: 40 requests, 721584 bytes
+country JP: 38 requests, 650115 bytes
+country US: 38 requests, 703366 bytes
+country GB: 37 requests, 563569 bytes
+country FR: 30 requests, 494766 bytes
+country ??: 29 requests, 476403 bytes
+country AU: 18 requests, 254922 bytes
+country --: 13 requests, 165234 bytes
+country KE: 12 requests, 188093 bytes
+country NG: 11 requests, 205802 bytes
+country CA: 8 requests, 173066 bytes
+country BR: 7 requests, 134906 bytes
+country IS: 7 requests, 122538 bytes
+country PL: 7 requests, 116053 bytes
+country IN: 5 requests, 80075 bytes
+asn 0: 71 requests, 1135196 bytes
+asn 64503: 37 requests, 610467 bytes
+asn 64496: 35 requests, 489819 bytes
+asn 64498: 17 requests, 266122 bytes
+asn 64508: 17 requests, 261595 bytes
+asn 64500: 16 requests, 253435 bytes
+29 addresses not in the city database
+== firewall | policy.txt | access.log
+line 3: deny 2001:db8:700:0:0:0:72:e66a /catalog (rule 7: deny satellite)
+line 6: deny 41.83.225.119 /api/v2/loans (rule 5: deny continent AF)
+line 9: deny 105.118.243.4 /catalog (rule 5: deny continent AF)
+line 10: deny 198.51.100.19 /feeds/new.xml (rule 10: deny unknown)
+line 14: deny 41.80.186.29 /account/login (rule 5: deny continent AF)
+line 17: deny 214.78.121.232 /static/app.js (rule 6: deny anycast)
+line 21: deny 198.51.100.122 /account/login (rule 10: deny unknown)
+line 25: deny 214.78.122.179 /catalog/search?q=maps (rule 6: deny anycast)
+line 26: deny 82.221.131.181 /admin (rule 9: deny country IS)
+line 29: deny 82.221.244.239 /account/login (rule 9: deny country IS)
+line 33: deny 10.1.2.213 /static/app.js (rule 10: deny unknown)
+line 34: deny 2001:db8:ffff:0:0:0:45:fe79 /admin (rule 10: deny unknown)
+line 38: deny 2001:db8:700:0:0:0:13:ed09 /api/v2/loans (rule 7: deny satellite)
+line 41: deny 10.1.2.143 / (rule 10: deny unknown)
+line 42: deny 214.78.120.138 /catalog (rule 6: deny anycast)
+line 45: deny 198.51.100.239 /admin (rule 10: deny unknown)
+line 49: deny 10.1.2.180 /feeds/new.xml (rule 10: deny unknown)
+line 57: deny 2001:db8:700:0:0:0:5c:b35a /account/login (rule 7: deny satellite)
+line 62: deny 2001:DB8:700:0:0:0:F:A354 /api/v2/loans (rule 7: deny satellite)
+line 64: deny 2001:db8:700:0:0:0:1:140c /account/login (rule 7: deny satellite)
+line 68: deny 82.221.86.151 /admin (rule 9: deny country IS)
+line 70: deny 2001:db8:ffff:0:0:0:61:5b12 /feeds/new.xml (rule 10: deny unknown)
+line 71: deny 10.1.2.98 / (rule 10: deny unknown)
+line 73: deny 10.1.2.26 /api/v2/loans (rule 10: deny unknown)
+line 77: deny 41.83.205.60 /account/login (rule 5: deny continent AF)
+line 78: skipped, bad address 'not-an-ip'
+line 79: deny 82.221.214.15 /admin (rule 9: deny country IS)
+line 80: deny 198.51.100.32 /catalog (rule 10: deny unknown)
+line 81: deny 41.81.73.126 /catalog/search?q=maps (rule 5: deny continent AF)
+line 86: deny 2001:db8:700:0:0:0:6:7c8f /admin (rule 7: deny satellite)
+line 100: deny 10.1.2.208 /api/v2/loans (rule 10: deny unknown)
+line 103: deny 41.82.19.217 /api/v2/loans (rule 5: deny continent AF)
+line 107: deny 192.168.7.112 /catalog/search?q=maps (rule 10: deny unknown)
+line 110: deny 192.168.7.52 /admin (rule 10: deny unknown)
+line 112: deny 214.78.120.155 / (rule 6: deny anycast)
+line 113: deny 82.221.198.30 /catalog (rule 9: deny country IS)
+line 114: deny 198.51.100.250 /account/login (rule 10: deny unknown)
+line 118: deny 214.1.166.243 /api/v2/loans (rule 3: deny represented military)
+line 119: deny 105.123.157.213 /static/app.js (rule 5: deny continent AF)
+line 126: deny 214.78.123.103 /account/login (rule 6: deny anycast)
+line 130: deny 192.168.7.224 /feeds/new.xml (rule 10: deny unknown)
+line 132: deny 2001:db8:ffff:0:0:0:29:c1dc /catalog/search?q=maps (rule 10: deny unknown)
+line 134: deny 2001:db8:700:0:0:0:2a:2a4 /api/v2/loans (rule 7: deny satellite)
+line 136: deny 2001:db8:700:0:0:0:48:bc74 /catalog/search?q=maps (rule 7: deny satellite)
+line 138: deny 192.168.7.41 / (rule 10: deny unknown)
+line 146: deny 2001:db8:700:0:0:0:71:6c05 /catalog/search?q=maps (rule 7: deny satellite)
+line 147: deny 2001:db8:ffff:0:0:0:60:df58 /admin (rule 10: deny unknown)
+line 150: deny 198.51.100.228 /account/login (rule 10: deny unknown)
+line 151: skipped, bad address '300.12.4.1'
+line 152: deny 198.51.100.250 /api/v2/loans (rule 10: deny unknown)
+line 153: deny 10.1.2.213 /api/v2/loans (rule 10: deny unknown)
+line 160: deny 192.168.7.110 / (rule 10: deny unknown)
+line 165: deny 82.221.122.48 / (rule 9: deny country IS)
+line 166: deny 10.1.2.145 /catalog (rule 10: deny unknown)
+line 169: deny 41.85.95.105 /admin (rule 5: deny continent AF)
+line 170: deny 105.115.55.191 / (rule 5: deny continent AF)
+line 172: deny 105.119.140.105 /account/login (rule 5: deny continent AF)
+line 181: deny 82.221.84.176 /catalog (rule 9: deny country IS)
+line 183: deny 2001:db8:700:0:0:0:e:1586 /api/v2/loans (rule 7: deny satellite)
+line 186: deny 192.168.7.222 /feeds/new.xml (rule 10: deny unknown)
+line 196: deny 105.114.84.61 /static/app.js (rule 5: deny continent AF)
+line 204: deny 198.51.100.129 /admin (rule 10: deny unknown)
+line 205: deny 105.119.96.192 /api/v2/loans (rule 5: deny continent AF)
+line 207: deny 105.121.149.229 /account/login (rule 5: deny continent AF)
+line 208: deny 41.81.58.84 /catalog/search?q=maps (rule 5: deny continent AF)
+line 209: deny 214.1.95.23 / (rule 3: deny represented military)
+line 210: deny 105.124.137.225 / (rule 5: deny continent AF)
+line 211: deny 105.122.98.137 /catalog/search?q=maps (rule 5: deny continent AF)
+line 227: deny 105.121.238.176 /account/login (rule 5: deny continent AF)
+line 228: deny 214.1.34.141 /admin (rule 3: deny represented military)
+line 235: deny 214.1.116.218 /static/app.js (rule 3: deny represented military)
+line 238: deny 214.78.123.80 /catalog (rule 6: deny anycast)
+line 241: deny 2001:db8:700:0:0:0:28:8548 /catalog/search?q=maps (rule 7: deny satellite)
+line 249: deny 214.1.121.118 /catalog (rule 3: deny represented military)
+line 250: deny 105.117.203.179 /account/login (rule 5: deny continent AF)
+line 251: deny 41.85.60.184 /static/app.js (rule 5: deny continent AF)
+line 252: deny 198.51.100.198 /feeds/new.xml (rule 10: deny unknown)
+line 255: deny 214.1.127.42 /feeds/new.xml (rule 3: deny represented military)
+line 261: deny 2001:db8:700:0:0:0:62:8090 / (rule 7: deny satellite)
+line 266: deny 41.84.221.76 /account/login (rule 5: deny continent AF)
+line 269: deny 2001:db8:700:0:0:0:7e:28a9 /feeds/new.xml (rule 7: deny satellite)
+line 270: deny 192.168.7.219 /feeds/new.xml (rule 10: deny unknown)
+line 277: deny 198.51.100.75 / (rule 10: deny unknown)
+line 278: deny 41.87.13.21 /catalog (rule 5: deny continent AF)
+line 279: deny 41.87.155.172 /account/login (rule 5: deny continent AF)
+line 280: deny 214.1.27.187 /catalog/search?q=maps (rule 3: deny represented military)
+line 291: deny 214.78.122.247 /catalog/search?q=maps (rule 6: deny anycast)
+line 293: deny 41.87.61.141 /feeds/new.xml (rule 5: deny continent AF)
+rule 2 deny country KP: 0
+rule 3 deny represented military: 7
+rule 4 allow asn 64496: 35
+rule 5 deny continent AF: 23
+rule 6 deny anycast: 7
+rule 7 deny satellite: 13
+rule 8 allow registered US: 39
+rule 9 deny country IS: 7
+rule 10 deny unknown: 29
+rule 11 default allow: 140
+214 allowed, 86 denied
