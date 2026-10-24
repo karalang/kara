@@ -1,0 +1,10 @@
+source = "kara-katas/apps/pipeline/replenish_plan/replenish_plan.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "b5c92c11"

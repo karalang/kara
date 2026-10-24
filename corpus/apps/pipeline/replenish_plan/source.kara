@@ -1,0 +1,761 @@
+// pipeline/replenish_plan
+//
+// A weekly replenishment batch, the job a retailer's supply-chain team runs
+// over its distribution centres (north, south, east and west). It builds
+// each centre's SKUs with a year of weekly sales, writes them as CSV, reads
+// the files back and parses them with a loader's checks, fits a Holt
+// forecast to every SKU over a grid of smoothing constants, ranks the SKUs
+// ABC by revenue, plans reorder points and order quantities, runs five
+// reports per centre, and sends the four centres' purchase orders to one
+// supplier.
+//
+// The builds, the writes, the reads, the parses, the forecasts, the ABC
+// ranks, the plans and the reports are each a group of statements that do
+// not depend on each other (a stmt-par app). The supplier fills orders from
+// one week's capacity in arrival order and numbers its backorders as they
+// are raised, so the submissions have to run in order.
+
+const MASK32: i64 = 4294967295;
+const SKUS: i64 = 120;
+const WEEKS: i64 = 52;
+const HOLDOUT: i64 = 26;
+const HORIZON: i64 = 4;
+const CATS: Array[Str, 7] = ["grocery", "household", "pets", "garden", "outdoor", "toys", "electronics"];
+// Per category: price in cents, the bound on a SKU's weekly base units, the
+// seasonal swing in percent and its peak week, the supplier's lead time in
+// weeks, the case pack, and the supplier's product family.
+const PRICE: Array[i64, 7] = [450, 899, 1599, 2499, 4999, 2999, 8999];
+const BASE: Array[i64, 7] = [60, 30, 20, 14, 8, 10, 6];
+const AMP: Array[i64, 7] = [10, 15, 5, 55, 60, 40, 25];
+const PEAK: Array[i64, 7] = [50, 10, 30, 20, 26, 48, 47];
+const LEAD: Array[i64, 7] = [1, 2, 2, 3, 4, 3, 4];
+const CASE: Array[i64, 7] = [12, 6, 4, 2, 1, 4, 1];
+const FAMILY: Array[i64, 7] = [0, 0, 0, 1, 1, 2, 2];
+const FAMILIES: Array[Str, 3] = ["dry", "seasonal", "hard"];
+const CAPACITY: Array[i64, 3] = [9000, 1100, 3000];
+// Service factor x1000 by ABC class: A 98%, B 95%, C 90%.
+const SERVICE_Z: Array[i64, 3] = [2054, 1645, 1282];
+const ALPHAS: Array[i64, 9] = [10, 20, 30, 40, 50, 60, 70, 80, 90];
+const BETAS: Array[i64, 5] = [0, 10, 20, 30, 40];
+
+struct Dc {
+    name: String,
+    code: String,
+    seed: i64,
+    cats: Vec[String],
+}
+
+struct Sku {
+    sku: String,
+    cat: String,
+    on_hand: i64,
+    on_order: i64,
+    // Units per week, -1 for a week the shelf was empty.
+    sales: Vec[i64],
+}
+
+// The winning Holt fit: level and trend in milli-units, and its error and
+// actual units over the holdout weeks with sales on record.
+struct Fit {
+    alpha: i64,
+    beta: i64,
+    level: i64,
+    trend: i64,
+    abs_err: i64,
+    actual: i64,
+    n: i64,
+}
+
+struct Line {
+    sku: String,
+    cat: String,
+    cls: i64,
+    rop: i64,
+    position: i64,
+    qty: i64,
+    value: i64,
+}
+
+struct Supplier {
+    left: Vec[i64],
+    pos: i64,
+    backorders: i64,
+    log: String,
+}
+
+enum PlanError {
+    Bad(String),
+}
+
+impl PlanError {
+    fn describe(ref self) -> String {
+        match self {
+            PlanError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> PlanError {
+    PlanError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn dollars(cents: i64) -> String {
+    let sign = if cents < 0 { "-" } else { "" };
+    f"{sign}${group3(cents.abs() / 100)}"
+}
+
+// Newton's method from above.
+fn isqrt(n: i64) -> i64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+fn cat_index(cat: ref String) -> i64 {
+    for i in 0..7 {
+        if CATS[i] == cat {
+            return i;
+        }
+    }
+    -1
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn header() -> String {
+    let mut h = "sku,cat,on_hand,on_order".to_string();
+    for w in 0..WEEKS {
+        h.push_str(f",w{w + 1}");
+    }
+    h
+}
+
+// ------------------------------------------------------------ the data
+
+fn season(cat: i64, w: i64) -> i64 {
+    let d = ((w - PEAK[cat]) % WEEKS + WEEKS) % WEEKS;
+    let near = 26 - d.min(WEEKS - d);
+    100 + AMP[cat] * (2 * near - 26) / 26
+}
+
+fn build_skus(dc: ref Dc) -> Vec[Sku] {
+    let mut out: Vec[Sku] = Vec.new();
+    for i in 0..SKUS {
+        let h = mix(dc.seed, i, 1);
+        let cat = cat_index(dc.cats[h % dc.cats.len() as i64]);
+        let base = 2 + (h >> 4) % BASE[cat];
+        let sporadic = (h >> 12) % 6 == 0;
+        let mut sales: Vec[i64] = Vec.new();
+        for w in 0..WEEKS {
+            let hw = mix(dc.seed, i * WEEKS + w, 2);
+            if hw % 31 == 0 {
+                sales.push(-1);
+                continue;
+            }
+            let noise = (hw >> 5) % 41 - 20;
+            let mut units = base * season(cat, w) * (100 + noise) / 10000;
+            if (hw >> 11) % 19 == 0 {
+                units *= 2;
+            }
+            if sporadic {
+                units = if (hw >> 16) % 4 == 0 { units * 3 } else { 0 };
+            }
+            sales.push(units);
+        }
+        let h2 = mix(dc.seed, i, 3);
+        let on_hand = (h2 % 9) * base;
+        let on_order = if (h2 >> 4) % 4 == 0 { CASE[cat] * ((h2 >> 8) % 3) } else { 0 };
+        out.push(Sku {
+            sku: f"{dc.code}-{i + 1:04}",
+            cat: CATS[cat].to_string(),
+            on_hand: on_hand,
+            on_order: on_order,
+            sales: sales,
+        });
+    }
+    out
+}
+
+fn encode_skus(skus: ref Vec[Sku]) -> String {
+    let mut out = f"{header()}\n";
+    for s in skus {
+        out.push_str(f"{s.sku},{s.cat},{s.on_hand},{s.on_order}");
+        for x in s.sales {
+            if *x < 0 {
+                out.push_str(",-");
+            } else {
+                out.push_str(f",{x}");
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, PlanError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"could not read {path}")),
+    }
+}
+
+// Replace the given field of the n-th SKU.
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n + 1], ",");
+    f[field] = value.clone();
+    lines[n + 1] = f.join(",");
+    lines.join("\n")
+}
+
+fn count_field(path: ref String, n: i64, what: ref String, text: ref String) -> Result[i64, PlanError] {
+    if not is_digits(text) {
+        return Err(bad(f"{path} line {n}: bad {what} '{text}'"));
+    }
+    match i64.parse(text) {
+        Ok(v) => Ok(v),
+        Err(_) => Err(bad(f"{path} line {n}: bad {what} '{text}'")),
+    }
+}
+
+fn parse_skus(path: ref String, dc: ref Dc, text: ref String) -> Result[Vec[Sku], PlanError] {
+    let lines = split_on(text, "\n");
+    if lines[0] != header() {
+        return Err(bad(f"{path}: bad header"));
+    }
+    let mut out: Vec[Sku] = Vec.new();
+    for k in 1..lines.len() as i64 {
+        let line = lines[k].clone();
+        if line == "" {
+            continue;
+        }
+        let n = k + 1;
+        let f = split_on(line, ",");
+        if f.len() as i64 != 4 + WEEKS {
+            return Err(bad(f"{path} line {n}: {f.len()} fields"));
+        }
+        let sku = f[0].clone();
+        let prefix = f"{dc.code}-";
+        if sku.len() != 7 or not sku.starts_with(prefix) or not is_digits(sku.substring(3, 7)) {
+            return Err(bad(f"{path} line {n}: bad sku '{sku}'"));
+        }
+        if not dc.cats.contains(f[1]) {
+            return Err(bad(f"{path} line {n}: {f[1]} is not stocked at {dc.name}"));
+        }
+        let on_hand = count_field(path, n, "on_hand", f[2])?;
+        let on_order = count_field(path, n, "on_order", f[3])?;
+        let mut sales: Vec[i64] = Vec.new();
+        for w in 0..WEEKS {
+            let x = f[4 + w].clone();
+            if x == "-" {
+                sales.push(-1);
+            } else {
+                sales.push(count_field(path, n, f"w{w + 1}", x)?);
+            }
+        }
+        out.push(Sku { sku: sku, cat: f[1].clone(), on_hand: on_hand, on_order: on_order, sales: sales });
+    }
+    Ok(out)
+}
+
+fn same_skus(a: ref Vec[Sku], b: ref Vec[Sku]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.sku != y.sku or x.cat != y.cat or x.on_hand != y.on_hand or x.on_order != y.on_order or x.sales != y.sales {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ forecasting
+
+// Holt's linear smoothing in milli-units, one run. A stockout week carries
+// the forecast forward without an update.
+fn holt(sales: ref Vec[i64], alpha: i64, beta: i64) -> Fit {
+    let mut level: i64 = -1;
+    let mut trend: i64 = 0;
+    let mut abs_err: i64 = 0;
+    let mut actual: i64 = 0;
+    let mut n: i64 = 0;
+    for w in 0..WEEKS {
+        let y = sales[w];
+        if level < 0 {
+            if y >= 0 {
+                level = y * 1000;
+            }
+            continue;
+        }
+        let f = level + trend;
+        if y < 0 {
+            level = f;
+            continue;
+        }
+        let err = y * 1000 - f;
+        if w >= HOLDOUT {
+            abs_err += err.abs();
+            actual += y;
+            n += 1;
+        }
+        let new_level = f + alpha * err / 100;
+        trend = trend + beta * (new_level - level - trend) / 100;
+        level = new_level;
+    }
+    if level < 0 {
+        level = 0;
+    }
+    Fit { alpha: alpha, beta: beta, level: level, trend: trend, abs_err: abs_err, actual: actual, n: n }
+}
+
+// Every alpha and beta on the grid: the lowest holdout error wins, the
+// first in grid order on a tie.
+fn fit(sales: ref Vec[i64]) -> Fit {
+    let mut best = holt(sales, ALPHAS[0], BETAS[0]);
+    for a in ALPHAS {
+        for b in BETAS {
+            let f = holt(sales, a, b);
+            if f.abs_err < best.abs_err {
+                best = f;
+            }
+        }
+    }
+    best
+}
+
+fn forecast_all(skus: ref Vec[Sku]) -> Vec[Fit] {
+    let mut out: Vec[Fit] = Vec.new();
+    for s in skus {
+        out.push(fit(s.sales));
+    }
+    out
+}
+
+fn ahead(f: ref Fit, h: i64) -> i64 {
+    let x = f.level + h * f.trend;
+    if x > 0 { x } else { 0 }
+}
+
+// ------------------------------------------------------------ planning
+
+fn revenue(s: ref Sku) -> i64 {
+    let mut units = 0;
+    for x in s.sales {
+        if *x > 0 {
+            units += *x;
+        }
+    }
+    units * PRICE[cat_index(s.cat)]
+}
+
+// A by revenue to 70%, B to 90%, C the rest.
+fn classify(skus: ref Vec[Sku]) -> Vec[i64] {
+    let mut order: Vec[(i64, String, i64)] = Vec.new();
+    let mut total = 0;
+    for i in 0..skus.len() as i64 {
+        let r = revenue(skus[i]);
+        order.push((r, skus[i].sku.clone(), i));
+        total += r;
+    }
+    order.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+    let mut cls: Vec[i64] = Vec.filled(skus.len() as i64, 2);
+    let mut run = 0;
+    for (r, _, i) in order {
+        if run * 100 < total * 70 {
+            cls[*i] = 0;
+        } else if run * 100 < total * 90 {
+            cls[*i] = 1;
+        }
+        run += *r;
+    }
+    cls
+}
+
+fn plan(skus: ref Vec[Sku], fits: ref Vec[Fit], cls: ref Vec[i64]) -> Vec[Line] {
+    let mut out: Vec[Line] = Vec.new();
+    for i in 0..skus.len() as i64 {
+        let s = ref skus[i];
+        let f = ref fits[i];
+        let c = cat_index(s.cat);
+        let lead = LEAD[c];
+        let mut demand = 0;
+        for h in 1..lead + 2 {
+            demand += ahead(f, h);
+        }
+        let mad = if f.n > 0 { f.abs_err / f.n } else { 0 };
+        let sigma = mad * 1250 / 1000;
+        let safety = SERVICE_Z[cls[i]] * sigma / 1000 * isqrt((lead + 1) * 10000) / 100;
+        let rop = (demand + safety + 999) / 1000;
+        let position = s.on_hand + s.on_order;
+        let mut qty = 0;
+        if position <= rop {
+            let mut target = rop;
+            for h in lead + 2..lead + 2 + HORIZON {
+                target += (ahead(f, h) + 999) / 1000;
+            }
+            let need = target - position;
+            qty = (need + CASE[c] - 1) / CASE[c] * CASE[c];
+        }
+        out.push(Line {
+            sku: s.sku.clone(),
+            cat: s.cat.clone(),
+            cls: cls[i],
+            rop: rop,
+            position: position,
+            qty: qty,
+            value: qty * PRICE[c],
+        });
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn sales_report(dc: ref Dc, skus: ref Vec[Sku]) -> String {
+    let mut units = 0;
+    let mut rev = 0;
+    let mut stockouts = 0;
+    let mut by_cat: SortedMap[String, i64] = SortedMap.new();
+    for s in skus {
+        for x in s.sales {
+            if *x < 0 {
+                stockouts += 1;
+            } else {
+                units += *x;
+            }
+        }
+        let r = revenue(s);
+        rev += r;
+        let old = by_cat.get(s.cat) ?? 0;
+        by_cat.insert(s.cat.clone(), old + r);
+    }
+    let mut top_cat = String.new();
+    let mut top_rev = -1;
+    for (cat, r) in by_cat {
+        if *r > top_rev {
+            top_cat = cat.clone();
+            top_rev = *r;
+        }
+    }
+    f"{dc.name} sales: {group3(units)} units, {dollars(rev)}, {stockouts} stockout weeks; top {top_cat} {dollars(top_rev)}"
+}
+
+fn abc_report(dc: ref Dc, skus: ref Vec[Sku], cls: ref Vec[i64]) -> String {
+    let mut total = 0;
+    for s in skus {
+        total += revenue(s);
+    }
+    let mut parts: Vec[String] = Vec.new();
+    let names = ["A", "B", "C"];
+    for k in 0..3 {
+        let mut n = 0;
+        let mut r = 0;
+        for i in 0..skus.len() as i64 {
+            if cls[i] == k {
+                n += 1;
+                r += revenue(skus[i]);
+            }
+        }
+        parts.push(f"{names[k]} {n} skus {r * 100 / total}.{r * 1000 / total % 10}%");
+    }
+    f"{dc.name} abc: {parts.join(", ")}"
+}
+
+fn accuracy_report(dc: ref Dc, skus: ref Vec[Sku], fits: ref Vec[Fit]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for cat in dc.cats {
+        let mut err = 0;
+        let mut act = 0;
+        for i in 0..skus.len() as i64 {
+            if skus[i].cat == cat {
+                err += fits[i].abs_err;
+                act += fits[i].actual;
+            }
+        }
+        let wmape = if act > 0 { err / act } else { 0 };
+        parts.push(f"{cat} {wmape / 10}.{wmape % 10}%");
+    }
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    for f in fits {
+        let key = f.alpha * 100 + f.beta;
+        let old = counts.get(key) ?? 0;
+        counts.insert(key, old + 1);
+    }
+    let mut best_key = 0;
+    let mut best_n = 0;
+    for (key, n) in counts {
+        if *n > best_n {
+            best_key = *key;
+            best_n = *n;
+        }
+    }
+    f"{dc.name} wmape: {parts.join(", ")}; most chosen alpha .{best_key / 100:02} beta .{best_key % 100:02} ({best_n} skus)"
+}
+
+fn order_report(dc: ref Dc, lines: ref Vec[Line]) -> String {
+    let mut picks: Vec[(i64, String, i64)] = Vec.new();
+    let mut units = 0;
+    let mut value = 0;
+    for l in lines {
+        if l.qty > 0 {
+            picks.push((l.value, l.sku.clone(), l.qty));
+            units += l.qty;
+            value += l.value;
+        }
+    }
+    let count = picks.len();
+    picks.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+    let mut tops: Vec[String] = Vec.new();
+    for (v, sku, qty) in picks.iter().take(3) {
+        tops.push(f"{sku} {qty} {dollars(*v)}");
+    }
+    f"{dc.name} orders: {count} lines, {group3(units)} units, {dollars(value)}; largest {tops.join(", ")}"
+}
+
+fn cover_report(dc: ref Dc, skus: ref Vec[Sku], fits: ref Vec[Fit]) -> String {
+    let mut dead = 0;
+    let mut dead_value = 0;
+    let mut buckets = [0, 0, 0, 0];
+    for i in 0..skus.len() as i64 {
+        let s = ref skus[i];
+        let price = PRICE[cat_index(s.cat)];
+        let mut recent = 0;
+        for w in WEEKS - 8..WEEKS {
+            if s.sales[w] > 0 {
+                recent += s.sales[w];
+            }
+        }
+        if recent == 0 and s.on_hand > 0 {
+            dead += 1;
+            dead_value += s.on_hand * price;
+        }
+        let weekly = ahead(fits[i], 1);
+        if weekly == 0 {
+            buckets[3] += 1;
+            continue;
+        }
+        let weeks = s.on_hand * 1000 / weekly;
+        if weeks < 1 {
+            buckets[0] += 1;
+        } else if weeks < 4 {
+            buckets[1] += 1;
+        } else {
+            buckets[2] += 1;
+        }
+    }
+    f"{dc.name} cover: {buckets[0]} under a week, {buckets[1]} under four, {buckets[2]} longer, {buckets[3]} no demand; {dead} dead skus holding {dollars(dead_value)}"
+}
+
+// ------------------------------------------------------------ the supplier
+
+// One supplier fills purchase orders in arrival order from this week's
+// capacity per family. A short line raises a numbered backorder.
+fn submit(sup: mut ref Supplier, dc: ref Dc, lines: ref Vec[Line]) -> String {
+    sup.pos += 1;
+    let po = f"PO-{sup.pos:04}";
+    let mut filled = 0;
+    let mut asked = 0;
+    let mut shorts: Vec[String] = Vec.new();
+    let mut order: Vec[(String, i64)] = Vec.new();
+    for i in 0..lines.len() as i64 {
+        order.push((lines[i].sku.clone(), i));
+    }
+    order.sort_by(|a, b| a.0.cmp(b.0));
+    for (_, i) in order {
+        let l = ref lines[*i];
+        if l.qty == 0 {
+            continue;
+        }
+        let c = cat_index(l.cat);
+        let fam = FAMILY[c];
+        asked += l.qty;
+        let got = l.qty.min(sup.left[fam]) / CASE[c] * CASE[c];
+        sup.left[fam] -= got;
+        filled += got;
+        sup.log.push_str(f"{po} {dc.name} {l.sku} {got}/{l.qty}\n");
+        if got < l.qty {
+            sup.backorders += 1;
+            let bo = f"BO-{sup.backorders:04}";
+            sup.log.push_str(f"{bo} {dc.name} {l.sku} short {l.qty - got}\n");
+            shorts.push(bo);
+        }
+    }
+    let mut left: Vec[String] = Vec.new();
+    for k in 0..3 {
+        left.push(f"{FAMILIES[k]} {sup.left[k]}");
+    }
+    let first = if shorts.len() > 0 { f" from {shorts[0]}" } else { String.new() };
+    let plural = if shorts.len() == 1 { "" } else { "s" };
+    f"{po} {dc.name}: {group3(filled)} of {group3(asked)} units filled, {shorts.len()} backorder{plural}{first}; left {left.join(", ")}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), PlanError] {
+    let north = Dc { name: "north", code: "NO", seed: 13, cats: ["grocery", "household", "pets"].to_vec() };
+    let south = Dc { name: "south", code: "SO", seed: 29, cats: ["grocery", "garden", "outdoor"].to_vec() };
+    let east = Dc { name: "east", code: "EA", seed: 43, cats: ["household", "toys", "electronics"].to_vec() };
+    let west = Dc { name: "west", code: "WE", seed: 57, cats: ["electronics", "garden", "pets"].to_vec() };
+
+    // Four centres of SKUs.
+    let k1 = build_skus(north);
+    let k2 = build_skus(south);
+    let k3 = build_skus(east);
+    let k4 = build_skus(west);
+
+    // Four writes.
+    let w1 = fs.write("north.csv", encode_skus(k1));
+    let w2 = fs.write("south.csv", encode_skus(k2));
+    let w3 = fs.write("east.csv", encode_skus(k3));
+    let w4 = fs.write("west.csv", encode_skus(k4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() {
+        return Err(bad("could not write the sku files"));
+    }
+
+    let whole = read_text("east.csv")?;
+    if fs.write("east.bad", damage(whole, 77, 30, "12.5")).is_err() {
+        return Err(bad("could not write east.bad"));
+    }
+
+    // Four reads.
+    let t1 = read_text("north.csv")?;
+    let t2 = read_text("south.csv")?;
+    let t3 = read_text("east.csv")?;
+    let t4 = read_text("west.csv")?;
+    println(f"north.csv: {t1.len()} bytes, fnv {text_sum(t1):08x}");
+    println(f"south.csv: {t2.len()} bytes, fnv {text_sum(t2):08x}");
+    println(f"east.csv: {t3.len()} bytes, fnv {text_sum(t3):08x}");
+    println(f"west.csv: {t4.len()} bytes, fnv {text_sum(t4):08x}");
+
+    // Four parses.
+    let g1 = parse_skus("north.csv", north, t1)?;
+    let g2 = parse_skus("south.csv", south, t2)?;
+    let g3 = parse_skus("east.csv", east, t3)?;
+    let g4 = parse_skus("west.csv", west, t4)?;
+    match parse_skus("east.bad", east, read_text("east.bad")?) {
+        Ok(_) => println("east.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_skus("south.csv", west, t2) {
+        Ok(_) => println("south.csv as west: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_skus(g1, k1) and same_skus(g2, k2) and same_skus(g3, k3) and same_skus(g4, k4);
+    println(f"parsed skus match the built ones: {same}");
+
+    // Four forecasts: every SKU over the whole grid, which is where the
+    // time goes.
+    let f1 = forecast_all(g1);
+    let f2 = forecast_all(g2);
+    let f3 = forecast_all(g3);
+    let f4 = forecast_all(g4);
+
+    // Four ABC ranks.
+    let c1 = classify(g1);
+    let c2 = classify(g2);
+    let c3 = classify(g3);
+    let c4 = classify(g4);
+
+    // Four plans.
+    let l1 = plan(g1, f1, c1);
+    let l2 = plan(g2, f2, c2);
+    let l3 = plan(g3, f3, c3);
+    let l4 = plan(g4, f4, c4);
+
+    // Reports that only read what came before.
+    let a1 = sales_report(north, g1);
+    let a2 = sales_report(south, g2);
+    let a3 = sales_report(east, g3);
+    let a4 = sales_report(west, g4);
+    let b1 = abc_report(north, g1, c1);
+    let b2 = abc_report(south, g2, c2);
+    let b3 = abc_report(east, g3, c3);
+    let b4 = abc_report(west, g4, c4);
+    let d1 = accuracy_report(north, g1, f1);
+    let d2 = accuracy_report(south, g2, f2);
+    let d3 = accuracy_report(east, g3, f3);
+    let d4 = accuracy_report(west, g4, f4);
+    let o1 = order_report(north, l1);
+    let o2 = order_report(south, l2);
+    let o3 = order_report(east, l3);
+    let o4 = order_report(west, l4);
+    let v1 = cover_report(north, g1, f1);
+    let v2 = cover_report(south, g2, f2);
+    let v3 = cover_report(east, g3, f3);
+    let v4 = cover_report(west, g4, f4);
+    for line in [a1, a2, a3, a4, b1, b2, b3, b4, d1, d2, d3, d4, o1, o2, o3, o4, v1, v2, v3, v4] {
+        println(line);
+    }
+
+    // One supplier: each centre gets what the ones before it left, and
+    // backorders are numbered as they are raised.
+    let mut sup = Supplier { left: CAPACITY.to_vec(), pos: 0, backorders: 0, log: String.new() };
+    println(submit(mut sup, north, l1));
+    println(submit(mut sup, south, l2));
+    println(submit(mut sup, east, l3));
+    println(submit(mut sup, west, l4));
+    if fs.write("supplier.log", sup.log).is_err() {
+        return Err(bad("could not write supplier.log"));
+    }
+    let back = read_text("supplier.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"supplier.log: {rows} entries, {back.len()} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["north.csv", "south.csv", "east.csv", "west.csv", "east.bad", "supplier.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"replenish_plan failed: {e.describe()}"),
+    }
+}

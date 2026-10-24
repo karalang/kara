@@ -1,0 +1,32 @@
+north.csv: 19272 bytes, fnv 58a422f9
+south.csv: 17809 bytes, fnv ebaa7665
+east.csv: 17260 bytes, fnv a6d9b630
+west.csv: 16788 bytes, fnv 21ed906f
+east.bad line 79: bad w27 '12.5'
+south.csv line 2: bad sku 'SO-0001'
+parsed skus match the built ones: true
+north sales: 124,417 units, $920,449, 202 stockout weeks; top grocery $345,406
+south sales: 84,039 units, $1,203,263, 191 stockout weeks; top outdoor $507,798
+east sales: 53,755 units, $1,227,911, 227 stockout weeks; top electronics $570,266
+west sales: 43,801 units, $1,437,130, 182 stockout weeks; top electronics $706,421
+north abc: A 58 skus 70.7%, B 30 skus 19.7%, C 32 skus 9.5%
+south abc: A 58 skus 70.6%, B 31 skus 19.4%, C 31 skus 9.8%
+east abc: A 55 skus 70.7%, B 31 skus 19.4%, C 34 skus 9.8%
+west abc: A 58 skus 70.4%, B 29 skus 19.5%, C 33 skus 9.9%
+north wmape: grocery 27.4%, household 44.2%, pets 23.0%; most chosen alpha .10 beta .00 (47 skus)
+south wmape: grocery 26.1%, garden 33.0%, outdoor 35.0%; most chosen alpha .10 beta .00 (22 skus)
+east wmape: household 28.3%, toys 24.9%, electronics 38.4%; most chosen alpha .20 beta .00 (19 skus)
+west wmape: electronics 29.4%, garden 43.1%, pets 30.4%; most chosen alpha .10 beta .00 (26 skus)
+north orders: 53 lines, 6,312 units, $50,961; largest NO-0084 342 $3,074, NO-0043 636 $2,862, NO-0080 258 $2,319
+south orders: 41 lines, 3,512 units, $39,112; largest SO-0011 82 $4,099, SO-0059 468 $2,106, SO-0026 84 $2,099
+east orders: 71 lines, 3,812 units, $141,759; largest EA-0032 69 $6,209, EA-0051 61 $5,489, EA-0056 59 $5,309
+west orders: 57 lines, 2,414 units, $122,695; largest WE-0022 258 $6,447, WE-0049 61 $5,489, WE-0103 59 $5,309
+north cover: 18 under a week, 35 under four, 52 longer, 15 no demand; 5 dead skus holding $3,617
+south cover: 18 under a week, 14 under four, 78 longer, 10 no demand; 2 dead skus holding $2,699
+east cover: 18 under a week, 33 under four, 56 longer, 13 no demand; 2 dead skus holding $2,825
+west cover: 18 under a week, 24 under four, 66 longer, 12 no demand; 0 dead skus holding $0
+PO-0001 north: 6,312 of 6,312 units filled, 0 backorders; left dry 2688, seasonal 1100, hard 3000
+PO-0002 south: 3,440 of 3,512 units filled, 1 backorder from BO-0001; left dry 0, seasonal 348, hard 3000
+PO-0003 east: 2,450 of 3,812 units filled, 15 backorders from BO-0002; left dry 0, seasonal 348, hard 550
+PO-0004 west: 898 of 2,414 units filled, 35 backorders from BO-0017; left dry 0, seasonal 0, hard 0
+supplier.log: 273 entries, 7637 bytes, fnv 33394c10
