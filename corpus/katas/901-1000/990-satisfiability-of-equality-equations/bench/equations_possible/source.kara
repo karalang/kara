@@ -1,0 +1,78 @@
+// LeetCode #990: Satisfiability of Equality Equations -- union-find
+//
+// Every `==` joins its two letters' sets in a union-find over the 26
+// letters, with path halving on each find; then the equations hold
+// together unless some `!=` names two letters in the same set. The
+// `==` pass must finish first: `a!=c` is only wrong once `a==b` and
+// `b==c` have both been read. O(n α(26)).
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut at = x;
+    while parent[at] != at {
+        parent[at] = parent[parent[at]];
+        at = parent[at];
+    }
+    at
+}
+
+fn equations_possible(equations: Vec[String]) -> bool {
+    let mut parent: Vec[i64] = (0..26).collect();
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'=' {
+            let x = find(mut parent, b[0] as i64 - 97);
+            let y = find(mut parent, b[3] as i64 - 97);
+            parent[x] = y;
+        }
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'!' and find(mut parent, b[0] as i64 - 97) == find(mut parent, b[3] as i64 - 97) {
+            return false;
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(i: i64) -> String {
+    f"{(97 + i) as u8 as char}"
+}
+
+// n equations over the 26 letters, each `!=` with chance `unequal` in
+// 256
+fn random_equations(n: i64, unequal: i64, seed: mut ref i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let a = letter(next_random(mut seed) % 26);
+        let op = if next_random(mut seed) % 256 < unequal { "!=" } else { "==" };
+        let b = letter(next_random(mut seed) % 26);
+        out.push(a + op + b);
+    }
+    out
+}
+
+fn main() {
+    let rounds = 6000;
+    let mut seed = 990;
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    for i in 0..20 {
+        sets.push(random_equations(500, i % 2, mut seed));
+    }
+    let mut sat = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let ok = equations_possible(sets[(r + i) % 20]);
+            if ok {
+                sat += 1;
+            }
+            check = (check * 31 + if ok { 2 } else { 1 }) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 20 sets of 500 equations: {sat} satisfiable, checksum {check}");
+}

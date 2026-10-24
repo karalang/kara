@@ -1,0 +1,16 @@
+["a==b", "b!=a"] -> false
+["b==a", "a==b"] -> true
+["a==b", "b==c", "a==c"] -> true
+["a==b", "b!=c", "c==a"] -> false
+["c==c", "b==d", "x!=z"] -> true
+["a!=a"] -> false
+["a==a"] -> true
+["a==b", "c==d", "b==c", "a!=d"] -> false
+["a!=b", "b!=c", "c!=a"] -> true
+["a!=b", "a==c", "c==b"] -> false
+500 equations, a chain from a to z and then a!=z -> false
+500 equations, the even letters equal and each unequal to the next -> true
+300 random sets of up to 5 equations over 3 letters, 4 in 16 unequal: 890 equations, 181 satisfiable, checksum 11136116
+3000 random sets of up to 50 equations over 26 letters, 1 in 16 unequal: 76255 equations, 1499 satisfiable, checksum 973542792
+300 random sets of up to 500 equations over 26 letters, 1 in 16 unequal: 77211 equations, 15 satisfiable, checksum 832059904
+3 random sets of up to 500 equations over 26 letters, 0 in 16 unequal: 1500 equations, 3 satisfiable, checksum 1986

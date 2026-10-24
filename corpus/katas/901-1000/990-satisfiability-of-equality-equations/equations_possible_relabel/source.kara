@@ -1,0 +1,110 @@
+// LeetCode #990: Satisfiability of Equality Equations -- relabelling
+//
+// Every letter starts with its own label. Each `==` gives the left
+// letter's whole set the right letter's label, by relabelling every
+// letter that carries the left one's; once the `==` are read, two
+// letters must be equal exactly when their labels match, and the
+// equations hold together unless some `!=` pair's do. O(26 n).
+
+fn equations_possible(equations: Vec[String]) -> bool {
+    let mut label: Vec[i64] = (0..26).collect();
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'=' {
+            let from = label[b[0] as i64 - 97];
+            let to = label[b[3] as i64 - 97];
+            for x in 0..26 {
+                if label[x] == from {
+                    label[x] = to;
+                }
+            }
+        }
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'!' and label[b[0] as i64 - 97] == label[b[3] as i64 - 97] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(i: i64) -> String {
+    f"{(97 + i) as u8 as char}"
+}
+
+// n equations over the first `letters` letters, each `!=` with chance
+// `unequal` in 16.
+fn random_equations(n: i64, letters: i64, unequal: i64, seed: mut ref i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let a = letter(next_random(mut seed) % letters);
+        let op = if next_random(mut seed) % 16 < unequal { "!=" } else { "==" };
+        let b = letter(next_random(mut seed) % letters);
+        out.push(a + op + b);
+    }
+    out
+}
+
+fn shown(es: ref Vec[String]) -> String {
+    let parts: Vec[String] = es.iter().map(|e| "\"" + e + "\"").collect();
+    "[" + parts.join(", ") + "]"
+}
+
+fn tf(b: bool) -> String {
+    if b { "true" } else { "false" }
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[String]] = vec![
+        vec!["a==b", "b!=a"],
+        vec!["b==a", "a==b"],
+        vec!["a==b", "b==c", "a==c"],
+        vec!["a==b", "b!=c", "c==a"],
+        vec!["c==c", "b==d", "x!=z"],
+        vec!["a!=a"],
+        vec!["a==a"],
+        vec!["a==b", "c==d", "b==c", "a!=d"],
+        vec!["a!=b", "b!=c", "c!=a"],
+        vec!["a!=b", "a==c", "c==b"],
+    ].into_iter().map(|es| es.iter().map(|e| e.to_string()).collect()).collect();
+    for es in cases.iter() {
+        println(f"{shown(es)} -> {tf(equations_possible(es))}");
+    }
+    let mut chain: Vec[String] = (0..499).map(|i| letter(i % 25) + "==" + letter(i % 25 + 1)).collect();
+    chain.push("a!=z".to_string());
+    println(f"500 equations, a chain from a to z and then a!=z -> {tf(equations_possible(chain))}");
+    let mut halves: Vec[String] = (0..250).map(|i| letter(2 * (i % 13)) + "==" + letter(2 * ((i + 1) % 13))).collect();
+    for i in 0..250 {
+        halves.push(letter(2 * (i % 13)) + "!=" + letter(2 * (i % 13) + 1));
+    }
+    println(f"500 equations, the even letters equal and each unequal to the next -> {tf(equations_possible(halves))}");
+    // random sets: 300 of up to 5 equations over 3 letters, 3000 of up
+    // to 50 over 26, 300 of up to 500 over 26, and three of 500 with no
+    // `!=`
+    let mut seed = 990;
+    for (count, most, letters, unequal) in vec![(300, 5, 3, 4), (3000, 50, 26, 1), (300, 500, 26, 1), (3, 500, 26, 0)] {
+        let mut sat = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if count == 3 { most } else { 1 + next_random(mut seed) % most };
+            let es = random_equations(n, letters, unequal, mut seed);
+            let ok = equations_possible(es);
+            total += n;
+            if ok {
+                sat += 1;
+            }
+            check = (check * 31 + if ok { 2 } else { 1 }) % 1000000007;
+        }
+        println(f"{count} random sets of up to {most} equations over {letters} letters, {unequal} in 16 unequal: {total} equations, {sat} satisfiable, checksum {check}");
+    }
+}

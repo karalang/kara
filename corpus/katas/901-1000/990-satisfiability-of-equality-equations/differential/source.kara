@@ -1,0 +1,366 @@
+// LeetCode #990: Satisfiability of Equality Equations -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random sets of equations.
+
+// ---- star ----
+
+fn star_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut at = x;
+    while parent[at] != at {
+        parent[at] = parent[parent[at]];
+        at = parent[at];
+    }
+    at
+}
+
+fn star_equations_possible(equations: Vec[String]) -> bool {
+    let mut parent: Vec[i64] = (0..26).collect();
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'=' {
+            let x = star_find(mut parent, b[0] as i64 - 97);
+            let y = star_find(mut parent, b[3] as i64 - 97);
+            parent[x] = y;
+        }
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'!' and star_find(mut parent, b[0] as i64 - 97) == star_find(mut parent, b[3] as i64 - 97) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- bfs ----
+
+fn bfs_equations_possible(equations: Vec[String]) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..26 {
+        adj.push(Vec.new());
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'=' {
+            let x = b[0] as i64 - 97;
+            let y = b[3] as i64 - 97;
+            adj[x].push(y);
+            adj[y].push(x);
+        }
+    }
+    let mut comp: Vec[i64] = Vec.filled(26, -1);
+    for start in 0..26 {
+        if comp[start] >= 0 {
+            continue;
+        }
+        comp[start] = start;
+        let mut queue: VecDeque[i64] = VecDeque.new();
+        queue.push_back(start);
+        while let Some(x) = queue.pop_front() {
+            for y in adj[x].iter() {
+                if comp[*y] < 0 {
+                    comp[*y] = start;
+                    queue.push_back(*y);
+                }
+            }
+        }
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'!' and comp[b[0] as i64 - 97] == comp[b[3] as i64 - 97] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- dfs ----
+
+fn dfs_paint(equal: ref Vec[Vec[bool]], colour: mut ref Vec[i64], x: i64, c: i64) {
+    colour[x] = c;
+    for y in 0..26 {
+        if equal[x][y] and colour[y] < 0 {
+            dfs_paint(equal, mut colour, y, c);
+        }
+    }
+}
+
+fn dfs_equations_possible(equations: Vec[String]) -> bool {
+    let mut equal: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..26 {
+        equal.push(Vec.filled(26, false));
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'=' {
+            let x = b[0] as i64 - 97;
+            let y = b[3] as i64 - 97;
+            equal[x][y] = true;
+            equal[y][x] = true;
+        }
+    }
+    let mut colour: Vec[i64] = Vec.filled(26, -1);
+    let mut next = 0;
+    for x in 0..26 {
+        if colour[x] < 0 {
+            dfs_paint(equal, mut colour, x, next);
+            next += 1;
+        }
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'!' and colour[b[0] as i64 - 97] == colour[b[3] as i64 - 97] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- closure ----
+
+fn closure_equations_possible(equations: Vec[String]) -> bool {
+    let mut eq: Vec[Vec[bool]] = Vec.new();
+    for x in 0..26 {
+        let mut row: Vec[bool] = Vec.filled(26, false);
+        row[x] = true;
+        eq.push(row);
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'=' {
+            let x = b[0] as i64 - 97;
+            let y = b[3] as i64 - 97;
+            eq[x][y] = true;
+            eq[y][x] = true;
+        }
+    }
+    for m in 0..26 {
+        for x in 0..26 {
+            if eq[x][m] {
+                for y in 0..26 {
+                    if eq[m][y] {
+                        eq[x][y] = true;
+                    }
+                }
+            }
+        }
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'!' and eq[b[0] as i64 - 97][b[3] as i64 - 97] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- relabel ----
+
+fn relabel_equations_possible(equations: Vec[String]) -> bool {
+    let mut label: Vec[i64] = (0..26).collect();
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'=' {
+            let from = label[b[0] as i64 - 97];
+            let to = label[b[3] as i64 - 97];
+            for x in 0..26 {
+                if label[x] == from {
+                    label[x] = to;
+                }
+            }
+        }
+    }
+    for e in equations.iter() {
+        let b = e.bytes();
+        if b[1] == b'!' and label[b[0] as i64 - 97] == label[b[3] as i64 - 97] {
+            return false;
+        }
+    }
+    true
+}
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(i: i64) -> String {
+    f"{(97 + i) as u8 as char}"
+}
+
+fn random_equation(letters: i64, unequal: i64, seed: mut ref i64) -> String {
+    let a = letter(next_random(mut seed) % letters);
+    let op = if next_random(mut seed) % 16 < unequal { "!=" } else { "==" };
+    let b = letter(next_random(mut seed) % letters);
+    a + op + b
+}
+
+fn arm(k: i64, es: ref Vec[String]) -> bool {
+    if k == 0 {
+        star_equations_possible(es)
+    } else if k == 1 {
+        bfs_equations_possible(es)
+    } else if k == 2 {
+        dfs_equations_possible(es)
+    } else if k == 3 {
+        closure_equations_possible(es)
+    } else {
+        relabel_equations_possible(es)
+    }
+}
+
+// The statement read literally: is there a way to give each letter an
+// integer that makes every equation true? With L letters there are at
+// most L different values to tell apart, so trying every assignment of
+// 0 to L - 1 to the letters is enough.
+fn literal(es: ref Vec[String], letters: i64) -> bool {
+    let mut ways = 1;
+    for _ in 0..letters {
+        ways *= letters;
+    }
+    for w in 0..ways {
+        let mut value: Vec[i64] = Vec.new();
+        let mut rest = w;
+        for _ in 0..letters {
+            value.push(rest % letters);
+            rest /= letters;
+        }
+        let mut all = true;
+        for e in es.iter() {
+            let b = e.bytes();
+            let x = value[b[0] as i64 - 97];
+            let y = value[b[3] as i64 - 97];
+            let holds = if b[1] == b'=' { x == y } else { x != y };
+            if not holds {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            return true;
+        }
+    }
+    false
+}
+
+// every letter renamed by the permutation `to`
+fn renamed(es: ref Vec[String], to: ref Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for e in es.iter() {
+        let b = e.bytes();
+        let op = if b[1] == b'=' { "==" } else { "!=" };
+        out.push(letter(to[b[0] as i64 - 97]) + op + letter(to[b[3] as i64 - 97]));
+    }
+    out
+}
+
+fn swapped(es: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for e in es.iter() {
+        let b = e.bytes();
+        let op = if b[1] == b'=' { "==" } else { "!=" };
+        out.push(letter(b[3] as i64 - 97) + op + letter(b[0] as i64 - 97));
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, es: ref Vec[String], letters: i64, small: bool, seed: mut ref i64) -> bool {
+    let truth = if small { literal(es, letters) } else { false };
+    let mut got: Vec[bool] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, es));
+    }
+    let backwards: Vec[String] = es.iter().rev().map(|e| e.clone()).collect();
+    let turned = swapped(es);
+    // a random permutation of the 26 letters
+    let mut to: Vec[i64] = (0..26).collect();
+    for i in 0..26 {
+        let j = i + next_random(mut seed) % (26 - i);
+        let t = to[i];
+        to[i] = to[j];
+        to[j] = t;
+    }
+    let moved = renamed(es, to);
+    let mut copied = es.clone();
+    copied.push(es[next_random(mut seed) % es.len()].clone());
+    let mut added = es.clone();
+    added.push(random_equation(letters, 8, mut seed));
+    for k in 0..5 {
+        let a = got[k];
+        // P1: the statement's answer, on the first 3000 sets
+        if small {
+            check(mut tally, 1, a == truth);
+        }
+        // P2: the equations read last to first give the same answer
+        check(mut tally, 2, arm(k, backwards) == a);
+        // P3: each equation's sides swapped, and the letters renamed by
+        // a random permutation, give the same answer
+        check(mut tally, 3, arm(k, turned) == a and arm(k, moved) == a);
+        // P4: one of the equations again changes nothing
+        check(mut tally, 4, arm(k, copied) == a);
+        // P5: one more equation cannot make an impossible set possible
+        check(mut tally, 5, a or not arm(k, added));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == a {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 990;
+    let mut total = 0;
+    let mut sat = 0;
+    let mut check_sum = 0;
+    // 3000 sets of up to 8 equations over 4 letters against the
+    // statement, then 200 of up to 100 over 26 letters
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most = if small { 8 } else { 100 };
+        let letters = if small { 4 } else { 26 };
+        let unequal = if small { 5 } else if c % 2 == 0 { 1 } else { 12 };
+        let n = 1 + next_random(mut seed) % most;
+        let mut es: Vec[String] = Vec.new();
+        for _ in 0..n {
+            es.push(random_equation(letters, unequal, mut seed));
+        }
+        let ok = properties(mut tally, es, letters, small, mut seed);
+        total += n;
+        if ok {
+            sat += 1;
+        }
+        check_sum = (check_sum * 31 + if ok { 2 } else { 1 }) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 sets of {total} equations: {sat} satisfiable, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
