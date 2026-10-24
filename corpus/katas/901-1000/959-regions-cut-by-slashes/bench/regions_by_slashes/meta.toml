@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/959-regions-cut-by-slashes/bench/regions_by_slashes.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 959 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "bec23b498"
+classified_with = "d34a2566d"
 extracted_src = "7ffec28f"
