@@ -62,9 +62,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 15 |
 | diagnostics | 11 |
 | perf | 10 |
+| miscompile | 4 |
 | soundness | 4 |
 | run-vs-build | 4 |
-| miscompile | 3 |
 | other | 2 |
 | codegen-gap | 2 |
 
@@ -72,9 +72,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 28 |
+| typecheck | 29 |
 | codegen | 23 |
-| interp | 15 |
+| interp | 16 |
 | mir | 9 |
 | runtime | 8 |
 | cli | 7 |
@@ -137,6 +137,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-13 | 2026-10-24 | parser | low | The turbofish fix deletes `::<T>` / `::[T]` from `let x = it.collect::[Vec[char]]();` and leaves `let x = it.collect();`, which then fails E0238 "cannot infer type parameter 'C'": in a `let` with no annotation the fix should move the type onto the binding, as its own message tells the author to | — |
 | B-2026-10-24-15 | 2026-10-24 | typecheck+interp+codegen | low | A binding of a non-Copy payload from a `match` on a FIELD of a `mut ref` parameter (`match c.s { S.B(buf) => add(mut buf, 7) }`, `c: mut ref C`) is a `mut ref` under `karac check`, per core-semantics §4.6, but `ref` under the MIR typecheck, which refuses passing it as a `mut ref` argument; a method call through the same binding is accepted by both | — |
 | B-2026-10-24-16 | 2026-10-24 | typecheck | medium | `karac check` rejects `.collect()` after an item-preserving adaptor on a generic iterator: under `I: Iterator[Item = i64]`, `it.filter(|x| x % 2 == 0).collect()` and `it.take(2).collect()` into a `Vec[i64]` give "trait bound `C: FromIterator[ItemV]` is not satisfied; `Vec[i64]` implements `FromIterator[i64]`, not `FromIterator[ItemV]`" | — |
+| B-2026-10-24-17 | 2026-10-24 | typecheck+interp | medium | An integer literal in a tuple literal gets no range check against its slot: `let t: (i64, u8) = (1, 300);` passes `karac check` and the MIR run prints `t.1` as 44, where `let x: u8 = 300;` is refused | — |
 
 ### Fixed
 
