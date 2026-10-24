@@ -1,0 +1,14 @@
+[[0,0],[0,1],[1,0],[1,2],[2,1],[2,2]]: 5 stones removed
+[[0,0],[0,2],[1,1],[2,0],[2,2]]: 3 stones removed
+[[0,0]]: 0 stones removed
+[[0,0],[0,5]]: 1 stone removed
+[[0,0],[1,1],[2,2],[3,3]]: 0 stones removed
+[[0,0],[0,1],[1,1],[1,2],[2,2]]: 4 stones removed
+[[10000,10000],[10000,0],[0,10000]]: 2 stones removed
+[[0,0],[0,1],[5,5],[5,6],[9,0]]: 3 stones removed
+300 random sets of 5802 stones: 5139 removed, checksum 365157433
+1000 stones at random points up to 10000: 104 stones removed
+1000 stones at random points up to 999: 716 stones removed
+1000 stones in a staircase: 999 stones removed
+1000 stones on a diagonal: 0 stones removed
+25 rows of 40 stones: 999 stones removed

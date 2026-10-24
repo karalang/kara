@@ -1,0 +1,410 @@
+// LeetCode #947: Most Stones Removed with Same Row or Column --
+// differential test of the five arms against the statement read
+// literally, with six properties.
+//
+// The statement: on a 2D plane, we place n stones at some integer
+// coordinate points. Each coordinate point may have at most one stone. A
+// stone can be removed if it shares either the same row or the same
+// column as another stone that has not been removed. Given an array
+// stones of length n where stones[i] = [xi, yi] represents the location
+// of the ith stone, return the largest possible number of stones that can
+// be removed.
+
+// ---- the ★ arm: rows and columns joined -----------------------------------
+fn star_find_line(parent: mut ref Vec[i64], v: i64) -> i64 {
+    let mut x = v;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn star_remove_stones(stones: Vec[Vec[i64]]) -> i64 {
+    let mut parent: Vec[i64] = Vec.filled(20002, -1);
+    let mut groups = 0;
+    for s in stones.iter() {
+        let row = s[0];
+        let col = 10001 + s[1];
+        if parent[row] < 0 {
+            parent[row] = row;
+            groups += 1;
+        }
+        if parent[col] < 0 {
+            parent[col] = col;
+            groups += 1;
+        }
+        let a = star_find_line(mut parent, row);
+        let b = star_find_line(mut parent, col);
+        if a != b {
+            parent[a] = b;
+            groups -= 1;
+        }
+    }
+    stones.len() - groups
+}
+
+// ---- the dfs arm: stones searched depth first -----------------------------
+fn dfs_remove_stones(stones: Vec[Vec[i64]]) -> i64 {
+    let n = stones.len();
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut groups = 0;
+    for start in 0..n {
+        if seen[start] {
+            continue;
+        }
+        groups += 1;
+        seen[start] = true;
+        let mut stack: Vec[i64] = vec![start];
+        while let Some(i) = stack.pop() {
+            for j in 0..n {
+                if not seen[j] and (stones[i][0] == stones[j][0] or stones[i][1] == stones[j][1]) {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+    }
+    n - groups
+}
+
+// ---- the lines arm: the stones of each line -------------------------------
+fn lines_remove_stones(stones: Vec[Vec[i64]]) -> i64 {
+    let n = stones.len();
+    let mut rows: Map[i64, Vec[i64]] = Map.new();
+    let mut cols: Map[i64, Vec[i64]] = Map.new();
+    for i in 0..n {
+        if let Some(list) = rows.get_mut(stones[i][0]) {
+            list.push(i);
+        } else {
+            rows.insert(stones[i][0], vec![i]);
+        }
+        if let Some(list) = cols.get_mut(stones[i][1]) {
+            list.push(i);
+        } else {
+            cols.insert(stones[i][1], vec![i]);
+        }
+    }
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut groups = 0;
+    for start in 0..n {
+        if seen[start] {
+            continue;
+        }
+        groups += 1;
+        seen[start] = true;
+        let mut queue: VecDeque[i64] = VecDeque.new();
+        queue.push_back(start);
+        while let Some(i) = queue.pop_front() {
+            if let Some(list) = rows.remove(stones[i][0]) {
+                for j in list.iter() {
+                    if not seen[*j] {
+                        seen[*j] = true;
+                        queue.push_back(*j);
+                    }
+                }
+            }
+            if let Some(list) = cols.remove(stones[i][1]) {
+                for j in list.iter() {
+                    if not seen[*j] {
+                        seen[*j] = true;
+                        queue.push_back(*j);
+                    }
+                }
+            }
+        }
+    }
+    n - groups
+}
+
+// ---- the labels arm: the least label spread -------------------------------
+fn labels_remove_stones(stones: Vec[Vec[i64]]) -> i64 {
+    let n = stones.len();
+    let mut label: Vec[i64] = Vec.new();
+    for i in 0..n {
+        label.push(i);
+    }
+    let mut top_row = 0;
+    let mut top_col = 0;
+    for s in stones.iter() {
+        top_row = top_row.max(s[0]);
+        top_col = top_col.max(s[1]);
+    }
+    let mut row_low: Vec[i64] = Vec.filled(top_row + 1, n);
+    let mut col_low: Vec[i64] = Vec.filled(top_col + 1, n);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..n {
+            let r = stones[i][0];
+            let c = stones[i][1];
+            row_low[r] = row_low[r].min(label[i]);
+            col_low[c] = col_low[c].min(label[i]);
+        }
+        for i in 0..n {
+            let low = row_low[stones[i][0]].min(col_low[stones[i][1]]);
+            if low < label[i] {
+                label[i] = low;
+                changed = true;
+            }
+        }
+        for i in 0..n {
+            row_low[stones[i][0]] = n;
+            col_low[stones[i][1]] = n;
+        }
+    }
+    let mut groups = 0;
+    for i in 0..n {
+        if label[i] == i {
+            groups += 1;
+        }
+    }
+    n - groups
+}
+
+// ---- the sorted arm: neighbours in sorted order joined --------------------
+fn sorted_find_stone(parent: mut ref Vec[i64], v: i64) -> i64 {
+    let mut x = v;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn sorted_join_lines(keys: ref Vec[i64], parent: mut ref Vec[i64]) -> i64 {
+    let mut joins = 0;
+    for k in 1..keys.len() {
+        if keys[k - 1] / 65536 == keys[k] / 65536 {
+            let a = sorted_find_stone(mut parent, keys[k - 1] % 65536);
+            let b = sorted_find_stone(mut parent, keys[k] % 65536);
+            if a != b {
+                parent[a] = b;
+                joins += 1;
+            }
+        }
+    }
+    joins
+}
+
+fn sorted_remove_stones(stones: Vec[Vec[i64]]) -> i64 {
+    let n = stones.len();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut by_row: Vec[i64] = Vec.new();
+    let mut by_col: Vec[i64] = Vec.new();
+    for i in 0..n {
+        parent.push(i);
+        by_row.push(stones[i][0] * 65536 + i);
+        by_col.push(stones[i][1] * 65536 + i);
+    }
+    by_row.sort();
+    by_col.sort();
+    sorted_join_lines(by_row, mut parent) + sorted_join_lines(by_col, mut parent)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, stones: Vec[Vec[i64]]) -> i64 {
+    if x == 0 {
+        star_remove_stones(stones)
+    } else if x == 1 {
+        dfs_remove_stones(stones)
+    } else if x == 2 {
+        lines_remove_stones(stones)
+    } else if x == 3 {
+        labels_remove_stones(stones)
+    } else {
+        sorted_remove_stones(stones)
+    }
+}
+
+// The statement read literally: from the stones still there, any stone
+// that shares a row or a column with another of them may be removed; the
+// most stones some order of removals takes away, over the sets of stones
+// left, each set kept as a mask and worked out once.
+fn removals(stones: ref Vec[Vec[i64]], mask: i64, memo: mut ref Vec[i64]) -> i64 {
+    if memo[mask] >= 0 {
+        return memo[mask];
+    }
+    let n = stones.len();
+    let mut best = 0;
+    for i in 0..n {
+        if (mask >> i) & 1 == 1 {
+            let mut shares = false;
+            for j in 0..n {
+                if j != i and (mask >> j) & 1 == 1 and (stones[i][0] == stones[j][0] or stones[i][1] == stones[j][1]) {
+                    shares = true;
+                }
+            }
+            if shares {
+                best = best.max(1 + removals(stones, mask - (1 << i), mut memo));
+            }
+        }
+    }
+    memo[mask] = best;
+    best
+}
+
+fn literal(stones: ref Vec[Vec[i64]]) -> i64 {
+    let full = (1 << stones.len()) - 1;
+    let mut memo: Vec[i64] = Vec.filled(full + 1, -1);
+    removals(stones, full, mut memo)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n stones at distinct random points with x from 0 to w - 1 and y from 0
+// to h - 1, or one at every point when there are fewer than n.
+fn random_stones(n: i64, w: i64, h: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut taken: Set[i64] = Set.new();
+    let mut stones: Vec[Vec[i64]] = Vec.new();
+    let want = n.min(w * h);
+    while stones.len() < want {
+        let x = (next_random(mut seed) * 32768 + next_random(mut seed)) % w;
+        let y = (next_random(mut seed) * 32768 + next_random(mut seed)) % h;
+        if not taken.contains(x * 10001 + y) {
+            taken.insert(x * 10001 + y);
+            stones.push(vec![x, y]);
+        }
+    }
+    stones
+}
+
+// how many different values the stones hold at index k: their rows or
+// their columns
+fn distinct(stones: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let mut seen: Set[i64] = Set.new();
+    for s in stones.iter() {
+        seen.insert(s[k]);
+    }
+    seen.len()
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, stones: Vec[Vec[i64]], small: bool) -> i64 {
+    let n = stones.len();
+    let truth = if small { literal(stones) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, stones));
+    }
+    let rows = distinct(stones, 0);
+    let cols = distinct(stones, 1);
+    let mut top_x = 0;
+    let mut top_y = 0;
+    let mut taken: Set[i64] = Set.new();
+    for s in stones.iter() {
+        top_x = top_x.max(s[0]);
+        top_y = top_y.max(s[1]);
+        taken.insert(s[0] * 10001 + s[1]);
+    }
+    // the inputs P3 to P5 share: the stones shuffled, each with its row
+    // and column swapped and its new row counted down from 10000; the
+    // stones beside a copy moved past every row and column used; and one
+    // more stone at a random free point
+    let mut turned: Vec[Vec[i64]] = Vec.new();
+    for s in stones.iter() {
+        turned.push(vec![10000 - s[1], s[0]]);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        turned.swap(i, j);
+    }
+    let mut apart = stones.clone();
+    for s in stones.iter() {
+        apart.push(vec![s[0] + top_x + 1, s[1] + top_y + 1]);
+    }
+    let mut more = stones.clone();
+    let mut extra_x = 0;
+    let mut extra_y = 0;
+    let mut placed = false;
+    while not placed {
+        extra_x = next_random(mut seed) % (top_x + 2);
+        extra_y = next_random(mut seed) % (top_y + 2);
+        placed = not taken.contains(extra_x * 10001 + extra_y);
+    }
+    more.push(vec![extra_x, extra_y]);
+    let mut lonely = true;
+    for s in stones.iter() {
+        if s[0] == extra_x or s[1] == extra_y {
+            lonely = false;
+        }
+    }
+    for x in 0..5 {
+        let m = got[x];
+        // P1: the statement's most removals, on the small sets
+        if small {
+            check(mut t, 1, m == truth);
+        }
+        // P2: from n less the fewer of the rows and columns used to n - 1,
+        // and 0 exactly when no two stones share a row or a column
+        check(mut t, 2, m >= n - rows.min(cols) and m <= n - 1 and ((m == 0) == (rows == n and cols == n)));
+        // P3: shuffled, turned a quarter, the same
+        check(mut t, 3, arm(x, turned) == m);
+        // P4: beside a copy of themselves past every line used, twice
+        check(mut t, 4, arm(x, apart) == 2 * m);
+        // P5: one more stone, 0, 1 or 2 more, and 0 exactly when it
+        // shares no line with another
+        let d = arm(x, more) - m;
+        check(mut t, 5, d >= 0 and d <= 2 and ((d == 0) == lonely));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == m {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 947;
+    let mut sets = 0;
+    let mut count = 0;
+    let mut removed = 0;
+    let mut check_sum = 0;
+    // up to 7 stones on grids up to 4 by 4 against the statement, then up
+    // to 300 stones on grids up to 600 by 600
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 7 } else { 1 + next_random(mut seed) % 300 };
+        let side = if small { 4 } else { 600 };
+        let w = 1 + next_random(mut seed) % side;
+        let h = 1 + next_random(mut seed) % side;
+        let stones = random_stones(n, w, h, mut seed);
+        sets += 1;
+        count += stones.len();
+        let m = properties(mut t, mut seed, stones, small);
+        removed += m;
+        check_sum = (check_sum * 1000003 + m) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{sets} sets of {count} stones, {removed} removed, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

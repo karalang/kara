@@ -1,0 +1,74 @@
+// Benchmark: LeetCode #947 Most Stones Removed with Same Row or Column --
+// the ★ arm, rows and columns joined, on sets of 1000 stones, LeetCode's
+// largest. Mirrors remove_stones.c, .rs, .py and go-seq/.
+
+fn find_line(parent: mut ref Vec[i64], v: i64) -> i64 {
+    let mut x = v;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn remove_stones(stones: Vec[Vec[i64]]) -> i64 {
+    let mut parent: Vec[i64] = Vec.filled(20002, -1);
+    let mut groups = 0;
+    for s in stones.iter() {
+        let row = s[0];
+        let col = 10001 + s[1];
+        if parent[row] < 0 {
+            parent[row] = row;
+            groups += 1;
+        }
+        if parent[col] < 0 {
+            parent[col] = col;
+            groups += 1;
+        }
+        let a = find_line(mut parent, row);
+        let b = find_line(mut parent, col);
+        if a != b {
+            parent[a] = b;
+            groups -= 1;
+        }
+    }
+    stones.len() - groups
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 1000;
+    let count = 20;
+    let n = 1000;
+    let mut seed = 947;
+    // distinct random points on a square grid of side 200 to 2000
+    let mut sets: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..count {
+        let side = 200 + next_random(mut seed) % 1801;
+        let mut taken: Set[i64] = Set.new();
+        let mut stones: Vec[Vec[i64]] = Vec.new();
+        while stones.len() < n {
+            let x = next_random(mut seed) % side;
+            let y = next_random(mut seed) % side;
+            if not taken.contains(x * 10001 + y) {
+                taken.insert(x * 10001 + y);
+                stones.push(vec![x, y]);
+            }
+        }
+        sets.push(stones);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let m = remove_stones(sets[(r + i) % count]);
+            total += m;
+            check = (check * 1000003 + m) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} sets of {n} stones: {total} removed, checksum {check}");
+}

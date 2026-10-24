@@ -1,0 +1,16 @@
+source = "kara-katas/leetcode/901-1000/947-most-stones-removed-with-same-row-or-column/remove_stones_dfs.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:dataframe", "lib:set"]
+class = "d"
+expected_from = "mirror"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "legacy fails on this program; expected.out is the kata's Python mirror, which every arm matches on __mir-run, as the kata README records it"
+bucket = "d"
+classified_with = "fe6e91051"
+extracted_src = "780514dd"

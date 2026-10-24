@@ -1,0 +1,137 @@
+// LeetCode #947: Most Stones Removed with Same Row or Column -- rows and
+// columns joined.
+//
+// Stones that share a row or a column, directly or through other stones,
+// form a group, and a group can always be removed down to its last stone:
+// take its stones off a spanning tree leaf first, each still sharing a
+// line with the stone it hangs from. So the answer is the number of stones
+// less the number of groups. Here the rows and columns are what is
+// joined: each stone joins its row to its column in a union-find over the
+// 10001 rows and 10001 columns, a group counted for each line seen for the
+// first time and one taken away for each join of two groups. O(n α(n))
+// after O(20002) set-up.
+
+fn find_line(parent: mut ref Vec[i64], v: i64) -> i64 {
+    let mut x = v;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn remove_stones(stones: Vec[Vec[i64]]) -> i64 {
+    let mut parent: Vec[i64] = Vec.filled(20002, -1);
+    let mut groups = 0;
+    for s in stones.iter() {
+        let row = s[0];
+        let col = 10001 + s[1];
+        if parent[row] < 0 {
+            parent[row] = row;
+            groups += 1;
+        }
+        if parent[col] < 0 {
+            parent[col] = col;
+            groups += 1;
+        }
+        let a = find_line(mut parent, row);
+        let b = find_line(mut parent, col);
+        if a != b {
+            parent[a] = b;
+            groups -= 1;
+        }
+    }
+    stones.len() - groups
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(stones: ref Vec[Vec[i64]]) -> String {
+    let mut s = String.new();
+    for i in 0..stones.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"[{stones[i][0]},{stones[i][1]}]";
+    }
+    f"[{s}]"
+}
+
+fn removed_text(r: i64) -> String {
+    if r == 1 { "1 stone removed".to_string() } else { f"{r} stones removed" }
+}
+
+// n stones at distinct random points with x from 0 to w - 1 and y from 0
+// to h - 1, or one at every point when there are fewer than n.
+fn random_stones(n: i64, w: i64, h: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut taken: Set[i64] = Set.new();
+    let mut stones: Vec[Vec[i64]] = Vec.new();
+    let want = n.min(w * h);
+    while stones.len() < want {
+        let x = (next_random(mut seed) * 32768 + next_random(mut seed)) % w;
+        let y = (next_random(mut seed) * 32768 + next_random(mut seed)) % h;
+        if not taken.contains(x * 10001 + y) {
+            taken.insert(x * 10001 + y);
+            stones.push(vec![x, y]);
+        }
+    }
+    stones
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![0, 0], vec![0, 1], vec![1, 0], vec![1, 2], vec![2, 1], vec![2, 2]],
+        vec![vec![0, 0], vec![0, 2], vec![1, 1], vec![2, 0], vec![2, 2]],
+        vec![vec![0, 0]],
+        vec![vec![0, 0], vec![0, 5]],
+        vec![vec![0, 0], vec![1, 1], vec![2, 2], vec![3, 3]],
+        vec![vec![0, 0], vec![0, 1], vec![1, 1], vec![1, 2], vec![2, 2]],
+        vec![vec![10000, 10000], vec![10000, 0], vec![0, 10000]],
+        vec![vec![0, 0], vec![0, 1], vec![5, 5], vec![5, 6], vec![9, 0]],
+    ];
+    for stones in examples.iter() {
+        println(f"{show(stones)}: {removed_text(remove_stones(stones))}");
+    }
+    // 300 random sets of 1 to 40 stones on grids of 1 to 25 by 1 to 25
+    let mut seed = 947;
+    let mut count = 0;
+    let mut removed = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let w = 1 + next_random(mut seed) % 25;
+        let h = 1 + next_random(mut seed) % 25;
+        let stones = random_stones(n, w, h, mut seed);
+        let r = remove_stones(stones);
+        count += stones.len();
+        removed += r;
+        check = (check * 31 + r) % 1000000007;
+    }
+    println(f"300 random sets of {count} stones: {removed} removed, checksum {check}");
+    // LeetCode's largest, 1000 stones
+    let wide = random_stones(1000, 10001, 10001, mut seed);
+    println(f"1000 stones at random points up to 10000: {removed_text(remove_stones(wide))}");
+    let sparse = random_stones(1000, 1000, 1000, mut seed);
+    println(f"1000 stones at random points up to 999: {removed_text(remove_stones(sparse))}");
+    let mut stairs: Vec[Vec[i64]] = Vec.new();
+    for i in 0..1000 {
+        stairs.push(vec![i / 2, (i + 1) / 2]);
+    }
+    println(f"1000 stones in a staircase: {removed_text(remove_stones(stairs))}");
+    let mut diagonal: Vec[Vec[i64]] = Vec.new();
+    for i in 0..1000 {
+        diagonal.push(vec![i * 10, 9990 - i * 10]);
+    }
+    println(f"1000 stones on a diagonal: {removed_text(remove_stones(diagonal))}");
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for i in 0..1000 {
+        grid.push(vec![i / 40 * 400, i % 40 * 250]);
+    }
+    println(f"25 rows of 40 stones: {removed_text(remove_stones(grid))}");
+}
