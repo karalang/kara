@@ -2342,13 +2342,16 @@ struct ChunkJob<'a> {
     lo: SymbolId,
     hi: SymbolId,
     ty: Ty,
+    /// The loop's reduction is a signed sum, which the task keeps wide
+    /// (see [`AutoRed::wide`]).
+    wide: Option<WideSum<'a>>,
 }
 
 /// `acc = acc op e` in an auto-par loop's body: each task starts its own
 /// `acc` at `op`'s identity and returns it, and the join folds the results
 /// into `acc` in iteration order.
 #[derive(Clone, Copy)]
-struct AutoRed {
+struct AutoRed<'a> {
     sym: SymbolId,
     acc: Local,
     op: BinOp,
@@ -2356,14 +2359,39 @@ struct AutoRed {
     /// Where the sequential loop's operation is, which the fold's overflow
     /// check names.
     span: Span,
+    /// A checked `+` on a signed integer: a run's own sum can overflow
+    /// where the sequential sum never does (`i64.max + 1 - 1`), so each
+    /// task sums in `i128` and returns that sum with its run's least and
+    /// greatest prefix, and the join checks the prefixes against `acc`'s
+    /// range in order: the sequential loop overflows exactly where one of
+    /// them leaves it.
+    wide: Option<WideSum<'a>>,
+}
+
+/// A signed sum's statement in an auto-par loop's body, and the term it
+/// adds.
+#[derive(Clone, Copy)]
+struct WideSum<'a> {
+    stmt: &'a Stmt,
+    term: &'a Expr,
+}
+
+/// An auto-par task's wide sum while its run is lowered: the `i128`
+/// locals the reduction's statement adds its term to in place of `acc`.
+#[derive(Clone, Copy)]
+struct WideAcc<'a> {
+    sum: WideSum<'a>,
+    total: Local,
+    least: Local,
+    most: Local,
 }
 
 /// What a join of a loop's tasks does with each task's value.
-enum JoinSink {
+enum JoinSink<'a> {
     /// Push it onto this `Vec` (a `par for`'s value).
     Push(Local, Ty),
     /// Fold it into the reduction's accumulator.
-    Fold(AutoRed),
+    Fold(AutoRed<'a>),
     /// Nothing: the iterations return no value.
     Discard,
 }
@@ -2461,6 +2489,8 @@ struct Bx<'l, 'a> {
     /// The next closure lowered is an auto-par loop's task running a run
     /// of its iterations (see `ClosureJob::chunk`).
     closure_chunk: Option<ChunkJob<'a>>,
+    /// An auto-par task's signed sum, while its run is lowered.
+    wide_acc: Option<WideAcc<'a>>,
     /// Symbols the next closure lowered captures besides those its body
     /// names (an auto-par task's bounds), and ones it does not (the loop's
     /// own binding, which the task binds).
@@ -2534,6 +2564,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_by_value: FxHashSet::default(),
             auto_par_candidate: None,
             closure_chunk: None,
+            wide_acc: None,
             closure_extra_caps: Vec::new(),
             closure_skip_caps: FxHashSet::default(),
             closure_ret_capture: None,
@@ -3999,9 +4030,51 @@ impl<'l, 'a> Bx<'l, 'a> {
             span: s.span,
             ..outer
         });
-        let r = self.stmt_here(s);
+        let r = match self.wide_acc {
+            Some(w) if std::ptr::eq(w.sum.stmt, s) => self.wide_add(w),
+            _ => self.stmt_here(s),
+        };
         self.b.set_source_info(outer);
         r
+    }
+
+    /// An auto-par task's signed sum statement: its term added to the
+    /// task's `i128` total, the least and greatest prefix kept.
+    fn wide_add(&mut self, w: WideAcc<'a>) -> R<()> {
+        let t = self.expr_ty(w.sum.term)?;
+        let x = self.temp(t);
+        self.expr_into(w.sum.term, Place::local(x))?;
+        let wt = self.b.local_ty(w.total);
+        let xw = self.temp(wt);
+        self.assign(
+            xw,
+            Rvalue::Cast(CastKind::IntToInt, Operand::Move(Place::local(x)), wt),
+        );
+        // No run is long enough to overflow an `i128` total of 64-bit terms.
+        self.assign(
+            w.total,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Operand::Copy(Place::local(w.total)),
+                Operand::Move(Place::local(xw)),
+            ),
+        );
+        let bool_t = self.tys().bool();
+        for (bound, op) in [(w.least, BinOp::Lt), (w.most, BinOp::Gt)] {
+            let past = self.temp(bool_t);
+            self.assign(
+                past,
+                Rvalue::BinaryOp(
+                    op,
+                    Operand::Copy(Place::local(w.total)),
+                    Operand::Copy(Place::local(bound)),
+                ),
+            );
+            self.when(past, |b| {
+                b.assign(bound, Rvalue::Use(Operand::Copy(Place::local(w.total))));
+            });
+        }
+        Ok(())
     }
 
     fn stmt_here(&mut self, s: &'a Stmt) -> R<()> {
@@ -9171,7 +9244,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// After a loop whose iterations ran as tasks: joins each in iteration
     /// order, handing its value (of type `et`) to `sink`, then drops the
     /// handles and the group, so what the tasks borrow is free again.
-    fn par_for_join(&mut self, g: Local, gt: Ty, hs: Local, hvt: Ty, et: Ty, sink: JoinSink) {
+    fn par_for_join(&mut self, g: Local, gt: Ty, hs: Local, hvt: Ty, et: Ty, sink: JoinSink<'a>) {
         let tcx = self.tys().tcx();
         let usize_t = tcx.intern(HK::UInt(UIntSize::Usize));
         let ht = match tcx.kind(hvt) {
@@ -9239,6 +9312,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     Place::local(u),
                 );
             }
+            JoinSink::Fold(r) if r.wide.is_some() => self.wide_fold(r, v),
             JoinSink::Fold(r) => {
                 let outer = self.b.source_info();
                 self.b.set_source_info(SourceInfo {
@@ -9280,6 +9354,80 @@ impl<'l, 'a> Bx<'l, 'a> {
                 next,
             );
         }
+    }
+
+    /// A task's wide sum `v` (its total, least and greatest prefix) folded
+    /// into the signed sum `r`: an overflow, named at the loop's operation,
+    /// when `acc` plus either prefix leaves `acc`'s range, which is where
+    /// the sequential loop overflows; `acc` plus the total otherwise.
+    fn wide_fold(&mut self, r: AutoRed<'a>, v: Local) {
+        let tcx = self.tys().tcx();
+        let wt = tcx.intern(HK::Int(IntSize::I128));
+        let bool_t = self.tys().bool();
+        let (min, max) = int_range(tcx.kind(r.ty));
+        let wide = |n: i128| {
+            Operand::Const(Const {
+                ty: wt,
+                kind: ConstKind::Scalar(n as u128),
+            })
+        };
+        let field = |i: u32| Operand::Copy(Place::local(v).field(i, wt));
+        let aw = self.temp(wt);
+        self.assign(
+            aw,
+            Rvalue::Cast(CastKind::IntToInt, Operand::Copy(Place::local(r.acc)), wt),
+        );
+        let mut out = Vec::new();
+        for (i, op, bound) in [(1, BinOp::Lt, min), (2, BinOp::Gt, max)] {
+            let at = self.temp(wt);
+            self.assign(
+                at,
+                Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(aw)), field(i)),
+            );
+            let o = self.temp(bool_t);
+            self.assign(
+                o,
+                Rvalue::BinaryOp(op, Operand::Copy(Place::local(at)), wide(bound)),
+            );
+            out.push(o);
+        }
+        let bad = self.temp(bool_t);
+        self.assign(
+            bad,
+            Rvalue::BinaryOp(
+                BinOp::BitOr,
+                Operand::Copy(Place::local(out[0])),
+                Operand::Copy(Place::local(out[1])),
+            ),
+        );
+        let ok = self.b.new_block();
+        let over = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(bad)),
+                targets: SwitchTargets::if_else(over, ok),
+            },
+            over,
+        );
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: r.span,
+            ..outer
+        });
+        self.diverge(TerminatorKind::Abort {
+            reason: AbortReason::Overflow,
+        });
+        self.b.set_source_info(outer);
+        self.cur = ok;
+        let sum = self.temp(wt);
+        self.assign(
+            sum,
+            Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(aw)), field(0)),
+        );
+        self.assign(
+            r.acc,
+            Rvalue::Cast(CastKind::IntToInt, Operand::Move(Place::local(sum)), r.ty),
+        );
     }
 
     /// A `par for` iteration as a task of the loop's group: its handle is
@@ -9410,7 +9558,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// keeps the loop sequential: a body with a value, more than one
     /// reduction, or one that is not a statement of the body itself (which
     /// runs exactly once an iteration) on an integer or `bool` local.
-    fn auto_par_plan(&mut self, body: &'a Block, reds: &[Span]) -> R<Option<Option<AutoRed>>> {
+    fn auto_par_plan(&mut self, body: &'a Block, reds: &[Span]) -> R<Option<Option<AutoRed<'a>>>> {
         if let Some(f) = &body.final_expr {
             let t = self.expr_ty(f)?;
             if t != self.unit() {
@@ -9430,9 +9578,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             (ExprKind::Identifier(_), Some(Res::Local(sym))) => Some(*sym),
             _ => None,
         };
-        // The span the sequential loop's checked operation carries.
-        let (sym, op, span) = match &st.kind {
-            StmtKind::CompoundAssign { target, op, .. } => {
+        // The span the sequential loop's checked operation carries, and the
+        // term it adds.
+        let (sym, op, span, term) = match &st.kind {
+            StmtKind::CompoundAssign {
+                target, op, value, ..
+            } => {
                 let op = match op {
                     CompoundOp::Add => BinOp::Add,
                     CompoundOp::Mul => BinOp::Mul,
@@ -9441,7 +9592,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     CompoundOp::BitXor => BinOp::BitXor,
                     _ => return Ok(None),
                 };
-                (local(target), op, st.span)
+                (local(target), op, st.span, value)
             }
             StmtKind::Assign { target, value } => {
                 let ExprKind::Binary { op, left, right } = &value.kind else {
@@ -9459,7 +9610,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if t.is_none() || (local(left) != t && local(right) != t) {
                     return Ok(None);
                 }
-                (t, op, value.span)
+                let term = if local(left) == t { &**right } else { &**left };
+                (t, op, value.span, term)
             }
             _ => return Ok(None),
         };
@@ -9468,18 +9620,24 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(None);
         };
         let ty = self.b.local_ty(acc);
-        if !matches!(
-            self.tys().tcx().kind(ty),
-            HK::Int(_) | HK::UInt(_) | HK::Bool
-        ) {
-            return Ok(None);
-        }
+        // A checked `*` stays sequential: a run's product can overflow
+        // where the sequential one never does (an earlier 0 keeps it 0),
+        // and so can a signed sum, which the tasks keep wide; an `i128`
+        // has no wider type to keep it in.
+        let wide = match (self.tys().tcx().kind(ty), op) {
+            (HK::Int(_) | HK::UInt(_), BinOp::Mul) => return Ok(None),
+            (HK::Int(IntSize::I128), BinOp::Add) => return Ok(None),
+            (HK::Int(_), BinOp::Add) => Some(WideSum { stmt: st, term }),
+            (HK::Int(_) | HK::UInt(_) | HK::Bool, _) => None,
+            _ => return Ok(None),
+        };
         Ok(Some(Some(AutoRed {
             sym,
             acc,
             op,
             ty,
             span,
+            wide,
         })))
     }
 
@@ -9521,7 +9679,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         pattern: &'a Pattern,
         iterable: &'a Expr,
         body: &'a Block,
-        red: Option<AutoRed>,
+        red: Option<AutoRed<'a>>,
         dest: Place,
     ) -> R<()> {
         let (left, right) = match &iterable.kind {
@@ -9549,6 +9707,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => return self.for_range(e, label, pattern, iterable, body, dest),
         };
         let et = match red {
+            Some(AutoRed { wide: Some(_), .. }) => {
+                let tcx = self.tys().tcx();
+                let wt = tcx.intern(HK::Int(IntSize::I128));
+                tcx.tuple(&[wt, wt, wt])
+            }
             Some(r) => r.ty,
             None => self.unit(),
         };
@@ -9659,7 +9822,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.assign(start, Rvalue::Use(identity));
             held = self.locals.insert(r.sym, start);
             self.closure_by_value.insert(r.sym);
-            self.closure_ret_capture = Some(r.sym);
+            if r.wide.is_none() {
+                self.closure_ret_capture = Some(r.sym);
+            }
         }
         self.closure_skip_caps = skip;
         self.closure_chunk = Some(ChunkJob {
@@ -9668,6 +9833,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             lo: lo_sym,
             hi: hi_sym,
             ty: t,
+            wide: red.and_then(|r| r.wide),
         });
         self.closure_task = true;
         self.closure_ret = Some((et, None));
@@ -17568,6 +17734,27 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             let u = self.unit();
             let l = self.temp(u);
+            let wide = ch.wide.map(|sum| {
+                let wt = self.tys().tcx().intern(HK::Int(IntSize::I128));
+                let [total, least, most] = [(); 3].map(|_| {
+                    let x = self.temp(wt);
+                    self.assign(
+                        x,
+                        Rvalue::Use(Operand::Const(Const {
+                            ty: wt,
+                            kind: ConstKind::Scalar(0),
+                        })),
+                    );
+                    x
+                });
+                WideAcc {
+                    sum,
+                    total,
+                    least,
+                    most,
+                }
+            });
+            self.wide_acc = wide;
             self.push_scope();
             self.range_loop(
                 &None,
@@ -17579,10 +17766,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                 ch.ty,
             )?;
             self.pop_scope()?;
+            self.wide_acc = None;
             self.assign(l, Rvalue::Use(unit_const(u)));
-            let value = match job.ret_capture.and_then(|s| self.captured.get(&s).cloned()) {
-                Some(p) => Rvalue::Use(Operand::Copy(p)),
-                None => Rvalue::Use(unit_const(u)),
+            let value = match (
+                wide,
+                job.ret_capture.and_then(|s| self.captured.get(&s).cloned()),
+            ) {
+                (Some(w), _) => Rvalue::Aggregate(
+                    AggregateKind::Tuple,
+                    [w.total, w.least, w.most]
+                        .map(|x| Operand::Copy(Place::local(x)))
+                        .to_vec(),
+                ),
+                (None, Some(p)) => Rvalue::Use(Operand::Copy(p)),
+                (None, None) => Rvalue::Use(unit_const(u)),
             };
             self.assign(Local::RETURN_PLACE, value);
         } else if let Some((rt, Some(ok))) = job.ret {

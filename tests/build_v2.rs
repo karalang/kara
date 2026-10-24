@@ -197,11 +197,11 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     built(&native);
 }
 
-/// Auto-parallelisation goes to the archive with the legacy backend, so the
-/// v2 build says it ignores `KARAC_AUTO_PAR=1` rather than building a
-/// sequential binary in silence (B-2026-10-22-21).
+/// The v2 build honours `KARAC_AUTO_PAR=1` (M4 item 14), so it no longer
+/// warns that it ignores it (which B-2026-10-22-21 added while the flag
+/// built a sequential binary).
 #[test]
-fn build_v2_says_it_ignores_auto_par() {
+fn build_v2_honours_auto_par_without_a_warning() {
     let dir = scratch("autopar");
     std::fs::write(dir.join("a.kara"), "fn main() {\n    println(\"a\");\n}\n").unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
@@ -213,9 +213,7 @@ fn build_v2_says_it_ignores_auto_par() {
         .unwrap();
     built(&out);
     assert!(
-        text(&out.stderr).contains(
-            "warning: `KARAC_AUTO_PAR=1` is ignored: auto-parallelisation goes to the archive"
-        ),
+        !text(&out.stderr).contains("KARAC_AUTO_PAR"),
         "{}",
         text(&out.stderr)
     );

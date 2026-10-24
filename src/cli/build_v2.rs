@@ -265,12 +265,6 @@ fn refuse_unsupported(a: &BuildArgs) {
         fail_with(&lines.join("\n"), a.output);
         process::exit(1);
     }
-    if std::env::var("KARAC_AUTO_PAR").is_ok_and(|v| v == "1") {
-        eprintln!(
-            "warning: `KARAC_AUTO_PAR=1` is ignored: auto-parallelisation goes to the \
-             archive with the legacy backend at M3 and returns on v2 in M4"
-        );
-    }
 }
 
 /// The CPU baseline, as `karac build` sets it: the flag, then

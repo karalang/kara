@@ -130,11 +130,11 @@ fn same_both_ways(name: &str, src: &str, loops: &[&str]) -> (String, Option<i32>
     shown(&seq)
 }
 
-/// Reductions of every operator over several integer types, in methods
-/// and generic functions, with an empty range, a negative one and fewer
-/// iterations than tasks; a loop that prints keeps its order, and a
-/// closure's loop stays sequential, since the closure would suspend while
-/// called through a function value.
+/// Reductions of every operator but a checked `*` over several integer
+/// types, in methods and generic functions, with an empty range, a
+/// negative one and fewer iterations than tasks; a product, a loop that
+/// prints, and a closure's loop (which would suspend while called through
+/// a function value) keep their order.
 #[test]
 fn mir_auto_par_reductions_match_the_sequential_loop() {
     let src = r#"struct Grid {
@@ -216,7 +216,6 @@ fn main() {
             "Grid.row_sum@9",
             "main@32",
             "main@37",
-            "main@42",
             "main@47",
             "main@52",
             "main@56",
@@ -298,4 +297,46 @@ fn main() {
     };
     assert!(seq >= std::time::Duration::from_millis(800), "{seq:?}");
     assert!(par < std::time::Duration::from_millis(500), "{par:?}");
+}
+
+/// A signed sum whose runs overflow on their own (`i64.max`, five 1s, then
+/// 100000 -1s) gives the sequential sum, and a product whose later runs
+/// overflow after an earlier 0 stays sequential.
+#[test]
+fn mir_auto_par_sums_overflow_only_where_the_loop_does() {
+    let src = r#"fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(9223372036854775807);
+    for _ in 0..5 {
+        v.push(1);
+    }
+    for _ in 0..100000 {
+        v.push(-1);
+    }
+    let mut acc = -10;
+    for i in 0..v.len() {
+        acc = acc + v[i];
+    }
+    println(f"{acc}");
+    let mut w: Vec[u64] = Vec.new();
+    w.push(0);
+    for _ in 0..40 {
+        w.push(4000000000);
+    }
+    let mut p: u64 = 1;
+    for i in 0..w.len() {
+        p *= w[i];
+    }
+    println(p);
+}
+"#;
+    let (out, code, err) = same_both_ways("wide", src, &["main@11"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, "9223372036854675802\n0\n");
+    // The sum overflows where the in-order sum does, not in a run.
+    let over = src.replace("let mut acc = -10;", "let mut acc = 10;");
+    let (out, code, err) = same_both_ways("wide-over", &over, &["main@11"]);
+    assert_eq!(out, "");
+    assert_eq!(code, Some(101), "{err}");
+    assert!(err.contains("overflow"), "{err}");
 }
