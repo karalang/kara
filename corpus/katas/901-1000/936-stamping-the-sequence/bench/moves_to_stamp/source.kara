@@ -1,0 +1,106 @@
+// LeetCode #936: Stamping The Sequence -- bench: stamps peeled off in
+// reverse. Mirrors moves_to_stamp.c, .rs, .py and go-seq/.
+
+fn moves_to_stamp(stamp: String, target: String) -> Vec[i64] {
+    let s = stamp.bytes().to_vec();
+    let mut t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    let mut erased = 0;
+    let mut order: Vec[i64] = Vec.new();
+    let mut progress = true;
+    while progress and erased < n {
+        progress = false;
+        for p in 0..n - m + 1 {
+            let mut fits = true;
+            let mut fresh = false;
+            for k in 0..m {
+                if t[p + k] == s[k] {
+                    fresh = true;
+                } else if t[p + k] != b'?' {
+                    fits = false;
+                }
+            }
+            if fits and fresh {
+                for k in 0..m {
+                    if t[p + k] != b'?' {
+                        t[p + k] = b'?';
+                        erased += 1;
+                    }
+                }
+                order.push(p);
+                progress = true;
+            }
+        }
+    }
+    if erased < n {
+        return Vec.new();
+    }
+    order.reverse();
+    order
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 100;
+    let count = 50;
+    let n = 1000;
+    let mut seed = 936;
+    let mut stamps: Vec[String] = Vec.new();
+    let mut targets: Vec[String] = Vec.new();
+    // each target stamped at random with its own stamp of 5 to 20 letters
+    // until no '?' is left; every other one then has one letter changed
+    for c in 0..count {
+        let m = 5 + next_random(mut seed) % 16;
+        let mut s: Vec[u8] = Vec.new();
+        for _ in 0..m {
+            s.push((97 + next_random(mut seed) % 3) as u8);
+        }
+        let mut out: Vec[u8] = Vec.filled(n, b'?');
+        let mut left = n;
+        while left > 0 {
+            let p = next_random(mut seed) % (n - m + 1);
+            for k in 0..m {
+                if out[p + k] == b'?' {
+                    left -= 1;
+                }
+                out[p + k] = s[k];
+            }
+        }
+        if c % 2 == 1 {
+            out[next_random(mut seed) % n] = (97 + next_random(mut seed) % 3) as u8;
+        }
+        let mut stamp = String.new();
+        for b in s.iter() {
+            stamp.push(*b as char);
+        }
+        let mut target = String.new();
+        for b in out.iter() {
+            target.push(*b as char);
+        }
+        stamps.push(stamp);
+        targets.push(target);
+    }
+    let mut stamped = 0;
+    let mut turns = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        // each round stamps every target, starting from a different one
+        for i in 0..count {
+            let c = (r + i) % count;
+            let moves = moves_to_stamp(stamps[c], targets[c]);
+            if moves.len() > 0 {
+                stamped += 1;
+            }
+            turns += moves.len();
+            for p in moves.iter() {
+                check = (check * 1000003 + *p + 1) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over {count} targets of {n} letters: {stamped} stamped, {turns} stamps, checksum {check}");
+}

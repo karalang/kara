@@ -1,0 +1,184 @@
+// LeetCode #936: Stamping The Sequence -- stamps peeled off in reverse.
+//
+// Work backwards from the target. The last stamp placed shows all of its
+// letters, so some window matches the stamp exactly; erase it to '?'.
+// After that a window can be the stamp placed before when each of its
+// letters either matches the stamp or is already erased, and at least
+// one is not erased yet. Sweep the windows again and again, erasing
+// every one that fits, until the whole target is erased or a sweep
+// erases nothing. The erased windows, last first, are the stamps in
+// order. Each stamp erases a letter, so there are at most n of them.
+// O(n (n - m) m) for a stamp of m letters and a target of n.
+
+fn moves_to_stamp(stamp: String, target: String) -> Vec[i64] {
+    let s = stamp.bytes().to_vec();
+    let mut t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    let mut erased = 0;
+    let mut order: Vec[i64] = Vec.new();
+    let mut progress = true;
+    while progress and erased < n {
+        progress = false;
+        for p in 0..n - m + 1 {
+            let mut fits = true;
+            let mut fresh = false;
+            for k in 0..m {
+                if t[p + k] == s[k] {
+                    fresh = true;
+                } else if t[p + k] != b'?' {
+                    fits = false;
+                }
+            }
+            if fits and fresh {
+                for k in 0..m {
+                    if t[p + k] != b'?' {
+                        t[p + k] = b'?';
+                        erased += 1;
+                    }
+                }
+                order.push(p);
+                progress = true;
+            }
+        }
+    }
+    if erased < n {
+        return Vec.new();
+    }
+    order.reverse();
+    order
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// whether stamping `moves` in turn onto n '?'s gives the target, within
+// 10 n turns
+fn valid(stamp: String, target: String, moves: ref Vec[i64]) -> bool {
+    let s = stamp.bytes().to_vec();
+    let t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    if moves.len() > 10 * n {
+        return false;
+    }
+    let mut out: Vec[u8] = Vec.filled(n, b'?');
+    for p in moves.iter() {
+        if *p < 0 or *p > n - m {
+            return false;
+        }
+        for k in 0..m {
+            out[*p + k] = s[k];
+        }
+    }
+    out == t
+}
+
+fn verdict(stamp: String, target: String) -> String {
+    let moves = moves_to_stamp(stamp, target);
+    if moves.len() == 0 {
+        "cannot be stamped".to_string()
+    } else if valid(stamp, target, moves) {
+        "stamped".to_string()
+    } else {
+        "INVALID STAMPS".to_string()
+    }
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    w
+}
+
+// a target of n letters made by stamping at random places until no '?'
+// is left
+fn stamped(seed: mut ref i64, stamp: String, n: i64) -> String {
+    let s = stamp.bytes().to_vec();
+    let m = s.len();
+    let mut out: Vec[u8] = Vec.filled(n, b'?');
+    let mut left = n;
+    while left > 0 {
+        let p = next_random(mut seed) % (n - m + 1);
+        for k in 0..m {
+            if out[p + k] == b'?' {
+                left -= 1;
+            }
+            out[p + k] = s[k];
+        }
+    }
+    let mut w = String.new();
+    for b in out.iter() {
+        w.push(*b as char);
+    }
+    w
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[String]] = vec![
+        vec!["abc".to_string(), "ababc".to_string()],
+        vec!["abca".to_string(), "aabcaca".to_string()],
+        vec!["abc".to_string(), "abc".to_string()],
+        vec!["a".to_string(), "aaaa".to_string()],
+        vec!["ab".to_string(), "ba".to_string()],
+        vec!["abc".to_string(), "abcx".to_string()],
+        vec!["aab".to_string(), "aaaab".to_string()],
+        vec!["abc".to_string(), "aabcc".to_string()],
+        vec!["xyz".to_string(), "xyxyzyz".to_string()],
+    ];
+    for c in cases.iter() {
+        println(f"stamp = {c[0]}, target = {c[1]}: {verdict(c[0], c[1])}");
+    }
+    // 300 random cases: a stamp of 1 to 5 letters from a, b and c, and a
+    // target of up to 60 letters, stamped, stamped with one letter
+    // changed, or random
+    let mut seed = 936;
+    let mut count = 0;
+    let mut lengths = 0;
+    let mut check = 0;
+    for c in 0..300 {
+        let m = 1 + next_random(mut seed) % 5;
+        let stamp = random_word(mut seed, m, 3);
+        let n = m + next_random(mut seed) % (61 - m);
+        let mut target = stamped(mut seed, stamp, n);
+        if c % 3 == 1 {
+            let at = next_random(mut seed) % n;
+            let letter = (97 + next_random(mut seed) % 3) as u8;
+            let mut b = target.bytes().to_vec();
+            b[at] = letter;
+            let mut w = String.new();
+            for x in b.iter() {
+                w.push(*x as char);
+            }
+            target = w;
+        } else if c % 3 == 2 {
+            target = random_word(mut seed, n, 3);
+        }
+        let v = verdict(stamp, target);
+        let bit = if v == "stamped" { 1 } else if v == "cannot be stamped" { 0 } else { 2 };
+        if bit == 1 {
+            count += 1;
+        }
+        lengths += n;
+        check = (check * 31 + n * 3 + bit) % 1000000007;
+    }
+    println(f"300 random cases: {count} stamped, targets of {lengths} letters, checksum {check}");
+    // LeetCode's largest: targets of 1000 letters
+    let ones = "a".repeat(1000);
+    println(f"stamp a, target of 1000 a's: {verdict("a", ones)}");
+    let ten = random_word(mut seed, 10, 3);
+    let big = stamped(mut seed, ten, 1000);
+    println(f"stamp of 10 letters, target of 1000 stamped at random: {verdict(ten, big)}");
+    let half = random_word(mut seed, 500, 2);
+    let wide = stamped(mut seed, half, 1000);
+    println(f"stamp of 500 letters, target of 1000 stamped at random: {verdict(half, wide)}");
+    let spoiled = big.substring(0, 999) + "z";
+    println(f"the same target of 1000 ending in z: {verdict(ten, spoiled)}");
+}

@@ -1,0 +1,14 @@
+stamp = abc, target = ababc: stamped
+stamp = abca, target = aabcaca: stamped
+stamp = abc, target = abc: stamped
+stamp = a, target = aaaa: stamped
+stamp = ab, target = ba: cannot be stamped
+stamp = abc, target = abcx: cannot be stamped
+stamp = aab, target = aaaab: stamped
+stamp = abc, target = aabcc: stamped
+stamp = xyz, target = xyxyzyz: stamped
+300 random cases: 148 stamped, targets of 10154 letters, checksum 831104415
+stamp a, target of 1000 a's: stamped
+stamp of 10 letters, target of 1000 stamped at random: stamped
+stamp of 500 letters, target of 1000 stamped at random: stamped
+the same target of 1000 ending in z: cannot be stamped

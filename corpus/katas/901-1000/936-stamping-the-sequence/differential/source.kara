@@ -1,0 +1,596 @@
+// LeetCode #936: Stamping The Sequence -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: you are given two strings stamp and target. Initially
+// there is a string s of length target.length with all s[i] == '?'. In
+// one turn, you can place stamp over s and replace every letter in s
+// with the corresponding letter from stamp. We want to convert s to
+// target using at most 10 * target.length turns. Return an array of the
+// index of the left-most letter being stamped at each turn. If we cannot
+// obtain target from s within 10 * target.length turns, return an empty
+// array.
+
+// ---- the ★ arm: stamps peeled off in reverse ------------------------------
+fn star_moves_to_stamp(stamp: String, target: String) -> Vec[i64] {
+    let s = stamp.bytes().to_vec();
+    let mut t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    let mut erased = 0;
+    let mut order: Vec[i64] = Vec.new();
+    let mut progress = true;
+    while progress and erased < n {
+        progress = false;
+        for p in 0..n - m + 1 {
+            let mut fits = true;
+            let mut fresh = false;
+            for k in 0..m {
+                if t[p + k] == s[k] {
+                    fresh = true;
+                } else if t[p + k] != b'?' {
+                    fits = false;
+                }
+            }
+            if fits and fresh {
+                for k in 0..m {
+                    if t[p + k] != b'?' {
+                        t[p + k] = b'?';
+                        erased += 1;
+                    }
+                }
+                order.push(p);
+                progress = true;
+            }
+        }
+    }
+    if erased < n {
+        return Vec.new();
+    }
+    order.reverse();
+    order
+}
+
+// ---- the queue arm: a queue of erased letters -----------------------------
+fn queue_moves_to_stamp(stamp: String, target: String) -> Vec[i64] {
+    let s = stamp.bytes().to_vec();
+    let t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    let w = n - m + 1;
+    let mut differ: Vec[i64] = Vec.filled(w, 0);
+    let mut peeled: Vec[bool] = Vec.filled(w, false);
+    let mut erased: Vec[bool] = Vec.filled(n, false);
+    let mut queue: Vec[i64] = Vec.new();
+    let mut order: Vec[i64] = Vec.new();
+    for p in 0..w {
+        for k in 0..m {
+            if t[p + k] != s[k] {
+                differ[p] += 1;
+            }
+        }
+    }
+    for p in 0..w {
+        if differ[p] == 0 {
+            peeled[p] = true;
+            order.push(p);
+            for k in 0..m {
+                if not erased[p + k] {
+                    erased[p + k] = true;
+                    queue.push(p + k);
+                }
+            }
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let i = queue[head];
+        head += 1;
+        let low = if i - m + 1 > 0 { i - m + 1 } else { 0 };
+        let high = if i < w - 1 { i } else { w - 1 };
+        for p in low..high + 1 {
+            if not peeled[p] and t[i] != s[i - p] {
+                differ[p] -= 1;
+                if differ[p] == 0 {
+                    peeled[p] = true;
+                    order.push(p);
+                    for k in 0..m {
+                        if not erased[p + k] {
+                            erased[p + k] = true;
+                            queue.push(p + k);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if queue.len() < n {
+        return Vec.new();
+    }
+    order.reverse();
+    order
+}
+
+// ---- the frontier arm: sweeps over a frontier -----------------------------
+fn frontier_moves_to_stamp(stamp: String, target: String) -> Vec[i64] {
+    let s = stamp.bytes().to_vec();
+    let mut t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    let w = n - m + 1;
+    let mut order: Vec[i64] = Vec.new();
+    let mut erased = 0;
+    // the sweep that last queued each window, so none is queued twice
+    let mut queued: Vec[i64] = Vec.filled(w, 0);
+    let mut windows: Vec[i64] = Vec.new();
+    for p in 0..w {
+        windows.push(p);
+    }
+    let mut sweep = 0;
+    while windows.len() > 0 and erased < n {
+        sweep += 1;
+        let mut fresh_cells: Vec[i64] = Vec.new();
+        for p in windows.iter() {
+            let mut fits = true;
+            let mut fresh = false;
+            for k in 0..m {
+                if t[*p + k] == s[k] {
+                    fresh = true;
+                } else if t[*p + k] != b'?' {
+                    fits = false;
+                }
+            }
+            if fits and fresh {
+                for k in 0..m {
+                    if t[*p + k] != b'?' {
+                        t[*p + k] = b'?';
+                        erased += 1;
+                        fresh_cells.push(*p + k);
+                    }
+                }
+                order.push(*p);
+            }
+        }
+        // the windows holding a cell erased in this sweep, from the left
+        let mut next: Vec[i64] = Vec.new();
+        for i in fresh_cells.iter() {
+            let low = if *i - m + 1 > 0 { *i - m + 1 } else { 0 };
+            let high = if *i < w - 1 { *i } else { w - 1 };
+            for p in low..high + 1 {
+                if queued[p] != sweep {
+                    queued[p] = sweep;
+                    next.push(p);
+                }
+            }
+        }
+        next.sort();
+        windows = next;
+    }
+    if erased < n {
+        return Vec.new();
+    }
+    order.reverse();
+    order
+}
+
+// ---- the layers arm: the visible layers, forwards -------------------------
+fn layers_moves_to_stamp(stamp: String, target: String) -> Vec[i64] {
+    let s = stamp.bytes().to_vec();
+    let t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    // can[i][j]: letters i to n - 1 can be shown with letter i at offset j
+    let mut can: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..n {
+        can.push(Vec.filled(m, false));
+    }
+    // any_at[i]: some offset works for letter i
+    let mut any_at: Vec[bool] = Vec.filled(n, false);
+    let mut i = n - 1;
+    while i >= 0 {
+        for j in 0..m {
+            if t[i] == s[j] {
+                if i == n - 1 {
+                    can[i][j] = j == m - 1;
+                } else {
+                    can[i][j] = (j + 1 < m and can[i + 1][j + 1]) or can[i + 1][0] or (j == m - 1 and any_at[i + 1]);
+                }
+            }
+            if can[i][j] {
+                any_at[i] = true;
+            }
+        }
+        i -= 1;
+    }
+    if not can[0][0] {
+        return Vec.new();
+    }
+    // each stamp shown: where it starts, and the offset it is shown from
+    let mut starts: Vec[i64] = vec![0];
+    let mut shown_from: Vec[i64] = vec![0];
+    let mut j = 0;
+    for i in 0..n - 1 {
+        if j + 1 < m and can[i + 1][j + 1] {
+            j += 1;
+        } else {
+            let mut next = 0;
+            if not can[i + 1][0] {
+                // the stamp has shown its last letter: any offset that works
+                while not can[i + 1][next] {
+                    next += 1;
+                }
+            }
+            j = next;
+            starts.push(i + 1 - j);
+            shown_from.push(j);
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    let mut k = starts.len() - 1;
+    while k >= 0 {
+        if shown_from[k] != 0 {
+            order.push(starts[k]);
+        }
+        k -= 1;
+    }
+    for k in 0..starts.len() {
+        if shown_from[k] == 0 {
+            order.push(starts[k]);
+        }
+    }
+    order
+}
+
+// ---- the memo arm: the visible layers, by search --------------------------
+fn memo_reach(i: i64, j: i64, s: ref Vec[u8], t: ref Vec[u8], memo: mut ref Vec[Vec[i64]], path: mut ref Vec[i64]) -> bool {
+    let m = s.len();
+    let n = t.len();
+    if t[i] != s[j] {
+        return false;
+    }
+    if i == n - 1 {
+        if j == m - 1 {
+            path.push(j);
+            return true;
+        }
+        return false;
+    }
+    if memo[i][j] == 0 {
+        return false;
+    }
+    let mut found = memo_reach(i + 1, 0, s, t, mut memo, mut path);
+    if not found and j + 1 < m {
+        found = memo_reach(i + 1, j + 1, s, t, mut memo, mut path);
+    }
+    if not found and j == m - 1 {
+        let mut next = 1;
+        while not found and next < m {
+            found = memo_reach(i + 1, next, s, t, mut memo, mut path);
+            next += 1;
+        }
+    }
+    if found {
+        path.push(j);
+    } else {
+        memo[i][j] = 0;
+    }
+    found
+}
+
+fn memo_moves_to_stamp(stamp: String, target: String) -> Vec[i64] {
+    let s = stamp.bytes().to_vec();
+    let t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        memo.push(Vec.filled(m, -1));
+    }
+    // the offsets shown, last letter first
+    let mut path: Vec[i64] = Vec.new();
+    if not memo_reach(0, 0, s, t, mut memo, mut path) {
+        return Vec.new();
+    }
+    path.reverse();
+    // split the letters into stamps
+    let mut starts: Vec[i64] = vec![0];
+    let mut shown_from: Vec[i64] = vec![0];
+    for i in 1..n {
+        if path[i] != path[i - 1] + 1 {
+            starts.push(i - path[i]);
+            shown_from.push(path[i]);
+        }
+    }
+    // stamp k must come after the neighbours it lies on; take each stamp
+    // once nothing it lies on is left to place
+    let count = starts.len();
+    let mut waiting: Vec[i64] = Vec.filled(count, 0);
+    for k in 1..count {
+        if shown_from[k] == 0 {
+            waiting[k] += 1;
+        } else {
+            waiting[k - 1] += 1;
+        }
+    }
+    let mut ready: Vec[i64] = Vec.new();
+    for k in 0..count {
+        if waiting[k] == 0 {
+            ready.push(k);
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    while ready.len() > 0 {
+        let k = ready.pop().unwrap();
+        order.push(starts[k]);
+        // the right neighbour lies on k when shown from offset 0
+        if k + 1 < count and shown_from[k + 1] == 0 {
+            waiting[k + 1] -= 1;
+            if waiting[k + 1] == 0 {
+                ready.push(k + 1);
+            }
+        }
+        // the left neighbour lies on k when k is not shown from offset 0
+        if k > 0 and shown_from[k] != 0 {
+            waiting[k - 1] -= 1;
+            if waiting[k - 1] == 0 {
+                ready.push(k - 1);
+            }
+        }
+    }
+    order
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, stamp: String, target: String) -> Vec[i64] {
+    if x == 0 {
+        star_moves_to_stamp(stamp, target)
+    } else if x == 1 {
+        queue_moves_to_stamp(stamp, target)
+    } else if x == 2 {
+        frontier_moves_to_stamp(stamp, target)
+    } else if x == 3 {
+        layers_moves_to_stamp(stamp, target)
+    } else {
+        memo_moves_to_stamp(stamp, target)
+    }
+}
+
+// The statement read literally: start from n '?'s and try every stamp
+// at every place, turn after turn, keeping every string reached, until
+// the target turns up or nothing new can be reached. A string of '?'s and
+// the letters a, b and c is a number in base 4, '?' being 0. Nothing is
+// reached in more turns than it needs, and the reverse peeling shows that
+// a target that can be reached needs at most n turns, so the limit of
+// 10 n never matters.
+fn literal(stamp: String, target: String) -> bool {
+    let s = stamp.bytes().to_vec();
+    let t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    let mut place: Vec[i64] = Vec.filled(n, 1);
+    let mut i = n - 2;
+    while i >= 0 {
+        place[i] = place[i + 1] * 4;
+        i -= 1;
+    }
+    let mut goal = 0;
+    for b in t.iter() {
+        goal = goal * 4 + (*b - b'a') as i64 + 1;
+    }
+    let mut seen: Vec[bool] = Vec.filled(place[0] * 4, false);
+    seen[0] = true;
+    let mut queue: Vec[i64] = vec![0];
+    let mut head = 0;
+    while head < queue.len() {
+        let state = queue[head];
+        head += 1;
+        if state == goal {
+            return true;
+        }
+        for p in 0..n - m + 1 {
+            let mut next = state;
+            for k in 0..m {
+                let was = next / place[p + k] % 4;
+                next += ((s[k] - b'a') as i64 + 1 - was) * place[p + k];
+            }
+            if not seen[next] {
+                seen[next] = true;
+                queue.push(next);
+            }
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    w
+}
+
+fn word(b: ref Vec[u8]) -> String {
+    let mut w = String.new();
+    for x in b.iter() {
+        w.push(*x as char);
+    }
+    w
+}
+
+// a target of n letters made by stamping at random places until no '?'
+// is left
+fn stamped(seed: mut ref i64, stamp: String, n: i64) -> String {
+    let s = stamp.bytes().to_vec();
+    let m = s.len();
+    let mut out: Vec[u8] = Vec.filled(n, b'?');
+    let mut left = n;
+    while left > 0 {
+        let p = next_random(mut seed) % (n - m + 1);
+        for k in 0..m {
+            if out[p + k] == b'?' {
+                left -= 1;
+            }
+            out[p + k] = s[k];
+        }
+    }
+    word(out)
+}
+
+fn reversed(w: String) -> String {
+    let mut b = w.bytes().to_vec();
+    b.reverse();
+    word(b)
+}
+
+// whether stamping `moves` in turn onto n '?'s gives the target, within
+// 10 n turns
+fn valid(stamp: String, target: String, moves: ref Vec[i64]) -> bool {
+    let s = stamp.bytes().to_vec();
+    let t = target.bytes().to_vec();
+    let m = s.len();
+    let n = t.len();
+    if moves.len() > 10 * n {
+        return false;
+    }
+    let mut out: Vec[u8] = Vec.filled(n, b'?');
+    for p in moves.iter() {
+        if *p < 0 or *p > n - m {
+            return false;
+        }
+        for k in 0..m {
+            out[*p + k] = s[k];
+        }
+    }
+    out == t
+}
+
+// stamps given, and they replay to the target
+fn stamps(x: i64, stamp: String, target: String) -> bool {
+    let moves = arm(x, stamp, target);
+    moves.len() > 0 and valid(stamp, target, moves)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, stamp: String, target: String, made: bool, small: bool) -> bool {
+    let truth = if small { literal(stamp, target) } else { false };
+    let mut got: Vec[bool] = Vec.new();
+    let mut fine: Vec[bool] = Vec.new();
+    for x in 0..5 {
+        let moves = arm(x, stamp, target);
+        got.push(moves.len() > 0);
+        fine.push(moves.len() == 0 or valid(stamp, target, moves));
+    }
+    // the inputs P3 to P5 share: both strings reversed; the stamp written
+    // in front of the target; whether the target has a letter the stamp
+    // lacks; and a second target made by stamping, to follow the first
+    let back_stamp = reversed(stamp);
+    let back_target = reversed(target);
+    let front = stamp + target;
+    let s = stamp.bytes().to_vec();
+    let mut lacks = false;
+    for b in target.bytes() {
+        let mut found = false;
+        for c in s.iter() {
+            if *c == b {
+                found = true;
+            }
+        }
+        if not found {
+            lacks = true;
+        }
+    }
+    let m = s.len();
+    let more = if small { m + next_random(mut seed) % 4 } else { m + next_random(mut seed) % 100 };
+    let other = stamped(mut seed, stamp, more);
+    let joined = target + other;
+    for x in 0..5 {
+        // P1: stamps exactly when the statement reaches the target
+        if small {
+            check(mut t, 1, got[x] == truth);
+        }
+        // P2: stamps given replay to the target within 10 n turns, and a
+        // target made by stamping gets them
+        check(mut t, 2, fine[x] and (got[x] or not made));
+        // P3: both strings reversed get stamps exactly when they do as
+        // they are
+        check(mut t, 3, (arm(x, back_stamp, back_target).len() > 0) == got[x]);
+        // P4: a target with a letter the stamp lacks gets none; one that
+        // gets stamps still does with the stamp written in front
+        if lacks {
+            check(mut t, 4, not got[x]);
+        } else {
+            check(mut t, 4, not (got[x] and fine[x]) or stamps(x, stamp, front));
+        }
+        // P5: two targets that both get stamps still do one after the other
+        check(mut t, 5, not (got[x] and fine[x] and stamps(x, stamp, other)) or stamps(x, stamp, joined));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == got[x] {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 936;
+    let mut cases = 0;
+    let mut lengths = 0;
+    let mut count = 0;
+    // targets of up to 7 letters against the statement, then up to 300;
+    // made by stamping, made by stamping with one letter changed, or
+    // random, from the letters a, b and c
+    for c in 0..3200 {
+        let small = c < 3000;
+        let m = if small { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 20 };
+        let stamp = random_word(mut seed, m, 3);
+        let n = if small { m + next_random(mut seed) % (8 - m) } else { m + next_random(mut seed) % (301 - m) };
+        let mut target = stamped(mut seed, stamp, n);
+        if c % 3 == 1 {
+            let mut b = target.bytes().to_vec();
+            let at = next_random(mut seed) % n;
+            b[at] = (97 + next_random(mut seed) % 3) as u8;
+            target = word(b);
+        } else if c % 3 == 2 {
+            target = random_word(mut seed, n, 3);
+        }
+        cases += 1;
+        lengths += n;
+        if properties(mut t, mut seed, stamp, target, c % 3 == 0, small) {
+            count += 1;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, targets of {lengths} letters, {count} stamped, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
