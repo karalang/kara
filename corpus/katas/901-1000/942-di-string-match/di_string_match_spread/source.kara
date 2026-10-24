@@ -1,0 +1,100 @@
+// LeetCode #942: DI String Match -- out from the first number.
+//
+// Start at the number of D's. At an I step to one more than the largest
+// so far; at a D, to one less than the smallest so far. Every I adds a
+// new top and every D a new bottom, so the numbers used are exactly 0 to
+// n, the bottom reaching 0 at the last D. O(n) time.
+
+fn di_string_match(s: String) -> Vec[i64] {
+    let b = s.bytes().to_vec();
+    let mut downs = 0;
+    for c in b.iter() {
+        if *c == b'D' {
+            downs += 1;
+        }
+    }
+    let mut perm: Vec[i64] = vec![downs];
+    let mut top = downs;
+    let mut bottom = downs;
+    for c in b.iter() {
+        if *c == b'I' {
+            top += 1;
+            perm.push(top);
+        } else {
+            bottom -= 1;
+            perm.push(bottom);
+        }
+    }
+    perm
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_letters(seed: mut ref i64, n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(if next_random(mut seed) % 2 == 0 { 'I' } else { 'D' });
+    }
+    s
+}
+
+// Whether perm holds each of 0 to n once and rises at each I and falls
+// at each D.
+fn fits(s: ref String, perm: ref Vec[i64]) -> bool {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    if perm.len() != n + 1 {
+        return false;
+    }
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..(n + 1) {
+        seen.push(false);
+    }
+    for v in perm.iter() {
+        if *v < 0 or *v > n or seen[*v] {
+            return false;
+        }
+        seen[*v] = true;
+    }
+    for i in 0..n {
+        if (b[i] == b'I') != (perm[i] < perm[i + 1]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn verdict(s: ref String) -> String {
+    let n = s.len();
+    if fits(s, di_string_match(s)) { f"a permutation of 0 to {n} that fits" } else { "WRONG" }
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    for s in ["IDID", "III", "DDI", "I", "D", "DIDI", "IIDD", "DDDIII"] {
+        println(f"\"{s}\": {verdict(s.to_string())}");
+    }
+    // 300 random strings of 1 to 100 letters
+    let mut seed = 942;
+    let mut letters = 0;
+    let mut good = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 100;
+        let s = random_letters(mut seed, n);
+        if fits(s, di_string_match(s)) {
+            good += 1;
+        }
+        letters += n;
+    }
+    println(f"300 random strings of {letters} letters: {good} answers fit");
+    // LeetCode's longest: 10^5 letters
+    println(f"100000 I: {verdict("I".repeat(100000))}");
+    println(f"100000 D: {verdict("D".repeat(100000))}");
+    println(f"ID 50000 times: {verdict("ID".repeat(50000))}");
+    println(f"100000 random letters: {verdict(random_letters(mut seed, 100000))}");
+}

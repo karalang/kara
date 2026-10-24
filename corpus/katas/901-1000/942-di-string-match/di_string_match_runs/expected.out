@@ -1,0 +1,13 @@
+"IDID": a permutation of 0 to 4 that fits
+"III": a permutation of 0 to 3 that fits
+"DDI": a permutation of 0 to 3 that fits
+"I": a permutation of 0 to 1 that fits
+"D": a permutation of 0 to 1 that fits
+"DIDI": a permutation of 0 to 4 that fits
+"IIDD": a permutation of 0 to 4 that fits
+"DDDIII": a permutation of 0 to 6 that fits
+300 random strings of 15139 letters: 300 answers fit
+100000 I: a permutation of 0 to 100000 that fits
+100000 D: a permutation of 0 to 100000 that fits
+ID 50000 times: a permutation of 0 to 100000 that fits
+100000 random letters: a permutation of 0 to 100000 that fits

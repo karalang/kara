@@ -1,0 +1,54 @@
+// Benchmark: LeetCode #942 DI String Match -- the ★ arm, the smallest
+// and largest left, on 20 strings of 100000 letters, LeetCode's longest,
+// in 50 rounds. Mirrors di_string_match.c, .rs, .py and go-seq/.
+
+fn di_string_match(s: String) -> Vec[i64] {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut lo = 0;
+    let mut hi = n;
+    let mut perm: Vec[i64] = Vec.new();
+    for c in b.iter() {
+        if *c == b'I' {
+            perm.push(lo);
+            lo += 1;
+        } else {
+            perm.push(hi);
+            hi -= 1;
+        }
+    }
+    perm.push(lo);
+    perm
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 50;
+    let count = 20;
+    let n = 100000;
+    let mut seed = 942;
+    // each string holds random letters, an I with a chance from 1 in 16
+    // to 15 in 16
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let odds = 1 + next_random(mut seed) % 15;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push(if next_random(mut seed) % 16 < odds { 'I' } else { 'D' });
+        }
+        strings.push(s);
+    }
+    let mut check = 0;
+    for r in 0..rounds {
+        // each round answers every string, starting from a different one
+        for i in 0..count {
+            let perm = di_string_match(strings[(r + i) % count]);
+            check = (check * 1000003 + perm[0] * 3 + perm[n / 2] * 5 + perm[n] * 7) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} strings of {n} letters: checksum {check}");
+}
