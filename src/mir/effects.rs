@@ -1314,6 +1314,10 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Receiver", "recv") => vec![(Receives, "Channel", Some(0)), (Blocks, "", None)],
         ("Receiver", "try_recv") => vec![(Receives, "Channel", Some(0))],
         ("Receiver", "__closed") => vec![(Receives, "Channel", Some(0))],
+        ("TlsStream", "write" | "shutdown_write") => {
+            vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
+        }
+        ("TlsStream", "read") => vec![(Receives, "Network", Some(0)), (Blocks, "", None)],
         ("TcpStream", "write" | "write_all" | "flush") => {
             vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
         }

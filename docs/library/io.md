@@ -190,7 +190,7 @@ Both are prelude types. `IoError` covers the standard streams and files; `VarErr
 
 ## Networking
 
-v1 networking is blocking TCP and UDP, in `std.net`, and the HTTP client, which speaks HTTPS (below). HTTP servers, TLS servers and WebSocket come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
+`std.net` has TCP and UDP sockets, a TLS server and a WebSocket server (below), and there is an HTTP client, which speaks HTTPS. HTTP servers over TLS or WebSocket (`Server.serve_tls`, `Server.serve_ws`) come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
 
 ```kara
 impl TcpListener {
@@ -229,7 +229,16 @@ enum NetError {
     TimedOut,
     WouldBlock,
     InvalidInput,
+    Tls(TlsFailure),
+    Protocol,
     Other(i32),
+}
+
+enum TlsFailure {
+    Handshake,
+    BadCertificate,
+    Protocol,
+    UnexpectedClose,
 }
 
 type TcpError = NetError;
@@ -243,7 +252,62 @@ type TcpError = NetError;
 
 **Timeouts.** `set_read_timeout(Some(ms))` makes a later `read`, `recv` or `recv_from` that waits longer than `ms` milliseconds fail with `NetError.TimedOut`; `None` waits for ever, the default. A timeout is how a UDP program avoids waiting for ever on a lost datagram. A timeout below 1 ms fails with `InvalidInput`. Inside a task, a read that waits suspends its task, and the timeout still ends it, so the program's other tasks run until the data or the deadline arrives ([core semantics §11.10](../core-semantics.md)).
 
-**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `InvalidInput` is an argument the operation refuses: an address that does not parse, or a timeout below 1 ms. `Other` carries the OS error code, or -1 when the OS gave none. `TcpError` is the earlier name of `NetError`, kept until M3.
+**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `InvalidInput` is an argument the operation refuses: an address that does not parse, a timeout below 1 ms, or a certificate or key that does not parse. `Tls` is a TLS failure on a `TlsStream`, and `Protocol` a WebSocket peer that broke the protocol, or a send after the close. `Other` carries the OS error code, or -1 when the OS gave none. `TcpError` is the earlier name of `NetError`, kept until M3.
+
+### TLS server
+
+```kara
+impl TlsListener {
+    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError]
+    fn accept(self) -> Result[TlsStream, NetError] with receives(self) blocks
+    fn local_addr(self) -> Result[String, NetError]
+}
+
+impl TlsStream {
+    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks
+    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
+    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
+    fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
+    fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
+}
+```
+
+A `TlsListener` is a TCP listener whose connections speak TLS 1.2 or 1.3. `bind_tls` takes the server's certificate chain and private key as PEM text, not file paths, so a program reads them with `fs.read_to_string` first; the key may be PKCS#8, PKCS#1 or SEC1. A chain or key that does not parse, or a key that does not match the certificate, fails with `InvalidInput`. Client certificates are not asked for.
+
+A `TlsStream` reads and writes plaintext as a `TcpStream` does, and `read` returns 0 once the peer has sent its `close_notify`. The handshake is not part of `accept`: it runs inside the stream's first `read` or `write`, so a slow or hostile client holds up only its own connection. `shutdown_write` sends `close_notify`, and dropping a stream sends it too, as far as the socket takes it, before closing. Inside a task, a read or write that waits suspends its task, the handshake included, and the read timeout ends a read as on a `TcpStream`.
+
+A failed connection fails with `NetError.Tls`, and every later call on it fails the same way. `TlsFailure.Handshake` is a handshake that did not complete: no protocol version, cipher or key in common, or a client that is not speaking TLS at all. `BadCertificate` is a certificate refused, ours by the peer. `Protocol` is the peer breaking the TLS record protocol after the handshake. `UnexpectedClose` is a connection that ended without the peer's `close_notify`, which can hide a truncated message.
+
+### WebSocket
+
+```kara
+impl WebSocket {
+    fn accept(listener: TcpListener) -> Result[WebSocket, NetError] with receives(listener) blocks
+    fn accept_tls(listener: TlsListener) -> Result[WebSocket, NetError] with receives(listener) blocks
+    fn recv(mut self) -> Result[WsMessage, NetError] with receives(self) sends(self) blocks
+    fn send_text(mut self, text: Str) -> Result[(), NetError] with sends(self) blocks
+    fn send_binary(mut self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks
+    fn send_ping(mut self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks
+    fn close(mut self, code: u16) -> Result[(), NetError] with sends(self) receives(self) blocks
+    fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
+}
+
+enum WsMessage {
+    Text(String),
+    Binary(Vec[u8]),
+    Ping(Vec[u8]),
+    Pong(Vec[u8]),
+    Close(Option[u16]),
+}
+```
+
+A `WebSocket` is the server end of an RFC 6455 connection. `accept` takes the next connection on a `TcpListener` and runs the opening handshake, and `accept_tls` does the same on a `TlsListener`; a request that is not a WebSocket upgrade is answered `400 Bad Request` and fails with `Protocol`. There is no client yet.
+
+`recv` returns the next message. A fragmented message comes whole, and a `Text` message is checked to be UTF-8. A `Ping` is answered with its `Pong` before `recv` returns it, so a program that ignores pings stays connected. `Close` carries the peer's status code, or `None` when its close frame had none. Once the connection has closed, every `recv` returns the same `Close`: after the peer's close frame (which `recv` answers), after `close`, or after the peer dropped the connection without one, which reads as `Close(Some(1006))`. A peer that breaks the protocol is sent a close frame and `recv` fails with `Protocol`; the code is 1002, 1007 for text that is not UTF-8, and 1009 for a message or frame over 16 MiB, the largest a `WebSocket` takes.
+
+The sends write one unfragmented frame each; a server's frames are not masked. A send after the connection has closed fails with `Protocol`. `send_ping` takes at most 125 bytes, and its pong comes back through `recv`. `close(code)` sends the close frame with `code` (1000 is a normal close), then reads until the peer's close frame, dropping any messages before it, or until the peer drops the connection; `set_read_timeout` bounds that wait, as it bounds `recv`. Dropping a `WebSocket` without `close` closes the connection without a close frame.
+
+`recv` and the sends take the `WebSocket` mutably, so one task cannot receive while another sends on the same connection; splitting a connection into its two halves comes later.
 
 ### HTTP client
 

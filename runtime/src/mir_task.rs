@@ -624,6 +624,28 @@ fn ready_read_by(fd: i32, t: Duration) -> u8 {
     };
     // SAFETY: one initialized entry.
     let readable = unsafe { poll(&mut p, 1, 0) } != 0;
+    read_by(fd, readable, 1, t)
+}
+
+/// The `__ready` of a call on `fd` whose readiness its own layer worked
+/// out (`mir_tls.rs`): `ready`, or the running task waits for `fd` to
+/// turn writable (`out`) or readable; with `by`, a read timeout, until
+/// that deadline at most, as [`ready_read_by`]'s.
+#[cfg(all(feature = "tls", unix))]
+pub(crate) fn ready_io(fd: i32, ready: bool, out: bool, by: Option<Duration>) -> u8 {
+    if EXEC.with(|e| e.borrow().cur.is_none()) {
+        return 1;
+    }
+    let events: i16 = if out { 4 } else { 1 }; // POLLOUT, POLLIN
+    match by {
+        Some(t) => read_by(fd, ready, events, t),
+        None => note(ready, Wait::Fd(fd, events)),
+    }
+}
+
+/// [`ready_read_by`] with the readiness given and the wait on `events`.
+#[cfg(unix)]
+fn read_by(fd: i32, readable: bool, events: i16, t: Duration) -> u8 {
     let now = Instant::now();
     let at = EXEC.with(|e| {
         let mut e = e.borrow_mut();
@@ -640,7 +662,7 @@ fn ready_read_by(fd: i32, t: Duration) -> u8 {
         TIMED_OUT.with(|c| c.set(fd));
         note(true, Wait::None)
     } else {
-        note(false, Wait::FdBy(fd, 1, at))
+        note(false, Wait::FdBy(fd, events, at))
     }
 }
 

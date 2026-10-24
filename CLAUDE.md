@@ -70,10 +70,10 @@ cargo rustc -p karac-runtime --release --crate-type staticlib
 - **Rebuild the archives whenever `runtime/src` changes at all**, not only when
   its symbol set does. A behaviour-only change links fine against an old archive
   and silently runs the old behaviour. The runtime also compiles
-  `src/http1.rs` and `src/format_spec.rs` through `#[path]`
-  (`grep -rn '#\[path' runtime/src`), so they count. The check before trusting
-  any compiled measurement:
-  `git log --oneline <sha-the-archives-were-built-at>..HEAD -- runtime/src src/http1.rs src/format_spec.rs`.
+  `src/http1.rs`, `src/format_spec.rs`, `src/tls_conn.rs` and `src/ws_frame.rs`
+  through `#[path]` (`grep -rn '#\[path' runtime/src`), so they count. The check
+  before trusting any compiled measurement:
+  `git log --oneline <sha-the-archives-were-built-at>..HEAD -- runtime/src src/http1.rs src/format_spec.rs src/tls_conn.rs src/ws_frame.rs`.
 - **"The archives" includes the opt-in ones.** Nobody rebuilds those, so a
   container that built one once keeps serving it.
 - **`undefined reference to karac_*` from a test means rebuild the archives**,

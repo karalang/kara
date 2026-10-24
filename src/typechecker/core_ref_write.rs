@@ -1336,13 +1336,13 @@ impl Walk<'_, '_> {
         }
     }
 
-    /// B-2026-10-20-8: the TLS server (`Server.serve_tls`, `TlsListener`)
-    /// and WebSocket (`Server.serve_ws`, `Server.serve_ws_tls`, `WebSocket`)
-    /// keep their services-track (M4a) placement (docs/library/io.md), and
-    /// the v2 backends do not run them, so the check refuses each entry
-    /// point rather than let a program reach an internal MIR error. The TLS
-    /// client (`TlsStream.connect`) is not one. Records the call and returns
-    /// false, so the walk goes on as for any other call.
+    /// B-2026-10-20-8: the HTTP servers over TLS and WebSocket
+    /// (`Server.serve_tls`, `Server.serve_ws`, `Server.serve_ws_tls`) keep
+    /// their services-track (M4a) placement (docs/library/io.md), and the
+    /// v2 backends do not run them, so the check refuses each entry point
+    /// rather than let a program reach an internal MIR error. `TlsListener`
+    /// and `WebSocket` themselves run on v2 (M4 item 8). Records the call
+    /// and returns false, so the walk goes on as for any other call.
     fn check_m4a_call(&mut self, call: &Expr, ty: &str, method: &str) -> bool {
         if ty == "Server" && method.starts_with("serve") && method != "serve_static" {
             self.check_handler_response(call, method);
@@ -1350,8 +1350,6 @@ impl Walk<'_, '_> {
         let what = match (ty, method) {
             ("Server", "serve_tls") => "the TLS server",
             ("Server", "serve_ws" | "serve_ws_tls") => "WebSocket",
-            ("TlsListener", _) => "the TLS server",
-            ("WebSocket", _) => "WebSocket",
             ("Base64" | "Hex" | "Url" | "Stats", _) => "",
             _ => return false,
         };

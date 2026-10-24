@@ -143,6 +143,10 @@ pub mod regex;
 // which comes with `tls`: full archive only.
 #[cfg(feature = "tls")]
 pub mod mir_crypto;
+// The MIR backend's TLS server (`TlsListener` / `TlsStream`), full archive
+// only.
+#[cfg(all(feature = "tls", unix))]
+pub mod mir_tls;
 // The MIR backend's `std.regex` engine (`karac_regex_mir`), same feature.
 #[cfg(feature = "regex")]
 pub mod mir_regex;
@@ -582,6 +586,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // socket calls.
     #[cfg(feature = "net")]
     keep!(mir_io::karac_mir_tcp);
+    #[cfg(feature = "net")]
+    keep!(mir_io::karac_mir_ws_accept_key);
     // Their other methods and `UdpSocket` (B-2026-10-15-18).
     #[cfg(all(feature = "net", unix))]
     keep!(mir_io::karac_mir_net);
@@ -605,6 +611,13 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // `std.crypto`'s digests on the MIR backend (full archive only).
     #[cfg(feature = "tls")]
     keep!(mir_crypto::karac_crypto_mir);
+    // The TLS server on the MIR backend (full archive only).
+    #[cfg(all(feature = "tls", unix))]
+    keep!(
+        mir_tls::karac_mir_tls,
+        mir_tls::karac_mir_ready_tls,
+        mir_tls::karac_mir_tls_close,
+    );
     // `std.http`'s client on the MIR backend (full archive only).
     #[cfg(feature = "tls")]
     keep!(

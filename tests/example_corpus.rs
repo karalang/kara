@@ -94,7 +94,7 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// the structural `==` on its reference-typed `Value` enum, a gap its own
 /// diagnostic documents. Neither is a reason to re-pin it here.
 ///
-/// Since M3 this gate type-checks on v2, the only front end left, so the four
+/// Since M3 this gate type-checks on v2, the only front end left, so the three
 /// entries below are packages the legacy `karac build` accepted and the v2
 /// rules refuse. Each is example rot against the v2 core rules (or an M4a
 /// feature), not a regression: none of them built on v2 before the deletion.
@@ -114,11 +114,6 @@ const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[
         "weave",
         "typecheck (v2 core rules): `Str` expected where a `char` literal is \
          written, src/main.kara:195, and 17 more errors.",
-    ),
-    (
-        "ws_idle_holder",
-        "typecheck: `TlsListener.bind_tls` and `WebSocket.accept_tls` are the \
-         services track (M4a), which the v2 build refuses by name until then.",
     ),
 ];
 
@@ -169,16 +164,6 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
          legacy probe for the free-spawn coroutine leak \
          (docs/spikes/windows-iocp-scale-investigation.md), and \
          ws_echo_spawn.kara is the TaskGroup form.",
-    ),
-    (
-        "std_net/ws_echo.kara",
-        "typecheck: `WebSocket` waits for the services track (M4a, \
-         E_DEFERRED_M4A, B-2026-10-20-8); `karac check` refuses it until then.",
-    ),
-    (
-        "std_net/ws_echo_spawn.kara",
-        "typecheck: `WebSocket` waits for the services track (M4a, \
-         E_DEFERRED_M4A, B-2026-10-20-8); `karac check` refuses it until then.",
     ),
     (
         "std_net/https_hello.kara",

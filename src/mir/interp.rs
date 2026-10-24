@@ -2042,7 +2042,16 @@ impl<'a> Interp<'a> {
             ("TcpListener" | "TcpStream" | "UdpSocket", _) => {
                 self.tcp_method(name, base, method, args, arg_tys, ret)
             }
+            ("TlsListener" | "TlsStream", _) => {
+                self.tls_method(name, base, method, args, arg_tys, ret)
+            }
             ("RegexEngine", _) => self.regex_method(name, method, args, arg_tys),
+            // The WebSocket handshake's `Sec-WebSocket-Accept` value.
+            ("WebSocket", "__accept_key") if args.len() == 1 => {
+                let key = self.string_at(&args[0])?;
+                let accept = crate::ws_frame::accept_key(&key);
+                Ok(self.alloc_box("String", Value::Str(accept)))
+            }
             ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
                 self.crypto_method(name, method, args)
             }
@@ -5793,6 +5802,208 @@ impl<'a> Interp<'a> {
                 let fields = code
                     .map(|c| vec![Value::Int(i128::from(c))])
                     .unwrap_or_default();
+                let payload = self.variant_named(ret, Some("Err"), kind, fields)?;
+                self.variant_named(ret, None, "Err", vec![payload])
+            }
+        }
+    }
+
+    /// `TlsListener` and `TlsStream` (docs/library/io.md § TLS server),
+    /// over the connections `crate::tls_conn` runs, which the compiled
+    /// backend's runtime shares. A listener is a `TcpListener` with a
+    /// config, kept by descriptor; an accepted stream is a non-blocking
+    /// `TcpStream` with its connection. Failures as `tcp_method`'s, and a
+    /// TLS one as `Tls(TlsFailure)`.
+    fn tls_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        use crate::tls_conn::{Error, TlsConn};
+        let cause = |e: &std::io::Error| match e.kind() {
+            std::io::ErrorKind::Interrupted => ("Interrupted", None),
+            std::io::ErrorKind::AddrInUse => ("AddrInUse", None),
+            std::io::ErrorKind::PermissionDenied => ("PermissionDenied", None),
+            _ if timed_out(e) => ("TimedOut", None),
+            _ => ("Other", Some(e.raw_os_error().unwrap_or(-1))),
+        };
+        let fail = |e: Error| match e {
+            Error::Io(e) => cause(&e),
+            Error::Tls(f) => ("Tls", Some(f.code())),
+        };
+        let res: Result<Value, (&str, Option<i32>)> = match (base, method, args.as_slice()) {
+            ("TlsListener", "bind_tls", [addr, cert, key]) => {
+                let addr = self.string_at(addr)?;
+                let cert = self.string_at(cert)?;
+                let key = self.string_at(key)?;
+                match (
+                    addr.parse::<std::net::SocketAddr>(),
+                    crate::tls_conn::server_config(cert.as_bytes(), key.as_bytes()),
+                ) {
+                    (Ok(at), Some(config)) => match std::net::TcpListener::bind(at) {
+                        Ok(l) => {
+                            if let Some(port) = announced_port(at, &l) {
+                                self.write_out(true, &format!("BOUND_PORT={port}\n"));
+                            }
+                            let fd = socket_fd(&l);
+                            self.sockets.listeners.insert(fd, l);
+                            self.sockets.tls_configs.insert(fd, config);
+                            Ok(Value::Agg(vec![Value::Int(i128::from(fd))]))
+                        }
+                        Err(e) => Err(cause(&e)),
+                    },
+                    _ => Err(("InvalidInput", None)),
+                }
+            }
+            (_, _, [recv, rest @ ..]) => {
+                let fd = self.socket_of(recv, name)?;
+                let not_open = || ("Other", Some(9));
+                match (base, method, rest) {
+                    (_, "drop", []) => {
+                        if let (Some(c), Some(s)) = (
+                            self.sockets.tls.get_mut(&fd),
+                            self.sockets.streams.get_mut(&fd),
+                        ) {
+                            c.close(s);
+                        }
+                        self.sockets.tls.remove(&fd);
+                        self.sockets.tls_configs.remove(&fd);
+                        self.sockets.tls_timeouts.remove(&fd);
+                        self.sockets.listeners.remove(&fd);
+                        self.sockets.streams.remove(&fd);
+                        self.sockets.accepted.remove(&fd);
+                        return Ok(Value::Unit);
+                    }
+                    ("TlsListener", "local_addr", []) => {
+                        match self.sockets.listeners.get(&fd).map(|l| l.local_addr()) {
+                            Some(Ok(a)) => Ok(self.alloc_box("String", Value::Str(a.to_string()))),
+                            Some(Err(e)) => Err(cause(&e)),
+                            None => Err(not_open()),
+                        }
+                    }
+                    // The connection's handshake runs in its first read or
+                    // write (`tls_conn`).
+                    ("TlsListener", "accept", []) => {
+                        let got = match self.sockets.accepted.remove(&fd) {
+                            Some(s) => Ok(s),
+                            None => match self.sockets.listeners.get(&fd) {
+                                Some(l) => l.accept().map(|(s, _)| s).map_err(|e| cause(&e)),
+                                None => Err(not_open()),
+                            },
+                        };
+                        let config = self.sockets.tls_configs.get(&fd).cloned();
+                        match (got, config.as_ref().and_then(TlsConn::new)) {
+                            (Ok(s), Some(conn)) => match s.set_nonblocking(true) {
+                                Ok(()) => {
+                                    let v = self.sockets.stream(s);
+                                    let at = self.socket_of(&v, name)?;
+                                    self.sockets.tls.insert(at, conn);
+                                    Ok(v)
+                                }
+                                Err(e) => Err(cause(&e)),
+                            },
+                            (Err(e), _) => Err(e),
+                            (Ok(_), None) => Err(("Tls", Some(0))),
+                        }
+                    }
+                    ("TlsStream", "set_read_timeout", [ms]) => {
+                        match self.timeout_arg(ms, arg_tys.get(1).copied())? {
+                            Err(()) => Err(("InvalidInput", None)),
+                            Ok(Some(d)) => {
+                                self.sockets.tls_timeouts.insert(fd, d);
+                                Ok(Value::Unit)
+                            }
+                            Ok(None) => {
+                                self.sockets.tls_timeouts.remove(&fd);
+                                Ok(Value::Unit)
+                            }
+                        }
+                    }
+                    ("TlsStream", "shutdown_write", []) => {
+                        match (
+                            self.sockets.tls.get_mut(&fd),
+                            self.sockets.streams.get_mut(&fd),
+                        ) {
+                            (Some(c), Some(s)) => {
+                                c.close(s);
+                                Ok(Value::Unit)
+                            }
+                            _ => Err(not_open()),
+                        }
+                    }
+                    ("TlsStream", "read", [buf]) => {
+                        let (at, lo, len) = self.view_of(buf)?;
+                        let mut bytes = vec![0u8; len as usize];
+                        let timeout = self.sockets.tls_timeouts.get(&fd).copied();
+                        let deadline = timeout.map(|d| std::time::Instant::now() + d);
+                        let timed = self.sockets.timed_out.remove(&fd);
+                        let got = match (
+                            self.sockets.tls.get_mut(&fd),
+                            self.sockets.streams.get_mut(&fd),
+                        ) {
+                            _ if timed => Err(("TimedOut", None)),
+                            (Some(c), Some(s)) => {
+                                let probe = s.try_clone();
+                                let mut wait = |_: bool| match &probe {
+                                    Ok(p) => Ok(wait_readable(p, deadline)),
+                                    Err(e) => Err(std::io::Error::new(e.kind(), "")),
+                                };
+                                c.read(s, &mut bytes, &mut wait).map_err(fail)
+                            }
+                            _ => Err(not_open()),
+                        };
+                        if let Ok(n) = got {
+                            for (i, b) in bytes[..n].iter().enumerate() {
+                                *self.slot_mut(&at.child(lo + i as u64))? =
+                                    Value::Int(i128::from(*b));
+                            }
+                        }
+                        got.map(|n| Value::Int(n as i128))
+                    }
+                    ("TlsStream", "write", [buf]) => {
+                        let bytes = self.bytes_of_view(buf, name)?;
+                        match (
+                            self.sockets.tls.get_mut(&fd),
+                            self.sockets.streams.get_mut(&fd),
+                        ) {
+                            (Some(c), Some(s)) => {
+                                let probe = s.try_clone();
+                                // A full send buffer is waited out a moment
+                                // at a time.
+                                let mut wait = |out: bool| match &probe {
+                                    Ok(_) if out => {
+                                        std::thread::sleep(std::time::Duration::from_millis(1));
+                                        Ok(true)
+                                    }
+                                    Ok(p) => Ok(wait_readable(p, None)),
+                                    Err(e) => Err(std::io::Error::new(e.kind(), "")),
+                                };
+                                c.write(s, &bytes, &mut wait)
+                                    .map(|n| Value::Int(n as i128))
+                                    .map_err(fail)
+                            }
+                            _ => Err(not_open()),
+                        }
+                    }
+                    _ => return err(format!("call of unknown function {name}")),
+                }
+            }
+            _ => return err(format!("call of unknown function {name}")),
+        };
+        match res {
+            Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
+            Err((kind, code)) => {
+                let fields = match (kind, code) {
+                    // `Tls(TlsFailure)`: the failure's index.
+                    ("Tls", Some(c)) => vec![Value::Variant(c as u32, Vec::new())],
+                    (_, code) => code
+                        .map(|c| vec![Value::Int(i128::from(c))])
+                        .unwrap_or_default(),
+                };
                 let payload = self.variant_named(ret, Some("Err"), kind, fields)?;
                 self.variant_named(ret, None, "Err", vec![payload])
             }
@@ -12514,7 +12725,9 @@ impl<'a> Interp<'a> {
                     let at = instant_at(*until);
                     nearest = Some(nearest.map_or(at, |n| n.min(at)))
                 }
-                Wait::Read(_, Some(at)) | Wait::Datagram(_, Some(at)) => {
+                Wait::Read(_, Some(at))
+                | Wait::Datagram(_, Some(at))
+                | Wait::Tls(_, _, Some(at)) => {
                     nearest = Some(nearest.map_or(*at, |n| n.min(*at)));
                     io = true;
                 }
@@ -12522,6 +12735,7 @@ impl<'a> Interp<'a> {
                 | Wait::Read(..)
                 | Wait::Write(..)
                 | Wait::Datagram(..)
+                | Wait::Tls(..)
                 | Wait::Child(_) => io = true,
                 Wait::Recv(_)
                 | Wait::Send(_)
@@ -12604,7 +12818,19 @@ impl<'a> Interp<'a> {
                     None
                 }
             }
-            ("TcpListener", "accept", [l, ..]) => Some(Wait::Accept(self.socket_of(l, &callee)?)),
+            ("TcpListener" | "TlsListener", "accept", [l, ..]) => {
+                Some(Wait::Accept(self.socket_of(l, &callee)?))
+            }
+            ("TlsStream", "read" | "write", [st, ..]) => {
+                let fd = self.socket_of(st, &callee)?;
+                let timeout = self.sockets.tls_timeouts.get(&fd).copied();
+                let at = if method == "read" {
+                    self.read_deadline(timeout)
+                } else {
+                    None
+                };
+                Some(Wait::Tls(fd, method == "write", at))
+            }
             ("TcpStream", "read", [st, ..]) => {
                 let fd = self.socket_of(st, &callee)?;
                 let timeout = self
@@ -12656,7 +12882,7 @@ impl<'a> Interp<'a> {
             let t = &mut self.tasks[self.cur_task];
             t.deadline = None;
             t.slept = true;
-        } else if let Some(Wait::Read(..) | Wait::Datagram(..)) = wait {
+        } else if let Some(Wait::Read(..) | Wait::Datagram(..) | Wait::Tls(..)) = wait {
             self.tasks[self.cur_task].deadline = None;
         }
         Ok(Value::Bool(ready))
@@ -12816,6 +13042,15 @@ impl<'a> Interp<'a> {
                         true
                     }
                 }
+            }
+            Wait::Tls(fd, write, at) => {
+                let (Some(c), Some(s)) = (
+                    self.sockets.tls.get_mut(fd),
+                    self.sockets.streams.get_mut(fd),
+                ) else {
+                    return Ok(true);
+                };
+                c.ready(s, *write).0 || self.sockets.past(*fd, *at)
             }
             Wait::Datagram(fd, at) => {
                 let Some(u) = self.sockets.udp.get(fd) else {
@@ -14385,6 +14620,9 @@ enum Wait {
     Write(i64, Vec<u8>),
     /// A datagram to receive, or the read timeout's deadline to pass.
     Datagram(i64, Option<std::time::Instant>),
+    /// A TLS stream's read (`false`) or write to be able to complete, as
+    /// `TlsConn::ready` says, or a read's timeout deadline to pass.
+    Tls(i64, bool, Option<std::time::Instant>),
     /// A child, by its `ChildProcess` id, to exit.
     Child(i128),
     /// A pool, by id, to have a value to lend, or the deadline to pass.
@@ -14415,6 +14653,13 @@ struct Sockets {
     /// Sockets whose suspended read reached its read timeout's deadline
     /// with nothing to read, so the read that follows fails `TimedOut`.
     timed_out: rustc_hash::FxHashSet<i64>,
+    /// A TLS listener's config, by its descriptor.
+    tls_configs: rustc_hash::FxHashMap<i64, std::sync::Arc<rustls::ServerConfig>>,
+    /// An accepted TLS stream's connection, by its descriptor.
+    tls: rustc_hash::FxHashMap<i64, crate::tls_conn::TlsConn>,
+    /// A TLS stream's read timeout: its socket is non-blocking, so the
+    /// read keeps the timeout itself.
+    tls_timeouts: rustc_hash::FxHashMap<i64, std::time::Duration>,
 }
 
 impl Sockets {
@@ -14444,6 +14689,21 @@ impl Sockets {
 }
 
 /// Whether `e` is a read timeout expiring (the runtime's `timed_out`).
+/// Waits until `s`, non-blocking, has bytes (or the end) to read, or
+/// `deadline` passes: whether it has.
+fn wait_readable(s: &std::net::TcpStream, deadline: Option<std::time::Instant>) -> bool {
+    loop {
+        match s.peek(&mut [0u8; 1]) {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            _ => return true,
+        }
+        if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 fn timed_out(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),

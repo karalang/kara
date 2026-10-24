@@ -78,7 +78,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ok = self.rt_flag("chan_ready", &[h.into(), send.into()])?;
                 self.ready_flag(ok)?
             }
-            ("TcpListener", "accept", [s, ..]) | ("TcpStream", "read", [s, ..]) => {
+            ("TcpListener" | "TlsListener", "accept", [s, ..]) | ("TcpStream", "read", [s, ..]) => {
                 let (at, _) = self.behind_refs(s)?;
                 let fd = self.load_i64(at)?;
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
@@ -87,6 +87,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 let (at, _) = self.behind_refs(s)?;
                 let fd = self.load_i64(at)?;
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_int(1, false).into()])?
+            }
+            // The connection's own readiness, its handshake and records
+            // moved on first (`runtime/src/mir_tls.rs`).
+            ("TlsStream", "read" | "write", [s, ..]) => {
+                let (at, _) = self.behind_refs(s)?;
+                let fd = self.load_i64(at)?;
+                let write = i8t.const_int(u64::from(method == "write"), false);
+                self.rt_flag("ready_tls", &[fd.into(), write.into()])?
             }
             ("UdpSocket", "recv" | "recv_from", [s, ..]) => {
                 let (at, _) = self.behind_refs(s)?;

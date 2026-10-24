@@ -1,0 +1,473 @@
+// runtime/stdlib/source/websocket.kara
+//
+// `std.net`'s WebSocket server on the v2 pipeline (RFC 6455), as
+// docs/library/io.md § WebSocket describes it: the upgrade handshake on an
+// accepted `TcpStream` or `TlsStream`, then messages. The MIR pipeline
+// appends this file, with net.kara, to a program that names `WebSocket` or
+// `WsMessage` (`BAKED_SOURCES` in src/mir/lower.rs). It is Kāra over the
+// streams' `read` and `write`, so it waits, and suspends in a task, as
+// they do; only the handshake's accept key is native.
+
+// One WebSocket message. `recv` answers a `Ping` with its `Pong` before it
+// returns it. `Close` carries the peer's status code, or `None` when its
+// close frame had none.
+enum WsMessage {
+    Text(String),
+    Binary(Vec[u8]),
+    Ping(Vec[u8]),
+    Pong(Vec[u8]),
+    Close(Option[u16]),
+}
+
+// The stream a `WebSocket` runs over.
+enum WsConn {
+    Plain(TcpStream),
+    Tls(TlsStream),
+}
+
+impl WsConn {
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+        match self {
+            WsConn.Plain(s) => s.read(buf),
+            WsConn.Tls(s) => s.read(buf),
+        }
+    }
+
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+        match self {
+            WsConn.Plain(s) => s.write_all(buf),
+            WsConn.Tls(s) => s.write_all(buf),
+        }
+    }
+
+    fn set_read_timeout(ref self, ms: Option[i64]) -> Result[(), NetError] {
+        match self {
+            WsConn.Plain(s) => s.set_read_timeout(ms),
+            WsConn.Tls(s) => s.set_read_timeout(ms),
+        }
+    }
+}
+
+// What the bytes received so far hold: not yet a whole frame, a frame (its
+// FIN bit, opcode and unmasked payload), or a violation, with the close
+// code it earns.
+enum WsFrame {
+    Need,
+    Frame(bool, i64, Vec[u8]),
+    Bad(u16),
+}
+
+// An upgraded connection. One task uses it at a time: `recv` and the sends
+// take it `mut ref`, so one task cannot receive while another sends.
+struct WebSocket {
+    conn: WsConn,
+    // Received bytes not yet taken as a frame.
+    buf: Vec[u8],
+    // A fragmented message so far: its opcode (1 text, 2 binary; 0 when
+    // none is under way) and its bytes.
+    frag_op: i64,
+    frag: Vec[u8],
+    // Whether the connection has closed, and the code `recv` reports.
+    closed: bool,
+    close_code: Option[u16],
+    // Whether our close frame went out.
+    close_sent: bool,
+}
+
+impl WebSocket {
+    // The largest message, or frame, a WebSocket takes: 16 MiB. A bigger
+    // one closes the connection with code 1009.
+    fn max_message() -> i64 {
+        16777216
+    }
+
+    // Accepts a connection on `listener` and runs the upgrade handshake on
+    // it. A request that is no WebSocket upgrade is answered 400 and fails
+    // with `Protocol`.
+    fn accept(listener: ref TcpListener) -> Result[WebSocket, NetError] with sends(Network) receives(Network) {
+        match listener.accept() {
+            Ok(s) => WebSocket.upgrade(WsConn.Plain(s)),
+            Err(e) => Err(e),
+        }
+    }
+
+    // As `accept`, over TLS.
+    fn accept_tls(listener: ref TlsListener) -> Result[WebSocket, NetError] with sends(Network) receives(Network) {
+        match listener.accept() {
+            Ok(s) => WebSocket.upgrade(WsConn.Tls(s)),
+            Err(e) => Err(e),
+        }
+    }
+
+    // The handshake (RFC 6455 §4.2): reads the request head, at most 16
+    // KiB, and answers 101 with the key's accept value. Bytes after the
+    // head are the first frames'.
+    fn upgrade(conn: own WsConn) -> Result[WebSocket, NetError] with sends(Network) receives(Network) {
+        let mut buf: Vec[u8] = Vec.new();
+        let mut chunk = [0u8; 2048];
+        let mut end = -1;
+        while end < 0 {
+            if buf.len() > 16384 {
+                return Err(NetError.Protocol);
+            }
+            match conn.read(mut chunk) {
+                Ok(0) => return Err(NetError.Protocol),
+                Ok(n) => buf.extend_from_slice(chunk[0..n]),
+                Err(NetError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+            end = WebSocket.head_end(buf);
+        }
+        let head = match String.from_utf8(buf[0..end]) {
+            Ok(h) => h,
+            Err(_) => return Err(NetError.Protocol),
+        };
+        let upgrade = match WebSocket.header(head, "upgrade") {
+            Some(v) => v.to_lowercase().contains("websocket"),
+            None => false,
+        };
+        let key = WebSocket.header(head, "sec-websocket-key");
+        match key {
+            Some(k) if upgrade and head.starts_with("GET ") => {
+                let accept = WebSocket.__accept_key(k);
+                let reply = f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n";
+                match conn.write_all(reply.bytes()) {
+                    Ok(_) => {}
+                    Err(e) => return Err(e),
+                }
+                let rest = buf.split_off(end + 4);
+                Ok(WebSocket {
+                    conn: conn,
+                    buf: rest,
+                    frag_op: 0,
+                    frag: Vec.new(),
+                    closed: false,
+                    close_code: None,
+                    close_sent: false,
+                })
+            }
+            _ => {
+                let _ = conn.write_all("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".bytes());
+                Err(NetError.Protocol)
+            }
+        }
+    }
+
+    // Where the request head in `b` ends (its blank line), or -1.
+    fn head_end(b: Slice[u8]) -> i64 {
+        let mut i = 0;
+        while i + 3 < b.len() {
+            if b[i] == 13u8 and b[i + 1] == 10u8 and b[i + 2] == 13u8 and b[i + 3] == 10u8 {
+                return i;
+            }
+            i = i + 1;
+        }
+        -1
+    }
+
+    // The value of the header `name` (lowercase) in `head`, trimmed.
+    fn header(head: Str, name: Str) -> Option[String] {
+        for line in head.split("\r\n") {
+            match line.split_once(":") {
+                Some((k, v)) => {
+                    if k.trim().to_lowercase() == name.to_string() {
+                        return Some(v.trim().to_string());
+                    }
+                }
+                None => {}
+            }
+        }
+        None
+    }
+
+    // `Sec-WebSocket-Accept` for the client's key: the base64 of the SHA-1
+    // of the key and RFC 6455's GUID.
+    #[compiler_builtin]
+    fn __accept_key(key: Str) -> String {
+        String.new()
+    }
+
+    // How long `recv` waits for the peer before failing with `TimedOut`,
+    // as `TcpStream.set_read_timeout`; it bounds `close`'s wait too.
+    fn set_read_timeout(ref self, ms: Option[i64]) -> Result[(), NetError] {
+        self.conn.set_read_timeout(ms)
+    }
+
+    // The next message. A ping is answered before it is returned; a
+    // fragmented message comes whole. Once the connection has closed, by
+    // the peer's close frame, by `close`, or by the peer dropping it
+    // (code 1006), every call returns that `Close`. A peer that breaks the
+    // protocol is sent a close (1002; 1007 for text that is not UTF-8,
+    // 1009 for a message over 16 MiB) and the call fails with `Protocol`.
+    fn recv(mut ref self) -> Result[WsMessage, NetError] with sends(Network) receives(Network) {
+        loop {
+            if self.closed {
+                return Ok(WsMessage.Close(self.close_code));
+            }
+            match self.next_frame() {
+                WsFrame.Need => {
+                    let mut chunk = [0u8; 4096];
+                    match self.conn.read(mut chunk) {
+                        Ok(0) => self.dropped(),
+                        Ok(n) => self.buf.extend_from_slice(chunk[0..n]),
+                        Err(NetError.Interrupted) => {}
+                        Err(NetError.Tls(TlsFailure.UnexpectedClose)) => self.dropped(),
+                        Err(e) => return Err(e),
+                    }
+                }
+                WsFrame.Bad(code) => return Err(self.fail(code)),
+                WsFrame.Frame(fin, op, payload) => {
+                    match self.take(fin, op, payload) {
+                        Ok(Some(m)) => return Ok(m),
+                        Ok(None) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        }
+    }
+
+    // The peer went without a close frame.
+    fn dropped(mut ref self) {
+        self.closed = true;
+        self.close_code = Some(1006u16);
+    }
+
+    // Sends a close with `code` (as far as the stream takes it) and fails
+    // with `Protocol`.
+    fn fail(mut ref self, code: u16) -> NetError with sends(Network) receives(Network) {
+        if not self.close_sent {
+            self.close_sent = true;
+            let _ = self.send_frame(8, WebSocket.code_bytes(code));
+        }
+        self.closed = true;
+        self.close_code = Some(code);
+        NetError.Protocol
+    }
+
+    // What the frame `op` with `payload` makes: a message, nothing yet (a
+    // fragment), or a violation.
+    fn take(mut ref self, fin: bool, op: i64, payload: own Vec[u8]) -> Result[Option[WsMessage], NetError] with sends(Network) receives(Network) {
+        if op == 8 {
+            if payload.len() == 1 {
+                return Err(self.fail(1002u16));
+            }
+            let code = if payload.len() >= 2 {
+                Some(((payload[0] as u16) << 8u16) | (payload[1] as u16))
+            } else {
+                None
+            };
+            if not self.close_sent {
+                self.close_sent = true;
+                let echo = match code {
+                    Some(c) => WebSocket.code_bytes(c),
+                    None => Vec.new(),
+                };
+                let _ = self.send_frame(8, echo);
+            }
+            self.closed = true;
+            self.close_code = code;
+            return Ok(Some(WsMessage.Close(code)));
+        }
+        if op == 9 {
+            match self.send_frame(10, payload) {
+                Ok(()) => {}
+                Err(e) => return Err(e),
+            }
+            return Ok(Some(WsMessage.Ping(payload)));
+        }
+        if op == 10 {
+            return Ok(Some(WsMessage.Pong(payload)));
+        }
+        if op == 1 or op == 2 {
+            if self.frag_op != 0 {
+                return Err(self.fail(1002u16));
+            }
+            if not fin {
+                self.frag_op = op;
+                self.frag = payload;
+                return Ok(None);
+            }
+            return self.message(op, payload);
+        }
+        if op == 0 {
+            if self.frag_op == 0 {
+                return Err(self.fail(1002u16));
+            }
+            if self.frag.len() + payload.len() > WebSocket.max_message() {
+                return Err(self.fail(1009u16));
+            }
+            self.frag.extend_from_slice(payload);
+            if not fin {
+                return Ok(None);
+            }
+            let whole = mem.take(mut self.frag);
+            let kind = self.frag_op;
+            self.frag_op = 0;
+            return self.message(kind, whole);
+        }
+        Err(self.fail(1002u16))
+    }
+
+    // A whole data message.
+    fn message(mut ref self, op: i64, bytes: own Vec[u8]) -> Result[Option[WsMessage], NetError] with sends(Network) receives(Network) {
+        if op == 2 {
+            return Ok(Some(WsMessage.Binary(bytes)));
+        }
+        match String.from_utf8(bytes) {
+            Ok(s) => Ok(Some(WsMessage.Text(s))),
+            Err(_) => Err(self.fail(1007u16)),
+        }
+    }
+
+    // The first frame in `buf`, which it leaves; a client's frames are
+    // masked, so an unmasked one is a violation, as are reserved bits, a
+    // control frame that is fragmented or over 125 bytes, and a length
+    // with its top bit set.
+    fn next_frame(mut ref self) -> WsFrame {
+        let n = self.buf.len();
+        if n < 2 {
+            return WsFrame.Need;
+        }
+        let b0 = self.buf[0] as i64;
+        let b1 = self.buf[1] as i64;
+        let fin = (b0 & 128) != 0;
+        let op = b0 & 15;
+        if (b0 & 112) != 0 or (b1 & 128) == 0 {
+            return WsFrame.Bad(1002u16);
+        }
+        let mut len = b1 & 127;
+        let mut at = 2;
+        if len == 126 {
+            if n < 4 {
+                return WsFrame.Need;
+            }
+            len = ((self.buf[2] as i64) << 8) | (self.buf[3] as i64);
+            at = 4;
+        } else if len == 127 {
+            if n < 10 {
+                return WsFrame.Need;
+            }
+            if (self.buf[2] & 128u8) != 0u8 {
+                return WsFrame.Bad(1002u16);
+            }
+            len = 0;
+            let mut i = 2;
+            while i < 10 {
+                len = (len << 8) | (self.buf[i] as i64);
+                if len > WebSocket.max_message() {
+                    return WsFrame.Bad(1009u16);
+                }
+                i = i + 1;
+            }
+            at = 10;
+        }
+        if op >= 8 and (not fin or len > 125) {
+            return WsFrame.Bad(1002u16);
+        }
+        if len > WebSocket.max_message() {
+            return WsFrame.Bad(1009u16);
+        }
+        if n < at + 4 + len {
+            return WsFrame.Need;
+        }
+        let mut payload: Vec[u8] = Vec.with_capacity(len);
+        let mut i = 0;
+        while i < len {
+            payload.push(self.buf[at + 4 + i] ^ self.buf[at + i % 4]);
+            i = i + 1;
+        }
+        let rest = self.buf.split_off(at + 4 + len);
+        self.buf = rest;
+        WsFrame.Frame(fin, op, payload)
+    }
+
+    // A close frame's payload: the code, big-endian.
+    fn code_bytes(code: u16) -> Vec[u8] {
+        let mut b: Vec[u8] = Vec.new();
+        b.push((code >> 8u16) as u8);
+        b.push((code & 255u16) as u8);
+        b
+    }
+
+    // One unfragmented, unmasked frame, as a server sends them.
+    fn send_frame(ref self, op: i64, payload: Slice[u8]) -> Result[(), NetError] with sends(Network) receives(Network) {
+        let n = payload.len();
+        let mut out: Vec[u8] = Vec.with_capacity(n + 10);
+        out.push((128 | op) as u8);
+        if n < 126 {
+            out.push(n as u8);
+        } else if n < 65536 {
+            out.push(126u8);
+            out.push((n >> 8) as u8);
+            out.push((n & 255) as u8);
+        } else {
+            out.push(127u8);
+            let mut s = 56;
+            while s >= 0 {
+                out.push(((n >> s) & 255) as u8);
+                s = s - 8;
+            }
+        }
+        out.extend_from_slice(payload);
+        match self.conn.write_all(out) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    // Data on a connection that closed is refused with `Protocol`.
+    fn send_data(mut ref self, op: i64, payload: Slice[u8]) -> Result[(), NetError] with sends(Network) receives(Network) {
+        if self.closed or self.close_sent {
+            return Err(NetError.Protocol);
+        }
+        self.send_frame(op, payload)
+    }
+
+    fn send_text(mut ref self, text: Str) -> Result[(), NetError] with sends(Network) receives(Network) {
+        self.send_data(1, text.bytes())
+    }
+
+    fn send_binary(mut ref self, data: Slice[u8]) -> Result[(), NetError] with sends(Network) receives(Network) {
+        self.send_data(2, data)
+    }
+
+    // Sends a ping; its pong comes back through `recv`.
+    fn send_ping(mut ref self, data: Slice[u8]) -> Result[(), NetError] with sends(Network) receives(Network) {
+        if data.len() > 125 {
+            return Err(NetError.InvalidInput);
+        }
+        self.send_data(9, data)
+    }
+
+    // Closes with `code` (1000 is a normal close): sends the close frame,
+    // then reads until the peer's, dropping any messages before it, or
+    // until the peer drops the connection. `recv` afterwards returns
+    // `Close(Some(code))`.
+    fn close(mut ref self, code: u16) -> Result[(), NetError] with sends(Network) receives(Network) {
+        if not self.close_sent {
+            self.close_sent = true;
+            match self.send_frame(8, WebSocket.code_bytes(code)) {
+                Ok(()) => {}
+                Err(e) => {
+                    self.closed = true;
+                    self.close_code = Some(code);
+                    return Err(e);
+                }
+            }
+        }
+        while not self.closed {
+            match self.recv() {
+                Ok(_) => {}
+                Err(NetError.Protocol) => {}
+                Err(e) => {
+                    self.closed = true;
+                    self.close_code = Some(code);
+                    return Err(e);
+                }
+            }
+        }
+        self.close_code = Some(code);
+        Ok(())
+    }
+}

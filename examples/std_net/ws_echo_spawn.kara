@@ -10,17 +10,18 @@
 // level* concurrency on the Windows event loop — the thing the serial example
 // does not. Mirrors the spawn shape of examples/ws_idle_holder/src/main.kara.
 fn echo(ws: own WebSocket) {
-    let mut buf: Array[u8, 1024] = [0u8; 1024];
+    let mut ws = ws;
     loop {
-        match ws.recv_text(mut buf) {
-            Result.Ok(n) => {
-                if n == 0 { break; }
-                match ws.send_text(buf[0..n]) {
-                    Result.Ok(_) => {}
-                    Result.Err(_) => { break; }
-                }
+        match ws.recv() {
+            Ok(WsMessage.Text(t)) => {
+                if ws.send_text(t).is_err() { break; }
             }
-            Result.Err(_) => { break; }
+            Ok(WsMessage.Binary(b)) => {
+                if ws.send_binary(b).is_err() { break; }
+            }
+            Ok(WsMessage.Close(_)) => { break; }
+            Ok(_) => {}
+            Err(_) => { break; }
         }
     }
 }

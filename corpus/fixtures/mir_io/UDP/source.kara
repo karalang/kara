@@ -9,6 +9,8 @@ fn show(e: NetError) -> String {
         NetError.TimedOut => "timed out".to_string(),
         NetError.WouldBlock => "would block".to_string(),
         NetError.InvalidInput => "invalid input".to_string(),
+        NetError.Tls(_) => "tls".to_string(),
+        NetError.Protocol => "protocol".to_string(),
     }
 }
 

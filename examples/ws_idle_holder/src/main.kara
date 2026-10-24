@@ -42,15 +42,11 @@
 //   3. `tg.spawn(|| handle_connection(ws))` — same move-capture shape
 //      as slice 1, leveraging the `OnceFn() -> T` spawn slot.
 //
-// **Per-connection handler.** `recv_text` loop until `Ok(0)` clean EOF
-// or `Err(_)`, echoing each received frame back via `send_text` (the
-// echo fires only on a real inbound frame, so the idle path is
-// byte-identical to slice 1's recv-only loop). The framing FFIs check the TLS
-// session registry by fd at each call; for a `WebSocket` produced by
-// `accept_tls`, the rustls session is present so plaintext flows
-// through `ServerConnection::reader()` / `.writer()` / `read_tls` /
-// `write_tls`. For a plain-TCP `accept` `WebSocket` the registry miss
-// keeps the existing fast path active. No kara-side flag needed.
+// **Per-connection handler.** A `recv` loop until the client's `Close`
+// or an error, echoing each text message back via `send_text` (the echo
+// fires only on a real inbound message, so the idle path only waits). The
+// `WebSocket` from `accept_tls` reads and writes through its `TlsStream`
+// (docs/library/io.md § WebSocket); the handler is the same for both.
 //
 // **What slice 2 deliberately omits** (same omissions as slice 1):
 //   - No structured logging. `std.tracing` integration lands in slice 3+
@@ -58,20 +54,19 @@
 //   - No graceful shutdown / max-connection cap.
 
 fn handle_connection(ws: own WebSocket) {
-    let mut buf: Array[u8, 4096] = [0u8; 4096];
+    let mut ws = ws;
     loop {
-        let r = ws.recv_text(mut buf);
-        match r {
-            Result.Ok(n) => {
-                if n == 0 {
+        match ws.recv() {
+            Ok(WsMessage.Text(t)) => {
+                if ws.send_text(t).is_err() {
                     break;
                 }
-                match ws.send_text(buf[0..n]) {
-                    Result.Ok(_) => {}
-                    Result.Err(_) => { break; }
-                }
             }
-            Result.Err(_) => {
+            Ok(WsMessage.Close(_)) => {
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => {
                 break;
             }
         }

@@ -1177,6 +1177,9 @@ const TLS_RUNTIME_SYMBOL_MARKERS: &[&str] = &[
     "karac_runtime_ws_accept_tls",
     // `std.crypto` (runtime/src/mir_crypto.rs) is `ring`, which `tls` brings.
     "karac_crypto_",
+    // The TLS server (`runtime/src/mir_tls.rs`), `ready_tls` included.
+    "karac_mir_tls",
+    "karac_mir_ready_tls",
 ];
 
 /// Scan `obj_path`'s symbol table (via `nm`) for any reference to a

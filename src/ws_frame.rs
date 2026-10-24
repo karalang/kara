@@ -1,11 +1,12 @@
-//! WebSocket framing (RFC 6455) for the MIR backends: the opening
-//! handshake's accept key, and a frame encoder and incremental decoder.
-//! The MIR interpreter (`src/mir/interp.rs`) and the compiled backend's
-//! runtime share it by `#[path]`, as they do `http1.rs`, so a connection
-//! reads and writes the same bytes on both. Plain `std`, no `karac` types,
-//! and no crypto crate: the handshake's SHA-1 is here, so a program that
-//! links the lean (rustls-free) runtime archive can speak WebSocket over
-//! plain TCP.
+//! WebSocket framing (RFC 6455): the opening handshake's accept key, and
+//! a frame encoder and incremental decoder. The server itself is Kāra
+//! (runtime/stdlib/source/websocket.kara); its one native, the accept key,
+//! is here, which the MIR interpreter (`src/mir/interp.rs`) and the
+//! compiled backend's runtime share by `#[path]`, as they do `http1.rs`.
+//! The encoder and decoder are the tests' client. Plain `std`, no `karac`
+//! types, and no crypto crate: the handshake's SHA-1 is here, so a program
+//! that links the lean (rustls-free) runtime archive can speak WebSocket
+//! over plain TCP.
 
 /// The GUID RFC 6455 §1.3 appends to the client's key.
 const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

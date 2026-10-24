@@ -35,7 +35,7 @@ pub(super) const IO_ERRORS: [&str; 9] = [
 ];
 
 /// The `NetError` variants by the runtime's code for them.
-const NET_ERRORS: [&str; 8] = [
+const NET_ERRORS: [&str; 10] = [
     "Interrupted",
     "Other",
     "AddrInUse",
@@ -44,7 +44,12 @@ const NET_ERRORS: [&str; 8] = [
     "TimedOut",
     "WouldBlock",
     "InvalidInput",
+    "Tls",
+    "Protocol",
 ];
+
+/// `TlsFailure`'s variants, in the order `src/tls_conn.rs` numbers them.
+const TLS_FAILURES: [&str; 4] = ["Handshake", "BadCertificate", "Protocol", "UnexpectedClose"];
 
 impl<'ctx> Cx<'ctx, '_> {
     /// Lowers the I/O native `base.method`, or `None` when it is not one.
@@ -87,6 +92,8 @@ impl<'ctx> Cx<'ctx, '_> {
             ("TcpListener" | "TcpStream" | "UdpSocket", _) => {
                 self.tcp_native(base, method, args, dest)
             }
+            ("TlsListener" | "TlsStream", _) => self.tls_native(base, method, args, dest),
+            ("WebSocket", "__accept_key") => self.ws_accept_native(args, dest).map(Some),
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
                 self.http_native(base, method, args, dest)
             }
@@ -1046,29 +1053,7 @@ impl<'ctx> Cx<'ctx, '_> {
         match op {
             3 | 4 | 6 | 7 => (ptr, len) = self.view_of(&args[1])?,
             5 => (addr, addr_len) = self.str_parts(&args[1])?,
-            1 | 9 => {
-                // `Some(ms)` is `len` ms with `addr_len` 1; `None` is 0.
-                let (at, t) = self.behind_refs(&args[1])?;
-                let (some, _) = self.option_variants(t)?;
-                let tag = self.load_tag(at, t)?;
-                let is = self
-                    .builder
-                    .build_int_compare(
-                        IntPredicate::EQ,
-                        tag,
-                        tag.get_type().const_int(u64::from(some), false),
-                        "",
-                    )
-                    .map_err(e)?;
-                let ms = self.load_i64(self.offset(at, self.field_offset(t, Some(some), 0)?)?)?;
-                let i64t = self.llcx.i64_type();
-                addr_len = self.builder.build_int_z_extend(is, i64t, "").map_err(e)?;
-                len = self
-                    .builder
-                    .build_select(is, ms, zero, "")
-                    .map_err(e)?
-                    .into_int_value();
-            }
+            1 | 9 => (len, addr_len) = self.timeout_ms(&args[1])?,
             _ => {}
         }
         if op == 3 {
@@ -1094,6 +1079,94 @@ impl<'ctx> Cx<'ctx, '_> {
         )?;
         self.drop_moved(args)?;
         self.store_net_result(dest, code, value, Some(out))?;
+        Ok(Some(()))
+    }
+
+    /// A read timeout's `Option[i64]` as the runtime takes it: the
+    /// milliseconds, and 1 when it is `Some` (0 for `None`).
+    fn timeout_ms(&mut self, arg: &Operand) -> R<(IntValue<'ctx>, IntValue<'ctx>)> {
+        let (at, t) = self.behind_refs(arg)?;
+        let (some, _) = self.option_variants(t)?;
+        let tag = self.load_tag(at, t)?;
+        let is = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                tag.get_type().const_int(u64::from(some), false),
+                "",
+            )
+            .map_err(e)?;
+        let ms = self.load_i64(self.offset(at, self.field_offset(t, Some(some), 0)?)?)?;
+        let i64t = self.llcx.i64_type();
+        let present = self.builder.build_int_z_extend(is, i64t, "").map_err(e)?;
+        let ms = self
+            .builder
+            .build_select(is, ms, self.i64(0), "")
+            .map_err(e)?
+            .into_int_value();
+        Ok((ms, present))
+    }
+
+    /// `TlsListener` / `TlsStream` through `karac_mir_tls(op, fd, ptr, len,
+    /// a, a_len, b, b_len, value)` (`runtime/src/mir_tls.rs`), its results
+    /// as `karac_mir_tcp`'s, with `Tls`'s `TlsFailure` in `value`.
+    /// `TlsListener.local_addr` is a `TcpListener`'s.
+    fn tls_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let op: u64 = match (base, method) {
+            ("TlsListener", "bind_tls") => 0,
+            ("TlsListener", "accept") => 1,
+            ("TlsStream", "read") => 2,
+            ("TlsStream", "write") => 3,
+            ("TlsStream", "shutdown_write") => 4,
+            ("TlsStream", "set_read_timeout") => 5,
+            ("TlsListener", "local_addr") => {
+                return self.net_native("TcpListener", method, args, dest)
+            }
+            _ => return Ok(None),
+        };
+        let null = self.ptr_ty().const_null();
+        let zero = self.i64(0);
+        let (mut fd, mut ptr, mut len, mut a, mut a_len, mut b, mut b_len) =
+            (zero, null, zero, null, zero, null, zero);
+        if op == 0 {
+            (ptr, len) = self.str_parts(&args[0])?;
+            (a, a_len) = self.str_parts(&args[1])?;
+            (b, b_len) = self.str_parts(&args[2])?;
+        } else {
+            let (at, _) = self.behind_refs(&args[0])?;
+            fd = self.load_i64(at)?;
+        }
+        match op {
+            2 | 3 => (ptr, len) = self.view_of(&args[1])?,
+            5 => (len, a_len) = self.timeout_ms(&args[1])?,
+            _ => {}
+        }
+        let value = self.entry_slot(8, "tls.value")?;
+        let i32t = self.llcx.i32_type();
+        let code = self.rt_int(
+            "tls",
+            &[
+                i32t.const_int(op, false).into(),
+                fd.into(),
+                ptr.into(),
+                len.into(),
+                a.into(),
+                a_len.into(),
+                b.into(),
+                b_len.into(),
+                value.into(),
+            ],
+            32,
+        )?;
+        self.drop_moved(args)?;
+        self.store_net_result(dest, code, value, None)?;
         Ok(Some(()))
     }
 
@@ -1152,7 +1225,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 .build_int_compare(IntPredicate::EQ, code, i32t.const_int(k as u64, false), "")
                 .map_err(e)?;
             let other = *name == "Other";
-            let off = if other {
+            let tls = *name == "Tls";
+            let off = if other || tls {
                 self.field_offset(et, Some(var), 0)?
             } else {
                 0
@@ -1166,6 +1240,22 @@ impl<'ctx> Cx<'ctx, '_> {
                         .map_err(e)?;
                     cx.store(cx.offset(ep, off)?, c.into())?;
                 }
+                if tls {
+                    // The failure, by its code in `value`.
+                    let ft = cx
+                        .tys
+                        .field_ty(et, Some(var), 0)
+                        .ok_or("NetError.Tls has no payload")?;
+                    let fp = cx.offset(ep, off)?;
+                    for (k, f) in TLS_FAILURES.iter().enumerate() {
+                        let fv = cx.variant_of(ft, f)?;
+                        let is = cx
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, v, cx.i64(k as u64), "")
+                            .map_err(e)?;
+                        cx.if_then(is, |cx| cx.store_tag(fp, ft, fv))?;
+                    }
+                }
                 Ok(())
             })?;
         }
@@ -1176,16 +1266,16 @@ impl<'ctx> Cx<'ctx, '_> {
     /// `mut ref` is in `slot`: `true` when it is one. A socket closes its
     /// descriptor, leaving the reactor first (`karac_mir_sock_close`).
     pub(super) fn io_drop(&mut self, name: &str, slot: PointerValue<'ctx>) -> R<bool> {
-        if !matches!(name, "TcpListener" | "TcpStream" | "UdpSocket") {
-            return Ok(false);
-        }
+        let close = match name {
+            "TcpListener" | "TcpStream" | "UdpSocket" => "karac_mir_sock_close",
+            // A stream sends `close_notify` first (`mir_tls.rs`).
+            "TlsListener" | "TlsStream" => "karac_mir_tls_close",
+            _ => return Ok(false),
+        };
         let v = self.load_ptr(slot)?;
         let fd = self.load_i64(v)?;
         let i64t = self.llcx.i64_type();
-        let f = self.extern_fn(
-            "karac_mir_sock_close",
-            self.llcx.void_type().fn_type(&[i64t.into()], false),
-        );
+        let f = self.extern_fn(close, self.llcx.void_type().fn_type(&[i64t.into()], false));
         self.builder.build_call(f, &[fd.into()], "").map_err(e)?;
         Ok(true)
     }
@@ -1743,6 +1833,32 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => self.copy(d, out, string)?,
         }
         Ok(Some(()))
+    }
+
+    /// The WebSocket handshake's accept value through
+    /// `karac_mir_ws_accept_key(p, n, out)`, which the interpreter's
+    /// `src/ws_frame.rs` backs too.
+    fn ws_accept_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let (p, n) = self.str_parts(&args[0])?;
+        let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+        let out = self.temp(string, "ws.accept")?;
+        let f = self.extern_fn(
+            "karac_mir_ws_accept_key",
+            self.llcx.void_type().fn_type(
+                &[
+                    self.ptr_ty().into(),
+                    self.llcx.i64_type().into(),
+                    self.ptr_ty().into(),
+                ],
+                false,
+            ),
+        );
+        self.builder
+            .build_call(f, &[p.into(), n.into(), out.into()], "")
+            .map_err(e)?;
+        self.drop_moved(args)?;
+        let d = self.place_ptr(dest)?;
+        self.copy(d, out, string)
     }
 
     /// `StableHash.siphash24(bytes, k0, k1)` through the

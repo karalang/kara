@@ -1112,6 +1112,30 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_headers(body: *const u8, 
     unsafe { out.write(RawVec::new(items, n, n)) };
 }
 
+// The WebSocket handshake's accept key, shared with the MIR interpreter
+// (`src/ws_frame.rs`, by `#[path]`). The rest of WebSocket is Kāra
+// (runtime/stdlib/source/websocket.kara); the frame half serves tests.
+#[cfg(feature = "net")]
+#[path = "../../src/ws_frame.rs"]
+#[allow(dead_code)]
+mod ws_frame;
+
+/// `WebSocket.__accept_key(key)`: the `Sec-WebSocket-Accept` value, as a
+/// fresh `String` at `out`.
+///
+/// # Safety
+/// `p` and `n` describe the key's bytes, and `out` is writable for a
+/// `String`.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_ws_accept_key(p: *const u8, n: i64, out: *mut RawVec) {
+    // SAFETY: the caller's contract.
+    let key = unsafe { buf_bytes(p, n.max(0) as usize) };
+    let accept = ws_frame::accept_key(&String::from_utf8_lossy(key));
+    // SAFETY: the caller's contract.
+    unsafe { string_of(out, accept.as_bytes()) };
+}
+
 // `Server.serve` on the MIR backend: the blocking one-request-at-a-time
 // server the MIR interpreter runs too (`src/http1.rs`, shared by `#[path]`).
 #[cfg(feature = "net")]

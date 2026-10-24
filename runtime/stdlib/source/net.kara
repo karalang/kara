@@ -30,8 +30,24 @@ enum NetError {
     // operation returns it.
     WouldBlock,
     // An argument the operation refuses: an address that does not parse,
-    // or a timeout below 1 ms.
+    // a timeout below 1 ms, or a certificate or key that does not parse.
     InvalidInput,
+    // A TLS failure, on a `TlsStream`.
+    Tls(TlsFailure),
+    // The peer broke the WebSocket protocol.
+    Protocol,
+}
+
+// How a TLS connection failed (`NetError.Tls`).
+enum TlsFailure {
+    // No protocol version, cipher or key in common with the peer.
+    Handshake,
+    // A certificate refused, by us or by the peer.
+    BadCertificate,
+    // The peer broke the TLS record protocol after the handshake.
+    Protocol,
+    // The connection ended without the peer's `close_notify`.
+    UnexpectedClose,
 }
 
 // The name before UDP; `TcpError` is `NetError` until M3.
@@ -46,6 +62,17 @@ struct TcpStream {
 }
 
 struct UdpSocket {
+    fd: i64,
+}
+
+// A TCP listener whose connections speak TLS, with its certificate.
+struct TlsListener {
+    fd: i64,
+}
+
+// An accepted TLS connection. Its handshake runs in its first `read` or
+// `write`.
+struct TlsStream {
     fd: i64,
 }
 
@@ -172,6 +199,73 @@ impl UdpSocket {
     fn try_clone(ref self) -> Result[UdpSocket, NetError] {
         Err(NetError.Other(-1))
     }
+}
+
+impl TlsListener {
+    // Binds `addr`, serving the certificate chain `cert_pem` with the
+    // private key `key_pem` (PEM text, not paths). A chain or key that does
+    // not parse, or a key that does not match, is `InvalidInput`.
+    #[compiler_builtin]
+    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn accept(ref self) -> Result[TlsStream, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn local_addr(ref self) -> Result[String, NetError] {
+        Err(NetError.Other(-1))
+    }
+}
+
+impl TlsStream {
+    // Sends `close_notify`: the peer reads the end of the stream.
+    #[compiler_builtin]
+    fn shutdown_write(ref self) -> Result[(), NetError] {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    // As `TcpStream.write_all`.
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+        let mut done = 0;
+        while done < buf.len() {
+            match self.write(buf[done..buf.len()]) {
+                Ok(0) => return Ok(done),
+                Ok(n) => done = done + n,
+                Err(NetError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(done)
+    }
+
+    #[compiler_builtin]
+    fn set_read_timeout(ref self, ms: Option[i64]) -> Result[(), NetError] {
+        Err(NetError.Other(-1))
+    }
+}
+
+impl Drop for TlsListener {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}
+
+impl Drop for TlsStream {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
 }
 
 impl Drop for TcpListener {
