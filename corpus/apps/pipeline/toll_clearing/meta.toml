@@ -1,0 +1,10 @@
+source = "kara-katas/apps/pipeline/toll_clearing/toll_clearing.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "42018ec9"

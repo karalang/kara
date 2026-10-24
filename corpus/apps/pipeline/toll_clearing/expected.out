@@ -1,0 +1,55 @@
+accounts: 300 rows, 15,415 bytes, fnv bb8e06aa
+hotlist: 6 rows, 199 bytes, fnv b6d6b783
+harbor: 1,452 rows, 84,052 bytes, fnv a35c2c67
+ridge: 1,409 rows, 106,971 bytes, fnv 635b2f2f
+lakeshore: 1,068 rows, 61,672 bytes, fnv 3bda33e7
+valley: 1,696 rows, 98,382 bytes, fnv e1ada6f4
+valley_txns.bad line 41: bad tag '2912218853'
+ridge_txns.bad line 62: entry at 2026-10-02 05:18:59 is not before the exit
+harbor_txns.csv line 2: bad transaction 'H0000001' for valley
+parsed files match the built ones: true
+harbor: 1,452 transactions, 1,259 rated (1,171 by tag, 88 by plate), 193 not billed: S 12, C 8, D 33, U 55, V 85
+  S stolen tag: H0000709 2026-10-16 08:41:01 lane 2 3139166932
+  C account closed: H0001148 2026-10-26 08:32:48 lane 7 2169734767
+  D duplicate read: H0000044 2026-10-01 18:42:39 lane 4 9699067717
+  U plate unreadable: H0000039 2026-10-01 18:07:43 lane 8 NYTCB6732
+  V plate not on file: H0000026 2026-10-01 11:02:19 lane 1 OHGLP2677
+ridge: 1,409 transactions, 1,238 rated (1,152 by tag, 86 by plate), 171 not billed: S 3, C 11, D 46, U 47, V 64
+  S stolen tag: R0000912 2026-10-21 01:01:46 lane 2 4013980687
+  C account closed: R0000979 2026-10-22 07:07:20 lane 8 9637061145
+  D duplicate read: R0000057 2026-10-02 04:03:44 lane 6 6400224413
+  U plate unreadable: R0000022 2026-10-01 09:35:27 lane 10 PATSY3993
+  V plate not on file: R0000003 2026-10-01 03:09:20 lane 12 MDCQW1914
+lakeshore: 1,068 transactions, 935 rated (856 by tag, 79 by plate), 133 not billed: S 11, D 22, U 45, V 55
+  S stolen tag: L0000371 2026-10-12 08:37:42 lane 2 8468387074
+  D duplicate read: L0000024 2026-10-01 17:29:57 lane 4 2933378826
+  U plate unreadable: L0000001 2026-10-01 01:40:43 lane 3 MDWJT8410
+  V plate not on file: L0000036 2026-10-01 20:54:17 lane 1 VAZIU4105
+valley: 1,696 transactions, 1,501 rated (1,403 by tag, 98 by plate), 195 not billed: C 5, D 51, U 66, V 73
+  C account closed: V0001156 2026-10-21 20:51:01 lane 2 PAKBK5753
+  D duplicate read: V0000025 2026-10-01 10:58:48 lane 3 6873927997
+  U plate unreadable: V0000077 2026-10-02 08:26:19 lane 1 NYAKK6959
+  V plate not on file: V0000027 2026-10-01 13:30:30 lane 3 CTHLD6807
+harbor revenue: $8,288.60 on 1,259 trips; peak $6,028.50 on 854, off-peak $2,260.10 on 405; plate surcharges $282.35; 46 trips over the account class, $126.00 more
+ridge revenue: $4,788.12 on 1,238 trips; short $474.05 on 442, medium $1,912.85 on 501, long $1,502.40 on 209, no entry $898.82 on 86; plate surcharges $299.52; 45 trips over the account class, $75.40 more
+lakeshore revenue: $2,934.50 on 935 trips; light $716.25 on 377, busy $1,494.00 on 375, jammed $515.00 on 80, weekend $209.25 on 103; plate surcharges $110.50; 46 trips over the account class, $109.50 more
+valley revenue: $6,272.12 on 1,501 trips; day $5,629.00 on 1,272, night $643.12 on 229; plate surcharges $198.62; 52 trips over the account class, $97.25 more
+harbor traffic: busiest Tue 10-13 with 70, busiest hour 07:00 with 134 over the month, busiest lane 1 with 200; 57.9 a weekday, 19.9 a weekend day
+ridge traffic: busiest Thu 10-29 with 66, busiest hour 06:00 with 134 over the month, busiest lane 16 with 97; 56.0 a weekday, 19.6 a weekend day
+lakeshore traffic: busiest Fri 10-09 with 50, busiest hour 19:00 with 115 over the month, busiest lane 4 with 279; 42.9 a weekday, 13.9 a weekend day
+valley traffic: busiest Fri 10-16 with 83, busiest hour 09:00 with 155 over the month, busiest lane 2 with 445; 67.9 a weekday, 22.6 a weekend day
+harbor accounts: 87 billed, 54 with a trip billed by plate; top A20287 $232.50 on 20, A20119 $231.75 on 14, A20229 $228.00 on 19
+ridge accounts: 83 billed, 51 with a trip billed by plate; top A20119 $309.05 on 14, A20238 $152.67 on 17, A20118 $127.45 on 15
+lakeshore accounts: 65 billed, 47 with a trip billed by plate; top A20258 $190.00 on 18, A20223 $133.00 on 26, A20269 $102.50 on 13
+valley accounts: 99 billed, 63 with a trip billed by plate; top A20063 $136.25 on 22, A20258 $116.25 on 12, A20147 $102.50 on 25
+harbor posted: 1,259 trips, $7,579.48 from prepaid balances, 196 replenishments for $6,950.00, 94 notices billing $1,270.87; 14 accounts suspended
+  suspended after 3 notices: A20218 10-13 19:34, A20041 10-16 10:56, A20288 10-19 09:07, A20143 10-20 07:44, A20078 10-21 19:36, A20266 10-22 19:07, A20237 10-22 21:32, A20068 10-23 08:18, A20287 10-27 04:44, A20014 10-27 06:30, A20161 10-28 00:02, A20133 10-28 09:50, A20119 10-28 18:38, A20298 10-30 04:56
+ridge posted: 1,238 trips, $4,047.63 from prepaid balances, 97 replenishments for $3,530.00, 119 notices billing $1,404.22; 10 accounts suspended
+  suspended after 3 notices: A20144 10-07 08:29, A20201 10-14 18:29, A20267 10-16 07:50, A20103 10-19 17:19, A20007 10-22 16:01, A20096 10-23 09:52, A20232 10-26 04:46, A20022 10-28 06:26, A20050 10-29 09:43, A20212 10-31 03:51
+lakeshore posted: 935 trips, $2,475.75 from prepaid balances, 64 replenishments for $2,265.00, 124 notices billing $1,043.25; 4 accounts suspended
+  suspended after 3 notices: A20231 10-12 10:45, A20158 10-22 17:04, A20223 10-27 19:30, A20079 10-29 17:48
+valley posted: 1,501 trips, $5,073.87 from prepaid balances, 118 replenishments for $4,320.00, 265 notices billing $2,527.86; 16 accounts suspended
+  suspended after 3 notices: A20063 10-06 08:21, A20194 10-07 07:36, A20164 10-07 10:19, A20153 10-08 09:49, A20248 10-09 19:13, A20122 10-12 09:32, A20229 10-13 00:31, A20240 10-13 08:13, A20277 10-15 14:31, A20186 10-16 01:53, A20115 10-19 06:34, A20015 10-23 00:56, A20058 10-23 16:52, A20043 10-25 03:06, A20176 10-29 09:21, A20233 10-31 21:04
+month: $19,176.73 debited, $17,065.00 replenished, 602 notices billing $6,246.20; 56 accounts used every replenishment their card allows, 44 suspended
+accounts: 215 with trips, 95 at more than one agency, 54 closing below their threshold; largest balances A20253 $59.20, A20262 $58.50, A20109 $58.00
+ledger.log: 5,407 entries, 289,248 bytes, fnv f138801f

@@ -1,0 +1,1310 @@
+// pipeline/toll_clearing
+//
+// A toll clearinghouse's October 2026 batch over four toll agencies: the
+// Harbor bridge, the Ridge turnpike, the Lakeshore express lanes and the
+// Valley tunnel. It builds the prepaid account file, the stolen-tag
+// hotlist and each agency's transaction file, writes them as CSV, reads
+// them back and parses them with the clearinghouse's checks (the tag's
+// Luhn check digit included), then rates every transaction: it
+// identifies the vehicle by its tag or, failing that, its plate, rejects
+// stolen tags, closed accounts, duplicate reads and plates it cannot
+// read or find, and prices the trip by the agency's own rule (peak hours
+// on the bridge, distance on the turnpike, congestion on the express
+// lanes, night rates in the tunnel), with a surcharge when a plate paid.
+// Four reports per agency follow. Then every rated trip posts to one
+// ledger of prepaid balances, which replenishes from the card on file as
+// the balance runs low, as many times a month as the card allows, and
+// bills a notice for a toll the balance cannot pay.
+//
+// The builds, the writes, the reads, the parses, the ratings and the
+// reports are each a group of statements that do not depend on each
+// other (a stmt-par app). A trip's posting depends on how much of the
+// balance and the replenishments the trips posted before it used, and
+// accounts travel through more than one agency, so the four agencies
+// have to post in order.
+
+const MASK32: i64 = 4294967295;
+// Day 0 is Thursday 1 October 2026; FIRST_WEEKDAY is its weekday
+// counting Monday as 0.
+const FIRST_WEEKDAY: i64 = 3;
+const WEEKDAYS: Array[Str, 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// Days from 1 January to the first of each month in 2026.
+const MONTH_START: Array[i64, 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const MONTH_DAYS: Array[i64, 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const DAY0: i64 = 273;
+const MONTH_LEN: i64 = 31;
+const ACCOUNTS: i64 = 300;
+const LETTERS: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const STATES: Array[Str, 4] = ["NJ", "NY", "PA", "DE"];
+const STRANGER_STATES: Array[Str, 4] = ["MD", "CT", "VA", "OH"];
+const REPLENISH: Array[i64, 3] = [2500, 3500, 5000];
+const CARDS: Array[i64, 8] = [0, 2, 3, 4, 4, 6, 6, 8];
+// The Ridge turnpike's interchanges, by milepost.
+const MILEPOSTS: Array[i64, 18] = [0, 6, 11, 19, 27, 34, 42, 51, 58, 66, 73, 81, 90, 98, 105, 113, 120, 128];
+// Cents a mile on the Ridge, by vehicle class (axles).
+const PER_MILE: Array[i64, 7] = [0, 0, 6, 9, 13, 18, 24];
+const CODES: Array[Str, 5] = ["S", "C", "D", "U", "V"];
+const CODE_NAMES: Array[Str, 5] = ["stolen tag", "account closed", "duplicate read", "plate unreadable", "plate not on file"];
+const NOTICE_FEE: i64 = 300;
+const NOTICES_TO_SUSPEND: i64 = 3;
+const WEEKDAYS_IN_MONTH: i64 = 22;
+const WEEKEND_DAYS_IN_MONTH: i64 = 9;
+
+#[derive(Clone, PartialEq)]
+struct Account {
+    acct: String,
+    tag: String,
+    plate: String,
+    // axles, 2 to 6
+    class: i64,
+    // cents
+    balance: i64,
+    threshold: i64,
+    replenish: i64,
+    // replenishments the card allows this month
+    cards: i64,
+    // the day the account closed, or -1
+    closed: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Hot {
+    tag: String,
+    // seconds into October
+    reported: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Txn {
+    txn: String,
+    time: i64,
+    lane: i64,
+    tag: String,
+    plate: String,
+    conf: i64,
+    class: i64,
+    // the Ridge entry interchange and time, or 0 and -1
+    entry: i64,
+    entry_time: i64,
+}
+
+struct Agency {
+    name: Str,
+    code: Str,
+    seed: i64,
+    // 0 bridge, 1 turnpike, 2 express lanes, 3 tunnel
+    kind: i64,
+    lanes: i64,
+    panel: i64,
+    strangers: i64,
+}
+
+// A transaction while it is built: its time, then the order it was made
+// in, which breaks ties.
+struct Ev {
+    time: i64,
+    seq: i64,
+    lane: i64,
+    tag: String,
+    plate: String,
+    conf: i64,
+    class: i64,
+    entry: i64,
+    entry_time: i64,
+}
+
+struct Outcome {
+    // R rated, or a reject code
+    code: Str,
+    acct: i64,
+    how: Str,
+    class: i64,
+    base: i64,
+    toll: i64,
+    band: String,
+    // what the charged class costs over the account's own
+    extra: i64,
+}
+
+struct Ledger {
+    bal: Vec[i64],
+    used: Vec[i64],
+    notices: Vec[i64],
+    susp: Vec[bool],
+    agencies: Vec[i64],
+    suspended: i64,
+    debited: i64,
+    replenished: i64,
+    notice_n: i64,
+    billed: i64,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+// num / den with one decimal, rounded half up.
+fn tenths(num: i64, den: i64) -> String {
+    let t = (num * 20 + den) / (2 * den);
+    f"{t / 10}.{t % 10}"
+}
+
+fn plural(n: i64, word: Str) -> String {
+    if n == 1 { f"{n} {word}" } else { f"{n} {word}s" }
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn max2(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_upper(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c >= 'A' and c <= 'Z')
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 7 {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 6 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+fn date_of(day: i64) -> String {
+    let n = DAY0 + day;
+    let mut m = 11;
+    while MONTH_START[m] > n {
+        m -= 1;
+    }
+    f"2026-{m + 1:02}-{n - MONTH_START[m] + 1:02}"
+}
+
+// The day of a YYYY-MM-DD date in 2026, or None.
+fn day_of(t: ref String) -> Option[i64] {
+    if t.len() != 10 or t.substring(4, 5) != "-" or t.substring(7, 8) != "-" {
+        return None;
+    }
+    let ys = t.substring(0, 4);
+    let ms = t.substring(5, 7);
+    let ds = t.substring(8, 10);
+    if not (is_digits(ys) and is_digits(ms) and is_digits(ds)) {
+        return None;
+    }
+    let y = to_int(ys);
+    let m = to_int(ms);
+    let d = to_int(ds);
+    if y != 2026 or m < 1 or m > 12 or d < 1 or d > MONTH_DAYS[m - 1] {
+        return None;
+    }
+    Some(MONTH_START[m - 1] + d - 1 - DAY0)
+}
+
+fn day_name(day: i64) -> String {
+    f"{WEEKDAYS[(FIRST_WEEKDAY + day) % 7]} {date_of(day).substring(5, 10)}"
+}
+
+fn weekday(t: i64) -> i64 {
+    (FIRST_WEEKDAY + t / 86400) % 7
+}
+
+fn hour_of(t: i64) -> i64 {
+    t % 86400 / 3600
+}
+
+fn stamp(t: i64) -> String {
+    let s = t % 86400;
+    f"{date_of(t / 86400)} {s / 3600:02}:{s % 3600 / 60:02}:{s % 60:02}"
+}
+
+// Seconds into October of a 'YYYY-MM-DD HH:MM:SS' stamp, or None.
+fn time_of(t: ref String) -> Option[i64] {
+    if t.len() != 19 or t.substring(10, 11) != " " or t.substring(13, 14) != ":" or t.substring(16, 17) != ":" {
+        return None;
+    }
+    let day = match day_of(t.substring(0, 10)) {
+        Some(d) if d >= 0 and d < MONTH_LEN => d,
+        _ => return None,
+    };
+    let hs = t.substring(11, 13);
+    let ms = t.substring(14, 16);
+    let ss = t.substring(17, 19);
+    if not (is_digits(hs) and is_digits(ms) and is_digits(ss)) {
+        return None;
+    }
+    let h = to_int(hs);
+    let m = to_int(ms);
+    let s = to_int(ss);
+    if h > 23 or m > 59 or s > 59 {
+        return None;
+    }
+    Some(day * 86400 + h * 3600 + m * 60 + s)
+}
+
+// The Luhn check digit of a string of digits.
+fn luhn_digit(payload: ref String) -> i64 {
+    let ds: Vec[i64] = payload.chars().map(|c| c as i64 - 48).collect();
+    let mut total = 0;
+    let mut k = 0;
+    let mut i = ds.len() as i64 - 1;
+    while i >= 0 {
+        let mut d = ds[i];
+        if k % 2 == 0 {
+            d *= 2;
+            if d > 9 {
+                d -= 9;
+            }
+        }
+        total += d;
+        k += 1;
+        i -= 1;
+    }
+    (10 - total % 10) % 10
+}
+
+fn tag_ok(t: ref String) -> bool {
+    t.len() == 10 and is_digits(t) and luhn_digit(t.substring(0, 9)) == to_int(t.substring(9, 10))
+}
+
+fn plate_ok(t: ref String) -> bool {
+    t.len() == 9 and is_upper(t.substring(0, 5)) and is_digits(t.substring(5, 9))
+}
+
+fn letter(k: i64) -> String {
+    LETTERS.substring(k, k + 1)
+}
+
+fn letters3(h: i64) -> String {
+    f"{letter(h % 26)}{letter(h / 26 % 26)}{letter(h / 676 % 26)}"
+}
+
+// ------------------------------------------------------------ building
+
+fn build_accounts() -> Vec[Account] {
+    let mut out: Vec[Account] = Vec.new();
+    for i in 0..ACCOUNTS {
+        let base9 = 100000000 + i * 2999999 + mix(7, i, 2) % 2999999;
+        let tag = f"{base9}{luhn_digit(f"{base9}")}";
+        let plate = f"{STATES[mix(7, i, 3) % 4]}{letters3(mix(7, i, 4))}{1000 + i * 7919 % 9000:04}";
+        let r = mix(7, i, 5) % 100;
+        let class = if r < 85 { 2 } else if r < 92 { 3 } else if r < 96 { 4 } else if r < 99 { 5 } else { 6 };
+        let closed = if mix(7, i, 9) % 40 == 0 { 2 + mix(7, i, 10) % 28 } else { -1 };
+        out.push(Account {
+            acct: f"A{20001 + i}",
+            tag: tag,
+            plate: plate,
+            class: class,
+            balance: 1500 + mix(7, i, 6) % 36 * 100,
+            threshold: 1000,
+            replenish: REPLENISH[mix(7, i, 7) % 3],
+            cards: CARDS[mix(7, i, 8) % 8],
+            closed: closed,
+        });
+    }
+    out
+}
+
+fn build_hotlist(accounts: ref Vec[Account]) -> Vec[Hot] {
+    let mut out: Vec[Hot] = Vec.new();
+    for i in 0..ACCOUNTS {
+        if mix(7, i, 11) % 60 == 0 {
+            let day = 3 + mix(7, i, 12) % 25;
+            out.push(Hot { tag: accounts[i].tag.clone(), reported: day * 86400 + (9 + mix(7, i, 13) % 9) * 3600 + mix(7, i, 14) % 3600 });
+        }
+    }
+    out
+}
+
+// A plate read: a confidence, and no plate below 20.
+fn read_conf(q: i64) -> i64 {
+    if q % 4 == 0 { q / 4 % 80 } else { 80 + q / 4 % 20 }
+}
+
+fn build_txns(ag: ref Agency, accounts: ref Vec[Account]) -> Vec[Txn] {
+    let mut events: Vec[Ev] = Vec.new();
+    let mut seq = 0;
+    let s = ag.seed;
+    for i in 0..ACCOUNTS {
+        if mix(s, i, 20) % 100 >= ag.panel {
+            continue;
+        }
+        let a = ref accounts[i];
+        let home = 1 + mix(s, i, 27) % 18;
+        let mut work = 1 + mix(s, i, 28) % 18;
+        if work == home {
+            work = home % 18 + 1;
+        }
+        for d in 0..MONTH_LEN {
+            let wd = (FIRST_WEEKDAY + d) % 7;
+            let key0 = i * 31 + d;
+            let r = mix(s, key0, 21) % 100;
+            let n = if wd < 5 {
+                if r < 20 { 2 } else if r < 42 { 1 } else { 0 }
+            } else {
+                if r < 18 { 1 } else { 0 }
+            };
+            for t in 0..n {
+                let key = key0 * 2 + t;
+                let hour = if n == 2 {
+                    (if t == 0 { 6 } else { 16 }) + mix(s, key, 24) % 4
+                } else {
+                    mix(s, key, 24) % 24
+                };
+                let time = d * 86400 + hour * 3600 + mix(s, key, 22) % 3600;
+                let mut entry = 0;
+                let mut lane = 0;
+                if ag.kind == 1 {
+                    if n == 2 and t == 0 {
+                        entry = home;
+                        lane = work;
+                    } else if n == 2 {
+                        entry = work;
+                        lane = home;
+                    } else {
+                        entry = home;
+                        lane = 1 + mix(s, key, 26) % 18;
+                        if lane == entry {
+                            lane = entry % 18 + 1;
+                        }
+                    }
+                } else if ag.kind == 2 {
+                    let dirn = if n == 2 and t == 0 { 0 } else if n == 2 { 1 } else { mix(s, key, 26) % 2 };
+                    lane = 1 + 2 * dirn + mix(s, key, 25) % 2;
+                } else {
+                    lane = 1 + mix(s, key, 25) % ag.lanes;
+                }
+                let tag = if mix(s, key, 30) % 12 != 0 { a.tag.clone() } else { String.new() };
+                let mut conf = read_conf(mix(s, key, 31));
+                let mut plate = a.plate.clone();
+                if conf < 20 {
+                    plate = String.new();
+                    conf = 0;
+                }
+                let c = mix(s, key, 33) % 50;
+                let class = if c < 2 { min2(6, a.class + 1) } else if c == 2 { max2(2, a.class - 1) } else { a.class };
+                let mut entry_time = -1;
+                if ag.kind == 1 and tag != "" {
+                    let miles = (MILEPOSTS[lane - 1] - MILEPOSTS[entry - 1]).abs();
+                    entry_time = time - (miles * 60 + 120 + mix(s, key, 34) % 600);
+                } else {
+                    entry = 0;
+                }
+                events.push(Ev { time: time, seq: seq, lane: lane, tag: tag.clone(), plate: plate.clone(), conf: conf, class: class, entry: entry, entry_time: entry_time });
+                seq += 1;
+                if mix(s, key, 35) % 30 == 0 {
+                    events.push(Ev { time: time + 20 + mix(s, key, 36) % 70, seq: seq, lane: lane, tag: tag, plate: plate, conf: conf, class: class, entry: entry, entry_time: entry_time });
+                    seq += 1;
+                }
+            }
+        }
+    }
+    for k in 0..ag.strangers {
+        let d = mix(s, k, 40) % MONTH_LEN;
+        let time = d * 86400 + mix(s, k, 41) % 24 * 3600 + mix(s, k, 42) % 3600;
+        let h = mix(s, k, 44);
+        let mut plate = f"{STRANGER_STATES[mix(s, k, 43) % 4]}{letters3(h)}{1000 + h / 17576 % 9000:04}";
+        let mut conf = read_conf(mix(s, k, 45));
+        if conf < 20 {
+            plate = String.new();
+            conf = 0;
+        }
+        let class = if mix(s, k, 46) % 10 < 8 { 2 } else { 3 + mix(s, k, 47) % 3 };
+        let lane = 1 + mix(s, k, 48) % ag.lanes;
+        events.push(Ev { time: time, seq: seq, lane: lane, tag: String.new(), plate: plate, conf: conf, class: class, entry: 0, entry_time: -1 });
+        seq += 1;
+    }
+    events.sort_by(|a, b| if a.time != b.time { a.time.cmp(b.time) } else { a.seq.cmp(b.seq) });
+    let mut out: Vec[Txn] = Vec.new();
+    for k in 0..events.len() as i64 {
+        let e = ref events[k];
+        out.push(Txn {
+            txn: f"{ag.code}{k + 1:07}",
+            time: e.time,
+            lane: e.lane,
+            tag: e.tag.clone(),
+            plate: e.plate.clone(),
+            conf: e.conf,
+            class: e.class,
+            entry: e.entry,
+            entry_time: e.entry_time,
+        });
+    }
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn accounts_header() -> String {
+    "account,tag,plate,class,balance,threshold,replenish,cards,closed".to_string()
+}
+
+fn hotlist_header() -> String {
+    "tag,reported".to_string()
+}
+
+fn txns_header() -> String {
+    "txn,time,lane,tag,plate,conf,class,entry,entry_time".to_string()
+}
+
+fn encode_accounts(accounts: ref Vec[Account]) -> String {
+    let mut out = f"{accounts_header()}\n";
+    for a in accounts {
+        let closed = if a.closed >= 0 { date_of(a.closed) } else { String.new() };
+        out.push_str(f"{a.acct},{a.tag},{a.plate},{a.class},{dollars(a.balance)},{dollars(a.threshold)},{dollars(a.replenish)},{a.cards},{closed}\n");
+    }
+    out
+}
+
+fn encode_hotlist(hot: ref Vec[Hot]) -> String {
+    let mut out = f"{hotlist_header()}\n";
+    for h in hot {
+        out.push_str(f"{h.tag},{stamp(h.reported)}\n");
+    }
+    out
+}
+
+fn encode_txns(txns: ref Vec[Txn]) -> String {
+    let mut out = f"{txns_header()}\n";
+    for x in txns {
+        let entry = if x.entry > 0 { f"{x.entry:02}" } else { String.new() };
+        let et = if x.entry_time >= 0 { stamp(x.entry_time) } else { String.new() };
+        out.push_str(f"{x.txn},{stamp(x.time)},{x.lane:02},{x.tag},{x.plate},{x.conf},{x.class},{entry},{et}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// The first line from n on whose field is not empty.
+fn first_with(text: ref String, n: i64, field: i64) -> i64 {
+    let lines = split_on(text, "\n");
+    let mut k = n;
+    while split_on(lines[k], ",")[field] == "" {
+        k += 1;
+    }
+    k
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn money_field(path: ref String, n: i64, what: Str, t: ref String) -> Result[i64, BatchError] {
+    match cents_of(t) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn int_field(path: ref String, n: i64, what: Str, t: ref String, lo: i64, hi: i64) -> Result[i64, BatchError] {
+    match small_int(t, lo, hi) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn time_field(path: ref String, n: i64, what: Str, t: ref String) -> Result[i64, BatchError] {
+    match time_of(t) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn known_state(t: ref String) -> bool {
+    for s in STATES {
+        if t == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn parse_accounts(path: ref String, text: ref String) -> Result[Vec[Account], BatchError] {
+    let body = body_lines(path, text, accounts_header())?;
+    let mut out: Vec[Account] = Vec.new();
+    let mut tags: Set[String] = Set.new();
+    let mut plates: Set[String] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() != 9 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 9"));
+        }
+        if f[0].len() != 6 or f[0].substring(0, 1) != "A" or not is_digits(f[0].substring(1, 6)) {
+            return Err(bad(f"{path} line {n}: bad account '{f[0]}'"));
+        }
+        if not tag_ok(f[1]) {
+            return Err(bad(f"{path} line {n}: bad tag '{f[1]}'"));
+        }
+        if tags.contains(f[1]) {
+            return Err(bad(f"{path} line {n}: tag {f[1]} is on two accounts"));
+        }
+        if not plate_ok(f[2]) or not known_state(f[2].substring(0, 2)) {
+            return Err(bad(f"{path} line {n}: bad plate '{f[2]}'"));
+        }
+        if plates.contains(f[2]) {
+            return Err(bad(f"{path} line {n}: plate {f[2]} is on two accounts"));
+        }
+        tags.insert(f[1].clone());
+        plates.insert(f[2].clone());
+        let class = int_field(path, n, "class", f[3], 2, 6)?;
+        let balance = money_field(path, n, "balance", f[4])?;
+        let threshold = money_field(path, n, "threshold", f[5])?;
+        let replenish = money_field(path, n, "replenish amount", f[6])?;
+        let cards = int_field(path, n, "card limit", f[7], 0, 9)?;
+        let mut closed = -1;
+        if f[8] != "" {
+            closed = match day_of(f[8]) {
+                Some(d) if d >= 0 and d < MONTH_LEN => d,
+                _ => return Err(bad(f"{path} line {n}: bad closing date '{f[8]}'")),
+            };
+        }
+        out.push(Account {
+            acct: f[0].clone(),
+            tag: f[1].clone(),
+            plate: f[2].clone(),
+            class: class,
+            balance: balance,
+            threshold: threshold,
+            replenish: replenish,
+            cards: cards,
+            closed: closed,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_hotlist(path: ref String, text: ref String, accounts: ref Vec[Account]) -> Result[Vec[Hot], BatchError] {
+    let body = body_lines(path, text, hotlist_header())?;
+    let mut known: Set[String] = Set.new();
+    for a in accounts {
+        known.insert(a.tag.clone());
+    }
+    let mut out: Vec[Hot] = Vec.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() != 2 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 2"));
+        }
+        if not tag_ok(f[0]) {
+            return Err(bad(f"{path} line {n}: bad tag '{f[0]}'"));
+        }
+        if not known.contains(f[0]) {
+            return Err(bad(f"{path} line {n}: tag {f[0]} is on no account"));
+        }
+        out.push(Hot { tag: f[0].clone(), reported: time_field(path, n, "report time", f[1])? });
+    }
+    Ok(out)
+}
+
+fn parse_txns(path: ref String, ag: ref Agency, text: ref String) -> Result[Vec[Txn], BatchError] {
+    let body = body_lines(path, text, txns_header())?;
+    let mut out: Vec[Txn] = Vec.new();
+    let mut last = 0;
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() != 9 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 9"));
+        }
+        if f[0].len() != 8 or f[0].substring(0, 1) != ag.code or not is_digits(f[0].substring(1, 8)) {
+            return Err(bad(f"{path} line {n}: bad transaction '{f[0]}' for {ag.name}"));
+        }
+        let time = time_field(path, n, "time", f[1])?;
+        if time < last {
+            return Err(bad(f"{path} line {n}: {f[1]} is earlier than the line before"));
+        }
+        last = time;
+        let lane = int_field(path, n, "lane", f[2], 1, ag.lanes)?;
+        if f[3] != "" and not tag_ok(f[3]) {
+            return Err(bad(f"{path} line {n}: bad tag '{f[3]}'"));
+        }
+        if f[4] != "" and not plate_ok(f[4]) {
+            return Err(bad(f"{path} line {n}: bad plate '{f[4]}'"));
+        }
+        let conf = int_field(path, n, "confidence", f[5], 0, 99)?;
+        let class = int_field(path, n, "class", f[6], 2, 6)?;
+        let mut entry = 0;
+        let mut entry_time = -1;
+        if (f[7] == "") != (f[8] == "") {
+            return Err(bad(f"{path} line {n}: an entry needs both its interchange and its time"));
+        }
+        if f[7] != "" {
+            if ag.kind != 1 {
+                return Err(bad(f"{path} line {n}: an entry on a {ag.name} lane"));
+            }
+            entry = int_field(path, n, "entry interchange", f[7], 1, 18)?;
+            entry_time = time_field(path, n, "entry time", f[8])?;
+            if entry_time >= time {
+                return Err(bad(f"{path} line {n}: entry at {f[8]} is not before the exit"));
+            }
+        }
+        out.push(Txn {
+            txn: f[0].clone(),
+            time: time,
+            lane: lane,
+            tag: f[3].clone(),
+            plate: f[4].clone(),
+            conf: conf,
+            class: class,
+            entry: entry,
+            entry_time: entry_time,
+        });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ rating
+
+// The express lanes' congestion slot: the day, the hour and the direction.
+fn slot_key(t: i64, lane: i64) -> i64 {
+    t / 86400 * 1000 + hour_of(t) * 10 + (lane - 1) / 2
+}
+
+// The toll and the fare band it fell in. The band is a String: a `Str` in
+// the result would borrow the arguments (core-semantics.md §5.4).
+fn toll_for(ag: ref Agency, x: ref Txn, class: i64, counts: ref Map[i64, i64]) -> (i64, String) {
+    let h = hour_of(x.time);
+    if ag.kind == 0 {
+        let peak = weekday(x.time) < 5 and ((h >= 6 and h < 10) or (h >= 16 and h < 20));
+        if peak {
+            return (600 + 300 * (class - 2), "peak");
+        }
+        return (450 + 225 * (class - 2), "off-peak");
+    }
+    if ag.kind == 1 {
+        let out = MILEPOSTS[x.lane - 1];
+        let mut miles = 0;
+        let mut band = "no entry";
+        if x.entry == 0 {
+            miles = max2(out - MILEPOSTS[0], MILEPOSTS[17] - out);
+        } else {
+            miles = (out - MILEPOSTS[x.entry - 1]).abs();
+            band = if miles < 30 { "short" } else if miles < 80 { "medium" } else { "long" };
+        }
+        return (max2(75, (miles * PER_MILE[class] + 4) / 5 * 5), band);
+    }
+    if ag.kind == 2 {
+        if weekday(x.time) >= 5 {
+            return (150 * (class - 1), "weekend");
+        }
+        let n = *counts.get(slot_key(x.time, x.lane)).unwrap_or(0);
+        if n <= 3 {
+            return (150 * (class - 1), "light");
+        }
+        if n <= 6 {
+            return (300 * (class - 1), "busy");
+        }
+        return (500 * (class - 1), "jammed");
+    }
+    if h >= 22 or h < 6 {
+        return (250 + 125 * (class - 2), "night");
+    }
+    (400 + 200 * (class - 2), "day")
+}
+
+fn reject(code: Str, acct: i64, how: Str) -> Outcome {
+    Outcome { code: code, acct: acct, how: how, class: 0, base: 0, toll: 0, band: String.new(), extra: 0 }
+}
+
+fn rate(ag: ref Agency, accounts: ref Vec[Account], hot: ref Vec[Hot], txns: ref Vec[Txn]) -> Vec[Outcome] {
+    let mut by_tag: Map[String, i64] = Map.new();
+    let mut by_plate: Map[String, i64] = Map.new();
+    for i in 0..accounts.len() as i64 {
+        by_tag.insert(accounts[i].tag.clone(), i);
+        by_plate.insert(accounts[i].plate.clone(), i);
+    }
+    let mut stolen: Map[String, i64] = Map.new();
+    for h in hot {
+        stolen.insert(h.tag.clone(), h.reported);
+    }
+    let mut counts: Map[i64, i64] = Map.new();
+    if ag.kind == 2 {
+        for x in txns {
+            let k = slot_key(x.time, x.lane);
+            let c = *counts.get(k).unwrap_or(0);
+            counts.insert(k, c + 1);
+        }
+    }
+    let mut last: Vec[i64] = Vec.filled(accounts.len() as i64, -1);
+    let mut out: Vec[Outcome] = Vec.new();
+    for x in txns {
+        let mut idx = -1;
+        let mut how: Str = "";
+        if x.tag != "" {
+            if let Some(t) = stolen.get(x.tag) {
+                if x.time >= *t {
+                    out.push(reject("S", -1, ""));
+                    continue;
+                }
+            }
+            idx = *by_tag.get(x.tag).unwrap_or(-1);
+            how = "tag";
+        }
+        if idx < 0 {
+            if x.plate == "" or x.conf < 80 {
+                out.push(reject("U", -1, ""));
+                continue;
+            }
+            idx = *by_plate.get(x.plate).unwrap_or(-1);
+            if idx < 0 {
+                out.push(reject("V", -1, ""));
+                continue;
+            }
+            how = "plate";
+        }
+        let a = ref accounts[idx];
+        if a.closed >= 0 and x.time / 86400 >= a.closed {
+            out.push(reject("C", idx, how));
+            continue;
+        }
+        if last[idx] >= 0 and x.time - last[idx] < 120 {
+            out.push(reject("D", idx, how));
+            continue;
+        }
+        let class = max2(x.class, a.class);
+        let (base, band) = toll_for(ag, x, class, counts);
+        let (at_acct, _) = toll_for(ag, x, a.class, counts);
+        let toll = if how == "plate" { base + base / 2 } else { base };
+        last[idx] = x.time;
+        out.push(Outcome { code: "R", acct: idx, how: how, class: class, base: base, toll: toll, band: band, extra: base - at_acct });
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn txn_report(ag: ref Agency, txns: ref Vec[Txn], outs: ref Vec[Outcome]) -> Vec[String] {
+    let mut rated = 0;
+    let mut by_tag = 0;
+    for o in outs {
+        if o.code == "R" {
+            rated += 1;
+            if o.how == "tag" {
+                by_tag += 1;
+            }
+        }
+    }
+    let mut counts: Vec[String] = Vec.new();
+    for c in CODES {
+        let n = outs.iter().filter(|o| o.code == c).count() as i64;
+        if n > 0 {
+            counts.push(f"{c} {n}");
+        }
+    }
+    let total = txns.len() as i64;
+    let mut head = f"{ag.name}: {group3(total)} transactions, {group3(rated)} rated ({group3(by_tag)} by tag, {group3(rated - by_tag)} by plate), {group3(total - rated)} not billed";
+    if counts.len() > 0 {
+        head.push_str(f": {counts.join(", ")}");
+    }
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(head);
+    for ci in 0..5 {
+        for k in 0..total {
+            if outs[k].code == CODES[ci] {
+                let x = ref txns[k];
+                let seen = if x.tag != "" { x.tag.clone() } else if x.plate != "" { x.plate.clone() } else { "no read".to_string() };
+                lines.push(f"  {CODES[ci]} {CODE_NAMES[ci]}: {x.txn} {stamp(x.time)} lane {x.lane} {seen}");
+                break;
+            }
+        }
+    }
+    lines
+}
+
+fn bands_of(kind: i64) -> Vec[Str] {
+    if kind == 0 {
+        return vec!["peak", "off-peak"];
+    }
+    if kind == 1 {
+        return vec!["short", "medium", "long", "no entry"];
+    }
+    if kind == 2 {
+        return vec!["light", "busy", "jammed", "weekend"];
+    }
+    vec!["day", "night"]
+}
+
+fn revenue_report(ag: ref Agency, outs: ref Vec[Outcome]) -> String {
+    let mut total = 0;
+    let mut rated = 0;
+    let mut sur = 0;
+    let mut over = 0;
+    let mut extra = 0;
+    for o in outs {
+        if o.code == "R" {
+            total += o.toll;
+            rated += 1;
+            sur += o.toll - o.base;
+            if o.extra > 0 {
+                over += 1;
+                extra += o.extra;
+            }
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for band in bands_of(ag.kind) {
+        let mut s = 0;
+        let mut n = 0;
+        for o in outs {
+            if o.code == "R" and o.band == band {
+                s += o.toll;
+                n += 1;
+            }
+        }
+        parts.push(f"{band} {money(s)} on {group3(n)}");
+    }
+    f"{ag.name} revenue: {money(total)} on {group3(rated)} trips; {parts.join(", ")}; plate surcharges {money(sur)}; {over} trips over the account class, {money(extra)} more"
+}
+
+fn traffic_report(ag: ref Agency, txns: ref Vec[Txn]) -> String {
+    let mut per_day: Vec[i64] = Vec.filled(MONTH_LEN, 0);
+    let mut per_hour: Vec[i64] = Vec.filled(24, 0);
+    let mut per_lane: Vec[i64] = Vec.filled(ag.lanes + 1, 0);
+    for x in txns {
+        per_day[x.time / 86400] += 1;
+        per_hour[hour_of(x.time)] += 1;
+        per_lane[x.lane] += 1;
+    }
+    let mut bd = 0;
+    for d in 0..MONTH_LEN {
+        if per_day[d] > per_day[bd] {
+            bd = d;
+        }
+    }
+    let mut bh = 0;
+    for h in 0..24 {
+        if per_hour[h] > per_hour[bh] {
+            bh = h;
+        }
+    }
+    let mut bl = 1;
+    for lane in 1..ag.lanes + 1 {
+        if per_lane[lane] > per_lane[bl] {
+            bl = lane;
+        }
+    }
+    let mut wk = 0;
+    let mut we = 0;
+    for d in 0..MONTH_LEN {
+        if (FIRST_WEEKDAY + d) % 7 < 5 {
+            wk += per_day[d];
+        } else {
+            we += per_day[d];
+        }
+    }
+    f"{ag.name} traffic: busiest {day_name(bd)} with {per_day[bd]}, busiest hour {bh:02}:00 with {per_hour[bh]} over the month, busiest lane {bl} with {per_lane[bl]}; {tenths(wk, WEEKDAYS_IN_MONTH)} a weekday, {tenths(we, WEEKEND_DAYS_IN_MONTH)} a weekend day"
+}
+
+fn accounts_report(ag: ref Agency, accounts: ref Vec[Account], outs: ref Vec[Outcome]) -> String {
+    let mut tolls: Vec[i64] = Vec.filled(accounts.len() as i64, 0);
+    let mut trips: Vec[i64] = Vec.filled(accounts.len() as i64, 0);
+    let mut plated: Vec[bool] = Vec.filled(accounts.len() as i64, false);
+    for o in outs {
+        if o.code == "R" {
+            tolls[o.acct] += o.toll;
+            trips[o.acct] += 1;
+            if o.how == "plate" {
+                plated[o.acct] = true;
+            }
+        }
+    }
+    let mut ranked: Vec[i64] = Vec.new();
+    let mut by_plate = 0;
+    for i in 0..accounts.len() as i64 {
+        if trips[i] > 0 {
+            ranked.push(i);
+            if plated[i] {
+                by_plate += 1;
+            }
+        }
+    }
+    let billed = ranked.len() as i64;
+    ranked.sort_by(|a, b| if tolls[a] != tolls[b] { tolls[b].cmp(tolls[a]) } else { accounts[a].acct.cmp(accounts[b].acct) });
+    let mut top: Vec[String] = Vec.new();
+    for k in 0..min2(3, billed) {
+        let i = ranked[k];
+        top.push(f"{accounts[i].acct} {money(tolls[i])} on {trips[i]}");
+    }
+    f"{ag.name} accounts: {billed} billed, {by_plate} with a trip billed by plate; top {top.join(", ")}"
+}
+
+// ------------------------------------------------------------ posting
+
+fn new_ledger(accounts: ref Vec[Account]) -> Ledger {
+    let n = accounts.len() as i64;
+    let mut bal: Vec[i64] = Vec.new();
+    for a in accounts {
+        bal.push(a.balance);
+    }
+    Ledger {
+        bal: bal,
+        used: Vec.filled(n, 0),
+        notices: Vec.filled(n, 0),
+        susp: Vec.filled(n, false),
+        agencies: Vec.filled(n, 0),
+        suspended: 0,
+        debited: 0,
+        replenished: 0,
+        notice_n: 0,
+        billed: 0,
+        log: Vec.new(),
+    }
+}
+
+fn post_tolls(led: mut ref Ledger, ag: ref Agency, accounts: ref Vec[Account], txns: ref Vec[Txn], outs: ref Vec[Outcome]) -> String {
+    let mut trips = 0;
+    let mut debited = 0;
+    let mut rep = 0;
+    let mut rep_amt = 0;
+    let mut notices = 0;
+    let mut billed = 0;
+    let mut susp: Vec[String] = Vec.new();
+    let mut seen: Vec[bool] = Vec.filled(accounts.len() as i64, false);
+    for k in 0..txns.len() as i64 {
+        let o = ref outs[k];
+        if o.code != "R" {
+            continue;
+        }
+        let x = ref txns[k];
+        let i = o.acct;
+        let a = ref accounts[i];
+        trips += 1;
+        if not seen[i] {
+            seen[i] = true;
+            led.agencies[i] += 1;
+        }
+        if not led.susp[i] {
+            if led.bal[i] - o.toll < a.threshold and led.used[i] < a.cards {
+                led.bal[i] += a.replenish;
+                led.used[i] += 1;
+                rep += 1;
+                rep_amt += a.replenish;
+                led.log.push(f"{stamp(x.time)} {x.txn} {a.acct} replenish {dollars(a.replenish)} {dollars(led.bal[i])}");
+            }
+            if led.bal[i] >= o.toll {
+                led.bal[i] -= o.toll;
+                debited += o.toll;
+                led.log.push(f"{stamp(x.time)} {x.txn} {a.acct} debit {dollars(o.toll)} {dollars(led.bal[i])}");
+                continue;
+            }
+        }
+        let bill = o.base * 3 / 2 + NOTICE_FEE;
+        led.notices[i] += 1;
+        notices += 1;
+        billed += bill;
+        led.log.push(f"{stamp(x.time)} {x.txn} {a.acct} notice {dollars(bill)} {dollars(led.bal[i])}");
+        if led.notices[i] == NOTICES_TO_SUSPEND {
+            led.susp[i] = true;
+            led.suspended += 1;
+            susp.push(f"{a.acct} {stamp(x.time).substring(5, 16)}");
+        }
+    }
+    led.debited += debited;
+    led.replenished += rep_amt;
+    led.notice_n += notices;
+    led.billed += billed;
+    let mut out = f"{ag.name} posted: {group3(trips)} trips, {money(debited)} from prepaid balances, {plural(rep, "replenishment")} for {money(rep_amt)}, {group3(notices)} notices billing {money(billed)}; {plural(susp.len() as i64, "account")} suspended";
+    if susp.len() > 0 {
+        out.push_str(f"\n  suspended after {NOTICES_TO_SUSPEND} notices: {susp.join(", ")}");
+    }
+    out
+}
+
+fn ledger_summary(led: ref Ledger, accounts: ref Vec[Account]) -> Vec[String] {
+    let mut used_up = 0;
+    let mut active: Vec[i64] = Vec.new();
+    let mut multi = 0;
+    let mut below = 0;
+    for i in 0..accounts.len() as i64 {
+        if accounts[i].cards > 0 and led.used[i] == accounts[i].cards {
+            used_up += 1;
+        }
+        if led.agencies[i] > 0 {
+            active.push(i);
+            if led.agencies[i] > 1 {
+                multi += 1;
+            }
+            if led.bal[i] < accounts[i].threshold {
+                below += 1;
+            }
+        }
+    }
+    active.sort_by(|a, b| if led.bal[a] != led.bal[b] { led.bal[b].cmp(led.bal[a]) } else { accounts[a].acct.cmp(accounts[b].acct) });
+    let mut high: Vec[String] = Vec.new();
+    for k in 0..min2(3, active.len() as i64) {
+        let i = active[k];
+        high.push(f"{accounts[i].acct} {money(led.bal[i])}");
+    }
+    let mut out: Vec[String] = Vec.new();
+    out.push(f"month: {money(led.debited)} debited, {money(led.replenished)} replenished, {group3(led.notice_n)} notices billing {money(led.billed)}; {used_up} accounts used every replenishment their card allows, {led.suspended} suspended");
+    out.push(f"accounts: {active.len()} with trips, {multi} at more than one agency, {below} closing below their threshold; largest balances {high.join(", ")}");
+    out
+}
+
+fn file_line(name: Str, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let harbor = Agency { name: "harbor", code: "H", seed: 101, kind: 0, lanes: 8, panel: 30, strangers: 110 };
+    let ridge = Agency { name: "ridge", code: "R", seed: 202, kind: 1, lanes: 18, panel: 26, strangers: 90 };
+    let lakeshore = Agency { name: "lakeshore", code: "L", seed: 303, kind: 2, lanes: 4, panel: 22, strangers: 70 };
+    let valley = Agency { name: "valley", code: "V", seed: 404, kind: 3, lanes: 4, panel: 28, strangers: 100 };
+
+    let accounts = build_accounts();
+    let hot = build_hotlist(accounts);
+
+    // Four agencies' transactions.
+    let x1 = build_txns(harbor, accounts);
+    let x2 = build_txns(ridge, accounts);
+    let x3 = build_txns(lakeshore, accounts);
+    let x4 = build_txns(valley, accounts);
+
+    // Six writes.
+    let w1 = fs.write("accounts.csv", encode_accounts(accounts));
+    let w2 = fs.write("hotlist.csv", encode_hotlist(hot));
+    let w3 = fs.write("harbor_txns.csv", encode_txns(x1));
+    let w4 = fs.write("ridge_txns.csv", encode_txns(x2));
+    let w5 = fs.write("lakeshore_txns.csv", encode_txns(x3));
+    let w6 = fs.write("valley_txns.csv", encode_txns(x4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() {
+        return Err(bad("could not write the batch files"));
+    }
+
+    // A copy of Valley's file with one tag's check digit off by one, and
+    // a copy of Ridge's with one entry time after its exit.
+    let whole = read_text("valley_txns.csv")?;
+    let n = first_with(whole, 40, 3);
+    let tag = split_on(split_on(whole, "\n")[n], ",")[3].clone();
+    let last = (to_int(tag.substring(9, 10)) + 1) % 10;
+    if fs.write("valley_txns.bad", damage(whole, n, 3, f"{tag.substring(0, 9)}{last}")).is_err() {
+        return Err(bad("could not write valley_txns.bad"));
+    }
+    let whole2 = read_text("ridge_txns.csv")?;
+    let n2 = first_with(whole2, 60, 7);
+    let exit_at = split_on(split_on(whole2, "\n")[n2], ",")[1].clone();
+    if fs.write("ridge_txns.bad", damage(whole2, n2, 8, f"{exit_at.substring(0, 17)}59")).is_err() {
+        return Err(bad("could not write ridge_txns.bad"));
+    }
+
+    // Six reads.
+    let ta = read_text("accounts.csv")?;
+    let th = read_text("hotlist.csv")?;
+    let t1 = read_text("harbor_txns.csv")?;
+    let t2 = read_text("ridge_txns.csv")?;
+    let t3 = read_text("lakeshore_txns.csv")?;
+    let t4 = read_text("valley_txns.csv")?;
+    println(file_line("accounts", ta));
+    println(file_line("hotlist", th));
+    println(file_line("harbor", t1));
+    println(file_line("ridge", t2));
+    println(file_line("lakeshore", t3));
+    println(file_line("valley", t4));
+
+    // The accounts and the hotlist, then the four transaction files. Each
+    // can fail with `?`, so a parallel run has to report the first failure
+    // in source order.
+    let ga = parse_accounts("accounts.csv", ta)?;
+    let gh = parse_hotlist("hotlist.csv", th, ga)?;
+    let g1 = parse_txns("harbor_txns.csv", harbor, t1)?;
+    let g2 = parse_txns("ridge_txns.csv", ridge, t2)?;
+    let g3 = parse_txns("lakeshore_txns.csv", lakeshore, t3)?;
+    let g4 = parse_txns("valley_txns.csv", valley, t4)?;
+    match parse_txns("valley_txns.bad", valley, read_text("valley_txns.bad")?) {
+        Ok(_) => println("valley_txns.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_txns("ridge_txns.bad", ridge, read_text("ridge_txns.bad")?) {
+        Ok(_) => println("ridge_txns.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_txns("harbor_txns.csv", valley, t1) {
+        Ok(_) => println("harbor_txns.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = ga == accounts and gh == hot and g1 == x1 and g2 == x2 and g3 == x3 and g4 == x4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four ratings, the hot group.
+    let o1 = rate(harbor, ga, gh, g1);
+    let o2 = rate(ridge, ga, gh, g2);
+    let o3 = rate(lakeshore, ga, gh, g3);
+    let o4 = rate(valley, ga, gh, g4);
+
+    // Reports that only read what came before.
+    let r1 = txn_report(harbor, g1, o1);
+    let r2 = txn_report(ridge, g2, o2);
+    let r3 = txn_report(lakeshore, g3, o3);
+    let r4 = txn_report(valley, g4, o4);
+    let v1 = revenue_report(harbor, o1);
+    let v2 = revenue_report(ridge, o2);
+    let v3 = revenue_report(lakeshore, o3);
+    let v4 = revenue_report(valley, o4);
+    let f1 = traffic_report(harbor, g1);
+    let f2 = traffic_report(ridge, g2);
+    let f3 = traffic_report(lakeshore, g3);
+    let f4 = traffic_report(valley, g4);
+    let c1 = accounts_report(harbor, ga, o1);
+    let c2 = accounts_report(ridge, ga, o2);
+    let c3 = accounts_report(lakeshore, ga, o3);
+    let c4 = accounts_report(valley, ga, o4);
+    for lines in [r1, r2, r3, r4] {
+        for line in lines {
+            println(line);
+        }
+    }
+    for line in [v1, v2, v3, v4, f1, f2, f3, f4, c1, c2, c3, c4] {
+        println(line);
+    }
+
+    // One ledger: whether a trip is paid from the balance, after a
+    // replenishment, or billed as a notice depends on the trips posted
+    // before it, so the agencies post in order.
+    let mut led = new_ledger(ga);
+    println(post_tolls(mut led, harbor, ga, g1, o1));
+    println(post_tolls(mut led, ridge, ga, g2, o2));
+    println(post_tolls(mut led, lakeshore, ga, g3, o3));
+    println(post_tolls(mut led, valley, ga, g4, o4));
+    for line in ledger_summary(led, ga) {
+        println(line);
+    }
+    if fs.write("ledger.log", f"{led.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write ledger.log"));
+    }
+    let back = read_text("ledger.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 2;
+    println(f"ledger.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["accounts.csv", "hotlist.csv", "harbor_txns.csv", "ridge_txns.csv", "lakeshore_txns.csv", "valley_txns.csv", "valley_txns.bad", "ridge_txns.bad", "ledger.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"toll_clearing failed: {e.describe()}"),
+    }
+}
