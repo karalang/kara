@@ -1140,6 +1140,29 @@ impl<'ctx> Cx<'ctx, '_> {
                 let size = self.layout(el)?.size;
                 let src = self.operand_ptr(&args[0])?;
                 let d = self.place_ptr(dest)?;
+                // A literal of plain elements into a local nothing but shared
+                // borrows and its drop reads borrows the array's own storage,
+                // capacity 0, as a `String` literal borrows its bytes
+                // (B-2026-10-18-52): `for step in [1, 9]` allocates nothing.
+                // The array must be a temporary made for this call alone, so
+                // nothing writes its storage while the `Vec` lives.
+                if std::env::var("KARAC_MIR_BORROW_LITERALS").as_deref() != Ok("0")
+                    && n > 0
+                    && !self.tys.needs_drop(el)
+                    && dest.projection.is_empty()
+                    && dest.local != crate::mir::Local::RETURN_PLACE
+                    && matches!(&args[0], Operand::Move(a) if a.projection.is_empty()
+                    && self.body.is_some_and(|b| {
+                        // A coroutine's or par region's locals are laid
+                        // out by liveness, which counts the array dead.
+                        !b.suspends && b.par_regions.is_empty() && array_temp(b, a.local)
+                    }))
+                    && self.body.is_some_and(|b| only_borrowed(b, dest.local))
+                {
+                    self.store(d, src.into())?;
+                    self.store(self.offset(d, 8)?, self.i64(n).into())?;
+                    return self.store(self.offset(d, 16)?, self.i64(0).into());
+                }
                 self.vec_alloc(d, self.i64(n), size)?;
                 if n * size != 0 {
                     let buf = self.load_ptr(d)?;
@@ -1612,6 +1635,85 @@ impl<'ctx> Cx<'ctx, '_> {
 /// Whether `l` is defined by exactly one call and is otherwise only
 /// borrowed shared, dropped, or brought into and out of storage: nothing
 /// can then write to its buffer, grow it, or take it.
+/// Whether `a` is a temporary assigned once, in the block whose call moves
+/// it, and read by nothing else: storage only that call's result can see.
+fn array_temp(body: &crate::mir::Body, a: crate::mir::Local) -> bool {
+    use crate::mir::{StatementKind, TerminatorKind};
+    let mut defs = 0;
+    let mut uses = 0;
+    for b in &body.blocks {
+        let mut here = false;
+        for st in &b.statements {
+            match &st.kind {
+                StatementKind::Assign(p, rv) => {
+                    if p.local == a {
+                        if !p.projection.is_empty() {
+                            return false;
+                        }
+                        defs += 1;
+                        here = true;
+                    }
+                    if rvalue_mentions(rv, a) {
+                        return false;
+                    }
+                }
+                StatementKind::SetDiscriminant(p, _) | StatementKind::FreeBox(p)
+                    if p.local == a =>
+                {
+                    return false;
+                }
+                StatementKind::BorrowFlag(
+                    crate::mir::FlagOp::Acquire { place, .. }
+                    | crate::mir::FlagOp::Check { place, .. },
+                ) if place.local == a => return false,
+                _ => {}
+            }
+        }
+        match &b.terminator.kind {
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => {
+                if func.place().is_some_and(|p| p.local == a) || destination.local == a {
+                    return false;
+                }
+                let n = args
+                    .iter()
+                    .filter(|o| o.place().is_some_and(|p| p.local == a))
+                    .count();
+                if n > 0 && !here {
+                    return false;
+                }
+                uses += n;
+            }
+            TerminatorKind::Drop { place, .. } if place.local == a => {}
+            TerminatorKind::SwitchInt { discr, .. }
+                if discr.place().is_some_and(|p| p.local == a) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    defs == 1 && uses == 1
+}
+
+fn rvalue_mentions(rv: &crate::mir::Rvalue, l: crate::mir::Local) -> bool {
+    use crate::mir::Rvalue;
+    let op = |o: &Operand| o.place().is_some_and(|p| p.local == l);
+    match rv {
+        Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => op(o),
+        Rvalue::BinaryOp(_, a, c) | Rvalue::CheckedBinaryOp(_, a, c) => op(a) || op(c),
+        Rvalue::Aggregate(_, os) => os.iter().any(op),
+        Rvalue::Ref(_, q) | Rvalue::Retain(q) | Rvalue::Discriminant(q) | Rvalue::Len(q) => {
+            q.local == l
+        }
+        Rvalue::NullaryOp(..) => false,
+    }
+}
+
 fn only_borrowed(body: &crate::mir::Body, l: crate::mir::Local) -> bool {
     use crate::mir::{BorrowKind, Rvalue, StatementKind, TerminatorKind};
     let hit = |p: &Place| p.local == l;

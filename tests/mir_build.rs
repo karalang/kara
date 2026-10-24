@@ -932,6 +932,86 @@ fn main() {
     }
 }
 
+/// B-2026-10-18-52: a list literal of plain elements that is only read
+/// (walked, indexed, measured, cloned, passed by `ref`) borrows its array's
+/// storage on the compiled backends instead of allocating, as a `String`
+/// literal borrows its bytes. One that is pushed to, returned, holds
+/// Strings, sits at the top level, or lives in a coroutine or `par` task
+/// still allocates; every case must print what the interpreter prints.
+#[test]
+fn mir_read_only_list_literals_borrow_their_array() {
+    const SRC: &str = r#"fn make() -> Vec[i64] {
+    [4, 5, 6]
+}
+
+fn total(v: ref Vec[(i64, i64)]) -> i64 {
+    let mut t = 0;
+    for (a, b) in v.iter() { t += a * 10 + b; }
+    t
+}
+
+fn main() {
+    let mut sum = 0;
+    let mut i = 0;
+    while i < 1000 {
+        for step in [1, 9] { sum += (i + step) % 7; }
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] { sum += dr * 3 + dc + i % 5; }
+        let steps = [2, 5, 11];
+        sum += steps[0] + steps[2] * steps.len() + total([(1, 2), (3, i % 4)]);
+        let mut grown = [7, 8];
+        grown.push(i);
+        sum += grown[2] + grown.len();
+        let c = steps.clone();
+        let mut d = c.clone();
+        d[0] = 100;
+        sum += c[0] + d[0];
+        let words = ["ab", "cde"];
+        sum += words[1].len();
+        let s = [3, 1, 2];
+        let mut sorted = s.clone();
+        sorted.sort();
+        sum += sorted[0] * 100 + s[0];
+        sum += make()[2];
+        let m: i64 = [9, 4, 7].iter().fold(0, |a, x| if x > a { x } else { a });
+        sum += m;
+        i += 1;
+    }
+    let top = [10, 20];
+    println(f"{sum} {top[1]} {top.len()}");
+}
+"#;
+    const TASKS: &str = r#"fn walk(n: i64) -> i64 {
+    let steps = [3, 5, 7];
+    let mut t = 0;
+    for s in [1, 2] {
+        sleep_ms(2);
+        t += s * steps[0];
+    }
+    sleep_ms(1);
+    t + steps[2] + n + steps.len()
+}
+fn main() {
+    let group = TaskGroup.new();
+    let x = group.spawn(|| walk(1));
+    let y = group.spawn(|| walk(2));
+    let ks = [10, 20];
+    let (a, b) = par { walk(ks[0]), walk(ks[1]) };
+    println(f"{x.join() + y.join()} {a} {b}");
+}
+"#;
+    for (src, pin) in [(SRC, "818005 20 2\n"), (TASKS, "41 29 39\n")] {
+        let want = karac::mir::lower::run_source(src)
+            .expect("MIR interpreter")
+            .output;
+        assert_eq!(want, pin);
+        for opt in [0, 2] {
+            if let Some(out) = build_and_run(src, opt) {
+                assert_eq!(out, want, "at -O{opt}");
+            }
+        }
+    }
+}
+
 /// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
 /// squaring, with the same multiplications on both backends, so the bits
 /// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).
