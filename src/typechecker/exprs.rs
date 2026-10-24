@@ -9533,7 +9533,21 @@ impl<'a> super::TypeChecker<'a> {
                 // Resolve element type via IntoIterator.Item (impl_assoc_types),
                 // covering Vec, Map, SortedSet, Set, Slice, Array, Range* and
                 // any user type that has registered an "Item" assoc binding.
-                let elem_ty = self.element_type_of(&iter_ty);
+                let mut elem_ty = self.element_type_of(&iter_ty);
+                // A `for` iterates a collection, an iterator or an
+                // `IntoIterator`; anything else is refused rather than bound
+                // whole to the pattern (B-2026-10-21-76).
+                if self.cli_lint_overrides.strict_core && !self.for_iterable_may_iterate(&iter_ty) {
+                    elem_ty = Type::Error;
+                    self.type_error(
+                        format!(
+                            "type '{}' cannot be iterated by a `for` loop: it implements neither `Iterator` nor `IntoIterator`",
+                            type_display(&iter_ty)
+                        ),
+                        iterable.span,
+                        TypeErrorKind::TraitBoundNotSatisfied,
+                    );
+                }
                 // v2 core §4.6: `for x in c` borrows any standard collection,
                 // a temporary one included, so every binding of its item
                 // pattern is a `ref` (`for x in c.into_iter()` iterates an

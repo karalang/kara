@@ -1516,6 +1516,43 @@ impl<'a> super::TypeChecker<'a> {
     /// using the struct's declared `generic_params` paired with the concrete
     /// type arguments from `ty`. Falls back to `ty` itself for unknown types
     /// so the rest of the type checker can proceed without a hard error.
+    /// False only for a `for` iterable that cannot iterate: a scalar, a
+    /// tuple, a function, or a named type with no `Item` and no `Iterator`
+    /// or `IntoIterator` impl. Anything not yet known (an inference variable,
+    /// a type parameter, a projection, an `impl Trait`) may still iterate.
+    pub(super) fn for_iterable_may_iterate(&self, ty: &Type) -> bool {
+        let mut base = ty;
+        loop {
+            match base {
+                Type::Ref(inner) | Type::MutRef(inner) => base = inner,
+                Type::Refinement { base: inner, .. } => base = inner,
+                _ => break,
+            }
+        }
+        match base {
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Unit
+            | Type::Tuple(_)
+            | Type::Function { .. }
+            | Type::OnceFunction { .. } => false,
+            Type::Named { name, args } => {
+                name == "StringSlice"
+                    || self.type_param_name(base).is_some()
+                    || self
+                        .env
+                        .impl_assoc_types
+                        .contains_key(&(name.clone(), "Item".to_string()))
+                    || self.env.has_impl("Iterator", name, args)
+                    || self.env.has_impl("IntoIterator", name, args)
+            }
+            _ => true,
+        }
+    }
+
     pub(super) fn element_type_of(&self, ty: &Type) -> Type {
         // Strings iterate as `char` BY VALUE — a `char` is a Copy scalar decoded
         // from the UTF-8 storage, not a borrow into it — so `for c in s` and
@@ -1532,7 +1569,10 @@ impl<'a> super::TypeChecker<'a> {
             while let Type::Ref(inner) | Type::MutRef(inner) = base {
                 base = inner;
             }
-            if matches!(base, Type::Str) {
+            // The view is also spelled as the named `StringSlice`.
+            if matches!(base, Type::Str)
+                || matches!(base, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
+            {
                 return Type::Char;
             }
         }

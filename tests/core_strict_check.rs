@@ -12445,3 +12445,28 @@ fn iterator_methods_on_a_generic_iterator_check() {
          fn main() {\n    let v: Vec[i64] = [1, 2, 3];\n    println(f\"{tot(v.into_iter())}\");\n}\n",
     );
 }
+
+#[test]
+fn a_for_loop_over_a_value_that_does_not_iterate_is_refused() {
+    // B-2026-10-21-76: a `for` iterates a collection, an iterator or an
+    // `IntoIterator`; anything else was bound whole to the pattern.
+    rejected(
+        "for-over-struct",
+        "struct S { a: i64 }\nfn main() {\n    let s = S { a: 1 };\n    for x in s { println(f\"{x.a}\"); }\n}\n",
+        "type 'S' cannot be iterated by a `for` loop",
+    );
+    rejected(
+        "for-over-int",
+        "fn main() {\n    let n = 5;\n    for x in n { println(f\"{x}\"); }\n}\n",
+        "type 'i64' cannot be iterated by a `for` loop",
+    );
+    accepted_and_runs(
+        "for-over-iterators",
+        "struct Counter { n: i64 }\nimpl Iterator for Counter {\n    type Item = i64;\n    \
+         fn next(mut ref self) -> Option[i64] { if self.n == 0 { None } else { self.n -= 1; Some(self.n) } }\n}\n\
+         fn main() {\n    let c = Counter { n: 2 };\n    for x in c { println(f\"{x}\"); }\n    \
+         let v: StringSlice = \"hé\";\n    for ch in v { let d: char = ch; println(f\"{d}\"); }\n    \
+         for i in 0..2 { println(f\"{i}\"); }\n}\n",
+        "1\n0\nh\né\n0\n1\n",
+    );
+}
