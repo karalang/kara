@@ -59,8 +59,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | missing-feature | 15 |
-| false-positive | 13 |
-| diagnostics | 8 |
+| false-positive | 14 |
+| diagnostics | 9 |
 | perf | 8 |
 | soundness | 4 |
 | miscompile | 3 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 26 |
 | codegen | 23 |
 | interp | 14 |
+| mir | 8 |
 | runtime | 7 |
 | cli | 7 |
-| mir | 6 |
 | ownership | 4 |
 | other | 2 |
 | mir-llvm | 1 |
@@ -132,6 +132,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-6 | 2026-10-24 | codegen+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 93 per word hash, against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
 | B-2026-10-24-7 | 2026-10-24 | typecheck | low | `c as i128` and `c as u128` on a `char` are refused with a bare "cannot cast 'char' to 'i128'", though `c as i64` and `c as u64` are accepted: integer_width_bits has no 128-bit entries, so check_cast_pair's char-to-wide-integer rule never sees them | — |
 | B-2026-10-24-8 | 2026-10-24 | mir | low | The MIR builder refuses `.into()` called straight on a unit-variant literal: `let b: B = A.Y.into();` checks (since eb790336d3), and `__mir-run` and `__mir-llvm-run` stop with "a call with no resolved callee is not lowered yet", while `(A.Y).into()` prints `Q` | — |
+| B-2026-10-24-9 | 2026-10-24 | mir | medium | A closure returned from a closure is tied to the callee: `let make = |n: i64| |x: i64| x + n; fs.push(make(i));` is refused by check and both MIR columns (E0509 "the result borrows `make`"), though §9.3 makes a returned closure own its captures and the same shape through `fn adder(n: i64) -> Fn(i64) -> i64` passes | — |
+| B-2026-10-24-10 | 2026-10-24 | mir | low | A borrow-check refusal names a MIR temporary: `let f = make("abc".to_string());` with `fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }` reports "drop of _2 while it is borrowed (borrow at 3:13) [E0516]" on check, where the reader needs the temporary `"abc".to_string()` and the binding `f` that borrows it | — |
 
 ### Fixed
 
