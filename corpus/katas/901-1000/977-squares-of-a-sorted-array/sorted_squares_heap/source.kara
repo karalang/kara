@@ -1,0 +1,66 @@
+// LeetCode #977: Squares of a Sorted Array -- a heap of squares.
+//
+// Every square goes into a smallest-first `PriorityQueue`, and the
+// queue is emptied into the result. O(n log n).
+
+fn sorted_squares(nums: Vec[i64]) -> Vec[i64] {
+    let mut heap: PriorityQueue[i64] = PriorityQueue.new();
+    for x in nums {
+        heap.push(x * x);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    while let Some(s) = heap.pop() {
+        out.push(s);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n random numbers in [-top, top], sorted
+fn random_sorted(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    nums.sort();
+    nums
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![-4, -1, 0, 3, 10],
+        vec![-7, -3, 2, 3, 11],
+        vec![0],
+        vec![-5],
+        vec![-9, -4, -2, -1],
+        vec![1, 2, 6, 7],
+        vec![-3, -3, 0, 0, 3, 3],
+        vec![-10000, -1, 1, 10000],
+        vec![-2, -1, 0, 1, 2],
+        vec![-10, 1, 2, 3, 4],
+    ];
+    for nums in cases {
+        println(f"{nums}: {sorted_squares(nums)}");
+    }
+    // random sorted arrays: 300 small, 3000 longer, then 4 of 10^4 numbers
+    let mut seed = 977;
+    for (count, most, top) in vec![(300, 12, 5), (3000, 60, 1000), (4, 10000, 10000)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if most == 10000 { most } else { 1 + next_random(mut seed) % most };
+            for s in sorted_squares(random_sorted(n, top, mut seed)) {
+                total += s;
+                check = (check * 31 + s) % 1000000007;
+            }
+        }
+        println(f"{count} random arrays of up to {most} numbers: squares total {total}, checksum {check}");
+    }
+}

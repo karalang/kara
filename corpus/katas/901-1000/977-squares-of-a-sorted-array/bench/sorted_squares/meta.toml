@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/977-squares-of-a-sorted-array/bench/sorted_squares.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "e52a368cd"
+extracted_src = "a16a4a19"

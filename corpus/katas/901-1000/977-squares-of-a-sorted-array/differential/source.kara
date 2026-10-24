@@ -1,0 +1,290 @@
+// LeetCode #977: Squares of a Sorted Array -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random sorted arrays.
+
+// ---- star ----
+
+fn star_sorted_squares(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut out = Vec.filled(n, 0);
+    let mut lo = 0;
+    let mut hi = n - 1;
+    let mut at = n - 1;
+    while lo <= hi {
+        let a = nums[lo] * nums[lo];
+        let b = nums[hi] * nums[hi];
+        if a > b {
+            out[at] = a;
+            lo += 1;
+        } else {
+            out[at] = b;
+            hi -= 1;
+        }
+        at -= 1;
+    }
+    out
+}
+
+// ---- sort ----
+
+fn sort_sorted_squares(nums: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = nums.iter().map(|x| x * x).collect();
+    out.sort();
+    out
+}
+
+// ---- merge ----
+
+fn merge_first_not_negative(nums: ref Vec[i64]) -> i64 {
+    let mut lo = 0;
+    let mut hi = nums.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if nums[mid] < 0 {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn merge_sorted_squares(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut right = merge_first_not_negative(nums);
+    let mut left = right - 1;
+    while left >= 0 or right < n {
+        if right >= n or (left >= 0 and -nums[left] < nums[right]) {
+            out.push(nums[left] * nums[left]);
+            left -= 1;
+        } else {
+            out.push(nums[right] * nums[right]);
+            right += 1;
+        }
+    }
+    out
+}
+
+// ---- counting ----
+
+fn counting_sorted_squares(nums: Vec[i64]) -> Vec[i64] {
+    let mut top = 0;
+    for x in nums {
+        top = top.max(x.abs());
+    }
+    let mut count = Vec.filled(top + 1, 0);
+    for x in nums {
+        count[x.abs()] += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in 0..top + 1 {
+        for _ in 0..count[v] {
+            out.push(v * v);
+        }
+    }
+    out
+}
+
+// ---- heap ----
+
+fn heap_sorted_squares(nums: Vec[i64]) -> Vec[i64] {
+    let mut heap: PriorityQueue[i64] = PriorityQueue.new();
+    for x in nums {
+        heap.push(x * x);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    while let Some(s) = heap.pop() {
+        out.push(s);
+    }
+    out
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_sorted(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    nums.sort();
+    nums
+}
+
+// The statement read literally: the square of each number, put in
+// non-decreasing order by inserting each one after every square that
+// is no larger.
+fn literal(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums {
+        let s = x * x;
+        let mut at = out.len();
+        while at > 0 and out[at - 1] > s {
+            at -= 1;
+        }
+        out.insert(at, s);
+    }
+    out
+}
+
+fn arm(a: i64, nums: Vec[i64]) -> Vec[i64] {
+    if a == 0 {
+        star_sorted_squares(nums)
+    } else if a == 1 {
+        sort_sorted_squares(nums)
+    } else if a == 2 {
+        merge_sorted_squares(nums)
+    } else if a == 3 {
+        counting_sorted_squares(nums)
+    } else {
+        heap_sorted_squares(nums)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, nums: Vec[i64], small: bool, seed: mut ref i64) -> Vec[i64] {
+    let n = nums.len();
+    let truth = if small { literal(nums) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, nums));
+    }
+    // every number negated, read backwards so that it stays sorted
+    let mut mirrored: Vec[i64] = Vec.new();
+    for i in 0..n {
+        mirrored.push(-nums[n - 1 - i]);
+    }
+    // the sum of the squares, and the smallest and largest absolute value
+    let mut sum = 0;
+    let mut least = 10001;
+    let mut most = 0;
+    for x in nums {
+        sum += x * x;
+        least = least.min(x.abs());
+        most = most.max(x.abs());
+    }
+    // a number at the far end whose absolute value is at least every other
+    let far = most + next_random(mut seed) % (10001 - most);
+    let mut longer = nums.clone();
+    if next_random(mut seed) % 2 == 0 {
+        longer.push(far);
+    } else {
+        longer.insert(0, -far);
+    }
+    // the number of smallest absolute value taken out
+    let mut fewer: Vec[i64] = Vec.new();
+    let mut dropped = false;
+    for x in nums {
+        if not dropped and x.abs() == least {
+            dropped = true;
+        } else {
+            fewer.push(x);
+        }
+    }
+    for a in 0..5 {
+        let out = got[a].clone();
+        // P1: the statement's answer, on the first 3000 arrays
+        if small {
+            check(mut tally, 1, out == truth);
+        }
+        // P2: negating every number and reversing the order gives the
+        // same squares
+        check(mut tally, 2, arm(a, mirrored) == out);
+        // P3: as many squares as numbers, in order, summing to the sum of
+        // the squares, from the smallest absolute value's to the largest's
+        let mut in_order = out.len() == n;
+        let mut total = 0;
+        for i in 0..out.len() {
+            total += out[i];
+            if i > 0 and out[i - 1] > out[i] {
+                in_order = false;
+            }
+        }
+        check(mut tally, 3, in_order and total == sum and out[0] == least * least and out[out.len() - 1] == most * most);
+        // P4: a number at either end at least as large in absolute value
+        // as every other adds its square at the end
+        let mut want = out.clone();
+        want.push(far * far);
+        check(mut tally, 4, arm(a, longer) == want);
+        // P5: taking out a number of smallest absolute value takes out the
+        // first square, when another number is left
+        let mut rest: Vec[i64] = Vec.new();
+        for i in 1..out.len() {
+            rest.push(out[i]);
+        }
+        check(mut tally, 5, n == 1 or arm(a, fewer) == rest);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == out {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 977;
+    let mut total = 0;
+    let mut squares = 0;
+    let mut check_sum = 0;
+    // 3000 small arrays against the statement, the numbers drawn from
+    // narrow and wide ranges so that some repeat and some cross zero
+    // unevenly, then 200 of 300 numbers over LeetCode's whole range
+    for c in 0..3200 {
+        let small = c < 3000;
+        let nums = if small {
+            let n = 1 + next_random(mut seed) % 30;
+            let mut nums = random_sorted(n, vec![2, 5, 100, 10000][c % 4], mut seed);
+            // every fifth array moved 3 up or down, so that zero falls
+            // off the middle
+            if c % 5 == 4 {
+                let lean = if c % 10 == 4 { 3 } else { -3 };
+                for i in 0..n {
+                    nums[i] = (nums[i] + lean).max(-10000).min(10000);
+                }
+            }
+            nums
+        } else {
+            random_sorted(300, 10000, mut seed)
+        };
+        let got = properties(mut tally, nums, small, mut seed);
+        total += nums.len();
+        for s in got {
+            squares += s;
+            check_sum = (check_sum * 31 + s) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 arrays of {total} numbers: squares total {squares}, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

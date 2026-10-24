@@ -1,0 +1,55 @@
+// Benchmark: LeetCode #977 Squares of a Sorted Array -- the ★ arm, two
+// pointers from the ends, on 20 sorted arrays of 10000 numbers. Mirrors
+// sorted_squares.rs, .c, .py and go-seq/.
+
+fn sorted_squares(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut out = Vec.filled(n, 0);
+    let mut lo = 0;
+    let mut hi = n - 1;
+    let mut at = n - 1;
+    while lo <= hi {
+        let a = nums[lo] * nums[lo];
+        let b = nums[hi] * nums[hi];
+        if a > b {
+            out[at] = a;
+            lo += 1;
+        } else {
+            out[at] = b;
+            hi -= 1;
+        }
+        at -= 1;
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 500;
+    let count = 20;
+    let n = 10000;
+    let mut seed = 977;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 20001 - 10000);
+        }
+        nums.sort();
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let out = sorted_squares(arrays[(r + i) % count]);
+            total += out[0] + out[n - 1];
+            check = (check * 31 + out[(r * 13 + i * 7) % n]) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} arrays of 10000 numbers: squares total {total}, checksum {check}");
+}
