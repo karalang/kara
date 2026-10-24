@@ -1,0 +1,15 @@
+case 1: 2
+case 2: 3
+case 3: 0
+case 4: 2
+case 5: 3
+case 6: 4
+case 7: 6
+case 8: 6
+case 9: 10
+case 10: 16
+300 random trees of 1983 nodes: 1480 moves, checksum 422115453
+3000 random trees of 155722 nodes: 196981 moves, checksum 945373705
+a random tree of 100 nodes: 117 moves
+the complete tree of 100 nodes, every coin on the root: 480 moves
+a path of 100 nodes, every coin at the far end: 4950 moves

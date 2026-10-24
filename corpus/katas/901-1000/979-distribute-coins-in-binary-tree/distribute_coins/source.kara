@@ -1,0 +1,173 @@
+// LeetCode #979: Distribute Coins in Binary Tree -- excess from the
+// leaves.
+//
+// The coins that cross the edge above a subtree are its excess, its
+// coins less its nodes, in whichever direction the sign says, and no
+// plan can move fewer. So a walk from the leaves returns each subtree's
+// excess, and every edge adds the absolute excess below it to the
+// moves. O(n) time, O(height) stack.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn excess(t: ref Option[TreeNode], moves: mut ref i64) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => {
+            let l = excess(node.left, mut moves);
+            let r = excess(node.right, mut moves);
+            *moves += l.abs() + r.abs();
+            node.val + l + r - 1
+        }
+    }
+}
+
+fn distribute_coins(root: Option[TreeNode]) -> i64 {
+    let mut moves = 0;
+    excess(root, mut moves);
+    moves
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape, with n coins thrown at random nodes.
+fn random_tree(n: i64, seed: mut ref i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = vec![TreeNode { val: 0, left: None, right: None }];
+    for _ in 1..n {
+        let node = TreeNode { val: 0, left: None, right: None };
+        attach(nodes[0], node, mut seed);
+        nodes.push(node);
+    }
+    for _ in 0..n {
+        nodes[next_random(mut seed) % n].val += 1;
+    }
+    nodes[0]
+}
+
+// The complete tree of n nodes, node i's children nodes 2i + 1 and
+// 2i + 2, with all n coins on the root.
+fn complete_tree(n: i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for _ in 0..n {
+        nodes.push(TreeNode { val: 0, left: None, right: None });
+    }
+    for i in 1..n {
+        if i % 2 == 1 {
+            nodes[(i - 1) / 2].left = Some(nodes[i]);
+        } else {
+            nodes[(i - 1) / 2].right = Some(nodes[i]);
+        }
+    }
+    nodes[0].val = n;
+    nodes[0]
+}
+
+// A path of n nodes, every child on the left, with all n coins on the
+// deepest.
+fn path(n: i64) -> TreeNode {
+    let mut t = TreeNode { val: n, left: None, right: None };
+    for _ in 1..n {
+        t = TreeNode { val: 0, left: Some(t), right: None };
+    }
+    t
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[Option[i64]]] = vec![
+        vec![Some(3), Some(0), Some(0)],
+        vec![Some(0), Some(3), Some(0)],
+        vec![Some(1)],
+        vec![Some(1), Some(0), Some(2)],
+        vec![Some(0), Some(0), Some(3)],
+        vec![Some(1), Some(0), Some(0), None, Some(3)],
+        vec![Some(0), Some(0), None, Some(0), None, Some(4)],
+        vec![Some(4), Some(0), None, Some(0), None, Some(0)],
+        vec![Some(7), Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
+        vec![Some(0), Some(0), Some(0), Some(0), Some(0), Some(0), Some(7)],
+    ];
+    for i in 0..cases.len() {
+        println(f"case {i + 1}: {distribute_coins(from_level_order(cases[i].clone()))}");
+    }
+    // random trees with coins thrown at random: 300 of up to 12 nodes and
+    // 3000 of up to LeetCode's 100
+    let mut seed = 979;
+    for (count, most) in vec![(300, 12), (3000, 100)] {
+        let mut nodes = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = 1 + next_random(mut seed) % most;
+            let m = distribute_coins(Some(random_tree(n, mut seed)));
+            nodes += n;
+            total += m;
+            check = (check * 31 + m + 1) % 1000000007;
+        }
+        println(f"{count} random trees of {nodes} nodes: {total} moves, checksum {check}");
+    }
+    println(f"a random tree of 100 nodes: {distribute_coins(Some(random_tree(100, mut seed)))} moves");
+    println(f"the complete tree of 100 nodes, every coin on the root: {distribute_coins(Some(complete_tree(100)))} moves");
+    println(f"a path of 100 nodes, every coin at the far end: {distribute_coins(Some(path(100)))} moves");
+}

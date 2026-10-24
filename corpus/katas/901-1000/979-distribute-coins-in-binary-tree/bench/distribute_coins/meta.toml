@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/979-distribute-coins-in-binary-tree/bench/distribute_coins.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "0362b858e"
+extracted_src = "763de90a"

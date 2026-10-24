@@ -1,0 +1,461 @@
+// LeetCode #979: Distribute Coins in Binary Tree -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random trees with coins.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star ----
+
+fn star_excess(t: ref Option[TreeNode], moves: mut ref i64) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => {
+            let l = star_excess(node.left, mut moves);
+            let r = star_excess(node.right, mut moves);
+            *moves += l.abs() + r.abs();
+            node.val + l + r - 1
+        }
+    }
+}
+
+fn star_distribute_coins(root: Option[TreeNode]) -> i64 {
+    let mut moves = 0;
+    star_excess(root, mut moves);
+    moves
+}
+
+// ---- stack ----
+
+fn stack_distribute_coins(root: Option[TreeNode]) -> i64 {
+    let Some(top) = root else {
+        return 0;
+    };
+    let mut moves = 0;
+    let mut done: Vec[i64] = Vec.new();
+    let mut stack: Vec[(TreeNode, bool)] = vec![(top, false)];
+    while let Some((node, ready)) = stack.pop() {
+        if ready {
+            let r = if node.right.is_some() { done.pop().unwrap() } else { 0 };
+            let l = if node.left.is_some() { done.pop().unwrap() } else { 0 };
+            moves += l.abs() + r.abs();
+            done.push(node.val + l + r - 1);
+        } else {
+            stack.push((node, true));
+            if let Some(r) = node.right {
+                stack.push((r, false));
+            }
+            if let Some(l) = node.left {
+                stack.push((l, false));
+            }
+        }
+    }
+    moves
+}
+
+// ---- levels ----
+
+fn levels_distribute_coins(root: Option[TreeNode]) -> i64 {
+    let Some(top) = root else {
+        return 0;
+    };
+    let mut nodes: Vec[TreeNode] = vec![top];
+    let mut parent: Vec[i64] = vec![-1];
+    let mut i = 0;
+    while i < nodes.len() {
+        let node = nodes[i];
+        if let Some(l) = node.left {
+            nodes.push(l);
+            parent.push(i);
+        }
+        if let Some(r) = node.right {
+            nodes.push(r);
+            parent.push(i);
+        }
+        i += 1;
+    }
+    let mut ex: Vec[i64] = Vec.new();
+    for node in nodes {
+        ex.push(node.val - 1);
+    }
+    let mut moves = 0;
+    let mut j = ex.len() - 1;
+    while j > 0 {
+        moves += ex[j].abs();
+        ex[parent[j]] += ex[j];
+        j -= 1;
+    }
+    moves
+}
+
+// ---- recount ----
+
+fn recount_count(t: ref Option[TreeNode]) -> (i64, i64) {
+    match t {
+        None => (0, 0),
+        Some(node) => {
+            let (ln, lc) = recount_count(node.left);
+            let (rn, rc) = recount_count(node.right);
+            (ln + rn + 1, lc + rc + node.val)
+        }
+    }
+}
+
+fn recount_edge(child: ref Option[TreeNode], moves: mut ref i64) {
+    if child.is_some() {
+        let (n, c) = recount_count(child);
+        *moves += (c - n).abs();
+        recount_walk(child, mut moves);
+    }
+}
+
+fn recount_walk(t: ref Option[TreeNode], moves: mut ref i64) {
+    if let Some(node) = t {
+        recount_edge(node.left, mut moves);
+        recount_edge(node.right, mut moves);
+    }
+}
+
+fn recount_distribute_coins(root: Option[TreeNode]) -> i64 {
+    let mut moves = 0;
+    recount_walk(root, mut moves);
+    moves
+}
+
+// ---- peel ----
+
+fn peel_distribute_coins(root: Option[TreeNode]) -> i64 {
+    let Some(top) = root else {
+        return 0;
+    };
+    let mut nodes: Vec[TreeNode] = vec![top];
+    let mut adj: Vec[Vec[i64]] = vec![Vec.new()];
+    let mut i = 0;
+    while i < nodes.len() {
+        let node = nodes[i];
+        for child in vec![node.left, node.right] {
+            if let Some(c) = child {
+                let j = nodes.len();
+                nodes.push(c);
+                adj.push(Vec.new());
+                adj[i].push(j);
+                adj[j].push(i);
+            }
+        }
+        i += 1;
+    }
+    let n = nodes.len();
+    let mut ex: Vec[i64] = Vec.new();
+    let mut degree: Vec[i64] = Vec.new();
+    let mut leaves: Vec[i64] = Vec.new();
+    for v in 0..n {
+        ex.push(nodes[v].val - 1);
+        degree.push(adj[v].len());
+        if adj[v].len() == 1 {
+            leaves.push(v);
+        }
+    }
+    let mut gone = Vec.filled(n, false);
+    let mut moves = 0;
+    while let Some(v) = leaves.pop() {
+        gone[v] = true;
+        for w in adj[v] {
+            if not gone[w] {
+                moves += ex[v].abs();
+                ex[w] += ex[v];
+                degree[w] -= 1;
+                if degree[w] == 1 {
+                    leaves.push(w);
+                }
+            }
+        }
+    }
+    moves
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape with n coins: thrown at random nodes (way 0),
+// piled on one random node (way 1), or one on each node and then a few
+// moved at random from a node that has one to any node (way 2).
+fn random_tree(n: i64, way: i64, seed: mut ref i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = vec![TreeNode { val: 0, left: None, right: None }];
+    for _ in 1..n {
+        let node = TreeNode { val: 0, left: None, right: None };
+        attach(nodes[0], node, mut seed);
+        nodes.push(node);
+    }
+    if way == 0 {
+        for _ in 0..n {
+            nodes[next_random(mut seed) % n].val += 1;
+        }
+    } else if way == 1 {
+        nodes[next_random(mut seed) % n].val = n;
+    } else {
+        for i in 0..n {
+            nodes[i].val = 1;
+        }
+        for _ in 0..1 + next_random(mut seed) % 4 {
+            let from = next_random(mut seed) % n;
+            if nodes[from].val > 0 {
+                nodes[from].val -= 1;
+                nodes[next_random(mut seed) % n].val += 1;
+            }
+        }
+    }
+    nodes[0]
+}
+
+fn copy(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: node.val, left: copy(node.left), right: copy(node.right) }),
+    }
+}
+
+fn mirror(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: node.val, left: mirror(node.right), right: mirror(node.left) }),
+    }
+}
+
+// the nodes in preorder, each beside its parent's place (-1 for the root)
+fn listing(t: ref Option[TreeNode], parent: i64, nodes: mut ref Vec[TreeNode], parents: mut ref Vec[i64]) {
+    if let Some(node) = t {
+        let me = nodes.len();
+        nodes.push(node);
+        parents.push(parent);
+        listing(node.left, me, mut nodes, mut parents);
+        listing(node.right, me, mut nodes, mut parents);
+    }
+}
+
+fn encode(v: ref Vec[i64], base: i64) -> i64 {
+    let mut s = 0;
+    for x in v {
+        s = s * base + x;
+    }
+    s
+}
+
+fn decode(s: i64, n: i64, base: i64) -> Vec[i64] {
+    let mut v = Vec.filled(n, 0);
+    let mut rest = s;
+    let mut i = n - 1;
+    while i >= 0 {
+        v[i] = rest % base;
+        rest = rest / base;
+        i -= 1;
+    }
+    v
+}
+
+// The statement read literally: a move takes one coin from a node to a
+// node joined to it by an edge, and the answer is the fewest moves from
+// the given coins to one on every node, found by a breadth-first search
+// over every placement of the coins.
+fn literal(t: ref Option[TreeNode]) -> i64 {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    let mut parents: Vec[i64] = Vec.new();
+    listing(t, -1, mut nodes, mut parents);
+    let n = nodes.len();
+    let base = n + 1;
+    let mut start: Vec[i64] = Vec.new();
+    for node in nodes {
+        start.push(node.val);
+    }
+    let goal = encode(Vec.filled(n, 1), base);
+    let mut seen: Set[i64] = Set.new();
+    let mut frontier: Vec[i64] = vec![encode(start, base)];
+    seen.insert(frontier[0]);
+    let mut d = 0;
+    loop {
+        let mut next: Vec[i64] = Vec.new();
+        for s in frontier {
+            if s == goal {
+                return d;
+            }
+            let v = decode(s, n, base);
+            for c in 1..n {
+                let p = parents[c];
+                for (from, to) in vec![(c, p), (p, c)] {
+                    if v[from] > 0 {
+                        let mut w = v.clone();
+                        w[from] -= 1;
+                        w[to] += 1;
+                        let e = encode(w, base);
+                        if not seen.contains(e) {
+                            seen.insert(e);
+                            next.push(e);
+                        }
+                    }
+                }
+            }
+        }
+        frontier = next;
+        d += 1;
+    }
+}
+
+fn arm(a: i64, t: ref Option[TreeNode]) -> i64 {
+    if a == 0 {
+        star_distribute_coins(t)
+    } else if a == 1 {
+        stack_distribute_coins(t)
+    } else if a == 2 {
+        levels_distribute_coins(t)
+    } else if a == 3 {
+        recount_distribute_coins(t)
+    } else {
+        peel_distribute_coins(t)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, t: Option[TreeNode], small: bool, seed: mut ref i64) -> i64 {
+    let truth = if small { literal(t) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, t));
+    }
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    let mut parents: Vec[i64] = Vec.new();
+    listing(t, -1, mut nodes, mut parents);
+    let n = nodes.len();
+    // the coins that must leave their nodes, at least one move each
+    let mut spare = 0;
+    for node in nodes {
+        spare += (node.val - 1).max(0);
+    }
+    let mirrored = mirror(t);
+    // one coin moved across one edge, from a node that has a coin
+    let moved = copy(t);
+    let mut cnodes: Vec[TreeNode] = Vec.new();
+    let mut cparents: Vec[i64] = Vec.new();
+    listing(moved, -1, mut cnodes, mut cparents);
+    if n > 1 {
+        let mut from = next_random(mut seed) % n;
+        while cnodes[from].val == 0 {
+            from = (from + 1) % n;
+        }
+        let mut near: Vec[TreeNode] = Vec.new();
+        if cparents[from] >= 0 {
+            near.push(cnodes[cparents[from]]);
+        }
+        if let Some(l) = cnodes[from].left {
+            near.push(l);
+        }
+        if let Some(r) = cnodes[from].right {
+            near.push(r);
+        }
+        cnodes[from].val -= 1;
+        near[next_random(mut seed) % near.len()].val += 1;
+    }
+    // a new leaf holding one coin, at a random empty place
+    let grown = copy(t);
+    attach(grown.unwrap(), TreeNode { val: 1, left: None, right: None }, mut seed);
+    for a in 0..5 {
+        let p = got[a];
+        // P1: the statement's answer, on the first 3000 trees
+        if small {
+            check(mut tally, 1, p == truth);
+        }
+        // P2: the mirror image needs the same moves
+        check(mut tally, 2, arm(a, mirrored) == p);
+        // P3: every spare coin moves at least once, and none needs more
+        // than n - 1 moves
+        check(mut tally, 3, spare <= p and p <= spare * (n - 1));
+        // P4: one coin moved across one edge changes the answer by exactly
+        // one, since only that edge's crossing count changes
+        check(mut tally, 4, n == 1 or (arm(a, moved) - p).abs() == 1);
+        // P5: a new leaf with its own coin needs nothing, so the answer
+        // stays
+        check(mut tally, 5, arm(a, grown) == p);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == p {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 979;
+    let mut total = 0;
+    let mut moves = 0;
+    let mut check_sum = 0;
+    // 3000 trees of 1 to 7 nodes against the statement, small enough to
+    // search every placement of the coins, then 200 of LeetCode's 100
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 7 } else { 100 };
+        let t = Some(random_tree(n, c % 3, mut seed));
+        let got = properties(mut tally, t, small, mut seed);
+        total += n;
+        moves += got;
+        check_sum = (check_sum * 31 + got + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 trees of {total} nodes: {moves} moves, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

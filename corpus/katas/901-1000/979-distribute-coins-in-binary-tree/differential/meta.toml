@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/901-1000/979-distribute-coins-in-binary-tree/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:set"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "0362b858e"
+extracted_src = "3203bc9a"

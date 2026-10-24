@@ -1,0 +1,91 @@
+// Benchmark: LeetCode #979 Distribute Coins in Binary Tree -- the ★ arm,
+// excess from the leaves, on random trees of 100 nodes, LeetCode's
+// largest. Mirrors distribute_coins.rs, .c, .py and go-seq/.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn excess(t: ref Option[TreeNode], moves: mut ref i64) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => {
+            let l = excess(node.left, mut moves);
+            let r = excess(node.right, mut moves);
+            *moves += l.abs() + r.abs();
+            node.val + l + r - 1
+        }
+    }
+}
+
+fn distribute_coins(root: Option[TreeNode]) -> i64 {
+    let mut moves = 0;
+    excess(root, mut moves);
+    moves
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape, with n coins thrown at random nodes.
+fn random_tree(n: i64, seed: mut ref i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = vec![TreeNode { val: 0, left: None, right: None }];
+    for _ in 1..n {
+        let node = TreeNode { val: 0, left: None, right: None };
+        attach(nodes[0], node, mut seed);
+        nodes.push(node);
+    }
+    for _ in 0..n {
+        nodes[next_random(mut seed) % n].val += 1;
+    }
+    nodes[0]
+}
+
+fn main() {
+    let rounds = 200;
+    // 2000 random trees of 100 nodes, made once
+    let mut seed = 979;
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    for _ in 0..2000 {
+        trees.push(Some(random_tree(100, mut seed)));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..2000 {
+            let m = distribute_coins(trees[(r + i) % 2000]);
+            total += m;
+            check = (check * 31 + m + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 2000 trees of 100 nodes: {total} moves, checksum {check}");
+}
