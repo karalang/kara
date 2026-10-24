@@ -147,6 +147,11 @@ struct Walk<'t, 'a> {
     /// binding is a `ref` into that place (§4.6), so a write through it is
     /// a write through the `ref` (§5.9; B-2026-10-24-21).
     pattern_read_only: FxHashMap<usize, (ReadOnlyAt, String)>,
+    /// This function's borrowed parameters by the offset of their type
+    /// (where an `Origin::Param` binding's fix goes): the name, and whether
+    /// it is bare (D5's implied `ref`), so a local bound from one is told
+    /// apart from it (B-2026-10-24-37).
+    params_by_fix: FxHashMap<usize, (String, bool)>,
     /// The callee of each call of an `OnceFn` value, for the ownership
     /// pass's E0500 wording (§9.6).
     once_calls: FxHashSet<SpanKey>,
@@ -313,6 +318,7 @@ impl<'a> TypeChecker<'a> {
             handler_shapes: Vec::new(),
             written_pattern_bindings: FxHashSet::default(),
             pattern_read_only: FxHashMap::default(),
+            params_by_fix: FxHashMap::default(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             w.self_read_only = matches!(f.self_param, Some(SelfParam::Ref));
@@ -323,19 +329,35 @@ impl<'a> TypeChecker<'a> {
                 }),
                 _ => None,
             };
+            w.params_by_fix = f
+                .params
+                .iter()
+                .filter_map(
+                    |p| match (&p.ty.kind, p.pattern.binding_names().as_slice()) {
+                        (TypeKind::Ref(inner), [n]) => {
+                            Some((p.ty.span.offset, (n.clone(), inner.span == p.ty.span)))
+                        }
+                        _ => None,
+                    },
+                )
+                .collect();
             w.scopes = vec![f
                 .params
                 .iter()
                 .flat_map(|p| {
-                    let (origin, fix) = if matches!(p.ty.kind, TypeKind::Ref(_)) {
-                        // `ref T` → `mut ref T`: insert before the `ref`.
+                    let (origin, fix) = if let TypeKind::Ref(inner) = &p.ty.kind {
+                        // `ref T` → `mut ref T`: insert before the `ref`. A
+                        // bare `T` is D5's `ref T` with `T`'s own span and no
+                        // `ref` written, so it gets the whole `mut ref `
+                        // (B-2026-10-24-37).
                         let span = Span {
                             length: 0,
                             ..p.ty.span
                         };
+                        let bare = inner.span == p.ty.span;
                         let fix = (!p.is_frozen).then(|| FixIt {
                             span,
-                            replacement: "mut ".to_string(),
+                            replacement: if bare { "mut ref " } else { "mut " }.to_string(),
                         });
                         (Origin::Param, fix)
                     } else {
@@ -1941,11 +1963,39 @@ impl Walk<'_, '_> {
         };
         let action = action.replace("through it", &format!("through `{name}`"));
         match origin {
-            Origin::Param => format!(
-                "`{name}` is a `ref` parameter, so {action} cannot modify it \
-                 (core-semantics.md §5.9). Declare it `{name}: mut ref ...` and mark its \
-                 call sites `mut`"
-            ),
+            Origin::Param => {
+                let param = self
+                    .lookup(name)
+                    .and_then(|b| b.2.as_ref())
+                    .and_then(|fix| self.params_by_fix.get(&fix.span.offset));
+                let (param, bare) = match param {
+                    Some((p, bare)) => (p.as_str(), *bare),
+                    None => (name, false),
+                };
+                let what = if bare {
+                    "a bare parameter, which borrows (design.md § Parameter modes)"
+                } else {
+                    "a `ref` parameter"
+                };
+                let copy = if bare {
+                    "; to change a copy of its own instead, take it `own` or `.clone()` it"
+                } else {
+                    ""
+                };
+                if param == name {
+                    format!(
+                        "`{name}` is {what}, so {action} cannot modify it \
+                         (core-semantics.md §5.9). Declare it `{name}: mut ref ...` and mark \
+                         its call sites `mut`{copy}"
+                    )
+                } else {
+                    format!(
+                        "`{name}` is bound from `{param}`, {what}, so {action} cannot modify \
+                         it (core-semantics.md §5.9). Declare `{param}: mut ref ...` and mark \
+                         its call sites `mut`{copy}"
+                    )
+                }
+            }
             Origin::SelfCopy => format!(
                 "`{name}` copies the receiver `ref self` (core-semantics.md §4.6), so \
                  {action} cannot modify it (§5.9). Declare the method `mut ref self`"

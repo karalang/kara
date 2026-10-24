@@ -13089,3 +13089,39 @@ fn a_string_literal_let_used_as_a_str_names_the_binding_and_fixes_it() {
          (design.md § String literals)\n",
     );
 }
+
+#[test]
+fn a_write_through_a_bare_parameter_fixes_to_mut_ref() {
+    // B-2026-10-24-37: a bare parameter is D5's `ref T` with no `ref`
+    // written, so its fix inserts `mut ref `, not `mut `; a local bound from
+    // it names the parameter, not itself.
+    let main =
+        "fn main() {\n    let mut v = [\"b\".to_string(), \"a\".to_string()].to_vec();\n    \
+                println(sorted_names(v));\n}\n";
+    for (tag, body, expect) in [
+        (
+            "bare-param-write",
+            "    items.sort();\n    items.join(\",\")\n",
+            "`items` is a bare parameter, which borrows",
+        ),
+        (
+            "bare-param-local-write",
+            "    let mut s = items;\n    s.sort();\n    s.join(\",\")\n",
+            "`s` is bound from `items`, a bare parameter, which borrows",
+        ),
+    ] {
+        let src = format!("fn sorted_names(items: Vec[String]) -> String {{\n{body}}}\n{main}");
+        rejected_then_fixed_in(tag, &src, expect, "items: mut ref Vec[String]", 2);
+    }
+    let src = format!(
+        "fn sorted_names(items: ref Vec[String]) -> String {{\n    let mut s = items;\n    \
+         s.sort();\n    s.join(\",\")\n}}\n{main}"
+    );
+    rejected_then_fixed_in(
+        "ref-param-local-write",
+        &src,
+        "`s` is bound from `items`, a `ref` parameter",
+        "items: mut ref Vec[String]",
+        2,
+    );
+}
