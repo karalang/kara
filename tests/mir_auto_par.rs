@@ -636,3 +636,140 @@ fn main() {
     assert!(seq >= std::time::Duration::from_millis(800), "{seq:?}");
     assert!(par < std::time::Duration::from_millis(500), "{par:?}");
 }
+
+/// A counting `while` (`while k < n { ..; k += 1 }`, or `k = k + 1`) runs
+/// as a `for` over `k..n` does: a reduction over `i64`, `u64` from a `u32`
+/// counter, an `xor` bounded by `v.len()`, and the counter left at `n`, or
+/// where it was when the loop never ran. A body that pushes, breaks, or
+/// writes its bound keeps its order.
+#[test]
+fn mir_auto_par_counting_whiles() {
+    let src = r#"fn work(n: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        s = (s + i * i) % 1000007;
+        i += 1;
+    }
+    s
+}
+
+fn main() {
+    let mut total = 0;
+    let mut k = 0;
+    let iters = 1000;
+    while k < iters {
+        let w = work(k);
+        total = total + w;
+        k = k + 1;
+    }
+    println(f"{total} {k}");
+    let mut j: u32 = 5;
+    let mut x: u64 = 0;
+    while j < 40 {
+        x += j as u64;
+        j += 1;
+    }
+    let mut late: u32 = 50;
+    while late < 40 {
+        x += late as u64;
+        late += 1;
+    }
+    println(f"{x} {j} {late}");
+    let v = Vec.filled(37, 2);
+    let mut m = 3;
+    let mut bits = 0;
+    while m < v.len() {
+        bits = bits ^ (v[m] * m);
+        m += 1;
+    }
+    println(f"{bits} {m}");
+    let mut q = 0;
+    let mut out: Vec[i64] = Vec.new();
+    while q < 10 {
+        out.push(q);
+        q += 1;
+    }
+    let mut b = 0;
+    let mut found = 0;
+    while b < 100 {
+        if b * b > 50 {
+            found = b;
+            break;
+        }
+        b += 1;
+    }
+    let mut lim = 10;
+    let mut c = 0;
+    let mut seen = 0;
+    while c < lim {
+        seen += c;
+        lim = 8;
+        c += 1;
+    }
+    println(f"{out.len()} {q} {found} {b} {seen} {c}");
+}
+"#;
+    let (out, code, err) =
+        same_both_ways("whiles", src, &["main@15", "main@23", "main@28", "main@36"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, "458838713 1000\n770 40 50\n78 37\n10 10 8 8 28 8\n");
+}
+
+/// A loop in a function that runs many times (recursive, or called from a
+/// loop) keeps its order, as its tasks would be spawned on every call; the
+/// same loop in a function called once runs as tasks.
+#[test]
+fn mir_auto_par_loops_in_hot_functions_stay_in_order() {
+    let src = r#"fn rec(d: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < 50 {
+        s += i * d;
+        i += 1;
+    }
+    if d == 0 { s } else { s + rec(d - 1) }
+}
+
+fn called(d: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < 50 {
+        s += i * d;
+        i += 1;
+    }
+    s
+}
+
+fn cold(d: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < 50 {
+        s += i * d;
+        i += 1;
+    }
+    s
+}
+
+fn main() {
+    let mut t = 0;
+    for d in 0..20 {
+        t += called(d);
+        println(t);
+    }
+    println(f"{rec(10)} {t} {cold(7)}");
+}
+"#;
+    let (out, code, err) = same_both_ways("hot", src, &["cold@24"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(out.ends_with("67375 232750 8575\n"), "{out}");
+    let par = interp_run("hot-report", src, true);
+    let report = String::from_utf8_lossy(&par.stderr);
+    for at in ["rec@4", "called@14"] {
+        let name = at.split('@').next().unwrap();
+        let want = format!(
+            "auto-par: in order: {at}: Cost(\"{name} is recursive or reached from a loop\")"
+        );
+        assert!(report.lines().any(|l| l == want), "{want} in {report}");
+    }
+}

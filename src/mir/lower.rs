@@ -375,6 +375,7 @@ fn lower_program_inner<'a>(
         closure_exprs: FxHashMap::default(),
         par_task_exprs: FxHashMap::default(),
         par_for_task_exprs: FxHashMap::default(),
+        counted_whiles: FxHashMap::default(),
         next_synthetic_node: u32::MAX - 1,
         auto_par,
         next_synthetic_sym: usize::MAX - 1,
@@ -892,6 +893,9 @@ struct Lcx<'a> {
     par_task_exprs: FxHashMap<NodeId, &'a Expr>,
     /// The closure `|| { body }` a `par for` iteration runs as, by body.
     par_for_task_exprs: FxHashMap<*const Block, &'a Expr>,
+    /// Each `while`'s counting shape, by the loop's node, or `None` when
+    /// it has none (see [`CountedWhile`]).
+    counted_whiles: FxHashMap<NodeId, Option<CountedWhile<'a>>>,
     /// The next id for a node the builder makes up (counting down from
     /// the top, clear of the checker's ids).
     next_synthetic_node: u32,
@@ -2396,6 +2400,23 @@ struct ChunkJob<'a> {
     /// The loop's reduction is a signed sum, which the task keeps wide
     /// (see [`AutoRed::wide`]).
     wide: Option<WideSum<'a>>,
+}
+
+/// `while k < n { ..; k += 1 }` (or `k = k + 1`), with `k` an integer
+/// local and `n` a literal, a name or `v.len()`: auto-par records and runs
+/// it as `for k in k..n { .. }`, the step left out (M4 item 14). Each task
+/// binds its own `k`; the loop then leaves `k` at `n` when it ran at all.
+#[derive(Clone, Copy)]
+struct CountedWhile<'a> {
+    /// `k`, binding the counter's symbol.
+    pattern: &'a Pattern,
+    /// `k..n`.
+    range: &'a Expr,
+    /// The body without its last statement, the step.
+    inner: &'a Block,
+    step: &'a Stmt,
+    counter: &'a Expr,
+    bound: &'a Expr,
 }
 
 /// `acc = acc op e` in an auto-par loop's body: each task starts its own
@@ -6638,6 +6659,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                 body,
                 ..
             } => {
+                let counted = match self.lcx.auto_par {
+                    AutoPar::Off => None,
+                    _ if self.seq_depth > 0 => None,
+                    _ => self.counted_while(e, condition, body)?,
+                };
+                if let (Some(cw), AutoPar::Apply(hints)) = (counted, &self.lcx.auto_par) {
+                    let key = (self.name.clone(), e.span.offset, e.span.length);
+                    if let Some(reds) = hints.loops.get(&key).cloned() {
+                        if !leaves_loop(cw.inner) {
+                            if let Some(red) = self.auto_par_plan(cw.inner, &reds)? {
+                                return self.auto_par_while(e, label, cw, red, dest);
+                            }
+                        }
+                    }
+                }
                 let head = self.b.new_block();
                 let body_bb = self.b.new_block();
                 let exit = self.b.new_block();
@@ -6656,7 +6692,26 @@ impl<'l, 'a> Bx<'l, 'a> {
                     },
                     body_bb,
                 );
-                self.loop_body(label, body, head, exit, None)?;
+                match counted {
+                    // The body's step outside the candidate, so the
+                    // iterations' uses of the counter are reads.
+                    Some(cw) if matches!(self.lcx.auto_par, AutoPar::Record) => {
+                        self.loops.push(LoopCx {
+                            label: label.clone(),
+                            break_bb: exit,
+                            continue_bb: head,
+                            depth: self.scopes.len(),
+                            dest: None,
+                        });
+                        let r = self
+                            .auto_par_record(cw.inner, e.span)
+                            .and_then(|()| self.stmt(cw.step));
+                        self.loops.pop();
+                        r?;
+                        self.goto(head);
+                    }
+                    _ => self.loop_body(label, body, head, exit, None)?,
+                }
                 self.cur = exit;
                 self.assign(dest, Rvalue::Use(unit_const(self.unit())));
                 Ok(())
@@ -9748,6 +9803,167 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         }
         self.for_range(e, label, pattern, iterable, body, dest)
+    }
+
+    /// `e`'s counting shape, when it has one (see [`CountedWhile`]).
+    fn counted_while(
+        &mut self,
+        e: &'a Expr,
+        condition: &'a Expr,
+        body: &'a Block,
+    ) -> R<Option<CountedWhile<'a>>> {
+        if let Some(&c) = self.lcx.counted_whiles.get(&e.id) {
+            return Ok(c);
+        }
+        let found = self.find_counted_while(condition, body)?;
+        self.lcx.counted_whiles.insert(e.id, found);
+        Ok(found)
+    }
+
+    fn find_counted_while(
+        &mut self,
+        condition: &'a Expr,
+        body: &'a Block,
+    ) -> R<Option<CountedWhile<'a>>> {
+        let ExprKind::Binary {
+            op: AstBinOp::Lt,
+            left: counter,
+            right: bound,
+        } = &condition.kind
+        else {
+            return Ok(None);
+        };
+        let ExprKind::Identifier(name) = &counter.kind else {
+            return Ok(None);
+        };
+        let t = self.expr_ty(counter)?;
+        // An unsuffixed literal bound reads as the counter's type, as the
+        // comparison reads it.
+        let literal = matches!(bound.kind, ExprKind::Integer(_, None));
+        if !matches!(self.tys().tcx().kind(t), HK::Int(_) | HK::UInt(_))
+            || (!literal && self.expr_ty(bound)? != t)
+        {
+            return Ok(None);
+        }
+        let local = |x: &Expr| match (&x.kind, self.lcx.res.get(&x.id)) {
+            (ExprKind::Identifier(_), Some(Res::Local(sym))) if self.locals.contains_key(sym) => {
+                Some(*sym)
+            }
+            _ => None,
+        };
+        let Some(k) = local(counter) else {
+            return Ok(None);
+        };
+        let is_k = |x: &Expr| local(x) == Some(k);
+        let bound_ok = match &bound.kind {
+            ExprKind::Integer(..) | ExprKind::Path { .. } => true,
+            ExprKind::Identifier(_) => !is_k(bound),
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => method == "len" && args.is_empty() && local(object).is_some() && !is_k(object),
+            _ => false,
+        };
+        let one = |x: &Expr| matches!(x.kind, ExprKind::Integer(1, _));
+        let (Some((step, rest)), None) = (body.stmts.split_last(), &body.final_expr) else {
+            return Ok(None);
+        };
+        let steps = match &step.kind {
+            StmtKind::CompoundAssign {
+                target,
+                op: CompoundOp::Add,
+                value,
+            } => is_k(target) && one(value),
+            StmtKind::Assign { target, value } => {
+                is_k(target)
+                    && matches!(&value.kind, ExprKind::Binary { op: AstBinOp::Add, left, right }
+                        if is_k(left) && one(right))
+            }
+            _ => false,
+        };
+        if !bound_ok || !steps || rest.is_empty() {
+            return Ok(None);
+        }
+        let pid = NodeId(self.lcx.next_synthetic_node);
+        self.lcx.next_synthetic_node -= 1;
+        self.lcx.binding_syms.insert((pid, name.clone()), k);
+        self.lcx.node_types.insert(pid, t);
+        let pattern: &'a Pattern = Box::leak(Box::new(Pattern {
+            kind: PatternKind::Binding(name.clone()),
+            span: counter.span,
+            id: pid,
+        }));
+        let bound: &'a Expr = if literal {
+            let bid = NodeId(self.lcx.next_synthetic_node);
+            self.lcx.next_synthetic_node -= 1;
+            self.lcx.node_types.insert(bid, t);
+            Box::leak(Box::new(Expr {
+                kind: bound.kind.clone(),
+                span: bound.span,
+                id: bid,
+            }))
+        } else {
+            bound
+        };
+        let rid = NodeId(self.lcx.next_synthetic_node);
+        self.lcx.next_synthetic_node -= 1;
+        let range: &'a Expr = Box::leak(Box::new(Expr {
+            kind: ExprKind::Binary {
+                op: AstBinOp::Range,
+                left: counter.clone(),
+                right: Box::new(bound.clone()),
+            },
+            span: condition.span,
+            id: rid,
+        }));
+        let inner: &'a Block = Box::leak(Box::new(Block {
+            stmts: rest.to_vec(),
+            final_expr: None,
+            span: body.span,
+        }));
+        Ok(Some(CountedWhile {
+            pattern,
+            range,
+            inner,
+            step,
+            counter,
+            bound,
+        }))
+    }
+
+    /// A counting `while` its verdict said yes to: its iterations run as
+    /// tasks, as a `for` over `k..n`'s do, and the counter then holds `n`
+    /// when it started below it, as the sequential loop leaves it.
+    fn auto_par_while(
+        &mut self,
+        e: &'a Expr,
+        label: &Option<String>,
+        cw: CountedWhile<'a>,
+        red: Option<AutoRed<'a>>,
+        dest: Place,
+    ) -> R<()> {
+        let t = self.expr_ty(cw.counter)?;
+        let k = self.expr_place(cw.counter, false)?;
+        self.auto_par_for(e, label, cw.pattern, cw.range, cw.inner, red, dest)?;
+        self.push_scope();
+        let n = self.temp(t);
+        self.expr_into(cw.bound, Place::local(n))?;
+        let bool_t = self.tys().bool();
+        let below = self.temp(bool_t);
+        self.assign(
+            below,
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Operand::Copy(k.clone()),
+                Operand::Copy(Place::local(n)),
+            ),
+        );
+        self.when(below, |b| {
+            b.assign(k, Rvalue::Use(Operand::Copy(Place::local(n))));
+        });
+        self.pop_scope()
     }
 
     /// A sequential `for`'s body, recorded as an auto-par candidate of one
@@ -19411,6 +19627,23 @@ fn process_exit_args(e: &Expr) -> Option<&[CallArg]> {
         .then_some(args.as_slice()),
         _ => None,
     }
+}
+
+/// Whether a loop body `b` can leave its iteration other than by its end:
+/// a `return`, `?`, `break` or `continue` anywhere in it (an auto-par task
+/// runs a whole run of iterations, so it takes none).
+fn leaves_loop(b: &Block) -> bool {
+    let mut leaves = false;
+    crate::span_visitor::for_each_expr_in_block(b, &mut |x| {
+        leaves |= matches!(
+            x.kind,
+            ExprKind::Return(_)
+                | ExprKind::Question(_)
+                | ExprKind::Break { .. }
+                | ExprKind::Continue { .. }
+        );
+    });
+    leaves
 }
 
 /// Whether `e` holds a `return`, which leaves the enclosing function: a

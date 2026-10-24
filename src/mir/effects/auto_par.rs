@@ -49,8 +49,11 @@
 //!   parallel only when at least two of its statements do real work (a
 //!   loop of their own, or a call that loops or recurses), and only when
 //!   it runs rarely: not inside a loop of its function, and not in a
-//!   function that is recursive or reached from a loop. A loop gets no
-//!   cost gate here; the builder sizes it.
+//!   function that is recursive or reached from a loop. A loop's cost
+//!   gate is that second half only (its blocks always lie on its own
+//!   cycle): in a function that runs many times, its tasks would be
+//!   spawned again and again (kata 52's recursive search ran 160x slower).
+//!   Otherwise the builder sizes it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -414,6 +417,10 @@ pub(super) fn verdict(
                     Some(c) => Err(Refusal::Conflict(c)),
                     None => match stopped(0, 0) {
                         Some(why) => Err(why),
+                        // Its tasks would be spawned again and again.
+                        None if cost.hot.contains(name) => Err(Refusal::Cost(format!(
+                            "{name} is recursive or reached from a loop"
+                        ))),
                         None => Ok(reductions),
                     },
                 }
