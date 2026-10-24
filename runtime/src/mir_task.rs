@@ -9,6 +9,51 @@
 //! When every task in the queue has suspended on a `Wait` with nothing
 //! having happened since, the executor sleeps until a deadline passes or a
 //! socket is ready; with neither to wait for, the program is deadlocked.
+//!
+//! # The reactor contract (M4 item 2)
+//!
+//! Readiness moves from poll(2) over every waiter to one reactor. The natives
+//! (`mir_io.rs`, Thread C's), this executor, codegen's readiness loop
+//! (`src/backend/mir/coroutine.rs`, `task.rs`) and the MIR interpreter's
+//! twin all keep it:
+//!
+//! - **Fds.** Every socket a native creates (listen, accept, connect, UDP),
+//!   and a spawned child's pipes, is `O_NONBLOCK | O_CLOEXEC` from birth.
+//! - **Outside a task**, every native keeps blocking semantics: on `EAGAIN`
+//!   it calls `karac_mir_io_wait(fd, write, timeout_ms)`, a one-fd blocking
+//!   wait answering 0 when ready and 1 when `timeout_ms` passed (-1: none),
+//!   and retries. A program that runs no task sees no change.
+//! - **Inside a task** a native that would block returns `IO_NOT_READY`
+//!   (100, exported from `mir_io.rs`) having done nothing, and never retries
+//!   itself. Kāra code never sees the status.
+//! - **The readiness loop** codegen emits around a suspending fd call is
+//!   `loop { while !__ready(op, fd) { yield }; r = native(..); if r !=
+//!   IO_NOT_READY { break }; karac_mir_io_stale(fd, write) }`. `__ready`
+//!   reads the reactor's cached readiness. An fd's first query registers it
+//!   (epoll edge-triggered, kqueue `EV_CLEAR`) and answers ready, so the
+//!   first attempt is optimistic. `io_stale` clears the cached bit, and the
+//!   next event sets it again.
+//! - **Connect is two-phase.** On `EINPROGRESS`, `connect` returns
+//!   `IO_IN_PROGRESS` (101) with the fd in an out parameter. The loop waits
+//!   for that fd to be writable, then calls `connect_finish(fd)`, which
+//!   reads `SO_ERROR` itself.
+//! - **Close.** A native that closes a socket or pipe fd calls
+//!   `karac_mir_io_forget(fd)` first, so the reactor deregisters it before
+//!   the number can be reused. A `dup` shares the description, so it gets
+//!   the same treatment.
+//! - **Timeouts.** A native reads an fd's timeout back with `getsockopt`. Until task
+//!   deadlines land (item 5), a task's read on an fd with a timeout falls
+//!   back to the blocking `io_wait`.
+//! - **Process waits** give the reactor an fd to wait readable on (pidfd on
+//!   Linux, a `SIGCHLD` self-pipe elsewhere). The wait native answers
+//!   `IO_NOT_READY` until the child has exited.
+//! - **Wasm and non-unix** have no reactor. There `io_wait` is a sleep
+//!   loop, and nothing above changes what a program does.
+//!
+//! A task waiting on an fd leaves the run queue and parks on the reactor,
+//! and deadlines go in a heap. A round of the executor then costs O(ready)
+//! rather than O(tasks): the executor sleeps on one `epoll_wait` / `kevent`
+//! until the nearest deadline, and wakes only the tasks the events name.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
