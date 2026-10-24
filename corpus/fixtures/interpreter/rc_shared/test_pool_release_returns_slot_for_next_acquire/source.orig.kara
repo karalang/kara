@@ -1,0 +1,14 @@
+fn make_int() -> i64 { 99 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_int, 1, 4);
+             match pool.acquire(0) {
+                 Ok(c1) => {
+                     pool.release(c1);
+                     match pool.acquire(0) {
+                         Ok(c2) => println(c2.val),
+                         Err(_) => println("acq2_err"),
+                     }
+                 }
+                 Err(_) => println("acq1_err"),
+             }
+         }

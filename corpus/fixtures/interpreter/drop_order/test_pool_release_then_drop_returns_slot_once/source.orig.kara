@@ -1,0 +1,18 @@
+fn make_int() -> i64 { 7 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_int, 1, 4);
+             {
+                 let c1 = pool.acquire(0).unwrap();
+                 pool.release(c1);
+             }
+             match pool.acquire(0) {
+                 Ok(_) => {
+                     match pool.acquire(0) {
+                         Ok(_) => println("DOUBLE"),
+                         Err(PoolError.Timeout) => println("single"),
+                         Err(_) => println("other"),
+                     }
+                 }
+                 Err(_) => println("acq_err"),
+             }
+         }

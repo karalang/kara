@@ -1,11 +1,14 @@
+import std.pool.{Pool};
+import std.time.{Duration};
 struct Conn { id: i64 }
 impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
+fn conn(id: i64) -> Result[Conn, String] { Ok(Conn { id }) }
 fn main() {
-    let pool: Pool[Conn] = Pool.new(|| Conn { id: 1 }, 2, 4).with_health_check(|c| c.id > 5);
-    match pool.acquire(10) { Ok(c) => println(f"a {c.val.id}"), Err(_) => println("err") }
-    match pool.acquire(10) { Ok(c) => println(f"b {c.val.id}"), Err(_) => println("err") }
-    let kept: Pool[Conn] = Pool.new(|| Conn { id: 9 }, 2, 4).with_health_check(|c| c.id > 5);
-    match kept.acquire(10) { Ok(c) => println(f"c {c.val.id}"), Err(_) => println("err") }
-    match kept.acquire(10) { Ok(c) => println(f"d {c.val.id}"), Err(_) => println("err") }
+    let pool: Pool[Conn, String] = Pool.new(|| conn(1), 2, 4).with_health_check(|c| c.id > 5);
+    match pool.acquire(Duration.ms(10)) { Ok(c) => println(f"a {c.val.id}"), Err(_) => println("err") }
+    match pool.acquire(Duration.ms(10)) { Ok(c) => println(f"b {c.val.id}"), Err(_) => println("err") }
+    let kept: Pool[Conn, String] = Pool.new(|| conn(9), 2, 4).with_health_check(|c| c.id > 5);
+    match kept.acquire(Duration.ms(10)) { Ok(c) => println(f"c {c.val.id}"), Err(_) => println("err") }
+    match kept.acquire(Duration.ms(10)) { Ok(c) => println(f"d {c.val.id}"), Err(_) => println("err") }
     println("end");
 }

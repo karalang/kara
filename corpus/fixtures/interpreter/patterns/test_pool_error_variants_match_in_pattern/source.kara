@@ -1,12 +1,14 @@
-fn classify(e: own PoolError) -> String {
+import std.pool.{PoolError};
+fn classify(e: own PoolError[String]) -> String {
              match e {
                  PoolError.Timeout => "timeout",
                  PoolError.PoolClosed => "closed",
-                 PoolError.CreateFailed => "create_failed",
+                 PoolError.CreateFailed(_) => "create_failed",
+                 PoolError.Busy => "busy",
              }
          }
          fn main() {
              println(classify(PoolError.Timeout));
              println(classify(PoolError.PoolClosed));
-             println(classify(PoolError.CreateFailed));
+             println(classify(PoolError.CreateFailed("refused".to_string())));
          }

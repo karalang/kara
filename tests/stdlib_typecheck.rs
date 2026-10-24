@@ -37,7 +37,6 @@ const LOWERED_MODULES: &[&str] = &[
     "protobuf.kara",
     "mem.kara",
     "regex.kara",
-    "pool.kara",
     "process.kara",
     "cli.kara",
     "priority_queue.kara",

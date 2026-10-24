@@ -13,7 +13,7 @@
 
 use karac::ast::{Item, Program};
 use karac::must_use_lint::{check_implicit_must_use, LintDiagnostic, LintLevel};
-use karac::prelude::STDLIB_SOURCES;
+use karac::prelude::{GATED_STDLIB_SOURCES, STDLIB_SOURCES};
 use karac::typechecker::TypeCheckResult;
 
 fn parse_and_typecheck(source: &str) -> (Program, TypeCheckResult) {
@@ -322,7 +322,7 @@ fn test_discarded_result_diagnostic_has_help_and_note() {
 //
 // What's annotated at slice 2 in current v1 stdlib:
 //   - `Peekable[T]` (peekable.kara) — iterator-adapter category
-//   - `PooledConnection[T]` (pool.kara) — guard category (drop-releases-
+//   - `PooledConnection[T]` (std_pool.kara) — guard category (drop-releases-
 //      automatically RAII handle, matches the MutexGuard / RwLockGuard /
 //      RefCellGuard slot in the slice 2 spec)
 //
@@ -343,11 +343,29 @@ fn test_discarded_result_diagnostic_has_help_and_note() {
 //     `Path.with_extension` — `String` and `Path` are not in stdlib yet.
 
 fn parse_stdlib_file(file_basename: &str) -> Program {
-    let src = STDLIB_SOURCES
-        .iter()
-        .find(|(name, _)| *name == file_basename)
-        .unwrap_or_else(|| panic!("stdlib file '{file_basename}' missing from STDLIB_SOURCES"))
-        .1;
+    parse_stdlib_source(
+        file_basename,
+        STDLIB_SOURCES
+            .iter()
+            .find(|(name, _)| *name == file_basename)
+            .unwrap_or_else(|| panic!("stdlib file '{file_basename}' missing from STDLIB_SOURCES"))
+            .1,
+    )
+}
+
+/// A gated library module's source (`std.pool`), parsed.
+fn parse_gated_module(path: &[&str]) -> Program {
+    parse_stdlib_source(
+        &path.join("."),
+        GATED_STDLIB_SOURCES
+            .iter()
+            .find(|(p, _)| *p == path)
+            .unwrap_or_else(|| panic!("gated module '{}' missing", path.join(".")))
+            .1,
+    )
+}
+
+fn parse_stdlib_source(file_basename: &str, src: &str) -> Program {
     let parsed = karac::parse(src);
     assert!(
         parsed.errors.is_empty(),
@@ -401,7 +419,7 @@ fn test_slice2_peekable_carries_must_use_annotation() {
 
 #[test]
 fn test_slice2_pooled_connection_carries_must_use_annotation() {
-    let prog = parse_stdlib_file("pool.kara");
+    let prog = parse_gated_module(&["std", "pool"]);
     let s = find_struct(&prog, "PooledConnection");
     let attr = s
         .attributes
@@ -429,8 +447,8 @@ fn test_slice2_pool_struct_does_not_carry_must_use() {
     // Negative-space pin: the `Pool[T]` constructor handle itself is
     // NOT must-use (it's a long-lived resource the caller stores, not
     // a guard / adapter). Catches an over-broad future edit that
-    // accidentally annotates every type in `pool.kara`.
-    let prog = parse_stdlib_file("pool.kara");
+    // accidentally annotates every type in `std.pool`.
+    let prog = parse_gated_module(&["std", "pool"]);
     let s = find_struct(&prog, "Pool");
     assert!(
         s.attributes.iter().all(|a| !a.is_bare("must_use")),

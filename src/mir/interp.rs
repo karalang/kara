@@ -4047,8 +4047,14 @@ impl<'a> Interp<'a> {
                 Ok(Value::Unit)
             }
             "with_health_check" => {
-                let recv = args.next();
-                let id = self.handle_field(recv.as_ref(), name)?;
+                // The pool moves in (`own self`, B-2026-10-21-43).
+                let id = match args.next() {
+                    Some(Value::Agg(fs)) => match fs.first() {
+                        Some(Value::Int(id)) => *id,
+                        _ => return err(format!("{name} of a handle with no id")),
+                    },
+                    recv => self.handle_field(recv.as_ref(), name)?,
+                };
                 let Some(check) = args.next() else {
                     return err(format!("{name} takes a check"));
                 };
@@ -4057,12 +4063,9 @@ impl<'a> Interp<'a> {
                     None => check,
                 };
                 let check = self.alloc_box("Fn", check);
-                // The pool returned is another reference on it.
+                // The pool moves in and comes back out: no new reference.
                 let old = match self.pool(id) {
-                    Some(p) => {
-                        p.refs += 1;
-                        p.check.replace(check)
-                    }
+                    Some(p) => p.check.replace(check),
                     None => Some(check),
                 };
                 if let Some(Value::Box(f)) = old {
@@ -4115,7 +4118,25 @@ impl<'a> Interp<'a> {
                 let Value::Box(f) = p.create.clone() else {
                     return err(format!("{name}: a factory held as {:?}", p.create));
                 };
-                let minted = self.call_held(f, vec![], name)?;
+                // The factory's `Err(e)` is `CreateFailed(e)`; the failed
+                // attempt holds nothing and does not count (B-2026-10-21-41).
+                let ok = match self.tys.kind(ret) {
+                    TyKind::Adt(a) => self.tys.adt(a).variants.iter().position(|v| v.name == "Ok"),
+                    _ => None,
+                }
+                .ok_or_else(|| Stop::Error(format!("{name} returns no `Ok`")))?;
+                let minted = match self.call_held(f, vec![], name)? {
+                    Value::Variant(k, mut fs) if fs.len() == 1 => {
+                        let v = fs.pop().expect("one payload");
+                        if k as usize != ok {
+                            let e =
+                                self.variant_named(ret, Some("Err"), "CreateFailed", vec![v])?;
+                            return self.variant_named(ret, None, "Err", vec![e]);
+                        }
+                        v
+                    }
+                    other => return err(format!("{name}: a factory returned {other:?}")),
+                };
                 match self.pool(id) {
                     Some(p) => p.active += 1,
                     None => {

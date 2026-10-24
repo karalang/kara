@@ -332,12 +332,6 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "ChildStdout",
     "ChildStderr",
     "ChildStdin",
-    // `Pool[T]` (v64 backend-platform lift): connection-pool
-    // primitive. `Pool[T]` / `PooledConnection[T]` / `PoolError`
-    // are the user-facing surface. See `runtime/stdlib/pool.kara`.
-    "Pool",
-    "PooledConnection",
-    "PoolError",
     // `Arena[T]` bulk-allocation primitive (v70 arena/handle stdlib
     // graduation). `Arena[T]` / `ArenaRef[T]` / `ArenaCheckpoint` are
     // the user-facing surface. See `runtime/stdlib/arena.kara`.
@@ -1089,10 +1083,6 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         "process.kara",
         include_str!("../runtime/stdlib/process.kara"),
     ),
-    // `Pool[T]` connection-pool primitive (v64 backend-platform lift).
-    // Surface only — acquire returns placeholder Err pending the
-    // follow-up bounded-waiters intrinsic.
-    ("pool.kara", include_str!("../runtime/stdlib/pool.kara")),
     // `Arena[T]` bulk-allocation primitive (v70 arena/handle stdlib
     // graduation). Surface + single-lifetime interpreter intrinsic
     // (`push` / `get` / `high_water_mark` / `rewind_to` / `len`);
@@ -1285,6 +1275,12 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
     (
         &["std", "time"],
         include_str!("../runtime/stdlib/std_time.kara"),
+    ),
+    // `std.pool`: connection pools (docs/library/pool.md). It imports
+    // `std.time`'s `Duration`, which no prelude file can name.
+    (
+        &["std", "pool"],
+        include_str!("../runtime/stdlib/std_pool.kara"),
     ),
     (
         &["std", "random"],
@@ -1947,6 +1943,19 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
                 }
             }
             crate::span_visitor::walk_item_mut_with(item, &mut RenameCallees(&renames));
+        }
+    }
+
+    // What the module imports from another gated module (`std.pool`'s
+    // `import std.time.{Duration};`) is spliced beside it, as an item the
+    // import did not list: the program need not import it too, and its own
+    // item of that name does not meet it (`privatize_unlisted_types`).
+    if !out.is_empty() {
+        for item in &program.items {
+            let Item::Import(imp) = item else { continue };
+            if let Some(nested) = gated_items_for_import(&imp.path, &imp.items) {
+                out.extend(nested);
+            }
         }
     }
 

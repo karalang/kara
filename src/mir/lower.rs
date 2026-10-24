@@ -287,6 +287,7 @@ fn lower_program_inner<'a>(
         fns: FxHashMap::default(),
         builtin_owns: FxHashMap::default(),
         builtin_mut_self: FxHashSet::default(),
+        builtin_own_self: FxHashSet::default(),
         consts: FxHashMap::default(),
         resource_defaults: FxHashMap::default(),
         resource_bounds: FxHashMap::default(),
@@ -631,6 +632,9 @@ struct Lcx<'a> {
     /// result holds the reader. The others (`TaskGroup.spawn`) write
     /// through a shared borrow, as the library cells do.
     builtin_mut_self: FxHashSet<(String, String)>,
+    /// The library's `#[compiler_builtin]` methods declared `own self`
+    /// (`Pool.with_health_check`, B-2026-10-21-43): the receiver moves in.
+    builtin_own_self: FxHashSet<(String, String)>,
     defs: &'a ProgramDefs,
     res: &'a FxHashMap<NodeId, Res>,
     node_types: FxHashMap<NodeId, Ty>,
@@ -1165,6 +1169,9 @@ impl<'a> Lcx<'a> {
                     && f.return_type.as_ref().is_some_and(type_expr_borrows)
                 {
                     self.builtin_mut_self.insert((head.clone(), f.name.clone()));
+                }
+                if builtin && f.self_is_own {
+                    self.builtin_own_self.insert((head.clone(), f.name.clone()));
                 }
                 if builtin && f.params.iter().any(|p| p.is_own) {
                     self.builtin_owns.insert(
@@ -17326,6 +17333,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                         "and_modify" | "or_insert" | "or_insert_with" | "or_default"
                     )
                     || (self.tys().display(base).starts_with("TaskHandle[") && method == "join")
+                    || {
+                        let shown = self.tys().display(base);
+                        let head = shown.split('[').next().unwrap_or("").to_string();
+                        self.lcx
+                            .builtin_own_self
+                            .contains(&(head, method.to_string()))
+                    }
                 {
                     // An `Entry` is consumed by each step of its chain
                     // (docs/library/collections.md), and `join` consumes its

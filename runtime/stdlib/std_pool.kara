@@ -1,0 +1,112 @@
+// `std.pool`: connection pools (docs/library/pool.md). `Pool[T, E]` keeps a
+// bounded set of reusable values, made by a factory that fails with `E`,
+// and lends them out one at a time.
+//
+// The methods are `#[compiler_builtin]`: `pool_method` in
+// src/mir/interp.rs on the interpreter, and src/backend/mir/pool.rs over
+// the runtime's `karac_mir_pool_*` compiled. A `Pool` holds a handle to
+// the pool's state (the factory, the health check, the idle values and the
+// loans); a hand-built `Pool { handle_id: 0 }` has none, and every
+// `acquire` answers it `PoolClosed`.
+//
+// Neither backend waits yet (B-2026-10-21-44): at `max_connections`,
+// `acquire` fails with `Timeout` at once whatever the `timeout`,
+// `max_waiters` limits nothing and `Busy` is never produced.
+
+import std.time.{Duration};
+
+/// Why `acquire` failed.
+#[non_exhaustive]
+pub enum PoolError[+E] {
+    /// The caller waited the whole timeout and no value came back.
+    Timeout,
+    /// `max_waiters` callers were already waiting, so this one was turned
+    /// away without waiting.
+    Busy,
+    /// `close` was called; the pool lends nothing more.
+    PoolClosed,
+    /// The factory failed with this error. The pool keeps nothing from the
+    /// attempt, so it does not count toward `max_connections`.
+    CreateFailed(E),
+}
+
+/// A pool of `T` values, made by a factory that fails with `E`. It has one
+/// owner and no `clone`; share it by reference.
+pub struct Pool[=T, =E] {
+    handle_id: i64,
+}
+
+/// One value lent out by a pool; `val` is the value itself. It goes back to
+/// its pool when it drops, once per loan, whether or not `release` was
+/// called first.
+#[must_use("discarding the connection releases the slot back to the pool without using it — bind the handle to a variable so it lives across the work, or pass it to the consuming function")]
+pub struct PooledConnection[=T] {
+    pool_handle_id: i64,
+    conn_id: i64,
+    pub val: T,
+}
+
+impl[T, E] Pool[T, E] {
+    /// An empty pool. `create_fn` makes a value when the pool needs a new
+    /// one; at most `max_connections` exist at once; at most `max_waiters`
+    /// callers wait in `acquire` at once.
+    #[compiler_builtin]
+    pub fn new(create_fn: own Fn() -> Result[T, E], max_connections: i64, max_waiters: i64) -> Pool[T, E] {
+        Pool { handle_id: 0 }
+    }
+
+    /// Lends out a value: an idle one that passes the health check first,
+    /// else, below `max_connections`, one from `create_fn` (whose `Err(e)`
+    /// is `CreateFailed(e)`), else `Timeout`.
+    #[compiler_builtin]
+    pub fn acquire(ref self, timeout: Duration) -> Result[PooledConnection[T], PoolError[E]] {
+        Err(PoolError.Timeout)
+    }
+
+    /// Gives `conn` back now rather than when it drops. A value lent out by
+    /// a different pool is dropped, not added to this one.
+    #[compiler_builtin]
+    pub fn release(ref self, conn: own PooledConnection[T]) {}
+
+    /// Registers a check that `acquire` runs on each idle value before
+    /// reusing it, and returns the pool. A value that fails is dropped and
+    /// no longer counts toward `max_connections`. The check's parameter
+    /// borrows the value.
+    #[compiler_builtin]
+    pub fn with_health_check(own self, check: own Fn(T) -> bool) -> Pool[T, E] {
+        Pool { handle_id: 0 }
+    }
+
+    /// Shuts the pool down: its idle values drop at once, each loan's value
+    /// drops when it comes back, and every later `acquire` fails with
+    /// `PoolClosed`. Closing twice does nothing more.
+    #[compiler_builtin]
+    pub fn close(ref self) {}
+}
+
+// The loan's value goes back to its pool, or drops when the pool does not
+// take it (closed, gone, or the loan was released already).
+//
+// Drop-skip-sound: if this Drop never runs, the loan's value is never handed
+// back — the pool loses capacity and later acquires fail. No UB, no
+// type-system violation; the return is keyed on the loan's `conn_id`, so a
+// skipped-then-leaked loan cannot alias a reissued one. Soundness derives
+// from the type system; this destructor only runs cleanup (design.md § Drop
+// > Destructors are NOT soundness mechanisms).
+impl[T] Drop for PooledConnection[T] {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}
+
+// The pool's own reference on its state; the last reference gone drops the
+// idle values and the functions.
+//
+// Drop-skip-sound: if this Drop never runs, the pool's state leaks until
+// process exit — a memory leak, never UB or a type-system violation. No
+// aliasing hazard (single owner, no reissue). Soundness derives from the
+// type system; this destructor only reclaims memory (design.md § Drop >
+// Destructors are NOT soundness mechanisms).
+impl[T, E] Drop for Pool[T, E] {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

@@ -345,15 +345,18 @@ fn literal_receiver_view_outlives_its_branch() {
 /// B-2026-10-21-38: a health check over a connection type with a `Drop`
 /// is lent each idle value (a bare closure parameter borrows it); a failing
 /// one is evicted, dropped, and a fresh one minted, on both backends.
-const POOL_CHECK_DROP: &str = r#"struct Conn { id: i64 }
+const POOL_CHECK_DROP: &str = r#"import std.pool.{Pool};
+import std.time.{Duration};
+struct Conn { id: i64 }
 impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
+fn conn(id: i64) -> Result[Conn, String] { Ok(Conn { id }) }
 fn main() {
-    let pool: Pool[Conn] = Pool.new(|| Conn { id: 1 }, 2, 4).with_health_check(|c| c.id > 5);
-    match pool.acquire(10) { Ok(c) => println(f"a {c.val.id}"), Err(_) => println("err") }
-    match pool.acquire(10) { Ok(c) => println(f"b {c.val.id}"), Err(_) => println("err") }
-    let kept: Pool[Conn] = Pool.new(|| Conn { id: 9 }, 2, 4).with_health_check(|c| c.id > 5);
-    match kept.acquire(10) { Ok(c) => println(f"c {c.val.id}"), Err(_) => println("err") }
-    match kept.acquire(10) { Ok(c) => println(f"d {c.val.id}"), Err(_) => println("err") }
+    let pool: Pool[Conn, String] = Pool.new(|| conn(1), 2, 4).with_health_check(|c| c.id > 5);
+    match pool.acquire(Duration.ms(10)) { Ok(c) => println(f"a {c.val.id}"), Err(_) => println("err") }
+    match pool.acquire(Duration.ms(10)) { Ok(c) => println(f"b {c.val.id}"), Err(_) => println("err") }
+    let kept: Pool[Conn, String] = Pool.new(|| conn(9), 2, 4).with_health_check(|c| c.id > 5);
+    match kept.acquire(Duration.ms(10)) { Ok(c) => println(f"c {c.val.id}"), Err(_) => println("err") }
+    match kept.acquire(Duration.ms(10)) { Ok(c) => println(f"d {c.val.id}"), Err(_) => println("err") }
     println("end");
 }
 "#;
@@ -375,28 +378,31 @@ fn pool_check_of_a_dropping_connection_is_clean_under_asan() {
 /// B-2026-10-21-37: a pool's idle values drop when its last `Pool` value and loan are gone,
 /// on both backends: a pool going out of scope, one handed a connection
 /// from another pool, and a closure factory with a capture.
-const POOL_DROP: &str = r#"struct Conn { id: i64 }
+const POOL_DROP: &str = r#"import std.pool.{Pool};
+import std.time.{Duration};
+struct Conn { id: i64 }
 impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
+fn conn(id: i64) -> Result[Conn, String] { Ok(Conn { id }) }
 fn scoped() {
-    let pool: Pool[Conn] = Pool.new(|| Conn { id: 3 }, 2, 4);
-    match pool.acquire(10) { Ok(c) => println(f"use {c.val.id}"), Err(_) => println("err") }
+    let pool: Pool[Conn, String] = Pool.new(|| conn(3), 2, 4);
+    match pool.acquire(Duration.ms(10)) { Ok(c) => println(f"use {c.val.id}"), Err(_) => println("err") }
     println("end of scope");
 }
 fn main() {
     scoped();
     println("after");
     let tag = "db".to_string();
-    let pool: Pool[Conn] = Pool.new(|| Conn { id: tag.len() as i64 }, 2, 4).with_health_check(|c| c.id > 0);
-    let other: Pool[Conn] = Pool.new(|| Conn { id: 40 }, 1, 1);
-    match pool.acquire(10) {
+    let pool: Pool[Conn, String] = Pool.new(|| conn(tag.len() as i64), 2, 4).with_health_check(|c| c.id > 0);
+    let other: Pool[Conn, String] = Pool.new(|| conn(40), 1, 1);
+    match pool.acquire(Duration.ms(10)) {
         Ok(c) => {
             other.release(c);
             println("released to other");
         }
         Err(_) => println("err"),
     }
-    match pool.acquire(10) { Ok(c) => println(f"next {c.val.id}"), Err(_) => println("err2") }
-    match other.acquire(10) { Ok(c) => println(f"other {c.val.id}"), Err(_) => println("err3") }
+    match pool.acquire(Duration.ms(10)) { Ok(c) => println(f"next {c.val.id}"), Err(_) => println("err2") }
+    match other.acquire(Duration.ms(10)) { Ok(c) => println(f"other {c.val.id}"), Err(_) => println("err3") }
     println("end");
 }
 "#;
@@ -464,9 +470,11 @@ fn try_resize_is_clean_under_asan() {
 /// drops when it comes back instead of going back, `acquire` answers
 /// `PoolClosed` from then on, and closing twice (or a hand-built pool) does
 /// nothing more.
-const POOL_CLOSE: &str = r#"struct Conn { id: i64 }
+const POOL_CLOSE: &str = r#"import std.pool.{Pool, PoolError, PooledConnection};
+import std.time.{Duration};
+struct Conn { id: i64 }
 impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
-fn show(r: Result[PooledConnection[Conn], PoolError]) -> String {
+fn show(r: Result[PooledConnection[Conn], PoolError[String]]) -> String {
     match r {
         Ok(c) => f"got {c.val.id}",
         Err(PoolError.PoolClosed) => "closed".to_string(),
@@ -475,26 +483,26 @@ fn show(r: Result[PooledConnection[Conn], PoolError]) -> String {
     }
 }
 fn main() {
-    let pool: Pool[Conn] = Pool.new(|| Conn { id: 1 }, 2, 4);
-    match pool.acquire(10) {
+    let pool: Pool[Conn, String] = Pool.new(|| Ok(Conn { id: 1 }), 2, 4);
+    match pool.acquire(Duration.ms(10)) {
         Ok(held) => {
             {
-                let idle = pool.acquire(10);
+                let idle = pool.acquire(Duration.ms(10));
             }
             println("one idle, one lent");
             pool.close();
             println("closed");
-            println(show(pool.acquire(10)));
+            println(show(pool.acquire(Duration.ms(10))));
             pool.close();
             println(f"still holding {held.val.id}");
         }
         Err(_) => println("err"),
     }
     println("loan returned");
-    println(show(pool.acquire(10)));
-    let fake: Pool[Conn] = Pool { handle_id: 0 };
+    println(show(pool.acquire(Duration.ms(10))));
+    let fake: Pool[Conn, String] = Pool { handle_id: 0 };
     fake.close();
-    println(show(fake.acquire(10)));
+    println(show(fake.acquire(Duration.ms(10))));
 }
 "#;
 
@@ -511,6 +519,86 @@ fn pool_close_is_clean_under_asan() {
     if let Some(out) = under_asan(POOL_CLOSE) {
         assert_eq!(out, WANT_POOL_CLOSE);
     }
+}
+
+/// B-2026-10-21-41/-42/-43: the factory can fail, and its `Err(e)` is
+/// `PoolError.CreateFailed(e)` with nothing kept and nothing counted toward
+/// `max_connections` (so the third attempt mints under a bound of one);
+/// `acquire` takes a `Duration`; `with_health_check` takes the pool and
+/// gives it back, so the pool drops once.
+const POOL_FALLIBLE: &str = r#"import std.pool.{Pool, PoolError, PooledConnection};
+import std.time.{Duration};
+struct Conn { id: i64 }
+impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
+enum ConnectError { Refused(String), AuthFailed }
+shared struct Tries { mut n: i64 }
+fn show(r: Result[PooledConnection[Conn], PoolError[ConnectError]]) -> String {
+    match r {
+        Ok(c) => f"got {c.val.id}",
+        Err(PoolError.CreateFailed(ConnectError.Refused(why))) => f"refused {why}",
+        Err(PoolError.CreateFailed(ConnectError.AuthFailed)) => "auth".to_string(),
+        Err(PoolError.Timeout) => "timeout".to_string(),
+        Err(PoolError.Busy) => "busy".to_string(),
+        Err(PoolError.PoolClosed) => "closed".to_string(),
+    }
+}
+fn main() {
+    let tries = Tries { n: 0 };
+    let pool: Pool[Conn, ConnectError] = Pool.new(|| {
+        tries.n = tries.n + 1;
+        if tries.n == 1 {
+            Err(ConnectError.Refused(f"try {tries.n}"))
+        } else if tries.n == 2 {
+            Err(ConnectError.AuthFailed)
+        } else {
+            Ok(Conn { id: tries.n })
+        }
+    }, 1, 4).with_health_check(|c| c.id != 3);
+    println(show(pool.acquire(Duration.ms(10))));
+    println(show(pool.acquire(Duration.ms(10))));
+    match pool.acquire(Duration.ms(10)) {
+        Ok(held) => {
+            println(f"held {held.val.id}");
+            println(show(pool.acquire(Duration.secs(1))));
+        }
+        Err(_) => println("err"),
+    }
+    println(show(pool.acquire(Duration.ms(0))));
+}
+"#;
+
+const WANT_POOL_FALLIBLE: &str = "refused try 1\nauth\nheld 3\ntimeout\nclose 3\ngot 4\nclose 4\n";
+
+#[test]
+fn pool_factory_failure_is_create_failed_on_both_backends() {
+    agrees(POOL_FALLIBLE, WANT_POOL_FALLIBLE, 0);
+}
+
+#[test]
+fn pool_factory_failure_is_clean_under_asan() {
+    if let Some(out) = under_asan(POOL_FALLIBLE) {
+        assert_eq!(out, WANT_POOL_FALLIBLE);
+    }
+}
+
+/// `std.pool` imports `std.time.{Duration}` itself: a program importing
+/// only `Pool` needs no `std.time` import, and its own `Duration` does not
+/// meet the library's.
+const POOL_OWN_DURATION: &str = r#"import std.pool.{Pool};
+struct Duration { secs: i64 }
+fn make() -> Result[i64, String] { Ok(7) }
+fn main() {
+    let d = Duration { secs: 3 };
+    let pool: Pool[i64, String] = Pool.new(make, 2, 4);
+    println(f"{d.secs}");
+    pool.close();
+    println("closed");
+}
+"#;
+
+#[test]
+fn pool_imports_its_own_duration_on_both_backends() {
+    agrees(POOL_OWN_DURATION, "3\nclosed\n", 0);
 }
 
 /// B-2026-10-21-65: `iN.checked_from(f)` is `Some` of `f` truncated toward

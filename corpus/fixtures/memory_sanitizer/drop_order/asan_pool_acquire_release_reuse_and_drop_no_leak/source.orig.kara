@@ -1,0 +1,15 @@
+
+fn make_conn() -> i64 { 100i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let pool: Pool[i64] = Pool.new(make_conn, 1i64, 2i64);
+        match pool.acquire(0i64) {
+            Ok(c) => { total = total + c.val; pool.release(c); }
+            Err(_e) => {}
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

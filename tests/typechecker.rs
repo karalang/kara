@@ -14117,7 +14117,6 @@ fn baked_stdlib_handle_types_reject_unknown_methods() {
         "TcpStream",
         "TcpListener",
         "Mutex[i64]",
-        "Pool",
         "Interner",
         "Semaphore",
         "Arena",
@@ -14134,6 +14133,20 @@ fn baked_stdlib_handle_types_reject_unknown_methods() {
             errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
     }
+    // `Pool` is in the gated `std.pool` (B-2026-10-21-41).
+    let errors = typecheck_errors_gated(
+        "import std.pool.{Pool};
+fn t(f: ref Pool[i64, String]) { f.bogus_xyz(); }
+fn main() {}
+",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'bogus_xyz'")),
+        "expected NoMethodFound for unknown method on `Pool`, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
 }
 
 #[test]

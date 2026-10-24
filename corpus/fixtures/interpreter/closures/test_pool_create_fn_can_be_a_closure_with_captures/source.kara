@@ -1,7 +1,9 @@
+import std.pool.{Pool};
+import std.time.{Duration};
 fn main() {
          let prefix = "tag-";
-         let pool: Pool[String] = Pool.new(|| prefix + "x", 2, 4);
-         match pool.acquire(0) {
+         let pool: Pool[String, String] = Pool.new(|| Ok(prefix + "x"), 2, 4);
+         match pool.acquire(Duration.ms(0)) {
              Ok(conn) => println(conn.val),
              Err(_) => println("err"),
          }

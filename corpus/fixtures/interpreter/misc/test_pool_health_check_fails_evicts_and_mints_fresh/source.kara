@@ -1,11 +1,13 @@
-fn make_conn() -> i64 { println("mint"); 7 }
+import std.pool.{Pool};
+import std.time.{Duration};
+fn make_conn() -> Result[i64, String] { println("mint"); Ok(7) }
          fn main() {
-             let pool: Pool[i64] = Pool.new(make_conn, 4, 8).with_health_check(|c| { c < 0 });
-             match pool.acquire(0) {
+             let pool: Pool[i64, String] = Pool.new(make_conn, 4, 8).with_health_check(|c| { c < 0 });
+             match pool.acquire(Duration.ms(0)) {
                  Ok(c1) => { pool.release(c1); }
                  Err(_) => println("acq1_err"),
              }
-             match pool.acquire(0) {
+             match pool.acquire(Duration.ms(0)) {
                  Ok(c2) => println(c2.val),
                  Err(_) => println("acq2_err"),
              }

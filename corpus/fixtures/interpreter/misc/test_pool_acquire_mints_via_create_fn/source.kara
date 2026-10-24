@@ -1,7 +1,9 @@
-fn make_int() -> i64 { 42 }
+import std.pool.{Pool};
+import std.time.{Duration};
+fn make_int() -> Result[i64, String] { Ok(42) }
          fn main() {
-             let pool: Pool[i64] = Pool.new(make_int, 4, 8);
-             match pool.acquire(0) {
+             let pool: Pool[i64, String] = Pool.new(make_int, 4, 8);
+             match pool.acquire(Duration.ms(0)) {
                  Ok(conn) => println(conn.val),
                  Err(_) => println("err"),
              }

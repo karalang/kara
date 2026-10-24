@@ -1,0 +1,13 @@
+fn make_conn() -> i64 { println("mint"); 7 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_conn, 1, 1).with_health_check(|c| { false });
+             match pool.acquire(0) {
+                 Ok(c1) => { pool.release(c1); }
+                 Err(_) => println("acq1_err"),
+             }
+             match pool.acquire(0) {
+                 Ok(_) => println("ok2"),
+                 Err(PoolError.Timeout) => println("timeout2"),
+                 Err(_) => println("err2"),
+             }
+         }

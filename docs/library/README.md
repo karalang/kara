@@ -15,7 +15,7 @@ This directory specifies the standard library's public API: its types, functions
 | [io.md](io.md) | Standard streams, files, buffered I/O, TCP, process exit |
 | [regex.md](regex.md) | Regular expressions: `Regex`, `Match`, `Captures` |
 | [concurrency.md](concurrency.md) | Channels, `TaskGroup`, `Mutex`, atomics |
-| [pool.md](pool.md) | Connection pools: `Pool`, `PooledConnection`, `PoolError` |
+| [pool.md](pool.md) | `std.pool`: connection pools, `Pool`, `PooledConnection`, `PoolError` |
 | [time-random-env.md](time-random-env.md) | `Clock`, `RandomSource` and `Env` APIs |
 | [log.md](log.md) | Structured logging (`std.log`) |
 | [secret.md](secret.md) | `Secret[T]` (post-v1 library) |

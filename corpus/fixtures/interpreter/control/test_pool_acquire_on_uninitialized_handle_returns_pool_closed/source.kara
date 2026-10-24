@@ -1,9 +1,12 @@
+import std.pool.{Pool, PoolError};
+import std.time.{Duration};
 fn main() {
-         let pool: Pool[i64] = Pool { handle_id: 0 };
-         match pool.acquire(0) {
+         let pool: Pool[i64, String] = Pool { handle_id: 0 };
+         match pool.acquire(Duration.ms(0)) {
              Ok(_) => println("ok??"),
              Err(PoolError.Timeout) => println("timeout"),
+             Err(PoolError.Busy) => println("busy"),
              Err(PoolError.PoolClosed) => println("closed"),
-             Err(PoolError.CreateFailed) => println("create_failed"),
+             Err(PoolError.CreateFailed(_)) => println("create_failed"),
          }
      }

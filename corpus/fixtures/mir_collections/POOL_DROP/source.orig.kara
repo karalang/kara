@@ -1,0 +1,24 @@
+struct Conn { id: i64 }
+impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
+fn scoped() {
+    let pool: Pool[Conn] = Pool.new(|| Conn { id: 3 }, 2, 4);
+    match pool.acquire(10) { Ok(c) => println(f"use {c.val.id}"), Err(_) => println("err") }
+    println("end of scope");
+}
+fn main() {
+    scoped();
+    println("after");
+    let tag = "db".to_string();
+    let pool: Pool[Conn] = Pool.new(|| Conn { id: tag.len() as i64 }, 2, 4).with_health_check(|c| c.id > 0);
+    let other: Pool[Conn] = Pool.new(|| Conn { id: 40 }, 1, 1);
+    match pool.acquire(10) {
+        Ok(c) => {
+            other.release(c);
+            println("released to other");
+        }
+        Err(_) => println("err"),
+    }
+    match pool.acquire(10) { Ok(c) => println(f"next {c.val.id}"), Err(_) => println("err2") }
+    match other.acquire(10) { Ok(c) => println(f"other {c.val.id}"), Err(_) => println("err3") }
+    println("end");
+}

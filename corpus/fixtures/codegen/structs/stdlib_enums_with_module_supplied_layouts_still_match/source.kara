@@ -1,3 +1,4 @@
+import std.pool.{PoolError};
 fn main() {
 let a = Stdio.Inherit;
 let b = Stdio.Null;
@@ -5,6 +6,6 @@ let c = Stdio.Piped;
 match a { Stdio.Inherit => println("a=Inherit"), Stdio.Null => println("a=Null"), Stdio.Piped => println("a=Piped") }
 match b { Stdio.Inherit => println("b=Inherit"), Stdio.Null => println("b=Null"), Stdio.Piped => println("b=Piped") }
 match c { Stdio.Inherit => println("c=Inherit"), Stdio.Null => println("c=Null"), Stdio.Piped => println("c=Piped") }
-let p = PoolError.PoolClosed;
+let p: PoolError[String] = PoolError.PoolClosed;
 match p { PoolError.Timeout => println("Timeout"), PoolError.PoolClosed => println("PoolClosed"), _ => println("other") }
 }

@@ -1,4 +1,4 @@
-//! `Pool[T]` and `PooledConnection[T]`, with the interpreter's
+//! `Pool[T, E]` and `PooledConnection[T]`, with the interpreter's
 //! `pool_method` semantics (`src/mir/interp.rs`). A `Pool` holds a pointer
 //! to the runtime's pool (`karac_mir_pool_*`, null for a hand-built
 //! literal, which every `acquire` answers `PoolClosed`); the pool keeps
@@ -35,9 +35,14 @@ impl<'ctx> Cx<'ctx, '_> {
             ("new", [create, max, _]) => {
                 let el = self.type_arg(dty)?;
                 // The factory moves into the pool, erased.
+                let from = self.operand_type(create)?;
+                let made = match self.tys.kind(from) {
+                    TyKind::Fn { ret, .. } => ret,
+                    _ => self.body_of_def(from)?.return_ty(),
+                };
                 let to = self.tys.intern(TyKind::Fn {
                     params: vec![],
-                    ret: el,
+                    ret: made,
                     kind: FnKind::Fn,
                 });
                 let cp = self.erased_operand(create, to)?;
@@ -82,7 +87,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.call_glue(kp, kt)?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(some);
+                // The pool moves in and comes back out (B-2026-10-21-43):
+                // the check is set, and no reference is added.
                 self.mrt_ptr("pool_share", &[h.into(), kp.into()])?;
+                self.rt("pool_drop", &[h.into()])?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);
             }
@@ -145,8 +153,9 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// `pool.acquire(timeout)`: an idle value that passes the health check
     /// (a failing one is evicted), else a fresh one from the factory while
-    /// the pool is below its bound, else `Timeout`; `PoolClosed` for a
-    /// hand-built or closed pool.
+    /// the pool is below its bound (its `Err(e)` is `CreateFailed(e)`, and
+    /// counts nothing), else `Timeout`; `PoolClosed` for a hand-built or
+    /// closed pool.
     fn pool_acquire(&mut self, recv: &Operand, dest: &Place) -> R<()> {
         let dty = self.place_type(dest)?;
         let h = self.pool_handle(recv)?;
@@ -164,9 +173,17 @@ impl<'ctx> Cx<'ctx, '_> {
         let el = self.type_arg(ct)?;
         let conn = self.offset(d, self.field_offset(dty, Some(okv), 0)?)?;
         let val = self.offset(conn, self.field_offset(ct, None, 2)?)?;
+        // The factory makes a `Result[T, E]`, the `Result` of `dty`.
+        let tcx = self.tys.tcx();
+        let (res, _) = tcx.adt_of(dty).ok_or("`acquire` returns no `Result`")?;
+        let ee = self.type_arg(et)?;
+        let made = tcx.intern(crate::ty::TyKind::Adt {
+            def: res.def,
+            args: tcx.intern_list(&[el, ee]),
+        });
         let create_ty = self.tys.intern(TyKind::Fn {
             params: vec![],
-            ret: el,
+            ret: made,
             kind: FnKind::Fn,
         });
         let check_ty = self.check_ty(el);
@@ -247,7 +264,51 @@ impl<'ctx> Cx<'ctx, '_> {
             ty: create_ty,
             consume: false,
         };
-        self.call_callee(&c, val, &[])?;
+        let r = self.temp(made, "made")?;
+        self.call_callee(&c, r, &[])?;
+        let mok = self.variant_of(made, "Ok")?;
+        let merr = self.variant_of(made, "Err")?;
+        let tag = self.load_tag(r, made)?;
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                tag.get_type().const_int(u64::from(mok), false),
+                "",
+            )
+            .map_err(e)?;
+        let (minted, failed) = (
+            self.llcx.append_basic_block(f, "pool.minted"),
+            self.llcx.append_basic_block(f, "pool.failed"),
+        );
+        self.builder
+            .build_conditional_branch(is_ok, minted, failed)
+            .map_err(e)?;
+        // `Err(e)` is `CreateFailed(e)`: the error moves, nothing is kept
+        // and nothing counted (B-2026-10-21-41).
+        self.builder.position_at_end(failed);
+        let q = self.offset(d, self.field_offset(dty, Some(errv), 0)?)?;
+        let cf = self.variant_of(et, "CreateFailed")?;
+        let eat = self.offset(q, self.field_offset(et, Some(cf), 0)?)?;
+        let efrom = self.offset(r, self.field_offset(made, Some(merr), 0)?)?;
+        let esize = self.layout(ee)?.size;
+        if esize > 0 {
+            self.builder
+                .build_memcpy(eat, 1, efrom, 1, self.i64(esize))
+                .map_err(e)?;
+        }
+        self.store_tag(q, et, cf)?;
+        self.store_tag(d, dty, errv)?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(minted);
+        let vfrom = self.offset(r, self.field_offset(made, Some(mok), 0)?)?;
+        let vsize = self.layout(el)?.size;
+        if vsize > 0 {
+            self.builder
+                .build_memcpy(val, 1, vfrom, 1, self.i64(vsize))
+                .map_err(e)?;
+        }
         self.mrt_i8("pool_count", &[h.into(), self.i64(1).into()])?;
         self.builder.build_unconditional_branch(out).map_err(e)?;
 
