@@ -1,0 +1,114 @@
+name: M4a load gate
+
+# M4 plan item 2's gate (review/m4-plan-2026-10-24.md in the project's
+# shared folder): 100k idle TCP connections held by one Kāra server under
+# 1 GiB resident, and p99 under 10 ms at fixed request rates on kv_serve and
+# proxy_serve, with and without 10k idle connections held. The harness is
+# kara-katas apps/loadtest (run.sh, loadclient.py, summarize.py).
+#
+# Dispatch only. A cloud session caps open files at 20000, so the 100k tier
+# can't be measured there. A GitHub runner can raise the limit with sudo,
+# which is why the gate runs here. `enforce` fails the job on any FAIL or
+# NOT MEASURED verdict; leave it off to record a baseline.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tiers:
+        description: Idle connection tiers
+        default: "1000 10000 100000"
+      rates:
+        description: Request rates (per second)
+        default: "500 1000 2000"
+      rate_seconds:
+        description: Seconds per rate
+        default: "30"
+      katas_ref:
+        description: kara-katas ref holding apps/loadtest
+        default: main
+      enforce:
+        description: Fail the job unless every verdict is PASS
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-gate
+  cancel-in-progress: false
+
+jobs:
+  load:
+    name: Load gate (100k idle, p99)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: karalang/kara-katas
+          ref: ${{ inputs.katas_ref }}
+          path: kara-katas
+
+      # The same LLVM recipe as ci.yml's codegen-e2e job.
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: load-gate
+
+      # Lean first, then full over the canonical name (CLAUDE.md).
+      - name: Build runtime archives and karac
+        run: |
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+          cargo build --release --features llvm --bin karac --bin karac_jit_runner
+
+      # One step, so the raised limit holds for run.sh and everything it starts.
+      - name: Run the load test
+        env:
+          TIERS: ${{ inputs.tiers }}
+          RATES: ${{ inputs.rates }}
+          RATE_SECONDS: ${{ inputs.rate_seconds }}
+        run: |
+          sudo sysctl -w fs.nr_open=2097152 fs.file-max=2097152 \
+            net.core.somaxconn=65535 net.ipv4.tcp_max_syn_backlog=65535 \
+            net.ipv4.ip_local_port_range="1024 65535"
+          sudo -E env "PATH=$PATH" "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" \
+            KARAC="$PWD/target/release/karac" TIERS="$TIERS" RATES="$RATES" RATE_SECONDS="$RATE_SECONDS" \
+            bash -c 'ulimit -Hn 1048576 && ulimit -n 1048576 && bash kara-katas/apps/loadtest/run.sh "$PWD/loadtest-out"'
+          sudo chown -R "$(id -u):$(id -g)" loadtest-out
+
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## M4a load gate at $(git rev-parse --short HEAD)"; echo
+            cat loadtest-out/machine.txt 2>/dev/null | sed 's/^/    /'; echo
+            cat loadtest-out/summary.md 2>/dev/null || echo "no summary: the run failed before summarize.py"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: loadtest-out
+          path: loadtest-out/
+
+      - name: Enforce the bars
+        if: inputs.enforce
+        run: |
+          grep -E '^- (Idle|p99)' loadtest-out/summary.md
+          if grep -E '^- (Idle|p99)' loadtest-out/summary.md | grep -qE 'FAIL|NOT MEASURED'; then
+            echo "::error::a load-gate verdict is not PASS"; exit 1
+          fi
+          [ "$(grep -cE '^- (Idle|p99).*PASS' loadtest-out/summary.md)" = 3 ] || { echo "::error::expected 3 PASS verdicts"; exit 1; }
