@@ -19152,17 +19152,17 @@ fn run_via_jit_executes_network_boundary_fn_body() {
 /// subprocess, as in the fixture above.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: WebSocket and the network boundary come with the services track (M4a)"]
 fn uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit() {
     use std::process::Command;
 
-    let handler = "fn handle_ws(ws: WebSocket) {\n\
-                   \x20   let mut buf: Array[u8, 64] = [0u8; 64];\n\
+    let handler = "fn handle_ws(ws: own WebSocket) {\n\
+                   \x20   let mut ws = ws;\n\
                    \x20   loop {\n\
-                   \x20       let r = ws.recv_text(mut buf);\n\
-                   \x20       match r {\n\
-                   \x20           Result.Ok(n) => { if n == 0 { break; } let _s = ws.send_text(buf); }\n\
-                   \x20           Result.Err(_) => { break; }\n\
+                   \x20       match ws.recv() {\n\
+                   \x20           Ok(WsMessage.Text(t)) => { let _s = ws.send_text(t); }\n\
+                   \x20           Ok(WsMessage.Close(_)) => { break; }\n\
+                   \x20           Ok(_) => {}\n\
+                   \x20           Err(_) => { break; }\n\
                    \x20       }\n\
                    \x20   }\n\
                    }\n";
@@ -19174,13 +19174,13 @@ fn uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit() {
         ),
         (
             "beside_a_called_one",
+            // `mk` fails at its bind, so `simple` is called only on paper.
             format!(
                 "{handler}fn simple(ws: WebSocket) {{ println(\"h\"); }}\n\
-                 #[allow(unstable_api)]\n\
-                 fn mk(fd: i64) -> Result[WebSocket, i64] {{ return Result.Ok(WebSocket.from_fd(fd)); }}\n\
-                 fn main() {{ match mk(-1) {{ Result.Ok(ws) => {{ simple(ws); }} Result.Err(_) => {{}} }} println(\"end\"); }}\n"
+                 fn mk() -> Result[WebSocket, NetError] {{ let l = TcpListener.bind(\"256.0.0.1:0\")?; WebSocket.accept(l) }}\n\
+                 fn main() {{ match mk() {{ Result.Ok(ws) => {{ simple(ws); }} Result.Err(_) => {{}} }} println(\"end\"); }}\n"
             ),
-            "h\nend\n",
+            "end\n",
         ),
     ];
     let tmp = scratch_project("uncalled-coro-o0");

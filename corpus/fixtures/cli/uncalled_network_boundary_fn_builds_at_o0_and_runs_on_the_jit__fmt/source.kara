@@ -1,10 +1,11 @@
-fn handle_ws(ws: WebSocket) {
-    let mut buf: Array[u8, 64] = [0u8; 64];
+fn handle_ws(ws: own WebSocket) {
+    let mut ws = ws;
     loop {
-        let r = ws.recv_text(mut buf);
-        match r {
-            Result.Ok(n) => { if n == 0 { break; } let _s = ws.send_text(buf); }
-            Result.Err(_) => { break; }
+        match ws.recv() {
+            Ok(WsMessage.Text(t)) => { let _s = ws.send_text(t); }
+            Ok(WsMessage.Close(_)) => { break; }
+            Ok(_) => {}
+            Err(_) => { break; }
         }
     }
 }
