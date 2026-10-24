@@ -1,0 +1,1133 @@
+// mini_spellchecker: pyspellchecker 0.8.1, Tyler Barrus's spell checker
+// after Peter Norvig's "How to Write a Spelling Corrector", as a
+// documentation team uses it: a dictionary built from the team's own
+// docs (data/corpus.txt), documents from the review queue checked against
+// it, and the dictionary edited, exported to JSON and opened again. It
+// reads its commands from data/jobs.txt.
+//
+// The port follows spellchecker.py and utils.py: a word frequency table
+// (a Counter in Python) with the totals, the letter set and the longest
+// word it keeps up to date, the regex tokenizer, the "should this be
+// checked at all" rule (single punctuation, too long, or anything
+// Python's float() accepts), and candidates at edit distance one, then
+// two. Python returns sets; this port returns them sorted, as the oracle
+// prints them.
+
+const MASK32: i64 = 4294967295;
+
+fn fnv(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn join(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..xs.len() as i64 {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(xs[i]);
+    }
+    out
+}
+
+fn from_chars(c: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    for i in lo..hi {
+        s.push(c[i]);
+    }
+    s
+}
+
+fn sorted_set(s: ref Set[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in s.iter() {
+        out.push(w.clone());
+    }
+    out.sort();
+    out
+}
+
+// Python prints a set as {a, b}; None when there is none.
+fn show_set(xs: ref Option[Vec[String]]) -> String {
+    match xs {
+        Some(v) => "{".to_string() + join(v, ", ") + "}".to_string(),
+        None => "None".to_string(),
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b {
+        "True".to_string()
+    } else {
+        "False".to_string()
+    }
+}
+
+// ------------------------------------------------------------ utils.py
+// _parse_into_words: re.findall(r"(\w[\w']*\w|\w)", text). The greedy run
+// of word characters and apostrophes gives back trailing apostrophes so
+// that the match ends on a word character.
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() or c == '_'
+}
+
+fn parse_into_words(text: ref String) -> Vec[String] {
+    let cs: Vec[char] = text.chars().collect();
+    let n = cs.len() as i64;
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        if is_word_char(cs[i]) {
+            let mut j = i + 1;
+            while j < n and (is_word_char(cs[j]) or cs[j] == '\'') {
+                j += 1;
+            }
+            let mut e = j;
+            while e > i + 1 and cs[e - 1] == '\'' {
+                e -= 1;
+            }
+            out.push(from_chars(cs, i, e));
+            i = e;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+// string.punctuation
+fn is_punctuation(c: char) -> bool {
+    for p in "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".chars() {
+        if p == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_digit(cs: ref Vec[char], i: i64) -> bool {
+    i < cs.len() as i64 and cs[i].is_ascii_digit()
+}
+
+// digitpart: digit (["_"] digit)*, from a digit at i; returns the end.
+fn digit_part(cs: ref Vec[char], start: i64) -> i64 {
+    let n = cs.len() as i64;
+    let mut i = start + 1;
+    while i < n {
+        if cs[i].is_ascii_digit() {
+            i += 1;
+        } else if cs[i] == '_' and is_digit(cs, i + 1) {
+            i += 2;
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+// Whether Python's float() accepts the text: surrounding whitespace, a
+// sign, then inf, infinity or nan in any case, or a decimal number with
+// optional fraction and exponent, digits grouped by single underscores.
+fn python_float_accepts(word: ref String) -> bool {
+    let cs: Vec[char] = word.trim().chars().collect();
+    let n = cs.len() as i64;
+    let mut i = 0;
+    if i < n and (cs[i] == '+' or cs[i] == '-') {
+        i += 1;
+    }
+    let rest = from_chars(cs, i, n).to_lowercase();
+    if rest == "inf" or rest == "infinity" or rest == "nan" {
+        return true;
+    }
+    let mut digits = false;
+    if is_digit(cs, i) {
+        i = digit_part(cs, i);
+        digits = true;
+    }
+    if i < n and cs[i] == '.' {
+        i += 1;
+        if is_digit(cs, i) {
+            i = digit_part(cs, i);
+            digits = true;
+        }
+    }
+    if not digits {
+        return false;
+    }
+    if i < n and (cs[i] == 'e' or cs[i] == 'E') {
+        i += 1;
+        if i < n and (cs[i] == '+' or cs[i] == '-') {
+            i += 1;
+        }
+        if not is_digit(cs, i) {
+            return false;
+        }
+        i = digit_part(cs, i);
+    }
+    i == n
+}
+
+// ------------------------------------------------------------ WordFrequency
+// The Counter of words and what _update_dictionary keeps beside it. A
+// checker that is not case-sensitive folds every word to lower case on
+// the way in and on every lookup.
+
+struct WordFrequency {
+    dictionary: Map[String, i64],
+    total_words: i64,
+    unique_words: i64,
+    letters: Vec[char],
+    longest_word_length: i64,
+    case_sensitive: bool,
+}
+
+impl WordFrequency {
+    fn new(case_sensitive: bool) -> WordFrequency {
+        WordFrequency {
+            dictionary: Map.new(),
+            total_words: 0,
+            unique_words: 0,
+            letters: Vec.new(),
+            longest_word_length: 0,
+            case_sensitive: case_sensitive,
+        }
+    }
+
+    fn fold(ref self, word: ref String) -> String {
+        if self.case_sensitive {
+            word.clone()
+        } else {
+            word.to_lowercase()
+        }
+    }
+
+    fn contains(ref self, word: ref String) -> bool {
+        self.dictionary.contains_key(self.fold(word))
+    }
+
+    fn get(ref self, word: ref String) -> i64 {
+        self.dictionary.get(self.fold(word)) ?? 0
+    }
+
+    // Counter.update: counts add to what is there.
+    fn bump(mut ref self, key: own String, n: i64) {
+        let had = self.dictionary.get(key) ?? 0;
+        self.dictionary.insert(key, had + n);
+    }
+
+    fn update_dictionary(mut ref self) {
+        self.longest_word_length = 0;
+        let mut total = 0;
+        let mut letters: Set[char] = Set.new();
+        let mut longest = 0;
+        for (k, v) in self.dictionary.iter() {
+            total += *v;
+            let mut n = 0;
+            for c in k.chars() {
+                letters.insert(c);
+                n += 1;
+            }
+            if n > longest {
+                longest = n;
+            }
+        }
+        self.total_words = total;
+        self.unique_words = self.dictionary.len();
+        self.longest_word_length = longest;
+        let mut ls: Vec[char] = Vec.new();
+        for c in letters.iter() {
+            ls.push(*c);
+        }
+        ls.sort();
+        self.letters = ls;
+    }
+
+    fn tokenize(ref self, text: ref String) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for w in parse_into_words(text) {
+            out.push(self.fold(w));
+        }
+        out
+    }
+
+    fn load_text(mut ref self, text: ref String) {
+        for w in self.tokenize(text).into_iter() {
+            self.bump(w, 1);
+        }
+        self.update_dictionary();
+    }
+
+    fn load_words(mut ref self, words: ref Vec[String]) {
+        for i in 0..words.len() as i64 {
+            let k = self.fold(words[i]);
+            self.bump(k, 1);
+        }
+        self.update_dictionary();
+    }
+
+    // load_json, and add() through it.
+    fn load_counts(mut ref self, counts: ref Vec[(String, i64)]) {
+        for i in 0..counts.len() as i64 {
+            self.bump(counts[i].0.clone(), counts[i].1);
+        }
+        self.update_dictionary();
+    }
+
+    fn add(mut ref self, word: ref String, val: i64) {
+        let mut one: Vec[(String, i64)] = Vec.new();
+        one.push((self.fold(word), val));
+        self.load_counts(one);
+    }
+
+    fn pop(mut ref self, word: ref String) -> Option[i64] {
+        let k = self.fold(word);
+        self.dictionary.remove(k)
+    }
+
+    fn remove(mut ref self, word: ref String) {
+        let _ = self.pop(word);
+        self.update_dictionary();
+    }
+
+    fn remove_words(mut ref self, words: ref Vec[String]) {
+        for i in 0..words.len() as i64 {
+            let _ = self.pop(words[i]);
+        }
+        self.update_dictionary();
+    }
+
+    fn remove_by_threshold(mut ref self, threshold: i64) {
+        let mut doomed: Vec[String] = Vec.new();
+        for (k, v) in self.dictionary.iter() {
+            if *v <= threshold {
+                doomed.push(k.clone());
+            }
+        }
+        self.remove_words(doomed);
+    }
+
+    // The words with their counts, most frequent first, ties by word.
+    fn top(ref self, n: i64) -> Vec[(String, i64)] {
+        let mut all: Vec[(String, i64)] = Vec.new();
+        for (k, v) in self.dictionary.iter() {
+            all.push((k.clone(), *v));
+        }
+        all.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
+        let mut out: Vec[(String, i64)] = Vec.new();
+        for i in 0..all.len() as i64 {
+            if i < n {
+                out.push((all[i].0.clone(), all[i].1));
+            }
+        }
+        out
+    }
+}
+
+// ------------------------------------------------------------ SpellChecker
+
+struct SpellChecker {
+    wf: WordFrequency,
+    distance: i64,
+}
+
+// The distance setter: 1 or 2, anything else becomes 2.
+fn valid_distance(val: i64) -> i64 {
+    if val > 0 and val <= 2 {
+        val
+    } else {
+        2
+    }
+}
+
+impl SpellChecker {
+    fn new(distance: i64, case_sensitive: bool) -> SpellChecker {
+        SpellChecker { wf: WordFrequency.new(case_sensitive), distance: valid_distance(distance) }
+    }
+
+    fn should_check(ref self, word: ref String) -> bool {
+        let n = word.chars().count() as i64;
+        if n == 1 and is_punctuation(word.chars().next().unwrap()) {
+            return false;
+        }
+        if n > self.wf.longest_word_length + 3 {
+            return false;
+        }
+        if word.to_lowercase() == "nan" {
+            return true;
+        }
+        if python_float_accepts(word) {
+            return false;
+        }
+        true
+    }
+
+    fn in_dictionary(ref self, folded: ref String) -> bool {
+        self.wf.dictionary.contains_key(folded)
+    }
+
+    fn known(ref self, words: ref Vec[String]) -> Vec[String] {
+        let mut s: Set[String] = Set.new();
+        for i in 0..words.len() as i64 {
+            let w = self.wf.fold(words[i]);
+            if self.in_dictionary(w) and self.should_check(w) {
+                s.insert(w);
+            }
+        }
+        sorted_set(s)
+    }
+
+    fn unknown(ref self, words: ref Vec[String]) -> Vec[String] {
+        let mut s: Set[String] = Set.new();
+        for i in 0..words.len() as i64 {
+            if self.should_check(words[i]) {
+                let w = self.wf.fold(words[i]);
+                if not self.in_dictionary(w) {
+                    s.insert(w);
+                }
+            }
+        }
+        sorted_set(s)
+    }
+
+    // edit_distance_1: every deletion, transposition, replacement and
+    // insertion, with the letters the dictionary uses. A word that is not
+    // checked is its own only edit. The set comes back in the order its
+    // members were first made.
+    fn edit_distance_1(ref self, word: ref String) -> Vec[String] {
+        let w = self.wf.fold(word);
+        if not self.should_check(w) {
+            let mut only: Vec[String] = Vec.new();
+            only.push(w);
+            return only;
+        }
+        let cs: Vec[char] = w.chars().collect();
+        let n = cs.len() as i64;
+        let letters = self.wf.letters.clone();
+        let mut seen: Set[String] = Set.new();
+        let mut out: Vec[String] = Vec.new();
+        for i in 0..n {
+            let mut d = from_chars(cs, 0, i);
+            d.push_str(from_chars(cs, i + 1, n));
+            if seen.insert(d.clone()) {
+                out.push(d);
+            }
+        }
+        for i in 0..n - 1 {
+            let mut t = from_chars(cs, 0, i);
+            t.push(cs[i + 1]);
+            t.push(cs[i]);
+            t.push_str(from_chars(cs, i + 2, n));
+            if seen.insert(t.clone()) {
+                out.push(t);
+            }
+        }
+        for i in 0..n {
+            let left = from_chars(cs, 0, i);
+            let right = from_chars(cs, i + 1, n);
+            for c in letters.iter() {
+                let mut r = left.clone();
+                r.push(*c);
+                r.push_str(right);
+                if seen.insert(r.clone()) {
+                    out.push(r);
+                }
+            }
+        }
+        for i in 0..n + 1 {
+            let left = from_chars(cs, 0, i);
+            let right = from_chars(cs, i, n);
+            for c in letters.iter() {
+                let mut r = left.clone();
+                r.push(*c);
+                r.push_str(right);
+                if seen.insert(r.clone()) {
+                    out.push(r);
+                }
+            }
+        }
+        out
+    }
+
+    // The words of the dictionary one edit away from any checked word in
+    // the list: __edit_distance_alt, then known() over it. Only membership
+    // matters here, so each edit is built in one buffer and looked up
+    // without the set edit_distance_1 makes. The edits of a folded word
+    // are already folded: their letters come from the dictionary's keys.
+    fn known_one_edit_from(ref self, words: ref Vec[String]) -> Vec[String] {
+        let mut s: Set[String] = Set.new();
+        for i in 0..words.len() as i64 {
+            if self.should_check(words[i]) {
+                let e1 = self.wf.fold(words[i]);
+                self.known_edits(e1, mut s);
+            }
+        }
+        sorted_set(s)
+    }
+
+    fn keep_if_known(ref self, cand: ref String, s: mut ref Set[String]) {
+        if self.in_dictionary(cand) and self.should_check(cand) {
+            s.insert(cand.clone());
+        }
+    }
+
+    fn known_edits(ref self, w: ref String, s: mut ref Set[String]) {
+        // edit_distance_1 of an unchecked word is the word itself, which
+        // known() then drops for the same reason.
+        if not self.should_check(w) {
+            return;
+        }
+        let cs: Vec[char] = w.chars().collect();
+        let n = cs.len() as i64;
+        let mut buf = String.new();
+        for i in 0..n {
+            buf.clear();
+            for j in 0..n {
+                if j != i {
+                    buf.push(cs[j]);
+                }
+            }
+            self.keep_if_known(buf, mut s);
+        }
+        for i in 0..n - 1 {
+            buf.clear();
+            for j in 0..n {
+                if j == i {
+                    buf.push(cs[i + 1]);
+                } else if j == i + 1 {
+                    buf.push(cs[i]);
+                } else {
+                    buf.push(cs[j]);
+                }
+            }
+            self.keep_if_known(buf, mut s);
+        }
+        for i in 0..n + 1 {
+            let left = from_chars(cs, 0, i);
+            let right = from_chars(cs, i, n);
+            let after = if i < n { from_chars(cs, i + 1, n) } else { String.new() };
+            for c in self.wf.letters.iter() {
+                if i < n {
+                    buf.clear();
+                    buf.push_str(left);
+                    buf.push(*c);
+                    buf.push_str(after);
+                    self.keep_if_known(buf, mut s);
+                }
+                buf.clear();
+                buf.push_str(left);
+                buf.push(*c);
+                buf.push_str(right);
+                self.keep_if_known(buf, mut s);
+            }
+        }
+    }
+
+    fn candidates(ref self, word: ref String) -> Option[Vec[String]] {
+        let mut one: Vec[String] = Vec.new();
+        one.push(word.clone());
+        if not self.known(one).is_empty() {
+            return Some(one);
+        }
+        if not self.should_check(word) {
+            let mut same: Vec[String] = Vec.new();
+            same.push(word.clone());
+            return Some(same);
+        }
+        let res = self.edit_distance_1(word);
+        let k1 = self.known(res);
+        if not k1.is_empty() {
+            return Some(k1);
+        }
+        if self.distance == 2 {
+            let k2 = self.known_one_edit_from(res);
+            if not k2.is_empty() {
+                return Some(k2);
+            }
+        }
+        None
+    }
+
+    // max(sorted(candidates), key=frequency): the first of the most
+    // frequent, in sorted order.
+    fn best_of(ref self, c: ref Vec[String]) -> String {
+        let mut best = 0;
+        for i in 1..c.len() as i64 {
+            if self.wf.get(c[i]) > self.wf.get(c[best]) {
+                best = i;
+            }
+        }
+        c[best].clone()
+    }
+
+    fn correction(ref self, word: ref String) -> Option[String] {
+        match self.candidates(word) {
+            None => None,
+            Some(c) => Some(self.best_of(c)),
+        }
+    }
+
+    // edit_distance_2 is a list, one entry per edit of an edit, repeats
+    // and all; the report gives its length and the known words in it.
+    fn edit_distance_2(ref self, word: ref String) -> (i64, Vec[String]) {
+        let w = self.wf.fold(word);
+        let mut count = 0;
+        let mut s: Set[String] = Set.new();
+        for e1 in self.edit_distance_1(w) {
+            for e2 in self.edit_distance_1(e1) {
+                count += 1;
+                let k = self.wf.fold(e2);
+                if self.in_dictionary(k) and self.should_check(k) {
+                    s.insert(k);
+                }
+            }
+        }
+        (count, sorted_set(s))
+    }
+}
+
+// ------------------------------------------------------------ export, load_dictionary
+// export() is json.dumps(dictionary, sort_keys=True), written plain (the
+// oracle passes gzipped=False). load_dictionary() reads the file, folds
+// the whole text to lower case unless the checker is case-sensitive, and
+// json.loads it, so keys that fold together keep the last one's count.
+
+fn json_string(s: ref String) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn export_text(wf: ref WordFrequency) -> String {
+    let mut keys: Vec[String] = Vec.new();
+    for (k, _) in wf.dictionary.iter() {
+        keys.push(k.clone());
+    }
+    keys.sort();
+    let mut out = "{".to_string();
+    for i in 0..keys.len() as i64 {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(json_string(keys[i]));
+        out.push_str(": ");
+        let n = wf.dictionary.get(keys[i]) ?? 0;
+        out.push_str(f"{n}");
+    }
+    out.push('}');
+    out
+}
+
+fn skip_ws(cs: ref Vec[char], start: i64) -> i64 {
+    let mut i = start;
+    while i < cs.len() as i64 and (cs[i] == ' ' or cs[i] == '\n' or cs[i] == '\t' or cs[i] == '\r') {
+        i += 1;
+    }
+    i
+}
+
+fn hex_value(c: char) -> i64 {
+    let lower: Vec[char] = "0123456789abcdef".chars().collect();
+    let upper: Vec[char] = "0123456789ABCDEF".chars().collect();
+    for i in 0..16 {
+        if lower[i] == c or upper[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+// A JSON string at cs[start] (the opening quote); returns it and the
+// index after the closing quote.
+fn read_json_string(cs: ref Vec[char], start: i64) -> Result[(String, i64), String] {
+    let n = cs.len() as i64;
+    let mut i = start + 1;
+    let mut out = String.new();
+    while i < n {
+        let c = cs[i];
+        if c == '"' {
+            return Ok((out, i + 1));
+        }
+        if c == '\\' {
+            if i + 1 >= n {
+                break;
+            }
+            let e = cs[i + 1];
+            if e == 'n' {
+                out.push('\n');
+                i += 2;
+            } else if e == 't' {
+                out.push('\t');
+                i += 2;
+            } else if e == 'u' {
+                let mut v = 0;
+                for k in 0..4 {
+                    let d = if i + 2 + k < n { hex_value(cs[i + 2 + k]) } else { -1 };
+                    if d < 0 {
+                        return Err(f"bad \\u escape at {i}");
+                    }
+                    v = v * 16 + d;
+                }
+                match char.try_from(v as u32) {
+                    Ok(ch) => out.push(ch),
+                    Err(_) => return Err(f"bad \\u escape at {i}"),
+                }
+                i += 6;
+            } else {
+                out.push(e);
+                i += 2;
+            }
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    Err("unterminated string".to_string())
+}
+
+// A flat JSON object of words to counts, the shape export() writes.
+fn parse_counts(text: ref String) -> Result[Map[String, i64], String] {
+    let cs: Vec[char] = text.chars().collect();
+    let n = cs.len() as i64;
+    let mut out: Map[String, i64] = Map.new();
+    let mut i = skip_ws(cs, 0);
+    if i >= n or cs[i] != '{' {
+        return Err("expected {".to_string());
+    }
+    i = skip_ws(cs, i + 1);
+    if i < n and cs[i] == '}' {
+        return Ok(out);
+    }
+    while i < n {
+        if cs[i] != '"' {
+            return Err(f"expected a key at {i}");
+        }
+        let (key, after) = read_json_string(cs, i)?;
+        i = skip_ws(cs, after);
+        if i >= n or cs[i] != ':' {
+            return Err(f"expected : at {i}");
+        }
+        i = skip_ws(cs, i + 1);
+        let neg = i < n and cs[i] == '-';
+        if neg {
+            i += 1;
+        }
+        if not is_digit(cs, i) {
+            return Err(f"expected a count at {i}");
+        }
+        let mut v = 0;
+        while is_digit(cs, i) {
+            v = v * 10 + (cs[i] as i64 - '0' as i64);
+            i += 1;
+        }
+        out.insert(key, if neg { -v } else { v });
+        i = skip_ws(cs, i);
+        if i < n and cs[i] == ',' {
+            i = skip_ws(cs, i + 1);
+        } else if i < n and cs[i] == '}' {
+            return Ok(out);
+        } else {
+            return Err(f"expected , or }} at {i}");
+        }
+    }
+    Err("unterminated object".to_string())
+}
+
+fn load_dictionary(wf: mut ref WordFrequency, path: ref String) -> Result[(), String] {
+    let raw = match fs.read_to_string(path.clone()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {path}: {e}"),
+    };
+    let data = if wf.case_sensitive { raw } else { raw.to_lowercase() };
+    let counts = parse_counts(data)?;
+    let mut pairs: Vec[(String, i64)] = Vec.new();
+    for (k, v) in counts.iter() {
+        pairs.push((k.clone(), *v));
+    }
+    wf.load_counts(pairs);
+    Ok(())
+}
+
+// ------------------------------------------------------------ jobs
+// One command per line, as oracle.py runs them against the library: a
+// command word, then its arguments split at whitespace, or for split,
+// check and load_text the rest of the line as text.
+
+fn opt(args: ref Vec[String], key: Str) -> String {
+    for i in 0..args.len() as i64 {
+        match args[i].split_once("=") {
+            Some((k, v)) => {
+                if k == key {
+                    return v.to_string();
+                }
+            },
+            None => {},
+        }
+    }
+    "".to_string()
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+fn show_count(v: Option[i64]) -> String {
+    match v {
+        Some(n) => f"{n}",
+        None => "None".to_string(),
+    }
+}
+
+fn show_word(v: ref Option[String]) -> String {
+    match v {
+        Some(w) => w.clone(),
+        None => "None".to_string(),
+    }
+}
+
+fn stats_line(wf: ref WordFrequency) -> String {
+    let mut letters = String.new();
+    for i in 0..wf.letters.len() as i64 {
+        letters.push(wf.letters[i]);
+    }
+    let mut tops: Vec[String] = Vec.new();
+    for p in wf.top(6) {
+        tops.push(f"{p.0} {p.1}");
+    }
+    let t = join(tops, ", ");
+    f"{wf.total_words} total, {wf.unique_words} unique, longest {wf.longest_word_length}, letters [{letters}]; top {t}"
+}
+
+fn ed1_line(edits: ref Vec[String]) -> String {
+    let mut e = edits.clone();
+    e.sort();
+    let n = e.len() as i64;
+    let mut first: Vec[String] = Vec.new();
+    let mut last: Vec[String] = Vec.new();
+    for i in 0..n {
+        if i < 6 {
+            first.push(e[i].clone());
+        }
+        if i >= n - 3 {
+            last.push(e[i].clone());
+        }
+    }
+    let h = fnv(join(e, " "));
+    let a = join(first, " ");
+    let b = join(last, " ");
+    f"{n} edits, first {a}, last {b}; fnv {h:08x}"
+}
+
+// A document from the review queue: its unknown words, each with the
+// correction and how many candidates there were, and the hash of the
+// document with every correctable word replaced.
+fn check_line(sc: ref SpellChecker, text: ref String) -> String {
+    let toks = parse_into_words(text);
+    let bad = sc.unknown(toks);
+    let mut parts: Vec[String] = Vec.new();
+    let mut fixes: Map[String, String] = Map.new();
+    for i in 0..bad.len() as i64 {
+        let w = bad[i].clone();
+        // correction() would compute the candidates again; the oracle
+        // calls both, and this takes the same pick from the one list.
+        let (n, fix) = match sc.candidates(w) {
+            Some(c) => (c.len() as i64, Some(sc.best_of(c))),
+            None => (0, None),
+        };
+        let shown = show_word(fix);
+        parts.push(f"{w} -> {shown} ({n})");
+        match fix {
+            Some(f) => {
+                fixes.insert(w, f);
+            },
+            None => {},
+        }
+    }
+    let mut fixed: Vec[String] = Vec.new();
+    for i in 0..toks.len() as i64 {
+        match fixes.get(toks[i].to_lowercase()) {
+            Some(f) => fixed.push(f.clone()),
+            None => fixed.push(toks[i].clone()),
+        }
+    }
+    let p = join(parts, "; ");
+    let h = fnv(join(fixed, " "));
+    f"{toks.len()} words, {bad.len()} unknown: {p}; fnv {h:08x}"
+}
+
+fn first_chars(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let mut k = 0;
+    for c in s.chars() {
+        if k < n {
+            out.push(c);
+        }
+        k += 1;
+    }
+    out
+}
+
+struct Desk {
+    names: Vec[String],
+    checkers: Vec[SpellChecker],
+    cur: i64,
+}
+
+impl Desk {
+    fn put(mut ref self, name: ref String, sc: own SpellChecker) {
+        for i in 0..self.names.len() as i64 {
+            if self.names[i] == *name {
+                self.checkers[i] = sc;
+                self.cur = i;
+                return;
+            }
+        }
+        self.names.push(name.clone());
+        self.checkers.push(sc);
+        self.cur = self.names.len() as i64 - 1;
+    }
+
+    fn find(ref self, name: ref String) -> i64 {
+        for i in 0..self.names.len() as i64 {
+            if self.names[i] == *name {
+                return i;
+            }
+        }
+        -1
+    }
+}
+
+// The commands that change the current checker.
+fn edit_job(sc: mut ref SpellChecker, op: ref String, args: ref Vec[String], rest: ref String) -> Result[String, String] {
+    if op == "load_text_file" {
+        let text = match fs.read_to_string(args[0].clone()) {
+            Ok(t) => t,
+            Err(e) => return Err(f"cannot read {args[0]}: {e}"),
+        };
+        sc.wf.load_text(text);
+        return Ok(f"{sc.wf.total_words} words");
+    }
+    if op == "load_text" {
+        sc.wf.load_text(rest);
+        return Ok(f"{sc.wf.total_words} words");
+    }
+    if op == "load_words" {
+        sc.wf.load_words(args);
+        return Ok(f"{sc.wf.total_words} words");
+    }
+    if op == "add" {
+        sc.wf.add(args[0], to_int(args[1]));
+        return Ok(f" {args[0]}: {sc.wf.get(args[0])}");
+    }
+    if op == "pop" {
+        let v = sc.wf.pop(args[0]);
+        return Ok(f" {args[0]}: {show_count(v)}");
+    }
+    if op == "remove" {
+        sc.wf.remove(args[0]);
+        return Ok(f" {args[0]}: {sc.wf.unique_words} words");
+    }
+    if op == "remove_words" {
+        sc.wf.remove_words(args);
+        return Ok(f"{sc.wf.unique_words} words");
+    }
+    if op == "remove_threshold" {
+        sc.wf.remove_by_threshold(to_int(args[0]));
+        return Ok(f" {args[0]}: {sc.wf.unique_words} words");
+    }
+    if op == "distance" {
+        sc.distance = valid_distance(to_int(args[0]));
+        return Ok(f" {args[0]}: {sc.distance}");
+    }
+    Err(f"unknown op {op}")
+}
+
+// The commands that only read it.
+fn query_job(sc: ref SpellChecker, op: ref String, args: ref Vec[String], rest: ref String) -> Result[String, String] {
+    if op == "stats" {
+        return Ok(stats_line(sc.wf));
+    }
+    if op == "freq" {
+        return Ok(f" {args[0]}: {sc.wf.get(args[0])}");
+    }
+    if op == "contains" {
+        return Ok(f" {args[0]}: {py_bool(sc.wf.contains(args[0]))}");
+    }
+    if op == "split" {
+        let toks = parse_into_words(rest);
+        return Ok(f"{toks.len()} [{join(toks, "|")}]");
+    }
+    if op == "known" {
+        return Ok(show_set(Some(sc.known(args))));
+    }
+    if op == "unknown" {
+        return Ok(show_set(Some(sc.unknown(args))));
+    }
+    if op == "candidates" {
+        return Ok(f" {args[0]}: {show_set(sc.candidates(args[0]))}");
+    }
+    if op == "correction" {
+        return Ok(f" {args[0]}: {show_word(sc.correction(args[0]))}");
+    }
+    if op == "ed1" {
+        return Ok(f" {args[0]}: {ed1_line(sc.edit_distance_1(args[0]))}");
+    }
+    if op == "ed2" {
+        let (n, k) = sc.edit_distance_2(args[0]);
+        return Ok(f" {args[0]}: {n} edits, {k.len()} known: {show_set(Some(k))}");
+    }
+    if op == "check" {
+        return Ok(check_line(sc, rest));
+    }
+    if op == "export" {
+        let data = export_text(sc.wf);
+        if let Err(e) = fs.write(args[0].clone(), data.clone()) {
+            return Err(f"cannot write {args[0]}: {e}");
+        }
+        let back = match fs.read_to_string(args[0].clone()) {
+            Ok(t) => t,
+            Err(e) => return Err(f"cannot read {args[0]}: {e}"),
+        };
+        return Ok(f" {args[0]}: {back.len()} bytes, starts [{first_chars(back, 60)}]; fnv {fnv(back):08x}");
+    }
+    Err(f"unknown op {op}")
+}
+
+fn is_edit(op: ref String) -> bool {
+    op == "load_text_file" or op == "load_text" or op == "load_words" or op == "add" or op == "pop" or op == "remove" or op == "remove_words" or op == "remove_threshold" or op == "distance"
+}
+
+fn run_jobs(text: ref String) -> Result[i64, String] {
+    let mut desk = Desk { names: Vec.new(), checkers: Vec.new(), cur: -1 };
+    let mut lines = 0;
+    let all: Vec[String] = text.split("\n").map(|l| l.to_string()).collect();
+    for li in 0..all.len() as i64 - 1 {
+        let line = all[li].clone();
+        if line.starts_with("#") {
+            println(line);
+            lines += 1;
+            continue;
+        }
+        let (op, rest) = match line.split_once(" ") {
+            Some((a, b)) => (a.to_string(), b.to_string()),
+            None => (line.clone(), "".to_string()),
+        };
+        let args: Vec[String] = rest.split_whitespace().map(|p| p.to_string()).collect();
+        if op == "new" {
+            let d = to_int(opt(args, "distance"));
+            let cs = opt(args, "case") == "1";
+            desk.put(args[0], SpellChecker.new(d, cs));
+            let shown = desk.checkers[desk.cur].distance;
+            println(f"{args[0]}: new checker, distance {shown}, case-sensitive {py_bool(cs)}");
+        } else if op == "open" {
+            let mut sc = SpellChecker.new(2, false);
+            load_dictionary(mut sc.wf, args[1])?;
+            let n = sc.wf.unique_words;
+            desk.put(args[0], sc);
+            println(f"{args[0]}: opened {args[1]}, {n} words");
+        } else if op == "use" {
+            let i = desk.find(args[0]);
+            if i < 0 {
+                return Err(f"no checker {args[0]}");
+            }
+            desk.cur = i;
+            println(f"{args[0]}: in use");
+        } else {
+            let name = desk.names[desk.cur].clone();
+            let res = if is_edit(op) {
+                edit_job(mut desk.checkers[desk.cur], op, args, rest)
+            } else {
+                query_job(desk.checkers[desk.cur], op, args, rest)
+            };
+            match res {
+                Ok(s) => {
+                    if s.starts_with(" ") {
+                        println(f"{name} {op}{s}");
+                    } else {
+                        println(f"{name} {op}: {s}");
+                    }
+                },
+                Err(e) => return Err(e),
+            }
+        }
+        lines += 1;
+    }
+    Ok(lines)
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/corpus.txt".to_string(), corpus_text()) {
+        eprintln(f"cannot write data/corpus.txt: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.txt".to_string(), jobs_text()) {
+        eprintln(f"cannot write data/jobs.txt: {e}");
+        return;
+    }
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/jobs.txt: {e}");
+            return;
+        },
+    };
+    if let Err(e) = run_jobs(text) {
+        eprintln(f"error: {e}");
+    }
+    for p in ["data/corpus.txt", "data/jobs.txt", "data/docs.json", "data/names.json"] {
+        let _ = fs.remove_file(p.to_string());
+    }
+}
+
+// ------------------------------------------------------------ data
+
+// data/corpus.txt, which main() writes out and the jobs read back.
+fn corpus_text() -> String {
+    let mut s = String.new();
+    s.push_str("Every rollout writes its window to a missing cluster on port 5. Each token has a private request and a healthy deployment. There isn't a missing queue for this response; create one first. When a domain encrypts, the operator's metric shows a current pipeline.\n\nCheck that the threshold and the table use the same volume version. You can set the log task to 2 days in the replica file. Users' gateway and owners' backup are kept in separate token tables. Don't delete the new service until the release moves. The 'dry run' mode shows what the job would do without changing the owner.\n\nYou can set the firewall team to 10 days in the firewall file. A node that updates too often is marked missing and the volume pauses. Don't delete the weekly queue until the node retries. If the image is current, the response promotes and the dependency retries.\n\nThe 'dry run' mode shows what the retry would do without changing the operator. Your stage can't reach the dashboard while the commit is temporary. Each volume has a public build and a private job. Each stage has a permanent limit and a active release. Check that the release and the backup use the same quota version. You can set the service dependency to 2 days in the account file. A private request updates every 1 seconds.\n\nEvery project writes its database to a custom account on port 8. The cluster compresses when the queue caches. Don't delete the shared response until the window writes. If the package is permanent, the build receives and the artifact waits. You can set the backup stage to 2 minutes in the limit file.\n\nThe stage caches when the session copies. Use max_retries and log_level to tune how the certificate rotates. You can set the project retry to 60 seconds in the alert file. Use max_retries and log_level to tune how the dashboard compresses. The 'dry run' mode shows what the deployment would do without changing the retry. Every secret writes its artifact to a active secret on port 2.\n\nCheck that the replica and the registry use the same dashboard version. There isn't a shared snapshot for this endpoint; create one first. The commit fails when the schedule reloads. When a task verifies, the operator's policy shows a secondary node.\n");
+    s.push_str("\nThe 'dry run' mode shows what the replica would do without changing the zone. Don't delete the private config until the package stops. You can set the endpoint mirror to 60 minutes in the replica file. If the session is empty, the backup pauses and the budget expires. Every dashboard writes its server to a small quota on port 90. When a schedule drains, the operator's index shows a temporary file.\n\nAfter the operator writes, the gateway stops and the healthy release is removed. A private task retries every 90 minutes. It's safe to move a degraded artifact to another token. It's safe to move a secondary window to another node. It's safe to move a idle deployment to another token. The metric's task receives after 90 days. Every artifact writes its session to a nightly queue on port 8.\n\nThe 'dry run' mode shows what the deployment would do without changing the budget. The policy's pipeline caches after 5 days. Users' proxy and owners' file are kept in separate cluster tables. The config rolls when the firewall compresses. You can set the certificate backup to 3600 seconds in the snapshot file. Your mirror can't reach the task while the replica is empty. Users' rollout and owners' dependency are kept in separate dashboard tables. If the cluster is weekly, the operator deletes and the region rotates.\n\nMost teams run one network per pipeline and one dependency per queue. The task's snapshot scales after 10 hours. There isn't a private alert for this limit; create one first. Most teams run one config per cluster and one firewall per timeout. Your backup can't reach the endpoint while the domain is large.\n\nDon't delete the full gateway until the limit expires. The stage's log writes after 443 minutes. There isn't a degraded image for this log; create one first. It's safe to move a previous timeout to another cluster. Check that the network and the rollout use the same stage version. Your project can't reach the pipeline while the zone is remote. The backup's team expires after 2024 seconds.\n");
+    s.push_str("\nCheck that the branch and the token use the same metric version. The 'dry run' mode shows what the network would do without changing the index. We'll keep the pending package for 1 days before the task expires. Users' server and owners' image are kept in separate window tables. If the dashboard is small, the endpoint stops and the domain creates.\n\nA version that updates too often is marked weekly and the image scales. You can set the stage threshold to 1 seconds in the build file. Every certificate writes its pipeline to a healthy budget on port 3600. Your cluster can't reach the log while the queue is missing. You can set the proxy artifact to 8 seconds in the mirror file. We'll keep the missing version for 3 days before the proxy sends.\n\nIt's safe to move a empty database to another session. Every endpoint writes its zone to a idle client on port 443. Users' timeout and owners' replica are kept in separate operator tables. The 'dry run' mode shows what the rollout would do without changing the user. There isn't a current pipeline for this operator; create one first.\n\nYou can set the domain version to 10 days in the endpoint file. When a threshold pauses, the operator's timeout shows a pending schedule. The dashboard waits when the branch signs. We'll keep the full budget for 90 hours before the route pauses. Each report has a full domain and a old service. Most teams run one alert per volume and one task per cluster.\n\nWhen a commit promotes, the operator's log shows a local rollout. Each job has a manual table and a local index. Don't delete the pending token until the snapshot drains. Your client can't reach the service while the mirror is slow. If the operator is nightly, the client drains and the project promotes. Each account has a public config and a previous request. The 'dry run' mode shows what the alert would do without changing the zone. Don't delete the stale firewall until the release deletes.\n\nYour table can't reach the file while the gateway is custom. A pending retry starts every 30 seconds. A replica that reports too often is marked shared and the branch creates. The threshold's owner pauses after 30 minutes. The table's token verifies after 10 seconds. Every package writes its request to a degraded commit on port 443. There isn't a idle threshold for this volume; create one first.\n");
+    s.push_str("\nA missing volume drains every 30 minutes. We'll keep the stale package for 443 days before the mirror encrypts. If the backup is broken, the log compresses and the log retries. Use max_retries and log_level to tune how the account promotes. Check that the project and the retry use the same snapshot version.\n\nUse max_retries and log_level to tune how the user deletes. A stale domain signs every 2 seconds. The 'dry run' mode shows what the service would do without changing the project. You can set the file dashboard to 10 hours in the zone file. A primary operator reloads every 60 seconds. Each release has a full container and a broken volume.\n\nYour dependency can't reach the schedule while the secret is active. Each user has a healthy queue and a empty replica. You can set the rollout report to 3 seconds in the endpoint file. We'll keep the active zone for 8 days before the policy drains. The 'dry run' mode shows what the secret would do without changing the job. There isn't a permanent rollout for this quota; create one first. Use max_retries and log_level to tune how the network caches. A nightly threshold reports every 2 hours.\n\nA volume that publishes too often is marked weekly and the version reports. Users' log and owners' dependency are kept in separate container tables. Most teams run one endpoint per schedule and one metric per dashboard. Check that the queue and the log use the same file version. When a schedule stops, the operator's file shows a active cache. Each index has a manual route and a broken dependency. Check that the secret and the stage use the same user version.\n\nWe'll keep the read-only window for 90 hours before the cluster pauses. When a database receives, the operator's dashboard shows a old build. Most teams run one dashboard per task and one cluster per budget. If the replica is full, the user drains and the cluster verifies. A previous image retries every 60 minutes.\n\nIt's safe to move a primary task to another window. A image that copies too often is marked pending and the dashboard deletes. Most teams run one region per team and one alert per release. Check that the window and the artifact use the same pipeline version.\n");
+    s.push_str("\nWhen a threshold updates, the operator's owner shows a idle metric. Don't delete the old server until the gateway restarts. You can set the schedule branch to 2 minutes in the project file. A public client retries every 443 seconds. If the project is healthy, the firewall encrypts and the policy promotes. There isn't a degraded policy for this pipeline; create one first. The 'dry run' mode shows what the certificate would do without changing the index. Don't delete the previous secret until the alert stops.\n\nCheck that the node and the report use the same request version. Your zone can't reach the owner while the route is current. You can set the index metric to 8080 days in the cache file. Every schedule writes its snapshot to a remote gateway on port 30. A config that creates too often is marked weekly and the service waits. Most teams run one rollout per firewall and one proxy per index.\n\nYou can set the log config to 8080 days in the deployment file. When a user blocks, the operator's worker shows a slow report. When a table rotates, the operator's artifact shows a slow config. We'll keep the old zone for 8080 seconds before the pipeline reads. Every artifact writes its dashboard to a degraded artifact on port 5. Users' gateway and owners' account are kept in separate request tables. Use max_retries and log_level to tune how the retry drains. You can set the proxy deployment to 60 days in the volume file.\n\nA commit that receives too often is marked read-only and the request receives. We'll keep the degraded release for 3600 minutes before the firewall checks. A dependency that verifies too often is marked healthy and the queue pauses. Each pipeline has a active firewall and a weekly response. Use max_retries and log_level to tune how the queue expires. Most teams run one pipeline per index and one retry per retry. Check that the client and the stage use the same certificate version. You can set the budget registry to 2 minutes in the account file.\n\nYour project can't reach the dashboard while the snapshot is previous. The budget caches when the worker reads. Each task has a large backup and a slow budget. There isn't a dedicated team for this window; create one first. The 'dry run' mode shows what the worker would do without changing the network. Your table can't reach the index while the backup is permanent.\n");
+    s.push_str("\nDon't delete the read-only task until the certificate reloads. The response promotes when the account compresses. It's safe to move a automatic file to another limit. Use max_retries and log_level to tune how the endpoint scales.\n\nUse max_retries and log_level to tune how the mirror fails. The pipeline's quota caches after 90 days. Use max_retries and log_level to tune how the replica verifies. It's safe to move a primary image to another dashboard.\n\nYou can set the budget node to 10 hours in the alert file. If the cache is previous, the pipeline copies and the proxy updates. Users' rollout and owners' artifact are kept in separate cluster tables. A permanent token rolls every 30 seconds. A policy that receives too often is marked secondary and the volume creates. Most teams run one report per pipeline and one mirror per pipeline.\n\nIt's safe to move a missing registry to another version. When a node encrypts, the operator's zone shows a temporary alert. It's safe to move a temporary certificate to another firewall. Each region has a temporary image and a pending project. There isn't a previous commit for this replica; create one first. Every session writes its container to a primary metric on port 5.\n\nAfter the user updates, the region restarts and the pending stage is removed. We'll keep the broken schedule for 2 days before the package rolls. After the team caches, the artifact promotes and the public report is removed. Check that the cache and the release use the same log version. If the schedule is full, the report retries and the build reads. A network that rotates too often is marked slow and the commit deletes.\n\nAfter the rollout restarts, the cluster copies and the old rollout is removed. Use max_retries and log_level to tune how the release pauses. The 'dry run' mode shows what the release would do without changing the dependency. The domain's task scales after 30 days.\n\nEach policy has a broken stage and a shared firewall. It's safe to move a broken request to another queue. Users' network and owners' volume are kept in separate timeout tables. You can set the mirror deployment to 3600 hours in the endpoint file.\n");
+    s.push_str("\nUsers' token and owners' account are kept in separate database tables. The image receives when the operator syncs. When a session verifies, the operator's image shows a small backup. If the queue is pending, the task syncs and the job caches. After the release receives, the retry stops and the primary window is removed. Don't delete the temporary server until the gateway expires. When a job deletes, the operator's database shows a read-only dashboard. After the artifact rolls, the certificate signs and the idle retry is removed.\n\nWhen a metric receives, the operator's node shows a old response. Check that the report and the operator use the same index version. Users' mirror and owners' endpoint are kept in separate network tables. After the file starts, the registry verifies and the large route is removed. The cluster's metric fails after 30 minutes. Your project can't reach the budget while the replica is new. We'll keep the primary gateway for 2 seconds before the schedule creates. It's safe to move a full job to another timeout.\n\nUsers' timeout and owners' replica are kept in separate registry tables. There isn't a small service for this commit; create one first. A pipeline that checks too often is marked previous and the project reads. A build that creates too often is marked missing and the token blocks. It's safe to move a nightly backup to another quota.\n\nWhen a limit rolls, the operator's account shows a large artifact. Check that the endpoint and the gateway use the same domain version. You can set the token pipeline to 3 hours in the schedule file. If the snapshot is broken, the queue expires and the response deletes. A task that rotates too often is marked fast and the task starts. The 'dry run' mode shows what the database would do without changing the budget. A release that updates too often is marked nightly and the user copies.\n\nYou can set the endpoint policy to 60 seconds in the domain file. The branch's team rolls after 3600 seconds. The retry promotes when the queue moves. If the domain is stale, the service caches and the pipeline restarts. Each build has a old cluster and a default timeout.\n");
+    s.push_str("\nIt's safe to move a new artifact to another alert. Use max_retries and log_level to tune how the network compresses. Don't delete the pending task until the account waits. We'll keep the local commit for 10 hours before the schedule checks. There isn't a remote config for this team; create one first. Most teams run one dependency per limit and one image per index. Every project writes its network to a secondary service on port 8. A broken stage waits every 443 days.\n\nMost teams run one rollout per budget and one volume per firewall. Most teams run one window per pipeline and one secret per deployment. Most teams run one timeout per table and one registry per limit. After the cluster compresses, the secret restarts and the missing queue is removed. Check that the secret and the firewall use the same version version.\n\nCheck that the quota and the operator use the same metric version. We'll keep the small owner for 5 days before the build blocks. When a commit pauses, the operator's mirror shows a temporary network. The rollout moves when the stage reads. Use max_retries and log_level to tune how the service compresses. Most teams run one release per network and one quota per task. Every limit writes its dependency to a healthy queue on port 60.\n\nWhen a retry verifies, the operator's window shows a nightly commit. If the version is primary, the pipeline sends and the owner blocks. When a proxy expires, the operator's team shows a new proxy. Each session has a fast policy and a private image. The client encrypts when the dependency restarts. A temporary table stops every 3 seconds. A container that stops too often is marked primary and the artifact receives.\n\nCheck that the image and the quota use the same limit version. Most teams run one project per proxy and one project per response. When a endpoint signs, the operator's pipeline shows a degraded version. Every request writes its queue to a manual dashboard on port 2024. It's safe to move a automatic session to another session. Users' index and owners' cluster are kept in separate worker tables. Check that the user and the snapshot use the same certificate version. Check that the container and the route use the same report version.\n");
+    s.push_str("\nEach schedule has a nightly deployment and a degraded endpoint. The artifact syncs when the zone deletes. The file compresses when the file creates. Use max_retries and log_level to tune how the policy signs.\n\nA permanent image verifies every 8 hours. If the budget is stale, the container pauses and the server moves. The firewall's limit moves after 5 seconds. The window's certificate signs after 10 hours.\n\nAfter the schedule writes, the token pauses and the weekly image is removed. Check that the budget and the volume use the same deployment version. Users' branch and owners' node are kept in separate retry tables. A policy that verifies too often is marked shared and the quota publishes. Check that the user and the image use the same response version. The 'dry run' mode shows what the server would do without changing the registry.\n\nIt's safe to move a permanent config to another replica. You can set the node policy to 2 hours in the operator file. The server's job rotates after 2 days. After the quota deletes, the server receives and the nightly schedule is removed. Each service has a public cluster and a old operator. Your package can't reach the limit while the stage is manual. If the limit is pending, the quota reloads and the artifact blocks. After the queue publishes, the endpoint waits and the small task is removed.\n\nEvery schedule writes its log to a primary image on port 8. Check that the budget and the route use the same alert version. Check that the commit and the firewall use the same metric version. Your team can't reach the gateway while the window is dedicated. There isn't a small schedule for this request; create one first. You can set the team stage to 3 hours in the volume file. Use max_retries and log_level to tune how the rollout deletes. Check that the replica and the worker use the same artifact version.\n\nThe snapshot's queue updates after 10 hours. It's safe to move a large quota to another response. A image that checks too often is marked fast and the server caches. We'll keep the read-only token for 5 minutes before the dependency reloads.\n");
+    s.push_str("\nUse max_retries and log_level to tune how the window writes. Each backup has a new deployment and a degraded commit. If the worker is idle, the request sends and the queue publishes. A backup that rolls too often is marked shared and the team pauses.\n\nUse max_retries and log_level to tune how the branch compresses. Most teams run one project per dashboard and one zone per registry. It's safe to move a local window to another user. Every deployment writes its project to a missing threshold on port 3. When a node creates, the operator's client shows a fast secret.\n\nA region that caches too often is marked new and the budget copies. Use max_retries and log_level to tune how the dependency sends. If the owner is default, the threshold rotates and the database checks. A primary index retries every 10 minutes. A route that moves too often is marked default and the budget retries. Your deployment can't reach the retry while the owner is healthy. If the project is large, the request verifies and the network checks.\n\nEvery retry writes its artifact to a public task on port 443. After the version compresses, the server rolls and the temporary config is removed. When a quota waits, the operator's deployment shows a manual task. A secondary dependency pauses every 8080 seconds. Most teams run one backup per version and one alert per alert. A window that scales too often is marked manual and the endpoint verifies. We'll keep the slow account for 3600 days before the config sends. Most teams run one team per stage and one node per job.\n\nEvery operator writes its threshold to a fast branch on port 3. Most teams run one commit per project and one user per package. When a file waits, the operator's pipeline shows a dedicated retry. Each dependency has a permanent queue and a large container. Users' account and owners' release are kept in separate limit tables. Most teams run one alert per service and one alert per database. The user's registry checks after 2 days. Most teams run one response per account and one limit per stage.\n");
+    s.push_str("\nEvery zone writes its service to a pending zone on port 30. The log encrypts when the commit caches. You can set the project retry to 3 days in the account file. A firewall that syncs too often is marked healthy and the registry reads. The cluster retries when the index publishes.\n\nIf the policy is weekly, the file pauses and the log starts. The 'dry run' mode shows what the backup would do without changing the operator. Don't delete the automatic release until the window reloads. Most teams run one secret per request and one user per replica. A zone that copies too often is marked private and the mirror reads. Check that the cache and the artifact use the same request version. It's safe to move a active owner to another build. Don't delete the custom volume until the pipeline sends.\n\nEach timeout has a local release and a large artifact. A dedicated image moves every 2 seconds. Most teams run one artifact per backup and one stage per quota. A owner that expires too often is marked local and the branch expires. Every proxy writes its session to a primary build on port 30.\n\nUsers' session and owners' client are kept in separate dependency tables. A shared backup expires every 90 seconds. The zone's request drains after 30 minutes. A certificate that reads too often is marked healthy and the account rotates.\n\nMost teams run one zone per region and one artifact per task. There isn't a dedicated server for this dashboard; create one first. Don't delete the public database until the window verifies. We'll keep the large alert for 2024 days before the client expires.\n\nMost teams run one region per threshold and one job per policy. It's safe to move a empty route to another log. Every timeout writes its commit to a shared domain on port 2. The secret's file publishes after 443 hours. We'll keep the idle branch for 443 seconds before the database verifies. Users' report and owners' mirror are kept in separate session tables. We'll keep the large user for 90 seconds before the dependency creates.\n");
+    s.push_str("\nUse max_retries and log_level to tune how the dependency checks. A stage that syncs too often is marked degraded and the owner rotates. If the token is weekly, the volume scales and the retry stops. Check that the deployment and the account use the same dependency version. A previous task signs every 3600 seconds. Don't delete the healthy dashboard until the cache verifies.\n\nAfter the project starts, the service resumes and the missing certificate is removed. The container's dashboard reloads after 8080 seconds. It's safe to move a degraded build to another job. The network's queue drains after 30 days. After the registry drains, the user publishes and the active mirror is removed. When a response syncs, the operator's report shows a old mirror. Each stage has a pending image and a read-only owner. After the rollout rolls, the backup drains and the secondary package is removed.\n\nA registry that creates too often is marked manual and the package sends. After the index signs, the task verifies and the shared request is removed. A backup that verifies too often is marked dedicated and the release verifies. Check that the team and the limit use the same window version. The node creates when the rollout syncs. Don't delete the custom release until the dashboard copies.\n\nA default build scales every 10 hours. A shared token reloads every 60 seconds. The deployment updates when the endpoint publishes. If the dependency is nightly, the deployment writes and the server deletes. Use max_retries and log_level to tune how the database publishes. You can set the dashboard retry to 2024 seconds in the snapshot file.\n\nA active table starts every 2024 seconds. It's safe to move a local artifact to another account. After the domain receives, the region signs and the healthy dependency is removed. Don't delete the dedicated cache until the branch pauses. The token reloads when the timeout retries. Your task can't reach the container while the schedule is new. We'll keep the broken request for 1 seconds before the rollout signs. You can set the limit user to 3600 seconds in the gateway file.\n");
+    s.push_str("\nThere isn't a pending firewall for this gateway; create one first. The 'dry run' mode shows what the dependency would do without changing the budget. When a commit signs, the operator's replica shows a read-only account. Your queue can't reach the dashboard while the container is small. Use max_retries and log_level to tune how the user compresses. You can set the snapshot package to 8080 minutes in the account file.\n\nWe'll keep the custom file for 1 minutes before the worker moves. Users' retry and owners' index are kept in separate budget tables. It's safe to move a weekly index to another gateway. Use max_retries and log_level to tune how the quota compresses. A token that reads too often is marked active and the queue syncs. It's safe to move a old proxy to another region. Each threshold has a new endpoint and a pending file. Check that the certificate and the container use the same policy version.\n\nIt's safe to move a shared domain to another mirror. You can set the report deployment to 3 minutes in the config file. It's safe to move a missing session to another cluster. It's safe to move a local database to another queue. We'll keep the healthy worker for 443 seconds before the package waits. Your budget can't reach the index while the owner is automatic.\n\nDon't delete the broken user until the firewall syncs. The 'dry run' mode shows what the stage would do without changing the metric. Every limit writes its region to a primary mirror on port 90. There isn't a automatic report for this zone; create one first.\n\nIt's safe to move a current team to another package. Use max_retries and log_level to tune how the package promotes. Use max_retries and log_level to tune how the stage syncs. A image that sends too often is marked local and the session stops. Every account writes its server to a active secret on port 5. There isn't a missing build for this timeout; create one first. Most teams run one backup per metric and one zone per quota. Every schedule writes its job to a empty region on port 5.\n");
+    s.push_str("\nUsers' budget and owners' policy are kept in separate pipeline tables. Check that the endpoint and the pipeline use the same server version. The 'dry run' mode shows what the metric would do without changing the build. Your project can't reach the build while the network is full. Each threshold has a missing operator and a shared database. If the certificate is default, the version drains and the branch copies.\n\nYour user can't reach the session while the cache is permanent. You can set the dependency limit to 8080 days in the project file. You can set the cache certificate to 2 seconds in the user file. It's safe to move a fast pipeline to another cluster. Users' metric and owners' threshold are kept in separate pipeline tables. Every route writes its pipeline to a primary budget on port 8080. Don't delete the small cache until the version promotes. The container fails when the snapshot expires.\n\nYou can set the endpoint budget to 8080 seconds in the threshold file. There isn't a read-only cache for this zone; create one first. We'll keep the nightly retry for 2024 minutes before the route restarts. We'll keep the small commit for 8 seconds before the package signs. Your domain can't reach the session while the database is public. Don't delete the local package until the config fails.\n\nWe'll keep the degraded budget for 2 hours before the timeout publishes. The budget's job updates after 10 seconds. If the index is default, the task sends and the version fails. A broken route caches every 30 days. Your build can't reach the stage while the region is weekly.\n\nWe'll keep the custom release for 8 seconds before the cluster moves. If the container is temporary, the client expires and the image retries. Don't delete the full volume until the secret encrypts. It's safe to move a shared budget to another session. If the request is stale, the stage expires and the config drains. The 'dry run' mode shows what the job would do without changing the gateway. Each domain has a read-only policy and a remote endpoint. Check that the secret and the snapshot use the same build version.\n");
+    s.push_str("\nWe'll keep the broken alert for 10 days before the version copies. A cluster that drains too often is marked missing and the stage reports. When a dependency waits, the operator's release shows a slow config. We'll keep the healthy zone for 3 seconds before the node reloads. You can set the backup registry to 90 minutes in the token file. Check that the gateway and the commit use the same response version. The 'dry run' mode shows what the volume would do without changing the rollout.\n\nMost teams run one metric per team and one index per endpoint. Users' node and owners' server are kept in separate release tables. There isn't a fast cache for this token; create one first. The user pauses when the file signs. A previous token receives every 8080 seconds. The 'dry run' mode shows what the client would do without changing the node.\n\nEach domain has a stale job and a degraded threshold. Don't delete the stale dashboard until the worker syncs. We'll keep the custom snapshot for 8 hours before the build verifies. Your zone can't reach the registry while the limit is local. The 'dry run' mode shows what the table would do without changing the certificate.\n\nUse max_retries and log_level to tune how the task restarts. The job reloads when the database pauses. We'll keep the old job for 443 days before the response reports. We'll keep the public account for 2024 days before the account reports. Don't delete the large zone until the endpoint resumes. We'll keep the small schedule for 8 hours before the node publishes. After the region deletes, the volume restarts and the shared operator is removed.\n\nIt's safe to move a remote commit to another owner. A empty network checks every 8 seconds. Check that the snapshot and the package use the same container version. Check that the node and the pipeline use the same deployment version. Most teams run one node per database and one stage per cluster. Check that the deployment and the secret use the same stage version.\n\nEvery domain writes its artifact to a secondary build on port 3. If the node is shared, the firewall starts and the client pauses. Use max_retries and log_level to tune how the secret restarts. Users' file and owners' node are kept in separate node tables. A firewall that writes too often is marked degraded and the stage checks. A full package starts every 60 hours. A database that blocks too often is marked manual and the schedule drains.\n");
+    s.push_str("\nEach window has a remote branch and a missing limit. A temporary worker resumes every 30 seconds. We'll keep the secondary quota for 443 minutes before the stage reports. The 'dry run' mode shows what the network would do without changing the certificate.\n\nA primary build drains every 90 minutes. Each service has a temporary node and a broken report. After the table restarts, the release signs and the degraded timeout is removed. Most teams run one stage per branch and one build per artifact. Your policy can't reach the region while the log is remote. There isn't a broken threshold for this commit; create one first.\n\nThe team stops when the policy verifies. If the branch is stale, the response blocks and the cache reports. Your queue can't reach the budget while the database is old. Don't delete the permanent alert until the pipeline drains. Your report can't reach the timeout while the rollout is automatic.\n\nMost teams run one team per worker and one container per container. A network that reloads too often is marked large and the endpoint drains. Users' server and owners' worker are kept in separate account tables. Don't delete the degraded certificate until the proxy encrypts. Each window has a weekly dependency and a small budget. The worker's budget blocks after 443 hours. We'll keep the dedicated endpoint for 30 seconds before the server rolls.\n\nWhen a dependency reloads, the operator's zone shows a idle project. It's safe to move a active region to another endpoint. Use max_retries and log_level to tune how the team drains. The 'dry run' mode shows what the stage would do without changing the log. Use max_retries and log_level to tune how the replica stops.\n\nA team that scales too often is marked new and the policy retries. A pipeline that retries too often is marked remote and the budget compresses. Use max_retries and log_level to tune how the package encrypts. Users' timeout and owners' client are kept in separate backup tables.\n");
+    s
+}
+
+// data/jobs.txt, which main() writes out and the jobs read back.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("# a documentation team's spell checker, built on the docs themselves\nnew docs distance=2 case=0\nload_text_file data/corpus.txt\nstats\nfreq the\nfreq The\nfreq THE\nfreq don't\nfreq max_retries\nfreq 8080\nfreq kubernetes\ncontains Deploy\ncontains deployment\ncontains Operator's\nsplit Don't panic: it's 'quoted' -- a''b x_y 3.14 rock'n'roll users' end' _x_ 'tis\nsplit   leading and trailing   \nknown the The service deployment's 8080 2024 nan Infinity inf 1e5 1_000 x\nunknown the servise 8080 1__0 _1 1_ 1e 0x10 nan +nan -inf .5 5. ! ? ab\nknown ! . ' _ - a\nunknown ! . ' _ - a q\n# candidates and corrections\ncandidates service\ncorrection service\ncandidates Service\ncorrection Service\ncandidates servise\ncorrection servise\ncandidates srevice\ncorrection srevice\ncandidates servce\ncorrection servce\ncandidates sservice\ncorrection sservice\ncandidates dpeloyment\ncorrection dpeloyment\ncandidates deploymnt\ncorrection deploymnt\ncandidates polcy\ncorrection polcy\ncandidates plicy\ncorrection plicy\ncandidates 8080\ncorrection 8080\ncandidates 1e9\ncorrection 1e9\ncandidates nan\ncorrection nan\ncandidates token\ncorrection token\ncandidates tokne\ncorrection tokne\ncandidates toekn\ncorrection toekn\ncandidates tken\ncorrection tken\ncandidates tokens\ncorrection tokens\ncandidates zzzz\ncandidates q\ncorrection q\ncandidates qxz\ncandidates certificatesandmore\ncorrection certificatesandmore\ncandidates rools\ncorrection rools\ncandidates ro\ncorrection ro\ncandidates teh\ncorrection teh\ncandidates adn\ncorrection adn\ncandidates wiht\ned1 node\ned1 Node\ned1 8080\ned1 a\ned2 job\n# documents from the docs' review queue\ncheck A dedicated schedule caches every 10 hours. We'll keep the read-only registry for 90 hours befoe the routxe rolls.\ncheck Don't delete the custoa limit until the config waits. Every team writes its retry to a manual token on port 1.\ncheck Don't delete the weekly version until the window retries. Every registry wrrites its secret to a shared gateway on port 2024.\ncheck There isn't a automatic build for this zone; create one first. Mtost teams run one project per release and one server per service.\n");
+    s.push_str("check It's safe to move a tepmorary operator to another response. After the certificate moves, the metric expires and the nightly worker is removed.\ncheck Use max_retries and log_level to ltune how the certificate publishes. If the config is private, the release starts and the dependency pauses.\ncheck Each secret has a active container and a nightly release. Yousr report can't reach the snapshot while the route is primary.\ncheck You can set the team route to 5 hours in the dashboard file. When a route reasd, the operator's backup shows a pending request.\ncheck Check that the gateway and the serivce use the same schedule version. If the owner is epmtcy, the client creates and the stage updates.\ncheck After the queue reloads, the rollout creates and the idle alert is removed. The 'dry run' mode shows what the team would do wthout changing the commit.\ncheck Use max_retries and log_level to tune how the deployment stops. A volume thalt rolls too ofwen is marked rublic and the quota reloads.\ncheck A build that writes too often is marked private and the table reports. Check that the lgimit and the network use the same table version.\ncheck The 'dry run' mode shows what the ubdget dould do without changing the branch. After the artifact blocks, the account rolls and the stale cluster is removed.\ncheck Use max_retries and log_level to tune how the report resumes. Your accoutn can't reach the server while the teaom is missing.\ncheck The file's cluster fails after 90 minutes. If the deployment is manual, the mirror cachegs and the route signs.\ncheck The sesion encrypts when the registry pauses. After the report updates, the job compresses and the active token is removed.\ncheck The nginx proxy reads the config files.\ncheck The service restarts when the config file updates.\ncheck \n# editing the dictionary\nadd Skiff 40\nadd skiff 2\nadd kubectl 5\nload_words Helm helm HELM nginx yaml\nstats\ncandidates skif\ncorrection skif\ncandidates kubctl\ncheck The skiff CLI wraps kubectl and helm; nginx reads yaml.\n");
+    s.push_str("pop SKIFF\npop skiff\npop skiff\nfreq skiff\nremove nginx\nremove nginx\nremove_words yaml Helm nothing\nstats\nexport data/docs.json\nremove_threshold 3\nstats\ned1 node\ncandidates nod\ncorrection nod\nremove_threshold 1000000\nstats\ncandidates hello\ned1 hi\n# the exported dictionary, opened again\nopen saved data/docs.json\nstats\nfreq service\nfreq skiff\ncorrection servise\n# a checker that only looks one edit away\nnew strict distance=1 case=0\nload_text_file data/corpus.txt\ncandidates srevice\ncandidates srevcie\ncorrection srevcie\ndistance 2\ncandidates srevcie\ndistance 0\ndistance 3\ndistance 1\ncandidates tken\n# an empty checker\nnew empty distance=2 case=0\nstats\ncandidates hello\ncandidates hi\nknown hi\nunknown hi hello\ned1 ab\n# a case-sensitive checker for product names\nnew names distance=2 case=1\nload_text Skiff runs on Linux and macOS. The Skiff CLI talks to the Skiff API. skiff is the binary. The the THE.\nload_words Linux Linux linux API\nadd The 4\nstats\nknown Skiff skiff SKIFF Linux linux The the\nunknown Skiff skiff SKIFF Linux linux The the\ncandidates Skif\ncandidates skif\ncorrection Linx\ncorrection linx\ncandidates THe\ned1 Ab\nexport data/names.json\nopen folded data/names.json\nstats\nfreq the\nfreq skiff\nfreq linux\nfreq api\nuse saved\nstats\ncandidates srvice\n");
+    s
+}

@@ -1,0 +1,175 @@
+# a documentation team's spell checker, built on the docs themselves
+docs: new checker, distance 2, case-sensitive False
+docs load_text_file: 5979 words
+docs stats: 5979 total, 249 unique, longest 11, letters ['012345689_abcdefghijklmnopqrstuvwxyz]; top the 710, a 249, and 229, to 151, is 110, one 80
+docs freq the: 710
+docs freq The: 710
+docs freq THE: 710
+docs freq don't: 26
+docs freq max_retries: 29
+docs freq 8080: 10
+docs freq kubernetes: 0
+docs contains Deploy: False
+docs contains deployment: True
+docs contains Operator's: True
+docs split: 13 [Don't|panic|it's|quoted|a''b|x_y|3|14|rock'n'roll|users|end|_x_|tis]
+docs split: 3 [leading|and|trailing]
+docs known: {service, the}
+docs unknown: {0x10, 1_, 1__0, 1e, _1, ab, nan, servise}
+docs known: {a}
+docs unknown: {q}
+# candidates and corrections
+docs candidates service: {service}
+docs correction service: service
+docs candidates Service: {Service}
+docs correction Service: Service
+docs candidates servise: {service}
+docs correction servise: service
+docs candidates srevice: {service}
+docs correction srevice: service
+docs candidates servce: {service}
+docs correction servce: service
+docs candidates sservice: {service}
+docs correction sservice: service
+docs candidates dpeloyment: {deployment}
+docs correction dpeloyment: deployment
+docs candidates deploymnt: {deployment}
+docs correction deploymnt: deployment
+docs candidates polcy: {policy}
+docs correction polcy: policy
+docs candidates plicy: {policy}
+docs correction plicy: policy
+docs candidates 8080: {8080}
+docs correction 8080: 8080
+docs candidates 1e9: {1e9}
+docs correction 1e9: 1e9
+docs candidates nan: {can}
+docs correction nan: can
+docs candidates token: {token}
+docs correction token: token
+docs candidates tokne: {token}
+docs correction tokne: token
+docs candidates toekn: {token}
+docs correction toekn: token
+docs candidates tken: {token}
+docs correction tken: token
+docs candidates tokens: {token}
+docs correction tokens: token
+docs candidates zzzz: None
+docs candidates q: {a}
+docs correction q: a
+docs candidates qxz: None
+docs candidates certificatesandmore: {certificatesandmore}
+docs correction certificatesandmore: certificatesandmore
+docs candidates rools: {rolls}
+docs correction rools: rolls
+docs candidates ro: {do, to}
+docs correction ro: to
+docs candidates teh: {the}
+docs correction teh: the
+docs candidates adn: {and}
+docs correction adn: and
+docs candidates wiht: {what}
+docs ed1 node: 333 edits, first 'node 'ode 0node 0ode 1node 1ode, last yode znode zode; fnv c2ecaa50
+docs ed1 Node: 333 edits, first 'node 'ode 0node 0ode 1node 1ode, last yode znode zode; fnv c2ecaa50
+docs ed1 8080: 1 edits, first 8080, last 8080; fnv 40c0f1e5
+docs ed1 a: 111 edits, first  ' 'a 0 0a 1, last ya z za; fnv 1ac807f4
+docs ed2 job: 77575 edits, 9 known: {do, for, how, job, log, on, to, too, you}
+# documents from the docs' review queue
+docs check: 20 words, 2 unknown: befoe -> before (1); routxe -> route (1); fnv 4c29c13e
+docs check: 21 words, 1 unknown: custoa -> custom (1); fnv 44248c2c
+docs check: 21 words, 1 unknown: wrrites -> writes (1); fnv 482be626
+docs check: 23 words, 1 unknown: mtost -> most (1); fnv 0c2db5c0
+docs check: 23 words, 1 unknown: tepmorary -> temporary (1); fnv ba589866
+docs check: 22 words, 1 unknown: ltune -> tune (1); fnv 0052044b
+docs check: 21 words, 1 unknown: yousr -> your (1); fnv 30bacd43
+docs check: 24 words, 1 unknown: reasd -> read (2); fnv f39039ec
+docs check: 24 words, 2 unknown: epmtcy -> empty (1); serivce -> service (1); fnv 9d098d64
+docs check: 27 words, 1 unknown: wthout -> without (1); fnv 87c69c6b
+docs check: 23 words, 3 unknown: ofwen -> often (1); rublic -> public (1); thalt -> that (1); fnv 6cc9cb8c
+docs check: 25 words, 1 unknown: lgimit -> limit (1); fnv 42746d32
+docs check: 27 words, 2 unknown: dould -> would (1); ubdget -> budget (1); fnv 970ed9a9
+docs check: 21 words, 2 unknown: accoutn -> account (1); teaom -> team (1); fnv 5da19134
+docs check: 19 words, 2 unknown: cachegs -> caches (1); file's -> file (1); fnv ea52d798
+docs check: 20 words, 1 unknown: sesion -> session (1); fnv b7e0a50d
+docs check: 7 words, 2 unknown: files -> file (1); nginx -> None (0); fnv 18c6536e
+docs check: 8 words, 0 unknown: ; fnv 8ac70e72
+docs check: 0 words, 0 unknown: ; fnv 811c9dc5
+# editing the dictionary
+docs add Skiff: 40
+docs add skiff: 42
+docs add kubectl: 5
+docs load_words: 6031 words
+docs stats: 6031 total, 254 unique, longest 11, letters ['012345689_abcdefghijklmnopqrstuvwxyz]; top the 710, a 249, and 229, to 151, is 110, one 80
+docs candidates skif: {skiff}
+docs correction skif: skiff
+docs candidates kubctl: {kubectl}
+docs check: 10 words, 2 unknown: cli -> can (2); wraps -> None (0); fnv 13c7575d
+docs pop SKIFF: 42
+docs pop skiff: None
+docs pop skiff: None
+docs freq skiff: 0
+docs remove nginx: 252 words
+docs remove nginx: 252 words
+docs remove_words: 250 words
+docs stats: 5984 total, 250 unique, longest 11, letters ['012345689_abcdefghijklmnopqrstuvwxyz]; top the 710, a 249, and 229, to 151, is 110, one 80
+docs export data/docs.json: 3385 bytes, starts [{"1": 5, "10": 13, "2": 17, "2024": 7, "3": 11, "30": 14, "3]; fnv 1fd04b08
+docs remove_threshold 3: 227 words
+docs stats: 5959 total, 227 unique, longest 11, letters ['012345689_abcdefghijklmnopqrstuvwxyz]; top the 710, a 249, and 229, to 151, is 110, one 80
+docs ed1 node: 333 edits, first 'node 'ode 0node 0ode 1node 1ode, last yode znode zode; fnv c2ecaa50
+docs candidates nod: {node}
+docs correction nod: node
+docs remove_threshold 1000000: 0 words
+docs stats: 0 total, 0 unique, longest 0, letters []; top 
+docs candidates hello: {hello}
+docs ed1 hi: 3 edits, first h i ih, last h i ih; fnv 896663e5
+# the exported dictionary, opened again
+saved: opened data/docs.json, 250 words
+saved stats: 5984 total, 250 unique, longest 11, letters ['012345689_abcdefghijklmnopqrstuvwxyz]; top the 710, a 249, and 229, to 151, is 110, one 80
+saved freq service: 15
+saved freq skiff: 0
+saved correction servise: service
+# a checker that only looks one edit away
+strict: new checker, distance 1, case-sensitive False
+strict load_text_file: 5979 words
+strict candidates srevice: {service}
+strict candidates srevcie: None
+strict correction srevcie: None
+strict distance 2: 2
+strict candidates srevcie: {service}
+strict distance 0: 2
+strict distance 3: 2
+strict distance 1: 1
+strict candidates tken: {token}
+# an empty checker
+empty: new checker, distance 2, case-sensitive False
+empty stats: 0 total, 0 unique, longest 0, letters []; top 
+empty candidates hello: {hello}
+empty candidates hi: None
+empty known: {}
+empty unknown: {hi}
+empty ed1 ab: 3 edits, first a b ba, last a b ba; fnv 2c4d91c7
+# a case-sensitive checker for product names
+names: new checker, distance 2, case-sensitive True
+names load_text: 21 words
+names load_words: 25 words
+names add The: 6
+names stats: 29 total, 17 unique, longest 6, letters [ACEHILOPSTabcdefhiklmnorstuxy]; top The 6, Linux 3, Skiff 3, the 3, API 2, CLI 1
+names known: {Linux, Skiff, The, linux, skiff, the}
+names unknown: {SKIFF}
+names candidates Skif: {Skiff}
+names candidates skif: {skiff}
+names correction Linx: Linux
+names correction linx: linux
+names candidates THe: {THE, The}
+names ed1 Ab: 145 edits, first A AA AAb AC ACb AE, last xb yAb yb; fnv 03a01a0f
+names export data/names.json: 183 bytes, starts [{"API": 2, "CLI": 1, "Linux": 3, "Skiff": 3, "THE": 1, "The"]; fnv cd1d180f
+folded: opened data/names.json, 13 words
+folded stats: 16 total, 13 unique, longest 6, letters [abcdefhiklmnoprstuxy]; top the 3, api 2, and 1, binary 1, cli 1, is 1
+folded freq the: 3
+folded freq skiff: 1
+folded freq linux: 1
+folded freq api: 2
+saved: in use
+saved stats: 5984 total, 250 unique, longest 11, letters ['012345689_abcdefghijklmnopqrstuvwxyz]; top the 710, a 249, and 229, to 151, is 110, one 80
+saved candidates srvice: {service}

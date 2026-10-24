@@ -1,0 +1,10 @@
+source = "kara-katas/apps/cli/mini_spellchecker/mini_spellchecker.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:cli", "apps:real-io"]
+expected_from = "oracle"
+rules = []
+backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
+env = {}
+extracted_src = "5346ab76"
