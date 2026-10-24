@@ -1,0 +1,1476 @@
+> parse feeds/rss20_blog.xml
+  bozo: False
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: -
+  headers:
+  namespaces:
+    dc: 'http://purl.org/dc/elements/1.1/'
+    content: 'http://purl.org/rss/1.0/modules/content/'
+    wfw: 'http://wellformedweb.org/commentAPI/'
+  feed:
+    title: 'Field Notes'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Field Notes'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'https://notes.example.org/'
+    link: 'https://notes.example.org/'
+    subtitle: 'Short posts about <b>gardening</b> and tools'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: 'Short posts about <b>gardening</b> and tools'
+    language: 'en-gb'
+    rights: 'Copyright 2024 Field Notes'
+    rights_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Copyright 2024 Field Notes'
+    updated: 'Tue, 05 Mar 2024 10:15:00 +0000'
+    updated_parsed: (2024, 3, 5, 10, 15, 0, 1, 65, 0)
+    generator_detail:
+      name: 'Hugo -- gohugo.io'
+    generator: 'Hugo -- gohugo.io'
+    authors:
+      - [0]
+        name: 'Sam Rivera'
+        email: 'editor@notes.example.org'
+    author: 'editor@notes.example.org (Sam Rivera)'
+    author_detail:
+      name: 'Sam Rivera'
+      email: 'editor@notes.example.org'
+    publisher: 'web@notes.example.org'
+    publisher_detail:
+      email: 'web@notes.example.org'
+    ttl: '60'
+    cloud:
+      domain: 'rpc.example.org'
+      port: '80'
+      path: '/RPC2'
+      registerprocedure: 'ping'
+      protocol: 'xml-rpc'
+    image:
+      href: 'https://notes.example.org/logo.png'
+      title: 'Field Notes'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Field Notes'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://notes.example.org/'
+      link: 'https://notes.example.org/'
+      width: 88
+      height: 0
+  entries: 3
+    - [0]
+      title: 'Pruning the <em>apple</em> trees'
+      title_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'Pruning the <em>apple</em> trees'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://notes.example.org/2024/03/pruning/'
+      link: 'https://notes.example.org/2024/03/pruning/'
+      summary: '<p>Late winter is the time. <a href="/tools/">Tools</a> I use.</p>'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: '<p>Late winter is the time. <a href="/tools/">Tools</a> I use.</p>'
+      published: 'Tue, 05 Mar 2024 09:00:00 GMT'
+      published_parsed: (2024, 3, 5, 9, 0, 0, 1, 65, 0)
+      id: 'https://notes.example.org/2024/03/pruning/'
+      guidislink: False
+      authors:
+        - [0]
+          name: 'Sam Rivera'
+      author: 'Sam Rivera'
+      author_detail:
+        name: 'Sam Rivera'
+      tags:
+        - [0]
+          term: 'orchard'
+          scheme: 'https://notes.example.org/tags'
+          label: None
+        - [1]
+          term: 'winter'
+          scheme: None
+          label: None
+      comments: 'https://notes.example.org/2024/03/pruning/#comments'
+      wfw_commentrss: 'https://notes.example.org/2024/03/pruning/feed/'
+      content:
+        - [0]
+          type: 'text/html'
+          language: None
+          base: ''
+          value: '<p style="color: red;">Cut <b>above</b> the bud.</p>\n<img alt="cut" src="/img/cut.jpg" /><br />\n<p>Done &amp; dusted.</p>'
+    - [1]
+      title: 'Seed swap on Saturday'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Seed swap on Saturday'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://notes.example.org/2024/02/seed-swap/'
+        - [1]
+          length: '1234567'
+          type: 'audio/mpeg'
+          href: 'https://notes.example.org/media/swap.mp3'
+          rel: 'enclosure'
+      link: 'https://notes.example.org/2024/02/seed-swap/'
+      summary: 'Bring seeds, take seeds.'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'Bring seeds, take seeds.'
+      published: 'Sat, 24 Feb 2024 18:30:00 -0500'
+      published_parsed: (2024, 2, 24, 23, 30, 0, 5, 55, 0)
+      id: 'tag:notes.example.org,2024:seed-swap'
+      guidislink: False
+      authors:
+        - [0]
+          name: 'Sam Rivera'
+          email: 'sam@notes.example.org'
+      author: 'sam@notes.example.org (Sam Rivera)'
+      author_detail:
+        name: 'Sam Rivera'
+        email: 'sam@notes.example.org'
+    - [2]
+      title: 'Untitled note'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Untitled note'
+      summary: 'A note without a link, dated in an odd way.'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'A note without a link, dated in an odd way.'
+      published: '24 Feb 24 07:05 EST'
+      published_parsed: (2024, 2, 24, 12, 5, 0, 5, 55, 0)
+> parse feeds/atom10_news.xml
+  bozo: False
+  encoding: 'utf-8'
+  version: 'atom10'
+  bozo_exception: -
+  headers:
+  namespaces:
+    : 'http://www.w3.org/2005/Atom'
+    xhtml: 'http://www.w3.org/1999/xhtml'
+  feed:
+    language: 'en-US'
+    title: 'Example News'
+    title_detail:
+      type: 'text/plain'
+      language: 'en-US'
+      base: 'https://news.example.com/'
+      value: 'Example News'
+    subtitle: 'All the <i>news</i> that fits'
+    subtitle_detail:
+      type: 'text/html'
+      language: 'en-US'
+      base: 'https://news.example.com/'
+      value: 'All the <i>news</i> that fits'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'https://news.example.com/'
+      - [1]
+        rel: 'self'
+        href: 'https://news.example.com/feed.atom'
+        type: 'application/atom+xml'
+    link: 'https://news.example.com/'
+    id: 'urn:uuid:60a76c80-d399-11d9-b93c-0003939e0af6'
+    guidislink: False
+    updated: '2024-03-06T08:30:00Z'
+    updated_parsed: (2024, 3, 6, 8, 30, 0, 2, 66, 0)
+    rights: '(c) 2024 Example News'
+    rights_detail:
+      type: 'text/plain'
+      language: 'en-US'
+      base: 'https://news.example.com/'
+      value: '(c) 2024 Example News'
+    generator_detail:
+      version: '2.1'
+      href: 'https://news.example.com/gen/'
+      name: 'NewsGen'
+    generator: 'NewsGen'
+    icon: 'https://news.example.com/favicon.ico'
+    logo: 'https://news.example.com/logo.svg'
+    authors:
+      - [0]
+        name: 'Desk Editor'
+        email: 'desk@news.example.com'
+        href: 'https://news.example.com/staff/desk'
+    author_detail:
+      name: 'Desk Editor'
+      email: 'desk@news.example.com'
+      href: 'https://news.example.com/staff/desk'
+    author: 'Desk Editor (desk@news.example.com)'
+    href: 'https://news.example.com/staff/desk'
+  entries: 3
+    - [0]
+      title: 'Council approves <b>new</b> bridge'
+      title_detail:
+        type: 'text/html'
+        language: 'en-US'
+        base: 'https://news.example.com/'
+        value: 'Council approves <b>new</b> bridge'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://news.example.com/2024/03/bridge'
+        - [1]
+          rel: 'enclosure'
+          type: 'image/jpeg'
+          length: '40960'
+          href: 'https://news.example.com/img/bridge.jpg'
+      link: 'https://news.example.com/2024/03/bridge'
+      id: 'tag:news.example.com,2024:bridge'
+      guidislink: False
+      published: '2024-03-05T17:00:00-08:00'
+      published_parsed: (2024, 3, 6, 1, 0, 0, 2, 66, 0)
+      updated: '2024-03-06T01:15:30+01:00'
+      updated_parsed: (2024, 3, 6, 0, 15, 30, 2, 66, 0)
+      authors:
+        - [0]
+          name: 'Ana Lima'
+      author_detail:
+        name: 'Ana Lima'
+      author: 'Ana Lima'
+      contributors:
+        - [0]
+          name: 'Raj Patel'
+          email: 'raj@news.example.com'
+      tags:
+        - [0]
+          term: 'local'
+          scheme: 'https://news.example.com/sections'
+          label: 'Local'
+        - [1]
+          term: 'transport'
+          scheme: None
+          label: None
+      summary: 'The vote was <b>7 to 2</b>. <a href="https://news.example.com/votes/123">Details</a>'
+      summary_detail:
+        type: 'text/html'
+        language: 'en-US'
+        base: 'https://news.example.com/'
+        value: 'The vote was <b>7 to 2</b>. <a href="https://news.example.com/votes/123">Details</a>'
+      content:
+        - [0]
+          type: 'application/xhtml+xml'
+          language: 'en-US'
+          base: 'https://news.example.com/2024/03/'
+          value: '<p>Construction starts in <em>June</em>. See <a href="https://news.example.com/2024/03/plan.pdf">the plan</a>.</p>\n        <p>Cost: 5 &lt; 6 million &amp; rising.</p>'
+    - [1]
+      title: 'Marché du samedi'
+      title_detail:
+        type: 'text/plain'
+        language: 'fr'
+        base: 'https://news.example.com/'
+        value: 'Marché du samedi'
+      links:
+        - [0]
+          href: 'https://news.example.com/fr/marche'
+          rel: 'alternate'
+          type: 'text/html'
+      link: 'https://news.example.com/fr/marche'
+      id: 'tag:news.example.com,2024:marche'
+      guidislink: False
+      updated: '2024-03-02'
+      updated_parsed: (2024, 3, 2, 0, 0, 0, 5, 62, 0)
+      summary: 'Les producteurs locaux reviennent.'
+      summary_detail:
+        type: 'text/plain'
+        language: 'fr'
+        base: 'https://news.example.com/'
+        value: 'Les producteurs locaux reviennent.'
+      content:
+        - [0]
+          type: 'text/plain'
+          language: 'fr'
+          base: 'https://news.example.com/'
+          value: 'Ouvert de 8h à 13h.'
+      source:
+        id: 'tag:partner.example.net,2024:feed'
+        guidislink: True
+        link: 'tag:partner.example.net,2024:feed'
+        title: 'Partner Wire'
+        title_detail:
+          type: 'text/plain'
+          language: 'fr'
+          base: 'https://news.example.com/'
+          value: 'Partner Wire'
+        updated: '2024-03-01T12:00:00Z'
+        updated_parsed: (2024, 3, 1, 12, 0, 0, 4, 61, 0)
+    - [2]
+      title: 'Weather <b>warning</b>'
+      title_detail:
+        type: 'application/xhtml+xml'
+        language: 'en-US'
+        base: 'https://news.example.com/'
+        value: 'Weather <b>warning</b>'
+      id: 'tag:news.example.com,2024:weather'
+      guidislink: True
+      link: 'tag:news.example.com,2024:weather'
+      updated: '2024-03-06T23:59:59Z'
+      updated_parsed: (2024, 3, 6, 23, 59, 59, 2, 66, 0)
+      content:
+        - [0]
+          type: 'text/html'
+          language: 'en-US'
+          base: 'https://news.example.com/'
+          value: '<p>High winds <u>tonight</u>.</p>'
+      summary: '<p>High winds <u>tonight</u>.</p>'
+> parse feeds/rss10_rdf.xml
+  bozo: False
+  encoding: 'utf-8'
+  version: 'rss10'
+  bozo_exception: -
+  headers:
+  namespaces:
+    rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+    : 'http://purl.org/rss/1.0/'
+    dc: 'http://purl.org/dc/elements/1.1/'
+    sy: 'http://purl.org/rss/1.0/modules/syndication/'
+  feed:
+    title: 'Library New Arrivals'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Library New Arrivals'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'https://lib.example.edu/new'
+    link: 'https://lib.example.edu/new'
+    subtitle: 'Books added this week'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: 'Books added this week'
+    language: 'en'
+    publisher: 'City Library'
+    publisher_detail:
+      name: 'City Library'
+    rights: 'CC0'
+    rights_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'CC0'
+    updated: '2024-03-04T06:00:00+00:00'
+    updated_parsed: (2024, 3, 4, 6, 0, 0, 0, 64, 0)
+    sy_updateperiod: 'weekly'
+    rdf_li:
+      rdf:resource: 'https://lib.example.edu/b/1'
+    rdf_seq: ''
+    entries: ''
+    textinput:
+      name: 'q'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+  entries: 2
+    - [0]
+      id: 'https://lib.example.edu/b/1'
+      title: 'The Soil Book'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'The Soil Book'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://lib.example.edu/b/1'
+      link: 'https://lib.example.edu/b/1'
+      summary: 'A practical guide.'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'A practical guide.'
+      tags:
+        - [0]
+          term: 'Gardening'
+          scheme: None
+          label: None
+      authors:
+        - [0]
+          name: 'J. Okafor'
+      author: 'J. Okafor'
+      author_detail:
+        name: 'J. Okafor'
+      updated: '2024-03-03'
+      updated_parsed: (2024, 3, 3, 0, 0, 0, 6, 63, 0)
+      contributors:
+        - [0]
+          name: 'M. Chen'
+    - [1]
+      id: 'https://lib.example.edu/b/2'
+      title: 'Rivers of the North'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Rivers of the North'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://lib.example.edu/b/2'
+      link: 'https://lib.example.edu/b/2'
+      tags:
+        - [0]
+          term: 'Geography'
+          scheme: None
+          label: None
+      updated: '2024-03-02T15:20:00-03:30'
+      updated_parsed: (2024, 3, 2, 18, 50, 0, 5, 62, 0)
+> parse feeds/rss091n.xml
+  bozo: False
+  encoding: 'iso-8859-1'
+  version: 'rss091n'
+  bozo_exception: -
+  headers:
+  namespaces:
+  feed:
+    title: 'Café Bulletin'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Café Bulletin'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'http://cafe.example.org/'
+    link: 'http://cafe.example.org/'
+    subtitle: 'Daily specials at the café'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: 'Daily specials at the café'
+    language: 'fr-ca'
+  entries: 1
+    - [0]
+      title: 'Crêpes today'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Crêpes today'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'http://cafe.example.org/crepes'
+      link: 'http://cafe.example.org/crepes'
+      summary: 'With maple syrup & berries.'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'With maple syrup & berries.'
+> parse feeds/rss092.xml
+  bozo: False
+  encoding: 'utf-8'
+  version: 'rss092'
+  bozo_exception: -
+  headers:
+  namespaces:
+  feed:
+    title: 'Plain 0.92'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Plain 0.92'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'http://old.example.org/'
+    link: 'http://old.example.org/'
+    subtitle: 'no declaration at all'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: 'no declaration at all'
+  entries: 1
+    - [0]
+      title: 'First'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'First'
+      summary: 'one &amp; two'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'one &amp; two'
+      links:
+        - [0]
+          length: '10'
+          type: 'audio/ogg'
+          href: 'http://old.example.org/a.ogg'
+          rel: 'enclosure'
+> parse feeds/podcast.xml
+  bozo: False
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: -
+  headers:
+  namespaces:
+    itunes: 'http://www.itunes.com/dtds/podcast-1.0.dtd'
+  feed:
+    title: 'Workshop Talk'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Workshop Talk'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'https://pod.example.fm/'
+    link: 'https://pod.example.fm/'
+    subtitle: 'Conversations about making things.'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: 'Conversations about making things.'
+    authors:
+      - [0]
+        name: 'Lee Park'
+        email: 'lee@pod.example.fm'
+    author: 'Lee Park'
+    author_detail:
+      name: 'Lee Park'
+      email: 'lee@pod.example.fm'
+    publisher_detail:
+      name: 'Lee Park'
+      email: 'lee@pod.example.fm'
+    image:
+      href: 'https://pod.example.fm/cover.jpg'
+    tags:
+      - [0]
+        term: 'Arts'
+        scheme: 'http://www.itunes.com/'
+        label: None
+      - [1]
+        term: 'Design'
+        scheme: 'http://www.itunes.com/'
+        label: None
+      - [2]
+        term: 'wood'
+        scheme: 'http://www.itunes.com/'
+        label: None
+      - [3]
+        term: 'metal'
+        scheme: 'http://www.itunes.com/'
+        label: None
+      - [4]
+        term: 'craft'
+        scheme: 'http://www.itunes.com/'
+        label: None
+    itunes_explicit: False
+    itunes_block: 1
+  entries: 2
+    - [0]
+      title: 'Episode 12: Joinery'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Episode 12: Joinery'
+      subtitle: 'Dovetails and more'
+      subtitle_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Dovetails and more'
+      summary: 'We talk about <b>hand-cut</b> joints.'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'We talk about <b>hand-cut</b> joints.'
+      itunes_duration: '45:10'
+      itunes_explicit: True
+      links:
+        - [0]
+          length: '43200000'
+          type: 'audio/mpeg'
+          href: 'https://pod.example.fm/ep12.mp3'
+          rel: 'enclosure'
+      id: 'https://pod.example.fm/ep12'
+      guidislink: True
+      link: 'https://pod.example.fm/ep12'
+      published: 'Mon, 04 Mar 2024 05:00:00 PST'
+      published_parsed: (2024, 3, 4, 13, 0, 0, 0, 64, 0)
+    - [1]
+      title: 'Episode 11: Finishes'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Episode 11: Finishes'
+      itunes_explicit: None
+      links:
+        - [0]
+          length: '40000000'
+          type: 'audio/mpeg'
+          href: 'https://pod.example.fm/ep11.mp3'
+          rel: 'enclosure'
+      id: 'pod-ep11'
+      guidislink: False
+      published: 'Mon, 26 Feb 2024 05:00:00 PST'
+      published_parsed: (2024, 2, 26, 13, 0, 0, 0, 57, 0)
+> parse feeds/atom03.xml
+  bozo: False
+  encoding: 'utf-8'
+  version: 'atom03'
+  bozo_exception: -
+  headers:
+  namespaces:
+    : 'http://purl.org/atom/ns#'
+  feed:
+    title: 'Old &lt;Atom&gt;'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Old &lt;Atom&gt;'
+    subtitle: 'An Atom 0.3 feed'
+    subtitle_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'An Atom 0.3 feed'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'http://old.example.net/'
+    link: 'http://old.example.net/'
+    updated: '2003-12-13T18:30:02Z'
+    updated_parsed: (2003, 12, 13, 18, 30, 2, 5, 347, 0)
+    authors:
+      - [0]
+        name: 'Mark'
+        href: 'http://old.example.net/mark'
+    author_detail:
+      name: 'Mark'
+      href: 'http://old.example.net/mark'
+    href: 'http://old.example.net/mark'
+    author: 'Mark'
+  entries: 1
+    - [0]
+      title: 'Atom-Powered Robots Run Amok'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Atom-Powered Robots Run Amok'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'http://old.example.net/2003/12/13/atom03'
+      link: 'http://old.example.net/2003/12/13/atom03'
+      id: 'tag:old.example.net,2003:3.2397'
+      guidislink: False
+      published: '2003-12-13T08:29:29-04:00'
+      published_parsed: (2003, 12, 13, 12, 29, 29, 5, 347, 0)
+      updated: '2003-12-13T18:30:02Z'
+      updated_parsed: (2003, 12, 13, 18, 30, 2, 5, 347, 0)
+      created: '2003-12-13T08:29:29-04:00'
+      created_parsed: (2003, 12, 13, 12, 29, 29, 5, 347, 0)
+      summary: 'Some text with <br> inside.'
+      summary_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Some text with <br> inside.'
+      content:
+        - [0]
+          type: 'text/html'
+          language: None
+          base: ''
+          value: '<p>Hello <img src="robot.png" /></p>'
+> parse feeds/latin1_declared.xml
+  bozo: False
+  encoding: 'iso-8859-1'
+  version: 'rss20'
+  bozo_exception: -
+  headers:
+  namespaces:
+  feed:
+    title: 'Grüße aus Köln'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Grüße aus Köln'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'http://koeln.example.de/'
+    link: 'http://koeln.example.de/'
+    subtitle: '¿Qué tal?'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: '¿Qué tal?'
+  entries: 1
+    - [0]
+      title: 'Straßenfest'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Straßenfest'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'http://koeln.example.de/fest'
+      link: 'http://koeln.example.de/fest'
+> parse feeds/cp1252_mislabeled.xml
+  bozo: True
+  encoding: 'windows-1252'
+  version: 'rss20'
+  bozo_exception: CharacterEncodingOverride: document declared as utf-8, but parsed as windows-1252
+  headers:
+  namespaces:
+  feed:
+    title: 'Smart “quotes” – dash'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Smart “quotes” – dash'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'http://quotes.example.com/'
+    link: 'http://quotes.example.com/'
+    subtitle: 'Saved by an old editor …'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: 'Saved by an old editor …'
+  entries: 1
+    - [0]
+      title: 'Café € prices'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Café € prices'
+> parse feeds/utf8_bom.xml
+  bozo: False
+  encoding: 'utf-8'
+  version: 'atom10'
+  bozo_exception: -
+  headers:
+  namespaces:
+    : 'http://www.w3.org/2005/Atom'
+  feed:
+    title: 'BOM ✓ feed'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'BOM ✓ feed'
+    id: 'urn:x:bom'
+    guidislink: True
+    link: 'urn:x:bom'
+    updated: '2024-01-01T00:00:00Z'
+    updated_parsed: (2024, 1, 1, 0, 0, 0, 0, 1, 0)
+  entries: 1
+    - [0]
+      title: '日本語'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: '日本語'
+      id: 'urn:x:bom:1'
+      guidislink: True
+      link: 'urn:x:bom:1'
+      updated: '2024-01-01T00:00:00Z'
+      updated_parsed: (2024, 1, 1, 0, 0, 0, 0, 1, 0)
+> parse feeds/bad_entity.xml
+  bozo: 1
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: SAXParseException: <unknown>:4:27: undefined entity
+  headers:
+  namespaces:
+  feed:
+    title: "Tom's Hardware \xa0Deals"
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: "Tom's Hardware \xa0Deals"
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'http://deals.example.com/'
+    link: 'http://deals.example.com/'
+    subtitle: 'Prices © 2024 — updated hourly'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: 'Prices © 2024 — updated hourly'
+  entries: 1
+    - [0]
+      title: 'SSD & RAM bundle'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'SSD & RAM bundle'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'http://deals.example.com/?id=5&ref=rss'
+      link: 'http://deals.example.com/?id=5&ref=rss'
+      summary: '<b>Save</b> 20%'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: '<b>Save</b> 20%'
+      published: 'Wed, 06 Mar 2024 12:00:00 Z'
+      published_parsed: (2024, 3, 6, 12, 0, 0, 2, 66, 0)
+> parse feeds/bare_ampersand.xml
+  bozo: 1
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: SAXParseException: <unknown>:3:11: not well-formed (invalid token)
+  headers:
+  namespaces:
+  feed:
+    title: 'AT&T; Customer News'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'AT&T; Customer News'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'http://att.example.com/?a=1&b=2'
+    link: 'http://att.example.com/?a=1&b=2'
+    subtitle: 'News & offers'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: 'News & offers'
+  entries: 1
+    - [0]
+      title: 'Q&A; session'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Q&A; session'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'http://att.example.com/qa'
+      link: 'http://att.example.com/qa'
+      summary: 'Ask us <i>anything</i>'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'Ask us <i>anything</i>'
+> parse feeds/truncated.xml
+  bozo: 1
+  encoding: 'utf-8'
+  version: 'atom10'
+  bozo_exception: SAXParseException: <unknown>:8:0: no element found
+  headers:
+  namespaces:
+    : 'http://www.w3.org/2005/Atom'
+  feed:
+    title: 'Cut short'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Cut short'
+  entries: 1
+    - [0]
+      title: 'Only entry'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Only entry'
+      id: 'urn:cut:1'
+      guidislink: True
+      link: 'urn:cut:1'
+> parse feeds/mismatched.xml
+  bozo: 1
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: SAXParseException: <unknown>:4:23: mismatched tag
+  headers:
+  namespaces:
+  feed:
+    title: 'Sloppy <b>Feed'
+    title_detail:
+      type: 'application/xhtml+xml'
+      language: None
+      base: ''
+      value: 'Sloppy <b>Feed'
+  entries: 1
+    - [0]
+      title: 'One'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'One'
+      summary: 'first'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: 'first'
+> parse feeds/unbound_prefix.xml
+  bozo: 1
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: SAXParseException: <unknown>:3:31: unbound prefix
+  headers:
+  namespaces:
+  feed:
+    title: 'Prefix trouble'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Prefix trouble'
+  entries: 1
+    - [0]
+      title: 'Uses media'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Uses media'
+      ext_thumb:
+        url: 'http://x.example/t.jpg'
+> parse feeds/relative.xml
+  bozo: False
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: -
+  headers:
+  namespaces:
+  feed:
+    title: 'Relative links'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Relative links'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: '/home'
+    link: '/home'
+    subtitle: '<a href="about.html">About</a> <img src="//cdn.example.net/x.png" /> <a href="">bad</a>'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: ''
+      value: '<a href="about.html">About</a> <img src="//cdn.example.net/x.png" /> <a href="">bad</a>'
+  entries: 1
+    - [0]
+      title: 'Post'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: ''
+        value: 'Post'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'posts/1'
+      link: 'posts/1'
+      id: 'posts/1'
+      guidislink: False
+      summary: '<blockquote cite="../q">quoted</blockquote> <a href="mailto:me@example.org">mail</a>'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: ''
+        value: '<blockquote cite="../q">quoted</blockquote> <a href="mailto:me@example.org">mail</a>'
+> parse feeds/junk_after.xml
+  bozo: 1
+  encoding: 'utf-8'
+  version: 'atom10'
+  bozo_exception: SAXParseException: <unknown>:3:0: junk after document element
+  headers:
+  namespaces:
+    : 'http://www.w3.org/2005/Atom'
+  feed:
+    title: 'Twice'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: ''
+      value: 'Twice'
+  entries: 0
+> parse feeds/html_page.xml
+  bozo: 1
+  encoding: 'utf-8'
+  version: ''
+  bozo_exception: SAXParseException: <unknown>:3:25: mismatched tag
+  headers:
+  namespaces:
+  feed:
+    summary: '<p>Hello<br />world</p>'
+  entries: 0
+> parse feeds/relative.xml http://site.example.org/blog/feed.xml
+  bozo: True
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: NonXMLContentType: no Content-type specified
+  headers:
+    content-location: 'http://site.example.org/blog/feed.xml'
+  namespaces:
+  feed:
+    title: 'Relative links'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: 'http://site.example.org/blog/feed.xml'
+      value: 'Relative links'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'http://site.example.org/home'
+    link: 'http://site.example.org/home'
+    subtitle: '<a href="http://site.example.org/blog/about.html">About</a> <img src="http://cdn.example.net/x.png" /> <a href="">bad</a>'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: 'http://site.example.org/blog/feed.xml'
+      value: '<a href="http://site.example.org/blog/about.html">About</a> <img src="http://cdn.example.net/x.png" /> <a href="">bad</a>'
+  entries: 1
+    - [0]
+      title: 'Post'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: 'http://site.example.org/blog/feed.xml'
+        value: 'Post'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'http://site.example.org/blog/posts/1'
+      link: 'http://site.example.org/blog/posts/1'
+      id: 'http://site.example.org/blog/posts/1'
+      guidislink: False
+      summary: '<blockquote cite="http://site.example.org/q">quoted</blockquote> <a href="mailto:me@example.org">mail</a>'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: 'http://site.example.org/blog/feed.xml'
+        value: '<blockquote cite="http://site.example.org/q">quoted</blockquote> <a href="mailto:me@example.org">mail</a>'
+> parse feeds/rss20_blog.xml https://notes.example.org/feed/
+  bozo: True
+  encoding: 'utf-8'
+  version: 'rss20'
+  bozo_exception: NonXMLContentType: no Content-type specified
+  headers:
+    content-location: 'https://notes.example.org/feed/'
+  namespaces:
+    dc: 'http://purl.org/dc/elements/1.1/'
+    content: 'http://purl.org/rss/1.0/modules/content/'
+    wfw: 'http://wellformedweb.org/commentAPI/'
+  feed:
+    title: 'Field Notes'
+    title_detail:
+      type: 'text/plain'
+      language: None
+      base: 'https://notes.example.org/feed/'
+      value: 'Field Notes'
+    links:
+      - [0]
+        rel: 'alternate'
+        type: 'text/html'
+        href: 'https://notes.example.org/'
+    link: 'https://notes.example.org/'
+    subtitle: 'Short posts about <b>gardening</b> and tools'
+    subtitle_detail:
+      type: 'text/html'
+      language: None
+      base: 'https://notes.example.org/feed/'
+      value: 'Short posts about <b>gardening</b> and tools'
+    language: 'en-gb'
+    rights: 'Copyright 2024 Field Notes'
+    rights_detail:
+      type: 'text/plain'
+      language: None
+      base: 'https://notes.example.org/feed/'
+      value: 'Copyright 2024 Field Notes'
+    updated: 'Tue, 05 Mar 2024 10:15:00 +0000'
+    updated_parsed: (2024, 3, 5, 10, 15, 0, 1, 65, 0)
+    generator_detail:
+      name: 'Hugo -- gohugo.io'
+    generator: 'Hugo -- gohugo.io'
+    authors:
+      - [0]
+        name: 'Sam Rivera'
+        email: 'editor@notes.example.org'
+    author: 'editor@notes.example.org (Sam Rivera)'
+    author_detail:
+      name: 'Sam Rivera'
+      email: 'editor@notes.example.org'
+    publisher: 'web@notes.example.org'
+    publisher_detail:
+      email: 'web@notes.example.org'
+    ttl: '60'
+    cloud:
+      domain: 'rpc.example.org'
+      port: '80'
+      path: '/RPC2'
+      registerprocedure: 'ping'
+      protocol: 'xml-rpc'
+    image:
+      href: 'https://notes.example.org/logo.png'
+      title: 'Field Notes'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: 'https://notes.example.org/feed/'
+        value: 'Field Notes'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://notes.example.org/'
+      link: 'https://notes.example.org/'
+      width: 88
+      height: 0
+  entries: 3
+    - [0]
+      title: 'Pruning the <em>apple</em> trees'
+      title_detail:
+        type: 'text/html'
+        language: None
+        base: 'https://notes.example.org/feed/'
+        value: 'Pruning the <em>apple</em> trees'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://notes.example.org/2024/03/pruning/'
+      link: 'https://notes.example.org/2024/03/pruning/'
+      summary: '<p>Late winter is the time. <a href="https://notes.example.org/tools/">Tools</a> I use.</p>'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: 'https://notes.example.org/feed/'
+        value: '<p>Late winter is the time. <a href="https://notes.example.org/tools/">Tools</a> I use.</p>'
+      published: 'Tue, 05 Mar 2024 09:00:00 GMT'
+      published_parsed: (2024, 3, 5, 9, 0, 0, 1, 65, 0)
+      id: 'https://notes.example.org/2024/03/pruning/'
+      guidislink: False
+      authors:
+        - [0]
+          name: 'Sam Rivera'
+      author: 'Sam Rivera'
+      author_detail:
+        name: 'Sam Rivera'
+      tags:
+        - [0]
+          term: 'orchard'
+          scheme: 'https://notes.example.org/tags'
+          label: None
+        - [1]
+          term: 'winter'
+          scheme: None
+          label: None
+      comments: 'https://notes.example.org/2024/03/pruning/#comments'
+      wfw_commentrss: 'https://notes.example.org/2024/03/pruning/feed/'
+      content:
+        - [0]
+          type: 'text/html'
+          language: None
+          base: 'https://notes.example.org/feed/'
+          value: '<p style="color: red;">Cut <b>above</b> the bud.</p>\n<img alt="cut" src="https://notes.example.org/img/cut.jpg" /><br />\n<p>Done &amp; dusted.</p>'
+    - [1]
+      title: 'Seed swap on Saturday'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: 'https://notes.example.org/feed/'
+        value: 'Seed swap on Saturday'
+      links:
+        - [0]
+          rel: 'alternate'
+          type: 'text/html'
+          href: 'https://notes.example.org/2024/02/seed-swap/'
+        - [1]
+          length: '1234567'
+          type: 'audio/mpeg'
+          href: 'https://notes.example.org/media/swap.mp3'
+          rel: 'enclosure'
+      link: 'https://notes.example.org/2024/02/seed-swap/'
+      summary: 'Bring seeds, take seeds.'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: 'https://notes.example.org/feed/'
+        value: 'Bring seeds, take seeds.'
+      published: 'Sat, 24 Feb 2024 18:30:00 -0500'
+      published_parsed: (2024, 2, 24, 23, 30, 0, 5, 55, 0)
+      id: 'tag:notes.example.org,2024:seed-swap'
+      guidislink: False
+      authors:
+        - [0]
+          name: 'Sam Rivera'
+          email: 'sam@notes.example.org'
+      author: 'sam@notes.example.org (Sam Rivera)'
+      author_detail:
+        name: 'Sam Rivera'
+        email: 'sam@notes.example.org'
+    - [2]
+      title: 'Untitled note'
+      title_detail:
+        type: 'text/plain'
+        language: None
+        base: 'https://notes.example.org/feed/'
+        value: 'Untitled note'
+      summary: 'A note without a link, dated in an odd way.'
+      summary_detail:
+        type: 'text/html'
+        language: None
+        base: 'https://notes.example.org/feed/'
+        value: 'A note without a link, dated in an odd way.'
+      published: '24 Feb 24 07:05 EST'
+      published_parsed: (2024, 2, 24, 12, 5, 0, 5, 55, 0)
+> !dates dates.txt
+  'Tue, 05 Mar 2024 09:00:00 GMT' -> (2024, 3, 5, 9, 0, 0, 1, 65, 0)
+  'Sat, 24 Feb 2024 18:30:00 -0500' -> (2024, 2, 24, 23, 30, 0, 5, 55, 0)
+  '24 Feb 24 07:05 EST' -> (2024, 2, 24, 12, 5, 0, 5, 55, 0)
+  'Mar 05 2024 09:00:00 +0530' -> (2024, 3, 5, 3, 30, 0, 1, 65, 0)
+  'Thu, 29 Feb 2024 23:59:59 +02:00' -> (2024, 2, 29, 21, 59, 59, 3, 60, 0)
+  '05 Mar 1989 1:2:3 PDT' -> (1989, 3, 5, 8, 2, 3, 6, 64, 0)
+  'Wed, 06 Mar 2024 12:00:00 Z' -> (2024, 3, 6, 12, 0, 0, 2, 66, 0)
+  'Wed, 06 Mar 2024 12:00:00 Etc/GMT+1' -> None
+  'Mon, 01 Jan 2024 00:00:00 GMT-05:00' -> (2024, 1, 1, 5, 0, 0, 0, 1, 0)
+  '2024-03-05T17:00:00-08:00' -> (2024, 3, 6, 1, 0, 0, 2, 66, 0)
+  '2024-03-06T01:15:30+01:00' -> (2024, 3, 6, 0, 15, 30, 2, 66, 0)
+  '2024-03-02' -> (2024, 3, 2, 0, 0, 0, 5, 62, 0)
+  '2024-03' -> (2024, 3, 1, 0, 0, 0, 4, 61, 0)
+  '2024' -> (2024, 1, 1, 0, 0, 0, 0, 1, 0)
+  '2003-12-13T18:30:02Z' -> (2003, 12, 13, 18, 30, 2, 5, 347, 0)
+  '2003-12-13 18:30:02' -> (2003, 12, 13, 18, 30, 2, 5, 347, 0)
+  '2024-03-05T10:20:30.75+05:45' -> (2024, 3, 5, 4, 35, 30, 1, 65, 0)
+  '2024-03-05t10:20z' -> (2024, 3, 5, 10, 20, 0, 1, 65, 0)
+  'Sun, 31 Dec 2023 23:00:00 -0100' -> (2024, 1, 1, 0, 0, 0, 0, 1, 0)
+  'Fri, 13 Sep 2024 25:00:00 GMT' -> None
+  'yesterday' -> None
+  '' -> None
+  'Mon, 04 Mar 2024 05:00:00 PST' -> (2024, 3, 4, 13, 0, 0, 0, 64, 0)
+  'Tue, 5 Mar 2024 9:00 MET' -> (2024, 3, 5, 8, 0, 0, 1, 65, 0)
+  '2024-03-05T10:00:00 +0200' -> (2024, 3, 5, 8, 0, 0, 1, 65, 0)
+> !sanitize snippets.txt
+  '<p>Hello <b>world</b></p>'
+    => '<p>Hello <b>world</b></p>'
+  '<script>alert("x")</script><p>after</p>'
+    => '<p>after</p>'
+  '<a href="javascript:alert(1)" title="t">link</a>'
+    => '<a href="" title="t">link</a>'
+  '<a href="http://ok.example.com/" target="_blank" rel="Nofollow">ok</a>'
+    => '<a href="http://ok.example.com/" rel="nofollow" target="_blank">ok</a>'
+  '<div style="color: blue; background: url(http://x/y.png) red; margin: 0 auto">styled</div>'
+    => '<div style="color: blue; background: red; margin: 0 auto;">styled</div>'
+  '<span style="font-weight: bold; behavior: url(x.htc)">b</span>'
+    => '<span style="font-weight: bold;">b</span>'
+  '<img src="x.png" onerror="evil()" width="10">'
+    => '<img src="x.png" width="10" />'
+  '<!-- a comment --><p>text</p><?php echo 1 ?>'
+    => '<!-- a comment --><p>text</p>'
+  '<table><tr><td colspan="2">cell</td></tr></table>'
+    => '<table><tr><td colspan="2">cell</td></tr></table>'
+  '<p>5 &lt; 6 &amp;&amp; 7 &gt; 3 &nbsp; &bogus; &#169; &#x41; &#150;</p>'
+    => '<p>5 &lt; 6 &amp;&amp; 7 &gt; 3 &nbsp; &amp;bogus &#169; &#x41; &#x2013;</p>'
+  '<object data="movie.swf"><param name="a" value="b"></object>text'
+    => 'text'
+  '<br/><hr/><p/>end'
+    => '<br /><hr /><p></p>end'
+  '<style>body{display:none}</style>visible'
+    => 'visible'
+  '<p>unclosed <b>bold <i>italic'
+    => '<p>unclosed <b>bold <i>italic'
+  '<A HREF="/Upper" CLASS="x">CAPS</A>'
+    => '<a class="x" href="/Upper">CAPS</a>'
+  '<form action="/f"><input type="TEXT" name="q"></form>'
+    => '<form action="/f"><input name="q" type="text" /></form>'
+  "<p title='single' id=plain>attrs</p>"
+    => '<p id="plain" title="single">attrs</p>'
+  '<applet code="x"></applet>after applet'
+    => 'after applet'
+  '<p>line one\r\nline two</p>'
+    => '<p>line one\nline two</p>'
+  '<![CDATA[raw]]> and <!-- unterminated'
+    => '&lt;![CDATA[raw]]> and'
+> !resolve snippets.txt http://site.example.org/a/b/
+  '<p>Hello <b>world</b></p>'
+    => '<p>Hello <b>world</b></p>'
+  '<script>alert("x")</script><p>after</p>'
+    => '<script>alert("x")</script><p>after</p>'
+  '<a href="javascript:alert(1)" title="t">link</a>'
+    => '<a href="javascript:alert(1)" title="t">link</a>'
+  '<a href="http://ok.example.com/" target="_blank" rel="Nofollow">ok</a>'
+    => '<a href="http://ok.example.com/" rel="nofollow" target="_blank">ok</a>'
+  '<div style="color: blue; background: url(http://x/y.png) red; margin: 0 auto">styled</div>'
+    => '<div style="color: blue; background: url(http://x/y.png) red; margin: 0 auto">styled</div>'
+  '<span style="font-weight: bold; behavior: url(x.htc)">b</span>'
+    => '<span style="font-weight: bold; behavior: url(x.htc)">b</span>'
+  '<img src="x.png" onerror="evil()" width="10">'
+    => '<img onerror="evil()" src="http://site.example.org/a/b/x.png" width="10" />'
+  '<!-- a comment --><p>text</p><?php echo 1 ?>'
+    => '<!-- a comment --><p>text</p><?php echo 1 ?>'
+  '<table><tr><td colspan="2">cell</td></tr></table>'
+    => '<table><tr><td colspan="2">cell</td></tr></table>'
+  '<p>5 &lt; 6 &amp;&amp; 7 &gt; 3 &nbsp; &bogus; &#169; &#x41; &#150;</p>'
+    => '<p>5 &lt; 6 &amp;&amp; 7 &gt; 3 &nbsp; &amp;bogus &#169; &#x41; &#x2013;</p>'
+  '<object data="movie.swf"><param name="a" value="b"></object>text'
+    => '<object data="http://site.example.org/a/b/movie.swf"><param name="a" value="b" /></object>text'
+  '<br/><hr/><p/>end'
+    => '<br /><hr /><p></p>end'
+  '<style>body{display:none}</style>visible'
+    => '<style>body{display:none}</style>visible'
+  '<p>unclosed <b>bold <i>italic'
+    => '<p>unclosed <b>bold <i>italic'
+  '<A HREF="/Upper" CLASS="x">CAPS</A>'
+    => '<a class="x" href="http://site.example.org/Upper">CAPS</a>'
+  '<form action="/f"><input type="TEXT" name="q"></form>'
+    => '<form action="http://site.example.org/f"><input name="q" type="text" /></form>'
+  "<p title='single' id=plain>attrs</p>"
+    => '<p id="plain" title="single">attrs</p>'
+  '<applet code="x"></applet>after applet'
+    => '<applet code="x"></applet>after applet'
+  '<p>line one\r\nline two</p>'
+    => '<p>line one\r\nline two</p>'
+  '<![CDATA[raw]]> and <!-- unterminated'
+    => ' and <!-- unterminated'
+> !digest feeds/reader_0.xml feeds/reader_1.xml feeds/reader_2.xml feeds/rss20_blog.xml feeds/atom10_news.xml
+  15 entries from 5 feeds, 0 undated
+  2024-03-06 23:59:59  Example News     Weather <b>warning</b> <tag:news.example.com,2024:weather>
+  2024-03-06 00:15:30  Example News     Council approves <b>new</b> bridge <https://news.example.com/2024/03/bridge>
+  2024-03-05 09:00:00  Field Notes      Pruning the <em>apple</em> trees <https://notes.example.org/2024/03/pruning/>
+  2024-03-04 18:14:00  Evening Edition  Evening Edition story 3 <http://r1.example.com/s2>
+  2024-03-04 18:07:00  Evening Edition  Evening Edition story 2 <http://r1.example.com/s1>
+  2024-03-04 18:00:00  Evening Edition  Evening Edition story 1 <http://r1.example.com/s0>
+  2024-03-04 07:14:00  Morning Brief    Morning Brief story 3 <http://r0.example.com/s2>
+  2024-03-04 07:07:00  Morning Brief    Morning Brief story 2 <http://r0.example.com/s1>
+  2024-03-04 07:00:00  Morning Brief    Morning Brief story 1 <http://r0.example.com/s0>
+  2024-03-02 18:14:00  Weekend Reads    Weekend Reads story 3 <http://r2.example.com/s2>
+> !tags feeds/reader_0.xml feeds/reader_1.xml feeds/reader_2.xml feeds/rss20_blog.xml feeds/atom10_news.xml feeds/podcast.xml
+    6 world
+    3 tech
+    1 arts
+    1 craft
+    1 design
+    1 local
+    1 metal
+    1 orchard
+    1 transport
+    1 winter
+    1 wood
+> !opml feeds/rss20_blog.xml feeds/atom10_news.xml feeds/rss10_rdf.xml feeds/podcast.xml feeds/bad_entity.xml feeds/html_page.xml
+  <opml version="2.0"><body>
+    <outline text="Field Notes" type="rss" xmlUrl="feeds/rss20_blog.xml" htmlUrl="https://notes.example.org/"/>
+    <outline text="Example News" type="atom" xmlUrl="feeds/atom10_news.xml" htmlUrl="https://news.example.com/"/>
+    <outline text="Library New Arrivals" type="rss" xmlUrl="feeds/rss10_rdf.xml" htmlUrl="https://lib.example.edu/new"/>
+    <outline text="Workshop Talk" type="rss" xmlUrl="feeds/podcast.xml" htmlUrl="https://pod.example.fm/"/>
+    <outline text="Tom's Hardware  Deals" type="rss" xmlUrl="feeds/bad_entity.xml" htmlUrl="http://deals.example.com/"/>
+  <!-- skipped feeds/html_page.xml: SAXParseException -->
+  </body></opml>
+> !health feeds/rss20_blog.xml feeds/atom10_news.xml feeds/rss10_rdf.xml feeds/rss091n.xml feeds/rss092.xml feeds/podcast.xml feeds/atom03.xml feeds/latin1_declared.xml feeds/cp1252_mislabeled.xml feeds/utf8_bom.xml feeds/bad_entity.xml feeds/bare_ampersand.xml feeds/truncated.xml feeds/mismatched.xml feeds/unbound_prefix.xml feeds/relative.xml feeds/junk_after.xml feeds/html_page.xml
+  rss20_blog.xml               rss20    utf-8         3 entries  ok
+  atom10_news.xml              atom10   utf-8         3 entries  ok
+  rss10_rdf.xml                rss10    utf-8         2 entries  ok
+  rss091n.xml                  rss091n  iso-8859-1    1 entries  ok
+  rss092.xml                   rss092   utf-8         1 entries  ok
+  podcast.xml                  rss20    utf-8         2 entries  ok
+  atom03.xml                   atom03   utf-8         1 entries  ok
+  latin1_declared.xml          rss20    iso-8859-1    1 entries  ok
+  cp1252_mislabeled.xml        rss20    windows-1252  1 entries  bozo CharacterEncodingOverride
+  utf8_bom.xml                 atom10   utf-8         1 entries  ok
+  bad_entity.xml               rss20    utf-8         1 entries  bozo SAXParseException
+  bare_ampersand.xml           rss20    utf-8         1 entries  bozo SAXParseException
+  truncated.xml                atom10   utf-8         1 entries  bozo SAXParseException
+  mismatched.xml               rss20    utf-8         1 entries  bozo SAXParseException
+  unbound_prefix.xml           rss20    utf-8         1 entries  bozo SAXParseException
+  relative.xml                 rss20    utf-8         1 entries  ok
+  junk_after.xml               atom10   utf-8         0 entries  bozo SAXParseException
+  html_page.xml                ?        utf-8         0 entries  bozo SAXParseException
