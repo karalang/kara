@@ -56,7 +56,49 @@ Sending returns a `Result` instead of panicking because a panic ends the whole p
 
 **Moving the ends.** `Sender[T]` and `Receiver[T]` are ordinary owned values. They can be moved into tasks, passed to functions and returned.
 
-**Deferred.** `select` across several channels, receive and send timeouts, unbounded channels and fan-out or fan-in combinators come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services). The rules for `select` and the timeouts are already fixed in [core-semantics.md §11.11](../core-semantics.md#11-concurrency-c9): `Receiver.recv_timeout(self, d: Duration) -> Result[T, RecvTimeoutError]` and `Sender.send_timeout(self, value: own T, d: Duration) -> Result[(), SendTimeoutError[T]]`, where the send error hands the value back on `Closed(T)` and `TimedOut(T)` alike.
+**`select`.** A `select` waits on several channel operations at once and runs the first one that can complete ([core-semantics.md §11.11](../core-semantics.md#11-concurrency-c9)):
+
+```kara
+select {
+    msg = requests.recv()       => handle(msg),   // msg: Option[Job]
+    r = results.send(done)      => log(r),        // r: Result[(), SendError[Report]]
+    _ = after(Duration.ms(30))  => tick(),
+    default                     => idle(),        // optional
+}
+```
+
+- Each arm is `pattern = op => body`, where the op is `<receiver>.recv()`, `<sender>.send(value)` or `after(duration)`. The pattern binds the op's own result, as `let` does, so it must be irrefutable: write a name and `match` on it in the body.
+- The channels, the values to send and the durations are evaluated once, in source order, when the `select` starts, and each `after` counts from then.
+- When several arms are ready, the first in source order wins. The arm that runs is the only one whose operation happened: a send arm that loses still owns its value, which drops when the `select` ends.
+- A closed channel makes its arm ready: `recv` gives `None` and `send` gives `Err(SendError.Closed(v))`.
+- With no `default`, the `select` waits until an arm is ready. While it waits, the other tasks run. A `select` that nothing can ever make ready (no other task, no `after`) is a deadlock.
+- The block's value is the chosen arm's value, and the bodies run outside the wait, so `break` and `continue` in a body mean the loop around the `select`.
+
+**Timeouts.** `recv_timeout` and `send_timeout` behave as a two-arm `select` of the channel operation and `after(d)`:
+
+```kara
+impl[T] Receiver[T] {
+    fn recv_timeout(self, d: Duration) -> Result[T, RecvTimeoutError] with receives(self) blocks
+}
+
+impl[T] Sender[T] {
+    fn send_timeout(self, value: own T, d: Duration) -> Result[(), SendTimeoutError[T]] with sends(self) blocks
+}
+
+enum RecvTimeoutError {
+    Closed,      // every Sender is gone and the channel is drained
+    TimedOut,    // d passed first
+}
+
+enum SendTimeoutError[T] {
+    Closed(T),   // no Receiver remains
+    TimedOut(T), // d passed first
+}
+```
+
+Both errors tell a closed channel from a timeout, and `send_timeout` hands the value back either way. They take a `std.time` `Duration`, so a program that calls one imports it.
+
+**Deferred.** Unbounded channels and fan-out or fan-in combinators come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
 
 ```kara
 import std.sync.{channel, Sender, Receiver, SendError};

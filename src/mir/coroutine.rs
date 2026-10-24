@@ -17,13 +17,14 @@ use super::ty::{AdtDef, AdtId, IntTy, Ty, TyInterner, TyKind, VariantDef};
 /// on the next.
 pub const YIELD_NOW: &str = "__yield_now";
 
-/// Whether the native `name` suspends: `__yield_now`, a sleep, a channel
+/// Whether the native `name` suspends: `__yield_now`, a sleep, a `select`
+/// with no arm ready (`__select_park`), a channel
 /// receive, a join, a socket call that can wait, a child's `wait`, or a
 /// pool's `acquire`. The interpreter's natives complete synchronously, so
 /// under the executor a suspending native other than `__yield_now` yields
 /// once and then makes its call when resumed.
 pub fn suspends_native(name: &str) -> bool {
-    if name == YIELD_NOW || name == "sleep_ms" {
+    if name == YIELD_NOW || name == "sleep_ms" || name == "__select_park" {
         return true;
     }
     let Some((ty, method)) = name.rsplit_once('.') else {

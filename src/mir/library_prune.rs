@@ -137,6 +137,11 @@ const ALWAYS_KEPT: &[&str] = &[
     "acquire",
     "release",
     "lock",
+    // What a `select` stands for (`crate::select_desugar`), written after
+    // this pass reads the program.
+    "__closed",
+    "try_recv",
+    "try_send",
 ];
 
 pub fn enabled() -> bool {

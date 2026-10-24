@@ -650,6 +650,7 @@ fn run_with(
         calls: 0,
         arenas: 0,
         channels: Vec::new(),
+        chan_epoch: 0,
         files: Vec::new(),
         bufs: Vec::new(),
         buf_windows: Default::default(),
@@ -1034,6 +1035,9 @@ struct Interp<'a> {
     arenas: i128,
     /// The queues behind `Channel` ends and `BoundedChannel`s, by id - 1.
     channels: Vec<Chan>,
+    /// Moves on whenever a channel changes (a value sent or received, an
+    /// end dropped): what a `select` with no arm ready waits on.
+    chan_epoch: i64,
     /// The open files behind `File` values, by id - 1; `None` once closed.
     files: Vec<Option<std::fs::File>>,
     /// The `BufReader`s and `BufWriter`s, by id - 1; `None` once dropped.
@@ -1665,11 +1669,7 @@ impl<'a> Interp<'a> {
             )),
             // As the runtime's `karac_runtime_clock_monotonic_ns` /
             // `_wall_ns`: the origin is the first reading.
-            ("Clock", "monotonic_ns") => {
-                static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-                let origin = ORIGIN.get_or_init(std::time::Instant::now);
-                Ok(Value::Int(origin.elapsed().as_nanos() as i64 as i128))
-            }
+            ("Clock", "monotonic_ns") => Ok(Value::Int(i128::from(monotonic_ns()))),
             ("Clock", "wall_ns") => Ok(Value::Int(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1925,6 +1925,29 @@ impl<'a> Interp<'a> {
                     location
                 };
                 Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            ("__select_epoch", "") => Ok(Value::Int(i128::from(self.chan_epoch))),
+            // Under the executor its `__ready` waited (`Wait::Select`).
+            // Outside one no other task can change a channel, so a
+            // `select` with no arm ready waits for its deadline, and with
+            // none can never go on.
+            ("__select_park", "") => {
+                if !self.tasks.is_empty() {
+                    return Ok(Value::Unit);
+                }
+                let [_, Value::Int(until)] = args.as_slice() else {
+                    return err("__select_park takes an epoch and a deadline");
+                };
+                if *until < 0 {
+                    return Err(self.deadlock(
+                        "a `select` waits on channels that no running task sends to or receives from",
+                    ));
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                std::thread::sleep(std::time::Duration::from_nanos(
+                    (*until as i64 - monotonic_ns()).max(0) as u64,
+                ));
+                Ok(Value::Unit)
             }
             ("sleep_ms", "") => {
                 // `std.time::sleep_ms`, bodyless: a real pause, as legacy's
@@ -4617,6 +4640,7 @@ impl<'a> Interp<'a> {
                 let elem = c.elem;
                 if !closed && !full {
                     c.queue.push_back(v.clone());
+                    self.chan_epoch += 1;
                 }
                 // The MIR pipeline's `send` returns a `Result`, as
                 // `try_send` does (B-2026-10-15-11). Under the executor its
@@ -4647,9 +4671,17 @@ impl<'a> Interp<'a> {
                     _ => Ok(Value::Unit),
                 }
             }
+            // Whether every sender is gone, for a `select`'s receive arm.
+            (_, "__closed") => {
+                let id = self.chan_id(args.first(), name)?;
+                Ok(Value::Bool(self.chan_mut(id, name)?.senders == 0))
+            }
             (_, "recv" | "recv_blocking" | "try_recv") => {
                 let id = self.chan_id(args.first(), name)?;
                 let v = self.chan_mut(id, name)?.queue.pop_front();
+                if v.is_some() {
+                    self.chan_epoch += 1;
+                }
                 // The MIR pipeline's `recv` returns an `Option`: `None`
                 // once every sender is gone and the queue is drained, which
                 // is what its `__ready` waited for (B-2026-10-15-11).
@@ -4714,6 +4746,7 @@ impl<'a> Interp<'a> {
     /// One end of channel `id` is gone; with both gone, what is still
     /// queued drops.
     fn end_dropped(&mut self, id: i128, sender: bool) -> R<()> {
+        self.chan_epoch += 1;
         let c = self.chan_mut(id, "drop")?;
         let count = if sender {
             &mut c.senders
@@ -12316,13 +12349,21 @@ impl<'a> Interp<'a> {
                 Wait::Until(at) | Wait::Pool(_, at) => {
                     nearest = Some(nearest.map_or(*at, |n| n.min(*at)))
                 }
+                Wait::Select(_, until) if *until >= 0 => {
+                    let at = instant_at(*until);
+                    nearest = Some(nearest.map_or(at, |n| n.min(at)))
+                }
                 Wait::Accept(_)
                 | Wait::Read(_)
                 | Wait::Write(..)
                 | Wait::Datagram(_)
                 | Wait::Child(_) => io = true,
-                Wait::Recv(_) | Wait::Send(_) | Wait::Join(_) | Wait::Group(..) | Wait::Lock(_) => {
-                }
+                Wait::Recv(_)
+                | Wait::Send(_)
+                | Wait::Join(_)
+                | Wait::Group(..)
+                | Wait::Lock(_)
+                | Wait::Select(..) => {}
             }
         }
         let step = std::time::Duration::from_millis(1);
@@ -12420,6 +12461,9 @@ impl<'a> Interp<'a> {
             },
             ("Mutex", "acquire", [m, ..]) => Some(Wait::Lock(self.atomic_cell(m, &callee)?)),
             ("Pool", "acquire", [p, d, ..]) => self.ready_pool(p, d, &callee)?,
+            ("__select_park", "", [Value::Int(epoch), Value::Int(until), ..]) => {
+                Some(Wait::Select(*epoch as i64, *until as i64))
+            }
             _ => return err(format!("__ready of {callee}, which does not suspend")),
         };
         let ready = match &wait {
@@ -12516,6 +12560,9 @@ impl<'a> Interp<'a> {
                 c.cap == 0 || c.queue.len() < c.cap || c.receivers == 0
             }
             Wait::Until(at) => std::time::Instant::now() >= *at,
+            Wait::Select(epoch, until) => {
+                self.chan_epoch != *epoch || (*until >= 0 && monotonic_ns() >= *until)
+            }
             Wait::Lock(cell) => !self.held_locks.contains(cell),
             Wait::Join(h) => self.handles.get(h - 1).is_none_or(|h| h.done),
             Wait::Group(g, end) => match self.groups.get(g - 1) {
@@ -14151,6 +14198,9 @@ enum Wait {
     Group(usize, bool),
     /// A mutex, by its cell, that no task holds.
     Lock(Addr),
+    /// A `select` with no arm ready: a channel to change since the epoch,
+    /// or the monotonic clock to reach the deadline (-1: none).
+    Select(i64, i64),
 }
 
 /// The interpreter's sockets, by descriptor (`Interp::tcp_method`).
@@ -14252,6 +14302,20 @@ struct Limiter {
 /// The `conn_id` of a `PooledConnection` whose value `release` has moved
 /// back to its pool.
 const RELEASED: i128 = -1;
+
+/// `Clock.monotonic_ns()`: nanoseconds since the first reading, as the
+/// runtime's `karac_runtime_clock_monotonic_ns`.
+fn monotonic_ns() -> i64 {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let origin = ORIGIN.get_or_init(std::time::Instant::now);
+    origin.elapsed().as_nanos() as i64
+}
+
+/// The `Instant` the monotonic clock reads `ns` at.
+fn instant_at(ns: i64) -> std::time::Instant {
+    let now = std::time::Instant::now();
+    now + std::time::Duration::from_nanos((ns - monotonic_ns()).max(0) as u64)
+}
 
 /// Whether `acquire` on `p` can complete now: an idle value, room for a
 /// new one, or a closed pool.

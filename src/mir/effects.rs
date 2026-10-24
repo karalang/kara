@@ -1257,6 +1257,10 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         }
         ("Atomic" | "Mutex", "new") => vec![HEAP],
         ("sleep_ms", "") => vec![(Blocks, "", None)],
+        // A `select` (core-semantics §11.11): the count of channel changes
+        // touches nothing, and the wait with no arm ready blocks.
+        ("__select_epoch", "") => vec![],
+        ("__select_park", "") => vec![(Blocks, "", None)],
         // The collections the MIR interpreter implements natively: they
         // allocate, and an out-of-range index or a missing key panics.
         // `Option`/`Result` combinators are here too; a closure they take is
@@ -1300,6 +1304,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Sender", "try_send") => vec![(Sends, "Channel", Some(0))],
         ("Receiver", "recv") => vec![(Receives, "Channel", Some(0)), (Blocks, "", None)],
         ("Receiver", "try_recv") => vec![(Receives, "Channel", Some(0))],
+        ("Receiver", "__closed") => vec![(Receives, "Channel", Some(0))],
         ("TcpStream", "write" | "write_all" | "flush") => {
             vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
         }

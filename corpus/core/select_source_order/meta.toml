@@ -1,0 +1,11 @@
+source = "core-semantics §11.11"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency", "select", "channel"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "core-semantics §11.11 (M4 item 6): source-first ready arm, the chosen arm alone performs its operation, a losing send arm's value drops as the select ends, a closed channel's arm is ready"

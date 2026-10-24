@@ -962,6 +962,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 };
                 self.chan_send_result(base, method, dty, dest, r, vp, el)?;
             }
+            // Whether every sender is gone, for a `select`'s receive arm.
+            ("Receiver", "__closed", [recv]) => {
+                let h = self.chan_handle(recv)?;
+                let closed = self.rt_flag("chan_closed", &[h.into()])?;
+                self.store_bool(dest, closed)?;
+            }
             (_, "recv" | "recv_blocking" | "try_recv", [recv]) => {
                 let h = self.chan_handle(recv)?;
                 let d = self.place_ptr(dest)?;

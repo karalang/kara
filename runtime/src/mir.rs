@@ -3137,6 +3137,7 @@ pub unsafe extern "C" fn karac_mir_chan_send(h: *mut MirChan, v: *const u8) -> i
     }
     // SAFETY: as above.
     s.queue.push_back(unsafe { bytes(v, c.size) }.into());
+    crate::mir_task::chan_changed();
     0
 }
 
@@ -3172,10 +3173,23 @@ pub unsafe extern "C" fn karac_mir_chan_recv(h: *mut MirChan, out: *mut u8) -> u
         Some(b) => {
             // SAFETY: as above.
             unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, c.size) };
+            crate::mir_task::chan_changed();
             1
         }
         None => 0,
     }
+}
+
+/// Whether every sender of `h` is gone, for a `select`'s receive arm.
+///
+/// # Safety
+/// `h` is a live channel.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_closed(h: *mut MirChan) -> u8 {
+    // SAFETY: the caller's contract.
+    let c = unsafe { &*h };
+    let s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
+    u8::from(s.senders == 0)
 }
 
 /// Another end of the kind `sender` names.
@@ -3205,6 +3219,7 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
     if h.is_null() {
         return;
     }
+    crate::mir_task::chan_changed();
     let last = {
         // SAFETY: the caller's contract.
         let c = unsafe { &*h };

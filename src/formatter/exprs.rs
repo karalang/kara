@@ -335,6 +335,31 @@ impl super::Formatter {
                     }
                 }
             }
+            // A `select`, as the parser gives it (`crate::select_desugar`):
+            // each arm's op is its guard, and the arm without one is the
+            // `default`.
+            ExprKind::Match { scrutinee, arms } if matches!(&scrutinee.kind, ExprKind::Identifier(n) if n == crate::select_desugar::MARKER) =>
+            {
+                self.write_str("select {\n");
+                self.push_indent();
+                for arm in arms {
+                    self.write_indent();
+                    match &arm.guard {
+                        Some(op) => {
+                            self.format_pattern(&arm.pattern);
+                            self.write_str(" = ");
+                            self.format_expr(op);
+                        }
+                        None => self.write_str("default"),
+                    }
+                    self.write_str(" => ");
+                    self.format_expr(&arm.body);
+                    self.write_str(",\n");
+                }
+                self.pop_indent();
+                self.write_indent();
+                self.write_str("}");
+            }
             ExprKind::Match { scrutinee, arms } => {
                 self.write_str("match ");
                 self.format_expr(scrutinee);

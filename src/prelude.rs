@@ -817,6 +817,8 @@ pub const LIBRARY_SOURCE_TYPES: &[&str] = &[
     "Slice",
     "VecDeque",
     "Receiver",
+    // `send_timeout` (runtime/stdlib/source/channel_timeout.kara).
+    "Sender",
 ];
 
 /// Library methods written in Kāra (redesign A2), from

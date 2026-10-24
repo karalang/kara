@@ -1,0 +1,46 @@
+//! The channel waits with a timeout (core-semantics §11.11). They take a
+//! `std.time` `Duration`, which the library's channel source cannot name, so
+//! they are appended to a program that calls one (`BAKED_SOURCES` in
+//! src/mir/lower.rs), as `std.net` is. Each behaves as a two-arm `select` of
+//! its operation and `after(d)`; their errors are in `sync.kara`.
+
+impl[T] Receiver[T] {
+    /// The next value, waiting at most `d` for one: `TimedOut` when `d`
+    /// passes first, `Closed` once every sender is gone and the channel is
+    /// drained.
+    pub fn recv_timeout(ref self, d: Duration) -> Result[T, RecvTimeoutError] with reads(Clock) suspends {
+        select {
+            v = self.recv() => match v {
+                Some(v) => Ok(v),
+                None => Err(RecvTimeoutError.Closed),
+            },
+            _ = after(d) => Err(RecvTimeoutError.TimedOut),
+        }
+    }
+}
+
+impl[T] Sender[T] {
+    /// Sends `value`, waiting at most `d` for room: `TimedOut(value)` when
+    /// `d` passes first, `Closed(value)` when no receiver is left. The
+    /// `select` written out, so the value comes back when the send loses.
+    pub fn send_timeout(ref self, value: own T, d: Duration) -> Result[(), SendTimeoutError[T]] with reads(Clock) suspends {
+        let mut slot = Some(value);
+        let at = d.__select_at();
+        loop {
+            let epoch = __select_epoch();
+            match __select_send(self, mut slot) {
+                Some(Ok(())) => return Ok(()),
+                Some(Err(SendError.Closed(v))) => return Err(SendTimeoutError.Closed(v)),
+                Some(Err(SendError.Full(v))) => return Err(SendTimeoutError.TimedOut(v)),
+                None => {}
+            }
+            if __select_due(at) {
+                return match slot.take() {
+                    Some(v) => Err(SendTimeoutError.TimedOut(v)),
+                    None => panic("a send that lost keeps its value"),
+                };
+            }
+            __select_park(epoch, at);
+        }
+    }
+}

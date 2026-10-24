@@ -4015,9 +4015,13 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 // The library's `impl[T] Mutex[T]`, on the MIR pipeline: its
                 // `lock` stores `ref self` in a `MutexGuard[T]`, which an
-                // erased `Mutex` does not match (B-2026-10-19-23).
+                // erased `Mutex` does not match (B-2026-10-19-23). So do
+                // `impl[T] Receiver[T]` and `Sender[T]`, whose `recv_timeout`
+                // and `send_timeout` pass `self` to the `select` functions.
                 Type::Named { name, args }
-                    if self.library_methods_from_source && name == "Mutex" && !args.is_empty() =>
+                    if self.library_methods_from_source
+                        && matches!(name.as_str(), "Mutex" | "Receiver" | "Sender")
+                        && !args.is_empty() =>
                 {
                     lowered.clone()
                 }

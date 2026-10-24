@@ -1,0 +1,8 @@
+a 1
+b 2
+default
+drop ticket 2
+timed out
+received ticket 1
+drop ticket 1
+closed true

@@ -23,6 +23,12 @@ impl Duration {
     pub fn as_ms(self) -> i64 {
         self.ns / 1000000
     }
+
+    // When a `select`'s `after(self)` arm entered now fires, on the
+    // monotonic clock (core-semantics §11.11; `select_desugar.rs`).
+    pub fn __select_at(self) -> i64 with reads(Clock) {
+        Clock.monotonic_ns() + self.ns
+    }
 }
 
 /// Wall-clock time, which can jump when the system clock is set. Use an

@@ -20347,6 +20347,13 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &["Json", "JsonError"],
         &["Json"],
     ),
+    (
+        // `Receiver.recv_timeout` / `Sender.send_timeout` (§11.11): they
+        // take a `std.time` `Duration`.
+        include_str!("../../runtime/stdlib/source/channel_timeout.kara"),
+        &["recv_timeout", "send_timeout"],
+        &[],
+    ),
 ];
 
 /// The v2 `Json.parse` and `Json.stringify`.

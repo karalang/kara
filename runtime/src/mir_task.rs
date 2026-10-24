@@ -430,6 +430,67 @@ pub(crate) fn ready_by(ready: bool, ns: i64) -> (u8, bool) {
     }
 }
 
+/// Moves on whenever a channel changes (a value sent or received, an end
+/// dropped): what a `select` with no arm ready waits on.
+static CHAN_EPOCH: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// A channel changed: a `select` waiting on the epoch may go on, and the
+/// task that changed it made progress, so the executor polls the others
+/// again before it concludes they all wait.
+pub(crate) fn chan_changed() {
+    CHAN_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    EXEC.with(|e| {
+        if let Ok(mut e) = e.try_borrow_mut() {
+            e.progress += 1;
+        }
+    });
+}
+
+/// `__select_epoch()`: the count of channel changes so far.
+#[no_mangle]
+pub extern "C" fn karac_mir_select_epoch() -> i64 {
+    CHAN_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether the monotonic clock has reached `until` (-1: never).
+fn select_due(until: i64) -> bool {
+    until >= 0 && crate::karac_runtime_clock_monotonic_ns() >= until
+}
+
+/// `__ready("__select_park", epoch, until)` (core-semantics §11.11): a
+/// `select` with no arm ready goes on once a channel has changed since
+/// `epoch`, or the monotonic clock reads `until` (-1: no deadline).
+#[no_mangle]
+pub extern "C" fn karac_mir_ready_select(epoch: i64, until: i64) -> u8 {
+    let ready = karac_mir_select_epoch() != epoch || select_due(until);
+    let wait = if until >= 0 {
+        let left = until - crate::karac_runtime_clock_monotonic_ns();
+        Wait::Until(Instant::now() + Duration::from_nanos(left.max(0) as u64))
+    } else {
+        Wait::Task
+    };
+    note(ready, wait)
+}
+
+/// `__select_park(epoch, until)`. Under the executor its `__ready` waited.
+/// Outside one no other task can change a channel, so the wait is for the
+/// deadline, and with none the program can never go on.
+#[no_mangle]
+pub extern "C" fn karac_mir_select_park(epoch: i64, until: i64) {
+    if EXEC.with(|e| e.borrow().cur.is_some()) || karac_mir_select_epoch() != epoch {
+        return;
+    }
+    if until < 0 {
+        crate::mir::deadlock(
+            "a `select` waits on channels that no running task sends to or receives from",
+        );
+    }
+    let left = until - crate::karac_runtime_clock_monotonic_ns();
+    if left > 0 {
+        std::thread::sleep(Duration::from_nanos(left as u64));
+    }
+}
+
 /// Whether the running task's `__ready` already waited its pause out; the
 /// flag is cleared, so `sleep_ms` asks it once.
 pub(crate) fn take_slept() -> bool {

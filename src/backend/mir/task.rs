@@ -122,6 +122,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 let (cell, _) = self.cell_arg(m)?;
                 self.rt_flag("mutex_ready", &[cell.into()])?
             }
+            // A channel to change, or the deadline (core-semantics §11.11).
+            ("__select_park", "", [epoch, until, ..]) => {
+                let epoch = self.int_arg(epoch)?;
+                let until = self.int_arg(until)?;
+                self.rt_flag("ready_select", &[epoch.into(), until.into()])?
+            }
             ("TaskGroup", "spawn_frame" | "end", [g, ..]) => {
                 let g = self.group_handle(g)?;
                 let end = i8t.const_int(u64::from(method == "end"), false);

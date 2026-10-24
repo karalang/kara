@@ -34,6 +34,88 @@ impl[T] Receiver[T] {
     fn into_iter(own self) -> ReceiverIter[T] {
         ReceiverIter { rx: self }
     }
+
+    // Whether every sender is gone. A native of each MIR backend.
+    #[compiler_builtin]
+    fn __closed(ref self) -> bool {
+        self.__closed()
+    }
+}
+
+/// Why `Receiver.recv_timeout` gave no value (core-semantics §11.11).
+pub enum RecvTimeoutError {
+    /// Every sender is gone and the channel is drained.
+    Closed,
+    /// The timeout passed first.
+    TimedOut,
+}
+
+/// Why `Sender.send_timeout` did not send, with the value it hands back.
+pub enum SendTimeoutError[T] {
+    /// No receiver is left.
+    Closed(T),
+    /// The timeout passed first.
+    TimedOut(T),
+}
+
+// What a `select` stands for (core-semantics §11.11): `select_desugar.rs`
+// writes the calls.
+
+// A receive arm's result slot, empty.
+fn __select_recv_none[T](rx: ref Receiver[T]) -> Option[Option[T]] {
+    None
+}
+
+// The receive, tried without waiting: `None` while the arm is not ready,
+// else what `recv` gives, `None` once every sender is gone and the channel
+// is drained. A closed channel takes no more values, so the second
+// `try_recv` is the answer.
+fn __select_recv[T](rx: ref Receiver[T]) -> Option[Option[T]] {
+    match rx.try_recv() {
+        Some(v) => Some(Some(v)),
+        None => if rx.__closed() { Some(rx.try_recv()) } else { None },
+    }
+}
+
+// A send arm's result slot, empty.
+fn __select_send_none[T](tx: ref Sender[T]) -> Option[Result[(), SendError[T]]] {
+    None
+}
+
+// The send of the value in `slot`, tried without waiting: `None`, with the
+// value back in `slot`, while the channel is full, else what `send` gives,
+// the value then gone from `slot`.
+fn __select_send[T](tx: ref Sender[T], slot: mut ref Option[T]) -> Option[Result[(), SendError[T]]] {
+    match slot.take() {
+        Some(v) => match tx.try_send(v) {
+            Err(SendError.Full(v)) => {
+                *slot = Some(v);
+                None
+            }
+            r => Some(r),
+        },
+        None => None,
+    }
+}
+
+// A count every channel operation that changes a channel (a value sent or
+// received, an end dropped) moves on. A native of each MIR backend.
+#[compiler_builtin]
+fn __select_epoch() -> i64 {
+    0
+}
+
+// Waits until the count has moved past `epoch` or the monotonic clock
+// reads `until` (-1: no deadline), so a `select` with no arm ready tries
+// its arms again. Outside a task nothing else can move the count, so the
+// wait is for the deadline, and with none the program is deadlocked. A
+// native of each MIR backend.
+#[compiler_builtin]
+fn __select_park(epoch: i64, until: i64) with suspends {}
+
+// Whether the monotonic clock has reached `at`: an `after` arm is ready.
+fn __select_due(at: i64) -> bool with reads(Clock) {
+    Clock.monotonic_ns() >= at
 }
 
 

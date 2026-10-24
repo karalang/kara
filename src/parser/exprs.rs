@@ -1838,6 +1838,21 @@ impl super::Parser {
                 })
             }
 
+            // `select { pat = op => body, .., default => body }`
+            // (core-semantics §11.11): parsed as a `match` on the marker
+            // `__select`, whose arms hold each op as their guard, so every
+            // phase before the desugar sees a node it already knows
+            // (`crate::select_desugar`).
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "select"
+                && !self.keyword_block_is_name
+                && matches!(self.peek_token_ref_at(1), Token::LeftBrace) =>
+            {
+                self.parse_select_expr()
+            }
+
             // Seq block
             Token::Identifier {
                 ref name,
@@ -2153,6 +2168,106 @@ impl super::Parser {
             span: self.span_from(&start),
             kind: ExprKind::Match {
                 scrutinee: Box::new(scrutinee),
+                arms,
+            },
+        })
+    }
+
+    /// `select { arms }` (core-semantics §11.11, docs/deferred.md
+    /// § `select` Across Channels). Each arm is `pat = <rx>.recv() =>
+    /// body`, `pat = <tx>.send(v) => body`, `pat = after(d) => body`, or
+    /// `default => body`, the last at most once. The result is
+    /// `match __select { pat if op => body, .., _ => default }`: the op is
+    /// the arm's guard, and the default arm alone has none.
+    fn parse_select_expr(&mut self) -> Option<Expr> {
+        let start = self.current_span();
+        self.advance();
+        self.expect(&Token::LeftBrace)?;
+        let mut arms: Vec<MatchArm> = Vec::new();
+        let mut defaulted = false;
+        while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            let arm_start = self.current_span();
+            let is_default = matches!(
+                self.peek_token_ref_at(0),
+                Token::Identifier { name, raw: false } if name == "default"
+            ) && matches!(self.peek_token_ref_at(1), Token::FatArrow);
+            let (pattern, op) = if is_default {
+                self.advance();
+                if defaulted {
+                    self.error_at("a `select` has at most one `default` arm", arm_start);
+                }
+                defaulted = true;
+                let pattern = Pattern {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: arm_start,
+                    kind: PatternKind::Wildcard,
+                };
+                (pattern, None)
+            } else {
+                let pattern = self.parse_pattern()?;
+                if !binds_whole(&pattern) {
+                    self.error_at(
+                        "a `select` arm's pattern binds the whole result of its operation \
+                         (`Option` for `recv`, `Result` for `send`), as in `let`: write a \
+                         name and `match` on it in the arm's body",
+                        pattern.span,
+                    );
+                }
+                self.expect(&Token::Equal)?;
+                let saved = self.keyword_block_is_name;
+                self.keyword_block_is_name = true;
+                let op = self.parse_expression();
+                self.keyword_block_is_name = saved;
+                let op = op?;
+                if !is_select_op(&op) {
+                    self.error_at(
+                        "a `select` arm waits on `<receiver>.recv()`, `<sender>.send(value)` \
+                         or `after(duration)`",
+                        op.span,
+                    );
+                }
+                (pattern, Some(op))
+            };
+            self.expect(&Token::FatArrow)?;
+            let body_is_block = self.check(&Token::LeftBrace);
+            let body = if body_is_block {
+                let block = self.parse_block()?;
+                Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: block.span,
+                    kind: ExprKind::Block(block),
+                }
+            } else {
+                let expr = self.parse_expression()?;
+                self.recover_assignment_arm_body(expr)
+            };
+            arms.push(MatchArm {
+                pattern,
+                guard: op,
+                body,
+                span: self.span_from(&arm_start),
+            });
+            if !self.eat(&Token::Comma) && !body_is_block {
+                break;
+            }
+        }
+        self.expect(&Token::RightBrace)?;
+        if arms.iter().all(|a| a.guard.is_none()) {
+            self.error_at(
+                "a `select` needs an arm that waits: `recv`, `send` or `after`",
+                self.span_from(&start),
+            );
+        }
+        let span = self.span_from(&start);
+        Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
+            span,
+            kind: ExprKind::Match {
+                scrutinee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: start,
+                    kind: ExprKind::Identifier(crate::select_desugar::MARKER.to_string()),
+                }),
                 arms,
             },
         })
@@ -3754,4 +3869,30 @@ fn is_primitive_type_name(name: &str) -> bool {
             | "bool"
             | "char"
     )
+}
+
+/// Whether a `select` arm's pattern is irrefutable over its operation's
+/// result: a name, `_`, `name @ _`, or `()` for `after`. Every other form
+/// tests a variant of the `Option` or `Result` a `recv` or `send` gives.
+fn binds_whole(p: &Pattern) -> bool {
+    match &p.kind {
+        PatternKind::Wildcard | PatternKind::Binding(_) => true,
+        PatternKind::AtBinding { pattern, .. } => binds_whole(pattern),
+        PatternKind::Tuple(ps) => ps.is_empty(),
+        _ => false,
+    }
+}
+
+/// Whether `op` is an operation a `select` arm can wait on: a `recv()` or
+/// a one-argument `send(..)` on a channel, or `after(duration)`.
+fn is_select_op(op: &Expr) -> bool {
+    match &op.kind {
+        ExprKind::MethodCall { method, args, .. } => {
+            (method == "recv" && args.is_empty()) || (method == "send" && args.len() == 1)
+        }
+        ExprKind::Call { callee, args } => {
+            matches!(&callee.kind, ExprKind::Identifier(n) if n == "after") && args.len() == 1
+        }
+        _ => false,
+    }
 }

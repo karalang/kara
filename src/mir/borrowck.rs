@@ -2172,6 +2172,11 @@ fn main() -> () {
         ];
         // Rules checked before MIR: `par` effects and Drop-type moves.
         let not_mir = ["err_par_conflict", "err_partial_move_drop_type"];
+        // Pins that call Kāra library functions, which `check_built` does
+        // not append (a `select` desugars to calls into sync.kara). The
+        // build in `built_core_pins_match_their_expected_output` runs them
+        // with the library, through the same move and borrow checks.
+        let needs_library = ["select_source_order"];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)
             .unwrap()
@@ -2181,7 +2186,7 @@ fn main() -> () {
         let (mut ok_checked, mut bad) = (0, Vec::new());
         for dir in pins {
             let pin = dir.file_name().unwrap().to_str().unwrap().to_string();
-            if not_mir.contains(&pin.as_str()) {
+            if not_mir.contains(&pin.as_str()) || needs_library.contains(&pin.as_str()) {
                 continue;
             }
             let src = std::fs::read_to_string(dir.join("source.kara")).unwrap();

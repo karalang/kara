@@ -1,0 +1,60 @@
+// core-semantics §11.11: the source-first ready arm wins, choosing an arm
+// performs its operation and no other arm's, a send arm that is not chosen
+// still owns its value, which drops as the `select` ends, and a closed
+// channel makes its arm ready.
+import std.time.{Duration};
+
+struct Ticket { n: i64 }
+
+impl Drop for Ticket {
+    fn drop(mut ref self) {
+        println(f"drop ticket {self.n}");
+    }
+}
+
+fn main() {
+    let (atx, arx) = channel(4);
+    let (btx, brx) = channel(4);
+    let _ = atx.send(1);
+    let _ = btx.send(2);
+    // Both arms are ready: the first wins, and `b` keeps its value.
+    let first = select {
+        v = arx.recv() => f"a {v.unwrap()}",
+        v = brx.recv() => f"b {v.unwrap()}",
+    };
+    println(first);
+    let second = select {
+        v = arx.recv() => f"a {v.unwrap()}",
+        v = brx.recv() => f"b {v.unwrap()}",
+    };
+    println(second);
+    // Nothing is ready: the default runs.
+    let idle = select {
+        v = arx.recv() => f"a {v.unwrap()}",
+        default => "default".to_string(),
+    };
+    println(idle);
+    // A full channel: the send arm loses to `after`, and its ticket drops
+    // as the select ends.
+    let (ttx, trx) = channel(1);
+    let _ = ttx.send(Ticket { n: 1 });
+    let sent = select {
+        r = ttx.send(Ticket { n: 2 }) => f"sent {r.is_ok()}",
+        _ = after(Duration.ms(10)) => "timed out".to_string(),
+    };
+    println(sent);
+    match trx.recv() {
+        Some(t) => println(f"received ticket {t.n}"),
+        None => println("no ticket"),
+    }
+    // No sender is left: the receive arm is ready with `None`.
+    {
+        let gone = atx;
+        let _ = gone;
+    }
+    let closed = select {
+        v = arx.recv() => f"closed {v.is_none()}",
+        _ = after(Duration.ms(1000)) => "timed out".to_string(),
+    };
+    println(closed);
+}

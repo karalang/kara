@@ -686,6 +686,17 @@ impl<'ctx> Cx<'ctx, '_> {
                     .const_int(u64::from(base == "__karac_panic_location"), false);
                 self.rt("panic_info", &[d.into(), which.into()])
             }
+            // A `select` (core-semantics §11.11): the count of channel
+            // changes, and the wait with no arm ready.
+            ("__select_epoch", "") => {
+                let n = self.rt_int("select_epoch", &[], 64)?;
+                self.store_int_as(dest, n, true)
+            }
+            ("__select_park", "") if args.len() == 2 => {
+                let epoch = self.int_arg(&args[0])?;
+                let until = self.int_arg(&args[1])?;
+                self.rt("select_park", &[epoch.into(), until.into()])
+            }
             ("sleep_ms", "") if args.len() == 1 => {
                 let ms = self.int_arg(&args[0])?;
                 self.rt("sleep_ms", &[ms.into()])
