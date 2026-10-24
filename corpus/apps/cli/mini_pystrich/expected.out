@@ -1,0 +1,660 @@
+# Data Matrix: the docstring example and the encodation modes
+> dm payloads/hudora.txt art
+  symbol 14x14 square, regions 1x1, 8 data + 10 error codewords, 1 block
+  data 4976457053628138
+  ec 5ebcf9260b1ea3a7a802
+  ascii 36x18 fnv 933bf575
+    |                                    |
+    |                                    |
+    |    XX  XX  XX  XX  XX  XX  XX      |
+    |    XX  XXXX  XXXXXX      XXXXXX    |
+    |    XXXXXX    XX          XX        |
+    |    XXXXXX    XX        XXXX  XX    |
+    |    XXXX  XX  XXXXXX                |
+    |    XXXXXX    XXXXXXXX    XXXXXX    |
+    |    XX    XX  XXXXXXXX  XXXX        |
+    |    XX    XX      XXXX      XXXX    |
+    |    XX  XXXXXXXXXX    XXXX          |
+    |    XX  XXXX    XX            XX    |
+    |    XX  XXXXXX  XXXXXX      XX      |
+    |    XXXXXX  XX  XX  XX  XX    XX    |
+    |    XX    XX              XX        |
+    |    XXXXXXXXXXXXXXXXXXXXXXXXXXXX    |
+    |                                    |
+    |                                    |
+> dm payloads/hello.txt
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data 49666d6d702d215870736d65228157ed851c
+  ec 6f2ece38c47a023e31fcee374aac
+  ascii 44x22 fnv 82f00d35
+> dm payloads/one.txt qz=1 art
+  symbol 10x10 square, regions 1x1, 3 data + 5 error codewords, 1 block
+  data 628146
+  ec 3d0f293675
+  ascii 24x12 fnv fbf75865
+    |                        |
+    |  XX  XX  XX  XX  XX    |
+    |  XXXX  XXXX  XXXXXXXX  |
+    |  XX          XX  XX    |
+    |  XX    XX    XX  XXXX  |
+    |  XX      XXXXXXXX      |
+    |  XX  XX  XX  XX  XXXX  |
+    |  XX      XXXXXX        |
+    |  XXXX    XXXX  XXXXXX  |
+    |  XXXX            XX    |
+    |  XXXXXXXXXXXXXXXXXXXX  |
+    |                        |
+> dm payloads/nul.txt
+  symbol 10x10 square, regions 1x1, 3 data + 5 error codewords, 1 block
+  data 018146
+  ec ebc2a967a9
+  ascii 28x14 fnv 080c6335
+> dm payloads/digits.txt
+  symbol 12x12 square, regions 1x1, 5 data + 7 error codewords, 1 block
+  data 8ea4bad0dc
+  ec 225b773d99215a
+  ascii 32x16 fnv 01cbc825
+> dm payloads/odd_digits.txt
+  symbol 10x10 square, regions 1x1, 3 data + 5 error codewords, 1 block
+  data 8ea436
+  ec 5b7702faf9
+  ascii 28x14 fnv 05eecbd5
+> dm payloads/upper.txt
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data e659e96d24805f939aa6d5fe518157ed851c
+  ec 08e16b917002bc8ce77022f532e2
+  ascii 44x22 fnv ef978515
+> dm payloads/lower.txt
+  symbol 24x24 square, regions 1x1, 36 data + 24 error codewords, 1 block
+  data efd19b17938c191538b4bc15d5e7d0d8aec895ddb017fe71125dbf1585fe6881f0881fb5
+  ec e333de155dcddf9adc6c2fe84f32587fffdd6a3c5d4bc8e5
+  ascii 56x28 fnv ddad45c5
+> dm payloads/x12.txt
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data ee59e9070f2c36f3996d2415f6fe4a81851c
+  ec e3c732267ca4353dd4a47955b0dd
+  ascii 44x22 fnv b8411795
+> dm payloads/url.txt
+  symbol 26x26 square, regions 1x1, 44 data + 28 error codewords, 1 block
+  data ef888aba425df70883e98bb93b0859b3125c006d30c83d8c2a714d32f2242b76fba4c7fe6d817911a73ed46b
+  ec 2e9afee553de96ffead94ce3a612049ea12ca3a88687f71a79479a89
+  ascii 60x30 fnv de175415
+> dm payloads/mixed_case.txt
+  symbol 24x24 square, regions 1x1, 36 data + 24 error codewords, 1 block
+  data 5053454653ef1715084c32f47b40131ec23b7ae7d18a5e40188c102f6d73fe752e594d81
+  ec 95af08edb23afabdadb1833933d154bdea149b563ed91a20
+  ascii 56x28 fnv ffe7ab25
+> dm payloads/serial.txt
+  symbol 22x22 square, regions 1x1, 30 data + 20 error codewords, 1 block
+  data 544f8399afc5db8399afc5db8399afc5db8399afc5db8399afc581fe962d
+  ec a22e16733decf241a3817185ad6f2061b4329dfd
+  ascii 52x26 fnv 1dfcd5b5
+> dm payloads/control.txt
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data 02037562630a696673661c46544481ed851c
+  ec c6159da3088ffbd6d9b591b05de5
+  ascii 44x22 fnv 341c6b55
+> dm payloads/punct.txt
+  symbol 22x22 square, regions 1x1, 30 data + 20 error codewords, 1 block
+  data 622263236424652566266727682869296a2a6b2b6c2c6d813bd168fe962d
+  ec 3290967760b2ec786a58d156bd07b308742e8dfd
+  ascii 52x26 fnv 053997d5
+> dm payloads/crlf.txt
+  symbol 22x22 square, regions 1x1, 30 data + 20 error codewords, 1 block
+  data ef9fcc7115ab91514b9fcc711ae56251d4766a07fcd19ba8f81585fe6f66
+  ec cb1e3ca4eefdd83cd9e6fa4436d6246daa3da20b
+  ascii 52x26 fnv c3be2df5
+# Data Matrix: character sets
+> dm payloads/latin1.txt
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data f10453ef5cf1ca96a567feeb60667381851c
+  ec 7ea4896d7af8f8a2e3451d4a5579
+  ascii 44x22 fnv 41a32eb5
+> dm payloads/cafe.txt
+  symbol 20x20 square, regions 1x1, 22 data + 18 error codewords, 1 block
+  data f104ef66440b0715600b06a554fe6373eb7c6deb6a66
+  ec bec224366cc21664dd1a6e98397aeac31e8b
+  ascii 48x24 fnv 48b08a05
+> dm payloads/greek.txt
+  symbol 24x24 square, regions 1x1, 36 data + 24 error codewords, 1 block
+  data f11beb4feb16eb4feb3ceb4feb3ceb4feb38eb4feb3eeb4feb3aeb4feb3beb4feb2d81b5
+  ec 50b26d78df6d8519d3cd1b15e6cc8cfe745306d8649f583d
+  ascii 56x28 fnv f31c7a45
+> dm payloads/emoji.txt
+  symbol 20x20 square, regions 1x1, 22 data + 18 error codewords, 1 block
+  data f11beb71eb20eb14eb272171627364666d21ac81df76
+  ec b044abe9fad0e4e4d2e66496f438fa3ac0c7
+  ascii 48x24 fnv 71f4b145
+> dm payloads/latin1.txt enc=ascii
+  error PyStrichInvalidInput: DataMatrixData encoding ASCII cannot encode the input; try DataMatrixData('Rausschmeißer', encoding='iso-8859-1') or pass auto_encoding=True to select an encoding automatically.
+> dm payloads/latin1.txt enc=iso-8859-1
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data f10453ef5cf1ca96a567feeb60667381851c
+  ec 7ea4896d7af8f8a2e3451d4a5579
+  ascii 44x22 fnv 41a32eb5
+> dm payloads/latin1.txt enc=utf-8
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data f11b53ef5cf1ca96a567feeb44eb20667381
+  ec b57262ee17ce49049b53653026ba
+  ascii 44x22 fnv 98fcc795
+> dm payloads/greek.txt enc=iso-8859-1
+  error PyStrichInvalidInput: DataMatrixData encoding ISO-8859-1 cannot encode the input; try DataMatrixData('Ελληνικά', encoding='utf-8') or pass auto_encoding=True to select an encoding automatically.
+> dm payloads/compat_high.txt enc=compat
+  warning: DataMatrixNonAsciiWarning: DataMatrix encoding 'compat' got non-ASCII input; the legacy ASCII+1 transform will widen each high codepoint to a raw codeword. Prefer encoding='iso-8859-1' (or 'utf-8') or auto_encoding=True. Promote to error with warnings.filterwarnings('error', category=PyStrichWarning).
+  symbol 12x12 square, regions 1x1, 5 data + 7 error codewords, 1 block
+  data 4873fde066
+  ec 542f1877f34396
+  ascii 32x16 fnv 11427be5
+> dm payloads/euro.txt enc=compat
+  warning: DataMatrixNonAsciiWarning: DataMatrix encoding 'compat' got non-ASCII input; the legacy ASCII+1 transform will widen each high codepoint to a raw codeword. Prefer encoding='iso-8859-1' (or 'utf-8') or auto_encoding=True. Promote to error with warnings.filterwarnings('error', category=PyStrichWarning).
+  error ValueError: codeword must be 0-255, got 8365
+> dm payloads/hello.txt enc=latin2
+  error PyStrichInvalidOption: unknown DataMatrixData encoding 'latin2'; expected one of ['ascii', 'iso-8859-1', 'utf-8']
+> dm payloads/fnc1_compat.txt
+  warning: Fnc1WorkaroundCompatWarning: chr(231) is being interpreted as FNC1 (codeword 232) for backwards compatibility with issue #13. New code should use the FNC1 constant from pystrich.datamatrix instead.
+  symbol 16x16 square, regions 1x1, 12 data + 12 error codewords, 1 block
+  data e8838ea4bad0dc8ea181fb93
+  ec f5e806678aa84fc269455655
+  ascii 40x20 fnv e0f19365
+> dm payloads/fnc1_compat.txt enc=auto
+  symbol 16x16 square, regions 1x1, 12 data + 12 error codewords, 1 block
+  data f104eb68838ea4bad0dc8ea1
+  ec e282dacac78b5e9bd1baa7e0
+  ascii 40x20 fnv 878c5705
+> dm payloads/binary.txt
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data f10401eb01eb8008eb490e0b428157ed851c
+  ec c343710618d2ad249aa2fcc0e64c
+  ascii 44x22 fnv e90923d5
+# Data Matrix: shapes, byte mode, padding and size limits
+> dm payloads/hello.txt shape=rectangular
+  symbol 12x26 rectangular, regions 1x1, 16 data + 14 error codewords, 1 block
+  data 49666d6d702d215870736d65228157ed
+  ec 1112ea65ff21e4602989c142056a
+  ascii 60x16 fnv 05ab3765
+> dm payloads/hello.txt shape=auto
+  symbol 12x26 rectangular, regions 1x1, 16 data + 14 error codewords, 1 block
+  data 49666d6d702d215870736d65228157ed
+  ec 1112ea65ff21e4602989c142056a
+  ascii 60x16 fnv 05ab3765
+> dm payloads/lower.txt shape=rectangular
+  symbol 16x36 rectangular, regions 2x1, 32 data + 24 error codewords, 1 block
+  data efd19b17938c191538b4bc15d5e7d0d8aec895ddb017fe71125dbf1585fe6881
+  ec f2c31695cbae83abc08ee11939b416be3706523666197691
+  ascii 80x20 fnv 06f1fe05
+> dm payloads/lower.txt shape=auto
+  symbol 24x24 square, regions 1x1, 36 data + 24 error codewords, 1 block
+  data efd19b17938c191538b4bc15d5e7d0d8aec895ddb017fe71125dbf1585fe6881f0881fb5
+  ec e333de155dcddf9adc6c2fe84f32587fffdd6a3c5d4bc8e5
+  ascii 56x28 fnv ddad45c5
+> dm payloads/url.txt shape=rectangular
+  symbol 16x48 rectangular, regions 2x1, 49 data + 28 error codewords, 1 block
+  data ef888aba425df70883e98bb93b0859b3125c006d30c83d8c2a714d32f2242b76fba4c7fe6d817911a73ed46b039930c65d
+  ec fde1c653c1d4618fa0504cb4564dd4ed6c1492901382d4fce82b56f5
+  ascii 104x20 fnv e6a58cc5
+> dm payloads/url.txt shape=auto
+  symbol 26x26 square, regions 1x1, 44 data + 28 error codewords, 1 block
+  data ef888aba425df70883e98bb93b0859b3125c006d30c83d8c2a714d32f2242b76fba4c7fe6d817911a73ed46b
+  ec 2e9afee553de96ffead94ce3a612049ea12ca3a88687f71a79479a89
+  ascii 60x30 fnv de175415
+> dm payloads/digits.txt shape=rectangular qz=1 art
+  symbol 8x18 rectangular, regions 1x1, 5 data + 7 error codewords, 1 block
+  data 8ea4bad0dc
+  ec 225b773d99215a
+  ascii 40x10 fnv 07586eb5
+    |                                        |
+    |  XX  XX  XX  XX  XX  XX  XX  XX  XX    |
+    |  XXXX    XX    XX          XX  XXXXXX  |
+    |  XXXX    XXXX      XXXXXX      XXXX    |
+    |  XXXX      XXXX  XXXX  XXXX    XX  XX  |
+    |  XXXX    XX    XXXX    XX    XX        |
+    |  XX  XX    XX  XXXXXX  XXXXXX  XXXXXX  |
+    |  XX    XX  XXXXXXXXXX  XX    XXXXXX    |
+    |  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  |
+    |                                        |
+> dm payloads/long_text.txt shape=rectangular
+  error DataTooLongForImplementation: input requires 229 data codewords; largest ECC200 rectangular symbol holds 49
+> dm payloads/hello.txt shape=oval
+  error PyStrichInvalidOption: symbol_shape must be one of ('square', 'rectangular', 'auto'), got 'oval'
+> dm payloads/upper.txt bytes
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data 42434445464748494a4b4c4d4e4f5051811c
+  ec 6469d0736ffd3677988515e3858c
+  ascii 44x22 fnv 1e8c6995
+> dm payloads/lower.txt bytes
+  symbol 26x26 square, regions 1x1, 44 data + 28 error codewords, 1 block
+  data 7569662172766a646c21637370786f21677079216b766e7174217077667321756966216d627b7a2165706881
+  ec cf33d469479defcc8865d6045dd1493d8a8c53303e6d97aca1482af1
+  ascii 60x30 fnv 08973b75
+> dm payloads/latin1.txt bytes
+  symbol 18x18 square, regions 1x1, 18 data + 14 error codewords, 1 block
+  data f104536276747464696e666aeb606673811c
+  ec 3efc7c6bdd44002f501c80a17970
+  ascii 44x22 fnv 5ff1f755
+> dm payloads/empty.txt
+  symbol 10x10 square, regions 1x1, 3 data + 5 error codewords, 1 block
+  data 81af46
+  ec 2101aa8b37
+  ascii 28x14 fnv 8b5a1a95
+> dm payloads/exact_c40.txt
+  symbol 14x14 square, regions 1x1, 8 data + 10 error codewords, 1 block
+  data 4243444546478138
+  ec bfbd013c93f31064975d
+  ascii 36x18 fnv cd98e215
+> dm payloads/exact_unlatch.txt
+  symbol 14x14 square, regions 1x1, 8 data + 10 error codewords, 1 block
+  data e659e959e959e9fe
+  ec b4f79b6ef7b182446fad
+  ascii 36x18 fnv 95b39b55
+> dm payloads/exact_unlatch.txt shape=auto
+  symbol 14x14 square, regions 1x1, 8 data + 10 error codewords, 1 block
+  data e659e959e959e9fe
+  ec b4f79b6ef7b182446fad
+  ascii 36x18 fnv 95b39b55
+> dm payloads/long_text.txt
+  symbol 64x64 square, regions 4x4, 280 data + 112 error codewords, 2 blocks
+  data ef6c9258135cc88f4cce0b623ac8895c78ee1bb5daaf8c8c9a736c162bab88732c63d275848dbc5819c0dfc494d19b17d7f694b1fc5819d08bb574150c6ada861474c9b1bbc2568c19c89a8614675b5c1bcd2cb1fc7b43c24bab5d6c928dfc17d1862b75847b4015b4757f17e2c4b2674cb1fcd19b17fbec6a5e47ca978a0cb3dc6dc58ec9164c17578e7907fc648cb3faee0cb3dc664e8eb7a142455a766a15d5c252b4b3c2495c93150c6ade180d748c710cb3dcd19b15a28a0985905a22755ccaf207fccdb7d0d68dcd1877d18c9e92675bc89d862c17fe5cacca547584cc97fe64662f818d24ba51e77e16ac43d970089e35cb62f89027bd54ea8219af46dc730ba138ce65fb932ac057ed851cb249df760ea43bd168
+  ec 65e875c002641d3f63a237474e75c02f720b347acedd65d6039ce27acc5375706c808164b58231d00748bed272ba68a0ea1e92f7e4ee64f04b6fb20129a647df4d11d368c9f6c7dd9f54d65f84be18a87a0dc4be1c7fb8e8fa2a462ca35aeefe61a7356c242e1f428c5c441a5ede7ef5
+  ascii 136x68 fnv 714127a5
+> dm payloads/long_digits.txt
+  symbol 88x88 square, regions 4x4, 576 data + 224 error codewords, 4 blocks
+  data 89abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc189abd79fc18127bd54ea8219af46dc730ba138ce65fb932ac057ed851cb249df760ea43bd168fe962dc35af0881fb54ce27911a73ed46b039930c65df38b22b84fe57c14aa41d76e069c33c960f68e25bb
+  ec 93dbb045a6d8cfb7e750b2d85bf8615cabec8e083021ded3cf58df9885d4ec3c46fe740d3323e6274e2016969e8e4203110aa2a4c53e9d6b71e6994185abd6407caf27a5f162645fabda00804d2b428cf0a9dc44e3a1e619178465ebe899f5650756ff203f9f46f87e72adf11463714fb8d10312b490ded75a023d3e3352f9eea84d8c454333e2c7c54b52bc29349bfc4abb10d4ae6eb229d821ad764867c2ae28a9b0807a54388ac2bcae59efe4de7b8eba5595a7399dcf5256d0b0d3508ce7f646a887fa406641b09d59a0343ee6f1db5616a9a347ea263dde489cf16a41e2
+  ascii 184x92 fnv 286c6c25
+> dm payloads/huge.txt
+  symbol 144x144 square, regions 6x6, 1558 data + 620 error codewords, 10 blocks
+  data ef59e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f68d276052738d86c859e96d24805f920066bb79f6fe6a6b817f17ad44da71099f36cc63f99128be55eb831ab047dd740ca239cf66fc942bc158ee861db34ae0770fa53cd26901972ec45bf18920b64de37a12a83fd56c049a31c75ef48c23b950e67d15ab42d86f079d34ca61f78f26bc53e98018ae45db720aa037cd64fa9229bf56ec841bb148de750da33ad067fd952cc259ef871eb44be17810a63dd36a02982fc55cf28a21b74ee47b13a940d66d059b32c85ff58d24ba51e77e16ac43d970089e35cb62f89027bd54ea8219af46dc730ba138ce65fb932ac057ed851cb249df760ea43bd168fe962dc35af0881fb54ce27911
+  ec 3cace02406089a12741277f185fca907387133936e555e60b83419e91e96cfbe880d7ea695f4335cdcf92ccbb81a2c183ae4ae6990930346ef0eb36228ad895d0bf4bada87fcff8b94bc6b97c7eec85757e443498675da0074dd3d2a4f6ac365e7a14470092ec9eb0fe9322fe49904afdf873f149d3f9680a744c9b8c5ba0568f70f5365c5cb9669697552864bb2560cbc0485c3ad2839fc42c42e6a2d677a7b41c949f5b03093f65b479d12165ebb7d2fe276d8cc25fb231c4b905ef9370e395b31a1014ac642e09c88c464925a8fb7f9e28c096c550bb285b54d791304fafd1c905ac43218097cae90738583e9e70214ffa4c789406e8906bea09d139c5b2b1708abc81fc2937e4c5904795308ac7dde7cdca6a177683a675f8392296c7d86042f394d04b6cad90f4bcc77261ab53738c7b2c2acb141c8210b5bbd46d65c497a8f1af330c33f06bc1b8c96a8f35e3cdaab26dd27524699c104bfcbe08544e1c7ec098734821908570eaa806d689b7b11cc5170db4f0a54893c26de239b7de6c301cef1fe2e66c7de5c5e4af9e5126a2b55c3b8e3d93006c475c2b609b82e3036de78ee195af01f0de1cb86ed259f737180ee2f8a0ca069044dfa5c26500dc7797b9c0271d14f6222d3eec31e79a086cf2481d47226eb29d8261f3a93b70c1078a0e7218549fc03e043de41e778aa1a854de30ccb197b15e089390a3408413fa80a5c47feae0c3637a968536fa283a41a1adcfbb40b56f9b08634667c02b196df2cdc2882771097802e024e29a976f3fc41ca18932d486f27b7844203dbca1d0af9c4d1868e83ee2ec14c82ea08f8c7b015dee4a10cbaea937ce067dd0236b773ef5aa398c8d6c26b59b457
+  ascii 296x148 fnv b3e41a25
+> dm payloads/too_long.txt
+  error PyStrichInvalidPayloadLength: input is 3117 characters, exceeding the maximum of 3116
+> dm payloads/hudora.txt qz=0
+  symbol 14x14 square, regions 1x1, 8 data + 10 error codewords, 1 block
+  data 4976457053628138
+  ec 5ebcf9260b1ea3a7a802
+  ascii 28x14 fnv 4d6a1095
+> dm payloads/hudora.txt qz=-1
+  error PyStrichInvalidOption: quiet_zone must be at least 0, got -1
+# Aztec: modes, shifts and byte runs
+> az payloads/hello.txt art
+  80 bits, compact L2, 19x19, 6-bit codewords, 14 data + 26 check
+  mode 0100110101110100100110100111
+  data 133033163001093304092d0a011b
+  ascii 23x23 fnv cc2de81f
+    |                       |
+    |                       |
+    |   XX   XXXXX XX X  X  |
+    |      XXX XXX X     X  |
+    |  XXXXX  X  XX XXX X   |
+    |  XXX XXXX   X     X   |
+    |     XXX X  XX  X   X  |
+    |     XXXXXXXXXXXX   X  |
+    |  XXX XX       XXX     |
+    |     XXX XXXXX X       |
+    |  XXX XX X   X XX      |
+    |   XX  X X X X XX      |
+    |   X   X X   X XX  X   |
+    |  X  XXX XXXXX X   XX  |
+    |  XXXX X       XXXX X  |
+    |       XXXXXXXXXX  X   |
+    |    X   XX  X     XX   |
+    |    X    X XXX    X    |
+    |    X XXXXXXXXX XX     |
+    |  X  XX X X   X XX  X  |
+    |    X X X    X XX   X  |
+    |                       |
+    |                       |
+> az payloads/one.txt qz=1 art
+  10 bits, compact L1, 15x15, 6-bit codewords, 2 data + 15 check
+  mode 0000000110110100011000100001
+  data 380b
+  ascii 17x17 fnv e3922b47
+    |                 |
+    |     XXXXXX   X  |
+    | XXXX X XXXXX XX |
+    | X XX        XX  |
+    |   XXXXXXXXXXXXX |
+    |   XX       XXX  |
+    | X  X XXXXX XXX  |
+    | XX X X   X X XX |
+    | X  X X X X XXXX |
+    | X  X X   X XX   |
+    |  XXX XXXXX X X  |
+    | X  X       XX X |
+    | XX XXXXXXXXXXX  |
+    |  X    XX     X  |
+    | X X X  XXXX     |
+    | XXXXX X XXX     |
+    |                 |
+> az payloads/hudora.txt
+  45 bits, compact L1, 15x15, 6-bit codewords, 8 data + 9 check
+  mode 0000011101001111000111100111
+  data 1332370230390c17
+  ascii 19x19 fnv 090784b7
+> az payloads/digits.txt
+  45 bits, compact L1, 15x15, 6-bit codewords, 8 data + 9 check
+  mode 0000011101001111000111100111
+  data 3c1a0a33310d1617
+  ascii 19x19 fnv 61ba1307
+> az payloads/upper.txt
+  80 bits, compact L2, 19x19, 6-bit codewords, 14 data + 26 check
+  mode 0100110101110100100110100111
+  data 040c211307102512360d1c3e020f
+  ascii 23x23 fnv 52ea3db7
+> az payloads/lower.txt
+  220 bits, compact L3, 23x23, 8-bit codewords, 28 data + 23 check
+  mode 1001101101101100000001110111
+  data e55260caca230239c30f09e190aece8d030b9a61aa4c168b7a09608f
+  ascii 27x27 fnv 9f669a67
+> az payloads/url.txt
+  273 bits, compact L3, 23x23, 8-bit codewords, 35 data + 16 check
+  mode 1010001011101001011110100000
+  data e26b58d0150501a1b22745a604c9070290994d3a034a2f83064c80bee4cc7061c2537f
+  ascii 27x27 fnv eb6d48a7
+> az payloads/mixed_case.txt
+  253 bits, compact L3, 23x23, 8-bit codewords, 32 data + 19 check
+  mode 1001111111001111101111110011
+  data 84ca69f02f87b45907b8784c3c74c3ca39554f80aa3dcc879851506af825d96f
+  ascii 27x27 fnv db6ac7f7
+> az payloads/control.txt
+  100 bits, compact L2, 19x19, 6-bit codewords, 17 data + 23 check
+  mode 0101000011001001110001110001
+  data 3a081f0a220735170426261b2b3e131409
+  ascii 23x23 fnv 2e8b6b37
+> az payloads/punct.txt
+  175 bits, compact L3, 23x23, 8-bit codewords, 22 data + 29 check
+  mode 1001010111100001001010001001
+  data e0806180e4020a04980a38168031206a80e581ec041b
+  ascii 27x27 fnv 62c60337
+> az payloads/crlf.txt
+  185 bits, compact L3, 23x23, 8-bit codewords, 24 data + 27 check
+  mode 1001011110111001111011001011
+  data e354f3060f3004d53cc1ae2001de6cd404aa4cf014b079bf
+  ascii 27x27 fnv c2723fe7
+> az payloads/nul.txt
+  18 bits, compact L1, 15x15, 6-bit codewords, 4 data + 13 check
+  mode 0000001111101100101001100011
+  data 3e02010f
+  ascii 19x19 fnv 5139ebe7
+> az payloads/binary.txt
+  82 bits, compact L2, 19x19, 6-bit codewords, 15 data + 25 check
+  mode 0100111010011000001111000100
+  data 01010a3e250104013e380f24010205
+  ascii 23x23 fnv 8cdd1077
+> az payloads/bytes_run.txt
+  377 bits, compact L4, 27x27, 8-bit codewords, 48 data + 28 check
+  mode 1110111110011101111000000111
+  data 010579fef93939393939393939393939393939393939393939393939393939393939393e9e4e4e4e4e4e4e4e4e433cbf
+  ascii 31x31 fnv 936bb05f
+> az payloads/ticket.txt
+  308 bits, compact L4, 27x27, 8-bit codewords, 39 data + 37 check
+  mode 1110011001011111110100011110
+  data 778f8b03028b13cde111111111111e30864f1a28f428d1a205d784a0d04d17f4469e222641322f
+  ascii 31x31 fnv 1175cee7
+# Aztec: character sets
+> az payloads/latin1.txt
+  100 bits, compact L2, 19x19, 6-bit codewords, 17 data + 23 check
+  mode 0101000011001001110001110001
+  data 01010a33380a350a041238322f21373313
+  ascii 23x23 fnv f334cd7f
+> az payloads/cafe.txt
+  151 bits, compact L2, 19x19, 6-bit codewords, 26 data + 14 check
+  mode 0101100100001011111101101000
+  data 01010a3c08083e391e242018370b281c1808393e233e1b193426
+  ascii 23x23 fnv cf28ce9f
+> az payloads/greek.txt
+  159 bits, compact L2, 19x19, 6-bit codewords, 27 data + 13 check
+  mode 0101101011100111010100001011
+  data 010112113e030e251c3a3b332b2f0e2d3c3a3d332b270e2e2c3a2c
+  ascii 23x23 fnv 7a77ecff
+> az payloads/emoji.txt
+  120 bits, compact L2, 19x19, 6-bit codewords, 21 data + 19 check
+  mode 0101010001101010011111110101
+  data 0101121133390f021f243a180c111308192f21190f
+  ascii 23x23 fnv fe1b29d7
+> az payloads/latin1.txt enc=ascii
+  error PyStrichInvalidInput: AztecData encoding ASCII cannot encode the input; try AztecData('Rausschmeißer', encoding='iso-8859-1') or pass auto_encoding=True to select an encoding automatically.
+> az payloads/latin1.txt enc=utf-8
+  112 bits, compact L2, 19x19, 6-bit codewords, 20 data + 20 check
+  mode 0101001100100101011000010010
+  data 010112110f202b1428110b230a3e05213339293e
+  ascii 23x23 fnv 7e9f138f
+# Aztec: error correction, symbol kinds and layers
+> az payloads/hello.txt ecc=5
+  80 bits, compact L2, 19x19, 6-bit codewords, 14 data + 26 check
+  mode 0100110101110100100110100111
+  data 133033163001093304092d0a011b
+  ascii 23x23 fnv cc2de81f
+> az payloads/hello.txt ecc=50
+  80 bits, compact L2, 19x19, 6-bit codewords, 14 data + 26 check
+  mode 0100110101110100100110100111
+  data 133033163001093304092d0a011b
+  ascii 23x23 fnv cc2de81f
+> az payloads/hello.txt ecc=95
+  80 bits, full L9, 53x53, 10-bit codewords, 8 data + 222 check
+  mode 0100000000000111000100001101010110101000
+  data 13c0cd1b00043982131a5006
+  ascii 57x57 fnv 787c952f
+> az payloads/hello.txt ecc=4
+  error PyStrichInvalidOption: ecc must be between 5 and 95, got 4
+> az payloads/hello.txt ecc=96
+  error PyStrichInvalidOption: ecc must be between 5 and 95, got 96
+> az payloads/hello.txt kind=full
+  80 bits, full L2, 23x23, 6-bit codewords, 14 data + 34 check
+  mode 0000100000001101011010001011111000101111
+  data 133033163001093304092d0a011b
+  ascii 27x27 fnv a1189e17
+> az payloads/one.txt kind=full qz=0 art
+  10 bits, full L1, 19x19, 6-bit codewords, 2 data + 19 check
+  mode 0000000000000001011110010011110010101100
+  data 380b
+  ascii 19x19 fnv b815615f
+    |   X  XX    X X X X|
+    |XXX XX XXX  X XXXX |
+    |X XX            X X|
+    |  XXXXXXXXXXXXXXX X|
+    |   X           X   |
+    |X  X XXXXXXXXX X  X|
+    |XXXX X       X X X |
+    |X XX X XXXXX X X  X|
+    |XX X X X   X X X XX|
+    | X X X X X X X X X |
+    | XXX X X   X X XXXX|
+    |   X X XXXXX X X X |
+    |XXXX X       X XX  |
+    |XX X XXXXXXXXX XXX |
+    | X X           XX  |
+    | X XXXXXXXXXXXXXXX |
+    |    XXXX   X  X  XX|
+    |  XX  X  XXXX  X  X|
+    |  X   X X   XX     |
+> az payloads/hello.txt kind=compact layers=4
+  80 bits, compact L4, 27x27, 8-bit codewords, 10 data + 66 check
+  mode 1100100111111101000001000100
+  data 4f0cd6c004e621369406
+  ascii 31x31 fnv 577f1a0f
+> az payloads/hello.txt kind=full layers=6
+  80 bits, full L6, 41x41, 8-bit codewords, 10 data + 146 check
+  mode 0010100000001001001111110101000100011111
+  data 4f0cd6c004e621369406
+  ascii 45x45 fnv 956fe447
+> az payloads/lower.txt kind=compact layers=1
+  error PyStrichInvalidPayloadLength: payload exceeds capacity of compact L1 (needs 37 data codewords, symbol holds 10 at ecc=23%)
+> az payloads/hello.txt layers=2
+  error PyStrichInvalidOption: specify symbol_kind='compact' or 'full' when overriding layers=
+> az payloads/hello.txt kind=compact layers=5
+  error PyStrichInvalidOption: no Aztec symbol with kind='compact', layers=5; expected kind='compact' with layers in [1, 2, 3, 4] or kind='full' with layers in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+> az payloads/hello.txt kind=full layers=33
+  error PyStrichInvalidOption: layers must be between 1 and 32, got 33
+> az payloads/para.txt kind=compact
+  error PyStrichInvalidPayloadLength: payload too large for any Aztec symbol at ecc=23%
+> az payloads/para.txt
+  1604 bits, full L9, 53x53, 10-bit codewords, 161 data + 69 check
+  mode 0100000010100000101111110000100001011101
+  data 05c3750c40242050d40222660330c20a10f320e0351260240cf2b30c12162b80530b40042900351263411e60c502f2012561462a13701e60160351260232cd1b40da0c10ea1e50d303415528114f03512602e1450ad0c009512602e2050c11c62940480c126a1e828115500404f0a12a90c10a22a203422a2621b40302d502a1e11a23462740300e10b01ca1f00d40033872cd1a025304f10603434e0701b40220a50220330c70d30cf08602826a0a10d70d334128a3350c61e11d00b61a62812900220330c20a62610821e10f01ad21803512602d05a0d32810d70cf0381261e12a90c123314f2a11540380532260be37f
+  ascii 57x57 fnv 847e986f
+> az payloads/para.txt qz=0 art
+  1604 bits, full L9, 53x53, 10-bit codewords, 161 data + 69 check
+  mode 0100000010100000101111110000100001011101
+  data 05c3750c40242050d40222660330c20a10f320e0351260240cf2b30c12162b80530b40042900351263411e60c502f2012561462a13701e60160351260232cd1b40da0c10ea1e50d303415528114f03512602e1450ad0c009512602e2050c11c62940480c126a1e828115500404f0a12a90c10a22a203422a2621b40302d502a1e11a23462740300e10b01ca1f00d40033872cd1a025304f10603434e0701b40220a50220330c70d30cf08602826a0a10d70d334128a3350c61e11d00b61a62812900220330c20a62610821e10f01ad21803512602d05a0d32810d70cf0381261e12a90c123314f2a11540380532260be37f
+  ascii 53x53 fnv f34ab53f
+    |  X    X XXX   X X  XXXX  X  X   X    XXXXX     X X X|
+    |   XX   X  XX  XXXX     X  XX XXX X    XX    XX X  X |
+    |     XX   X             XXX XXX XXX X   X X X      XX|
+    | X   XX X   X   XXXXXX        XX   X X  X     X  XXX |
+    | XXXX    XX  XX  X  X  X  X  XX   X   X  XXX  X X XX |
+    |XX XX X  X X  X XX XX   X   XXX X X XX      XXX X X  |
+    |   X  X   XX XX XX X  X X XX  X X     XX  X XXX X X  |
+    |XX X XXXX   X  X      X X  X         X  X      XXX X |
+    | X  X  X  XXX X X XX     XXX         XXXXXX  X X   XX|
+    |XXX X   X  X   X   X XX    X   XXXXX    XX  X X  XX X|
+    |X X X X X X X X X X X X X X X X X X X X X X X X X X X|
+    | X XX      XXX  X    XXXX  XX X  X XX XX X X  X XX X |
+    | XX X     XX   XX  X X X  X       X X XX XXXXX XXX  X|
+    |     XX X  XX     XX  XXXX   XXX  XX  XX X    XXX    |
+    |XX       XX X X XX XX XXX XX XXXX X   X   XXXX     X |
+    |  X XXX XX XX XXXXXXXXXXXX  XX X XX XXXX X   XX  XXX |
+    | X      X XXX    XX   X XXX XX            X X X    X |
+    |  XX  X    XX  XX X X  X X X    X XXX  X   X     X XX|
+    |  X  XX  XX      X   XXX  X XX XX   X XXXXX      X   |
+    |  XX   X   X    X  XX X       X  X     XXX     X     |
+    |X   X  XXXXXXXX XXXXXXXXXXXXXXXXXX  X  XXXXXXX X     |
+    | XXXX   XX XX XXX  XX           XXXX XX  X   XXXX X  |
+    |   X      XX XX XX  X XXXXXXXXX X   X  X  XX X    XX |
+    |X  XX X    XX    X XX X       X X XX  X  X  XX   XX X|
+    |  X X    XX X   XXXXX X XXXXX X X X  XXX  X X     X X|
+    |  XXX X X     X XX XX X X   X X X  XXXX     X XXX    |
+    |X X X X X X X X X X X X X X X X X X X X X X X X X X X|
+    | X XX   X  X XXXX X X X X   X X X   X X X   XXXXX  X |
+    | X      XXX X X  X XX X XXXXX X XX    XX XXX X X  X  |
+    |    X XX X XXXXXX   X X       X X  X  XXXX    X XX   |
+    |XXXX    X X X XXXXX X XXXXXXXXX XXXX  X X X XX  X X  |
+    | X X  XX     X X  X X           XXXX    XX XX        |
+    | XX XX   XX  XX X X XXXXXXXXXXXXXX XX X  XXX XXXXX X |
+    |  X  XXXX    X        X     XXXX   X XX     X  X X XX|
+    |          XX  XXXX     XXXX  XXXX   XX   XXX X   X  X|
+    |  XXX  X       XX   X  X X X XXX      XX    XX   X   |
+    |X     XX  XXXXXX       XXXX   X  XXX    XXX  XXXX XXX|
+    |    X   XX X X  X X  X   X  XX XXX    X X  X    X    |
+    |X  XX XX XX    X  XX XX XXXXX X  X   XXXXXX  XX    X |
+    |X   X  X X X XXX XXXX    X XX  XX           X XX   X |
+    | XXXX    XX XX X  X XXX  XX X X    XXX    XXX X      |
+    |X X  XXX   XX  X X  XX  X   X XX  XX   XXX      XXX  |
+    |X X X X X X X X X X X X X X X X X X X X X X X X X X X|
+    | XX X    X     XX XX   XX  X    X XXXX X X    XXX   X|
+    |X X   XXX XX  XX    XX X  XXXX    X  X X XXXX X  X XX|
+    |   XX  XX    X       X        X XXXX XX XX X X   XX X|
+    |  XX X XX XX  X  XX X XXX XXX   X  X X  XXX       X X|
+    |XXX  XX    X   XXXX     XX   XX    XX X  X XX  XX X X|
+    |   XXX    XX  XX     XXX XXX   XX XX   XX XX       X |
+    |XXX XX X   XX XXXXX    XXX  XX  XXXX  X     X XX X X |
+    |    X  X  XX       XX     X XX  X    X X  XXXX   X   |
+    |X       X  XX X   X   XXXX   X    X  X XX   X X X   X|
+    |X  X XX   XXX XX  XX  X   X X X  X   X XXXXXX X X  X |
+> az payloads/big_az.txt
+  6000 bits, full L19, 95x95, 10-bit codewords, 600 data + 190 check
+  mode 1001001001010111111110000101100101000111
+  data 04921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d504921708b2590cd29b10f2c31513051933471d5049217
+  ascii 99x99 fnv 9fa766df
+> az payloads/huge_az.txt
+  12005 bits, full L28, 135x135, 12-bit codewords, 1001 data + 305 check
+  mode 1101101111101000000111000111101101010100
+  data f12c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b492c5a3d1b4ff
+  ascii 139x139 fnv 154b4957
+> az payloads/huge.txt
+  10005 bits, full L26, 125x125, 12-bit codewords, 834 data + 310 check
+  mode 1100101101000001001011111010011100111110
+  data e0864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a58864298e84a962190a63a12a5f
+  ascii 129x129 fnv 142ae03f
+> az payloads/too_long.txt
+  error PyStrichInvalidPayloadLength: payload too large for any Aztec symbol at ecc=23%
+> az payloads/empty.txt
+  error PyStrichInvalidOption: invalid data_codewords=0 for compact symbol; expected 1..64
+# programs: GS1 labels, tickets, symbol sizes
+> !labels tables/products.csv
+  ASP-100: (01)09506000134352(17)261231(10)L4512 -> 18x18, 18 data codewords, fnv 17b94485
+    |                                        |
+    |  XX  XX  XX  XX  XX  XX  XX  XX  XX    |
+    |  XXXX    XXXXXXXX  XX  XX        XXXX  |
+    |  XX      XX  XX    XX    XX  XX  XX    |
+    |  XX  XXXXXXXXXXXX      XXXX  XXXXXXXX  |
+    |  XXXXXX  XXXX      XXXX  XXXXXXXX      |
+    |  XX        XX  XXXX      XX  XX    XX  |
+    |  XX    XX    XXXXXX  XXXX  XXXXXXXX    |
+    |  XX  XXXX  XX          XX  XX  XX  XX  |
+    |  XXXXXX  XX  XX      XX  XX      XX    |
+    |  XXXX    XXXXXX  XXXXXX      XX    XX  |
+    |  XXXXXX        XXXX          XX        |
+    |  XXXXXX            XX  XXXX    XX  XX  |
+    |  XXXX  XXXXXX  XXXXXXXX    XX  XX      |
+    |  XXXX  XXXX        XXXXXXXXXX  XX  XX  |
+    |  XX  XX  XX    XX        XXXXXX        |
+    |  XXXX  XX    XX    XX  XX    XX  XXXX  |
+    |  XX        XXXX    XX      XX  XXXX    |
+    |  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  |
+    |                                        |
+  VIT-C: (01)09506000134369(17)270630(10)B77(21)SN0001 -> 20x20, 22 data codewords, fnv e3248db5
+  BAND-S: (01)09506000134376(10)X1(21)SN0002 -> 18x18, 18 data codewords, fnv b8311265
+  GLOVE-M: (01)09506000134383(17)280101(10)GL-2026-10 -> 20x20, 22 data codewords, fnv c95129b5
+  BAD-CHK: GTIN 09506000134391 has check digit 1, expected 0
+  SHORT: GTIN 0950600013435 is not 14 digits
+  NO-BATCH: error PyStrichInvalidInput: GS1 field value must be a non-empty str
+  TAB: error PyStrichInvalidInput: GS1 field value must be printable ASCII (0x20-0x7E); '\t' (U+0009) is not
+  4 labels, 4 rejected
+> !tickets payloads/tickets.txt
+  rail: 51 characters -> aztec compact L4 27x27 (42+34), data matrix 26x26, fnv 68870c4f
+  rail: 51 characters -> aztec compact L4 27x27 (42+34), data matrix 26x26, fnv 6f1f0017
+  flight: 56 characters -> aztec compact L4 27x27 (39+37), data matrix 26x26, fnv b39a638f
+  event: 60 characters -> aztec compact L4 27x27 (45+31), data matrix 32x32, fnv b610627f
+  transit: 36 characters -> aztec compact L3 23x23 (30+21), data matrix 22x22, fnv 21aef337
+    |                         |
+    | XXXXXX     XXXX XXXX X  |
+    | X X X X XX  XX      X   |
+    |  XX X XX  X   XX X    X |
+    |  X  XXXXXX     XXX   XX |
+    |  XX   X     X  XX     X |
+    | X  X X X      X  XXXX   |
+    |  XXX XXXX  XXX  XX  XXX |
+    | X X   XXXXXXXXXXXXXXXXX |
+    |   XX XXX       XXXXX    |
+    | X X    X XXXXX XXX XXXX |
+    |  X X   X X   X X    XX  |
+    | XXXXXX X X X X X XXX XX |
+    | XXX X XX X   X XX    X  |
+    |  X  XXXX XXXXX X X XXXX |
+    |   XXXX X       XX X  X  |
+    |  XXXX  XXXXXXXXXX   X X |
+    |  XX     XXXX XX   XXX   |
+    |  X XX  XXX    XX XX  X  |
+    |  XXX XX X    XX  X X  X |
+    |  XX  X      X  XX XXX   |
+    | XXXX   X X X X X  XXX   |
+    |  X XX X X   XX XXX  XXX |
+    | XXX XX XXX  XX X XX     |
+    |                         |
+> !capacity
+  class   chars  square    rect      aztec
+  digits      1  10x10     8x18      compact L1 15x15
+  digits     10  12x12     8x18      compact L1 15x15
+  digits     50  22x22     16x36     compact L3 23x23
+  digits    200  40x40     -         full L6 41x41
+  upper       1  10x10     8x18      compact L1 15x15
+  upper      10  16x16     8x32      compact L1 15x15
+  upper      50  24x24     16x48     compact L3 23x23
+  upper     200  44x44     -         full L7 45x45
+  lower       1  10x10     8x18      compact L1 15x15
+  lower      10  16x16     8x32      compact L1 15x15
+  lower      50  24x24     16x48     compact L3 23x23
+  lower     200  44x44     -         full L7 45x45
+  words       1  10x10     8x18      compact L1 15x15
+  words      10  16x16     8x32      compact L1 15x15
+  words      50  24x24     16x48     compact L3 23x23
+  words     200  44x44     -         full L7 45x45
+  latin1      1  12x12     8x18      compact L1 15x15
+  latin1     10  20x20     12x36     compact L2 19x19
+  latin1     50  40x40     -         compact L4 27x27
+  latin1    200  80x80     -         full L9 53x53
+  binary      1  10x10     8x18      compact L1 15x15
+  binary     10  18x18     12x26     compact L2 19x19
+  binary     50  36x36     -         compact L4 27x27
+  binary    200  72x72     -         full L9 53x53

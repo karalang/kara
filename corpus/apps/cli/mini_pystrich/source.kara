@@ -1,0 +1,2479 @@
+// mini_pystrich: a port of pyStrich 0.20 (Apache-2.0; Michael Mulqueen,
+// Helen Taylor and contributors), the pure-Python barcode library. This port
+// covers its two 2D symbologies, Data Matrix (ECC 200) and Aztec Code, from
+// the input model through mode optimisation, Reed-Solomon and module
+// placement to the ASCII rendering. The jobs encode payload files, print
+// GS1 labels from a product table, encode tickets and tabulate symbol
+// sizes. See README.md.
+
+// ------------------------------------------------------------ helpers
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn chars_str(cs: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut k = a;
+    while k < b {
+        out.push(cs[k]);
+        k += 1;
+    }
+    out
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n: i64 = 0;
+    for _ in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn read_data(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+
+fn parse_int(s: ref String) -> i64 {
+    let mut neg = false;
+    let mut v: i64 = 0;
+    for c in s.chars() {
+        if c == '-' {
+            neg = true;
+        } else {
+            v = v * 10 + (c as i64 - 48);
+        }
+    }
+    if neg { -v } else { v }
+}
+
+fn is_digits(s: ref String) -> bool {
+    for c in s.chars() {
+        if c < '0' or c > '9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_mod(a: i64, b: i64) -> i64 {
+    let r = a % b;
+    if r < 0 { r + b } else { r }
+}
+
+fn hex_pad(v: i64, digits: i64, upper: bool) -> String {
+    let d: Vec[char] = if upper { "0123456789ABCDEF".chars().collect() } else { "0123456789abcdef".chars().collect() };
+    let mut rev: Vec[char] = Vec.new();
+    let mut x = v;
+    let mut k: i64 = 0;
+    while k < digits or x > 0 {
+        rev.push(d[x % 16]);
+        x = x / 16;
+        k += 1;
+    }
+    let mut out = String.new();
+    let mut i = rev.len() as i64 - 1;
+    while i >= 0 {
+        out.push(rev[i]);
+        i -= 1;
+    }
+    out
+}
+
+// "%0*x" % (digits, w) for each word of ws[a..b].
+fn hex_words(ws: ref Vec[i64], a: i64, b: i64, digits: i64) -> String {
+    let mut out = String.new();
+    let mut k = a;
+    while k < b {
+        out.push_str(hex_pad(ws[k], digits, false));
+        k += 1;
+    }
+    out
+}
+
+fn fnv(text: ref String) -> String {
+    let mut h: i64 = 0x811C9DC5;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & 0xFFFFFFFF;
+    }
+    hex_pad(h, 8, false)
+}
+
+// Python's repr() of a str.
+fn py_repr(s: ref String) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s.chars() {
+        if c == '\'' {
+            has_single = true;
+        }
+        if c == '"' {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        let cp = c as i64;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if cp < 0x20 or (cp >= 0x7f and cp < 0xa0) {
+            out.push_str("\\x");
+            out.push_str(hex_pad(cp, 2, false));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn words_of(words: ref Vec[String]) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for w in words {
+        let cs = chars_of(w);
+        let mut k: i64 = 0;
+        while k < cs.len() as i64 and cs[k] != '=' {
+            k += 1;
+        }
+        if k < cs.len() as i64 {
+            out.push((chars_str(cs, 0, k), chars_str(cs, k + 1, cs.len() as i64)));
+        } else {
+            out.push((w.clone(), String.new()));
+        }
+    }
+    out
+}
+
+fn opt_get(o: ref Vec[(String, String)], key: Str, default: Str) -> String {
+    let mut found = default.to_string();
+    for kv in o {
+        if kv.0 == key {
+            found = kv.1.clone();
+        }
+    }
+    found
+}
+
+fn opt_has(o: ref Vec[(String, String)], key: Str) -> bool {
+    for kv in o {
+        if kv.0 == key {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ Reed-Solomon
+
+struct Gf {
+    size: i64,
+    exp: Vec[i64],
+    log: Vec[i64],
+}
+
+fn gf_new(primitive: i64, size: i64) -> Gf {
+    let order = size - 1;
+    let mut exp: Vec[i64] = Vec.filled((2 * order) as usize, 0);
+    let mut log: Vec[i64] = Vec.filled(size as usize, 0);
+    let mut x: i64 = 1;
+    for i in 0..order {
+        exp[i] = x;
+        log[x] = i;
+        x = x << 1;
+        if x >= size {
+            x = x ^ primitive;
+        }
+    }
+    for i in order..2 * order {
+        exp[i] = exp[i - order];
+    }
+    Gf { size: size, exp: exp, log: log }
+}
+
+fn gf_mul(g: ref Gf, a: i64, b: i64) -> i64 {
+    if a == 0 or b == 0 {
+        return 0;
+    }
+    g.exp[g.log[a] + g.log[b]]
+}
+
+fn rs_generator(g: ref Gf, num_ec: i64, first_root: i64) -> Vec[i64] {
+    let mut poly: Vec[i64] = vec![1];
+    let order = g.size - 1;
+    for i in 0..num_ec {
+        let alpha = g.exp[(first_root + i) % order];
+        let mut next: Vec[i64] = poly.clone();
+        next.push(0);
+        let mut j: i64 = 0;
+        while j < poly.len() as i64 {
+            next[j + 1] = next[j + 1] ^ gf_mul(g, poly[j], alpha);
+            j += 1;
+        }
+        poly = next;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k: i64 = 1;
+    while k < poly.len() as i64 {
+        out.push(poly[k]);
+        k += 1;
+    }
+    out
+}
+
+fn rs_encode(data: ref Vec[i64], g: ref Gf, num_ec: i64, first_root: i64) -> Vec[i64] {
+    let poly = rs_generator(g, num_ec, first_root);
+    let mut lg: Vec[i64] = Vec.new();
+    for c in poly {
+        lg.push(if c == 0 { -1 } else { g.log[c] });
+    }
+    let n = data.len() as i64;
+    let mut buf: Vec[i64] = data.clone();
+    for _ in 0..num_ec {
+        buf.push(0);
+    }
+    for i in 0..n {
+        let lead = buf[i];
+        if lead != 0 {
+            let ll = g.log[lead];
+            for j in 0..num_ec {
+                if lg[j] >= 0 {
+                    buf[i + 1 + j] = buf[i + 1 + j] ^ g.exp[ll + lg[j]];
+                }
+            }
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for j in 0..num_ec {
+        out.push(buf[n + j]);
+    }
+    out
+}
+
+// ------------------------------------------------------------ the input model
+//
+// pyStrich's DataMatrixData and AztecData hold text segments, and Data
+// Matrix also raw codeword markers (FNC1, and the bytes the legacy "compat"
+// encoding widens), with a charset picked or checked at construction.
+
+enum Seg {
+    Text(String),
+    Code(i64),
+}
+
+struct Payload {
+    segs: Vec[Seg],
+    enc: String,
+}
+
+fn seg_copy(s: ref Seg) -> Seg {
+    match s {
+        Seg.Text(t) => Seg.Text(t.clone()),
+        Seg.Code(v) => Seg.Code(*v),
+    }
+}
+
+fn max_codepoint(segs: ref Vec[Seg]) -> i64 {
+    let mut m: i64 = 0;
+    for s in segs {
+        if let Seg.Text(t) = s {
+            for c in t.chars() {
+                if c as i64 > m {
+                    m = c as i64;
+                }
+            }
+        }
+    }
+    m
+}
+
+fn pick_encoding(cp: i64) -> String {
+    if cp <= 0x7f {
+        "ascii".to_string()
+    } else if cp <= 0xff {
+        "iso-8859-1".to_string()
+    } else {
+        "utf-8".to_string()
+    }
+}
+
+fn enc_upper(enc: ref String) -> String {
+    if enc == "ascii" {
+        "ASCII".to_string()
+    } else if enc == "iso-8859-1" {
+        "ISO-8859-1".to_string()
+    } else {
+        "UTF-8".to_string()
+    }
+}
+
+fn seg_repr(s: ref Seg) -> String {
+    match s {
+        Seg.Text(t) => py_repr(t),
+        Seg.Code(v) => f"DataMatrixCodeword({*v})",
+    }
+}
+
+// Consecutive text segments merge and empty ones drop.
+fn merge_segs(segs: ref Vec[Seg]) -> Vec[Seg] {
+    let mut out: Vec[Seg] = Vec.new();
+    let mut pending = String.new();
+    let mut have = false;
+    for s in segs {
+        match s {
+            Seg.Text(t) => {
+                if t.len() > 0 {
+                    pending.push_str(t);
+                    have = true;
+                }
+            }
+            Seg.Code(v) => {
+                if have {
+                    out.push(Seg.Text(pending));
+                    pending = String.new();
+                    have = false;
+                }
+                out.push(Seg.Code(*v));
+            }
+        }
+    }
+    if have {
+        out.push(Seg.Text(pending));
+    }
+    out
+}
+
+// EncodableData.__init__: the length cap, then the charset.
+fn make_data(cls: Str, max_len: i64, segs: ref Vec[Seg], enc: ref String, auto: bool) -> Result[Payload, String] {
+    let mut total: i64 = 0;
+    for s in segs {
+        match s {
+            Seg.Text(t) => {
+                total += char_count(t);
+            }
+            Seg.Code(_) => {
+                total += 1;
+            }
+        }
+    }
+    if total > max_len {
+        return Err(f"PyStrichInvalidPayloadLength: input is {total} characters, exceeding the maximum of {max_len}");
+    }
+    let max_cp = max_codepoint(segs);
+    let mut chosen = enc.clone();
+    if auto {
+        chosen = pick_encoding(max_cp);
+    } else {
+        if enc != "ascii" and enc != "iso-8859-1" and enc != "utf-8" {
+            return Err(f"PyStrichInvalidOption: unknown {cls} encoding {py_repr(enc)}; expected one of ['ascii', 'iso-8859-1', 'utf-8']");
+        }
+        let limit: i64 = if enc == "ascii" { 0x7f } else if enc == "iso-8859-1" { 0xff } else { 0x10ffff };
+        if max_cp > limit {
+            let mut args = String.new();
+            let mut first = true;
+            for s in segs {
+                if not first {
+                    args.push_str(", ");
+                }
+                first = false;
+                args.push_str(seg_repr(s));
+            }
+            let suggested = pick_encoding(max_cp);
+            return Err(f"PyStrichInvalidInput: {cls} encoding {enc_upper(enc)} cannot encode the input; try {cls}({args}, encoding={py_repr(suggested)}) or pass auto_encoding=True to select an encoding automatically.");
+        }
+    }
+    Ok(Payload { segs: merge_segs(segs), enc: chosen })
+}
+
+// The concatenated text when no segment is a marker.
+fn plain_text(p: ref Payload) -> Option[String] {
+    let mut out = String.new();
+    for s in p.segs {
+        match s {
+            Seg.Text(t) => out.push_str(t),
+            Seg.Code(_) => {
+                return None;
+            }
+        }
+    }
+    Some(out)
+}
+
+// str.encode(charset) for a charset already checked to cover the text.
+fn encode_text(t: ref String, enc: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if enc == "utf-8" {
+        for b in t.bytes() {
+            out.push(b as i64);
+        }
+    } else {
+        for c in t.chars() {
+            out.push(c as i64);
+        }
+    }
+    out
+}
+
+fn eci_of(enc: ref String) -> i64 {
+    if enc == "iso-8859-1" {
+        3
+    } else if enc == "utf-8" {
+        26
+    } else {
+        -1
+    }
+}
+
+fn require_int(name: Str, v: i64, lo: i64, hi: i64) -> Result[(), String] {
+    if hi < 0 {
+        if v < lo {
+            return Err(f"PyStrichInvalidOption: {name} must be at least {lo}, got {v}");
+        }
+    } else if v < lo or v > hi {
+        return Err(f"PyStrichInvalidOption: {name} must be between {lo} and {hi}, got {v}");
+    }
+    Ok(())
+}
+
+// get_ascii(): one line a row, each cell drawn by on/off.
+fn ascii_art(m: ref Vec[i64], w: i64, h: i64, on: Str, off: Str) -> String {
+    let mut out = String.new();
+    for r in 0..h {
+        for c in 0..w {
+            if m[r * w + c] == 1 {
+                out.push_str(on);
+            } else {
+                out.push_str(off);
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn show_matrix(art: ref String) {
+    let lines = split_on(art, '\n');
+    let n = lines.len() as i64 - 1;
+    let width = if n > 0 { char_count(lines[0]) } else { 0 };
+    println(f"  ascii {width}x{n} fnv {fnv(art)}");
+}
+
+fn show_art(art: ref String) {
+    let lines = split_on(art, '\n');
+    let n = lines.len() as i64 - 1;
+    for k in 0..n {
+        println(f"    |{lines[k]}|");
+    }
+}
+
+// ------------------------------------------------------------ Data Matrix input
+
+// _compat_transform: each character from U+0080 up becomes the raw codeword
+// ord + 1, with one warning for the payload.
+fn compat_transform(segs: ref Vec[Seg], warnings: mut ref Vec[String]) -> Result[Vec[Seg], String] {
+    let mut warned = false;
+    let mut out: Vec[Seg] = Vec.new();
+    for s in segs {
+        match s {
+            Seg.Text(t) => {
+                let mut chunk = String.new();
+                for c in t.chars() {
+                    let cp = c as i64;
+                    if cp >= 128 {
+                        if not warned {
+                            warnings.push("DataMatrixNonAsciiWarning: DataMatrix encoding 'compat' got non-ASCII input; the legacy ASCII+1 transform will widen each high codepoint to a raw codeword. Prefer encoding='iso-8859-1' (or 'utf-8') or auto_encoding=True. Promote to error with warnings.filterwarnings('error', category=PyStrichWarning).".to_string());
+                            warned = true;
+                        }
+                        if chunk.len() > 0 {
+                            out.push(Seg.Text(chunk));
+                            chunk = String.new();
+                        }
+                        if cp + 1 > 255 {
+                            return Err(f"ValueError: codeword must be 0-255, got {cp + 1}");
+                        }
+                        out.push(Seg.Code(cp + 1));
+                    } else {
+                        chunk.push(c);
+                    }
+                }
+                if chunk.len() > 0 {
+                    out.push(Seg.Text(chunk));
+                }
+            }
+            Seg.Code(v) => out.push(Seg.Code(*v)),
+        }
+    }
+    Ok(out)
+}
+
+// DataMatrixData(*segs, encoding=enc); enc "auto" is auto_encoding=True.
+fn dm_data(segs: ref Vec[Seg], enc: ref String, warnings: mut ref Vec[String]) -> Result[Payload, String] {
+    if enc == "compat" {
+        let segs2 = compat_transform(segs, mut warnings)?;
+        return make_data("DataMatrixData", 3116, segs2, "ascii".to_string(), false);
+    }
+    if enc == "auto" {
+        return make_data("DataMatrixData", 3116, segs, enc, true);
+    }
+    make_data("DataMatrixData", 3116, segs, enc, false)
+}
+
+// fnc1_workaround_compat: a plain str with a leading chr(231) takes it, and
+// every later one, as FNC1.
+fn dm_from_str(text: ref String, warnings: mut ref Vec[String]) -> Result[Payload, String] {
+    if not text.starts_with("\u{e7}") {
+        let segs: Vec[Seg] = vec![Seg.Text(text.clone())];
+        return dm_data(segs, "auto".to_string(), mut warnings);
+    }
+    warnings.push("Fnc1WorkaroundCompatWarning: chr(231) is being interpreted as FNC1 (codeword 232) for backwards compatibility with issue #13. New code should use the FNC1 constant from pystrich.datamatrix instead.".to_string());
+    let mut segs: Vec[Seg] = Vec.new();
+    let mut i: i64 = 0;
+    for chunk in split_on(text, '\u{e7}') {
+        if i > 0 {
+            segs.push(Seg.Code(232));
+        }
+        if chunk.len() > 0 {
+            segs.push(Seg.Text(chunk.clone()));
+        }
+        i += 1;
+    }
+    dm_data(segs, "compat".to_string(), mut warnings)
+}
+
+// ------------------------------------------------------------ Data Matrix modes
+//
+// Mode 0 is ASCII, 1 C40, 2 Text, 3 X12. Costs are in thirds of a
+// codeword: a codeword is 3, a C40/Text/X12 set value 2.
+
+const DM_INF: i64 = 1000000000000000000;
+
+fn shift2_value(b: i64) -> i64 {
+    if b >= 33 and b <= 47 {
+        b - 33
+    } else if b >= 58 and b <= 64 {
+        b - 58 + 15
+    } else if b >= 91 and b <= 95 {
+        b - 91 + 22
+    } else {
+        -1
+    }
+}
+
+// The set values C40 (text = false) or Text (text = true) emits for a byte.
+fn emit_values(b: i64, text: bool) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if b >= 128 {
+        out.push(1);
+        out.push(30);
+        for v in emit_values(b - 128, text) {
+            out.push(v);
+        }
+        return out;
+    }
+    let lower = b >= 97 and b <= 122;
+    let upper = b >= 65 and b <= 90;
+    if b == 32 {
+        out.push(3);
+    } else if b >= 48 and b <= 57 {
+        out.push(4 + b - 48);
+    } else if (upper and not text) or (lower and text) {
+        out.push(if text { 14 + b - 97 } else { 14 + b - 65 });
+    } else if b < 32 {
+        out.push(0);
+        out.push(b);
+    } else if shift2_value(b) >= 0 {
+        out.push(1);
+        out.push(shift2_value(b));
+    } else if b == 96 {
+        out.push(2);
+        out.push(0);
+    } else if upper or lower {
+        out.push(2);
+        out.push(if text { 1 + b - 65 } else { 1 + b - 97 });
+    } else {
+        out.push(2);
+        out.push(27 + b - 123);
+    }
+    out
+}
+
+fn x12_value(b: i64) -> i64 {
+    if b == 13 {
+        0
+    } else if b == 42 {
+        1
+    } else if b == 62 {
+        2
+    } else if b == 32 {
+        3
+    } else if b >= 48 and b <= 57 {
+        4 + b - 48
+    } else if b >= 65 and b <= 90 {
+        14 + b - 65
+    } else {
+        -1
+    }
+}
+
+struct DmTables {
+    c40: Vec[Vec[i64]],
+    text: Vec[Vec[i64]],
+    x12: Vec[i64],
+}
+
+fn dm_tables() -> DmTables {
+    let mut c40: Vec[Vec[i64]] = Vec.new();
+    let mut text: Vec[Vec[i64]] = Vec.new();
+    let mut x12: Vec[i64] = Vec.new();
+    for b in 0..256 {
+        c40.push(emit_values(b, false));
+        text.push(emit_values(b, true));
+        x12.push(x12_value(b));
+    }
+    DmTables { c40: c40, text: text, x12: x12 }
+}
+
+fn is_digit_byte(b: i64) -> bool {
+    b >= 0x30 and b <= 0x39
+}
+
+// ASCII mode: digit pairs, Upper Shift for high bytes, byte + 1 otherwise.
+fn pack_byte_by_byte(p: ref Vec[i64], a: i64, b: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = a;
+    while i < b {
+        let x = p[i];
+        if i + 1 < b and is_digit_byte(x) and is_digit_byte(p[i + 1]) {
+            out.push(130 + (x - 0x30) * 10 + (p[i + 1] - 0x30));
+            i += 2;
+        } else if x > 127 {
+            out.push(235);
+            out.push(x - 127);
+            i += 1;
+        } else {
+            out.push(x + 1);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn pack_triplets(vals: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut i: i64 = 0;
+    while i + 2 < vals.len() as i64 {
+        let packed = 1600 * vals[i] + 40 * vals[i + 1] + vals[i + 2] + 1;
+        out.push(packed >> 8);
+        out.push(packed & 0xff);
+        i += 3;
+    }
+}
+
+fn pack_mode(mode: i64, p: ref Vec[i64], a: i64, b: i64, t: ref DmTables) -> Vec[i64] {
+    if mode == 0 {
+        return pack_byte_by_byte(p, a, b);
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    for i in a..b {
+        if mode == 1 {
+            for v in t.c40[p[i]] {
+                vals.push(*v);
+            }
+        } else if mode == 2 {
+            for v in t.text[p[i]] {
+                vals.push(*v);
+            }
+        } else {
+            vals.push(t.x12[p[i]]);
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    out.push(if mode == 1 { 230 } else if mode == 2 { 239 } else { 238 });
+    pack_triplets(vals, mut out);
+    out.push(254);
+    out
+}
+
+fn dm_close(m: i64, phase: i64) -> i64 {
+    if phase != 0 {
+        DM_INF
+    } else if m == 0 {
+        0
+    } else {
+        3
+    }
+}
+
+fn dm_header(m: i64) -> i64 {
+    if m == 0 { 0 } else { 3 }
+}
+
+// _HighLevelEncoder: a DP over (mode, position, phase) states.
+fn dm_high_level(p: ref Vec[i64], eci: i64) -> Vec[i64] {
+    let t = dm_tables();
+    let n = p.len() as i64;
+    let cols = (n + 1) * 3;
+    let total = 4 * cols;
+    let mut dp: Vec[i64] = Vec.filled(total as usize, DM_INF);
+    let mut prev: Vec[i64] = Vec.filled(total as usize, -1);
+    let eci_cost: i64 = if eci >= 0 { 6 } else { 0 };
+    for m in 0..4 {
+        dp[m * cols] = eci_cost + dm_header(m);
+    }
+    for pos in 0..n + 1 {
+        // Switches: close the source phase, pay the destination's latch.
+        for msrc in 0..4 {
+            for phase in 0..3 {
+                let src = msrc * cols + pos * 3 + phase;
+                let base = dp[src] + dm_close(msrc, phase);
+                if base >= DM_INF {
+                    continue;
+                }
+                for mdst in 0..4 {
+                    if mdst == msrc {
+                        continue;
+                    }
+                    let nc = base + dm_header(mdst);
+                    let dst = mdst * cols + pos * 3;
+                    if nc < dp[dst] {
+                        dp[dst] = nc;
+                        prev[dst] = src;
+                    }
+                }
+            }
+        }
+        if pos == n {
+            continue;
+        }
+        let byte = p[pos];
+        // ASCII, with the digit pair.
+        let a0 = pos * 3;
+        let cost = dp[a0];
+        if cost < DM_INF {
+            let nc = cost + if byte <= 127 { 3 } else { 6 };
+            if nc < dp[a0 + 3] {
+                dp[a0 + 3] = nc;
+                prev[a0 + 3] = a0;
+            }
+            if pos + 1 < n and is_digit_byte(byte) and is_digit_byte(p[pos + 1]) {
+                let pc = cost + 3;
+                if pc < dp[a0 + 6] {
+                    dp[a0 + 6] = pc;
+                    prev[a0 + 6] = a0;
+                }
+            }
+        }
+        // C40 and Text.
+        for mode in 1..3 {
+            let count = if mode == 1 { t.c40[byte].len() as i64 } else { t.text[byte].len() as i64 };
+            let step = count % 3;
+            for phase in 0..3 {
+                let src = mode * cols + pos * 3 + phase;
+                let c = dp[src];
+                if c >= DM_INF {
+                    continue;
+                }
+                let dst = mode * cols + (pos + 1) * 3 + (phase + step) % 3;
+                let nc = c + 2 * count;
+                if nc < dp[dst] {
+                    dp[dst] = nc;
+                    prev[dst] = src;
+                }
+            }
+        }
+        // X12, for the bytes it has.
+        if t.x12[byte] >= 0 {
+            for phase in 0..3 {
+                let src = 3 * cols + pos * 3 + phase;
+                let c = dp[src];
+                if c >= DM_INF {
+                    continue;
+                }
+                let dst = 3 * cols + (pos + 1) * 3 + (phase + 1) % 3;
+                if c + 2 < dp[dst] {
+                    dp[dst] = c + 2;
+                    prev[dst] = src;
+                }
+            }
+        }
+    }
+    // The cheapest end state, then the back-pointers.
+    let mut best = DM_INF;
+    let mut best_state: i64 = -1;
+    for m in 0..4 {
+        for phase in 0..3 {
+            let s = m * cols + n * 3 + phase;
+            let c = dp[s] + dm_close(m, phase);
+            if c < best {
+                best = c;
+                best_state = s;
+            }
+        }
+    }
+    let mut chain: Vec[i64] = Vec.new();
+    let mut cur = best_state;
+    while cur >= 0 {
+        chain.push(cur);
+        cur = prev[cur];
+    }
+    chain.reverse();
+    let mut out: Vec[i64] = Vec.new();
+    if eci >= 0 {
+        out.push(241);
+        out.push(eci + 1);
+    }
+    // Each maximal same-mode run packs as one segment.
+    let mut k: i64 = 0;
+    while k < chain.len() as i64 {
+        let mode = chain[k] / cols;
+        let start = (chain[k] % cols) / 3;
+        let mut end = start;
+        while k < chain.len() as i64 and chain[k] / cols == mode {
+            end = (chain[k] % cols) / 3;
+            k += 1;
+        }
+        for cw in pack_mode(mode, p, start, end, t) {
+            out.push(cw);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ symbol sizes
+
+#[derive(Copy)]
+struct DmSpec {
+    dw: i64,
+    ew: i64,
+    blocks: i64,
+    rr: i64,
+    rc: i64,
+    h: i64,
+    v: i64,
+    square: bool,
+}
+
+fn dm_square_specs() -> Vec[DmSpec] {
+    let dwl: Vec[i64] = vec![3, 5, 8, 12, 18, 22, 30, 36, 44, 62, 86, 114, 144, 174, 204, 280, 368, 456, 576, 696, 816, 1050, 1304, 1558];
+    let ewl: Vec[i64] = vec![5, 7, 10, 12, 14, 18, 20, 24, 28, 36, 42, 48, 56, 68, 84, 112, 144, 192, 224, 272, 336, 408, 496, 620];
+    let region: Vec[i64] = vec![8, 10, 12, 14, 16, 18, 20, 22, 24, 14, 16, 18, 20, 22, 24, 14, 16, 18, 20, 22, 24, 18, 20, 22];
+    let hv: Vec[i64] = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 6, 6, 6];
+    let rb: Vec[i64] = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 4, 4, 4, 4, 6, 6, 8, 10];
+    let mut out: Vec[DmSpec] = Vec.new();
+    for i in 0..24 {
+        out.push(DmSpec { dw: dwl[i], ew: ewl[i], blocks: rb[i], rr: region[i], rc: region[i], h: hv[i], v: hv[i], square: true });
+    }
+    out
+}
+
+fn dm_rect_specs() -> Vec[DmSpec] {
+    let mut out: Vec[DmSpec] = Vec.new();
+    out.push(DmSpec { dw: 5, ew: 7, blocks: 1, rr: 6, rc: 16, h: 1, v: 1, square: false });
+    out.push(DmSpec { dw: 10, ew: 11, blocks: 1, rr: 6, rc: 14, h: 2, v: 1, square: false });
+    out.push(DmSpec { dw: 16, ew: 14, blocks: 1, rr: 10, rc: 24, h: 1, v: 1, square: false });
+    out.push(DmSpec { dw: 22, ew: 18, blocks: 1, rr: 10, rc: 16, h: 2, v: 1, square: false });
+    out.push(DmSpec { dw: 32, ew: 24, blocks: 1, rr: 14, rc: 16, h: 2, v: 1, square: false });
+    out.push(DmSpec { dw: 49, ew: 28, blocks: 1, rr: 14, rc: 22, h: 2, v: 1, square: false });
+    out
+}
+
+fn spec_copy(s: ref DmSpec) -> DmSpec {
+    DmSpec { dw: s.dw, ew: s.ew, blocks: s.blocks, rr: s.rr, rc: s.rc, h: s.h, v: s.v, square: s.square }
+}
+
+fn spec_rows(s: ref DmSpec) -> i64 {
+    (s.rr + 2) * s.v
+}
+
+fn spec_cols(s: ref DmSpec) -> i64 {
+    (s.rc + 2) * s.h
+}
+
+fn too_long(n: i64, what: Str, holds: i64) -> String {
+    f"DataTooLongForImplementation: input requires {n} data codewords; largest {what} holds {holds}"
+}
+
+fn select_spec(n: i64, shape: ref String) -> Result[DmSpec, String] {
+    if shape == "rectangular" {
+        for s in dm_rect_specs() {
+            if s.dw >= n {
+                return Ok(s);
+            }
+        }
+        return Err(too_long(n, "ECC200 rectangular symbol", 49));
+    }
+    if shape == "auto" {
+        // The smallest rendered area; on a tie the square.
+        let mut best: Option[DmSpec] = None;
+        let mut best_area: i64 = 0;
+        let mut all = dm_square_specs();
+        for s in dm_rect_specs() {
+            all.push(s);
+        }
+        for s in all {
+            if s.dw < n {
+                continue;
+            }
+            let area = spec_rows(s) * spec_cols(s);
+            let better = match best {
+                None => true,
+                Some(b) => area < best_area or (area == best_area and s.square and not b.square),
+            };
+            if better {
+                best_area = area;
+                best = Some(s);
+            }
+        }
+        return match best {
+            Some(s) => Ok(s),
+            None => Err(too_long(n, "supported ECC200 symbol", 1558)),
+        };
+    }
+    for s in dm_square_specs() {
+        if s.dw >= n {
+            return Ok(s);
+        }
+    }
+    Err(too_long(n, "supported ECC200 square symbol", 1558))
+}
+
+fn randomise_pad(position: i64) -> i64 {
+    let pr = ((149 * position) % 253) + 1;
+    let temp = 129 + pr;
+    if temp <= 254 { temp } else { temp - 254 }
+}
+
+struct DmCode {
+    cws: Vec[i64],
+    spec: DmSpec,
+}
+
+// TextEncoder.encode: high-level encoding, padding and error correction.
+fn dm_encode(data: ref Payload, force: bool, shape: ref String) -> Result[DmCode, String] {
+    let mut cws: Vec[i64] = Vec.new();
+    let plain = plain_text(data);
+    if force or plain.is_none() {
+        let eci = eci_of(data.enc);
+        if eci >= 0 {
+            cws.push(241);
+            cws.push(eci + 1);
+        }
+        for s in data.segs {
+            match s {
+                Seg.Code(v) => cws.push(v),
+                Seg.Text(t) => {
+                    let bytes = encode_text(t, data.enc);
+                    for cw in pack_byte_by_byte(bytes, 0, bytes.len() as i64) {
+                        cws.push(cw);
+                    }
+                }
+            }
+        }
+    } else {
+        let text = plain.unwrap();
+        cws = dm_high_level(encode_text(text, data.enc), eci_of(data.enc));
+    }
+    // A trailing Unlatch is dropped when the symbol is an exact fit without it.
+    let len0 = cws.len() as i64;
+    if len0 > 0 and cws[len0 - 1] == 254 {
+        let exact = match select_spec(len0 - 1, shape) {
+            Ok(s) => s.dw == len0 - 1,
+            Err(_) => false,
+        };
+        if exact {
+            cws.pop();
+        }
+    }
+    let unpadded = cws.len() as i64;
+    let spec = select_spec(unpadded, shape)?;
+    let padsize = spec.dw - unpadded;
+    if padsize > 0 {
+        cws.push(129);
+    }
+    for i in 1..padsize {
+        cws.push(randomise_pad(unpadded + i + 1));
+    }
+    // Reed-Solomon over interleaved blocks.
+    let g = gf_new(0x12D, 256);
+    let nb = spec.blocks;
+    let per = spec.ew / nb;
+    let mut ecs: Vec[Vec[i64]] = Vec.new();
+    for b in 0..nb {
+        let mut block: Vec[i64] = Vec.new();
+        let mut k = b;
+        while k < spec.dw {
+            block.push(cws[k]);
+            k += nb;
+        }
+        ecs.push(rs_encode(block, g, per, 1));
+    }
+    for j in 0..per {
+        for b in 0..nb {
+            cws.push(ecs[b][j]);
+        }
+    }
+    Ok(DmCode { cws: cws, spec: spec })
+}
+
+// ------------------------------------------------------------ placement
+
+struct Placer {
+    m: Vec[i64],
+    rows: i64,
+    cols: i64,
+    next: i64,
+    cws: Vec[i64],
+}
+
+fn place_bit(pl: mut ref Placer, r0: i64, c0: i64, bit: i64) {
+    let mut r = r0;
+    let mut c = c0;
+    if r < 0 {
+        r += pl.rows;
+        c += 4 - ((pl.rows + 4) % 8);
+    }
+    if c < 0 {
+        c += pl.cols;
+        r += 4 - ((pl.cols + 4) % 8);
+    }
+    pl.m[r * pl.cols + c] = bit;
+}
+
+fn take_cw(pl: mut ref Placer) -> i64 {
+    let k = pl.next;
+    pl.next += 1;
+    if k < pl.cws.len() as i64 { pl.cws[k] } else { 0 }
+}
+
+fn bit_of(cw: i64, k: i64) -> i64 {
+    (cw >> k) & 1
+}
+
+fn place_corner(pl: mut ref Placer, which: i64) {
+    let cw = take_cw(mut pl);
+    let rows = pl.rows;
+    let cols = pl.cols;
+    if which == 1 {
+        place_bit(mut pl, rows - 1, 0, bit_of(cw, 7));
+        place_bit(mut pl, rows - 1, 1, bit_of(cw, 6));
+        place_bit(mut pl, rows - 1, 2, bit_of(cw, 5));
+        place_bit(mut pl, 0, cols - 2, bit_of(cw, 4));
+        place_bit(mut pl, 0, cols - 1, bit_of(cw, 3));
+        place_bit(mut pl, 1, cols - 1, bit_of(cw, 2));
+        place_bit(mut pl, 2, cols - 1, bit_of(cw, 1));
+        place_bit(mut pl, 3, cols - 1, bit_of(cw, 0));
+    } else if which == 2 {
+        place_bit(mut pl, rows - 3, 0, bit_of(cw, 7));
+        place_bit(mut pl, rows - 2, 0, bit_of(cw, 6));
+        place_bit(mut pl, rows - 1, 0, bit_of(cw, 5));
+        place_bit(mut pl, 0, cols - 4, bit_of(cw, 4));
+        place_bit(mut pl, 0, cols - 3, bit_of(cw, 3));
+        place_bit(mut pl, 0, cols - 2, bit_of(cw, 2));
+        place_bit(mut pl, 0, cols - 1, bit_of(cw, 1));
+        place_bit(mut pl, 1, cols - 1, bit_of(cw, 0));
+    } else if which == 3 {
+        place_bit(mut pl, rows - 3, 0, bit_of(cw, 7));
+        place_bit(mut pl, rows - 2, 0, bit_of(cw, 6));
+        place_bit(mut pl, rows - 1, 0, bit_of(cw, 5));
+        place_bit(mut pl, 0, cols - 2, bit_of(cw, 4));
+        place_bit(mut pl, 0, cols - 1, bit_of(cw, 3));
+        place_bit(mut pl, 1, cols - 1, bit_of(cw, 2));
+        place_bit(mut pl, 2, cols - 1, bit_of(cw, 1));
+        place_bit(mut pl, 3, cols - 1, bit_of(cw, 0));
+    } else {
+        place_bit(mut pl, rows - 1, 0, bit_of(cw, 7));
+        place_bit(mut pl, rows - 1, cols - 1, bit_of(cw, 6));
+        place_bit(mut pl, 0, cols - 3, bit_of(cw, 5));
+        place_bit(mut pl, 0, cols - 2, bit_of(cw, 4));
+        place_bit(mut pl, 0, cols - 1, bit_of(cw, 3));
+        place_bit(mut pl, 1, cols - 3, bit_of(cw, 2));
+        place_bit(mut pl, 1, cols - 2, bit_of(cw, 1));
+        place_bit(mut pl, 1, cols - 1, bit_of(cw, 0));
+    }
+}
+
+fn place_standard(pl: mut ref Placer, r: i64, c: i64) {
+    if pl.m[r * pl.cols + c] != -1 {
+        return;
+    }
+    let cw = take_cw(mut pl);
+    place_bit(mut pl, r - 2, c - 2, bit_of(cw, 7));
+    place_bit(mut pl, r - 2, c - 1, bit_of(cw, 6));
+    place_bit(mut pl, r - 1, c - 2, bit_of(cw, 5));
+    place_bit(mut pl, r - 1, c - 1, bit_of(cw, 4));
+    place_bit(mut pl, r - 1, c, bit_of(cw, 3));
+    place_bit(mut pl, r, c - 2, bit_of(cw, 2));
+    place_bit(mut pl, r, c - 1, bit_of(cw, 1));
+    place_bit(mut pl, r, c, bit_of(cw, 0));
+}
+
+// DataMatrixPlacer: the diagonal snake over the mapping matrix.
+fn dm_place(cws: ref Vec[i64], rows: i64, cols: i64) -> Vec[i64] {
+    let mut pl = Placer { m: Vec.filled((rows * cols) as usize, -1), rows: rows, cols: cols, next: 0, cws: cws.clone() };
+    let mut row: i64 = 4;
+    let mut col: i64 = 0;
+    loop {
+        if row == rows and col == 0 {
+            place_corner(mut pl, 1);
+        } else if row == rows - 2 and col == 0 and cols % 4 != 0 {
+            place_corner(mut pl, 2);
+        } else if row == rows - 2 and col == 0 and cols % 8 == 4 {
+            place_corner(mut pl, 3);
+        } else if row == rows + 4 and col == 2 and cols % 8 == 0 {
+            place_corner(mut pl, 4);
+        }
+        loop {
+            if row < rows and col >= 0 and pl.m[row * cols + col] == -1 {
+                place_standard(mut pl, row, col);
+            }
+            row -= 2;
+            col += 2;
+            if row < 0 or col >= cols {
+                break;
+            }
+        }
+        row += 1;
+        col += 3;
+        loop {
+            if row >= 0 and col < cols and pl.m[row * cols + col] == -1 {
+                place_standard(mut pl, row, col);
+            }
+            row += 2;
+            col -= 2;
+            if row >= rows or col < 0 {
+                break;
+            }
+        }
+        row += 3;
+        col += 1;
+        if row >= rows and col >= cols {
+            break;
+        }
+    }
+    let mut m = pl.m;
+    if m[(rows - 1) * cols + cols - 1] == -1 {
+        m[(rows - 1) * cols + cols - 1] = 1;
+        m[(rows - 2) * cols + cols - 2] = 1;
+        m[(rows - 1) * cols + cols - 2] = 0;
+        m[(rows - 2) * cols + cols - 1] = 0;
+    }
+    for k in 0..rows * cols {
+        if m[k] == -1 {
+            m[k] = 0;
+        }
+    }
+    m
+}
+
+// ------------------------------------------------------------ rendering
+
+struct Grid {
+    m: Vec[i64],
+    w: i64,
+    h: i64,
+}
+
+// DataMatrixRenderer: gaps between regions, the border and quiet zone,
+// then the finder handles.
+fn dm_render(code: ref DmCode, qz: i64) -> Grid {
+    let s = code.spec;
+    let rows = s.rr * s.v;
+    let cols = s.rc * s.h;
+    let mapping = dm_place(code.cws, rows, cols);
+    let gw = cols + (s.h - 1) * 2;
+    let mut gapped: Vec[i64] = Vec.new();
+    let mut nrows: i64 = 0;
+    for r in 0..rows {
+        if r > 0 and r % s.rr == 0 {
+            for _ in 0..2 * gw {
+                gapped.push(0);
+            }
+            nrows += 2;
+        }
+        for i in 0..s.h {
+            if i > 0 {
+                gapped.push(0);
+                gapped.push(0);
+            }
+            for c in i * s.rc..(i + 1) * s.rc {
+                gapped.push(mapping[r * cols + c]);
+            }
+        }
+        nrows += 1;
+    }
+    let b = 1 + qz;
+    let w = gw + 2 * b;
+    let h = nrows + 2 * b;
+    let mut m: Vec[i64] = Vec.filled((w * h) as usize, 0);
+    for r in 0..nrows {
+        for c in 0..gw {
+            m[(r + b) * w + c + b] = gapped[r * gw + c];
+        }
+    }
+    for xi in 0..s.h {
+        for yi in 0..s.v {
+            let x0 = xi * (s.rc + 2) + qz;
+            let y0 = yi * (s.rr + 2) + qz;
+            let x1 = x0 + s.rc + 1;
+            let y1 = y0 + s.rr + 1;
+            for x in x0..x1 {
+                m[y1 * w + x] = 1;
+            }
+            for y in y0..y1 {
+                m[y * w + x0] = 1;
+            }
+            let mut x = x0;
+            while x < x1 {
+                m[y0 * w + x] = 1;
+                x += 2;
+            }
+            let mut y = y1;
+            while y > y0 {
+                m[y * w + x1] = 1;
+                y -= 2;
+            }
+        }
+    }
+    Grid { m: m, w: w, h: h }
+}
+
+fn dm_ascii(code: ref DmCode, qz: i64) -> String {
+    let g = dm_render(code, qz);
+    ascii_art(g.m, g.w, g.h, "XX", "  ")
+}
+
+// ------------------------------------------------------------ Aztec modes
+//
+// Modes 0..4 are Upper, Lower, Mixed, Punct and Digit. Byte mode runs are
+// edges that return to the mode they started from.
+
+fn az_char(mode: i64, b: i64) -> i64 {
+    if mode == 0 {
+        if b == 32 { 1 } else if b >= 65 and b <= 90 { 2 + b - 65 } else { -1 }
+    } else if mode == 1 {
+        if b == 32 { 1 } else if b >= 97 and b <= 122 { 2 + b - 97 } else { -1 }
+    } else if mode == 2 {
+        if b == 32 {
+            1
+        } else if b >= 1 and b <= 13 {
+            b + 1
+        } else if b >= 27 and b <= 31 {
+            b - 12
+        } else if b == 64 {
+            20
+        } else if b == 92 {
+            21
+        } else if b >= 94 and b <= 96 {
+            b - 72
+        } else if b == 124 {
+            25
+        } else if b == 126 {
+            26
+        } else if b == 127 {
+            27
+        } else {
+            -1
+        }
+    } else if mode == 3 {
+        if b == 13 {
+            1
+        } else if b >= 33 and b <= 47 {
+            b - 27
+        } else if b >= 58 and b <= 63 {
+            b - 37
+        } else if b == 91 {
+            27
+        } else if b == 93 {
+            28
+        } else if b == 123 {
+            29
+        } else if b == 125 {
+            30
+        } else {
+            -1
+        }
+    } else {
+        if b == 32 {
+            1
+        } else if b >= 48 and b <= 57 {
+            2 + b - 48
+        } else if b == 44 {
+            12
+        } else if b == 46 {
+            13
+        } else {
+            -1
+        }
+    }
+}
+
+fn az_char_bits(mode: i64) -> i64 {
+    if mode == 4 { 4 } else { 5 }
+}
+
+fn az_digraph(a: i64, b: i64) -> i64 {
+    if a == 13 and b == 10 {
+        2
+    } else if a == 46 and b == 32 {
+        3
+    } else if a == 44 and b == 32 {
+        4
+    } else if a == 58 and b == 32 {
+        5
+    } else {
+        -1
+    }
+}
+
+// Latch edges out of a mode, as (dst, codeword, bits), in the table's order.
+fn az_latches(mode: i64) -> Vec[(i64, i64, i64)] {
+    if mode == 0 {
+        vec![(1, 28, 5), (2, 29, 5), (4, 30, 5)]
+    } else if mode == 1 {
+        vec![(2, 29, 5), (4, 30, 5)]
+    } else if mode == 2 {
+        vec![(1, 28, 5), (0, 29, 5), (3, 30, 5)]
+    } else if mode == 3 {
+        vec![(0, 31, 5)]
+    } else {
+        vec![(0, 14, 4)]
+    }
+}
+
+fn az_shifts(mode: i64) -> Vec[(i64, i64, i64)] {
+    if mode == 0 {
+        vec![(3, 0, 5)]
+    } else if mode == 1 {
+        vec![(0, 28, 5), (3, 0, 5)]
+    } else if mode == 2 {
+        vec![(3, 0, 5)]
+    } else if mode == 3 {
+        Vec.new()
+    } else {
+        vec![(0, 15, 4), (3, 0, 4)]
+    }
+}
+
+const AZ_INF: i64 = 1000000000000000000;
+
+// The DP's tables, one entry a (mode, position) state. An edge carries up to
+// three (value, width) codewords, then payload bytes start..end at 8 bits.
+struct AzDp {
+    n: i64,
+    dp: Vec[i64],
+    prev: Vec[i64],
+    ecount: Vec[i64],
+    ev: Vec[i64],
+    ew: Vec[i64],
+    bstart: Vec[i64],
+    bend: Vec[i64],
+}
+
+fn az_relax(d: mut ref AzDp, st: i64, cost: i64, src: i64, cws: ref Vec[(i64, i64)], bs: i64, be: i64) -> bool {
+    if cost < d.dp[st] {
+        d.dp[st] = cost;
+        d.prev[st] = src;
+        d.ecount[st] = cws.len() as i64;
+        let mut k: i64 = 0;
+        for cw in cws {
+            d.ev[st * 3 + k] = cw.0;
+            d.ew[st * 3 + k] = cw.1;
+            k += 1;
+        }
+        d.bstart[st] = bs;
+        d.bend[st] = be;
+        return true;
+    }
+    false
+}
+
+fn push_bits(out: mut ref Vec[i64], value: i64, width: i64) {
+    let mut i = width - 1;
+    while i >= 0 {
+        out.push((value >> i) & 1);
+        i -= 1;
+    }
+}
+
+// encode_high_level: the shortest bit stream over the five modes and Byte runs.
+fn az_high_level(p: ref Vec[i64], eci: i64) -> Vec[i64] {
+    let n = p.len() as i64;
+    let w = n + 1;
+    let total = 5 * w;
+    let mut d = AzDp {
+        n: n,
+        dp: Vec.filled(total as usize, AZ_INF),
+        prev: Vec.filled(total as usize, -1),
+        ecount: Vec.filled(total as usize, 0),
+        ev: Vec.filled((total * 3) as usize, 0),
+        ew: Vec.filled((total * 3) as usize, 0),
+        bstart: Vec.filled(total as usize, -1),
+        bend: Vec.filled(total as usize, -1),
+    };
+    // The ECI prologue: P/S, FLG(n), then n digits.
+    let mut eci_em: Vec[(i64, i64)] = Vec.new();
+    if eci >= 0 {
+        let digits = chars_of(f"{eci}");
+        eci_em.push((0, 5));
+        eci_em.push((0, 5));
+        eci_em.push((digits.len() as i64, 3));
+        for c in digits {
+            eci_em.push((az_char(4, c as i64), 4));
+        }
+    }
+    let mut eci_cost: i64 = 0;
+    for e in eci_em {
+        eci_cost += e.1;
+    }
+    d.dp[0] = eci_cost;
+    // Byte-run windows for the byte-capable modes U, L, M: the start term
+    // dp - 8*start, and a monotonic deque per length regime.
+    let mut term: Vec[i64] = Vec.filled((3 * w) as usize, 0);
+    let mut has_term: Vec[bool] = Vec.filled((3 * w) as usize, false);
+    let mut wbuf: Vec[i64] = Vec.filled((6 * w) as usize, 0);
+    let mut whead: Vec[i64] = Vec.filled(6, 0);
+    let mut wtail: Vec[i64] = Vec.filled(6, 0);
+    for pos in 0..n + 1 {
+        // Byte runs closing at pos.
+        for m in 0..3 {
+            let mut best_cost = AZ_INF;
+            let mut best_start: i64 = -1;
+            for r in 0..2 {
+                let shortest: i64 = if r == 0 { 1 } else { 32 };
+                let longest: i64 = if r == 0 { 31 } else { 2047 };
+                let prefix_bits: i64 = if r == 0 { 5 } else { 16 };
+                let wi = m * 2 + r;
+                let base = wi * w;
+                let entering = pos - shortest;
+                if entering >= 0 and has_term[m * w + entering] {
+                    while wtail[wi] > whead[wi] and term[m * w + wbuf[base + wtail[wi] - 1]] >= term[m * w + entering] {
+                        wtail[wi] -= 1;
+                    }
+                    wbuf[base + wtail[wi]] = entering;
+                    wtail[wi] += 1;
+                }
+                while wtail[wi] > whead[wi] and wbuf[base + whead[wi]] < pos - longest {
+                    whead[wi] += 1;
+                }
+                if wtail[wi] > whead[wi] {
+                    let front = wbuf[base + whead[wi]];
+                    let cost = 5 + prefix_bits + 8 * pos + term[m * w + front];
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_start = front;
+                    }
+                }
+            }
+            if best_start < 0 {
+                continue;
+            }
+            let j = pos - best_start;
+            let prefix: Vec[(i64, i64)] = if j <= 31 { vec![(31, 5), (j, 5)] } else { vec![(31, 5), (0, 5), (j - 31, 11)] };
+            let _ = az_relax(mut d, m * w + pos, best_cost, m * w + best_start, prefix, best_start, pos);
+        }
+        // Latches, until no cost changes.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for m in 0..5 {
+                let src = m * w + pos;
+                let cost = d.dp[src];
+                if cost >= AZ_INF {
+                    continue;
+                }
+                for e in az_latches(m) {
+                    let cws: Vec[(i64, i64)] = vec![(e.1, e.2)];
+                    if az_relax(mut d, e.0 * w + pos, cost + e.2, src, cws, -1, -1) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+        // Byte runs may start here.
+        for m in 0..3 {
+            let st = m * w + pos;
+            if d.dp[st] < AZ_INF {
+                term[m * w + pos] = d.dp[st] - 8 * pos;
+                has_term[m * w + pos] = true;
+            }
+        }
+        if pos == n {
+            continue;
+        }
+        let byte = p[pos];
+        for m in 0..5 {
+            let src = m * w + pos;
+            let cost = d.dp[src];
+            if cost >= AZ_INF {
+                continue;
+            }
+            // Direct.
+            let cw = az_char(m, byte);
+            if cw >= 0 {
+                let bits = az_char_bits(m);
+                let cws: Vec[(i64, i64)] = vec![(cw, bits)];
+                let _ = az_relax(mut d, m * w + pos + 1, cost + bits, src, cws, -1, -1);
+            }
+            // A Punct digraph.
+            if m == 3 and pos + 1 < n {
+                let dg = az_digraph(byte, p[pos + 1]);
+                if dg >= 0 {
+                    let cws: Vec[(i64, i64)] = vec![(dg, 5)];
+                    let _ = az_relax(mut d, m * w + pos + 2, cost + 5, src, cws, -1, -1);
+                }
+            }
+            // Shifts.
+            for e in az_shifts(m) {
+                let dst = e.0;
+                let ccw = az_char(dst, byte);
+                if ccw >= 0 {
+                    let cb = az_char_bits(dst);
+                    let cws: Vec[(i64, i64)] = vec![(e.1, e.2), (ccw, cb)];
+                    let _ = az_relax(mut d, m * w + pos + 1, cost + e.2 + cb, src, cws, -1, -1);
+                }
+                if dst == 3 and pos + 1 < n {
+                    let dg = az_digraph(byte, p[pos + 1]);
+                    if dg >= 0 {
+                        let cws: Vec[(i64, i64)] = vec![(e.1, e.2), (dg, 5)];
+                        let _ = az_relax(mut d, m * w + pos + 2, cost + e.2 + 5, src, cws, -1, -1);
+                    }
+                }
+            }
+        }
+    }
+    // The cheapest end state, then the edges back to the start.
+    let mut end_cost = AZ_INF;
+    let mut end_mode: i64 = 0;
+    for m in 0..5 {
+        if d.dp[m * w + n] < end_cost {
+            end_cost = d.dp[m * w + n];
+            end_mode = m;
+        }
+    }
+    let mut chain: Vec[i64] = Vec.new();
+    let mut st = end_mode * w + n;
+    while st >= 0 {
+        chain.push(st);
+        st = d.prev[st];
+    }
+    chain.reverse();
+    let mut out: Vec[i64] = Vec.new();
+    for e in eci_em {
+        push_bits(mut out, e.0, e.1);
+    }
+    let mut k: i64 = 1;
+    while k < chain.len() as i64 {
+        let s = chain[k];
+        for i in 0..d.ecount[s] {
+            push_bits(mut out, d.ev[s * 3 + i], d.ew[s * 3 + i]);
+        }
+        if d.bstart[s] >= 0 {
+            for i in d.bstart[s]..d.bend[s] {
+                push_bits(mut out, p[i], 8);
+            }
+        }
+        k += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ symbol sizes
+
+fn az_layers_list(compact: bool) -> String {
+    let top: i64 = if compact { 4 } else { 32 };
+    let mut out = String.new();
+    out.push('[');
+    for i in 1..top + 1 {
+        if i > 1 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{i}");
+    }
+    out.push(']');
+    out
+}
+
+fn kind_name(compact: bool) -> String {
+    if compact { "compact".to_string() } else { "full".to_string() }
+}
+
+// (module count, total codewords, codeword bits) of a symbol.
+fn az_lookup(kind: ref String, layers: i64) -> Result[(i64, i64, i64), String] {
+    let compact_sizes: Vec[i64] = vec![15, 19, 23, 27];
+    let compact_cws: Vec[i64] = vec![17, 40, 51, 76];
+    let full_sizes: Vec[i64] = vec![19, 23, 27, 31, 37, 41, 45, 49, 53, 57, 61, 67, 71, 75, 79, 83, 87, 91, 95, 101, 105, 109, 113, 117, 121, 125, 131, 135, 139, 143, 147, 151];
+    let full_cws: Vec[i64] = vec![21, 48, 60, 88, 120, 156, 196, 240, 230, 272, 316, 364, 416, 470, 528, 588, 652, 720, 790, 864, 940, 1020, 920, 992, 1066, 1144, 1224, 1306, 1392, 1480, 1570, 1664];
+    if kind == "compact" and layers >= 1 and layers <= 4 {
+        let bits: i64 = if layers <= 2 { 6 } else { 8 };
+        return Ok((compact_sizes[layers - 1], compact_cws[layers - 1], bits));
+    }
+    if kind == "full" and layers >= 1 and layers <= 32 {
+        let bits: i64 = if layers <= 2 { 6 } else if layers <= 8 { 8 } else if layers <= 22 { 10 } else { 12 };
+        return Ok((full_sizes[layers - 1], full_cws[layers - 1], bits));
+    }
+    Err(f"PyStrichInvalidOption: no Aztec symbol with kind={py_repr(kind)}, layers={layers}; expected kind='compact' with layers in {az_layers_list(true)} or kind='full' with layers in {az_layers_list(false)}")
+}
+
+// to_codewords: chunk the bits, stuffing a bit into an all-0 or all-1 prefix.
+fn to_codewords(bits: ref Vec[i64], width: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = bits.len() as i64;
+    let all_one = (1 << width) - 1;
+    let mut i: i64 = 0;
+    while i < n {
+        if i + width <= n {
+            let mut v: i64 = 0;
+            let mut ones: i64 = 0;
+            for k in 0..width - 1 {
+                v = (v << 1) | bits[i + k];
+                ones += bits[i + k];
+            }
+            if ones == 0 {
+                out.push((v << 1) | 1);
+                i += width - 1;
+            } else if ones == width - 1 {
+                out.push(v << 1);
+                i += width - 1;
+            } else {
+                out.push((v << 1) | bits[i + width - 1]);
+                i += width;
+            }
+        } else {
+            let mut v: i64 = 0;
+            for k in i..n {
+                v = (v << 1) | bits[k];
+            }
+            for _ in 0..width - (n - i) {
+                v = (v << 1) | 1;
+            }
+            if v == all_one {
+                v -= 1;
+            }
+            out.push(v);
+            i = n;
+        }
+    }
+    out
+}
+
+struct AzSize {
+    compact: bool,
+    layers: i64,
+    size: i64,
+    width: i64,
+    cws: Vec[i64],
+    num_ec: i64,
+}
+
+// _choose_size: the smallest candidate whose capacity holds the codewords
+// plus the error-correction percentage; compact first at equal size.
+fn az_choose(bits: ref Vec[i64], ecc: i64, kind: ref String, layers: i64) -> Result[AzSize, String] {
+    let mut cands: Vec[(i64, i64, i64)] = Vec.new();
+    if layers > 0 {
+        if kind == "auto" {
+            return Err("PyStrichInvalidOption: specify symbol_kind='compact' or 'full' when overriding layers=".to_string());
+        }
+        cands.push((0, if kind == "compact" { 0 } else { 1 }, layers));
+    } else {
+        let mut raw: Vec[(i64, i64, i64)] = Vec.new();
+        if kind == "auto" or kind == "compact" {
+            for l in 1..5 {
+                let a = az_lookup("compact".to_string(), l)?;
+                raw.push((a.0, 0, l));
+            }
+        }
+        if kind == "auto" or kind == "full" {
+            for l in 1..33 {
+                let a = az_lookup("full".to_string(), l)?;
+                raw.push((a.0, 1, l));
+            }
+        }
+        // A stable sort by (module count, compact first).
+        for c in raw {
+            let mut k = cands.len() as i64;
+            cands.push(c);
+            while k > 0 and (cands[k - 1].0 > cands[k].0 or (cands[k - 1].0 == cands[k].0 and cands[k - 1].1 > cands[k].1)) {
+                cands.swap((k - 1) as usize, k as usize);
+                k -= 1;
+            }
+        }
+    }
+    let mut by_width: Vec[Vec[i64]] = Vec.new();
+    let mut have_width: Vec[bool] = Vec.new();
+    for _ in 0..4 {
+        by_width.push(Vec.new());
+        have_width.push(false);
+    }
+    let mut last_err = String.new();
+    for c in cands {
+        let kname = if c.1 == 0 { "compact".to_string() } else { "full".to_string() };
+        let attrs = az_lookup(kname, c.2)?;
+        let width = attrs.2;
+        let total = attrs.1;
+        let wi = width / 2 - 3;
+        if not have_width[wi] {
+            by_width[wi] = to_codewords(bits, width);
+            have_width[wi] = true;
+        }
+        let cwn = by_width[wi].len() as i64;
+        let min_ec = (total * ecc + 99) / 100 + 3;
+        let cap: i64 = if c.1 == 0 { 64 } else { 2048 };
+        let max_data = if total - min_ec < cap { total - min_ec } else { cap };
+        if cwn <= max_data {
+            return Ok(AzSize { compact: c.1 == 0, layers: c.2, size: attrs.0, width: width, cws: by_width[wi].clone(), num_ec: total - cwn });
+        }
+        let holds = if max_data < 0 { 0 } else { max_data };
+        last_err = f"PyStrichInvalidPayloadLength: payload exceeds capacity of {kname} L{c.2} (needs {cwn} data codewords, symbol holds {holds} at ecc={ecc}%)";
+    }
+    if last_err.len() > 0 and layers > 0 {
+        return Err(last_err);
+    }
+    Err(f"PyStrichInvalidPayloadLength: payload too large for any Aztec symbol at ecc={ecc}%")
+}
+
+fn az_field(width: i64) -> Gf {
+    if width == 6 {
+        gf_new(0x43, 64)
+    } else if width == 8 {
+        gf_new(0x12D, 256)
+    } else if width == 10 {
+        gf_new(0x409, 1024)
+    } else {
+        gf_new(0x1069, 4096)
+    }
+}
+
+// build_mode_message: layers - 1 and data codewords - 1 in nibbles, with
+// GF(16) check nibbles.
+fn az_mode_message(compact: bool, layers: i64, data_cws: i64) -> Result[Vec[i64], String] {
+    let length_bits: i64 = if compact { 6 } else { 11 };
+    let num_data: i64 = if compact { 2 } else { 4 };
+    let num_ec: i64 = if compact { 5 } else { 6 };
+    let max_cws: i64 = if compact { 64 } else { 2048 };
+    if data_cws < 1 or data_cws > max_cws {
+        return Err(f"PyStrichInvalidOption: invalid data_codewords={data_cws} for {kind_name(compact)} symbol; expected 1..{max_cws}");
+    }
+    let packed = ((layers - 1) << length_bits) | (data_cws - 1);
+    let mut nibbles: Vec[i64] = Vec.new();
+    for i in 0..num_data {
+        nibbles.push((packed >> (4 * (num_data - 1 - i))) & 0xf);
+    }
+    let g = gf_new(0x13, 16);
+    let ec = rs_encode(nibbles, g, num_ec, 1);
+    let mut out: Vec[i64] = Vec.new();
+    for x in nibbles {
+        push_bits(mut out, x, 4);
+    }
+    for x in ec {
+        push_bits(mut out, x, 4);
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ placement
+
+fn walk_outward(start: i64, dir: i64, count: i64, full: bool, centre: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = start;
+    while out.len() as i64 < count {
+        if not (full and (cur - centre) % 16 == 0) {
+            out.push(cur);
+        }
+        cur += dir;
+    }
+    out
+}
+
+// _data_cells: the clockwise spiral of dominoes, inner cell then outer.
+fn az_data_cells(size: i64, compact: bool, layers: i64) -> Vec[i64] {
+    let full = not compact;
+    let core: i64 = if compact { 11 } else { 15 };
+    let core_start = (size - core) / 2;
+    let core_end = core_start + core - 1;
+    let centre = (size - 1) / 2;
+    let top_rows = walk_outward(core_start - 1, -1, 2 * layers, full, centre);
+    let bot_rows = walk_outward(core_end + 1, 1, 2 * layers, full, centre);
+    let left_cols = walk_outward(core_start - 1, -1, 2 * layers, full, centre);
+    let right_cols = walk_outward(core_end + 1, 1, 2 * layers, full, centre);
+    let mut out: Vec[i64] = Vec.new();
+    for layer in 1..layers + 1 {
+        let it = top_rows[2 * layer - 2];
+        let ot = top_rows[2 * layer - 1];
+        let ib = bot_rows[2 * layer - 2];
+        let ob = bot_rows[2 * layer - 1];
+        let il = left_cols[2 * layer - 2];
+        let ol = left_cols[2 * layer - 1];
+        let ir = right_cols[2 * layer - 2];
+        let or_ = right_cols[2 * layer - 1];
+        for c in il + 1..or_ + 1 {
+            if not (full and (c - centre) % 16 == 0) {
+                out.push(it * size + c);
+                out.push(ot * size + c);
+            }
+        }
+        for r in it + 1..ob + 1 {
+            if not (full and (r - centre) % 16 == 0) {
+                out.push(r * size + ir);
+                out.push(r * size + or_);
+            }
+        }
+        let mut c = ir - 1;
+        while c > ol - 1 {
+            if not (full and (c - centre) % 16 == 0) {
+                out.push(ib * size + c);
+                out.push(ob * size + c);
+            }
+            c -= 1;
+        }
+        let mut r = ib - 1;
+        while r > ot - 1 {
+            if not (full and (r - centre) % 16 == 0) {
+                out.push(r * size + il);
+                out.push(r * size + ol);
+            }
+            r -= 1;
+        }
+    }
+    out
+}
+
+fn az_mode_ring(compact: bool) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    if compact {
+        let n: i64 = 11;
+        for c in 2..9 {
+            out.push((0, c));
+        }
+        for r in 2..9 {
+            out.push((r, n - 1));
+        }
+        let mut c = n - 3;
+        while c > 1 {
+            out.push((n - 1, c));
+            c -= 1;
+        }
+        let mut r = n - 3;
+        while r > 1 {
+            out.push((r, 0));
+            r -= 1;
+        }
+        return out;
+    }
+    let n: i64 = 15;
+    let ctr = (n - 1) / 2;
+    for c in 2..ctr {
+        out.push((0, c));
+    }
+    for c in ctr + 1..n - 2 {
+        out.push((0, c));
+    }
+    for r in 2..ctr {
+        out.push((r, n - 1));
+    }
+    for r in ctr + 1..n - 2 {
+        out.push((r, n - 1));
+    }
+    let mut c = n - 3;
+    while c > ctr {
+        out.push((n - 1, c));
+        c -= 1;
+    }
+    c = ctr - 1;
+    while c > 1 {
+        out.push((n - 1, c));
+        c -= 1;
+    }
+    let mut r = n - 3;
+    while r > ctr {
+        out.push((r, 0));
+        r -= 1;
+    }
+    r = ctr - 1;
+    while r > 1 {
+        out.push((r, 0));
+        r -= 1;
+    }
+    out
+}
+
+// build_matrix: reference grid, bullseye, chevrons, mode ring, then data.
+fn az_build(sz: ref AzSize, all_cws: ref Vec[i64], mode: ref Vec[i64]) -> Vec[i64] {
+    let size = sz.size;
+    let core: i64 = if sz.compact { 11 } else { 15 };
+    let f: i64 = if sz.compact { 4 } else { 6 };
+    let cs = (size - core) / 2;
+    let mut m: Vec[i64] = Vec.filled((size * size) as usize, 0);
+    if not sz.compact {
+        let ctr = (size - 1) / 2;
+        for r in 0..size {
+            for c in 0..size {
+                if (r - ctr) % 16 == 0 or (c - ctr) % 16 == 0 {
+                    m[r * size + c] = py_mod((r - ctr) + (c - ctr) + 1, 2);
+                }
+            }
+        }
+    }
+    let centre = (core - 1) / 2;
+    for dr in 0..core {
+        for dc in 0..core {
+            let a = (dr - centre).abs();
+            let b = (dc - centre).abs();
+            let d = if a > b { a } else { b };
+            if d <= f {
+                m[(cs + dr) * size + cs + dc] = (d + 1) % 2;
+            }
+        }
+    }
+    let k = core - 1;
+    let set = vec![(0, 0, 1), (0, 1, 1), (1, 0, 1), (0, k, 1), (1, k, 1), (0, k - 1, 0), (k - 1, k, 1), (k, k, 0), (k, k - 1, 0), (k, 0, 0), (k, 1, 0), (k - 1, 0, 0)];
+    for e in set {
+        m[(cs + e.0) * size + cs + e.1] = e.2;
+    }
+    let ring = az_mode_ring(sz.compact);
+    let mut i: i64 = 0;
+    while i < ring.len() as i64 and i < mode.len() as i64 {
+        m[(cs + ring[i].0) * size + cs + ring[i].1] = mode[i];
+        i += 1;
+    }
+    let cells = az_data_cells(size, sz.compact, sz.layers);
+    let mut next: i64 = 0;
+    let mut j = all_cws.len() as i64 - 1;
+    while j >= 0 {
+        let cw = all_cws[j];
+        for b in 0..sz.width {
+            if next >= cells.len() as i64 {
+                return m;
+            }
+            m[cells[next]] = (cw >> b) & 1;
+            next += 1;
+        }
+        j -= 1;
+    }
+    m
+}
+
+struct AzCode {
+    bits: i64,
+    sz: AzSize,
+    mode: Vec[i64],
+    m: Vec[i64],
+}
+
+// AztecEncoder's TextEncoder.encode.
+fn az_encode(data: ref Payload, ecc: i64, kind: ref String, layers: i64) -> Result[AzCode, String] {
+    let text = match plain_text(data) {
+        Some(t) => t,
+        None => String.new(),
+    };
+    let bits = az_high_level(encode_text(text, data.enc), eci_of(data.enc));
+    let sz = az_choose(bits, ecc, kind, layers)?;
+    let g = az_field(sz.width);
+    let ec = rs_encode(sz.cws, g, sz.num_ec, 1);
+    let mut all: Vec[i64] = sz.cws.clone();
+    for x in ec {
+        all.push(x);
+    }
+    let mode = az_mode_message(sz.compact, sz.layers, sz.cws.len() as i64)?;
+    let m = az_build(sz, all, mode);
+    Ok(AzCode { bits: bits.len() as i64, sz: sz, mode: mode, m: m })
+}
+
+fn az_data(text: ref String, enc: ref String) -> Result[Payload, String] {
+    let segs: Vec[Seg] = vec![Seg.Text(text.clone())];
+    if enc == "auto" {
+        return make_data("AztecData", 4729, segs, enc, true);
+    }
+    make_data("AztecData", 4729, segs, enc, false)
+}
+
+fn az_ascii(code: ref AzCode, qz: i64) -> String {
+    let size = code.sz.size;
+    let w = size + 2 * qz;
+    let mut m: Vec[i64] = Vec.filled((w * w) as usize, 0);
+    for r in 0..size {
+        for c in 0..size {
+            m[(r + qz) * w + c + qz] = code.m[r * size + c];
+        }
+    }
+    ascii_art(m, w, w, "X", " ")
+}
+
+// ------------------------------------------------------------ dm and az jobs
+
+fn print_warnings(ws: ref Vec[String]) {
+    for w in ws {
+        println(f"  warning: {w}");
+    }
+}
+
+// The DataMatrixEncoder constructor, from a str or a DataMatrixData.
+fn dm_job_encode(text: ref String, enc: ref String, shape: ref String, force: bool, qz: i64, warnings: mut ref Vec[String]) -> Result[DmCode, String] {
+    let mut data: Option[Payload] = None;
+    if enc != "str" {
+        let segs: Vec[Seg] = vec![Seg.Text(text.clone())];
+        data = Some(dm_data(segs, enc, mut warnings)?);
+    }
+    require_int("quiet_zone", qz, 0, -1)?;
+    if shape != "square" and shape != "rectangular" and shape != "auto" {
+        return Err(f"PyStrichInvalidOption: symbol_shape must be one of ('square', 'rectangular', 'auto'), got {py_repr(shape)}");
+    }
+    let p = match data {
+        Some(d) => d,
+        None => dm_from_str(text, mut warnings)?,
+    };
+    dm_encode(p, force, shape)
+}
+
+fn dm_dims(s: ref DmSpec) -> String {
+    f"{spec_rows(s)}x{spec_cols(s)}"
+}
+
+fn job_dm(rel: ref String, words: ref Vec[String]) {
+    let o = words_of(words);
+    let shape = opt_get(o, "shape", "square");
+    let qz = parse_int(opt_get(o, "qz", "2"));
+    let force = opt_has(o, "bytes");
+    let enc = opt_get(o, "enc", "str");
+    let mut warnings: Vec[String] = Vec.new();
+    let res = dm_job_encode(read_data(rel), enc, shape, force, qz, mut warnings);
+    print_warnings(warnings);
+    match res {
+        Err(e) => println(f"  error {e}"),
+        Ok(code) => {
+            let s = code.spec;
+            let plural = if s.blocks == 1 { "" } else { "s" };
+            let sh = if s.square { "square" } else { "rectangular" };
+            println(f"  symbol {dm_dims(s)} {sh}, regions {s.h}x{s.v}, {s.dw} data + {s.ew} error codewords, {s.blocks} block{plural}");
+            println(f"  data {hex_words(code.cws, 0, s.dw, 2)}");
+            println(f"  ec {hex_words(code.cws, s.dw, code.cws.len() as i64, 2)}");
+            let art = dm_ascii(code, qz);
+            show_matrix(art);
+            if opt_has(o, "art") {
+                show_art(art);
+            }
+        }
+    }
+}
+
+fn az_job_encode(text: ref String, enc: ref String, ecc: i64, kind: ref String, layers: i64, qz: i64) -> Result[AzCode, String] {
+    let mut data: Option[Payload] = None;
+    if enc != "str" {
+        data = Some(az_data(text, enc)?);
+    }
+    require_int("ecc", ecc, 5, 95)?;
+    require_int("quiet_zone", qz, 0, -1)?;
+    if layers != -1 {
+        require_int("layers", layers, 1, 32)?;
+    }
+    let p = match data {
+        Some(d) => d,
+        None => az_data(text, "auto".to_string())?,
+    };
+    az_encode(p, ecc, kind, if layers == -1 { 0 } else { layers })
+}
+
+fn job_az(rel: ref String, words: ref Vec[String]) {
+    let o = words_of(words);
+    let ecc = parse_int(opt_get(o, "ecc", "23"));
+    let kind = opt_get(o, "kind", "auto");
+    let layers = if opt_has(o, "layers") { parse_int(opt_get(o, "layers", "0")) } else { -1 };
+    let qz = parse_int(opt_get(o, "qz", "2"));
+    let enc = opt_get(o, "enc", "str");
+    match az_job_encode(read_data(rel), enc, ecc, kind, layers, qz) {
+        Err(e) => println(f"  error {e}"),
+        Ok(code) => {
+            let sz = ref code.sz;
+            println(f"  {code.bits} bits, {kind_name(sz.compact)} L{sz.layers}, {sz.size}x{sz.size}, {sz.width}-bit codewords, {sz.cws.len()} data + {sz.num_ec} check");
+            let mut mode = String.new();
+            for b in code.mode {
+                mode.push(if *b == 1 { '1' } else { '0' });
+            }
+            println(f"  mode {mode}");
+            println(f"  data {hex_words(sz.cws, 0, sz.cws.len() as i64, (sz.width + 3) / 4)}");
+            let art = az_ascii(code, qz);
+            show_matrix(art);
+            if opt_has(o, "art") {
+                show_art(art);
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ !labels
+
+fn gtin_check(digits: ref Vec[char]) -> i64 {
+    let mut total: i64 = 0;
+    let n = digits.len() as i64;
+    let mut i: i64 = 0;
+    let mut k = n - 2;
+    while k >= 0 {
+        let d = digits[k] as i64 - 48;
+        total += d * (if i % 2 == 0 { 3 } else { 1 });
+        i += 1;
+        k -= 1;
+    }
+    (10 - total % 10) % 10
+}
+
+// GS1Fixed / GS1Variable's value check.
+fn gs1_value(value: ref String) -> Result[(), String] {
+    if value.len() == 0 {
+        return Err("PyStrichInvalidInput: GS1 field value must be a non-empty str".to_string());
+    }
+    for c in value.chars() {
+        let cp = c as i64;
+        if cp < 0x20 or cp > 0x7e {
+            let one = c.to_string();
+            return Err(f"PyStrichInvalidInput: GS1 field value must be printable ASCII (0x20-0x7E); {py_repr(one)} (U+{hex_pad(cp, 4, true)}) is not");
+        }
+    }
+    Ok(())
+}
+
+// DataMatrixData.gs1: FNC1, then each field, with FNC1 after a variable
+// field that is not last.
+fn gs1_label(gtin: ref String, expiry: ref String, batch: ref String, serial: ref String, human: mut ref String) -> Result[DmCode, String] {
+    let mut fields: Vec[(String, String, bool)] = Vec.new();
+    gs1_value(gtin)?;
+    fields.push(("01".to_string(), gtin.clone(), false));
+    human.push_str(f"(01){gtin}");
+    if expiry.len() > 0 {
+        gs1_value(expiry)?;
+        fields.push(("17".to_string(), expiry.clone(), false));
+        human.push_str(f"(17){expiry}");
+    }
+    gs1_value(batch)?;
+    fields.push(("10".to_string(), batch.clone(), true));
+    human.push_str(f"(10){batch}");
+    if serial.len() > 0 {
+        gs1_value(serial)?;
+        fields.push(("21".to_string(), serial.clone(), true));
+        human.push_str(f"(21){serial}");
+    }
+    let mut segs: Vec[Seg] = vec![Seg.Code(232)];
+    let last = fields.len() as i64 - 1;
+    let mut i: i64 = 0;
+    for f in fields {
+        segs.push(Seg.Text(f"{f.0}{f.1}"));
+        if f.2 and i != last {
+            segs.push(Seg.Code(232));
+        }
+        i += 1;
+    }
+    let data = make_data("DataMatrixData", 3116, segs, "ascii".to_string(), false)?;
+    dm_encode(data, false, "square".to_string())
+}
+
+fn prog_labels(rel: ref String) {
+    let mut lines: Vec[String] = Vec.new();
+    for ln in split_on(read_data(rel), '\n') {
+        if ln.len() > 0 {
+            lines.push(ln.clone());
+        }
+    }
+    let mut ok: i64 = 0;
+    let mut bad: i64 = 0;
+    let mut first = true;
+    let mut k: i64 = 1;
+    while k < lines.len() as i64 {
+        let f = split_on(lines[k], ',');
+        k += 1;
+        let sku = f[0].clone();
+        let gtin = f[1].clone();
+        let gd = chars_of(gtin);
+        if gd.len() as i64 != 14 or not is_digits(gtin) {
+            println(f"  {sku}: GTIN {gtin} is not 14 digits");
+            bad += 1;
+            continue;
+        }
+        let want = gtin_check(gd);
+        let have = gd[13] as i64 - 48;
+        if have != want {
+            println(f"  {sku}: GTIN {gtin} has check digit {gd[13]}, expected {want}");
+            bad += 1;
+            continue;
+        }
+        let mut human = String.new();
+        match gs1_label(gtin, f[2], f[3], f[4], mut human) {
+            Err(e) => {
+                println(f"  {sku}: error {e}");
+                bad += 1;
+            }
+            Ok(code) => {
+                let art = dm_ascii(code, 1);
+                let s = code.spec;
+                println(f"  {sku}: {human} -> {s.rr + 2}x{s.rc + 2}, {s.dw} data codewords, fnv {fnv(art)}");
+                if first {
+                    show_art(art);
+                    first = false;
+                }
+                ok += 1;
+            }
+        }
+    }
+    println(f"  {ok} labels, {bad} rejected");
+}
+
+// ------------------------------------------------------------ !tickets
+
+fn prog_tickets(rel: ref String) {
+    for line in split_on(read_data(rel), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let kind = split_on(line, '|')[0].clone();
+        let mut ws: Vec[String] = Vec.new();
+        let az = az_job_encode(line, "str".to_string(), 23, "auto".to_string(), -1, 1);
+        let dm = match dm_from_str(line, mut ws) {
+            Ok(p) => dm_encode(p, false, "square".to_string()),
+            Err(e) => Err(e),
+        };
+        match (az, dm) {
+            (Ok(a), Ok(d)) => {
+                let art = az_ascii(a, 1);
+                let sz = ref a.sz;
+                println(f"  {kind}: {char_count(line)} characters -> aztec {kind_name(sz.compact)} L{sz.layers} {sz.size}x{sz.size} ({sz.cws.len()}+{sz.num_ec}), data matrix {dm_dims(d.spec)}, fnv {fnv(art)}");
+                if kind == "transit" {
+                    show_art(art);
+                }
+            }
+            _ => println(f"  {kind}: error"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ !capacity
+
+fn class_char(name: ref String, i: i64) -> char {
+    let words = chars_of("lorem ipsum dolor sit amet, ".to_string());
+    let latin = chars_of("\u{e4}\u{f6}\u{fc}\u{df}".to_string());
+    let cp: i64 = if name == "digits" {
+        48 + i % 10
+    } else if name == "upper" {
+        65 + i % 26
+    } else if name == "lower" {
+        97 + i % 26
+    } else if name == "words" {
+        words[i % 28] as i64
+    } else if name == "latin1" {
+        latin[i % 4] as i64
+    } else {
+        (i * 37) % 256
+    };
+    char.try_from(cp as u32).unwrap()
+}
+
+fn dm_size(text: ref String, shape: Str) -> String {
+    let mut ws: Vec[String] = Vec.new();
+    match dm_from_str(text, mut ws) {
+        Ok(p) => match dm_encode(p, false, shape.to_string()) {
+            Ok(c) => dm_dims(c.spec),
+            Err(_) => "-".to_string(),
+        },
+        Err(_) => "-".to_string(),
+    }
+}
+
+fn pad_right(s: ref String, width: i64) -> String {
+    let mut out = s.clone();
+    let mut n = char_count(s);
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out
+}
+
+fn pad_left(s: ref String, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = char_count(s);
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn rstrip(s: ref String) -> String {
+    let cs = chars_of(s);
+    let mut n = cs.len() as i64;
+    while n > 0 and cs[n - 1] == ' ' {
+        n -= 1;
+    }
+    chars_str(cs, 0, n)
+}
+
+fn prog_capacity() {
+    println(f"  {pad_right("class", 7)} {pad_left("chars", 5)}  {pad_right("square", 9)} {pad_right("rect", 9)} aztec");
+    let names: Vec[String] = vec!["digits".to_string(), "upper".to_string(), "lower".to_string(), "words".to_string(), "latin1".to_string(), "binary".to_string()];
+    let lens: Vec[i64] = vec![1, 10, 50, 200];
+    for name in names {
+        for n in lens {
+            let mut text = String.new();
+            for i in 0..*n {
+                text.push(class_char(name, i));
+            }
+            let sq = dm_size(text, "square");
+            let rect = dm_size(text, "rectangular");
+            let az = match az_job_encode(text, "str".to_string(), 23, "auto".to_string(), -1, 2) {
+                Ok(a) => f"{kind_name(a.sz.compact)} L{a.sz.layers} {a.sz.size}x{a.sz.size}",
+                Err(e) => e,
+            };
+            let row = f"  {pad_right(name, 7)} {pad_left(f"{*n}", 5)}  {pad_right(sq, 9)} {pad_right(rect, 9)} {az}";
+            println(rstrip(row));
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn hex_digit(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 0;
+    while k + 1 < cs.len() {
+        out.push((hex_digit(cs[k]) * 16 + hex_digit(cs[k + 1])) as u8);
+        k += 2;
+    }
+    out
+}
+
+fn hex_string(s: ref String) -> String {
+    String.from_utf8(hex_bytes(s)).unwrap_or(String.new())
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs = chars_of(path);
+    let mut cut: i64 = -1;
+    let mut k: i64 = 0;
+    while k < cs.len() as i64 {
+        if cs[k] == '/' {
+            cut = k;
+        }
+        k += 1;
+    }
+    if cut < 0 { String.new() } else { chars_str(cs, 0, cut) }
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    for hex in split_on(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let line = hex_string(hex);
+        if line.starts_with("#") {
+            println(line);
+            continue;
+        }
+        println(f"> {line}");
+        let parts = split_on(line, ' ');
+        let cmd = parts[0].clone();
+        let mut args: Vec[String] = Vec.new();
+        let mut k: i64 = 1;
+        while k < parts.len() {
+            args.push(parts[k].clone());
+            k += 1;
+        }
+        if cmd == "dm" or cmd == "az" {
+            let mut words: Vec[String] = Vec.new();
+            let mut j: i64 = 1;
+            while j < args.len() {
+                words.push(args[j].clone());
+                j += 1;
+            }
+            if cmd == "dm" {
+                job_dm(args[0], words);
+            } else {
+                job_az(args[0], words);
+            }
+        } else if cmd == "!labels" {
+            prog_labels(args[0]);
+        } else if cmd == "!tickets" {
+            prog_tickets(args[0]);
+        } else if cmd == "!capacity" {
+            prog_capacity();
+        } else {
+            println(f"unknown job {line}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("232044617461204d61747269783a2074686520646f63737472696e67206578616d706c6520616e642074686520656e636f646174696f6e206d6f646573\n646d207061796c6f6164732f6875646f72612e74787420617274\n646d207061796c6f6164732f68656c6c6f2e747874\n646d207061796c6f6164732f6f6e652e74787420717a3d3120617274\n646d207061796c6f6164732f6e756c2e747874\n646d207061796c6f6164732f6469676974732e747874\n646d207061796c6f6164732f6f64645f6469676974732e747874\n646d207061796c6f6164732f75707065722e747874\n646d207061796c6f6164732f6c6f7765722e747874\n646d207061796c6f6164732f7831322e747874\n646d207061796c6f6164732f75726c2e747874\n646d207061796c6f6164732f6d697865645f636173652e747874\n646d207061796c6f6164732f73657269616c2e747874\n646d207061796c6f6164732f636f6e74726f6c2e747874\n646d207061796c6f6164732f70756e63742e747874\n646d207061796c6f6164732f63726c662e747874\n232044617461204d61747269783a206368617261637465722073657473\n646d207061796c6f6164732f6c6174696e312e747874\n646d207061796c6f6164732f636166652e747874\n646d207061796c6f6164732f677265656b2e747874\n646d207061796c6f6164732f656d6f6a692e747874\n646d207061796c6f6164732f6c6174696e312e74787420656e633d6173636969\n646d207061796c6f6164732f6c6174696e312e74787420656e633d69736f2d383835392d31\n646d207061796c6f6164732f6c6174696e312e74787420656e633d7574662d38\n646d207061796c6f6164732f677265656b2e74787420656e633d69736f2d383835392d31\n646d207061796c6f6164732f636f6d7061745f686967682e74787420656e633d636f6d706174\n646d207061796c6f6164732f6575726f2e74787420656e633d636f6d706174\n646d207061796c6f6164732f68656c6c6f2e74787420656e633d6c6174696e32\n646d207061796c6f6164732f666e63315f636f6d7061742e747874\n646d207061796c6f6164732f666e63315f636f6d7061742e74787420656e633d6175746f\n646d207061796c6f6164732f62696e6172792e747874\n232044617461204d61747269783a207368617065732c2062797465206d6f64652c2070616464696e6720616e642073697a65206c696d697473\n646d207061796c6f6164732f68656c6c6f2e7478742073686170653d72656374616e67756c6172\n646d207061796c6f6164732f68656c6c6f2e7478742073686170653d6175746f\n646d207061796c6f6164732f6c6f7765722e7478742073686170653d72656374616e67756c6172\n");
+    s.push_str("646d207061796c6f6164732f6c6f7765722e7478742073686170653d6175746f\n646d207061796c6f6164732f75726c2e7478742073686170653d72656374616e67756c6172\n646d207061796c6f6164732f75726c2e7478742073686170653d6175746f\n646d207061796c6f6164732f6469676974732e7478742073686170653d72656374616e67756c617220717a3d3120617274\n646d207061796c6f6164732f6c6f6e675f746578742e7478742073686170653d72656374616e67756c6172\n646d207061796c6f6164732f68656c6c6f2e7478742073686170653d6f76616c\n646d207061796c6f6164732f75707065722e747874206279746573\n646d207061796c6f6164732f6c6f7765722e747874206279746573\n646d207061796c6f6164732f6c6174696e312e747874206279746573\n646d207061796c6f6164732f656d7074792e747874\n646d207061796c6f6164732f65786163745f6334302e747874\n646d207061796c6f6164732f65786163745f756e6c617463682e747874\n646d207061796c6f6164732f65786163745f756e6c617463682e7478742073686170653d6175746f\n646d207061796c6f6164732f6c6f6e675f746578742e747874\n646d207061796c6f6164732f6c6f6e675f6469676974732e747874\n646d207061796c6f6164732f687567652e747874\n646d207061796c6f6164732f746f6f5f6c6f6e672e747874\n646d207061796c6f6164732f6875646f72612e74787420717a3d30\n646d207061796c6f6164732f6875646f72612e74787420717a3d2d31\n2320417a7465633a206d6f6465732c2073686966747320616e6420627974652072756e73\n617a207061796c6f6164732f68656c6c6f2e74787420617274\n617a207061796c6f6164732f6f6e652e74787420717a3d3120617274\n617a207061796c6f6164732f6875646f72612e747874\n617a207061796c6f6164732f6469676974732e747874\n617a207061796c6f6164732f75707065722e747874\n617a207061796c6f6164732f6c6f7765722e747874\n617a207061796c6f6164732f75726c2e747874\n617a207061796c6f6164732f6d697865645f636173652e747874\n617a207061796c6f6164732f636f6e74726f6c2e747874\n617a207061796c6f6164732f70756e63742e747874\n617a207061796c6f6164732f63726c662e747874\n617a207061796c6f6164732f6e756c2e747874\n617a207061796c6f6164732f62696e6172792e747874\n617a207061796c6f6164732f62797465735f72756e2e747874\n617a207061796c6f6164732f7469636b65742e747874\n2320417a7465633a206368617261637465722073657473\n");
+    s.push_str("617a207061796c6f6164732f6c6174696e312e747874\n617a207061796c6f6164732f636166652e747874\n617a207061796c6f6164732f677265656b2e747874\n617a207061796c6f6164732f656d6f6a692e747874\n617a207061796c6f6164732f6c6174696e312e74787420656e633d6173636969\n617a207061796c6f6164732f6c6174696e312e74787420656e633d7574662d38\n2320417a7465633a206572726f7220636f7272656374696f6e2c2073796d626f6c206b696e647320616e64206c6179657273\n617a207061796c6f6164732f68656c6c6f2e747874206563633d35\n617a207061796c6f6164732f68656c6c6f2e747874206563633d3530\n617a207061796c6f6164732f68656c6c6f2e747874206563633d3935\n617a207061796c6f6164732f68656c6c6f2e747874206563633d34\n617a207061796c6f6164732f68656c6c6f2e747874206563633d3936\n617a207061796c6f6164732f68656c6c6f2e747874206b696e643d66756c6c\n617a207061796c6f6164732f6f6e652e747874206b696e643d66756c6c20717a3d3020617274\n617a207061796c6f6164732f68656c6c6f2e747874206b696e643d636f6d70616374206c61796572733d34\n617a207061796c6f6164732f68656c6c6f2e747874206b696e643d66756c6c206c61796572733d36\n617a207061796c6f6164732f6c6f7765722e747874206b696e643d636f6d70616374206c61796572733d31\n617a207061796c6f6164732f68656c6c6f2e747874206c61796572733d32\n617a207061796c6f6164732f68656c6c6f2e747874206b696e643d636f6d70616374206c61796572733d35\n617a207061796c6f6164732f68656c6c6f2e747874206b696e643d66756c6c206c61796572733d3333\n617a207061796c6f6164732f706172612e747874206b696e643d636f6d70616374\n617a207061796c6f6164732f706172612e747874\n617a207061796c6f6164732f706172612e74787420717a3d3020617274\n617a207061796c6f6164732f6269675f617a2e747874\n617a207061796c6f6164732f687567655f617a2e747874\n617a207061796c6f6164732f687567652e747874\n617a207061796c6f6164732f746f6f5f6c6f6e672e747874\n617a207061796c6f6164732f656d7074792e747874\n232070726f6772616d733a20475331206c6162656c732c207469636b6574732c2073796d626f6c2073697a6573\n216c6162656c73207461626c65732f70726f64756374732e637376\n217469636b657473207061796c6f6164732f7469636b6574732e747874\n216361706163697479\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("payloads/hudora.txt 4875446f5261\npayloads/hello.txt 48656c6c6f2c20576f726c6421\npayloads/empty.txt \npayloads/one.txt 61\npayloads/nul.txt 00\npayloads/digits.txt 31323334353637383930\npayloads/odd_digits.txt 3132333435\npayloads/upper.txt 4142434445464748494a4b4c4d4e4f50\npayloads/lower.txt 74686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67\npayloads/x12.txt 4142432a3132333e58595a0d44454620474849\npayloads/url.txt 68747470733a2f2f6578616d706c652e636f6d2f6f72646572733f69643d31303432267265663d6d61696c\npayloads/latin1.txt 526175737363686d6569c39f6572\npayloads/cafe.txt 636166c3a9206372c3a86d65206272c3bb6cc3a965\npayloads/greek.txt ce95cebbcebbceb7cebdceb9cebaceac\npayloads/emoji.txt f09f93a62070617263656c203432\npayloads/control.txt 010274616209686572651b455343\npayloads/mixed_case.txt 4f52444552206e6f2e20343220666f72204d7220536d6974683a20332078205769646765742d584c\npayloads/serial.txt 534e303132333435363738393031323334353637383930313233343536373839303132333435363738393031323334353637\npayloads/fnc1_compat.txt c3a730313132333435363738393031323331\npayloads/compat_high.txt 4772c3bcc39f65\npayloads/euro.txt 707269636520e282ac35\npayloads/long_text.txt 64617461206d61747269782073796d626f6c7320636172727920757020746f206669667465656e2068756e6472656420627974657320696e206120737175617265207468652073697a65206f662061207374616d702c20616e642074686520656e636f646572207069636b7320746865206368656170657374206f6620666f757220656e636f646174696f6e20736368656d657320666f722065766572792073747265746368206f662074686520746578743a20617363696920666f722064696769747320696e2070616972732c206320666f72747920666f72206361706974616c732c207465787420666f72206c6f776572206361736520616e642078207477656c766520666f72207468652065646920636861726163746572207365742c20737769746368696e672077697468206c617463686573207768656e20746861742073617665732073706163652e\npayloads/long_digits.txt 30373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633303734313835323936333037343138353239363330373431383532393633\n");
+    s.push_str("payloads/too_long.txt 787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878\n");
+    s.push_str("payloads/huge.txt 6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a6162636465666768696a\n");
+    s.push_str("payloads/exact_c40.txt 414243444546\npayloads/exact_unlatch.txt 414243414243414243\npayloads/binary.txt 00c280c3bf07c3880d0a41\npayloads/bytes_run.txt c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4c3a4656e64\npayloads/crlf.txt 6c696e65206f6e650d0a6c696e652074776f2e206e6578742c207468656e3a20646f6e65\npayloads/punct.txt 6121622263236424652566266727682869296a2a6b2b6c\npayloads/ticket.txt 4d31444f452f4a414e4520202020202020202020202045414243313233204f534c42474f445920303631322031323359303132413030343220313030\npayloads/para.txt 417a74656320636f6465732061726520726561642066726f6d207468652063656e747265206f757477617264732c20736f2074686579206e656564206e6f207175696574207a6f6e653b207468652062756c6c736579652066696e646572207369747320696e20746865206d6964646c652c20746865206d6f6465206d6573736167652072696e67732069742c20616e642074686520646174612073706972616c73206f757420696e206c6179657273206f6620646f6d696e6f65732e2046756c6c2d72616e67652073796d626f6c73206164642061207265666572656e63652067726964206576657279207369787465656e206d6f64756c657320736f2061207265616465722063616e20666f6c6c6f7720746865206c6179657273206576656e207768656e20746865207072696e74206973207761727065642e\npayloads/big_az.txt 41484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56434a5158454c535a474e5542495057444b5259464d5441484f56\n");
+    s.push_str("payloads/huge_az.txt 303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437303336393235383134373033363932353831343730333639323538313437\n");
+    s.push_str("tables/products.csv 736b752c6774696e2c6578706972792c62617463682c73657269616c0a4153502d3130302c30393530363030303133343335322c3236313233312c4c343531322c0a5649542d432c30393530363030303133343336392c3237303633302c4237372c534e303030310a42414e442d532c30393530363030303133343337362c2c58312c534e303030320a474c4f56452d4d2c30393530363030303133343338332c3238303130312c474c2d323032362d31302c0a4241442d43484b2c30393530363030303133343339312c3236313233312c4c312c0a53484f52542c303935303630303031333433352c3236313233312c4c322c0a4e4f2d42415443482c30393530363030303133343335322c3236313233312c2c534e390a5441422c30393530363030303133343335322c3236313233312c4c09332c0a\npayloads/tickets.txt 7261696c7c4f534c2d42474f7c323032362d31312d30322030373a32357c636172203420736561742035317c4e4f4b203839390a7261696c7c42474f2d4f534c7c323032362d31312d30342031363a30307c636172203220736561742031327c4e4f4b203839390a666c696768747c4d31444f452f4a414e452045414243313233204f534c4344474146203130373520333036593032344330303337203130300a6576656e747c434f4e434552542048414c4c7c524f57204b20534541542031347c323032362d31322d32342031393a33307c494420373733303034310a7472616e7369747c7a6f6e6520312d327c76616c6964203234687c6e72203030303431320a\njobs.txt 232044617461204d61747269783a2074686520646f63737472696e67206578616d706c6520616e642074686520656e636f646174696f6e206d6f6465730a646d207061796c6f6164732f6875646f72612e747874206172740a646d207061796c6f6164732f68656c6c6f2e7478740a646d207061796c6f6164732f6f6e652e74787420717a3d31206172740a646d207061796c6f6164732f6e756c2e7478740a646d207061796c6f6164732f6469676974732e7478740a646d207061796c6f6164732f6f64645f6469676974732e7478740a646d207061796c6f6164732f75707065722e7478740a646d207061796c6f6164732f6c6f7765722e7478740a646d207061796c6f6164732f7831322e7478740a646d207061796c6f6164732f75726c2e7478740a646d207061796c6f6164732f6d697865645f636173652e7478740a646d207061796c6f6164732f73657269616c2e7478740a646d207061796c6f6164732f636f6e74726f6c2e7478740a646d207061796c6f6164732f70756e63742e7478740a646d207061796c6f6164732f63726c662e7478740a232044617461204d61747269783a2063686172616374657220736574730a646d207061796c6f6164732f6c6174696e312e7478740a646d207061796c6f6164732f636166652e7478740a646d207061796c6f6164732f677265656b2e7478740a646d207061796c6f6164732f656d6f6a692e7478740a646d207061796c6f6164732f6c6174696e312e74787420656e633d61736369690a646d207061796c6f6164732f6c6174696e312e74787420656e633d69736f2d383835392d310a646d207061796c6f6164732f6c6174696e312e74787420656e633d7574662d380a646d207061796c6f6164732f677265656b2e74787420656e633d69736f2d383835392d310a646d207061796c6f6164732f636f6d7061745f686967682e74787420656e633d636f6d7061740a646d207061796c6f6164732f6575726f2e74787420656e633d636f6d7061740a646d207061796c6f6164732f68656c6c6f2e74787420656e633d6c6174696e320a646d207061796c6f6164732f666e63315f636f6d7061742e7478740a646d207061796c6f6164732f666e63315f636f6d7061742e74787420656e633d6175746f0a646d207061796c6f6164732f62696e6172792e7478740a232044617461204d61747269783a207368617065732c2062797465206d6f64652c2070616464696e6720616e642073697a65206c696d6974730a646d207061796c6f6164732f68656c6c6f2e7478742073686170653d72656374616e67756c61720a646d207061796c6f6164732f68656c6c6f2e7478742073686170653d6175746f0a646d207061796c6f6164732f6c6f7765722e7478742073686170653d72656374616e67756c61720a646d207061796c6f6164732f6c6f7765722e7478742073686170653d6175746f0a646d207061796c6f6164732f75726c2e7478742073686170653d72656374616e67756c61720a646d207061796c6f6164732f75726c2e7478742073686170653d6175746f0a646d207061796c6f6164732f6469676974732e7478742073686170653d72656374616e67756c617220717a3d31206172740a646d207061796c6f6164732f6c6f6e675f746578742e7478742073686170653d72656374616e67756c61720a646d207061796c6f6164732f68656c6c6f2e7478742073686170653d6f76616c0a646d207061796c6f6164732f75707065722e7478742062797465730a646d207061796c6f6164732f6c6f7765722e7478742062797465730a646d207061796c6f6164732f6c6174696e312e7478742062797465730a646d207061796c6f6164732f656d7074792e7478740a646d207061796c6f6164732f65786163745f6334302e7478740a646d207061796c6f6164732f65786163745f756e6c617463682e7478740a646d207061796c6f6164732f65786163745f756e6c617463682e7478742073686170653d6175746f0a646d207061796c6f6164732f6c6f6e675f746578742e7478740a646d207061796c6f6164732f6c6f6e675f6469676974732e7478740a646d207061796c6f6164732f687567652e7478740a646d207061796c6f6164732f746f6f5f6c6f6e672e7478740a646d207061796c6f6164732f6875646f72612e74787420717a3d300a646d207061796c6f6164732f6875646f72612e74787420717a3d2d310a2320417a7465633a206d6f6465732c2073686966747320616e6420627974652072756e730a617a207061796c6f6164732f68656c6c6f2e747874206172740a617a207061796c6f6164732f6f6e652e74787420717a3d31206172740a617a207061796c6f6164732f6875646f72612e7478740a617a207061796c6f6164732f6469676974732e7478740a617a207061796c6f6164732f75707065722e7478740a617a207061796c6f6164732f6c6f7765722e7478740a617a207061796c6f6164732f75726c2e7478740a617a207061796c6f6164732f6d697865645f636173652e7478740a617a207061796c6f6164732f636f6e74726f6c2e7478740a617a207061796c6f6164732f70756e63742e7478740a617a207061796c6f6164732f63726c662e7478740a617a207061796c6f6164732f6e756c2e7478740a617a207061796c6f6164732f62696e6172792e7478740a617a207061796c6f6164732f62797465735f72756e2e7478740a617a207061796c6f6164732f7469636b65742e7478740a2320417a7465633a2063686172616374657220736574730a617a207061796c6f6164732f6c6174696e312e7478740a617a207061796c6f6164732f636166652e7478740a617a207061796c6f6164732f677265656b2e7478740a617a207061796c6f6164732f656d6f6a692e7478740a617a207061796c6f6164732f6c6174696e312e74787420656e633d61736369690a617a207061796c6f6164732f6c6174696e312e74787420656e633d7574662d380a2320417a7465633a206572726f7220636f7272656374696f6e2c2073796d626f6c206b696e647320616e64206c61796572730a617a207061796c6f6164732f68656c6c6f2e747874206563633d350a617a207061796c6f6164732f68656c6c6f2e747874206563633d35300a617a207061796c6f6164732f68656c6c6f2e747874206563633d39350a617a207061796c6f6164732f68656c6c6f2e747874206563633d340a617a207061796c6f6164732f68656c6c6f2e747874206563633d39360a617a207061796c6f6164732f68656c6c6f2e747874206b696e643d66756c6c0a617a207061796c6f6164732f6f6e652e747874206b696e643d66756c6c20717a3d30206172740a617a207061796c6f6164732f68656c6c6f2e747874206b696e643d636f6d70616374206c61796572733d340a617a207061796c6f6164732f68656c6c6f2e747874206b696e643d66756c6c206c61796572733d360a617a207061796c6f6164732f6c6f7765722e747874206b696e643d636f6d70616374206c61796572733d310a617a207061796c6f6164732f68656c6c6f2e747874206c61796572733d320a617a207061796c6f6164732f68656c6c6f2e747874206b696e643d636f6d70616374206c61796572733d350a617a207061796c6f6164732f68656c6c6f2e747874206b696e643d66756c6c206c61796572733d33330a617a207061796c6f6164732f706172612e747874206b696e643d636f6d706163740a617a207061796c6f6164732f706172612e7478740a617a207061796c6f6164732f706172612e74787420717a3d30206172740a617a207061796c6f6164732f6269675f617a2e7478740a617a207061796c6f6164732f687567655f617a2e7478740a617a207061796c6f6164732f687567652e7478740a617a207061796c6f6164732f746f6f5f6c6f6e672e7478740a617a207061796c6f6164732f656d7074792e7478740a232070726f6772616d733a20475331206c6162656c732c207469636b6574732c2073796d626f6c2073697a65730a216c6162656c73207461626c65732f70726f64756374732e6373760a217469636b657473207061796c6f6164732f7469636b6574732e7478740a2163617061636974790a\n");
+    s
+}
