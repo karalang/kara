@@ -566,15 +566,22 @@ impl Walk<'_, '_> {
 
     /// The binding `name` resolves to.
     fn root_of(&self, name: &str) -> Root {
+        self.binding_root(name).unwrap_or(Root::SelfValue)
+    }
+
+    /// The binding `name` resolves to, or `None` when it names no local,
+    /// parameter or `self`: a `const` or other global is not a place under
+    /// any of them (B-2026-10-24-25).
+    fn binding_root(&self, name: &str) -> Option<Root> {
         if name == "self" {
-            return Root::SelfValue;
+            return Some(Root::SelfValue);
         }
         for (i, scope) in self.scopes.iter().enumerate().rev() {
             if let Some(j) = scope.iter().rposition(|(n, _, _)| n == name) {
-                return Root::Local(i, j);
+                return Some(Root::Local(i, j));
             }
         }
-        Root::SelfValue
+        None
     }
 
     /// A place's root binding and its projection steps, and whether a step
@@ -590,7 +597,7 @@ impl Walk<'_, '_> {
                 ExprKind::Index { object, .. } => (object, None),
                 ExprKind::Identifier(n) => {
                     path.reverse();
-                    return Some((self.root_of(n), path, handle));
+                    return Some((self.binding_root(n)?, path, handle));
                 }
                 ExprKind::SelfValue => {
                     path.reverse();
@@ -993,8 +1000,9 @@ impl Walk<'_, '_> {
                 self.note_capture_write(target);
                 // A rebound root names another value from here on.
                 if let ExprKind::Identifier(n) = &target.kind {
-                    let root = self.root_of(n);
-                    self.borrowed.retain(|b| b.root != root);
+                    if let Some(root) = self.binding_root(n) {
+                        self.borrowed.retain(|b| b.root != root);
+                    }
                 }
             }
             StmtKind::MultiAssign { targets, values } => {

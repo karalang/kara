@@ -12919,3 +12919,22 @@ fn an_array_of_non_scalar_elements_has_the_slice_reads() {
         "true false true\nSome(a) Some(b) Some(y) None Some((1, p))\n",
     );
 }
+
+#[test]
+fn a_for_over_a_const_array_borrows_nothing_under_self() {
+    // B-2026-10-24-25: a `const` is not a place under `self`, so writing a
+    // field of `self` inside `for w in WORDS` does not conflict with the
+    // loop's borrow.
+    accepted_and_runs(
+        "for-over-const-writes-self",
+        "const WORDS: Array[Str, 3] = [\"ab\", \"cd\", \"ef\"];\n\
+         struct Lex { pos: i64, hits: i64 }\nimpl Lex {\n    \
+         fn bump(mut ref self) { self.hits += 1; }\n    \
+         fn scan(mut ref self) -> i64 {\n        for w in WORDS {\n            \
+         if w.len() > 1 {\n                self.pos += 1;\n                self.bump();\n                \
+         return self.pos;\n            }\n        }\n        -1\n    }\n}\n\
+         fn main() {\n    let mut l = Lex { pos: 0, hits: 0 };\n    let p = l.scan();\n    \
+         println(f\"{p} {l.hits}\");\n}\n",
+        "1 1\n",
+    );
+}
