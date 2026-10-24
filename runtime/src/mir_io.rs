@@ -567,6 +567,13 @@ pub unsafe extern "C" fn karac_mir_tcp(
     value: *mut i64,
 ) -> i32 {
     use crate::event_loop as ev;
+    #[cfg(unix)]
+    {
+        // SAFETY: the caller's contract.
+        if let Some(code) = unsafe { tcp_unix(op, fd, ptr, len, value) } {
+            return code;
+        }
+    }
     // A construction result: the descriptor, or the runtime's cause code.
     let built = |r: i64| match r {
         r if r >= 0 => (-1, r),
@@ -598,6 +605,10 @@ pub unsafe extern "C" fn karac_mir_tcp(
                 #[cfg(unix)]
                 if bound.0 == -1 {
                     announce_port(ptr, len, bound.1);
+                    if let Err(e) = crate::mir_sock::set_nonblocking(bound.1 as i32) {
+                        crate::mir_sock::close(bound.1 as i32);
+                        return net_cause(&e).0;
+                    }
                 }
                 bound
             }
@@ -633,6 +644,112 @@ pub unsafe extern "C" fn karac_mir_tcp(
     // SAFETY: as above.
     unsafe { *value = v };
     code
+}
+
+/// [`karac_mir_tcp`]'s calls that can wait, on unix, under the reactor
+/// contract (`mir_sock.rs`): `connect` (1), `accept` (2), `read` (5),
+/// `write` (6), `write_all` (7) and `connect_finish` (8, `fd` the socket
+/// a `connect` answered `IO_IN_PROGRESS` with). An armed call that would
+/// block answers `IO_NOT_READY`; `None` leaves the op to the caller.
+///
+/// # Safety
+/// As [`karac_mir_tcp`].
+#[cfg(all(feature = "net", unix))]
+unsafe fn tcp_unix(op: i32, fd: i64, ptr: *mut u8, len: i64, value: *mut i64) -> Option<i32> {
+    use crate::mir_sock::{self as sock, Got};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::os::fd::IntoRawFd;
+    // Taken on every path, so a stale bit never reaches a later call.
+    let armed = sock::take_armed();
+    if !matches!(op, 1 | 2 | 5..=8) {
+        return None;
+    }
+    let raw = fd as i32;
+    // SAFETY: the caller's contract.
+    let buf = || unsafe {
+        if ptr.is_null() || len <= 0 {
+            &mut [][..]
+        } else {
+            std::slice::from_raw_parts_mut(ptr, len as usize)
+        }
+    };
+    let mut infl = -1;
+    let got = match op {
+        1 => {
+            // SAFETY: the caller's contract.
+            let text = unsafe { std::str::from_utf8(buf_bytes(ptr, len.max(0) as usize)) };
+            match text
+                .ok()
+                .and_then(|t| t.parse::<std::net::SocketAddr>().ok())
+            {
+                None => (7, 0),
+                Some(at) => match sock::connect(at, armed, &mut infl) {
+                    Got::Done(c) => (-1, c),
+                    Got::NotReady => (sock::IO_IN_PROGRESS, infl),
+                    Got::Fail(e) => net_cause(&e),
+                },
+            }
+        }
+        8 => match sock::connect_finish(raw) {
+            Got::Done(c) => (-1, c),
+            Got::NotReady => (sock::IO_NOT_READY, 0),
+            Got::Fail(e) => net_cause(&e),
+        },
+        _ => {
+            let got = match op {
+                // SAFETY: `fd` is a listener (the caller's contract).
+                2 => sock::drive(raw, false, armed, || unsafe {
+                    let (c, _) = borrowed::<TcpListener>(fd).accept()?;
+                    let c = c.into_raw_fd();
+                    if let Err(e) = sock::set_nonblocking(c) {
+                        sock::close(c);
+                        return Err(e);
+                    }
+                    Ok(i64::from(c))
+                }),
+                // SAFETY: `fd` is a stream (the caller's contract).
+                5 => sock::drive(raw, false, armed, || unsafe {
+                    borrowed::<TcpStream>(fd).read(buf()).map(|n| n as i64)
+                }),
+                // SAFETY: as above.
+                6 => sock::drive(raw, true, armed, || unsafe {
+                    borrowed::<TcpStream>(fd).write(buf()).map(|n| n as i64)
+                }),
+                // Every byte, waiting as it must: `write_all` is a library
+                // loop over `write` in a task, so this is never armed.
+                _ => {
+                    let all = buf();
+                    let mut done = 0;
+                    loop {
+                        if done == all.len() {
+                            break Got::Done(done as i64);
+                        }
+                        // SAFETY: as above.
+                        let got = sock::drive(raw, true, false, || unsafe {
+                            borrowed::<TcpStream>(fd)
+                                .write(&all[done..])
+                                .map(|n| n as i64)
+                        });
+                        match got {
+                            Got::Done(0) => break Got::Done(done as i64),
+                            Got::Done(n) => done += n as usize,
+                            Got::Fail(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                            other => break other,
+                        }
+                    }
+                }
+            };
+            match got {
+                Got::Done(n) => (-1, n),
+                Got::NotReady => (sock::IO_NOT_READY, 0),
+                Got::Fail(e) => net_cause(&e),
+            }
+        }
+    };
+    // SAFETY: the caller's contract.
+    unsafe { *value = got.1 };
+    Some(got.0)
 }
 
 /// Whether the OS error `errno` is a read timeout expiring (`EAGAIN` from
@@ -701,8 +818,19 @@ pub unsafe extern "C" fn karac_mir_net(
     value: *mut i64,
     out: *mut RawVec,
 ) -> i32 {
+    use crate::mir_sock::{self as sock, Got};
     use std::net::{TcpListener, TcpStream, UdpSocket};
     use std::os::fd::IntoRawFd;
+    let armed = sock::take_armed();
+    // A datagram call that can wait, under the reactor contract
+    // (`mir_sock.rs`): an armed one that would block is `IO_NOT_READY`.
+    let driven = |write: bool, call: &mut dyn FnMut() -> std::io::Result<i64>| match sock::drive(
+        fd as i32, write, armed, call,
+    ) {
+        Got::Done(n) => Ok(n),
+        Got::NotReady => Err((sock::IO_NOT_READY, 0)),
+        Got::Fail(e) => Err(net_cause(&e)),
+    };
     // SAFETY: the caller's contract.
     let text = |p: *const u8, n: i64| unsafe {
         std::str::from_utf8(buf_bytes(p, n.max(0) as usize))
@@ -732,7 +860,6 @@ pub unsafe extern "C" fn karac_mir_net(
         }
         Err(e) => Err(net_cause(&e)),
     };
-    let count = |r: std::io::Result<usize>| r.map(|n| n as i64).map_err(|e| net_cause(&e));
     let unit = |r: std::io::Result<()>| r.map(|()| 0).map_err(|e| net_cause(&e));
     // SAFETY: the caller's contract.
     let res: Result<i64, (i32, i64)> = unsafe {
@@ -741,24 +868,43 @@ pub unsafe extern "C" fn karac_mir_net(
             1 => timeout().and_then(|t| unit(borrowed::<TcpStream>(fd).set_read_timeout(t))),
             2 => match text(ptr, len) {
                 None => Err((7, 0)),
-                Some(at) => UdpSocket::bind(at)
-                    .map(|s| i64::from(s.into_raw_fd()))
-                    .map_err(|e| net_cause(&e)),
+                Some(at) => match UdpSocket::bind(at).and_then(|s| {
+                    s.set_nonblocking(true)?;
+                    Ok(s)
+                }) {
+                    Ok(s) => Ok(i64::from(s.into_raw_fd())),
+                    Err(e) => Err(net_cause(&e)),
+                },
             },
             3 => match text(addr, addr_len) {
                 None => Err((7, 0)),
-                Some(at) => count(borrowed::<UdpSocket>(fd).send_to(bytes(), at)),
+                Some(at) => driven(true, &mut || {
+                    borrowed::<UdpSocket>(fd)
+                        .send_to(bytes(), at)
+                        .map(|n| n as i64)
+                }),
             },
-            4 => match borrowed::<UdpSocket>(fd).recv_from(bytes_mut()) {
-                Ok((n, from)) => addr_out(Ok(from)).map(|_| n as i64),
-                Err(e) => Err(net_cause(&e)),
-            },
+            4 => {
+                let mut from = None;
+                driven(false, &mut || {
+                    let (n, a) = borrowed::<UdpSocket>(fd).recv_from(bytes_mut())?;
+                    from = Some(a);
+                    Ok(n as i64)
+                })
+                .and_then(|n| addr_out(Ok(from.expect("recv_from's sender"))).map(|_| n))
+            }
             5 => match text(addr, addr_len) {
                 None => Err((7, 0)),
                 Some(at) => unit(borrowed::<UdpSocket>(fd).connect(at)),
             },
-            6 => count(borrowed::<UdpSocket>(fd).send(bytes())),
-            7 => count(borrowed::<UdpSocket>(fd).recv(bytes_mut())),
+            6 => driven(true, &mut || {
+                borrowed::<UdpSocket>(fd).send(bytes()).map(|n| n as i64)
+            }),
+            7 => driven(false, &mut || {
+                borrowed::<UdpSocket>(fd)
+                    .recv(bytes_mut())
+                    .map(|n| n as i64)
+            }),
             8 => addr_out(borrowed::<UdpSocket>(fd).local_addr()),
             9 => timeout().and_then(|t| unit(borrowed::<UdpSocket>(fd).set_read_timeout(t))),
             _ => borrowed::<UdpSocket>(fd)

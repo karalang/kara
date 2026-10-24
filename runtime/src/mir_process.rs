@@ -22,6 +22,23 @@ enum StdioCfg {
     Err(Option<ChildStderr>),
 }
 
+/// A spawned child, and the descriptor its `wait` readiness loop waits on
+/// ([`karac_mir_child`] op 8): -2 until asked, -1 when there is none.
+/// `child` is `None` once `wait_with_output` took it.
+struct Kid {
+    child: Option<Child>,
+    wait_fd: i32,
+}
+
+impl Drop for Kid {
+    fn drop(&mut self) {
+        #[cfg(all(feature = "net", unix))]
+        if self.wait_fd >= 0 {
+            crate::mir_sock::close(self.wait_fd);
+        }
+    }
+}
+
 /// A pipe taken off a child. A closed stdin is `In(None)`.
 enum Pipe {
     Out(ChildStdout),
@@ -53,11 +70,82 @@ pub(crate) unsafe fn take_pipe(
 ) -> Result<Box<dyn Read>, Box<dyn Write>> {
     // SAFETY: the caller's contract.
     match *unsafe { Box::from_raw(handle.cast::<Pipe>()) } {
-        Pipe::Out(o) => Ok(Box::new(o)),
-        Pipe::Err(e) => Ok(Box::new(e)),
-        Pipe::In(Some(w)) => Err(Box::new(w)),
+        Pipe::Out(o) => Ok(waiting(o)),
+        Pipe::Err(e) => Ok(waiting(e)),
+        Pipe::In(Some(w)) => Err(waiting_out(w)),
         Pipe::In(None) => Err(Box::new(ClosedPipe)),
     }
+}
+
+/// A read pipe end as a blocking stream: the descriptor is non-blocking
+/// (the reactor contract, `mir_task.rs`), so a read that would block
+/// waits for it.
+fn waiting<T: Read + 'static + WaitFd>(r: T) -> Box<dyn Read> {
+    #[cfg(all(feature = "net", unix))]
+    return Box::new(crate::mir_sock::Waiting(r));
+    #[cfg(not(all(feature = "net", unix)))]
+    Box::new(r)
+}
+
+/// [`waiting`] for the write end.
+fn waiting_out<T: Write + 'static + WaitFd>(w: T) -> Box<dyn Write> {
+    #[cfg(all(feature = "net", unix))]
+    return Box::new(crate::mir_sock::Waiting(w));
+    #[cfg(not(all(feature = "net", unix)))]
+    Box::new(w)
+}
+
+/// A pipe end with a descriptor to wait on, where there is a reactor.
+#[cfg(all(feature = "net", unix))]
+trait WaitFd: std::os::fd::AsFd {}
+#[cfg(all(feature = "net", unix))]
+impl<T: std::os::fd::AsFd> WaitFd for T {}
+#[cfg(not(all(feature = "net", unix)))]
+trait WaitFd {}
+#[cfg(not(all(feature = "net", unix)))]
+impl<T> WaitFd for T {}
+
+/// Makes a spawned child's pipe ends non-blocking, as the reactor
+/// contract has every descriptor the natives hand out.
+#[cfg(all(feature = "net", unix))]
+fn nonblocking_pipes(c: &Child) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fds = [
+        c.stdin.as_ref().map(|p| p.as_raw_fd()),
+        c.stdout.as_ref().map(|p| p.as_raw_fd()),
+        c.stderr.as_ref().map(|p| p.as_raw_fd()),
+    ];
+    for fd in fds.into_iter().flatten() {
+        crate::mir_sock::set_blocking(fd, false)?;
+    }
+    Ok(())
+}
+
+/// Makes a child's pipe ends blocking again, for std's own reads.
+#[cfg(all(feature = "net", unix))]
+fn blocking_pipes(c: &Child) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fds = [
+        c.stdout.as_ref().map(|p| p.as_raw_fd()),
+        c.stderr.as_ref().map(|p| p.as_raw_fd()),
+    ];
+    for fd in fds.into_iter().flatten() {
+        crate::mir_sock::set_blocking(fd, true)?;
+    }
+    Ok(())
+}
+
+/// A pipe given to another child as its stream blocks again: the two
+/// ends share one open file description, and the child expects a
+/// blocking one.
+#[cfg(all(feature = "net", unix))]
+fn blocking<T: std::os::fd::AsRawFd>(p: T) -> std::io::Result<T> {
+    crate::mir_sock::set_blocking(p.as_raw_fd(), true)?;
+    Ok(p)
+}
+#[cfg(not(all(feature = "net", unix)))]
+fn blocking<T>(p: T) -> std::io::Result<T> {
+    Ok(p)
 }
 
 /// An `EnvVar` as compiled code lays it out: `op` 0 sets `key`, 1 removes
@@ -173,8 +261,8 @@ unsafe fn to_std(handle: *mut std::ffi::c_void) -> std::io::Result<std::process:
         StdioCfg::Null => Stdio::null(),
         StdioCfg::Piped => Stdio::piped(),
         StdioCfg::File(f) => Stdio::from(f.try_clone()?),
-        StdioCfg::Out(o) => Stdio::from(o.take().ok_or_else(given)?),
-        StdioCfg::Err(e) => Stdio::from(e.take().ok_or_else(given)?),
+        StdioCfg::Out(o) => Stdio::from(blocking(o.take().ok_or_else(given)?)?),
+        StdioCfg::Err(e) => Stdio::from(blocking(e.take().ok_or_else(given)?)?),
     })
 }
 
@@ -254,7 +342,13 @@ pub unsafe extern "C" fn karac_mir_command(
     crate::mir::out_flush();
     let res = cmd.spawn().and_then(|child| {
         if output == 0 {
-            return Ok(Box::into_raw(Box::new(Some(child))) as i64);
+            #[cfg(all(feature = "net", unix))]
+            nonblocking_pipes(&child)?;
+            let kid = Kid {
+                child: Some(child),
+                wait_fd: -2,
+            };
+            return Ok(Box::into_raw(Box::new(kid)) as i64);
         }
         let o = child.wait_with_output()?;
         // SAFETY: the caller's contract.
@@ -272,8 +366,10 @@ pub unsafe extern "C" fn karac_mir_command(
 /// `try_wait` (1), the status packed into `*value` (for `try_wait`, with
 /// its low bit set when the child has ended); `kill` (2);
 /// `wait_with_output` (3), as `output` in [`karac_mir_command`]; `id` (4);
-/// and taking its stdin (5), stdout (6) or stderr (7) pipe, a handle in
-/// `*value` or 0.
+/// taking its stdin (5), stdout (6) or stderr (7) pipe, a handle in
+/// `*value` or 0; and the descriptor `wait`'s readiness loop waits
+/// readable on (8, -1 for none). Armed (`mir_sock.rs`), `wait` answers
+/// `IO_NOT_READY` while the child runs.
 ///
 /// # Safety
 /// `handle` is a live child; `out` and `err` as in [`karac_mir_command`]
@@ -288,7 +384,12 @@ pub unsafe extern "C" fn karac_mir_child(
     msg: *mut RawVec,
 ) -> i32 {
     // SAFETY: the caller's contract.
-    let slot = unsafe { &mut *handle.cast::<Option<Child>>() };
+    let kid = unsafe { &mut *handle.cast::<Kid>() };
+    #[cfg(all(feature = "net", unix))]
+    let armed = crate::mir_sock::take_armed();
+    #[cfg(not(all(feature = "net", unix)))]
+    let armed = false;
+    let slot = &mut kid.child;
     let Some(child) = slot.as_mut() else {
         let gone = std::io::Error::other("the child was already waited for with its output");
         // SAFETY: the caller's contract.
@@ -300,11 +401,29 @@ pub unsafe extern "C" fn karac_mir_child(
             // A held stdin closes first, so the child can see the end of
             // its input.
             child.stdin = None;
-            child.wait().map(pack)
+            if armed {
+                match child.try_wait() {
+                    Ok(None) => {
+                        // SAFETY: the caller's contract.
+                        unsafe { *value = 0 };
+                        return NOT_READY;
+                    }
+                    r => r.map(|s| pack(s.expect("matched above"))),
+                }
+            } else {
+                child.wait().map(pack)
+            }
         }
         1 => child.try_wait().map(|s| s.map_or(0, |s| pack(s) | 1)),
         2 => child.kill().map(|()| 0),
         3 => {
+            // std reads a lone pipe with a plain `read_to_end`, which a
+            // non-blocking end would fail with `WouldBlock`.
+            #[cfg(all(feature = "net", unix))]
+            if let Err(e) = blocking_pipes(child) {
+                // SAFETY: the caller's contract.
+                return unsafe { io_error_code(&e, msg) };
+            }
             let child = slot.take().expect("checked above");
             child.wait_with_output().map(|o| {
                 // SAFETY: the caller's contract.
@@ -318,10 +437,44 @@ pub unsafe extern "C" fn karac_mir_child(
         4 => Ok(i64::from(child.id())),
         5 => Ok(pipe(child.stdin.take().map(|p| Pipe::In(Some(p))))),
         6 => Ok(pipe(child.stdout.take().map(Pipe::Out))),
-        _ => Ok(pipe(child.stderr.take().map(Pipe::Err))),
+        7 => Ok(pipe(child.stderr.take().map(Pipe::Err))),
+        _ => Ok(wait_fd(kid)),
     };
     // SAFETY: the caller's contract.
     unsafe { report(res, value, msg) }
+}
+
+/// The descriptor that turns readable once `kid` exits, opened on first
+/// ask: -1 when there is none, or once `wait_with_output` took the child.
+fn wait_fd(kid: &mut Kid) -> i64 {
+    if kid.wait_fd == -2 {
+        #[cfg(all(feature = "net", unix))]
+        let fd = kid
+            .child
+            .as_ref()
+            .map_or(-1, |c| crate::mir_sock::child_wait_fd(c.id()));
+        #[cfg(not(all(feature = "net", unix)))]
+        let fd = -1;
+        kid.wait_fd = fd;
+    }
+    i64::from(kid.wait_fd)
+}
+
+/// `Child.wait`'s readiness: the descriptor of [`karac_mir_child`]'s op 8,
+/// for `__ready` to wait readable on.
+///
+/// # Safety
+/// `handle` is a live child.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_child_wait_fd(handle: *mut std::ffi::c_void) -> i64 {
+    // SAFETY: the caller's contract.
+    let kid = unsafe { &mut *handle.cast::<Kid>() };
+    // The `wait` this guards closes a held stdin first; so does its
+    // readiness, or a child reading to the end of its input never exits.
+    if let Some(c) = kid.child.as_mut() {
+        c.stdin = None;
+    }
+    wait_fd(kid)
 }
 
 /// Drops a child: it neither waits for nor kills the process, and closes
@@ -333,7 +486,7 @@ pub unsafe extern "C" fn karac_mir_child(
 pub unsafe extern "C" fn karac_mir_child_free(handle: *mut std::ffi::c_void) {
     if !handle.is_null() {
         // SAFETY: the caller's contract.
-        drop(unsafe { Box::from_raw(handle.cast::<Option<Child>>()) });
+        drop(unsafe { Box::from_raw(handle.cast::<Kid>()) });
     }
 }
 
@@ -358,6 +511,13 @@ pub unsafe extern "C" fn karac_mir_pipe(
     // SAFETY: the caller's contract.
     let pipe = unsafe { &mut *handle.cast::<Pipe>() };
     let n = usize::try_from(len).unwrap_or(0);
+    #[cfg(all(feature = "net", unix))]
+    {
+        // SAFETY: the caller's contract.
+        if let Some(code) = unsafe { pipe_unix(pipe, op, ptr, n, value, msg) } {
+            return code;
+        }
+    }
     let res: std::io::Result<i64> = match pipe {
         // SAFETY: the caller's contract.
         Pipe::Out(o) if op <= 2 => unsafe { read_op(o, op, ptr, n) },
@@ -389,6 +549,79 @@ pub unsafe extern "C" fn karac_mir_pipe(
     // SAFETY: the caller's contract.
     unsafe { report(res, value, msg) }
 }
+
+/// [`karac_mir_pipe`]'s calls on a non-blocking pipe end, under the
+/// reactor contract (`mir_sock.rs`): `read` (0) and `write` (3) answer
+/// `IO_NOT_READY` when armed and they would block, and every other call
+/// waits for the descriptor as it must. `None` leaves a closed stdin and
+/// `close` to the caller.
+///
+/// # Safety
+/// As [`karac_mir_pipe`].
+#[cfg(all(feature = "net", unix))]
+unsafe fn pipe_unix(
+    pipe: &mut Pipe,
+    op: i32,
+    ptr: *mut u8,
+    n: usize,
+    value: *mut i64,
+    msg: *mut RawVec,
+) -> Option<i32> {
+    use crate::mir_sock::{self as sock, Got, Waiting};
+    use std::os::fd::AsRawFd;
+    let armed = sock::take_armed();
+    // SAFETY: the caller's contract.
+    let buf = || unsafe {
+        if ptr.is_null() || n == 0 {
+            &mut [][..]
+        } else {
+            std::slice::from_raw_parts_mut(ptr, n)
+        }
+    };
+    let got = match pipe {
+        Pipe::Out(o) if op == 0 => sock::drive_for(o.as_raw_fd(), false, armed, -1, || {
+            o.read(buf()).map(|k| k as i64)
+        }),
+        Pipe::Err(e) if op == 0 => sock::drive_for(e.as_raw_fd(), false, armed, -1, || {
+            e.read(buf()).map(|k| k as i64)
+        }),
+        // SAFETY: the caller's contract.
+        Pipe::Out(o) if op <= 2 => match unsafe { read_op(&mut Waiting(o), op, ptr, n) } {
+            Ok(k) => Got::Done(k),
+            Err(e) => Got::Fail(e),
+        },
+        // SAFETY: the caller's contract.
+        Pipe::Err(e) if op <= 2 => match unsafe { read_op(&mut Waiting(e), op, ptr, n) } {
+            Ok(k) => Got::Done(k),
+            Err(e) => Got::Fail(e),
+        },
+        Pipe::In(Some(w)) if op == 3 => sock::drive_for(w.as_raw_fd(), true, armed, -1, || {
+            w.write(buf()).map(|k| k as i64)
+        }),
+        Pipe::In(Some(w)) if op == 4 => match Waiting(w).write_all(buf()) {
+            Ok(()) => Got::Done(0),
+            Err(e) => Got::Fail(e),
+        },
+        _ => return None,
+    };
+    let res = match got {
+        Got::Done(k) => Ok(k),
+        Got::NotReady => {
+            // SAFETY: the caller's contract.
+            unsafe { *value = 0 };
+            return Some(NOT_READY);
+        }
+        Got::Fail(e) => Err(e),
+    };
+    // SAFETY: the caller's contract.
+    Some(unsafe { report(res, value, msg) })
+}
+
+/// The status of a call that would block, armed: `IO_NOT_READY`.
+#[cfg(all(feature = "net", unix))]
+const NOT_READY: i32 = crate::mir_sock::IO_NOT_READY;
+#[cfg(not(all(feature = "net", unix)))]
+const NOT_READY: i32 = 100;
 
 /// A read pipe's `read` (op 0), `read_to_end` (1) or `read_to_string` (2),
 /// as [`karac_mir_pipe`] has them.

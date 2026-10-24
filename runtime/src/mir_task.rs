@@ -24,8 +24,13 @@
 //!   wait answering 0 when ready and 1 when `timeout_ms` passed (-1: none),
 //!   and retries. A program that runs no task sees no change.
 //! - **Inside a task** a native that would block returns `IO_NOT_READY`
-//!   (100, exported from `mir_io.rs`) having done nothing, and never retries
-//!   itself. Kāra code never sees the status.
+//!   (100, `mir_sock.rs`) having done nothing, and never retries itself.
+//!   Kāra code never sees the status.
+//! - **Armed calls.** Only a call the readiness loop armed answers
+//!   `IO_NOT_READY`: a ready answer from `__ready` sets the thread's armed
+//!   bit (`karac_mir_io_arm`), and every native takes it, clearing it, on
+//!   every path. An unarmed call (one through a function value, or in a
+//!   body that is no coroutine) blocks as outside a task.
 //! - **The readiness loop** codegen emits around a suspending fd call is
 //!   `loop { while !__ready(op, fd) { yield }; r = native(..); if r !=
 //!   IO_NOT_READY { break }; karac_mir_io_stale(fd, write) }`. `__ready`
@@ -36,7 +41,8 @@
 //! - **Connect is two-phase.** On `EINPROGRESS`, `connect` returns
 //!   `IO_IN_PROGRESS` (101) with the fd in an out parameter. The loop waits
 //!   for that fd to be writable, then calls `connect_finish(fd)`, which
-//!   reads `SO_ERROR` itself.
+//!   answers `IO_NOT_READY` while the connect is still under way and
+//!   otherwise reads `SO_ERROR` itself.
 //! - **Close.** A native that closes a socket or pipe fd calls
 //!   `karac_mir_io_forget(fd)` first, so the reactor deregisters it before
 //!   the number can be reused. A `dup` shares the description, so it gets
@@ -44,9 +50,11 @@
 //! - **Timeouts.** A native reads an fd's timeout back with `getsockopt`. Until task
 //!   deadlines land (item 5), a task's read on an fd with a timeout falls
 //!   back to the blocking `io_wait`.
-//! - **Process waits** give the reactor an fd to wait readable on (pidfd on
-//!   Linux, a `SIGCHLD` self-pipe elsewhere). The wait native answers
-//!   `IO_NOT_READY` until the child has exited.
+//! - **Process waits** give the reactor an fd to wait readable on
+//!   (`karac_mir_child_wait_fd`: a pidfd on Linux, a kqueue watching the
+//!   process with `EVFILT_PROC` / `NOTE_EXIT` on macOS and the BSDs, -1
+//!   where neither is had, and the wait then blocks). The wait native
+//!   answers `IO_NOT_READY` until the child has exited.
 //! - **Wasm and non-unix** have no reactor. There `io_wait` is a sleep
 //!   loop, and nothing above changes what a program does.
 //!
@@ -426,8 +434,22 @@ pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     };
     #[cfg(not(unix))]
     let ready = true;
+    // A ready answer arms the call it guards (`mir_sock.rs`), which may
+    // then answer `IO_NOT_READY`; only once the readiness loop retries on
+    // that status.
+    #[cfg(all(feature = "net", unix))]
+    if ARM_ON_READY && ready {
+        crate::mir_sock::karac_mir_io_arm();
+    }
     note(ready, Wait::Fd(fd as i32, events))
 }
+
+/// Whether [`karac_mir_ready_fd`] arms the call after a ready answer: off
+/// until codegen's readiness loop handles `IO_NOT_READY`, since a call
+/// that still found nothing (a connection reset between the readiness
+/// check and its `accept`) would otherwise hand the status to Kāra code.
+#[cfg(all(feature = "net", unix))]
+const ARM_ON_READY: bool = false;
 
 thread_local! {
     /// The mutexes a task holds, by their cells' addresses (B-2026-10-19-23):

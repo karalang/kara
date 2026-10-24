@@ -83,6 +83,34 @@ impl<'ctx> Cx<'ctx, '_> {
                 let fd = self.load_i64(at)?;
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
             }
+            ("TcpStream", "write", [s, ..]) => {
+                let (at, _) = self.behind_refs(s)?;
+                let fd = self.load_i64(at)?;
+                self.rt_flag("ready_fd", &[fd.into(), i8t.const_int(1, false).into()])?
+            }
+            ("UdpSocket", "recv" | "recv_from", [s, ..]) => {
+                let (at, _) = self.behind_refs(s)?;
+                let fd = self.load_i64(at)?;
+                self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
+            }
+            // The child's exit makes its wait descriptor readable.
+            ("Child", "wait", [c, ..]) => {
+                let (at, _) = self.behind_refs(c)?;
+                let handle = self.load_ptr(at)?;
+                let i64t = self.llcx.i64_type();
+                let f = self.extern_fn(
+                    "karac_mir_child_wait_fd",
+                    i64t.fn_type(&[self.ptr_ty().into()], false),
+                );
+                let fd = self
+                    .builder
+                    .build_call(f, &[handle.into()], "")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
+            }
             ("TcpStream", "connect", _) => self.llcx.bool_type().const_int(1, false),
             ("Mutex", "acquire", [m, ..]) => {
                 let (cell, _) = self.cell_arg(m)?;

@@ -124,6 +124,8 @@ pub mod mir_flags;
 pub mod mir_io;
 pub mod mir_map;
 pub mod mir_process;
+#[cfg(all(feature = "net", unix))]
+pub mod mir_sock;
 pub mod mir_task;
 pub mod mutex;
 pub mod once;
@@ -325,6 +327,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_process::karac_mir_stdio_free,
         mir_process::karac_mir_command,
         mir_process::karac_mir_child,
+        mir_process::karac_mir_child_wait_fd,
         mir_process::karac_mir_child_free,
         mir_process::karac_mir_pipe,
         mir_process::karac_mir_pipe_free,
@@ -574,6 +577,15 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // Their other methods and `UdpSocket` (B-2026-10-15-18).
     #[cfg(all(feature = "net", unix))]
     keep!(mir_io::karac_mir_net);
+    // The reactor contract's socket calls (M4 item 2, `mir_sock.rs`).
+    #[cfg(all(feature = "net", unix))]
+    keep!(
+        mir_sock::karac_mir_io_arm,
+        mir_sock::karac_mir_io_wait,
+        mir_sock::karac_mir_io_stale,
+        mir_sock::karac_mir_io_forget,
+        mir_sock::karac_mir_sock_close,
+    );
     // `Server.serve` and `Request` on the MIR backend (`src/http1.rs`).
     #[cfg(feature = "net")]
     keep!(

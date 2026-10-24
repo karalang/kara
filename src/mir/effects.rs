@@ -2781,7 +2781,8 @@ fn main() -> () {
     }
 
     /// Child processes, the HTTP client and files have entries, so a
-    /// program that uses them is not left with every effect.
+    /// program that uses them is not left with every effect. `Child.wait`
+    /// suspends a task until the child exits (M4 item 2).
     #[test]
     fn effects_process_http_and_files_are_known() {
         let (p, tys) = from_mir(
@@ -2817,6 +2818,7 @@ fn io(_1: ref Vec[i64], _2: ref Vec[i64], _3: ref Vec[i64]) -> () {
                 "receives(Network @ fresh)",
                 "allocates(Heap)",
                 "blocks",
+                "suspends",
             ],
         );
     }

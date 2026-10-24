@@ -18,7 +18,7 @@ use super::ty::{AdtDef, AdtId, IntTy, Ty, TyInterner, TyKind, VariantDef};
 pub const YIELD_NOW: &str = "__yield_now";
 
 /// Whether the native `name` suspends: `__yield_now`, a sleep, a channel
-/// receive, or a join. The interpreter's natives complete synchronously, so
+/// receive, a join, a socket call that can wait, or a child's `wait`. The interpreter's natives complete synchronously, so
 /// under the executor a suspending native other than `__yield_now` yields
 /// once and then makes its call when resumed.
 pub fn suspends_native(name: &str) -> bool {
@@ -37,7 +37,9 @@ pub fn suspends_native(name: &str) -> bool {
             | ("Mutex", "acquire")
             | ("TaskGroup", "spawn_frame" | "end")
             | ("TcpListener", "accept")
-            | ("TcpStream", "read" | "connect")
+            | ("TcpStream", "read" | "write" | "connect")
+            | ("UdpSocket", "recv" | "recv_from")
+            | ("Child", "wait")
     )
 }
 

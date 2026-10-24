@@ -5545,6 +5545,8 @@ impl<'a> Interp<'a> {
                         self.sockets.listeners.remove(&fd);
                         self.sockets.streams.remove(&fd);
                         self.sockets.udp.remove(&fd);
+                        self.sockets.accepted.remove(&fd);
+                        self.sockets.written.remove(&fd);
                         return Ok(Value::Unit);
                     }
                     ("TcpListener", "local_addr", []) => {
@@ -5692,7 +5694,14 @@ impl<'a> Interp<'a> {
                                 other => return err(format!("{name} of a byte holding {other:?}")),
                             }
                         }
+                        // The write its `__ready` already made, under the
+                        // executor.
+                        let made = self.sockets.written.remove(&fd);
                         match self.sockets.streams.get_mut(&fd) {
+                            _ if made.is_some() => made
+                                .expect("checked")
+                                .map(|n| Value::Int(n as i128))
+                                .map_err(|e| syscall(&e)),
                             None => Err(not_open()),
                             Some(_) if bytes.is_empty() => Ok(Value::Int(0)),
                             Some(s) => s
@@ -12208,7 +12217,11 @@ impl<'a> Interp<'a> {
         for (_, w) in parked {
             match w {
                 Wait::Until(at) => nearest = Some(nearest.map_or(*at, |n| n.min(*at))),
-                Wait::Accept(_) | Wait::Read(_) => io = true,
+                Wait::Accept(_)
+                | Wait::Read(_)
+                | Wait::Write(..)
+                | Wait::Datagram(_)
+                | Wait::Child(_) => io = true,
                 Wait::Recv(_) | Wait::Send(_) | Wait::Join(_) | Wait::Group(..) | Wait::Lock(_) => {
                 }
             }
@@ -12289,6 +12302,23 @@ impl<'a> Interp<'a> {
             ("TcpListener", "accept", [l, ..]) => Some(Wait::Accept(self.socket_of(l, &callee)?)),
             ("TcpStream", "read", [st, ..]) => Some(Wait::Read(self.socket_of(st, &callee)?)),
             ("TcpStream", "connect", _) => None,
+            ("TcpStream", "write", [st, buf, ..]) => {
+                let fd = self.socket_of(st, &callee)?;
+                let bytes = self.bytes_of_view(buf, &callee)?;
+                Some(Wait::Write(fd, bytes))
+            }
+            ("UdpSocket", "recv" | "recv_from", [u, ..]) => {
+                Some(Wait::Datagram(self.socket_of(u, &callee)?))
+            }
+            // A datagram goes out whole or fails; it does not wait.
+            ("UdpSocket", "send" | "send_to", _) => None,
+            ("Child", "wait", [c, ..]) => match self.struct_value(c, &callee)?.as_slice() {
+                [Value::Agg(p)] => match p.as_slice() {
+                    [Value::Int(id)] => Some(Wait::Child(*id)),
+                    other => return err(format!("{callee} of a child holding {other:?}")),
+                },
+                other => return err(format!("{callee} of a child holding {other:?}")),
+            },
             ("Mutex", "acquire", [m, ..]) => Some(Wait::Lock(self.atomic_cell(m, &callee)?)),
             _ => return err(format!("__ready of {callee}, which does not suspend")),
         };
@@ -12369,6 +12399,55 @@ impl<'a> Interp<'a> {
                 let got = s.peek(&mut [0u8; 1]);
                 let _ = s.set_nonblocking(false);
                 !matches!(got, Err(e) if e.kind() == WouldBlock)
+            }
+            // A write is tried without blocking, and what it came to kept
+            // for the `write` that follows, as an accepted connection is.
+            Wait::Write(fd, bytes) => {
+                use std::io::Write;
+                if self.sockets.written.contains_key(fd) {
+                    return Ok(true);
+                }
+                let Some(s) = self.sockets.streams.get_mut(fd) else {
+                    return Ok(true);
+                };
+                if bytes.is_empty() {
+                    return Ok(true);
+                }
+                let _ = s.set_nonblocking(true);
+                let got = s.write(bytes);
+                let _ = s.set_nonblocking(false);
+                match got {
+                    Err(e) if e.kind() == WouldBlock => false,
+                    got => {
+                        self.sockets.written.insert(*fd, got);
+                        true
+                    }
+                }
+            }
+            Wait::Datagram(fd) => {
+                let Some(u) = self.sockets.udp.get(fd) else {
+                    return Ok(true);
+                };
+                if matches!(u.read_timeout(), Ok(Some(_))) {
+                    return Ok(true);
+                }
+                let _ = u.set_nonblocking(true);
+                let got = u.peek_from(&mut [0u8; 1]);
+                let _ = u.set_nonblocking(false);
+                !matches!(got, Err(e) if e.kind() == WouldBlock)
+            }
+            Wait::Child(id) => {
+                let slot = usize::try_from(*id - 1).ok();
+                match slot.and_then(|i| self.procs.children.get_mut(i)) {
+                    // The `wait` closes a held stdin first, so its
+                    // readiness does too: the child may be reading to the
+                    // end of its input.
+                    Some(Some(c)) => {
+                        drop(c.stdin.take());
+                        !matches!(c.try_wait(), Ok(None))
+                    }
+                    _ => true,
+                }
             }
         })
     }
@@ -13893,6 +13972,12 @@ enum Wait {
     /// A connection to accept, or bytes (or the end) to read.
     Accept(i64),
     Read(i64),
+    /// Room to write some of the bytes, which `__ready` then writes.
+    Write(i64, Vec<u8>),
+    /// A datagram to receive.
+    Datagram(i64),
+    /// A child, by its `ChildProcess` id, to exit.
+    Child(i128),
     /// A spawned task to return, by handle id.
     Join(usize),
     /// Room under a group's limit, or (`true`) all its tasks returned.
@@ -13910,6 +13995,9 @@ struct Sockets {
     /// A connection `__ready` accepted for a listener, which its `accept`
     /// takes next.
     accepted: rustc_hash::FxHashMap<i64, std::net::TcpStream>,
+    /// What a write `__ready` made for a stream came to, which its `write`
+    /// reports next.
+    written: rustc_hash::FxHashMap<i64, std::io::Result<usize>>,
 }
 
 impl Sockets {

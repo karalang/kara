@@ -1174,7 +1174,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// The `#[compiler_builtin]` `Drop` of the I/O type `name`, whose
     /// `mut ref` is in `slot`: `true` when it is one. A socket closes its
-    /// descriptor.
+    /// descriptor, leaving the reactor first (`karac_mir_sock_close`).
     pub(super) fn io_drop(&mut self, name: &str, slot: PointerValue<'ctx>) -> R<bool> {
         if !matches!(name, "TcpListener" | "TcpStream" | "UdpSocket") {
             return Ok(false);
@@ -1183,8 +1183,8 @@ impl<'ctx> Cx<'ctx, '_> {
         let fd = self.load_i64(v)?;
         let i64t = self.llcx.i64_type();
         let f = self.extern_fn(
-            "karac_runtime_tcp_close",
-            self.llcx.i32_type().fn_type(&[i64t.into()], false),
+            "karac_mir_sock_close",
+            self.llcx.void_type().fn_type(&[i64t.into()], false),
         );
         self.builder.build_call(f, &[fd.into()], "").map_err(e)?;
         Ok(true)
