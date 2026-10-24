@@ -136,6 +136,9 @@ pub struct Lowered {
     /// The receivers whose result borrows what the receiver's value
     /// borrows, not its place (§5.4; [`view_result`]).
     pub views: FxHashSet<String>,
+    /// The views whose result borrows through their receiver's references
+    /// ([`through_ref_fields`]).
+    pub pointee_views: FxHashSet<String>,
     /// For a program that binds a resource (core semantics §14), the
     /// effects of the program as built, before provider specialisation
     /// replaced its calls on resources: what `par_check` reports from.
@@ -416,12 +419,18 @@ fn lower_program_inner<'a>(
             break;
         }
     }
+    let pointee_views: FxHashSet<String> = views
+        .iter()
+        .filter(|n| through_ref_fields(&lcx.program, &lcx.tys, &views, n))
+        .cloned()
+        .collect();
     Lowered {
         program: lcx.program,
         tys: lcx.tys,
         errors: lcx.errors,
         receivers,
         views,
+        pointee_views,
         effects: None,
     }
 }
@@ -479,6 +488,105 @@ fn view_result(t: &ast::TypeExpr, params: &[&str]) -> bool {
         ast::TypeKind::Array { element, .. } => view_result(element, params),
         _ => false,
     }
+}
+
+/// Whether the view `name`'s result borrows only what the values its
+/// receiver refers to hold (`ResultBorrows::ReceiverPointeeValue`): its
+/// receiver's fields are each a reference or a scalar, every call it makes
+/// is itself a view, and it copies no reference field out, so nothing it
+/// returns can carry the receiver's references themselves.
+/// `IterByRef.next` over a view iterator is one (B-2026-10-21-59); a
+/// lending iterator, whose `next` is not a view, keeps its loan.
+fn through_ref_fields(
+    program: &interp::Program,
+    tys: &TyInterner,
+    views: &FxHashSet<String>,
+    name: &str,
+) -> bool {
+    use crate::mir::syntax::{StatementKind, TerminatorKind};
+    let Some(body) = program.bodies.get(name) else {
+        return false;
+    };
+    let tcx = tys.tcx();
+    let Some(recv) = body.locals.get(1).map(|l| l.ty) else {
+        return false;
+    };
+    let (HK::Ref(st) | HK::MutRef(st)) = tcx.kind(recv) else {
+        return false;
+    };
+    let Some((adt, _)) = tcx.adt_of(st) else {
+        return false;
+    };
+    let Some(v) = adt.variants.first().filter(|_| !adt.is_enum) else {
+        return false;
+    };
+    let fields_ok = (0..v.fields.len() as u32).all(|i| {
+        tcx.field_ty(st, None, i).is_some_and(|t| {
+            matches!(
+                tcx.kind(t),
+                HK::Ref(_)
+                    | HK::MutRef(_)
+                    | HK::Int(_)
+                    | HK::UInt(_)
+                    | HK::Float(_)
+                    | HK::Bool
+                    | HK::Char
+            )
+        })
+    });
+    if !fields_ok {
+        return false;
+    }
+    let self_ref_field = |p: &Place| {
+        p.local.index() == 1
+            && p.projection.len() == 2
+            && matches!(p.projection[0], ProjElem::Deref)
+            && crate::mir::place_ty::place_ty(body, tys, p)
+                .is_ok_and(|pt| matches!(tcx.kind(pt.ty), HK::Ref(_) | HK::MutRef(_)))
+    };
+    // A body with no `return` (a stub left where lowering failed) is no
+    // evidence of what the method returns.
+    let returns = body
+        .blocks
+        .iter()
+        .any(|b| matches!(b.terminator.kind, TerminatorKind::Return));
+    returns && body.blocks.iter().all(|b| {
+        let copies = b.statements.iter().any(|s| match &s.kind {
+            StatementKind::Assign(_, Rvalue::Use(Operand::Copy(p) | Operand::Move(p))) => {
+                self_ref_field(p)
+            }
+            _ => false,
+        });
+        let calls_ok = match &b.terminator.kind {
+            TerminatorKind::Call { func, .. } => matches!(
+                func,
+                Operand::Const(Const { kind: ConstKind::FnDef(c), .. }) if views.contains(&c.name)
+            ),
+            _ => true,
+        };
+        !copies && calls_ok
+    })
+}
+
+/// Whether `t` is a reference to a struct whose fields are all references
+/// (`IterByRef`): a library method on one keeps its body under `karac
+/// check`, for `through_ref_fields` to read (B-2026-10-21-59).
+fn refs_only_receiver(tys: &TyInterner, t: Ty) -> bool {
+    let tcx = tys.tcx();
+    let (HK::Ref(st) | HK::MutRef(st)) = tcx.kind(t) else {
+        return false;
+    };
+    let Some((adt, _)) = tcx.adt_of(st) else {
+        return false;
+    };
+    let Some(v) = adt.variants.first().filter(|_| !adt.is_enum) else {
+        return false;
+    };
+    !v.fields.is_empty()
+        && (0..v.fields.len() as u32).all(|i| {
+            tcx.field_ty(st, None, i)
+                .is_some_and(|t| matches!(tcx.kind(t), HK::Ref(_) | HK::MutRef(_)))
+        })
 }
 
 /// The natives the builder calls by bare name rather than through a
@@ -3557,6 +3665,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             .lcx
             .signatures_only_from
             .is_some_and(|from| f.span.offset >= from)
+            && !self
+                .self_local
+                .is_some_and(|l| refs_only_receiver(self.tys(), self.b.local_ty(l)))
         {
             // Parameters only: the body ends unreachable (`finish`).
             self.scopes.clear();
@@ -18453,13 +18564,32 @@ fn panic_handler_name(src: &str) -> Option<String> {
 /// sources every program gets). A program is checked against their
 /// signatures; the bodies are the library's own concern, checked by its
 /// tests and by the MIR pipeline, and checking them again for every program
-/// cost most of a check's time (about 0.7 s of 0.8 s).
+/// cost most of a check's time (about 0.7 s of 0.8 s). A method of a struct
+/// whose fields are all references (`IterByRef`) keeps its body: the borrow
+/// check reads it to tell what the method's result borrows
+/// (`through_ref_fields`, B-2026-10-21-59).
 pub fn library_bodies_unchecked(program: &mut crate::ast::Program, range: std::ops::Range<usize>) {
-    use crate::ast::{Block, ImplItem, Item, TraitItem};
+    use crate::ast::{Block, ImplItem, Item, TraitItem, TypeKind};
     let empty = |b: &mut Block| {
         b.stmts.clear();
         b.final_expr = None;
     };
+    let ref_structs: FxHashSet<String> = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::StructDef(s)
+                if range.contains(&s.span.offset)
+                    && !s.fields.is_empty()
+                    && s.fields
+                        .iter()
+                        .all(|f| matches!(f.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_))) =>
+            {
+                Some(s.name.clone())
+            }
+            _ => None,
+        })
+        .collect();
     for item in &mut program.items {
         match item {
             Item::Function(f) if range.contains(&f.span.offset) => empty(&mut f.body),
@@ -18473,6 +18603,11 @@ pub fn library_bodies_unchecked(program: &mut crate::ast::Program, range: std::o
                 }
             }
             Item::ImplBlock(b) if range.contains(&b.span.offset) => {
+                if let TypeKind::Path(p) = &b.target_type.kind {
+                    if p.segments.last().is_some_and(|n| ref_structs.contains(n)) {
+                        continue;
+                    }
+                }
                 for it in &mut b.items {
                     if let ImplItem::Method(f) = it {
                         empty(&mut f.body);
@@ -18854,8 +18989,15 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
         if !borrowck {
             continue;
         }
-        let has_receiver =
-            |i: &InstanceId| result_borrows(&names, &lowered.receivers, &lowered.views, i);
+        let has_receiver = |i: &InstanceId| {
+            result_borrows(
+                &names,
+                &lowered.receivers,
+                &lowered.views,
+                &lowered.pointee_views,
+                i,
+            )
+        };
         for mut e in crate::mir::borrow_errors(body, &lowered.tys, &has_receiver) {
             if !in_program(e.at) {
                 continue;
@@ -18907,8 +19049,12 @@ fn result_borrows(
     names: &FxHashSet<String>,
     receivers: &FxHashSet<String>,
     views: &FxHashSet<String>,
+    pointee_views: &FxHashSet<String>,
     i: &InstanceId,
 ) -> crate::mir::ResultBorrows {
+    if pointee_views.contains(&i.name) {
+        return crate::mir::ResultBorrows::ReceiverPointeeValue;
+    }
     // A native that moves a value out of its receiver returns what that
     // value borrowed, not a borrow of the receiver.
     let moves_out = !names.contains(i.name.as_str())
@@ -19204,7 +19350,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         // `KARAC_MIR_BORROWCK=0` skips the check.
         let receivers = &lowered.receivers;
         let views = &lowered.views;
-        let has_receiver = |i: &InstanceId| result_borrows(&names, receivers, views, i);
+        let pointee_views = &lowered.pointee_views;
+        let has_receiver =
+            |i: &InstanceId| result_borrows(&names, receivers, views, pointee_views, i);
         if borrowck {
             crate::mir::check_borrows(body, &lowered.tys, &has_receiver)
                 .map_err(|e| format!("borrow check {}: {}", body.instance.name, e.join("; ")))?;

@@ -62,8 +62,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 12 |
 | diagnostics | 8 |
 | perf | 7 |
+| soundness | 4 |
 | miscompile | 3 |
-| soundness | 3 |
 | run-vs-build | 3 |
 | other | 2 |
 | codegen-gap | 1 |
@@ -77,8 +77,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 14 |
 | cli | 7 |
 | runtime | 6 |
+| mir | 5 |
 | ownership | 4 |
-| mir | 4 |
 | other | 2 |
 | mir-llvm | 1 |
 ## Current state
@@ -137,6 +137,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-1 | 2026-10-24 | cli+interp | low | The v2 REPL's remaining legacy-only pieces: `%show` and `--auto-clone` / `%set auto-clone` refuse on v2, `:provide` does not check that the provider implements the resource's trait until the next cell, and the `:provide` construction program still replays every earlier cell | — |
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
 | B-2026-10-24-4 | 2026-10-24 | mir | medium | The MIR builder refuses an adaptor called on a value of generic type `I: Iterator[Item = i64]`: `it.map(|x| x + 1).count()` checks, and `__mir-run` and `__mir-llvm-run` stop with "the method call `.map` with no resolved callee is not lowered yet" | — |
+| B-2026-10-24-5 | 2026-10-24 | mir | high | MIR borrowck lets the borrowed place change while a ref read through a borrowed struct's `mut ref` field is still live, a use-after-free that `karac check` accepts | — |
 
 ### Fixed
 

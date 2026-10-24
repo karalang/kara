@@ -194,6 +194,11 @@ pub enum ResultBorrows {
     /// references come only through the receiver type's parameters or
     /// associated types.
     ReceiverValue,
+    /// What the values the receiver's value refers to hold: a view whose
+    /// receiver holds its parameter only through references
+    /// (`IterByRef.next`), so the result borrows what the referenced
+    /// iterator holds, not the reference to it (B-2026-10-21-59).
+    ReceiverPointeeValue,
 }
 
 /// Checks `body`; the errors name each conflicting access by block and
@@ -279,7 +284,11 @@ pub fn borrow_errors(
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
     let live_out = liveness_with(body, &drop_uses);
-    let view = body.arg_count > 0 && has_receiver(&body.instance) == ResultBorrows::ReceiverValue;
+    let view = body.arg_count > 0
+        && matches!(
+            has_receiver(&body.instance),
+            ResultBorrows::ReceiverValue | ResultBorrows::ReceiverPointeeValue
+        );
 
     for (bi, block) in body.blocks.iter().enumerate() {
         let Some(mut o) = origins[bi].clone() else {
@@ -1005,6 +1014,20 @@ impl Cx<'_> {
             }
             ResultBorrows::Receiver => self.operand_origins(o, &args[0], &mut val),
             ResultBorrows::ReceiverValue => self.pointee_origins(o, &args[0], &mut val),
+            ResultBorrows::ReceiverPointeeValue => {
+                let mut held = LoanSet::default();
+                self.pointee_origins(o, &args[0], &mut held);
+                for li in held.iter() {
+                    let l = &self.loans[li];
+                    if l.place.projection.contains(&ProjElem::Deref) {
+                        // A place behind a reference: what it holds came
+                        // from outside, so the loan stands for it.
+                        val.insert(li);
+                    } else {
+                        self.place_origins(o, &l.place, &mut val);
+                    }
+                }
+            }
         }
         clear_moved(o, std::iter::once(func).chain(args));
         self.assign(o, dest, val);

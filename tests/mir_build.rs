@@ -8857,3 +8857,77 @@ fn main() {
         }
     }
 }
+
+/// `by_ref` over an iterator whose items borrow what it reads leaves the
+/// iterator free once the loop ends: the items borrow that source, not the
+/// iterator (B-2026-10-21-59). A lending iterator, whose items borrow the
+/// iterator itself, still holds it, and both `karac check` and the MIR
+/// pipeline say so.
+#[test]
+fn mir_by_ref_items_borrow_the_source_not_the_iterator() {
+    let src = r#"fn main() {
+    let line = "-v -x -- a b".to_string();
+    let mut words = line.split_whitespace();
+    let mut flags: Vec[Str] = Vec.new();
+    for w in words.by_ref() {
+        if w == "--" { break; }
+        flags.push(w);
+    }
+    let rest: Vec[Str] = words.collect();
+    println(f"{flags.len()} {rest.len()}");
+    for f in flags { println(f); }
+    for r in rest { println(r); }
+    let v = vec![1, 2, 3];
+    let mut it = v.iter();
+    let mut got: Vec[ref i64] = Vec.new();
+    for x in it.by_ref() { if *x == 2 { break; } got.push(x); }
+    let more: Vec[ref i64] = it.collect();
+    println(f"{got.len()} {more.len()} {*more[0]}");
+}
+"#;
+    let want = "2 2\n-v\n-x\na\nb\n1 1 3\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    for opt in 0..=3 {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    let lending = r#"struct Own { v: Vec[i64], i: usize }
+impl Iterator for Own {
+    type Item = ref i64;
+    fn next(mut ref self) -> Option[ref i64] {
+        let r = self.v.get(self.i);
+        self.i += 1;
+        r
+    }
+}
+fn main() {
+    let mut o = Own { v: vec![1, 2, 3], i: 0 };
+    let mut kept: Vec[ref i64] = Vec.new();
+    for x in o.by_ref() { kept.push(x); }
+    o.v.push(4);
+    println(f"{kept.len()}");
+}
+"#;
+    let err = karac::mir::lower::run_source(lending).expect_err("refused");
+    assert!(err.contains("14:5") && err.contains("E0516"), "{err}");
+    let dir = Scratch::new();
+    for (name, text, ok) in [("source.kara", src, true), ("lending.kara", lending, false)] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .arg("check")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.success(), ok, "{name}: {stderr}");
+        if !ok {
+            assert!(
+                stderr.contains(":14:5:") && stderr.contains("[E0516]"),
+                "{name}: {stderr}"
+            );
+        }
+    }
+}
