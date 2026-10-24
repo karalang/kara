@@ -17,7 +17,7 @@ pub type HashFn = unsafe extern "C" fn(*const u8) -> u64;
 pub type EqFn = unsafe extern "C" fn(*const u8, *const u8) -> bool;
 pub type CmpFn = unsafe extern "C" fn(*const u8, *const u8) -> i32;
 
-/// The first six fields are read by compiled code, which probes a table
+/// The first nine fields are read by compiled code, which probes a table
 /// of scalar keys and counts and walks its entries in line
 /// (`src/backend/mir/table.rs`): each is a pointer-sized word, the `k`-th
 /// at `k` words, as the assertions after [`NO_PAIR`] check.
@@ -37,6 +37,15 @@ pub struct MirMap {
     /// compiled code (0 cells while it is empty).
     cells: *const u64,
     ncells: usize,
+    /// The walk order of a hashed table ([`karac_mir_map_walk_at`]): the
+    /// `i`th entry of a walk is the entry at index `(perm_a * i + perm_c)
+    /// mod perm_len`, from `karac_hash::walk_perm(perm_len)`. Compiled
+    /// code walks in line while `perm_len` is the table's length, and
+    /// calls [`karac_mir_map_walk_perm`] to bring the words up to date
+    /// when it is not; `usize::MAX` until the first walk.
+    perm_len: std::sync::atomic::AtomicUsize,
+    perm_a: std::sync::atomic::AtomicUsize,
+    perm_c: std::sync::atomic::AtomicUsize,
     cap: usize,
     /// Each slot's hash, for the hashed kinds.
     hashes: Vec<u64>,
@@ -74,6 +83,10 @@ const _: () = {
     assert!(std::mem::offset_of!(MirMap, holes) == 3 * w);
     assert!(std::mem::offset_of!(MirMap, cells) == 4 * w);
     assert!(std::mem::offset_of!(MirMap, ncells) == 5 * w);
+    assert!(std::mem::offset_of!(MirMap, perm_len) == 6 * w);
+    assert!(std::mem::offset_of!(MirMap, perm_a) == 7 * w);
+    assert!(std::mem::offset_of!(MirMap, perm_c) == 8 * w);
+    assert!(std::mem::size_of::<std::sync::atomic::AtomicUsize>() == w);
 };
 
 /// An `index` cell that never held a slot: a probe stops here.
@@ -180,6 +193,25 @@ impl MirMap {
             i = (i + 1) & mask;
         }
         self.index[i] = TOMB;
+    }
+
+    /// The walk-order words for the current length, brought up to date
+    /// first: `(len, a, c)`. `perm_len` is stored last, so a reader that
+    /// sees it current sees the `a` and `c` that go with it.
+    fn walk_perm(&self) -> (usize, usize, usize) {
+        use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+        let n = self.len();
+        if self.perm_len.load(Acquire) != n {
+            let (a, c) = if self.hashes.is_empty() {
+                (1, 0)
+            } else {
+                karac_hash::walk_perm(n as u64)
+            };
+            self.perm_a.store(a as usize, Relaxed);
+            self.perm_c.store(c as usize, Relaxed);
+            self.perm_len.store(n, Release);
+        }
+        (n, self.perm_a.load(Relaxed), self.perm_c.load(Relaxed))
     }
 
     fn len(&self) -> usize {
@@ -522,6 +554,9 @@ unsafe fn insert(
                 holes: 0,
                 cells: std::ptr::null(),
                 ncells: 0,
+                perm_len: std::sync::atomic::AtomicUsize::new(usize::MAX),
+                perm_a: std::sync::atomic::AtomicUsize::new(1),
+                perm_c: std::sync::atomic::AtomicUsize::new(0),
                 cap: 0,
                 hashes: Vec::new(),
                 index: Vec::new(),
@@ -573,6 +608,34 @@ unsafe fn insert(
 pub unsafe extern "C" fn karac_mir_map_at(h: *const MirMap, i: i64) -> *mut u8 {
     // SAFETY: the caller's contract.
     unsafe { (*h).at(i as usize) }
+}
+
+/// Brings the walk-order words of the table at `h` up to date for its
+/// length: `karac_hash::walk_perm` of it for a hashed table, so a walk
+/// visits the entries in an order that changes from one process to the
+/// next and that `KARAC_HASH_SEED` pins, the order the MIR interpreter
+/// walks too (collections.md § Map, B-2026-10-23-19); 1 and 0, the order
+/// of the indices, for a sorted one.
+///
+/// # Safety
+/// `h` is a live table.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_walk_perm(h: *const MirMap) {
+    // SAFETY: the caller's contract.
+    unsafe { (*h).walk_perm() };
+}
+
+/// The `i`th entry of a walk over the table at `h` (in bounds), in the
+/// order [`karac_mir_map_walk_perm`] describes.
+///
+/// # Safety
+/// `h` is a live table with more than `i` entries.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_walk_at(h: *const MirMap, i: i64) -> *mut u8 {
+    // SAFETY: the caller's contract.
+    let m = unsafe { &*h };
+    let (n, a, c) = m.walk_perm();
+    m.at(karac_hash::walk_index(i as u64, n as u64, a as u64, c as u64) as usize)
 }
 
 /// The number of entries (0 for a null handle).
