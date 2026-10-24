@@ -448,3 +448,191 @@ fn mir_auto_par_operator_chains_fold() {
     assert_eq!(code, Some(101), "{err}");
     assert!(err.contains("overflow"), "{err}");
 }
+
+/// The runs of statements the auto-par build ran as tasks, from its
+/// report: each `instance@line` of the run's first statement.
+fn grouped(stderr: &[u8]) -> Vec<String> {
+    std::str::from_utf8(stderr)
+        .unwrap()
+        .lines()
+        .find_map(|l| l.strip_prefix("auto-par: statements as tasks: "))
+        .map(|l| l.split(", ").map(String::from).collect())
+        .unwrap_or_default()
+}
+
+/// Runs of independent statements that each loop run as tasks and give
+/// the sequential program's output on both backends: `let`s that move
+/// their argument in, expression statements that fill a `mut ref`, values
+/// that own memory or run a `Drop` body, a generic instance, `?` and
+/// `return` in a run (the source-earliest one wins), and an expression
+/// statement's value dropped. A statement that prints keeps its place, and
+/// one that reads what an earlier one binds starts the next run.
+#[test]
+fn mir_auto_par_statement_groups_match_in_order() {
+    let src = r#"struct Noisy { id: i64 }
+impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+
+struct Pair { x: i64, y: Vec[i64] }
+
+fn work(n: i64) -> i64 {
+    let mut s = 0;
+    for i in 0..n {
+        s = (s + i * i) % 1000007;
+    }
+    s
+}
+
+fn total(v: own Vec[i64]) -> i64 {
+    let mut s = 0;
+    for x in v.iter() {
+        s = s + *x;
+    }
+    s
+}
+
+fn fill(v: mut ref Vec[i64], n: i64) {
+    for i in 0..n {
+        v.push(i);
+    }
+}
+
+fn noisy(n: i64) -> Noisy {
+    Noisy { id: work(n) }
+}
+
+fn pair(n: i64) -> Pair {
+    let mut y = Vec.new();
+    for i in 0..n {
+        y.push(i);
+    }
+    Pair { x: work(n), y: y }
+}
+
+fn count[T](v: ref Vec[T], f: i64) -> i64 {
+    let mut s = 0;
+    for i in 0..v.len() {
+        s = (s * 2 + f) % 1000;
+    }
+    s
+}
+
+fn checked(n: i64) -> Result[i64, String] {
+    if n < 0 {
+        return Err(f"negative {n}");
+    }
+    Ok(work(n))
+}
+
+fn both(x: i64, y: i64) -> Result[i64, String] {
+    let a = checked(x)?;
+    let b = checked(y)?;
+    Ok(a + b)
+}
+
+fn early(x: i64, y: i64) -> i64 {
+    let a = if x < 0 { return -1 } else { work(x) };
+    let b = if y < 0 { return -2 } else { work(y) };
+    a + b
+}
+
+fn main() {
+    let v = Vec.filled(1000, 3);
+    let w = Vec.filled(2000, 5);
+    let a = total(v);
+    let b = total(w);
+    println(f"{a} {b}");
+    let mut p: Vec[i64] = Vec.new();
+    let mut q: Vec[i64] = Vec.new();
+    fill(mut p, 100);
+    fill(mut q, 200);
+    println(f"{p.len()} {q.len()}");
+    let n1 = noisy(100);
+    let n2 = noisy(200);
+    println(f"{n1.id} {n2.id}");
+    let r = pair(100);
+    let s = pair(50);
+    println(f"{r.x} {r.y.len()} {s.x} {s.y.len()}");
+    let g1 = count(p, 3);
+    let g2 = count(q, 4);
+    println(f"{g1} {g2}");
+    println(f"{both(1000, 2000)} {both(-1, 5)} {both(5, -2)} {both(-3, -4)}");
+    println(f"{early(10, 20)} {early(-1, 20)} {early(10, -1)} {early(-1, -1)}");
+    let t = work(300);
+    let u = work(t % 100);
+    pair(30);
+    pair(40);
+    println(f"{t} {u}");
+}
+"#;
+    let (out, code, err) = same_both_ways("groups", src, &[]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(
+        out,
+        "3000 10000\n100 200\n328350 646686\n328350 100 40425 50\n\
+         125 500\nOk(1479528) Err(negative -1) Err(negative -2) Err(negative -3)\n\
+         2755 -1 -2 -1\n954994 272459\ndrop 646686\ndrop 328350\n"
+    );
+    let par = interp_run("groups-report", src, true);
+    assert_eq!(
+        grouped(&par.stderr),
+        ["both@56", "early@62", "main@70", "main@75", "main@78", "main@81", "main@84", "main@90"],
+        "{}",
+        String::from_utf8_lossy(&par.stderr)
+    );
+}
+
+/// Four statements that each sleep four times run concurrently as tasks.
+#[test]
+fn mir_auto_par_statements_wait_concurrently() {
+    let src = r#"fn slow(n: i64) -> i64 {
+    let mut s = 0;
+    for i in 0..4 {
+        sleep_ms(50);
+        s = s * 2 + i * n;
+    }
+    s
+}
+
+fn main() {
+    let a = slow(1);
+    let b = slow(2);
+    let c = slow(3);
+    let d = slow(4);
+    println(a + b + c + d);
+}
+"#;
+    let timed = |auto: bool| {
+        let (dir, file) = source(&format!("s-{auto}"), src);
+        let exe = dir.join("main");
+        let built = karac(auto)
+            .args([
+                "build",
+                "--mir",
+                file.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&built.stderr).to_string();
+        common::link_or_skip(if built.status.success() {
+            Ok(())
+        } else {
+            Err(err.clone())
+        })?;
+        let want: &[&str] = if auto { &["main@11"] } else { &[] };
+        assert_eq!(grouped(err.as_bytes()), want, "{err}");
+        assert_loops(&tasked(err.as_bytes()), &[], "statements");
+        let start = std::time::Instant::now();
+        let out = Command::new(&exe).output().unwrap();
+        let took = start.elapsed();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), "110\n");
+        Some(took)
+    };
+    let (Some(seq), Some(par)) = (timed(false), timed(true)) else {
+        return;
+    };
+    assert!(seq >= std::time::Duration::from_millis(800), "{seq:?}");
+    assert!(par < std::time::Duration::from_millis(500), "{par:?}");
+}

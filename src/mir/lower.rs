@@ -190,6 +190,9 @@ pub struct Lowered {
     /// The loops this build ran as tasks under auto-par (M4 item 14), as
     /// `instance@line` of each `for`.
     pub auto_par_tasks: Vec<String>,
+    /// The runs of statements this build ran as tasks under auto-par, as
+    /// `instance@line` of each run's first statement.
+    pub auto_par_groups: Vec<String>,
 }
 
 /// What an `extern "C"` signature with a type no backend passes to C yet
@@ -376,6 +379,7 @@ fn lower_program_inner<'a>(
         auto_par,
         next_synthetic_sym: usize::MAX - 1,
         auto_par_done: Vec::new(),
+        auto_par_groups: Vec::new(),
         closure_queue: Vec::new(),
         fn_param_tys: FxHashMap::default(),
         own_self_trait_methods: FxHashSet::default(),
@@ -487,6 +491,7 @@ fn lower_program_inner<'a>(
         pointee_views,
         effects: None,
         auto_par_tasks: lcx.auto_par_done,
+        auto_par_groups: lcx.auto_par_groups,
     }
 }
 
@@ -897,6 +902,8 @@ struct Lcx<'a> {
     next_synthetic_sym: usize,
     /// See [`Lowered::auto_par_tasks`].
     auto_par_done: Vec<String>,
+    /// See [`Lowered::auto_par_groups`].
+    auto_par_groups: Vec<String>,
     closure_queue: Vec<ClosureJob<'a>>,
     /// Instances whose function-typed parameters take a concrete closure
     /// or function type: by instance name, one entry per parameter.
@@ -3881,9 +3888,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let ret = Place::local(Local::RETURN_PLACE);
         self.push_scope();
         self.note_escaping_lets(&f.body);
-        for s in &f.body.stmts {
-            self.stmt(s)?;
-        }
+        self.block_stmts(&f.body)?;
         match &f.body.final_expr {
             Some(e) => {
                 self.push_scope();
@@ -3987,9 +3992,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn block_into(&mut self, block: &'a Block, dest: Place) -> R<()> {
         self.push_scope();
         self.note_escaping_lets(block);
-        for s in &block.stmts {
-            self.stmt(s)?;
-        }
+        self.block_stmts(block)?;
         match &block.final_expr {
             // A value in a `()` slot (the arm of an `if` with no `else`)
             // is discarded, as a statement's is: built, then dropped.
@@ -4008,6 +4011,153 @@ impl<'l, 'a> Bx<'l, 'a> {
             None => self.assign(dest, Rvalue::Use(unit_const(self.unit()))),
         }
         self.pop_scope()
+    }
+
+    /// A block's statements, in order: recorded as an auto-par candidate
+    /// when the build records them, and with the runs its verdict named
+    /// lowered as tasks when it said yes (M4 item 14). Nothing in a
+    /// `seq { .. }` is either.
+    fn block_stmts(&mut self, block: &'a Block) -> R<()> {
+        if self.seq_depth == 0 && block.stmts.len() > 1 {
+            let groups = match &self.lcx.auto_par {
+                AutoPar::Off => None,
+                AutoPar::Record => return self.auto_par_record_stmts(block),
+                AutoPar::Apply(hints) => {
+                    let key = (self.name.clone(), block.span.offset, block.span.length);
+                    hints.stmts.get(&key).cloned()
+                }
+            };
+            if let Some(groups) = groups {
+                let mut k = 0;
+                while k < block.stmts.len() {
+                    let run = groups.iter().find(|g| g.first() == Some(&k));
+                    if let Some(g) = run {
+                        let end = k + g.len();
+                        let consecutive = g.iter().copied().eq(k..end);
+                        if consecutive
+                            && end <= block.stmts.len()
+                            && self.stmt_tasks(&block.stmts[k..end])?
+                        {
+                            k = end;
+                            continue;
+                        }
+                    }
+                    self.stmt(&block.stmts[k])?;
+                    k += 1;
+                }
+                return Ok(());
+            }
+        }
+        for s in &block.stmts {
+            self.stmt(s)?;
+        }
+        Ok(())
+    }
+
+    /// A block's statements, each recorded as one branch of an auto-par
+    /// candidate, its blocks.
+    fn auto_par_record_stmts(&mut self, block: &'a Block) -> R<()> {
+        // Outer before inner, as `par_regions` are.
+        let k = self.b.auto_par_candidates.len();
+        self.b.auto_par_candidates.push(ParRegion {
+            kind: ParKind::Block,
+            span: block.span,
+            branches: Vec::new(),
+        });
+        for s in &block.stmts {
+            let entry = self.branch_begin();
+            self.stmt(s)?;
+            self.candidate_branch_end(k, entry);
+        }
+        Ok(())
+    }
+
+    /// Ends a branch of auto-par candidate `k` begun at `entry`, recording
+    /// its blocks, and continues in a fresh block.
+    fn candidate_branch_end(&mut self, k: usize, entry: BasicBlock) {
+        let after = self.b.new_block();
+        let end = self.b.block_count() as u32;
+        let blocks = (entry.0..end)
+            .filter(|&i| i != after.0)
+            .map(BasicBlock)
+            .collect();
+        self.b.auto_par_candidates[k].branches.push(blocks);
+        self.goto(after);
+        self.cur = after;
+    }
+
+    /// A run of statements an auto-par verdict said may run together,
+    /// each as a task, as a statement `par {}` runs its branches; the
+    /// `let`s bind their task's result once all are joined. `false`, with
+    /// nothing lowered, for a run with a statement that is not a `let` of
+    /// one name or an expression, or whose value is a reference, a
+    /// function or never returns: the run then stays in order.
+    fn stmt_tasks(&mut self, run: &'a [Stmt]) -> R<bool> {
+        let mut es: Vec<&'a Expr> = Vec::new();
+        let mut slots = Vec::new();
+        for s in run {
+            let (e, slot) = match &s.kind {
+                StmtKind::Let {
+                    pattern, value, ty, ..
+                } => {
+                    let PatternKind::Binding(name) = &pattern.kind else {
+                        return Ok(false);
+                    };
+                    if self.is_fn_typed(pattern.id) {
+                        return Ok(false);
+                    }
+                    let t = self.node_ty(pattern.id, pattern.span)?;
+                    if ty.is_none()
+                        && (self.ref_rebind(value, t)?.is_some()
+                            || (is_branching(value) && self.arm_width(value, t) != t))
+                    {
+                        return Ok(false);
+                    }
+                    if self.expr_ty(value)? != t {
+                        return Ok(false);
+                    }
+                    (value, Some((name.as_str(), pattern.id)))
+                }
+                StmtKind::Expr(e) if self.discarded_dbg(e).is_none() => (e, None),
+                _ => return Ok(false),
+            };
+            let t = self.expr_ty(e)?;
+            if self.is_reference(t) || matches!(self.tys().tcx().kind(t), HK::Never | HK::Fn { .. })
+            {
+                return Ok(false);
+            }
+            es.push(e);
+            slots.push((slot, t));
+        }
+        let region = self.open_par_region(ParKind::Block, run[0].span);
+        let tys: Vec<Ty> = slots.iter().map(|&(_, t)| t).collect();
+        let tt = self.tys().tcx().tuple(&tys);
+        let tup = self.temp(tt);
+        self.push_scope();
+        self.par_tasks(region, &es, Place::local(tup))?;
+        let mut binds = Vec::new();
+        for (k, (slot, t)) in slots.into_iter().enumerate() {
+            let field = Operand::Move(Place::local(tup).field(k as u32, t));
+            match slot {
+                Some((name, id)) => {
+                    let l = self.user_local(name, t, id);
+                    self.assign(l, Rvalue::Use(field));
+                    binds.push((l, t));
+                }
+                // An expression statement's value drops with the run.
+                None => {
+                    let d = self.scoped_temp(t);
+                    self.assign(d, Rvalue::Use(field));
+                }
+            }
+        }
+        self.pop_scope()?;
+        for (l, t) in binds {
+            self.declare(l, t);
+        }
+        let at = format!("{}@{}", self.name, run[0].span.line);
+        self.lcx.auto_par_groups.push(at);
+        Ok(true)
     }
 
     /// Record the `let f = |..| ..` bindings of `block` whose closure escapes.
@@ -8758,7 +8908,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         if b.stmts.is_empty() {
             if let Some(ExprKind::Tuple(es)) = b.final_expr.as_deref().map(|x| &x.kind) {
                 if es.len() > 1 {
-                    return self.par_tasks(region, es, dest);
+                    let es: Vec<&'a Expr> = es.iter().collect();
+                    return self.par_tasks(region, &es, dest);
                 }
             }
         }
@@ -8817,13 +8968,13 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// When a branch `return`s, each task instead returns a `Result` whose
     /// error variant carries the function's whole value, which a `return`
     /// or `?` in the task builds; the source-earliest one is returned.
-    fn par_tasks(&mut self, region: usize, es: &'a [Expr], dest: Place) -> R<()> {
+    fn par_tasks(&mut self, region: usize, es: &[&'a Expr], dest: Place) -> R<()> {
         let span = es[0].span;
         let ret_ty = self.fn_ret_ty();
         // A branch that `return`s leaves its task with the function's
         // value, so every task returns a `Result` whose error variant
         // carries it, and `?` is the `return` of an error (B-2026-10-22-9).
-        let exits = es.iter().any(returns_from_fn);
+        let exits = es.iter().any(|x| returns_from_fn(x));
         let err = if exits {
             None
         } else {
@@ -8835,7 +8986,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let g = self.temp(group_ty);
         self.call_native("TaskGroup.new", Vec::new(), Place::local(g));
         let mut handles = Vec::new();
-        for x in es {
+        for &x in es {
             let vt = self.expr_ty(x)?;
             let mut exit = None;
             let tt = match err {
@@ -9613,15 +9764,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let tmp = self.temp(t);
         let entry = self.branch_begin();
         self.block_into(body, Place::local(tmp))?;
-        let after = self.b.new_block();
-        let end = self.b.block_count() as u32;
-        let blocks = (entry.0..end)
-            .filter(|&i| i != after.0)
-            .map(BasicBlock)
-            .collect();
-        self.b.auto_par_candidates[k].branches.push(blocks);
-        self.goto(after);
-        self.cur = after;
+        self.candidate_branch_end(k, entry);
         Ok(())
     }
 
@@ -20315,7 +20458,7 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
         }
     }
     let mut hints = AutoParHints::of(&verdicts);
-    while !hints.loops.is_empty() {
+    while !hints.is_empty() {
         let second = match lower_source_for_checks(src, false, AutoPar::Apply(hints.clone()))
             .and_then(finish_build)
         {
@@ -20330,19 +20473,25 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
             }
         };
         let Some(name) = suspends_as_value(&first, &second) else {
-            if debug && !second.auto_par_tasks.is_empty() {
-                let mut at = second.auto_par_tasks.clone();
-                at.sort();
-                eprintln!("auto-par: loops as tasks: {}", at.join(", "));
+            for (what, done) in [
+                ("loops", &second.auto_par_tasks),
+                ("statements", &second.auto_par_groups),
+            ] {
+                if debug && !done.is_empty() {
+                    let mut at = done.clone();
+                    at.sort();
+                    eprintln!("auto-par: {what} as tasks: {}", at.join(", "));
+                }
             }
             return Ok(second);
         };
         if debug {
             eprintln!("auto-par: `{name}` would suspend and is used as a function value");
         }
-        let before = hints.loops.len();
+        let before = hints.len();
         hints.loops.retain(|(instance, _, _), _| *instance != name);
-        if hints.loops.len() == before {
+        hints.stmts.retain(|(instance, _, _), _| *instance != name);
+        if hints.len() == before {
             break;
         }
     }
@@ -20384,25 +20533,41 @@ pub(crate) enum AutoPar {
 
 /// The loops whose iterations may run as tasks, by instance and the
 /// loop's span (offset, length), each with the spans of the reductions
-/// its verdict names.
+/// its verdict names; and the blocks with runs of statements that may,
+/// by instance and the block's span, each with its runs (indices into
+/// its statements).
 #[derive(Default, Clone)]
 pub(crate) struct AutoParHints {
     loops: FxHashMap<(String, usize, usize), Vec<Span>>,
+    stmts: FxHashMap<(String, usize, usize), Vec<Vec<usize>>>,
 }
 
 impl AutoParHints {
     fn of(verdicts: &[crate::mir::effects::auto_par::AutoParVerdict]) -> AutoParHints {
         use crate::mir::effects::auto_par::VerdictKind;
         let mut loops = FxHashMap::default();
+        let mut stmts = FxHashMap::default();
         for v in verdicts {
-            if let (VerdictKind::Loop, Ok(reductions)) = (&v.kind, &v.verdict) {
-                loops.insert(
-                    (v.instance.clone(), v.span.offset, v.span.length),
-                    reductions.iter().map(|r| r.span).collect(),
-                );
+            let key = (v.instance.clone(), v.span.offset, v.span.length);
+            match (&v.kind, &v.verdict) {
+                (VerdictKind::Loop, Ok(reductions)) => {
+                    loops.insert(key, reductions.iter().map(|r| r.span).collect());
+                }
+                (VerdictKind::Statements { groups }, Ok(_)) if !groups.is_empty() => {
+                    stmts.insert(key, groups.clone());
+                }
+                _ => {}
             }
         }
-        AutoParHints { loops }
+        AutoParHints { loops, stmts }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.loops.is_empty() && self.stmts.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.loops.len() + self.stmts.len()
     }
 }
 
@@ -21127,7 +21292,9 @@ fn main() {
 
     /// M4 item 14: a recording build gives each sequential `for` a
     /// candidate whose one branch is its body, and none to a loop in a
-    /// `seq {}` or to a `par for`; a plain build records none.
+    /// `seq {}` or to a `par for`, and each block of two or more
+    /// statements one with a branch per statement; a plain build records
+    /// none.
     #[test]
     fn auto_par_candidates_are_the_sequential_loops() {
         let src = "fn main() {
@@ -21146,11 +21313,23 @@ fn main() {
 ";
         let l = super::build_source_recording(src).unwrap_or_else(|e| panic!("{e}"));
         let c = &l.program.bodies["main"].auto_par_candidates;
-        assert_eq!(c.len(), 1, "{c:?}");
-        assert!(matches!(c[0].kind, ParKind::For { limit: None }));
-        assert_eq!(c[0].span.line, 3);
-        assert_eq!(c[0].branches.len(), 1);
-        assert!(!c[0].branches[0].is_empty());
+        let loops: Vec<&ParRegion> = c
+            .iter()
+            .filter(|r| matches!(r.kind, ParKind::For { limit: None }))
+            .collect();
+        assert_eq!(loops.len(), 1, "{c:?}");
+        assert_eq!(loops[0].span.line, 3);
+        assert_eq!(loops[0].branches.len(), 1);
+        assert!(!loops[0].branches[0].is_empty());
+        // The body's five statements, each a branch of its own; the
+        // blocks of one statement in a `seq {}` or a loop body are none.
+        let runs: Vec<&ParRegion> = c
+            .iter()
+            .filter(|r| matches!(r.kind, ParKind::Block))
+            .collect();
+        assert_eq!(runs.len(), 1, "{c:?}");
+        assert_eq!(runs[0].branches.len(), 5);
+        assert!(runs[0].branches.iter().all(|b| !b.is_empty()));
         let plain = super::build_source(src).unwrap_or_else(|e| panic!("{e}"));
         assert!(plain.program.bodies["main"].auto_par_candidates.is_empty());
         assert_eq!(run_source(src), Ok(("12 2\n".to_string(), Some(0))));
