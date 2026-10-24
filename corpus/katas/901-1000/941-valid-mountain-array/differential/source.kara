@@ -1,0 +1,295 @@
+// LeetCode #941: Valid Mountain Array -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: given an array of integers arr, return true if and only
+// if it is a valid mountain array: arr.length >= 3, and there exists some
+// i with 0 < i < arr.length - 1 such that arr[0] < arr[1] < ... < arr[i]
+// and arr[i] > arr[i + 1] > ... > arr[arr.length - 1].
+
+// ---- the ★ arm: a walk up and a walk down ---------------------------------
+fn star_valid_mountain_array(arr: Vec[i64]) -> bool {
+    let n = arr.len();
+    let mut i = 0;
+    while i + 1 < n and arr[i] < arr[i + 1] {
+        i += 1;
+    }
+    if i == 0 or i == n - 1 {
+        return false;
+    }
+    while i + 1 < n and arr[i] > arr[i + 1] {
+        i += 1;
+    }
+    i == n - 1
+}
+
+// ---- the ends arm: climbing from both ends --------------------------------
+fn ends_valid_mountain_array(arr: Vec[i64]) -> bool {
+    let n = arr.len();
+    if n < 3 {
+        return false;
+    }
+    let mut left = 0;
+    while left + 1 < n and arr[left] < arr[left + 1] {
+        left += 1;
+    }
+    let mut right = n - 1;
+    while right > 0 and arr[right - 1] > arr[right] {
+        right -= 1;
+    }
+    left > 0 and right < n - 1 and left == right
+}
+
+// ---- the signs arm: the signs of the steps --------------------------------
+fn signs_valid_mountain_array(arr: Vec[i64]) -> bool {
+    let n = arr.len();
+    if n < 3 {
+        return false;
+    }
+    let mut signs: Vec[i64] = Vec.new();
+    for i in 1..n {
+        if arr[i] > arr[i - 1] {
+            signs.push(1);
+        } else if arr[i] < arr[i - 1] {
+            signs.push(-1);
+        } else {
+            return false;
+        }
+    }
+    let mut turns = 0;
+    for k in 1..signs.len() {
+        if signs[k] != signs[k - 1] {
+            turns += 1;
+        }
+    }
+    signs[0] == 1 and signs[signs.len() - 1] == -1 and turns == 1
+}
+
+// ---- the peak arm: the peak first -----------------------------------------
+fn peak_valid_mountain_array(arr: Vec[i64]) -> bool {
+    let n = arr.len();
+    if n < 3 {
+        return false;
+    }
+    let mut top = 0;
+    for i in 1..n {
+        if arr[i] > arr[top] {
+            top = i;
+        }
+    }
+    if top == 0 or top == n - 1 {
+        return false;
+    }
+    for i in 0..top {
+        if arr[i] >= arr[i + 1] {
+            return false;
+        }
+    }
+    for i in top..(n - 1) {
+        if arr[i] <= arr[i + 1] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the states arm: a machine of states ----------------------------------
+enum Climb {
+    Start,
+    Up,
+    Down,
+    Failed,
+}
+
+fn states_valid_mountain_array(arr: Vec[i64]) -> bool {
+    let mut state = Climb.Start;
+    for i in 1..arr.len() {
+        let rise = arr[i] > arr[i - 1];
+        let fall = arr[i] < arr[i - 1];
+        state = match state {
+            Climb.Start => if rise { Climb.Up } else { Climb.Failed },
+            Climb.Up => if rise { Climb.Up } else if fall { Climb.Down } else { Climb.Failed },
+            Climb.Down => if fall { Climb.Down } else { Climb.Failed },
+            Climb.Failed => Climb.Failed,
+        };
+    }
+    match state {
+        Climb.Down => true,
+        _ => false,
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, arr: ref Vec[i64]) -> bool {
+    if x == 0 {
+        star_valid_mountain_array(arr)
+    } else if x == 1 {
+        ends_valid_mountain_array(arr)
+    } else if x == 2 {
+        signs_valid_mountain_array(arr)
+    } else if x == 3 {
+        peak_valid_mountain_array(arr)
+    } else {
+        states_valid_mountain_array(arr)
+    }
+}
+
+// The statement read literally: some i with 0 < i < n - 1 where
+// arr[0] < arr[1] < ... < arr[i] and arr[i] > arr[i + 1] > ... > arr[n - 1].
+fn literal(arr: ref Vec[i64]) -> bool {
+    let n = arr.len();
+    for i in 1..(n - 1) {
+        let mut ok = true;
+        for k in 0..i {
+            if not (arr[k] < arr[k + 1]) {
+                ok = false;
+            }
+        }
+        for k in i..(n - 1) {
+            if not (arr[k] > arr[k + 1]) {
+                ok = false;
+            }
+        }
+        if ok {
+            return true;
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n values going up to a random place and down after it, each step 1 to
+// `step`, moved so the least is 0; then, half the time, one value changed
+// to anything from 0 to the largest.
+fn random_case(seed: mut ref i64, n: i64, step: i64) -> Vec[i64] {
+    let top = next_random(mut seed) % n;
+    let mut out: Vec[i64] = Vec.new();
+    let mut v = 0;
+    let mut least = 0;
+    let mut most = 0;
+    out.push(v);
+    for i in 1..n {
+        if i <= top {
+            v += 1 + next_random(mut seed) % step;
+        } else {
+            v -= 1 + next_random(mut seed) % step;
+        }
+        out.push(v);
+        if v < least {
+            least = v;
+        }
+        if v > most {
+            most = v;
+        }
+    }
+    for i in 0..n {
+        out[i] -= least;
+    }
+    if next_random(mut seed) % 2 == 0 {
+        let j = next_random(mut seed) % n;
+        out[j] = next_random(mut seed) % (most - least + 1);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, arr: ref Vec[i64], small: bool) -> bool {
+    let truth = if small { literal(arr) } else { false };
+    let mut got: Vec[bool] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, arr));
+    }
+    // the inputs P3 to P5 share
+    let n = arr.len();
+    let mut reversed: Vec[i64] = Vec.new();
+    let mut scaled: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(arr[n - 1 - i]);
+        scaled.push(3 * arr[i] + 7);
+    }
+    // one value written twice in a row
+    let d = next_random(mut seed) % n;
+    let mut doubled: Vec[i64] = Vec.new();
+    for i in 0..n {
+        doubled.push(arr[i]);
+        if i == d {
+            doubled.push(arr[i]);
+        }
+    }
+    // one more value, one below the last
+    let mut longer = arr.clone();
+    longer.push(arr[n - 1] - 1);
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the small cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: a mountain has 3 values at least, rises first and falls last
+        check(mut t, 2, not a or (n >= 3 and arr[0] < arr[1] and arr[n - 2] > arr[n - 1]));
+        // P3: reversed, the same
+        check(mut t, 3, arm(x, reversed) == a);
+        // P4: every value tripled and 7 added, the same
+        check(mut t, 4, arm(x, scaled) == a);
+        // P5: a value written twice in a row is never a mountain, and a
+        // mountain with a lower value after it still is
+        check(mut t, 5, not arm(x, doubled) and (not a or arm(x, longer)));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 941;
+    let mut cases = 0;
+    let mut count = 0;
+    let mut mountains = 0;
+    // up to 8 values with steps of 1 or 2 against the statement; then up
+    // to 2000 values with steps of 1 to 3
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 2000 };
+        let step = if small { 2 } else { 3 };
+        let arr = random_case(mut seed, n, step);
+        cases += 1;
+        count += n;
+        if properties(mut t, mut seed, arr, small) {
+            mountains += 1;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases of {count} values, {mountains} mountains, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

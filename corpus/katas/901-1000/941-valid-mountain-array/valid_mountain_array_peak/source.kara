@@ -1,0 +1,148 @@
+// LeetCode #941: Valid Mountain Array -- the peak first.
+//
+// Find the first place holding the largest value. It must be neither end,
+// and from it every step to the left and every step to the right must go
+// strictly down. O(n) time.
+
+fn valid_mountain_array(arr: Vec[i64]) -> bool {
+    let n = arr.len();
+    if n < 3 {
+        return false;
+    }
+    let mut top = 0;
+    for i in 1..n {
+        if arr[i] > arr[top] {
+            top = i;
+        }
+    }
+    if top == 0 or top == n - 1 {
+        return false;
+    }
+    for i in 0..top {
+        if arr[i] >= arr[i + 1] {
+            return false;
+        }
+    }
+    for i in top..(n - 1) {
+        if arr[i] <= arr[i + 1] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n values going up to a random place and down after it, each step 1 to
+// `step`, moved so the least is 0; then, half the time, one value changed
+// to anything from 0 to the largest.
+fn random_case(seed: mut ref i64, n: i64, step: i64) -> Vec[i64] {
+    let top = next_random(mut seed) % n;
+    let mut out: Vec[i64] = Vec.new();
+    let mut v = 0;
+    let mut least = 0;
+    let mut most = 0;
+    out.push(v);
+    for i in 1..n {
+        if i <= top {
+            v += 1 + next_random(mut seed) % step;
+        } else {
+            v -= 1 + next_random(mut seed) % step;
+        }
+        out.push(v);
+        if v < least {
+            least = v;
+        }
+        if v > most {
+            most = v;
+        }
+    }
+    for i in 0..n {
+        out[i] -= least;
+    }
+    if next_random(mut seed) % 2 == 0 {
+        let j = next_random(mut seed) % n;
+        out[j] = next_random(mut seed) % (most - least + 1);
+    }
+    out
+}
+
+fn show(arr: ref Vec[i64]) -> String {
+    let mut s = "[";
+    for i in 0..arr.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{arr[i]}";
+    }
+    s + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![2, 1],
+        vec![3, 5, 5],
+        vec![0, 3, 2, 1],
+        vec![1],
+        vec![1, 3, 2],
+        vec![0, 1, 2],
+        vec![2, 1, 0],
+        vec![0, 2, 3, 3, 5, 2, 1],
+        vec![0, 1, 0, 1, 0],
+        vec![1, 2, 3, 4, 5, 4, 3, 2, 1, 1],
+    ];
+    for i in 0..examples.len() {
+        println(f"{show(examples[i])}: {valid_mountain_array(examples[i])}");
+    }
+    // 300 random cases of 1 to 50 values, steps of 1 to 3
+    let mut seed = 941;
+    let mut count = 0;
+    let mut mountains = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 50;
+        let arr = random_case(mut seed, n, 3);
+        let a = valid_mountain_array(arr);
+        count += n;
+        if a {
+            mountains += 1;
+        }
+        check = (check * 1000003 + if a { n } else { 0 }) % 1000000007;
+    }
+    println(f"300 random cases of {count} values: {mountains} mountains, checksum {check}");
+    // LeetCode's longest: 10^4 values
+    let mut middle: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        middle.push(if i <= 5000 { i } else { 10000 - i });
+    }
+    println(f"up to 5000 and down: {valid_mountain_array(middle)}");
+    let mut flat = middle.clone();
+    flat[3000] = flat[2999];
+    println(f"the same with one flat step: {valid_mountain_array(flat)}");
+    let mut rising: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        rising.push(i);
+    }
+    println(f"0 to 9999: {valid_mountain_array(rising)}");
+    let mut early: Vec[i64] = vec![0];
+    for i in 1..10000 {
+        early.push(10000 - i);
+    }
+    println(f"0, then 9999 down to 1: {valid_mountain_array(early)}");
+    let mut same: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        same.push(7);
+    }
+    println(f"10000 sevens: {valid_mountain_array(same)}");
+    let mut noise: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        noise.push(next_random(mut seed) % 10001);
+    }
+    println(f"10000 random values: {valid_mountain_array(noise)}");
+}

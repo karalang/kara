@@ -1,0 +1,58 @@
+// Benchmark: LeetCode #941 Valid Mountain Array -- the ★ arm, a walk up
+// and a walk down, on 100 arrays of 10000 values, LeetCode's longest, in
+// 200 rounds. Mirrors valid_mountain_array.c, .rs, .py and go-seq/.
+
+fn valid_mountain_array(arr: Vec[i64]) -> bool {
+    let n = arr.len();
+    let mut i = 0;
+    while i + 1 < n and arr[i] < arr[i + 1] {
+        i += 1;
+    }
+    if i == 0 or i == n - 1 {
+        return false;
+    }
+    while i + 1 < n and arr[i] > arr[i + 1] {
+        i += 1;
+    }
+    i == n - 1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 200;
+    let count = 100;
+    let mut seed = 941;
+    // each array climbs by 1 to a random place and falls by 1 after it,
+    // moved so the least is 0; every other one then has one value changed
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for a in 0..count {
+        let top = 1 + next_random(mut seed) % 9998;
+        let mut arr: Vec[i64] = Vec.new();
+        let least = if top < 10000 - top { 0 } else { 2 * top - 9999 };
+        for i in 0..10000 {
+            arr.push((if i <= top { i } else { 2 * top - i }) - least);
+        }
+        if a % 2 == 1 {
+            let j = (next_random(mut seed) * 32768 + next_random(mut seed)) % 10000;
+            arr[j] = next_random(mut seed) % 10001;
+        }
+        arrays.push(arr);
+    }
+    let mut mountains = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        // each round answers every array, starting from a different one
+        for i in 0..count {
+            let c = (r + i) % count;
+            if valid_mountain_array(arrays[c]) {
+                mountains += 1;
+                check = (check * 1000003 + c + 1) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over {count} arrays of 10000 values: {mountains} mountains, checksum {check}");
+}
