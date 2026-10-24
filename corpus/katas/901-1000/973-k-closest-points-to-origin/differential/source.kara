@@ -1,0 +1,353 @@
+// LeetCode #973: K Closest Points to Origin -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random sets of points.
+
+// ---- star ----
+
+fn star_k_closest(points: Vec[(i64, i64)], k: i64) -> Vec[(i64, i64)] {
+    let mut sorted = points.clone();
+    sorted.sort_by_key(|p| p.0 * p.0 + p.1 * p.1);
+    sorted.truncate(k);
+    sorted
+}
+
+// ---- heap ----
+
+fn heap_k_closest(points: Vec[(i64, i64)], k: i64) -> Vec[(i64, i64)] {
+    let mut heap: PriorityQueue[(i64, i64, i64)] = PriorityQueue.max_first();
+    for (x, y) in points {
+        let d = x * x + y * y;
+        if heap.len() < k {
+            heap.push((d, x, y));
+        } else if d < heap.peek().unwrap().0 {
+            heap.pop();
+            heap.push((d, x, y));
+        }
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    while let Some((_, x, y)) = heap.pop() {
+        out.push((x, y));
+    }
+    out
+}
+
+// ---- select ----
+
+fn select_dist(p: (i64, i64)) -> i64 {
+    p.0 * p.0 + p.1 * p.1
+}
+
+fn select_k_closest(points: Vec[(i64, i64)], k: i64) -> Vec[(i64, i64)] {
+    let mut a = points.clone();
+    let mut lo = 0;
+    let mut hi = a.len() - 1;
+    while lo < hi {
+        let pivot = select_dist(a[(lo + hi) / 2]);
+        let mut i = lo;
+        let mut j = hi;
+        // Hoare's scheme: afterwards a[lo..j] <= pivot <= a[i..hi]
+        while i <= j {
+            while select_dist(a[i]) < pivot {
+                i += 1;
+            }
+            while select_dist(a[j]) > pivot {
+                j -= 1;
+            }
+            if i <= j {
+                a.swap(i, j);
+                i += 1;
+                j -= 1;
+            }
+        }
+        if k - 1 <= j {
+            hi = j;
+        } else if k - 1 >= i {
+            lo = i;
+        } else {
+            break;
+        }
+    }
+    a.truncate(k);
+    a
+}
+
+// ---- threshold ----
+
+fn threshold_k_closest(points: Vec[(i64, i64)], k: i64) -> Vec[(i64, i64)] {
+    let mut lo = 0;
+    let mut hi = 0;
+    for (x, y) in points {
+        hi = hi.max(x * x + y * y);
+    }
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let mut within = 0;
+        for (x, y) in points {
+            if x * x + y * y <= mid {
+                within += 1;
+            }
+        }
+        if within >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (x, y) in points {
+        if x * x + y * y <= lo {
+            out.push((x, y));
+        }
+    }
+    out
+}
+
+// ---- tree ----
+
+fn tree_k_closest(points: Vec[(i64, i64)], k: i64) -> Vec[(i64, i64)] {
+    let mut rings: SortedMap[i64, Vec[(i64, i64)]] = SortedMap.new();
+    for (x, y) in points {
+        let d = x * x + y * y;
+        let mut ring = rings.remove(d) ?? Vec.new();
+        ring.push((x, y));
+        rings.insert(d, ring);
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for ring in rings.values() {
+        for p in ring {
+            if out.len() < k {
+                out.push(*p);
+            }
+        }
+    }
+    out
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn sq(p: (i64, i64)) -> i64 {
+    p.0 * p.0 + p.1 * p.1
+}
+
+fn points_of(n: i64, span: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..n {
+        let x = next_random(mut seed) % (2 * span + 1) - span;
+        let y = next_random(mut seed) % (2 * span + 1) - span;
+        points.push((x, y));
+    }
+    points
+}
+
+// Every k from 1 to n whose k closest points are unique.
+fn valid_ks(points: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut ds: Vec[i64] = Vec.new();
+    for p in points {
+        ds.push(sq(*p));
+    }
+    ds.sort();
+    let mut ks: Vec[i64] = Vec.new();
+    for k in 1..ds.len() {
+        if ds[k - 1] < ds[k] {
+            ks.push(k);
+        }
+    }
+    ks.push(ds.len());
+    ks
+}
+
+fn sorted(v: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut s = v.clone();
+    s.sort();
+    s
+}
+
+// The statement read literally: a point is among the k closest when
+// fewer than k points are strictly closer than it.
+fn literal(points: ref Vec[(i64, i64)], k: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for p in points {
+        let mut closer = 0;
+        for q in points {
+            if sq(*q) < sq(*p) {
+                closer += 1;
+            }
+        }
+        if closer < k {
+            out.push(*p);
+        }
+    }
+    sorted(out)
+}
+
+fn arm(a: i64, points: Vec[(i64, i64)], k: i64) -> Vec[(i64, i64)] {
+    if a == 0 {
+        sorted(star_k_closest(points, k))
+    } else if a == 1 {
+        sorted(heap_k_closest(points, k))
+    } else if a == 2 {
+        sorted(select_k_closest(points, k))
+    } else if a == 3 {
+        sorted(threshold_k_closest(points, k))
+    } else {
+        sorted(tree_k_closest(points, k))
+    }
+}
+
+// Whether every point of b is in a, as many times; both are sorted.
+fn holds(a: ref Vec[(i64, i64)], b: ref Vec[(i64, i64)]) -> bool {
+    let mut i = 0;
+    for p in b {
+        while i < a.len() and a[i] < *p {
+            i += 1;
+        }
+        if i == a.len() or a[i] != *p {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// a with one copy of p taken out, if p is there.
+fn without(a: ref Vec[(i64, i64)], p: (i64, i64)) -> Option[Vec[(i64, i64)]] {
+    let at = a.iter().position(|q| *q == p)?;
+    let mut rest = a.clone();
+    rest.remove(at);
+    Some(rest)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, points: Vec[(i64, i64)], k: i64, small: bool, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let n = points.len();
+    let truth = if small { literal(points, k) } else { Vec.new() };
+    let mut got: Vec[Vec[(i64, i64)]] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, points, k));
+    }
+    let ks = valid_ks(points);
+    // the input rotated by a random amount
+    let turn = next_random(mut seed) % n;
+    let mut rotated: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        rotated.push(points[(i + turn) % n]);
+    }
+    // the plane turned a quarter, and mirrored in the diagonal
+    let mut quarter: Vec[(i64, i64)] = Vec.new();
+    let mut mirror: Vec[(i64, i64)] = Vec.new();
+    for (x, y) in points {
+        quarter.push((-y, x));
+        mirror.push((y, x));
+    }
+    // a smaller k whose closest points are unique, when there is one
+    let mut smaller = 0;
+    for j in ks {
+        if j < k {
+            smaller = j;
+        }
+    }
+    // the input without its last point
+    let last = points[n - 1];
+    let mut shorter = points.clone();
+    shorter.pop();
+    for a in 0..5 {
+        let mine = got[a].clone();
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut tally, 1, mine == truth);
+        }
+        // P2: the order of the input does not matter
+        check(mut tally, 2, arm(a, rotated, k) == mine);
+        // P3: turning the plane a quarter, or mirroring it, turns or
+        // mirrors the answer
+        let mut q: Vec[(i64, i64)] = Vec.new();
+        let mut m: Vec[(i64, i64)] = Vec.new();
+        for (x, y) in mine {
+            q.push((-y, x));
+            m.push((y, x));
+        }
+        check(mut tally, 3, arm(a, quarter, k) == sorted(q) and arm(a, mirror, k) == sorted(m));
+        // P4: all n points when k is n, and the closest for a smaller k
+        // are among these
+        let all = arm(a, points, n) == sorted(points);
+        let nested = smaller == 0 or holds(mine, arm(a, points, smaller));
+        check(mut tally, 4, all and nested);
+        // P5: dropping the last point keeps the answer when it is not in
+        // it, and otherwise is the answer for k - 1 without it
+        let inside = without(mine, last);
+        let ok = if n == 1 {
+            true
+        } else if let Some(rest) = inside {
+            k == 1 or arm(a, shorter, k - 1) == rest
+        } else {
+            arm(a, shorter, k) == mine
+        };
+        check(mut tally, 5, ok);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == mine {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 973;
+    let mut total = 0;
+    let mut kept = 0;
+    let mut check_sum = 0;
+    // 3000 small cases against the statement, many with ties, then 200
+    // of 100 points over LeetCode's whole range of coordinates
+    for c in 0..3200 {
+        let small = c < 3000;
+        let points = if small {
+            let n = 1 + next_random(mut seed) % 30;
+            let span = vec![1, 2, 3, 10, 100][c % 5];
+            points_of(n, span, mut seed)
+        } else {
+            points_of(100, 10000, mut seed)
+        };
+        let ks = valid_ks(points);
+        let k = ks[next_random(mut seed) % ks.len()];
+        let answer = properties(mut tally, points, k, small, mut seed);
+        total += points.len();
+        kept += answer.len();
+        for (x, y) in answer {
+            check_sum = (check_sum * 31 + (x + 10001) * 20003 + y + 10001) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {total} points: {kept} kept, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
