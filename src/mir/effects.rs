@@ -638,15 +638,17 @@ fn own_locals(
 
 /// Every use of a place by the blocks `set`, in block order and, within a
 /// block, in the order its statements and terminator make them, leaving
-/// out the blocks on the branch's way out of the function.
+/// out what the blocks on the branch's way out of the function do to leave.
 fn branch_uses(body: &Body, set: &BTreeSet<BasicBlock>) -> Vec<(BasicBlock, Use, Place)> {
     let mut out = Vec::new();
-    // The blocks on a branch's way out of the function (a `?` in it): they
-    // return and never come back to the code after the branch. What they do,
-    // the drops of everything live and the write of the result, belongs to
-    // leaving, and the `par` decides which branch's exit counts (core
-    // §11.7). A block that can neither continue nor return (a loop with no
-    // way out) is kept.
+    // The blocks on a branch's way out of the function (a `?` in it, or a
+    // whole arm that ends in `return`): they return and never come back to
+    // the code after the branch. Their drops of everything live and their
+    // write of the result belong to leaving, and the `par` decides which
+    // branch's exit counts (core §11.7); every other use is the branch's
+    // own work, which may read what a sibling writes (B-2026-10-24-34). A
+    // block that can neither continue nor return (a loop with no way out)
+    // is kept whole.
     let leaves: BTreeSet<BasicBlock> = {
         let succ = |b: BasicBlock| body.blocks[b.index()].terminator.kind.successors();
         let mut on: BTreeSet<BasicBlock> = set
@@ -688,7 +690,7 @@ fn branch_uses(body: &Body, set: &BTreeSet<BasicBlock>) -> Vec<(BasicBlock, Use,
         Operand::Move(p) => Some((Use::Move, p.clone())),
         Operand::Const(_) => None,
     };
-    for &b in set.difference(&leaves) {
+    for &b in set {
         let bb = &body.blocks[b.index()];
         // Each statement's and the terminator's uses, in order.
         let mut uses: Vec<(Use, Place)> = Vec::new();
@@ -740,7 +742,14 @@ fn branch_uses(body: &Body, set: &BTreeSet<BasicBlock>) -> Vec<(BasicBlock, Use,
             | TerminatorKind::Abort { .. }
             | TerminatorKind::Unreachable => {}
         }
-        out.extend(uses.into_iter().map(|(how, p)| (b, how, p)));
+        let leaving = |how: &Use, p: &Place| {
+            leaves.contains(&b) && (*how == Use::Drop || p.local == Local::RETURN_PLACE)
+        };
+        out.extend(
+            uses.into_iter()
+                .filter(|(how, p)| !leaving(how, p))
+                .map(|(how, p)| (b, how, p)),
+        );
     }
     out
 }

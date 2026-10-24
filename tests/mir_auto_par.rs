@@ -467,10 +467,11 @@ fn grouped(stderr: &[u8]) -> Vec<String> {
 /// Runs of independent statements that each loop run as tasks and give
 /// the sequential program's output on both backends: `let`s that move
 /// their argument in, expression statements that fill a `mut ref`, values
-/// that own memory or run a `Drop` body, a generic instance, `?` and
-/// `return` in a run (the source-earliest one wins), and an expression
-/// statement's value dropped. A statement that prints keeps its place, and
-/// one that reads what an earlier one binds starts the next run.
+/// that own memory or run a `Drop` body, a generic instance, and an
+/// expression statement's value dropped. A statement that prints keeps its
+/// place, one that reads what an earlier one binds starts the next run,
+/// and one that may panic stays after a `?` or `return`, which in order
+/// would have kept it from running.
 #[test]
 fn mir_auto_par_statement_groups_match_in_order() {
     let src = r#"struct Noisy { id: i64 }
@@ -576,10 +577,13 @@ fn main() {
          125 500\nOk(1479528) Err(negative -1) Err(negative -2) Err(negative -3)\n\
          2755 -1 -2 -1\n954994 272459\ndrop 646686\ndrop 328350\n"
     );
+    // `both` and `early` stay in order: their first statement can return,
+    // and in order that return keeps the second, whose `work` can
+    // overflow, from running at all (B-2026-10-24-35).
     let par = interp_run("groups-report", src, true);
     assert_eq!(
         grouped(&par.stderr),
-        ["both@56", "early@62", "main@70", "main@75", "main@78", "main@81", "main@84", "main@90"],
+        ["main@70", "main@75", "main@78", "main@81", "main@84", "main@90"],
         "{}",
         String::from_utf8_lossy(&par.stderr)
     );

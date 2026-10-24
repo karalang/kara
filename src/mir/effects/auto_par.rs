@@ -325,14 +325,17 @@ pub(super) fn verdict(
                 .map(Effect::display)
         })
         .collect();
-    let panics: Vec<bool> = sets
+    let panic: Vec<Option<String>> = sets
         .iter()
         .map(|set| {
             set.iter()
                 .filter_map(|b| at.get(b))
-                .any(|e| e.effects.iter().any(|x| x.verb == Verb::Panics))
+                .flat_map(|e| e.effects.iter())
+                .find(|x| x.verb == Verb::Panics)
+                .map(Effect::display)
         })
         .collect();
+    let panics: Vec<bool> = panic.iter().map(Option::is_some).collect();
     // A branch on its way out of the function (a `?`, a `return`) writes
     // the return place, which nothing else in a branch does.
     let returns: Vec<bool> = sets
@@ -396,10 +399,15 @@ pub(super) fn verdict(
         .collect();
     // Branch `i` stopping first would have kept something branch `j` does
     // from being seen: a panic ends the program, so only an effect counts;
-    // a return ends the function, so a write the caller sees counts too.
+    // a return ends the function, so a write the caller sees counts too,
+    // and so does a panic, which would end a run the return lets go on
+    // (B-2026-10-24-35).
     let stopped = |i: usize, j: usize| -> Option<Refusal> {
         let seen = if returns[i] {
-            visible[j].clone().or_else(|| escapes[j].clone())
+            visible[j]
+                .clone()
+                .or_else(|| escapes[j].clone())
+                .or_else(|| panic[j].clone())
         } else if panics[i] {
             visible[j].clone()
         } else {
@@ -1193,6 +1201,106 @@ fn main() {{
             }) => assert_eq!(effect, "writes(Stdout)"),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The statement-run verdicts on `src` for the candidates the builder
+    /// records itself, one per function named.
+    fn recorded_runs(src: &str) -> Vec<AutoParVerdict> {
+        let l = crate::mir::lower::build_source_recording(src).unwrap_or_else(|e| panic!("{e}"));
+        analyze(&l.program, &l.tys)
+            .auto_par
+            .into_iter()
+            .filter(|v| matches!(v.kind, VerdictKind::Statements { .. }))
+            .collect()
+    }
+
+    /// A statement whose whole arm ends in `return` still does its work
+    /// before leaving: here it reads `v`, which the statement before it
+    /// fills, and a binding the statement before it makes, so neither
+    /// pair may run together (B-2026-10-24-34).
+    #[test]
+    fn auto_par_statement_that_returns_still_uses_what_it_reads() {
+        let v = recorded_runs(
+            "fn fill(v: mut ref Vec[i64], n: i64) {
+    for i in 0..n {
+        v.push(i);
+    }
+}
+
+fn sum(v: ref Vec[i64]) -> i64 {
+    let mut t = 0;
+    for x in v.iter() {
+        t = t + *x;
+    }
+    t
+}
+
+fn go(c: bool) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    fill(mut v, 100);
+    if c { let mut t = 0; for x in v.iter() { t = t + *x; }; return t; }
+    0
+}
+
+fn near(c: bool) -> i64 {
+    let w: Vec[i64] = vec![1, 2, 3];
+    let p = sum(w);
+    if c { let mut t = 0; for x in w.iter() { t = t + *x * p; }; return t; }
+    0
+}
+
+fn main() {
+    println(go(true));
+    println(near(true));
+}
+",
+        );
+        for name in ["go", "near"] {
+            let grouped: Vec<&AutoParVerdict> = v
+                .iter()
+                .filter(|r| r.instance == name && !groups(r).is_empty())
+                .collect();
+            assert!(grouped.is_empty(), "{grouped:#?}");
+        }
+    }
+
+    /// A statement that may panic stays after one that returns: run in
+    /// order, the return would have kept the panic from ending the run
+    /// (B-2026-10-24-35).
+    #[test]
+    fn auto_par_statement_that_may_panic_stays_after_a_return() {
+        let v = recorded_runs(
+            "fn grow(n: i64) -> i64 {
+    let mut s = 1;
+    for i in 0..n {
+        s = s * 3 + i;
+    }
+    s
+}
+
+fn second(lines: ref Vec[i64]) -> i64 {
+    if grow(lines.len()) < 10 {
+        return -1;
+    }
+    let g = grow(lines[1]);
+    g
+}
+
+fn main() {
+    let lines: Vec[i64] = vec![5];
+    println(second(lines));
+}
+",
+        );
+        let mine: Vec<&AutoParVerdict> = v.iter().filter(|r| r.instance == "second").collect();
+        assert!(mine.iter().all(|r| groups(r).is_empty()), "{mine:#?}");
+        assert!(
+            mine.iter().any(|r| matches!(
+                &r.verdict,
+                Err(Refusal::Stops { visible: 1, effect, .. }) if effect == "panics"
+            )),
+            "{mine:#?}"
+        );
     }
 
     /// A sequential `for`, recorded by its body's lines as the builder
