@@ -1,0 +1,20 @@
+case 1: 2
+case 2: 1
+case 3: 5
+case 4: 1
+case 5: 2
+case 6: 2
+case 7: 4
+case 8: 4
+case 9: 5
+case 10: 8
+300 random grids of 11404 cells, regions: 1568, checksum 286974548
+30 by 30, blank 0 in 10, regions: 127
+30 by 30, blank 3 in 10, regions: 43
+30 by 30, blank 6 in 10, regions: 7
+30 by 30, blank 9 in 10, regions: 3
+30 by 30 of [/], regions: 60
+30 by 30 of [\], regions: 60
+30 by 30 of [/\, \/], regions: 481
+30 by 30 of [\/, /\], regions: 480
+30 by 30 of [ ], regions: 1

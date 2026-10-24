@@ -1,0 +1,151 @@
+// LeetCode #959: Regions Cut By Slashes -- Euler's formula.
+//
+// The border and the slashes make a plane graph on the (n + 1)^2 corner
+// points. For V points, E segments and C connected pieces, Euler's
+// formula counts E - V + C + 1 faces, the one outside the square among
+// them, so the square holds E - V + C regions. E is the 4n border
+// segments and the slashes; C is counted by a breadth-first walk over the
+// points, every point that no segment touches a piece of its own. O(n^2).
+
+fn regions_by_slashes(grid: Vec[String]) -> i64 {
+    let n = grid.len();
+    let w = n + 1;
+    let v = w * w;
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..v {
+        adj.push(Vec.new());
+    }
+    let mut edges = 0;
+    // the border, a segment between neighbouring points on each side
+    for i in 0..n {
+        let sides: Vec[(i64, i64)] = vec![
+            (i, i + 1),
+            (n * w + i, n * w + i + 1),
+            (i * w, (i + 1) * w),
+            (i * w + n, (i + 1) * w + n),
+        ];
+        for (a, b) in sides.iter() {
+            adj[*a].push(*b);
+            adj[*b].push(*a);
+            edges += 1;
+        }
+    }
+    for r in 0..n {
+        let row = grid[r].bytes();
+        for c in 0..n {
+            let (a, b) = if row[c] == b'/' {
+                (r * w + c + 1, (r + 1) * w + c)
+            } else if row[c] == b'\\' {
+                (r * w + c, (r + 1) * w + c + 1)
+            } else {
+                continue;
+            };
+            adj[a].push(b);
+            adj[b].push(a);
+            edges += 1;
+        }
+    }
+    let mut pieces = 0;
+    let mut seen: Vec[bool] = Vec.filled(v, false);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for s in 0..v {
+        if seen[s] {
+            continue;
+        }
+        pieces += 1;
+        seen[s] = true;
+        queue.push_back(s);
+        while let Some(p) = queue.pop_front() {
+            for q in adj[p].iter() {
+                if not seen[*q] {
+                    seen[*q] = true;
+                    queue.push_back(*q);
+                }
+            }
+        }
+    }
+    edges - v + pieces
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An n by n grid, each cell blank with chance blank in 10, otherwise a
+// slash or a backslash with even chances.
+fn random_grid(n: i64, blank: i64, seed: mut ref i64) -> Vec[String] {
+    let mut grid: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let mut row = String.new();
+        for _ in 0..n {
+            if next_random(mut seed) % 10 < blank {
+                row.push_str(" ");
+            } else if next_random(mut seed) % 2 == 0 {
+                row.push_str("/");
+            } else {
+                row.push_str("\\");
+            }
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+// An n by n grid from a pattern of k by k cells repeated.
+fn tiled(n: i64, pattern: ref Vec[String]) -> Vec[String] {
+    let k = pattern.len();
+    let mut grid: Vec[String] = Vec.new();
+    for r in 0..n {
+        let mut row = String.new();
+        for c in 0..n {
+            row.push_str(pattern[r % k].substring(c % k, c % k + 1));
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[String]] = vec![
+        vec![" /", "/ "],
+        vec![" /", "  "],
+        vec!["/\\", "\\/"],
+        vec![" "],
+        vec!["/"],
+        vec!["\\"],
+        vec!["\\/", "/\\"],
+        vec!["//", "//"],
+        vec![" /\\ ", "/  \\", "\\  /", " \\/ "],
+        vec!["/\\/", "\\/\\", "/\\/"],
+    ];
+    for i in 0..cases.len() {
+        println(f"case {i + 1}: {regions_by_slashes(cases[i])}");
+    }
+    // 300 random grids of 1 to 10 cells a side
+    let mut seed = 959;
+    let mut cells = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10;
+        let blank = next_random(mut seed) % 10;
+        let r = regions_by_slashes(random_grid(n, blank, mut seed));
+        cells += n * n;
+        total += r;
+        check = (check * 31 + r) % 1000000007;
+    }
+    println(f"300 random grids of {cells} cells, regions: {total}, checksum {check}");
+    // LeetCode's largest grids, 30 by 30
+    for blank in [0, 3, 6, 9] {
+        let r = regions_by_slashes(random_grid(30, blank, mut seed));
+        println(f"30 by 30, blank {blank} in 10, regions: {r}");
+    }
+    let patterns: Vec[Vec[String]] = vec![vec!["/"], vec!["\\"], vec!["/\\", "\\/"], vec!["\\/", "/\\"], vec![" "]];
+    for p in patterns.iter() {
+        println(f"30 by 30 of {p}, regions: {regions_by_slashes(tiled(30, p))}");
+    }
+}

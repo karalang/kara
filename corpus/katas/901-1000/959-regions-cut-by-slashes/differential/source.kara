@@ -1,0 +1,530 @@
+// LeetCode #959: Regions Cut By Slashes -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random grids of every density of slashes.
+
+// ---- star ----
+
+fn star_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut r = x;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    let mut c = x;
+    while parent[c] != r {
+        let next = parent[c];
+        parent[c] = r;
+        c = next;
+    }
+    r
+}
+
+fn star_union(parent: mut ref Vec[i64], sets: mut ref i64, a: i64, b: i64) {
+    let ra = star_find(mut parent, a);
+    let rb = star_find(mut parent, b);
+    if ra != rb {
+        parent[ra] = rb;
+        *sets -= 1;
+    }
+}
+
+fn star_regions_by_slashes(grid: Vec[String]) -> i64 {
+    let n = grid.len();
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..4 * n * n {
+        parent.push(i);
+    }
+    let mut sets = 4 * n * n;
+    for r in 0..n {
+        let row = grid[r].bytes();
+        for c in 0..n {
+            // triangles 0 top, 1 right, 2 bottom, 3 left
+            let t = 4 * (r * n + c);
+            let ch = row[c];
+            if ch == b' ' {
+                star_union(mut parent, mut sets, t, t + 1);
+                star_union(mut parent, mut sets, t + 1, t + 2);
+                star_union(mut parent, mut sets, t + 2, t + 3);
+            } else if ch == b'/' {
+                star_union(mut parent, mut sets, t, t + 3);
+                star_union(mut parent, mut sets, t + 1, t + 2);
+            } else {
+                star_union(mut parent, mut sets, t, t + 1);
+                star_union(mut parent, mut sets, t + 2, t + 3);
+            }
+            if c + 1 < n {
+                star_union(mut parent, mut sets, t + 1, t + 4 + 3);
+            }
+            if r + 1 < n {
+                star_union(mut parent, mut sets, t + 2, t + 4 * n);
+            }
+        }
+    }
+    sets
+}
+
+// ---- pixels ----
+
+fn pixels_regions_by_slashes(grid: Vec[String]) -> i64 {
+    let n = grid.len();
+    let m = 3 * n;
+    let mut wall: Vec[bool] = Vec.filled(m * m, false);
+    for r in 0..n {
+        let row = grid[r].bytes();
+        for c in 0..n {
+            for i in 0..3 {
+                if row[c] == b'/' {
+                    wall[(3 * r + i) * m + 3 * c + 2 - i] = true;
+                } else if row[c] == b'\\' {
+                    wall[(3 * r + i) * m + 3 * c + i] = true;
+                }
+            }
+        }
+    }
+    let mut regions = 0;
+    let mut stack: Vec[i64] = Vec.new();
+    for start in 0..m * m {
+        if wall[start] {
+            continue;
+        }
+        regions += 1;
+        wall[start] = true;
+        stack.push(start);
+        while let Some(p) = stack.pop() {
+            let (y, x) = (p / m, p % m);
+            if y > 0 and not wall[p - m] {
+                wall[p - m] = true;
+                stack.push(p - m);
+            }
+            if y + 1 < m and not wall[p + m] {
+                wall[p + m] = true;
+                stack.push(p + m);
+            }
+            if x > 0 and not wall[p - 1] {
+                wall[p - 1] = true;
+                stack.push(p - 1);
+            }
+            if x + 1 < m and not wall[p + 1] {
+                wall[p + 1] = true;
+                stack.push(p + 1);
+            }
+        }
+    }
+    regions
+}
+
+// ---- points ----
+
+fn points_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut r = x;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    let mut c = x;
+    while parent[c] != r {
+        let next = parent[c];
+        parent[c] = r;
+        c = next;
+    }
+    r
+}
+
+fn points_regions_by_slashes(grid: Vec[String]) -> i64 {
+    let n = grid.len();
+    let w = n + 1;
+    let mut parent: Vec[i64] = Vec.new();
+    for p in 0..w * w {
+        let (y, x) = (p / w, p % w);
+        if y == 0 or y == n or x == 0 or x == n {
+            parent.push(0);
+        } else {
+            parent.push(p);
+        }
+    }
+    let mut regions = 1;
+    for r in 0..n {
+        let row = grid[r].bytes();
+        for c in 0..n {
+            let (a, b) = if row[c] == b'/' {
+                (r * w + c + 1, (r + 1) * w + c)
+            } else if row[c] == b'\\' {
+                (r * w + c, (r + 1) * w + c + 1)
+            } else {
+                continue;
+            };
+            let ra = points_find(mut parent, a);
+            let rb = points_find(mut parent, b);
+            if ra == rb {
+                regions += 1;
+            } else {
+                parent[ra] = rb;
+            }
+        }
+    }
+    regions
+}
+
+// ---- flood ----
+
+fn flood_regions_by_slashes(grid: Vec[String]) -> i64 {
+    let n = grid.len();
+    let mut chars: Vec[u8] = Vec.new();
+    for r in 0..n {
+        let row = grid[r].bytes();
+        for c in 0..n {
+            chars.push(row[c]);
+        }
+    }
+    let mut seen: Vec[bool] = Vec.filled(4 * n * n, false);
+    let mut regions = 0;
+    let mut stack: Vec[i64] = Vec.new();
+    for start in 0..4 * n * n {
+        if seen[start] {
+            continue;
+        }
+        regions += 1;
+        seen[start] = true;
+        stack.push(start);
+        while let Some(t) = stack.pop() {
+            let cell = t / 4;
+            let k = t % 4;
+            let (r, c) = (cell / n, cell % n);
+            let mut next: Vec[i64] = Vec.new();
+            // inside the cell
+            let ch = chars[cell];
+            if ch == b' ' {
+                for j in 0..4 {
+                    next.push(4 * cell + j);
+                }
+            } else if ch == b'/' {
+                next.push(4 * cell + 3 - k);
+            } else {
+                next.push(4 * cell + (5 - k) % 4);
+            }
+            // across to the neighbouring cell
+            if k == 0 and r > 0 {
+                next.push(4 * (cell - n) + 2);
+            } else if k == 1 and c + 1 < n {
+                next.push(4 * (cell + 1) + 3);
+            } else if k == 2 and r + 1 < n {
+                next.push(4 * (cell + n));
+            } else if k == 3 and c > 0 {
+                next.push(4 * (cell - 1) + 1);
+            }
+            for u in next.iter() {
+                if not seen[*u] {
+                    seen[*u] = true;
+                    stack.push(*u);
+                }
+            }
+        }
+    }
+    regions
+}
+
+// ---- euler ----
+
+fn euler_regions_by_slashes(grid: Vec[String]) -> i64 {
+    let n = grid.len();
+    let w = n + 1;
+    let v = w * w;
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..v {
+        adj.push(Vec.new());
+    }
+    let mut edges = 0;
+    // the border, a segment between neighbouring points on each side
+    for i in 0..n {
+        let sides: Vec[(i64, i64)] = vec![
+            (i, i + 1),
+            (n * w + i, n * w + i + 1),
+            (i * w, (i + 1) * w),
+            (i * w + n, (i + 1) * w + n),
+        ];
+        for (a, b) in sides.iter() {
+            adj[*a].push(*b);
+            adj[*b].push(*a);
+            edges += 1;
+        }
+    }
+    for r in 0..n {
+        let row = grid[r].bytes();
+        for c in 0..n {
+            let (a, b) = if row[c] == b'/' {
+                (r * w + c + 1, (r + 1) * w + c)
+            } else if row[c] == b'\\' {
+                (r * w + c, (r + 1) * w + c + 1)
+            } else {
+                continue;
+            };
+            adj[a].push(b);
+            adj[b].push(a);
+            edges += 1;
+        }
+    }
+    let mut pieces = 0;
+    let mut seen: Vec[bool] = Vec.filled(v, false);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for s in 0..v {
+        if seen[s] {
+            continue;
+        }
+        pieces += 1;
+        seen[s] = true;
+        queue.push_back(s);
+        while let Some(p) = queue.pop_front() {
+            for q in adj[p].iter() {
+                if not seen[*q] {
+                    seen[*q] = true;
+                    queue.push_back(*q);
+                }
+            }
+        }
+    }
+    edges - v + pieces
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An n by n grid, each cell blank with chance blank in 10, otherwise a
+// slash or a backslash with even chances.
+fn random_grid(n: i64, blank: i64, seed: mut ref i64) -> Vec[String] {
+    let mut grid: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let mut row = String.new();
+        for _ in 0..n {
+            if next_random(mut seed) % 10 < blank {
+                row.push_str(" ");
+            } else if next_random(mut seed) % 2 == 0 {
+                row.push_str("/");
+            } else {
+                row.push_str("\\");
+            }
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+// The statement read literally: the square drawn at five pixels to a
+// cell, each slash a diagonal line of pixels, and the regions the groups
+// of empty pixels joined edge to edge. Used on grids of up to 5 cells a
+// side.
+fn literal(grid: ref Vec[String]) -> i64 {
+    let n = grid.len();
+    let k = 5;
+    let m = k * n;
+    let mut wall: Vec[bool] = Vec.filled(m * m, false);
+    for r in 0..n {
+        for c in 0..n {
+            let ch = grid[r].substring(c, c + 1);
+            for i in 0..k {
+                if ch == "/" {
+                    wall[(k * r + i) * m + k * c + k - 1 - i] = true;
+                } else if ch == "\\" {
+                    wall[(k * r + i) * m + k * c + i] = true;
+                }
+            }
+        }
+    }
+    let mut label: Vec[i64] = Vec.filled(m * m, -1);
+    let mut regions = 0;
+    for start in 0..m * m {
+        if wall[start] or label[start] >= 0 {
+            continue;
+        }
+        // a region: every empty pixel reachable from start
+        let mut frontier: Vec[i64] = vec![start];
+        label[start] = regions;
+        let mut i = 0;
+        while i < frontier.len() {
+            let p = frontier[i];
+            let (y, x) = (p / m, p % m);
+            let around: Vec[(i64, i64)] = vec![(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)];
+            for (yy, xx) in around.iter() {
+                if *yy >= 0 and *yy < m and *xx >= 0 and *xx < m {
+                    let q = *yy * m + *xx;
+                    if not wall[q] and label[q] < 0 {
+                        label[q] = regions;
+                        frontier.push(q);
+                    }
+                }
+            }
+            i += 1;
+        }
+        regions += 1;
+    }
+    regions
+}
+
+fn cell(grid: ref Vec[String], r: i64, c: i64) -> String {
+    grid[r].substring(c, c + 1)
+}
+
+fn swapped(ch: own String) -> String {
+    if ch == "/" {
+        "\\"
+    } else if ch == "\\" {
+        "/"
+    } else {
+        ch
+    }
+}
+
+// Turned a quarter turn clockwise: the cell at (r, c) comes from (n - 1 -
+// c, r), and a slash turns into a backslash and back.
+fn rotated(grid: ref Vec[String]) -> Vec[String] {
+    let n = grid.len();
+    let mut out: Vec[String] = Vec.new();
+    for r in 0..n {
+        let mut row = String.new();
+        for c in 0..n {
+            row.push_str(swapped(cell(grid, n - 1 - c, r)));
+        }
+        out.push(row);
+    }
+    out
+}
+
+// Left for right: each row reversed, slashes and backslashes swapped.
+fn mirrored(grid: ref Vec[String]) -> Vec[String] {
+    let n = grid.len();
+    let mut out: Vec[String] = Vec.new();
+    for r in 0..n {
+        let mut row = String.new();
+        for c in 0..n {
+            row.push_str(swapped(cell(grid, r, n - 1 - c)));
+        }
+        out.push(row);
+    }
+    out
+}
+
+// Reflected in the main diagonal: rows become columns, and each slash
+// keeps its direction.
+fn transposed(grid: ref Vec[String]) -> Vec[String] {
+    let n = grid.len();
+    let mut out: Vec[String] = Vec.new();
+    for r in 0..n {
+        let mut row = String.new();
+        for c in 0..n {
+            row.push_str(cell(grid, c, r));
+        }
+        out.push(row);
+    }
+    out
+}
+
+// The grid with cell (r, c) set to ch.
+fn with_cell(grid: ref Vec[String], r: i64, c: i64, ch: String) -> Vec[String] {
+    let n = grid.len();
+    let mut out = grid.clone();
+    out[r] = grid[r].substring(0, c) + ch + grid[r].substring(c + 1, n);
+    out
+}
+
+fn arm(x: i64, grid: Vec[String]) -> i64 {
+    if x == 0 {
+        star_regions_by_slashes(grid)
+    } else if x == 1 {
+        pixels_regions_by_slashes(grid)
+    } else if x == 2 {
+        points_regions_by_slashes(grid)
+    } else if x == 3 {
+        flood_regions_by_slashes(grid)
+    } else {
+        euler_regions_by_slashes(grid)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, grid: Vec[String], small: bool) -> i64 {
+    let n = grid.len();
+    let truth = if small { literal(grid) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, grid));
+    }
+    let turned = rotated(grid);
+    let flipped = mirrored(grid);
+    let across = transposed(grid);
+    // one cell blank, and the same cell with a slash or a backslash
+    let r = next_random(mut seed) % n;
+    let c = next_random(mut seed) % n;
+    let mark = if next_random(mut seed) % 2 == 0 { "/" } else { "\\" };
+    let open = with_cell(grid, r, c, " ");
+    let cut = with_cell(grid, r, c, mark);
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the first 3000 grids
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: a quarter turn, the same
+        check(mut t, 2, arm(x, turned) == a);
+        // P3: left for right, the same
+        check(mut t, 3, arm(x, flipped) == a);
+        // P4: reflected in the main diagonal, the same
+        check(mut t, 4, arm(x, across) == a);
+        // P5: a slash in a blank cell adds no region or one
+        let extra = arm(x, cut) - arm(x, open);
+        check(mut t, 5, extra == 0 or extra == 1);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 959;
+    let mut cells = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 grids of up to 5 cells a side, against the statement, then 200
+    // of up to 20; each of a random density of blanks
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 5 } else { 1 + next_random(mut seed) % 20 };
+        let blank = next_random(mut seed) % 10;
+        let grid = random_grid(n, blank, mut seed);
+        cells += n * n;
+        let r = properties(mut t, mut seed, grid, small);
+        total += r;
+        check_sum = (check_sum * 31 + r) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 grids of {cells} cells, regions: {total}, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

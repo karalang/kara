@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/959-regions-cut-by-slashes/bench/regions_by_slashes.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "bec23b498"
+extracted_src = "7ffec28f"

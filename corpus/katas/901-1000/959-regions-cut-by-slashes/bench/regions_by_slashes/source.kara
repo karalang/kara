@@ -1,0 +1,115 @@
+// Benchmark: LeetCode #959 Regions Cut By Slashes -- the ★ arm, four
+// triangles per cell, on grids of 30 by 30, LeetCode's largest. Mirrors
+// regions_by_slashes.c, .rs, .py and go-seq/.
+//
+//
+// Cut every cell along both diagonals into four triangles, top, right,
+// bottom and left, and join them with a union-find: a blank cell joins
+// all four, a slash `/` the top with the left and the right with the
+// bottom, a backslash the top with the right and the bottom with the
+// left. Each cell's right triangle also joins the left one of the cell to
+// its right, and its bottom the top of the cell below. The regions are
+// the sets left. O(n^2 a(n^2)).
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut r = x;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    let mut c = x;
+    while parent[c] != r {
+        let next = parent[c];
+        parent[c] = r;
+        c = next;
+    }
+    r
+}
+
+fn union(parent: mut ref Vec[i64], sets: mut ref i64, a: i64, b: i64) {
+    let ra = find(mut parent, a);
+    let rb = find(mut parent, b);
+    if ra != rb {
+        parent[ra] = rb;
+        *sets -= 1;
+    }
+}
+
+fn regions_by_slashes(grid: Vec[String]) -> i64 {
+    let n = grid.len();
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..4 * n * n {
+        parent.push(i);
+    }
+    let mut sets = 4 * n * n;
+    for r in 0..n {
+        let row = grid[r].bytes();
+        for c in 0..n {
+            // triangles 0 top, 1 right, 2 bottom, 3 left
+            let t = 4 * (r * n + c);
+            let ch = row[c];
+            if ch == b' ' {
+                union(mut parent, mut sets, t, t + 1);
+                union(mut parent, mut sets, t + 1, t + 2);
+                union(mut parent, mut sets, t + 2, t + 3);
+            } else if ch == b'/' {
+                union(mut parent, mut sets, t, t + 3);
+                union(mut parent, mut sets, t + 1, t + 2);
+            } else {
+                union(mut parent, mut sets, t, t + 1);
+                union(mut parent, mut sets, t + 2, t + 3);
+            }
+            if c + 1 < n {
+                union(mut parent, mut sets, t + 1, t + 4 + 3);
+            }
+            if r + 1 < n {
+                union(mut parent, mut sets, t + 2, t + 4 * n);
+            }
+        }
+    }
+    sets
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An n by n grid, each cell blank with chance blank in 10, otherwise a
+// slash or a backslash with even chances.
+fn random_grid(n: i64, blank: i64, seed: mut ref i64) -> Vec[String] {
+    let mut grid: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let mut row = String.new();
+        for _ in 0..n {
+            if next_random(mut seed) % 10 < blank {
+                row.push_str(" ");
+            } else if next_random(mut seed) % 2 == 0 {
+                row.push_str("/");
+            } else {
+                row.push_str("\\");
+            }
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    let rounds = 300;
+    // 100 grids of 30 by 30, made once, blank with chance 0 to 9 in 10
+    let mut seed = 959;
+    let mut grids: Vec[Vec[String]] = Vec.new();
+    for i in 0..100 {
+        grids.push(random_grid(30, i % 10, mut seed));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..100 {
+            let k = regions_by_slashes(grids[(r + i) % 100]);
+            total += k;
+            check = (check * 31 + k + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 100 grids of 30 by 30: {total} regions, checksum {check}");
+}

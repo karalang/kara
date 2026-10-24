@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/901-1000/959-regions-cut-by-slashes/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:vecdeque"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "bec23b498"
+extracted_src = "111e705c"
