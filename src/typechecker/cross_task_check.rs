@@ -250,6 +250,47 @@ impl<'a> super::TypeChecker<'a> {
         self.type_error(msg, span, TypeErrorKind::CrossTaskUnsafeCapture);
     }
 
+    /// The result of a task crosses back to the joining task, so
+    /// `spawn[T: CrossTask]` (concurrency.md § TaskGroup) refuses a `T`
+    /// that is not cross-task safe, as the capture direction does
+    /// (B-2026-10-21-71). `ret` is the call's `TaskHandle[T]`. Free
+    /// `spawn` is removed from the core language (§11.1), so only
+    /// `TaskGroup.spawn` reaches this.
+    pub(super) fn check_spawn_result_cross_task(
+        &mut self,
+        ret: &Type,
+        span: &Span,
+        site_label: &str,
+    ) {
+        let Type::Named { name, args } = ret else {
+            return;
+        };
+        if name != "TaskHandle" || args.len() != 1 {
+            return;
+        }
+        let result_ty = super::inference::resolve_type_vars(
+            &args[0],
+            &self.env.substitutions,
+            &HashMap::new(),
+            &self.env.const_substitutions,
+            &HashMap::new(),
+        );
+        if matches!(
+            result_ty,
+            Type::TypeVar(_) | Type::Error | Type::TypeParam(_)
+        ) {
+            return;
+        }
+        if let Err(path) = is_cross_task_safe_with(&result_ty, &self.env.structs, &self.env.enums) {
+            self.emit_cross_task_unsafe_value(
+                &format!("the result of the task passed to `{site_label}`"),
+                &result_ty,
+                &path,
+                span,
+            );
+        }
+    }
+
     /// Emit `E_NOT_CROSS_TASK` for a cross-task boundary site that
     /// transfers a *value* rather than capturing a named binding —
     /// `Channel.send(value)` and `with_provider[R](provider, …)` (Phase 6

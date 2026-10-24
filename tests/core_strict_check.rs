@@ -12470,3 +12470,28 @@ fn a_for_loop_over_a_value_that_does_not_iterate_is_refused() {
         "1\n0\nh\né\n0\n1\n",
     );
 }
+
+#[test]
+fn a_spawned_task_returns_only_a_cross_task_value() {
+    // B-2026-10-21-71: concurrency.md declares `spawn[T: CrossTask]`, so the
+    // result direction is checked like the capture direction.
+    rejected(
+        "taskgroup-spawn-shared-result",
+        "shared struct Node { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
+         let h = g.spawn(|| Node { v: 1 });\n    println(h.join().v);\n}\n",
+        "the result of the task passed to `TaskGroup.spawn` (type `Node`) cannot cross a task boundary",
+    );
+    rejected(
+        "taskgroup-spawn-shared-in-vec",
+        "shared struct Node { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
+         let h = g.spawn(|| [Node { v: 1 }]);\n    println(h.join().len());\n}\n",
+        "E_NOT_CROSS_TASK",
+    );
+    accepted_and_runs(
+        "taskgroup-spawn-plain-result",
+        "struct P { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
+         let h = g.spawn(|| P { v: 1 });\n    let k = g.spawn(|| [1, 2, 3]);\n    \
+         println(h.join().v);\n    println(k.join().len());\n}\n",
+        "1\n3\n",
+    );
+}

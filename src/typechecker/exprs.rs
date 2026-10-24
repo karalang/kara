@@ -8428,6 +8428,9 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 let t = self.infer_method_call(object, method, args, &expr.span, args_close_span);
+                if method == "spawn" && args.len() == 1 {
+                    self.check_spawn_result_cross_task(&t, &expr.span, "TaskGroup.spawn");
+                }
                 // A target that keeps the borrows (`Vec[(ref K, ref V)]`)
                 // stores the lent items rather than moving out of them.
                 if self.cli_lint_overrides.strict_core
