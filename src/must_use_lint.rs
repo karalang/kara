@@ -56,7 +56,8 @@ fn implicit_must_use_kind(name: &str) -> Option<(&'static str, &'static str)> {
 /// reports the element the mutation displaced or removed — `Map` /
 /// `SortedMap` `insert` (the previous value) and `remove` (the removed
 /// value), `Vec.pop` / `Vec.remove_first`, `VecDeque.pop_front` /
-/// `pop_back`, `PriorityQueue.pop` (B-2026-10-18-16) — are exempt from the implicit `Option` must-use. For
+/// `pop_back`, `PriorityQueue.pop` (B-2026-10-18-16), `String.pop`
+/// (B-2026-10-22-2) — are exempt from the implicit `Option` must-use. For
 /// these the mutation is the operation's purpose and the `Option` is an
 /// ancillary report; discarding it is the dominant correct idiom
 /// (`map.insert(k, v);` as a statement — Rust deliberately leaves
@@ -105,6 +106,7 @@ fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
         (receiver, panicking),
         ("Map" | "SortedMap", "insert" | "remove")
             | ("Vec", "pop" | "remove_first")
+            | ("String", "pop")
             | ("VecDeque", "pop_front" | "pop_back")
             | ("PriorityQueue", "pop")
     )

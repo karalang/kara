@@ -1197,3 +1197,21 @@ fn test_question_on_a_non_exempt_stdlib_option_still_warns() {
     );
     assert_eq!(diags.len(), 1, "expected one warning, got: {diags:?}");
 }
+
+/// B-2026-10-22-2 — `String.pop` returns the character it removed, the
+/// same displaced-value shape as `Vec.pop`, so `s.pop();` is exempt too.
+#[test]
+fn string_pop_is_displaced_value_exempt() {
+    let diags = lint(
+        "fn main() {\n\
+             let mut s = String.new();\n\
+             s.push('a');\n\
+             s.pop();\n\
+             println(s);\n\
+         }",
+    );
+    assert!(
+        diags.iter().all(|d| d.lint_name != "must_use"),
+        "String.pop must be exempt like Vec.pop, got: {diags:?}"
+    );
+}
