@@ -1,0 +1,756 @@
+// pipeline/route_plan
+//
+// A delivery routing job, the shape of a dispatch service's nightly plan.
+// It builds the road networks of four city districts, writes each as an
+// edge-list file, reads the files back and parses them, computes the
+// shortest drive between every pair of stops (the depot and fourteen
+// orders) with Dijkstra, plans a tour of each district by nearest
+// neighbour and 2-opt, runs five reports per district, and books the
+// tours onto one shared fleet of trucks.
+//
+// The builds, the writes, the reads, the parses, the distance matrices,
+// the tours and the reports are each a group of statements that do not
+// depend on each other (a stmt-par app). The bookings go onto the same
+// fleet, and each truck is picked by the load the earlier bookings left,
+// so they have to run in order.
+
+const GRID: i64 = 48;
+const STOPS: i64 = 14;
+const INF: i64 = 1099511627776;
+const MASK32: i64 = 4294967295;
+const KEY: i64 = 4096;
+const CAPACITY: i64 = 10;
+const UNLOAD: i64 = 4;
+const TRUCKS: i64 = 3;
+
+struct Graph {
+    name: String,
+    n: i64,
+    eu: Vec[i64],
+    ev: Vec[i64],
+    ew: Vec[i64],
+    start: Vec[i64],
+    to: Vec[i64],
+    wt: Vec[i64],
+}
+
+struct Stops {
+    node: Vec[i64],
+    demand: Vec[i64],
+}
+
+struct Tour {
+    order: Vec[i64],
+    skipped: Vec[i64],
+    nn_len: i64,
+    opt_len: i64,
+    passes: i64,
+}
+
+struct Truck {
+    minutes: i64,
+    trips: Vec[String],
+}
+
+struct Fleet {
+    trucks: Vec[Truck],
+}
+
+enum RouteError {
+    Bad(String),
+}
+
+impl RouteError {
+    fn describe(ref self) -> String {
+        match self {
+            RouteError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+// ------------------------------------------------------------ the networks
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, x: i64, y: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + y * 7919 + x * 104729 + salt * 15485863)
+}
+
+fn build_city(name: ref String, seed: i64) -> Graph {
+    let n = GRID * GRID;
+    let mut eu: Vec[i64] = Vec.new();
+    let mut ev: Vec[i64] = Vec.new();
+    let mut ew: Vec[i64] = Vec.new();
+    for y in 0..GRID {
+        for x in 0..GRID {
+            let u = y * GRID + x;
+            if x + 1 < GRID {
+                let h = mix(seed, x, y, 1);
+                if h % 100 >= 7 {
+                    eu.push(u);
+                    ev.push(u + 1);
+                    ew.push(5 + (h / 100) % 20);
+                }
+            }
+            if y + 1 < GRID {
+                let h = mix(seed, x, y, 2);
+                if h % 100 >= 7 {
+                    eu.push(u);
+                    ev.push(u + GRID);
+                    ew.push(5 + (h / 100) % 20);
+                }
+            }
+            if x + 1 < GRID and y + 1 < GRID {
+                let h = mix(seed, x, y, 3);
+                if h % 100 < 6 {
+                    eu.push(u);
+                    ev.push(u + GRID + 1);
+                    ew.push(8 + (h / 100) % 25);
+                }
+            }
+        }
+    }
+    make_graph(name, n, eu, ev, ew)
+}
+
+// Adjacency in compressed rows, both directions, in edge order.
+fn make_graph(name: ref String, n: i64, eu: own Vec[i64], ev: own Vec[i64], ew: own Vec[i64]) -> Graph {
+    let mut deg: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        deg.push(0);
+    }
+    for i in 0..eu.len() {
+        deg[eu[i] + 1] += 1;
+        deg[ev[i] + 1] += 1;
+    }
+    for i in 0..n {
+        deg[i + 1] += deg[i];
+    }
+    let mut fill = deg.clone();
+    let mut to: Vec[i64] = Vec.new();
+    let mut wt: Vec[i64] = Vec.new();
+    for _ in 0..2 * eu.len() {
+        to.push(0);
+        wt.push(0);
+    }
+    for i in 0..eu.len() {
+        let a = eu[i];
+        let b = ev[i];
+        to[fill[a]] = b;
+        wt[fill[a]] = ew[i];
+        fill[a] += 1;
+        to[fill[b]] = a;
+        wt[fill[b]] = ew[i];
+        fill[b] += 1;
+    }
+    Graph { name: name.clone(), n: n, eu: eu, ev: ev, ew: ew, start: deg, to: to, wt: wt }
+}
+
+// ------------------------------------------------------------ the files
+
+fn encode_city(g: ref Graph) -> String {
+    let mut out = f"city {g.name} {GRID}x{GRID} {g.eu.len()} edges\n";
+    for i in 0..g.eu.len() {
+        out.push_str(f"{g.eu[i]} {g.ev[i]} {g.ew[i]}\n");
+    }
+    out
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn parse_num(field: ref String, name: ref String, line: i64) -> Result[i64, RouteError] {
+    match i64.parse(field) {
+        Ok(v) => Ok(v),
+        Err(_) => Err(RouteError.Bad(f"{name}: line {line}: bad number '{field}'")),
+    }
+}
+
+fn parse_city(name: ref String, text: ref String) -> Result[Graph, RouteError] {
+    let mut eu: Vec[i64] = Vec.new();
+    let mut ev: Vec[i64] = Vec.new();
+    let mut ew: Vec[i64] = Vec.new();
+    let mut declared = -1;
+    let mut n = 0;
+    let mut line_no = 0;
+    for line in text.lines() {
+        line_no += 1;
+        let f: Vec[String] = line.split(" ").map(|x| x.to_string()).collect();
+        if line_no == 1 {
+            if f.len() != 5 or f[0] != "city" or f[4] != "edges" {
+                return Err(RouteError.Bad(f"{name}: line 1: not a city header"));
+            }
+            if f[1] != name {
+                return Err(RouteError.Bad(f"{name}: line 1: the file is for {f[1]}"));
+            }
+            let dims: Vec[String] = f[2].split("x").map(|x| x.to_string()).collect();
+            if dims.len() != 2 {
+                return Err(RouteError.Bad(f"{name}: line 1: bad size {f[2]}"));
+            }
+            let w = parse_num(dims[0], name, 1)?;
+            let h = parse_num(dims[1], name, 1)?;
+            n = w * h;
+            declared = parse_num(f[3], name, 1)?;
+            continue;
+        }
+        if f.len() != 3 {
+            return Err(RouteError.Bad(f"{name}: line {line_no}: expected 3 fields, got {f.len()}"));
+        }
+        let u = parse_num(f[0], name, line_no)?;
+        let v = parse_num(f[1], name, line_no)?;
+        let w = parse_num(f[2], name, line_no)?;
+        if u < 0 or u >= n or v < 0 or v >= n {
+            return Err(RouteError.Bad(f"{name}: line {line_no}: node out of range"));
+        }
+        if w <= 0 {
+            return Err(RouteError.Bad(f"{name}: line {line_no}: weight {w} is not positive"));
+        }
+        eu.push(u);
+        ev.push(v);
+        ew.push(w);
+    }
+    if declared < 0 {
+        return Err(RouteError.Bad(f"{name}: empty file"));
+    }
+    if eu.len() as i64 != declared {
+        return Err(RouteError.Bad(f"{name}: header says {declared} edges, found {eu.len()}"));
+    }
+    Ok(make_graph(name, n, eu, ev, ew))
+}
+
+fn same_graph(a: ref Graph, b: ref Graph) -> bool {
+    a.n == b.n and a.eu == b.eu and a.ev == b.ev and a.ew == b.ew
+}
+
+fn damage(text: ref String, at: i64) -> String {
+    let mut out = String.new();
+    let mut line_no = 0;
+    for line in text.lines() {
+        line_no += 1;
+        if line_no == at {
+            let f: Vec[String] = line.split(" ").map(|x| x.to_string()).collect();
+            out.push_str(f"{f[0]} x{f[1]} {f[2]}\n");
+        } else {
+            out.push_str(line);
+            out.push_str("\n");
+        }
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, RouteError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(RouteError.Bad(f"could not read {path}")),
+    }
+}
+
+// ------------------------------------------------------------ shortest paths
+
+// A binary min-heap of keys dist * KEY + node, so ties go to the lower node.
+fn heap_push(heap: mut ref Vec[i64], key: i64) {
+    heap.push(key);
+    let mut i = heap.len() as i64 - 1;
+    while i > 0 {
+        let p = (i - 1) / 2;
+        if heap[p] <= heap[i] {
+            break;
+        }
+        let t = heap[p];
+        heap[p] = heap[i];
+        heap[i] = t;
+        i = p;
+    }
+}
+
+fn heap_pop(heap: mut ref Vec[i64]) -> i64 {
+    let top = heap[0];
+    let last = heap.pop().unwrap();
+    let n = heap.len() as i64;
+    if n > 0 {
+        heap[0] = last;
+        let mut i = 0;
+        loop {
+            let l = 2 * i + 1;
+            let r = l + 1;
+            let mut m = i;
+            if l < n and heap[l] < heap[m] {
+                m = l;
+            }
+            if r < n and heap[r] < heap[m] {
+                m = r;
+            }
+            if m == i {
+                break;
+            }
+            let t = heap[m];
+            heap[m] = heap[i];
+            heap[i] = t;
+            i = m;
+        }
+    }
+    top
+}
+
+fn dijkstra(g: ref Graph, src: i64) -> (Vec[i64], Vec[i64]) {
+    let mut dist: Vec[i64] = Vec.new();
+    let mut prev: Vec[i64] = Vec.new();
+    for _ in 0..g.n {
+        dist.push(INF);
+        prev.push(-1);
+    }
+    let mut heap: Vec[i64] = Vec.new();
+    dist[src] = 0;
+    heap_push(mut heap, src);
+    while heap.len() > 0 {
+        let key = heap_pop(mut heap);
+        let d = key / KEY;
+        let u = key % KEY;
+        if d > dist[u] {
+            continue;
+        }
+        for e in g.start[u]..g.start[u + 1] {
+            let v = g.to[e];
+            let nd = d + g.wt[e];
+            if nd < dist[v] {
+                dist[v] = nd;
+                prev[v] = u;
+                heap_push(mut heap, nd * KEY + v);
+            }
+        }
+    }
+    (dist, prev)
+}
+
+fn make_stops(g: ref Graph, seed: i64) -> Stops {
+    let depot = (GRID / 2) * GRID + GRID / 2;
+    let mut node: Vec[i64] = vec![depot];
+    let mut demand: Vec[i64] = vec![0];
+    for k in 0..STOPS {
+        let mut s = mix(seed, k, 0, 9) % g.n;
+        while node.contains(s) {
+            s = (s + 1) % g.n;
+        }
+        node.push(s);
+        demand.push(1 + mix(seed, k, 0, 10) % 6);
+    }
+    Stops { node: node, demand: demand }
+}
+
+// The drive between every pair of stops, row by row.
+fn dist_matrix(g: ref Graph, st: ref Stops) -> Vec[i64] {
+    let k = st.node.len() as i64;
+    let mut m: Vec[i64] = Vec.new();
+    for i in 0..k {
+        let (dist, _) = dijkstra(g, st.node[i]);
+        for j in 0..k {
+            m.push(dist[st.node[j]]);
+        }
+    }
+    m
+}
+
+// ------------------------------------------------------------ tours
+
+fn tour_len(m: ref Vec[i64], k: i64, order: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    for i in 0..order.len() as i64 - 1 {
+        total += m[order[i] * k + order[i + 1]];
+    }
+    total
+}
+
+fn plan_tour(m: ref Vec[i64], k: i64) -> Tour {
+    let mut skipped: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    for s in 1..k {
+        if m[s] >= INF {
+            skipped.push(s);
+        } else {
+            left.push(s);
+        }
+    }
+    // Nearest neighbour from the depot; a tie goes to the lower stop.
+    let mut order: Vec[i64] = vec![0];
+    let mut at = 0;
+    while left.len() > 0 {
+        let mut best = 0;
+        for i in 1..left.len() {
+            if m[at * k + left[i]] < m[at * k + left[best]] {
+                best = i;
+            }
+        }
+        at = left[best];
+        order.push(at);
+        left.remove(best);
+    }
+    order.push(0);
+    let nn_len = tour_len(m, k, order);
+    // 2-opt, first improvement in scan order, until a pass changes nothing.
+    let last = order.len() as i64 - 2;
+    let mut passes = 0;
+    let mut improved = true;
+    while improved {
+        improved = false;
+        passes += 1;
+        for i in 1..last {
+            for j in i + 1..last + 1 {
+                let a = order[i - 1];
+                let b = order[i];
+                let c = order[j];
+                let d = order[j + 1];
+                let delta = m[a * k + c] + m[b * k + d] - m[a * k + b] - m[c * k + d];
+                if delta < 0 {
+                    let mut lo = i;
+                    let mut hi = j;
+                    while lo < hi {
+                        let t = order[lo];
+                        order[lo] = order[hi];
+                        order[hi] = t;
+                        lo += 1;
+                        hi -= 1;
+                    }
+                    improved = true;
+                }
+            }
+        }
+    }
+    let opt_len = tour_len(m, k, order);
+    Tour { order: order, skipped: skipped, nn_len: nn_len, opt_len: opt_len, passes: passes }
+}
+
+// ------------------------------------------------------------ reports
+
+fn xy(node: i64) -> String {
+    f"({node % GRID},{node / GRID})"
+}
+
+fn network_report(g: ref Graph) -> String {
+    let mut streets = 0;
+    let mut arterials = 0;
+    let mut total = 0;
+    for i in 0..g.eu.len() {
+        let d = g.ev[i] - g.eu[i];
+        if d == 1 or d == GRID {
+            streets += 1;
+        } else {
+            arterials += 1;
+        }
+        total += g.ew[i];
+    }
+    let closed = 2 * GRID * (GRID - 1) - streets;
+    let mut hist: Vec[i64] = vec![0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for u in 0..g.n {
+        hist[g.start[u + 1] - g.start[u]] += 1;
+    }
+    let mut degs = String.new();
+    for d in 0..9 {
+        if hist[d] > 0 {
+            if degs.len() > 0 {
+                degs.push_str(" ");
+            }
+            degs.push_str(f"{d}:{hist[d]}");
+        }
+    }
+    f"{g.name} network: {g.n} junctions, {streets} streets ({closed} closed), {arterials} arterials, {total} min of road, degrees {degs}"
+}
+
+fn reach_report(g: ref Graph, st: ref Stops) -> String {
+    let (dist, _) = dijkstra(g, st.node[0]);
+    let mut reached = 0;
+    let mut far = 0;
+    let mut far_node = st.node[0];
+    let mut sum = 0;
+    let mut bands: Vec[i64] = vec![0, 0, 0, 0, 0, 0];
+    for u in 0..g.n {
+        if dist[u] < INF {
+            reached += 1;
+            sum += dist[u];
+            if dist[u] > far {
+                far = dist[u];
+                far_node = u;
+            }
+            let b = dist[u] / 120;
+            if b < 5 {
+                bands[b] += 1;
+            } else {
+                bands[5] += 1;
+            }
+        }
+    }
+    let mean = sum / reached;
+    f"{g.name} reach: {reached}/{g.n} from the depot {xy(st.node[0])}, mean {mean} min, farthest {xy(far_node)} at {far} min, by 2 h band {bands[0]} {bands[1]} {bands[2]} {bands[3]} {bands[4]} {bands[5]}"
+}
+
+fn tour_report(name: ref String, t: ref Tour) -> String {
+    let mut seq = String.new();
+    for i in 0..t.order.len() {
+        if i > 0 {
+            seq.push_str(" ");
+        }
+        if t.order[i] == 0 {
+            seq.push_str("D");
+        } else {
+            seq.push_str(f"s{t.order[i]}");
+        }
+    }
+    let mut out = f"{name} tour: {seq}; nearest neighbour {t.nn_len} min, 2-opt {t.opt_len} min in {t.passes} passes";
+    if t.skipped.len() > 0 {
+        let mut s = String.new();
+        for x in t.skipped {
+            s.push_str(f" s{x}");
+        }
+        out.push_str(f"; unreachable{s}");
+    }
+    out
+}
+
+fn leg_report(g: ref Graph, st: ref Stops, m: ref Vec[i64], t: ref Tour) -> String {
+    let k = st.node.len() as i64;
+    let mut best = 0;
+    for i in 1..t.order.len() as i64 - 1 {
+        if m[t.order[i] * k + t.order[i + 1]] > m[t.order[best] * k + t.order[best + 1]] {
+            best = i;
+        }
+    }
+    let from = st.node[t.order[best]];
+    let to = st.node[t.order[best + 1]];
+    let (dist, prev) = dijkstra(g, from);
+    let mut path: Vec[i64] = vec![to];
+    let mut at = to;
+    while at != from {
+        at = prev[at];
+        path.push(at);
+    }
+    path.reverse();
+    let mut arterial = 0;
+    for i in 0..path.len() as i64 - 1 {
+        let d = path[i + 1] - path[i];
+        if d != 1 and d != -1 and d != GRID and d != -GRID {
+            arterial += 1;
+        }
+    }
+    let hops = path.len() as i64 - 1;
+    let mut via = String.new();
+    for i in 0..path.len() as i64 {
+        if i < 3 or i >= hops - 2 {
+            via.push_str(f" {xy(path[i])}");
+        } else if i == 3 {
+            via.push_str(" ..");
+        }
+    }
+    f"{g.name} longest leg: {xy(from)} to {xy(to)}, {dist[to]} min over {hops} roads ({arterial} arterial):{via}"
+}
+
+fn demand_report(name: ref String, st: ref Stops, m: ref Vec[i64]) -> String {
+    let k = st.node.len() as i64;
+    let mut total = 0;
+    let mut list = String.new();
+    for s in 1..k {
+        total += st.demand[s];
+        list.push_str(f" s{s}={st.demand[s]}");
+    }
+    let mut check = 0;
+    for i in 0..k {
+        for j in 0..k {
+            let d = m[i * k + j];
+            if d < INF {
+                check = (check + d * (i + 1) * (j + 3)) % 1000000007;
+            }
+        }
+    }
+    f"{name} demand: {total} units:{list}; matrix check {check}"
+}
+
+// ------------------------------------------------------------ the fleet
+
+fn new_fleet() -> Fleet {
+    let mut trucks: Vec[Truck] = Vec.new();
+    for _ in 0..TRUCKS {
+        trucks.push(Truck { minutes: 0, trips: Vec.new() });
+    }
+    Fleet { trucks: trucks }
+}
+
+fn book_trip(fleet: mut ref Fleet, label: ref String, stops: ref Vec[i64], load: i64, m: ref Vec[i64], k: i64) {
+    let mut minutes = m[stops[0]] + m[stops[stops.len() - 1] * k];
+    for i in 0..stops.len() as i64 - 1 {
+        minutes += m[stops[i] * k + stops[i + 1]];
+    }
+    minutes += UNLOAD * stops.len() as i64;
+    let mut pick = 0;
+    for i in 1..TRUCKS {
+        if fleet.trucks[i].minutes < fleet.trucks[pick].minutes {
+            pick = i;
+        }
+    }
+    let mut names = String.new();
+    for s in stops {
+        if names.len() > 0 {
+            names.push_str(",");
+        }
+        names.push_str(f"s{s}");
+    }
+    let begin = fleet.trucks[pick].minutes;
+    fleet.trucks[pick].minutes += minutes;
+    fleet.trucks[pick].trips.push(f"{label} {names} ({load} units) {begin}-{begin + minutes}");
+}
+
+// The tour is cut into trips of at most CAPACITY units, each back to the
+// depot, and each trip goes to the truck that is free first.
+fn dispatch(fleet: mut ref Fleet, name: ref String, st: ref Stops, m: ref Vec[i64], t: ref Tour) {
+    let k = st.node.len() as i64;
+    let mut trip: Vec[i64] = Vec.new();
+    let mut load = 0;
+    let mut count = 0;
+    for i in 1..t.order.len() as i64 - 1 {
+        let s = t.order[i];
+        if load + st.demand[s] > CAPACITY {
+            count += 1;
+            book_trip(mut fleet, f"{name}#{count}", trip, load, m, k);
+            trip = Vec.new();
+            load = 0;
+        }
+        trip.push(s);
+        load += st.demand[s];
+    }
+    if trip.len() > 0 {
+        count += 1;
+        book_trip(mut fleet, f"{name}#{count}", trip, load, m, k);
+    }
+}
+
+fn run() -> Result[(), RouteError] {
+    // Four districts, each from its own seed.
+    let north = build_city("north", 11);
+    let south = build_city("south", 23);
+    let east = build_city("east", 37);
+    let west = build_city("west", 41);
+
+    // Four writes, one edge list per district.
+    let w1 = fs.write("route_north.txt", encode_city(north));
+    let w2 = fs.write("route_south.txt", encode_city(south));
+    let w3 = fs.write("route_east.txt", encode_city(east));
+    let w4 = fs.write("route_west.txt", encode_city(west));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() {
+        return Err(RouteError.Bad("could not write the networks".to_string()));
+    }
+
+    // A damaged copy, to show the parser's error.
+    let whole = read_text("route_east.txt")?;
+    if fs.write("route_broken.txt", damage(whole, 41)).is_err() {
+        return Err(RouteError.Bad("could not write route_broken.txt".to_string()));
+    }
+
+    // Four reads, then four parses.
+    let t1 = read_text("route_north.txt")?;
+    let t2 = read_text("route_south.txt")?;
+    let t3 = read_text("route_east.txt")?;
+    let t4 = read_text("route_west.txt")?;
+    println(f"route_north.txt: {t1.len()} bytes, fnv {text_sum(t1):08x}");
+    println(f"route_south.txt: {t2.len()} bytes, fnv {text_sum(t2):08x}");
+    println(f"route_east.txt: {t3.len()} bytes, fnv {text_sum(t3):08x}");
+    println(f"route_west.txt: {t4.len()} bytes, fnv {text_sum(t4):08x}");
+    let gn = parse_city("north", t1)?;
+    let gs = parse_city("south", t2)?;
+    let ge = parse_city("east", t3)?;
+    let gw = parse_city("west", t4)?;
+    match parse_city("east", read_text("route_broken.txt")?) {
+        Ok(_) => println("route_broken.txt: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_city("west", t3) {
+        Ok(_) => println("route_east.txt as west: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_graph(north, gn) and same_graph(south, gs) and same_graph(east, ge) and same_graph(west, gw);
+    println(f"parsed networks match the built ones: {same}");
+
+    // The stops of each district: the depot and fourteen orders.
+    let sn = make_stops(gn, 11);
+    let ss = make_stops(gs, 23);
+    let se = make_stops(ge, 37);
+    let sw = make_stops(gw, 41);
+
+    // Four distance matrices, fifteen Dijkstra runs each (the hot group).
+    let mn = dist_matrix(gn, sn);
+    let ms = dist_matrix(gs, ss);
+    let me = dist_matrix(ge, se);
+    let mw = dist_matrix(gw, sw);
+
+    // Four tours.
+    let k = STOPS + 1;
+    let tn = plan_tour(mn, k);
+    let ts = plan_tour(ms, k);
+    let te = plan_tour(me, k);
+    let tw = plan_tour(mw, k);
+
+    // Reports that only read the networks, stops, matrices and tours.
+    let a1 = network_report(gn);
+    let a2 = network_report(gs);
+    let a3 = network_report(ge);
+    let a4 = network_report(gw);
+    let b1 = reach_report(gn, sn);
+    let b2 = reach_report(gs, ss);
+    let b3 = reach_report(ge, se);
+    let b4 = reach_report(gw, sw);
+    let c1 = tour_report("north", tn);
+    let c2 = tour_report("south", ts);
+    let c3 = tour_report("east", te);
+    let c4 = tour_report("west", tw);
+    let d1 = leg_report(gn, sn, mn, tn);
+    let d2 = leg_report(gs, ss, ms, ts);
+    let d3 = leg_report(ge, se, me, te);
+    let d4 = leg_report(gw, sw, mw, tw);
+    let e1 = demand_report("north", sn, mn);
+    let e2 = demand_report("south", ss, ms);
+    let e3 = demand_report("east", se, me);
+    let e4 = demand_report("west", sw, mw);
+    for line in [a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4, d1, d2, d3, d4, e1, e2, e3, e4] {
+        println(line);
+    }
+
+    // One fleet for all four districts: each trip goes to the truck that is
+    // free first, so the bookings run in order.
+    let mut fleet = new_fleet();
+    dispatch(mut fleet, "north", sn, mn, tn);
+    dispatch(mut fleet, "south", ss, ms, ts);
+    dispatch(mut fleet, "east", se, me, te);
+    dispatch(mut fleet, "west", sw, mw, tw);
+    let mut makespan = 0;
+    let mut busy = 0;
+    for i in 0..TRUCKS {
+        let t = ref fleet.trucks[i];
+        println(f"truck {i + 1}: {t.trips.len()} trips, {t.minutes} min");
+        for trip in t.trips {
+            println(f"  {trip}");
+        }
+        busy += t.minutes;
+        if t.minutes > makespan {
+            makespan = t.minutes;
+        }
+    }
+    println(f"fleet: {busy} truck-minutes, done after {makespan} min");
+
+    for p in ["route_north.txt", "route_south.txt", "route_east.txt", "route_west.txt", "route_broken.txt"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"route_plan failed: {e.describe()}"),
+    }
+}

@@ -1,0 +1,56 @@
+route_north.txt: 50972 bytes, fnv c2781861
+route_south.txt: 51074 bytes, fnv 57f64a0a
+route_east.txt: 51414 bytes, fnv 469d3d62
+route_west.txt: 51344 bytes, fnv f5ddb5b0
+east: line 41: bad number 'x68'
+west: line 1: the file is for east
+parsed networks match the built ones: true
+north network: 2304 junctions, 4182 streets (330 closed), 128 arterials, 63831 min of road, degrees 1:6 2:92 3:580 4:1443 5:180 6:3
+south network: 2304 junctions, 4185 streets (327 closed), 141 arterials, 63667 min of road, degrees 1:4 2:83 3:600 4:1412 5:196 6:9
+east network: 2304 junctions, 4189 streets (323 closed), 159 arterials, 63963 min of road, degrees 1:7 2:77 3:576 4:1424 5:209 6:11
+west network: 2304 junctions, 4204 streets (308 closed), 142 arterials, 63771 min of road, degrees 1:5 2:88 3:538 4:1474 5:193 6:6
+north reach: 2304/2304 from the depot (24,24), mean 266 min, farthest (0,0) at 514 min, by 2 h band 187 680 1051 369 17 0
+south reach: 2304/2304 from the depot (24,24), mean 269 min, farthest (0,47) at 493 min, by 2 h band 178 653 1067 402 4 0
+east reach: 2304/2304 from the depot (24,24), mean 254 min, farthest (0,46) at 502 min, by 2 h band 227 754 979 336 8 0
+west reach: 2304/2304 from the depot (24,24), mean 260 min, farthest (0,47) at 485 min, by 2 h band 203 707 1038 355 1 0
+north tour: D s7 s1 s3 s12 s9 s14 s8 s11 s2 s6 s13 s10 s5 s4 D; nearest neighbour 2585 min, 2-opt 2340 min in 3 passes
+south tour: D s8 s3 s2 s11 s9 s1 s12 s4 s6 s13 s14 s7 s5 s10 D; nearest neighbour 2760 min, 2-opt 2564 min in 2 passes
+east tour: D s11 s9 s13 s5 s10 s12 s2 s14 s7 s8 s4 s3 s1 s6 D; nearest neighbour 2400 min, 2-opt 2400 min in 1 passes
+west tour: D s12 s11 s6 s1 s5 s2 s4 s9 s14 s8 s13 s7 s10 s3 D; nearest neighbour 2570 min, 2-opt 2569 min in 2 passes
+north longest leg: (40,36) to (17,46), 350 min over 33 roads (0 arterial): (40,36) (40,37) (39,37) .. (18,45) (18,46) (17,46)
+south longest leg: (23,0) to (5,18), 385 min over 36 roads (0 arterial): (23,0) (22,0) (22,1) .. (6,17) (5,17) (5,18)
+east longest leg: (39,38) to (24,24), 290 min over 29 roads (0 arterial): (39,38) (39,37) (39,36) .. (24,26) (24,25) (24,24)
+west longest leg: (38,1) to (4,2), 459 min over 39 roads (0 arterial): (38,1) (38,2) (37,2) .. (6,2) (5,2) (4,2)
+north demand: 49 units: s1=2 s2=2 s3=3 s4=6 s5=6 s6=5 s7=6 s8=5 s9=2 s10=5 s11=3 s12=1 s13=2 s14=1; matrix check 5779996
+south demand: 54 units: s1=5 s2=4 s3=6 s4=1 s5=3 s6=2 s7=6 s8=3 s9=3 s10=5 s11=5 s12=4 s13=5 s14=2; matrix check 6151172
+east demand: 42 units: s1=5 s2=3 s3=3 s4=3 s5=2 s6=2 s7=4 s8=4 s9=6 s10=4 s11=1 s12=3 s13=1 s14=1; matrix check 5786582
+west demand: 47 units: s1=2 s2=5 s3=2 s4=6 s5=6 s6=1 s7=1 s8=3 s9=6 s10=2 s11=1 s12=6 s13=2 s14=4; matrix check 6269188
+truck 1: 9 trips, 6265 min
+  north#1 s7,s1 (8 units) 0-635
+  north#4 s6,s13 (7 units) 635-1202
+  north#6 s5 (6 units) 1202-1568
+  south#3 s9,s1 (8 units) 1568-2398
+  south#6 s7,s5 (9 units) 2398-3067
+  east#1 s11,s9,s13,s5 (10 units) 3067-3912
+  east#4 s4,s3 (6 units) 3912-4568
+  west#2 s5 (6 units) 4568-5282
+  west#5 s9,s14 (10 units) 5282-6265
+truck 2: 8 trips, 6646 min
+  north#2 s3,s12,s9,s14 (7 units) 0-1216
+  north#7 s4 (6 units) 1216-1548
+  south#2 s2,s11 (9 units) 1548-2329
+  south#5 s13,s14 (7 units) 2329-3355
+  east#2 s10,s12,s2 (10 units) 3355-4175
+  east#5 s1,s6 (7 units) 4175-4892
+  west#3 s2 (5 units) 4892-5662
+  west#6 s8,s13,s7,s10,s3 (10 units) 5662-6646
+truck 3: 8 trips, 5768 min
+  north#3 s8,s11,s2 (10 units) 0-857
+  north#5 s10 (5 units) 857-1475
+  south#1 s8,s3 (9 units) 1475-1809
+  south#4 s12,s4,s6 (7 units) 1809-2760
+  south#7 s10 (5 units) 2760-3400
+  east#3 s14,s7,s8 (9 units) 3400-4177
+  west#1 s12,s11,s6,s1 (10 units) 4177-4960
+  west#4 s4 (6 units) 4960-5768
+fleet: 18679 truck-minutes, done after 6646 min
