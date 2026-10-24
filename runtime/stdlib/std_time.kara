@@ -100,6 +100,20 @@ impl Add[Duration] for Instant {
     }
 }
 
+/// What `timeout` gives when its deadline passes first.
+pub struct TimedOut {}
+
+/// Runs `f` as a task scope bounded by `d` (core-semantics §11.10): its
+/// value, or `Err(TimedOut)` once `d` has passed, when the scope is
+/// cancelled and `f` stops at the wait it is in.
+pub fn timeout[T](d: Duration, f: own OnceFn() -> T) -> Result[T, TimedOut] with reads(Clock) blocks suspends {
+    let group = TaskGroup.new().__deadline_at(d.__select_at());
+    match group.spawn(f).try_join() {
+        Ok(v) => Ok(v),
+        Err(_) => Err(TimedOut {}),
+    }
+}
+
 /// Parks the calling task for `d`.
 pub fn sleep(d: Duration) with reads(Clock) blocks suspends {
     sleep_ms(d.as_ms());

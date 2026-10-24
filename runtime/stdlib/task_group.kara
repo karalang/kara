@@ -155,6 +155,14 @@ impl TaskGroup {
     fn cancel(ref self) {
         // Stub body — codegen replaces via the slice 5b-1 lowering.
     }
+
+    // The group, cancelled once the monotonic clock reads `at` (ns): what
+    // `with_deadline` and `std.time.timeout` build on (core-semantics
+    // §11.10), which take a `std.time` `Duration` this file cannot name.
+    #[compiler_builtin]
+    fn __deadline_at(own self, at: i64) -> TaskGroup {
+        self
+    }
 }
 
 impl[T] TaskHandle[T] {
@@ -187,6 +195,21 @@ impl[T] TaskHandle[T] {
         // runtime helper invoked from the lowering.
         loop { }
     }
+
+    // Waits for the task as `join` does, and gives `Err(Cancelled)` for a
+    // task its group cancelled (core-semantics §11.9) instead of
+    // panicking. On an ordinary group only `Cancelled` can occur; an
+    // isolating group's panics are `Panicked` (§11.12).
+    #[compiler_builtin]
+    fn try_join(own self) -> Result[T, TaskFailed] {
+        loop { }
+    }
+}
+
+// Why a task gave no value (core-semantics §11.9, §11.12).
+enum TaskFailed {
+    Panicked { message: String, location: String },
+    Cancelled,
 }
 
 // Close-on-drop for `TaskGroup`. The user-Drop dispatch chain emits

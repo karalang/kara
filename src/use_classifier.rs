@@ -1994,7 +1994,7 @@ impl<'a> UseClassifier<'a> {
         }
         // `fn join(own self) -> T` (task_group.kara): joining takes the handle.
         if name == "TaskHandle" {
-            return method == "join";
+            return matches!(method, "join" | "try_join");
         }
         matches!(name.as_str(), "Option" | "Result")
             && matches!(

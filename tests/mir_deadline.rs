@@ -52,9 +52,8 @@ fn karac(file: &Path, args: &[&str]) -> Command {
     c
 }
 
-/// The program's stdout on the interpreter and, when the runtime archive
-/// links, on the built binary, which must print the same.
-fn stdout_on_both(name: &str, src: &str) -> String {
+/// The program's stdout on the interpreter.
+fn stdout_on_interp(name: &str, src: &str) -> String {
     let (dir, file) = scratch(name, "i", src);
     let out = run(name, karac(&file, &["__mir-run"]));
     let _ = std::fs::remove_dir_all(&dir);
@@ -63,7 +62,13 @@ fn stdout_on_both(name: &str, src: &str) -> String {
         "{name} on the interpreter: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let interp = String::from_utf8(out.stdout).unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// The program's stdout on the interpreter and, when the runtime archive
+/// links, on the built binary, which must print the same.
+fn stdout_on_both(name: &str, src: &str) -> String {
+    let interp = stdout_on_interp(name, src);
 
     let (dir, file) = scratch(name, "b", src);
     let exe = dir.join("main");
@@ -174,5 +179,167 @@ fn main() {
         stdout_on_both("read", src),
         "a tick 0\na tick 1\na tick 2\nread timed out\nwrote\nread 2\n\
          b tick 0\nb tick 1\nb tick 2\nrecv timed out\n"
+    );
+}
+
+// The cancellation pins run on the interpreter until the compiled
+// executor cancels too (the drop schedule's half of M4 item 5), when they
+// move to `stdout_on_both`.
+
+/// `TaskGroup.cancel` tears each unfinished task down at the wait it is
+/// suspended in (core-semantics §11.9): its drops run then, a task that
+/// returned keeps its value, and `try_join` tells a cancelled task by
+/// `Err(TaskFailed.Cancelled)`.
+#[test]
+fn mir_deadline_cancel_tears_down_suspended_tasks() {
+    let src = r#"
+struct Noisy {
+    name: String,
+}
+
+impl Drop for Noisy {
+    fn drop(mut ref self) {
+        println(f"drop {self.name}");
+    }
+}
+
+fn waiter(rx: own Receiver[i64]) -> i64 {
+    let n = Noisy { name: "waiter".to_string() };
+    match rx.recv() {
+        Some(v) => v,
+        None => -1,
+    }
+}
+
+fn sleeper() -> i64 {
+    let n = Noisy { name: "sleeper".to_string() };
+    sleep_ms(10000);
+    println("woke");
+    1
+}
+
+fn quick() -> i64 {
+    7
+}
+
+fn main() {
+    let (tx, rx) = channel(1);
+    let group = TaskGroup.new();
+    let a = group.spawn(|| waiter(rx));
+    let b = group.spawn(|| sleeper());
+    let c = group.spawn(|| quick());
+    sleep_ms(20);
+    println("cancelling");
+    group.cancel();
+    sleep_ms(5);
+    println("after");
+    match c.try_join() {
+        Ok(v) => println(f"quick {v}"),
+        Err(_) => println("quick failed"),
+    }
+    match a.try_join() {
+        Ok(v) => println(f"waiter {v}"),
+        Err(TaskFailed.Cancelled) => println("waiter cancelled"),
+        Err(TaskFailed.Panicked { message, location }) => println(f"waiter panicked {message}"),
+    }
+    match b.try_join() {
+        Ok(v) => println(f"sleeper {v}"),
+        Err(TaskFailed.Cancelled) => println("sleeper cancelled"),
+        Err(_) => println("sleeper failed"),
+    }
+    let _ = tx;
+    println("done");
+}
+"#;
+    assert_eq!(stdout_on_interp("cancel", src), "cancelling\ndrop waiter\ndrop sleeper\nafter\nquick 7\nwaiter cancelled\nsleeper cancelled\ndone\n");
+}
+
+/// Cancelling a task cancels the groups it made, innermost first: the
+/// inner task's drops run before its owner's.
+#[test]
+fn mir_deadline_cancel_reaches_nested_groups() {
+    let src = r#"
+struct Noisy {
+    name: String,
+}
+
+impl Drop for Noisy {
+    fn drop(mut ref self) {
+        println(f"drop {self.name}");
+    }
+}
+
+fn sleeper() -> i64 {
+    defer println("deferred");
+    let n = Noisy { name: "inner".to_string() };
+    sleep_ms(10000);
+    1
+}
+
+fn nested() -> i64 {
+    let n = Noisy { name: "outer".to_string() };
+    let inner = TaskGroup.new();
+    let h = inner.spawn(|| sleeper());
+    h.join()
+}
+
+fn main() {
+    let group = TaskGroup.new();
+    let a = group.spawn(|| sleeper());
+    let b = group.spawn(|| nested());
+    sleep_ms(20);
+    group.cancel();
+    println("cancelled");
+}
+"#;
+    assert_eq!(
+        stdout_on_interp("nested", src),
+        "drop inner\ndrop inner\ndrop outer\ncancelled\n"
+    );
+}
+
+/// `with_deadline` cancels the group once its deadline passes (§11.10):
+/// a task that finished first keeps its value.
+#[test]
+fn mir_deadline_with_deadline_cancels_the_group() {
+    let src = r#"
+import std.time.{Duration, timeout, TimedOut};
+
+struct Noisy {
+    name: String,
+}
+
+impl Drop for Noisy {
+    fn drop(mut ref self) {
+        println(f"drop {self.name}");
+    }
+}
+
+fn slow(ms: i64) -> i64 {
+    let n = Noisy { name: f"slow {ms}" };
+    sleep_ms(ms);
+    ms
+}
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let group = TaskGroup.new().with_deadline(Duration.ms(30));
+    let a = group.spawn(|| match rx.recv() { Some(v) => v, None => -1 });
+    let b = group.spawn(|| slow(5));
+    match b.try_join() {
+        Ok(v) => println(f"b {v}"),
+        Err(_) => println("b cancelled"),
+    }
+    match a.try_join() {
+        Ok(v) => println(f"a {v}"),
+        Err(TaskFailed.Cancelled) => println("a cancelled"),
+        Err(_) => println("a failed"),
+    }
+    let _ = tx;
+}
+"#;
+    assert_eq!(
+        stdout_on_interp("with_deadline", src),
+        "drop slow 5\nb 5\na cancelled\n"
     );
 }

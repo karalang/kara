@@ -1292,8 +1292,8 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Mutex", "lock" | "try_lock" | "acquire") => vec![(Blocks, "", None)],
         // A group's own natives; `spawn` is charged with its task's effects
         // in `call_effects`.
-        ("TaskGroup", "new" | "end" | "drop" | "cancel") => vec![HEAP],
-        ("TaskHandle", "join") => vec![(Blocks, "", None)],
+        ("TaskGroup", "new" | "end" | "drop" | "cancel" | "__deadline_at") => vec![HEAP],
+        ("TaskHandle", "join" | "try_join") => vec![(Blocks, "", None)],
         ("Mutex", "release") => vec![],
         // D6: channels and connections key their effects by the endpoint
         // (argument 0, the receiver); files by the open file. These have no

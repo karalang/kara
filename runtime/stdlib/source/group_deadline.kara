@@ -1,0 +1,12 @@
+//! `TaskGroup.with_deadline` (core-semantics §11.10). It takes a
+//! `std.time` `Duration`, which task_group.kara cannot name, so it is
+//! appended to a program that calls it (`BAKED_SOURCES` in
+//! src/mir/lower.rs), as the channel timeouts are.
+
+impl TaskGroup {
+    /// The group, with a deadline: once `d` has passed, it is cancelled
+    /// (§11.9), and its unfinished tasks stop at their waits.
+    pub fn with_deadline(own self, d: Duration) -> TaskGroup with reads(Clock) {
+        self.__deadline_at(d.__select_at())
+    }
+}

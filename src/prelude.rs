@@ -397,6 +397,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // counterpart lives in `PRELUDE_FUNCTIONS` below.
     "TaskGroup",
     "TaskHandle",
+    // Why a task gave no value: `TaskHandle.try_join`'s error.
+    "TaskFailed",
     // `CStr` — the borrowed C-string type produced by `c"..."` literals
     // (design.md § C-String Literals). Scope-0 so the `let s: ref CStr =
     // c"..."` annotation form resolves; the type has no constructible

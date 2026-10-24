@@ -19516,7 +19516,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                         method,
                         "and_modify" | "or_insert" | "or_insert_with" | "or_default"
                     )
-                    || (self.tys().display(base).starts_with("TaskHandle[") && method == "join")
+                    || (self.tys().display(base).starts_with("TaskHandle[")
+                        && matches!(method, "join" | "try_join"))
                     || {
                         let shown = self.tys().display(base);
                         let head = shown.split('[').next().unwrap_or("").to_string();
@@ -20352,6 +20353,12 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         // take a `std.time` `Duration`.
         include_str!("../../runtime/stdlib/source/channel_timeout.kara"),
         &["recv_timeout", "send_timeout"],
+        &[],
+    ),
+    (
+        // `TaskGroup.with_deadline` (§11.10), for the same reason.
+        include_str!("../../runtime/stdlib/source/group_deadline.kara"),
+        &["with_deadline"],
         &[],
     ),
 ];

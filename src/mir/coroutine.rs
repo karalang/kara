@@ -35,7 +35,7 @@ pub fn suspends_native(name: &str) -> bool {
         (base, method),
         ("Receiver" | "Channel", "recv" | "recv_blocking")
             | ("Sender" | "Channel", "send")
-            | ("TaskHandle", "join")
+            | ("TaskHandle", "join" | "try_join")
             | ("Mutex", "acquire")
             | ("TaskGroup", "spawn_frame" | "end")
             | ("TcpListener", "accept")

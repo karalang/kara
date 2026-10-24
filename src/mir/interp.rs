@@ -696,6 +696,7 @@ fn run_with(
         handles: Vec::new(),
         groups: Vec::new(),
         spawned: Vec::new(),
+        torn: Vec::new(),
         cur_task: 0,
         wait: None,
     };
@@ -1097,6 +1098,9 @@ struct Interp<'a> {
     groups: Vec<GroupSlot>,
     /// Tasks spawned while the running task ran, queued once it yields.
     spawned: Vec<usize>,
+    /// Tasks torn down by a cancel while another task ran, which the
+    /// executor takes off its queue.
+    torn: Vec<usize>,
     /// The task the executor is running.
     cur_task: usize,
     /// What the running task's last `__ready` reported it waits for.
@@ -5829,10 +5833,34 @@ impl<'a> Interp<'a> {
                     Some(Value::Int(n)) => *n,
                     _ => i128::from(i64::MAX),
                 };
-                self.groups.push(GroupSlot { limit, live: 0 });
+                self.groups.push(GroupSlot {
+                    limit,
+                    live: 0,
+                    owner: self.cur_task,
+                    deadline: None,
+                });
                 Ok(Value::Agg(vec![Value::Int(self.groups.len() as i128)]))
             }
-            ("TaskGroup", "cancel" | "drop" | "end") => Ok(Value::Unit),
+            ("TaskGroup", "cancel") => {
+                if let Some(g) = args.first() {
+                    let g = self.group_id(g)?;
+                    self.cancel_group(g)?;
+                }
+                Ok(Value::Unit)
+            }
+            // The group itself, cancelled once the clock reads `at`.
+            ("TaskGroup", "__deadline_at") => match args.as_slice() {
+                [g, Value::Int(at)] => {
+                    let id = self.group_id(g)?;
+                    let at = instant_at(*at as i64);
+                    if let Some(slot) = id.checked_sub(1).and_then(|i| self.groups.get_mut(i)) {
+                        slot.deadline = Some(slot.deadline.map_or(at, |d| d.min(at)));
+                    }
+                    Ok(g.clone())
+                }
+                _ => err(format!("{name} takes a group and a deadline")),
+            },
+            ("TaskGroup", "drop" | "end") => Ok(Value::Unit),
             ("TaskGroup", "spawn_frame") => self.spawn_frame(name, args),
             ("TaskGroup", "spawn") => {
                 let (Some(f), Some(&fty)) = (args.get(1), arg_tys.get(1)) else {
@@ -5845,10 +5873,33 @@ impl<'a> Interp<'a> {
             }
             ("TaskHandle", "join") if args.len() == 1 && self.exec_handle(&args[0])?.is_some() => {
                 let h = self.exec_handle(&args[0])?.unwrap_or(0);
-                match self.handles.get_mut(h - 1).and_then(|h| h.result.take()) {
-                    Some(v) => Ok(v),
+                match self.handles.get_mut(h - 1) {
+                    Some(h) if h.cancelled => {
+                        // No value to return (§11.9).
+                        self.panic_message = Some("joined a cancelled task".to_string());
+                        self.native_panic()
+                    }
+                    Some(h) => match h.result.take() {
+                        Some(v) => Ok(v),
+                        None => err(format!("{name} of a task that has not returned")),
+                    },
                     None => err(format!("{name} of a task that has not returned")),
                 }
+            }
+            // `Ok` of what `join` gives, or `Err(TaskFailed.Cancelled)`.
+            ("TaskHandle", "try_join") => {
+                let cancelled = match args.first() {
+                    Some(h) => self
+                        .exec_handle(h)?
+                        .and_then(|h| self.handles.get(h - 1))
+                        .is_some_and(|h| h.cancelled),
+                    None => false,
+                };
+                if cancelled {
+                    return Ok(Value::Variant(1, vec![Value::Variant(1, Vec::new())]));
+                }
+                let joined = self.task_method(name, base, "join", args, arg_tys)?;
+                Ok(Value::Variant(0, vec![joined]))
             }
             ("TaskHandle", "join") => match args.as_slice() {
                 [Value::Agg(fs)] if fs.len() == 1 => Ok(fs[0].clone()),
@@ -5900,6 +5951,7 @@ impl<'a> Interp<'a> {
             result: None,
             done: false,
             detached: false,
+            cancelled: false,
         });
         let handle = self.handles.len();
         if let Some(g) = self.groups.get_mut(group - 1) {
@@ -5916,9 +5968,97 @@ impl<'a> Interp<'a> {
             pool_wait: None,
             pool_verdict: None,
             spans: self.active_spans.clone(),
+            cancelled: false,
         });
         self.spawned.push(self.tasks.len() - 1);
         Ok(Value::Agg(vec![Value::Int(handle as i128), Value::Unit]))
+    }
+
+    /// Cancels group `g` (core-semantics §11.9): every unfinished task of
+    /// it is suspended, so each is torn down now, at its wait, unless it is
+    /// the running task, which is torn down at its next one. The groups a
+    /// task made are cancelled before it, innermost first, since their
+    /// tasks may borrow from its frame.
+    fn cancel_group(&mut self, g: usize) -> R<()> {
+        let doomed: Vec<usize> = (1..self.tasks.len())
+            .filter(|&t| self.tasks[t].group == g && !self.task_done(t))
+            .collect();
+        for t in doomed {
+            if t == self.cur_task {
+                self.tasks[t].cancelled = true;
+                continue;
+            }
+            self.tear_down(t)?;
+        }
+        Ok(())
+    }
+
+    /// Cancels each group whose deadline has passed (§11.10).
+    fn fire_deadlines(&mut self) -> R<()> {
+        let now = std::time::Instant::now();
+        for g in 1..=self.groups.len() {
+            if self.groups[g - 1].deadline.is_some_and(|at| at <= now) {
+                self.groups[g - 1].deadline = None;
+                self.cancel_group(g)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether spawned task `t` has returned or been torn down.
+    fn task_done(&self, t: usize) -> bool {
+        self.tasks[t]
+            .handle
+            .checked_sub(1)
+            .and_then(|h| self.handles.get(h))
+            .is_none_or(|h| h.done)
+    }
+
+    /// Spawned task `t`, suspended, is cancelled: the groups it made are
+    /// cancelled, its frame is dropped through its `drop_frame`, and its
+    /// group runs one task fewer. The executor drops it from its queue
+    /// (`torn`).
+    fn tear_down(&mut self, t: usize) -> R<()> {
+        let made: Vec<usize> = (1..=self.groups.len())
+            .filter(|&i| self.groups[i - 1].owner == t)
+            .collect();
+        for g in made {
+            self.cancel_group(g)?;
+        }
+        self.torn.push(t);
+        let slot = self.tasks[t].frame;
+        let resume = self.tasks[t].resume.clone();
+        let Some(entry) = resume.strip_suffix("#resume") else {
+            return err(format!("task {t} resumes through {resume}"));
+        };
+        let drop = coroutine::drop_frame_name(entry);
+        let at = Addr {
+            root: Root::Heap(slot),
+            path: Path::new(),
+        };
+        let (cur, wait) = (self.cur_task, self.wait.take());
+        self.cur_task = t;
+        let dropped = self.call(&drop, vec![Value::Ref(at)]);
+        self.cur_task = cur;
+        self.wait = wait;
+        dropped?;
+        self.free_slot(slot);
+        let task = &mut self.tasks[t];
+        task.deadline = None;
+        if let Some(p) = task.pool_wait.take() {
+            if let Some(p) = self.pool(p) {
+                p.waiting -= 1;
+            }
+        }
+        let (group, handle) = (self.tasks[t].group, self.tasks[t].handle);
+        if let Some(g) = group.checked_sub(1).and_then(|g| self.groups.get_mut(g)) {
+            g.live -= 1;
+        }
+        if let Some(h) = handle.checked_sub(1).and_then(|h| self.handles.get_mut(h)) {
+            h.done = true;
+            h.cancelled = true;
+        }
+        Ok(())
     }
 
     /// Spawned task `t` returned `v`: its handle holds it, or, dropped
@@ -12250,6 +12390,7 @@ impl<'a> Interp<'a> {
             pool_wait: None,
             pool_verdict: None,
             spans: self.active_spans.clone(),
+            cancelled: false,
         });
         self.run_tasks(entry)
     }
@@ -12265,6 +12406,12 @@ impl<'a> Interp<'a> {
         let mut parked: Vec<(usize, Wait)> = Vec::new();
         let mut root = None;
         loop {
+            self.fire_deadlines()?;
+            if !self.torn.is_empty() {
+                let torn = std::mem::take(&mut self.torn);
+                queue.retain(|t| !torn.contains(t));
+                parked.retain(|(t, _)| !torn.contains(t));
+            }
             let Some(t) = queue.pop_front() else {
                 if parked.is_empty() {
                     break;
@@ -12336,6 +12483,16 @@ impl<'a> Interp<'a> {
                 }
                 other => return err(format!("{resume} returned {other:?}, not a Poll")),
             }
+            // The running task, cancelled while it ran, stops at the wait
+            // it has reached; one that returned keeps its result.
+            if self.tasks[t].cancelled && !self.task_done(t) {
+                self.tear_down(t)?;
+            }
+            if !self.torn.is_empty() {
+                let torn = std::mem::take(&mut self.torn);
+                queue.retain(|t| !torn.contains(t));
+                parked.retain(|(t, _)| !torn.contains(t));
+            }
         }
         root.ok_or_else(|| Stop::Error(format!("{entry} never finished")))
     }
@@ -12345,7 +12502,9 @@ impl<'a> Interp<'a> {
     /// running task can reach is waited on.
     fn wait_for(&mut self, parked: &[(usize, Wait)]) -> R<()> {
         let mut io = false;
-        let mut nearest: Option<std::time::Instant> = None;
+        // A group's deadline cancels its tasks (§11.10).
+        let mut nearest: Option<std::time::Instant> =
+            self.groups.iter().filter_map(|g| g.deadline).min();
         for (_, w) in parked {
             match w {
                 Wait::Until(at) | Wait::Pool(_, at) => {
@@ -12415,7 +12574,7 @@ impl<'a> Interp<'a> {
         let wait = match (base, method, rest) {
             // A spawned task's handle waits for it to return; one from a
             // plain spawn already holds its result.
-            ("TaskHandle", "join", [h, ..]) => self.exec_handle(h)?.map(Wait::Join),
+            ("TaskHandle", "join" | "try_join", [h, ..]) => self.exec_handle(h)?.map(Wait::Join),
             // A spawn waits for room under the group's limit, and the
             // group's end for its tasks to return (B-2026-10-15-30).
             ("TaskGroup", "spawn_frame" | "end", [g, ..]) => {
@@ -14182,6 +14341,9 @@ struct TaskSlot {
     /// Its active span stack while it is not running (B-2026-10-20-37):
     /// span context is per task, inherited from the spawner.
     spans: Vec<i128>,
+    /// Its group was cancelled while it ran: it is torn down at the wait
+    /// it reaches (§11.9).
+    cancelled: bool,
 }
 
 /// A spawned task's handle under the executor: its result once the task
@@ -14192,12 +14354,18 @@ struct HandleSlot {
     done: bool,
     /// The handle dropped first: the task drops its own result.
     detached: bool,
+    /// The task was cancelled (§11.9): done, with no result.
+    cancelled: bool,
 }
 
 /// A `TaskGroup`: its limit on running tasks, and how many run.
 struct GroupSlot {
     limit: i128,
     live: i128,
+    /// The task that made it, whose teardown cancels it (§11.9).
+    owner: usize,
+    /// When it is cancelled (`with_deadline`, §11.10), until then.
+    deadline: Option<std::time::Instant>,
 }
 
 /// What a parked task waits for: the condition its last `__ready` saw

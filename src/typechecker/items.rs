@@ -1316,6 +1316,10 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // The library's own methods are exempt: `with_deadline`
+                // hands back the group it was given (core-semantics §11.10).
+                Item::ImplBlock(imp)
+                    if imp.span.offset >= self.program.library_start.unwrap_or(usize::MAX) => {}
                 Item::ImplBlock(imp) => {
                     // Methods inside `impl` blocks — return-type
                     // check fires regardless of visibility. Parameter
