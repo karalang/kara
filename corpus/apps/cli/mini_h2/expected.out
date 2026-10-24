@@ -1,0 +1,2100 @@
+> a GET and its response
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example user-agent=mini-h2/1.0 accept=text/html end
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 1 in 0, window out 65535 in 65535, next 3
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65535 frame 16384
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'user-agent', b'mini-h2/1.0'), (b'accept', b'text/html')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200 content-type=text/html;~scharset~eutf-8 content-length=12 server=h2
+  s data 1 hello~sworld! end
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65523 in 65535, next 2
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885f92497ca589d34d1f...>
+    > DataFrame(stream_id=1, flags=['END_STREAM']): <hex:68656c6c6f20776f726c...>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200'), (b'content-type', b'text/html; charset=utf-8'), (b'content-length', b'12'), (b'server', b'h2')]>
+    <DataReceived stream_id:1, flow_controlled_length:12, data:68656c6c6f20776f726c6421>
+    <StreamEnded stream_id:1>
+  c ack 12 1
+  pipe c s
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 0 in 0, window out 65535 in 65523, next 3
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65523 in 65535, next 2
+> a POST in three DATA frames, acknowledged as it arrives
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=POST :path=/orders :scheme=https :authority=shop.example content-type=application/json content-length=50
+  c data 1 {"sku":~s"A-17"~c
+  c data 1 ~s"qty":~s3~c
+  c data 1 ~s"note":~s"leave~sat~sdoor"} end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:83448560f6485b118741...>
+    > DataFrame(stream_id=1, flags=[]): <hex:7b22736b75223a202241...>
+    > DataFrame(stream_id=1, flags=[]): <hex:2022717479223a20332c>
+    > DataFrame(stream_id=1, flags=['END_STREAM']): <hex:20226e6f7465223a2022...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'POST'), (b':path', b'/orders'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'content-type', b'application/json'), (b'content-length', b'50')]>
+    <DataReceived stream_id:1, flow_controlled_length:15, data:7b22736b75223a2022412d3137222c>
+    <DataReceived stream_id:1, flow_controlled_length:10, data:2022717479223a20332c>
+    <DataReceived stream_id:1, flow_controlled_length:25, data:20226e6f7465223a20226c656176652061742064>
+    <StreamEnded stream_id:1>
+  s ack 50 1
+  s windows 1
+    local 65535 remote 65485
+  s headers 1 :status=201 location=/orders/9 end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:488210036e8760f6485b...>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'201'), (b'location', b'/orders/9')]>
+    <StreamEnded stream_id:1>
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 0 in 0, window out 65485 in 65535, next 3
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65535 in 65485, next 2
+> two requests on one connection, answered out of order
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  c headers 3 :method=GET :path=/style.css :scheme=https :authority=shop.example end
+  c headers 5 :method=GET :path=/logo.png :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8244876109f541572211...>
+    > HeadersFrame(stream_id=5, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8244876283cc75ebaa6f...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/style.css'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:3>
+    <RequestReceived stream_id:5, headers:[(b':method', b'GET'), (b':path', b'/logo.png'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:5>
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 3, window out 65535 in 65535, next 2
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 65535 in 65535 frame 16384
+      <H2Stream id:3 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 65535 in 65535 frame 16384
+      <H2Stream id:5 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 65535 in 65535 frame 16384
+  s headers 5 :status=200 content-type=image/png
+  s data 5 hex=89504e470d0a1a0a end
+  s headers 3 :status=304 end
+  s headers 1 :status=200 content-type=text/html
+  s data 1 <html></html> end
+  pipe s c
+    > HeadersFrame(stream_id=5, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885f87352398ac5754df>
+    > DataFrame(stream_id=5, flags=['END_STREAM']): <hex:89504e470d0a1a0a>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8b>
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885f87497ca589d34d1f>
+    > DataFrame(stream_id=1, flags=['END_STREAM']): <hex:3c68746d6c3e3c2f6874...>
+    <ResponseReceived stream_id:5, headers:[(b':status', b'200'), (b'content-type', b'image/png')]>
+    <DataReceived stream_id:5, flow_controlled_length:8, data:89504e470d0a1a0a>
+    <StreamEnded stream_id:5>
+    <ResponseReceived stream_id:3, headers:[(b':status', b'304')]>
+    <StreamEnded stream_id:3>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200'), (b'content-type', b'text/html')]>
+    <DataReceived stream_id:1, flow_controlled_length:13, data:3c68746d6c3e3c2f68746d6c3e>
+    <StreamEnded stream_id:1>
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 0 in 0, window out 65535 in 65514, next 7
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65514 in 65535, next 2
+> header encoding: str headers back out
+  c new client encoding=utf-8
+  s new server encoding=utf-8
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example accept-language=fr-CH~c~sfr;q~e0.9 x-name=café end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(':method', 'GET'), (':path', '/'), (':scheme', 'https'), (':authority', 'shop.example'), ('accept-language', 'fr-CH, fr;q=0.9'), ('x-name', 'café')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200 x-greeting=grüße end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:884088f2b4d614a93553...>
+    <ResponseReceived stream_id:1, headers:[(':status', '200'), ('x-greeting', 'grüße')]>
+    <StreamEnded stream_id:1>
+> sensitive headers and cookies
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example authorization=Bearer~sabc.def.ghi cookie=a~e1 cookie=session~e0123456789abcdef0123 !x-api-key=k-5150 %x-raw=bytes~svalue end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'authorization', b'Bearer abc.def.ghi'), (b'x-api-key', b'k-5150'), (b'x-raw', b'bytes value'), (b'cookie', b'a=1; session=0123456789abcdef0123')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200 set-cookie=id~e7;~sPath~e/ end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88778934903bf6a6b1a6...>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200'), (b'set-cookie', b'id=7; Path=/')]>
+    <StreamEnded stream_id:1>
+  c headers 3 :method=GET :path=/ :scheme=https :authority=shop.example authorization=Bearer~sabc.def.ghi cookie=a~e1 end
+  pipe c s
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487c01f088dba51d8...>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'authorization', b'Bearer abc.def.ghi'), (b'cookie', b'a=1')]>
+    <StreamEnded stream_id:3>
+> outbound normalisation: case, spaces and connection headers
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example User-Agent=~s~sspaced~s~s Connection=keep-alive Keep-Alive=5 X-Mixed=Case end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'user-agent', b'spaced'), (b'x-mixed', b'Case')]>
+    <StreamEnded stream_id:1>
+> split outbound cookies
+  c new client split_outbound_cookies=1
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example cookie=a~e1;~sb~e2;~sc~e3 end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'cookie', b'a=1; b=2; c=3')]>
+    <StreamEnded stream_id:1>
+> trailers after the body
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=POST :path=/upload :scheme=https :authority=shop.example te=trailers
+  c data 1 part~sone
+  c headers 1 x-checksum=1234 x-count=8 end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:83448562dae838e48741...>
+    > DataFrame(stream_id=1, flags=[]): <hex:70617274206f6e65>
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:4088f2b127293aa2da7f...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'POST'), (b':path', b'/upload'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'te', b'trailers')]>
+    <DataReceived stream_id:1, flow_controlled_length:8, data:70617274206f6e65>
+    <TrailersReceived stream_id:1, headers:[(b'x-checksum', b'1234'), (b'x-count', b'8')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200 grpc-encoding=identity
+  s data 1 ok
+  s headers 1 grpc-status=0 grpc-message=done
+    error ProtocolError: Trailers must have END_STREAM set.
+  s headers 1 grpc-status=0 grpc-message=done end
+    error ProtocolError: 
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88408a9acac8b16a21e4...>
+    > DataFrame(stream_id=1, flags=[]): <hex:6f6b>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200'), (b'grpc-encoding', b'identity')]>
+    <DataReceived stream_id:1, flow_controlled_length:2, data:6f6b>
+> a 100-continue before the final response
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=PUT :path=/big :scheme=https :authority=shop.example expect=100-continue
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:4283d7c37f448362334d...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'PUT'), (b':path', b'/big'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'expect', b'100-continue')]>
+  s headers 1 :status=100
+  s headers 1 :status=103 link=</a.css>;~srel~epreload end
+    error ProtocolError: Cannot set END_STREAM on informational responses.
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:48820801>
+    <InformationalResponseReceived stream_id:1, headers:[(b':status', b'100')]>
+  c data 1 the~sbody end
+  pipe c s
+    > DataFrame(stream_id=1, flags=['END_STREAM']): <hex:74686520626f6479>
+    <DataReceived stream_id:1, flow_controlled_length:8, data:74686520626f6479>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=204 end
+  s headers 1 :status=100
+    error ProtocolError: Invalid input StreamInputs.SEND_INFORMATIONAL_HEADERS in state 6
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:89>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'204')]>
+    <StreamEnded stream_id:1>
+> HEAD and content-length
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=HEAD :path=/file :scheme=https :authority=shop.example end
+  c headers 3 :method=GET :path=/file :scheme=https :authority=shop.example end
+  c headers 5 :method=GET :path=/short :scheme=https :authority=shop.example end
+  c headers 7 :method=GET :path=/bad :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:4284c7821bff44846253...>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82bf87be>
+    > HeadersFrame(stream_id=5, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82448561139ec4ff87bf>
+    > HeadersFrame(stream_id=7, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8244836231c987c0>
+    <RequestReceived stream_id:1, headers:[(b':method', b'HEAD'), (b':path', b'/file'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/file'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:3>
+    <RequestReceived stream_id:5, headers:[(b':method', b'GET'), (b':path', b'/short'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:5>
+    <RequestReceived stream_id:7, headers:[(b':method', b'GET'), (b':path', b'/bad'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:7>
+  s headers 1 :status=200 content-length=1000 end
+  s headers 3 :status=200 content-length=5
+  s data 3 12345 end
+  s headers 5 :status=200 content-length=5
+  s data 5 123 end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885c8308000f>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885c816f>
+    > DataFrame(stream_id=3, flags=['END_STREAM']): <hex:3132333435>
+    > HeadersFrame(stream_id=5, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88be>
+    > DataFrame(stream_id=5, flags=['END_STREAM']): <hex:313233>
+    error InvalidBodyLengthError: InvalidBodyLengthError: Expected 5 bytes, received 3
+  c state
+    c: ConnectionState.CLOSED, open out 2 in 0, window out 65535 in 65527, next 9
+      <H2Stream id:5 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65532 frame 16384
+      <H2Stream id:7 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65535 frame 16384
+> content-length as Python's int() reads it
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  c headers 3 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487be>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:3>
+  s headers 1 :status=200 content-length=~s+0_2~t
+  s data 1 hi end
+  s headers 3 :status=200 content-length=-0
+  s data 3 len=0 end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885c84ff60885f>
+    > DataFrame(stream_id=1, flags=['END_STREAM']): <hex:6869>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885c82581f>
+    > DataFrame(stream_id=3, flags=['END_STREAM']): None
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200'), (b'content-length', b'+0_2')]>
+    <DataReceived stream_id:1, flow_controlled_length:2, data:6869>
+    <StreamEnded stream_id:1>
+    <ResponseReceived stream_id:3, headers:[(b':status', b'200'), (b'content-length', b'-0')]>
+    <DataReceived stream_id:3, flow_controlled_length:0, data:>
+    <StreamEnded stream_id:3>
+> content-length that is not a number
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200 content-length=twelve
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885c854f82d1dcbf>
+    error ProtocolError: Invalid content-length header: b'twelve'
+  c state
+    c: ConnectionState.CLOSED, open out 1 in 0, window out 65535 in 65535, next 3
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65535 frame 16384
+> padding, end_stream on its own, and an empty body
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=POST :path=/p :scheme=https :authority=shop.example
+  c data 1 secret pad=10
+  c data 1 len=0 pad=0
+  c end 1
+  c end 1
+    error ProtocolError: Invalid input StreamInputs.SEND_END_STREAM in state 5
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:83448262bf87418944e7...>
+    > DataFrame(stream_id=1, flags=['PADDED']): <hex:0a736563726574000000...>
+    > DataFrame(stream_id=1, flags=['PADDED']): <hex:00>
+    > DataFrame(stream_id=1, flags=['END_STREAM']): None
+    <RequestReceived stream_id:1, headers:[(b':method', b'POST'), (b':path', b'/p'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <DataReceived stream_id:1, flow_controlled_length:17, data:736563726574>
+    <DataReceived stream_id:1, flow_controlled_length:1, data:>
+    <DataReceived stream_id:1, flow_controlled_length:0, data:>
+    <StreamEnded stream_id:1>
+  s data 1 x pad=256
+    error ValueError: pad_length must be within range: [0, 255]
+  s data 1 x pad=-1
+    error ValueError: pad_length must be within range: [0, 255]
+  s headers 1 :status=200 end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    error StreamClosedError: 1
+> filling the stream window and reopening it
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200
+  s data 1 len=16384
+  s data 1 len=16384
+  s data 1 len=16384
+  s data 1 len=16383
+  s windows 1
+    local 0 remote 65535
+  s data 1 len=2
+    error FlowControlError: Cannot send 2 bytes, flow control window is 0
+  s data 1 len=1
+    error FlowControlError: Cannot send 1 bytes, flow control window is 0
+  s windows 1
+    local 0 remote 65535
+  s data 1 len=1
+    error FlowControlError: Cannot send 1 bytes, flow control window is 0
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    > DataFrame(stream_id=1, flags=[]): <hex:030a11181f262d343b42...>
+    > DataFrame(stream_id=1, flags=[]): <hex:030a11181f262d343b42...>
+    > DataFrame(stream_id=1, flags=[]): <hex:030a11181f262d343b42...>
+    > DataFrame(stream_id=1, flags=[]): <hex:030a11181f262d343b42...>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+    <DataReceived stream_id:1, flow_controlled_length:16384, data:030a11181f262d343b424950575e656c737a8188>
+    <DataReceived stream_id:1, flow_controlled_length:16384, data:030a11181f262d343b424950575e656c737a8188>
+    <DataReceived stream_id:1, flow_controlled_length:16384, data:030a11181f262d343b424950575e656c737a8188>
+    <DataReceived stream_id:1, flow_controlled_length:16383, data:030a11181f262d343b424950575e656c737a8188>
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 1 in 0, window out 65535 in 0, next 3
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 0 frame 16384
+  c ack 30000 1
+  pipe c s
+    > WindowUpdateFrame(stream_id=0, flags=[]): window_increment=30000
+    > WindowUpdateFrame(stream_id=1, flags=[]): window_increment=30000
+    <WindowUpdated stream_id:0, delta:30000>
+    <WindowUpdated stream_id:1, delta:30000>
+  s windows 1
+    local 30000 remote 65535
+  c ack 35535 1
+  pipe c s
+    > WindowUpdateFrame(stream_id=0, flags=[]): window_increment=35535
+    > WindowUpdateFrame(stream_id=1, flags=[]): window_increment=35535
+    <WindowUpdated stream_id:0, delta:35535>
+    <WindowUpdated stream_id:1, delta:35535>
+  s windows 1
+    local 65535 remote 65535
+  s data 1 len=20000 end
+    error FrameTooLargeError: Cannot send frame size 20000, max frame size is 16384
+  pipe s c
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 1 in 0, window out 65535 in 65535, next 3
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65535 frame 16384
+> a frame bigger than the peer's maximum
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200
+  s data 1 len=16385
+    error FrameTooLargeError: Cannot send frame size 16385, max frame size is 16384
+  s data 1 len=16384
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    > DataFrame(stream_id=1, flags=[]): <hex:030a11181f262d343b42...>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+    <DataReceived stream_id:1, flow_controlled_length:16384, data:030a11181f262d343b424950575e656c737a8188>
+> window increments sent and received
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  c window 1000
+  c window 500 1
+  c window 0
+    error ValueError: Flow control increment must be between 1 and 2147483647
+  c window 2147483648
+    error ValueError: Flow control increment must be between 1 and 2147483647
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    > WindowUpdateFrame(stream_id=0, flags=[]): window_increment=1000
+    > WindowUpdateFrame(stream_id=1, flags=[]): window_increment=500
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+    <WindowUpdated stream_id:0, delta:1000>
+    <WindowUpdated stream_id:1, delta:500>
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 1, window out 66535 in 65535, next 2
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 66035 in 65535 frame 16384
+  s headers 1 :status=200
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+  s window 100 9
+    error KeyError: 9
+  s window 2147483647
+    error FlowControlError: Flow control window mustn't exceed 2147483647
+  s show
+> SETTINGS: a smaller window, a bigger frame size and acknowledgements
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200
+  c settings 4=100 5=20000 1=1024 6=8000
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=[]): settings={4: 100, 5: 20000, 1: 1024, 6: 8000}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=4, original_value=65535, new_value=100), ChangedSetting(setting=5, original_value=16384, new_value=20000), ChangedSetting(setting=1, original_value=4096, new_value=1024), ChangedSetting(setting=6, original_value=65536, new_value=8000)}>
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 1, window out 65535 in 65535, next 2
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 100 in 65535 frame 20000
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+    <SettingsAcknowledged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=1024), ChangedSetting(setting=4, original_value=65535, new_value=100), ChangedSetting(setting=5, original_value=16384, new_value=20000), ChangedSetting(setting=6, original_value=65536, new_value=8000)}>
+  s data 1 len=150
+    error FlowControlError: Cannot send 150 bytes, flow control window is 100
+  s data 1 len=100
+  s windows 1
+    local 0 remote 65535
+  pipe s c
+    > DataFrame(stream_id=1, flags=[]): <hex:030a11181f262d343b42...>
+    <DataReceived stream_id:1, flow_controlled_length:100, data:030a11181f262d343b424950575e656c737a8188>
+  c settings 4=65535
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=[]): settings={4: 65535}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=4, original_value=100, new_value=65535)}>
+  s windows 1
+    local 65435 remote 65535
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{ChangedSetting(setting=4, original_value=100, new_value=65535)}>
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 1 in 0, window out 65535 in 65435, next 3
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65435 frame 16384
+> invalid SETTINGS values
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c settings 2=2
+    error InvalidSettingsValueError: Setting 2 has invalid value 2
+  c settings 4=2147483648
+    error InvalidSettingsValueError: Setting 4 has invalid value 2147483648
+  c settings 5=100
+    error InvalidSettingsValueError: Setting 5 has invalid value 100
+  c settings 6=-1
+    error InvalidSettingsValueError: Setting 6 has invalid value -1
+  c settings 8=3
+    error InvalidSettingsValueError: Setting 8 has invalid value 3
+  c settings 99=1
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=[]): settings={99: 1}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=99, original_value=None, new_value=1)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{ChangedSetting(setting=99, original_value=None, new_value=1)}>
+> a concurrency limit
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  s settings 3=2
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={3: 2}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=3, original_value=100, new_value=2)}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{ChangedSetting(setting=3, original_value=100, new_value=2)}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example
+  c headers 3 :method=GET :path=/2 :scheme=https :authority=shop.example
+  c headers 5 :method=GET :path=/3 :scheme=https :authority=shop.example
+    error TooManyStreamsError: Max outbound streams is 2, 2 open
+  c reset 1
+  c headers 5 :method=GET :path=/3 :scheme=https :authority=shop.example
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 2 in 0, window out 65535 in 65535, next 7
+      <H2Stream id:3 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:5 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:824482605f87bf>
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=0
+    > HeadersFrame(stream_id=5, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:824482619f87c0>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/2'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamReset stream_id:1, error_code:0, remote_reset:True>
+    <RequestReceived stream_id:5, headers:[(b':method', b'GET'), (b':path', b'/3'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 2, window out 65535 in 65535, next 2
+      <H2Stream id:3 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:5 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+> server push
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s push 1 2 :method=GET :path=/app.js :scheme=https :authority=shop.example
+  s push 1 4 :method=GET :path=/app.css :scheme=https :authority=shop.example
+  s headers 1 :status=200
+  s data 1 <script~ssrc~e/app.js> end
+  s headers 2 :status=200 content-type=text/javascript
+  s data 2 alert(1) end
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65507 in 65535, next 6
+      <H2Stream id:4 state:<StreamState.RESERVED_LOCAL: 2>> out 65535 in 65535 frame 16384
+  pipe s c
+    > PushPromiseFrame(stream_id=1, flags=['END_HEADERS']): promised_stream_id=2, data=<hex:8244866075d6bf447f87...>
+    > PushPromiseFrame(stream_id=1, flags=['END_HEADERS']): promised_stream_id=4, data=<hex:8244866075d6b9108f87...>
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    > DataFrame(stream_id=1, flags=['END_STREAM']): <hex:3c736372697074207372...>
+    > HeadersFrame(stream_id=2, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:885f8b497ca58e83ee34...>
+    > DataFrame(stream_id=2, flags=['END_STREAM']): <hex:616c657274283129>
+    <PushedStreamReceived pushed_stream_id:2, parent_stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/app.js'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <PushedStreamReceived pushed_stream_id:4, parent_stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/app.css'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+    <DataReceived stream_id:1, flow_controlled_length:20, data:3c736372697074207372633d2f6170702e6a733e>
+    <StreamEnded stream_id:1>
+    <ResponseReceived stream_id:2, headers:[(b':status', b'200'), (b'content-type', b'text/javascript')]>
+    <DataReceived stream_id:2, flow_controlled_length:8, data:616c657274283129>
+    <StreamEnded stream_id:2>
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 0 in 0, window out 65535 in 65507, next 3
+      <H2Stream id:4 state:<StreamState.RESERVED_REMOTE: 1>> out 65535 in 65535 frame 16384
+  c reset 4 8
+  pipe c s
+    > RstStreamFrame(stream_id=4, flags=[]): error_code=8
+    <StreamReset stream_id:4, error_code:8, remote_reset:True>
+  s headers 4 :status=200
+    error StreamClosedError: 4
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65507 in 65535, next 6
+  s push 2 6 :method=GET :path=/x :scheme=https :authority=shop.example
+    error StreamClosedError: 2
+  s push 1 4 :method=GET :path=/y :scheme=https :authority=shop.example
+    error StreamClosedError: 1
+  c push 1 3 :method=GET :path=/z :scheme=https :authority=shop.example
+    error ProtocolError: Remote peer has disabled stream push
+> push refused by the client
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c settings 2=0
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=[]): settings={2: 0}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=2, original_value=1, new_value=0)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{ChangedSetting(setting=2, original_value=1, new_value=0)}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s push 1 2 :method=GET :path=/a.js :scheme=https :authority=shop.example
+    error ProtocolError: Remote peer has disabled stream push
+> priority signals
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example w=32 d=0 x=1 end
+  c headers 3 :method=GET :path=/b :scheme=https :authority=shop.example w=200 end
+  c prio 3 w=1 d=1 x=0
+  c prio 5 w=256
+  c prio 7
+  c prio 3 d=3
+    error ProtocolError: Stream 3 may not depend on itself
+  c prio 3 w=0
+    error ProtocolError: Weight must be between 1 and 256, not 0
+  c headers 9 :method=GET :path=/c :scheme=https :authority=shop.example w=300
+    error ProtocolError: Weight must be between 1 and 256, not 300
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM', 'PRIORITY']): exclusive=True, depends_on=0, stream_weight=31, data=<hex:828487418944e7ad72f9...>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM', 'PRIORITY']): exclusive=False, depends_on=0, stream_weight=199, data=<hex:824482623f87bf>
+    > PriorityFrame(stream_id=3, flags=[]): exclusive=False, depends_on=1, stream_weight=0
+    > PriorityFrame(stream_id=5, flags=[]): exclusive=False, depends_on=0, stream_weight=255
+    > PriorityFrame(stream_id=7, flags=[]): exclusive=False, depends_on=0, stream_weight=15
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+    <PriorityUpdated stream_id:1, weight:32, depends_on:0, exclusive:True>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/b'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:3>
+    <PriorityUpdated stream_id:3, weight:200, depends_on:0, exclusive:False>
+    <PriorityUpdated stream_id:3, weight:1, depends_on:1, exclusive:False>
+    <PriorityUpdated stream_id:5, weight:256, depends_on:0, exclusive:False>
+    <PriorityUpdated stream_id:7, weight:16, depends_on:0, exclusive:False>
+  s prio 1 w=10
+    error RFC1122Error: Servers SHOULD NOT prioritize streams.
+  s headers 1 :status=200 w=10 end
+    error RFC1122Error: Servers SHOULD NOT prioritize streams.
+> alternative services
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s altsvc h3~e":443";~sma~e86400 origin=https://shop.example
+  s altsvc h3~e":8443" sid=1
+  s altsvc v sid=1 origin=x
+    error ValueError: Must not provide both origin and stream_id
+  s headers 1 :status=200 end
+  s altsvc late sid=1
+    error ProtocolError: Invalid input StreamInputs.SEND_ALTERNATIVE_SERVICE in state 6
+  pipe s c
+    > AltSvcFrame(stream_id=0, flags=[]): origin=b'https://shop.example', field=b'h3=":443"; ma=86400'
+    > AltSvcFrame(stream_id=1, flags=[]): origin=b'', field=b'h3=":8443"'
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    <AlternativeServiceAvailable origin:https://shop.example, field_value:h3=":443"; ma=86400>
+    <AlternativeServiceAvailable origin:shop.example, field_value:h3=":8443">
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+    <StreamEnded stream_id:1>
+  c altsvc nope origin=x
+    error ProtocolError: Invalid input ConnectionInputs.SEND_ALTERNATIVE_SERVICE in state ConnectionState.CLIENT_OPEN
+> ping and pong
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c ping 12345678
+  c ping short
+    error ValueError: Invalid value for ping data: b'short'
+  pipe c s
+    > PingFrame(stream_id=0, flags=[]): opaque_data=b'12345678'
+    <PingReceived ping_data:3132333435363738>
+  pipe s c
+    > PingFrame(stream_id=0, flags=['ACK']): opaque_data=b'12345678'
+    <PingAckReceived ping_data:3132333435363738>
+  s ping hex=0001020304050607
+  pipe s c
+    > PingFrame(stream_id=0, flags=[]): opaque_data=b'\x00\x01\x02\x03\x04\x05\x06\x07'
+    <PingReceived ping_data:0001020304050607>
+  pipe c s
+    > PingFrame(stream_id=0, flags=['ACK']): opaque_data=b'\x00\x01\x02\x03\x04\x05\x06\x07'
+    <PingAckReceived ping_data:0001020304050607>
+> reset streams in both directions
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example
+  c headers 3 :method=GET :path=/2 :scheme=https :authority=shop.example
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:824482605f87bf>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/2'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+  c reset 1 8
+  pipe c s
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=8
+    <StreamReset stream_id:1, error_code:8, remote_reset:True>
+  s headers 1 :status=200
+    error StreamClosedError: 1
+  s data 1 late
+    error StreamClosedError: 1
+  s reset 3
+  pipe s c
+    > RstStreamFrame(stream_id=3, flags=[]): error_code=0
+    <StreamReset stream_id:3, error_code:0, remote_reset:True>
+  c data 3 after~sreset
+    error StreamClosedError: 3
+  c reset 3
+    error StreamClosedError: 3
+  c reset 11
+    error NoSuchStreamError: 11
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 0 in 0, window out 65535 in 65535, next 5
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65535 in 65535, next 2
+> data that arrives after the client reset the stream
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200
+  s data 1 len=5000
+  c reset 1 8
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    > DataFrame(stream_id=1, flags=[]): <hex:030a11181f262d343b42...>
+  c show
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=8
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=5
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=5
+  pipe c s
+  s data 1 more
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 1, window out 60531 in 65535, next 2
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 60531 in 65535 frame 16384
+> GOAWAY
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  c headers 3 :method=GET :path=/2 :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:824482605f87bf>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/2'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:3>
+  s goaway code=0 last=1 data=shutting~sdown
+  s headers 1 :status=200
+    error ProtocolError: Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED
+  pipe s c
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=0, additional_data=b'shutting down'
+    <ConnectionTerminated error_code:0, last_stream_id:1, additional_data:7368757474696e6720646f776e>
+  c headers 5 :method=GET :path=/3 :scheme=https :authority=shop.example
+    error ProtocolError: Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED
+  c goaway code=2
+  c state
+    c: ConnectionState.CLOSED, open out 2 in 0, window out 65535 in 65535, next 5
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65535 frame 16384
+      <H2Stream id:3 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65535 frame 16384
+  s state
+    s: ConnectionState.CLOSED, open out 0 in 2, window out 65535 in 65535, next 2
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 65535 in 65535 frame 16384
+      <H2Stream id:3 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 65535 in 65535 frame 16384
+> closing a connection
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c goaway code=11 data=len=30
+  pipe c s
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=11, additional_data=b'\x03\n\x11\x18\x1f&-4;BIPW^elsz\x81\x88\x8f\x96\x9d\xa4\xab\xb2\xb9\xc0\xc7\xce'
+    <ConnectionTerminated error_code:11, last_stream_id:0, additional_data:030a11181f262d343b424950575e656c737a8188>
+  s goaway
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=0, additional_data=b''
+  s new server
+  s goaway code=1
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> calls the state machine refuses
+  c new client
+  s new server
+  c data 1 x
+    error NoSuchStreamError: 1
+  c end 1
+    error ProtocolError: Invalid input ConnectionInputs.SEND_DATA in state ConnectionState.IDLE
+  c reset 1
+    error ProtocolError: Invalid input ConnectionInputs.SEND_RST_STREAM in state ConnectionState.CLOSED
+  c windows 1
+    error NoSuchStreamError: 1
+  c ack 10 0
+    error ValueError: Stream ID 0 is not valid for acknowledge_received_data
+  c ack -1 1
+    error ValueError: Cannot acknowledge negative data
+  s headers 1 :status=200
+    error ProtocolError: Invalid stream ID for peer.
+  c initiate
+    error ProtocolError: Invalid input ConnectionInputs.SEND_SETTINGS in state ConnectionState.CLOSED
+  c headers 2 :method=GET :path=/ :scheme=https :authority=shop.example
+    error ProtocolError: Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+    error ProtocolError: Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example
+    error ProtocolError: Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED
+  c data 1 x
+    error NoSuchStreamError: 1
+  c headers 1 x-late=1
+    error ProtocolError: Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED
+  c headers 1 :status=200 end
+    error ProtocolError: Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED
+  s initiate
+  pipe c s
+  s headers 1 :method=GET :path=/ :scheme=https :authority=x
+    error ProtocolError: Invalid stream ID for peer.
+  s headers 3 :status=200
+    error ProtocolError: Invalid stream ID for peer.
+  s headers 2 :status=200 end
+    error ProtocolError: Header block missing mandatory b':path' header
+  c state
+    c: ConnectionState.CLOSED, open out 0 in 0, window out 65535 in 65535, next 1
+  s state
+    s: ConnectionState.CLIENT_OPEN, open out 1 in 0, window out 65535 in 65535, next 4
+      <H2Stream id:2 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+> outbound header validation
+  c new client
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https end
+    error ProtocolError: Request header block does not have an :authority or Host header.
+  c headers 3 :method=GET :path=/ :scheme=https :authority=a host=b end
+    error ProtocolError: Request header block has mismatched :authority and Host headers: b'a' / b'b'
+  c headers 5 :method=GET :path= :scheme=https :authority=a end
+    error ProtocolError: An empty :path header is forbidden
+  c headers 7 :method=GET :path=/ :scheme=https :authority=a te=gzip end
+    error ProtocolError: Invalid value for TE header: b'gzip'
+  c headers 9 :method=GET :path=/ :scheme=https :authority=a :status=200 end
+    error ProtocolError: Encountered response-only headers {b':status'}
+  c headers 11 :method=GET :path=/ :scheme=https :authority=a :protocol=websocket end
+    error ProtocolError: Encountered connect-request-only headers {b':protocol'}
+  c headers 13 :method=GET :path=/ :scheme=https :authority=a :foo=bar end
+    error ProtocolError: Received custom pseudo-header field b':foo'
+  c headers 15 :method=GET :path=/ :scheme=https :authority=a :method=POST end
+    error ProtocolError: Received duplicate pseudo-header field b':method'
+  c headers 17 :method=CONNECT :protocol=websocket :path=/chat :scheme=https :authority=a end
+  c headers 19 x-early=1 :method=GET :path=/ :scheme=https :authority=a end
+    error ProtocolError: Received pseudo-header field out of sequence: b':method'
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 10 in 0, window out 65535 in 65535, next 21
+      <H2Stream id:1 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:3 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:5 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:7 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:9 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:11 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:13 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:15 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+      <H2Stream id:17 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65535 frame 16384
+      <H2Stream id:19 state:<StreamState.OPEN: 3>> out 65535 in 65535 frame 16384
+  pipe c s
+    > HeadersFrame(stream_id=17, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:4287bdab4e9c17b7ffbf...>
+    error ProtocolError: Error decoding header block: Invalid table index 63
+> outbound validation turned off
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a X-Upper=1 end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f4086fc5b...>
+    error ProtocolError: Received uppercase header name b'X-Upper'.
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: an uppercase name
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a Accept=x end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f40848484...>
+    error ProtocolError: Received uppercase header name b'Accept'.
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: a name with a trailing space
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a accept~s=x end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f40851908...>
+    error ProtocolError: Received header name surrounded by whitespace b'accept '
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: a value with a leading space
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a accept=~sx end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f538253cf>
+    error ProtocolError: Received header value surrounded by whitespace b' x'
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: a connection header
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a connection=close end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f408721ea...>
+    error ProtocolError: Connection-specific header field present: b'connection'.
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: TE that is not trailers
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a te=chunked end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f4082497f...>
+    error ProtocolError: Invalid value for TE header: b'chunked'
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: TE in capitals
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a te=TRAILERS end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f4082497f...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'a'), (b'te', b'TRAILERS')]>
+    <StreamEnded stream_id:1>
+  s show
+> inbound validation: no :path
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :scheme=https :authority=a end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828741811f>
+    error ProtocolError: Header block missing mandatory b':path' header
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: no host at all
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487>
+    error ProtocolError: Request header block does not have an :authority or Host header.
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: Host instead of :authority
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https host=a end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848766811f>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b'host', b'a')]>
+    <StreamEnded stream_id:1>
+  s show
+> inbound validation: host and :authority disagree
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a host=b end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f66818f>
+    error ProtocolError: Request header block has mismatched :authority and Host headers: b'a' / b'b'
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: a duplicate pseudo-header
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :method=GET :path=/ :scheme=https :authority=a end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8282848741811f>
+    error ProtocolError: Received duplicate pseudo-header field b':method'
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: a pseudo-header after a regular one
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https y=1 :authority=a end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8284874081f5810f4181...>
+    error ProtocolError: Received pseudo-header field out of sequence: b':authority'
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: a custom pseudo-header
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a :x=1 end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f4082b9e7...>
+    error ProtocolError: Received custom pseudo-header field b':x'
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: an empty name
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=a ~z=1 end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:82848741811f4080810f>
+    error ProtocolError: Received header name with zero length.
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: an empty :path
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path= :scheme=https :authority=a end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8244808741811f>
+    error ProtocolError: An empty :path header is forbidden
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> inbound validation: CONNECT with :protocol
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=CONNECT :protocol=websocket :path=/ :scheme=https :authority=a end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:4287bdab4e9c17b7ff40...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'CONNECT'), (b':protocol', b'websocket'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'a')]>
+    <StreamEnded stream_id:1>
+  s show
+> inbound validation turned off
+  c new client validate_outbound_headers=0 normalize_outbound_headers=0
+  s new server validate_inbound_headers=0 normalize_inbound_headers=0
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https Accept=x cookie=a cookie=b end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487408484842d6981...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b'Accept', b'x'), (b'cookie', b'a'), (b'cookie', b'b')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200 end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+    <StreamEnded stream_id:1>
+> response validation at the client
+  c new client
+  s new server validate_outbound_headers=0 normalize_outbound_headers=0
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  c headers 3 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487be>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:3>
+  s headers 1 :status=200 :path=/ end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8884>
+    error ProtocolError: Encountered request-only headers {b':path'}
+  c show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> trailers that carry a pseudo-header
+  c new client
+  s new server validate_outbound_headers=0
+  c initiate
+  s initiate
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <SettingsAcknowledged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200
+  s headers 1 :status=500 end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:8e>
+    error ProtocolError: Received pseudo-header in trailer {b':status'}
+  c show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> h2c upgrade
+  c new client
+  s new server
+  c upgrade
+    -> b'AAEAABAAAAIAAAABAAQAAP__AAUAAEAAAAgAAAAAAAMAAABkAAYAAQAA'
+  s upgrade AAMAAABkAAQAAAPoAAYAAQAA
+    -> None
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 1 in 0, window out 65535 in 65535, next 3
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_LOCAL: 5>> out 65535 in 65535 frame 16384
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 1, window out 65535 in 65535, next 2
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 1000 in 65535 frame 16384
+  pipe c s
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=1000, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=100, new_value=100), ChangedSetting(setting=6, original_value=65536, new_value=65536)}>
+  pipe s c
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 0, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  s headers 1 :status=200
+  s data 1 upgraded end
+  pipe s c
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    > DataFrame(stream_id=1, flags=['END_STREAM']): <hex:7570677261646564>
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+    <DataReceived stream_id:1, flow_controlled_length:8, data:7570677261646564>
+    <StreamEnded stream_id:1>
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 0 in 0, window out 65535 in 65527, next 3
+  c headers 1 y=1
+    error StreamIDTooLowError: StreamIDTooLowError: 1 is lower than 1
+  c headers 3 :method=GET :path=/2 :scheme=http :authority=a end
+  pipe c s
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > HeadersFrame(stream_id=3, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:824482605f8641811f>
+    <SettingsAcknowledged changed_settings:{}>
+    <RequestReceived stream_id:3, headers:[(b':method', b'GET'), (b':path', b'/2'), (b':scheme', b'http'), (b':authority', b'a')]>
+    <StreamEnded stream_id:3>
+> upgrade without a settings header
+  s new server
+  s upgrade
+    -> None
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 1, window out 65535 in 65535, next 2
+      <H2Stream id:1 state:<StreamState.HALF_CLOSED_REMOTE: 4>> out 65535 in 65535 frame 16384
+> a bad preamble
+  s new server
+  s raw 16 bytes
+    error ProtocolError: Invalid HTTP/2 preamble.
+  s show
+> a preamble in pieces
+  s new server
+  s raw 5 bytes
+  s raw 28 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 17 bytes
+    <PingReceived ping_data:6162636465666768>
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > PingFrame(stream_id=0, flags=['ACK']): opaque_data=b'abcdefgh'
+> headers in CONTINUATION frames
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 21 bytes
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+> a header block split three ways, then interrupted
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 78 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example'), (b'user-agent', b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')]>
+    <StreamEnded stream_id:1>
+  s raw 30 bytes
+    error ProtocolError: Invalid frame during header block.
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> CONTINUATION on another stream
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 32 bytes
+    error ProtocolError: Invalid frame during header block.
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> a naked CONTINUATION
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 10 bytes
+    error NoSuchStreamError: 1
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> data before headers, and on stream 0
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 13 bytes
+    error ProtocolError: Invalid input ConnectionInputs.RECV_DATA in state ConnectionState.IDLE
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 11 bytes
+    error ProtocolError: Received frame with invalid header: Stream ID must be non-zero for DataFrame
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> a frame over the maximum size, and a frame with a bad padding length
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 16394 bytes
+    error FrameTooLargeError: Received overlong frame: length 16385, max 16384
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=6, additional_data=b''
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+  s raw 12 bytes
+    error ProtocolError: Received frame with invalid padding.
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> an unknown frame type and an unknown setting
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 12 bytes
+    <UnknownFrameReceived>
+  s raw 21 bytes
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=66, original_value=None, new_value=7), ChangedSetting(setting=4, original_value=65535, new_value=70000)}>
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+  s state
+    s: ConnectionState.IDLE, open out 0 in 0, window out 65535 in 65535, next 2
+> stream identifiers out of order
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    <RequestReceived stream_id:5, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:5>
+  s raw 13 bytes
+    error StreamIDTooLowError: StreamIDTooLowError: 3 is lower than 5
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=5, error_code=1, additional_data=b''
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    error ProtocolError: Invalid stream ID for peer.
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> headers on a stream that has ended
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s headers 1 :status=200 end
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65535 in 65535, next 2
+  s raw 13 bytes
+    error StreamClosedError: 1
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:88>
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=5, additional_data=b''
+> headers on a half-closed stream
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  s raw 18 bytes
+    <StreamReset stream_id:1, error_code:5, remote_reset:False>
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=5
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65535 in 65535, next 2
+> a stream reset, then more frames on it
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+  s reset 1 7
+  s raw 26 bytes
+  s raw 20 bytes
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=7
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=5
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=5
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65535 in 65531, next 2
+> window updates that are wrong
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+  s raw 13 bytes
+    error ProtocolError: Received frame with non-compliant data
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+  s raw 13 bytes
+    <StreamReset stream_id:1, error_code:3, remote_reset:False>
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=3
+  s state
+    s: ConnectionState.SERVER_OPEN, open out 0 in 0, window out 65535 in 65535, next 2
+  s raw 13 bytes
+    error FlowControlError: May not increment flow control window past 2147483647
+  s show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=3, additional_data=b''
+> RST_STREAM and PRIORITY on idle streams
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 27 bytes
+    error ProtocolError: Invalid input ConnectionInputs.RECV_RST_STREAM in state ConnectionState.IDLE
+  s raw 14 bytes
+    error ProtocolError: Invalid input ConnectionInputs.RECV_PRIORITY in state ConnectionState.CLOSED
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> PUSH_PROMISE sent to a server, and from a client
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 23 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+  s raw 17 bytes
+    error ProtocolError: Received pushed stream
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> PRIORITY inside HEADERS
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 28 bytes
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+    <PriorityUpdated stream_id:1, weight:42, depends_on:0, exclusive:True>
+  s raw 18 bytes
+    error ProtocolError: Stream 3 may not depend on itself
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=3, error_code=1, additional_data=b''
+> a broken header block
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 15 bytes
+    error ProtocolError: Error decoding header block: Invalid table index 34359738494
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 15 bytes
+    error ProtocolError: Header block missing mandatory b':path' header
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b''
+> a header list over the limit
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 59737 bytes
+    error DenialOfServiceError: Oversized header block: A header list larger than 65536 has been received
+  s show
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=11, additional_data=b''
+> GOAWAY and PING from a raw peer
+  s new server
+  s raw 33 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  s raw 59 bytes
+    <PingAckReceived ping_data:0000000000000000>
+    <ConnectionTerminated error_code:99, last_stream_id:0, additional_data:7878787878787878787878787878787878787878>
+  s show
+  s state
+    s: ConnectionState.CLOSED, open out 0 in 0, window out 65535 in 65535, next 2
+  s headers 2 :status=200
+    error ProtocolError: Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED
+> a client fed a server's mistakes
+  c new client
+  c initiate
+  c raw 9 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  c raw 35 bytes
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+    <DataReceived stream_id:1, flow_controlled_length:3, data:616263>
+    <StreamEnded stream_id:1>
+  c show
+    > preamble
+    > SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 2: 1, 4: 65535, 5: 16384, 8: 0, 3: 100, 6: 65536}
+    > SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+    > HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487418944e7ad72f9...>
+    > RstStreamFrame(stream_id=1, flags=[]): error_code=5
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 0 in 0, window out 65535 in 65528, next 3
+> a client fed a push for a reset stream
+  c new client
+  c initiate
+  c raw 9 bytes
+    <RemoteSettingsChanged changed_settings:{}>
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  c reset 1
+  c drop
+    dropped 120 bytes
+  c raw 27 bytes
+  c show
+    > RstStreamFrame(stream_id=2, flags=[]): error_code=7
+  c raw 17 bytes
+    error ProtocolError: Attempted to push on closed stream.
+  c show
+    > GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=1, additional_data=b''
+> delivery a few bytes at a time
+  c new client
+  s new server
+  c initiate
+  s initiate
+  c headers 1 :method=GET :path=/ :scheme=https :authority=shop.example end
+  pipe c s 10
+    > 10 bytes
+  pipe c s 30
+    > 30 bytes
+  pipe c s 7
+    > 7 bytes
+  pipe c s 1
+    > 1 bytes
+  pipe c s 100
+    > 50 bytes
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=1, new_value=1), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <RequestReceived stream_id:1, headers:[(b':method', b'GET'), (b':path', b'/'), (b':scheme', b'https'), (b':authority', b'shop.example')]>
+    <StreamEnded stream_id:1>
+  pipe c s
+  pipe s c 20
+    > 20 bytes
+  pipe s c
+    > DataFrame(stream_id=2147418117, flags=[]): <hex:00004000>
+    > 27 trailing bytes
+    <RemoteSettingsChanged changed_settings:{ChangedSetting(setting=1, original_value=4096, new_value=4096), ChangedSetting(setting=2, original_value=0, new_value=0), ChangedSetting(setting=4, original_value=65535, new_value=65535), ChangedSetting(setting=5, original_value=16384, new_value=16384), ChangedSetting(setting=8, original_value=0, new_value=0), ChangedSetting(setting=3, original_value=None, new_value=100), ChangedSetting(setting=6, original_value=None, new_value=65536)}>
+    <SettingsAcknowledged changed_settings:{}>
+  s headers 1 :status=200
+  s data 1 abcdefghij end
+  pipe s c 12
+    > 12 bytes
+    <ResponseReceived stream_id:1, headers:[(b':status', b'200')]>
+  pipe s c 1
+    > 1 bytes
+  pipe s c
+    > 16 trailing bytes
+    <DataReceived stream_id:1, flow_controlled_length:10, data:6162636465666768696a>
+    <StreamEnded stream_id:1>
+  c state
+    c: ConnectionState.CLIENT_OPEN, open out 0 in 0, window out 65535 in 65525, next 3
