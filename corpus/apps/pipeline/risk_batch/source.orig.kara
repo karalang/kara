@@ -1,0 +1,731 @@
+// pipeline/risk_batch
+//
+// A nightly market-risk batch, the shape of the job a bank's risk desk
+// runs after the close, over four trading desks (rates, equity, fx and
+// credit). It builds each desk's positions, writes them as CSV, reads the
+// files back and parses them with a loader's checks, sums each desk's
+// factor exposures, prices every position over 250 days of historical-
+// style scenarios, takes each desk's VaR and expected shortfall, runs five
+// reports per desk, and books the four desks into one firm-wide limit
+// book.
+//
+// The builds, the writes, the reads, the parses, the exposures, the
+// pricing runs, the risk numbers and the reports are each a group of
+// statements that do not depend on each other (a stmt-par app). The limit
+// book attributes VaR to each desk as it arrives and numbers its breach
+// tickets in arrival order, so the bookings have to run in order.
+
+const MASK32: i64 = 4294967295;
+const POSITIONS: i64 = 240;
+const DAYS: i64 = 250;
+const ISSUERS: i64 = 16;
+const FIRM_CAP: i64 = 1200000;
+const HEADER: Str = "id,book,kind,factor,qty,delta,gamma,issuer";
+const FACTORS: Array[Str, 12] = ["r2y", "r5y", "r10y", "r30y", "spx", "sx5e", "nky", "eurusd", "usdjpy", "gbpusd",
+                                 "ig", "hy"];
+const BETA: Array[i64, 12] = [-30, -40, -45, -40, 90, 85, 70, 20, -35, 25, -60, -80];
+const IDIO: Array[i64, 12] = [60, 55, 50, 55, 45, 50, 70, 80, 75, 70, 50, 70];
+const GAMMA_KINDS: Array[Str, 4] = ["call", "put", "option", "bond"];
+const STRESS_NAMES: Array[Str, 3] = ["crash", "taper", "rates+200"];
+const STRESSES: Array[Array[i64, 12], 3] = [
+    [-80, -70, -60, -50, -900, -950, -800, -150, -300, 120, 180, 450],
+    [60, 90, 110, 80, -250, -200, -150, -80, 150, -60, 40, 120],
+    [200, 200, 200, 200, -120, -100, -90, 50, 100, 30, 20, 60],
+];
+
+struct Desk {
+    name: String,
+    seed: i64,
+    books: Vec[String],
+    kinds: Vec[String],
+    lo: i64,
+    hi: i64,
+    credit: bool,
+    limit: i64,
+}
+
+struct Pos {
+    pid: String,
+    book: String,
+    kind: String,
+    factor: String,
+    qty: i64,
+    delta: i64,
+    gamma: i64,
+    issuer: String,
+}
+
+// One scenario per day of a 250-day window: a common market move, an own
+// move per factor, crisis days with three times the common move, and
+// issuer defaults that are likelier on a crisis day.
+struct Scenarios {
+    shocks: Vec[Vec[i64]],
+    crisis: Vec[bool],
+    defaults: Vec[Vec[bool]],
+}
+
+struct Expo {
+    delta: Vec[i64],
+    gamma: Vec[i64],
+    gross: Vec[i64],
+    jtd: Vec[i64],
+}
+
+struct Pnl {
+    books: Vec[Vec[i64]],
+    total: Vec[i64],
+    default_days: i64,
+}
+
+struct Risk {
+    var99: i64,
+    es975: i64,
+    worst_day: i64,
+    book_var: Vec[i64],
+}
+
+struct LimitBook {
+    cap: i64,
+    firm: Vec[i64],
+    firm_var: i64,
+    standalone: i64,
+    tickets: i64,
+    log: String,
+}
+
+enum RiskError {
+    Bad(String),
+}
+
+impl RiskError {
+    fn describe(ref self) -> String {
+        match self {
+            RiskError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> RiskError {
+    RiskError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn money(x: i64) -> String {
+    let s = if x < 0 { "-" } else { "" };
+    let a = x.abs();
+    if a >= 1000000 {
+        return f"{s}{a / 1000000}.{(a % 1000000) / 100000}m";
+    }
+    f"{s}{a / 1000}.{(a % 1000) / 100}k"
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+// ------------------------------------------------------------ the data
+
+fn build_positions(desk: ref Desk) -> Vec[Pos] {
+    let mut out: Vec[Pos] = Vec.new();
+    let nf = desk.hi - desk.lo;
+    for i in 0..POSITIONS {
+        let h = mix(desk.seed, i, 1);
+        let h2 = mix(desk.seed, i, 2);
+        let h3 = mix(desk.seed, i, 3);
+        let book = desk.books[h % desk.books.len() as i64].clone();
+        let kind = desk.kinds[(h >> 4) % desk.kinds.len() as i64].clone();
+        let factor = desk.lo + (h >> 8) % nf;
+        let size = (1 + h2 % 50) * 100000;
+        let sign = if (h2 >> 10) % 3 == 0 { -1 } else { 1 };
+        let direction = if kind == "bond" or kind == "put" { -1 } else { 1 };
+        let sens = 1 + h3 % 90;
+        let delta = direction * sign * (size * sens / 1000000);
+        let mut gamma = 0;
+        if kind == "bond" and not desk.credit {
+            gamma = sign * (1 + (h3 >> 8) % 3);
+        } else if GAMMA_KINDS.contains(kind) and kind != "bond" {
+            gamma = sign * (1 + (h3 >> 8) % 20);
+        }
+        let issuer = if desk.credit { f"ISS{(h3 >> 12) % ISSUERS:02}" } else { "-".to_string() };
+        out.push(Pos {
+            pid: f"{desk.name}-{i + 1:04}",
+            book: book,
+            kind: kind,
+            factor: FACTORS[factor].to_string(),
+            qty: sign * size,
+            delta: delta,
+            gamma: gamma,
+            issuer: issuer,
+        });
+    }
+    out
+}
+
+fn encode_positions(ps: ref Vec[Pos]) -> String {
+    let mut out = f"{HEADER}\n";
+    for p in ps {
+        out.push_str(f"{p.pid},{p.book},{p.kind},{p.factor},{p.qty},{p.delta},{p.gamma},{p.issuer}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, RiskError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"could not read {path}")),
+    }
+}
+
+// Replace the given field of the n-th position.
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n + 1], ",");
+    f[field] = value.clone();
+    lines[n + 1] = f.join(",");
+    lines.join("\n")
+}
+
+fn draw(h: i64) -> i64 {
+    (h % 201) - 100 + ((h >> 8) % 201) - 100 + ((h >> 16) % 201) - 100
+}
+
+fn build_scenarios() -> Scenarios {
+    let mut sc = Scenarios { shocks: Vec.new(), crisis: Vec.new(), defaults: Vec.new() };
+    for s in 0..DAYS {
+        let crisis = mix(77, s, 5) % 29 == 0;
+        let mut common = draw(mix(77, s, 6));
+        if crisis {
+            common = common * 3;
+        }
+        let mut row: Vec[i64] = Vec.new();
+        for f in 0..12 {
+            let own = draw(mix(77, s * 12 + f, 7));
+            row.push((BETA[f] * common + IDIO[f] * own) / 100);
+        }
+        sc.shocks.push(row);
+        sc.crisis.push(crisis);
+        let odds = if crisis { 60 } else { 500 };
+        let mut d: Vec[bool] = Vec.new();
+        for i in 0..ISSUERS {
+            d.push(mix(77, s * ISSUERS + i, 9) % odds == 0);
+        }
+        sc.defaults.push(d);
+    }
+    sc
+}
+
+// ------------------------------------------------------------ the parser
+
+fn is_digits(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for b in s.bytes() {
+        if b < 48 or b > 57 {
+            return false;
+        }
+    }
+    true
+}
+
+fn factor_index(name: ref String) -> i64 {
+    for i in 0..12 {
+        if FACTORS[i] == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn parse_positions(path: ref String, desk: ref Desk, text: ref String) -> Result[Vec[Pos], RiskError] {
+    let lines = split_on(text, "\n");
+    if lines.len() == 0 or lines[0] != HEADER {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    let prefix = f"{desk.name}-";
+    let mut out: Vec[Pos] = Vec.new();
+    for n in 1..lines.len() as i64 {
+        let line = ref lines[n];
+        if line == "" {
+            continue;
+        }
+        let where_ = f"{path} line {n + 1}: ";
+        let f = split_on(line, ",");
+        if f.len() != 8 {
+            return Err(bad(f"{where_}{f.len()} fields"));
+        }
+        if not f[0].starts_with(prefix) or not is_digits(f[0].substring(prefix.len() as i64)) {
+            return Err(bad(f"{where_}bad id '{f[0]}'"));
+        }
+        if not desk.books.contains(f[1]) {
+            return Err(bad(f"{where_}unknown book '{f[1]}'"));
+        }
+        if not desk.kinds.contains(f[2]) {
+            return Err(bad(f"{where_}unknown kind '{f[2]}'"));
+        }
+        let fx = factor_index(f[3]);
+        if fx < desk.lo or fx >= desk.hi {
+            return Err(bad(f"{where_}factor '{f[3]}' is not on the {desk.name} desk"));
+        }
+        let qty = match i64.parse(f[4]) {
+            Ok(v) => v,
+            Err(_) => return Err(bad(f"{where_}bad qty '{f[4]}'")),
+        };
+        if qty == 0 {
+            return Err(bad(f"{where_}zero qty"));
+        }
+        let delta = match i64.parse(f[5]) {
+            Ok(v) => v,
+            Err(_) => return Err(bad(f"{where_}bad delta '{f[5]}'")),
+        };
+        let gamma = match i64.parse(f[6]) {
+            Ok(v) => v,
+            Err(_) => return Err(bad(f"{where_}bad gamma '{f[6]}'")),
+        };
+        if gamma != 0 and not GAMMA_KINDS.contains(f[2]) {
+            return Err(bad(f"{where_}gamma on a linear {f[2]}"));
+        }
+        if desk.credit {
+            let num = f[7].substring(3);
+            if not f[7].starts_with("ISS") or not is_digits(num) or i64.parse(num).unwrap_or(ISSUERS) >= ISSUERS {
+                return Err(bad(f"{where_}bad issuer '{f[7]}'"));
+            }
+        } else if f[7] != "-" {
+            return Err(bad(f"{where_}issuer '{f[7]}' off the credit desk"));
+        }
+        out.push(Pos {
+            pid: f[0].clone(),
+            book: f[1].clone(),
+            kind: f[2].clone(),
+            factor: f[3].clone(),
+            qty: qty,
+            delta: delta,
+            gamma: gamma,
+            issuer: f[7].clone(),
+        });
+    }
+    Ok(out)
+}
+
+fn same_positions(a: ref Vec[Pos], b: ref Vec[Pos]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.pid != y.pid or x.book != y.book or x.kind != y.kind or x.factor != y.factor or x.qty != y.qty
+            or x.delta != y.delta or x.gamma != y.gamma or x.issuer != y.issuer {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ exposures and pricing
+
+// What a position makes when its issuer defaults: a bond holder loses
+// 60% of face, a protection buyer gains it.
+fn jump(p: ref Pos) -> i64 {
+    let loss = p.qty * 60 / 100;
+    if p.kind == "bond" { -loss } else { loss }
+}
+
+fn issuer_index(p: ref Pos) -> i64 {
+    if p.issuer == "-" {
+        return -1;
+    }
+    i64.parse(p.issuer.substring(3)).unwrap_or(-1)
+}
+
+fn exposures(desk: ref Desk, ps: ref Vec[Pos]) -> Expo {
+    let n = desk.hi - desk.lo;
+    let mut e = Expo { delta: Vec.filled(n, 0), gamma: Vec.filled(n, 0), gross: Vec.filled(n, 0), jtd: Vec.filled(ISSUERS, 0) };
+    for p in ps {
+        let k = factor_index(p.factor) - desk.lo;
+        e.delta[k] += p.delta;
+        e.gamma[k] += p.gamma;
+        e.gross[k] += p.delta.abs();
+        let i = issuer_index(p);
+        if i >= 0 {
+            e.jtd[i] += jump(p);
+        }
+    }
+    e
+}
+
+fn book_index(desk: ref Desk, name: ref String) -> i64 {
+    for i in 0..desk.books.len() as i64 {
+        if desk.books[i] == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn move_pnl(p: ref Pos, x: i64) -> i64 {
+    p.delta * x + p.gamma * x * x / 200
+}
+
+fn price(desk: ref Desk, ps: ref Vec[Pos], sc: ref Scenarios) -> Pnl {
+    let mut books: Vec[Vec[i64]] = Vec.new();
+    for _ in desk.books {
+        books.push(Vec.filled(DAYS, 0));
+    }
+    let mut out = Pnl { books: books, total: Vec.filled(DAYS, 0), default_days: 0 };
+    for s in 0..DAYS {
+        let mut hit = false;
+        for p in ps {
+            let x = sc.shocks[s][factor_index(p.factor)];
+            let mut v = move_pnl(p, x);
+            let i = issuer_index(p);
+            if i >= 0 and sc.defaults[s][i] {
+                v += jump(p);
+                hit = true;
+            }
+            let b = book_index(desk, p.book);
+            out.books[b][s] += v;
+            out.total[s] += v;
+        }
+        if hit {
+            out.default_days += 1;
+        }
+    }
+    out
+}
+
+// 99% one-day VaR over 250 days is the third-worst day; 97.5% expected
+// shortfall is the mean of the worst six.
+fn var_of(v: ref Vec[i64]) -> i64 {
+    let mut s = v.clone();
+    s.sort();
+    -s[2]
+}
+
+fn es_of(v: ref Vec[i64]) -> i64 {
+    let mut s = v.clone();
+    s.sort();
+    let mut total = 0;
+    for i in 0..6 {
+        total += s[i];
+    }
+    -(total / 6)
+}
+
+fn risk(pnl: ref Pnl) -> Risk {
+    let mut worst = 0;
+    for s in 0..DAYS {
+        if pnl.total[s] < pnl.total[worst] {
+            worst = s;
+        }
+    }
+    let mut book_var: Vec[i64] = Vec.new();
+    for b in pnl.books {
+        book_var.push(var_of(b));
+    }
+    Risk { var99: var_of(pnl.total), es975: es_of(pnl.total), worst_day: worst, book_var: book_var }
+}
+
+// ------------------------------------------------------------ reports
+
+fn totals_report(desk: ref Desk, ps: ref Vec[Pos]) -> String {
+    let mut longs = 0;
+    let mut gross = 0;
+    for p in ps {
+        if p.qty > 0 {
+            longs += 1;
+            gross += p.qty;
+        } else {
+            gross -= p.qty;
+        }
+    }
+    let n = ps.len() as i64;
+    let mut out = f"{desk.name}: {n} positions in {desk.books.len()} books, {longs} long, {n - longs} short, ";
+    out.push_str(f"gross {money(gross)};");
+    for k in desk.kinds {
+        let mut count = 0;
+        for p in ps {
+            if p.kind == k {
+                count += 1;
+            }
+        }
+        out.push_str(f" {k} {count}");
+    }
+    out
+}
+
+fn factor_report(desk: ref Desk, e: ref Expo) -> String {
+    let mut out = f"{desk.name} exposures:";
+    for k in 0..(desk.hi - desk.lo) {
+        let sep = if k > 0 { "," } else { "" };
+        out.push_str(f"{sep} {FACTORS[desk.lo + k]} delta {money(e.delta[k])}/bp gamma {e.gamma[k]} gross {money(e.gross[k])}");
+    }
+    if desk.credit {
+        let mut worst = 0;
+        for i in 0..ISSUERS {
+            if e.jtd[i] < e.jtd[worst] {
+                worst = i;
+            }
+        }
+        out.push_str(f"; worst jump to default ISS{worst:02} {money(e.jtd[worst])}");
+    }
+    out
+}
+
+fn book_report(desk: ref Desk, r: ref Risk) -> String {
+    let mut out = f"{desk.name} VaR99 {money(r.var99)}, ES97.5 {money(r.es975)}; books";
+    let mut total = 0;
+    for i in 0..desk.books.len() as i64 {
+        let sep = if i > 0 { "," } else { "" };
+        out.push_str(f"{sep} {desk.books[i]} {money(r.book_var[i])}");
+        total += r.book_var[i];
+    }
+    out.push_str(f"; diversification {money(total - r.var99)}");
+    out
+}
+
+fn worst_report(desk: ref Desk, pnl: ref Pnl, sc: ref Scenarios) -> String {
+    let mut days: Vec[i64] = (0..DAYS).collect();
+    days.sort_by(|a, b| if pnl.total[a] != pnl.total[b] { pnl.total[a].cmp(pnl.total[b]) } else { a.cmp(b) });
+    let mut out = f"{desk.name} worst days:";
+    let mut crisis = 0;
+    for j in 0..5 {
+        let s = days[j];
+        let sep = if j > 0 { "," } else { "" };
+        let mark = if sc.crisis[s] { "*" } else { "" };
+        out.push_str(f"{sep} d{s + 1:03}{mark} {money(pnl.total[s])}");
+        if sc.crisis[s] {
+            crisis += 1;
+        }
+    }
+    out.push_str(f"; {crisis} of 5 on crisis days, {pnl.default_days} days with a default");
+    out
+}
+
+fn stress_report(desk: ref Desk, ps: ref Vec[Pos]) -> String {
+    let mut out = f"{desk.name} stress:";
+    for j in 0..3 {
+        let mut v = 0;
+        for p in ps {
+            v += move_pnl(p, STRESSES[j][factor_index(p.factor)]);
+        }
+        let sep = if j > 0 { "," } else { "" };
+        out.push_str(f"{sep} {STRESS_NAMES[j]} {money(v)}");
+    }
+    out
+}
+
+// ------------------------------------------------------------ the limit book
+
+fn ticket(lb: mut ref LimitBook, what: ref String) -> String {
+    lb.tickets += 1;
+    let t = f"LB-{lb.tickets:04}";
+    lb.log.push_str(f"{t} {what}\n");
+    t
+}
+
+// A desk's VaR is attributed as it arrives: its marginal VaR is what the
+// firm's VaR moves by when the desk's P&L joins it.
+fn book(lb: mut ref LimitBook, desk: ref Desk, pnl: ref Pnl, r: ref Risk) -> String {
+    let before = lb.firm_var;
+    for s in 0..DAYS {
+        lb.firm[s] += pnl.total[s];
+    }
+    let after = var_of(lb.firm);
+    lb.firm_var = after;
+    lb.standalone += r.var99;
+    let marginal = after - before;
+    let mut out = f"{desk.name} booked: firm VaR {money(before)} -> {money(after)}, marginal {money(marginal)}";
+    lb.log.push_str(f"book {desk.name} {r.var99} {marginal} {after}\n");
+    if r.var99 > desk.limit {
+        let t = ticket(mut lb, f"{desk.name} desk VaR {r.var99} over its limit {desk.limit}");
+        out.push_str(f"; {t} desk over its {money(desk.limit)} limit by {money(r.var99 - desk.limit)}");
+    }
+    if after > lb.cap {
+        if before > lb.cap {
+            let t = ticket(mut lb, f"{desk.name} keeps the firm over its cap at {after}");
+            out.push_str(f"; {t} firm still over cap");
+        } else {
+            let t = ticket(mut lb, f"{desk.name} takes the firm over its cap {lb.cap} to {after}");
+            out.push_str(f"; {t} firm over its {money(lb.cap)} cap by {money(after - lb.cap)}");
+        }
+    } else if marginal < 0 {
+        out.push_str(f"; diversifying, headroom {money(lb.cap - after)}");
+    } else {
+        out.push_str(f"; headroom {money(lb.cap - after)}");
+    }
+    out
+}
+
+fn desk(name: Str, seed: i64, books: ref Vec[Str], kinds: ref Vec[Str], lo: i64, hi: i64, credit: bool, limit: i64) -> Desk {
+    Desk {
+        name: name.to_string(),
+        seed: seed,
+        books: books.iter().map(|b| b.to_string()).collect(),
+        kinds: kinds.iter().map(|k| k.to_string()).collect(),
+        lo: lo,
+        hi: hi,
+        credit: credit,
+        limit: limit,
+    }
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), RiskError] {
+    let sc = build_scenarios();
+    let mut crisis = 0;
+    let mut events = 0;
+    for s in 0..DAYS {
+        if sc.crisis[s] {
+            crisis += 1;
+        }
+        for x in sc.defaults[s] {
+            if *x {
+                events += 1;
+            }
+        }
+    }
+    println(f"scenarios: {DAYS} days, {crisis} crisis days, {events} issuer defaults");
+
+    let rates = desk("rates", 11, ["RT-NY", "RT-LDN", "RT-TKY"].to_vec(), ["swap", "bond", "future"].to_vec(), 0, 4, false, 600000);
+    let equity = desk("equity", 23, ["EQ-D1", "EQ-VOL", "EQ-ARB"].to_vec(), ["stock", "call", "put"].to_vec(), 4, 7, false, 800000);
+    let fx = desk("fx", 37, ["FX-SPOT", "FX-OPT"].to_vec(), ["spot", "fwd", "option"].to_vec(), 7, 10, false, 900000);
+    let credit = desk("credit", 41, ["CR-IG", "CR-HY", "CR-IDX"].to_vec(), ["cds", "bond"].to_vec(), 10, 12, true, 600000);
+
+    // Four desks of positions.
+    let p1 = build_positions(rates);
+    let p2 = build_positions(equity);
+    let p3 = build_positions(fx);
+    let p4 = build_positions(credit);
+
+    // Four writes.
+    let w1 = fs.write("rates.csv", encode_positions(p1));
+    let w2 = fs.write("equity.csv", encode_positions(p2));
+    let w3 = fs.write("fx.csv", encode_positions(p3));
+    let w4 = fs.write("credit.csv", encode_positions(p4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() {
+        return Err(bad("could not write the positions"));
+    }
+
+    let whole = read_text("equity.csv")?;
+    if fs.write("equity.bad", damage(whole, 150, 5, "1.5e3")).is_err() {
+        return Err(bad("could not write equity.bad"));
+    }
+
+    // Four reads.
+    let t1 = read_text("rates.csv")?;
+    let t2 = read_text("equity.csv")?;
+    let t3 = read_text("fx.csv")?;
+    let t4 = read_text("credit.csv")?;
+    println(f"rates.csv: {t1.len()} bytes, fnv {text_sum(t1):08x}");
+    println(f"equity.csv: {t2.len()} bytes, fnv {text_sum(t2):08x}");
+    println(f"fx.csv: {t3.len()} bytes, fnv {text_sum(t3):08x}");
+    println(f"credit.csv: {t4.len()} bytes, fnv {text_sum(t4):08x}");
+
+    // Four parses.
+    let g1 = parse_positions("rates.csv", rates, t1)?;
+    let g2 = parse_positions("equity.csv", equity, t2)?;
+    let g3 = parse_positions("fx.csv", fx, t3)?;
+    let g4 = parse_positions("credit.csv", credit, t4)?;
+    match parse_positions("equity.bad", equity, read_text("equity.bad")?) {
+        Ok(_) => println("equity.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_positions("fx.csv", credit, t3) {
+        Ok(_) => println("fx.csv as credit: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_positions(g1, p1) and same_positions(g2, p2) and same_positions(g3, p3) and same_positions(g4, p4);
+    println(f"parsed positions match the built ones: {same}");
+
+    // Four exposure sums.
+    let e1 = exposures(rates, g1);
+    let e2 = exposures(equity, g2);
+    let e3 = exposures(fx, g3);
+    let e4 = exposures(credit, g4);
+
+    // Four pricing runs: every position over every day.
+    let v1 = price(rates, g1, sc);
+    let v2 = price(equity, g2, sc);
+    let v3 = price(fx, g3, sc);
+    let v4 = price(credit, g4, sc);
+
+    // Four risk numbers.
+    let r1 = risk(v1);
+    let r2 = risk(v2);
+    let r3 = risk(v3);
+    let r4 = risk(v4);
+
+    // Reports that only read what came before.
+    let a1 = totals_report(rates, g1);
+    let a2 = totals_report(equity, g2);
+    let a3 = totals_report(fx, g3);
+    let a4 = totals_report(credit, g4);
+    let b1 = factor_report(rates, e1);
+    let b2 = factor_report(equity, e2);
+    let b3 = factor_report(fx, e3);
+    let b4 = factor_report(credit, e4);
+    let c1 = book_report(rates, r1);
+    let c2 = book_report(equity, r2);
+    let c3 = book_report(fx, r3);
+    let c4 = book_report(credit, r4);
+    let d1 = worst_report(rates, v1, sc);
+    let d2 = worst_report(equity, v2, sc);
+    let d3 = worst_report(fx, v3, sc);
+    let d4 = worst_report(credit, v4, sc);
+    let s1 = stress_report(rates, g1);
+    let s2 = stress_report(equity, g2);
+    let s3 = stress_report(fx, g3);
+    let s4 = stress_report(credit, g4);
+    for line in [a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4, d1, d2, d3, d4, s1, s2, s3, s4] {
+        println(line);
+    }
+
+    // One limit book: each desk's marginal VaR depends on who booked
+    // before it, and tickets are numbered as they are raised.
+    let mut lb = LimitBook { cap: FIRM_CAP, firm: Vec.filled(DAYS, 0), firm_var: 0, standalone: 0, tickets: 0, log: String.new() };
+    println(book(mut lb, rates, v1, r1));
+    println(book(mut lb, equity, v2, r2));
+    println(book(mut lb, fx, v3, r3));
+    println(book(mut lb, credit, v4, r4));
+    if fs.write("limits.log", lb.log).is_err() {
+        return Err(bad("could not write limits.log"));
+    }
+    let back = read_text("limits.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    let mut summary = f"firm VaR {money(lb.firm_var)} against {money(lb.standalone)} standalone, ";
+    summary.push_str(f"diversification {money(lb.standalone - lb.firm_var)}; {lb.tickets} tickets");
+    println(summary);
+    println(f"limits.log: {rows} entries, {back.len()} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["rates.csv", "equity.csv", "fx.csv", "credit.csv", "equity.bad", "limits.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"risk_batch failed: {e.describe()}"),
+    }
+}

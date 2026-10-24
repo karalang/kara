@@ -1,0 +1,34 @@
+scenarios: 250 days, 11 crisis days, 10 issuer defaults
+rates.csv: 10556 bytes, fnv bd872d52
+equity.csv: 10698 bytes, fnv a5915001
+fx.csv: 10573 bytes, fnv f79f93be
+credit.csv: 11059 bytes, fnv c5f8eeba
+equity.bad line 152: bad delta '1.5e3'
+fx.csv line 2: bad id 'fx-0001'
+parsed positions match the built ones: true
+rates: 240 positions in 3 books, 163 long, 77 short, gross 591.8m; swap 89 bond 75 future 76
+equity: 240 positions in 3 books, 159 long, 81 short, gross 609.1m; stock 80 call 75 put 85
+fx: 240 positions in 2 books, 149 long, 91 short, gross 628.7m; spot 72 fwd 101 option 67
+credit: 240 positions in 3 books, 161 long, 79 short, gross 626.7m; cds 134 bond 106
+rates exposures: r2y delta 1.7k/bp gamma 17 gross 6.3k, r5y delta 1.4k/bp gamma -3 gross 7.2k, r10y delta 0.2k/bp gamma 8 gross 7.0k, r30y delta 0.9k/bp gamma 19 gross 6.2k
+equity exposures: spx delta 3.1k/bp gamma 204 gross 11.8k, sx5e delta -0.2k/bp gamma 135 gross 7.6k, nky delta 1.5k/bp gamma 127 gross 7.1k
+fx exposures: eurusd delta 2.5k/bp gamma 83 gross 9.5k, usdjpy delta 1.1k/bp gamma 31 gross 8.6k, gbpusd delta 4.2k/bp gamma 195 gross 10.1k
+credit exposures: ig delta 2.2k/bp gamma 0 gross 13.7k, hy delta -0.1k/bp gamma 0 gross 15.0k; worst jump to default ISS13 -9.3m
+rates VaR99 563.1k, ES97.5 549.8k; books RT-NY 224.1k, RT-LDN 175.1k, RT-TKY 324.6k; diversification 160.8k
+equity VaR99 862.6k, ES97.5 944.8k; books EQ-D1 574.3k, EQ-VOL 152.9k, EQ-ARB 193.7k; diversification 58.3k
+fx VaR99 798.3k, ES97.5 829.8k; books FX-SPOT 408.0k, FX-OPT 496.1k; diversification 105.8k
+credit VaR99 527.2k, ES97.5 2.0m; books CR-IG 544.8k, CR-HY 303.1k, CR-IDX 1.6m; diversification 1.9m
+rates worst days: d104* -767.1k, d236* -594.7k, d068* -563.1k, d204 -463.7k, d031* -463.6k; 4 of 5 on crisis days, 0 days with a default
+equity worst days: d170* -1.6m, d146 -896.2k, d049 -862.6k, d128 -770.8k, d143 -765.9k; 1 of 5 on crisis days, 0 days with a default
+fx worst days: d137 -1.0m, d177 -893.5k, d071 -798.3k, d128 -789.2k, d049 -738.8k; 0 of 5 on crisis days, 0 days with a default
+credit worst days: d236* -6.1m, d031* -4.0m, d068* -527.2k, d104* -523.7k, d204 -427.3k; 4 of 5 on crisis days, 9 days with a default
+rates stress: crash -295.5k, taper 329.7k, rates+200 863.8k
+equity stress: crash -2.0m, taper -876.0k, rates+200 -471.9k
+fx stress: crash -172.1k, taper -283.0k, rates+200 371.6k
+credit stress: crash 334.2k, taper 71.2k, rates+200 35.6k
+rates booked: firm VaR 0.0k -> 563.1k, marginal 563.1k; headroom 636.9k
+equity booked: firm VaR 563.1k -> 706.8k, marginal 143.7k; LB-0001 desk over its 800.0k limit by 62.6k; headroom 493.1k
+fx booked: firm VaR 706.8k -> 1.3m, marginal 662.8k; LB-0002 firm over its 1.2m cap by 169.6k
+credit booked: firm VaR 1.3m -> 1.4m, marginal 75.9k; LB-0003 firm still over cap
+firm VaR 1.4m against 2.7m standalone, diversification 1.3m; 3 tickets
+limits.log: 7 entries, 293 bytes, fnv 59f6f17b
