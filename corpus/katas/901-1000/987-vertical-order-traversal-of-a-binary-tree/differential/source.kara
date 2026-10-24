@@ -1,0 +1,436 @@
+// LeetCode #987: Vertical Order Traversal of a Binary Tree --
+// differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star ----
+
+fn star_walk(t: ref Option[TreeNode], row: i64, col: i64, out: mut ref Vec[(i64, i64, i64)]) {
+    if let Some(node) = t {
+        out.push((col, row, node.val));
+        star_walk(node.left, row + 1, col - 1, mut out);
+        star_walk(node.right, row + 1, col + 1, mut out);
+    }
+}
+
+fn star_vertical_traversal(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut places: Vec[(i64, i64, i64)] = Vec.new();
+    star_walk(root, 0, 0, mut places);
+    places.sort();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut last = 0;
+    for (col, _, val) in places {
+        if out.len() == 0 or col != last {
+            out.push(Vec.new());
+            last = col;
+        }
+        let k = out.len() - 1;
+        out[k].push(val);
+    }
+    out
+}
+
+// ---- bfs ----
+
+fn bfs_vertical_traversal(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut columns: SortedMap[i64, Vec[i64]] = SortedMap.new();
+    let mut level: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        level.push((r, 0));
+    }
+    while level.len() > 0 {
+        let mut row: Vec[(i64, i64)] = Vec.new();
+        let mut next: Vec[(TreeNode, i64)] = Vec.new();
+        for (node, col) in level.iter() {
+            row.push((col, node.val));
+            if let Some(l) = node.left {
+                next.push((l, col - 1));
+            }
+            if let Some(r) = node.right {
+                next.push((r, col + 1));
+            }
+        }
+        row.sort();
+        for (col, val) in row {
+            if not columns.contains_key(col) {
+                columns.insert(col, Vec.new());
+            }
+            columns[col].push(val);
+        }
+        level = next;
+    }
+    columns.values().cloned().collect()
+}
+
+// ---- buckets ----
+
+fn buckets_span(t: ref Option[TreeNode], col: i64, lo: mut ref i64, hi: mut ref i64) {
+    if let Some(node) = t {
+        *lo = (*lo).min(col);
+        *hi = (*hi).max(col);
+        buckets_span(node.left, col - 1, mut lo, mut hi);
+        buckets_span(node.right, col + 1, mut lo, mut hi);
+    }
+}
+
+fn buckets_fill(t: ref Option[TreeNode], row: i64, col: i64, buckets: mut ref Vec[Vec[(i64, i64)]]) {
+    if let Some(node) = t {
+        buckets[col].push((row, node.val));
+        buckets_fill(node.left, row + 1, col - 1, mut buckets);
+        buckets_fill(node.right, row + 1, col + 1, mut buckets);
+    }
+}
+
+fn buckets_vertical_traversal(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    if root.is_none() {
+        return Vec.new();
+    }
+    let mut lo = 0;
+    let mut hi = 0;
+    buckets_span(root, 0, mut lo, mut hi);
+    let mut buckets: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in lo..hi + 1 {
+        buckets.push(Vec.new());
+    }
+    buckets_fill(root, 0, -lo, mut buckets);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for b in buckets.iter_mut() {
+        b.sort();
+        out.push(b.iter().map(|(_, val)| val).collect());
+    }
+    out
+}
+
+// ---- merge ----
+
+fn merge_columns(t: ref Option[TreeNode]) -> (i64, Vec[Vec[(i64, i64)]]) {
+    match t {
+        None => (0, Vec.new()),
+        Some(node) => {
+            let (left_root, left) = merge_columns(node.left);
+            let (right_root, right) = merge_columns(node.right);
+            let mut lo = 0;
+            let mut hi = 0;
+            if left.len() > 0 {
+                lo = lo.min(-left_root - 1);
+                hi = hi.max(left.len() - left_root - 2);
+            }
+            if right.len() > 0 {
+                lo = lo.min(1 - right_root);
+                hi = hi.max(right.len() - right_root);
+            }
+            let mut out: Vec[Vec[(i64, i64)]] = Vec.new();
+            for _ in lo..hi + 1 {
+                out.push(Vec.new());
+            }
+            out[-lo].push((0, node.val));
+            for j in 0..left.len() {
+                for (row, val) in left[j].iter() {
+                    out[j - left_root - 1 - lo].push((row + 1, val));
+                }
+            }
+            for j in 0..right.len() {
+                for (row, val) in right[j].iter() {
+                    out[j - right_root + 1 - lo].push((row + 1, val));
+                }
+            }
+            (-lo, out)
+        }
+    }
+}
+
+fn merge_vertical_traversal(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let (_, cols) = merge_columns(root);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for col in cols.into_iter() {
+        let mut c = col;
+        c.sort();
+        out.push(c.iter().map(|(_, val)| val).collect());
+    }
+    out
+}
+
+// ---- map ----
+
+fn map_vertical_traversal(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut by_column: Map[i64, Vec[(i64, i64)]] = Map.new();
+    let mut stack: Vec[(TreeNode, i64, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 0, 0));
+    }
+    while let Some((node, row, col)) = stack.pop() {
+        by_column.entry(col).or_insert(Vec.new()).push((row, node.val));
+        if let Some(l) = node.left {
+            stack.push((l, row + 1, col - 1));
+        }
+        if let Some(r) = node.right {
+            stack.push((r, row + 1, col + 1));
+        }
+    }
+    let mut cols: Vec[i64] = by_column.keys().cloned().collect();
+    cols.sort();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in cols {
+        let mut places = by_column[c].clone();
+        places.sort();
+        out.push(places.iter().map(|(_, val)| val).collect());
+    }
+    out
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape, each with a value below `values`.
+fn random_tree(n: i64, values: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: next_random(mut seed) % values, left: None, right: None };
+    for _ in 1..n {
+        let node = TreeNode { val: next_random(mut seed) % values, left: None, right: None };
+        attach(root, node, mut seed);
+    }
+    root
+}
+
+fn arm(k: i64, root: ref Option[TreeNode]) -> Vec[Vec[i64]] {
+    if k == 0 {
+        star_vertical_traversal(root)
+    } else if k == 1 {
+        bfs_vertical_traversal(root)
+    } else if k == 2 {
+        buckets_vertical_traversal(root)
+    } else if k == 3 {
+        merge_vertical_traversal(root)
+    } else {
+        map_vertical_traversal(root)
+    }
+}
+
+// Every node as (row, column, value), read off the path to it: a row
+// per step down, a column to the left per step left and to the right
+// per step right.
+fn nodes(t: ref Option[TreeNode], path: ref Vec[bool], out: mut ref Vec[(i64, i64, i64)]) {
+    if let Some(node) = t {
+        let mut col = 0;
+        for right in path.iter() {
+            if right {
+                col += 1;
+            } else {
+                col -= 1;
+            }
+        }
+        out.push((path.len(), col, node.val));
+        let mut down = path.clone();
+        down.push(false);
+        nodes(node.left, down, mut out);
+        let k = down.len() - 1;
+        down[k] = true;
+        nodes(node.right, down, mut out);
+    }
+}
+
+// The statement read literally: for each column from the leftmost to
+// the rightmost, each row from the top down, the values of the nodes at
+// that place in order.
+fn literal(root: ref Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut all: Vec[(i64, i64, i64)] = Vec.new();
+    nodes(root, Vec.new(), mut all);
+    let mut lo = 0;
+    let mut hi = 0;
+    let mut deepest = 0;
+    for (row, col, _) in all.iter() {
+        lo = lo.min(col);
+        hi = hi.max(col);
+        deepest = deepest.max(row);
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for col in lo..hi + 1 {
+        let mut column: Vec[i64] = Vec.new();
+        for row in 0..deepest + 1 {
+            // the values at (row, col), smallest first, by insertion
+            let mut here: Vec[i64] = Vec.new();
+            for (r, c, v) in all.iter() {
+                if r == row and c == col {
+                    let mut at = here.len();
+                    while at > 0 and here[at - 1] > v {
+                        at -= 1;
+                    }
+                    here.insert(at, v);
+                }
+            }
+            for v in here.iter() {
+                column.push(v);
+            }
+        }
+        if column.len() > 0 {
+            out.push(column);
+        }
+    }
+    out
+}
+
+fn mirror(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: node.val, left: mirror(node.right), right: mirror(node.left) }),
+    }
+}
+
+fn shifted(t: ref Option[TreeNode], by: i64) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: node.val + by, left: shifted(node.left, by), right: shifted(node.right, by) }),
+    }
+}
+
+fn leftmost(t: ref Option[TreeNode], col: i64) -> i64 {
+    match t {
+        None => col + 1,
+        Some(node) => col.min(leftmost(node.left, col - 1)).min(leftmost(node.right, col + 1)),
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, root: ref Option[TreeNode], small: bool, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let truth = if small { literal(root) } else { Vec.new() };
+    let mut got: Vec[Vec[Vec[i64]]] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, root));
+    }
+    let mut all: Vec[(i64, i64, i64)] = Vec.new();
+    nodes(root, Vec.new(), mut all);
+    let mut values: Vec[i64] = all.iter().map(|(_, _, v)| v).collect();
+    values.sort();
+    let flipped = mirror(root);
+    let by = next_random(mut seed) % 1000;
+    let moved = shifted(root, by);
+    let top = next_random(mut seed) % 1001;
+    let raised = Some(TreeNode { val: top, left: root.clone(), right: None });
+    let under = 1 - leftmost(root, 0);
+    for k in 0..5 {
+        let a = got[k].clone();
+        // P1: the statement's answer, on the first 3000 trees
+        if small {
+            check(mut tally, 1, a == truth);
+        }
+        // P2: the mirror image gives the columns in reverse
+        let mut reversed = a.clone();
+        reversed.reverse();
+        check(mut tally, 2, arm(k, flipped) == reversed);
+        // P3: every value raised by the same amount raises the answer's
+        let raised_values: Vec[Vec[i64]] = a.iter().map(|col| col.iter().map(|v| v + by).collect()).collect();
+        check(mut tally, 3, arm(k, moved) == raised_values);
+        // P4: every node once, the answer's values those of the tree
+        let mut flat: Vec[i64] = Vec.new();
+        for col in a.iter() {
+            for v in col.iter() {
+                flat.push(v);
+            }
+        }
+        flat.sort();
+        check(mut tally, 4, flat == values);
+        // P5: a new root above, with the tree as its left child, tops the
+        // column to the right of the old root's
+        let mut want = a.clone();
+        if under == want.len() {
+            want.push(vec![top]);
+        } else {
+            want[under].insert(0, top);
+        }
+        check(mut tally, 5, arm(k, raised) == want);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == a {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 987;
+    let mut total = 0;
+    let mut columns = 0;
+    let mut check_sum = 0;
+    // 3000 trees of up to 8 nodes with values below 10, so that places
+    // and values are often shared, against the statement, then 200 of up
+    // to 300 nodes with values up to LeetCode's 1000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most = if small { 8 } else { 300 };
+        let values = if small { 10 } else { 1001 };
+        let n = 1 + next_random(mut seed) % most;
+        let root = Some(random_tree(n, values, mut seed));
+        let got = properties(mut tally, root, small, mut seed);
+        total += n;
+        columns += got.len();
+        for col in got.iter() {
+            check_sum = (check_sum * 31 + col.len()) % 1000000007;
+            for v in col.iter() {
+                check_sum = (check_sum * 31 + v) % 1000000007;
+            }
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 trees of {total} nodes: {columns} columns, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

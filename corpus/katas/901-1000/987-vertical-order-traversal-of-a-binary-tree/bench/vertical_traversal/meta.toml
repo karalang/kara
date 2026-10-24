@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/987-vertical-order-traversal-of-a-binary-tree/bench/vertical_traversal.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "44db797f1"
+extracted_src = "c352d4eb"

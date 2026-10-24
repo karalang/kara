@@ -1,0 +1,209 @@
+// LeetCode #987: Vertical Order Traversal of a Binary Tree -- every
+// node's place, sorted.
+//
+// A walk gives every node its column, row and value; sorted as tuples,
+// they come in the order the answer wants, column by column, top to
+// bottom, and by value where two nodes share a place, so the answer
+// cuts the sorted list where the column changes. O(n log n).
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn walk(t: ref Option[TreeNode], row: i64, col: i64, out: mut ref Vec[(i64, i64, i64)]) {
+    if let Some(node) = t {
+        out.push((col, row, node.val));
+        walk(node.left, row + 1, col - 1, mut out);
+        walk(node.right, row + 1, col + 1, mut out);
+    }
+}
+
+fn vertical_traversal(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut places: Vec[(i64, i64, i64)] = Vec.new();
+    walk(root, 0, 0, mut places);
+    places.sort();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut last = 0;
+    for (col, _, val) in places {
+        if out.len() == 0 or col != last {
+            out.push(Vec.new());
+            last = col;
+        }
+        let k = out.len() - 1;
+        out[k].push(val);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: ref Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape, each with a value below `values`.
+fn random_tree(n: i64, values: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: next_random(mut seed) % values, left: None, right: None };
+    for _ in 1..n {
+        let node = TreeNode { val: next_random(mut seed) % values, left: None, right: None };
+        attach(root, node, mut seed);
+    }
+    root
+}
+
+// The complete tree of n nodes, node i's children nodes 2i + 1 and
+// 2i + 2, each node's value its number.
+fn complete_tree(n: i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for i in 0..n {
+        nodes.push(TreeNode { val: i, left: None, right: None });
+    }
+    for i in 1..n {
+        if i % 2 == 1 {
+            nodes[(i - 1) / 2].left = Some(nodes[i]);
+        } else {
+            nodes[(i - 1) / 2].right = Some(nodes[i]);
+        }
+    }
+    nodes[0]
+}
+
+// A path of n nodes, every child on the left.
+fn left_path(n: i64) -> TreeNode {
+    let mut t = TreeNode { val: 0, left: None, right: None };
+    for i in 1..n {
+        t = TreeNode { val: i % 1001, left: Some(t), right: None };
+    }
+    t
+}
+
+fn fold(check: i64, cols: ref Vec[Vec[i64]]) -> i64 {
+    let mut c = check;
+    for col in cols.iter() {
+        c = (c * 31 + col.len()) % 1000000007;
+        for v in col.iter() {
+            c = (c * 31 + v) % 1000000007;
+        }
+    }
+    c
+}
+
+fn level_order_text(vals: ref Vec[Option[i64]]) -> String {
+    let parts: Vec[String] = vals.iter().map(|v| match v {
+        Some(x) => f"{x}",
+        None => "null".to_string(),
+    }).collect();
+    "[" + parts.join(", ") + "]"
+}
+
+fn cols_text(cols: ref Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = cols.iter().map(|col| {
+        let vals: Vec[String] = col.iter().map(|v| f"{v}").collect();
+        "[" + vals.join(", ") + "]"
+    }).collect();
+    "[" + parts.join(", ") + "]"
+}
+
+fn summary(cols: ref Vec[Vec[i64]]) -> String {
+    let mut nodes = 0;
+    let mut widest = 0;
+    for col in cols.iter() {
+        nodes += col.len();
+        widest = widest.max(col.len());
+    }
+    f"{nodes} nodes in {cols.len()} columns, the widest {widest}, checksum {fold(0, cols)}"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[Option[i64]]] = vec![
+        vec![Some(3), Some(9), Some(20), None, None, Some(15), Some(7)],
+        vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)],
+        vec![Some(1), Some(2), Some(3), Some(4), Some(6), Some(5), Some(7)],
+        vec![Some(0)],
+        vec![Some(5), Some(4), None, Some(3), None, Some(2)],
+        vec![Some(1), None, Some(2), None, Some(3)],
+        vec![Some(1), Some(2), None, None, Some(3), Some(4)],
+        vec![Some(1), Some(2), Some(3), None, Some(9), Some(8)],
+        vec![Some(7), Some(7), Some(7), Some(7), Some(7), Some(7), Some(7)],
+        vec![Some(3), Some(1), Some(4), Some(0), Some(2), Some(2)],
+    ];
+    for c in cases.iter() {
+        println(f"{level_order_text(c)} -> {cols_text(vertical_traversal(from_level_order(c)))}");
+    }
+    println(f"the complete tree of 1000 nodes: {summary(vertical_traversal(Some(complete_tree(1000))))}");
+    println(f"a path of 1000 nodes to the left: {summary(vertical_traversal(Some(left_path(1000))))}");
+    // random trees: 300 of up to 8 nodes with values below 10, 3000 of up
+    // to 100 and three of LeetCode's largest, 1000 nodes
+    let mut seed = 987;
+    for (count, most, values) in vec![(300, 8, 10), (3000, 100, 1001), (3, 1000, 1001)] {
+        let mut nodes = 0;
+        let mut columns = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if count == 3 { most } else { 1 + next_random(mut seed) % most };
+            let cols = vertical_traversal(Some(random_tree(n, values, mut seed)));
+            nodes += n;
+            columns += cols.len();
+            check = fold(check, cols);
+        }
+        println(f"{count} random trees of {nodes} nodes, values below {values}: {columns} columns, checksum {check}");
+    }
+}
