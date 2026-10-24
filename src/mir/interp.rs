@@ -668,6 +668,7 @@ fn run_with(
             | 1,
         sorted_tables: Default::default(),
         table_key_ty: Default::default(),
+        walk_perm: (0, 1, 0),
         table_holes: Default::default(),
         deque_front: Default::default(),
         flags: Vec::new(),
@@ -1074,6 +1075,9 @@ struct Interp<'a> {
     /// the type's own `cmp` (B-2026-10-06-109), or a `u128` key unsigned
     /// (B-2026-10-19-22).
     table_key_ty: rustc_hash::FxHashMap<AllocId, Ty>,
+    /// The last [`karac_hash::walk_perm`] asked for, as `(n, a, c)`: a
+    /// walk asks it on every step, for the same `n`.
+    walk_perm: (u64, u64, u64),
     /// The borrow flags currently held, by field address.
     flags: Vec<(Addr, Flag)>,
     /// Resumes of a pending task root.
@@ -6652,7 +6656,7 @@ impl<'a> Interp<'a> {
             ("entry_at", [Value::Int(i)]) => {
                 // The `i`th entry in iteration order, for a borrowing `for`:
                 // a `ref (K, V)` into a Map, a `ref T` into a Set.
-                let i = self.table_slot(id, *i)?;
+                let i = self.walk_slot(id, *i, sorted)?;
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
                     path: Path::from_slice(&[i as u64]),
@@ -6696,7 +6700,7 @@ impl<'a> Interp<'a> {
                 let by_ref = matches!(self.tys.kind(e), TyKind::Ref(_));
                 // Plain keys (or values) are copied straight out of the
                 // entries.
-                let slots = self.table_slots(id)?;
+                let slots = self.table_walk(id, sorted)?;
                 if !by_ref && self.tys.is_copy(part_ty) {
                     let elems = self.vec_elems(id)?;
                     let copied: Option<Vec<Value>> = slots
@@ -6715,7 +6719,7 @@ impl<'a> Interp<'a> {
                     }
                 }
                 let mut out = Vec::with_capacity(slots.len());
-                for i in slots {
+                for &i in slots.iter() {
                     let at = Addr {
                         root: Root::Heap(id),
                         path: Path::from_slice(&[i as u64, part]),
@@ -6948,10 +6952,10 @@ impl<'a> Interp<'a> {
                 // Clones of entries as `(K, V)` tuples: all of them, the
                 // keys in `lo..hi` / `lo..=hi`, the greatest key at most / least key
                 // at least `k`, or the first / last.
-                let slots = self.table_slots(id)?;
+                let slots = self.table_walk(id, sorted)?;
                 let n = slots.len();
                 let mut vals = Vec::with_capacity(n + rest.len());
-                for &i in &slots {
+                for &i in slots.iter() {
                     vals.push(self.entry_key(id, i, true)?);
                 }
                 // The bounds are ordered with the keys, so a user `cmp`
@@ -7070,7 +7074,7 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box(&vname, Value::Agg(out)))
             }
             ("clear", []) => {
-                for i in self.table_slots(id)? {
+                for i in self.table_walk(id, sorted)? {
                     let at = Addr {
                         root: Root::Heap(id),
                         path: Path::from_slice(&[i as u64]),
@@ -7091,7 +7095,7 @@ impl<'a> Interp<'a> {
                 // Every entry moved out into a `Vec`, in iteration order
                 // (a map's as its `(key, value)` pair); the table is left
                 // empty.
-                let out = self.table_entries(id)?;
+                let out = self.walk_entries(id, sorted)?;
                 self.vec_elems(id)?.clear();
                 self.key_index.remove(&id);
                 self.table_holes.remove(&id);
@@ -8011,6 +8015,52 @@ impl<'a> Interp<'a> {
         let slots = self.table_slots(id)?;
         let elems = self.vec_elems(id)?;
         Ok(slots.iter().map(|&i| elems[i].clone()).collect())
+    }
+
+    /// The slots of table `id`'s entries in iteration order, the order
+    /// `entry_at`, `keys`, `Display` and the table's drop all walk. A
+    /// sorted table walks them as they lie, in key order. A hashed one
+    /// walks them in the seeded order [`karac_hash::walk_perm`] gives,
+    /// which `runtime/src/mir_map.rs` walks too: it changes from one
+    /// process to the next, and a pinned `KARAC_HASH_SEED` gives one order
+    /// on both backends (collections.md § Map, B-2026-10-23-19).
+    fn table_walk(&mut self, id: AllocId, sorted: bool) -> R<Vec<usize>> {
+        let slots = self.table_slots(id)?;
+        if sorted {
+            return Ok(slots);
+        }
+        let n = slots.len() as u64;
+        let (a, c) = self.walk_perm(n);
+        Ok((0..n)
+            .map(|i| slots[karac_hash::walk_index(i, n, a, c) as usize])
+            .collect())
+    }
+
+    /// Table `id`'s entries, in [`Interp::table_walk`] order.
+    fn walk_entries(&mut self, id: AllocId, sorted: bool) -> R<Vec<Value>> {
+        let slots = self.table_walk(id, sorted)?;
+        let elems = self.vec_elems(id)?;
+        Ok(slots.iter().map(|&i| elems[i].clone()).collect())
+    }
+
+    /// The slot of table `id`'s `i`th entry in [`Interp::table_walk`]
+    /// order, for `entry_at`.
+    fn walk_slot(&mut self, id: AllocId, i: i128, sorted: bool) -> R<usize> {
+        let n = self.table_len(id)? as u64;
+        if sorted || !(0..n as i128).contains(&i) {
+            return self.table_slot(id, i);
+        }
+        let (a, c) = self.walk_perm(n);
+        self.table_slot(id, karac_hash::walk_index(i as u64, n, a, c) as i128)
+    }
+
+    /// [`karac_hash::walk_perm`]`(n)`, remembered for the last `n`.
+    fn walk_perm(&mut self, n: u64) -> (u64, u64) {
+        if self.walk_perm.0 != n {
+            let (a, c) = karac_hash::walk_perm(n);
+            self.walk_perm = (n, a, c);
+        }
+        (self.walk_perm.1, self.walk_perm.2)
     }
 
     /// The slot of table `id`'s `i`th entry, for `entry_at`.
@@ -9600,7 +9650,11 @@ impl<'a> Interp<'a> {
             ) => {
                 // `{k: v, ...}` in iteration order, with no type name (the
                 // 2026-10-08 display decision).
-                let entries = self.table_entries(*id)?;
+                let sorted = matches!(
+                    self.tys.kind(ty),
+                    TyKind::Intrinsic(IntrinsicTy::SortedMap(..))
+                );
+                let entries = self.walk_entries(*id, sorted)?;
                 let mut parts = Vec::with_capacity(entries.len());
                 for e in &entries {
                     let Value::Agg(pair) = e else {
@@ -9616,7 +9670,11 @@ impl<'a> Interp<'a> {
                 TyKind::Intrinsic(IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e)),
                 Value::Box(id),
             ) => {
-                let fs = self.table_entries(*id)?;
+                let sorted = matches!(
+                    self.tys.kind(ty),
+                    TyKind::Intrinsic(IntrinsicTy::SortedSet(_))
+                );
+                let fs = self.walk_entries(*id, sorted)?;
                 let tys = vec![e; fs.len()];
                 format!("{{{}}}", list(self, &fs, &tys)?.join(", "))
             }
@@ -9886,7 +9944,7 @@ impl<'a> Interp<'a> {
                 }
             }
             (TyKind::Intrinsic(IntrinsicTy::Set(e)), Value::Box(id)) => {
-                let fs = self.table_entries(*id).ok()?;
+                let fs = self.walk_entries(*id, false).ok()?;
                 let shown = list(self, &fs, &vec![e; fs.len()])?;
                 match shown.is_empty() {
                     true => "Set.new()".into(),
@@ -9897,7 +9955,11 @@ impl<'a> Interp<'a> {
                 TyKind::Intrinsic(IntrinsicTy::Map(kt, vt) | IntrinsicTy::SortedMap(kt, vt)),
                 Value::Box(id),
             ) => {
-                let entries = self.table_entries(*id).ok()?;
+                let sorted = matches!(
+                    self.tys.kind(ty),
+                    TyKind::Intrinsic(IntrinsicTy::SortedMap(..))
+                );
+                let entries = self.walk_entries(*id, sorted).ok()?;
                 let mut parts = Vec::with_capacity(entries.len());
                 for e in &entries {
                     let Value::Agg(pair) = e else {
@@ -11505,11 +11567,11 @@ impl<'a> Interp<'a> {
                 }
                 other => err(format!("a function-value place holds {other:?}")),
             },
-            TyKind::Intrinsic(k) => {
+            TyKind::Intrinsic(kind) => {
                 let Value::Box(id) = v else {
                     return err(format!("a {} place holds no box", self.tys.display(ty)));
                 };
-                match k {
+                match kind {
                     IntrinsicTy::String => {}
                     // Elements that own nothing are not visited.
                     IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e) if !self.needs_drop(e) => {}
@@ -11526,11 +11588,12 @@ impl<'a> Interp<'a> {
                             self.drop_at(&root.child(i as u64), e)?;
                         }
                     }
-                    // Entries in insertion order, the interpreter's
-                    // (unspecified) iteration order; within an entry the
-                    // key drops before the value (core-semantics §7).
+                    // Entries in iteration order ([`Interp::table_walk`]);
+                    // within an entry the key drops before the value
+                    // (core-semantics §7).
                     IntrinsicTy::Map(k, val) | IntrinsicTy::SortedMap(k, val) => {
-                        for i in self.table_slots(id)? {
+                        let sorted = matches!(kind, IntrinsicTy::SortedMap(..));
+                        for i in self.table_walk(id, sorted)? {
                             let entry = Addr {
                                 root: Root::Heap(id),
                                 path: Path::from_slice(&[i as u64]),
@@ -11540,7 +11603,8 @@ impl<'a> Interp<'a> {
                         }
                     }
                     IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e) => {
-                        for i in self.table_slots(id)? {
+                        let sorted = matches!(kind, IntrinsicTy::SortedSet(_));
+                        for i in self.table_walk(id, sorted)? {
                             let at = Addr {
                                 root: Root::Heap(id),
                                 path: Path::from_slice(&[i as u64]),

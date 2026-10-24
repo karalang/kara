@@ -428,8 +428,57 @@ impl<const C: usize, const D: usize> State<C, D> {
     }
 }
 
+/// The order a hashed `Map` or `Set` with `n` live entries walks them in.
+/// collections.md § Map says iteration order is unspecified and varies
+/// between runs. The `i`th entry of a walk is the table's
+/// [`walk_index`]`(i, n, a, c)`th live entry, for the `(a, c)` this
+/// returns. Both come from the process seed, so the order changes from one
+/// process to the next and `KARAC_HASH_SEED` pins it. `a` is coprime to `n`,
+/// so a walk visits every entry exactly once. The interpreter and the
+/// runtime both walk through this one function (B-2026-10-23-19).
+pub fn walk_perm(n: u64) -> (u64, u64) {
+    if n <= 1 {
+        return (1, 0);
+    }
+    let gcd = |mut x: u64, mut y: u64| {
+        while y != 0 {
+            (x, y) = (y, x % y);
+        }
+        x
+    };
+    let mut a = (hash_u64(WALK_A) % n).max(1);
+    while gcd(a, n) != 1 {
+        a = if a + 1 == n { 1 } else { a + 1 };
+    }
+    (a, hash_u64(WALK_C) % n)
+}
+
+/// The live index the `i`th step of a walk over `n` entries visits, under
+/// [`walk_perm`]`(n) = (a, c)`.
+#[inline]
+pub fn walk_index(i: u64, n: u64, a: u64, c: u64) -> u64 {
+    ((u128::from(a) * u128::from(i) + u128::from(c)) % u128::from(n)) as u64
+}
+
+/// The words [`walk_perm`] hashes for its multiplier and its offset.
+const WALK_A: u64 = 0x7761_6c6b_2d61; // "walk-a"
+const WALK_C: u64 = 0x7761_6c6b_2d63; // "walk-c"
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn walk_perm_visits_every_entry_once() {
+        for n in 0..200u64 {
+            let (a, c) = walk_perm(n);
+            let mut seen = vec![false; n as usize];
+            for i in 0..n {
+                let j = walk_index(i, n, a, c) as usize;
+                assert!(!seen[j], "n = {n}: index {j} visited twice");
+                seen[j] = true;
+            }
+        }
+    }
+
     use super::*;
 
     /// The implementation is checked against an ORACLE, not against constants
