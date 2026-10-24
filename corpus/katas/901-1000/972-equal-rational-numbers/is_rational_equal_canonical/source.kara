@@ -1,0 +1,273 @@
+// LeetCode #972: Equal Rational Numbers -- one way to write each number.
+//
+// No arithmetic on values: bring each string to a canonical form and
+// compare the forms. A missing repeating part is "0". The repeating block
+// is cut to its shortest period ("1212" is "12"), then started as early
+// as it can be, while the digit before it equals its last digit ("0.1(21)"
+// is "0.(12)"). A block of 9 is the same as adding one in the last place
+// before it and repeating 0 ("0.19(9)" is "0.2(0)"), after which trailing
+// zeros roll into the block the same way. What is left is unique.
+
+// (integer digits, non-repeating digits, repeating digits); the
+// repeating part is "0" when s has none.
+fn split(s: String) -> (String, String, String) {
+    match s.split_once(".") {
+        None => (s.clone(), String.new(), String.from("0")),
+        Some((int, rest)) => match rest.split_once("(") {
+            None => (int.to_string(), rest.to_string(), String.from("0")),
+            Some((non, rep)) => (int.to_string(), non.to_string(), rep.strip_suffix(")").unwrap().to_string()),
+        },
+    }
+}
+
+// The shortest block whose repetitions make rep.
+fn shortest(rep: String) -> String {
+    let b = rep.bytes();
+    let n = b.len();
+    for p in 1..n {
+        if n % p == 0 {
+            let mut repeats = true;
+            for i in p..n {
+                if b[i] != b[i - p] {
+                    repeats = false;
+                }
+            }
+            if repeats {
+                return rep.substring(0, p);
+            }
+        }
+    }
+    rep.clone()
+}
+
+// Start the block one digit earlier while the digit before it is the
+// block's last.
+fn roll_back(non: mut ref String, rep: mut ref String) {
+    while non.len() > 0 and non.bytes()[non.len() - 1] == rep.bytes()[rep.len() - 1] {
+        let last = non.pop().unwrap();
+        let mut moved = String.new();
+        moved.push(last);
+        moved.push_str(rep.substring(0, rep.len() - 1));
+        *rep = moved;
+    }
+}
+
+// int.non plus one in its last place, as new integer and non-repeating
+// digits.
+fn bump(int: String, non: String) -> (String, String) {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in int.bytes() {
+        digits.push(c);
+    }
+    for c in non.bytes() {
+        digits.push(c);
+    }
+    let mut i = digits.len() - 1;
+    let mut carry = true;
+    while carry and i >= 0 {
+        if digits[i] == b'9' {
+            digits[i] = b'0';
+            i -= 1;
+        } else {
+            digits[i] = digits[i] + 1;
+            carry = false;
+        }
+    }
+    let mut text = String.new();
+    if carry {
+        text.push_str("1");
+    }
+    text.push_str(String.from_utf8(digits).unwrap());
+    let cut = text.len() - non.len();
+    (text.substring(0, cut), text.substring(cut))
+}
+
+fn canonical(s: String) -> (String, String, String) {
+    let mut (int, non, rep) = split(s);
+    rep = shortest(rep);
+    roll_back(mut non, mut rep);
+    if rep == "9" {
+        let (i, n) = bump(int, non);
+        int = i;
+        non = n;
+        rep = String.from("0");
+        roll_back(mut non, mut rep);
+    }
+    (int, non, rep)
+}
+
+fn is_rational_equal(s: String, t: String) -> bool {
+    canonical(s) == canonical(t)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digits(len: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push_str(f"{next_random(mut seed) % 10}");
+    }
+    s
+}
+
+// A number as LeetCode writes it: its integer part, non-repeating and
+// repeating digits ("" when there are none), and whether a bare '.'
+// follows an integer with neither.
+struct Num {
+    int: i64,
+    non: String,
+    rep: String,
+    dot: bool,
+}
+
+fn text(x: ref Num) -> String {
+    let mut s = f"{x.int}";
+    if x.dot or x.non.len() > 0 or x.rep.len() > 0 {
+        s.push_str(".");
+    }
+    s.push_str(x.non);
+    if x.rep.len() > 0 {
+        s.push_str("(");
+        s.push_str(x.rep);
+        s.push_str(")");
+    }
+    s
+}
+
+fn random_num(seed: mut ref i64) -> Num {
+    let len = 1 + next_random(mut seed) % 4;
+    let mut int = next_random(mut seed) % 10;
+    for _ in 1..len {
+        int = int * 10 + next_random(mut seed) % 10;
+    }
+    let non = digits(next_random(mut seed) % 5, mut seed);
+    let rep = if next_random(mut seed) % 3 == 0 { String.new() } else { digits(1 + next_random(mut seed) % 4, mut seed) };
+    Num { int: int, non: non, rep: rep, dot: next_random(mut seed) % 2 == 0 }
+}
+
+// The same number written another way, by one to three rewrites that
+// keep every part within LeetCode's lengths.
+fn variant(x: ref Num, seed: mut ref i64) -> Num {
+    let mut int = x.int;
+    let mut non = x.non.clone();
+    let mut rep = x.rep.clone();
+    let mut dot = x.dot;
+    let steps = 1 + next_random(mut seed) % 3;
+    for _ in 0..steps {
+        let kind = next_random(mut seed) % 7;
+        let r = rep.len();
+        if kind == 0 and r > 0 and non.len() < 4 {
+            // 0.(12) is 0.1(21)
+            non.push_str(rep.substring(0, 1));
+            rep = rep.substring(1) + rep.substring(0, 1);
+        } else if kind == 1 and r > 0 and 2 * r <= 4 {
+            // 0.(12) is 0.(1212)
+            rep = rep.clone() + rep.clone();
+        } else if kind == 2 and r == 0 and non.len() < 4 {
+            // 0.5 is 0.50
+            non.push_str("0");
+        } else if kind == 3 and r == 0 {
+            // 0.5 is 0.5(0)
+            rep = String.from("0");
+        } else if kind == 4 and r == 0 {
+            // 0.5 is 0.4(9), and 3 is 2.(9)
+            if non.len() > 0 and non.bytes()[non.len() - 1] != b'0' {
+                let last = non.bytes()[non.len() - 1] as i64 - b'0' as i64;
+                non.truncate(non.len() - 1);
+                non.push_str(f"{last - 1}");
+                rep = String.from("9");
+            } else if non.len() == 0 and int > 0 {
+                int -= 1;
+                rep = String.from("9");
+            }
+        } else if kind == 5 and (rep == "0" or rep == "00" or rep == "000" or rep == "0000") {
+            // 0.5(0) is 0.5
+            rep = String.new();
+            dot = true;
+        } else if kind == 6 and r % 2 == 0 and r > 0 and rep.substring(0, r / 2) == rep.substring(r / 2) {
+            // 0.(1212) is 0.(12)
+            rep = rep.substring(0, r / 2);
+        }
+    }
+    Num { int: int, non: non, rep: rep, dot: dot }
+}
+
+// s with one digit changed.
+fn nudge(s: String, seed: mut ref i64) -> String {
+    let b = s.bytes();
+    let mut places: Vec[i64] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] >= b'0' and b[i] <= b'9' {
+            places.push(i);
+        }
+    }
+    let at = places[next_random(mut seed) % places.len()];
+    let old = b[at] as i64 - b'0' as i64;
+    let mut new = next_random(mut seed) % 9;
+    if new >= old {
+        new += 1;
+    }
+    // keep a multi-digit integer part free of a leading zero
+    if at == 0 and new == 0 and b.len() > 1 and b[1] >= b'0' and b[1] <= b'9' {
+        new = 1 + old % 9;
+        if new == old {
+            new = 9;
+        }
+    }
+    s.substring(0, at) + f"{new}" + s.substring(at + 1)
+}
+
+// A pair of strings: a third the same number written two ways, a third
+// one of those with a digit changed, and a third two random numbers.
+fn random_pair(c: i64, seed: mut ref i64) -> (String, String) {
+    let x = random_num(mut seed);
+    if c % 3 == 0 {
+        (text(x), text(variant(x, mut seed)))
+    } else if c % 3 == 1 {
+        let y = text(variant(x, mut seed));
+        (text(x), nudge(y, mut seed))
+    } else {
+        (text(x), text(random_num(mut seed)))
+    }
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(String, String)] = vec![
+        (String.from("0.(52)"), String.from("0.5(25)")),
+        (String.from("0.1666(6)"), String.from("0.166(66)")),
+        (String.from("0.9(9)"), String.from("1.")),
+        (String.from("1"), String.from("1.0")),
+        (String.from("0"), String.from("0.(0)")),
+        (String.from("9998.(9)"), String.from("9999")),
+        (String.from("0.08(9)"), String.from("0.09")),
+        (String.from("1.(123)"), String.from("1.1(231)")),
+        (String.from("0.(12)"), String.from("0.(21)")),
+        (String.from("3.14"), String.from("3.1(4)")),
+        (String.from("0.(9)"), String.from("0.9(99)")),
+        (String.from("12.34(0)"), String.from("12.3400")),
+    ];
+    for (s, t) in cases {
+        println(f"{s} and {t}: {is_rational_equal(s, t)}");
+    }
+    // random pairs, 300 and then 3000
+    let mut seed = 972;
+    for count in vec![300, 3000] {
+        let mut equal = 0;
+        let mut check = 0;
+        for c in 0..count {
+            let (s, t) = random_pair(c, mut seed);
+            let same = is_rational_equal(s, t);
+            if same {
+                equal += 1;
+            }
+            check = (check * 2 + if same { 1 } else { 0 }) % 1000000007;
+        }
+        println(f"{count} random pairs: {equal} equal, checksum {check}");
+    }
+}

@@ -1,0 +1,14 @@
+0.(52) and 0.5(25): true
+0.1666(6) and 0.166(66): true
+0.9(9) and 1.: true
+1 and 1.0: true
+0 and 0.(0): true
+9998.(9) and 9999: true
+0.08(9) and 0.09: true
+1.(123) and 1.1(231): true
+0.(12) and 0.(21): false
+3.14 and 3.1(4): false
+0.(9) and 0.9(99): true
+12.34(0) and 12.3400: true
+300 random pairs: 100 equal, checksum 755457580
+3000 random pairs: 1000 equal, checksum 808971705
