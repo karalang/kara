@@ -1,0 +1,277 @@
+// LeetCode #951: Flip Equivalent Binary Trees -- both pairings tried.
+//
+// Two trees are flip equivalent when both are empty, or their roots hold
+// the same value and their children are flip equivalent either as they
+// stand (left with left, right with right) or crossed (left with right,
+// right with left). Try both. The values are unique, so at most one
+// pairing can match at each node and the other fails at its first
+// comparison. O(n) time, O(height) stack.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn flip_equiv(root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    match (root1, root2) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            a.val == b.val
+                and ((flip_equiv(a.left, b.left) and flip_equiv(a.right, b.right))
+                    or (flip_equiv(a.left, b.right) and flip_equiv(a.right, b.left)))
+        }
+        _ => false,
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// A random tree holding the values in turn.
+fn random_tree(values: ref Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
+    if values.len() == 0 {
+        return None;
+    }
+    let root = TreeNode { val: values[0], left: None, right: None };
+    for i in 1..values.len() {
+        attach(root, TreeNode { val: values[i], left: None, right: None }, mut seed);
+    }
+    Some(root)
+}
+
+// A copy with each value v renamed to rename[v], and each node's children
+// swapped with chance one in two.
+fn flipped_copy(t: ref Option[TreeNode], rename: ref Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => {
+            let l = flipped_copy(node.left, rename, mut seed);
+            let r = flipped_copy(node.right, rename, mut seed);
+            if next_random(mut seed) % 2 == 0 {
+                Some(TreeNode { val: rename[node.val], left: l, right: r })
+            } else {
+                Some(TreeNode { val: rename[node.val], left: r, right: l })
+            }
+        }
+    }
+}
+
+// Take one leaf off at random, other than the root; the leaf taken, or
+// None when the root is alone.
+fn detach_leaf(root: TreeNode, seed: mut ref i64) -> Option[TreeNode] {
+    let mut parents: Vec[TreeNode] = Vec.new();
+    let mut sides: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = vec![root];
+    while let Some(node) = stack.pop() {
+        if let Some(l) = node.left {
+            if l.left.is_none() and l.right.is_none() {
+                parents.push(node);
+                sides.push(0);
+            } else {
+                stack.push(l);
+            }
+        }
+        if let Some(r) = node.right {
+            if r.left.is_none() and r.right.is_none() {
+                parents.push(node);
+                sides.push(1);
+            } else {
+                stack.push(r);
+            }
+        }
+    }
+    if parents.len() == 0 {
+        return None;
+    }
+    let k = next_random(mut seed) % parents.len();
+    let p = parents[k];
+    let leaf = if sides[k] == 0 { p.left } else { p.right };
+    if sides[k] == 0 {
+        p.left = None;
+    } else {
+        p.right = None;
+    }
+    leaf
+}
+
+fn identity() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..100 {
+        v.push(i);
+    }
+    v
+}
+
+// The first n of the values 0 to 99 shuffled.
+fn some_values(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v = identity();
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (100 - i);
+        v.swap(i, j);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        out.push(v[i]);
+    }
+    out
+}
+
+// The second tree of a pair, by kind: 0 a flipped copy, 1 a flipped copy
+// with two values swapped, 2 a flipped copy with a leaf moved, 3 another
+// random tree of the same values, 4 a flipped copy with a leaf taken off
+// (none left when the tree is one node).
+fn partner(t: ref Option[TreeNode], values: ref Vec[i64], kind: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let mut rename = identity();
+    if kind == 1 and values.len() >= 2 {
+        let a = values[next_random(mut seed) % values.len()];
+        let b = values[next_random(mut seed) % values.len()];
+        rename[a] = b;
+        rename[b] = a;
+    }
+    if kind == 3 {
+        let mut shuffled = values.clone();
+        for i in 0..shuffled.len() {
+            let j = i + next_random(mut seed) % (shuffled.len() - i);
+            shuffled.swap(i, j);
+        }
+        if shuffled.len() > 0 {
+            // keep the root's value, as a different root is an easy no
+            for i in 0..shuffled.len() {
+                if shuffled[i] == values[0] {
+                    shuffled.swap(0, i);
+                }
+            }
+        }
+        return random_tree(shuffled, mut seed);
+    }
+    let copy = flipped_copy(t, rename, mut seed);
+    if let Some(root) = copy {
+        if kind == 2 {
+            if let Some(leaf) = detach_leaf(root, mut seed) {
+                attach(root, leaf, mut seed);
+            }
+        } else if kind == 4 {
+            if root.left.is_none() and root.right.is_none() {
+                return None;
+            }
+            let _ = detach_leaf(root, mut seed);
+        }
+    }
+    copy
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(Vec[Option[i64]], Vec[Option[i64]])] = vec![
+        (vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), None, None, None, Some(7), Some(8)],
+         vec![Some(1), Some(3), Some(2), None, Some(6), Some(4), Some(5), None, None, None, None, Some(8), Some(7)]),
+        (vec![], vec![]),
+        (vec![], vec![Some(1)]),
+        (vec![Some(1)], vec![Some(1)]),
+        (vec![Some(1)], vec![Some(2)]),
+        (vec![Some(1), Some(2)], vec![Some(1), None, Some(2)]),
+        (vec![Some(1), Some(2), Some(3), Some(4)], vec![Some(1), Some(3), Some(2), None, None, Some(4)]),
+        (vec![Some(1), Some(2), Some(3), Some(4)], vec![Some(1), Some(3), Some(2), Some(4)]),
+        (vec![Some(0), Some(1), Some(2)], vec![Some(0), Some(1), None, Some(2)]),
+    ];
+    for i in 0..cases.len() {
+        let (a, b) = cases[i].clone();
+        println(f"case {i + 1}: {flip_equiv(from_level_order(a), from_level_order(b))}");
+    }
+    // 300 random pairs, the first tree of 0 to 12 nodes
+    let mut seed = 951;
+    let mut nodes = 0;
+    let mut yes = 0;
+    let mut by_kind: Vec[i64] = vec![0, 0, 0, 0, 0];
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 13;
+        let values = some_values(n, mut seed);
+        let t = random_tree(values, mut seed);
+        let kind = next_random(mut seed) % 5;
+        let u = partner(t, values, kind, mut seed);
+        nodes += n;
+        let same = flip_equiv(t, u);
+        let bit = if same { 1 } else { 0 };
+        yes += bit;
+        by_kind[kind] += bit;
+        check = (check * 31 + bit + 1) % 1000000007;
+    }
+    println(f"300 random pairs, the first trees of {nodes} nodes: {yes} flip equivalent ({by_kind[0]}, {by_kind[1]}, {by_kind[2]}, {by_kind[3]}, {by_kind[4]} by kind), checksum {check}");
+    // LeetCode's largest trees, 100 nodes, one pair of each kind
+    for kind in 0..5 {
+        let values = some_values(100, mut seed);
+        let t = random_tree(values, mut seed);
+        let u = partner(t, values, kind, mut seed);
+        println(f"100 nodes, kind {kind}: {flip_equiv(t, u)}");
+    }
+    // a path of 100 nodes, flipped at every node
+    let mut lefts = TreeNode { val: 99, left: None, right: None };
+    let mut rights = TreeNode { val: 99, left: None, right: None };
+    let mut k = 98;
+    while k >= 0 {
+        lefts = TreeNode { val: k, left: Some(lefts), right: None };
+        rights = TreeNode { val: k, left: None, right: Some(rights) };
+        k -= 1;
+    }
+    println(f"a path of 100 nodes and its mirror: {flip_equiv(Some(lefts), Some(rights))}");
+}

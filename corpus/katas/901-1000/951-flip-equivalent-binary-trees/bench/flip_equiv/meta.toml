@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/951-flip-equivalent-binary-trees/bench/flip_equiv.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "8b7ea66a7"
+extracted_src = "b996ae9d"
