@@ -1,5 +1,5 @@
 //! A hashed table's key is hashed by compiled code, not the runtime
-//! (`karac_mir_map_find_hv` / `_insert_hv`): a scalar key's hash is a
+//! (`karac_mir_map_lookup_hv` / `_insert_hv`): a scalar key's hash is a
 //! pure call, so a `get` and the `insert` after it hash it once (kata
 //! 219). The tables still agree with the interpreter, removals included.
 #![cfg(feature = "llvm")]
@@ -76,7 +76,9 @@ fn mir_map_hashes_a_key_in_compiled_code() {
     let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
     assert_eq!(interp.output, WANT);
     let ir = ir(SRC);
-    assert!(ir.contains("@karac_mir_map_find_hv("), "{ir}");
+    // An `i64` key is probed in line; a `String` one in the runtime.
+    assert!(ir.contains("@karac_mir_map_lookup_hv("), "{ir}");
+    assert!(!ir.contains("@karac_mir_map_find_hv("), "{ir}");
     assert!(ir.contains("@karac_mir_map_insert_hv("), "{ir}");
     assert!(
         ir.contains("memory(none)"),

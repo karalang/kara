@@ -17,15 +17,26 @@ pub type HashFn = unsafe extern "C" fn(*const u8) -> u64;
 pub type EqFn = unsafe extern "C" fn(*const u8, *const u8) -> bool;
 pub type CmpFn = unsafe extern "C" fn(*const u8, *const u8) -> i32;
 
+/// The first six fields are read by compiled code, which probes a table
+/// of scalar keys and counts and walks its entries in line
+/// (`src/backend/mir/table.rs`): each is a pointer-sized word, the `k`-th
+/// at `k` words, as the assertions after [`NO_PAIR`] check.
+#[repr(C)]
 pub struct MirMap {
-    entry_size: usize,
     buf: *mut u8,
+    entry_size: usize,
     /// The slots in use, removed ones included: an index is a live
     /// entry's place among the live entries, and a slot its place in
     /// `buf`. Removing from a hashed table leaves a hole rather than
     /// shifting what follows (B-2026-10-12-4); a sorted table never has
     /// one, as bisection needs its entries contiguous.
     slots: usize,
+    /// How many slots are holes (`dead` says which).
+    holes: usize,
+    /// `index`'s cells and their number, kept in step with it for
+    /// compiled code (0 cells while it is empty).
+    cells: *const u64,
+    ncells: usize,
     cap: usize,
     /// Each slot's hash, for the hashed kinds.
     hashes: Vec<u64>,
@@ -37,9 +48,7 @@ pub struct MirMap {
     index: Vec<u64>,
     /// The cells of `index` that are not [`EMPTY`].
     index_used: usize,
-    /// Which slots are holes, and how many.
     dead: Vec<bool>,
-    holes: usize,
     /// A Fenwick tree over `cap` slots counting the live ones, kept only
     /// while there are holes: index to slot and back in `O(log n)`.
     live: Vec<i64>,
@@ -54,6 +63,18 @@ pub struct MirMap {
 }
 
 const NO_PAIR: u64 = u64::MAX;
+
+// The words compiled code reads, in order.
+const _: () = {
+    let w = std::mem::size_of::<usize>();
+    assert!(std::mem::size_of::<*const u64>() == w);
+    assert!(std::mem::offset_of!(MirMap, buf) == 0);
+    assert!(std::mem::offset_of!(MirMap, entry_size) == w);
+    assert!(std::mem::offset_of!(MirMap, slots) == 2 * w);
+    assert!(std::mem::offset_of!(MirMap, holes) == 3 * w);
+    assert!(std::mem::offset_of!(MirMap, cells) == 4 * w);
+    assert!(std::mem::offset_of!(MirMap, ncells) == 5 * w);
+};
 
 /// An `index` cell that never held a slot: a probe stops here.
 const EMPTY: u64 = u32::MAX as u64;
@@ -117,6 +138,8 @@ impl MirMap {
     fn reindex(&mut self, cells: usize) {
         self.index.clear();
         self.index.resize(cells, EMPTY);
+        self.cells = self.index.as_ptr();
+        self.ncells = cells;
         self.index_used = 0;
         for sl in 0..self.hashes.len() {
             if !self.dead[sl] {
@@ -358,6 +381,63 @@ pub unsafe extern "C" fn karac_mir_map_find_hv(
     }
 }
 
+/// The entry whose key equals `key`, or null: [`karac_mir_map_find`]
+/// handing back where the entry is rather than its index, which a table
+/// with holes would have to count.
+///
+/// # Safety
+/// As [`karac_mir_map_find`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_lookup(
+    h: *const MirMap,
+    key: *const u8,
+    hash: Option<HashFn>,
+    eq: Option<EqFn>,
+    cmp: Option<CmpFn>,
+) -> *mut u8 {
+    if h.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: the caller's contract.
+    let m = unsafe { &*h };
+    if let Some(cmp) = cmp {
+        // SAFETY: as above; a sorted table's indices are its slots.
+        return match unsafe { search(m, key, cmp) } {
+            Ok(i) => m.slot_ptr(i),
+            Err(_) => std::ptr::null_mut(),
+        };
+    }
+    let (Some(hash), Some(eq)) = (hash, eq) else {
+        return std::ptr::null_mut();
+    };
+    // SAFETY: as above.
+    unsafe { karac_mir_map_lookup_hv(h, key, hash(key), eq) }
+}
+
+/// [`karac_mir_map_lookup`] on a hashed table, with the key's hash `hv`
+/// computed by the caller, as for [`karac_mir_map_find_hv`].
+///
+/// # Safety
+/// As [`karac_mir_map_find_hv`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_lookup_hv(
+    h: *const MirMap,
+    key: *const u8,
+    hv: u64,
+    eq: EqFn,
+) -> *mut u8 {
+    if h.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: the caller's contract.
+    let m = unsafe { &*h };
+    // SAFETY: as above.
+    match unsafe { m.find_slot(hv, key, eq) } {
+        Some(sl) => m.slot_ptr(sl),
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// # Safety
 /// `m` is live; `key` a key of its type; `cmp` its order.
 unsafe fn search(m: &MirMap, key: *const u8, cmp: CmpFn) -> Result<usize, usize> {
@@ -394,11 +474,15 @@ pub unsafe extern "C" fn karac_mir_map_insert(
     // SAFETY: the caller's contract.
     let hv = hash.map(|hash| unsafe { hash(entry) });
     // SAFETY: as above.
-    unsafe { insert(hp, entry_size, entry, hv, cmp) }
+    unsafe {
+        let s = insert(hp, entry_size, entry, hv, cmp);
+        (**hp).index_of(s) as i64
+    }
 }
 
 /// [`karac_mir_map_insert`] into a hashed table, with the key's hash `hv`
-/// computed by the caller, as for [`karac_mir_map_find_hv`].
+/// computed by the caller, as for [`karac_mir_map_find_hv`]. Returns
+/// where the new entry is, not its index.
 ///
 /// # Safety
 /// As [`karac_mir_map_insert`]; `hv` is the entry key's hash.
@@ -408,12 +492,17 @@ pub unsafe extern "C" fn karac_mir_map_insert_hv(
     entry_size: u64,
     entry: *const u8,
     hv: u64,
-) -> i64 {
+) -> *mut u8 {
     let entry_size = entry_size as usize;
     // SAFETY: the caller's contract.
-    unsafe { insert(hp, entry_size, entry, Some(hv), None) }
+    unsafe {
+        let s = insert(hp, entry_size, entry, Some(hv), None);
+        (**hp).slot_ptr(s)
+    }
 }
 
+/// Returns the new entry's slot.
+///
 /// # Safety
 /// As [`karac_mir_map_insert`], with `hv` the hash for a hashed table.
 unsafe fn insert(
@@ -422,20 +511,22 @@ unsafe fn insert(
     entry: *const u8,
     hash: Option<u64>,
     cmp: Option<CmpFn>,
-) -> i64 {
+) -> usize {
     // SAFETY: the caller's contract.
     let m = unsafe {
         if (*hp).is_null() {
             *hp = Box::into_raw(Box::new(MirMap {
-                entry_size,
                 buf: std::ptr::null_mut(),
+                entry_size,
                 slots: 0,
+                holes: 0,
+                cells: std::ptr::null(),
+                ncells: 0,
                 cap: 0,
                 hashes: Vec::new(),
                 index: Vec::new(),
                 index_used: 0,
                 dead: Vec::new(),
-                holes: 0,
                 live: Vec::new(),
                 pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
             }));
@@ -471,7 +562,7 @@ unsafe fn insert(
         m.hashes.push(hv);
         m.index_place(hv, at);
     }
-    m.index_of(at) as i64
+    at
 }
 
 /// The entry at index `i` (in bounds).
@@ -584,8 +675,32 @@ pub unsafe extern "C" fn karac_mir_map_pick(
 pub unsafe extern "C" fn karac_mir_map_remove(h: *mut MirMap, i: i64, out: *mut u8) {
     // SAFETY: the caller's contract.
     let m = unsafe { &mut *h };
-    let es = m.entry_size;
     let s = m.slot_of(i as usize);
+    // SAFETY: as above.
+    unsafe { remove_slot(m, s, out) }
+}
+
+/// [`karac_mir_map_remove`] of the entry at `at`, which a lookup handed
+/// back.
+///
+/// # Safety
+/// `h` is a live table and `at` one of its live entries; `out` is
+/// writable for an entry.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_remove_entry(h: *mut MirMap, at: *const u8, out: *mut u8) {
+    // SAFETY: the caller's contract.
+    let m = unsafe { &mut *h };
+    let s = (at as usize - m.buf as usize) / m.entry_size.max(1);
+    // SAFETY: as above.
+    unsafe { remove_slot(m, s, out) }
+}
+
+/// Moves the live entry in slot `s` to `out`, as [`karac_mir_map_remove`].
+///
+/// # Safety
+/// As [`karac_mir_map_remove`], with `s` a live slot.
+unsafe fn remove_slot(m: &mut MirMap, s: usize, out: *mut u8) {
+    let es = m.entry_size;
     m.forget();
     // SAFETY: as above.
     unsafe { std::ptr::copy_nonoverlapping(m.slot_ptr(s), out, es) };
@@ -636,6 +751,8 @@ pub unsafe extern "C" fn karac_mir_map_clear(h: *mut MirMap) {
     m.slots = 0;
     m.hashes.clear();
     m.index.clear();
+    m.cells = std::ptr::null();
+    m.ncells = 0;
     m.index_used = 0;
     m.dead.clear();
     m.holes = 0;

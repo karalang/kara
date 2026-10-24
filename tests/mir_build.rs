@@ -1012,6 +1012,98 @@ fn main() {
     }
 }
 
+/// B-2026-10-04-79: a hashed table of scalar keys is probed in line,
+/// and every lookup hands back where its entry is rather than its index.
+/// A sliding window's counts leave holes and close them; the walk after
+/// removals, `entry`, `get_or`, indexing, set algebra, `String` keys and
+/// a sorted map must all print what the interpreter prints.
+#[test]
+fn mir_table_lookups_agree_through_holes() {
+    const SRC: &str = r#"fn window(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut counts: Map[char, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..cs.len() {
+        let c = cs[right];
+        counts.insert(c, counts.get(c).unwrap_or(0) + 1);
+        while counts.len() > k {
+            let d = cs[left];
+            let n = counts.get(d).unwrap() - 1;
+            if n == 0 {
+                counts.remove(d);
+            } else {
+                counts.insert(d, n);
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    let mut order = String.new();
+    for (c, n) in counts.iter() {
+        order.push(c);
+        order.push_str(n.to_string().as_str());
+    }
+    println(order);
+    best
+}
+
+fn main() {
+    println(f"{window("abacbbcdddeabbbaaeffegg", 2)} {window("zzyyxxzzyyabcabc", 3)}");
+    let mut m: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < 300 {
+        m.insert(i % 37, i);
+        if i % 3 == 0 { m.remove((i * 7) % 37); }
+        i += 1;
+    }
+    let mut t = 0;
+    let mut first = -1;
+    for (k, v) in m.iter() {
+        if first < 0 { first = k; }
+        t = t * 31 % 1000003 + k * v;
+    }
+    println(f"{m.len()} {t} {first} {m[5]} {m.get(36)} {m.contains_key(0)} {m.get_or(1000, 7)}");
+    let mut flags: Map[bool, i64] = Map.new();
+    flags.insert(true, 1);
+    flags.insert(false, 2);
+    flags.remove(true);
+    flags.insert(true, 3);
+    println(f"{flags.get(true)} {flags.get(false)} {flags.len()}");
+    let mut bytes: Map[u8, i64] = Map.new();
+    for b in "hello world".bytes() { *bytes.entry(b).or_insert(0) += 1; }
+    let l: u8 = 108;
+    println(f"{bytes.get(l)} {bytes.len()}");
+    let mut a: Set[i32] = Set.new();
+    let mut b: Set[i32] = Set.new();
+    for x in 0..20 { a.insert((x * 2) as i32); b.insert((x * 3) as i32); }
+    a.remove(4);
+    b.remove(9);
+    let u = a.union(b.clone());
+    let n = a.intersection(b.clone());
+    let d = a.difference(b);
+    println(f"{u.len()} {n.len()} {d.len()} {n.contains(6)} {n.contains(12)}");
+    let mut words: Map[String, i64] = Map.new();
+    for w in ["x", "yy", "x", "zzz", "yy", "x"] { words.insert(w.to_string(), words.get(w.to_string()).unwrap_or(0) + 1); }
+    words.remove("yy".to_string());
+    println(f"{words.get("x".to_string())} {words.get("yy".to_string())} {words.len()}");
+    let mut sm: SortedMap[i64, i64] = SortedMap.new();
+    for x in [5, 1, 9, 3] { sm.insert(x, x * x); }
+    sm.remove(9);
+    println(f"{sm.get(3)} {sm.get(9)} {sm.len()} {sm.contains_key(1)}");
+}
+"#;
+    let want = karac::mir::lower::run_source(SRC)
+        .expect("MIR interpreter")
+        .output;
+    assert_eq!(want, "e1g2\na2b2c2\n6 10\n32 91955 12 264 Some(295) true 7\nSome(3) Some(2) 2\nSome(3) 8\n31 7 12 true true\nSome(3) None 2\nSome(9) None 3 true\n");
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
 /// squaring, with the same multiplications on both backends, so the bits
 /// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).

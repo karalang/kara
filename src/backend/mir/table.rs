@@ -103,48 +103,223 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
-    /// The index of `key` in the table `h`, or -1.
-    fn find(
-        &mut self,
-        h: PointerValue<'ctx>,
-        key: PointerValue<'ctx>,
-        t: Table,
-    ) -> R<IntValue<'ctx>> {
-        Ok(self.find_hashed(h, key, t)?.0)
+    /// Word `k` of the table header at `h` (`runtime/src/mir_map.rs`'s
+    /// `MirMap`: `buf`, `entry_size`, `slots`, `holes`, `cells`,
+    /// `ncells`), a count widened to `i64`.
+    fn map_word(&self, h: PointerValue<'ctx>, k: u64) -> R<IntValue<'ctx>> {
+        let (w, it) = self.map_word_ty();
+        let p = self.offset(h, k * w)?;
+        let v = self.builder.build_load(it, p, "").map_err(e)?;
+        self.builder
+            .build_int_z_extend_or_bit_cast(v.into_int_value(), self.llcx.i64_type(), "")
+            .map_err(e)
     }
 
-    /// [`Cx::find`], and for a hashed table the key's hash, hashed here
-    /// rather than by the runtime so a scalar key is hashed inline and
-    /// once for a `get` and the `insert` that follows it.
-    fn find_hashed(
+    /// Word `k` of the table header at `h`, a pointer.
+    fn map_ptr_word(&self, h: PointerValue<'ctx>, k: u64) -> R<PointerValue<'ctx>> {
+        let (w, _) = self.map_word_ty();
+        self.load_ptr(self.offset(h, k * w)?)
+    }
+
+    /// The width in bytes of a table header's words, and its integer type.
+    fn map_word_ty(&self) -> (u64, inkwell::types::IntType<'ctx>) {
+        if crate::target::active_target_is_wasm() {
+            (4, self.llcx.i32_type())
+        } else {
+            (8, self.llcx.i64_type())
+        }
+    }
+
+    /// The number of entries in the table `h` (null for none yet).
+    fn table_len(&self, h: PointerValue<'ctx>) -> R<IntValue<'ctx>> {
+        let i64t = self.llcx.i64_type();
+        let f = self.cur_fn()?;
+        let here = self.builder.get_insert_block().ok_or("no block")?;
+        let (live, done) = (
+            self.llcx.append_basic_block(f, "len.live"),
+            self.llcx.append_basic_block(f, "len"),
+        );
+        let null = self.builder.build_is_null(h, "").map_err(e)?;
+        self.builder
+            .build_conditional_branch(null, done, live)
+            .map_err(e)?;
+        self.builder.position_at_end(live);
+        let slots = self.map_word(h, 2)?;
+        let holes = self.map_word(h, 3)?;
+        let n = self.builder.build_int_sub(slots, holes, "").map_err(e)?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        let phi = self.builder.build_phi(i64t, "").map_err(e)?;
+        phi.add_incoming(&[(&i64t.const_zero(), here), (&n, live)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
+    /// Whether a key of type `ty` is probed in line: an integer, `char`
+    /// or `bool`, whose equality is its bits'.
+    fn probe_in_line(&self, ty: Ty) -> bool {
+        matches!(
+            self.tys.kind(ty),
+            TyKind::Bool | TyKind::Char | TyKind::Int(_)
+        )
+    }
+
+    /// Where the entry whose key equals `key` is in the table `h`, or
+    /// null; and for a hashed table the key's hash, for an `insert` that
+    /// follows. A scalar key is probed in line, over the runtime's index
+    /// (`MirMap::find_slot`); any other searches in the runtime, which
+    /// hands back the entry rather than its index.
+    fn lookup(
         &mut self,
         h: PointerValue<'ctx>,
         key: PointerValue<'ctx>,
         t: Table,
-    ) -> R<(IntValue<'ctx>, Option<IntValue<'ctx>>)> {
+    ) -> R<(PointerValue<'ctx>, Option<IntValue<'ctx>>)> {
         let [hf, ef, cf] = self.glue_ptrs(t);
-        if t.sorted {
-            let i = self.mrt_i64(
-                "map_find",
-                &[h.into(), key.into(), hf.into(), ef.into(), cf.into()],
-            )?;
-            return Ok((i, None));
-        }
-        let hv = self.hash_call(key, t.key)?;
-        let args: [BasicMetadataValueEnum<'ctx>; 4] = [h.into(), key.into(), hv.into(), ef.into()];
+        let (args, hv): (Vec<BasicMetadataValueEnum<'ctx>>, _) = if t.sorted {
+            (
+                vec![h.into(), key.into(), hf.into(), ef.into(), cf.into()],
+                None,
+            )
+        } else {
+            let hv = self.hash_call(key, t.key)?;
+            if self.probe_in_line(t.key) {
+                return Ok((self.probe(h, key, hv, t)?, Some(hv)));
+            }
+            (vec![h.into(), key.into(), hv.into(), ef.into()], Some(hv))
+        };
+        let name = if t.sorted {
+            "karac_mir_map_lookup"
+        } else {
+            "karac_mir_map_lookup_hv"
+        };
         let tys = self.arg_tys(&args);
-        let f = self.extern_fn(
-            "karac_mir_map_find_hv",
-            self.llcx.i64_type().fn_type(&tys, false),
-        );
+        let f = self.extern_fn(name, self.ptr_ty().fn_type(&tys, false));
         let call = self.builder.build_call(f, &args, "").map_err(e)?;
         // A search with glue that runs no user code only reads, so the
         // key's slot and the table's handle are not reloaded after it.
         if self.plain_key(t.key) {
             self.read_only(call);
         }
-        let i = call.try_as_basic_value().unwrap_basic().into_int_value();
-        Ok((i, Some(hv)))
+        let at = call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        Ok((at, hv))
+    }
+
+    /// The linear probe of `MirMap::find_slot` for the scalar `key` (hash
+    /// `hv`) in the hashed table `h`: where its entry is, or null.
+    fn probe(
+        &mut self,
+        h: PointerValue<'ctx>,
+        key: PointerValue<'ctx>,
+        hv: IntValue<'ctx>,
+        t: Table,
+    ) -> R<PointerValue<'ctx>> {
+        let i64t = self.llcx.i64_type();
+        let f = self.cur_fn()?;
+        let block = |name| self.llcx.append_basic_block(f, name);
+        let (hdr, start, head, test, cmp, step, miss, done) = (
+            block("probe.live"),
+            block("probe.start"),
+            block("probe"),
+            block("probe.tag"),
+            block("probe.key"),
+            block("probe.next"),
+            block("probe.miss"),
+            block("probe.done"),
+        );
+        let null = self.builder.build_is_null(h, "").map_err(e)?;
+        self.builder
+            .build_conditional_branch(null, miss, hdr)
+            .map_err(e)?;
+        self.builder.position_at_end(hdr);
+        let n = self.map_word(h, 5)?;
+        let empty = self.is_zero(n)?;
+        self.builder
+            .build_conditional_branch(empty, miss, start)
+            .map_err(e)?;
+        self.builder.position_at_end(start);
+        let cells = self.map_ptr_word(h, 4)?;
+        let buf = self.map_ptr_word(h, 0)?;
+        let es = self.map_word(h, 1)?;
+        let mask = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
+        let mixed = self
+            .builder
+            .build_int_mul(hv, self.i64(0x9E37_79B9_7F4A_7C15), "")
+            .map_err(e)?;
+        let mixed = self
+            .builder
+            .build_right_shift(mixed, self.i64(32), false, "")
+            .map_err(e)?;
+        let home = self.builder.build_and(mixed, mask, "").map_err(e)?;
+        let want = self.load(key, t.key)?.into_int_value();
+        self.builder.build_unconditional_branch(head).map_err(e)?;
+        self.builder.position_at_end(head);
+        let i = self.builder.build_phi(i64t, "").map_err(e)?;
+        let iv = i.as_basic_value().into_int_value();
+        // SAFETY of the read: `i` stays under `ncells` by the mask.
+        let cp = unsafe { self.builder.build_in_bounds_gep(i64t, cells, &[iv], "") }.map_err(e)?;
+        let c = self
+            .builder
+            .build_load(i64t, cp, "")
+            .map_err(e)?
+            .into_int_value();
+        let sl = self
+            .builder
+            .build_and(c, self.i64(0xFFFF_FFFF), "")
+            .map_err(e)?;
+        // `EMPTY` ends the probe; a `TOMB`, or a cell whose hash's top
+        // half differs, is passed over.
+        let stop = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, sl, self.i64(0xFFFF_FFFF), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(stop, miss, test)
+            .map_err(e)?;
+        self.builder.position_at_end(test);
+        let x = self.builder.build_xor(c, hv, "").map_err(e)?;
+        let x = self
+            .builder
+            .build_right_shift(x, self.i64(32), false, "")
+            .map_err(e)?;
+        let same = self.is_zero(x)?;
+        let live = self
+            .builder
+            .build_int_compare(IntPredicate::NE, sl, self.i64(0xFFFF_FFFE), "")
+            .map_err(e)?;
+        let both = self.builder.build_and(same, live, "").map_err(e)?;
+        self.builder
+            .build_conditional_branch(both, cmp, step)
+            .map_err(e)?;
+        self.builder.position_at_end(cmp);
+        let off = self.builder.build_int_mul(sl, es, "").map_err(e)?;
+        // SAFETY of the pointer: a live slot is inside `buf`.
+        let at = unsafe {
+            self.builder
+                .build_in_bounds_gep(self.llcx.i8_type(), buf, &[off], "")
+        }
+        .map_err(e)?;
+        let got = self.load(at, t.key)?.into_int_value();
+        let hit = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, got, want, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(hit, done, step)
+            .map_err(e)?;
+        self.builder.position_at_end(step);
+        let next = self.builder.build_int_add(iv, self.i64(1), "").map_err(e)?;
+        let next = self.builder.build_and(next, mask, "").map_err(e)?;
+        self.builder.build_unconditional_branch(head).map_err(e)?;
+        i.add_incoming(&[(&home, start), (&next, step)]);
+        self.builder.position_at_end(miss);
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        let phi = self.builder.build_phi(self.ptr_ty(), "").map_err(e)?;
+        phi.add_incoming(&[(&at, cmp), (&self.ptr_ty().const_null(), miss)]);
+        Ok(phi.as_basic_value().into_pointer_value())
     }
 
     /// Adds the entry at `entry` to the table whose handle is at `hp`.
@@ -178,23 +353,57 @@ impl<'ctx> Cx<'ctx, '_> {
             Some(hv) => hv,
             None => self.hash_call(entry, t.key)?,
         };
-        self.mrt_i64(
+        self.mrt_ptr(
             "map_insert_hv",
             &[hp.into(), size.into(), entry.into(), hv.into()],
         )?;
         Ok(())
     }
 
-    fn entry_at(&self, h: PointerValue<'ctx>, i: IntValue<'ctx>) -> R<PointerValue<'ctx>> {
+    /// The entry at index `i` of the table `h`, which has more than `i`:
+    /// slot `i` while the table has no holes, else the runtime's count.
+    pub(super) fn entry_at(
+        &self,
+        h: PointerValue<'ctx>,
+        i: IntValue<'ctx>,
+    ) -> R<PointerValue<'ctx>> {
+        let f = self.cur_fn()?;
+        let (dense, holed, done) = (
+            self.llcx.append_basic_block(f, "entry.dense"),
+            self.llcx.append_basic_block(f, "entry.holed"),
+            self.llcx.append_basic_block(f, "entry.at"),
+        );
+        let holes = self.map_word(h, 3)?;
+        let none = self.is_zero(holes)?;
+        self.builder
+            .build_conditional_branch(none, dense, holed)
+            .map_err(e)?;
+        self.builder.position_at_end(dense);
+        let buf = self.map_ptr_word(h, 0)?;
+        let es = self.map_word(h, 1)?;
+        let off = self.builder.build_int_mul(i, es, "").map_err(e)?;
+        // SAFETY of the pointer: `i` is a live slot of `buf`.
+        let near = unsafe {
+            self.builder
+                .build_in_bounds_gep(self.llcx.i8_type(), buf, &[off], "")
+        }
+        .map_err(e)?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(holed);
         let args: [BasicMetadataValueEnum<'ctx>; 2] = [h.into(), i.into()];
         let tys = self.arg_tys(&args);
-        let f = self.extern_fn("karac_mir_map_at", self.ptr_ty().fn_type(&tys, false));
-        let call = self.builder.build_call(f, &args, "").map_err(e)?;
+        let rf = self.extern_fn("karac_mir_map_at", self.ptr_ty().fn_type(&tys, false));
+        let call = self.builder.build_call(rf, &args, "").map_err(e)?;
         self.read_only(call);
-        Ok(call
+        let far = call
             .try_as_basic_value()
             .unwrap_basic()
-            .into_pointer_value())
+            .into_pointer_value();
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        let phi = self.builder.build_phi(self.ptr_ty(), "").map_err(e)?;
+        phi.add_incoming(&[(&near, dense), (&far, holed)]);
+        Ok(phi.as_basic_value().into_pointer_value())
     }
 
     /// Marks a call into the runtime that only reads memory, so loads
@@ -272,7 +481,7 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(());
         }
         let voff = self.val_off(t)?;
-        let n = self.mrt_i64("map_len", &[h.into()])?;
+        let n = self.table_len(h)?;
         self.count_loop(n, |cx, i| {
             let at = cx.entry_at(h, i)?;
             if kd {
@@ -298,7 +507,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .ok_or_else(|| format!("`{}` is not a table", self.tys.display(ty)))?;
         self.store(dst, self.ptr_ty().const_null().into())?;
         let h = self.load_ptr(src)?;
-        let n = self.mrt_i64("map_len", &[h.into()])?;
+        let n = self.table_len(h)?;
         let tmp = self.temp(t.entry, "entry")?;
         self.count_loop(n, |cx, i| {
             let at = cx.entry_at(h, i)?;
@@ -334,7 +543,7 @@ impl<'ctx> Cx<'ctx, '_> {
         match (method, &args[1..]) {
             ("len", []) => {
                 let h = self.load_ptr(hp)?;
-                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let n = self.table_len(h)?;
                 let d = self.place_ptr(dest)?;
                 let it = self.llvm_ty(dty)?.into_int_type();
                 let n = self
@@ -345,29 +554,28 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("is_empty", []) => {
                 let h = self.load_ptr(hp)?;
-                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let n = self.table_len(h)?;
                 let z = self.is_zero(n)?;
                 self.store_bool(dest, z)?;
             }
             ("contains_key" | "contains", [k]) => {
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let i = self.find(h, kp, t)?;
-                let found = self.found(i)?;
+                let (at, _) = self.lookup(h, kp, t)?;
+                let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 self.store_bool(dest, found)?;
                 self.drop_moved(&args[1..])?;
             }
             ("get" | "get_mut_by_view", [k]) if is_map => {
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let i = self.find(h, kp, t)?;
-                let found = self.found(i)?;
+                let (at, _) = self.lookup(h, kp, t)?;
+                let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 let voff = self.val_off(t)?;
                 let d = self.place_ptr(dest)?;
                 let (some, none) = self.option_variants(dty)?;
                 self.store_tag(d, dty, none)?;
                 self.if_then(found, |cx| {
-                    let at = cx.entry_at(h, i)?;
                     let v = cx.offset(at, voff)?;
                     cx.store_tag(d, dty, some)?;
                     let vt = t.val.unwrap_or(t.key);
@@ -378,10 +586,9 @@ impl<'ctx> Cx<'ctx, '_> {
             ("index" | "index_mut", [k]) if is_map => {
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let i = self.find(h, kp, t)?;
-                let found = self.found(i)?;
+                let (at, _) = self.lookup(h, kp, t)?;
+                let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 self.abort_unless(found, "explicit panic")?;
-                let at = self.entry_at(h, i)?;
                 let v = self.offset(at, self.val_off(t)?)?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, v.into())?;
@@ -390,7 +597,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("entry_at", [i]) => {
                 let h = self.load_ptr(hp)?;
                 let i = self.int_arg(i)?;
-                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let n = self.table_len(h)?;
                 let ok = self
                     .builder
                     .build_int_compare(IntPredicate::ULT, i, n, "")
@@ -403,7 +610,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("insert", [k, rest @ ..]) => self.table_insert(hp, t, k, rest, dest, dty, unit)?,
             ("entries", []) if is_map => {
                 let h = self.load_ptr(hp)?;
-                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let n = self.table_len(h)?;
                 let size = self.layout(t.entry)?.size;
                 let d = self.place_ptr(dest)?;
                 self.vec_alloc(d, n, size)?;
@@ -421,8 +628,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = t.val.unwrap_or(t.key);
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let i = self.find(h, kp, t)?;
-                let found = self.found(i)?;
+                let (at, _) = self.lookup(h, kp, t)?;
+                let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 let slot = self.entry_slot(8, "stored")?;
                 let f = self.cur_fn()?;
                 let (old, new, done) = (
@@ -435,7 +642,6 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 self.builder.position_at_end(old);
                 self.drop_moved(&args[1..])?;
-                let at = self.entry_at(h, i)?;
                 self.store(slot, at.into())?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(new);
@@ -453,8 +659,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 self.insert_entry(hp, tmp, t)?;
                 let h2 = self.load_ptr(hp)?;
-                let i2 = self.find(h2, tmp, t)?;
-                let at = self.entry_at(h2, i2)?;
+                let (at, _) = self.lookup(h2, tmp, t)?;
                 self.store(slot, at.into())?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);
@@ -467,8 +672,8 @@ impl<'ctx> Cx<'ctx, '_> {
             ("remove", [k]) => {
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let i = self.find(h, kp, t)?;
-                let found = self.found(i)?;
+                let (at, _) = self.lookup(h, kp, t)?;
+                let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 let d = self.place_ptr(dest)?;
                 let tmp = self.temp(t.entry, "removed")?;
                 if is_map {
@@ -477,7 +682,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     let voff = self.val_off(t)?;
                     let v = t.val.unwrap_or(t.key);
                     self.if_then(found, |cx| {
-                        cx.rt("map_remove", &[h.into(), i.into(), tmp.into()])?;
+                        cx.rt("map_remove_entry", &[h.into(), at.into(), tmp.into()])?;
                         if cx.tys.needs_drop(t.key) {
                             cx.call_glue(tmp, t.key)?;
                         }
@@ -489,7 +694,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 } else {
                     self.store_bool(dest, found)?;
                     self.if_then(found, |cx| {
-                        cx.rt("map_remove", &[h.into(), i.into(), tmp.into()])?;
+                        cx.rt("map_remove_entry", &[h.into(), at.into(), tmp.into()])?;
                         if cx.tys.needs_drop(t.key) {
                             cx.call_glue(tmp, t.key)?;
                         }
@@ -510,7 +715,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 // Every entry moved out into a `Vec`, in iteration order;
                 // the table is left empty, with nothing of its own to drop.
                 let h = self.load_ptr(hp)?;
-                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let n = self.table_len(h)?;
                 let size = self.layout(t.entry)?.size;
                 let d = self.place_ptr(dest)?;
                 self.vec_alloc(d, n, size)?;
@@ -527,8 +732,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = t.val.unwrap_or(t.key);
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let i = self.find(h, kp, t)?;
-                let found = self.found(i)?;
+                let (at, _) = self.lookup(h, kp, t)?;
+                let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 let d = self.place_ptr(dest)?;
                 let voff = self.val_off(t)?;
                 let dt = self.operand_type(default)?;
@@ -548,7 +753,6 @@ impl<'ctx> Cx<'ctx, '_> {
                     .build_conditional_branch(found, yes, no)
                     .map_err(e)?;
                 self.builder.position_at_end(yes);
-                let at = self.entry_at(h, i)?;
                 let src = self.offset(at, voff)?;
                 self.clone_into(d, src, v)?;
                 if !by_ref {
@@ -577,7 +781,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let by_ref = matches!(self.tys.kind(el), TyKind::Ref(_));
                 let size = self.layout(el)?.size;
                 let h = self.load_ptr(hp)?;
-                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let n = self.table_len(h)?;
                 let d = self.place_ptr(dest)?;
                 self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
@@ -598,8 +802,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 // sorted map (an `Entry` names a `Map` either way).
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let i = self.find(h, kp, t)?;
-                let found = self.found(i)?;
+                let (at, _) = self.lookup(h, kp, t)?;
+                let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 let d = self.place_ptr(dest)?;
                 let occ = self.variant_of(dty, "Occupied")?;
                 let vac = self.variant_of(dty, "Vacant")?;
@@ -615,7 +819,6 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.builder.position_at_end(old);
                 self.drop_moved(&args[1..])?;
                 self.store_tag(d, dty, occ)?;
-                let at = self.entry_at(h, i)?;
                 let v = self.offset(at, self.val_off(t)?)?;
                 let q = self.offset(d, self.field_offset(dty, Some(occ), 0)?)?;
                 self.store(q, v.into())?;
@@ -712,17 +915,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, self.ptr_ty().const_null().into())?;
                 let tmp = self.temp(t.entry, "elem")?;
-                let mine = self.mrt_i64("map_len", &[h.into()])?;
+                let mine = self.table_len(h)?;
                 self.count_loop(mine, |cx, i| {
                     let at = cx.entry_at(h, i)?;
-                    let j = cx.find(oh, at, t)?;
+                    let (j, _) = cx.lookup(oh, at, t)?;
                     let keep = match method {
                         "union" => cx.llcx.bool_type().const_all_ones(),
-                        "intersection" => cx.found(j)?,
-                        _ => cx
-                            .builder
-                            .build_int_compare(IntPredicate::SLT, j, cx.i64(0), "")
-                            .map_err(e)?,
+                        "intersection" => cx.builder.build_is_not_null(j, "").map_err(e)?,
+                        _ => cx.builder.build_is_null(j, "").map_err(e)?,
                     };
                     cx.if_then(keep, |cx| {
                         cx.clone_into(tmp, at, t.entry)?;
@@ -730,14 +930,11 @@ impl<'ctx> Cx<'ctx, '_> {
                     })
                 })?;
                 if matches!(method, "union" | "symmetric_difference") {
-                    let theirs = self.mrt_i64("map_len", &[oh.into()])?;
+                    let theirs = self.table_len(oh)?;
                     self.count_loop(theirs, |cx, i| {
                         let at = cx.entry_at(oh, i)?;
-                        let j = cx.find(h, at, t)?;
-                        let new = cx
-                            .builder
-                            .build_int_compare(IntPredicate::SLT, j, cx.i64(0), "")
-                            .map_err(e)?;
+                        let (j, _) = cx.lookup(h, at, t)?;
+                        let new = cx.builder.build_is_null(j, "").map_err(e)?;
                         cx.if_then(new, |cx| {
                             cx.clone_into(tmp, at, t.entry)?;
                             cx.insert_entry(d, tmp, t)
@@ -764,8 +961,8 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<()> {
         let h = self.load_ptr(hp)?;
         let kp = self.key_arg(k, t.key)?;
-        let (i, hv) = self.find_hashed(h, kp, t)?;
-        let found = self.found(i)?;
+        let (at, hv) = self.lookup(h, kp, t)?;
+        let found = self.builder.build_is_not_null(at, "").map_err(e)?;
         let f = self.cur_fn()?;
         let (old, new, done) = (
             self.llcx.append_basic_block(f, "insert.old"),
@@ -790,7 +987,6 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         match (t.val, rest) {
             (Some(v), [val]) => {
-                let at = self.entry_at(h, i)?;
                 let slot = self.offset(at, self.val_off(t)?)?;
                 match d {
                     Some(d) => {
