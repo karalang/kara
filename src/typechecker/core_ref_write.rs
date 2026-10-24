@@ -141,6 +141,12 @@ struct Walk<'t, 'a> {
     removed_calls: Vec<(Span, String)>,
     /// Offsets of plain pattern bindings some write goes through.
     written_pattern_bindings: FxHashSet<usize>,
+    /// A plain pattern binding of a `match`, `if let` or `while let` over a
+    /// place reached through a shared `ref`, by the binding's offset: where
+    /// the place is read-only, and the scrutinee as written. A non-`Copy`
+    /// binding is a `ref` into that place (§4.6), so a write through it is
+    /// a write through the `ref` (§5.9; B-2026-10-24-21).
+    pattern_read_only: FxHashMap<usize, (ReadOnlyAt, String)>,
     /// The callee of each call of an `OnceFn` value, for the ownership
     /// pass's E0500 wording (§9.6).
     once_calls: FxHashSet<SpanKey>,
@@ -215,6 +221,15 @@ enum Origin {
     MutRefPattern,
     /// `let b = self;` over a borrowed receiver: `b` is a `ref Self` (§4.6).
     SelfCopy,
+}
+
+/// The read-only step of a place: the expression, where its binding came
+/// from, and the edit that makes it writable.
+#[derive(Clone)]
+struct ReadOnlyAt {
+    at: Expr,
+    origin: Origin,
+    fix: Option<FixIt>,
 }
 
 /// What a step of a place's projection chain says about writing through it.
@@ -297,6 +312,7 @@ impl<'a> TypeChecker<'a> {
             m4a_calls: Vec::new(),
             handler_shapes: Vec::new(),
             written_pattern_bindings: FxHashSet::default(),
+            pattern_read_only: FxHashMap::default(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             w.self_read_only = matches!(f.self_param, Some(SelfParam::Ref));
@@ -1173,6 +1189,7 @@ impl Walk<'_, '_> {
                         &[],
                     );
                     let keys = self.hold(held);
+                    self.note_pattern_read_only(&arm.pattern, scrutinee);
                     self.scopes.push(Vec::new());
                     self.bind(&arm.pattern, Origin::Owned, None);
                     self.branches.push((e.span.offset, i + 1));
@@ -1212,6 +1229,7 @@ impl Walk<'_, '_> {
                 self.check_mut_ref_bindings(pattern, value);
                 let held = self.ref_binding_borrows(pattern, value, &[], &[then_block]);
                 let keys = self.hold(held);
+                self.note_pattern_read_only(pattern, value);
                 self.scopes.push(Vec::new());
                 self.bind(pattern, Origin::Owned, None);
                 self.branches.push((e.span.offset, 1));
@@ -1236,6 +1254,7 @@ impl Walk<'_, '_> {
                 self.check_mut_ref_bindings(pattern, value);
                 let held = self.ref_binding_borrows(pattern, value, &[], &[body]);
                 let keys = self.hold(held);
+                self.note_pattern_read_only(pattern, value);
                 self.scopes.push(Vec::new());
                 self.bind(pattern, Origin::Owned, None);
                 self.block(body);
@@ -1777,14 +1796,104 @@ impl Walk<'_, '_> {
                 ExprKind::FieldAccess { object, .. }
                 | ExprKind::TupleIndex { object, .. }
                 | ExprKind::Index { object, .. } => object,
+                ExprKind::Identifier(n) => {
+                    if let Some((ro, text)) = self.bound_from_read_only(cur) {
+                        let through = format!("through `{n}` (bound from `{text}`)");
+                        let action = if action.contains(&format!("`{n}.")) {
+                            format!("{action}, with `{n}` bound from `{text}`,")
+                        } else if action.contains("through it") {
+                            action.replace("through it", &through)
+                        } else {
+                            format!("{action} {through}")
+                        };
+                        let message = self.read_only_message_as(&ro.at, &action, ro.origin);
+                        self.errors.push((at, message, ro.fix));
+                    }
+                    return;
+                }
                 _ => return,
             };
+        }
+    }
+
+    /// Where `place` is read-only, if it is: `check_through`'s walk without
+    /// its effects.
+    fn read_only_step(&self, place: &Expr) -> Option<ReadOnlyAt> {
+        let mut cur = place;
+        loop {
+            match self.step(cur) {
+                Step::ReadOnly => {
+                    let (origin, fix) = match &cur.kind {
+                        ExprKind::SelfValue => (Origin::Owned, self.self_fix.clone()),
+                        ExprKind::Identifier(n) if n == "self" => {
+                            (Origin::Owned, self.self_fix.clone())
+                        }
+                        ExprKind::Identifier(n) => {
+                            (self.origin_of(n), self.lookup(n).and_then(|b| b.2.clone()))
+                        }
+                        _ => (Origin::Owned, None),
+                    };
+                    return Some(ReadOnlyAt {
+                        at: cur.clone(),
+                        origin,
+                        fix,
+                    });
+                }
+                Step::Writable => return None,
+                Step::Continue => {}
+            }
+            cur = match &cur.kind {
+                ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. }
+                | ExprKind::Index { object, .. } => object,
+                ExprKind::Identifier(_) => return self.bound_from_read_only(cur).map(|r| r.0),
+                _ => return None,
+            };
+        }
+    }
+
+    /// The read-only place a non-`Copy` plain pattern binding `e` was bound
+    /// from, and that place as written.
+    fn bound_from_read_only(&self, e: &Expr) -> Option<(ReadOnlyAt, String)> {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return None;
+        };
+        let Origin::OwnedPattern(at) = self.origin_of(n) else {
+            return None;
+        };
+        if self.holds_a_copy(e) {
+            return None;
+        }
+        self.pattern_read_only.get(&at).cloned()
+    }
+
+    /// Record, for each plain binding of `pattern`, the read-only place
+    /// `scrutinee` is reached through, before the bindings are in scope.
+    fn note_pattern_read_only(&mut self, pattern: &Pattern, scrutinee: &Expr) {
+        let Some(text) = place_text(scrutinee) else {
+            return;
+        };
+        let Some(ro) = self.read_only_step(scrutinee) else {
+            return;
+        };
+        for (_, sp) in pattern.binding_name_spans() {
+            self.pattern_read_only
+                .insert(sp.offset, (ro.clone(), text.clone()));
         }
     }
 
     /// The error for a write through `at`, the read-only step, worded by
     /// where the borrow came from so the fix can be named.
     fn read_only_message(&self, at: &Expr, action: &str) -> String {
+        let origin = match &at.kind {
+            ExprKind::Identifier(n) => self.origin_of(n),
+            _ => Origin::Owned,
+        };
+        self.read_only_message_as(at, action, origin)
+    }
+
+    /// `read_only_message` for a binding whose origin is `origin`.
+    fn read_only_message_as(&self, at: &Expr, action: &str, origin: Origin) -> String {
         let (name, origin) = match &at.kind {
             ExprKind::SelfValue => {
                 let action = action.replace("through it", "through `self`");
@@ -1816,7 +1925,7 @@ impl Walk<'_, '_> {
                      elements with `.to_vec()`"
                 );
             }
-            ExprKind::Identifier(n) => (n.as_str(), self.origin_of(n)),
+            ExprKind::Identifier(n) => (n.as_str(), origin),
             _ => {
                 return format!(
                     "this place is a shared `ref`, so {action} cannot modify it \

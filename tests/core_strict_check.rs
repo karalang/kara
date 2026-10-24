@@ -12748,3 +12748,41 @@ fn a_block_arm_lending_among_owned_arms_has_no_unparseable_fix() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_mut_argument_through_a_binding_into_a_shared_ref_is_refused() {
+    // B-2026-10-24-21: `buf` binds a place inside `c`, a `ref` parameter, so
+    // passing it `mut` writes through the `ref` (§4.6, §5.9), as `buf.push`
+    // does; the fix makes the parameter `mut ref`.
+    for (tag, arm) in [
+        ("mut-arg-via-match-binding", "add(mut buf, 7)"),
+        ("push-via-match-binding", "buf.push(7)"),
+    ] {
+        let src = format!(
+            "enum S {{ B(Vec[u8]), N }}\nstruct C {{ s: S }}\n\
+             fn add(out: mut ref Vec[u8], x: u8) {{ out.push(x); }}\n\
+             fn put(c: ref C) {{\n    match c.s {{\n        S.B(buf) => {arm},\n        S.N => {{}}\n    }}\n}}\n\
+             fn main() {{\n    let mut c = C {{ s: S.B(Vec.new()) }};\n    put(c);\n}}\n"
+        );
+        rejected_then_fixed_in(tag, &src, "bound from `c.s`", "c: mut ref C", 2);
+    }
+}
+
+#[test]
+fn a_mut_argument_through_a_binding_into_an_owned_place_is_accepted() {
+    // B-2026-10-24-21: the same binding into a `mut ref` place writes it,
+    // and a `Copy` binding is a copy of its own.
+    accepted_and_runs(
+        "mut-arg-via-owned-match-binding",
+        "enum S { B(Vec[u8]), N(u8) }\nstruct C { s: S }\n\
+         fn add(out: mut ref Vec[u8], x: u8) { out.push(x); }\n\
+         fn bump(n: mut ref u8) { *n = *n + 1; }\n\
+         fn put(c: mut ref C) {\n    match c.s {\n        S.B(buf) => add(mut buf, 7),\n        S.N(_) => {}\n    }\n    \
+         if let S.B(buf) = c.s { buf.push(8); }\n}\n\
+         fn copy(c: ref C) -> u8 {\n    match c.s {\n        S.N(n) => { let mut m = n; bump(mut m); m }\n        S.B(_) => 0,\n    }\n}\n\
+         fn main() {\n    let mut c = C { s: S.B(Vec.new()) };\n    put(mut c);\n    \
+         let n = match c.s { S.B(b) => b.len(), S.N(_) => 0 };\n    \
+         println(f\"{n} {copy(C { s: S.N(4) })}\");\n}\n",
+        "2 5\n",
+    );
+}
