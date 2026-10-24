@@ -1,0 +1,2452 @@
+// cli/mini_networkx
+//
+// A port of networkx 3.4.2 (BSD-3-Clause), the graph library: its Graph
+// and DiGraph classes, which keep nodes and each node's neighbours in
+// insertion order, and the algorithms a road, dependency, link, pipe and
+// grid network need: shortest paths (bidirectional BFS and Dijkstra),
+// BFS and DFS, connected and strongly connected components, the
+// condensation, topological sorts and generations, the longest path in a
+// DAG, transitive reduction, ancestors and descendants, find_cycle,
+// Kruskal's spanning trees, Edmonds-Karp maximum flow and the minimum cut,
+// articulation points and bridges, core numbers, greedy colouring
+// (largest first and DSATUR), triangles, bipartite colouring,
+// eccentricity, Euler circuits and all simple paths.
+//
+// Every result that depends on an order (a BFS, a path among equal ones,
+// a colouring) follows networkx's own order, so the output matches what
+// networkx prints for data/jobs.txt byte for byte.
+
+const MASK32: i64 = 4294967295;
+// "absent" in the per-node tables that stand for networkx's dicts.
+const NONE: i64 = -1;
+const ABSENT: i64 = -2;
+
+fn fnv(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn join(names: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..names.len() as i64 {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(names[i]);
+    }
+    out
+}
+
+// The first k names, and " ..." when there are more.
+fn few(names: ref Vec[String], k: i64) -> String {
+    let mut out = String.new();
+    let n = names.len() as i64;
+    for i in 0..n {
+        if i == k {
+            out.push_str(" ...");
+            break;
+        }
+        if i > 0 {
+            out.push_str(" ");
+        }
+        out.push_str(names[i]);
+    }
+    out
+}
+
+fn seq(names: ref Vec[String], k: i64) -> String {
+    let all = join(names, " ");
+    f"{names.len()} nodes: {few(names, k)}; fnv {fnv(all):08x}"
+}
+
+fn sort_names(names: mut ref Vec[String]) {
+    names.sort_by(|a, b| a.cmp(b));
+}
+
+// ------------------------------------------------------------ heapq
+// Python's heapq on (key, count, node) triples. Every caller makes the
+// first two fields unique, so the pop order is fixed.
+
+fn heap_less(a: (i64, i64, i64), b: (i64, i64, i64)) -> bool {
+    if a.0 != b.0 {
+        return a.0 < b.0;
+    }
+    if a.1 != b.1 {
+        return a.1 < b.1;
+    }
+    a.2 < b.2
+}
+
+fn heap_push(heap: mut ref Vec[(i64, i64, i64)], item: (i64, i64, i64)) {
+    heap.push(item);
+    let mut pos = heap.len() as i64 - 1;
+    while pos > 0 {
+        let parent = (pos - 1) / 2;
+        if heap_less(heap[pos], heap[parent]) {
+            let t = heap[pos];
+            heap[pos] = heap[parent];
+            heap[parent] = t;
+            pos = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+fn heap_pop(heap: mut ref Vec[(i64, i64, i64)]) -> (i64, i64, i64) {
+    let top = heap[0];
+    let last = heap.pop().unwrap();
+    let n = heap.len() as i64;
+    if n > 0 {
+        heap[0] = last;
+        let mut pos = 0;
+        loop {
+            let l = 2 * pos + 1;
+            if l >= n {
+                break;
+            }
+            let mut c = l;
+            if l + 1 < n and heap_less(heap[l + 1], heap[l]) {
+                c = l + 1;
+            }
+            if heap_less(heap[c], heap[pos]) {
+                let t = heap[pos];
+                heap[pos] = heap[c];
+                heap[c] = t;
+                pos = c;
+            } else {
+                break;
+            }
+        }
+    }
+    top
+}
+
+// ------------------------------------------------------------ graphs
+
+// The index of the entry for node v in an adjacency list, or -1.
+fn find_adj(list: ref Vec[(i64, i64)], v: i64) -> i64 {
+    for i in 0..list.len() as i64 {
+        if list[i].0 == v {
+            return i;
+        }
+    }
+    -1
+}
+
+// networkx's Graph (undirected) and DiGraph. A node is a slot: removing a
+// node kills its slot and adding the name again makes a new one at the
+// end, as deleting and re-inserting a dict key does. succ holds each
+// node's neighbours (successors for a DiGraph) as (node, weight) in
+// insertion order; pred holds a DiGraph's predecessors.
+struct Graph {
+    directed: bool,
+    names: Vec[String],
+    alive: Vec[bool],
+    slots: Map[String, i64],
+    succ: Vec[Vec[(i64, i64)]],
+    pred: Vec[Vec[(i64, i64)]],
+    live: i64,
+}
+
+impl Graph {
+    fn new(directed: bool) -> Graph {
+        Graph {
+            directed: directed,
+            names: Vec.new(),
+            alive: Vec.new(),
+            slots: Map.new(),
+            succ: Vec.new(),
+            pred: Vec.new(),
+            live: 0,
+        }
+    }
+
+    fn size(ref self) -> i64 {
+        self.names.len() as i64
+    }
+
+    fn slot(ref self, name: ref String) -> i64 {
+        self.slots.get(name) ?? -1
+    }
+
+    fn nodes(ref self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for s in 0..self.size() {
+            if self.alive[s] {
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    fn add_node(mut ref self, name: ref String) -> i64 {
+        let s = self.slot(name);
+        if s >= 0 {
+            return s;
+        }
+        let n = self.size();
+        self.names.push(name.clone());
+        self.alive.push(true);
+        self.succ.push(Vec.new());
+        self.pred.push(Vec.new());
+        self.slots.insert(name.clone(), n);
+        self.live += 1;
+        n
+    }
+
+    // add_edge(u, v, weight=w) on slots: a new edge goes at the end of
+    // each list, an existing one keeps its place and takes the new weight.
+    fn link(mut ref self, a: i64, b: i64, w: i64) {
+        let i = find_adj(self.succ[a], b);
+        if i >= 0 {
+            self.succ[a][i] = (b, w);
+        } else {
+            self.succ[a].push((b, w));
+        }
+        if self.directed {
+            let j = find_adj(self.pred[b], a);
+            if j >= 0 {
+                self.pred[b][j] = (a, w);
+            } else {
+                self.pred[b].push((a, w));
+            }
+        } else if a != b {
+            let j = find_adj(self.succ[b], a);
+            if j >= 0 {
+                self.succ[b][j] = (a, w);
+            } else {
+                self.succ[b].push((a, w));
+            }
+        }
+    }
+
+    fn add_edge(mut ref self, u: ref String, v: ref String, w: i64) {
+        let a = self.add_node(u);
+        let b = self.add_node(v);
+        self.link(a, b, w);
+    }
+
+    fn has_edge(ref self, a: i64, b: i64) -> bool {
+        find_adj(self.succ[a], b) >= 0
+    }
+
+    fn weight(ref self, a: i64, b: i64) -> i64 {
+        let i = find_adj(self.succ[a], b);
+        self.succ[a][i].1
+    }
+
+    fn unlink(mut ref self, a: i64, b: i64) -> bool {
+        let i = find_adj(self.succ[a], b);
+        if i < 0 {
+            return false;
+        }
+        let _ = self.succ[a].remove(i);
+        if self.directed {
+            let j = find_adj(self.pred[b], a);
+            let _ = self.pred[b].remove(j);
+        } else if a != b {
+            let j = find_adj(self.succ[b], a);
+            let _ = self.succ[b].remove(j);
+        }
+        true
+    }
+
+    fn remove_node(mut ref self, s: i64) {
+        let outs = self.succ[s].clone();
+        for k in 0..outs.len() as i64 {
+            let t = outs[k].0;
+            if t != s {
+                if self.directed {
+                    let j = find_adj(self.pred[t], s);
+                    let _ = self.pred[t].remove(j);
+                } else {
+                    let j = find_adj(self.succ[t], s);
+                    let _ = self.succ[t].remove(j);
+                }
+            }
+        }
+        if self.directed {
+            let ins = self.pred[s].clone();
+            for k in 0..ins.len() as i64 {
+                let t = ins[k].0;
+                if t != s {
+                    let j = find_adj(self.succ[t], s);
+                    let _ = self.succ[t].remove(j);
+                }
+            }
+        }
+        self.succ[s] = Vec.new();
+        self.pred[s] = Vec.new();
+        self.alive[s] = false;
+        let name = self.names[s].clone();
+        let _ = self.slots.remove(name);
+        self.live -= 1;
+    }
+
+    fn edge_count(ref self) -> i64 {
+        let mut m = 0;
+        let mut loops = 0;
+        for s in 0..self.size() {
+            m += self.succ[s].len() as i64;
+            if find_adj(self.succ[s], s) >= 0 {
+                loops += 1;
+            }
+        }
+        if self.directed { m } else { (m + loops) / 2 }
+    }
+
+    fn degree(ref self, s: i64) -> i64 {
+        if self.directed {
+            return (self.succ[s].len() + self.pred[s].len()) as i64;
+        }
+        let mut d = self.succ[s].len() as i64;
+        if find_adj(self.succ[s], s) >= 0 {
+            d += 1;
+        }
+        d
+    }
+
+    // G.edges(data=True): a Graph yields each edge once, from the
+    // earlier of its two nodes.
+    fn edges(ref self) -> Vec[(i64, i64, i64)] {
+        let mut out: Vec[(i64, i64, i64)] = Vec.new();
+        let mut seen: Vec[bool] = Vec.filled(self.size(), false);
+        for u in self.nodes().into_iter() {
+            for k in 0..self.succ[u].len() as i64 {
+                let (v, w) = self.succ[u][k];
+                if self.directed or not seen[v] {
+                    out.push((u, v, w));
+                }
+            }
+            seen[u] = true;
+        }
+        out
+    }
+
+    // G.copy(): the nodes in order, then add_edge for every adjacency
+    // entry in order, which can reorder a Graph's lists.
+    fn copy(ref self) -> Graph {
+        let mut h = Graph.new(self.directed);
+        let mut map: Vec[i64] = Vec.filled(self.size(), -1);
+        for u in self.nodes().into_iter() {
+            map[u] = h.add_node(self.names[u]);
+        }
+        for u in self.nodes().into_iter() {
+            for k in 0..self.succ[u].len() as i64 {
+                let (v, w) = self.succ[u][k];
+                h.link(map[u], map[v], w);
+            }
+        }
+        h
+    }
+
+    // G.reverse() for a DiGraph.
+    fn reverse(ref self) -> Graph {
+        let mut h = Graph.new(true);
+        let mut map: Vec[i64] = Vec.filled(self.size(), -1);
+        for u in self.nodes().into_iter() {
+            map[u] = h.add_node(self.names[u]);
+        }
+        for e in self.edges().into_iter() {
+            h.link(map[e.1], map[e.0], e.2);
+        }
+        h
+    }
+
+    fn names_of(ref self, slots: ref Vec[i64]) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for i in 0..slots.len() as i64 {
+            out.push(self.names[slots[i]].clone());
+        }
+        out
+    }
+
+    fn chain(ref self, slots: ref Vec[i64]) -> String {
+        join(self.names_of(slots), " > ")
+    }
+
+    fn sep(ref self) -> Str {
+        if self.directed { ">" } else { "-" }
+    }
+
+    fn edge_text(ref self, a: i64, b: i64) -> String {
+        f"{self.names[a]}{self.sep()}{self.names[b]}"
+    }
+}
+
+// edges_line in oracle.py: the first k edges, " ..." when there are more.
+fn edges_line(g: ref Graph, es: ref Vec[(i64, i64)], k: i64) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..es.len() as i64 {
+        parts.push(g.edge_text(es[i].0, es[i].1));
+    }
+    few(parts, k)
+}
+
+// ------------------------------------------------------------ traversal
+
+fn nbr_count(g: ref Graph, v: i64, reverse: bool) -> i64 {
+    if reverse { g.pred[v].len() as i64 } else { g.succ[v].len() as i64 }
+}
+
+fn nbr_at(g: ref Graph, v: i64, i: i64, reverse: bool) -> i64 {
+    if reverse { g.pred[v][i].0 } else { g.succ[v][i].0 }
+}
+
+// generic_bfs_edges: level by level, each parent's children in adjacency
+// order. reverse walks a DiGraph's predecessors (bfs_edges(reverse=True)).
+fn bfs_edges(g: ref Graph, source: i64, reverse: bool) -> Vec[(i64, i64)] {
+    let n = g.live;
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut seen: Vec[bool] = Vec.filled(g.size(), false);
+    seen[source] = true;
+    let mut seen_count = 1;
+    let mut next: Vec[i64] = Vec.new();
+    next.push(source);
+    let mut depth = 0;
+    while next.len() > 0 and depth < n {
+        let this = next;
+        next = Vec.new();
+        for k in 0..this.len() as i64 {
+            let parent = this[k];
+            for i in 0..nbr_count(g, parent, reverse) {
+                let child = nbr_at(g, parent, i, reverse);
+                if not seen[child] {
+                    seen[child] = true;
+                    seen_count += 1;
+                    next.push(child);
+                    out.push((parent, child));
+                }
+            }
+            if seen_count == n {
+                return out;
+            }
+        }
+        depth += 1;
+    }
+    out
+}
+
+// dfs_edges from one source: a stack of (node, next neighbour index).
+fn dfs_edges(g: ref Graph, source: i64) -> Vec[(i64, i64)] {
+    let depth_limit = g.live;
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut visited: Vec[bool] = Vec.filled(g.size(), false);
+    visited[source] = true;
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    stack.push((source, 0));
+    let mut depth_now = 1;
+    while stack.len() > 0 {
+        let top = stack.len() as i64 - 1;
+        let (parent, start) = stack[top];
+        let mut i = start;
+        let mut pushed = false;
+        while i < g.succ[parent].len() as i64 {
+            let child = g.succ[parent][i].0;
+            i += 1;
+            if not visited[child] {
+                out.push((parent, child));
+                visited[child] = true;
+                if depth_now < depth_limit {
+                    stack[top] = (parent, i);
+                    stack.push((child, 0));
+                    depth_now += 1;
+                    pushed = true;
+                    break;
+                }
+            }
+        }
+        if not pushed {
+            let _ = stack.pop();
+            depth_now -= 1;
+        }
+    }
+    out
+}
+
+fn heads(source: i64, es: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    out.push(source);
+    for i in 0..es.len() as i64 {
+        out.push(es[i].1);
+    }
+    out
+}
+
+// ------------------------------------------------------------ shortest paths
+
+// bidirectional_shortest_path: BFS from both ends, always expanding the
+// smaller fringe, until the searches meet.
+fn bidirectional_path(g: ref Graph, source: i64, target: i64) -> Result[Vec[i64], String] {
+    let mut path: Vec[i64] = Vec.new();
+    if source == target {
+        path.push(source);
+        return Ok(path);
+    }
+    let n = g.size();
+    let mut pred: Vec[i64] = Vec.filled(n, ABSENT);
+    let mut succ: Vec[i64] = Vec.filled(n, ABSENT);
+    pred[source] = NONE;
+    succ[target] = NONE;
+    let mut forward: Vec[i64] = Vec.new();
+    forward.push(source);
+    let mut backward: Vec[i64] = Vec.new();
+    backward.push(target);
+    let mut meet = -1;
+    while forward.len() > 0 and backward.len() > 0 and meet < 0 {
+        if forward.len() <= backward.len() {
+            let this = forward;
+            forward = Vec.new();
+            let mut k = 0;
+            while k < this.len() as i64 and meet < 0 {
+                let v = this[k];
+                let mut i = 0;
+                while i < g.succ[v].len() as i64 {
+                    let w = g.succ[v][i].0;
+                    i += 1;
+                    if pred[w] == ABSENT {
+                        forward.push(w);
+                        pred[w] = v;
+                    }
+                    if succ[w] != ABSENT {
+                        meet = w;
+                        break;
+                    }
+                }
+                k += 1;
+            }
+        } else {
+            let this = backward;
+            backward = Vec.new();
+            let back = g.directed;
+            let mut k = 0;
+            while k < this.len() as i64 and meet < 0 {
+                let v = this[k];
+                let mut i = 0;
+                while i < nbr_count(g, v, back) {
+                    let w = nbr_at(g, v, i, back);
+                    i += 1;
+                    if succ[w] == ABSENT {
+                        succ[w] = v;
+                        backward.push(w);
+                    }
+                    if pred[w] != ABSENT {
+                        meet = w;
+                        break;
+                    }
+                }
+                k += 1;
+            }
+        }
+    }
+    if meet < 0 {
+        return Err(f"No path between {g.names[source]} and {g.names[target]}.");
+    }
+    let mut w = meet;
+    while w != NONE {
+        path.push(w);
+        w = pred[w];
+    }
+    path.reverse();
+    w = succ[path[path.len() as i64 - 1]];
+    while w != NONE {
+        path.push(w);
+        w = succ[w];
+    }
+    Ok(path)
+}
+
+// The result of _dijkstra_multisource from one source: final distances
+// in the order they were settled, and for each node the node it was last
+// improved from (its path is that node's path plus itself).
+struct Dijkstra {
+    dist: Vec[i64],
+    order: Vec[i64],
+    parent: Vec[i64],
+}
+
+fn dijkstra(g: ref Graph, source: i64, target: i64) -> Dijkstra {
+    let n = g.size();
+    let mut dist: Vec[i64] = Vec.filled(n, ABSENT);
+    let mut seen: Vec[i64] = Vec.filled(n, ABSENT);
+    let mut parent: Vec[i64] = Vec.filled(n, NONE);
+    let mut order: Vec[i64] = Vec.new();
+    let mut fringe: Vec[(i64, i64, i64)] = Vec.new();
+    let mut c = 0;
+    seen[source] = 0;
+    heap_push(mut fringe, (0, c, source));
+    c += 1;
+    while fringe.len() > 0 {
+        let (d, _, v) = heap_pop(mut fringe);
+        if dist[v] != ABSENT {
+            continue;
+        }
+        dist[v] = d;
+        order.push(v);
+        if v == target {
+            break;
+        }
+        for i in 0..g.succ[v].len() as i64 {
+            let (u, cost) = g.succ[v][i];
+            let vu_dist = dist[v] + cost;
+            if dist[u] != ABSENT {
+                continue;
+            }
+            if seen[u] == ABSENT or vu_dist < seen[u] {
+                seen[u] = vu_dist;
+                heap_push(mut fringe, (vu_dist, c, u));
+                c += 1;
+                parent[u] = v;
+            }
+        }
+    }
+    Dijkstra { dist: dist, order: order, parent: parent }
+}
+
+fn dijkstra_path(g: ref Graph, source: i64, target: i64) -> (i64, Vec[i64]) {
+    let r = dijkstra(g, source, target);
+    let mut path: Vec[i64] = Vec.new();
+    let mut v = target;
+    while v != NONE {
+        path.push(v);
+        v = r.parent[v];
+    }
+    path.reverse();
+    (r.dist[target], path)
+}
+
+// single_source_shortest_path_length: BFS levels, as (node, hops) in the
+// order found.
+fn bfs_lengths(g: ref Graph, source: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut seen: Vec[bool] = Vec.filled(g.size(), false);
+    seen[source] = true;
+    let mut level: Vec[i64] = Vec.new();
+    level.push(source);
+    let mut d = 0;
+    while level.len() > 0 {
+        let mut next: Vec[i64] = Vec.new();
+        for k in 0..level.len() as i64 {
+            let v = level[k];
+            out.push((v, d));
+            for i in 0..g.succ[v].len() as i64 {
+                let w = g.succ[v][i].0;
+                if not seen[w] {
+                    seen[w] = true;
+                    next.push(w);
+                }
+            }
+        }
+        level = next;
+        d += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ components
+
+// _plain_bfs: the nodes reachable from source, in the order found.
+fn plain_bfs(g: ref Graph, source: i64) -> Vec[i64] {
+    let n = g.live;
+    let mut seen: Vec[bool] = Vec.filled(g.size(), false);
+    let mut out: Vec[i64] = Vec.new();
+    seen[source] = true;
+    out.push(source);
+    let mut next: Vec[i64] = Vec.new();
+    next.push(source);
+    while next.len() > 0 {
+        let this = next;
+        next = Vec.new();
+        for k in 0..this.len() as i64 {
+            let v = this[k];
+            for i in 0..g.succ[v].len() as i64 {
+                let w = g.succ[v][i].0;
+                if not seen[w] {
+                    seen[w] = true;
+                    out.push(w);
+                    next.push(w);
+                }
+            }
+            if out.len() as i64 == n {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+fn connected_components(g: ref Graph) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut seen: Vec[bool] = Vec.filled(g.size(), false);
+    for v in g.nodes().into_iter() {
+        if not seen[v] {
+            let c = plain_bfs(g, v);
+            for i in 0..c.len() as i64 {
+                seen[c[i]] = true;
+            }
+            out.push(c);
+        }
+    }
+    out
+}
+
+// strongly_connected_components: networkx's non-recursive Tarjan.
+fn strongly_connected(g: ref Graph) -> Vec[Vec[i64]] {
+    let n = g.size();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut preorder: Vec[i64] = Vec.filled(n, 0);
+    let mut lowlink: Vec[i64] = Vec.filled(n, 0);
+    let mut found: Vec[bool] = Vec.filled(n, false);
+    let mut next_nbr: Vec[i64] = Vec.filled(n, 0);
+    let mut scc_queue: Vec[i64] = Vec.new();
+    let mut i = 0;
+    for source in g.nodes().into_iter() {
+        if found[source] {
+            continue;
+        }
+        let mut queue: Vec[i64] = Vec.new();
+        queue.push(source);
+        while queue.len() > 0 {
+            let v = queue[queue.len() as i64 - 1];
+            if preorder[v] == 0 {
+                i += 1;
+                preorder[v] = i;
+            }
+            let mut done = true;
+            while next_nbr[v] < g.succ[v].len() as i64 {
+                let w = g.succ[v][next_nbr[v]].0;
+                next_nbr[v] += 1;
+                if preorder[w] == 0 {
+                    queue.push(w);
+                    done = false;
+                    break;
+                }
+            }
+            if done {
+                lowlink[v] = preorder[v];
+                for k in 0..g.succ[v].len() as i64 {
+                    let w = g.succ[v][k].0;
+                    if not found[w] {
+                        if preorder[w] > preorder[v] {
+                            lowlink[v] = lowlink[v].min(lowlink[w]);
+                        } else {
+                            lowlink[v] = lowlink[v].min(preorder[w]);
+                        }
+                    }
+                }
+                let _ = queue.pop();
+                if lowlink[v] == preorder[v] {
+                    let mut scc: Vec[i64] = Vec.new();
+                    scc.push(v);
+                    while scc_queue.len() > 0 and preorder[scc_queue[scc_queue.len() as i64 - 1]] > preorder[v] {
+                        scc.push(scc_queue.pop().unwrap());
+                    }
+                    for k in 0..scc.len() as i64 {
+                        found[scc[k]] = true;
+                    }
+                    out.push(scc);
+                } else {
+                    scc_queue.push(v);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn comps_line(g: ref Graph, cs: ref Vec[Vec[i64]]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut flat: Vec[String] = Vec.new();
+    for i in 0..cs.len() as i64 {
+        let mut names = g.names_of(cs[i]);
+        sort_names(mut names);
+        parts.push(f"{names.len()} {names[0]}");
+        flat.push(join(names, " "));
+    }
+    let mut head = String.new();
+    for i in 0..parts.len() as i64 {
+        if i == 6 {
+            head.push_str(" ...");
+            break;
+        }
+        if i > 0 {
+            head.push_str(" | ");
+        }
+        head.push_str(parts[i]);
+    }
+    let flat_text = join(flat, ";");
+    f"{cs.len()} components: {head}; fnv {fnv(flat_text):08x}"
+}
+
+// condensation: one node per strongly connected component, numbered in
+// the order Tarjan finds them, and an edge wherever G crosses two.
+fn condensation(g: ref Graph) -> String {
+    let cs = strongly_connected(g);
+    let k = cs.len() as i64;
+    let mut mapping: Vec[i64] = Vec.filled(g.size(), -1);
+    for i in 0..k {
+        for j in 0..cs[i].len() as i64 {
+            mapping[cs[i][j]] = i;
+        }
+    }
+    let mut c = Graph.new(true);
+    for i in 0..k {
+        let _ = c.add_node(f"{i}");
+    }
+    for e in g.edges().into_iter() {
+        let a = mapping[e.0];
+        let b = mapping[e.1];
+        if a != b {
+            c.link(a, b, 1);
+        }
+    }
+    let mut sources = 0;
+    let mut sinks = 0;
+    for v in 0..k {
+        if c.pred[v].len() == 0 {
+            sources += 1;
+        }
+        if c.succ[v].len() == 0 {
+            sinks += 1;
+        }
+    }
+    f"{k} nodes, {c.edge_count()} edges; {sources} sources, {sinks} sinks"
+}
+
+// ------------------------------------------------------------ DAGs
+
+const CYCLE_MSG: Str = "Graph contains a cycle or graph changed during iteration";
+const UNDIRECTED_TOPO: Str = "Topological sort not defined on undirected graphs.";
+
+// topological_generations: Kahn's algorithm a generation at a time, the
+// zero in-degree nodes in node order and then in the order their last
+// in-edge is removed.
+fn topological_generations(g: ref Graph) -> Result[Vec[Vec[i64]], String] {
+    if not g.directed {
+        return Err(UNDIRECTED_TOPO.to_string());
+    }
+    let mut indegree: Vec[i64] = Vec.filled(g.size(), 0);
+    let mut zero: Vec[i64] = Vec.new();
+    let mut left = 0;
+    for v in g.nodes().into_iter() {
+        let d = g.pred[v].len() as i64;
+        if d > 0 {
+            indegree[v] = d;
+            left += 1;
+        } else {
+            zero.push(v);
+        }
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    while zero.len() > 0 {
+        let this = zero;
+        zero = Vec.new();
+        for k in 0..this.len() as i64 {
+            let node = this[k];
+            for i in 0..g.succ[node].len() as i64 {
+                let child = g.succ[node][i].0;
+                indegree[child] -= 1;
+                if indegree[child] == 0 {
+                    zero.push(child);
+                    left -= 1;
+                }
+            }
+        }
+        out.push(this);
+    }
+    if left > 0 {
+        return Err(CYCLE_MSG.to_string());
+    }
+    Ok(out)
+}
+
+fn topological_sort(g: ref Graph) -> Result[Vec[i64], String] {
+    let gens = topological_generations(g)?;
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..gens.len() as i64 {
+        for j in 0..gens[i].len() as i64 {
+            out.push(gens[i][j]);
+        }
+    }
+    Ok(out)
+}
+
+fn is_dag(g: ref Graph) -> bool {
+    g.directed and topological_sort(g).is_ok()
+}
+
+// lexicographical_topological_sort: a heap of (key, node id, node), the
+// key being the node's name; its rank among the sorted names orders the
+// same way.
+fn lexicographical_topological_sort(g: ref Graph) -> Result[Vec[i64], String] {
+    if not g.directed {
+        return Err(UNDIRECTED_TOPO.to_string());
+    }
+    let nodes = g.nodes();
+    let mut by_name: Vec[(String, i64)] = Vec.new();
+    for i in 0..nodes.len() as i64 {
+        by_name.push((g.names[nodes[i]].clone(), nodes[i]));
+    }
+    by_name.sort_by(|a, b| a.0.cmp(b.0));
+    let mut rank: Vec[i64] = Vec.filled(g.size(), 0);
+    let mut id: Vec[i64] = Vec.filled(g.size(), 0);
+    for i in 0..by_name.len() as i64 {
+        rank[by_name[i].1] = i;
+        id[nodes[i]] = i;
+    }
+    let mut indegree: Vec[i64] = Vec.filled(g.size(), 0);
+    let mut heap: Vec[(i64, i64, i64)] = Vec.new();
+    let mut left = 0;
+    for v in nodes.into_iter() {
+        let d = g.pred[v].len() as i64;
+        if d > 0 {
+            indegree[v] = d;
+            left += 1;
+        } else {
+            heap_push(mut heap, (rank[v], id[v], v));
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    while heap.len() > 0 {
+        let (_, _, node) = heap_pop(mut heap);
+        for i in 0..g.succ[node].len() as i64 {
+            let child = g.succ[node][i].0;
+            indegree[child] -= 1;
+            if indegree[child] == 0 {
+                heap_push(mut heap, (rank[child], id[child], child));
+                left -= 1;
+            }
+        }
+        out.push(node);
+    }
+    if left > 0 {
+        return Err(CYCLE_MSG.to_string());
+    }
+    Ok(out)
+}
+
+// dag_longest_path: for each node in topological order, the best
+// (length, predecessor) over its in-edges, the first on a tie; the path
+// ends at the first node with the greatest length.
+fn dag_longest_path(g: ref Graph) -> Result[(i64, Vec[i64]), String] {
+    let topo = topological_sort(g)?;
+    let n = g.size();
+    let mut dist_len: Vec[i64] = Vec.filled(n, 0);
+    let mut dist_from: Vec[i64] = Vec.filled(n, -1);
+    for t in 0..topo.len() as i64 {
+        let v = topo[t];
+        let mut best_len = 0;
+        let mut best_from = v;
+        let mut any = false;
+        for i in 0..g.pred[v].len() as i64 {
+            let (u, w) = g.pred[v][i];
+            let len = dist_len[u] + w;
+            if not any or len > best_len {
+                best_len = len;
+                best_from = u;
+                any = true;
+            }
+        }
+        if best_len >= 0 {
+            dist_len[v] = best_len;
+            dist_from[v] = best_from;
+        } else {
+            dist_len[v] = 0;
+            dist_from[v] = v;
+        }
+    }
+    let mut path: Vec[i64] = Vec.new();
+    if topo.len() == 0 {
+        return Ok((0, path));
+    }
+    let mut v = topo[0];
+    for t in 0..topo.len() as i64 {
+        if dist_len[topo[t]] > dist_len[v] {
+            v = topo[t];
+        }
+    }
+    let mut u = -1;
+    while u != v {
+        path.push(v);
+        u = v;
+        v = dist_from[v];
+    }
+    path.reverse();
+    let mut length = 0;
+    for i in 1..path.len() as i64 {
+        length += g.weight(path[i - 1], path[i]);
+    }
+    Ok((length, path))
+}
+
+// transitive_reduction: each node keeps the out-edges that no other
+// out-neighbour reaches; a neighbour's descendants are found once by DFS
+// and dropped when its last in-edge has been seen.
+fn transitive_reduction(g: ref Graph) -> Result[Vec[Vec[bool]], String] {
+    if not is_dag(g) {
+        return Err("Directed Acyclic Graph required for transitive_reduction".to_string());
+    }
+    let n = g.size();
+    let mut descendants: Vec[Vec[bool]] = Vec.new();
+    let mut known: Vec[bool] = Vec.filled(n, false);
+    for _ in 0..n {
+        descendants.push(Vec.new());
+    }
+    let mut check_count: Vec[i64] = Vec.filled(n, 0);
+    for v in g.nodes().into_iter() {
+        check_count[v] = g.pred[v].len() as i64;
+    }
+    let mut kept: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..n {
+        kept.push(Vec.filled(n, false));
+    }
+    for u in g.nodes().into_iter() {
+        let mut u_nbrs: Vec[bool] = Vec.filled(n, false);
+        for i in 0..g.succ[u].len() as i64 {
+            u_nbrs[g.succ[u][i].0] = true;
+        }
+        for i in 0..g.succ[u].len() as i64 {
+            let v = g.succ[u][i].0;
+            if u_nbrs[v] {
+                if not known[v] {
+                    let mut d: Vec[bool] = Vec.filled(n, false);
+                    for e in dfs_edges(g, v).into_iter() {
+                        d[e.1] = true;
+                    }
+                    descendants[v] = d;
+                    known[v] = true;
+                }
+                for x in 0..n {
+                    if descendants[v][x] {
+                        u_nbrs[x] = false;
+                    }
+                }
+            }
+            check_count[v] -= 1;
+            if check_count[v] == 0 {
+                descendants[v] = Vec.new();
+                known[v] = false;
+            }
+        }
+        kept[u] = u_nbrs;
+    }
+    Ok(kept)
+}
+
+fn reachable_set(g: ref Graph, source: i64, reverse: bool) -> Vec[String] {
+    let mut names: Vec[String] = Vec.new();
+    for e in bfs_edges(g, source, reverse).into_iter() {
+        names.push(g.names[e.1].clone());
+    }
+    sort_names(mut names);
+    names
+}
+
+// ------------------------------------------------------------ cycles
+
+// edge_dfs from one node with no orientation: each edge once (a Graph's
+// edge in either direction counts as one), in DFS order.
+fn edge_dfs(g: ref Graph, start: i64) -> Vec[(i64, i64)] {
+    let n = g.size();
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut visited_edges: Vec[bool] = Vec.filled(n * n, false);
+    let mut visited_nodes: Vec[bool] = Vec.filled(n, false);
+    let mut pos: Vec[i64] = Vec.filled(n, 0);
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(start);
+    while stack.len() > 0 {
+        let cur = stack[stack.len() as i64 - 1];
+        if not visited_nodes[cur] {
+            pos[cur] = 0;
+            visited_nodes[cur] = true;
+        }
+        if pos[cur] >= g.succ[cur].len() as i64 {
+            let _ = stack.pop();
+            continue;
+        }
+        let head = g.succ[cur][pos[cur]].0;
+        pos[cur] += 1;
+        let id = if g.directed or cur <= head { cur * n + head } else { head * n + cur };
+        if not visited_edges[id] {
+            visited_edges[id] = true;
+            stack.push(head);
+            out.push((cur, head));
+        }
+    }
+    out
+}
+
+// find_cycle with no source and no orientation.
+fn find_cycle(g: ref Graph) -> Result[Vec[(i64, i64)], String] {
+    let n = g.size();
+    let mut explored: Vec[bool] = Vec.filled(n, false);
+    let mut cycle: Vec[(i64, i64)] = Vec.new();
+    let mut final_node = -1;
+    for start in g.nodes().into_iter() {
+        if explored[start] {
+            continue;
+        }
+        let mut edges: Vec[(i64, i64)] = Vec.new();
+        let mut seen: Vec[i64] = Vec.new();
+        seen.push(start);
+        let mut active: Vec[bool] = Vec.filled(n, false);
+        active[start] = true;
+        let mut previous_head = -1;
+        for edge in edge_dfs(g, start).into_iter() {
+            let (tail, head) = edge;
+            if explored[head] {
+                continue;
+            }
+            if previous_head != -1 and tail != previous_head {
+                loop {
+                    if edges.len() == 0 {
+                        active = Vec.filled(n, false);
+                        active[tail] = true;
+                        break;
+                    }
+                    let popped = edges.pop().unwrap();
+                    active[popped.1] = false;
+                    if edges.len() > 0 {
+                        let last_head = edges[edges.len() as i64 - 1].1;
+                        if tail == last_head {
+                            break;
+                        }
+                    }
+                }
+            }
+            edges.push(edge);
+            if active[head] {
+                cycle = edges;
+                final_node = head;
+                break;
+            } else {
+                seen.push(head);
+                active[head] = true;
+                previous_head = head;
+            }
+        }
+        if cycle.len() > 0 {
+            break;
+        }
+        for i in 0..seen.len() as i64 {
+            explored[seen[i]] = true;
+        }
+    }
+    if cycle.len() == 0 {
+        return Err("No cycle found.".to_string());
+    }
+    let mut at = 0;
+    for i in 0..cycle.len() as i64 {
+        at = i;
+        if cycle[i].0 == final_node {
+            break;
+        }
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for i in at..cycle.len() as i64 {
+        out.push(cycle[i]);
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ spanning trees
+
+// networkx.utils.UnionFind over slots: path compression on find, union by
+// weight (the heavier root wins).
+struct UnionFind {
+    parents: Vec[i64],
+    weights: Vec[i64],
+}
+
+impl UnionFind {
+    fn new(n: i64) -> UnionFind {
+        UnionFind { parents: Vec.filled(n, -1), weights: Vec.filled(n, 0) }
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        if self.parents[x] < 0 {
+            self.parents[x] = x;
+            self.weights[x] = 1;
+            return x;
+        }
+        let mut path: Vec[i64] = Vec.new();
+        let mut obj = x;
+        let mut root = self.parents[obj];
+        while root != obj {
+            path.push(obj);
+            obj = root;
+            root = self.parents[obj];
+        }
+        for i in 0..path.len() as i64 {
+            self.parents[path[i]] = root;
+        }
+        root
+    }
+
+    fn union(mut ref self, a: i64, b: i64) {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra == rb {
+            return;
+        }
+        let (root, other) = if self.weights[rb] > self.weights[ra] { (rb, ra) } else { (ra, rb) };
+        self.weights[root] += self.weights[other];
+        self.parents[other] = root;
+    }
+}
+
+// kruskal_mst_edges: the edges in G.edges() order, sorted by weight
+// (Python's sort is stable, so the edge order breaks ties; for the
+// maximum tree the sort is reversed and still stable).
+fn kruskal(g: ref Graph, minimum: bool) -> Vec[(i64, i64, i64)] {
+    let es = g.edges();
+    let mut order: Vec[(i64, i64)] = Vec.new();
+    for i in 0..es.len() as i64 {
+        let w = es[i].2;
+        order.push((if minimum { w } else { -w }, i));
+    }
+    order.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+    let mut subtrees = UnionFind.new(g.size());
+    let mut out: Vec[(i64, i64, i64)] = Vec.new();
+    for k in 0..order.len() as i64 {
+        let (u, v, w) = es[order[k].1];
+        if subtrees.find(u) != subtrees.find(v) {
+            out.push((u, v, w));
+            subtrees.union(u, v);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ flow
+
+// build_residual_network: every edge of G with its reverse at capacity
+// 0 (a Graph's edge both ways at full capacity). Edge records are shared
+// between a node's successor list and the other end's predecessor list,
+// as networkx shares one attribute dict.
+struct Residual {
+    n: i64,
+    from: Vec[i64],
+    to: Vec[i64],
+    cap: Vec[i64],
+    flow: Vec[i64],
+    succ: Vec[Vec[i64]],
+    pred: Vec[Vec[i64]],
+    index: Vec[i64],
+    inf: i64,
+}
+
+impl Residual {
+    fn edge(ref self, u: i64, v: i64) -> i64 {
+        self.index[u * self.n + v]
+    }
+
+    fn set(mut ref self, u: i64, v: i64, c: i64) {
+        let e = self.edge(u, v);
+        if e >= 0 {
+            self.cap[e] = c;
+            return;
+        }
+        let id = self.from.len() as i64;
+        self.from.push(u);
+        self.to.push(v);
+        self.cap.push(c);
+        self.flow.push(0);
+        self.succ[u].push(id);
+        self.pred[v].push(id);
+        self.index[u * self.n + v] = id;
+    }
+}
+
+fn build_residual(g: ref Graph) -> Residual {
+    let n = g.size();
+    let mut r = Residual {
+        n: n,
+        from: Vec.new(),
+        to: Vec.new(),
+        cap: Vec.new(),
+        flow: Vec.new(),
+        succ: Vec.new(),
+        pred: Vec.new(),
+        index: Vec.filled(n * n, -1),
+        inf: 0,
+    };
+    for _ in 0..n {
+        r.succ.push(Vec.new());
+        r.pred.push(Vec.new());
+    }
+    let mut list: Vec[(i64, i64, i64)] = Vec.new();
+    let mut total = 0;
+    for e in g.edges().into_iter() {
+        if e.0 != e.1 and e.2 > 0 {
+            list.push(e);
+            total += e.2;
+        }
+    }
+    r.inf = if total > 0 { 3 * total } else { 1 };
+    let inf = r.inf;
+    for k in 0..list.len() as i64 {
+        let (u, v, c) = list[k];
+        let cap = c.min(inf);
+        if g.directed {
+            if r.edge(u, v) < 0 {
+                r.set(u, v, cap);
+                r.set(v, u, 0);
+            } else {
+                r.set(u, v, cap);
+            }
+        } else {
+            r.set(u, v, cap);
+            r.set(v, u, cap);
+        }
+    }
+    r
+}
+
+// edmonds_karp_core: shortest augmenting paths found by a bidirectional
+// BFS over the residual edges with room left.
+fn edmonds_karp(r: mut ref Residual, s: i64, t: i64) -> i64 {
+    let n = r.n;
+    let mut flow_value = 0;
+    loop {
+        let mut pred: Vec[i64] = Vec.filled(n, ABSENT);
+        let mut succ: Vec[i64] = Vec.filled(n, ABSENT);
+        pred[s] = NONE;
+        succ[t] = NONE;
+        let mut q_s: Vec[i64] = Vec.new();
+        q_s.push(s);
+        let mut q_t: Vec[i64] = Vec.new();
+        q_t.push(t);
+        let mut meet = -1;
+        let mut stuck = false;
+        while meet < 0 and not stuck {
+            let mut q: Vec[i64] = Vec.new();
+            if q_s.len() <= q_t.len() {
+                let mut k = 0;
+                while k < q_s.len() as i64 and meet < 0 {
+                    let u = q_s[k];
+                    for i in 0..r.succ[u].len() as i64 {
+                        let e = r.succ[u][i];
+                        let v = r.to[e];
+                        if pred[v] == ABSENT and r.flow[e] < r.cap[e] {
+                            pred[v] = u;
+                            if succ[v] != ABSENT {
+                                meet = v;
+                                break;
+                            }
+                            q.push(v);
+                        }
+                    }
+                    k += 1;
+                }
+                if meet < 0 {
+                    if q.len() == 0 {
+                        stuck = true;
+                    }
+                    q_s = q;
+                }
+            } else {
+                let mut k = 0;
+                while k < q_t.len() as i64 and meet < 0 {
+                    let u = q_t[k];
+                    for i in 0..r.pred[u].len() as i64 {
+                        let e = r.pred[u][i];
+                        let v = r.from[e];
+                        if succ[v] == ABSENT and r.flow[e] < r.cap[e] {
+                            succ[v] = u;
+                            if pred[v] != ABSENT {
+                                meet = v;
+                                break;
+                            }
+                            q.push(v);
+                        }
+                    }
+                    k += 1;
+                }
+                if meet < 0 {
+                    if q.len() == 0 {
+                        stuck = true;
+                    }
+                    q_t = q;
+                }
+            }
+        }
+        if stuck {
+            break;
+        }
+        let mut path: Vec[i64] = Vec.new();
+        path.push(meet);
+        let mut u = meet;
+        while u != s {
+            u = pred[u];
+            path.push(u);
+        }
+        path.reverse();
+        u = meet;
+        while u != t {
+            u = succ[u];
+            path.push(u);
+        }
+        let mut f = r.inf;
+        for i in 1..path.len() as i64 {
+            let e = r.edge(path[i - 1], path[i]);
+            f = f.min(r.cap[e] - r.flow[e]);
+        }
+        for i in 1..path.len() as i64 {
+            let e = r.edge(path[i - 1], path[i]);
+            let back = r.edge(path[i], path[i - 1]);
+            r.flow[e] += f;
+            r.flow[back] -= f;
+        }
+        flow_value += f;
+    }
+    flow_value
+}
+
+// minimum_cut with flow_func=edmonds_karp: drop the saturated residual
+// edges; the sink side is every node that can still reach t.
+fn minimum_cut(g: ref Graph, s: i64, t: i64) -> (i64, Vec[bool]) {
+    let mut r = build_residual(g);
+    let value = edmonds_karp(mut r, s, t);
+    let n = r.n;
+    let mut sink_side: Vec[bool] = Vec.filled(n, false);
+    sink_side[t] = true;
+    let mut level: Vec[i64] = Vec.new();
+    level.push(t);
+    while level.len() > 0 {
+        let mut next: Vec[i64] = Vec.new();
+        for k in 0..level.len() as i64 {
+            let v = level[k];
+            for i in 0..r.pred[v].len() as i64 {
+                let e = r.pred[v][i];
+                let u = r.from[e];
+                if r.flow[e] != r.cap[e] and not sink_side[u] {
+                    sink_side[u] = true;
+                    next.push(u);
+                }
+            }
+        }
+        level = next;
+    }
+    (value, sink_side)
+}
+
+// ------------------------------------------------------------ biconnectivity
+
+// _biconnected_dfs, run once for both of its modes: the articulation
+// points in the order it yields them (with repeats), and the biconnected
+// components as edge lists.
+struct Biconnected {
+    points: Vec[i64],
+    components: Vec[Vec[(i64, i64)]],
+}
+
+fn biconnected_dfs(g: ref Graph) -> Biconnected {
+    let n = g.size();
+    let mut points: Vec[i64] = Vec.new();
+    let mut components: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut visited: Vec[bool] = Vec.filled(n, false);
+    for start in g.nodes().into_iter() {
+        if visited[start] {
+            continue;
+        }
+        let mut discovery: Vec[i64] = Vec.filled(n, -1);
+        let mut low: Vec[i64] = Vec.filled(n, -1);
+        let mut found = 1;
+        discovery[start] = 0;
+        low[start] = 0;
+        let mut root_children = 0;
+        visited[start] = true;
+        let mut edge_stack: Vec[(i64, i64)] = Vec.new();
+        let mut edge_index: Vec[i64] = Vec.filled(n * n, -1);
+        // (grandparent, parent, next child index)
+        let mut stack: Vec[(i64, i64, i64)] = Vec.new();
+        stack.push((start, start, 0));
+        while stack.len() > 0 {
+            let top = stack.len() as i64 - 1;
+            let (grandparent, parent, at) = stack[top];
+            if at < g.succ[parent].len() as i64 {
+                stack[top] = (grandparent, parent, at + 1);
+                let child = g.succ[parent][at].0;
+                if grandparent == child {
+                    continue;
+                }
+                if visited[child] {
+                    if discovery[child] <= discovery[parent] {
+                        low[parent] = low[parent].min(discovery[child]);
+                        edge_index[parent * n + child] = edge_stack.len() as i64;
+                        edge_stack.push((parent, child));
+                    }
+                } else {
+                    discovery[child] = found;
+                    low[child] = found;
+                    found += 1;
+                    visited[child] = true;
+                    stack.push((parent, child, 0));
+                    edge_index[parent * n + child] = edge_stack.len() as i64;
+                    edge_stack.push((parent, child));
+                }
+            } else {
+                let _ = stack.pop();
+                if stack.len() > 1 {
+                    if low[parent] >= discovery[grandparent] {
+                        let ind = edge_index[grandparent * n + parent];
+                        let mut comp: Vec[(i64, i64)] = Vec.new();
+                        while edge_stack.len() as i64 > ind {
+                            comp.push(edge_stack.remove(ind));
+                        }
+                        components.push(comp);
+                        points.push(grandparent);
+                    }
+                    low[grandparent] = low[parent].min(low[grandparent]);
+                } else if stack.len() == 1 {
+                    root_children += 1;
+                    let ind = edge_index[grandparent * n + parent];
+                    let mut comp: Vec[(i64, i64)] = Vec.new();
+                    while edge_stack.len() as i64 > ind {
+                        comp.push(edge_stack.remove(ind));
+                    }
+                    components.push(comp);
+                }
+            }
+        }
+        if root_children > 1 {
+            points.push(start);
+        }
+    }
+    Biconnected { points: points, components: components }
+}
+
+fn articulation_points(g: ref Graph) -> Vec[i64] {
+    let b = biconnected_dfs(g);
+    let mut seen: Vec[bool] = Vec.filled(g.size(), false);
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..b.points.len() as i64 {
+        let p = b.points[i];
+        if not seen[p] {
+            seen[p] = true;
+            out.push(p);
+        }
+    }
+    out
+}
+
+// The bridges in G.edges() order. networkx finds them as the edges in no
+// chain of a chain decomposition; that is the same set as the
+// biconnected components of a single edge, which is how they are found
+// here.
+fn bridges(g: ref Graph) -> Vec[(i64, i64)] {
+    let n = g.size();
+    let b = biconnected_dfs(g);
+    let mut single: Vec[bool] = Vec.filled(n * n, false);
+    for i in 0..b.components.len() as i64 {
+        if b.components[i].len() == 1 {
+            let (u, v) = b.components[i][0];
+            single[u * n + v] = true;
+            single[v * n + u] = true;
+        }
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for e in g.edges().into_iter() {
+        if single[e.0 * n + e.1] {
+            out.push((e.0, e.1));
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ cores
+
+// core_number: Batagelj and Zaversnik's bin sort, which swaps nodes
+// inside the list it is walking.
+fn core_number(g: ref Graph) -> Vec[i64] {
+    let n = g.size();
+    let gnodes = g.nodes();
+    let mut core: Vec[i64] = Vec.filled(n, 0);
+    for v in gnodes.into_iter() {
+        core[v] = g.degree(v);
+    }
+    let mut keyed: Vec[(i64, i64)] = Vec.new();
+    let all = g.nodes();
+    for i in 0..all.len() as i64 {
+        keyed.push((core[all[i]], i));
+    }
+    keyed.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+    let mut nodes: Vec[i64] = Vec.new();
+    for i in 0..keyed.len() as i64 {
+        nodes.push(all[keyed[i].1]);
+    }
+    let mut bins: Vec[i64] = Vec.new();
+    bins.push(0);
+    let mut curr = 0;
+    for i in 0..nodes.len() as i64 {
+        let d = core[nodes[i]];
+        while curr < d {
+            bins.push(i);
+            curr += 1;
+        }
+    }
+    let mut node_pos: Vec[i64] = Vec.filled(n, 0);
+    for i in 0..nodes.len() as i64 {
+        node_pos[nodes[i]] = i;
+    }
+    let mut nbrs: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        nbrs.push(Vec.new());
+    }
+    for v in all.into_iter() {
+        let mut list: Vec[i64] = Vec.new();
+        if g.directed {
+            for i in 0..g.pred[v].len() as i64 {
+                list.push(g.pred[v][i].0);
+            }
+        }
+        for i in 0..g.succ[v].len() as i64 {
+            list.push(g.succ[v][i].0);
+        }
+        nbrs[v] = list;
+    }
+    for idx in 0..nodes.len() as i64 {
+        let v = nodes[idx];
+        let around = nbrs[v].clone();
+        for k in 0..around.len() as i64 {
+            let u = around[k];
+            if core[u] > core[v] {
+                let mut at = 0;
+                while nbrs[u][at] != v {
+                    at += 1;
+                }
+                let _ = nbrs[u].remove(at);
+                let pos = node_pos[u];
+                let bin_start = bins[core[u]];
+                node_pos[u] = bin_start;
+                node_pos[nodes[bin_start]] = pos;
+                let t = nodes[bin_start];
+                nodes[bin_start] = nodes[pos];
+                nodes[pos] = t;
+                bins[core[u]] += 1;
+                core[u] -= 1;
+            }
+        }
+    }
+    core
+}
+
+// ------------------------------------------------------------ colouring
+
+fn smallest_free(g: ref Graph, u: i64, colors: ref Vec[i64]) -> i64 {
+    let mut used: Vec[bool] = Vec.filled(g.succ[u].len() as i64 + 1, false);
+    for i in 0..g.succ[u].len() as i64 {
+        let c = colors[g.succ[u][i].0];
+        if c >= 0 and c < used.len() as i64 {
+            used[c] = true;
+        }
+    }
+    let mut c = 0;
+    while used[c] {
+        c += 1;
+    }
+    c
+}
+
+// greedy_color: the nodes in strategy order, each taking the smallest
+// colour no neighbour has. Returns the colouring order and the colours.
+fn greedy_color(g: ref Graph, dsatur: bool) -> (Vec[i64], Vec[i64]) {
+    let n = g.size();
+    let mut colors: Vec[i64] = Vec.filled(n, -1);
+    let mut order: Vec[i64] = Vec.new();
+    let nodes = g.nodes();
+    if nodes.len() == 0 {
+        return (order, colors);
+    }
+    if not dsatur {
+        // strategy_largest_first: sorted(G, key=G.degree, reverse=True)
+        let mut keyed: Vec[(i64, i64)] = Vec.new();
+        for i in 0..nodes.len() as i64 {
+            keyed.push((-g.degree(nodes[i]), i));
+        }
+        keyed.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+        for k in 0..keyed.len() as i64 {
+            let u = nodes[keyed[k].1];
+            colors[u] = smallest_free(g, u, colors);
+            order.push(u);
+        }
+        return (order, colors);
+    }
+    // strategy_saturation_largest_first: the uncoloured node with the most
+    // distinct neighbour colours, then the highest degree, the first in
+    // node order on a tie.
+    let mut distinct: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..n {
+        distinct.push(Vec.filled(n + 1, false));
+    }
+    let mut first = nodes[0];
+    for i in 0..nodes.len() as i64 {
+        if g.degree(nodes[i]) > g.degree(first) {
+            first = nodes[i];
+        }
+    }
+    colors[first] = smallest_free(g, first, colors);
+    order.push(first);
+    for i in 0..g.succ[first].len() as i64 {
+        distinct[g.succ[first][i].0][0] = true;
+    }
+    while (order.len() as i64) < g.live {
+        for k in 0..order.len() as i64 {
+            let v = order[k];
+            for i in 0..g.succ[v].len() as i64 {
+                distinct[g.succ[v][i].0][colors[v]] = true;
+            }
+        }
+        let mut best = -1;
+        let mut best_sat = 0;
+        let mut best_deg = 0;
+        for i in 0..nodes.len() as i64 {
+            let v = nodes[i];
+            if colors[v] >= 0 {
+                continue;
+            }
+            let mut sat = 0;
+            for c in 0..n + 1 {
+                if distinct[v][c] {
+                    sat += 1;
+                }
+            }
+            let deg = g.degree(v);
+            if best < 0 or sat > best_sat or (sat == best_sat and deg > best_deg) {
+                best = v;
+                best_sat = sat;
+                best_deg = deg;
+            }
+        }
+        colors[best] = smallest_free(g, best, colors);
+        order.push(best);
+    }
+    (order, colors)
+}
+
+// ------------------------------------------------------------ triangles
+
+fn triangles(g: ref Graph) -> Vec[i64] {
+    let n = g.size();
+    let mut later: Vec[Vec[bool]] = Vec.new();
+    let mut done: Vec[bool] = Vec.filled(n, false);
+    for _ in 0..n {
+        later.push(Vec.filled(n, false));
+    }
+    let nodes = g.nodes();
+    for k in 0..nodes.len() as i64 {
+        let v = nodes[k];
+        for i in 0..g.succ[v].len() as i64 {
+            let w = g.succ[v][i].0;
+            if not done[w] and w != v {
+                later[v][w] = true;
+            }
+        }
+        done[v] = true;
+    }
+    let mut count: Vec[i64] = Vec.filled(n, 0);
+    for k in 0..nodes.len() as i64 {
+        let a = nodes[k];
+        for b in 0..n {
+            if not later[a][b] {
+                continue;
+            }
+            let mut m = 0;
+            for c in 0..n {
+                if later[a][c] and later[b][c] {
+                    m += 1;
+                    count[c] += 1;
+                }
+            }
+            count[a] += m;
+            count[b] += m;
+        }
+    }
+    count
+}
+
+// ------------------------------------------------------------ bipartite
+
+// bipartite.color: a stack-driven search from each node that has a
+// neighbour; isolates get colour 0. Returns None when two neighbours
+// share a colour.
+fn bipartite_color(g: ref Graph) -> Option[Vec[i64]] {
+    let n = g.size();
+    let mut color: Vec[i64] = Vec.filled(n, -1);
+    for s in g.nodes().into_iter() {
+        if color[s] >= 0 or g.succ[s].len() == 0 {
+            continue;
+        }
+        let mut queue: Vec[i64] = Vec.new();
+        queue.push(s);
+        color[s] = 1;
+        while queue.len() > 0 {
+            let v = queue.pop().unwrap();
+            let c = 1 - color[v];
+            for i in 0..g.succ[v].len() as i64 {
+                let w = g.succ[v][i].0;
+                if color[w] >= 0 {
+                    if color[w] == color[v] {
+                        return None;
+                    }
+                } else {
+                    color[w] = c;
+                    queue.push(w);
+                }
+            }
+        }
+    }
+    for s in g.nodes().into_iter() {
+        if g.degree(s) == 0 {
+            color[s] = 0;
+        }
+    }
+    Some(color)
+}
+
+// ------------------------------------------------------------ distances
+
+// eccentricity: the longest shortest path from every node, by hops or by
+// weight. Err when some node is out of reach.
+fn eccentricity(g: ref Graph, weighted: bool) -> Result[Vec[i64], String] {
+    let mut e: Vec[i64] = Vec.filled(g.size(), -1);
+    for v in g.nodes().into_iter() {
+        let mut far = 0;
+        let mut reached = 0;
+        if weighted {
+            let r = dijkstra(g, v, -1);
+            reached = r.order.len() as i64;
+            for i in 0..r.order.len() as i64 {
+                far = far.max(r.dist[r.order[i]]);
+            }
+        } else {
+            let lens = bfs_lengths(g, v);
+            reached = lens.len() as i64;
+            for i in 0..lens.len() as i64 {
+                far = far.max(lens[i].1);
+            }
+        }
+        if reached != g.live {
+            if g.directed {
+                return Err("Found infinite path length because the digraph is not strongly connected".to_string());
+            }
+            return Err("Found infinite path length because the graph is not connected".to_string());
+        }
+        e[v] = far;
+    }
+    Ok(e)
+}
+
+// ------------------------------------------------------------ Euler
+
+fn is_eulerian(g: ref Graph) -> bool {
+    let nodes = g.nodes();
+    if g.directed {
+        for i in 0..nodes.len() as i64 {
+            if g.succ[nodes[i]].len() != g.pred[nodes[i]].len() {
+                return false;
+            }
+        }
+        return strongly_connected(g).len() == 1;
+    }
+    for i in 0..nodes.len() as i64 {
+        if g.degree(nodes[i]) % 2 != 0 {
+            return false;
+        }
+    }
+    nodes.len() > 0 and plain_bfs(g, nodes[0]).len() as i64 == g.live
+}
+
+// _simplegraph_eulerian_circuit on a copy (the reverse, for a DiGraph):
+// walk the first remaining edge out of the top of a vertex stack,
+// deleting it, and emit an edge each time a vertex runs out.
+fn eulerian_circuit(g: ref Graph) -> Vec[String] {
+    let mut h = if g.directed { g.reverse() } else { g.copy() };
+    let source = h.nodes()[0];
+    let mut out: Vec[String] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(source);
+    let mut last = -1;
+    while stack.len() > 0 {
+        let cur = stack[stack.len() as i64 - 1];
+        let deg = if h.directed { h.succ[cur].len() as i64 } else { h.degree(cur) };
+        if deg == 0 {
+            if last >= 0 {
+                if out.len() == 0 {
+                    out.push(h.names[last].clone());
+                }
+                out.push(h.names[cur].clone());
+            }
+            last = cur;
+            let _ = stack.pop();
+        } else {
+            let next = h.succ[cur][0].0;
+            stack.push(next);
+            let _ = h.unlink(cur, next);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ simple paths
+
+// _all_simple_edge_paths for one target: a stack of neighbour iterators,
+// the first of them over the single edge (None, source).
+fn all_simple_paths(g: ref Graph, source: i64, target: i64, cutoff: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if cutoff < 0 {
+        return out;
+    }
+    let mut in_path: Vec[bool] = Vec.filled(g.size(), false);
+    let mut path: Vec[i64] = Vec.new();
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    stack.push((-1, 0));
+    while stack.len() > 0 {
+        let top = stack.len() as i64 - 1;
+        let (node, at) = stack[top];
+        let mut p = at;
+        let mut next = -1;
+        if node < 0 {
+            if p == 0 {
+                p = 1;
+                if not in_path[source] {
+                    next = source;
+                }
+            }
+        } else {
+            while p < g.succ[node].len() as i64 {
+                let h = g.succ[node][p].0;
+                p += 1;
+                if not in_path[h] {
+                    next = h;
+                    break;
+                }
+            }
+        }
+        stack[top] = (node, p);
+        if next < 0 {
+            let _ = stack.pop();
+            if path.len() > 0 {
+                let gone = path.pop().unwrap();
+                in_path[gone] = false;
+            }
+            continue;
+        }
+        if next == target {
+            let mut found = path.clone();
+            found.push(next);
+            out.push(found);
+        }
+        if (path.len() as i64) < cutoff and not in_path[target] and next != target {
+            path.push(next);
+            in_path[next] = true;
+            stack.push((next, 0));
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ queries
+
+fn parse_num(s: ref String) -> i64 {
+    let mut v = 0;
+    let mut neg = false;
+    for b in s.bytes() {
+        if b == 45 {
+            neg = true;
+        } else {
+            v = v * 10 + (b as i64 - 48);
+        }
+    }
+    if neg { -v } else { v }
+}
+
+// not_implemented_for("directed") / ("undirected") on the networkx entry
+// points the queries use.
+fn kind_error(g: ref Graph, op: ref String) -> Option[String] {
+    let undirected_only = op == "components" or op == "cuts" or op == "bridges" or op == "mst" or op == "maxst" or op == "triangles";
+    let directed_only = op == "scc" or op == "condense" or op == "reduce" or op == "longest";
+    if g.directed and undirected_only {
+        return Some("not implemented for directed type".to_string());
+    }
+    if not g.directed and directed_only {
+        return Some("not implemented for undirected type".to_string());
+    }
+    None
+}
+
+fn sized_counts(sizes: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..sizes.len() as i64 {
+        parts.push(f"{sizes[i]}");
+    }
+    join(parts, " ")
+}
+
+fn query(g: ref Graph, op: ref String, args: ref Vec[String]) -> Result[String, String] {
+    if let Some(e) = kind_error(g, op) {
+        return Err(e);
+    }
+    if op == "info" {
+        let kind = if g.directed { "directed" } else { "undirected" };
+        return Ok(f"{g.live} nodes, {g.edge_count()} edges, {kind}");
+    }
+    if op == "degree" {
+        return Ok(f"{g.degree(g.slot(args[0]))}");
+    }
+    if op == "path" {
+        let s = g.slot(args[0]);
+        let t = g.slot(args[1]);
+        if s < 0 {
+            return Err(f"Source {args[0]} is not in G");
+        }
+        if t < 0 {
+            return Err(f"Target {args[1]} is not in G");
+        }
+        let p = bidirectional_path(g, s, t)?;
+        return Ok(f"{p.len() - 1} hops: {g.chain(p)}");
+    }
+    if op == "dijkstra" {
+        let s = g.slot(args[0]);
+        let t = g.slot(args[1]);
+        if s < 0 {
+            return Err(f"Node {args[0]} not found in graph");
+        }
+        if s == t {
+            return Ok(f"dist 0: {args[1]}");
+        }
+        if t < 0 {
+            return Err(f"No path to {args[1]}.");
+        }
+        let (d, p) = dijkstra_path(g, s, t);
+        if d == ABSENT {
+            return Err(f"No path to {args[1]}.");
+        }
+        return Ok(f"dist {d}: {g.chain(p)}");
+    }
+    if op == "reach" {
+        let s = g.slot(args[0]);
+        let k = parse_num(args[1]);
+        let r = dijkstra(g, s, -1);
+        let mut head: Vec[String] = Vec.new();
+        let mut flat: Vec[String] = Vec.new();
+        for i in 0..r.order.len() as i64 {
+            let v = r.order[i];
+            if i < k {
+                head.push(f"{g.names[v]} {r.dist[v]}");
+            }
+            flat.push(f"{g.names[v]}:{r.dist[v]}");
+        }
+        let flat_text = join(flat, ",");
+        let head_text = join(head, ", ");
+        return Ok(f"{r.order.len()} reached; {head_text}; fnv {fnv(flat_text):08x}");
+    }
+    if op == "bfs" {
+        let s = g.slot(args[0]);
+        return Ok(seq(g.names_of(heads(s, bfs_edges(g, s, false))), 12));
+    }
+    if op == "dfs" {
+        let s = g.slot(args[0]);
+        return Ok(seq(g.names_of(heads(s, dfs_edges(g, s))), 12));
+    }
+    if op == "components" {
+        return Ok(comps_line(g, connected_components(g)));
+    }
+    if op == "scc" {
+        return Ok(comps_line(g, strongly_connected(g)));
+    }
+    if op == "condense" {
+        return Ok(condensation(g));
+    }
+    if op == "mst" or op == "maxst" {
+        let es = kruskal(g, op == "mst");
+        let mut total = 0;
+        let mut head: Vec[String] = Vec.new();
+        let mut flat: Vec[String] = Vec.new();
+        for i in 0..es.len() as i64 {
+            let (u, v, w) = es[i];
+            total += w;
+            if i < 6 {
+                head.push(f"{g.names[u]}-{g.names[v]} {w}");
+            }
+            flat.push(f"{g.names[u]}-{g.names[v]}:{w}");
+        }
+        let flat_text = join(flat, ",");
+        let head_text = join(head, " ");
+        return Ok(f"{es.len()} edges, weight {total}; {head_text} ...; fnv {fnv(flat_text):08x}");
+    }
+    if op == "cuts" {
+        let ps = g.names_of(articulation_points(g));
+        return Ok(f"{ps.len()} cut points: {few(ps, 12)}");
+    }
+    if op == "bridges" {
+        let bs = bridges(g);
+        return Ok(f"{bs.len()} bridges: {edges_line(g, bs, 10)}");
+    }
+    if op == "core" {
+        let cn = core_number(g);
+        let nodes = g.nodes();
+        let mut top = 0;
+        for i in 0..nodes.len() as i64 {
+            top = top.max(cn[nodes[i]]);
+        }
+        let mut members: Vec[String] = Vec.new();
+        let mut hist: SortedMap[i64, i64] = SortedMap.new();
+        for i in 0..nodes.len() as i64 {
+            let v = nodes[i];
+            if cn[v] == top {
+                members.push(g.names[v].clone());
+            }
+            let old = hist.get(cn[v]) ?? 0;
+            hist.insert(cn[v], old + 1);
+        }
+        sort_names(mut members);
+        let mut hs: Vec[String] = Vec.new();
+        for (k, c) in hist {
+            hs.push(f"{k}:{c}");
+        }
+        let hist_text = join(hs, " ");
+        return Ok(f"max core {top}: {members.len()} nodes ({few(members, 8)}); histogram {hist_text}");
+    }
+    if op == "color" {
+        let (order, colors) = greedy_color(g, args[0] == "dsatur");
+        let mut k = 0;
+        for i in 0..order.len() as i64 {
+            k = k.max(colors[order[i]] + 1);
+        }
+        let mut sizes: Vec[i64] = Vec.filled(k, 0);
+        let mut flat: Vec[String] = Vec.new();
+        for i in 0..order.len() as i64 {
+            let v = order[i];
+            sizes[colors[v]] += 1;
+            flat.push(f"{g.names[v]}={colors[v]}");
+        }
+        let flat_text = join(flat, ",");
+        return Ok(f"{k} colors, classes {sized_counts(sizes)}; fnv {fnv(flat_text):08x}");
+    }
+    if op == "triangles" {
+        let t = triangles(g);
+        let nodes = g.nodes();
+        let mut total = 0;
+        let mut keyed: Vec[(i64, i64)] = Vec.new();
+        for i in 0..nodes.len() as i64 {
+            total += t[nodes[i]];
+            keyed.push((-t[nodes[i]], i));
+        }
+        keyed.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+        let mut top: Vec[String] = Vec.new();
+        for i in 0..keyed.len() as i64 {
+            if i == 3 {
+                break;
+            }
+            let v = nodes[keyed[i].1];
+            top.push(f"{g.names[v]} {t[v]}");
+        }
+        let top_text = join(top, ", ");
+        return Ok(f"{total / 3} triangles; most at {top_text}");
+    }
+    if op == "bipartite" {
+        let c = match bipartite_color(g) {
+            Some(c) => c,
+            None => return Ok("not bipartite".to_string()),
+        };
+        let mut ones: Vec[String] = Vec.new();
+        let mut zeros: Vec[String] = Vec.new();
+        for v in g.nodes().into_iter() {
+            if c[v] == 1 {
+                ones.push(g.names[v].clone());
+            } else {
+                zeros.push(g.names[v].clone());
+            }
+        }
+        sort_names(mut ones);
+        return Ok(f"bipartite, {ones.len()} + {zeros.len()}; one side {few(ones, 5)}");
+    }
+    if op == "ecc" or op == "wdiam" {
+        let e = eccentricity(g, op == "wdiam")?;
+        let nodes = g.nodes();
+        let mut d = e[nodes[0]];
+        let mut r = e[nodes[0]];
+        for i in 0..nodes.len() as i64 {
+            d = d.max(e[nodes[i]]);
+            r = r.min(e[nodes[i]]);
+        }
+        let mut center: Vec[String] = Vec.new();
+        let mut per = 0;
+        for i in 0..nodes.len() as i64 {
+            let v = nodes[i];
+            if e[v] == r {
+                center.push(g.names[v].clone());
+            }
+            if e[v] == d {
+                per += 1;
+            }
+        }
+        return Ok(f"diameter {d}, radius {r}, center {few(center, 6)}, periphery {per}");
+    }
+    if op == "euler" {
+        if not is_eulerian(g) {
+            return Ok("not eulerian".to_string());
+        }
+        let nodes = eulerian_circuit(g);
+        return Ok(f"circuit of {nodes.len() - 1} edges, {seq(nodes, 10)}");
+    }
+    if op == "paths" {
+        let s = g.slot(args[0]);
+        let t = g.slot(args[1]);
+        if s < 0 {
+            return Err(f"source node {args[0]} not in graph");
+        }
+        if t < 0 {
+            return Err(f"target node {args[1]} not in graph");
+        }
+        let ps = all_simple_paths(g, s, t, parse_num(args[2]));
+        if ps.len() == 0 {
+            return Ok("0 paths".to_string());
+        }
+        let mut short = ps[0].len() as i64;
+        for i in 0..ps.len() as i64 {
+            short = short.min(ps[i].len() as i64);
+        }
+        return Ok(f"{ps.len()} paths, shortest {short - 1} hops; first {g.chain(ps[0])}");
+    }
+    if op == "isdag" {
+        return Ok(if is_dag(g) { "yes".to_string() } else { "no".to_string() });
+    }
+    if op == "topo" {
+        return Ok(seq(g.names_of(topological_sort(g)?), 12));
+    }
+    if op == "lextopo" {
+        return Ok(seq(g.names_of(lexicographical_topological_sort(g)?), 12));
+    }
+    if op == "generations" {
+        let gens = topological_generations(g)?;
+        let mut sizes: Vec[i64] = Vec.new();
+        for i in 0..gens.len() as i64 {
+            sizes.push(gens[i].len() as i64);
+        }
+        let first = g.names_of(gens[0]);
+        return Ok(f"{gens.len()} generations, sizes {sized_counts(sizes)}; first {few(first, 6)}");
+    }
+    if op == "longest" {
+        let (length, p) = dag_longest_path(g)?;
+        return Ok(f"length {length}: {g.chain(p)}");
+    }
+    if op == "reduce" {
+        let kept = transitive_reduction(g)?;
+        let mut count = 0;
+        let mut gone: Vec[(i64, i64)] = Vec.new();
+        for e in g.edges().into_iter() {
+            if kept[e.0][e.1] {
+                count += 1;
+            } else {
+                gone.push((e.0, e.1));
+            }
+        }
+        return Ok(f"{count} kept, {gone.len()} removed: {edges_line(g, gone, 6)}");
+    }
+    if op == "ancestors" or op == "descendants" {
+        let s = g.slot(args[0]);
+        let names = reachable_set(g, s, op == "ancestors");
+        return Ok(f"{names.len()}: {few(names, 10)}");
+    }
+    if op == "cycle" {
+        let es = find_cycle(g)?;
+        let mut nodes: Vec[i64] = Vec.new();
+        for i in 0..es.len() as i64 {
+            nodes.push(es[i].0);
+        }
+        nodes.push(es[es.len() as i64 - 1].1);
+        return Ok(f"cycle of {es.len()}: {g.chain(nodes)}");
+    }
+    if op == "maxflow" {
+        let s = g.slot(args[0]);
+        let t = g.slot(args[1]);
+        if s < 0 {
+            return Err(f"node {args[0]} not in graph");
+        }
+        if t < 0 {
+            return Err(f"node {args[1]} not in graph");
+        }
+        if s == t {
+            return Err("source and sink are the same node".to_string());
+        }
+        let (value, sink_side) = minimum_cut(g, s, t);
+        let mut sink_count = 0;
+        let mut cut: Vec[(String, String, i64, i64)] = Vec.new();
+        for u in g.nodes().into_iter() {
+            if sink_side[u] {
+                sink_count += 1;
+                continue;
+            }
+            for i in 0..g.succ[u].len() as i64 {
+                let w = g.succ[u][i].0;
+                if sink_side[w] {
+                    cut.push((g.names[u].clone(), g.names[w].clone(), u, w));
+                }
+            }
+        }
+        cut.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+        let mut es: Vec[(i64, i64)] = Vec.new();
+        for i in 0..cut.len() as i64 {
+            es.push((cut[i].2, cut[i].3));
+        }
+        return Ok(f"value {value}; sink side {sink_count}; cut {edges_line(g, es, 8)}");
+    }
+    Err(f"unknown op {op}")
+}
+
+// ------------------------------------------------------------ jobs
+
+fn graph_index(names: ref Vec[String], name: ref String) -> i64 {
+    for i in 0..names.len() as i64 {
+        if names[i] == *name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn counts(g: ref Graph) -> String {
+    f"{g.live} nodes, {g.edge_count()} edges"
+}
+
+// The queries that change a graph (or add one), as G.copy(),
+// G.remove_edge, G.remove_node and G.add_edge.
+fn mutate(graphs: mut ref Vec[Graph], gnames: mut ref Vec[String], gi: i64, op: ref String, args: ref Vec[String]) -> Result[String, String] {
+    if op == "copy" {
+        let h = graphs[gi].copy();
+        let text = counts(h);
+        let at = graph_index(gnames, args[0]);
+        if at >= 0 {
+            graphs[at] = h;
+        } else {
+            graphs.push(h);
+            gnames.push(args[0].clone());
+        }
+        return Ok(text);
+    }
+    let g = mut ref graphs[gi];
+    if op == "rmedge" {
+        let a = g.slot(args[0]);
+        let b = g.slot(args[1]);
+        if a < 0 or b < 0 or not g.unlink(a, b) {
+            if g.directed {
+                return Err(f"The edge {args[0]}-{args[1]} not in graph.");
+            }
+            return Err(f"The edge {args[0]}-{args[1]} is not in the graph");
+        }
+        return Ok(counts(g));
+    }
+    if op == "rmnode" {
+        let s = g.slot(args[0]);
+        if s < 0 {
+            if g.directed {
+                return Err(f"The node {args[0]} is not in the digraph.");
+            }
+            return Err(f"The node {args[0]} is not in the graph.");
+        }
+        g.remove_node(s);
+        return Ok(counts(g));
+    }
+    // addedge
+    g.add_edge(args[0], args[1], parse_num(args[2]));
+    Ok(counts(g))
+}
+
+fn run_jobs(text: ref String) -> i64 {
+    let mut graphs: Vec[Graph] = Vec.new();
+    let mut gnames: Vec[String] = Vec.new();
+    let mut cur = -1;
+    let mut lines = 0;
+    for raw in text.split("\n") {
+        let line = raw.to_string();
+        if line.len() == 0 {
+            continue;
+        }
+        let w: Vec[String] = line.split(" ").map(|p| p.to_string()).collect();
+        if w[0] == "graph" {
+            graphs.push(Graph.new(w[2] == "directed"));
+            gnames.push(w[1].clone());
+            cur = graphs.len() as i64 - 1;
+        } else if w[0] == "n" {
+            let _ = graphs[cur].add_node(w[1]);
+        } else if w[0] == "e" {
+            graphs[cur].add_edge(w[1], w[2], parse_num(w[3]));
+        } else if w[0] == "end" {
+            cur = -1;
+        } else if w[0] == "q" {
+            let op = w[1].clone();
+            let mut name = w[2].clone();
+            let mut args: Vec[String] = Vec.new();
+            if op == "color" {
+                name = w[3].clone();
+                args.push(w[2].clone());
+            } else {
+                for i in 3..w.len() as i64 {
+                    args.push(w[i].clone());
+                }
+            }
+            let mut words: Vec[String] = Vec.new();
+            for i in 1..w.len() as i64 {
+                words.push(w[i].clone());
+            }
+            let label = join(words, " ");
+            let gi = graph_index(gnames, name);
+            let res = if op == "copy" or op == "rmedge" or op == "rmnode" or op == "addedge" {
+                mutate(mut graphs, mut gnames, gi, op, args)
+            } else {
+                query(graphs[gi], op, args)
+            };
+            match res {
+                Ok(s) => println(f"{label}: {s}"),
+                Err(e) => println(f"{label}: error: {e}"),
+            }
+            lines += 1;
+        }
+    }
+    println(f"{graphs.len()} graphs");
+    lines
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.txt".to_string(), jobs_text()) {
+        eprintln(f"cannot write data/jobs.txt: {e}");
+        return;
+    }
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/jobs.txt: {e}");
+            return;
+        },
+    };
+    let _ = run_jobs(text);
+    let _ = fs.remove_file("data/jobs.txt".to_string());
+}
+
+// ------------------------------------------------------------ data
+// data/jobs.txt, which main() writes out and reads back.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("graph roads undirected\ne ulley dunford 9\ne ulley penwick 22\ne ulley torham 24\ne ashton barham 13\ne ashton torham 10\ne ashton linford 17\ne fenley elmford 6\ne fenley ashford 19\ne ashford elmham 20\ne elmford ashford 22\ne venford yarham 8\ne venford morton 25\ne venford ulmouth 27\ne penton calham 20\ne penton ulmouth 21\ne penton morwick 24\ne ingham ulby 19\ne ingham salstead 18\ne fenford yarham 24\ne fenford venford 33\ne fenford morton 28\ne salstead ulby 26\ne salstead penmouth 26\ne penwick dunford 13\ne penwick torton 21\ne holford oakstead 10\ne holford linstead 13\ne holford venmouth 8\ne dunford norford 17\ne dunby ingley 22\ne dunby fenham 24\ne dunby kelmouth 23\ne weswick salley 12\ne weswick calby 18\ne salley calby 12\ne salley salby 29\ne venmouth oakstead 11\ne venmouth linstead 10\ne linford barham 14\ne linford torton 16\ne torton barham 21\ne morwick holford 11\ne morwick oakstead 18\ne torham barham 19\ne morton ulmouth 20\ne morton morwick 19\ne morton oakstead 21\ne oakstead linstead 18\ne calham ulmouth 26\ne elmham linford 19\ne elmham barham 23\ne norford salby 19\ne norford penwick 25\ne ulmouth morwick 14\ne salby weswick 19\ne fenton fenham 9\ne fenton kelmouth 17\ne fenton torham 29\ne ulby venmouth 24\ne penmouth calby 31\ne penmouth weswick 31\ne kelmouth fenham 9\ne ingley kelmouth 25\ne ulley fenwick 12\ne penton fenmouth 15\ne ulmouth kelley 16\ne ulley calford 24\ne calford kelley 12\nend\ngraph deps directed\nn libcore\ne libcore libutil 20\ne libutil liblog 2\ne libcore liblog 5\ne libutil libio 4\ne liblog libnet 29\ne libio libnet 27\ne libio libhttp 26\ne libutil libhttp 6\ne libcore libhttp 27\ne libnet libjson 23\ne libhttp libyaml 3\ne libnet libyaml 6\ne libio libcli 27\ne libutil libcli 23\ne libio libauth 26\ne libutil libauth 10\ne libio libcrypt 16\ne libyaml libcrypt 7\ne liblog libcrypt 17\ne libcore libdb 9\ne libyaml libdb 11\ne libcli libdb 21\ne libutil liborm 24\ne libauth libcache 6\ne libutil libcache 24\ne libcrypt libqueue 9\ne liborm libmail 2\ne libio libtmpl 12\ne libcrypt libtmpl 25\ne libjson libweb 11\n");
+    s.push_str("e liblog libapi 2\ne libnet libadmin 18\ne libapi libadmin 20\ne libtmpl libadmin 26\ne libcli libsearch 7\ne libauth libsearch 23\ne libcrypt libsearch 14\ne libauth libgeo 7\ne libhttp libimg 21\ne libnet libimg 13\ne libcrypt libimg 8\ne libio libpdf 20\ne libqueue libpdf 5\ne libjson libtest 11\ne libutil liblint 16\ne liborm libdoc 4\ne libapi libdoc 11\ne libdoc libbench 9\ne libdoc libmetric 20\ne libutil libtrace 29\ne libmail libtrace 29\ne libbench libconf 7\ne liblog libsched 16\ne libcrypt libsched 28\ne libbench libsched 12\ne libbench libpay 19\ne libpdf libpay 9\ne libmail libcart 16\ne libutil libuser 22\ne libweb libfeed 23\ne libpay libfeed 7\ne libadmin libchat 23\ne libapi libfile 12\ne libdoc libzip 16\ne libzip libdiff 6\ne libcore libdiff 2\ne libnet libdiff 7\ne libsearch appshop 13\ne libcrypt appshop 25\ne libchat appshop 7\ne libdiff appshop 3\ne libyaml appblog 7\ne libuser appblog 28\ne libtest appblog 5\ne libweb appblog 28\ne libapi appblog 3\ne libtest appwiki 25\ne libweb appwiki 22\ne libcache appwiki 7\ne libdiff appwiki 13\ne libcart appwiki 6\ne libgeo appcrm 15\ne libpdf appcrm 9\ne libdiff appcrm 28\ne libpdf appops 12\ne libzip appops 22\ne libtest appops 15\ne libcli appops 25\ne libmail appops 3\ne libbench appdesk 28\ne libapi appdesk 18\ne libsearch appdesk 18\ne libjson appdesk 15\nend\ngraph web directed\ne home item13 1\ne about login 1\ne about post00 1\ne about item11 1\ne blog post06 1\ne blog post08 1\ne blog item10 1\ne shop terms 1\ne shop post03 1\ne shop cart 1\ne help item05 1\ne help item01 1\ne faq item08 1\ne faq blog 1\ne faq post06 1\ne team post04 1\ne jobs post00 1\ne jobs post17 1\ne jobs item03 1\ne post00 post06 1\ne post00 post16 1\ne post01 press 1\ne post01 item10 1\ne post02 post12 1\ne post03 post16 1\ne post03 contact 1\ne post04 shop 1\ne post04 post12 1\ne post05 post14 1\ne post06 post04 1\ne post06 item09 1\ne post06 login 1\ne post07 blog 1\ne post08 item15 1\ne post08 item02 1\ne post08 help 1\ne post09 post16 1\ne post09 home 1\ne post09 about 1\ne post10 post03 1\ne post11 post08 1\ne post12 privacy 1\n");
+    s.push_str("e post13 post10 1\ne post13 login 1\ne post13 item14 1\ne post14 post16 1\ne post15 post03 1\ne post15 privacy 1\ne post15 post13 1\ne post16 post07 1\ne post16 jobs 1\ne post17 post02 1\ne post17 item10 1\ne post17 post14 1\ne item00 item03 1\ne item00 post07 1\ne item01 blog 1\ne item02 item01 1\ne item02 item09 1\ne item02 post07 1\ne item03 post16 1\ne item04 post05 1\ne item05 post14 1\ne item05 post09 1\ne item06 item04 1\ne item06 post02 1\ne item07 privacy 1\ne item07 about 1\ne item07 privacy 1\ne item08 post00 1\ne item08 about 1\ne item09 item13 1\ne item09 item11 1\ne item10 post10 1\ne item10 about 1\ne item10 item07 1\ne item11 post01 1\ne item12 post07 1\ne item12 home 1\ne item13 privacy 1\ne item13 item04 1\ne item14 item10 1\ne item15 item13 1\ne cart item05 1\ne cart post05 1\ne cart item13 1\ne login help 1\ne login about 1\ne login privacy 1\ne contact item04 1\ne contact post01 1\nend\ngraph pipes directed\ne src j0a 17\ne src j0b 19\ne j0a j1a 14\ne j0a j1b 8\ne j0a j1c 35\ne j0b j1a 37\ne j0b j1b 15\ne j0c j1a 5\ne j0c j1b 15\ne j0a j0b 6\ne j0b j0a 10\ne j1a j2a 20\ne j1a j2c 37\ne j1a j2d 26\ne j1a j2e 26\ne j1b j2b 11\ne j1c j2a 11\ne j1c j2e 15\ne j1a j1b 1\ne j1b j1a 8\ne j2a j3a 36\ne j2a j3c 38\ne j2b j3a 39\ne j2c j3a 32\ne j2c j3c 30\ne j2d j3a 12\ne j2d j3c 25\ne j2e j3b 27\ne j2e j3c 4\ne j2e j3d 5\ne j2a j2b 2\ne j2b j2a 5\ne j3a j4a 11\ne j3a j4b 8\ne j3b j4a 40\ne j3b j4b 37\ne j3b j4c 23\ne j3b j4d 2\ne j3c j4b 10\ne j3c j4c 23\ne j3d j4a 34\ne j3d j4c 33\ne j3d j4d 21\ne j3a j3b 15\ne j3b j3a 1\ne j4a sink 22\ne j4b sink 25\ne j4c sink 11\ne j4d sink 2\nend\ngraph ring undirected\ne r0c0 r0c1 1\ne r0c0 r1c0 2\ne r0c1 r0c2 4\ne r0c1 r1c1 3\ne r0c2 r0c3 3\ne r0c2 r1c2 9\ne r0c3 r0c4 6\ne r0c3 r1c3 4\ne r0c4 r0c5 8\ne r0c4 r1c4 3\ne r0c5 r0c0 8\ne r0c5 r1c5 7\ne r1c0 r1c1 1\ne r1c0 r2c0 4\ne r1c1 r1c2 2\ne r1c1 r2c1 5\ne r1c2 r1c3 9\ne r1c2 r2c2 8\ne r1c3 r1c4 2\ne r1c3 r2c3 2\ne r1c4 r1c5 2\ne r1c4 r2c4 6\ne r1c5 r1c0 6\ne r1c5 r2c5 4\ne r2c0 r2c1 1\ne r2c0 r3c0 9\ne r2c1 r2c2 5\ne r2c1 r3c1 8\ne r2c2 r2c3 7\ne r2c2 r3c2 3\ne r2c3 r2c4 9\ne r2c3 r3c3 3\ne r2c4 r2c5 4\n");
+    s.push_str("e r2c4 r3c4 3\ne r2c5 r2c0 1\ne r2c5 r3c5 4\ne r3c0 r3c1 8\ne r3c0 r4c0 8\ne r3c1 r3c2 7\ne r3c1 r4c1 2\ne r3c2 r3c3 8\ne r3c2 r4c2 9\ne r3c3 r3c4 9\ne r3c3 r4c3 9\ne r3c4 r3c5 5\ne r3c4 r4c4 5\ne r3c5 r3c0 2\ne r3c5 r4c5 9\ne r4c0 r4c1 7\ne r4c0 r0c0 4\ne r4c1 r4c2 7\ne r4c1 r0c1 8\ne r4c2 r4c3 6\ne r4c2 r0c2 7\ne r4c3 r4c4 6\ne r4c3 r0c3 9\ne r4c4 r4c5 2\ne r4c4 r0c4 8\ne r4c5 r4c0 2\ne r4c5 r0c5 1\nend\ngraph g0 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\nn v14\nn v15\nn v16\nn v17\nn v18\nn v19\ne v00 v01 11\ne v00 v02 7\ne v01 v03 3\ne v00 v04 16\ne v02 v05 7\ne v05 v06 10\ne v03 v07 20\ne v07 v08 1\ne v06 v09 16\ne v01 v10 1\ne v09 v11 1\ne v09 v12 11\ne v06 v13 15\ne v06 v14 2\ne v13 v15 3\ne v13 v16 12\ne v13 v17 12\ne v16 v18 14\ne v12 v19 13\nend\ngraph g1 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\nn v14\nn v15\nn v16\nn v17\nn v18\nn v19\nn v20\nn v21\nn v22\ne v08 v15 16\ne v06 v01 12\ne v00 v17 12\ne v18 v17 11\ne v14 v11 17\ne v20 v19 9\ne v14 v01 9\ne v00 v19 13\ne v20 v19 14\ne v08 v13 1\ne v06 v09 20\ne v10 v17 14\ne v00 v09 9\ne v14 v15 12\ne v20 v07 6\ne v04 v07 11\ne v06 v17 14\ne v02 v11 14\ne v12 v21 5\ne v10 v03 1\ne v16 v05 16\ne v04 v21 19\ne v16 v15 10\ne v10 v13 12\ne v08 v09 12\ne v16 v17 5\ne v16 v15 13\ne v14 v03 17\ne v14 v07 4\ne v00 v09 4\ne v18 v05 10\ne v18 v19 18\ne v10 v01 10\ne v16 v17 18\nend\ngraph g2 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\ne v00 v02 19\ne v01 v02 3\ne v01 v05 9\ne v01 v08 2\ne v01 v10 17\ne v02 v06 16\ne v02 v09 5\ne v02 v13 10\ne v03 v06 3\ne v04 v06 15\ne v04 v09 16\ne v05 v08 3\ne v05 v10 20\ne v05 v12 19\ne v07 v10 1\ne v09 v10 18\ne v10 v13 7\nend\ngraph g3 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\nn v14\nn v15\nn v16\nn v17\nn v18\nn v19\nn v20\nn v21\nn v22\nn v23\nn v24\nn v25\nn v26\ne v00 v02 18\ne v00 v04 9\ne v00 v09 3\ne v00 v14 9\ne v00 v16 8\ne v00 v21 17\ne v01 v08 13\ne v01 v15 20\ne v01 v18 4\ne v01 v23 6\ne v01 v24 6\ne v02 v12 20\n");
+    s.push_str("e v02 v15 3\ne v02 v21 2\ne v02 v24 6\ne v03 v13 12\ne v03 v16 6\ne v03 v20 12\ne v03 v21 8\ne v03 v23 7\ne v04 v10 13\ne v04 v11 7\ne v04 v14 10\ne v04 v19 9\ne v04 v20 10\ne v04 v21 4\ne v04 v22 5\ne v04 v26 17\ne v05 v16 7\ne v06 v08 8\ne v06 v09 10\ne v06 v13 16\ne v06 v17 9\ne v06 v20 3\ne v06 v25 19\ne v07 v12 18\ne v07 v19 15\ne v07 v20 18\ne v08 v13 18\ne v08 v14 9\ne v08 v25 13\ne v09 v14 17\ne v09 v16 6\ne v09 v17 18\ne v09 v23 7\ne v10 v14 12\ne v10 v15 14\ne v10 v23 19\ne v10 v26 2\ne v11 v23 3\ne v12 v19 6\ne v12 v21 12\ne v13 v18 17\ne v13 v22 9\ne v14 v23 14\ne v15 v18 17\ne v15 v21 14\ne v15 v26 7\ne v16 v26 12\ne v17 v18 20\ne v17 v21 2\ne v18 v20 14\ne v18 v21 1\ne v18 v22 1\ne v19 v22 18\ne v21 v23 14\ne v21 v25 17\ne v22 v23 6\ne v23 v24 15\ne v25 v26 8\nend\ngraph g4 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\ne v00 v01 6\ne v00 v05 15\ne v00 v06 10\ne v00 v07 3\ne v00 v09 17\ne v00 v12 9\ne v01 v09 20\ne v01 v10 6\ne v01 v11 5\ne v02 v04 1\ne v02 v06 7\ne v02 v07 2\ne v02 v11 18\ne v02 v12 8\ne v03 v07 9\ne v03 v10 13\ne v04 v06 12\ne v04 v08 17\ne v04 v10 12\ne v04 v11 18\ne v04 v12 12\ne v05 v11 9\ne v06 v12 20\ne v08 v09 1\ne v08 v12 8\ne v08 v13 11\ne v09 v13 20\nend\ngraph g5 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\nn v14\nn v15\nn v16\nn v17\nn v18\nn v19\nn v20\nn v21\nn v22\nn v23\ne v00 v01 18\ne v01 v02 1\ne v01 v03 2\ne v02 v04 6\ne v04 v05 9\ne v00 v06 19\ne v03 v07 2\ne v00 v08 16\ne v04 v09 16\ne v05 v10 4\ne v02 v11 13\ne v05 v12 20\ne v06 v13 16\ne v11 v14 17\ne v06 v15 10\ne v14 v16 14\ne v15 v17 9\ne v01 v18 1\ne v04 v19 1\ne v14 v20 6\ne v01 v21 16\ne v04 v22 7\ne v10 v23 13\nend\ngraph g6 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\nn v14\nn v15\nn v16\nn v17\nn v18\ne v06 v13 19\ne v00 v17 10\ne v00 v11 18\ne v08 v13 2\ne v14 v01 17\ne v16 v03 4\ne v12 v09 3\ne v04 v13 5\ne v04 v07 20\ne v02 v03 14\ne v14 v07 9\ne v10 v11 14\ne v00 v11 14\ne v14 v11 8\ne v14 v07 5\ne v10 v01 9\ne v00 v03 19\ne v08 v15 11\ne v10 v15 1\n");
+    s.push_str("e v10 v03 13\ne v10 v17 5\ne v04 v03 13\ne v12 v17 4\ne v06 v15 18\ne v10 v05 17\ne v06 v07 5\ne v04 v05 12\ne v04 v15 15\nend\ngraph g7 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\nn v14\nn v15\nn v16\nn v17\ne v00 v05 4\ne v00 v07 15\ne v01 v06 8\ne v01 v11 17\ne v02 v03 18\ne v02 v04 9\ne v02 v09 17\ne v02 v14 11\ne v03 v04 12\ne v03 v08 3\ne v03 v13 11\ne v03 v15 10\ne v03 v16 7\ne v05 v10 14\ne v06 v09 11\ne v06 v15 5\ne v07 v10 6\ne v07 v15 7\ne v07 v16 18\ne v07 v17 16\ne v08 v14 7\ne v08 v16 5\ne v10 v15 17\ne v10 v16 15\ne v13 v14 8\ne v13 v15 18\ne v13 v16 7\ne v14 v15 18\nend\ngraph g8 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\nn v14\nn v15\nn v16\nn v17\nn v18\nn v19\nn v20\nn v21\nn v22\nn v23\ne v00 v03 10\ne v00 v08 17\ne v00 v10 20\ne v00 v13 14\ne v00 v19 17\ne v00 v20 11\ne v01 v03 9\ne v01 v06 9\ne v01 v09 2\ne v01 v15 19\ne v01 v18 1\ne v01 v21 20\ne v01 v22 12\ne v02 v04 20\ne v02 v07 11\ne v02 v12 16\ne v02 v16 3\ne v02 v19 19\ne v03 v06 4\ne v03 v07 7\ne v03 v12 15\ne v04 v11 5\ne v04 v17 4\ne v04 v21 1\ne v05 v09 13\ne v05 v19 18\ne v06 v11 10\ne v06 v13 7\ne v06 v16 6\ne v07 v11 6\ne v07 v16 16\ne v07 v17 9\ne v07 v20 16\ne v08 v13 6\ne v08 v15 17\ne v08 v19 9\ne v09 v18 3\ne v09 v19 1\ne v09 v21 10\ne v09 v22 15\ne v10 v17 14\ne v11 v13 10\ne v11 v14 4\ne v11 v17 13\ne v11 v23 6\ne v12 v13 16\ne v13 v17 1\ne v13 v19 10\ne v14 v17 12\ne v14 v19 19\ne v15 v17 13\ne v15 v19 6\ne v15 v20 6\ne v16 v19 4\ne v16 v21 18\ne v16 v22 2\ne v16 v23 10\ne v17 v20 5\ne v17 v23 15\ne v18 v20 7\ne v18 v21 6\ne v20 v23 9\nend\ngraph g9 undirected\nn v00\nn v01\nn v02\nn v03\nn v04\nn v05\nn v06\nn v07\nn v08\nn v09\nn v10\nn v11\nn v12\nn v13\nn v14\nn v15\nn v16\nn v17\nn v18\nn v19\nn v20\nn v21\ne v00 v03 19\ne v00 v04 1\ne v00 v11 17\ne v00 v12 4\ne v00 v16 1\ne v00 v18 5\ne v00 v19 15\ne v00 v20 1\ne v01 v02 4\ne v01 v03 1\ne v01 v08 13\ne v01 v09 14\ne v01 v11 8\ne v01 v12 20\ne v01 v13 8\ne v01 v17 3\ne v01 v21 6\ne v02 v03 13\ne v02 v06 2\ne v02 v09 14\ne v02 v16 17\ne v02 v18 14\ne v03 v06 12\ne v03 v13 11\ne v04 v05 19\n");
+    s.push_str("e v04 v11 4\ne v04 v13 19\ne v04 v14 14\ne v04 v15 1\ne v04 v18 4\ne v04 v20 19\ne v05 v07 2\ne v05 v08 7\ne v05 v09 3\ne v05 v10 13\ne v05 v17 3\ne v05 v19 19\ne v05 v20 12\ne v06 v08 19\ne v06 v10 2\ne v06 v12 10\ne v06 v15 4\ne v06 v20 2\ne v06 v21 7\ne v07 v11 17\ne v07 v13 14\ne v07 v14 5\ne v07 v15 10\ne v07 v17 16\ne v07 v18 5\ne v08 v09 20\ne v08 v10 19\ne v08 v11 4\ne v08 v15 2\ne v08 v18 3\ne v09 v10 12\ne v09 v11 1\ne v09 v16 13\ne v09 v18 14\ne v09 v19 10\ne v10 v16 3\ne v10 v17 6\ne v11 v17 19\ne v11 v18 19\ne v12 v17 20\ne v12 v21 6\ne v13 v20 10\ne v13 v21 7\ne v14 v16 2\ne v14 v17 13\ne v14 v19 4\ne v14 v21 4\ne v16 v17 13\ne v17 v18 15\ne v17 v19 12\ne v18 v19 19\ne v19 v21 14\nend\nq info roads\nq path roads penwick oakstead\nq dijkstra roads penwick oakstead\nq path roads calby norford\nq dijkstra roads calby norford\nq path roads elmham weswick\nq dijkstra roads elmham weswick\nq path roads holford kelmouth\nq dijkstra roads holford kelmouth\nq path roads salley calham\nq dijkstra roads salley calham\nq path roads calby venmouth\nq dijkstra roads calby venmouth\nq path roads calby ingley\nq dijkstra roads calby ingley\nq path roads torton elmham\nq dijkstra roads torton elmham\nq path roads elmford penwick\nq dijkstra roads elmford penwick\nq path roads weswick ulley\nq dijkstra roads weswick ulley\nq path roads barham kelmouth\nq dijkstra roads barham kelmouth\nq path roads ashford fenford\nq dijkstra roads ashford fenford\nq path roads penton torton\nq dijkstra roads penton torton\nq path roads dunford ulley\nq dijkstra roads dunford ulley\nq reach roads venmouth 10\nq bfs roads holford\nq dfs roads salby\nq reach roads fenwick 10\nq bfs roads ashford\nq dfs roads ulmouth\nq reach roads linstead 10\nq bfs roads fenton\nq dfs roads ulley\nq reach roads weswick 10\nq bfs roads fenwick\nq dfs roads weswick\nq components roads\nq mst roads\nq maxst roads\nq cuts roads\nq bridges roads\nq core roads\nq color lf roads\nq color dsatur roads\nq triangles roads\nq bipartite roads\nq ecc roads\nq wdiam roads\nq euler roads\nq paths roads salstead venford 5\nq paths roads linford fenley 5\n");
+    s.push_str("q paths roads torton yarham 5\nq degree roads ashton\nq degree roads ashford\nq copy roads closed\nq rmedge closed ashton barham\nq rmedge closed dunby fenham\nq rmedge closed ulley torham\nq rmedge closed penwick dunford\nq rmedge closed penton calham\nq rmedge closed fenford venford\nq rmedge closed ulley nowhere\nq rmnode closed venford\nq rmnode closed venford\nq addedge closed fenley fenton 4\nq addedge closed venford ingham 9\nq info closed\nq components closed\nq mst closed\nq cuts closed\nq bridges closed\nq core closed\nq ecc closed\nq color lf closed\nq path closed calham fenton\nq dijkstra closed calham fenton\nq path closed torham salley\nq dijkstra closed torham salley\nq path closed calford holford\nq dijkstra closed calford holford\nq path closed fenham elmham\nq dijkstra closed fenham elmham\nq path closed morton torton\nq dijkstra closed morton torton\nq path closed weswick fenmouth\nq dijkstra closed weswick fenmouth\nq path closed kelley venford\nq dijkstra closed kelley venford\nq path closed torham venford\nq dijkstra closed torham venford\nq path closed nowhere ashby\nq dijkstra closed ashby nowhere\nq info deps\nq isdag deps\nq topo deps\nq lextopo deps\nq generations deps\nq longest deps\nq reduce deps\nq scc deps\nq cycle deps\nq ancestors deps libcrypt\nq descendants deps libadmin\nq ancestors deps libmetric\nq descendants deps libcore\nq ancestors deps libsched\nq descendants deps appshop\nq ancestors deps appblog\nq descendants deps appwiki\nq ancestors deps appwiki\nq descendants deps libio\nq ancestors deps libchat\nq descendants deps libweb\nq path deps libio liblint\nq dijkstra deps libcore appwiki\nq path deps libauth libcrypt\nq dijkstra deps libmail libimg\nq path deps libcrypt libcart\nq dijkstra deps libmetric libconf\nq path deps libfile libnet\nq dijkstra deps libnet libpdf\nq copy deps loop\nq addedge loop appshop libutil 3\nq addedge loop libdiff libcore 3\nq isdag loop\nq topo loop\nq scc loop\nq cycle loop\nq condense loop\nq rmedge loop libdiff libcore\nq cycle loop\nq info web\nq scc web\nq condense web\n");
+    s.push_str("q cycle web\nq isdag web\nq bfs web about\nq dfs web blog\nq path web post11 home\nq descendants web post08\nq bfs web contact\nq dfs web faq\nq path web faq post05\nq descendants web item06\nq bfs web post07\nq dfs web team\nq path web item14 post08\nq descendants web login\nq bfs web privacy\nq dfs web about\nq path web faq item15\nq descendants web post08\nq bfs web item01\nq dfs web item04\nq path web post08 item02\nq descendants web login\nq bfs web item13\nq dfs web terms\nq path web blog item13\nq descendants web post16\nq components web\nq info pipes\nq maxflow pipes src sink\nq longest pipes\nq topo pipes\nq maxflow pipes src j2a\nq maxflow pipes j0a sink\nq copy pipes pipes2\nq rmedge pipes2 j1a j2a\nq addedge pipes2 src j3b 25\nq maxflow pipes2 src sink\nq maxflow pipes2 sink src\nq maxflow pipes2 src src\nq info ring\nq euler ring\nq ecc ring\nq wdiam ring\nq bipartite ring\nq color lf ring\nq color dsatur ring\nq core ring\nq triangles ring\nq mst ring\nq cuts ring\nq bridges ring\nq paths ring r0c0 r2c3 6\nq copy ring ring2\nq rmedge ring2 r0c0 r0c1\nq euler ring2\nq addedge ring2 r0c0 r0c1 3\nq euler ring2\nq info g0\nq components g0\nq cuts g0\nq bridges g0\nq core g0\nq color lf g0\nq color dsatur g0\nq triangles g0\nq bipartite g0\nq ecc g0\nq mst g0\nq euler g0\nq cycle g0\nq bfs g0 v00\nq dfs g0 v01\nq paths g0 v00 v03 7\nq reach g0 v02 6\nq info g1\nq components g1\nq cuts g1\nq bridges g1\nq core g1\nq color lf g1\nq color dsatur g1\nq triangles g1\nq bipartite g1\nq ecc g1\nq mst g1\nq euler g1\nq cycle g1\nq bfs g1 v00\nq dfs g1 v01\nq paths g1 v00 v03 7\nq reach g1 v02 6\nq info g2\nq components g2\nq cuts g2\nq bridges g2\nq core g2\nq color lf g2\nq color dsatur g2\nq triangles g2\nq bipartite g2\nq ecc g2\nq mst g2\nq euler g2\nq cycle g2\nq bfs g2 v00\nq dfs g2 v01\nq paths g2 v00 v03 7\nq reach g2 v02 6\nq info g3\nq components g3\nq cuts g3\nq bridges g3\nq core g3\nq color lf g3\nq color dsatur g3\nq triangles g3\nq bipartite g3\nq ecc g3\nq mst g3\nq euler g3\nq cycle g3\nq bfs g3 v00\nq dfs g3 v01\nq paths g3 v00 v03 7\nq reach g3 v02 6\nq info g4\nq components g4\n");
+    s.push_str("q cuts g4\nq bridges g4\nq core g4\nq color lf g4\nq color dsatur g4\nq triangles g4\nq bipartite g4\nq ecc g4\nq mst g4\nq euler g4\nq cycle g4\nq bfs g4 v00\nq dfs g4 v01\nq paths g4 v00 v03 7\nq reach g4 v02 6\nq info g5\nq components g5\nq cuts g5\nq bridges g5\nq core g5\nq color lf g5\nq color dsatur g5\nq triangles g5\nq bipartite g5\nq ecc g5\nq mst g5\nq euler g5\nq cycle g5\nq bfs g5 v00\nq dfs g5 v01\nq paths g5 v00 v03 7\nq reach g5 v02 6\nq info g6\nq components g6\nq cuts g6\nq bridges g6\nq core g6\nq color lf g6\nq color dsatur g6\nq triangles g6\nq bipartite g6\nq ecc g6\nq mst g6\nq euler g6\nq cycle g6\nq bfs g6 v00\nq dfs g6 v01\nq paths g6 v00 v03 7\nq reach g6 v02 6\nq info g7\nq components g7\nq cuts g7\nq bridges g7\nq core g7\nq color lf g7\nq color dsatur g7\nq triangles g7\nq bipartite g7\nq ecc g7\nq mst g7\nq euler g7\nq cycle g7\nq bfs g7 v00\nq dfs g7 v01\nq paths g7 v00 v03 7\nq reach g7 v02 6\nq info g8\nq components g8\nq cuts g8\nq bridges g8\nq core g8\nq color lf g8\nq color dsatur g8\nq triangles g8\nq bipartite g8\nq ecc g8\nq mst g8\nq euler g8\nq cycle g8\nq bfs g8 v00\nq dfs g8 v01\nq paths g8 v00 v03 7\nq reach g8 v02 6\nq info g9\nq components g9\nq cuts g9\nq bridges g9\nq core g9\nq color lf g9\nq color dsatur g9\nq triangles g9\nq bipartite g9\nq ecc g9\nq mst g9\nq euler g9\nq cycle g9\nq bfs g9 v00\nq dfs g9 v01\nq paths g9 v00 v03 7\nq reach g9 v02 6\n");
+    s
+}

@@ -1,0 +1,367 @@
+info roads: 42 nodes, 68 edges, undirected
+path roads penwick oakstead: 6 hops: penwick > ulley > calford > kelley > ulmouth > morwick > oakstead
+dijkstra roads penwick oakstead: dist 106: penwick > ulley > calford > kelley > ulmouth > morwick > oakstead
+path roads calby norford: 3 hops: calby > weswick > salby > norford
+dijkstra roads calby norford: dist 56: calby > weswick > salby > norford
+path roads elmham weswick: 6 hops: elmham > linford > torton > penwick > norford > salby > weswick
+dijkstra roads elmham weswick: dist 119: elmham > linford > torton > penwick > norford > salby > weswick
+path roads holford kelmouth: 8 hops: holford > morwick > ulmouth > kelley > calford > ulley > torham > fenton > kelmouth
+dijkstra roads holford kelmouth: dist 147: holford > morwick > ulmouth > kelley > calford > ulley > torham > fenton > kelmouth
+path roads salley calham: 8 hops: salley > salby > norford > dunford > ulley > calford > kelley > ulmouth > calham
+dijkstra roads salley calham: dist 152: salley > salby > norford > dunford > ulley > calford > kelley > ulmouth > calham
+path roads calby venmouth: 4 hops: calby > penmouth > salstead > ulby > venmouth
+dijkstra roads calby venmouth: dist 107: calby > penmouth > salstead > ulby > venmouth
+path roads calby ingley: 9 hops: calby > weswick > salby > norford > dunford > ulley > torham > fenton > kelmouth > ingley
+dijkstra roads calby ingley: dist 177: calby > weswick > salby > norford > dunford > ulley > torham > fenton > kelmouth > ingley
+path roads torton elmham: 2 hops: torton > linford > elmham
+dijkstra roads torton elmham: dist 35: torton > linford > elmham
+path roads elmford penwick: 5 hops: elmford > ashford > elmham > linford > torton > penwick
+dijkstra roads elmford penwick: dist 98: elmford > ashford > elmham > linford > torton > penwick
+path roads weswick ulley: 4 hops: weswick > salby > norford > dunford > ulley
+dijkstra roads weswick ulley: dist 64: weswick > salby > norford > dunford > ulley
+path roads barham kelmouth: 3 hops: barham > torham > fenton > kelmouth
+dijkstra roads barham kelmouth: dist 65: barham > torham > fenton > kelmouth
+path roads ashford fenford: 9 hops: ashford > elmham > barham > torham > ulley > calford > kelley > ulmouth > venford > fenford
+dijkstra roads ashford fenford: dist 186: ashford > elmham > barham > torham > ulley > calford > kelley > ulmouth > morton > fenford
+path roads penton torton: 6 hops: penton > ulmouth > kelley > calford > ulley > penwick > torton
+dijkstra roads penton torton: dist 116: penton > ulmouth > kelley > calford > ulley > penwick > torton
+path roads dunford ulley: 1 hops: dunford > ulley
+dijkstra roads dunford ulley: dist 9: dunford > ulley
+reach roads venmouth 10: 42 reached; venmouth 0, holford 8, linstead 10, oakstead 11, morwick 19, ulby 24, morton 32, ulmouth 33, penton 43, ingham 43; fnv a1674e4c
+bfs roads holford: 42 nodes: holford oakstead linstead venmouth morwick morton ulby penton ulmouth venford fenford ingham ...; fnv 38983288
+dfs roads salby: 42 nodes: salby salley weswick calby penmouth salstead ingham ulby venmouth holford oakstead morwick ...; fnv 530870b8
+reach roads fenwick 10: 42 reached; fenwick 0, ulley 12, dunford 21, penwick 34, torham 36, calford 36, norford 38, ashton 46, kelley 48, torton 55; fnv 99349dc5
+bfs roads ashford: 42 nodes: ashford fenley elmham elmford linford barham ashton torton torham penwick ulley fenton ...; fnv d64f868c
+dfs roads ulmouth: 42 nodes: ulmouth venford yarham fenford morton morwick penton calham fenmouth holford oakstead venmouth ...; fnv 90983dc4
+reach roads linstead 10: 42 reached; linstead 0, venmouth 10, holford 13, oakstead 18, morwick 24, ulby 34, ulmouth 38, morton 39, penton 48, ingham 53; fnv ce3878be
+bfs roads fenton: 42 nodes: fenton fenham kelmouth torham dunby ingley ulley ashton barham dunford penwick fenwick ...; fnv 7208b896
+dfs roads ulley: 42 nodes: ulley dunford penwick torton linford ashton barham torham fenton fenham dunby ingley ...; fnv 6707638c
+reach roads weswick 10: 42 reached; weswick 0, salley 12, calby 18, salby 19, penmouth 31, norford 38, dunford 55, salstead 57, penwick 63, ulley 64; fnv d4dc76fb
+bfs roads fenwick: 42 nodes: fenwick ulley dunford penwick torham calford norford torton ashton barham fenton kelley ...; fnv adaecbca
+dfs roads weswick: 42 nodes: weswick salley calby penmouth salstead ingham ulby venmouth holford oakstead morwick penton ...; fnv 97cb3d0e
+components roads: 1 components: 42 ashford; fnv 1a8d93ce
+mst roads: 41 edges, weight 667; fenley-elmford 6 venford-yarham 8 holford-venmouth 8 ulley-dunford 9 fenham-fenton 9 fenham-kelmouth 9 ...; fnv 44a66ce2
+maxst roads: 41 edges, weight 906; venford-fenford 33 penmouth-calby 31 penmouth-weswick 31 torham-fenton 29 salley-salby 29 morton-fenford 28 ...; fnv 5a73ea9f
+cuts roads: 6 cut points: fenton torham ashford elmham penton ulley
+bridges roads: 4 bridges: ulley-fenwick torham-fenton ashford-elmham penton-fenmouth
+core roads: max core 3: 4 nodes (holford linstead oakstead venmouth); histogram 1:2 2:36 3:4
+color lf roads: 4 colors, classes 11 13 15 3; fnv 09d839c2
+color dsatur roads: 4 colors, classes 13 13 15 1; fnv 705f11e8
+triangles roads: 26 triangles; most at oakstead 5, barham 4, morton 4
+bipartite roads: not bipartite
+ecc roads: diameter 11, radius 7, center ulley dunford penwick norford kelley calford, periphery 8
+wdiam roads: diameter 236, radius 126, center norford, periphery 2
+euler roads: not eulerian
+paths roads salstead venford 5: 1 paths, shortest 5 hops; first salstead > ulby > venmouth > oakstead > morton > venford
+paths roads linford fenley 5: 6 paths, shortest 3 hops; first linford > ashton > barham > elmham > ashford > fenley
+paths roads torton yarham 5: 0 paths
+degree roads ashton: 3
+degree roads ashford: 3
+copy roads closed: 42 nodes, 68 edges
+rmedge closed ashton barham: 42 nodes, 67 edges
+rmedge closed dunby fenham: 42 nodes, 66 edges
+rmedge closed ulley torham: 42 nodes, 65 edges
+rmedge closed penwick dunford: 42 nodes, 64 edges
+rmedge closed penton calham: 42 nodes, 63 edges
+rmedge closed fenford venford: 42 nodes, 62 edges
+rmedge closed ulley nowhere: error: The edge ulley-nowhere is not in the graph
+rmnode closed venford: 41 nodes, 59 edges
+rmnode closed venford: error: The node venford is not in the graph.
+addedge closed fenley fenton 4: 41 nodes, 60 edges
+addedge closed venford ingham 9: 42 nodes, 61 edges
+info closed: 42 nodes, 61 edges, undirected
+components closed: 1 components: 42 ashford; fnv 1a8d93ce
+mst closed: 41 edges, weight 665; fenley-fenton 4 fenley-elmford 6 holford-venmouth 8 ulley-dunford 9 ingham-venford 9 fenham-fenton 9 ...; fnv 538198e3
+cuts closed: 10 cut points: kelmouth fenton torton penwick fenford morton penton ulmouth ingham ulley
+bridges closed: 7 bridges: ulley-fenwick penwick-torton yarham-fenford morton-fenford ulmouth-calham penton-fenmouth ingham-venford
+core closed: max core 3: 4 nodes (holford linstead oakstead venmouth); histogram 1:6 2:32 3:4
+ecc closed: diameter 13, radius 7, center penwick, periphery 6
+color lf closed: 4 colors, classes 12 15 13 2; fnv d0cb92a3
+path closed calham fenton: 9 hops: calham > ulmouth > kelley > calford > ulley > penwick > torton > barham > torham > fenton
+dijkstra closed calham fenton: dist 190: calham > ulmouth > kelley > calford > ulley > penwick > torton > barham > torham > fenton
+path closed torham salley: 6 hops: torham > barham > torton > penwick > norford > salby > salley
+dijkstra closed torham salley: dist 134: torham > barham > torton > penwick > norford > salby > salley
+path closed calford holford: 4 hops: calford > kelley > ulmouth > morwick > holford
+dijkstra closed calford holford: dist 53: calford > kelley > ulmouth > morwick > holford
+path closed fenham elmham: 4 hops: fenham > fenton > torham > barham > elmham
+dijkstra closed fenham elmham: dist 52: fenham > fenton > fenley > ashford > elmham
+path closed morton torton: 6 hops: morton > ulmouth > kelley > calford > ulley > penwick > torton
+dijkstra closed morton torton: dist 115: morton > ulmouth > kelley > calford > ulley > penwick > torton
+path closed weswick fenmouth: 8 hops: weswick > penmouth > salstead > ulby > venmouth > holford > morwick > penton > fenmouth
+dijkstra closed weswick fenmouth: dist 152: weswick > salby > norford > dunford > ulley > calford > kelley > ulmouth > penton > fenmouth
+path closed kelley venford: 7 hops: kelley > ulmouth > morton > oakstead > venmouth > ulby > ingham > venford
+dijkstra closed kelley venford: dist 101: kelley > ulmouth > morwick > holford > venmouth > ulby > ingham > venford
+path closed torham venford: 10 hops: torham > barham > torton > penwick > norford > salby > weswick > penmouth > salstead > ingham > venford
+dijkstra closed torham venford: dist 208: torham > barham > torton > penwick > norford > salby > weswick > penmouth > salstead > ingham > venford
+path closed nowhere ashby: error: Source nowhere is not in G
+dijkstra closed ashby nowhere: error: Node ashby not found in graph
+info deps: 46 nodes, 93 edges, directed
+isdag deps: yes
+topo deps: 46 nodes: libcore libutil liblog libio liborm liblint libuser libapi libnet libhttp libcli libauth ...; fnv 08cf0c77
+lextopo deps: 46 nodes: libcore libutil libio libauth libcache libcli libgeo libhttp liblint liblog libapi libfile ...; fnv 9f47d813
+generations deps: 10 generations, sizes 1 1 5 6 8 7 8 4 4 2; first libcore
+longest deps: length 145: libcore > libutil > liblog > libnet > libyaml > libcrypt > libtmpl > libadmin > libchat > appshop
+reduce deps: 74 kept, 19 removed: libcore>liblog libcore>libhttp libcore>libdb libcore>libdiff libutil>libhttp libutil>libcli ...
+scc deps: 46 components: 1 libfeed | 1 appblog | 1 appwiki | 1 libweb | 1 appops | 1 libtest ...; fnv d3dfdc70
+cycle deps: error: No cycle found.
+ancestors deps libcrypt: 7: libcore libhttp libio liblog libnet libutil libyaml
+descendants deps libadmin: 2: appshop libchat
+ancestors deps libmetric: 6: libapi libcore libdoc liblog liborm libutil
+descendants deps libcore: 45: appblog appcrm appdesk appops appshop appwiki libadmin libapi libauth libbench ...
+ancestors deps libsched: 12: libapi libbench libcore libcrypt libdoc libhttp libio liblog libnet liborm ...
+descendants deps appshop: 0: 
+ancestors deps appblog: 12: libapi libcore libhttp libio libjson liblog libnet libtest libuser libutil ...
+descendants deps appwiki: 0: 
+ancestors deps appwiki: 17: libapi libauth libcache libcart libcore libdiff libdoc libio libjson liblog ...
+descendants deps libio: 29: appblog appcrm appdesk appops appshop appwiki libadmin libauth libcache libchat ...
+ancestors deps libchat: 11: libadmin libapi libcore libcrypt libhttp libio liblog libnet libtmpl libutil ...
+descendants deps libweb: 3: appblog appwiki libfeed
+path deps libio liblint: error: No path between libio and liblint.
+dijkstra deps libcore appwiki: dist 15: libcore > libdiff > appwiki
+path deps libauth libcrypt: error: No path between libauth and libcrypt.
+dijkstra deps libmail libimg: error: No path to libimg.
+path deps libcrypt libcart: error: No path between libcrypt and libcart.
+dijkstra deps libmetric libconf: error: No path to libconf.
+path deps libfile libnet: error: No path between libfile and libnet.
+dijkstra deps libnet libpdf: dist 27: libnet > libyaml > libcrypt > libqueue > libpdf
+copy deps loop: 46 nodes, 93 edges
+addedge loop appshop libutil 3: 46 nodes, 94 edges
+addedge loop libdiff libcore 3: 46 nodes, 95 edges
+isdag loop: no
+topo loop: error: Graph contains a cycle or graph changed during iteration
+scc loop: 27 components: 1 libfeed | 1 appblog | 1 appwiki | 1 libweb | 1 appops | 1 libtest ...; fnv 7e377edd
+cycle loop: cycle of 9: libutil > liblog > libnet > libyaml > libcrypt > libtmpl > libadmin > libchat > appshop > libutil
+condense loop: 27 nodes, 45 edges; 1 sources, 14 sinks
+rmedge loop libdiff libcore: 46 nodes, 94 edges
+cycle loop: cycle of 9: libutil > liblog > libnet > libyaml > libcrypt > libtmpl > libadmin > libchat > appshop > libutil
+info web: 48 nodes, 90 edges, directed
+scc web: 16 components: 1 privacy | 1 terms | 1 press | 1 post12 | 1 post02 | 33 about ...; fnv 686ee446
+condense web: 16 nodes, 22 edges; 7 sources, 3 sinks
+cycle web: cycle of 7: post16 > post07 > blog > post06 > post04 > shop > post03 > post16
+isdag web: no
+bfs web about: 38 nodes: about login post00 item11 help privacy post06 post16 post01 item05 item01 post04 ...; fnv 05666f61
+dfs web blog: 38 nodes: blog post06 post04 shop terms post03 post16 post07 jobs post00 post17 post02 ...; fnv 5b9fb3c9
+path web post11 home: 5 hops: post11 > post08 > help > item05 > post09 > home
+descendants web post08: 37: about blog cart contact help home item01 item02 item03 item04 ...
+bfs web contact: 38 nodes: contact item04 post01 post05 press item10 post14 post10 about item07 post16 post03 ...; fnv 6920efff
+dfs web faq: 40 nodes: faq item08 post00 post06 post04 shop terms post03 post16 post07 blog post08 ...; fnv 67fd2a48
+path web faq post05: 5 hops: faq > post06 > item09 > item13 > item04 > post05
+descendants web item06: 38: about blog cart contact help home item01 item02 item03 item04 ...
+bfs web post07: 38 nodes: post07 blog post06 post08 item10 post04 item09 login item15 item02 help post10 ...; fnv ddf2b0c9
+dfs web team: 39 nodes: team post04 shop terms post03 post16 post07 blog post06 item09 item13 privacy ...; fnv 42a28908
+path web item14 post08: 7 hops: item14 > item10 > post10 > post03 > post16 > post07 > blog > post08
+descendants web login: 37: about blog cart contact help home item01 item02 item03 item04 ...
+bfs web privacy: 1 nodes: privacy; fnv 7ea66847
+dfs web about: 38 nodes: about login help item05 post14 post16 post07 blog post06 post04 shop terms ...; fnv 0584f69f
+path web faq item15: 3 hops: faq > blog > post08 > item15
+descendants web post08: 37: about blog cart contact help home item01 item02 item03 item04 ...
+bfs web item01: 38 nodes: item01 blog post06 post08 item10 post04 item09 login item15 item02 help post10 ...; fnv 67d50d81
+dfs web item04: 38 nodes: item04 post05 post14 post16 post07 blog post06 post04 shop terms post03 contact ...; fnv dcdf41ab
+path web post08 item02: 1 hops: post08 > item02
+descendants web login: 37: about blog cart contact help home item01 item02 item03 item04 ...
+bfs web item13: 38 nodes: item13 privacy item04 post05 post14 post16 post07 jobs blog post00 post17 item03 ...; fnv f3e16fd9
+dfs web terms: 1 nodes: terms; fnv ee7a3c2c
+path web blog item13: 3 hops: blog > post06 > item09 > item13
+descendants web post16: 37: about blog cart contact help home item01 item02 item03 item04 ...
+components web: error: not implemented for directed type
+info pipes: 21 nodes, 49 edges, directed
+maxflow pipes src sink: value 36; sink side 20; cut src>j0a src>j0b
+longest pipes: error: Graph contains a cycle or graph changed during iteration
+topo pipes: error: Graph contains a cycle or graph changed during iteration
+maxflow pipes src j2a: value 36; sink side 1; cut j1a>j2a j1c>j2a j2b>j2a
+maxflow pipes j0a sink: value 54; sink side 19; cut j0a>j0b j0a>j1a j0a>j1b j1c>j2a j1c>j2e
+copy pipes pipes2: 21 nodes, 49 edges
+rmedge pipes2 j1a j2a: 21 nodes, 48 edges
+addedge pipes2 src j3b 25: 21 nodes, 49 edges
+maxflow pipes2 src sink: value 60; sink side 1; cut j4a>sink j4b>sink j4c>sink j4d>sink
+maxflow pipes2 sink src: value 0; sink side 1; cut 
+maxflow pipes2 src src: error: source and sink are the same node
+info ring: 30 nodes, 60 edges, undirected
+euler ring: circuit of 60 edges, 61 nodes: r0c0 r4c0 r4c5 r4c4 r4c3 r4c2 r4c1 r4c0 r3c0 r3c5 ...; fnv c3459d1a
+ecc ring: diameter 5, radius 5, center r0c0 r0c1 r1c0 r0c2 r1c1 r0c3 ..., periphery 30
+wdiam ring: diameter 20, radius 16, center r0c1 r1c0, periphery 6
+bipartite ring: not bipartite
+color lf ring: 4 colors, classes 12 12 3 3; fnv 412d97ff
+color dsatur ring: 3 colors, classes 12 12 6; fnv 1eec6f3e
+core ring: max core 4: 30 nodes (r0c0 r0c1 r0c2 r0c3 r0c4 r0c5 r1c0 r1c1 ...); histogram 4:30
+triangles ring: 0 triangles; most at r0c0 0, r0c1 0, r1c0 0
+mst ring: 29 edges, weight 86; r0c0-r0c1 1 r1c0-r1c1 1 r0c5-r4c5 1 r2c0-r2c1 1 r2c0-r2c5 1 r0c0-r1c0 2 ...; fnv 1dca2441
+cuts ring: 0 cut points: 
+bridges ring: 0 bridges: 
+paths ring r0c0 r2c3 6: 60 paths, shortest 5 hops; first r0c0 > r0c1 > r0c2 > r0c3 > r1c3 > r2c3
+copy ring ring2: 30 nodes, 60 edges
+rmedge ring2 r0c0 r0c1: 30 nodes, 59 edges
+euler ring2: not eulerian
+addedge ring2 r0c0 r0c1 3: 30 nodes, 60 edges
+euler ring2: circuit of 60 edges, 61 nodes: r0c0 r4c0 r4c5 r4c4 r4c3 r4c2 r4c1 r4c0 r3c0 r3c5 ...; fnv 5e766bf2
+info g0: 20 nodes, 19 edges, undirected
+components g0: 1 components: 20 v00; fnv d284be83
+cuts g0: 11 cut points: v07 v03 v01 v09 v12 v06 v13 v16 v05 v02 v00
+bridges g0: 19 bridges: v00-v01 v00-v02 v00-v04 v01-v03 v01-v10 v02-v05 v03-v07 v05-v06 v06-v09 v06-v13 ...
+core g0: max core 1: 20 nodes (v00 v01 v02 v03 v04 v05 v06 v07 ...); histogram 1:20
+color lf g0: 3 colors, classes 10 9 1; fnv cb24db72
+color dsatur g0: 2 colors, classes 10 10; fnv 4759a283
+triangles g0: 0 triangles; most at v00 0, v01 0, v02 0
+bipartite g0: bipartite, 10 + 10; one side v00 v03 v05 v08 v09 ...
+ecc g0: diameter 10, radius 5, center v02, periphery 3
+mst g0: 19 edges, weight 175; v01-v10 1 v07-v08 1 v09-v11 1 v06-v14 2 v01-v03 3 v13-v15 3 ...; fnv e6922da4
+euler g0: not eulerian
+cycle g0: error: No cycle found.
+bfs g0 v00: 20 nodes: v00 v01 v02 v04 v03 v10 v05 v07 v06 v08 v09 v13 ...; fnv c7c0da2f
+dfs g0 v01: 20 nodes: v01 v00 v02 v05 v06 v09 v11 v12 v19 v13 v15 v16 ...; fnv f4e07dc7
+paths g0 v00 v03 7: 1 paths, shortest 2 hops; first v00 > v01 > v03
+reach g0 v02 6: 20 reached; v02 0, v00 7, v05 7, v06 17, v01 18, v14 19; fnv 2fc56220
+info g1: 23 nodes, 30 edges, undirected
+components g1: 2 components: 22 v00 | 1 v22; fnv f9244295
+cuts g1: 5 cut points: v11 v14 v21 v04 v07
+bridges g1: 5 bridges: v02-v11 v04-v07 v04-v21 v11-v14 v12-v21
+core g1: max core 2: 17 nodes (v00 v01 v03 v05 v06 v07 v08 v09 ...); histogram 0:1 1:5 2:17
+color lf g1: 3 colors, classes 9 8 6; fnv 6109d6a3
+color dsatur g1: 2 colors, classes 12 11; fnv 751dc9e0
+triangles g1: 0 triangles; most at v00 0, v01 0, v02 0
+bipartite g1: bipartite, 11 + 12; one side v00 v02 v04 v06 v08 ...
+ecc g1: error: Found infinite path length because the graph is not connected
+mst g1: 21 edges, weight 208; v03-v10 1 v08-v13 1 v00-v09 4 v07-v14 4 v12-v21 5 v07-v20 6 ...; fnv 5ce1ac15
+euler g1: not eulerian
+cycle g1: cycle of 8: v17 > v18 > v05 > v16 > v15 > v08 > v13 > v10 > v17
+bfs g1 v00: 22 nodes: v00 v17 v19 v09 v18 v10 v06 v16 v20 v08 v05 v03 ...; fnv 67770f80
+dfs g1 v01: 22 nodes: v01 v06 v09 v00 v17 v18 v05 v16 v15 v08 v13 v10 ...; fnv 747f16f0
+paths g1 v00 v03 7: 31 paths, shortest 3 hops; first v00 > v17 > v18 > v05 > v16 > v15 > v14 > v03
+reach g1 v02 6: 22 reached; v02 0, v11 14, v14 31, v07 35, v01 40, v20 41; fnv 94c30b3e
+info g2: 14 nodes, 17 edges, undirected
+components g2: 2 components: 13 v00 | 1 v11; fnv d6a6f2a3
+cuts g2: 4 cut points: v10 v06 v05 v02
+bridges g2: 4 bridges: v00-v02 v03-v06 v05-v12 v07-v10
+core g2: max core 2: 9 nodes (v01 v02 v04 v05 v06 v08 v09 v10 ...); histogram 0:1 1:4 2:9
+color lf g2: 3 colors, classes 7 6 1; fnv fe1798d6
+color dsatur g2: 3 colors, classes 7 6 1; fnv b468aef2
+triangles g2: 2 triangles; most at v01 2, v05 2, v08 1
+bipartite g2: not bipartite
+ecc g2: error: Found infinite path length because the graph is not connected
+mst g2: 12 edges, weight 103; v07-v10 1 v01-v08 2 v01-v02 3 v03-v06 3 v05-v08 3 v02-v09 5 ...; fnv ce4d5d97
+euler g2: not eulerian
+cycle g2: cycle of 3: v01 > v05 > v08 > v01
+bfs g2 v00: 13 nodes: v00 v02 v01 v06 v09 v13 v05 v08 v10 v03 v04 v12 ...; fnv 805e3498
+dfs g2 v01: 13 nodes: v01 v02 v00 v06 v03 v04 v09 v10 v05 v08 v12 v07 ...; fnv fb360010
+paths g2 v00 v03 7: 4 paths, shortest 3 hops; first v00 > v02 > v01 > v10 > v09 > v04 > v06 > v03
+reach g2 v02 6: 13 reached; v02 0, v01 3, v09 5, v08 5, v05 8, v13 10; fnv e178ff3c
+info g3: 27 nodes, 70 edges, undirected
+components g3: 1 components: 27 v00; fnv 81716bfa
+cuts g3: 1 cut points: v16
+bridges g3: 1 bridges: v05-v16
+core g3: max core 4: 20 nodes (v00 v01 v03 v04 v06 v08 v09 v10 ...); histogram 1:1 2:1 3:5 4:20
+color lf g3: 5 colors, classes 8 6 7 5 1; fnv e6fdca0c
+color dsatur g3: 4 colors, classes 8 8 5 6; fnv 85f56849
+triangles g3: 23 triangles; most at v21 7, v00 5, v04 5
+bipartite g3: not bipartite
+ecc g3: diameter 4, radius 3, center v00 v02 v03 v04 v06 v09 ..., periphery 10
+mst g3: 26 edges, weight 146; v18-v21 1 v18-v22 1 v02-v21 2 v10-v26 2 v17-v21 2 v00-v09 3 ...; fnv fa22e97c
+euler g3: not eulerian
+cycle g3: cycle of 6: v00 > v02 > v12 > v07 > v19 > v04 > v00
+bfs g3 v00: 27 nodes: v00 v02 v04 v09 v14 v16 v21 v12 v15 v24 v10 v11 ...; fnv b60138fe
+dfs g3 v01: 27 nodes: v01 v08 v06 v09 v00 v02 v12 v07 v19 v04 v10 v14 ...; fnv c8abbae2
+paths g3 v00 v03 7: 2162 paths, shortest 2 hops; first v00 > v02 > v12 > v07 > v19 > v04 > v20 > v03
+reach g3 v02 6: 27 reached; v02 0, v21 2, v15 3, v18 3, v17 4, v22 4; fnv 438c5600
+info g4: 14 nodes, 27 edges, undirected
+components g4: 1 components: 14 v00; fnv 76ea5648
+cuts g4: 0 cut points: 
+bridges g4: 0 bridges: 
+core g4: max core 3: 9 nodes (v00 v01 v02 v04 v06 v08 v09 v11 ...); histogram 2:5 3:9
+color lf g4: 4 colors, classes 4 4 5 1; fnv 0c67abd7
+color dsatur g4: 4 colors, classes 4 5 4 1; fnv e38cea7e
+triangles g4: 9 triangles; most at v04 5, v12 5, v02 4
+bipartite g4: not bipartite
+ecc g4: diameter 4, radius 2, center v00 v01 v04, periphery 2
+mst g4: 13 edges, weight 76; v02-v04 1 v08-v09 1 v02-v07 2 v00-v07 3 v01-v11 5 v00-v01 6 ...; fnv 6dde2311
+euler g4: not eulerian
+cycle g4: cycle of 3: v00 > v01 > v09 > v00
+bfs g4 v00: 14 nodes: v00 v01 v05 v06 v07 v09 v12 v10 v11 v02 v04 v03 ...; fnv 74260ef8
+dfs g4 v01: 14 nodes: v01 v00 v05 v11 v02 v04 v06 v12 v08 v09 v13 v10 ...; fnv 431d40d4
+paths g4 v00 v03 7: 113 paths, shortest 2 hops; first v00 > v01 > v09 > v08 > v04 > v02 > v07 > v03
+reach g4 v02 6: 14 reached; v02 0, v04 1, v07 2, v00 5, v06 7, v12 8; fnv 988c8984
+info g5: 24 nodes, 23 edges, undirected
+components g5: 1 components: 24 v00; fnv 29a1584b
+cuts g5: 11 cut points: v10 v05 v04 v02 v14 v11 v01 v03 v06 v15 v00
+bridges g5: 23 bridges: v00-v01 v00-v06 v00-v08 v01-v02 v01-v03 v01-v18 v01-v21 v02-v04 v02-v11 v03-v07 ...
+core g5: max core 1: 24 nodes (v00 v01 v02 v03 v04 v05 v06 v07 ...); histogram 1:24
+color lf g5: 3 colors, classes 9 14 1; fnv f8da5d41
+color dsatur g5: 2 colors, classes 11 13; fnv da0db590
+triangles g5: 0 triangles; most at v00 0, v01 0, v02 0
+bipartite g5: bipartite, 13 + 11; one side v00 v02 v03 v05 v09 ...
+ecc g5: diameter 9, radius 5, center v01 v02, periphery 2
+mst g5: 23 edges, weight 236; v01-v02 1 v01-v18 1 v04-v19 1 v01-v03 2 v03-v07 2 v05-v10 4 ...; fnv f1dc4d6f
+euler g5: not eulerian
+cycle g5: error: No cycle found.
+bfs g5 v00: 24 nodes: v00 v01 v06 v08 v02 v03 v18 v21 v13 v15 v04 v11 ...; fnv e1916223
+dfs g5 v01: 24 nodes: v01 v00 v06 v13 v15 v17 v08 v02 v04 v05 v10 v23 ...; fnv c202ca87
+paths g5 v00 v03 7: 1 paths, shortest 2 hops; first v00 > v01 > v03
+reach g5 v02 6: 24 reached; v02 0, v01 1, v18 2, v03 3, v07 5, v04 6; fnv 6dda9dce
+info g6: 19 nodes, 26 edges, undirected
+components g6: 2 components: 18 v00 | 1 v18; fnv f6dc4860
+cuts g6: 3 cut points: v03 v12 v17
+bridges g6: 4 bridges: v02-v03 v03-v16 v09-v12 v12-v17
+core g6: max core 2: 14 nodes (v00 v01 v03 v04 v05 v06 v07 v08 ...); histogram 0:1 1:4 2:14
+color lf g6: 2 colors, classes 10 9; fnv d9d4b909
+color dsatur g6: 2 colors, classes 10 9; fnv d9d4b909
+triangles g6: 0 triangles; most at v00 0, v01 0, v02 0
+bipartite g6: bipartite, 9 + 10; one side v00 v02 v04 v06 v08 ...
+ecc g6: error: Found infinite path length because the graph is not connected
+mst g6: 17 edges, weight 125; v10-v15 1 v08-v13 2 v09-v12 3 v03-v16 4 v12-v17 4 v04-v13 5 ...; fnv b3f9f4d4
+euler g6: not eulerian
+cycle g6: cycle of 4: v00 > v17 > v10 > v11 > v00
+bfs g6 v00: 18 nodes: v00 v17 v11 v03 v10 v12 v14 v16 v02 v04 v01 v15 ...; fnv 965f4c8c
+dfs g6 v01: 18 nodes: v01 v14 v07 v04 v13 v06 v15 v08 v10 v11 v00 v17 ...; fnv b4e92e94
+paths g6 v00 v03 7: 25 paths, shortest 1 hops; first v00 > v17 > v10 > v11 > v14 > v07 > v04 > v03
+reach g6 v02 6: 18 reached; v02 0, v03 14, v16 18, v10 27, v04 27, v15 28; fnv 67e32bdc
+info g7: 18 nodes, 28 edges, undirected
+components g7: 2 components: 17 v00 | 1 v12; fnv 8cfcf7f3
+cuts g7: 3 cut points: v01 v06 v07
+bridges g7: 3 bridges: v01-v06 v01-v11 v07-v17
+core g7: max core 3: 8 nodes (v03 v07 v08 v10 v13 v14 v15 v16); histogram 0:1 1:3 2:6 3:8
+color lf g7: 3 colors, classes 7 6 5; fnv 00014ece
+color dsatur g7: 3 colors, classes 7 6 5; fnv 219d72fa
+triangles g7: 7 triangles; most at v03 4, v13 3, v15 3
+bipartite g7: not bipartite
+ecc g7: error: Found infinite path length because the graph is not connected
+mst g7: 16 edges, weight 140; v03-v08 3 v00-v05 4 v06-v15 5 v08-v16 5 v07-v10 6 v07-v15 7 ...; fnv 9f01e53f
+euler g7: not eulerian
+cycle g7: cycle of 4: v00 > v05 > v10 > v07 > v00
+bfs g7 v00: 17 nodes: v00 v05 v07 v10 v15 v16 v17 v03 v06 v13 v14 v08 ...; fnv 68b66205
+dfs g7 v01: 17 nodes: v01 v06 v09 v02 v03 v04 v08 v14 v13 v15 v07 v00 ...; fnv fb5a1cf9
+paths g7 v00 v03 7: 103 paths, shortest 3 hops; first v00 > v05 > v10 > v07 > v15 > v03
+reach g7 v02 6: 17 reached; v02 0, v04 9, v14 11, v09 17, v03 18, v08 18; fnv 570dc5eb
+info g8: 24 nodes, 62 edges, undirected
+components g8: 1 components: 24 v00; fnv 29a1584b
+cuts g8: 0 cut points: 
+bridges g8: 0 bridges: 
+core g8: max core 4: 19 nodes (v00 v01 v02 v03 v04 v06 v07 v08 ...); histogram 2:2 3:3 4:19
+color lf g8: 5 colors, classes 4 5 8 4 3; fnv 77046728
+color dsatur g8: 4 colors, classes 6 7 7 4; fnv 3d720eaa
+triangles g8: 23 triangles; most at v17 8, v11 6, v19 6
+bipartite g8: not bipartite
+ecc g8: diameter 4, radius 2, center v19, periphery 2
+mst g8: 23 edges, weight 125; v01-v18 1 v04-v21 1 v09-v19 1 v13-v17 1 v01-v09 2 v16-v22 2 ...; fnv 5a2ab217
+euler g8: not eulerian
+cycle g8: cycle of 3: v03 > v01 > v06 > v03
+bfs g8 v00: 24 nodes: v00 v03 v08 v10 v13 v19 v20 v01 v06 v07 v12 v15 ...; fnv 46d74d4b
+dfs g8 v01: 24 nodes: v01 v03 v00 v08 v13 v06 v11 v04 v02 v07 v16 v19 ...; fnv f0944cab
+paths g8 v00 v03 7: 1409 paths, shortest 1 hops; first v00 > v03
+reach g8 v02 6: 24 reached; v02 0, v16 3, v22 5, v19 7, v09 8, v06 9; fnv 57c226a4
+info g9: 22 nodes, 77 edges, undirected
+components g9: 1 components: 22 v00; fnv b7f26580
+cuts g9: 0 cut points: 
+bridges g9: 0 bridges: 
+core g9: max core 5: 21 nodes (v00 v01 v02 v03 v04 v05 v06 v07 ...); histogram 4:1 5:21
+color lf g9: 5 colors, classes 5 5 6 5 1; fnv 1a96e21e
+color dsatur g9: 4 colors, classes 5 5 6 6; fnv 814fe26f
+triangles g9: 48 triangles; most at v09 14, v17 13, v18 13
+bipartite g9: not bipartite
+ecc g9: diameter 3, radius 2, center v00 v01 v02 v04 v06 v07 ..., periphery 9
+mst g9: 21 edges, weight 53; v00-v04 1 v00-v16 1 v00-v20 1 v01-v03 1 v04-v15 1 v09-v11 1 ...; fnv 518b45f1
+euler g9: not eulerian
+cycle g9: cycle of 3: v03 > v01 > v02 > v03
+bfs g9 v00: 22 nodes: v00 v03 v04 v11 v12 v16 v18 v19 v20 v01 v02 v06 ...; fnv 57c078d4
+dfs g9 v01: 22 nodes: v01 v02 v03 v00 v04 v05 v07 v11 v08 v06 v10 v09 ...; fnv d21a6f20
+paths g9 v00 v03 7: 9245 paths, shortest 1 hops; first v00 > v03
+reach g9 v02 6: 22 reached; v02 0, v06 2, v01 4, v10 4, v20 4, v03 5; fnv d79527d5
+19 graphs
