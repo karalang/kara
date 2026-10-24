@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/983-minimum-cost-for-tickets/bench/mincost_tickets.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
-bucket = "timeout"
-classified_with = "395f71ae0"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 983 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "f28ee171d"
 extracted_src = "8da674d9"
