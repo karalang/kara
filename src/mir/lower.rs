@@ -15456,7 +15456,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             // A generic method (`v.serialize(s)` with `S` the serializer's
             // type): its own parameters read off the arguments.
-            if let Some((d, inst_args)) = self.generic_method_by_receiver(rt, method, args)? {
+            let ret = if self.lcx.node_types.contains_key(&e.id) {
+                Some(self.expr_ty(e)?)
+            } else {
+                None
+            };
+            if let Some((d, inst_args)) = self.generic_method_by_receiver(rt, method, args, ret)? {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
             // `c.try_into()` into a `Result[K, E]`: the user's `impl TryFrom
@@ -15736,12 +15741,14 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// The one impl method `method` of `recv` when it has generic parameters
-    /// of its own, each read off an argument.
+    /// of its own, each read off an argument, or off `ret`, the call's type,
+    /// for one only the return type names (`OutV` of `it.map(f)`).
     fn generic_method_by_receiver(
         &mut self,
         recv: Ty,
         method: &str,
         args: &'a [CallArg],
+        ret: Option<Ty>,
     ) -> R<Option<(DefId, Vec<Ty>)>> {
         let (kind, base) = self.strip_ty_full(recv);
         let generic = |i: &FnItem<'_>| {
@@ -15760,7 +15767,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             if !generic(&self.lcx.fns[d]) {
                 return Ok(None);
             }
-            return self.own_generics_from_args(*d, Vec::new(), args);
+            return self.own_generics_from_args(*d, Vec::new(), args, ret);
         }
         if !prim.is_empty() {
             return Ok(None);
@@ -15800,7 +15807,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(inst) = item.impl_args(&targs) else {
             return Ok(None);
         };
-        self.own_generics_from_args(*d, inst, args)
+        self.own_generics_from_args(*d, inst, args, ret)
     }
 
     /// The associated function `m` of `t`'s impl when it has generic
@@ -15824,7 +15831,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             if prim.next().is_some() {
                 return Ok(None);
             }
-            return self.own_generics_from_args(d, Vec::new(), args);
+            return self.own_generics_from_args(d, Vec::new(), args, None);
         }
         let (target, targs) = match kind {
             HK::Adt { def, args } | HK::Shared { def, args } => (def, self.tys().tcx().list(args)),
@@ -15858,16 +15865,19 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(inst) = item.impl_args(&targs) else {
             return Ok(None);
         };
-        self.own_generics_from_args(d, inst, args)
+        self.own_generics_from_args(d, inst, args, None)
     }
 
     /// `d`'s instance arguments: `inst` (its impl's), then each of its own
-    /// generic parameters read off the argument written as that bare name.
+    /// generic parameters read off the argument written as that bare name,
+    /// or, for one no parameter is written as, off `ret`, the call's type,
+    /// where `d`'s return type names it (B-2026-10-24-4).
     fn own_generics_from_args(
         &mut self,
         d: DefId,
         mut inst: Vec<Ty>,
         args: &'a [CallArg],
+        ret: Option<Ty>,
     ) -> R<Option<(DefId, Vec<Ty>)>> {
         let f = self.lcx.fns[&d].f;
         let Some(own) = f.generic_params.as_ref() else {
@@ -15879,7 +15889,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         // Each parameter read off an argument written as it (`iter: own I`),
         // or as a borrow of it (`s: mut ref S`), whose pointee it is.
-        let mut from: Vec<(&'a Expr, bool)> = Vec::new();
+        let mut from: Vec<Result<(&'a Expr, bool), Ty>> = Vec::new();
         for gp in &own.params {
             let at = f
                 .params
@@ -15894,12 +15904,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     _ => None,
                 });
-            let Some(a) = at else {
+            if let Some(a) = at {
+                from.push(Ok(a));
+                continue;
+            }
+            let written = f
+                .return_type
+                .as_ref()
+                .zip(ret)
+                .and_then(|(rt, t)| self.written_at(rt, t, &gp.name));
+            let Some(t) = written else {
                 return Ok(None);
             };
-            from.push(a);
+            from.push(Err(t));
         }
-        for (a, borrowed) in from {
+        for a in from {
+            let (a, borrowed) = match a {
+                Ok(a) => a,
+                Err(t) => {
+                    inst.push(t);
+                    continue;
+                }
+            };
             let t = self.expr_ty(a)?;
             let t = match self.tys().tcx().kind(t) {
                 HK::Ref(inner) | HK::MutRef(inner) if borrowed => inner,
@@ -15908,6 +15934,43 @@ impl<'l, 'a> Bx<'l, 'a> {
             inst.push(t);
         }
         Ok(Some((d, inst)))
+    }
+
+    /// The part of `t` that `te`, the type `t` was written as, writes as the
+    /// bare name `name`: through a path's type arguments, a tuple's
+    /// elements and a borrow's pointee.
+    fn written_at(&self, te: &ast::TypeExpr, t: Ty, name: &str) -> Option<Ty> {
+        let tcx = self.tys().tcx();
+        match (&te.kind, tcx.kind(t)) {
+            (ast::TypeKind::Path(q), _)
+                if q.generic_args.is_none() && q.segments == [name.to_string()] =>
+            {
+                Some(t)
+            }
+            (
+                ast::TypeKind::Path(q),
+                HK::Adt { args, .. } | HK::Shared { args, .. } | HK::Intrinsic { args, .. },
+            ) => {
+                let written = q.generic_args.as_ref()?;
+                let args = tcx.list(args);
+                if written.len() != args.len() {
+                    return None;
+                }
+                written.iter().zip(args.iter()).find_map(|(w, &a)| match w {
+                    ast::GenericArg::Type(w) => self.written_at(w, a, name),
+                    _ => None,
+                })
+            }
+            (ast::TypeKind::Tuple(ws), HK::Tuple(l)) => {
+                let l = tcx.list(l);
+                ws.iter()
+                    .zip(l.iter())
+                    .find_map(|(w, &a)| self.written_at(w, a, name))
+            }
+            (ast::TypeKind::Ref(w), HK::Ref(inner))
+            | (ast::TypeKind::MutRef(w), HK::MutRef(inner)) => self.written_at(w, inner, name),
+            _ => None,
+        }
     }
 
     /// `left <op> right` as a call of the user impl's operator method `d`,
