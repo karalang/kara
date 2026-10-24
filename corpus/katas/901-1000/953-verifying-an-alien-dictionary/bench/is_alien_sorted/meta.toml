@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/953-verifying-an-alien-dictionary/bench/is_alien_sorted.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 953 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "eb23c834e"
+classified_with = "c8dfe2840"
 extracted_src = "052c4762"
