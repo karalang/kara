@@ -6635,15 +6635,37 @@ impl<'a> super::TypeChecker<'a> {
             || matches!(t, Type::Named { name, .. } if name == "VecDeque")
     }
 
-    /// Is `value` the receiver of a library `mut ref self` method? The MIR
-    /// builder matches it through a `mut` reborrow, so a binding of a part
-    /// is a `mut ref` (`match self { Some(x) => x }` in
-    /// `Option.get_or_insert`).
+    /// Is `value` the receiver of a `mut ref self` method, or a place
+    /// reached from a `mut ref` through fields alone (`c.s` with `c: mut
+    /// ref C`, `self.x` in a `mut ref self` method)? The MIR builder
+    /// matches it through a `mut` reborrow, so a binding of a part is a
+    /// `mut ref` (`match self { Some(x) => x }` in `Option.get_or_insert`;
+    /// core semantics §4.6, B-2026-10-24-15).
     pub(super) fn lib_mut_self_scrutinee(&self, value: &Expr) -> bool {
-        self.library_methods_from_source
-            && !self.cli_lint_overrides.strict_core
-            && self.current_fn_mut_self
-            && matches!(value.kind, ExprKind::SelfValue)
+        if !self.library_methods_from_source || self.cli_lint_overrides.strict_core {
+            return false;
+        }
+        let mut root = value;
+        loop {
+            match &root.kind {
+                ExprKind::SelfValue => return self.current_fn_mut_self,
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    let shared_ref = self
+                        .expr_types
+                        .get(&SpanKey::from_span(&object.span))
+                        .is_some_and(|t| matches!(t, Type::Ref(_)));
+                    if shared_ref || self.expr_is_shared_handle(object) {
+                        return false;
+                    }
+                    root = object;
+                }
+                ExprKind::Identifier(n) => {
+                    return !std::ptr::eq(root, value)
+                        && matches!(self.local_scope.lookup(n.as_str()), Some(Type::MutRef(_)));
+                }
+                _ => return false,
+            }
+        }
     }
 
     /// A binding's type under [`Self::library_view_scrutinee`]: a part that
