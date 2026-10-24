@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 612 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 344 |
+| missing-feature | 345 |
 | codegen-gap | 292 |
 | false-positive | 289 |
 | other | 199 |
@@ -111,11 +111,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 3046 |
-| interp | 1055 |
+| interp | 1056 |
 | typecheck | 581 |
 | ownership | 133 |
 | other | 127 |
-| cli | 93 |
+| cli | 94 |
 | runtime | 88 |
 | parser | 77 |
 | autopar | 59 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 12 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -172,12 +172,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-44 | 2026-10-22 | cli+codegen | medium | A v2 `karac test` failure from `assert_eq`/`assert_ne` carries no `left`/`right`: the MIR assertion aborts with "assertion failed: left != right" and reports neither operand, so the `test_fail` event has only `message` and `location`, where the legacy runner gives `"left":"4","right":"5"` (design §14 runner output; deferred.md's `test_fail` row makes both fields part of the event) | — |
 | B-2026-10-23-3 | 2026-10-23 | interp+codegen | medium | A method call whose receiver is a `const` of a primitive type (`const TOL0: f64 = 2.2e-16; TOL0.sqrt()`, also `.abs()` on an f64 or i64 const) passes `karac check` and runs under `karac run --interp`, but v2 lowers it as an associated call on the type: `__mir-run` stops at "call of unknown function f64.sqrt" and `__mir-llvm-run`, `__mir-llvm-asan` and `build --mir` refuse with "native `f64.sqrt` is not lowered yet"; copying the const into a local first (`let t = TOL0; t.sqrt()`) works | — |
 | B-2026-10-23-4 | 2026-10-23 | interp+codegen | low | Float Display breaks an exact tie between two equally short decimals away from zero, where Python's repr keeps the even last digit: -75455689800034.625 prints -75455689800034.63 on every v2 backend and in `--interp`, Python prints -75455689800034.62; library/core-types.md § Printing says only "the shortest digits that read back", so which of the two is unspecified | — |
-| B-2026-10-23-6 | 2026-10-23 | cli+interp | medium | The v2 REPL carries no values across cells: a later cell replays every earlier statement cell, so their side effects run again (a `read_line()` waits for input again, a file is written again, a clock is read again) and a slow cell slows every cell after it; `%show` and `--auto-clone` / `%set auto-clone` are legacy-only, and `:provide` does not check that the provider implements the resource's trait | — |
 | B-2026-10-23-7 | 2026-10-23 | typecheck | low | A `vec![..]` of integer literals inside a tuple literal is typed `Vec[i64]` even where the tuple's expected type says `Vec[u8]`: `let b: (String, Vec[u8]) = ("x".to_string(), vec![1, 2]);` and `v.push(("y".to_string(), vec![3]))` on a `Vec[(String, Vec[u8])]` are refused, while `let a: Vec[u8] = vec![1, 2];` and `let c: Option[Vec[u8]] = Some(vec![1, 2]);` are accepted | — |
 | B-2026-10-23-8 | 2026-10-23 | typecheck+interp+codegen | low | `karac check` accepts `*x` on a binding from a pattern over a bare `for` element (a destructuring `for (o, n) in v` over a `Vec[(String, i64)]`, `if let Some(f) = g` inside `for g in v` over a `Vec[Option[String]]`, or a `match` arm `Seg.Code(v)` inside `for s in p.segs` over a field of a borrowed struct, where `v` is an `i64`), typing it as a borrow, while every MIR front end (`__mir-run`, `__mir-llvm-run`, `build --mir`) types it as the value type and refuses the `*` | — |
 | B-2026-10-23-10 | 2026-10-23 | typecheck | low | A top-level `fn todo(..)` (likewise `unreachable`, `panic`, and `ref_eq`, which is checked against the prelude intrinsic) is accepted but never called: `todo(1, 2)` is checked against the builtin, "todo() takes 0 or 1 argument(s), found 2", although design.md § The prelude says any local name shadows a prelude name | — |
 | B-2026-10-23-12 | 2026-10-23 | typecheck | medium | `karac check` accepts a `Map` whose value type defaulted to `i64` (`let mut m = Map.new(); m.insert(5, 9)`) where `Map[i64, u64]` is wanted as a struct or variant field (`S { m: m }`, `Store.Full(m)`) or a call argument, so the MIR builder makes invalid MIR ("field 0 of S has the wrong type"); the same shape on `Vec` (`let w: Vec[u8] = v` after `v.push(3)`) is refused | — |
 | B-2026-10-23-13 | 2026-10-23 | codegen | low | A `match` on a tuple of handle locals (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`) counts each handle into a built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads: kata 558's `intersect` pays four increments and four `drop.shared` calls per Split node for it, 8 of the 8 count sites its IR has left | — |
+| B-2026-10-24-1 | 2026-10-24 | cli+interp | low | The v2 REPL's remaining legacy-only pieces: `%show` and `--auto-clone` / `%set auto-clone` refuse on v2, `:provide` does not check that the provider implements the resource's trait until the next cell, and the `:provide` construction program still replays every earlier cell | — |
 
 ### Relocated
 
@@ -4431,6 +4431,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-23-1 | interp | medium | `SortedMap.ceiling` / `floor` / `min` / `max` / `range` on `karac __mir-run` copy and order every key on each call, so each query is O(n log n) where… | 35709d0045 |
 | B-2026-10-23-2 | ownership+interp+codegen | medium | A named `Vec` passed as the default of `Option[ref Vec].unwrap_or` or `??` (here `m.get(k)` on a `Map[i64, Vec[i64]]`): `karac check` and the MIR bui… | bf21104041 |
 | B-2026-10-23-5 | typecheck | low | `to_vec()` on a `Vec[T]` receiver is refused ("no method 'to_vec' on type 'Vec'") though library/collections.md says a Vec finds every Slice method,… | 3fdb9248cb |
+| B-2026-10-23-6 | cli+interp | medium | The v2 REPL carries no values across cells: a later cell replays every earlier statement cell, so their side effects run again (a `read_line()` waits… | 7e5765dd1b |
 | B-2026-10-23-9 | interp+codegen | medium | The MIR builder refuses a closure inside `with_provider[R]`, other than the body closure itself, that uses `R` ("a closure or function value that use… | 580c5fb178 |
 | B-2026-10-23-11 | typecheck | medium | `let mut w = v;` with `v` a `for` element of `Copy` type is still treated as a `ref` to the element when `w` is passed `mut` to a `mut ref` parameter… | 8b64e4edb7 |
 
