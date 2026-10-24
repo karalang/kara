@@ -1,0 +1,408 @@
+// LeetCode #939: Minimum Area Rectangle -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: you are given an array of points in the X-Y plane
+// points where points[i] = [xi, yi]. Return the minimum area of a
+// rectangle formed from these points, with sides parallel to the X and Y
+// axes. If there is not any such rectangle, return 0.
+
+// ---- the ★ arm: pairs as diagonals ----------------------------------------
+fn star_min_area_rect(points: Vec[Vec[i64]]) -> i64 {
+    let mut seen: Set[i64] = Set.new();
+    for p in points.iter() {
+        seen.insert(p[0] * 40001 + p[1]);
+    }
+    let mut best = 0;
+    let n = points.len();
+    for i in 0..n {
+        let x1 = points[i][0];
+        let y1 = points[i][1];
+        for j in (i + 1)..n {
+            let x2 = points[j][0];
+            let y2 = points[j][1];
+            if x1 != x2 and y1 != y2 and seen.contains(x1 * 40001 + y2) and seen.contains(x2 * 40001 + y1) {
+                let area = (x1 - x2).abs() * (y1 - y2).abs();
+                if best == 0 or area < best {
+                    best = area;
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- the columns arm: a sweep over the columns ----------------------------
+fn columns_min_area_rect(points: Vec[Vec[i64]]) -> i64 {
+    let mut keys: Vec[i64] = Vec.new();
+    for p in points.iter() {
+        keys.push(p[0] * 40001 + p[1]);
+    }
+    keys.sort();
+    let mut last: Map[i64, i64] = Map.new();
+    let mut best = 0;
+    let mut i = 0;
+    while i < keys.len() {
+        let x = keys[i] / 40001;
+        let mut j = i;
+        while j < keys.len() and keys[j] / 40001 == x {
+            j += 1;
+        }
+        // the heights in this column are keys[i..j] % 40001, in order
+        for a in i..j {
+            for b in (a + 1)..j {
+                let y1 = keys[a] % 40001;
+                let y2 = keys[b] % 40001;
+                let pair = y1 * 40001 + y2;
+                if let Some(px) = last.get(pair) {
+                    let area = (x - px) * (y2 - y1);
+                    if best == 0 or area < best {
+                        best = area;
+                    }
+                }
+                last.insert(pair, x);
+            }
+        }
+        i = j;
+    }
+    best
+}
+
+// ---- the edges arm: vertical sides sorted ---------------------------------
+fn edges_min_area_rect(points: Vec[Vec[i64]]) -> i64 {
+    let n = points.len();
+    let mut sides: Vec[i64] = Vec.new();
+    for i in 0..n {
+        for j in 0..n {
+            if points[i][0] == points[j][0] and points[i][1] < points[j][1] {
+                sides.push((points[i][1] * 40001 + points[j][1]) * 40001 + points[i][0]);
+            }
+        }
+    }
+    sides.sort();
+    let mut best = 0;
+    for k in 1..sides.len() {
+        let pair = sides[k] / 40001;
+        if pair == sides[k - 1] / 40001 {
+            let width = sides[k] % 40001 - sides[k - 1] % 40001;
+            let height = pair % 40001 - pair / 40001;
+            let area = width * height;
+            if best == 0 or area < best {
+                best = area;
+            }
+        }
+    }
+    best
+}
+
+// ---- the sorted arm: a sorted list and binary search ----------------------
+fn sorted_has(keys: ref Vec[i64], key: i64) -> bool {
+    let mut lo = 0;
+    let mut hi = keys.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if keys[mid] < key {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo < keys.len() and keys[lo] == key
+}
+
+fn sorted_min_area_rect(points: Vec[Vec[i64]]) -> i64 {
+    let mut keys: Vec[i64] = Vec.new();
+    for p in points.iter() {
+        keys.push(p[0] * 40001 + p[1]);
+    }
+    keys.sort();
+    let mut best = 0;
+    let n = keys.len();
+    for i in 0..n {
+        let x1 = keys[i] / 40001;
+        let y1 = keys[i] % 40001;
+        for j in (i + 1)..n {
+            let x2 = keys[j] / 40001;
+            let y2 = keys[j] % 40001;
+            if x1 < x2 and y1 != y2 and sorted_has(keys, x1 * 40001 + y2) and sorted_has(keys, x2 * 40001 + y1) {
+                let area = (x2 - x1) * (y1 - y2).abs();
+                if best == 0 or area < best {
+                    best = area;
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- the rows arm: pairs of rows merged -----------------------------------
+fn rows_min_area_rect(points: Vec[Vec[i64]]) -> i64 {
+    let mut keys: Vec[i64] = Vec.new();
+    for p in points.iter() {
+        keys.push(p[1] * 40001 + p[0]);
+    }
+    keys.sort();
+    // where each row starts, and one past the end
+    let mut starts: Vec[i64] = Vec.new();
+    for k in 0..keys.len() {
+        if k == 0 or keys[k] / 40001 != keys[k - 1] / 40001 {
+            starts.push(k);
+        }
+    }
+    starts.push(keys.len());
+    let rows = starts.len() - 1;
+    let mut best = 0;
+    for r1 in 0..rows {
+        for r2 in (r1 + 1)..rows {
+            let height = keys[starts[r2]] / 40001 - keys[starts[r1]] / 40001;
+            let mut a = starts[r1];
+            let mut b = starts[r2];
+            let mut prev = -1;
+            while a < starts[r1 + 1] and b < starts[r2 + 1] {
+                let xa = keys[a] % 40001;
+                let xb = keys[b] % 40001;
+                if xa < xb {
+                    a += 1;
+                } else if xb < xa {
+                    b += 1;
+                } else {
+                    if prev >= 0 {
+                        let area = (xa - prev) * height;
+                        if best == 0 or area < best {
+                            best = area;
+                        }
+                    }
+                    prev = xa;
+                    a += 1;
+                    b += 1;
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, points: ref Vec[Vec[i64]]) -> i64 {
+    if x == 0 {
+        star_min_area_rect(points)
+    } else if x == 1 {
+        columns_min_area_rect(points)
+    } else if x == 2 {
+        edges_min_area_rect(points)
+    } else if x == 3 {
+        sorted_min_area_rect(points)
+    } else {
+        rows_min_area_rect(points)
+    }
+}
+
+// The statement read literally: every four of the points, kept when they
+// are the corners of a rectangle with sides parallel to the axes, which
+// four distinct points are exactly when they hold two values of x and
+// two of y.
+fn literal(points: ref Vec[Vec[i64]]) -> i64 {
+    let n = points.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            for k in (j + 1)..n {
+                for l in (k + 1)..n {
+                    let mut xs: Vec[i64] = Vec.new();
+                    let mut ys: Vec[i64] = Vec.new();
+                    for q in [i, j, k, l] {
+                        if not xs.contains(points[q][0]) {
+                            xs.push(points[q][0]);
+                        }
+                        if not ys.contains(points[q][1]) {
+                            ys.push(points[q][1]);
+                        }
+                    }
+                    if xs.len() == 2 and ys.len() == 2 {
+                        let area = (xs[0] - xs[1]).abs() * (ys[0] - ys[1]).abs();
+                        if best == 0 or area < best {
+                            best = area;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n distinct points, or as many as there are cells, at random cells of a
+// grid w cells wide and h high, `step` apart, from (ox, oy).
+fn grid_points(seed: mut ref i64, n: i64, w: i64, h: i64, step: i64, ox: i64, oy: i64) -> Vec[Vec[i64]] {
+    let want = if n < w * h { n } else { w * h };
+    let mut taken: Set[i64] = Set.new();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    while out.len() < want {
+        let c = (next_random(mut seed) * 32768 + next_random(mut seed)) % (w * h);
+        if not taken.contains(c) {
+            taken.insert(c);
+            out.push(vec![ox + (c % w) * step, oy + (c / w) * step]);
+        }
+    }
+    out
+}
+
+// Every area some four of the points make, from each two opposite
+// corners.
+fn areas(points: ref Vec[Vec[i64]]) -> Set[i64] {
+    let mut at: Set[i64] = Set.new();
+    for p in points.iter() {
+        at.insert(p[0] * 40001 + p[1]);
+    }
+    let mut out: Set[i64] = Set.new();
+    for p in points.iter() {
+        for q in points.iter() {
+            if p[0] < q[0] and p[1] < q[1] and at.contains(p[0] * 40001 + q[1]) and at.contains(q[0] * 40001 + p[1]) {
+                out.insert((q[0] - p[0]) * (q[1] - p[1]));
+            }
+        }
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, points: ref Vec[Vec[i64]], small: bool) -> i64 {
+    let truth = if small { literal(points) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, points));
+    }
+    // the inputs P2 to P5 share
+    let made = areas(points);
+    let mut at: Set[i64] = Set.new();
+    let mut max_x = 0;
+    let mut max_y = 0;
+    for p in points.iter() {
+        at.insert(p[0] * 40001 + p[1]);
+        if p[0] > max_x {
+            max_x = p[0];
+        }
+        if p[1] > max_y {
+            max_y = p[1];
+        }
+    }
+    // moved by (dx, dy) with every x doubled
+    let dx = next_random(mut seed) % (40001 - 2 * max_x);
+    let dy = next_random(mut seed) % (40001 - max_y);
+    let mut moved: Vec[Vec[i64]] = Vec.new();
+    // turned: x and y swapped, x mirrored, in reverse order
+    let mut turned: Vec[Vec[i64]] = Vec.new();
+    for p in points.iter() {
+        moved.push(vec![2 * p[0] + dx, p[1] + dy]);
+    }
+    let mut i = points.len();
+    while i > 0 {
+        i -= 1;
+        turned.push(vec![40000 - points[i][1], points[i][0]]);
+    }
+    // one more point, its x from one point and its y from another where
+    // that is new, otherwise anywhere new
+    let mut more = points.clone();
+    let mut nx = points[next_random(mut seed) % points.len()][0];
+    let mut ny = points[next_random(mut seed) % points.len()][1];
+    while at.contains(nx * 40001 + ny) {
+        nx = next_random(mut seed) % 20001;
+        ny = next_random(mut seed) % 20001;
+    }
+    more.push(vec![nx, ny]);
+    // the corners of a square of side 1 put in where they are new
+    let mut square = points.clone();
+    let sx = next_random(mut seed) % 20000;
+    let sy = next_random(mut seed) % 20000;
+    for c in 0..4 {
+        let cx = sx + c % 2;
+        let cy = sy + c / 2;
+        if not at.contains(cx * 40001 + cy) {
+            square.push(vec![cx, cy]);
+        }
+    }
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's least area, on the small sets
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: 0 exactly when no four points make a rectangle, otherwise
+        // the area of one that some four make
+        check(mut t, 2, if made.len() == 0 { a == 0 } else { made.contains(a) });
+        // P3: moved, with every x doubled, the area doubles
+        check(mut t, 3, arm(x, moved) == 2 * a);
+        // P4: x and y swapped, mirrored and in reverse order, the same
+        check(mut t, 4, arm(x, turned) == a);
+        // P5: one more point never makes it larger, and a square of side
+        // 1 makes it 1
+        let b = arm(x, more);
+        check(mut t, 5, (a == 0 or (b > 0 and b <= a)) and arm(x, square) == 1);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 939;
+    let mut sets = 0;
+    let mut count = 0;
+    let mut found = 0;
+    let mut check_sum = 0;
+    // up to 8 points on grids of 2 to 4 cells a side, 1 to 3 apart,
+    // against the statement; then up to 100 on grids of 2 to 30 cells a
+    // side, 1 to 600 apart
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 100 };
+        let w = if small { 2 + next_random(mut seed) % 3 } else { 2 + next_random(mut seed) % 29 };
+        let h = if small { 2 + next_random(mut seed) % 3 } else { 2 + next_random(mut seed) % 29 };
+        let step = if small { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 600 };
+        let ox = next_random(mut seed) % 1000;
+        let oy = next_random(mut seed) % 1000;
+        let points = grid_points(mut seed, n, w, h, step, ox, oy);
+        sets += 1;
+        count += points.len();
+        let s = properties(mut t, mut seed, points, small);
+        if s > 0 {
+            found += 1;
+        }
+        check_sum = (check_sum * 1000003 + s) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{sets} sets of {count} points, {found} with a rectangle, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

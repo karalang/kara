@@ -1,0 +1,126 @@
+// LeetCode #939: Minimum Area Rectangle -- vertical sides sorted.
+//
+// List every vertical side, two points in one column, as its two heights
+// and its column, and sort the list. Sides with the same two heights then
+// lie next to each other in order of column, and each two neighbours are
+// the sides of the narrowest rectangle between them. O(n^2 log n) time.
+
+fn min_area_rect(points: Vec[Vec[i64]]) -> i64 {
+    let n = points.len();
+    let mut sides: Vec[i64] = Vec.new();
+    for i in 0..n {
+        for j in 0..n {
+            if points[i][0] == points[j][0] and points[i][1] < points[j][1] {
+                sides.push((points[i][1] * 40001 + points[j][1]) * 40001 + points[i][0]);
+            }
+        }
+    }
+    sides.sort();
+    let mut best = 0;
+    for k in 1..sides.len() {
+        let pair = sides[k] / 40001;
+        if pair == sides[k - 1] / 40001 {
+            let width = sides[k] % 40001 - sides[k - 1] % 40001;
+            let height = pair % 40001 - pair / 40001;
+            let area = width * height;
+            if best == 0 or area < best {
+                best = area;
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n distinct points, or as many as there are cells, at random cells of a
+// grid w cells wide and h high, `step` apart, from (ox, oy).
+fn grid_points(seed: mut ref i64, n: i64, w: i64, h: i64, step: i64, ox: i64, oy: i64) -> Vec[Vec[i64]] {
+    let want = if n < w * h { n } else { w * h };
+    let mut taken: Set[i64] = Set.new();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    while out.len() < want {
+        let c = (next_random(mut seed) * 32768 + next_random(mut seed)) % (w * h);
+        if not taken.contains(c) {
+            taken.insert(c);
+            out.push(vec![ox + (c % w) * step, oy + (c / w) * step]);
+        }
+    }
+    out
+}
+
+fn show(points: ref Vec[Vec[i64]]) -> String {
+    let mut s = "[";
+    for i in 0..points.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"[{points[i][0]},{points[i][1]}]";
+    }
+    s + "]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![1, 1], vec![1, 3], vec![3, 1], vec![3, 3], vec![2, 2]],
+        vec![vec![1, 1], vec![1, 3], vec![3, 1], vec![3, 3], vec![4, 1], vec![4, 3]],
+        vec![vec![5, 5]],
+        vec![vec![0, 0], vec![0, 2], vec![2, 2]],
+        vec![vec![0, 7], vec![1, 7], vec![2, 7], vec![3, 7], vec![4, 7]],
+        vec![vec![1, 0], vec![0, 1], vec![2, 1], vec![1, 2]],
+        vec![vec![0, 0], vec![0, 40000], vec![40000, 0], vec![40000, 40000]],
+        vec![vec![0, 0], vec![4, 0], vec![0, 3], vec![4, 3], vec![1, 1], vec![2, 1], vec![1, 2], vec![2, 2]],
+    ];
+    for i in 0..examples.len() {
+        println(f"{show(examples[i])}: {min_area_rect(examples[i])}");
+    }
+    // 300 random sets of 1 to 60 points on grids of 2 to 10 cells a side,
+    // the cells 1 to 1000 apart
+    let mut seed = 939;
+    let mut count = 0;
+    let mut found = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let w = 2 + next_random(mut seed) % 9;
+        let h = 2 + next_random(mut seed) % 9;
+        let step = 1 + next_random(mut seed) % 1000;
+        let ox = next_random(mut seed) % 1000;
+        let oy = next_random(mut seed) % 1000;
+        let points = grid_points(mut seed, n, w, h, step, ox, oy);
+        let a = min_area_rect(points);
+        count += points.len();
+        if a > 0 {
+            found += 1;
+        }
+        total += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"300 random sets of {count} points: {found} with a rectangle, areas adding to {total}, checksum {check}");
+    // LeetCode's largest: 500 points
+    let full = grid_points(mut seed, 500, 25, 20, 1, 0, 0);
+    println(f"a 25 by 20 grid, every point: {min_area_rect(full)}");
+    let spread = grid_points(mut seed, 500, 100, 100, 400, 0, 0);
+    println(f"500 points of a 100 by 100 grid, 400 apart: {min_area_rect(spread)}");
+    let scattered = grid_points(mut seed, 500, 40001, 40001, 1, 0, 0);
+    println(f"500 points anywhere: {min_area_rect(scattered)}");
+    let left = grid_points(mut seed, 250, 1, 40001, 1, 0, 0);
+    let mut sides: Vec[Vec[i64]] = Vec.new();
+    for p in left.iter() {
+        sides.push(vec![0, p[1]]);
+        sides.push(vec![40000, p[1]]);
+    }
+    println(f"250 heights at x = 0 and at x = 40000: {min_area_rect(sides)}");
+    let mut diagonal: Vec[Vec[i64]] = Vec.new();
+    for i in 0..500 {
+        diagonal.push(vec![i * 80, i * 80]);
+    }
+    println(f"500 points on a diagonal: {min_area_rect(diagonal)}");
+}
