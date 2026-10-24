@@ -194,6 +194,7 @@ impl BodyBuilder {
             scopes: self.scopes,
             phase: MirPhase::Built,
             span: self.info.span,
+            auto_par_candidates: Vec::new(),
             par_regions: self.par_regions,
             provided: self.provided,
             suspends: self.suspends,

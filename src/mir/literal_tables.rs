@@ -331,6 +331,7 @@ fn init_body(body: &Body, table: &Table, name: &str) -> Body {
         scopes: body.scopes.clone(),
         phase: body.phase,
         span: body.span,
+        auto_par_candidates: Vec::new(),
         par_regions: Vec::new(),
         provided: Vec::new(),
         suspends: false,

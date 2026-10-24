@@ -49,6 +49,10 @@
 //! keep their order. A key on a value the branch makes itself is fresh
 //! there, so one iteration's channel does not conflict with the next's.
 //! The conflicts are reported in [`EffectReport::par_conflicts`].
+//!
+//! **Auto-par candidates (M4 item 13).** A loop or run of statements the
+//! builder records as one gets the same check, plus the rules of
+//! [`auto_par`], and a verdict in [`EffectReport::auto_par`].
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -60,6 +64,8 @@ use super::syntax::*;
 use super::ty::{AdtId, Ty, TyCtxt, TyInterner};
 use crate::ids::DefId;
 use crate::ty::TyKind as SK;
+
+pub mod auto_par;
 
 /// The effect verbs MIR can produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -217,6 +223,9 @@ pub struct EffectReport {
     pub sites: BTreeMap<String, Vec<Site>>,
     /// Per instance name: the `par` regions whose branches conflict.
     pub par_conflicts: BTreeMap<String, Vec<ParConflict>>,
+    /// The verdict on every auto-par candidate, by instance name and then
+    /// in the body's order ([`auto_par`]).
+    pub auto_par: Vec<auto_par::AutoParVerdict>,
     /// Per instance name: the hidden provider parameters it takes (core
     /// semantics §14.3), one per resource it reaches, `ref P` for
     /// [`Access::Reads`] and `mut ref P` for [`Access::Writes`]. Instances
@@ -387,6 +396,26 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
             report.par_conflicts.insert((*name).clone(), found);
         }
     }
+    if program
+        .bodies
+        .values()
+        .any(|b| !b.auto_par_candidates.is_empty())
+    {
+        let cost = auto_par::Cost::of(&a);
+        for (i, name) in names.iter().enumerate() {
+            let body = &program.bodies[*name];
+            for r in &body.auto_par_candidates {
+                report.auto_par.push(auto_par::verdict(
+                    name,
+                    body,
+                    r,
+                    &report.sites[*name],
+                    &origins[i],
+                    &cost,
+                ));
+            }
+        }
+    }
     // `main` takes no hidden parameter, so a provider it needs must come
     // from a `with_provider` inside it, or be a program-rooted resource's
     // default (core semantics §14.6, §14.7).
@@ -531,30 +560,7 @@ fn place_accesses(
     origins: &Origins,
 ) -> Vec<PlaceAccess> {
     let set: BTreeSet<BasicBlock> = blocks.iter().copied().collect();
-    let mut own: BTreeSet<u32> = BTreeSet::new();
-    let declared_in = |bb: &BasicBlockData, own: &mut BTreeSet<u32>| {
-        for st in &bb.statements {
-            if let StatementKind::StorageLive(l) = st.kind {
-                own.insert(l.0);
-            }
-        }
-    };
-    for b in &set {
-        declared_in(&body.blocks[b.index()], &mut own);
-    }
-    if let (ParKind::For { .. }, Some(entry)) = (&r.kind, blocks.first()) {
-        for (bi, bb) in body.blocks.iter().enumerate() {
-            let b = BasicBlock(bi as u32);
-            if !set.contains(&b) && bb.terminator.kind.successors().contains(entry) {
-                declared_in(bb, &mut own);
-            }
-        }
-    }
-    for (l, a) in origins.assigned.iter().enumerate() {
-        if !a.is_empty() && a.is_subset(&set) {
-            own.insert(l as u32);
-        }
-    }
+    let own = own_locals(body, r, blocks, &set, origins);
     let shared = |p: &Place| {
         p.local.0 != 0
             && !own.contains(&p.local.0)
@@ -586,6 +592,55 @@ fn place_accesses(
             }
         }
     };
+    for (b, how, p) in branch_uses(body, &set) {
+        add(b, how, &p);
+    }
+    out
+}
+
+/// The locals branch `blocks` (the set `set`) of region `r` has to itself:
+/// those it declares (`StorageLive`) or assigns only there, and for a `par
+/// for` the iteration's own binding, which the loop declares just before
+/// the body.
+fn own_locals(
+    body: &Body,
+    r: &ParRegion,
+    blocks: &[BasicBlock],
+    set: &BTreeSet<BasicBlock>,
+    origins: &Origins,
+) -> BTreeSet<u32> {
+    let mut own: BTreeSet<u32> = BTreeSet::new();
+    let declared_in = |bb: &BasicBlockData, own: &mut BTreeSet<u32>| {
+        for st in &bb.statements {
+            if let StatementKind::StorageLive(l) = st.kind {
+                own.insert(l.0);
+            }
+        }
+    };
+    for b in set {
+        declared_in(&body.blocks[b.index()], &mut own);
+    }
+    if let (ParKind::For { .. }, Some(entry)) = (&r.kind, blocks.first()) {
+        for (bi, bb) in body.blocks.iter().enumerate() {
+            let b = BasicBlock(bi as u32);
+            if !set.contains(&b) && bb.terminator.kind.successors().contains(entry) {
+                declared_in(bb, &mut own);
+            }
+        }
+    }
+    for (l, a) in origins.assigned.iter().enumerate() {
+        if !a.is_empty() && a.is_subset(set) {
+            own.insert(l as u32);
+        }
+    }
+    own
+}
+
+/// Every use of a place by the blocks `set`, in block order and, within a
+/// block, in the order its statements and terminator make them, leaving
+/// out the blocks on the branch's way out of the function.
+fn branch_uses(body: &Body, set: &BTreeSet<BasicBlock>) -> Vec<(BasicBlock, Use, Place)> {
+    let mut out = Vec::new();
     // The blocks on a branch's way out of the function (a `?` in it): they
     // return and never come back to the code after the branch. What they do,
     // the drops of everything live and the write of the result, belongs to
@@ -611,7 +666,7 @@ fn place_accesses(
             .collect();
         loop {
             let mut changed = false;
-            for &b in &set {
+            for &b in set {
                 let s = succ(b);
                 if !on.contains(&b) && s.iter().any(|x| on.contains(x)) {
                     on.insert(b);
@@ -685,9 +740,7 @@ fn place_accesses(
             | TerminatorKind::Abort { .. }
             | TerminatorKind::Unreachable => {}
         }
-        for (how, p) in &uses {
-            add(b, *how, p);
-        }
+        out.extend(uses.into_iter().map(|(how, p)| (b, how, p)));
     }
     out
 }
@@ -1403,45 +1456,51 @@ impl<'p> Analysis<'p> {
     /// The bodies `body` may run: direct callees, closures handed to a
     /// native, and the `Drop` bodies its drops reach.
     fn callees(&self, body: &Body) -> Vec<String> {
+        body.blocks
+            .iter()
+            .flat_map(|bb| self.block_callees(body, bb))
+            .collect()
+    }
+
+    /// The bodies one block of `body` can run: see [`Analysis::callees`].
+    fn block_callees(&self, body: &Body, bb: &BasicBlockData) -> Vec<String> {
         let mut out = Vec::new();
-        for bb in &body.blocks {
-            match &bb.terminator.kind {
-                TerminatorKind::Call {
-                    func:
-                        Operand::Const(Const {
-                            kind: ConstKind::FnDef(inst),
-                            ..
-                        }),
-                    args,
-                    ..
-                } => {
-                    if self.program.bodies.contains_key(&inst.name) {
-                        out.push(inst.name.clone());
-                    }
-                    // A call on a resource runs the method of every
-                    // provider bound to it.
-                    if let Some((_, _, impls)) = self.resource_call(&inst.name) {
-                        out.extend(impls);
-                    }
-                    // A function value passed along may run in the callee.
-                    for a in args {
-                        out.extend(self.fn_value_bodies(body, a));
-                    }
+        match &bb.terminator.kind {
+            TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
+                args,
+                ..
+            } => {
+                if self.program.bodies.contains_key(&inst.name) {
+                    out.push(inst.name.clone());
                 }
-                TerminatorKind::Drop { place, .. } => {
-                    if let Ok(pt) = place_ty(body, self.tys, place) {
-                        let mut seen = Vec::new();
-                        self.drop_bodies(pt.ty, &mut seen, &mut out);
-                    }
+                // A call on a resource runs the method of every
+                // provider bound to it.
+                if let Some((_, _, impls)) = self.resource_call(&inst.name) {
+                    out.extend(impls);
                 }
-                _ => {}
+                // A function value passed along may run in the callee.
+                for a in args {
+                    out.extend(self.fn_value_bodies(body, a));
+                }
             }
-            // A closure or function item made as a value captures the
-            // providers its body needs (core semantics §14.3).
-            for st in &bb.statements {
-                if let StatementKind::Assign(_, rv) = &st.kind {
-                    out.extend(self.made_fn_values(rv));
+            TerminatorKind::Drop { place, .. } => {
+                if let Ok(pt) = place_ty(body, self.tys, place) {
+                    let mut seen = Vec::new();
+                    self.drop_bodies(pt.ty, &mut seen, &mut out);
                 }
+            }
+            _ => {}
+        }
+        // A closure or function item made as a value captures the
+        // providers its body needs (core semantics §14.3).
+        for st in &bb.statements {
+            if let StatementKind::Assign(_, rv) = &st.kind {
+                out.extend(self.made_fn_values(rv));
             }
         }
         out

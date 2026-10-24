@@ -267,14 +267,18 @@ pub fn elaborate_drops(body: &mut Body, tys: &mut TyInterner) -> Result<(), Stri
     Ok(())
 }
 
-/// Adds to each `par` branch the blocks this pass created that the branch
-/// reaches (its drop ladders and flag edges), so the effect-conflict check
-/// sees the drops that run inside the branch. A new block is reached only
-/// from the block whose terminator it replaced, so it belongs to that
-/// block's branch; the walk stops at the original blocks, which the
-/// builder already listed.
+/// Adds to each `par` branch, and each auto-par candidate's, the blocks
+/// this pass created that the branch reaches (its drop ladders and flag
+/// edges), so the effect-conflict check sees the drops that run inside the
+/// branch. A new block is reached only from the block whose terminator it
+/// replaced, so it belongs to that block's branch; the walk stops at the
+/// original blocks, which the builder already listed.
 fn extend_par_regions(body: &mut Body, n_orig: usize) {
-    for r in &mut body.par_regions {
+    for r in body
+        .par_regions
+        .iter_mut()
+        .chain(body.auto_par_candidates.iter_mut())
+    {
         for branch in &mut r.branches {
             let mut seen: BTreeSet<BasicBlock> = branch.iter().copied().collect();
             let mut work = branch.clone();

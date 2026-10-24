@@ -134,6 +134,13 @@ pub struct Body {
     /// The `par` regions, outer before inner (a region nested in another's
     /// branch comes after it).
     pub par_regions: Vec<ParRegion>,
+    /// The loops and runs of statements that could run in parallel if
+    /// nothing orders them, recorded only when the build asks (M4 item 14),
+    /// in the shape of `par_regions`: a `For` per sequential `for`, its
+    /// body one branch, and a `Block` per run of two or more statements,
+    /// one branch each. The effect pass gives each a verdict
+    /// (`effects::auto_par`).
+    pub auto_par_candidates: Vec<ParRegion>,
     /// The `providers { .. } in { .. }` blocks, inner before outer. Only
     /// provider specialisation reads them, and it empties them.
     pub provided: Vec<ProvidedRegion>,

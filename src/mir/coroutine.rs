@@ -482,6 +482,7 @@ fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
         scopes: c.scopes.clone(),
         phase: c.phase,
         span: c.span,
+        auto_par_candidates: Vec::new(),
         par_regions: vec![],
         provided: Vec::new(),
         suspends: false,
@@ -1653,6 +1654,7 @@ impl<'a> Resume<'a> {
             phase: self.body.phase,
             span: self.body.span,
             provided: Vec::new(),
+            auto_par_candidates: Vec::new(),
             par_regions: self
                 .body
                 .par_regions
@@ -1905,6 +1907,7 @@ fn drop_frame(
         scopes: body.scopes.clone(),
         phase: body.phase,
         span: body.span,
+        auto_par_candidates: Vec::new(),
         par_regions: Vec::new(),
         provided: Vec::new(),
         suspends: false,

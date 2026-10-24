@@ -627,6 +627,7 @@ impl Parser {
             }],
             phase: MirPhase::Built,
             span: SourceInfo::dummy().span,
+            auto_par_candidates: Vec::new(),
             par_regions: Vec::new(),
             provided: Vec::new(),
             suspends,
