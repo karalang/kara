@@ -12735,6 +12735,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         }
         let Some(rc) = rc else {
+            if self.variant_into(e, callee, args, dest.clone())? {
+                return Ok(());
+            }
             return self.unsupported(e.span, "a call with no resolved callee");
         };
         let callee_kind = rc.callee.clone();
@@ -13454,6 +13457,77 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.goto(join);
         }
         self.cur = join;
+        Ok(true)
+    }
+
+    /// `A.Y.into()` parses as a call of the path `A.Y.into`, which the
+    /// checker resolves as a conversion with no callee: the unit variant
+    /// the first two segments name, converted by the user's `From` impl
+    /// for the call's type (B-2026-10-24-8).
+    fn variant_into(
+        &mut self,
+        e: &'a Expr,
+        callee: &'a Expr,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<bool> {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return Ok(false);
+        };
+        let ([ty, var, m], []) = (segments.as_slice(), args) else {
+            return Ok(false);
+        };
+        if m != "into" {
+            return Ok(false);
+        }
+        let Some(def) = self.lcx.defs.lookup(0, ty) else {
+            return Ok(false);
+        };
+        let t = self.tys().tcx().adt(def, &[]);
+        let Ok(t) = self.lcx.mir_ty(t, &[]) else {
+            return Ok(false);
+        };
+        let Some((adt, _)) = self.tys().tcx().adt_of(t) else {
+            return Ok(false);
+        };
+        let Some(idx) = adt
+            .variants
+            .iter()
+            .position(|v| v.name == *var && v.fields.is_empty())
+        else {
+            return Ok(false);
+        };
+        let dt = self.expr_ty(e)?;
+        let to = (dt != t).then(|| self.user_from(dt, t));
+        if let Some(None) = to {
+            return Ok(false);
+        }
+        let l = self.temp(t);
+        let kind = self.adt_aggregate(t, idx as u32);
+        self.assign(l, Rvalue::Aggregate(kind, Vec::new()));
+        let Some(Some(d)) = to else {
+            self.assign(dest, Rvalue::Use(Operand::Move(Place::local(l))));
+            return Ok(true);
+        };
+        let f = self.lcx.fns[&d].f;
+        let pt = self.callee_param_ty(&f.params[0], &[])?;
+        let arg = match self.tys().tcx().kind(pt) {
+            HK::Ref(_) => self.ref_to(Place::local(l), t),
+            _ => Operand::Move(Place::local(l)),
+        };
+        let name = self.lcx.instance(d, Vec::new());
+        let func = self.fn_operand(&name, d, Vec::new());
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: vec![arg],
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
         Ok(true)
     }
 
