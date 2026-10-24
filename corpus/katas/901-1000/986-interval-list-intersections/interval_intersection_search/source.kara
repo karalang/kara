@@ -1,0 +1,136 @@
+// LeetCode #986: Interval List Intersections -- binary search.
+//
+// For each interval of the first list, a binary search over the second
+// list's ends finds the first interval that does not end before it
+// starts; from there every interval that starts by its end meets it.
+// O(n log m + answer).
+fn first_reaching(second: ref Vec[(i64, i64)], start: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = second.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let (_, end) = second[mid];
+        if end < start {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn interval_intersection(first: Vec[(i64, i64)], second: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (a_start, a_end) in first.iter() {
+        let mut k = first_reaching(second, a_start);
+        while k < second.len() {
+            let (b_start, b_end) = second[k];
+            if b_start > a_end {
+                break;
+            }
+            out.push((a_start.max(b_start), a_end.min(b_end)));
+            k += 1;
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide_random(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed);
+    high * 32768 + next_random(mut seed)
+}
+
+// A list as LeetCode writes it, or its size and reach when long.
+fn listed(xs: Vec[(i64, i64)]) -> String {
+    let n = xs.len();
+    if n > 6 {
+        let (first, _) = xs[0];
+        let (_, last) = xs[n - 1];
+        return f"{n} intervals from {first} to {last}";
+    }
+    let mut s = "[".to_string();
+    for i in 0..n {
+        let (lo, hi) = xs[i];
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"[{lo}, {hi}]");
+    }
+    s.push(']');
+    s
+}
+
+fn show(first: Vec[(i64, i64)], second: Vec[(i64, i64)]) {
+    println(f"{listed(first)} and {listed(second)} -> {listed(interval_intersection(first, second))}");
+}
+
+// `n` disjoint intervals in order, each 1 to `length` long, with gaps of
+// 1 to `gap` between them.
+fn random_list(n: i64, gap: i64, length: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut pos = wide_random(mut seed) % gap;
+    for _ in 0..n {
+        let start = pos;
+        let end = start + 1 + wide_random(mut seed) % length;
+        out.push((start, end));
+        pos = end + 1 + wide_random(mut seed) % gap;
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's examples
+    show(vec![(0, 2), (5, 10), (13, 23), (24, 25)], vec![(1, 5), (8, 12), (15, 24), (25, 26)]);
+    show(vec![(1, 3), (5, 9)], Vec.new());
+    // a few more: an empty first list, the same list twice, intervals
+    // that touch at one point, one interval over many, interleaved lists
+    // that never meet, and LeetCode's largest coordinate
+    show(Vec.new(), vec![(1, 2)]);
+    show(vec![(1, 2), (4, 7)], vec![(1, 2), (4, 7)]);
+    show(vec![(1, 2)], vec![(2, 3)]);
+    show(vec![(0, 100)], vec![(1, 2), (4, 5), (7, 9)]);
+    show(vec![(1, 2), (5, 6)], vec![(3, 4), (7, 8)]);
+    show(vec![(0, 1000000000)], vec![(999999999, 1000000000)]);
+    // LeetCode's largest lists, 1000 intervals: overlapping halfway, and
+    // under one interval that covers them
+    let mut first: Vec[(i64, i64)] = Vec.new();
+    let mut second: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        first.push((4 * i, 4 * i + 2));
+        second.push((4 * i + 1, 4 * i + 3));
+    }
+    show(first, second);
+    let mut first: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        first.push((3 * i, 3 * i + 1));
+    }
+    show(first, vec![(0, 1000000000)]);
+    // random pairs of lists: 300 short, 3000 middling, then 3 of
+    // LeetCode's largest, reaching toward its 10^9
+    let mut seed = 986;
+    for (count, n, gap, length) in vec![(300, 6, 6, 6), (3000, 50, 40, 40), (3, 1000, 499999, 499999)] {
+        let mut found = 0;
+        let mut covered = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let a = if count == 3 { n } else { next_random(mut seed) % (n + 1) };
+            let b = if count == 3 { n } else { next_random(mut seed) % (n + 1) };
+            let first = random_list(a, gap, length, mut seed);
+            let second = random_list(b, gap, length, mut seed);
+            for (lo, hi) in interval_intersection(first, second) {
+                found += 1;
+                covered += hi - lo;
+                check = (check * 31 + lo) % 1000000007;
+                check = (check * 31 + hi) % 1000000007;
+            }
+        }
+        println(f"{count} random pairs of up to {n} intervals: {found} intersections covering {covered}, checksum {check}");
+    }
+}

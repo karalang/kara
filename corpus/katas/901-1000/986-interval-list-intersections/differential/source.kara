@@ -1,0 +1,309 @@
+// LeetCode #986: Interval List Intersections -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random pairs of interval lists.
+
+// ---- star ----
+
+fn star_interval_intersection(first: Vec[(i64, i64)], second: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < first.len() and j < second.len() {
+        let (a_start, a_end) = first[i];
+        let (b_start, b_end) = second[j];
+        let lo = a_start.max(b_start);
+        let hi = a_end.min(b_end);
+        if lo <= hi {
+            out.push((lo, hi));
+        }
+        if a_end < b_end {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
+}
+
+// ---- sweep ----
+
+fn sweep_interval_intersection(first: Vec[(i64, i64)], second: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut events: Vec[(i64, i64)] = Vec.new();
+    for (s, e) in first.iter() {
+        events.push((s, 0));
+        events.push((e, 1));
+    }
+    for (s, e) in second.iter() {
+        events.push((s, 0));
+        events.push((e, 1));
+    }
+    events.sort();
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut depth = 0;
+    let mut open = 0;
+    for (place, kind) in events {
+        if kind == 0 {
+            depth += 1;
+            if depth == 2 {
+                open = place;
+            }
+        } else {
+            if depth == 2 {
+                out.push((open, place));
+            }
+            depth -= 1;
+        }
+    }
+    out
+}
+
+// ---- search ----
+
+fn search_first_reaching(second: ref Vec[(i64, i64)], start: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = second.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let (_, end) = second[mid];
+        if end < start {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn search_interval_intersection(first: Vec[(i64, i64)], second: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (a_start, a_end) in first.iter() {
+        let mut k = search_first_reaching(second, a_start);
+        while k < second.len() {
+            let (b_start, b_end) = second[k];
+            if b_start > a_end {
+                break;
+            }
+            out.push((a_start.max(b_start), a_end.min(b_end)));
+            k += 1;
+        }
+    }
+    out
+}
+
+// ---- recursive ----
+
+fn recursive_intersect_from(first: ref Vec[(i64, i64)], second: ref Vec[(i64, i64)], i: i64, j: i64, out: mut ref Vec[(i64, i64)]) {
+    if i == first.len() or j == second.len() {
+        return;
+    }
+    let (a_start, a_end) = first[i];
+    let (b_start, b_end) = second[j];
+    if a_start.max(b_start) <= a_end.min(b_end) {
+        out.push((a_start.max(b_start), a_end.min(b_end)));
+    }
+    if a_end < b_end {
+        recursive_intersect_from(first, second, i + 1, j, mut out);
+    } else {
+        recursive_intersect_from(first, second, i, j + 1, mut out);
+    }
+}
+
+fn recursive_interval_intersection(first: Vec[(i64, i64)], second: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    recursive_intersect_from(first, second, 0, 0, mut out);
+    out
+}
+
+// ---- merged ----
+
+fn merged_interval_intersection(first: Vec[(i64, i64)], second: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut all = first.clone();
+    for x in second.iter() {
+        all.push(x);
+    }
+    all.sort();
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut reach = -1;
+    for (start, end) in all {
+        if start <= reach {
+            out.push((start, end.min(reach)));
+        }
+        reach = reach.max(end);
+    }
+    out
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide_random(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed);
+    high * 32768 + next_random(mut seed)
+}
+
+// `n` disjoint intervals in order, each 1 to `length` long, with gaps of
+// 1 to `gap` between them.
+fn random_list(n: i64, gap: i64, length: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut pos = wide_random(mut seed) % gap;
+    for _ in 0..n {
+        let start = pos;
+        let end = start + 1 + wide_random(mut seed) % length;
+        out.push((start, end));
+        pos = end + 1 + wide_random(mut seed) % gap;
+    }
+    out
+}
+
+fn arm(k: i64, first: ref Vec[(i64, i64)], second: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    if k == 0 {
+        star_interval_intersection(first, second)
+    } else if k == 1 {
+        sweep_interval_intersection(first, second)
+    } else if k == 2 {
+        search_interval_intersection(first, second)
+    } else if k == 3 {
+        recursive_interval_intersection(first, second)
+    } else {
+        merged_interval_intersection(first, second)
+    }
+}
+
+// The statement read literally: the points in some interval of each
+// list. On a grid of half steps, so that intervals one apart stay apart,
+// every point is marked in both lists or not, and each run of points in
+// both is one closed interval of the answer.
+fn literal(first: ref Vec[(i64, i64)], second: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut top = 0;
+    for (_, e) in first.iter() {
+        top = top.max(e);
+    }
+    for (_, e) in second.iter() {
+        top = top.max(e);
+    }
+    let mut in_first: Vec[bool] = Vec.filled(2 * top + 2, false);
+    let mut in_second: Vec[bool] = Vec.filled(2 * top + 2, false);
+    for (s, e) in first.iter() {
+        for p in 2 * s..2 * e + 1 {
+            in_first[p] = true;
+        }
+    }
+    for (s, e) in second.iter() {
+        for p in 2 * s..2 * e + 1 {
+            in_second[p] = true;
+        }
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut p = 0;
+    while p < 2 * top + 2 {
+        if in_first[p] and in_second[p] {
+            let start = p;
+            while p + 1 < 2 * top + 2 and in_first[p + 1] and in_second[p + 1] {
+                p += 1;
+            }
+            out.push((start / 2, p / 2));
+        }
+        p += 1;
+    }
+    out
+}
+
+fn moved(xs: ref Vec[(i64, i64)], by: i64, times: i64) -> Vec[(i64, i64)] {
+    xs.iter().map(|(s, e)| (s * times + by, e * times + by)).collect()
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, first: Vec[(i64, i64)], second: Vec[(i64, i64)], small: bool, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let truth = if small { literal(first, second) } else { Vec.new() };
+    let mut got: Vec[Vec[(i64, i64)]] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, first, second));
+    }
+    let by = next_random(mut seed) % 1000;
+    let first_moved = moved(first, by, 1);
+    let second_moved = moved(second, by, 1);
+    let first_scaled = moved(first, 0, 3);
+    let second_scaled = moved(second, 0, 3);
+    for k in 0..5 {
+        let a = got[k].clone();
+        // P1: the statement's answer, on the first 3000 pairs
+        if small {
+            check(mut tally, 1, a == truth);
+        }
+        // P2: the lists the other way round
+        check(mut tally, 2, arm(k, second, first) == a);
+        // P3: both lists moved along by the same amount
+        check(mut tally, 3, arm(k, first_moved, second_moved) == moved(a, by, 1));
+        // P4: the answer lies in both lists, so meeting either gives it
+        // back
+        check(mut tally, 4, arm(k, a, first) == a and arm(k, second, a) == a);
+        // P5: every place tripled
+        check(mut tally, 5, arm(k, first_scaled, second_scaled) == moved(a, 0, 3));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == a {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 986;
+    let mut intervals = 0;
+    let mut found = 0;
+    let mut covered = 0;
+    let mut check_sum = 0;
+    // 3000 pairs of up to 5 intervals each, with gaps and lengths of up
+    // to 6, against the statement, then 200 of up to 300 intervals
+    // reaching toward LeetCode's 10^9
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most = if small { 5 } else { 300 };
+        let step = if small { 6 } else { 1666666 };
+        let a = next_random(mut seed) % (most + 1);
+        let b = next_random(mut seed) % (most + 1);
+        let first = random_list(a, step, step, mut seed);
+        let second = random_list(b, step, step, mut seed);
+        let got = properties(mut tally, first, second, small, mut seed);
+        intervals += a + b;
+        for (lo, hi) in got {
+            found += 1;
+            covered += hi - lo;
+            check_sum = (check_sum * 31 + lo) % 1000000007;
+            check_sum = (check_sum * 31 + hi) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 pairs of {intervals} intervals: {found} intersections covering {covered}, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

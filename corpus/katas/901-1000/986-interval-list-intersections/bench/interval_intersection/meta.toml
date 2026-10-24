@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/986-interval-list-intersections/bench/interval_intersection.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "92479d7f4"
+extracted_src = "24c149a2"

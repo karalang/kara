@@ -1,0 +1,67 @@
+// Benchmark: LeetCode #986 Interval List Intersections -- the ★ arm, two pointers,
+// on pairs of LeetCode's largest lists, 1000 intervals each.
+// Mirrors interval_intersection.rs, .c, .py and go-seq/.
+
+fn interval_intersection(first: Vec[(i64, i64)], second: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < first.len() and j < second.len() {
+        let (a_start, a_end) = first[i];
+        let (b_start, b_end) = second[j];
+        let lo = a_start.max(b_start);
+        let hi = a_end.min(b_end);
+        if lo <= hi {
+            out.push((lo, hi));
+        }
+        if a_end < b_end {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide_random(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed);
+    high * 32768 + next_random(mut seed)
+}
+
+fn random_list(seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut pos = wide_random(mut seed) % 499999;
+    for _ in 0..1000 {
+        let start = pos;
+        let end = start + 1 + wide_random(mut seed) % 499999;
+        out.push((start, end));
+        pos = end + 1 + wide_random(mut seed) % 499999;
+    }
+    out
+}
+
+fn main() {
+    let rounds = 1000;
+    let mut seed = 986;
+    let mut lists: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..21 {
+        lists.push(random_list(mut seed));
+    }
+    let mut found = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let k = (r + i) % 20;
+            let answer = interval_intersection(lists[k], lists[k + 1]);
+            found += answer.len();
+            let (lo, hi) = answer[answer.len() / 2];
+            check = (check * 31 + answer.len() + lo % 1000 + hi % 1000) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 20 pairs of 1000 intervals: {found} intersections, checksum {check}");
+}
