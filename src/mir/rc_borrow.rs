@@ -30,6 +30,7 @@ use crate::ty::TyKind as SK;
 /// the body gives back unused. `skip` names the coroutines.
 pub fn elide_borrowed_retains(program: &mut Program, tys: &TyInterner, skip: &BTreeSet<String>) {
     let safe = count_safe(program, tys, skip);
+    let defined: BTreeSet<String> = program.bodies.keys().cloned().collect();
     for body in program.bodies.values_mut() {
         if !safe.get(&body.instance.name).copied().unwrap_or(false) {
             continue;
@@ -43,7 +44,335 @@ pub fn elide_borrowed_retains(program: &mut Program, tys: &TyInterner, skip: &BT
         if has_mut_param {
             continue;
         }
+        read_scrutinee_parts(body, tys, &defined);
         rewrite(body, tys);
+    }
+}
+
+/// How a place is used at one mention.
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    /// Assigned whole, or a call's destination.
+    Dest,
+    Move,
+    /// Copied, borrowed shared, or read (`discriminant`, `len`, `retain`).
+    Read,
+    Drop,
+    /// Anything else: a `mut` borrow, a discriminant write, a flag.
+    Other,
+}
+
+fn visit_operand(o: &Operand, f: &mut dyn FnMut(&Place, Role)) {
+    match o {
+        Operand::Copy(p) => f(p, Role::Read),
+        Operand::Move(p) => f(p, Role::Move),
+        Operand::Const(_) => {}
+    }
+}
+
+/// Every place `body` mentions, with its role.
+fn visit_places(body: &Body, f: &mut dyn FnMut(&Place, Role)) {
+    for data in &body.blocks {
+        for st in &data.statements {
+            match &st.kind {
+                StatementKind::Assign(d, rv) => {
+                    f(
+                        d,
+                        if d.projection.is_empty() {
+                            Role::Dest
+                        } else {
+                            Role::Other
+                        },
+                    );
+                    match rv {
+                        Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => {
+                            visit_operand(o, f)
+                        }
+                        Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => {
+                            visit_operand(a, f);
+                            visit_operand(b, f);
+                        }
+                        Rvalue::Aggregate(_, os) => os.iter().for_each(|o| visit_operand(o, f)),
+                        Rvalue::Ref(BorrowKind::Shared, p)
+                        | Rvalue::Retain(p)
+                        | Rvalue::Discriminant(p)
+                        | Rvalue::Len(p) => f(p, Role::Read),
+                        Rvalue::Ref(_, p) => f(p, Role::Other),
+                        Rvalue::NullaryOp(..) => {}
+                    }
+                }
+                StatementKind::SetDiscriminant(p, _) | StatementKind::FreeBox(p) => {
+                    f(p, Role::Other)
+                }
+                StatementKind::BorrowFlag(
+                    FlagOp::Acquire { place, .. } | FlagOp::Check { place, .. },
+                ) => f(place, Role::Other),
+                StatementKind::BorrowFlag(FlagOp::Release { .. })
+                | StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::Nop => {}
+            }
+        }
+
+        match &data.terminator.kind {
+            TerminatorKind::SwitchInt { discr, .. } => visit_operand(discr, f),
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => {
+                visit_operand(func, f);
+                args.iter().for_each(|o| visit_operand(o, f));
+                f(
+                    destination,
+                    if destination.projection.is_empty() {
+                        Role::Dest
+                    } else {
+                        Role::Other
+                    },
+                );
+            }
+            TerminatorKind::Drop { place, .. } => f(
+                place,
+                if place.projection.is_empty() {
+                    Role::Drop
+                } else {
+                    Role::Other
+                },
+            ),
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Abort { .. }
+            | TerminatorKind::Unreachable => {}
+        }
+    }
+}
+
+/// Where the part `e` of a scrutinee tuple comes from: a copy of what the
+/// `ref` parameter `a` points at, as `e = copy (*a)`, `e = retain(*a)` or
+/// `r = &(*a); e = <native>.clone(move r)`. Returns `a`, the block and
+/// statement of `e`'s definition (`None` for the call), and `r`.
+fn part_source(
+    body: &Body,
+    tys: &TyInterner,
+    defined: &BTreeSet<String>,
+    e: Local,
+) -> Option<(Local, usize, Option<usize>, Option<Local>)> {
+    let deref_of = |p: &Place| -> Option<Local> {
+        let a = p.local;
+        (p.projection == [ProjElem::Deref]
+            && a.index() >= 1
+            && a.index() <= body.arg_count
+            && matches!(tys.kind(body.local(a).ty), TyKind::Ref(_)))
+        .then_some(a)
+    };
+    let mut def = None;
+    for (bi, data) in body.blocks.iter().enumerate() {
+        for (si, st) in data.statements.iter().enumerate() {
+            if let StatementKind::Assign(d, rv) = &st.kind {
+                if *d == Place::local(e) {
+                    if def.is_some() {
+                        return None;
+                    }
+                    def = Some((bi, Some(si), Some(rv.clone())));
+                }
+            }
+        }
+        if let TerminatorKind::Call { destination, .. } = &data.terminator.kind {
+            if *destination == Place::local(e) {
+                if def.is_some() {
+                    return None;
+                }
+                def = Some((bi, None, None));
+            }
+        }
+    }
+    let (bi, si, rv) = def?;
+    if let Some(rv) = rv {
+        let (Rvalue::Use(Operand::Copy(p)) | Rvalue::Retain(p)) = &rv else {
+            return None;
+        };
+        return Some((deref_of(p)?, bi, si, None));
+    }
+    let TerminatorKind::Call { func, args, .. } = &body.blocks[bi].terminator.kind else {
+        return None;
+    };
+    let Operand::Const(Const {
+        kind: ConstKind::FnDef(inst),
+        ..
+    }) = func
+    else {
+        return None;
+    };
+    // A native's clone is a copy of the value; a body's may be anything.
+    if defined.contains(&inst.name)
+        || inst.name != format!("{}.clone", tys.display(body.local(e).ty))
+    {
+        return None;
+    }
+    let [Operand::Move(rp)] = args.as_slice() else {
+        return None;
+    };
+    if !rp.projection.is_empty() {
+        return None;
+    }
+    let r = rp.local;
+    let mut src = None;
+    for data in &body.blocks {
+        for st in &data.statements {
+            if let StatementKind::Assign(d, rv) = &st.kind {
+                if *d == Place::local(r) {
+                    if src.is_some() {
+                        return None;
+                    }
+                    let Rvalue::Ref(BorrowKind::Shared, p) = rv else {
+                        return None;
+                    };
+                    src = Some(deref_of(p)?);
+                }
+            }
+        }
+    }
+    Some((src?, bi, None, Some(r)))
+}
+
+/// `t = (move e_0, move e_1, ..)`, each part a copy of what a `ref`
+/// parameter points at, with `t` only read part by part and dropped: the
+/// scrutinee of `match (a, b)`. In a count-safe body nothing the
+/// parameters point at changes while it runs, so `t.i..` reads `(*a_i)..`
+/// instead, and the copies (a count per handle, kata 951's 3.4x,
+/// B-2026-10-23-13) and the drop of `t` go. A handle bound out of a part
+/// is then a retain of a borrowed parameter's handle, which `rewrite`
+/// elides in turn.
+fn read_scrutinee_parts(body: &mut Body, tys: &TyInterner, defined: &BTreeSet<String>) {
+    let mut tuples = Vec::new();
+    for (bi, data) in body.blocks.iter().enumerate() {
+        for (si, st) in data.statements.iter().enumerate() {
+            if let StatementKind::Assign(d, Rvalue::Aggregate(AggregateKind::Tuple, ops)) = &st.kind
+            {
+                if d.projection.is_empty() && d.local.index() > body.arg_count && !ops.is_empty() {
+                    let parts: Option<Vec<Local>> = ops
+                        .iter()
+                        .map(|o| match o {
+                            Operand::Move(p) if p.projection.is_empty() => Some(p.local),
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(parts) = parts {
+                        tuples.push((bi, si, d.local, parts));
+                    }
+                }
+            }
+        }
+    }
+    for (bi, si, t, parts) in tuples {
+        let Some(sources) = parts
+            .iter()
+            .map(|&e| part_source(body, tys, defined, e))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        let params: BTreeSet<Local> = sources.iter().map(|s| s.0).collect();
+        let copies: BTreeSet<Local> = parts
+            .iter()
+            .copied()
+            .chain(sources.iter().filter_map(|s| s.3))
+            .collect();
+        if copies.len() != parts.len() + sources.iter().filter(|s| s.3.is_some()).count() {
+            continue;
+        }
+        let mut ok = true;
+        let mut mentions: BTreeMap<Local, (usize, usize)> = BTreeMap::new();
+        visit_places(body, &mut |p, role| {
+            if params.contains(&p.local) && role == Role::Dest {
+                ok = false;
+            }
+            if copies.contains(&p.local) {
+                // A copy is defined once and moved once, nothing else.
+                let m = mentions.entry(p.local).or_default();
+                match role {
+                    Role::Dest if p.projection.is_empty() => m.0 += 1,
+                    Role::Move if p.projection.is_empty() => m.1 += 1,
+                    _ => ok = false,
+                }
+            }
+            if p.local == t {
+                match role {
+                    Role::Dest | Role::Drop => {}
+                    Role::Read => {
+                        if !matches!(p.projection.first(), Some(ProjElem::Field(..))) {
+                            ok = false;
+                        }
+                    }
+                    Role::Move | Role::Other => ok = false,
+                }
+            }
+        });
+        let defs_of_t = body
+            .blocks
+            .iter()
+            .flat_map(|d| d.statements.iter())
+            .filter(|st| matches!(&st.kind, StatementKind::Assign(d, _) if d.local == t))
+            .count();
+        let call_defs_t = body.blocks.iter().any(|d| {
+            matches!(&d.terminator.kind, TerminatorKind::Call { destination, .. } if destination.local == t)
+        });
+        if !ok || defs_of_t != 1 || call_defs_t || mentions.values().any(|&m| m != (1, 1)) {
+            continue;
+        }
+        // The rewrite: the copies and the tuple go, and `t.i..` reads
+        // `(*a_i)..`.
+        body.blocks[bi].statements[si].kind = StatementKind::Nop;
+        for &(_, dbi, dsi, r) in &sources {
+            match dsi {
+                Some(s) => body.blocks[dbi].statements[s].kind = StatementKind::Nop,
+                None => {
+                    let k = &mut body.blocks[dbi].terminator.kind;
+                    let TerminatorKind::Call {
+                        target: Some(target),
+                        ..
+                    } = k
+                    else {
+                        unreachable!("a clone returns")
+                    };
+                    *k = TerminatorKind::Goto { target: *target };
+                }
+            }
+            if let Some(r) = r {
+                for data in &mut body.blocks {
+                    for st in &mut data.statements {
+                        if matches!(&st.kind, StatementKind::Assign(d, _) if *d == Place::local(r))
+                        {
+                            st.kind = StatementKind::Nop;
+                        }
+                    }
+                }
+            }
+        }
+        let params: Vec<Local> = sources.iter().map(|s| s.0).collect();
+        let mut repoint = |q: &mut Place| {
+            if q.local == t {
+                if let Some(ProjElem::Field(i, _)) = q.projection.first() {
+                    q.local = params[i.0 as usize];
+                    q.projection[0] = ProjElem::Deref;
+                }
+            }
+        };
+        for data in &mut body.blocks {
+            for st in &mut data.statements {
+                statement_places(&mut st.kind, &mut repoint);
+            }
+            let k = &mut data.terminator.kind;
+            if let TerminatorKind::Drop { place, target, .. } = k {
+                if *place == Place::local(t) {
+                    *k = TerminatorKind::Goto { target: *target };
+                    continue;
+                }
+            }
+            terminator_places(k, &mut repoint);
+        }
     }
 }
 
