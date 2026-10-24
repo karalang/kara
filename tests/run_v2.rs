@@ -27,6 +27,12 @@ fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
+/// A reported path with Windows separators written as `/`, so one expected
+/// string covers every host.
+fn slashed(s: &str) -> String {
+    s.replace('\\', "/")
+}
+
 /// Both v2 executors: the default, and `--interp`.
 const LANES: [&[&str]; 2] = [&["run"], &["run", "--interp"]];
 
@@ -318,7 +324,7 @@ fn run_v2_runs_a_package_and_names_its_files() {
         let mut args = lane.to_vec();
         args.push("src/main.kara");
         let out = karac_in(&dir, &args);
-        let err = text(&out.stderr);
+        let err = slashed(&text(&out.stderr));
         assert_eq!(text(&out.stdout), "4 3\n5\n", "{lane:?}");
         assert!(
             err.contains("[src/main.kara:10] p.x + 1 = 3"),
@@ -340,13 +346,13 @@ fn run_v2_package_diagnostics_name_their_file() {
     let util = format!("{PKG_UTIL}\npub fn keep(v: Vec[i64]) -> Vec[i64] {{\n    v\n}}\n");
     let dir = package("diag", &[("main.kara", PKG_MAIN), ("util.kara", &util)]);
     let out = karac_in(&dir, &["run", "src/main.kara"]);
-    let err = text(&out.stderr);
+    let err = slashed(&text(&out.stderr));
     assert!(err.contains("src/util.kara:17:"), "{err}");
     assert!(err.contains("17 |     v"), "{err}");
     assert_eq!(text(&out.stdout), "");
     assert_eq!(out.status.code(), Some(1));
     let out = karac_in(&dir, &["run", "--output=json", "src/main.kara"]);
-    let json = text(&out.stdout);
+    let json = text(&out.stdout).replace("\\\\", "/");
     assert!(
         json.contains("\"file\":\"src/util.kara\",\"line\":17"),
         "{json}"
