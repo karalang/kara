@@ -1,0 +1,331 @@
+// LeetCode #950: Reveal Cards In Increasing Order -- differential test
+// of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: you are given an integer array deck, each card a unique
+// integer. You can order the deck in any order you want. Initially all
+// the cards start face down (unrevealed) in one deck. You do the
+// following steps repeatedly until all cards are revealed: take the top
+// card of the deck, reveal it, and take it out of the deck; if there are
+// still cards in the deck, put the next top card of the deck at the
+// bottom of the deck; if there are still unrevealed cards, go back to
+// step 1, otherwise stop. Return an ordering of the deck that would
+// reveal the cards in increasing order. The first entry in the answer is
+// considered to be the top of the deck.
+
+// ---- the ★ arm: the reveals played on the places --------------------------
+fn star_deck_revealed_increasing(deck: Vec[i64]) -> Vec[i64] {
+    let mut sorted = deck.clone();
+    sorted.sort();
+    let n = deck.len();
+    let mut places: VecDeque[i64] = VecDeque.new();
+    for i in 0..n {
+        places.push_back(i);
+    }
+    let mut out: Vec[i64] = Vec.filled(n, 0);
+    for card in sorted.iter() {
+        let place = places.pop_front().unwrap();
+        out[place] = *card;
+        if let Some(next) = places.pop_front() {
+            places.push_back(next);
+        }
+    }
+    out
+}
+
+// ---- the backward arm: the reveals played backwards -----------------------
+fn backward_deck_revealed_increasing(deck: Vec[i64]) -> Vec[i64] {
+    let mut sorted = deck.clone();
+    sorted.sort();
+    let mut d: VecDeque[i64] = VecDeque.new();
+    let mut k = sorted.len() - 1;
+    while k >= 0 {
+        if let Some(bottom) = d.pop_back() {
+            d.push_front(bottom);
+        }
+        d.push_front(sorted[k]);
+        k -= 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    while let Some(card) = d.pop_front() {
+        out.push(card);
+    }
+    out
+}
+
+// ---- the walk arm: the empty places walked round --------------------------
+fn walk_deck_revealed_increasing(deck: Vec[i64]) -> Vec[i64] {
+    let mut sorted = deck.clone();
+    sorted.sort();
+    let n = deck.len();
+    let mut out: Vec[i64] = Vec.filled(n, 0);
+    let mut filled: Vec[bool] = Vec.filled(n, false);
+    let mut at = 0;
+    let mut skip = false;
+    let mut k = 0;
+    while k < n {
+        if not filled[at] {
+            if skip {
+                skip = false;
+            } else {
+                out[at] = sorted[k];
+                filled[at] = true;
+                k += 1;
+                skip = true;
+            }
+        }
+        at = (at + 1) % n;
+    }
+    out
+}
+
+// ---- the links arm: the empty places in a ring ----------------------------
+fn links_deck_revealed_increasing(deck: Vec[i64]) -> Vec[i64] {
+    let mut sorted = deck.clone();
+    sorted.sort();
+    let n = deck.len();
+    let mut out: Vec[i64] = Vec.filled(n, 0);
+    let mut next: Vec[i64] = Vec.new();
+    for i in 0..n {
+        next.push((i + 1) % n);
+    }
+    let mut prev = n - 1;
+    let mut at = 0;
+    for k in 0..n {
+        out[at] = sorted[k];
+        // unlink at, then pass over the place after it
+        next[prev] = next[at];
+        prev = next[at];
+        at = next[prev];
+    }
+    out
+}
+
+// ---- the halves arm: every other place, then the rest ---------------------
+fn halves_place(order: ref Vec[i64], cards: ref Vec[i64], from: i64, out: mut ref Vec[i64]) {
+    let n = order.len();
+    let mut rest: Vec[i64] = Vec.new();
+    let mut k = from;
+    for i in 0..n {
+        if i % 2 == 0 {
+            out[order[i]] = cards[k];
+            k += 1;
+        } else {
+            rest.push(order[i]);
+        }
+    }
+    if rest.len() == 0 {
+        return;
+    }
+    if n % 2 == 1 {
+        let first = rest[0];
+        rest.remove(0);
+        rest.push(first);
+    }
+    halves_place(rest, cards, k, mut out);
+}
+
+fn halves_deck_revealed_increasing(deck: Vec[i64]) -> Vec[i64] {
+    let mut sorted = deck.clone();
+    sorted.sort();
+    let n = deck.len();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..n {
+        order.push(i);
+    }
+    let mut out: Vec[i64] = Vec.filled(n, 0);
+    halves_place(order, sorted, 0, mut out);
+    out
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, deck: Vec[i64]) -> Vec[i64] {
+    if x == 0 {
+        star_deck_revealed_increasing(deck)
+    } else if x == 1 {
+        backward_deck_revealed_increasing(deck)
+    } else if x == 2 {
+        walk_deck_revealed_increasing(deck)
+    } else if x == 3 {
+        links_deck_revealed_increasing(deck)
+    } else {
+        halves_deck_revealed_increasing(deck)
+    }
+}
+
+// The steps of the statement on an ordering: reveal the top card, and if
+// cards remain, put the next top card at the bottom; until none remain.
+fn reveal(order: ref Vec[i64]) -> Vec[i64] {
+    let mut q = order.clone();
+    let mut head = 0;
+    let mut shown: Vec[i64] = Vec.new();
+    while head < q.len() {
+        shown.push(q[head]);
+        head += 1;
+        if head < q.len() {
+            let c = q[head];
+            q.push(c);
+            head += 1;
+        }
+    }
+    shown
+}
+
+fn increasing(v: ref Vec[i64]) -> bool {
+    for i in 1..v.len() {
+        if v[i - 1] >= v[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// The statement read literally: every ordering of the deck, each revealed
+// by the statement's steps; the orderings that reveal the cards in
+// increasing order, and how many there are.
+fn search(a: mut ref Vec[i64], k: i64, found: mut ref Vec[Vec[i64]]) {
+    if k == a.len() {
+        if increasing(reveal(a)) {
+            found.push(a.clone());
+        }
+        return;
+    }
+    for i in k..a.len() {
+        a.swap(k, i);
+        search(mut a, k + 1, mut found);
+        a.swap(k, i);
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn sorted_copy(v: ref Vec[i64]) -> Vec[i64] {
+    let mut s = v.clone();
+    s.sort();
+    s
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, deck: Vec[i64], small: bool) -> Vec[i64] {
+    let n = deck.len();
+    let mut found: Vec[Vec[i64]] = Vec.new();
+    if small {
+        let mut a = deck.clone();
+        search(mut a, 0, mut found);
+    }
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, deck));
+    }
+    let sorted = sorted_copy(deck);
+    // the inputs P3 and P4 share: the deck shuffled, and every card
+    // replaced by a new one, the new ones in the same order as the old
+    let mut shuffled = deck.clone();
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        shuffled.swap(i, j);
+    }
+    let mut renamed: Map[i64, i64] = Map.new();
+    let mut value = 0;
+    for c in sorted.iter() {
+        value += 1 + next_random(mut seed) % 1000;
+        renamed.insert(*c, value);
+    }
+    let mut relabelled: Vec[i64] = Vec.new();
+    for c in deck.iter() {
+        relabelled.push(*renamed.get(*c).unwrap());
+    }
+    for x in 0..5 {
+        let r = got[x].clone();
+        // P1: the one ordering the statement's search finds, on the first
+        // 3000 decks
+        if small {
+            check(mut t, 1, found.len() == 1 and found[0] == r);
+        }
+        // P2: the deck's own cards, revealed in increasing order
+        check(mut t, 2, sorted_copy(r) == sorted and increasing(reveal(r)));
+        // P3: the deck shuffled, the same
+        check(mut t, 3, arm(x, shuffled) == r);
+        // P4: the cards renamed in order, the answer renamed
+        let mut want: Vec[i64] = Vec.new();
+        for c in r.iter() {
+            want.push(match renamed.get(*c) {
+                Some(v) => *v,
+                None => -1,
+            });
+        }
+        check(mut t, 4, arm(x, relabelled) == want);
+        // P5: the even places hold the smallest cards, in increasing order
+        let mut ok = r.len() == n;
+        let mut i = 0;
+        while ok and i < n {
+            ok = r[i] == sorted[i / 2];
+            i += 2;
+        }
+        check(mut t, 5, ok);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == r {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 950;
+    let mut cards = 0;
+    let mut check_sum = 0;
+    // 3000 decks of 1 to 6 cards, against the statement, then 200 of up
+    // to 1000 cards from 1 to 1000000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 1000 };
+        let top = if small { n + next_random(mut seed) % 10 } else { 1000000 };
+        let mut taken: Set[i64] = Set.new();
+        let mut deck: Vec[i64] = Vec.new();
+        while deck.len() < n {
+            let v = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+            if not taken.contains(v) {
+                taken.insert(v);
+                deck.push(v);
+            }
+        }
+        cards += n;
+        let r = properties(mut t, mut seed, deck, small);
+        for x in r.iter() {
+            check_sum = (check_sum * 1000003 + *x) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 decks of {cards} cards, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

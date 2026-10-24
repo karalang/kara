@@ -1,0 +1,135 @@
+// LeetCode #950: Reveal Cards In Increasing Order -- every other place,
+// then the rest.
+//
+// The first pass down the deck reveals the places 0, 2, 4, ..., so they
+// take the smallest half of the cards in order. What is left is a deck
+// of its own: the odd places 1, 3, 5, ... when the deck is even, and when
+// it is odd the same places with 1 moved to the bottom, since place 1 was
+// sent down just after the last even place was revealed. Fill those
+// places with the larger half the same way. O(n log n).
+
+fn place(order: ref Vec[i64], cards: ref Vec[i64], from: i64, out: mut ref Vec[i64]) {
+    let n = order.len();
+    let mut rest: Vec[i64] = Vec.new();
+    let mut k = from;
+    for i in 0..n {
+        if i % 2 == 0 {
+            out[order[i]] = cards[k];
+            k += 1;
+        } else {
+            rest.push(order[i]);
+        }
+    }
+    if rest.len() == 0 {
+        return;
+    }
+    if n % 2 == 1 {
+        let first = rest[0];
+        rest.remove(0);
+        rest.push(first);
+    }
+    place(rest, cards, k, mut out);
+}
+
+fn deck_revealed_increasing(deck: Vec[i64]) -> Vec[i64] {
+    let mut sorted = deck.clone();
+    sorted.sort();
+    let n = deck.len();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..n {
+        order.push(i);
+    }
+    let mut out: Vec[i64] = Vec.filled(n, 0);
+    place(order, sorted, 0, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{v[i]}";
+    }
+    s + "]"
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n distinct cards from 1 to top, in random order
+fn random_deck(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut taken: Set[i64] = Set.new();
+    let mut deck: Vec[i64] = Vec.new();
+    while deck.len() < n {
+        let v = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        if not taken.contains(v) {
+            taken.insert(v);
+            deck.push(v);
+        }
+    }
+    deck
+}
+
+fn fold(check: i64, v: ref Vec[i64]) -> i64 {
+    let mut c = check;
+    for x in v.iter() {
+        c = (c * 1000003 + *x) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![17, 13, 11, 2, 3, 5, 7],
+        vec![1, 1000],
+        vec![5],
+        vec![2, 1],
+        vec![1, 2, 3, 4],
+        vec![1, 2, 3, 4, 5],
+        vec![8, 7, 6, 5, 4, 3, 2, 1],
+        vec![1000000, 1, 500000],
+    ];
+    for deck in examples.iter() {
+        println(f"{show(deck)} -> {show(deck_revealed_increasing(deck))}");
+    }
+    // 300 random decks of 1 to 40 cards from 1 to 100
+    let mut seed = 950;
+    let mut cards = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let deck = random_deck(mut seed, n, 100);
+        cards += n;
+        check = fold(check, deck_revealed_increasing(deck));
+    }
+    println(f"300 random decks of {cards} cards: checksum {check}");
+    // LeetCode's largest decks, 1000 cards
+    let mut big: Vec[Vec[i64]] = Vec.new();
+    big.push(random_deck(mut seed, 1000, 1000000));
+    let mut up: Vec[i64] = Vec.new();
+    let mut down: Vec[i64] = Vec.new();
+    let mut spread: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        up.push(i + 1);
+        down.push(1000000 - i);
+        spread.push((i * 7919) % 1000 * 1000 + 1);
+    }
+    big.push(up);
+    big.push(down);
+    big.push(spread);
+    for deck in big.iter() {
+        let out = deck_revealed_increasing(deck);
+        let mut head: Vec[i64] = Vec.new();
+        for i in 0..8 {
+            head.push(out[i]);
+        }
+        println(f"1000 cards, first {show(head)}, last {out[999]}, checksum {fold(0, out)}");
+    }
+}

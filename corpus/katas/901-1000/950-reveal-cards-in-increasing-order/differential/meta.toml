@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/901-1000/950-reveal-cards-in-increasing-order/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map", "lib:set", "lib:vecdeque"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "bd015b5c7"
+extracted_src = "6190d995"
