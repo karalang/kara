@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 17 |
 | perf | 10 |
 | miscompile | 7 |
-| soundness | 4 |
+| soundness | 5 |
 | run-vs-build | 4 |
 | other | 2 |
 | codegen-gap | 2 |
@@ -84,6 +84,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | other | 2 |
 | resolver | 1 |
 | lexer | 1 |
+| effect | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-24). Do not edit this block by hand; edit the ledger and regenerate._
@@ -134,6 +135,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-38 | 2026-10-24 | cli | low | `karac fix` still answers E_INDEX_MOVE_NON_COPY on a DESTRUCTURING `let (a, b) = cases[i];` (both parts only read) with `.clone()`, a deep copy of the element, instead of the `ref cases[i]` borrow the message lists first; B-2026-10-24-18's borrow fix covers only a plain `let t = v[i];` | — |
 | B-2026-10-24-39 | 2026-10-24 | cli | medium | `karac check` on a project (no file) checks against the checker's built-in legacy library signatures, not the v2 library the build appends, so a package naming a v2-only library item (`WsMessage`, `TlsFailure`) fails check while `karac build` builds it | — |
 | B-2026-10-24-40 | 2026-10-24 | typecheck | low | `karac check` says `CODES.find(s)` MOVES its String argument when the receiver is a `const` Str (`const CODES: Str = "LRI";`), so a later use of `s` is E0500 and `CODES.find(v[i])` is E0515. The same call on a local `Str`, on a literal, and every other Str method on the const (`rfind`, `contains`, `starts_with`, `ends_with`, `split`, `replace`) borrow it | — |
+| B-2026-10-24-41 | 2026-10-24 | effect | medium | `karac check` accepts a public function that reads a socket under `with sends(Network) receives(Network)`: the library's socket, TLS, UDP, WebSocket and Child.wait declarations omit `blocks suspends` | — |
 
 ### Fixed
 
