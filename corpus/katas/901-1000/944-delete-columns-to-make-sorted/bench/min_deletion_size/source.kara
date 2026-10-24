@@ -1,0 +1,73 @@
+// Benchmark: LeetCode #944 Delete Columns to Make Sorted -- the ★ arm,
+// column by column, on grids of 100 rows of 1000 letters, LeetCode's
+// largest. Mirrors min_deletion_size.c, .rs, .py and go-seq/.
+
+fn min_deletion_size(strs: Vec[String]) -> i64 {
+    let mut rows: Vec[Vec[u8]] = Vec.new();
+    for s in strs.iter() {
+        rows.push(s.bytes().to_vec());
+    }
+    let n = rows.len();
+    let m = rows[0].len();
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut r = 1;
+        while r < n and rows[r - 1][c] <= rows[r][c] {
+            r += 1;
+        }
+        if r < n {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 150;
+    let count = 20;
+    let n = 100;
+    let m = 1000;
+    let mut seed = 944;
+    // each column sorted, then in half the columns two random rows swapped
+    let mut grids: Vec[Vec[String]] = Vec.new();
+    for _ in 0..count {
+        let mut columns: Vec[Vec[u8]] = Vec.new();
+        for _ in 0..m {
+            let mut column: Vec[u8] = Vec.new();
+            for _ in 0..n {
+                column.push((next_random(mut seed) % 26 + 97) as u8);
+            }
+            column.sort();
+            if next_random(mut seed) % 2 == 0 {
+                let a = next_random(mut seed) % n;
+                let b = next_random(mut seed) % n;
+                column.swap(a, b);
+            }
+            columns.push(column);
+        }
+        let mut strs: Vec[String] = Vec.new();
+        for r in 0..n {
+            let mut s = String.new();
+            for c in 0..m {
+                s.push(columns[c][r] as char);
+            }
+            strs.push(s);
+        }
+        grids.push(strs);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let d = min_deletion_size(grids[(r + i) % count]);
+            total += d;
+            check = (check * 1000003 + d * (i + 1)) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} grids of {n} rows of {m} letters: {total} deleted, checksum {check}");
+}

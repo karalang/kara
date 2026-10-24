@@ -1,0 +1,322 @@
+// LeetCode #944: Delete Columns to Make Sorted -- differential test of
+// the five arms against the statement read literally, with six properties.
+//
+// The statement: you are given an array of n strings strs, all of the
+// same length. The strings can be arranged such that there is one on each
+// line, making a grid. You want to delete the columns that are not sorted
+// lexicographically. Return the number of columns that you will delete.
+
+// ---- the ★ arm: column by column ------------------------------------------
+fn star_min_deletion_size(strs: Vec[String]) -> i64 {
+    let mut rows: Vec[Vec[u8]] = Vec.new();
+    for s in strs.iter() {
+        rows.push(s.bytes().to_vec());
+    }
+    let n = rows.len();
+    let m = rows[0].len();
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut r = 1;
+        while r < n and rows[r - 1][c] <= rows[r][c] {
+            r += 1;
+        }
+        if r < n {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+// ---- the rows arm: row by row ---------------------------------------------
+fn rows_min_deletion_size(strs: Vec[String]) -> i64 {
+    let m = strs[0].len();
+    let mut bad: Vec[bool] = Vec.filled(m, false);
+    let mut prev = strs[0].bytes().to_vec();
+    for r in 1..strs.len() {
+        let row = strs[r].bytes().to_vec();
+        for c in 0..m {
+            if row[c] < prev[c] {
+                bad[c] = true;
+            }
+        }
+        prev = row;
+    }
+    let mut deleted = 0;
+    for b in bad.iter() {
+        if *b {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+// ---- the sortcol arm: each column sorted ----------------------------------
+fn sortcol_min_deletion_size(strs: Vec[String]) -> i64 {
+    let mut rows: Vec[Vec[u8]] = Vec.new();
+    for s in strs.iter() {
+        rows.push(s.bytes().to_vec());
+    }
+    let m = rows[0].len();
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut column: Vec[u8] = Vec.new();
+        for row in rows.iter() {
+            column.push(row[c]);
+        }
+        let mut sorted = column.clone();
+        sorted.sort();
+        if sorted != column {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+// ---- the seen arm: letters seen above -------------------------------------
+fn seen_min_deletion_size(strs: Vec[String]) -> i64 {
+    let mut rows: Vec[Vec[u8]] = Vec.new();
+    for s in strs.iter() {
+        rows.push(s.bytes().to_vec());
+    }
+    let m = rows[0].len();
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut count: Vec[i64] = Vec.filled(26, 0);
+        let mut sorted = true;
+        for row in rows.iter() {
+            let letter = (row[c] - b'a') as i64;
+            for larger in (letter + 1)..26 {
+                if count[larger] > 0 {
+                    sorted = false;
+                }
+            }
+            count[letter] += 1;
+        }
+        if not sorted {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+// ---- the halves arm: halves -----------------------------------------------
+fn halves_sorted(rows: ref Vec[Vec[u8]], c: i64, lo: i64, hi: i64) -> bool {
+    if hi - lo <= 1 {
+        return true;
+    }
+    let mid = (lo + hi) / 2;
+    rows[mid - 1][c] <= rows[mid][c] and halves_sorted(rows, c, lo, mid) and halves_sorted(rows, c, mid, hi)
+}
+
+fn halves_min_deletion_size(strs: Vec[String]) -> i64 {
+    let mut rows: Vec[Vec[u8]] = Vec.new();
+    for s in strs.iter() {
+        rows.push(s.bytes().to_vec());
+    }
+    let n = rows.len();
+    let m = rows[0].len();
+    let mut deleted = 0;
+    for c in 0..m {
+        if not halves_sorted(rows, c, 0, n) {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, strs: Vec[String]) -> i64 {
+    if x == 0 {
+        star_min_deletion_size(strs)
+    } else if x == 1 {
+        rows_min_deletion_size(strs)
+    } else if x == 2 {
+        sortcol_min_deletion_size(strs)
+    } else if x == 3 {
+        seen_min_deletion_size(strs)
+    } else {
+        halves_min_deletion_size(strs)
+    }
+}
+
+// The statement read literally: a column is sorted when every letter is
+// no larger than every letter below it, each pair of rows compared.
+fn literal(strs: ref Vec[String]) -> i64 {
+    let mut rows: Vec[Vec[u8]] = Vec.new();
+    for s in strs.iter() {
+        rows.push(s.bytes().to_vec());
+    }
+    let n = rows.len();
+    let mut deleted = 0;
+    for c in 0..rows[0].len() {
+        let mut ok = true;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if rows[i][c] > rows[j][c] {
+                    ok = false;
+                }
+            }
+        }
+        if not ok {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n rows of m letters from the first `letters`; each column, with odds
+// `sorted_odds` in 4, sorted from top to bottom.
+fn random_grid(seed: mut ref i64, n: i64, m: i64, letters: i64, sorted_odds: i64) -> Vec[String] {
+    let mut columns: Vec[Vec[u8]] = Vec.new();
+    for _ in 0..m {
+        let mut column: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            column.push((next_random(mut seed) % letters + 97) as u8);
+        }
+        if next_random(mut seed) % 4 < sorted_odds {
+            column.sort();
+        }
+        columns.push(column);
+    }
+    let mut strs: Vec[String] = Vec.new();
+    for r in 0..n {
+        let mut s = String.new();
+        for c in 0..m {
+            s.push(columns[c][r] as char);
+        }
+        strs.push(s);
+    }
+    strs
+}
+
+fn row_of(letter: char, m: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..m {
+        s.push(letter);
+    }
+    s
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, strs: Vec[String], small: bool) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let truth = if small { literal(strs) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, strs));
+    }
+    // the inputs P3 to P5 share: the columns in a random order, the grid
+    // beside itself, the rows reversed with the alphabet reversed, a row
+    // of z's below and a row of a's above, and every row twice
+    let mut order: Vec[i64] = Vec.new();
+    for c in 0..m {
+        order.push(c);
+    }
+    for c in 0..m {
+        let d = c + next_random(mut seed) % (m - c);
+        order.swap(c, d);
+    }
+    let mut shuffled: Vec[String] = Vec.new();
+    let mut twice: Vec[String] = Vec.new();
+    let mut flipped: Vec[String] = Vec.new();
+    let mut doubled: Vec[String] = Vec.new();
+    let mut framed: Vec[String] = vec![row_of('a', m)];
+    for r in 0..n {
+        let b = strs[r].bytes().to_vec();
+        let mut s = String.new();
+        for c in 0..m {
+            s.push(b[order[c]] as char);
+        }
+        shuffled.push(s);
+        twice.push(strs[r] + strs[r]);
+        let back = strs[n - 1 - r].bytes().to_vec();
+        let mut f = String.new();
+        for c in 0..m {
+            f.push((219 - back[c] as i64) as u8 as char);
+        }
+        flipped.push(f);
+        doubled.push(strs[r].clone());
+        doubled.push(strs[r].clone());
+        framed.push(strs[r].clone());
+    }
+    framed.push(row_of('z', m));
+    for x in 0..5 {
+        let d = got[x];
+        // P1: the statement's count, on the small grids
+        if small {
+            check(mut t, 1, d == truth);
+        }
+        // P2: from 0 to the number of columns, and 0 for one row
+        check(mut t, 2, d >= 0 and d <= m and (n > 1 or d == 0));
+        // P3: the columns shuffled, the same; the grid beside itself, twice
+        check(mut t, 3, arm(x, shuffled) == d and arm(x, twice) == 2 * d);
+        // P4: the rows reversed and the alphabet reversed, the same
+        check(mut t, 4, arm(x, flipped) == d);
+        // P5: a row of a's above and of z's below, and every row twice,
+        // the same
+        check(mut t, 5, arm(x, framed) == d and arm(x, doubled) == d);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == d {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 944;
+    let mut grids = 0;
+    let mut cells = 0;
+    let mut deleted = 0;
+    let mut check_sum = 0;
+    // up to 5 rows of up to 5 letters from the first 1 to 3 letters against
+    // the statement, then up to 40 rows of up to 150 from 1 to 26
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 5 } else { 1 + next_random(mut seed) % 40 };
+        let m = if small { 1 + next_random(mut seed) % 5 } else { 1 + next_random(mut seed) % 150 };
+        let letters = if small { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 26 };
+        let odds = next_random(mut seed) % 5;
+        let strs = random_grid(mut seed, n, m, letters, odds);
+        grids += 1;
+        cells += n * m;
+        let d = properties(mut t, mut seed, strs, small);
+        deleted += d;
+        check_sum = (check_sum * 1000003 + d) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{grids} grids of {cells} letters, {deleted} deleted, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

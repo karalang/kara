@@ -1,0 +1,115 @@
+// LeetCode #944: Delete Columns to Make Sorted -- each column sorted.
+//
+// Copy each column out of the grid, sort the copy, and count the columns
+// that the sorting changed. O(m n log n) time.
+
+fn min_deletion_size(strs: Vec[String]) -> i64 {
+    let mut rows: Vec[Vec[u8]] = Vec.new();
+    for s in strs.iter() {
+        rows.push(s.bytes().to_vec());
+    }
+    let m = rows[0].len();
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut column: Vec[u8] = Vec.new();
+        for row in rows.iter() {
+            column.push(row[c]);
+        }
+        let mut sorted = column.clone();
+        sorted.sort();
+        if sorted != column {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_grid(seed: mut ref i64, n: i64, m: i64, letters: i64) -> Vec[String] {
+    let mut strs: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let mut s = String.new();
+        for _ in 0..m {
+            s.push((next_random(mut seed) % letters + 97) as u8 as char);
+        }
+        strs.push(s);
+    }
+    strs
+}
+
+fn shape(strs: ref Vec[String]) -> String {
+    let n = strs.len();
+    let m = strs[0].len();
+    let rs = if n == 1 { "" } else { "s" };
+    let ls = if m == 1 { "" } else { "s" };
+    f"{n} row{rs} of {m} letter{ls}"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[String]] = vec![
+        vec!["cba".to_string(), "daf".to_string(), "ghi".to_string()],
+        vec!["a".to_string(), "b".to_string()],
+        vec!["zyx".to_string(), "wvu".to_string(), "tsr".to_string()],
+        vec!["abc".to_string()],
+        vec!["a".to_string(), "a".to_string(), "a".to_string()],
+        vec!["b".to_string(), "a".to_string()],
+        vec!["ab".to_string(), "ba".to_string(), "ab".to_string()],
+        vec!["aaa".to_string(), "aab".to_string(), "aba".to_string(), "baa".to_string()],
+    ];
+    for strs in examples.iter() {
+        println(f"{shape(strs)}: {min_deletion_size(strs)} deleted");
+    }
+    // 300 random grids of 1 to 20 rows of 1 to 30 letters
+    let mut seed = 944;
+    let mut rows = 0;
+    let mut columns = 0;
+    let mut deleted = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let m = 1 + next_random(mut seed) % 30;
+        let letters = 1 + next_random(mut seed) % 26;
+        let strs = random_grid(mut seed, n, m, letters);
+        let d = min_deletion_size(strs);
+        rows += n;
+        columns += m;
+        deleted += d;
+        check = (check * 31 + d) % 1000000007;
+    }
+    println(f"300 random grids of {rows} rows and {columns} columns: {deleted} deleted, checksum {check}");
+    // LeetCode's largest: 100 rows of 1000 letters
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    sets.push(random_grid(mut seed, 100, 1000, 26));
+    sets.push(random_grid(mut seed, 100, 1000, 2));
+    // every column sorted but where row r holds a z, at column r * 10:
+    // the letter r / 4 everywhere else
+    let mut up: Vec[String] = Vec.new();
+    for r in 0..100 {
+        let mut s = String.new();
+        for c in 0..1000 {
+            s.push(if c == r * 10 { 'z' } else { (97 + r / 4) as u8 as char });
+        }
+        up.push(s);
+    }
+    sets.push(up);
+    // every column falling
+    let mut down: Vec[String] = Vec.new();
+    for r in 0..100 {
+        let mut s = String.new();
+        for c in 0..1000 {
+            s.push((122 - r / 4 - c % 2) as u8 as char);
+        }
+        down.push(s);
+    }
+    sets.push(down);
+    for strs in sets.iter() {
+        println(f"{shape(strs)}: {min_deletion_size(strs)} deleted");
+    }
+}
