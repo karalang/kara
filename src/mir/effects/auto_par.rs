@@ -623,11 +623,19 @@ mod tests {
 
     /// The verdicts on `src` with every written `par` region also a
     /// candidate, which is the shape the builder records for a sequential
-    /// `for` and a run of statements.
+    /// `for` and a run of statements. A written `par for` runs its
+    /// iterations as tasks (M4 item 14), so it stands for the plain loop
+    /// in its place, whose candidate the builder records.
     fn written(src: &str) -> Vec<AutoParVerdict> {
-        let mut l = crate::mir::lower::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let plain = src.replace("par for ", "    for ");
+        let loops: BTreeSet<usize> = src.match_indices("par for ").map(|(i, _)| i + 4).collect();
+        let mut l =
+            crate::mir::lower::build_source_recording(&plain).unwrap_or_else(|e| panic!("{e}"));
         for b in l.program.bodies.values_mut() {
-            b.auto_par_candidates = b.par_regions.clone();
+            b.auto_par_candidates
+                .retain(|c| loops.contains(&c.span.offset));
+            let blocks = b.par_regions.clone();
+            b.auto_par_candidates.extend(blocks);
         }
         analyze(&l.program, &l.tys).auto_par
     }

@@ -1037,7 +1037,19 @@ impl Origins {
             {
                 let d = destination.local.index();
                 assigned[d].insert(block);
-                let ins: Vec<usize> = std::iter::once(func).chain(args).filter_map(root).collect();
+                // A scalar or string read through a reference (a task's
+                // `Copy` capture, `(*env).0`) holds no resource, whatever
+                // local it is read from.
+                let holds = |o: &&Operand| {
+                    o.place().is_none_or(|p| {
+                        p.projection.is_empty()
+                            || !matches!(place_ty(body, tys, p), Ok(t) if !carries_value(tcx, t.ty))
+                    })
+                };
+                let ins: Vec<usize> = std::iter::once(func)
+                    .chain(args.iter().filter(holds))
+                    .filter_map(root)
+                    .collect();
                 // `TaskGroup.spawn(&g, c)` stores the task's closure in the
                 // group and writes nothing into the closure, so the values
                 // two tasks capture stay apart (B-2026-10-21-68).

@@ -143,6 +143,9 @@ pub struct Lowered {
     /// effects of the program as built, before provider specialisation
     /// replaced its calls on resources: what `par_check` reports from.
     pub effects: Option<crate::mir::effects::EffectReport>,
+    /// The loops this build ran as tasks under auto-par (M4 item 14), as
+    /// `instance@line` of each `for`.
+    pub auto_par_tasks: Vec<String>,
 }
 
 /// What an `extern "C"` signature with a type no backend passes to C yet
@@ -197,6 +200,7 @@ pub fn lower_program_with_library<'a>(
         capture_modes,
         None,
         None,
+        AutoPar::Off,
     )
 }
 
@@ -218,6 +222,7 @@ fn lower_program_inner<'a>(
     capture_modes: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     signatures_only_from: Option<usize>,
     roots: Option<&[String]>,
+    auto_par: AutoPar,
 ) -> Lowered {
     let user_types: FxHashSet<String> = match user_len {
         Some(n) => program
@@ -322,6 +327,11 @@ fn lower_program_inner<'a>(
         closures: FxHashMap::default(),
         closure_exprs: FxHashMap::default(),
         par_task_exprs: FxHashMap::default(),
+        par_for_task_exprs: FxHashMap::default(),
+        next_synthetic_node: u32::MAX - 1,
+        auto_par,
+        next_synthetic_sym: usize::MAX - 1,
+        auto_par_done: Vec::new(),
         closure_queue: Vec::new(),
         fn_param_tys: FxHashMap::default(),
         own_self_trait_methods: FxHashSet::default(),
@@ -432,6 +442,7 @@ fn lower_program_inner<'a>(
         views,
         pointee_views,
         effects: None,
+        auto_par_tasks: lcx.auto_par_done,
     }
 }
 
@@ -830,6 +841,18 @@ struct Lcx<'a> {
     closure_exprs: FxHashMap<DefId, &'a Expr>,
     /// The closure each `par` branch runs as, by the branch's node.
     par_task_exprs: FxHashMap<NodeId, &'a Expr>,
+    /// The closure `|| { body }` a `par for` iteration runs as, by body.
+    par_for_task_exprs: FxHashMap<*const Block, &'a Expr>,
+    /// The next id for a node the builder makes up (counting down from
+    /// the top, clear of the checker's ids).
+    next_synthetic_node: u32,
+    /// What this build does about automatic parallelism (M4 item 14).
+    auto_par: AutoPar,
+    /// The next symbol the builder makes up (counting down from the top,
+    /// clear of the resolver's).
+    next_synthetic_sym: usize,
+    /// See [`Lowered::auto_par_tasks`].
+    auto_par_done: Vec<String>,
     closure_queue: Vec<ClosureJob<'a>>,
     /// Instances whose function-typed parameters take a concrete closure
     /// or function type: by instance name, one entry per parameter.
@@ -901,6 +924,12 @@ struct ClosureJob<'a> {
     /// function's return type, and the variant of the task's result its
     /// `return` and `?` carry that function's value in (see `par_tasks`).
     exit: Option<(Ty, u32)>,
+    /// It returns this capture's value after its body runs (see
+    /// `Bx::closure_ret_capture`).
+    ret_capture: Option<SymbolId>,
+    /// It is an auto-par task: in place of its body it runs these of a
+    /// loop's iterations (M4 item 14).
+    chunk: Option<ChunkJob<'a>>,
 }
 
 /// A method of a resource's bound (core semantics §14.2).
@@ -1015,6 +1044,13 @@ fn typecheck_error(e: &crate::typechecker::TypeError) -> String {
 }
 
 impl<'a> Lcx<'a> {
+    /// A symbol no binding has, for a value the builder captures itself
+    /// (an auto-par task's bounds).
+    fn synthetic_sym(&mut self) -> SymbolId {
+        self.next_synthetic_sym -= 1;
+        SymbolId(self.next_synthetic_sym + 1)
+    }
+
     // ── items ───────────────────────────────────────────────────────
 
     /// Map each function and method in the AST to its DefId. An impl's
@@ -2282,6 +2318,56 @@ struct LoopCx {
     dest: Option<Place>,
 }
 
+/// A `par for` whose iterations run as tasks of one group (M4 item 12).
+struct ParForTasks {
+    group: Local,
+    group_ty: Ty,
+    /// The `Vec[TaskHandle[T]]` of the iterations' handles, in order.
+    handles: Local,
+    handles_ty: Ty,
+    /// The symbols bound before the loop: any other the body captures is
+    /// one of the loop's own, taken by value.
+    outer: FxHashSet<SymbolId>,
+}
+
+/// The most tasks an auto-par loop's iterations are cut into (M4 item 14).
+const AUTO_PAR_TASKS: u128 = 16;
+
+/// An auto-par loop's task (M4 item 14): a run of the loop's iterations,
+/// from the capture `lo` to the capture `hi`, with the loop's own pattern
+/// and body.
+struct ChunkJob<'a> {
+    pattern: &'a Pattern,
+    body: &'a Block,
+    lo: SymbolId,
+    hi: SymbolId,
+    ty: Ty,
+}
+
+/// `acc = acc op e` in an auto-par loop's body: each task starts its own
+/// `acc` at `op`'s identity and returns it, and the join folds the results
+/// into `acc` in iteration order.
+#[derive(Clone, Copy)]
+struct AutoRed {
+    sym: SymbolId,
+    acc: Local,
+    op: BinOp,
+    ty: Ty,
+    /// Where the sequential loop's operation is, which the fold's overflow
+    /// check names.
+    span: Span,
+}
+
+/// What a join of a loop's tasks does with each task's value.
+enum JoinSink {
+    /// Push it onto this `Vec` (a `par for`'s value).
+    Push(Local, Ty),
+    /// Fold it into the reduction's accumulator.
+    Fold(AutoRed),
+    /// Nothing: the iterations return no value.
+    Discard,
+}
+
 /// Where a `?` in a `par` branch goes: [`Bx::par_try`].
 #[derive(Clone, Copy)]
 struct ParTry {
@@ -2363,6 +2449,33 @@ struct Bx<'l, 'a> {
     /// The `par for` whose body is lowered next: its body, the `Vec` local
     /// that collects the bodies' values, and that `Vec`'s type.
     par_acc: Option<(*const Block, Local, Ty, usize)>,
+    /// When that `par for`'s iterations run as tasks: their group and the
+    /// `Vec` of their handles.
+    par_for_tasks: Option<ParForTasks>,
+    /// Captures a closure takes by value whatever its body needs: a `par
+    /// for` iteration's loop bindings, which end before its task does.
+    closure_by_value: FxHashSet<SymbolId>,
+    /// The sequential `for` whose body is lowered next, recorded as an
+    /// auto-par candidate with the loop's span (M4 item 14).
+    auto_par_candidate: Option<(*const Block, Span)>,
+    /// The next closure lowered is an auto-par loop's task running a run
+    /// of its iterations (see `ClosureJob::chunk`).
+    closure_chunk: Option<ChunkJob<'a>>,
+    /// Symbols the next closure lowered captures besides those its body
+    /// names (an auto-par task's bounds), and ones it does not (the loop's
+    /// own binding, which the task binds).
+    closure_extra_caps: Vec<SymbolId>,
+    closure_skip_caps: FxHashSet<SymbolId>,
+    /// The next closure lowered returns this capture's value once its body
+    /// has run: an auto-par iteration's part of a reduction.
+    closure_ret_capture: Option<SymbolId>,
+    /// The next closure lowered is an auto-par loop's task.
+    closure_auto_par: bool,
+    /// Auto-par tasks created in this body so far, for their names.
+    auto_par_count: u32,
+    /// The `seq { .. }` blocks being lowered: nothing in one is a
+    /// candidate for auto-par.
+    seq_depth: u32,
     /// The `par` branches being lowered, innermost last: a `?` in one
     /// records its error and leaves the branch, not the function, so the
     /// other branches still run (core semantics §11.7). `None` while a
@@ -2417,6 +2530,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             assigned_caps: Default::default(),
             ty_hints: FxHashMap::default(),
             par_acc: None,
+            par_for_tasks: None,
+            closure_by_value: FxHashSet::default(),
+            auto_par_candidate: None,
+            closure_chunk: None,
+            closure_extra_caps: Vec::new(),
+            closure_skip_caps: FxHashSet::default(),
+            closure_ret_capture: None,
+            closure_auto_par: false,
+            auto_par_count: 0,
+            seq_depth: 0,
             par_try: Vec::new(),
             old_vals: FxHashMap::default(),
             ensures: &[],
@@ -6176,8 +6299,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             // order: one of the schedules the block allows (the sequential
             // scheduler's).
             ExprKind::Par(b) => self.par_block(e, b, dest),
-            // `seq { .. }` only suppresses auto-parallelism, which MIR does not do.
-            ExprKind::Seq(b) => self.block_into(b, dest),
+            // `seq { .. }` only suppresses auto-parallelism: nothing in it
+            // is a candidate (M4 item 14).
+            ExprKind::Seq(b) => {
+                self.seq_depth += 1;
+                let r = self.block_into(b, dest);
+                self.seq_depth -= 1;
+                r
+            }
             ExprKind::RepeatLiteral { value, count, .. } => {
                 self.repeat_literal(e, value, count, dest)
             }
@@ -6259,7 +6388,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 iterable,
                 body,
                 ..
-            } => self.for_range(e, label, pattern, iterable, body, dest),
+            } => self.seq_for(e, label, pattern, iterable, body, dest),
             ExprKind::Return(value) => {
                 let ret = Place::local(Local::RETURN_PLACE);
                 // In a `par` branch's task the function's value ends the
@@ -8331,6 +8460,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// A loop body, whose value is dropped, or for the body of a `par for`,
     /// pushed onto the `Vec` the loop builds.
     fn for_body(&mut self, body: &'a Block) -> R<()> {
+        if let Some((_, span)) = self.auto_par_candidate.take_if(|c| std::ptr::eq(c.0, body)) {
+            return self.auto_par_record(body, span);
+        }
         let acc = match self.par_acc {
             Some((b, acc, vt, region)) if std::ptr::eq(b, body) => {
                 self.par_acc = None;
@@ -8350,6 +8482,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => self.tys().tcx().list(args)[0],
             _ => return self.unsupported(body.span, "this `par for`"),
         };
+        if let Some(tasks) = self.par_for_tasks.take() {
+            return self.par_for_spawn(body, region, et, tasks);
+        }
         let v = self.temp(et);
         let entry = self.branch_begin();
         self.block_into(body, Place::local(v))?;
@@ -8870,19 +9005,735 @@ impl<'l, 'a> Bx<'l, 'a> {
         let name = format!("{}.new", self.tys().display(vt));
         self.call_native(&name, Vec::new(), Place::local(acc));
         self.declare(acc, vt);
-        let region = self.open_par_region(ParKind::For { limit }, e.span);
+        let region = self.open_par_region(
+            ParKind::For {
+                limit: limit.clone(),
+            },
+            e.span,
+        );
+        let tasks = self.par_for_tasks_begin(e, body, vt, limit)?;
+        let joins = tasks
+            .as_ref()
+            .map(|t| (t.group, t.group_ty, t.handles, t.handles_ty));
         let saved = self
             .par_acc
             .replace((body as *const Block, acc, vt, region));
+        let saved_tasks = std::mem::replace(&mut self.par_for_tasks, tasks);
         let t = self.unit();
         let unit = self.temp(t);
         self.par_try.push(None);
         let r = self.for_range(e, label, pattern, iterable, body, Place::local(unit));
         self.par_try.pop();
         self.par_acc = saved;
+        self.par_for_tasks = saved_tasks;
         r?;
+        if let Some((g, gt, hs, hvt)) = joins {
+            let et = match self.tys().tcx().kind(vt) {
+                HK::Intrinsic { args, .. } => self.tys().tcx().list(args)[0],
+                _ => unreachable!("a `par for`'s value is a `Vec`"),
+            };
+            self.par_for_join(g, gt, hs, hvt, et, JoinSink::Push(acc, vt));
+        }
         self.assign(dest, Rvalue::Use(Operand::Move(Place::local(acc))));
         self.pop_scope()
+    }
+
+    /// Whether a `par for`'s iterations run as tasks, and if so its group
+    /// and handle `Vec`, made here before the loop. They do unless the body
+    /// leaves the loop or the function (`?`, `return`, `break`,
+    /// `continue`), whose meaning in a task is still the sequential one, or
+    /// its value can hold a borrow, which a join through the handle `Vec`
+    /// would tie to that `Vec`. `KARAC_PAR_FOR_TASKS=0` keeps every one
+    /// sequential.
+    fn par_for_tasks_begin(
+        &mut self,
+        e: &'a Expr,
+        body: &'a Block,
+        vt: Ty,
+        limit: Option<Operand>,
+    ) -> R<Option<ParForTasks>> {
+        if std::env::var("KARAC_PAR_FOR_TASKS").as_deref() == Ok("0") {
+            return Ok(None);
+        }
+        let et = match self.tys().tcx().kind(vt) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => self.tys().tcx().list(args)[0],
+            _ => return Ok(None),
+        };
+        self.loop_tasks(e, body, et, limit)
+    }
+
+    /// [`Self::par_for_tasks_begin`] for a loop whose iterations return
+    /// `et`: its group and handle `Vec`, or `None` when its body leaves the
+    /// loop or `et` can hold a borrow.
+    fn loop_tasks(
+        &mut self,
+        e: &'a Expr,
+        body: &'a Block,
+        et: Ty,
+        limit: Option<Operand>,
+    ) -> R<Option<ParForTasks>> {
+        let Some(task) = self.par_for_task_expr(e, body) else {
+            return Ok(None);
+        };
+        let mut leaves = false;
+        crate::span_visitor::for_each_expr(task, &mut |x| {
+            leaves |= matches!(
+                x.kind,
+                ExprKind::Return(_)
+                    | ExprKind::Question(_)
+                    | ExprKind::Break { .. }
+                    | ExprKind::Continue { .. }
+            );
+        });
+        if leaves || crate::mir::borrowck::holds_borrow(self.tys(), et) {
+            return Ok(None);
+        }
+        let (Some(group_ty), Some(ht)) = (
+            self.library_struct("TaskGroup", &[]),
+            self.library_struct("TaskHandle", &[et]),
+        ) else {
+            return Ok(None);
+        };
+        let handles_ty = {
+            let tcx = self.tys().tcx();
+            let args = tcx.intern_list(&[ht]);
+            tcx.intern(HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            })
+        };
+        let group = self.temp(group_ty);
+        self.call_native(
+            "TaskGroup.new",
+            limit.into_iter().collect(),
+            Place::local(group),
+        );
+        let handles = self.temp(handles_ty);
+        let name = format!("{}.new", self.tys().display(handles_ty));
+        self.call_native(&name, Vec::new(), Place::local(handles));
+        Ok(Some(ParForTasks {
+            group,
+            group_ty,
+            handles,
+            handles_ty,
+            outer: self.locals.keys().copied().collect(),
+        }))
+    }
+
+    /// The closure `|| { body }` a `par for` iteration runs as: one per
+    /// loop, kept for every instance lowered. Its id is a fresh one typed
+    /// as the body's value.
+    fn par_for_task_expr(&mut self, e: &'a Expr, body: &'a Block) -> Option<&'a Expr> {
+        let key = body as *const Block;
+        if let Some(&t) = self.lcx.par_for_task_exprs.get(&key) {
+            return Some(t);
+        }
+        let id = NodeId(self.lcx.next_synthetic_node);
+        self.lcx.next_synthetic_node -= 1;
+        // The checker's type of the loop, when it records one, gives the
+        // body's.
+        let et = self
+            .lcx
+            .node_types
+            .get(&e.id)
+            .and_then(|&vt| match self.tys().tcx().kind(vt) {
+                HK::Intrinsic {
+                    kind: IntrinsicKind::Vec,
+                    args,
+                } => Some(self.tys().tcx().list(args)[0]),
+                _ => None,
+            });
+        if let Some(et) = et {
+            self.lcx.node_types.insert(id, et);
+        }
+        let block = Expr {
+            kind: ExprKind::Block(body.clone()),
+            span: body.span,
+            id,
+        };
+        let t: &'a Expr = Box::leak(Box::new(Expr {
+            kind: ExprKind::Closure {
+                params: Vec::new(),
+                capture_mode: None,
+                prefix_span: None,
+                body: Box::new(block),
+            },
+            span: body.span,
+            id,
+        }));
+        self.lcx.par_for_task_exprs.insert(key, t);
+        Some(t)
+    }
+
+    /// After a loop whose iterations ran as tasks: joins each in iteration
+    /// order, handing its value (of type `et`) to `sink`, then drops the
+    /// handles and the group, so what the tasks borrow is free again.
+    fn par_for_join(&mut self, g: Local, gt: Ty, hs: Local, hvt: Ty, et: Ty, sink: JoinSink) {
+        let tcx = self.tys().tcx();
+        let usize_t = tcx.intern(HK::UInt(UIntSize::Usize));
+        let ht = match tcx.kind(hvt) {
+            HK::Intrinsic { args, .. } => tcx.list(args)[0],
+            _ => unreachable!("a loop's handles are a `Vec`"),
+        };
+        let n = self.seq_len(&Place::local(hs), hvt);
+        let i = self.temp(usize_t);
+        self.assign(
+            i,
+            Rvalue::Use(Operand::Const(Const {
+                ty: usize_t,
+                kind: ConstKind::Scalar(0),
+            })),
+        );
+        let head = self.b.new_block();
+        let body_bb = self.b.new_block();
+        let exit = self.b.new_block();
+        self.goto(head);
+        self.cur = head;
+        let bool_t = self.tys().bool();
+        let c = self.temp(bool_t);
+        self.assign(
+            c,
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(n)),
+            ),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(body_bb, exit),
+            },
+            body_bb,
+        );
+        let r = self.ref_to(Place::local(hs), hvt);
+        let hr = self.tys().tcx().reference(ht, false);
+        let h = self.temp(hr);
+        let name = format!("{}.index", self.tys().display(hvt));
+        self.call_native(
+            &name,
+            vec![r, Operand::Copy(Place::local(i))],
+            Place::local(h),
+        );
+        // The handle gives its result up; the `Vec` then drops it empty.
+        let v = self.temp(et);
+        let name = format!("{}.join", self.tys().display(ht));
+        self.call_native(&name, vec![Operand::Copy(Place::local(h))], Place::local(v));
+        match sink {
+            JoinSink::Push(acc, vt) => {
+                let rt = self.tys().tcx().reference(vt, true);
+                let ar = self.temp(rt);
+                self.assign(ar, Rvalue::Ref(BorrowKind::Mut, Place::local(acc)));
+                let u = self.unit();
+                let u = self.temp(u);
+                let name = format!("{}.push", self.tys().display(vt));
+                self.call_native(
+                    &name,
+                    vec![
+                        Operand::Move(Place::local(ar)),
+                        Operand::Move(Place::local(v)),
+                    ],
+                    Place::local(u),
+                );
+            }
+            JoinSink::Fold(r) => {
+                let outer = self.b.source_info();
+                self.b.set_source_info(SourceInfo {
+                    span: r.span,
+                    ..outer
+                });
+                self.arith(
+                    r.op,
+                    Operand::Copy(Place::local(r.acc)),
+                    Operand::Move(Place::local(v)),
+                    r.ty,
+                    Place::local(r.acc),
+                );
+                self.b.set_source_info(outer);
+            }
+            JoinSink::Discard => {}
+        }
+        self.assign(
+            i,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Operand::Copy(Place::local(i)),
+                Operand::Const(Const {
+                    ty: usize_t,
+                    kind: ConstKind::Scalar(1),
+                }),
+            ),
+        );
+        self.goto(head);
+        self.cur = exit;
+        for (p, _) in [(hs, hvt), (g, gt)] {
+            let next = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::Drop {
+                    place: Place::local(p),
+                    target: next,
+                    unwind: UnwindAction::Abort,
+                },
+                next,
+            );
+        }
+    }
+
+    /// A `par for` iteration as a task of the loop's group: its handle is
+    /// pushed onto the loop's handle `Vec`, and the loop's bindings move
+    /// into the task (`ParForTasks::outer`).
+    fn par_for_spawn(
+        &mut self,
+        body: &'a Block,
+        region: usize,
+        et: Ty,
+        tasks: ParForTasks,
+    ) -> R<()> {
+        let Some(task) = self
+            .lcx
+            .par_for_task_exprs
+            .get(&(body as *const Block))
+            .copied()
+        else {
+            return self.unsupported(body.span, "this `par for`");
+        };
+        let ParForTasks {
+            group,
+            group_ty,
+            handles,
+            handles_ty,
+            outer,
+        } = tasks;
+        let ht = match self.tys().tcx().kind(handles_ty) {
+            HK::Intrinsic { args, .. } => self.tys().tcx().list(args)[0],
+            _ => return self.unsupported(body.span, "this `par for`"),
+        };
+        let entry = self.branch_begin();
+        self.closure_task = true;
+        self.closure_ret = Some((et, None));
+        self.closure_by_value = self
+            .locals
+            .keys()
+            .filter(|s| !outer.contains(s))
+            .copied()
+            .collect();
+        let made = self.closure_value(task);
+        self.closure_task = false;
+        self.closure_ret = None;
+        self.closure_by_value.clear();
+        let (c, _) = made?;
+        let gr = self.ref_to(Place::local(group), group_ty);
+        let h = self.temp(ht);
+        self.call_native("TaskGroup.spawn", vec![gr, c], Place::local(h));
+        self.branch_end(region, entry);
+        let rt = self.tys().tcx().reference(handles_ty, true);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(handles)));
+        let u = self.unit();
+        let u = self.temp(u);
+        let name = format!("{}.push", self.tys().display(handles_ty));
+        self.call_native(
+            &name,
+            vec![
+                Operand::Move(Place::local(r)),
+                Operand::Move(Place::local(h)),
+            ],
+            Place::local(u),
+        );
+        Ok(())
+    }
+
+    /// A sequential `for`: an auto-par candidate when the build records
+    /// them, and its iterations run as tasks when its verdict said yes
+    /// (M4 item 14). Nothing in a `seq { .. }` is either.
+    #[allow(clippy::too_many_arguments)]
+    fn seq_for(
+        &mut self,
+        e: &'a Expr,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        iterable: &'a Expr,
+        body: &'a Block,
+        dest: Place,
+    ) -> R<()> {
+        if self.seq_depth == 0 {
+            match &self.lcx.auto_par {
+                AutoPar::Off => {}
+                AutoPar::Record => {
+                    self.auto_par_candidate = Some((body as *const Block, e.span));
+                }
+                AutoPar::Apply(hints) => {
+                    let key = (self.name.clone(), e.span.offset, e.span.length);
+                    if let Some(reds) = hints.loops.get(&key).cloned() {
+                        if let Some(red) = self.auto_par_plan(body, &reds)? {
+                            return self.auto_par_for(e, label, pattern, iterable, body, red, dest);
+                        }
+                    }
+                }
+            }
+        }
+        self.for_range(e, label, pattern, iterable, body, dest)
+    }
+
+    /// A sequential `for`'s body, recorded as an auto-par candidate of one
+    /// branch, its blocks (M4 item 14).
+    fn auto_par_record(&mut self, body: &'a Block, span: Span) -> R<()> {
+        // Outer before inner, as `par_regions` are.
+        let k = self.b.auto_par_candidates.len();
+        self.b.auto_par_candidates.push(ParRegion {
+            kind: ParKind::For { limit: None },
+            span,
+            branches: Vec::new(),
+        });
+        let t = self.unit();
+        let tmp = self.temp(t);
+        let entry = self.branch_begin();
+        self.block_into(body, Place::local(tmp))?;
+        let after = self.b.new_block();
+        let end = self.b.block_count() as u32;
+        let blocks = (entry.0..end)
+            .filter(|&i| i != after.0)
+            .map(BasicBlock)
+            .collect();
+        self.b.auto_par_candidates[k].branches.push(blocks);
+        self.goto(after);
+        self.cur = after;
+        Ok(())
+    }
+
+    /// How an auto-par loop's iterations combine, given the spans of the
+    /// reductions its verdict names: `Some(None)` when they return
+    /// nothing, `Some(Some(r))` when they fold into one reduction. `None`
+    /// keeps the loop sequential: a body with a value, more than one
+    /// reduction, or one that is not a statement of the body itself (which
+    /// runs exactly once an iteration) on an integer or `bool` local.
+    fn auto_par_plan(&mut self, body: &'a Block, reds: &[Span]) -> R<Option<Option<AutoRed>>> {
+        if let Some(f) = &body.final_expr {
+            let t = self.expr_ty(f)?;
+            if t != self.unit() {
+                return Ok(None);
+            }
+        }
+        let r = match reds {
+            [] => return Ok(Some(None)),
+            [r] => *r,
+            _ => return Ok(None),
+        };
+        let within = |s: Span| s.offset <= r.offset && r.offset + r.length <= s.offset + s.length;
+        let Some(st) = body.stmts.iter().find(|s| within(s.span)) else {
+            return Ok(None);
+        };
+        let local = |x: &Expr| match (&x.kind, self.lcx.res.get(&x.id)) {
+            (ExprKind::Identifier(_), Some(Res::Local(sym))) => Some(*sym),
+            _ => None,
+        };
+        // The span the sequential loop's checked operation carries.
+        let (sym, op, span) = match &st.kind {
+            StmtKind::CompoundAssign { target, op, .. } => {
+                let op = match op {
+                    CompoundOp::Add => BinOp::Add,
+                    CompoundOp::Mul => BinOp::Mul,
+                    CompoundOp::BitAnd => BinOp::BitAnd,
+                    CompoundOp::BitOr => BinOp::BitOr,
+                    CompoundOp::BitXor => BinOp::BitXor,
+                    _ => return Ok(None),
+                };
+                (local(target), op, st.span)
+            }
+            StmtKind::Assign { target, value } => {
+                let ExprKind::Binary { op, left, right } = &value.kind else {
+                    return Ok(None);
+                };
+                let op = match op {
+                    AstBinOp::Add => BinOp::Add,
+                    AstBinOp::Mul => BinOp::Mul,
+                    AstBinOp::BitAnd => BinOp::BitAnd,
+                    AstBinOp::BitOr => BinOp::BitOr,
+                    AstBinOp::BitXor => BinOp::BitXor,
+                    _ => return Ok(None),
+                };
+                let t = local(target);
+                if t.is_none() || (local(left) != t && local(right) != t) {
+                    return Ok(None);
+                }
+                (t, op, value.span)
+            }
+            _ => return Ok(None),
+        };
+        let Some(sym) = sym else { return Ok(None) };
+        let Some(&acc) = self.locals.get(&sym) else {
+            return Ok(None);
+        };
+        let ty = self.b.local_ty(acc);
+        if !matches!(
+            self.tys().tcx().kind(ty),
+            HK::Int(_) | HK::UInt(_) | HK::Bool
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(Some(AutoRed {
+            sym,
+            acc,
+            op,
+            ty,
+            span,
+        })))
+    }
+
+    /// `op`'s identity on the integer or `bool` type `t`: `x op it` is `x`.
+    fn identity(&self, op: BinOp, t: Ty) -> Operand {
+        let ones = match self.tys().tcx().kind(t) {
+            HK::Bool => 1,
+            HK::UInt(s) => match s {
+                UIntSize::U8 => u8::MAX as u128,
+                UIntSize::U16 => u16::MAX as u128,
+                UIntSize::U32 => u32::MAX as u128,
+                UIntSize::U128 => u128::MAX,
+                _ => u64::MAX as u128,
+            },
+            // A signed integer's -1, sign-extended as its constants are.
+            _ => u128::MAX,
+        };
+        let v = match op {
+            BinOp::Mul => 1,
+            BinOp::BitAnd => ones,
+            _ => 0,
+        };
+        Operand::Const(Const {
+            ty: t,
+            kind: ConstKind::Scalar(v),
+        })
+    }
+
+    /// An auto-par loop (M4 item 14): `for x in a..b`, its iterations cut
+    /// into at most [`AUTO_PAR_TASKS`] runs of consecutive ones, each a task
+    /// of one group, joined in order after the loop, folding `red` when the
+    /// iterations carry one. Any other loop, or a body the tasks cannot
+    /// take, stays sequential.
+    #[allow(clippy::too_many_arguments)]
+    fn auto_par_for(
+        &mut self,
+        e: &'a Expr,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        iterable: &'a Expr,
+        body: &'a Block,
+        red: Option<AutoRed>,
+        dest: Place,
+    ) -> R<()> {
+        let (left, right) = match &iterable.kind {
+            ExprKind::Binary {
+                op: AstBinOp::Range,
+                left,
+                right,
+            } => (&**left, &**right),
+            ExprKind::Range {
+                start: Some(left),
+                end: Some(right),
+                inclusive: false,
+            } => (&**left, &**right),
+            _ => return self.for_range(e, label, pattern, iterable, body, dest),
+        };
+        let skip: FxHashSet<SymbolId> = match &pattern.kind {
+            PatternKind::Binding(n) => self
+                .lcx
+                .binding_syms
+                .get(&(pattern.id, n.clone()))
+                .into_iter()
+                .copied()
+                .collect(),
+            PatternKind::Wildcard => FxHashSet::default(),
+            _ => return self.for_range(e, label, pattern, iterable, body, dest),
+        };
+        let et = match red {
+            Some(r) => r.ty,
+            None => self.unit(),
+        };
+        let Some(tasks) = self.loop_tasks(e, body, et, None)? else {
+            return self.for_range(e, label, pattern, iterable, body, dest);
+        };
+        let ParForTasks {
+            group,
+            group_ty,
+            handles,
+            handles_ty,
+            ..
+        } = tasks;
+        let ht = match self.tys().tcx().kind(handles_ty) {
+            HK::Intrinsic { args, .. } => self.tys().tcx().list(args)[0],
+            _ => return self.unsupported(body.span, "this loop's tasks"),
+        };
+        let Some(task) = self
+            .lcx
+            .par_for_task_exprs
+            .get(&(body as *const Block))
+            .copied()
+        else {
+            return self.unsupported(body.span, "this loop's tasks");
+        };
+        self.push_scope();
+        let (start, end, t) = self.range_bounds(left, Some(right))?;
+        let Some(end) = end else {
+            return self.unsupported(iterable.span, "this loop's range");
+        };
+        let int = |v: u128| {
+            Operand::Const(Const {
+                ty: t,
+                kind: ConstKind::Scalar(v),
+            })
+        };
+        let copy = |l: Local| Operand::Copy(Place::local(l));
+        let bool_t = self.tys().bool();
+        let lo = self.temp(t);
+        self.assign(lo, Rvalue::Use(start));
+        let hi = self.temp(t);
+        self.assign(hi, Rvalue::Use(end));
+        // `n` iterations, cut into `k` runs: the first `n % k` one longer.
+        let n = self.temp(t);
+        self.assign(n, Rvalue::Use(int(0)));
+        let some = self.temp(bool_t);
+        self.assign(some, Rvalue::BinaryOp(BinOp::Lt, copy(lo), copy(hi)));
+        self.when(some, |b| {
+            b.assign(n, Rvalue::BinaryOp(BinOp::Sub, copy(hi), copy(lo)));
+        });
+        let k = self.temp(t);
+        self.assign(k, Rvalue::Use(int(AUTO_PAR_TASKS)));
+        let few = self.temp(bool_t);
+        self.assign(
+            few,
+            Rvalue::BinaryOp(BinOp::Lt, copy(n), int(AUTO_PAR_TASKS)),
+        );
+        self.when(few, |b| b.assign(k, Rvalue::Use(copy(n))));
+        let none = self.temp(bool_t);
+        self.assign(none, Rvalue::BinaryOp(BinOp::Eq, copy(k), int(0)));
+        let d = self.temp(t);
+        self.assign(d, Rvalue::Use(copy(k)));
+        self.when(none, |b| b.assign(d, Rvalue::Use(int(1))));
+        let q = self.temp(t);
+        self.assign(q, Rvalue::BinaryOp(BinOp::Div, copy(n), copy(d)));
+        let rem = self.temp(t);
+        self.assign(rem, Rvalue::BinaryOp(BinOp::Rem, copy(n), copy(d)));
+        let j = self.temp(t);
+        self.assign(j, Rvalue::Use(int(0)));
+        let from = self.temp(t);
+        self.assign(from, Rvalue::Use(copy(lo)));
+        let to = self.temp(t);
+        let head = self.b.new_block();
+        let spawn = self.b.new_block();
+        let exit = self.b.new_block();
+        self.goto(head);
+        self.cur = head;
+        let more = self.temp(bool_t);
+        self.assign(more, Rvalue::BinaryOp(BinOp::Lt, copy(j), copy(k)));
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(more)),
+                targets: SwitchTargets::if_else(spawn, exit),
+            },
+            spawn,
+        );
+        self.assign(to, Rvalue::BinaryOp(BinOp::Add, copy(from), copy(q)));
+        let longer = self.temp(bool_t);
+        self.assign(longer, Rvalue::BinaryOp(BinOp::Lt, copy(j), copy(rem)));
+        self.when(longer, |b| {
+            b.assign(to, Rvalue::BinaryOp(BinOp::Add, copy(to), int(1)));
+        });
+        // The task takes its run's bounds, and the reduction's accumulator
+        // at the identity, by value.
+        let (lo_sym, hi_sym) = (self.lcx.synthetic_sym(), self.lcx.synthetic_sym());
+        let run_lo = self.temp(t);
+        self.assign(run_lo, Rvalue::Use(copy(from)));
+        let run_hi = self.temp(t);
+        self.assign(run_hi, Rvalue::Use(copy(to)));
+        self.locals.insert(lo_sym, run_lo);
+        self.locals.insert(hi_sym, run_hi);
+        self.closure_extra_caps = vec![lo_sym, hi_sym];
+        self.closure_by_value = [lo_sym, hi_sym].into_iter().collect();
+        let mut held = None;
+        if let Some(r) = red {
+            let start = self.temp(r.ty);
+            let identity = self.identity(r.op, r.ty);
+            self.assign(start, Rvalue::Use(identity));
+            held = self.locals.insert(r.sym, start);
+            self.closure_by_value.insert(r.sym);
+            self.closure_ret_capture = Some(r.sym);
+        }
+        self.closure_skip_caps = skip;
+        self.closure_chunk = Some(ChunkJob {
+            pattern,
+            body,
+            lo: lo_sym,
+            hi: hi_sym,
+            ty: t,
+        });
+        self.closure_task = true;
+        self.closure_ret = Some((et, None));
+        self.closure_auto_par = true;
+        let made = self.closure_value(task);
+        if let (Some(r), Some(acc)) = (red, held) {
+            self.locals.insert(r.sym, acc);
+        }
+        self.locals.remove(&lo_sym);
+        self.locals.remove(&hi_sym);
+        self.closure_task = false;
+        self.closure_ret = None;
+        self.closure_ret_capture = None;
+        self.closure_chunk = None;
+        self.closure_extra_caps.clear();
+        self.closure_skip_caps.clear();
+        self.closure_by_value.clear();
+        let (c, _) = made?;
+        let gr = self.ref_to(Place::local(group), group_ty);
+        let h = self.temp(ht);
+        self.call_native("TaskGroup.spawn", vec![gr, c], Place::local(h));
+        let rt = self.tys().tcx().reference(handles_ty, true);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(handles)));
+        let u = self.unit();
+        let u = self.temp(u);
+        let name = format!("{}.push", self.tys().display(handles_ty));
+        self.call_native(
+            &name,
+            vec![
+                Operand::Move(Place::local(r)),
+                Operand::Move(Place::local(h)),
+            ],
+            Place::local(u),
+        );
+        self.assign(from, Rvalue::Use(copy(to)));
+        self.assign(j, Rvalue::BinaryOp(BinOp::Add, copy(j), int(1)));
+        self.goto(head);
+        self.cur = exit;
+        let at = format!("{}@{}", self.name, e.span.line);
+        self.lcx.auto_par_done.push(at);
+        let sink = match red {
+            Some(r) => JoinSink::Fold(r),
+            None => JoinSink::Discard,
+        };
+        self.par_for_join(group, group_ty, handles, handles_ty, et, sink);
+        self.pop_scope()?;
+        self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+        Ok(())
+    }
+
+    /// Runs `then` in a block of its own when the `bool` local `c` holds,
+    /// and continues after it either way.
+    fn when(&mut self, c: Local, then: impl FnOnce(&mut Self)) {
+        let yes = self.b.new_block();
+        let after = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(yes, after),
+            },
+            yes,
+        );
+        then(self);
+        self.goto(after);
+        self.cur = after;
     }
 
     /// `for i in a..b { body }` over integers; `a..` runs until a `break`
@@ -8909,17 +9760,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             } if end.is_some() || !*inclusive => (left, end.as_deref(), *inclusive),
             _ => return self.for_collection(e, label, pattern, iterable, body, dest),
         };
-        let name = match &pattern.kind {
-            PatternKind::Binding(name) => Some(name),
-            PatternKind::Wildcard => None,
-            _ => return self.unsupported(pattern.span, "this loop pattern"),
-        };
+        if !matches!(
+            pattern.kind,
+            PatternKind::Binding(_) | PatternKind::Wildcard
+        ) {
+            return self.unsupported(pattern.span, "this loop pattern");
+        }
+        self.push_scope();
+        let (start, end, t) = self.range_bounds(left, right)?;
+        self.range_loop(label, pattern, body, start, end, inclusive, t)?;
+        self.pop_scope()?;
+        self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+        Ok(())
+    }
+
+    /// A range loop's bounds, evaluated, and the type the counter takes.
+    fn range_bounds(
+        &mut self,
+        left: &'a Expr,
+        right: Option<&'a Expr>,
+    ) -> R<(Operand, Option<Operand>, Ty)> {
         let lt = self.expr_ty(left)?;
         let rt = match right {
             Some(r) => self.expr_ty(r)?,
             None => lt,
         };
-        self.push_scope();
         let start = self.expr_operand(left)?;
         let end = match right {
             Some(r) => Some(self.expr_operand(r)?),
@@ -8946,7 +9811,27 @@ impl<'l, 'a> Bx<'l, 'a> {
             }),
             None => o,
         };
-        let (start, end) = (retype(start), end.map(retype));
+        Ok((retype(start), end.map(retype), t))
+    }
+
+    /// `for pattern in start..end { body }` (`..=` when `inclusive`, no end
+    /// for `start..`) over the integer type `t`, with the bounds evaluated.
+    #[allow(clippy::too_many_arguments)]
+    fn range_loop(
+        &mut self,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        body: &'a Block,
+        start: Operand,
+        end: Option<Operand>,
+        inclusive: bool,
+        t: Ty,
+    ) -> R<()> {
+        let name = match &pattern.kind {
+            PatternKind::Binding(name) => Some(name),
+            PatternKind::Wildcard => None,
+            _ => return self.unsupported(pattern.span, "this loop pattern"),
+        };
         let end_t = end.map(|end| {
             let l = self.temp(t);
             self.assign(l, Rvalue::Use(end));
@@ -9025,8 +9910,6 @@ impl<'l, 'a> Bx<'l, 'a> {
         );
         self.goto(head);
         self.cur = exit;
-        self.pop_scope()?;
-        self.assign(dest, Rvalue::Use(unit_const(self.unit())));
         Ok(())
     }
 
@@ -16250,6 +17133,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         let key = std::mem::take(&mut self.closure_key);
         let task = std::mem::take(&mut self.closure_task);
         let escapes = std::mem::take(&mut self.closure_escapes);
+        let by_value = std::mem::take(&mut self.closure_by_value);
+        let ret_capture = self.closure_ret_capture.take();
+        let auto_par = std::mem::take(&mut self.closure_auto_par);
+        let chunk = self.closure_chunk.take();
+        let extra_caps = std::mem::take(&mut self.closure_extra_caps);
+        let skip_caps = std::mem::take(&mut self.closure_skip_caps);
         let ret = self.closure_ret.take();
         let exit = self.closure_exit.take();
         let once = match self
@@ -16276,7 +17165,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         // Whether the body writes a capture, which then needs the
         // environment lent mutably even when the capture was moved in.
         let mut writes = false;
-        let captured = self.closure_captures(body);
+        let mut captured = self.closure_captures(body);
+        captured.retain(|s| !skip_caps.contains(s));
+        captured.extend(extra_caps);
         self.assigned_caps.borrow_mut().clear();
         let moved = self.moved_captures(body, &captured);
         let assigned = std::mem::take(&mut *self.assigned_caps.borrow_mut());
@@ -16333,7 +17224,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // its non-`Copy` captures move in.
             writes |= mode == Some(OwnershipMode::MutRef);
             let cm = match mode {
-                _ if escapes => CapMode::Value,
+                _ if escapes || by_value.contains(&sym) => CapMode::Value,
                 _ if !explicit && task_moved.contains(&name) => CapMode::Value,
                 Some(OwnershipMode::MutRef) => CapMode::Mut,
                 // A capture the body assigns to is lent by `mut ref` (§9.1).
@@ -16361,6 +17252,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 _ => CapMode::Ref,
             };
+            // A capture moved in that the body assigns to is written in
+            // the environment.
+            writes |= cm == CapMode::Value && assigned.contains(&sym);
             // A struct binding the body uses only through its fields is
             // captured field by field, so the rest of it stays usable
             // outside the closure (core semantics §9.1).
@@ -16426,8 +17320,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             let captures = tcx.intern_list(&list);
             tcx.intern(HK::Closure { def, captures })
         };
-        let name = format!("{}.c{}", self.name, self.closure_count);
-        self.closure_count += 1;
+        // An auto-par loop's task is named apart, so the closures the
+        // program writes keep the names the verdicts know them by.
+        let name = if auto_par {
+            self.auto_par_count += 1;
+            format!("{}.ap{}", self.name, self.auto_par_count - 1)
+        } else {
+            self.closure_count += 1;
+            format!("{}.c{}", self.name, self.closure_count - 1)
+        };
         self.lcx.closures.insert(def, (name.clone(), env));
         self.lcx.closure_exprs.insert(def, e);
         let simple = match &e.kind {
@@ -16459,6 +17360,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             ref_key,
             ret,
             exit,
+            ret_capture,
+            chunk,
         });
         let l = self.scoped_temp(ty);
         self.assign(l, Rvalue::Aggregate(AggregateKind::Closure { ty }, ops));
@@ -16590,6 +17493,35 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 None => self.assign(Local::RETURN_PLACE, Rvalue::Ref(BorrowKind::Shared, p)),
             }
+        } else if let Some(ch) = &job.chunk {
+            // An auto-par task: its run of the loop's iterations, then its
+            // part of the reduction, the capture it started at the
+            // identity, when the loop has one.
+            let (Some(lo), Some(hi)) = (
+                self.captured.get(&ch.lo).cloned(),
+                self.captured.get(&ch.hi).cloned(),
+            ) else {
+                return self.unsupported(body.span, "this loop's task");
+            };
+            let u = self.unit();
+            let l = self.temp(u);
+            self.push_scope();
+            self.range_loop(
+                &None,
+                ch.pattern,
+                ch.body,
+                Operand::Copy(lo),
+                Some(Operand::Copy(hi)),
+                false,
+                ch.ty,
+            )?;
+            self.pop_scope()?;
+            self.assign(l, Rvalue::Use(unit_const(u)));
+            let value = match job.ret_capture.and_then(|s| self.captured.get(&s).cloned()) {
+                Some(p) => Rvalue::Use(Operand::Copy(p)),
+                None => Rvalue::Use(unit_const(u)),
+            };
+            self.assign(Local::RETURN_PLACE, value);
         } else if let Some((rt, Some(ok))) = job.ret {
             // A `par` branch of a function that can fail: its value is the
             // success, and its `?` returns the error from the task.
@@ -18919,8 +19851,117 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
 }
 
 fn build_renamed_source(src: &str) -> Result<Lowered, String> {
-    let lowered = lower_source_for_checks(src, false)?;
-    finish_build(lowered)
+    if std::env::var("KARAC_AUTO_PAR").as_deref() != Ok("1") {
+        return finish_build(lower_source_for_checks(src, false, AutoPar::Off)?);
+    }
+    // M4 item 14: built once recording the candidates, whose verdicts
+    // then pick the loops a second build lowers as tasks. That build's
+    // own checks see the parallel form; when they refuse it, the first
+    // build stands. A body that would suspend while called through a
+    // function value loses its loops' hints, and the build runs again.
+    let debug = std::env::var("KARAC_AUTO_PAR_DEBUG").is_ok();
+    let first = finish_build(lower_source_for_checks(src, false, AutoPar::Record)?)?;
+    let verdicts = crate::mir::effects::analyze(&first.program, &first.tys).auto_par;
+    if debug {
+        for v in &verdicts {
+            if let Err(why) = &v.verdict {
+                eprintln!(
+                    "auto-par: in order: {}@{}: {why:?}",
+                    v.instance, v.span.line
+                );
+            }
+        }
+    }
+    let mut hints = AutoParHints::of(&verdicts);
+    while !hints.loops.is_empty() {
+        let second = match lower_source_for_checks(src, false, AutoPar::Apply(hints.clone()))
+            .and_then(finish_build)
+        {
+            Ok(second) => second,
+            Err(e) => {
+                if debug {
+                    eprintln!(
+                        "auto-par: the parallel build was refused, keeping the sequential one: {e}"
+                    );
+                }
+                break;
+            }
+        };
+        let Some(name) = suspends_as_value(&first, &second) else {
+            if debug {
+                let mut at = second.auto_par_tasks.clone();
+                at.sort();
+                eprintln!("auto-par: loops as tasks: {}", at.join(", "));
+            }
+            return Ok(second);
+        };
+        if debug {
+            eprintln!("auto-par: `{name}` would suspend and is used as a function value");
+        }
+        let before = hints.loops.len();
+        hints.loops.retain(|(instance, _, _), _| *instance != name);
+        if hints.loops.len() == before {
+            break;
+        }
+    }
+    Ok(first)
+}
+
+/// A body the parallel build `second` made suspend, by joining a loop's
+/// tasks, that is called through a function value somewhere, which a
+/// coroutine cannot be yet.
+fn suspends_as_value(first: &Lowered, second: &Lowered) -> Option<String> {
+    use crate::mir::coroutine::{called_indirectly, coroutines};
+    let before = coroutines(first.program.bodies.values());
+    let new: std::collections::BTreeSet<String> = coroutines(second.program.bodies.values())
+        .into_iter()
+        .filter(|n| first.program.bodies.contains_key(n) && !before.contains(n))
+        .collect();
+    if new.is_empty() {
+        return None;
+    }
+    let bodies: Vec<Body> = second.program.bodies.values().cloned().collect();
+    called_indirectly(&bodies, &new, &second.tys)
+}
+
+/// [`build_source`] with each body's auto-par candidates recorded
+/// ([`Body::auto_par_candidates`]), as the first of `KARAC_AUTO_PAR=1`'s
+/// two builds makes them (M4 item 14).
+pub fn build_source_recording(src: &str) -> Result<Lowered, String> {
+    finish_build(lower_source_for_checks(src, false, AutoPar::Record)?)
+}
+
+/// What a build does about automatic parallelism (M4 item 14).
+pub(crate) enum AutoPar {
+    Off,
+    /// Record each body's candidates ([`Body::auto_par_candidates`]).
+    Record,
+    /// Lower the loops these verdicts said yes to as tasks.
+    Apply(AutoParHints),
+}
+
+/// The loops whose iterations may run as tasks, by instance and the
+/// loop's span (offset, length), each with the spans of the reductions
+/// its verdict names.
+#[derive(Default, Clone)]
+pub(crate) struct AutoParHints {
+    loops: FxHashMap<(String, usize, usize), Vec<Span>>,
+}
+
+impl AutoParHints {
+    fn of(verdicts: &[crate::mir::effects::auto_par::AutoParVerdict]) -> AutoParHints {
+        use crate::mir::effects::auto_par::VerdictKind;
+        let mut loops = FxHashMap::default();
+        for v in verdicts {
+            if let (VerdictKind::Loop, Ok(reductions)) = (&v.kind, &v.verdict) {
+                loops.insert(
+                    (v.instance.clone(), v.span.offset, v.span.length),
+                    reductions.iter().map(|r| r.span).collect(),
+                );
+            }
+        }
+        AutoParHints { loops }
+    }
 }
 
 /// `karac check`'s run of the MIR move and borrow checks (B-2026-10-19-7):
@@ -18931,7 +19972,7 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
 /// reports only what its own rules find, as it did before.
 /// `KARAC_MIR_BORROWCK=0` skips the borrow check, as it does for a run.
 pub fn source_borrow_errors(src: &str) -> Vec<SourceBorrowError> {
-    let Ok(lowered) = lower_source_for_checks(src, true) else {
+    let Ok(lowered) = lower_source_for_checks(src, true, AutoPar::Off) else {
         return Vec::new();
     };
     borrow_errors_of(src, lowered)
@@ -18954,7 +19995,16 @@ pub fn checked_borrow_errors(
         return source_borrow_errors(src);
     }
     let (text, user_len) = library_source(src);
-    let Ok(lowered) = lower_typed(program, &text, user_len, tc, r, captures, true) else {
+    let Ok(lowered) = lower_typed(
+        program,
+        &text,
+        user_len,
+        tc,
+        r,
+        captures,
+        true,
+        AutoPar::Off,
+    ) else {
         return Vec::new();
     };
     borrow_errors_of(src, lowered)
@@ -19096,7 +20146,11 @@ pub fn phase_time(label: &str, t: &mut std::time::Instant) {
     *t = std::time::Instant::now();
 }
 
-fn lower_source_for_checks(src: &str, check_only: bool) -> Result<Lowered, String> {
+fn lower_source_for_checks(
+    src: &str,
+    check_only: bool,
+    auto_par: AutoPar,
+) -> Result<Lowered, String> {
     let mut t = std::time::Instant::now();
     let (src, user_len) = library_source(src);
     phase_time("library_source", &mut t);
@@ -19194,6 +20248,7 @@ fn lower_source_for_checks(src: &str, check_only: bool) -> Result<Lowered, Strin
         &r,
         &own.closure_captures,
         check_only,
+        auto_par,
     )
 }
 
@@ -19226,6 +20281,7 @@ pub fn lower_program_with_roots(
         &captures,
         None,
         Some(roots),
+        AutoPar::Off,
     );
     lowered.program.user_source_len = user_len;
     lowered
@@ -19236,6 +20292,7 @@ pub fn lower_program_with_roots(
 /// with §3.7's forbidden moves refused. `karac check` hands it the program
 /// its own pipeline checked, so the program is not checked twice
 /// (B-2026-10-19-21).
+#[allow(clippy::too_many_arguments)]
 fn lower_typed(
     program: &ast::Program,
     src: &str,
@@ -19244,6 +20301,7 @@ fn lower_typed(
     r: &ResolveResult,
     captures: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     check_only: bool,
+    auto_par: AutoPar,
 ) -> Result<Lowered, String> {
     let mut t = std::time::Instant::now();
     let defs = ProgramDefs::build_for_program(program);
@@ -19264,6 +20322,7 @@ fn lower_typed(
         captures,
         check_only.then_some(user_len),
         None,
+        auto_par,
     );
     lowered.program.user_source_len = Some(user_len);
     phase_time("mir_builder", &mut t);
@@ -19596,18 +20655,25 @@ fn main() {
         let lowered = super::build_source(src).unwrap_or_else(|e| panic!("{e}"));
         let main = &lowered.program.bodies["main"];
         let rs = &main.par_regions;
-        assert_eq!(rs.len(), 3, "{rs:?}");
+        assert_eq!(rs.len(), 2, "{rs:?}");
         assert!(matches!(rs[0].kind, ParKind::Block));
         assert_eq!(rs[0].branches.len(), 2);
         assert!(matches!(rs[1].kind, ParKind::For { limit: Some(_) }));
         assert_eq!(rs[1].branches.len(), 1);
-        // The inner `par` lies inside the `par for` body's blocks.
-        assert!(matches!(rs[2].kind, ParKind::Block));
-        let body = &rs[1].branches[0];
-        assert!(rs[2].branches.iter().flatten().all(|b| body.contains(b)));
         for r in rs {
             assert!(r.branches.iter().all(|bs| !bs.is_empty()));
         }
+        // The `par for` body runs as a task (M4 item 12), so the inner
+        // `par` is a region of the task's body.
+        let inner: Vec<&ParRegion> = lowered
+            .program
+            .bodies
+            .iter()
+            .filter(|(n, _)| n.starts_with("main.c"))
+            .flat_map(|(_, b)| &b.par_regions)
+            .collect();
+        assert_eq!(inner.len(), 1, "{inner:?}");
+        assert!(matches!(inner[0].kind, ParKind::Block));
         let empty = "fn main() {\n    par {}\n    println(\"ok\");\n}\n";
         assert_eq!(run_source(empty), Ok(("ok\n".to_string(), Some(0))));
         let printed = crate::mir::pretty::pretty_body(main, &lowered.tys);
@@ -19615,6 +20681,37 @@ fn main() {
         assert!(printed.contains("    par#1 for ["), "{printed}");
         assert!(printed.contains("] limit copy _"), "{printed}");
         assert_eq!(run_source(src), Ok(("2 4 3\n".to_string(), Some(0))));
+    }
+
+    /// M4 item 14: a recording build gives each sequential `for` a
+    /// candidate whose one branch is its body, and none to a loop in a
+    /// `seq {}` or to a `par for`; a plain build records none.
+    #[test]
+    fn auto_par_candidates_are_the_sequential_loops() {
+        let src = "fn main() {
+    let mut s = 0;
+    for i in 0..4 {
+        s += i;
+    }
+    seq {
+        for i in 0..4 {
+            s += i;
+        }
+    };
+    let v = par for i in 0..2 { i };
+    println(f\"{s} {v.len()}\");
+}
+";
+        let l = super::build_source_recording(src).unwrap_or_else(|e| panic!("{e}"));
+        let c = &l.program.bodies["main"].auto_par_candidates;
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert!(matches!(c[0].kind, ParKind::For { limit: None }));
+        assert_eq!(c[0].span.line, 3);
+        assert_eq!(c[0].branches.len(), 1);
+        assert!(!c[0].branches[0].is_empty());
+        let plain = super::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert!(plain.program.bodies["main"].auto_par_candidates.is_empty());
+        assert_eq!(run_source(src), Ok(("12 2\n".to_string(), Some(0))));
     }
 
     /// Kata-triage fixes: a user `Display` at every depth, `Secret` and

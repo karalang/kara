@@ -1064,7 +1064,11 @@ fn direct_span_bodies(bodies: &mut [Body], tys: &TyInterner) {
     }
 }
 
-fn called_indirectly(bodies: &[Body], set: &BTreeSet<String>, tys: &TyInterner) -> Option<String> {
+pub(crate) fn called_indirectly(
+    bodies: &[Body],
+    set: &BTreeSet<String>,
+    tys: &TyInterner,
+) -> Option<String> {
     let closure_defs: BTreeMap<DefId, &str> = bodies
         .iter()
         .filter(|b| set.contains(&b.instance.name))

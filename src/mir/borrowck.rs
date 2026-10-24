@@ -1094,7 +1094,7 @@ fn drop_reads_borrows(body: &Body, tys: &TyInterner, place: &Place) -> bool {
 /// Can a value of type `ty` hold a borrow? References and slices can, and
 /// so can anything with a part that can; a `shared` handle cannot (§5.7).
 /// A type MIR cannot see into is assumed to, and so is `TaskGroup`.
-fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
+pub(crate) fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
     // `stored`: `ty` sits in a struct or enum field or a collection, where
     // a closure escapes (§9.3) and so holds no borrow.
     fn go(tys: &TyInterner, ty: Ty, stored: bool, seen: &mut Vec<(Ty, bool)>) -> bool {
