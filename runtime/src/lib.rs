@@ -340,6 +340,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_process::karac_mir_command,
         mir_process::karac_mir_child,
         mir_process::karac_mir_child_wait_fd,
+        mir_process::karac_mir_ready_pipe,
         mir_process::karac_mir_child_free,
         mir_process::karac_mir_pipe,
         mir_process::karac_mir_pipe_free,

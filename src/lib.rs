@@ -92,6 +92,7 @@ pub mod question_chain;
 pub mod select_desugar;
 pub mod struct_spread;
 pub mod tls_conn;
+pub mod work_pool;
 pub mod ws_frame;
 // `module`, `walker`, `manifest` carry data types consumed by `resolver`
 // and `typechecker`, so they stay always-on. The fs-reading entry points

@@ -1,6 +1,6 @@
 # Input and output
 
-**I/O blocks, and socket waits suspend.** Outside a task, a read or write occupies the calling thread until it completes, so every file and network operation has `blocks`. The socket, TLS and WebSocket waits and `Child.wait` also have `suspends`: inside a task, a call that would wait suspends its task, and the program's other tasks run until it can go on ([core semantics §11.8](../core-semantics.md)). File I/O, the HTTP client and the child's pipes still hold the thread inside a task.
+**I/O blocks, and socket waits suspend.** Outside a task, a read or write occupies the calling thread until it completes, so every file and network operation has `blocks`. The socket, TLS and WebSocket waits, `Child.wait` and reads of a child's output pipes also have `suspends`: inside a task, a call that would wait suspends its task, and the program's other tasks run until it can go on ([core semantics §11.8](../core-semantics.md)). File I/O, the HTTP client, writes to a child's stdin and a `BufReader` over a pipe still hold the thread inside a task.
 
 **Effects.** Each function lists its effects ([design.md §12](../design.md#resources)):
 - **`FileSystem` and `Network` are capabilities**, not conflict keys: `reads(FileSystem)` means "may read files" and `sends(Network)` "may use the network". Path-taking functions such as `fs.write(path, content)` carry `writes(FileSystem)` (and `blocks`, like all I/O) and do not conflict with each other, so two `par` branches that write the same path by name are not detected.
@@ -425,9 +425,9 @@ Dropping a `Child` neither kills nor waits for it: the process keeps running, an
 
 ```kara
 impl ChildStdout {        // ChildStderr has the same methods
-    fn read(self, buf: mut Slice[u8]) -> Result[i64, IoError] with receives(self) blocks
-    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, IoError] with receives(self) blocks
-    fn read_to_string(self, buf: mut ref String) -> Result[i64, IoError] with receives(self) blocks
+    fn read(self, buf: mut Slice[u8]) -> Result[i64, IoError] with receives(self) blocks suspends
+    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, IoError] with receives(self) blocks suspends
+    fn read_to_string(self, buf: mut ref String) -> Result[i64, IoError] with receives(self) blocks suspends
 }
 
 impl ChildStdin {
@@ -438,7 +438,7 @@ impl ChildStdin {
 }
 ```
 
-The pipe handles read and write bytes as `File` does, and a `BufReader` or `BufWriter` takes one as it takes a `File`: `BufReader.new(child.stdout().unwrap()).lines()` reads a child's output line by line. `read` waits for at least one byte and returns 0 when the child has closed its end. `read_to_end` and `read_to_string` append everything up to end of file and return the count. `read_to_string` fails with `InvalidUtf8` when the bytes are not UTF-8, and leaves `buf` unchanged when it does. Each pipe is its own resource, so reading one child's stdout does not conflict with writing another child's stdin. Dropping a `ChildStdin` closes the pipe, which the child reads as end of file. `close` does the same thing explicitly. Closing twice is `Ok`, and a write after closing fails with `InvalidInput`.
+The pipe handles read and write bytes as `File` does, and a `BufReader` or `BufWriter` takes one as it takes a `File`: `BufReader.new(child.stdout().unwrap()).lines()` reads a child's output line by line. `read` waits for at least one byte and returns 0 when the child has closed its end. `read_to_end` and `read_to_string` append everything up to end of file and return the count. `read_to_string` fails with `InvalidUtf8` when the bytes are not UTF-8, and leaves `buf` unchanged when it does. Inside a task, a `read` with nothing to read suspends its task until the child writes or closes its end, and `read_to_end` and `read_to_string` suspend it until end of file, taking in what arrives meanwhile. Each pipe is its own resource, so reading one child's stdout does not conflict with writing another child's stdin. Dropping a `ChildStdin` closes the pipe, which the child reads as end of file. `close` does the same thing explicitly. Closing twice is `Ok`, and a write after closing fails with `InvalidInput`.
 
 A child that writes more than a pipe holds (64 KiB on Linux) blocks until the parent reads. A parent that writes to a child's stdin and only then reads its stdout can deadlock with it. Use `output` or `wait_with_output` to read both streams of a child together, or write and read from separate tasks.
 

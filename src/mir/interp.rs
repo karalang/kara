@@ -5315,14 +5315,16 @@ impl<'a> Interp<'a> {
                         }
                     }
                     ("read_to_end" | "read_to_string", Pipe::Out(_) | Pipe::Err(_), Some(buf)) => {
-                        let mut bytes = Vec::new();
+                        let id = slot.map_or(0, |i| i as i128 + 1);
+                        let mut bytes = self.procs.drained.remove(&id).unwrap_or_default();
+                        let before = bytes.len();
                         let got = pipe.reader().read_to_end(&mut bytes).and_then(|n| {
                             if method == "read_to_string" {
                                 std::str::from_utf8(&bytes).map_err(|e| {
                                     std::io::Error::new(std::io::ErrorKind::InvalidData, e)
                                 })?;
                             }
-                            Ok(n)
+                            Ok(before + n)
                         });
                         match got {
                             Ok(n) => {
@@ -6187,6 +6189,7 @@ impl<'a> Interp<'a> {
             slept: false,
             pool_wait: None,
             pool_verdict: None,
+            http: None,
             spans: self.active_spans.clone(),
             cancelled: false,
         });
@@ -6265,6 +6268,9 @@ impl<'a> Interp<'a> {
         self.free_slot(slot);
         let task = &mut self.tasks[t];
         task.deadline = None;
+        // A request already on its helper runs to its end; its result is
+        // dropped there.
+        task.http = None;
         if let Some(p) = task.pool_wait.take() {
             if let Some(p) = self.pool(p) {
                 p.waiting -= 1;
@@ -12609,6 +12615,7 @@ impl<'a> Interp<'a> {
             slept: false,
             pool_wait: None,
             pool_verdict: None,
+            http: None,
             spans: self.active_spans.clone(),
             cancelled: false,
         });
@@ -12745,7 +12752,9 @@ impl<'a> Interp<'a> {
                 | Wait::Write(..)
                 | Wait::Datagram(..)
                 | Wait::Tls(..)
-                | Wait::Child(_) => io = true,
+                | Wait::Child(_)
+                | Wait::Http(_)
+                | Wait::Pipe(..) => io = true,
                 Wait::Recv(_)
                 | Wait::Send(_)
                 | Wait::Join(_)
@@ -12873,6 +12882,13 @@ impl<'a> Interp<'a> {
                 },
                 other => return err(format!("{callee} of a child holding {other:?}")),
             },
+            ("Client", "get" | "post", _) | ("RequestBuilder", "send", _) => {
+                self.ready_http(base, method, rest, &callee)?
+            }
+            ("ChildStdout" | "ChildStderr", "read" | "read_to_end" | "read_to_string", [p, ..]) => {
+                let id = self.handle_field(Some(p), &callee)?;
+                Some(Wait::Pipe(id, method != "read"))
+            }
             ("Mutex", "acquire", [m, ..]) => Some(Wait::Lock(self.atomic_cell(m, &callee)?)),
             ("Pool", "acquire", [p, d, ..]) => self.ready_pool(p, d, &callee)?,
             ("__select_park", "", [Value::Int(epoch), Value::Int(until), ..]) => {
@@ -13073,6 +13089,8 @@ impl<'a> Interp<'a> {
             Wait::Pool(id, at) => {
                 std::time::Instant::now() >= *at || self.pool(*id).is_none_or(|p| pool_free(p))
             }
+            Wait::Http(t) => t.done(),
+            Wait::Pipe(id, drain) => self.procs.pipe_ready(*id, *drain),
             Wait::Child(id) => {
                 let slot = usize::try_from(*id - 1).ok();
                 match slot.and_then(|i| self.procs.children.get_mut(i)) {
@@ -13125,18 +13143,8 @@ impl<'a> Interp<'a> {
         match (base, method) {
             ("Client", "new") => Ok(Value::Agg(Vec::new())),
             ("Client", "get" | "post") => {
-                let url = self.string_at(&args[1])?;
-                let body = match args.get(2) {
-                    Some(b) => self.string_at(b)?,
-                    None => String::new(),
-                };
-                let req = HttpBuilder {
-                    method: if method == "get" { "GET" } else { "POST" }.into(),
-                    url,
-                    body,
-                    ..HttpBuilder::default()
-                };
-                self.http_send(req, method == "post", ret)
+                let (req, with_body) = self.http_request(base, method, &args, name)?;
+                self.http_send(req, with_body, ret)
             }
             ("Client", "request") => {
                 let method = self.string_at(&args[1])?;
@@ -13171,8 +13179,7 @@ impl<'a> Interp<'a> {
                         }
                     }
                     "send" => {
-                        let req = self.http_builders[i].clone();
-                        let with_body = !req.body.is_empty();
+                        let (req, with_body) = self.http_request(base, method, &args, name)?;
                         return self.http_send(req, with_body, ret);
                     }
                     _ => return err(format!("call of unknown function {name}")),
@@ -13227,71 +13234,98 @@ impl<'a> Interp<'a> {
         }
     }
 
-    /// Sends `req`: `Ok` of a `Response`, or `Err` of an `HttpError`
-    /// carrying `ureq`'s message (a non-2xx status is one, as legacy's).
-    /// Redirects are followed here rather than by `ureq`, as the compiled
-    /// client follows them (runtime/src/lib.rs `http_fetch_redirects`), so
-    /// each hop goes through the proxy its own URL names.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn http_send(&mut self, req: HttpBuilder, with_body: bool, ret: Ty) -> R<Value> {
-        let mut method = req.method.clone();
-        let mut url = req.url.clone();
-        let mut body = with_body.then(|| req.body.clone());
-        let mut headers = req.headers.clone();
-        for _hop in 0..=5 {
-            let resp = match http_exchange(&method, &url, &headers, body.as_deref(), req.timeout_ms)
-            {
-                Ok(resp) => resp,
-                Err(msg) => return self.http_error(msg, ret),
+    /// The request a `Client.get` / `post` or `RequestBuilder.send` with
+    /// arguments `args` makes, and whether it carries its body.
+    fn http_request(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Value],
+        name: &str,
+    ) -> R<(HttpBuilder, bool)> {
+        if base == "Client" {
+            let url = self.string_at(&args[1])?;
+            let body = match args.get(2) {
+                Some(b) => self.string_at(b)?,
+                None => String::new(),
             };
-            let status = resp.status();
-            if matches!(status, 301 | 302 | 303 | 307 | 308) {
-                if let Some(loc) = resp.header("location") {
-                    url = http_resolve_location(&url, loc);
-                    let demote = status == 303
-                        || (status == 301 || status == 302)
-                            && !method.eq_ignore_ascii_case("GET")
-                            && !method.eq_ignore_ascii_case("HEAD");
-                    if demote {
-                        method = "GET".to_string();
-                        body = None;
-                    }
-                    // The caller's credentials go no further once a hop
-                    // leaves the first request's origin (docs/library/io.md).
-                    if !crate::http_proxy::redirect_keeps_credentials(&req.url, &url) {
-                        headers.retain(|(k, _)| !crate::http_proxy::is_credential_header(k));
-                    }
-                    continue;
-                }
-            }
-            let status = i128::from(status);
-            let headers: Vec<(String, String)> = resp
-                .headers_names()
-                .into_iter()
-                .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
-                .collect();
-            // The body as it came, which `bytes()` returns: a body that is
-            // not UTF-8 keeps its bytes there, as the compiled backend's does.
-            let mut raw = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut resp.into_reader(), &mut raw);
-            let text = String::from_utf8_lossy(&raw).into_owned();
-            let body = self.alloc_box("String", Value::Str(text));
-            if let Value::Box(id) = body {
-                self.http_headers.insert(id, headers);
-                self.http_bodies.insert(id, raw);
-            }
-            let response = Value::Agg(vec![Value::Int(status), body]);
-            return self.variant_named(ret, None, "Ok", vec![response]);
+            let req = HttpBuilder {
+                method: if method == "get" { "GET" } else { "POST" }.into(),
+                url,
+                body,
+                ..HttpBuilder::default()
+            };
+            return Ok((req, method == "post"));
         }
-        self.http_error(format!("{url}: too many redirects"), ret)
+        let Some(recv) = args.first() else {
+            return err(format!("{name} takes its request"));
+        };
+        let h = match self.struct_value(recv, name)?.as_slice() {
+            [Value::Int(h)] => *h,
+            other => return err(format!("{name} of a request holding {other:?}")),
+        };
+        let Some(req) = (h as usize)
+            .checked_sub(1)
+            .and_then(|i| self.http_builders.get(i))
+        else {
+            return err(format!("{name} on an unknown request"));
+        };
+        let with_body = !req.body.is_empty();
+        Ok((req.clone(), with_body))
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn http_send(&mut self, _req: HttpBuilder, _with_body: bool, ret: Ty) -> R<Value> {
-        self.http_error(
-            "the HTTP client is not available in the browser".into(),
-            ret,
-        )
+    /// `__ready` of a client call: the request goes to a helper
+    /// (`crate::work_pool`, the interim the compiled backend shares), and
+    /// the task waits for it to end. The call after it takes the result.
+    fn ready_http(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Value],
+        name: &str,
+    ) -> R<Option<Wait>> {
+        if cfg!(target_arch = "wasm32") {
+            return Ok(None);
+        }
+        let cur = self.cur_task;
+        if let Some(t) = &self.tasks[cur].http {
+            return Ok(Some(Wait::Http(t.clone())));
+        }
+        let (req, with_body) = self.http_request(base, method, args, name)?;
+        let t = crate::work_pool::submit(move || http_fetch(&req, with_body), || {});
+        self.tasks[cur].http = Some(t.clone());
+        Ok(Some(Wait::Http(t)))
+    }
+
+    /// Sends `req`: `Ok` of a `Response`, or `Err` of an `HttpError`
+    /// carrying the client's message (a non-2xx status is one, as
+    /// legacy's). Under the executor the request already ran on a helper,
+    /// which the task's `__ready` waited for.
+    fn http_send(&mut self, req: HttpBuilder, with_body: bool, ret: Ty) -> R<Value> {
+        let sent = self
+            .tasks
+            .get_mut(self.cur_task)
+            .and_then(|t| t.http.take());
+        let fetched = match sent {
+            Some(t) => t
+                .take()
+                .unwrap_or_else(|| Err(format!("{}: the request failed", req.url))),
+            None => http_fetch(&req, with_body),
+        };
+        let a = match fetched {
+            Ok(a) => a,
+            Err(msg) => return self.http_error(msg, ret),
+        };
+        // The body as it came, which `bytes()` returns: a body that is
+        // not UTF-8 keeps its bytes there, as the compiled backend's does.
+        let text = String::from_utf8_lossy(&a.raw).into_owned();
+        let body = self.alloc_box("String", Value::Str(text));
+        if let Value::Box(id) = body {
+            self.http_headers.insert(id, a.headers);
+            self.http_bodies.insert(id, a.raw);
+        }
+        let response = Value::Agg(vec![Value::Int(i128::from(a.status)), body]);
+        self.variant_named(ret, None, "Ok", vec![response])
     }
 
     /// A call of the `extern "C"` function `name` (`super::foreign`).
@@ -14450,15 +14484,87 @@ struct Procs {
     stdio: Vec<Option<StdioCfg>>,
     children: Vec<Option<std::process::Child>>,
     pipes: Vec<Option<Pipe>>,
+    /// What a waiting `read_to_end`'s `__ready` drained off a pipe, by id,
+    /// which that `read_to_end` returns ahead of the rest.
+    drained: rustc_hash::FxHashMap<i128, Vec<u8>>,
 }
 
 impl Procs {
+    /// Whether pipe `id` has bytes or its end to read (`drain`: whether it
+    /// reached its end, reading what comes before it into `drained`). A
+    /// dropped pipe is ready, for its call to fail. Off Unix every pipe is
+    /// ready, and its read blocks.
+    fn pipe_ready(&mut self, id: i128, drain: bool) -> bool {
+        let Some(Some(pipe)) = usize::try_from(id - 1)
+            .ok()
+            .and_then(|i| self.pipes.get_mut(i))
+        else {
+            return true;
+        };
+        if matches!(pipe, Pipe::In(_)) {
+            return true;
+        }
+        loop {
+            if !pipe_readable(pipe) {
+                return false;
+            }
+            if !drain {
+                return true;
+            }
+            let mut chunk = [0u8; 64 * 1024];
+            match std::io::Read::read(pipe.reader(), &mut chunk) {
+                Ok(0) | Err(_) => return true,
+                Ok(n) => self.drained.entry(id).or_default().extend(&chunk[..n]),
+            }
+        }
+    }
+
     fn take_pipe(&mut self, id: i128) -> Option<Pipe> {
         usize::try_from(id - 1)
             .ok()
             .and_then(|i| self.pipes.get_mut(i))
             .and_then(Option::take)
     }
+}
+
+/// Whether a child's output pipe has bytes or its end to read now, asked
+/// with `poll(2)` and no timeout. Off Unix, always: the read blocks.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn pipe_readable(pipe: &Pipe) -> bool {
+    use std::os::fd::AsRawFd;
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+    #[cfg(target_os = "linux")]
+    type Nfds = std::ffi::c_ulong;
+    #[cfg(not(target_os = "linux"))]
+    type Nfds = std::ffi::c_uint;
+    extern "C" {
+        fn poll(fds: *mut PollFd, n: Nfds, timeout: i32) -> i32;
+    }
+    const POLLIN: i16 = 1;
+    let fd = match pipe {
+        Pipe::Out(o) => o.as_raw_fd(),
+        Pipe::Err(e) => e.as_raw_fd(),
+        Pipe::In(_) => return true,
+    };
+    let mut p = PollFd {
+        fd,
+        events: POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one live `pollfd`, and `poll` does not keep it.
+    let n = unsafe { poll(&mut p, 1, 0) };
+    // An error, a hang-up or a bad descriptor all leave the read to say.
+    n != 0
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn pipe_readable(_pipe: &Pipe) -> bool {
+    true
 }
 
 /// What a `Stdio` connects a stream to. A pipe goes to the first child
@@ -14582,6 +14688,9 @@ struct TaskSlot {
     /// What its waiting `acquire` comes to without a value: `Busy` or
     /// `Timeout`, set by `__ready` for the `acquire` that follows.
     pool_verdict: Option<&'static str>,
+    /// Its HTTP request on a helper (`crate::work_pool`), which its
+    /// `__ready` sent and the client call after it takes.
+    http: Option<crate::work_pool::Ticket<HttpFetched>>,
     /// Its active span stack while it is not running (B-2026-10-20-37):
     /// span context is per task, inherited from the spawner.
     spans: Vec<i128>,
@@ -14634,6 +14743,12 @@ enum Wait {
     Tls(i64, bool, Option<std::time::Instant>),
     /// A child, by its `ChildProcess` id, to exit.
     Child(i128),
+    /// An HTTP request on a helper to end.
+    Http(crate::work_pool::Ticket<HttpFetched>),
+    /// A child's output pipe, by id, to have bytes or its end to read;
+    /// with `true`, to reach its end, what it holds until then drained
+    /// for the `read_to_end` that follows.
+    Pipe(i128, bool),
     /// A pool, by id, to have a value to lend, or the deadline to pass.
     Pool(i128, std::time::Instant),
     /// A spawned task to return, by handle id.
@@ -15242,6 +15357,71 @@ fn announced_port(at: std::net::SocketAddr, l: &std::net::TcpListener) -> Option
         return None;
     }
     l.local_addr().ok().map(|a| a.port())
+}
+
+/// A response as `http_fetch` received it: its status, headers in
+/// order, and body bytes.
+struct HttpAnswer {
+    status: u16,
+    headers: Vec<(String, String)>,
+    raw: Vec<u8>,
+}
+
+/// What a request came to: the response, or the client's message.
+type HttpFetched = Result<HttpAnswer, String>;
+
+/// Sends `req`, with its body when `with_body`. Redirects are followed
+/// here rather than by `ureq`, as the compiled client follows them
+/// (runtime/src/lib.rs `http_fetch_redirects`), so each hop goes through
+/// the proxy its own URL names. Plain data in and out, so a helper thread
+/// runs it.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_fetch(req: &HttpBuilder, with_body: bool) -> HttpFetched {
+    let mut method = req.method.clone();
+    let mut url = req.url.clone();
+    let mut body = with_body.then(|| req.body.clone());
+    let mut headers = req.headers.clone();
+    for _hop in 0..=5 {
+        let resp = http_exchange(&method, &url, &headers, body.as_deref(), req.timeout_ms)?;
+        let status = resp.status();
+        if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            if let Some(loc) = resp.header("location") {
+                url = http_resolve_location(&url, loc);
+                let demote = status == 303
+                    || (status == 301 || status == 302)
+                        && !method.eq_ignore_ascii_case("GET")
+                        && !method.eq_ignore_ascii_case("HEAD");
+                if demote {
+                    method = "GET".to_string();
+                    body = None;
+                }
+                // The caller's credentials go no further once a hop
+                // leaves the first request's origin (docs/library/io.md).
+                if !crate::http_proxy::redirect_keeps_credentials(&req.url, &url) {
+                    headers.retain(|(k, _)| !crate::http_proxy::is_credential_header(k));
+                }
+                continue;
+            }
+        }
+        let headers = resp
+            .headers_names()
+            .into_iter()
+            .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
+            .collect();
+        let mut raw = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut resp.into_reader(), &mut raw);
+        return Ok(HttpAnswer {
+            status,
+            headers,
+            raw,
+        });
+    }
+    Err(format!("{url}: too many redirects"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn http_fetch(_req: &HttpBuilder, _with_body: bool) -> HttpFetched {
+    Err("the HTTP client is not available in the browser".into())
 }
 
 /// One request of `http_send`'s, redirects not followed: the

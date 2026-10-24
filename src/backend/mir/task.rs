@@ -119,6 +119,15 @@ impl<'ctx> Cx<'ctx, '_> {
                     .into_int_value();
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
             }
+            // A child's output pipe: bytes or its end to read, or (`drain`,
+            // for `read_to_end`) its end reached, what comes first drained
+            // (`runtime/src/mir_process.rs`).
+            ("ChildStdout" | "ChildStderr", "read" | "read_to_end" | "read_to_string", [p, ..]) => {
+                let (at, _) = self.behind_refs(p)?;
+                let handle = self.load_ptr(at)?;
+                let drain = i8t.const_int(u64::from(method != "read"), false);
+                self.rt_flag("ready_pipe", &[handle.into(), drain.into()])?
+            }
             // Ready at once, armed, unless the task has a connect under way.
             ("TcpStream", "connect", _) => self.rt_flag("ready_connect", &[])?,
             // A value to lend, by the timeout (B-2026-10-21-44).

@@ -43,6 +43,10 @@ pub fn suspends_native(name: &str) -> bool {
             | ("TlsStream", "read" | "write")
             | ("UdpSocket", "recv" | "recv_from")
             | ("Child", "wait")
+            | (
+                "ChildStdout" | "ChildStderr",
+                "read" | "read_to_end" | "read_to_string"
+            )
             | ("Pool", "acquire")
     )
 }

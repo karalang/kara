@@ -512,18 +512,24 @@ pub unsafe extern "C" fn karac_mir_pipe(
     // SAFETY: the caller's contract.
     let pipe = unsafe { &mut *handle.cast::<Pipe>() };
     let n = usize::try_from(len).unwrap_or(0);
+    // What a waiting `read_to_end`'s readiness already read comes first.
+    let mut ahead = if op == 1 || op == 2 {
+        take_drained(handle)
+    } else {
+        Vec::new()
+    };
     #[cfg(all(feature = "net", unix))]
     {
         // SAFETY: the caller's contract.
-        if let Some(code) = unsafe { pipe_unix(pipe, op, ptr, n, value, msg) } {
+        if let Some(code) = unsafe { pipe_unix(pipe, op, ptr, n, &mut ahead, value, msg) } {
             return code;
         }
     }
     let res: std::io::Result<i64> = match pipe {
         // SAFETY: the caller's contract.
-        Pipe::Out(o) if op <= 2 => unsafe { read_op(o, op, ptr, n) },
+        Pipe::Out(o) if op <= 2 => unsafe { read_op(o, op, ptr, n, &mut ahead) },
         // SAFETY: the caller's contract.
-        Pipe::Err(e) if op <= 2 => unsafe { read_op(e, op, ptr, n) },
+        Pipe::Err(e) if op <= 2 => unsafe { read_op(e, op, ptr, n, &mut ahead) },
         Pipe::In(w) if op == 6 => {
             *w = None;
             Ok(0)
@@ -565,6 +571,7 @@ unsafe fn pipe_unix(
     op: i32,
     ptr: *mut u8,
     n: usize,
+    ahead: &mut Vec<u8>,
     value: *mut i64,
     msg: *mut RawVec,
 ) -> Option<i32> {
@@ -587,12 +594,12 @@ unsafe fn pipe_unix(
             e.read(buf()).map(|k| k as i64)
         }),
         // SAFETY: the caller's contract.
-        Pipe::Out(o) if op <= 2 => match unsafe { read_op(&mut Waiting(o), op, ptr, n) } {
+        Pipe::Out(o) if op <= 2 => match unsafe { read_op(&mut Waiting(o), op, ptr, n, ahead) } {
             Ok(k) => Got::Done(k),
             Err(e) => Got::Fail(e),
         },
         // SAFETY: the caller's contract.
-        Pipe::Err(e) if op <= 2 => match unsafe { read_op(&mut Waiting(e), op, ptr, n) } {
+        Pipe::Err(e) if op <= 2 => match unsafe { read_op(&mut Waiting(e), op, ptr, n, ahead) } {
             Ok(k) => Got::Done(k),
             Err(e) => Got::Fail(e),
         },
@@ -618,6 +625,74 @@ unsafe fn pipe_unix(
     Some(unsafe { report(res, value, msg) })
 }
 
+/// What a waiting `read_to_end`'s `__ready` drained off a pipe, by the
+/// pipe's handle, which that `read_to_end` returns ahead of the rest.
+static DRAINED: std::sync::Mutex<Vec<(usize, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+
+/// The bytes [`karac_mir_ready_pipe`] drained off the pipe at `handle`.
+fn take_drained(handle: *mut std::ffi::c_void) -> Vec<u8> {
+    let mut d = DRAINED.lock().unwrap_or_else(|e| e.into_inner());
+    match d.iter().position(|(h, _)| *h == handle as usize) {
+        Some(i) => d.swap_remove(i).1,
+        None => Vec::new(),
+    }
+}
+
+/// `__ready` of a pipe's `read` (`drain` 0): whether it has bytes or its
+/// end to read, as `karac_mir_ready_fd` asks. Of its `read_to_end` /
+/// `read_to_string` (`drain` 1): whether it reached its end, reading what
+/// comes before it into [`DRAINED`] as it arrives. Off the reactor, and
+/// for a stdin pipe, every call is ready.
+///
+/// # Safety
+/// `handle` is a live pipe.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_ready_pipe(handle: *mut std::ffi::c_void, drain: u8) -> u8 {
+    #[cfg(all(feature = "net", unix))]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: the caller's contract.
+        let pipe = unsafe { &mut *handle.cast::<Pipe>() };
+        let fd = match pipe {
+            Pipe::Out(o) => o.as_raw_fd(),
+            Pipe::Err(e) => e.as_raw_fd(),
+            Pipe::In(_) => return crate::mir_task::karac_mir_ready(1),
+        };
+        loop {
+            let ready = crate::mir_task::karac_mir_ready_fd(i64::from(fd), 0);
+            if ready == 0 || drain == 0 {
+                return ready;
+            }
+            let mut chunk = [0u8; 64 * 1024];
+            // SAFETY: as above; the descriptor is non-blocking.
+            let pipe = unsafe { &mut *handle.cast::<Pipe>() };
+            let got = match pipe {
+                Pipe::Out(o) => o.read(&mut chunk),
+                Pipe::Err(e) => e.read(&mut chunk),
+                Pipe::In(_) => unreachable!("answered above"),
+            };
+            match got {
+                Ok(n) if n > 0 => {
+                    let mut d = DRAINED.lock().unwrap_or_else(|e| e.into_inner());
+                    match d.iter_mut().find(|(h, _)| *h == handle as usize) {
+                        Some((_, b)) => b.extend_from_slice(&chunk[..n]),
+                        None => d.push((handle as usize, chunk[..n].to_vec())),
+                    }
+                }
+                // Off the reactor every answer is ready, so nothing to read
+                // yet leaves the wait to the call itself.
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                _ => return ready,
+            }
+        }
+    }
+    #[cfg(not(all(feature = "net", unix)))]
+    {
+        let _ = (handle, drain);
+        crate::mir_task::karac_mir_ready(1)
+    }
+}
+
 /// The status of a call that would block, armed: `IO_NOT_READY`.
 #[cfg(all(feature = "net", unix))]
 const NOT_READY: i32 = crate::mir_sock::IO_NOT_READY;
@@ -629,7 +704,13 @@ const NOT_READY: i32 = 100;
 ///
 /// # Safety
 /// As [`karac_mir_pipe`].
-unsafe fn read_op(r: &mut dyn Read, op: i32, ptr: *mut u8, n: usize) -> std::io::Result<i64> {
+unsafe fn read_op(
+    r: &mut dyn Read,
+    op: i32,
+    ptr: *mut u8,
+    n: usize,
+    ahead: &mut Vec<u8>,
+) -> std::io::Result<i64> {
     if op == 0 {
         if ptr.is_null() || n == 0 {
             return r.read(&mut []).map(|k| k as i64);
@@ -639,8 +720,8 @@ unsafe fn read_op(r: &mut dyn Read, op: i32, ptr: *mut u8, n: usize) -> std::io:
             .read(unsafe { std::slice::from_raw_parts_mut(ptr, n) })
             .map(|k| k as i64);
     }
-    let mut b = Vec::new();
-    let k = r.read_to_end(&mut b)?;
+    let mut b = std::mem::take(ahead);
+    let k = b.len() + r.read_to_end(&mut b)?;
     if op == 2 {
         std::str::from_utf8(&b)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -657,6 +738,7 @@ unsafe fn read_op(r: &mut dyn Read, op: i32, ptr: *mut u8, n: usize) -> std::io:
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pipe_free(handle: *mut std::ffi::c_void) {
     if !handle.is_null() {
+        drop(take_drained(handle));
         // SAFETY: the caller's contract.
         drop(unsafe { Box::from_raw(handle.cast::<Pipe>()) });
     }

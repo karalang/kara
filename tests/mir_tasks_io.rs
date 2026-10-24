@@ -202,3 +202,68 @@ fn main() {
         "tick 0\ntick 1\ntick 2\nchild exited true\n"
     );
 }
+
+/// A task reading a child's output pipe lets the other tasks run meanwhile:
+/// each reader runs first and waits for output its child prints only once
+/// the writer spawned after it has run, through `read_to_string` (which
+/// waits for the end) and then a `read` loop, one pair at a time so the
+/// lines come in one order.
+#[test]
+fn mir_tasks_a_pipe_read_lets_the_writer_run() {
+    let src = r#"
+fn reader(out: own ChildStdout) {
+    let mut s = String.new();
+    match out.read_to_string(s) {
+        Ok(n) => println(f"read_to_string [{s}] {n}"),
+        Err(_) => println("read_to_string failed"),
+    }
+}
+fn chunked(out: own ChildStdout) {
+    let mut buf: Vec[u8] = vec![0, 0, 0, 0];
+    let mut total = 0;
+    loop {
+        match out.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => total = total + n,
+            Err(_) => break,
+        }
+    }
+    println(f"read {total} bytes");
+}
+fn writer(inp: own ChildStdin, tag: own String, line: own String) {
+    println(f"writing {tag}");
+    match inp.write_all(line.bytes()) {
+        Ok(_) => {}
+        Err(_) => println("write failed"),
+    }
+    let _ = inp.close();
+}
+fn whole(out: own ChildStdout, inp: own ChildStdin) {
+    let mut tg = TaskGroup.new();
+    tg.spawn(|| reader(out));
+    tg.spawn(|| writer(inp, "a", "hi\n"));
+}
+fn in_chunks(out: own ChildStdout, inp: own ChildStdin) {
+    let mut tg = TaskGroup.new();
+    tg.spawn(|| chunked(out));
+    tg.spawn(|| writer(inp, "b", "there\n"));
+}
+fn main() {
+    let a = Command.new("sh").arg("-c").arg("read x; printf \"got $x\"")
+        .stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
+    let b = Command.new("sh").arg("-c").arg("read x; printf \"0123456789 $x\"")
+        .stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
+    let (ao, ai) = (a.stdout().unwrap(), a.stdin().unwrap());
+    let (bo, bi) = (b.stdout().unwrap(), b.stdin().unwrap());
+    whole(ao, ai);
+    in_chunks(bo, bi);
+    let _ = a.wait();
+    let _ = b.wait();
+    println("done");
+}
+"#;
+    assert_eq!(
+        stdout_on_both("pipes", src),
+        "writing a\nread_to_string [got hi] 6\nwriting b\nread 16 bytes\ndone\n"
+    );
+}
