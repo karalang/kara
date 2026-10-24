@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 21 |
+| diagnostics | 22 |
 | false-positive | 19 |
 | missing-feature | 17 |
 | perf | 10 |
@@ -72,7 +72,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 38 |
+| typecheck | 39 |
 | codegen | 22 |
 | interp | 15 |
 | mir | 15 |
@@ -132,7 +132,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-29 | 2026-10-24 | mir | medium | `Map[K, V, H]` / `Set[T, H]` lose their hasher in MIR (IntrinsicTy::Map(K, V)), so `FxBuildHasher` and a user `BuildHasher` are ignored on both v2 backends: every table hashes and walks with the seeded default; 2 tests ignored at M3 | — |
 | B-2026-10-24-31 | 2026-10-24 | parser | low | A reserved keyword (`and`) bound by a `for` loop, or as a match-arm pattern, gets the right "reserved keyword" error and then cascade errors: `Expected expression, found RightBrace` and, for the loop, a false `file contains both top-level statements and an explicit fn main()` that points at a statement inside `main` | — |
 | B-2026-10-24-33 | 2026-10-24 | typecheck | low | A string literal bound with no type (`let mut how = "";`) is a `String`, as design.md §3 says, but using the binding where a `Str` is expected (a `Str` field, a `Str` return, a tuple with a `Str`) reports a bare `expected 'Str', found 'String'` at the use, with no note naming the binding and no fix-it | — |
-| B-2026-10-24-36 | 2026-10-24 | typecheck+mir | low | A `Copy` binding over `VecDeque.front()` takes `*` inconsistently: `karac check` refuses `*w` after `let (_, w) = q.front().unwrap()` (right, per core-semantics §4.6/§5.10) but accepts `*s` after `while let Some((s, _)) = q.front()` and `*a` after `if let Some((a, _)) = q.front()`, and every MIR front end accepts all three | — |
+| B-2026-10-24-36 | 2026-10-24 | typecheck+mir | low | A `Copy` binding destructured from a borrowed value takes `*` inconsistently: `karac check` refuses `*w` after `let (_, w) = q.front().unwrap()` or `let (v, i) = it.next().unwrap()` (right, per core-semantics §4.6/§5.10) but accepts `*s` after `while let Some((s, _)) = q.front()`, `*a` after `if let Some((a, _)) = q.front()` and `*index` after `for (val, index) in queries.iter()`, and every MIR front end accepts all of them | — |
+| B-2026-10-24-37 | 2026-10-24 | typecheck | low | E0517's fix-it for a write through a BARE parameter (`fn f(items: Vec[String]) { items.sort() }`, or through a local bound from it, `let mut s = items; s.sort()`) inserts `mut ` before the parameter's type, giving `items: mut Vec[String]`, which does not parse, so `karac fix` refuses; the message also calls the local `s` "a `ref` parameter". Correct only when the parameter is spelled `ref T` | — |
 
 ### Fixed
 
