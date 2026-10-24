@@ -167,6 +167,7 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(receiver_subs) = self.call_bound_receiver_subs.clone() {
             t = super::inference::substitute_type_params(&t, &receiver_subs);
         }
+        t = self.normalize_enclosing_assoc_eqs(&t);
         let subs: std::collections::HashMap<String, super::types::SubstValue> = name_to_id
             .iter()
             .map(|(n, id)| {
@@ -184,7 +185,34 @@ impl<'a> super::TypeChecker<'a> {
             })
             .collect();
         let t = super::inference::substitute_type_params(&t, &subs);
-        Some(self.resolve_assoc_projections(&t))
+        let t = self.resolve_assoc_projections(&t);
+        Some(self.normalize_enclosing_assoc_eqs(&t))
+    }
+
+    /// `t` with each projection the enclosing function's bounds fix
+    /// (`I.Item` under `I: Iterator[Item = i64]`) replaced by its type, so a
+    /// closure handed to a method reached through `I` takes an `i64`
+    /// (B-2026-10-21-60).
+    pub(super) fn normalize_enclosing_assoc_eqs(&mut self, t: &Type) -> Type {
+        if self.enclosing_assoc_eqs.is_empty() {
+            return t.clone();
+        }
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        let eqs: Vec<((String, String), TypeExpr)> = self
+            .enclosing_assoc_eqs
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mut out = t.clone();
+        for ((param, assoc), te) in eqs {
+            let bound = self.lower_type_expr(&te, &scope);
+            out = super::types::substitute_existential_assoc_bindings(
+                &out,
+                &param,
+                &[(assoc, bound)],
+            );
+        }
+        out
     }
 
     /// Emit the v1 trait-alias stub diagnostic at a use site.

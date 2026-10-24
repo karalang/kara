@@ -12419,3 +12419,29 @@ fn giving_away_a_part_of_a_bare_parameter_names_its_own_fix() {
         "b: own Box2",
     );
 }
+
+/// iterators.md: a chain can be passed down to a generic function. A
+/// method on `it: I` under `I: Iterator[Item = i64]` instantiates its own
+/// type parameters and reads `I.Item` as `i64`, so `fold`, `filter` and
+/// `map` closures check, through an adapter chain too (B-2026-10-21-60).
+#[test]
+fn iterator_methods_on_a_generic_iterator_check() {
+    accepted_and_runs(
+        "generic-fold",
+        "fn total[I: Iterator[Item = i64]](it: own I) -> i64 {\n    it.fold(0, |a, x| a + x)\n}\n\
+         fn main() {\n    let v: Vec[i64] = [1, 2, 3];\n    println(f\"{total(v.into_iter())}\");\n}\n",
+        "6\n",
+    );
+    accepted_and_runs(
+        "generic-chain",
+        "fn tot[I: Iterator[Item = i64]](it: own I) -> i64 {\n    \
+         it.filter(|x| *x > 1).map(|x| x * 2).fold(0, |a, b| a + b)\n}\n\
+         fn main() {\n    let v: Vec[i64] = [1, 2, 3];\n    println(f\"{tot(v.into_iter())}\");\n}\n",
+        "10\n",
+    );
+    accepted(
+        "generic-map-count",
+        "fn tot[I: Iterator[Item = i64]](it: own I) -> i64 {\n    it.map(|x| x + 1).count()\n}\n\
+         fn main() {\n    let v: Vec[i64] = [1, 2, 3];\n    println(f\"{tot(v.into_iter())}\");\n}\n",
+    );
+}

@@ -3000,6 +3000,11 @@ pub struct TypeChecker<'a> {
     /// function-trait bound on the method (`F: MutFn(own Self.Item) -> U`)
     /// is read under.
     pub(super) call_bound_receiver_subs: Option<std::collections::HashMap<String, SubstValue>>,
+    /// The enclosing function's type parameters a trait method's signature
+    /// names through a type-parameter receiver (`Self` = `I`): the call's
+    /// instantiation keeps them as they are rather than minting a variable
+    /// for each (B-2026-10-21-60).
+    pub(super) call_rigid_params: Vec<String>,
     /// Call bounds whose parameter only the context solves, checked at the
     /// end of `check` ([`Self::discharge_deferred_call_bounds`]).
     pub(super) deferred_call_bounds: Vec<DeferredCallBounds>,
@@ -3586,6 +3591,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
             call_bound_receiver_subs: None,
+            call_rigid_params: Vec::new(),
             deferred_call_bounds: Vec::new(),
             dbg_arg_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),

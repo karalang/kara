@@ -3975,6 +3975,21 @@ impl<'a> super::TypeChecker<'a> {
             &mut self.env.next_type_var,
             &mut self.env.next_const_var,
         );
+        // The caller's own parameters a receiver brought into the signature
+        // are not the callee's: they stay themselves, and are not recorded as
+        // the callee's substitution (an impl parameter of the same name, `T`
+        // of `Option.as_ref` called on an `Option[Option[T]]`, would read it).
+        let rigid = std::mem::take(&mut self.call_rigid_params);
+        for name in rigid.iter().cloned() {
+            if let Some(&id) = name_to_id.get(&name) {
+                unify_types(
+                    &Type::TypeVar(id),
+                    &Type::TypeParam(name),
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+            }
+        }
 
         // B-2026-08-05-19 — seed the metavars from the EXPECTED return type
         // BEFORE arguments are solved. Unifying the instantiated return
@@ -4550,7 +4565,16 @@ impl<'a> super::TypeChecker<'a> {
                 solutions.insert(name.clone(), resolved);
             }
         }
-        self.record_call_type_subs(record_subs_for_span, &solutions);
+        if rigid.is_empty() {
+            self.record_call_type_subs(record_subs_for_span, &solutions);
+        } else {
+            let recorded = solutions
+                .iter()
+                .filter(|(n, _)| !rigid.contains(n))
+                .map(|(n, t)| (n.clone(), t.clone()))
+                .collect();
+            self.record_call_type_subs(record_subs_for_span, &recorded);
+        }
 
         // Resolve the return type. Unsolved metavars come back as
         // `TypeParam(originating_name)` so the caller's

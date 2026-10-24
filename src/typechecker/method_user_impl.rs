@@ -1148,6 +1148,17 @@ impl<'a> super::TypeChecker<'a> {
                 // has no turbofish surface to pass along.
                 let mut receiver_subs = recv_subs.clone();
                 receiver_subs.extend(self_subs);
+                // The enclosing function's type parameters the receiver's
+                // type names (`IterFilter[I, F]` inside `fn f[I: Iterator]`)
+                // stay themselves (B-2026-10-21-60).
+                let mut rigid = Vec::new();
+                for v in receiver_subs.values() {
+                    if let SubstValue::Type(t) = v {
+                        super::expr_method_call::collect_type_param_names(t, &mut rigid);
+                    }
+                }
+                rigid.retain(|n| !sig.generic_params.contains(n));
+                self.call_rigid_params = rigid;
                 let saved = self.call_bound_receiver_subs.replace(receiver_subs);
                 let ret = self.check_call_args_with_substitution_full(
                     args,
@@ -1161,6 +1172,7 @@ impl<'a> super::TypeChecker<'a> {
                     span,
                 );
                 self.call_bound_receiver_subs = saved;
+                self.call_rigid_params.clear();
                 ret
             }
             None => {

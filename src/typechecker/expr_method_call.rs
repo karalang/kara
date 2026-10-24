@@ -700,26 +700,39 @@ impl<'a> super::TypeChecker<'a> {
                 // — without this, `c.sum()` under `C: Reduce[i64]` typed
                 // as the raw TypeParam `T` (S6a, expected-i64-found-T).
                 let trait_subs = self.trait_bound_arg_subs(&bound);
-                let ret =
-                    self.dispatch_trait_method_as(self_ty, &trait_method, &trait_subs, args, span);
-                // `I.Item` in the result names the type a `where I.Item = T`
-                // (or an `I: Iterator[Item = T]` bound) fixes, so `next()`
-                // under that bound is an `Option[T]`, not an abstract
-                // projection nothing can add or compare.
+                // `I.Item` names the type a `where I.Item = T` (or an
+                // `I: Iterator[Item = T]` bound) fixes, so `next()` under
+                // that bound is an `Option[T]`, not an abstract projection
+                // nothing can add or compare, and a closure argument of
+                // `fold` or `map` takes a `T` (B-2026-10-21-60).
                 let eqs: Vec<(String, crate::ast::TypeExpr)> = self
                     .enclosing_assoc_eqs
                     .iter()
                     .filter(|((p, _), _)| p == type_param_name)
                     .map(|((_, a), te)| (a.clone(), te.clone()))
                     .collect();
-                if eqs.is_empty() {
-                    return ret;
-                }
                 let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
                 let bindings: Vec<(String, Type)> = eqs
                     .iter()
                     .map(|(a, te)| (a.clone(), self.lower_type_expr(te, &scope)))
                     .collect();
+                let trait_name = bound.path.last().cloned().unwrap_or_default();
+                let ret = self.dispatch_trait_method_on(
+                    self_ty,
+                    &trait_method,
+                    &trait_subs,
+                    None,
+                    Some(BoundReceiver {
+                        key: type_param_name,
+                        trait_name: &trait_name,
+                        bindings: &bindings,
+                    }),
+                    args,
+                    span,
+                );
+                if bindings.is_empty() {
+                    return ret;
+                }
                 substitute_existential_assoc_bindings(&ret, type_param_name, &bindings)
             }
             _ => {
@@ -827,6 +840,7 @@ impl<'a> super::TypeChecker<'a> {
                 &m,
                 &[],
                 Some(receiver),
+                None,
                 args,
                 span,
             );
@@ -1141,7 +1155,7 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        self.dispatch_trait_method_on(self_ty, method, trait_subs, None, args, span)
+        self.dispatch_trait_method_on(self_ty, method, trait_subs, None, None, args, span)
     }
 
     /// [`Self::dispatch_trait_method_as`], where the receiver may be an
@@ -1150,17 +1164,19 @@ impl<'a> super::TypeChecker<'a> {
     /// parameters or a where clause has them solved and checked as on a
     /// named receiver: `adder(1).collect()`, `adder(1).map(|x| x + 1)`
     /// (B-2026-10-20-35).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn dispatch_trait_method_on(
         &mut self,
         self_ty: Type,
         method: &crate::ast::TraitMethod,
         trait_subs: &[(String, Type)],
         existential: Option<&Type>,
+        bound_receiver: Option<BoundReceiver<'_>>,
         args: &[CallArg],
         span: &Span,
     ) -> Type {
         let mut subs: HashMap<String, SubstValue> = HashMap::new();
-        subs.insert("Self".to_string(), SubstValue::Type(self_ty));
+        subs.insert("Self".to_string(), SubstValue::Type(self_ty.clone()));
         for (name, ty) in trait_subs {
             subs.insert(name.clone(), SubstValue::Type(ty.clone()));
         }
@@ -1174,13 +1190,33 @@ impl<'a> super::TypeChecker<'a> {
             scope.extend(gp.params.iter().map(|p| p.name.clone()));
         }
 
-        let (ex_trait, ex_bindings) = match existential {
-            Some(Type::Existential {
-                trait_name,
-                assoc_bindings,
-                ..
-            }) => (trait_name.clone(), assoc_bindings.clone()),
-            _ => (String::new(), Vec::new()),
+        // The receiver whose associated types the signature names: an
+        // `impl Trait` value's inline bindings, or a type parameter's
+        // `I: Iterator[Item = i64]` bound (B-2026-10-21-60), where `Self`
+        // stands for the parameter itself.
+        let (ex_trait, ex_bindings, ex_self, iterator) = match (existential, bound_receiver) {
+            (
+                Some(
+                    ex @ Type::Existential {
+                        trait_name,
+                        assoc_bindings,
+                        ..
+                    },
+                ),
+                _,
+            ) => (
+                trait_name.clone(),
+                assoc_bindings.clone(),
+                Some(ex.clone()),
+                trait_name == "Iterator",
+            ),
+            (_, Some(b)) => (
+                b.key.to_string(),
+                b.bindings.to_vec(),
+                Some(self_ty),
+                b.trait_name == "Iterator",
+            ),
+            _ => (String::new(), Vec::new(), None, false),
         };
         let bind = |t: Type| substitute_existential_assoc_bindings(&t, &ex_trait, &ex_bindings);
         let mut param_types: Vec<Type> = method
@@ -1198,7 +1234,7 @@ impl<'a> super::TypeChecker<'a> {
             .flat_map(|gp| gp.params.iter().map(|p| p.name.clone()))
             .collect();
         if let Some(ex) =
-            existential.filter(|_| !generic_names.is_empty() || method.where_clause.is_some())
+            ex_self.filter(|_| !generic_names.is_empty() || method.where_clause.is_some())
         {
             let mut ret = method
                 .return_type
@@ -1211,7 +1247,7 @@ impl<'a> super::TypeChecker<'a> {
             let mut generic_names = generic_names;
             // `sum`, `product`, `reduce`, `collect` and `cloned` read their
             // items as values, as on a named receiver (iterators.md).
-            if ex_trait == "Iterator"
+            if iterator
                 && generic_names.iter().any(|g| g == "ItemV")
                 && matches!(
                     method.name.as_str(),
@@ -1246,6 +1282,15 @@ impl<'a> super::TypeChecker<'a> {
                 &method.where_clause,
             );
             let saved = self.call_bound_receiver_subs.replace(receiver);
+            if bound_receiver.is_some() {
+                let mut rigid = Vec::new();
+                collect_type_param_names(&ex, &mut rigid);
+                for (_, t) in trait_subs {
+                    collect_type_param_names(t, &mut rigid);
+                }
+                rigid.retain(|n| !generic_names.contains(n));
+                self.call_rigid_params = rigid;
+            }
             let ret = self.check_call_args_with_substitution_full(
                 args,
                 &param_types,
@@ -1258,6 +1303,7 @@ impl<'a> super::TypeChecker<'a> {
                 span,
             );
             self.call_bound_receiver_subs = saved;
+            self.call_rigid_params.clear();
             return ret;
         }
 
@@ -5790,4 +5836,29 @@ fn append_place_text(e: &Expr) -> Option<String> {
         ExprKind::TupleIndex { object, index } => format!("{}.{index}", append_place_text(object)?),
         _ => return None,
     })
+}
+
+/// A type-parameter receiver of a trait method: its name, as projections in
+/// the signature spell it (`I` in `I.Item`), the bound trait the method comes
+/// from, and the associated types its bounds fix.
+#[derive(Clone, Copy)]
+pub(super) struct BoundReceiver<'a> {
+    pub(super) key: &'a str,
+    pub(super) trait_name: &'a str,
+    pub(super) bindings: &'a [(String, Type)],
+}
+
+/// The type parameters `ty` names, outermost first.
+pub(super) fn collect_type_param_names(ty: &Type, out: &mut Vec<String>) {
+    if let Type::TypeParam(n) = ty {
+        if !out.contains(n) {
+            out.push(n.clone());
+        }
+        return;
+    }
+    if let Type::Named { args, .. } = ty {
+        for a in args {
+            collect_type_param_names(a, out);
+        }
+    }
 }
