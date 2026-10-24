@@ -1,0 +1,1038 @@
+> stmt a,b 'SELECT * FROM t WHERE a = :a AND b = :b'
+    'SELECT * FROM t WHERE a = $1 AND b = $2'
+    vals ('a', 'b')
+> stmt a 'SELECT :a, :a, :a'
+    'SELECT $1, $1, $1'
+    vals ('a',)
+> stmt a,b 'SELECT :b, :a, :b'
+    'SELECT $1, $2, $1'
+    vals ('b', 'a')
+> stmt x 'SELECT x::text, :x'
+    'SELECT x::text, $1'
+    vals ('x',)
+> stmt v 'UPDATE t SET v := :v'
+    'UPDATE t SET v := $1'
+    vals ('v',)
+> stmt - 'SELECT \':notaparam\', "col:name"'
+    'SELECT \':notaparam\', "col:name"'
+    vals ()
+> stmt q "SELECT E'it\\'s :q', :q"
+    "SELECT E'it\\'s :q', $1"
+    vals ('q',)
+> stmt q "SELECT 'it''s :q', :q"
+    "SELECT 'it''s :q', $1"
+    vals ('q',)
+> stmt z 'SELECT $$ :z $$, :z'
+    'SELECT $$ :z $$, $1'
+    vals ('z',)
+> stmt y 'SELECT 1 -- :y is a comment\n, :y'
+    'SELECT 1 -- :y is a comment\n, $1'
+    vals ('y',)
+> stmt a_1,B2 'SELECT :a_1+:B2'
+    'SELECT $1+$2'
+    vals ('a_1', 'B2')
+> stmt a 'SELECT :a'
+    'SELECT $1'
+    vals ('a',)
+> stmt a 'SELECT :a)'
+    'SELECT $1)'
+    vals ('a',)
+> stmt - 'SELECT :types'
+    error InterfaceError: The name 'types' can't be used as a placeholder because it's used for another purpose.
+> stmt - 'SELECT :stream'
+    error InterfaceError: The name 'stream' can't be used as a placeholder because it's used for another purpose.
+> stmt a 'SELECT :a, :b'
+    'SELECT $1, $2'
+    error InterfaceError: There's a placeholder 'b' in the query, but no matching keyword argument.
+> stmt - 'SELECT 1'
+    'SELECT 1'
+    vals ()
+> stmt e "SELECT e':e', :e"
+    "SELECT e':e', $1"
+    vals ('e',)
+> stmt w "SELECT 'a':w"
+    "SELECT 'a'$1"
+    vals ('w',)
+> stmt - 'SELECT $1, ::int'
+    'SELECT $1, ::int'
+    vals ()
+> stmt t "SELECT '-' || :t"
+    "SELECT '-' || $1"
+    vals ('t',)
+> stmt t 'SELECT 2-:t'
+    'SELECT 2-$1'
+    vals ('t',)
+> stmt p 'SELECT :p\n'
+    'SELECT $1\n'
+    vals ('p',)
+> stmt p 'SELECT x FROM y WHERE z = :p;'
+    'SELECT x FROM y WHERE z = $1;'
+    vals ('p',)
+> style qmark a,b 'SELECT * FROM t WHERE a = ? AND b = ?'
+    ('SELECT * FROM t WHERE a = $1 AND b = $2', ('a', 'b'))
+> style qmark a "SELECT '?' , ?"
+    ("SELECT '?' , $1", ('a',))
+> style numeric a,b 'SELECT :1, :2, :1'
+    ('SELECT $1, $2, $1', ('a', 'b'))
+> style numeric - 'SELECT x::int, a:=1'
+    ('SELECT x::int, a:=1', ())
+> style named a,b 'SELECT :a, :b, :a'
+    ('SELECT $1, $2, $1', ('a', 'b'))
+> style named a 'SELECT :a, :b'
+    error KeyError: 'b'
+> style format a,b 'SELECT %s, %s'
+    ('SELECT $1, $2', ('a', 'b'))
+> style format a "SELECT '%s', %s, 100%%"
+    ("SELECT '%s', $1, 100%", ('a',))
+> style format a 'SELECT %d'
+    error InterfaceError: Only %s and %% are supported in the query.
+> style pyformat a,b 'SELECT %(a)s, %(b)s, %(a)s'
+    ('SELECT $1, $2, $1', ('a', 'b'))
+> style pyformat a 'SELECT %(a)s, %s'
+    ('SELECT $1, $1', {'a': 'a'})
+> style pyformat a 'SELECT %s, %(a)s'
+    error InterfaceError: Only %s and %% are supported in the query.
+> style pyformat a 'SELECT %(a)x, %(a)s'
+    error KeyError: 'ax, %a'
+> style pyformat a 'SELECT 50%% off, %(a)s'
+    error InterfaceError: Only %s and %% are supported in the query.
+> style qmark a 'SELECT "?", E\'\\\'?\', $$?$$, ?'
+    ('SELECT "?", E\'\\\'?\', $$?$$, $1', ('a',))
+> style qmark a 'SELECT 1 -- ?\n, ?'
+    ('SELECT 1 -- ?\n, $1', ('a',))
+> style bogus a 'SELECT ?, :a'
+    ('SELECT ?, :a', ())
+> style named a 'SELECT :a::text'
+    ('SELECT $1::text', ('a',))
+> ident 'users'
+    'users'
+> ident 'Users'
+    'Users'
+> ident 'user id'
+    '"user id"'
+> ident '_hidden'
+    '"_hidden"'
+> ident '1st'
+    '"1st"'
+> ident 'a$b'
+    'a$b'
+> ident 'quote"d'
+    '"quote""d"'
+> ident 'caf\xe9'
+    'café'
+> ident 'ok_2'
+    'ok_2'
+> ident ''
+    error InterfaceError: identifier must be > 0 characters in length
+> ident 5
+    error InterfaceError: identifier must be a str
+> ident 'nul\x00'
+    error InterfaceError: identifier cannot contain the code zero character
+> ident 'select'
+    'select'
+> literal None
+    'NULL'
+> literal True
+    'TRUE'
+> literal False
+    'FALSE'
+> literal 42
+    '42'
+> literal -1.5
+    '-1.5'
+> literal Decimal('3.14')
+    '3.14'
+> literal b'\xde\xad'
+    "X'dead'"
+> literal "O'Reilly"
+    "'O''Reilly'"
+> literal 'plain'
+    "'plain'"
+> literal datetime(2024, 6, 1, 12, 0, 0, 0)
+    "'2024-06-01T12:00:00'"
+> literal datetime(2024, 6, 1, 12, 0, 0, 0, tz=7200)
+    "'2024-06-01T10:00:00+00:00'"
+> literal date(2024, 6, 1)
+    "'2024-06-01'"
+> literal time(12, 0, 0, 5)
+    "'12:00:00.000005'"
+> literal timedelta(1, 2, 3)
+    "'1 days 2 seconds 3 microseconds'"
+> literal ['a', "b'c", None]
+    "'{a,b'c,NULL}'"
+> literal [[1], [2]]
+    "'{{1},{2}}'"
+> literal UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+    "'6ba7b810-9dad-11d1-80b4-00c04fd430c8'"
+> literal IPv4Address('10.0.0.1')
+    "'10.0.0.1'"
+> literal {'k': "it's"}
+    '\'{\'\'k\'\': "it\'\'s"}\''
+> literal (1, 'two')
+    "'(1, ''two'')'"
+> literal Range(1, 2, '[)')
+    "'[1,2)'"
+> literal PGInterval(days=1)
+    "'1 days'"
+> out None
+    None
+> out True
+    'true'
+> out False
+    'false'
+> out 0
+    '0'
+> out -17
+    '-17'
+> out 2.5
+    '2.5'
+> out 1e+300
+    '1e+300'
+> out -0.0
+    '-0.0'
+> out float('inf')
+    'inf'
+> out float('nan')
+    'nan'
+> out 'plain'
+    'plain'
+> out "it's"
+    "it's"
+> out ''
+    ''
+> out b''
+    '\\x'
+> out b'\x00\x01\xfe'
+    '\\x0001fe'
+> out bytearray(b'ab')
+    '\\x6162'
+> out Decimal('12.50')
+    '12.50'
+> out Decimal('-0.001')
+    '-0.001'
+> out Decimal('NaN')
+    'NaN'
+> out date(2024, 2, 29)
+    '2024-02-29'
+> out date(1, 1, 1)
+    '0001-01-01'
+> out time(23, 59, 59, 999999)
+    '23:59:59.999999'
+> out time(7, 5)
+    '07:05:00'
+> out datetime(2024, 2, 29, 23, 30, 0, 0)
+    '2024-02-29T23:30:00'
+> out datetime(2024, 2, 29, 23, 30, 0, 250000, tz=-3600)
+    '2024-03-01T00:30:00.250000+00:00'
+> out datetime(2024, 3, 1, 0, 15, 0, 0, tz=19800)
+    '2024-02-29T18:45:00+00:00'
+> out datetime(1999, 12, 31, 23, 59, 59, 999999, tz=0)
+    '1999-12-31T23:59:59.999999+00:00'
+> out timedelta(0, 0, 0)
+    '0 days 0 seconds 0 microseconds'
+> out timedelta(-1, 86399, 999999)
+    '-1 days 86399 seconds 999999 microseconds'
+> out timedelta(400, 3600, 1)
+    '400 days 3600 seconds 1 microseconds'
+> out PGInterval(years=1, months=2)
+    'None days None seconds None microseconds'
+> out PGInterval(weeks=3, hours=-4, seconds=1.5)
+    'None days 1.5 seconds None microseconds'
+> out UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+    '6ba7b810-9dad-11d1-80b4-00c04fd430c8'
+> out IPv4Address('127.0.0.1')
+    '127.0.0.1'
+> out IPv4Network('192.168.0.0/24')
+    '192.168.0.0/24'
+> out IPv6Address('2001:db8::1')
+    '2001:db8::1'
+> out IPv6Network('fe80::/10')
+    'fe80::/10'
+> out IPv6Address('0:0:0:0:0:0:0:0')
+    '::'
+> out IPv6Address('1:0:0:2:0:0:0:3')
+    '1:0:0:2::3'
+> out []
+    '{}'
+> out [1, 2, 3]
+    '{1,2,3}'
+> out [[1, 2], [3, None]]
+    '{{1,2},{3,NULL}}'
+> out ['x', 'y z', 'a,b', 'q"', 'back\\slash', '{', 'NULL', '']
+    '{x,"y z","a,b","q\\"","back\\\\slash","{","NULL",""}'
+> out [True, 2.5, Decimal('1.0'), date(2024, 1, 2)]
+    '{true,2.5,1.0,2024-01-02}'
+> out [b'\x01', {'k': 'v'}, (1, 2)]
+    '{"\\\\x01","{\\"k\\": \\"v\\"}","(1,2)"}'
+> out [' lead', 'tab\there', 'nl\n']
+    '{" lead","tab\there","nl\n"}'
+> out (1, 'a', None)
+    '(1,a,)'
+> out (None, None)
+    '(,)'
+> out ((1, 2), [3, 4])
+    '((1,2),{3,4})'
+> out ('x y', b'\xff')
+    '("x y","\\\\xff")'
+> out {}
+    '{}'
+> out {'a': 1, 'b': [True, None, 2.5], 'c': {'d': 'e'}}
+    '{"a": 1, "b": [true, null, 2.5], "c": {"d": "e"}}'
+> out {'u': 'caf\xe9', 'q': 'say "hi"'}
+    '{"u": "caf\\u00e9", "q": "say \\"hi\\""}'
+> out {'n': float('inf')}
+    '{"n": Infinity}'
+> out Range(1, 5, '[)')
+    '[1,5)'
+> out Range(None, date(2024, 1, 1), '(]')
+    '(,2024-01-01]'
+> out Range(Decimal('1.5'), None, '[)')
+    '[1.5,)'
+> out Range(is_empty=True)
+    'empty'
+> out Range(datetime(2024, 1, 1, 0, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0, 0), '[)')
+    '[2024-01-01T00:00:00,2024-01-02T00:00:00)'
+> in 23 '42'
+    42
+> in 23 ' -7 '
+    -7
+> in 23 '1_000'
+    1000
+> in 23 '4.5'
+    error ValueError: invalid literal for int() with base 10: '4.5'
+> in 23 ''
+    error ValueError: invalid literal for int() with base 10: ''
+> in 20 '+12'
+    12
+> in 21 '0x10'
+    error ValueError: invalid literal for int() with base 10: '0x10'
+> in 701 '3.14159'
+    3.14159
+> in 701 '1e-7'
+    1e-07
+> in 701 '-Infinity'
+    -inf
+> in 701 'NaN'
+    nan
+> in 701 '1e400'
+    inf
+> in 701 'abc'
+    error ValueError: could not convert string to float: 'abc'
+> in 700 '0.1'
+    0.1
+> in 701 '100000000000000000'
+    1e+17
+> in 701 '0.0001'
+    0.0001
+> in 701 '0.00001'
+    1e-05
+> in 1700 '0.10'
+    Decimal('0.10')
+> in 1700 '-123456789012345678901234567890.5'
+    Decimal('-123456789012345678901234567890.5')
+> in 1700 'NaN'
+    Decimal('NaN')
+> in 1700 'Infinity'
+    Decimal('Infinity')
+> in 1700 '1.2.3'
+    error InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+> in 16 't'
+    True
+> in 16 'f'
+    False
+> in 16 'true'
+    False
+> in 17 '\\x00ff10'
+    b'\x00\xff\x10'
+> in 17 '\\x'
+    b''
+> in 17 '\\x0g'
+    error ValueError: non-hexadecimal number found in fromhex() arg at position 1
+> in 17 '\\x0'
+    error ValueError: non-hexadecimal number found in fromhex() arg at position 1
+> in 17 '\\x00 ff'
+    b'\x00\xff'
+> in 1082 '2024-02-29'
+    datetime.date(2024, 2, 29)
+> in 1082 '2023-02-29'
+    '2023-02-29'
+> in 1082 'infinity'
+    'infinity'
+> in 1082 '0044-03-15 BC'
+    '0044-03-15 BC'
+> in 1082 '12345-01-01'
+    '12345-01-01'
+> in 1082 '2024-1-5'
+    datetime.date(2024, 1, 5)
+> in 1083 '08:30:00'
+    datetime.time(8, 30)
+> in 1083 '08:30:00.5'
+    datetime.time(8, 30, 0, 500000)
+> in 1083 '08:30:00.1234567'
+    error ValueError: unconverted data remains: 7
+> in 1083 '24:00:00'
+    error ValueError: time data '24:00:00' does not match format '%H:%M:%S'
+> in 1083 '8:5:3'
+    datetime.time(8, 5, 3)
+> in 1083 '08:30:60'
+    error ValueError: second must be in 0..59
+> in 1114 '2024-02-29 13:45:30'
+    datetime.datetime(2024, 2, 29, 13, 45, 30)
+> in 1114 '2024-02-29 13:45:30.000001'
+    datetime.datetime(2024, 2, 29, 13, 45, 30, 1)
+> in 1114 'infinity'
+    'infinity'
+> in 1114 '-infinity'
+    '-infinity'
+> in 1114 '0044-03-15 12:00:00 BC'
+    warning UnknownTimezoneWarning: tzname BC identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.
+    datetime.datetime(44, 3, 15, 12, 0)
+> in 1114 '10000-01-01 00:00:00'
+    '10000-01-01 00:00:00'
+> in 1184 '2024-02-29 13:45:30+00'
+    datetime.datetime(2024, 2, 29, 13, 45, 30, tzinfo=datetime.timezone.utc)
+> in 1184 '2024-02-29 13:45:30.5-08'
+    datetime.datetime(2024, 2, 29, 13, 45, 30, 500000, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=57600)))
+> in 1184 '2024-02-29 13:45:30+05:30'
+    datetime.datetime(2024, 2, 29, 13, 45, 30, tzinfo=tzoffset(None, 19800))
+> in 1184 '2024-02-29 13:45:30.25-03:30'
+    datetime.datetime(2024, 2, 29, 13, 45, 30, 250000, tzinfo=tzoffset(None, -12600))
+> in 1184 '1900-01-01 00:00:00+00:53:28'
+    '1900-01-01 00:00:00+00:53:28'
+> in 1184 '-infinity'
+    '-infinity'
+> in 1186 '1 day 02:03:04'
+    datetime.timedelta(days=1, seconds=7384)
+> in 1186 '1 year 2 mons 3 days 04:05:06.5'
+    <PGInterval 1 years 2 months 3 days 4 hours 5 minutes 6.5 seconds>
+> in 1186 '-1 days +02:00:00'
+    datetime.timedelta(days=-1, seconds=7200)
+> in 1186 '00:00:00.000001'
+    datetime.timedelta(microseconds=1)
+> in 1186 '@ 1 day 2 hours ago'
+    datetime.timedelta(days=-2, seconds=79200)
+> in 1186 '@ 3 mins 4.5 secs'
+    error KeyError: '4.5'
+> in 1186 'P1Y2M3DT4H5M6.5S'
+    <PGInterval 1 years 2 months 3 days 4 hours 5 minutes 6.5 seconds>
+> in 1186 'P3DT12H'
+    datetime.timedelta(days=3, seconds=43200)
+> in 1186 '1-2'
+    <PGInterval 1 years 2 months>
+> in 1186 '3 4:05:06'
+    datetime.timedelta(days=3, seconds=14706)
+> in 1186 '-1-2 +3 -4:05:06.25'
+    <PGInterval -1 years -2 months 3 days -4 hours -5 minutes -6.25 seconds>
+> in 1186 '2 weeks'
+    <PGInterval 2 weeks>
+> in 1186 '1 millennium 2 centuries 3 decades'
+    <PGInterval 1 millennia 2 centuries 3 decades>
+> in 114 '{"a": 1, "b": [true, false, null], "c": 1.5e3}'
+    {'a': 1, 'b': [True, False, None], 'c': 1500.0}
+> in 3802 '"text"'
+    'text'
+> in 3802 '[1, -2.0, 3e0]'
+    [1, -2.0, 3.0]
+> in 114 '{"esc": "\\u00e9\\n\\"", "neg": -0, "big": 1234567890123456789}'
+    {'esc': 'é\n"', 'neg': 0, 'big': 1234567890123456789}
+> in 114 '{bad}'
+    error JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+> in 114 ''
+    error JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+> in 114 '[1, 2'
+    error JSONDecodeError: Expecting ',' delimiter: line 1 column 6 (char 5)
+> in 114 '{"a" 1}'
+    error JSONDecodeError: Expecting ':' delimiter: line 1 column 6 (char 5)
+> in 114 '1 2'
+    error JSONDecodeError: Extra data: line 1 column 3 (char 2)
+> in 114 'nan'
+    error JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+> in 114 '-Infinity'
+    -inf
+> in 2950 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11'
+    UUID('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')
+> in 2950 '{a0eebc999c0b4ef8bb6d6bb9bd380a11}'
+    UUID('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')
+> in 2950 'not-a-uuid'
+    error ValueError: badly formed hexadecimal UUID string
+> in 869 '10.1.2.3'
+    IPv4Address('10.1.2.3')
+> in 869 '10.1.2.3/8'
+    IPv4Network('10.0.0.0/8')
+> in 869 '::ffff:1.2.3.4'
+    IPv6Address('::ffff:1.2.3.4')
+> in 869 'fe80::1/64'
+    IPv6Network('fe80::/64')
+> in 869 '2001:DB8:0:0:1::1'
+    IPv6Address('2001:db8::1:0:0:1')
+> in 869 '1:2:3:4:5:6:7:8'
+    IPv6Address('1:2:3:4:5:6:7:8')
+> in 869 '300.1.1.1'
+    error ValueError: '300.1.1.1' does not appear to be an IPv4 or IPv6 address
+> in 869 '1::2::3'
+    error ValueError: '1::2::3' does not appear to be an IPv4 or IPv6 address
+> in 650 '192.168.0.0/16'
+    '192.168.0.0/16'
+> in 650 '::/0'
+    '::/0'
+> in 1009 '{one,two,"three four"}'
+    ['one', 'two', 'three four']
+> in 1009 '{"a\\\\b","c\\"d",NULL,"NULL"}'
+    ['a\\b', 'c"d', None, 'NULL']
+> in 1009 '{{a,b},{c,d}}'
+    [['a', 'b'], ['c', 'd']]
+> in 1007 '{1,-2,3}'
+    [1, -2, 3]
+> in 1007 '{NULL,1}'
+    [None, 1]
+> in 1016 '{}'
+    []
+> in 1231 '{1.5,NaN}'
+    [Decimal('1.5'), Decimal('NaN')]
+> in 1000 '{t,f,NULL}'
+    [True, False, None]
+> in 1182 '{2024-01-01,infinity}'
+    [datetime.date(2024, 1, 1), 'infinity']
+> in 199 '{"{\\"a\\": 1}","[2]"}'
+    [{'a': 1}, [2]]
+> in 1022 '{1.5,Infinity}'
+    [1.5, inf]
+> in 1115 '{"2024-01-01 00:00:00"}'
+    [datetime.datetime(2024, 1, 1, 0, 0)]
+> in 2951 '{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}'
+    [UUID('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')]
+> in 1041 '{10.0.0.1,10.0.0.0/8}'
+    [IPv4Address('10.0.0.1'), IPv4Network('10.0.0.0/8')]
+> in 1001 '{"\\\\x00ff"}'
+    [b'\x00\xff']
+> in 3904 '[1,10)'
+    <Range [1,10)>
+> in 3904 'empty'
+    <Range empty>
+> in 3904 '(,5]'
+    <Range (,5]>
+> in 3926 '[-5,)'
+    <Range [-5,)>
+> in 3912 '[2024-01-01,2024-02-01)'
+    <Range [2024-01-01,2024-02-01)>
+> in 3906 '(1.5,2.25]'
+    <Range (1.5,2.25]>
+> in 3908 '["2024-01-01 00:00:00","2024-01-02 12:00:00")'
+    <Range [2024-01-01 00:00:00,2024-01-02 12:00:00)>
+> in 3910 '["2024-01-01 00:00:00+00",)'
+    <Range [2024-01-01 00:00:00+00:00,)>
+> in 4451 '{[1,3),[5,7)}'
+    [<Range [1,3)>, <Range [5,7)>]
+> in 4451 '{}'
+    []
+> in 4535 '{[2024-01-01,2024-01-05)}'
+    [<Range [2024-01-01,2024-01-05)>]
+> in 3905 '{"[1,2)","[3,4)"}'
+    [<Range [1,2)>, <Range [3,4)>]
+> in 600 '(1.5,-2)'
+    (1.5, -2.0)
+> in 600 '(0,1e-5)'
+    (0.0, 1e-05)
+> in 2249 '(1,"a b",)'
+    ('1', 'a b')
+> in 2249 '("x\\"y",,"")'
+    ('x"y', '')
+> in 2249 '()'
+    ()
+> in 22 '1 2 3'
+    [1, 2, 3]
+> in 22 ''
+    []
+> in 790 '$1,000.00'
+    '$1,000.00'
+> in 829 '08:00:2b:01:02:03'
+    '08:00:2b:01:02:03'
+> in 19 'pg_catalog'
+    'pg_catalog'
+> in 1043 'varchar'
+    'varchar'
+> in 1042 'char  '
+    'char  '
+> in 25 'tab\there'
+    'tab\there'
+> in 705 'unknown'
+    'unknown'
+> in 3615 "'fat' & 'rat'"
+    "'fat' & 'rat'"
+> session s01 user='alice' database='shop' application_name='inventory' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00alice\x00database\x00shop\x00application_name\x00inventory\x00\x00'
+    connected
+  op run 'SELECT id, name FROM items'
+    > Q b'SELECT id, name FROM items\x00'
+    rows [[1, 'widget'], [2, None]]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 23, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'id'}, {'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 25, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'name'}]
+    row_count 2
+  op run 'CREATE TABLE t (x int)'
+    > Q b'CREATE TABLE t (x int)\x00'
+    rows None
+    columns None
+    row_count -1
+  op show
+    status b'I' key b'\x00\x00\x10\x92+\x1d\x0f<'
+    parameter_statuses {'server_version': '16.4', 'client_encoding': 'UTF8', 'DateStyle': 'ISO, MDY', 'integer_datetimes': 'on', 'TimeZone': 'UTC'}
+    notices deque([], maxlen=100)
+    notifications deque([], maxlen=100)
+  op close
+    > X b''
+> session s02 user='bob' password='hunter2' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00bob\x00\x00'
+    > p b'hunter2\x00'
+    connected
+  op run 'SELECT 7'
+    > Q b'SELECT 7\x00'
+    rows [[7]]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 23, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'id'}]
+    row_count 1
+  op close
+    > X b''
+> session s03 user='carol' password='s3cr3t' database='crm' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00carol\x00database\x00crm\x00\x00'
+    > p b'md59f2eef04733756a3d43ec275c7750b83\x00'
+    connected
+  op show
+    status None key b'\x00\x00\x03\t\xff\xff\xff\xfb'
+    parameter_statuses {'server_version': '16.4', 'client_encoding': 'UTF8', 'DateStyle': 'ISO, MDY', 'integer_datetimes': 'on', 'TimeZone': 'UTC'}
+    notices deque([], maxlen=100)
+    notifications deque([], maxlen=100)
+  op close
+    > X b''
+> session s04 user='dave' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00dave\x00\x00'
+    > X b''
+    error InterfaceError: server requesting MD5 password authentication, but no password was provided
+> session s05 user='erin' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00erin\x00\x00'
+    > X b''
+    error InterfaceError: server requesting password authentication, but no password was provided
+> session s06 user='frank' password='correct horse battery staple' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00frank\x00\x00'
+    > p b'SCRAM-SHA-256\x00\x00\x00\x00-n,,n=frank,r=5f3a91c2d8e64b07a1c39e2f4d6b8a10'
+    > p b'c=biws,r=5f3a91c2d8e64b07a1c39e2f4d6b8a103rfcNHYJY1ZVvWVs7j,p=LkOuVcEmJz8a38/h1E4hPBs/EPfv8QxmPKccUCvTfng='
+    connected
+  op run 'SELECT sum(price) FROM orders WHERE customer = :c AND placed > :since' c='frank' since=date(2024, 1, 1)
+    > P b'\x00SELECT sum(price) FROM orders WHERE customer = $1 AND placed > $2\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x02\x00\x00\x00\x05frank\x00\x00\x00\n2024-01-01\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows [[Decimal('1234.50')]]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 1700, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'total'}]
+    row_count 1
+  op run 'INSERT INTO log VALUES (:at, :who, :what, :n)' at=datetime(2024, 3, 9, 14, 30, 5, 120) who=None what=b'\x00\xffok' n=12
+    > P b'\x00INSERT INTO log VALUES ($1, $2, $3, $4)\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x04\x00\x00\x00\x1a2024-03-09T14:30:05.000120\xff\xff\xff\xff\x00\x00\x00\n\\x00ff6f6b\x00\x00\x00\x0212\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows None
+    columns None
+    row_count 1
+  op close
+    > X b''
+> session s07 user='grace' password='pa55word' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00grace\x00\x00'
+    > p b'SCRAM-SHA-256\x00\x00\x00\x00-n,,n=grace,r=5f3a91c2d8e64b07a1c39e2f4d6ba8ff'
+    > p b'c=biws,r=5f3a91c2d8e64b07a1c39e2f4d6ba8ff3rfcNHYJY1ZVvWVs7j,p=CR+I9vhPSn3riiV8W4BmOCZk0Ql6lnRUiY9yUjIOVPc='
+    connected
+  op close
+    > X b''
+> session s08 user='heidi' password='letmein' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00heidi\x00\x00'
+    > p b'SCRAM-SHA-1\x00\x00\x00\x00-n,,n=heidi,r=5f3a91c2d8e64b07a1c39e2f4d6bc7ee'
+    > p b'c=biws,r=5f3a91c2d8e64b07a1c39e2f4d6bc7ee3rfcNHYJY1ZVvWVs7j,p=QwtosyPLxG1t2IZMc1enxrWuWm4='
+    connected
+  op close
+    > X b''
+> session s09 user='ivan' password='x' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00ivan\x00\x00'
+    > X b''
+    error ScramException: There are no suitable mechanisms in the list provided: ['SCRAM-SHA-256-PLUS']
+> session s10 user='judy' password='pw' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00judy\x00\x00'
+    > p b'SCRAM-SHA-256\x00\x00\x00\x00,n,,n=judy,r=5f3a91c2d8e64b07a1c39e2f4d6be6dd'
+    > p b'c=biws,r=5f3a91c2d8e64b07a1c39e2f4d6be6dd3rfcNHYJY1ZVvWVs7j,p=WVVuC2kLvH9JfTGfBbncmjjloaPjgLlhUuQrlaFJNzA='
+    > X b''
+    error ScramException: The server signature doesn't match.: other-error
+> session s11 user='ken' password='pw' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00ken\x00\x00'
+    > p b'SCRAM-SHA-256\x00\x00\x00\x00+n,,n=ken,r=5f3a91c2d8e64b07a1c39e2f4d6c05cc'
+    > X b''
+    error ScramException: Client nonce doesn't match.: other-error
+> session s12 user='lena' password='pw' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00lena\x00\x00'
+    > p b'SCRAM-SHA-256\x00\x00\x00\x00,n,,n=lena,r=5f3a91c2d8e64b07a1c39e2f4d6c24bb'
+    > X b''
+    error ScramException: Malformed server first message. Expected the attribute list to be 'rsi' but found 'ri': other-error
+> session s13 user='mallory' password='pw' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00mallory\x00\x00'
+    > p b'SCRAM-SHA-256\x00\x00\x00\x00/n,,n=mallory,r=5f3a91c2d8e64b07a1c39e2f4d6c43aa'
+    > p b'c=biws,r=5f3a91c2d8e64b07a1c39e2f4d6c43aa3rfcNHYJY1ZVvWVs7j,p=dhsRmNXu/+BrHjeQdFxOINKK3draRoJvVCud2ngQGaM='
+    > X b''
+    error ScramException: The server returned the error: invalid-proof
+> session s14 user='nina' password='tab\there' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00nina\x00\x00'
+    > p b'SCRAM-SHA-256\x00\x00\x00\x00,n,,n=nina,r=5f3a91c2d8e64b07a1c39e2f4d6c6299'
+    > X b''
+    error ScramException: control characters forbidden: invalid-encoding
+> session s15 user='oscar' password='nope' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00oscar\x00\x00'
+    > p b'md5f1e2480f8c84193a0995a7b1f66301d3\x00'
+    > X b''
+    error DatabaseError: {'S': 'FATAL', 'V': 'FATAL', 'C': '28P01', 'M': 'password authentication failed for user "oscar"', 'F': 'auth.c', 'L': '323', 'R': 'auth_failed'}
+> session s16 user='peggy' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00peggy\x00\x00'
+    > X b''
+    error InterfaceError: Authentication method 7 not supported by pg8000.
+> session s17 user='quinn' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00quinn\x00\x00'
+    > X b''
+    error InterfaceError: Authentication method 99 not recognized by pg8000.
+> session s18 user=None ssl=False
+    error InterfaceError: The 'user' connection parameter cannot be None
+> session s19 user='rita' database=5 ssl=False
+    error InterfaceError: The parameter database can't be of type <class 'int'>.
+> session s20 user='sam' ssl=None
+    > ssl-request b'\x00\x00\x00\x08\x04\xd2\x16/'
+    > startup b'\x00\x03\x00\x00user\x00sam\x00\x00'
+    connected
+  op close
+    > X b''
+> session s21 user='trent' ssl=True
+    > ssl-request b'\x00\x00\x00\x08\x04\xd2\x16/'
+    error InterfaceError: Server refuses SSL
+> session s22 user='uma' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00uma\x00\x00'
+    connected
+  op run 'SELECT * FROM every_type'
+    > Q b'SELECT * FROM every_type\x00'
+    rows [[-32768, 2147483647, 9223372036854775807, 4294967295, 1.5, -1.25e-08, Decimal('12345.6789'), True, 'plain', 'café', b'\xde\xad\xbe\xef', datetime.date(2024, 2, 29), datetime.time(23, 59, 59, 999999), datetime.datetime(2024, 2, 29, 12, 0), datetime.datetime(2024, 2, 29, 12, 0, tzinfo=datetime.timezone.utc), datetime.timedelta(days=1, seconds=7384), {'a': [1, 2.5, None], 'b': 'x"y'}, UUID('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'), IPv4Address('192.168.10.7'), '10.0.0.0/8', ['a', 'b c', None, 'd"e'], [[1, 2], [3, 4]], <Range [1,10)>, (1.5, -2.0), ('42', 'x y'), '08:00:2b:01:02:03', '$1,234.50', "'fat' & 'rat'"], [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None], [0, -1, -9223372036854775808, 0, nan, inf, Decimal('NaN'), False, '', '', b'', 'infinity', datetime.time(0, 0), 'infinity', '-infinity', datetime.timedelta(0), [], UUID('00000000-0000-0000-0000-000000000000'), IPv6Address('::1'), '2001:db8::/32', [], [], <Range empty>, (0.0, 0.0), (), 'ff:ff:ff:ff:ff:ff', '-$0.01', "'a'"]]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 21, 'type_size': 2, 'type_modifier': -1, 'format': 0, 'name': 'i2'}, {'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 23, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'i4'}, {'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 20, 'type_size': 8, 'type_modifier': -1, 'format': 0, 'name': 'i8'}, {'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 26, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'oid'}, {'table_oid': 16384, 'column_attrnum': 3, 'type_oid': 700, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'f4'}, {'table_oid': 16384, 'column_attrnum': 3, 'type_oid': 701, 'type_size': 8, 'type_modifier': -1, 'format': 0, 'name': 'f8'}, {'table_oid': 16384, 'column_attrnum': 3, 'type_oid': 1700, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'num'}, {'table_oid': 16384, 'column_attrnum': 4, 'type_oid': 16, 'type_size': 1, 'type_modifier': -1, 'format': 0, 'name': 'ok'}, {'table_oid': 16384, 'column_attrnum': 4, 'type_oid': 25, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'txt'}, {'table_oid': 16384, 'column_attrnum': 5, 'type_oid': 1043, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'vc'}, {'table_oid': 16384, 'column_attrnum': 5, 'type_oid': 17, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'bin'}, {'table_oid': 16384, 'column_attrnum': 6, 'type_oid': 1082, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'day'}, {'table_oid': 16384, 'column_attrnum': 0, 'type_oid': 1083, 'type_size': 8, 'type_modifier': -1, 'format': 0, 'name': 'at'}, {'table_oid': 16384, 'column_attrnum': 0, 'type_oid': 1114, 'type_size': 8, 'type_modifier': -1, 'format': 0, 'name': 'ts'}, {'table_oid': 16384, 'column_attrnum': 0, 'type_oid': 1184, 'type_size': 8, 'type_modifier': -1, 'format': 0, 'name': 'tstz'}, {'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 1186, 'type_size': 16, 'type_modifier': -1, 'format': 0, 'name': 'span'}, {'table_oid': 16384, 'column_attrnum': 4, 'type_oid': 3802, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'doc'}, {'table_oid': 16384, 'column_attrnum': 5, 'type_oid': 2950, 'type_size': 16, 'type_modifier': -1, 'format': 0, 'name': 'id'}, {'table_oid': 16384, 'column_attrnum': 5, 'type_oid': 869, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'addr'}, {'table_oid': 16384, 'column_attrnum': 0, 'type_oid': 650, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'net'}, {'table_oid': 16384, 'column_attrnum': 1, 'type_oid': 1009, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'tags'}, {'table_oid': 16384, 'column_attrnum': 3, 'type_oid': 1007, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'nums'}, {'table_oid': 16384, 'column_attrnum': 5, 'type_oid': 3904, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'r'}, {'table_oid': 16384, 'column_attrnum': 4, 'type_oid': 600, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'pt'}, {'table_oid': 16384, 'column_attrnum': 4, 'type_oid': 2249, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'rec'}, {'table_oid': 16384, 'column_attrnum': 5, 'type_oid': 829, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'mac'}, {'table_oid': 16384, 'column_attrnum': 6, 'type_oid': 790, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'cash'}, {'table_oid': 16384, 'column_attrnum': 1, 'type_oid': 3615, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'other'}]
+    row_count 3
+  op close
+    > X b''
+> session s23 user='victor' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00victor\x00\x00'
+    connected
+  op run 'SELECT name FROM people WHERE name = :n' n='Jos\xe9'
+    > P b'\x00SELECT name FROM people WHERE name = $1\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x01\x00\x00\x00\x04Jos\xe9\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows [['José Müller']]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 25, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'name'}]
+    row_count 1
+  op run 'SELECT q'
+    > Q b'SELECT q\x00'
+    rows [['“quoted” €']]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 25, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'q'}]
+    row_count 1
+  op show
+    status b'I' key b'\x00\x00\x10\x92+\x1d\x0f<'
+    parameter_statuses {'client_encoding': 'WIN1252'}
+    notices deque([], maxlen=100)
+    notifications deque([], maxlen=100)
+  op close
+    > X b''
+> session s24 user='walter' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00walter\x00\x00'
+    connected
+  op run 'SELECT * FROM nope'
+    > Q b'SELECT * FROM nope\x00'
+    error DatabaseError: {'S': 'ERROR', 'V': 'ERROR', 'C': '42P01', 'M': 'relation "nope" does not exist', 'P': '15', 'F': 'parse_relation.c', 'L': '1392', 'R': 'parserOpenTable'}
+  op run 'BEGIN'
+    > Q b'BEGIN\x00'
+    rows None
+    columns None
+    row_count -1
+  op run 'SELECT 1/0'
+    > Q b'SELECT 1/0\x00'
+    error DatabaseError: {'S': 'ERROR', 'V': 'ERROR', 'C': '22012', 'M': 'division by zero'}
+  op run 'SELECT 1'
+    > Q b'SELECT 1\x00'
+    error InterfaceError: in failed transaction block
+  op run 'ROLLBACK'
+    > Q b'ROLLBACK\x00'
+    rows None
+    columns None
+    row_count -1
+  op run 'DROP TABLE IF EXISTS t'
+    > Q b'DROP TABLE IF EXISTS t\x00'
+    rows None
+    columns None
+    row_count -1
+  op run 'SELECT 1'
+    > Q b'SELECT 1\x00'
+    rows [[1]]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 23, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'id'}]
+    row_count 1
+  op run ''
+    > Q b'\x00'
+    rows None
+    columns None
+    row_count -1
+  op run 'INSERT INTO t VALUES (1),(2),(3); UPDATE t SET x = x + 1 WHERE x < 3'
+    > Q b'INSERT INTO t VALUES (1),(2),(3); UPDATE t SET x = x + 1 WHERE x < 3\x00'
+    rows None
+    columns None
+    row_count 5
+  op show
+    status b'I' key b'\x00\x00\x10\x92+\x1d\x0f<'
+    parameter_statuses {'server_version': '16.4', 'client_encoding': 'UTF8', 'DateStyle': 'ISO, MDY', 'integer_datetimes': 'on', 'TimeZone': 'UTC', 'application_name': 'nightly'}
+    notices deque([{b'S': b'NOTICE', b'V': b'NOTICE', b'C': b'00000', b'M': b'table "t" does not exist, skipping', b'': b''}], maxlen=100)
+    notifications deque([(9001, 'orders', 'id=17'), (9001, 'orders', '')], maxlen=100)
+  op close
+    > X b''
+> session s25 user='xena' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00xena\x00\x00'
+    connected
+  op prepare p 'SELECT sku, qty FROM stock WHERE qty > :q'
+    > P b'pg8000_statement_0\x00SELECT sku, qty FROM stock WHERE qty > $1\x00\x00\x00'
+    > H b''
+    > D b'Spg8000_statement_0\x00'
+    > H b''
+    > S b''
+    name b'pg8000_statement_0\x00' columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 25, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'sku'}, {'table_oid': 16384, 'column_attrnum': 3, 'type_oid': 23, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'qty'}]
+  op exec p q=3
+    > B b'\x00pg8000_statement_0\x00\x00\x00\x00\x01\x00\x00\x00\x013\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows [['A-1', 4]]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 25, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'sku'}, {'table_oid': 16384, 'column_attrnum': 3, 'type_oid': 23, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'qty'}]
+  op exec p q=100
+    > B b'\x00pg8000_statement_0\x00\x00\x00\x00\x01\x00\x00\x00\x03100\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows []
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 25, 'type_size': -1, 'type_modifier': -1, 'format': 0, 'name': 'sku'}, {'table_oid': 16384, 'column_attrnum': 3, 'type_oid': 23, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'qty'}]
+  op prepare v 'VACUUM'
+    > P b'pg8000_statement_1\x00VACUUM\x00\x00\x00'
+    > H b''
+    > D b'Spg8000_statement_1\x00'
+    > H b''
+    > S b''
+    name b'pg8000_statement_1\x00' columns None
+  op closestmt p
+    > C b'Spg8000_statement_0\x00'
+    > H b''
+    > S b''
+  op prepare u 'UPDATE stock SET seen = :at WHERE sku = :s'
+    > P b'pg8000_statement_0\x00UPDATE stock SET seen = $1 WHERE sku = $2\x00\x00\x00'
+    > H b''
+    > D b'Spg8000_statement_0\x00'
+    > H b''
+    > S b''
+    name b'pg8000_statement_0\x00' columns None
+  op exec u s='A-1' at=datetime(2024, 5, 1, 8, 0, 0, 0, tz=-25200)
+    > B b'\x00pg8000_statement_0\x00\x00\x00\x00\x02\x00\x00\x00\x192024-05-01T15:00:00+00:00\x00\x00\x00\x03A-1\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows None
+    columns None
+  op exec u s='A-2'
+    error InterfaceError: There's a placeholder 'at' in the query, but no matching keyword argument.
+  op close
+    > X b''
+> session s26 user='yuri' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00yuri\x00\x00'
+    connected
+  op run 'COPY fruit TO STDOUT' stream=out_bytes()
+    > P b'\x00COPY fruit TO STDOUT\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x00\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows None
+    columns None
+    row_count 2
+    stream b'1\tapple\n2\tbanana\n'
+  op run 'COPY cafe TO STDOUT' stream=out_text()
+    > P b'\x00COPY cafe TO STDOUT\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x00\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows None
+    columns None
+    row_count 1
+    stream 'café\n'
+  op run 'COPY fruit FROM STDIN' stream=in_lines(['3\tcherry\n', b'4\tdate\n'])
+    > P b'\x00COPY fruit FROM STDIN\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x00\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    > d b'3\tcherry\n'
+    > d b'4\tdate\n'
+    > c b''
+    > S b''
+    rows None
+    columns None
+    row_count 2
+  op run 'COPY notes FROM STDIN' stream=in_bytes(b'a\nb\nc\n')
+    > P b'\x00COPY notes FROM STDIN\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x00\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    > d b'a\nb\nc\n'
+    > c b''
+    > S b''
+    rows None
+    columns None
+    row_count 3
+  op run 'COPY blob FROM STDIN (FORMAT binary)' stream=in_lines(['x'])
+    > P b'\x00COPY blob FROM STDIN (FORMAT binary)\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x00\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    error InterfaceError: The COPY IN stream is binary, but the stream parameter is an iterable with str type items.
+  op close
+    > X b''
+> session s27 user='zed' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00zed\x00\x00'
+    connected
+  op run 'COPY t TO STDOUT'
+    > Q b'COPY t TO STDOUT\x00'
+    error InterfaceError: An output stream is required for the COPY OUT response.
+  op close
+    > X b''
+> session s28 user='amy' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00amy\x00\x00'
+    connected
+  op run 'INSERT INTO t VALUES (:a, :b, :c, :d, :e, :f, :g, :h, :i, :j, :k, :l, :m, :n)' a=True b=-7 c=2.5 d=Decimal('-0.50') e="it's" f=time(9, 15) g=timedelta(2, 30, 5) h=UUID('12345678-1234-5678-1234-567812345678') i=IPv4Network('10.1.0.0/16') j=[1, None, [2, 3]] k=['a b', 'c"d', '', 'NULL'] l={'k': [1, 2], 'z': None} m=(1, 'x y', None) n=Range(1, 10, '[]')
+    > P b'\x00INSERT INTO t VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x0e\x00\x00\x00\x04true\x00\x00\x00\x02-7\x00\x00\x00\x032.5\x00\x00\x00\x05-0.50\x00\x00\x00\x04it\'s\x00\x00\x00\x0809:15:00\x00\x00\x00 2 days 30 seconds 5 microseconds\x00\x00\x00$12345678-1234-5678-1234-567812345678\x00\x00\x00\x0b10.1.0.0/16\x00\x00\x00\x0e{1,NULL,{2,3}}\x00\x00\x00\x18{"a b","c\\"d","","NULL"}\x00\x00\x00\x18{"k": [1, 2], "z": null}\x00\x00\x00\n(1,"x y",)\x00\x00\x00\x06[1,10]\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows None
+    columns None
+    row_count 1
+  op run 'INSERT INTO t VALUES (:a, :b)' a=PGInterval(months=2, days=3) b=datetime(2024, 1, 1, 0, 30, 0, 0, tz=3600) types={'a': 1186, 'b': 1184}
+    > P b'\x00INSERT INTO t VALUES ($1, $2)\x00\x00\x02\x00\x00\x04\xa2\x00\x00\x04\xa0'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x02\x00\x00\x00%3 days None seconds None microseconds\x00\x00\x00\x192023-12-31T23:30:00+00:00\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows None
+    columns None
+    row_count 1
+  op run 'SELECT :x::int + :x' x=1
+    > P b'\x00SELECT $1::int + $1\x00\x00\x00'
+    > H b''
+    > S b''
+    > D b'S\x00'
+    > H b''
+    > S b''
+    > B b'\x00\x00\x00\x00\x00\x01\x00\x00\x00\x011\x00\x00'
+    > H b''
+    > E b'\x00\x00\x00\x00\x00'
+    > H b''
+    > S b''
+    rows [[2]]
+    columns [{'table_oid': 16384, 'column_attrnum': 2, 'type_oid': 23, 'type_size': 4, 'type_modifier': -1, 'format': 0, 'name': 'n'}]
+    row_count 1
+  op run 'SELECT :types' types=1 a=2
+    error InterfaceError: The name 'types' can't be used as a placeholder because it's used for another purpose.
+  op run 'SELECT :missing' other=1
+    error InterfaceError: There's a placeholder 'missing' in the query, but no matching keyword argument.
+  op close
+    > X b''
+> session s29 user='bea' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00bea\x00\x00'
+    connected
+  op run 'SELECT 1'
+    > Q b'SELECT 1\x00'
+    error KeyError: b'W'
+  op close
+    > X b''
+> session s30 user='cal' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00cal\x00\x00'
+    connected
+  op run 'SELECT 1'
+    > Q b'SELECT 1\x00'
+    error InterfaceError: network error
+  op close
+    > X b''
+> session s31 user='dina' ssl=False
+    > startup b'\x00\x03\x00\x00user\x00dina\x00\x00'
+    connected
+  op close
+    > X b''
+  op run 'SELECT 1'
+    error InterfaceError: connection is closed
+  op close
+    error InterfaceError: connection is closed
