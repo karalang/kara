@@ -1,0 +1,840 @@
+// pipeline/thumb_render
+//
+// An image pipeline, the shape of a thumbnail service. It renders four
+// source images (a Mandelbrot set, a Julia set, a plasma and a terrain
+// map), writes each as a PPM file, reads the files back and decodes them,
+// makes a blurred quarter-size thumbnail of each, runs five reports over
+// the images and thumbnails, and composes the thumbnails into a contact
+// sheet it writes as a PNG and checks by decoding it again.
+//
+// The renders, the writes, the reads, the decodes, the thumbnails and the
+// reports are each a group of statements that do not depend on each other
+// (a stmt-par app). The four pastes onto the contact sheet overlap, so they
+// have to run in order.
+
+const WIDTH: i64 = 160;
+const HEIGHT: i64 = 120;
+const FP_SHIFT: i64 = 20;
+const FP: i64 = 1048576;
+const MAXIT: i64 = 96;
+const MASK32: i64 = 4294967295;
+
+struct Image {
+    w: i64,
+    h: i64,
+    px: Vec[i64],
+}
+
+enum ImageError {
+    Bad(String),
+}
+
+impl ImageError {
+    fn describe(ref self) -> String {
+        match self {
+            ImageError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+// ------------------------------------------------------------ rendering
+
+fn escape(cx: i64, cy: i64, zr0: i64, zi0: i64) -> i64 {
+    let mut zr = zr0;
+    let mut zi = zi0;
+    let mut i = 0;
+    while i < MAXIT {
+        let zr2 = (zr * zr) >> FP_SHIFT;
+        let zi2 = (zi * zi) >> FP_SHIFT;
+        if zr2 + zi2 > 4 * FP {
+            break;
+        }
+        zi = ((2 * zr * zi) >> FP_SHIFT) + cy;
+        zr = zr2 - zi2 + cx;
+        i += 1;
+    }
+    i
+}
+
+fn render_mandel() -> Vec[i64] {
+    let mut px: Vec[i64] = Vec.new();
+    for y in 0..HEIGHT {
+        let cy = -1258291 + y * 20971;
+        for x in 0..WIDTH {
+            let cx = -2306867 + x * 20971;
+            let i = escape(cx, cy, 0, 0);
+            if i == MAXIT {
+                px.push(0);
+                px.push(0);
+                px.push(0);
+            } else {
+                px.push((i * 7) % 256);
+                px.push((i * 13 + 60) % 256);
+                px.push(255 - (i * 5) % 256);
+            }
+        }
+    }
+    px
+}
+
+fn render_julia() -> Vec[i64] {
+    let mut px: Vec[i64] = Vec.new();
+    for y in 0..HEIGHT {
+        let zi = -1258291 + y * 20971;
+        for x in 0..WIDTH {
+            let zr = -1677721 + x * 20971;
+            let i = escape(-838861, 163578, zr, zi);
+            if i == MAXIT {
+                px.push(10);
+                px.push(0);
+                px.push(30);
+            } else {
+                px.push((i * 11) % 256);
+                px.push((i * 3) % 256);
+                px.push((i * 17 + 100) % 256);
+            }
+        }
+    }
+    px
+}
+
+// Bhaskara's sine approximation over 256 steps of a turn, scaled to 127.
+fn sine_table() -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    for k in 0..256 {
+        let deg = k * 360 / 256;
+        let neg = deg > 180;
+        let d = if neg { deg - 180 } else { deg };
+        let num = 4 * d * (180 - d);
+        let den = 40500 - d * (180 - d);
+        let s = num * 127 / den;
+        t.push(if neg { -s } else { s });
+    }
+    t
+}
+
+fn isqrt(n: i64) -> i64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+fn render_plasma(t: ref Vec[i64]) -> Vec[i64] {
+    let mut px: Vec[i64] = Vec.new();
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let dx = x - 80;
+            let dy = y - 60;
+            let v = t[(x * 3) % 256] + t[(y * 5) % 256] + t[((x + y) * 2) % 256]
+                + t[(isqrt(dx * dx + dy * dy) * 4) % 256];
+            let idx = (v + 512) / 4;
+            px.push(t[idx % 256] + 128);
+            px.push(t[(idx + 85) % 256] + 128);
+            px.push(t[(idx + 170) % 256] + 128);
+        }
+    }
+    px
+}
+
+fn lattice(ix: i64, iy: i64, seed: i64) -> i64 {
+    let mut h = (ix * 374761393 + iy * 668265263 + seed * 2147483647) & MASK32;
+    h = ((h ^ (h >> 13)) * 461845907) & MASK32;
+    h = h ^ (h >> 16);
+    h & 255
+}
+
+fn noise(x: i64, y: i64, cell: i64, seed: i64) -> i64 {
+    let ix = x / cell;
+    let iy = y / cell;
+    let fx = x % cell;
+    let fy = y % cell;
+    let top = lattice(ix, iy, seed) * (cell - fx) + lattice(ix + 1, iy, seed) * fx;
+    let bot = lattice(ix, iy + 1, seed) * (cell - fx) + lattice(ix + 1, iy + 1, seed) * fx;
+    (top * (cell - fy) + bot * fy) / (cell * cell)
+}
+
+fn render_terrain() -> Vec[i64] {
+    let mut px: Vec[i64] = Vec.new();
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let h = (noise(x, y, 32, 1) * 4 + noise(x, y, 16, 2) * 2 + noise(x, y, 8, 3)) / 7;
+            if h < 90 {
+                px.push(20);
+                px.push(40 + h);
+                px.push(120 + h);
+            } else if h < 105 {
+                px.push(194);
+                px.push(178);
+                px.push(128);
+            } else if h < 160 {
+                px.push(34 + (h - 105));
+                px.push(139 - (h - 105) / 2);
+                px.push(34);
+            } else if h < 210 {
+                let g = 110 + (h - 160) / 2;
+                px.push(g);
+                px.push(g - 10);
+                px.push(g - 20);
+            } else {
+                let s = 240 + (h - 210) / 6;
+                px.push(s);
+                px.push(s);
+                px.push(s);
+            }
+        }
+    }
+    px
+}
+
+// ------------------------------------------------------------ PPM
+
+fn encode_ppm(px: ref Vec[i64], w: i64, h: i64) -> Vec[u8] {
+    let header = f"P6\n{w} {h}\n255\n";
+    let mut out: Vec[u8] = Vec.new();
+    for b in header.bytes() {
+        out.push(b);
+    }
+    for v in px {
+        out.push(*v as u8);
+    }
+    out
+}
+
+fn is_space(b: u8) -> bool {
+    b == 32 or b == 9 or b == 13 or b == 10
+}
+
+fn all_digits(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if c < '0' or c > '9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn decode_ppm(name: ref String, data: ref Vec[u8]) -> Result[Image, ImageError] {
+    // Header: magic, width, height, maxval, separated by whitespace, then
+    // exactly one whitespace byte before the pixels.
+    let mut fields: Vec[String] = Vec.new();
+    let mut pos = 0;
+    while fields.len() < 4 {
+        while pos < data.len() and is_space(data[pos]) {
+            pos += 1;
+        }
+        let start = pos;
+        while pos < data.len() and not is_space(data[pos]) {
+            pos += 1;
+        }
+        if start == pos {
+            return Err(ImageError.Bad(f"{name}: header ends after {fields.len()} fields"));
+        }
+        let mut f = String.new();
+        for i in start..pos {
+            f.push(data[i] as char);
+        }
+        fields.push(f);
+    }
+    if fields[0] != "P6" {
+        return Err(ImageError.Bad(f"{name}: magic is {fields[0]}, not P6"));
+    }
+    for i in 1..4 {
+        if not all_digits(fields[i]) {
+            return Err(ImageError.Bad(f"{name}: {fields[i]} is not a number"));
+        }
+    }
+    let w = i64.parse(fields[1]).unwrap();
+    let h = i64.parse(fields[2]).unwrap();
+    let maxval = i64.parse(fields[3]).unwrap();
+    if maxval != 255 {
+        return Err(ImageError.Bad(f"{name}: maxval {maxval} is not 255"));
+    }
+    pos += 1;
+    let need = w * h * 3;
+    let have = data.len() - pos;
+    if have != need {
+        return Err(ImageError.Bad(f"{name}: {have} pixel bytes, {w}x{h} needs {need}"));
+    }
+    let mut px: Vec[i64] = Vec.new();
+    for i in pos..data.len() {
+        px.push(data[i] as i64);
+    }
+    Ok(Image { w: w, h: h, px: px })
+}
+
+// ------------------------------------------------------------ thumbnails
+
+fn clampi(v: i64, lo: i64, hi: i64) -> i64 {
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
+}
+
+fn blur(px: ref Vec[i64], w: i64, h: i64) -> Vec[i64] {
+    let k = [1, 2, 1];
+    let mut out: Vec[i64] = Vec.new();
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..3 {
+                let mut s = 0;
+                for dy in 0..3 {
+                    let yy = clampi(y + dy - 1, 0, h - 1);
+                    for dx in 0..3 {
+                        let xx = clampi(x + dx - 1, 0, w - 1);
+                        s += px[(yy * w + xx) * 3 + c] * k[dy] * k[dx];
+                    }
+                }
+                out.push((s + 8) / 16);
+            }
+        }
+    }
+    out
+}
+
+fn make_thumb(img: ref Image) -> Image {
+    let w = img.w;
+    let b = blur(img.px, w, img.h);
+    let tw = w / 4;
+    let th = img.h / 4;
+    let mut out: Vec[i64] = Vec.new();
+    for ty in 0..th {
+        for tx in 0..tw {
+            for c in 0..3 {
+                let mut s = 0;
+                for yy in 0..4 {
+                    for xx in 0..4 {
+                        s += b[((ty * 4 + yy) * w + tx * 4 + xx) * 3 + c];
+                    }
+                }
+                out.push((s + 8) / 16);
+            }
+        }
+    }
+    Image { w: tw, h: th, px: out }
+}
+
+// ------------------------------------------------------------ reports
+
+fn luma(r: i64, g: i64, b: i64) -> i64 {
+    (77 * r + 150 * g + 29 * b) >> 8
+}
+
+fn luma_at(px: ref Vec[i64], i: i64) -> i64 {
+    luma(px[i * 3], px[i * 3 + 1], px[i * 3 + 2])
+}
+
+fn histogram(name: ref String, img: ref Image) -> String {
+    let mut buckets = [0, 0, 0, 0, 0, 0, 0, 0];
+    for i in 0..img.w * img.h {
+        buckets[luma_at(img.px, i) >> 5] += 1;
+    }
+    let mut out = f"{name} luma histogram:";
+    for b in buckets {
+        out.push_str(f" {b}");
+    }
+    out
+}
+
+fn channel_stats(name: ref String, img: ref Image) -> String {
+    let n = img.w * img.h;
+    let labels = ["r", "g", "b"];
+    let mut out = f"{name} channels: ";
+    for c in 0..3 {
+        let mut s = 0;
+        let mut sq = 0;
+        for i in 0..n {
+            let v = img.px[i * 3 + c];
+            s += v;
+            sq += v * v;
+        }
+        let mean = s / n;
+        let std = isqrt((sq * n - s * s) / (n * n));
+        if c > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{labels[c]} {mean}+-{std}");
+    }
+    out
+}
+
+fn edge_count(name: ref String, img: ref Image) -> String {
+    let w = img.w;
+    let h = img.h;
+    let mut lum: Vec[i64] = Vec.new();
+    for i in 0..w * h {
+        lum.push(luma_at(img.px, i));
+    }
+    let mut edges = 0;
+    let mut strongest = 0;
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            let up = (y - 1) * w + x;
+            let mid = y * w + x;
+            let down = (y + 1) * w + x;
+            let gx = (lum[up + 1] + 2 * lum[mid + 1] + lum[down + 1])
+                - (lum[up - 1] + 2 * lum[mid - 1] + lum[down - 1]);
+            let gy = (lum[down - 1] + 2 * lum[down] + lum[down + 1])
+                - (lum[up - 1] + 2 * lum[up] + lum[up + 1]);
+            let mag = gx.abs() + gy.abs();
+            if mag > 128 {
+                edges += 1;
+            }
+            if mag > strongest {
+                strongest = mag;
+            }
+        }
+    }
+    f"{name} edges: {edges} of {(w - 2) * (h - 2)}, strongest {strongest}"
+}
+
+fn channel(p: ref (i64, i64, i64), c: i64) -> i64 {
+    if c == 0 {
+        p.0
+    } else if c == 1 {
+        p.1
+    } else {
+        p.2
+    }
+}
+
+fn cmp_pixel(a: ref (i64, i64, i64), b: ref (i64, i64, i64), c: i64) -> Ordering {
+    let ka = [channel(a, c), a.0, a.1, a.2];
+    let kb = [channel(b, c), b.0, b.1, b.2];
+    for i in 0..4 {
+        if ka[i] != kb[i] {
+            return ka[i].cmp(kb[i]);
+        }
+    }
+    Ordering.Equal
+}
+
+fn hex2(v: i64) -> String {
+    f"{v:02x}"
+}
+
+// Median cut down to four colours, splitting the box with the widest
+// channel at its median each time.
+fn palette(name: ref String, thumb: ref Image) -> String {
+    let mut first: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 0..thumb.w * thumb.h {
+        first.push((thumb.px[i * 3], thumb.px[i * 3 + 1], thumb.px[i * 3 + 2]));
+    }
+    let mut boxes: Vec[Vec[(i64, i64, i64)]] = Vec.new();
+    boxes.push(first);
+    while boxes.len() < 4 {
+        let mut best = -1;
+        let mut best_range = 0;
+        let mut best_c = 0;
+        for bi in 0..boxes.len() {
+            for c in 0..3 {
+                let mut lo = 256;
+                let mut hi = -1;
+                for p in boxes[bi] {
+                    let v = channel(p, c);
+                    if v < lo {
+                        lo = v;
+                    }
+                    if v > hi {
+                        hi = v;
+                    }
+                }
+                if hi - lo > best_range {
+                    best = bi;
+                    best_range = hi - lo;
+                    best_c = c;
+                }
+            }
+        }
+        if best < 0 {
+            break;
+        }
+        let mut chosen = boxes.remove(best);
+        chosen.sort_by(|a, b| cmp_pixel(a, b, best_c));
+        let mid = chosen.len() / 2;
+        let upper = chosen[mid..chosen.len()].to_vec();
+        let lower = chosen[0..mid].to_vec();
+        boxes.insert(best, upper);
+        boxes.insert(best, lower);
+    }
+    let mut colors: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for bx in boxes {
+        let n = bx.len();
+        let mut r = 0;
+        let mut g = 0;
+        let mut b = 0;
+        for p in bx {
+            r += p.0;
+            g += p.1;
+            b += p.2;
+        }
+        colors.push((r / n, g / n, b / n, n));
+    }
+    colors.sort_by(|a, b| {
+        let ka = [luma(a.0, a.1, a.2), a.0, a.1, a.2, a.3];
+        let kb = [luma(b.0, b.1, b.2), b.0, b.1, b.2, b.3];
+        let mut ord = Ordering.Equal;
+        for i in 0..5 {
+            if ka[i] != kb[i] {
+                ord = ka[i].cmp(kb[i]);
+                break;
+            }
+        }
+        ord
+    });
+    let mut out = f"{name} palette:";
+    for q in colors {
+        out.push_str(f" #{hex2(q.0)}{hex2(q.1)}{hex2(q.2)}x{q.3}");
+    }
+    out
+}
+
+fn preview(name: ref String, thumb: ref Image) -> String {
+    let ramp: Vec[char] = " .:-=+*#%@".chars().collect();
+    let mut out = f"{name} preview:";
+    let mut y = 0;
+    while y < thumb.h {
+        out.push_str("\n  |");
+        for x in 0..thumb.w {
+            out.push(ramp[luma_at(thumb.px, y * thumb.w + x) * 10 / 256]);
+        }
+        out.push_str("|");
+        y += 2;
+    }
+    out
+}
+
+// ------------------------------------------------------------ PNG
+
+fn crc_table() -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    for n in 0..256 {
+        let mut c = n;
+        for _ in 0..8 {
+            if c & 1 == 1 {
+                c = 3988292384 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+        }
+        t.push(c);
+    }
+    t
+}
+
+fn crc32(t: ref Vec[i64], data: ref Vec[u8], start: i64, end: i64) -> i64 {
+    let mut c = MASK32;
+    for i in start..end {
+        c = t[(c ^ (data[i] as i64)) & 255] ^ (c >> 8);
+    }
+    c ^ MASK32
+}
+
+fn adler32(data: ref Vec[u8]) -> i64 {
+    let mut a = 1;
+    let mut b = 0;
+    for v in data {
+        a = (a + (*v as i64)) % 65521;
+        b = (b + a) % 65521;
+    }
+    b * 65536 + a
+}
+
+fn push32(out: mut ref Vec[u8], v: i64) {
+    out.push(((v >> 24) & 255) as u8);
+    out.push(((v >> 16) & 255) as u8);
+    out.push(((v >> 8) & 255) as u8);
+    out.push((v & 255) as u8);
+}
+
+fn push_chunk(out: mut ref Vec[u8], t: ref Vec[i64], kind: ref String, body: ref Vec[u8]) {
+    push32(mut out, body.len());
+    let mut data: Vec[u8] = Vec.new();
+    for b in kind.bytes() {
+        data.push(b);
+    }
+    for b in body {
+        data.push(*b);
+    }
+    for b in data {
+        out.push(*b);
+    }
+    push32(mut out, crc32(t, data, 0, data.len()));
+}
+
+fn encode_png(t: ref Vec[i64], img: ref Image) -> Vec[u8] {
+    let mut raw: Vec[u8] = Vec.new();
+    for y in 0..img.h {
+        raw.push(0);
+        for i in y * img.w * 3..(y + 1) * img.w * 3 {
+            raw.push(img.px[i] as u8);
+        }
+    }
+    let mut z: Vec[u8] = Vec.new();
+    z.push(120);
+    z.push(1);
+    let mut pos = 0;
+    loop {
+        let n = if raw.len() - pos < 65535 { raw.len() - pos } else { 65535 };
+        let last = pos + n == raw.len();
+        z.push(if last { 1 } else { 0 });
+        z.push((n & 255) as u8);
+        z.push((n >> 8) as u8);
+        z.push(((65535 - n) & 255) as u8);
+        z.push(((65535 - n) >> 8) as u8);
+        for i in pos..pos + n {
+            z.push(raw[i]);
+        }
+        pos += n;
+        if last {
+            break;
+        }
+    }
+    push32(mut z, adler32(raw));
+    let mut ihdr: Vec[u8] = Vec.new();
+    push32(mut ihdr, img.w);
+    push32(mut ihdr, img.h);
+    for b in [8, 2, 0, 0, 0] {
+        ihdr.push(b as u8);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for b in [137, 80, 78, 71, 13, 10, 26, 10] {
+        out.push(b as u8);
+    }
+    push_chunk(mut out, t, "IHDR", ihdr);
+    push_chunk(mut out, t, "IDAT", z);
+    push_chunk(mut out, t, "IEND", Vec.new());
+    out
+}
+
+fn rd32(d: ref Vec[u8], i: i64) -> i64 {
+    ((d[i] as i64) << 24) | ((d[i + 1] as i64) << 16) | ((d[i + 2] as i64) << 8) | (d[i + 3] as i64)
+}
+
+fn decode_png(t: ref Vec[i64], d: ref Vec[u8]) -> Result[(Image, String), ImageError] {
+    let sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    if d.len() < 8 {
+        return Err(ImageError.Bad("png: bad signature".to_string()));
+    }
+    for i in 0..8 {
+        if d[i] as i64 != sig[i] {
+            return Err(ImageError.Bad("png: bad signature".to_string()));
+        }
+    }
+    let mut pos = 8;
+    let mut w = 0;
+    let mut h = 0;
+    let mut z: Vec[u8] = Vec.new();
+    let mut kinds = String.new();
+    while pos < d.len() {
+        let n = rd32(d, pos);
+        let mut kind = String.new();
+        for i in pos + 4..pos + 8 {
+            kind.push(d[i] as char);
+        }
+        let crc = rd32(d, pos + 8 + n);
+        if crc32(t, d, pos + 4, pos + 8 + n) != crc {
+            return Err(ImageError.Bad(f"png: {kind} crc mismatch"));
+        }
+        if kinds.len() > 0 {
+            kinds.push_str(" ");
+        }
+        kinds.push_str(f"{kind}({n})");
+        if kind == "IHDR" {
+            w = rd32(d, pos + 8);
+            h = rd32(d, pos + 12);
+        } else if kind == "IDAT" {
+            for i in pos + 8..pos + 8 + n {
+                z.push(d[i]);
+            }
+        }
+        pos += 12 + n;
+    }
+    let mut raw: Vec[u8] = Vec.new();
+    let mut i = 2;
+    loop {
+        let last = (z[i] & 1) == 1;
+        let n = (z[i + 1] as i64) | ((z[i + 2] as i64) << 8);
+        for j in i + 5..i + 5 + n {
+            raw.push(z[j]);
+        }
+        i += 5 + n;
+        if last {
+            break;
+        }
+    }
+    if rd32(z, i) != adler32(raw) {
+        return Err(ImageError.Bad("png: adler32 mismatch".to_string()));
+    }
+    let mut px: Vec[i64] = Vec.new();
+    for y in 0..h {
+        let row = y * (w * 3 + 1);
+        if raw[row] != 0 {
+            return Err(ImageError.Bad(f"png: row {y} filter {raw[row]}"));
+        }
+        for j in row + 1..row + 1 + w * 3 {
+            px.push(raw[j] as i64);
+        }
+    }
+    Ok((Image { w: w, h: h, px: px }, kinds))
+}
+
+// ------------------------------------------------------------ the sheet
+
+fn paste(sheet: mut ref Image, thumb: ref Image, ox: i64, oy: i64) {
+    for y in 0..thumb.h {
+        for x in 0..thumb.w {
+            for c in 0..3 {
+                let di = ((oy + y) * sheet.w + ox + x) * 3 + c;
+                sheet.px[di] = (sheet.px[di] + thumb.px[(y * thumb.w + x) * 3 + c] * 3) / 4;
+            }
+        }
+    }
+}
+
+fn file_line(name: ref String, t: ref Vec[i64], d: ref Vec[u8]) -> String {
+    f"{name}: {d.len()} bytes, crc32 {crc32(t, d, 0, d.len()):08x}"
+}
+
+fn run() -> Result[(), ImageError] {
+    let tab = sine_table();
+    let tc = crc_table();
+
+    // Four renders, each from nothing but its own constants (the hot group).
+    let mandel = render_mandel();
+    let julia = render_julia();
+    let plasma = render_plasma(tab);
+    let terrain = render_terrain();
+
+    // Four writes, one file per image.
+    let w1 = fs.write_bytes("thumb_mandel.ppm", encode_ppm(mandel, WIDTH, HEIGHT));
+    let w2 = fs.write_bytes("thumb_julia.ppm", encode_ppm(julia, WIDTH, HEIGHT));
+    let w3 = fs.write_bytes("thumb_plasma.ppm", encode_ppm(plasma, WIDTH, HEIGHT));
+    let w4 = fs.write_bytes("thumb_terrain.ppm", encode_ppm(terrain, WIDTH, HEIGHT));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() {
+        return Err(ImageError.Bad("could not write the images".to_string()));
+    }
+
+    // A damaged copy, to show the decoder's error.
+    let whole = match fs.read_bytes("thumb_mandel.ppm") {
+        Ok(b) => b,
+        Err(_) => return Err(ImageError.Bad("could not read thumb_mandel.ppm".to_string())),
+    };
+    if fs.write_bytes("thumb_broken.ppm", whole[0..1000].to_vec()).is_err() {
+        return Err(ImageError.Bad("could not write thumb_broken.ppm".to_string()));
+    }
+
+    // Four reads, then four decodes.
+    let r1 = fs.read_bytes("thumb_mandel.ppm");
+    let r2 = fs.read_bytes("thumb_julia.ppm");
+    let r3 = fs.read_bytes("thumb_plasma.ppm");
+    let r4 = fs.read_bytes("thumb_terrain.ppm");
+    let (d1, d2, d3, d4) = match (r1, r2, r3, r4) {
+        (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
+        _ => return Err(ImageError.Bad("could not read the images".to_string())),
+    };
+    println(file_line("mandel", tc, d1));
+    println(file_line("julia", tc, d2));
+    println(file_line("plasma", tc, d3));
+    println(file_line("terrain", tc, d4));
+    let m = decode_ppm("mandel", d1)?;
+    let j = decode_ppm("julia", d2)?;
+    let p = decode_ppm("plasma", d3)?;
+    let t = decode_ppm("terrain", d4)?;
+    match fs.read_bytes("thumb_broken.ppm") {
+        Ok(b) => match decode_ppm("broken", b) {
+            Ok(_) => println("broken: decoded"),
+            Err(e) => println(e.describe()),
+        },
+        Err(_) => return Err(ImageError.Bad("could not read thumb_broken.ppm".to_string())),
+    }
+
+    // Four thumbnails.
+    let tm = make_thumb(m);
+    let tj = make_thumb(j);
+    let tp = make_thumb(p);
+    let tt = make_thumb(t);
+
+    // Reports that only read the images and thumbnails.
+    let h1 = histogram("mandel", m);
+    let h2 = histogram("julia", j);
+    let h3 = histogram("plasma", p);
+    let h4 = histogram("terrain", t);
+    let s1 = channel_stats("mandel", m);
+    let s2 = channel_stats("julia", j);
+    let s3 = channel_stats("plasma", p);
+    let s4 = channel_stats("terrain", t);
+    let e1 = edge_count("mandel", m);
+    let e2 = edge_count("julia", j);
+    let e3 = edge_count("plasma", p);
+    let e4 = edge_count("terrain", t);
+    let c1 = palette("mandel", tm);
+    let c2 = palette("julia", tj);
+    let c3 = palette("plasma", tp);
+    let c4 = palette("terrain", tt);
+    let v1 = preview("mandel", tm);
+    let v2 = preview("julia", tj);
+    let v3 = preview("plasma", tp);
+    let v4 = preview("terrain", tt);
+    for line in [h1, h2, h3, h4, s1, s2, s3, s4, e1, e2, e3, e4, c1, c2, c3, c4, v1, v2, v3, v4] {
+        println(line);
+    }
+
+    // The contact sheet: the thumbnails overlap, so the pastes run in order.
+    let mut px: Vec[i64] = Vec.new();
+    for _ in 0..76 * 56 * 3 {
+        px.push(16);
+    }
+    let mut sheet = Image { w: 76, h: 56, px: px };
+    paste(mut sheet, tm, 0, 0);
+    paste(mut sheet, tj, 36, 0);
+    paste(mut sheet, tp, 0, 26);
+    paste(mut sheet, tt, 36, 26);
+    if fs.write_bytes("contact_sheet.png", encode_png(tc, sheet)).is_err() {
+        return Err(ImageError.Bad("could not write contact_sheet.png".to_string()));
+    }
+    let back = match fs.read_bytes("contact_sheet.png") {
+        Ok(b) => b,
+        Err(_) => return Err(ImageError.Bad("could not read contact_sheet.png".to_string())),
+    };
+    println(file_line("contact_sheet.png", tc, back));
+    match decode_png(tc, back) {
+        Ok((img, kinds)) => {
+            let same = img.w == sheet.w and img.h == sheet.h and img.px == sheet.px;
+            let verdict = if same { "match" } else { "differ" };
+            println(f"  chunks {kinds}, {img.w}x{img.h}, pixels {verdict}");
+        }
+        Err(e) => println(f"  {e.describe()}"),
+    }
+    let mut bad = back.clone();
+    bad[40] = bad[40] ^ 16;
+    match decode_png(tc, bad) {
+        Ok(_) => println("  damaged copy: decoded"),
+        Err(e) => println(f"  damaged copy: {e.describe()}"),
+    }
+
+    for path in ["thumb_mandel.ppm", "thumb_julia.ppm", "thumb_plasma.ppm", "thumb_terrain.ppm", "thumb_broken.ppm", "contact_sheet.png"] {
+        let _ = fs.remove_file(path);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"thumb_render failed: {e.describe()}"),
+    }
+}

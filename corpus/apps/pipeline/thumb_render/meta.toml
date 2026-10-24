@@ -1,0 +1,11 @@
+source = "kara-katas/apps/pipeline/thumb_render/thumb_render.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "c4d20f89"
+note = "stmt-par groups (source.orig.kara lines): L717-L720 four renders, the hot group; L723-L726 four fs.write_bytes calls; L741-L744 four fs.read_bytes calls; L753-L756 four decode_ppm calls, each with ?; L766-L769 four make_thumb calls; L772-L791 twenty read-only reports. L802-L805 four paste calls take mut ref sheet and overlap, so they must stay in order"
