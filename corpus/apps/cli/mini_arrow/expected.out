@@ -1,0 +1,1541 @@
+== 1 ctor plain
+<Arrow [2013-05-05T12:30:45+00:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2013, week=18, weekday=7) week=18 quarter=2 ts=1367757045.0 int_ts=1367757045 utcoffset=datetime.timedelta(0) dst=datetime.timedelta(0) tzname='UTC' fold=0 ambiguous=False imaginary=False ordinal=734993
+== 2 ctor micro
+<Arrow [2024-02-29T23:59:59.999999+05:30]>
+weekday=3 isoweekday=4 datetime.IsoCalendarDate(year=2024, week=9, weekday=4) week=9 quarter=1 ts=1709231399.999999 int_ts=1709231399 utcoffset=datetime.timedelta(seconds=19800) dst=datetime.timedelta(0) tzname=None fold=0 ambiguous=False imaginary=False ordinal=738945
+== 3 ctor named zone
+<Arrow [2024-07-04T09:00:00-04:00]>
+weekday=3 isoweekday=4 datetime.IsoCalendarDate(year=2024, week=27, weekday=4) week=27 quarter=3 ts=1720098000.0 int_ts=1720098000 utcoffset=datetime.timedelta(days=-1, seconds=72000) dst=datetime.timedelta(seconds=3600) tzname='EDT' fold=0 ambiguous=False imaginary=False ordinal=739071
+tzfile('data/zones/America/New_York')
+== 4 ctor utc names
+<Arrow [2024-01-01T00:00:00+00:00]>
+tzutc()
+== 5 ctor Z
+tzutc()
+== 6 ctor local
+<Arrow [2024-01-01T00:00:00+00:00]>
+tzlocal()
+weekday=0 isoweekday=1 datetime.IsoCalendarDate(year=2024, week=1, weekday=1) week=1 quarter=1 ts=1704067200.0 int_ts=1704067200 utcoffset=datetime.timedelta(0) dst=datetime.timedelta(0) tzname='UTC' fold=0 ambiguous=False imaginary=False ordinal=738886
+== 7 ctor offset forms
+<Arrow [2024-01-01T00:00:00-08:00]>
+tzoffset(None, -28800)
+== 8 ctor offset hours only
+<Arrow [2024-01-01T00:00:00+03:00]>
+tzoffset(None, 10800)
+== 9 ctor offset (UTC
+<Arrow [2024-01-01T00:00:00+09:30]>
+tzoffset(None, 34200)
+== 10 ctor bad zone
+ParserError: Could not parse timezone expression 'Mars/Olympus_Mons'.
+== 11 ctor bad day
+ValueError: day is out of range for month
+== 12 ctor bad month
+ValueError: month must be in 1..12
+== 13 ctor bad hour
+ValueError: hour must be in 0..23
+== 14 ctor year 0
+ValueError: year 0 is out of range
+== 15 ctor fold 1 ambiguous
+<Arrow [2024-11-03T01:30:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730615400.0 int_ts=1730615400 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=1 ambiguous=True imaginary=False ordinal=739193
+== 16 ctor fold 0 ambiguous
+<Arrow [2024-11-03T01:30:00-04:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730611800.0 int_ts=1730611800 utcoffset=datetime.timedelta(days=-1, seconds=72000) dst=datetime.timedelta(seconds=3600) tzname='EDT' fold=0 ambiguous=True imaginary=False ordinal=739193
+== 17 ctor imaginary
+<Arrow [2024-03-10T02:30:00-04:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=10, weekday=7) week=10 quarter=1 ts=1710052200.0 int_ts=1710052200 utcoffset=datetime.timedelta(days=-1, seconds=72000) dst=datetime.timedelta(seconds=3600) tzname='EDT' fold=0 ambiguous=False imaginary=True ordinal=738955
+== 18 ctor london gap
+<Arrow [2024-03-31T01:30:00+01:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=13, weekday=7) week=13 quarter=1 ts=1711845000.0 int_ts=1711845000 utcoffset=datetime.timedelta(seconds=3600) dst=datetime.timedelta(seconds=3600) tzname='BST' fold=0 ambiguous=False imaginary=True ordinal=738976
+== 19 ctor london overlap fold
+<Arrow [2024-10-27T01:30:00+00:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=43, weekday=7) week=43 quarter=4 ts=1729992600.0 int_ts=1729992600 utcoffset=datetime.timedelta(0) dst=datetime.timedelta(0) tzname='GMT' fold=1 ambiguous=True imaginary=False ordinal=739186
+== 20 ctor lmt
+<Arrow [1850-06-01T12:00:00-04:56:02]>
+weekday=5 isoweekday=6 datetime.IsoCalendarDate(year=1850, week=22, weekday=6) week=22 quarter=2 ts=-3773718238.0 int_ts=-3773718238 utcoffset=datetime.timedelta(days=-1, seconds=68638) dst=datetime.timedelta(0) tzname='LMT' fold=0 ambiguous=False imaginary=False ordinal=675485
+== 21 ctor kolkata 1941
+<Arrow [1942-06-01T12:00:00+05:30]>
+weekday=0 isoweekday=1 datetime.IsoCalendarDate(year=1942, week=23, weekday=1) week=23 quarter=2 ts=-870543000.0 int_ts=-870543000 utcoffset=datetime.timedelta(seconds=19800) dst=datetime.timedelta(0) tzname='IST' fold=0 ambiguous=False imaginary=False ordinal=709087
+== 22 ctor after 2037
+<Arrow [2040-07-01T12:00:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2040, week=26, weekday=7) week=26 quarter=3 ts=2224774800.0 int_ts=2224774800 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=0 ambiguous=False imaginary=False ordinal=744912
+== 23 ctor last transition
+<Arrow [2037-07-01T12:00:00-04:00]>
+weekday=2 isoweekday=3 datetime.IsoCalendarDate(year=2037, week=27, weekday=3) week=27 quarter=3 ts=2130076800.0 int_ts=2130076800 utcoffset=datetime.timedelta(days=-1, seconds=72000) dst=datetime.timedelta(seconds=3600) tzname='EDT' fold=0 ambiguous=False imaginary=False ordinal=743816
+== 24 ctor sydney dst
+<Arrow [2024-01-15T08:00:00+11:00]>
+weekday=0 isoweekday=1 datetime.IsoCalendarDate(year=2024, week=3, weekday=1) week=3 quarter=1 ts=1705266000.0 int_ts=1705266000 utcoffset=datetime.timedelta(seconds=39600) dst=datetime.timedelta(seconds=3600) tzname='AEDT' fold=0 ambiguous=False imaginary=False ordinal=738900
+== 25 ctor tokyo
+<Arrow [2024-01-15T08:00:00+09:00]>
+weekday=0 isoweekday=1 datetime.IsoCalendarDate(year=2024, week=3, weekday=1) week=3 quarter=1 ts=1705273200.0 int_ts=1705273200 utcoffset=datetime.timedelta(seconds=32400) dst=datetime.timedelta(0) tzname='JST' fold=0 ambiguous=False imaginary=False ordinal=738900
+== 26 ctor sao paulo 2018 midnight gap
+<Arrow [2018-11-04T00:30:00-02:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2018, week=44, weekday=7) week=44 quarter=4 ts=1541298600.0 int_ts=1541298600 utcoffset=datetime.timedelta(days=-1, seconds=79200) dst=datetime.timedelta(seconds=3600) tzname='-02' fold=0 ambiguous=False imaginary=True ordinal=737002
+== 27 ctor sao paulo now no dst
+<Arrow [2024-11-04T00:30:00-03:00]>
+weekday=0 isoweekday=1 datetime.IsoCalendarDate(year=2024, week=45, weekday=1) week=45 quarter=4 ts=1730691000.0 int_ts=1730691000 utcoffset=datetime.timedelta(days=-1, seconds=75600) dst=datetime.timedelta(0) tzname='-03' fold=0 ambiguous=False imaginary=False ordinal=739194
+== 28 fromtimestamp utc
+<Arrow [2023-11-14T22:13:20+00:00]>
+== 29 fromtimestamp float
+<Arrow [2023-11-14T17:13:20.123456-05:00]>
+weekday=1 isoweekday=2 datetime.IsoCalendarDate(year=2023, week=46, weekday=2) week=46 quarter=4 ts=1700000000.123456 int_ts=1700000000 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=0 ambiguous=False imaginary=False ordinal=738838
+== 30 fromtimestamp half micro
+<Arrow [1970-01-01T00:00:01.000001+00:00]>
+== 31 fromtimestamp negative
+<Arrow [1969-12-31T23:59:58.750000+00:00]>
+== 32 fromtimestamp ms
+<Arrow [2023-11-14T22:13:20.123000+00:00]>
+== 33 fromtimestamp us
+<Arrow [2023-11-14T22:13:20.123456+00:00]>
+== 34 fromtimestamp string
+<Arrow [2019-08-09T22:52:38.500000+09:00]>
+== 35 fromtimestamp bad string
+ValueError: The provided timestamp '15653x' is invalid.
+== 36 fromtimestamp local
+<Arrow [1970-01-01T00:00:00+00:00]>
+tzlocal()
+== 37 fromtimestamp into overlap
+<Arrow [2024-11-03T01:30:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730615400.0 int_ts=1730615400 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=1 ambiguous=True imaginary=False ordinal=739193
+== 38 fromtimestamp into overlap 2
+<Arrow [2024-11-03T02:30:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730619000.0 int_ts=1730619000 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=0 ambiguous=False imaginary=False ordinal=739193
+== 39 utcfromtimestamp
+<Arrow [2009-02-13T23:31:30.750000+00:00]>
+== 40 fromordinal
+<Arrow [2021-07-29T00:00:00+00:00]>
+== 41 fromordinal 0
+ValueError: Ordinal 0 is out of range.
+== 42 get iso date
+<Arrow [2024-03-15T00:00:00+00:00]>
+== 43 get iso datetime
+<Arrow [2024-03-15T08:30:00+00:00]>
+== 44 get iso space
+<Arrow [2024-03-15T08:30:00+00:00]>
+== 45 get iso basic
+<Arrow [2024-03-15T08:30:00+00:00]>
+== 46 get iso tz
+<Arrow [2024-03-15T08:30:00-05:00]>
+tzoffset(None, -18000)
+== 47 get iso tz basic
+<Arrow [2024-03-15T08:30:00+05:30]>
+== 48 get iso Z
+<Arrow [2024-03-15T08:30:00+00:00]>
+tzutc()
+== 49 get iso z lower
+ParserError: Could not parse timezone expression 'z'.
+== 50 get iso fraction
+<Arrow [2024-03-15T08:30:00.123000+00:00]>
+== 51 get iso fraction long
+<Arrow [2024-03-15T08:30:00.123457+00:00]>
+== 52 get iso fraction round even
+<Arrow [2024-03-15T08:30:00.000002+00:00]>
+== 53 get iso fraction round up
+<Arrow [2024-03-15T08:30:01+00:00]>
+== 54 get iso comma
+<Arrow [2024-03-15T08:30:00.500000+00:00]>
+== 55 get iso hour only
+<Arrow [2024-03-15T08:00:00+00:00]>
+== 56 get iso 24:00
+<Arrow [2024-03-16T00:00:00+00:00]>
+== 57 get iso 24:01
+ParserError: Midnight at the end of day must not contain minutes
+== 58 get iso ordinal
+<Arrow [2024-03-15T00:00:00+00:00]>
+== 59 get iso ordinal 366 non-leap
+<Arrow [2024-01-01T00:00:00+00:00]>
+== 60 get iso ordinal 367
+ParserError: The provided day of year 367 is invalid.
+== 61 get iso week
+<Arrow [2024-03-11T00:00:00+00:00]>
+== 62 get iso week day
+<Arrow [2024-03-15T00:00:00+00:00]>
+== 63 get iso week compact
+<Arrow [2024-03-15T00:00:00+00:00]>
+== 64 get iso week 53 bad
+ValueError: Invalid week: 53
+== 65 get iso week 53 good
+<Arrow [2021-01-03T00:00:00+00:00]>
+== 66 get iso month
+<Arrow [2024-03-01T00:00:00+00:00]>
+== 67 get iso year
+<Arrow [2024-01-01T00:00:00+00:00]>
+== 68 get iso slashes
+<Arrow [2024-03-05T00:00:00+00:00]>
+== 69 get iso dots
+<Arrow [2024-03-05T10:00:00+00:00]>
+== 70 get iso two spaces
+ParserError: Expected an ISO 8601-like string, but was given '2024-03-05  10:00'. Try passing in a format string to resolve this.
+== 71 get iso two spaces normalized
+<Arrow [2024-03-05T10:00:00+00:00]>
+== 72 get iso T and space
+ParserError: Expected an ISO 8601-like string, but was given '2024-03-05T10:00 Z'. Try passing in a format string to resolve this.
+== 73 get iso bad time
+ParserError: Invalid time component provided. Please specify a format or provide a valid time component in the basic or extended ISO 8601 time format.
+== 74 get iso bad
+ParserError: Invalid time component provided. Please specify a format or provide a valid time component in the basic or extended ISO 8601 time format.
+== 75 get iso with tzinfo kw
+<Arrow [2024-03-05T10:00:00+00:00]>
+== 76 get iso tz replaced not converted
+<Arrow [2024-03-05T10:00:00-05:00]>
+== 77 get timestamp int
+<Arrow [2023-11-14T22:13:20+00:00]>
+== 78 get timestamp float tz
+<Arrow [2023-11-15T03:43:20.500000+05:30]>
+== 79 get timestamp string is iso
+ParserError: Could not match input '1700000000' to any of the following formats: YYYY-MM-DD, YYYY-M-DD, YYYY-M-D, YYYY/MM/DD, YYYY/M/DD, YYYY/M/D, YYYY.MM.DD, YYYY.M.DD, YYYY.M.D, YYYYMMDD, YYYY-DDDD, YYYYDDDD, YYYY-MM, YYYY/MM, YYYY.MM, YYYY, W.
+== 80 get tuple
+<Arrow [2024-01-01T00:00:00+00:00]>
+== 81 get tuple week 53
+<Arrow [2016-01-03T00:00:00+00:00]>
+== 82 get tuple bad week
+ValueError: ISO Calendar week value must be between 1-53.
+== 83 get tuple bad day
+ValueError: ISO Calendar day value must be between 1-7
+== 84 get none
+TypeError: Cannot parse argument of type None.
+== 85 get bool
+TypeError: Cannot parse single argument of type <class 'bool'>.
+== 86 get datetime naive
+<Arrow [2024-05-06T07:08:09+00:00]>
+== 87 get datetime aware
+<Arrow [2024-05-06T07:08:09+02:00]>
+== 88 get datetime and tz
+<Arrow [2024-05-06T07:08:09+09:00]>
+== 89 get datetime and int
+TypeError: Cannot parse two arguments of types 'datetime', <class 'int'>.
+== 90 get date
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 91 get date and tz
+<Arrow [2024-05-06T00:00:00+10:00]>
+== 92 get str and tzobj
+TypeError: Cannot parse two arguments of types <class 'str'> and <class 'dateutil.tz.tz.tzutc'>.
+== 93 get three args
+<Arrow [2024-05-06T00:00:00+10:00]>
+== 94 get with fold kw
+<Arrow [2024-11-03T01:30:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730615400.0 int_ts=1730615400 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=1 ambiguous=True imaginary=False ordinal=739193
+== 95 get bad locale
+ValueError: Unsupported locale 'xx-yy'.
+== 96 parse 'YYYY-MM-DD HH:mm:ss' '2013-05-05 12:30:45'
+<Arrow [2013-05-05T12:30:45+00:00]>
+== 97 parse 'MM/DD/YYYY' '05/06/2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 98 parse 'M/D/YY' '5/6/24'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 99 parse 'M/D/YY' '5/6/69'
+<Arrow [1969-05-06T00:00:00+00:00]>
+== 100 parse 'M/D/YY' '5/6/68'
+<Arrow [2068-05-06T00:00:00+00:00]>
+== 101 parse 'DD MMMM YYYY' '06 May 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 102 parse 'DD MMMM YYYY' '06 may 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 103 parse 'D MMM YYYY' '6 Sept 2024'
+ParserMatchError: Failed to match 'D MMM YYYY' when parsing '6 Sept 2024'.
+== 104 parse 'D MMM YYYY' '6 Sep 2024'
+<Arrow [2024-09-06T00:00:00+00:00]>
+== 105 parse 'dddd, MMMM Do YYYY h:mm a' 'Monday, May 6th 2024 3:04 pm'
+<Arrow [2024-05-06T15:04:00+00:00]>
+== 106 parse 'dddd, MMMM Do YYYY h:mm A' 'Monday, May 6th 2024 3:04 PM'
+<Arrow [2024-05-06T15:04:00+00:00]>
+== 107 parse 'h:mm a' '12:15 am'
+<Arrow [0001-01-01T00:15:00+00:00]>
+== 108 parse 'h:mm a' '12:15 pm'
+<Arrow [0001-01-01T12:15:00+00:00]>
+== 109 parse 'h:mm a' '3:15 Pm'
+<Arrow [0001-01-01T03:15:00+00:00]>
+== 110 parse 'h a' '13 am'
+ParserMatchError: Hour token value must be between 0 and 12 inclusive for token 'a'.
+== 111 parse 'MMMM Do' 'March 1st'
+<Arrow [0001-03-01T00:00:00+00:00]>
+== 112 parse 'MMMM Do' 'March 22nd'
+<Arrow [0001-03-22T00:00:00+00:00]>
+== 113 parse 'MMMM Do' 'March 13th'
+<Arrow [0001-03-13T00:00:00+00:00]>
+== 114 parse 'MMMM Do' 'March 21th'
+ParserMatchError: Failed to match 'MMMM Do' when parsing 'March 21th'.
+== 115 parse 'YYYY-MM-DDTHH:mm:ssZZ' '2024-05-06T10:00:00-07:00'
+<Arrow [2024-05-06T10:00:00-07:00]>
+== 116 parse 'YYYY-MM-DD HH:mm Z' '2024-05-06 10:00 +0530'
+<Arrow [2024-05-06T10:00:00+05:30]>
+== 117 parse 'YYYY-MM-DD HH:mm ZZZ' '2024-05-06 10:00 Europe/London'
+<Arrow [2024-05-06T10:00:00+01:00]>
+== 118 parse 'YYYY-MM-DD HH:mm ZZZ' '2024-05-06 10:00 Asia/Tokyo'
+<Arrow [2024-05-06T10:00:00+09:00]>
+== 119 parse 'YYYY-MM-DD HH:mm ZZZ' '2024-05-06 10:00 Nowhere/Land'
+ParserError: Could not parse timezone expression 'Nowhere/Land'.
+== 120 parse 'X' '1700000000'
+<Arrow [2023-11-14T22:13:20+00:00]>
+== 121 parse 'X' '1700000000.25'
+<Arrow [2023-11-14T22:13:20.250000+00:00]>
+== 122 parse 'x' '1700000000123456'
+<Arrow [2023-11-14T22:13:20.123456+00:00]>
+== 123 parse 'x' '1700000000123'
+<Arrow [2023-11-14T22:13:20.123000+00:00]>
+== 124 parse 'YYYY-MM-DD HH:mm:ss.S' '2024-05-06 10:00:00.5'
+<Arrow [2024-05-06T10:00:00.500000+00:00]>
+== 125 parse 'YYYY-MM-DD HH:mm:ss.SSS' '2024-05-06 10:00:00.123'
+<Arrow [2024-05-06T10:00:00.123000+00:00]>
+== 126 parse 'YYYY-MM-DD HH:mm:ss.SSSSSSS' '2024-05-06 10:00:00.1234565'
+<Arrow [2024-05-06T10:00:00.123456+00:00]>
+== 127 parse 'YYYY-MM-DD HH:mm:ss.S' '2024-05-06 10:00:00.9999999'
+<Arrow [2024-05-06T10:00:01+00:00]>
+== 128 parse 'YYYY-DDDD' '2024-060'
+<Arrow [2024-02-29T00:00:00+00:00]>
+== 129 parse 'YYYY DDD' '2024 60'
+<Arrow [2024-02-29T00:00:00+00:00]>
+== 130 parse 'YYYY MM DDD' '2024 03 60'
+ParserError: Month component is not allowed with the DDD and DDDD tokens.
+== 131 parse 'DDDD' '060'
+ParserError: Year component is required with the DDD and DDDD tokens.
+== 132 parse 'W' '2024-W01-1'
+<Arrow [2024-01-01T00:00:00+00:00]>
+== 133 parse 'ddd YYYY-MM' 'Wed 2024-05'
+<Arrow [2024-05-01T00:00:00+00:00]>
+== 134 parse 'dddd' 'Friday'
+<Arrow [1970-01-02T00:00:00+00:00]>
+== 135 parse 'YYYY-MM-DD [at] HH:mm' '2024-05-06 at 10:30'
+<Arrow [2024-05-06T10:30:00+00:00]>
+== 136 parse '[Report for] MMMM YYYY' 'Report for June 2024'
+<Arrow [2024-06-01T00:00:00+00:00]>
+== 137 parse 'YYYY-MM-DD [.] HH' '2024-05-06 x 10'
+<Arrow [2024-05-06T10:00:00+00:00]>
+== 138 parse 'YYYY#MM' '2024#05'
+ParserMatchError: Failed to match 'YYYY#MM' when parsing '2024#05'.
+== 139 parse 'YYYY-MM-DD' 'on 2024-05-06, the'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 140 parse 'YYYY-MM-DD' 'id2024-05-06'
+ParserMatchError: Failed to match 'YYYY-MM-DD' when parsing 'id2024-05-06'.
+== 141 parse 'YYYY-MM-DD' '(2024-05-06).'
+ParserMatchError: Failed to match 'YYYY-MM-DD' when parsing '(2024-05-06).'.
+== 142 parse 'YYYY-MM-DD' '2024-05-06x'
+ParserMatchError: Failed to match 'YYYY-MM-DD' when parsing '2024-05-06x'.
+== 143 parse 'YYYY-MM-DD' 'x 2024-05-06!'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 144 parse 'MM-DD' '13-01'
+ValueError: month must be in 1..12
+== 145 parse 'YYYY YYYY' '2024 2024'
+ParserMatchError: Failed to generate regular expression pattern: redefinition of group name 'YYYY' as group 3; was group 2 at position 78.
+== 146 parse 'YYY-MM' '202-05'
+ParserError: Unrecognized token 'YYY'.
+== 147 parse 'dd MM' 'Mo 05'
+ParserError: Unrecognized token 'dd'.
+== 148 parse 'YYYY-MM-DD hh:mm' '2024-05-06 24:00'
+<Arrow [2024-05-07T00:00:00+00:00]>
+== 149 parse 'YYYY-MM-DD HH:mm' '2024-05-06 24:30'
+ParserError: Midnight at the end of day must not contain minutes
+== 150 parse 'HH:mm' '10:30'
+<Arrow [0001-01-01T10:30:00+00:00]>
+== 151 parse 'YYYY-MM-DD HH:mm:ss' '2024-05-06 10:30:60'
+ValueError: second must be in 0..59
+== 152 parse format list
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 153 parse format list none
+ParserError: Could not match input '06|05|2024' to any of the following formats: YYYY-MM-DD, DD.MM.YYYY.
+== 154 parse empty format list
+ParserError: Could not match input '06|05|2024' to any of the following formats: .
+== 155 parse with tzinfo
+<Arrow [2024-05-06T10:00:00-03:00]>
+== 156 parse whitespace
+<Arrow [2024-05-06T10:00:00+00:00]>
+== 157 parse fr 'D MMMM YYYY' '6 mai 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 158 parse fr 'dddd D MMMM YYYY' 'lundi 6 mai 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 159 parse fr 'Do MMMM' '1er mars'
+<Arrow [0001-03-01T00:00:00+00:00]>
+== 160 parse fr 'Do MMMM' '2e mars'
+<Arrow [0001-03-02T00:00:00+00:00]>
+== 161 parse de 'D. MMMM YYYY' '6. März 2024'
+<Arrow [2024-03-06T00:00:00+00:00]>
+== 162 parse de 'dddd, D. MMM YYYY' 'Montag, 6. Mär 2024'
+<Arrow [2024-03-06T00:00:00+00:00]>
+== 163 parse es 'D [de] MMMM [de] YYYY' '6 de mayo de 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 164 parse es 'Do MMMM' '6º mayo'
+<Arrow [0001-05-06T00:00:00+00:00]>
+== 165 parse it 'dddd D MMMM' 'lunedì 6 maggio'
+<Arrow [0001-05-06T00:00:00+00:00]>
+== 166 parse ru 'D MMMM YYYY' '6 мая 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 167 parse ru 'D MMMM YYYY' '6 МАЯ 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 168 parse pl 'D MMMM YYYY' '6 maj 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 169 parse ja 'YYYY年MMMMD日' '2024年5月6日'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 170 parse zh 'YYYY MMMM D' '2024 五月 6'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 171 parse ko 'MMMM D' '5월 6'
+<Arrow [0001-05-06T00:00:00+00:00]>
+== 172 parse nl 'D MMMM YYYY' '6 mei 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 173 parse pt 'dddd, D MMMM' 'Segunda-feira, 6 Maio'
+<Arrow [0001-05-06T00:00:00+00:00]>
+== 174 parse fi 'D. MMMM YYYY' '6. toukokuu 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 175 parse cs 'D. MMMM YYYY' '6. květen 2024'
+<Arrow [2024-05-06T00:00:00+00:00]>
+== 176 parse de 'Do MMMM' '6. Mai'
+ParserMatchError: Failed to match 'Do MMMM' when parsing '6. Mai'.
+== 177 parse fr 'h:mm a' '3:04 pm'
+ParserMatchError: Failed to match 'h:mm a' when parsing '3:04 pm'.
+== 178 parse de 'h:mm a' '3:04 nachm'
+ParserMatchError: Failed to match 'h:mm a' when parsing '3:04 nachm'.
+== 179 parse ja 'MMM' ' 5'
+<Arrow [0001-05-01T00:00:00+00:00]>
+== 180 format None
+2024-03-09 14:05:07-05:00
+== 181 format 'YYYY-MM-DD'
+2024-03-09
+== 182 format 'YY M D'
+24 3 9
+== 183 format 'MMMM MMM MM M'
+March Mar 03 3
+== 184 format 'DDDD DDD DD D Do'
+069 69 09 9 9th
+== 185 format 'dddd ddd d'
+Saturday Sat 6
+== 186 format 'HH H hh h mm m ss s'
+14 14 02 2 05 5 07 7
+== 187 format 'S SS SSS SSSS SSSSS SSSSSS'
+1 12 123 1234 12345 123456
+== 188 format 'ZZZ ZZ Z'
+EST -05:00 -0500
+== 189 format 'a A'
+pm PM
+== 190 format 'X'
+1710011107.123456
+== 191 format 'x'
+1710011107123456
+== 192 format 'W'
+2024-W10-6
+== 193 format '[Today is] dddd [at] h:mm a'
+Today is Saturday at 2:05 pm
+== 194 format '[[nested]] YYYY'
+[nested] 2024
+== 195 format '[unclosed YYYY'
+[unclo7e6 2024
+== 196 format 'YYY dd'
+ 
+== 197 format 'YYYYY MMMMM'
+2024Y March3
+== 198 format 'dddd, DD-MMM-YYYY HH:mm:ss ZZZ'
+Saturday, 09-Mar-2024 14:05:07 EST
+== 199 format 'ddd, DD MMM YY HH:mm:ss Z'
+Sat, 09 Mar 24 14:05:07 -0500
+== 200 format 'YYYY-MM-DDTHH:mm:ssZZ'
+2024-03-09T14:05:07-05:00
+== 201 format 'Q Qo w ww'
+Q Qo w ww
+== 202 format 'hh:mm A'
+02:05 PM
+== 203 format '年YYYY'
+年2024
+== 204 format locale en
+Monday 1 January 2024, 1st Mon Jan, 12:30 am AM
+== 205 format locale fr
+lundi 1 janvier 2024, 1er lun janv, 12:30  
+== 206 format locale fr-ca
+lundi 1 janvier 2024, 1er lun janv, 12:30  
+== 207 format locale de
+Montag 1 Januar 2024, 1. Mo Jan, 12:30  
+== 208 format locale de-at
+Montag 1 Jänner 2024, 1. Mo Jan, 12:30  
+== 209 format locale es
+lunes 1 enero 2024, 1º lun ene, 12:30 am AM
+== 210 format locale it
+lunedì 1 gennaio 2024, 1º lun gen, 12:30  
+== 211 format locale pt
+Segunda-feira 1 Janeiro 2024, 1 Seg Jan, 12:30  
+== 212 format locale pt-br
+Segunda-feira 1 Janeiro 2024, 1 Seg Jan, 12:30  
+== 213 format locale nl
+maandag 1 januari 2024, 1 ma jan, 12:30  
+== 214 format locale ru
+понедельник 1 января 2024, 1 пн янв, 12:30  
+== 215 format locale pl
+poniedziałek 1 styczeń 2024, 1 Pn sty, 12:30  
+== 216 format locale cs
+pondělí 1 leden 2024, 1 po led, 12:30  
+== 217 format locale fi
+maanantai 1 tammikuu 2024, 1. ma tammi, 12:30  
+== 218 format locale ja
+月曜日 1 1月 2024, 1 月  1, 12:30  
+== 219 format locale zh
+星期一 1 一月 2024, 1 一  1, 12:30  
+== 220 format locale ko
+월요일 1 1월 2024, 첫번째 월  1, 12:30  
+== 221 format hour 0 and 12
+12 12 am
+<Arrow [2024-01-01T12:00:00+00:00]>
+12 12 pm
+<Arrow [2024-01-01T13:00:00+00:00]>
+01 1 pm
+== 222 format lmt offset
+-04:56 -0456 LMT
+1850-06-01T12:00:00-04:56:02
+== 223 format offset none name
+|+05:30
+== 224 format year 5
+0005 05
+== 225 format bad locale
+ValueError: Unsupported locale 'tlh'.
+== 226 format ordinals
+en 1st 2nd 3rd 4th 10th 11th 12th 13th 21st 22nd 23rd 31st 101st 111th 112th -1st -2nd -11st
+fr 1er 2e 3e 4e 10e 11e 12e 13e 21e 22e 23e 31e 101e 111e 112e -1er -2e -11e
+es 1º 2º 3º 4º 10º 11º 12º 13º 21º 22º 23º 31º 101º 111º 112º -1º -2º -11º
+it 1º 2º 3º 4º 10º 11º 12º 13º 21º 22º 23º 31º 101º 111º 112º -1º -2º -11º
+de 1. 2. 3. 4. 10. 11. 12. 13. 21. 22. 23. 31. 101. 111. 112. -1. -2. -11.
+fi 1. 2. 3. 4. 10. 11. 12. 13. 21. 22. 23. 31. 101. 111. 112. -1. -2. -11.
+ko 첫번째 두번째 세번째 네번째 열번째 11번째 12번째 13번째 21번째 22번째 23번째 31번째 101번째 111번째 112번째 열번째 아홉번째 0번째
+nl 1 2 3 4 10 11 12 13 21 22 23 31 101 111 112 -1 -2 -11
+pl 1 2 3 4 10 11 12 13 21 22 23 31 101 111 112 -1 -2 -11
+== 227 to zones
+<Arrow [2024-06-30T19:30:00-04:00]>
+<Arrow [2024-07-01T05:00:00+05:30]>
+<Arrow [2024-07-01T09:30:00+10:00]>
+<Arrow [2024-07-01T00:30:00+01:00]>
+<Arrow [2024-06-30T23:30:00+00:00]>
+== 228 to local
+<Arrow [2024-07-01T03:30:00+00:00]>
+tzlocal()
+== 229 to bad
+ParserError: Could not parse timezone expression 'Atlantis/Main'.
+== 230 to across fall back
+<Arrow [2024-11-03T01:30:00-04:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730611800.0 int_ts=1730611800 utcoffset=datetime.timedelta(days=-1, seconds=72000) dst=datetime.timedelta(seconds=3600) tzname='EDT' fold=0 ambiguous=True imaginary=False ordinal=739193
+== 231 to across fall back 2
+<Arrow [2024-11-03T01:30:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730615400.0 int_ts=1730615400 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=1 ambiguous=True imaginary=False ordinal=739193
+== 232 to round trip fold
+<Arrow [2024-11-03T06:30:00+00:00]>
+<Arrow [2024-11-03T01:30:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730615400.0 int_ts=1730615400 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=1 ambiguous=True imaginary=False ordinal=739193
+== 233 shift basics
+<Arrow [2024-02-29T12:00:00+00:00]>
+<Arrow [2024-03-29T12:00:00+00:00]>
+<Arrow [2023-04-01T12:00:00+00:00]>
+<Arrow [2023-04-14T00:00:00+00:00]>
+<Arrow [2023-07-14T00:00:00+00:00]>
+<Arrow [2023-07-13T23:59:59.999999+00:00]>
+<Arrow [2023-07-17T00:00:04.999999+00:00]>
+<Arrow [2023-07-16T22:30:04.999999+00:00]>
+== 234 shift weekday
+<Arrow [2024-05-13T00:00:00+00:00]>
+<Arrow [2024-05-19T00:00:00+00:00]>
+<Arrow [2024-05-19T00:00:00+00:00]>
+<Arrow [2024-05-22T00:00:00+00:00]>
+== 235 shift bad key
+ValueError: Invalid shift time frame. Please select one of the following: years, months, days, hours, minutes, seconds, microseconds, weeks, quarters, weekday.
+== 236 shift singular
+ValueError: Invalid shift time frame. Please select one of the following: years, months, days, hours, minutes, seconds, microseconds, weeks, quarters, weekday.
+== 237 shift float months
+ValueError: Non-integer years and months are ambiguous and not currently supported.
+== 238 shift dst spring
+<Arrow [2024-03-10T03:30:00-04:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=10, weekday=7) week=10 quarter=1 ts=1710055800.0 int_ts=1710055800 utcoffset=datetime.timedelta(days=-1, seconds=72000) dst=datetime.timedelta(seconds=3600) tzname='EDT' fold=0 ambiguous=False imaginary=False ordinal=738955
+== 239 shift into gap
+<Arrow [2024-03-10T03:30:00-04:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=10, weekday=7) week=10 quarter=1 ts=1710055800.0 int_ts=1710055800 utcoffset=datetime.timedelta(days=-1, seconds=72000) dst=datetime.timedelta(seconds=3600) tzname='EDT' fold=0 ambiguous=False imaginary=False ordinal=738955
+== 240 shift over fall
+<Arrow [2024-11-03T01:30:00-04:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730611800.0 int_ts=1730611800 utcoffset=datetime.timedelta(days=-1, seconds=72000) dst=datetime.timedelta(seconds=3600) tzname='EDT' fold=0 ambiguous=True imaginary=False ordinal=739193
+<Arrow [2024-11-03T02:30:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730619000.0 int_ts=1730619000 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=0 ambiguous=False imaginary=False ordinal=739193
+== 241 shift leap
+<Arrow [2025-02-28T00:00:00+00:00]>
+<Arrow [2028-02-28T00:00:00+00:00]>
+== 242 shift overflow
+OverflowError: date value out of range
+== 243 shift underflow
+OverflowError: date value out of range
+== 244 replace
+<Arrow [2024-05-08T00:00:30+02:00]>
+<Arrow [2024-05-08T00:00:30+09:00]>
+<Arrow [2023-02-28T00:00:30+09:00]>
+<Arrow [2023-02-28T00:00:30-03:00]>
+== 245 replace week
+ValueError: Setting absolute week is not supported.
+== 246 replace unknown
+ValueError: Unknown attribute: 'hours'.
+== 247 replace bad day
+ValueError: day is out of range for month
+== 248 replace fold
+<Arrow [2024-11-03T01:30:00-05:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2024, week=44, weekday=7) week=44 quarter=4 ts=1730615400.0 int_ts=1730615400 utcoffset=datetime.timedelta(days=-1, seconds=68400) dst=datetime.timedelta(0) tzname='EST' fold=1 ambiguous=True imaginary=False ordinal=739193
+== 249 replace bad tz
+ValueError: 'Gondor/Minas_Tirith' not recognized as a timezone.
+== 250 span year
+(<Arrow [2024-01-01T00:00:00+01:00]>, <Arrow [2024-12-31T23:59:59.999999+01:00]>)
+== 251 span quarter
+(<Arrow [2024-04-01T00:00:00+02:00]>, <Arrow [2024-06-30T23:59:59.999999+02:00]>)
+== 252 span month
+(<Arrow [2024-05-01T00:00:00+02:00]>, <Arrow [2024-05-31T23:59:59.999999+02:00]>)
+== 253 span week
+(<Arrow [2024-05-13T00:00:00+02:00]>, <Arrow [2024-05-19T23:59:59.999999+02:00]>)
+== 254 span day
+(<Arrow [2024-05-15T00:00:00+02:00]>, <Arrow [2024-05-15T23:59:59.999999+02:00]>)
+== 255 span hour
+(<Arrow [2024-05-15T14:00:00+02:00]>, <Arrow [2024-05-15T14:59:59.999999+02:00]>)
+== 256 span minute
+(<Arrow [2024-05-15T14:37:00+02:00]>, <Arrow [2024-05-15T14:37:59.999999+02:00]>)
+== 257 span second
+(<Arrow [2024-05-15T14:37:22+02:00]>, <Arrow [2024-05-15T14:37:22.999999+02:00]>)
+== 258 span microsecond
+(<Arrow [2024-05-15T14:37:22.456789+02:00]>, <Arrow [2024-05-15T14:37:22.456789+02:00]>)
+== 259 span years
+(<Arrow [2024-01-01T00:00:00+01:00]>, <Arrow [2024-12-31T23:59:59.999999+01:00]>)
+== 260 span quarters
+(<Arrow [2024-04-01T00:00:00+02:00]>, <Arrow [2024-06-30T23:59:59.999999+02:00]>)
+== 261 span weeks
+(<Arrow [2024-05-13T00:00:00+02:00]>, <Arrow [2024-05-19T23:59:59.999999+02:00]>)
+== 262 span count
+(<Arrow [2024-05-15T00:00:00+02:00]>, <Arrow [2024-05-17T23:59:59.999999+02:00]>)
+(<Arrow [2024-05-01T00:00:00+02:00]>, <Arrow [2024-03-31T23:59:59.999999+02:00]>)
+== 263 span bounds ()
+(<Arrow [2024-05-15T14:00:00.000001+02:00]>, <Arrow [2024-05-15T14:59:59.999999+02:00]>)
+== 264 span bounds (]
+(<Arrow [2024-05-15T14:00:00.000001+02:00]>, <Arrow [2024-05-15T15:00:00+02:00]>)
+== 265 span bounds []
+(<Arrow [2024-05-15T14:00:00+02:00]>, <Arrow [2024-05-15T15:00:00+02:00]>)
+== 266 span bounds [)
+(<Arrow [2024-05-15T14:00:00+02:00]>, <Arrow [2024-05-15T14:59:59.999999+02:00]>)
+== 267 span bounds {}
+ValueError: Invalid bounds. Please select between '()', '(]', '[)', or '[]'.
+== 268 span exact
+(<Arrow [2024-05-15T14:37:22.456789+02:00]>, <Arrow [2024-05-16T14:37:22.456788+02:00]>)
+(<Arrow [2024-05-15T14:37:22.456789+02:00]>, <Arrow [2024-05-22T14:37:22.456789+02:00]>)
+== 269 span week start 1
+(<Arrow [2024-05-13T00:00:00+02:00]>, <Arrow [2024-05-19T23:59:59.999999+02:00]>)
+== 270 span week start 3
+(<Arrow [2024-05-15T00:00:00+02:00]>, <Arrow [2024-05-21T23:59:59.999999+02:00]>)
+== 271 span week start 7
+(<Arrow [2024-05-12T00:00:00+02:00]>, <Arrow [2024-05-18T23:59:59.999999+02:00]>)
+== 272 span week start 0
+ValueError: week_start argument must be between 1 and 7.
+== 273 span week start 8
+ValueError: week_start argument must be between 1 and 7.
+== 274 span bad frame
+ValueError: Range or span over frame fortnight not supported. Supported frames: year(s), month(s), day(s), hour(s), minute(s), second(s), microsecond(s), week(s), quarter(s).
+== 275 floor ceil
+<Arrow [2024-05-15T14:00:00+02:00]>
+<Arrow [2024-05-15T14:59:59.999999+02:00]>
+<Arrow [2024-04-01T00:00:00+02:00]>
+<Arrow [2024-12-31T23:59:59.999999+01:00]>
+== 276 span day over spring forward
+(<Arrow [2024-03-10T00:00:00-05:00]>, <Arrow [2024-03-10T23:59:59.999999-04:00]>)
+== 277 span day over fall back
+(<Arrow [2024-11-03T00:00:00-04:00]>, <Arrow [2024-11-03T23:59:59.999999-05:00]>)
+== 278 span day sao paulo 2018
+(<Arrow [2018-11-04T00:00:00-02:00]>, <Arrow [2018-11-04T23:59:59.999999-02:00]>)
+<Arrow [2018-11-04T00:00:00-02:00]>
+weekday=6 isoweekday=7 datetime.IsoCalendarDate(year=2018, week=44, weekday=7) week=44 quarter=4 ts=1541340000.0 int_ts=1541340000 utcoffset=datetime.timedelta(days=-1, seconds=79200) dst=datetime.timedelta(seconds=3600) tzname='-02' fold=0 ambiguous=False imaginary=False ordinal=737002
+== 279 span month sydney
+(<Arrow [2024-04-01T00:00:00+11:00]>, <Arrow [2024-04-30T23:59:59.999999+10:00]>)
+== 280 range hours
+  <Arrow [2024-05-01T22:00:00+00:00]>
+  <Arrow [2024-05-01T23:00:00+00:00]>
+  <Arrow [2024-05-02T00:00:00+00:00]>
+  <Arrow [2024-05-02T01:00:00+00:00]>
+  <Arrow [2024-05-02T02:00:00+00:00]>
+  5 items
+== 281 range month end clip
+  <Arrow [2024-01-31T00:00:00+00:00]>
+  <Arrow [2024-02-29T00:00:00+00:00]>
+  <Arrow [2024-03-31T00:00:00+00:00]>
+  <Arrow [2024-04-30T00:00:00+00:00]>
+  <Arrow [2024-05-31T00:00:00+00:00]>
+  <Arrow [2024-06-30T00:00:00+00:00]>
+  <Arrow [2024-07-31T00:00:00+00:00]>
+  7 items
+== 282 range month end clip 30
+  <Arrow [2024-01-30T00:00:00+00:00]>
+  <Arrow [2024-02-29T00:00:00+00:00]>
+  <Arrow [2024-03-30T00:00:00+00:00]>
+  <Arrow [2024-04-30T00:00:00+00:00]>
+  4 items
+== 283 range year leap
+  <Arrow [2020-02-29T00:00:00+00:00]>
+  <Arrow [2021-02-28T00:00:00+00:00]>
+  <Arrow [2022-02-28T00:00:00+00:00]>
+  <Arrow [2023-02-28T00:00:00+00:00]>
+  <Arrow [2024-02-29T00:00:00+00:00]>
+  <Arrow [2025-02-28T00:00:00+00:00]>
+  6 items
+== 284 range quarter
+  <Arrow [2024-02-15T00:00:00+00:00]>
+  <Arrow [2024-05-15T00:00:00+00:00]>
+  <Arrow [2024-08-15T00:00:00+00:00]>
+  <Arrow [2024-11-15T00:00:00+00:00]>
+  <Arrow [2025-02-15T00:00:00+00:00]>
+  5 items
+== 285 range week limit
+  <Arrow [2024-05-01T00:00:00+00:00]>
+  <Arrow [2024-05-08T00:00:00+00:00]>
+  <Arrow [2024-05-15T00:00:00+00:00]>
+  <Arrow [2024-05-22T00:00:00+00:00]>
+  4 items
+== 286 range limit and end
+  <Arrow [2024-05-01T00:00:00+00:00]>
+  <Arrow [2024-05-02T00:00:00+00:00]>
+  <Arrow [2024-05-03T00:00:00+00:00]>
+  3 items
+== 287 range no end no limit
+  0 items
+ValueError: One of 'end' or 'limit' is required.
+== 288 range tz
+  <Arrow [2024-03-08T12:00:00-05:00]>
+  <Arrow [2024-03-09T12:00:00-05:00]>
+  <Arrow [2024-03-10T12:00:00-04:00]>
+  <Arrow [2024-03-11T12:00:00-04:00]>
+  <Arrow [2024-03-12T12:00:00-04:00]>
+  5 items
+== 289 range over dst
+  <Arrow [2024-03-09T02:30:00-05:00]>
+  <Arrow [2024-03-10T03:30:00-04:00]>
+  <Arrow [2024-03-11T03:30:00-04:00]>
+  3 items
+== 290 range bad frame
+  0 items
+ValueError: Range or span over frame decade not supported. Supported frames: year(s), month(s), day(s), hour(s), minute(s), second(s), microsecond(s), week(s), quarter(s).
+== 291 range end before start
+  0 items
+== 292 range minutes
+  <Arrow [2024-05-01T10:00:30+00:00]>
+  <Arrow [2024-05-01T10:01:30+00:00]>
+  <Arrow [2024-05-01T10:02:30+00:00]>
+  3 items
+== 293 span_range days
+  (<Arrow [2024-05-01T00:00:00+00:00]>, <Arrow [2024-05-01T23:59:59.999999+00:00]>)
+  (<Arrow [2024-05-02T00:00:00+00:00]>, <Arrow [2024-05-02T23:59:59.999999+00:00]>)
+  (<Arrow [2024-05-03T00:00:00+00:00]>, <Arrow [2024-05-03T23:59:59.999999+00:00]>)
+  (<Arrow [2024-05-04T00:00:00+00:00]>, <Arrow [2024-05-04T23:59:59.999999+00:00]>)
+  4 items
+== 294 span_range month bounds
+  (<Arrow [2024-01-01T00:00:00+00:00]>, <Arrow [2024-02-01T00:00:00+00:00]>)
+  (<Arrow [2024-02-01T00:00:00+00:00]>, <Arrow [2024-03-01T00:00:00+00:00]>)
+  (<Arrow [2024-03-01T00:00:00+00:00]>, <Arrow [2024-04-01T00:00:00+00:00]>)
+  (<Arrow [2024-04-01T00:00:00+00:00]>, <Arrow [2024-05-01T00:00:00+00:00]>)
+  4 items
+== 295 span_range week limit
+  (<Arrow [2024-01-15T00:00:00+00:00]>, <Arrow [2024-01-21T23:59:59.999999+00:00]>)
+  (<Arrow [2024-01-22T00:00:00+00:00]>, <Arrow [2024-01-28T23:59:59.999999+00:00]>)
+  (<Arrow [2024-01-29T00:00:00+00:00]>, <Arrow [2024-02-04T23:59:59.999999+00:00]>)
+  3 items
+== 296 span_range exact
+  (<Arrow [2024-01-15T06:00:00+00:00]>, <Arrow [2024-01-16T05:59:59.999999+00:00]>)
+  (<Arrow [2024-01-16T06:00:00+00:00]>, <Arrow [2024-01-17T05:59:59.999999+00:00]>)
+  (<Arrow [2024-01-17T06:00:00+00:00]>, <Arrow [2024-01-18T02:59:59.999999+00:00]>)
+  3 items
+== 297 span_range exact month
+  (<Arrow [2024-01-15T00:00:00+00:00]>, <Arrow [2024-02-15T00:00:00+00:00]>)
+  (<Arrow [2024-02-15T00:00:00+00:00]>, <Arrow [2024-03-15T00:00:00+00:00]>)
+  (<Arrow [2024-03-15T00:00:00+00:00]>, <Arrow [2024-03-20T00:00:00+00:00]>)
+  3 items
+== 298 span_range hour tz
+  (<Arrow [2024-11-03T04:00:00-05:00]>, <Arrow [2024-11-03T04:59:59.999999-05:00]>)
+  (<Arrow [2024-11-03T05:00:00-05:00]>, <Arrow [2024-11-03T05:59:59.999999-05:00]>)
+  (<Arrow [2024-11-03T06:00:00-05:00]>, <Arrow [2024-11-03T06:59:59.999999-05:00]>)
+  (<Arrow [2024-11-03T07:00:00-05:00]>, <Arrow [2024-11-03T07:59:59.999999-05:00]>)
+  (<Arrow [2024-11-03T08:00:00-05:00]>, <Arrow [2024-11-03T08:59:59.999999-05:00]>)
+  5 items
+== 299 interval
+  (<Arrow [2024-05-01T09:00:00+00:00]>, <Arrow [2024-05-01T11:59:59.999999+00:00]>)
+  (<Arrow [2024-05-01T12:00:00+00:00]>, <Arrow [2024-05-01T14:59:59.999999+00:00]>)
+  (<Arrow [2024-05-01T15:00:00+00:00]>, <Arrow [2024-05-01T17:59:59.999999+00:00]>)
+  3 items
+== 300 interval days
+  (<Arrow [2024-05-01T00:00:00+00:00]>, <Arrow [2024-05-05T00:00:00+00:00]>)
+  (<Arrow [2024-05-05T00:00:00+00:00]>, <Arrow [2024-05-09T00:00:00+00:00]>)
+  (<Arrow [2024-05-09T00:00:00+00:00]>, <Arrow [2024-05-11T00:00:00+00:00]>)
+  3 items
+== 301 interval zero
+  0 items
+ValueError: interval has to be a positive integer
+== 302 humanize 0s
+<Arrow [2024-05-15T12:00:00+00:00]>
+just now
+== 303 humanize 9s
+<Arrow [2024-05-15T12:00:09+00:00]>
+just now
+== 304 humanize -9s
+<Arrow [2024-05-15T11:59:51+00:00]>
+just now
+== 305 humanize 10s
+<Arrow [2024-05-15T12:00:10+00:00]>
+in 10 seconds
+== 306 humanize -10s
+<Arrow [2024-05-15T11:59:50+00:00]>
+10 seconds ago
+== 307 humanize 44s
+<Arrow [2024-05-15T12:00:44+00:00]>
+in 44 seconds
+== 308 humanize -44s
+<Arrow [2024-05-15T11:59:16+00:00]>
+44 seconds ago
+== 309 humanize 59s
+<Arrow [2024-05-15T12:00:59+00:00]>
+in 59 seconds
+== 310 humanize -59s
+<Arrow [2024-05-15T11:59:01+00:00]>
+59 seconds ago
+== 311 humanize 60s
+<Arrow [2024-05-15T12:01:00+00:00]>
+in a minute
+== 312 humanize -60s
+<Arrow [2024-05-15T11:59:00+00:00]>
+a minute ago
+== 313 humanize 119s
+<Arrow [2024-05-15T12:01:59+00:00]>
+in a minute
+== 314 humanize -119s
+<Arrow [2024-05-15T11:58:01+00:00]>
+a minute ago
+== 315 humanize 120s
+<Arrow [2024-05-15T12:02:00+00:00]>
+in 2 minutes
+== 316 humanize -120s
+<Arrow [2024-05-15T11:58:00+00:00]>
+2 minutes ago
+== 317 humanize 3599s
+<Arrow [2024-05-15T12:59:59+00:00]>
+in 59 minutes
+== 318 humanize -3599s
+<Arrow [2024-05-15T11:00:01+00:00]>
+59 minutes ago
+== 319 humanize 3600s
+<Arrow [2024-05-15T13:00:00+00:00]>
+in an hour
+== 320 humanize -3600s
+<Arrow [2024-05-15T11:00:00+00:00]>
+an hour ago
+== 321 humanize 7199s
+<Arrow [2024-05-15T13:59:59+00:00]>
+in an hour
+== 322 humanize -7199s
+<Arrow [2024-05-15T10:00:01+00:00]>
+an hour ago
+== 323 humanize 7200s
+<Arrow [2024-05-15T14:00:00+00:00]>
+in 2 hours
+== 324 humanize -7200s
+<Arrow [2024-05-15T10:00:00+00:00]>
+2 hours ago
+== 325 humanize 86399s
+<Arrow [2024-05-16T11:59:59+00:00]>
+in 23 hours
+== 326 humanize -86399s
+<Arrow [2024-05-14T12:00:01+00:00]>
+23 hours ago
+== 327 humanize 86400s
+<Arrow [2024-05-16T12:00:00+00:00]>
+in a day
+== 328 humanize -86400s
+<Arrow [2024-05-14T12:00:00+00:00]>
+a day ago
+== 329 humanize 172799s
+<Arrow [2024-05-17T11:59:59+00:00]>
+in a day
+== 330 humanize -172799s
+<Arrow [2024-05-13T12:00:01+00:00]>
+a day ago
+== 331 humanize 172800s
+<Arrow [2024-05-17T12:00:00+00:00]>
+in 2 days
+== 332 humanize -172800s
+<Arrow [2024-05-13T12:00:00+00:00]>
+2 days ago
+== 333 humanize 604799s
+<Arrow [2024-05-22T11:59:59+00:00]>
+in 6 days
+== 334 humanize -604799s
+<Arrow [2024-05-08T12:00:01+00:00]>
+6 days ago
+== 335 humanize 604800s
+<Arrow [2024-05-22T12:00:00+00:00]>
+in a week
+== 336 humanize -604800s
+<Arrow [2024-05-08T12:00:00+00:00]>
+a week ago
+== 337 humanize 1209599s
+<Arrow [2024-05-29T11:59:59+00:00]>
+in a week
+== 338 humanize -1209599s
+<Arrow [2024-05-01T12:00:01+00:00]>
+a week ago
+== 339 humanize 1209600s
+<Arrow [2024-05-29T12:00:00+00:00]>
+in 2 weeks
+== 340 humanize -1209600s
+<Arrow [2024-05-01T12:00:00+00:00]>
+2 weeks ago
+== 341 humanize 2635199s
+<Arrow [2024-06-14T23:59:59+00:00]>
+in 4 weeks
+== 342 humanize -2635199s
+<Arrow [2024-04-15T00:00:01+00:00]>
+4 weeks ago
+== 343 humanize 2635200s
+<Arrow [2024-06-15T00:00:00+00:00]>
+in a month
+== 344 humanize -2635200s
+<Arrow [2024-04-15T00:00:00+00:00]>
+a month ago
+== 345 humanize 5270400s
+<Arrow [2024-07-15T12:00:00+00:00]>
+in 2 months
+== 346 humanize -5270400s
+<Arrow [2024-03-15T12:00:00+00:00]>
+2 months ago
+== 347 humanize 31535999s
+<Arrow [2025-05-15T11:59:59+00:00]>
+in 12 months
+== 348 humanize -31535999s
+<Arrow [2023-05-16T12:00:01+00:00]>
+12 months ago
+== 349 humanize 31536000s
+<Arrow [2025-05-15T12:00:00+00:00]>
+in a year
+== 350 humanize -31536000s
+<Arrow [2023-05-16T12:00:00+00:00]>
+a year ago
+== 351 humanize 63071999s
+<Arrow [2026-05-15T11:59:59+00:00]>
+in a year
+== 352 humanize -63071999s
+<Arrow [2022-05-16T12:00:01+00:00]>
+a year ago
+== 353 humanize 63072000s
+<Arrow [2026-05-15T12:00:00+00:00]>
+in 2 years
+== 354 humanize -63072000s
+<Arrow [2022-05-16T12:00:00+00:00]>
+2 years ago
+== 355 humanize 315360000s
+<Arrow [2034-05-13T12:00:00+00:00]>
+in 10 years
+== 356 humanize -315360000s
+<Arrow [2014-05-18T12:00:00+00:00]>
+10 years ago
+== 357 humanize months by calendar
+3 months ago
+== 358 humanize same tz ignores dst
+24 hours ago
+23 hours ago
+== 359 humanize naive other
+in 3 hours
+== 360 humanize aware other
+an hour ago
+== 361 humanize bad other
+TypeError: Invalid 'other' argument of type 'str'. Argument must be of type None, Arrow, or datetime.
+== 362 humanize granularity second
+in 71913294 seconds
+71913294 seconds
+== 363 humanize granularity minute
+in 1198554 minutes
+1198554 minutes
+== 364 humanize granularity hour
+in 19975 hours
+19975 hours
+== 365 humanize granularity day
+in 832 days
+832 days
+== 366 humanize granularity week
+in 118 weeks
+118 weeks
+== 367 humanize granularity month
+in 27 months
+27 months
+== 368 humanize granularity quarter
+in 9 quarters
+9 quarters
+== 369 humanize granularity year
+in 2 years
+2 years
+== 370 humanize granularity decade
+ValueError: Invalid level of granularity. Please select between 'second', 'minute', 'hour', 'day', 'week', 'month', 'quarter' or 'year'.
+ValueError: Invalid level of granularity. Please select between 'second', 'minute', 'hour', 'day', 'week', 'month', 'quarter' or 'year'.
+== 371 humanize granularity ['hour']
+in 19975 hours
+19975 hours
+== 372 humanize granularity ['year', 'day']
+in 2 years and 102 days
+2 years and 102 days
+== 373 humanize granularity ['month', 'week', 'second']
+in 27 months a week and 158094 seconds
+27 months a week and 158094 seconds
+== 374 humanize granularity ['day', 'hour', 'minute']
+in 832 days 7 hours and 54 minutes
+832 days 7 hours and 54 minutes
+== 375 humanize granularity ['year', 'decade']
+ValueError: Invalid level of granularity. Please select between 'second', 'minute', 'hour', 'day', 'week', 'month', 'quarter' or 'year'.
+ValueError: Invalid level of granularity. Please select between 'second', 'minute', 'hour', 'day', 'week', 'month', 'quarter' or 'year'.
+== 376 humanize granularity []
+ValueError: Empty granularity list provided. Please select one or more from 'second', 'minute', 'hour', 'day', 'week', 'month', 'quarter', 'year'.
+ValueError: Empty granularity list provided. Please select one or more from 'second', 'minute', 'hour', 'day', 'week', 'month', 'quarter', 'year'.
+== 377 humanize granularity second near
+just now
+== 378 humanize granularity minute fraction
+0 minutes ago
+== 379 humanize locale en
+just now
+in 30 seconds
+a minute ago
+in 21 minutes
+an hour ago
+in 3 hours
+in a day
+2 days ago
+5 days ago
+in a week
+3 weeks ago
+in a month
+11 months ago
+in a year
+2 years ago
+in 22 years
+3 days
+instantly
+in a year 35 days and 0 hours
+a quarter ago
+2 weeks and a day
+a day ago
+== 380 humanize locale fr
+maintenant
+dans 30 secondes
+il y a une minute
+dans 21 minutes
+il y a une heure
+dans 3 heures
+dans un jour
+il y a 2 jours
+il y a 5 jours
+dans une semaine
+il y a 3 semaines
+dans un mois
+il y a 11 mois
+dans un an
+il y a 2 ans
+dans 22 ans
+3 jours
+maintenant
+dans un an 35 jours et 0 heures
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'fr' locale. Please consider making a contribution to this locale.
+2 semaines et un jour
+il y a un jour
+== 381 humanize locale de
+gerade eben
+in 30 Sekunden
+vor einer Minute
+in 21 Minuten
+vor einer Stunde
+in 3 Stunden
+in einem Tag
+vor 2 Tagen
+vor 5 Tagen
+in einer Woche
+vor 3 Wochen
+in einem Monat
+vor 11 Monaten
+in einem Jahr
+vor 2 Jahren
+in 22 Jahren
+3 Tage
+gerade eben
+in einem Jahr 35 Tagen und 0 Stunden
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'de' locale. Please consider making a contribution to this locale.
+2 Wochen und einem Tag
+vor einem Tag
+== 382 humanize locale es
+ahora
+en 30 segundos
+hace un minuto
+en 21 minutos
+hace una hora
+en 3 horas
+en un día
+hace 2 días
+hace 5 días
+en una semana
+hace 3 semanas
+en un mes
+hace 11 meses
+en un año
+hace 2 años
+en 22 años
+3 días
+ahora
+en un año 35 días y 0 horas
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'es' locale. Please consider making a contribution to this locale.
+2 semanas y un día
+hace un día
+== 383 humanize locale it
+adesso
+tra 30 qualche secondo
+un minuto fa
+tra 21 minuti
+un'ora fa
+tra 3 ore
+tra un giorno
+2 giorni fa
+5 giorni fa
+tra una settimana
+3 settimane fa
+tra un mese
+11 mesi fa
+tra un anno
+2 anni fa
+tra 22 anni
+3 giorni
+adesso
+tra un anno 35 giorni e 0 ore
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'it' locale. Please consider making a contribution to this locale.
+2 settimane e un giorno
+un giorno fa
+== 384 humanize locale pt
+agora
+em 30 segundos
+há um minuto
+em 21 minutos
+há uma hora
+em 3 horas
+em um dia
+há 2 dias
+há 5 dias
+em uma semana
+há 3 semanas
+em um mês
+há 11 meses
+em um ano
+há 2 anos
+em 22 anos
+3 dias
+agora
+em um ano 35 dias e 0 horas
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'pt' locale. Please consider making a contribution to this locale.
+2 semanas e um dia
+há um dia
+== 385 humanize locale pt-br
+agora
+em 30 segundos
+faz um minuto
+em 21 minutos
+faz uma hora
+em 3 horas
+em um dia
+faz 2 dias
+faz 5 dias
+em uma semana
+faz 3 semanas
+em um mês
+faz 11 meses
+em um ano
+faz 2 anos
+em 22 anos
+3 dias
+agora
+em um ano 35 dias e 0 horas
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'pt-br' locale. Please consider making a contribution to this locale.
+2 semanas e um dia
+faz um dia
+== 386 humanize locale nl
+nu
+over 30 seconden
+een minuut geleden
+over 21 minuten
+een uur geleden
+over 3 uur
+over een dag
+2 dagen geleden
+5 dagen geleden
+over een week
+3 weken geleden
+over een maand
+11 maanden geleden
+over een jaar
+2 jaar geleden
+over 22 jaar
+3 dagen
+nu
+over een jaar 35 dagen 0 uur
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'nl' locale. Please consider making a contribution to this locale.
+2 weken een dag
+een dag geleden
+== 387 humanize locale ru
+сейчас
+через 30 секунд
+минуту назад
+через 21 минуту
+час назад
+через 3 часа
+через день
+2 дня назад
+5 дней назад
+через неделю
+3 недели назад
+через месяц
+11 месяцев назад
+через год
+2 года назад
+через 22 года
+3 дня
+сейчас
+через год 35 дней 0 часов
+квартал назад
+2 недели день
+день назад
+== 388 humanize locale pl
+teraz
+za 30 sekund
+minutę temu
+za 21 minut
+godzinę temu
+za 3 godziny
+za dzień
+2 dni temu
+5 dni temu
+za tydzień
+3 tygodnie temu
+za miesiąc
+11 miesięcy temu
+za rok
+2 lata temu
+za 22 lata
+3 dni
+teraz
+za rok 35 dni 0 godzin
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'pl' locale. Please consider making a contribution to this locale.
+2 tygodnie dzień
+dzień temu
+== 389 humanize locale cs
+Teď
+Za 30 sekund
+Před minutou
+Za 21 minut
+Před hodinou
+Za 3 hodiny
+Za den
+Před 2 dny
+Před 5 dny
+Za týden
+Před 3 týdny
+Za měsíc
+Před 11 měsíci
+Za rok
+Před 2 lety
+Za 22 roky
+3 dny
+Teď
+Za rok 35 dnů 0 hodin
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'cs' locale. Please consider making a contribution to this locale.
+2 týdny dnem
+Před dnem
+== 390 humanize locale fi
+juuri nyt
+30 sekunnin kuluttua
+minuutti sitten
+21 minuutin kuluttua
+tunti sitten
+3 tunnin kuluttua
+päivän kuluttua
+2 päivää sitten
+5 päivää sitten
+viikon kuluttua
+3 viikkoa sitten
+kuukauden kuluttua
+11 kuukautta sitten
+vuoden kuluttua
+2 vuotta sitten
+22 vuoden kuluttua
+3 päivää
+juuri nyt
+vuoden 35 päivän 0 tunnin kuluttua
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'fi' locale. Please consider making a contribution to this locale.
+2 viikkoa päivä
+päivä sitten
+== 391 humanize locale ja
+現在
+30秒後
+1分前
+21分後
+1時間前
+3時間後
+1日後
+2日前
+5日前
+1週間後
+3週間前
+1ヶ月後
+11ヶ月前
+1年後
+2年前
+22年後
+3日
+現在
+1年 35日 0時間後
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'ja' locale. Please consider making a contribution to this locale.
+2週間 1日
+1日前
+== 392 humanize locale zh
+刚才
+30秒后
+1分钟前
+21分钟后
+1小时前
+3小时后
+1天后
+2天前
+5天前
+1周后
+3周前
+1个月后
+11个月前
+1年后
+2年前
+22年后
+3天
+刚才
+1年 35天 0小时后
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'zh' locale. Please consider making a contribution to this locale.
+2周 1天
+1天前
+== 393 humanize locale ko
+지금
+30초 후
+1분 전
+21분 후
+한시간 전
+3시간 후
+내일
+그제
+5일 전
+1주 후
+3주 전
+한달 후
+11개월 전
+내년
+제작년
+22년 후
+3일
+지금
+1년 35일 0시간 후
+ValueError: Humanization of the 'quarter' granularity is not currently translated in the 'ko' locale. Please consider making a contribution to this locale.
+2주 하루
+어제
+== 394 humanize bad locale
+ValueError: Unsupported locale 'klingon'.
+== 395 dehumanize en 'in 5 seconds'
+<Arrow [2024-05-15T12:00:05+00:00]>
+== 396 dehumanize en '2 hours ago'
+<Arrow [2024-05-15T10:00:00+00:00]>
+== 397 dehumanize en 'a minute ago'
+<Arrow [2024-05-15T11:59:00+00:00]>
+== 398 dehumanize en 'in a year'
+<Arrow [2025-05-15T12:00:00+00:00]>
+== 399 dehumanize en 'just now'
+<Arrow [2024-05-15T12:00:00+00:00]>
+== 400 dehumanize en 'in 2 days and 3 hours'
+<Arrow [2024-05-17T15:00:00+00:00]>
+== 401 dehumanize en '3 weeks ago'
+<Arrow [2024-04-24T12:00:00+00:00]>
+== 402 dehumanize en 'in 2 quarters'
+<Arrow [2024-11-15T12:00:00+00:00]>
+== 403 dehumanize en 'an hour ago'
+<Arrow [2024-05-15T11:00:00+00:00]>
+== 404 dehumanize en '5 hours'
+ValueError: Invalid input String. String does not contain any relative time information. String should either represent a time in the future or a time in the past. Ex: 'in 5 seconds' or '5 seconds ago'.
+== 405 dehumanize en 'soon'
+ValueError: Input string not valid. Note: Some locales do not support the week granularity in Arrow. If you are attempting to use the week granularity on an unsupported locale, this could be the cause of this error.
+== 406 dehumanize en_US 'in 4 months'
+<Arrow [2024-09-15T12:00:00+00:00]>
+== 407 dehumanize fr 'il y a 3 jours'
+<Arrow [2024-05-12T12:00:00+00:00]>
+== 408 dehumanize fr 'dans une heure'
+<Arrow [2024-05-15T13:00:00+00:00]>
+== 409 dehumanize de 'vor 2 Tagen'
+<Arrow [2024-05-13T12:00:00+00:00]>
+== 410 dehumanize de 'in 5 Minuten'
+<Arrow [2024-05-15T12:05:00+00:00]>
+== 411 dehumanize es 'hace 2 años'
+<Arrow [2022-05-15T12:00:00+00:00]>
+== 412 dehumanize it 'tra 3 ore'
+<Arrow [2024-05-15T15:00:00+00:00]>
+== 413 dehumanize ru 'через 2 дня'
+<Arrow [2024-05-17T12:00:00+00:00]>
+== 414 dehumanize ru '5 минут назад'
+<Arrow [2024-05-15T11:55:00+00:00]>
+== 415 dehumanize pl 'za 3 godziny'
+<Arrow [2024-05-15T15:00:00+00:00]>
+== 416 dehumanize ja '3日前'
+<Arrow [2024-05-12T12:00:00+00:00]>
+== 417 dehumanize zh '2小时后'
+<Arrow [2024-05-15T14:00:00+00:00]>
+== 418 dehumanize nl 'over 2 weken'
+<Arrow [2024-05-29T12:00:00+00:00]>
+== 419 dehumanize pt 'há 4 meses'
+<Arrow [2024-01-15T12:00:00+00:00]>
+== 420 dehumanize fi '3 tuntia sitten'
+<Arrow [2024-05-15T09:00:00+00:00]>
+== 421 dehumanize cs 'Za 2 dny'
+<Arrow [2024-05-17T12:00:00+00:00]>
+== 422 dehumanize ko '3시간 후'
+ValueError: Dehumanize does not currently support the ko locale, please consider making a contribution to add support for this locale.
+== 423 dehumanize pt-br 'faz 2 dias'
+<Arrow [2024-05-13T12:00:00+00:00]>
+== 424 cmp same instant other zones
+== True != False < False <= True > False >= True a-b datetime.timedelta(0) b-a datetime.timedelta(0)
+== 425 cmp later
+== False != True < False <= False > True >= True a-b datetime.timedelta(seconds=3600) b-a datetime.timedelta(days=-1, seconds=82800)
+== 426 cmp ambiguous across zones
+== False != True < False <= True > False >= True a-b datetime.timedelta(0) b-a datetime.timedelta(0)
+== 427 cmp ambiguous fold 1 across zones
+== False != True < False <= True > False >= True a-b datetime.timedelta(0) b-a datetime.timedelta(0)
+== 428 cmp same zone folds
+== True != False < False <= True > False >= True a-b datetime.timedelta(0) b-a datetime.timedelta(0)
+== 429 cmp same zone across dst
+== False != True < True <= True > False >= False a-b datetime.timedelta(days=-1) b-a datetime.timedelta(days=1)
+== 430 cmp diff zone across dst
+== False != True < True <= True > False >= False a-b datetime.timedelta(days=-1, seconds=3600) b-a datetime.timedelta(seconds=82800)
+== 431 arith
+<Arrow [2024-03-01T01:00:00+11:00]>
+<Arrow [2024-02-23T01:00:00+11:00]>
+<Arrow [2024-02-23T01:00:01.500001+11:00]>
+== 432 between
+False
+True
+True
+False
+ValueError: Invalid bounds. Please select between '()', '(]', '[)', or '[]'.
+== 433 iso forms
+2024-06-01T12:03:04.005006+05:30
+2024-06-01 12+05:30
+2024-06-01T12:03+05:30
+2024-06-01T12:03:04+05:30
+2024-06-01T12:03:04.005+05:30
+2024-06-01_12:03:04.005006+05:30
+ValueError: Unknown timespec value
+== 434 iso no micro
+2024-06-01T12:03:04-02:30
+2024-06-01T12:03:04.000-02:30
+== 435 min and max
+<Arrow [0001-01-01T00:00:00+00:00]>
+0001-01-01 Monday 1-W01-1
+== 436 max
+<Arrow [9999-12-31T23:59:59.999999+00:00]>
+OverflowError: date value out of range
+== 437 log normalizer
+nginx   2024-03-10T04:58:12+00:00  local Sat 23:58:12 -05:00
+nginx   2024-03-10T05:02:40+00:00  local Sun 00:02:40 -05:00
+app     2024-03-10T05:03:01.412000+00:00  local Sun 05:03:01 +00:00
+app     2024-03-10T05:07:55.020000+00:00  local Sun 05:07:55 +00:00
+mail    2024-03-10T05:12:09+00:00  local Sun 06:12:09 +01:00
+mail    2024-03-10T05:12:09+00:00  local Sun 06:12:09 +01:00
+syslog  2024-03-10T04:59:01+00:00  local Sat 23:59:01 -05:00
+syslog  2024-03-10T06:15:44+00:00  local Sun 01:15:44 -05:00
+syslog  2024-03-10T06:30:00+00:00  local Sun 02:30:00 -04:00 (no such local time)
+syslog  2024-03-10T07:01:12+00:00  local Sun 03:01:12 -04:00
+audit   2024-03-10T05:17:00+00:00  local Sun 05:17:00 +00:00
+audit   2024-03-10T06:17:00.500000+00:00  local Sun 06:17:00 +00:00
+api     2024-03-10T05:20:00+00:00  local Sun 01:20:00 -04:00
+api     2024-03-10T02:15:31+00:00  local Sun 07:45:31 +05:30
+cron    2024-03-10T08:00:00+00:00  local Sun 09:00:00 +01:00
+cron    2024-03-10T08:15:00+00:00  local Sun 09:15:00 +01:00
+nginx   2024-03-10T07:59:59+00:00  local Sun 07:59:59 +00:00
+app     ParserError: Could not match input '2024-03-10 7:59:60,000 ERROR clock skew' to any of the following formats: YYYY-MM-DD HH:mm:ss,SSS, YYYY-MM-DDTHH:mm:ss.SSSZZ.
+unknown no format for this service
+by hour (UTC):
+  2024-03-10 02:00  # 1
+  2024-03-10 04:00  ## 2
+  2024-03-10 05:00  ####### 7
+  2024-03-10 06:00  ### 3
+  2024-03-10 07:00  ## 2
+  2024-03-10 08:00  ## 2
+by service:
+  api     2 lines, 2024-03-10T02:15:31+00:00 .. 2024-03-10T05:20:00+00:00
+  app     2 lines, 2024-03-10T05:03:01.412000+00:00 .. 2024-03-10T05:07:55.020000+00:00
+  audit   2 lines, 2024-03-10T05:17:00+00:00 .. 2024-03-10T06:17:00.500000+00:00
+  cron    2 lines, 2024-03-10T08:00:00+00:00 .. 2024-03-10T08:15:00+00:00
+  mail    2 lines, 2024-03-10T05:12:09+00:00 .. 2024-03-10T05:12:09+00:00
+  nginx   3 lines, 2024-03-10T04:58:12+00:00 .. 2024-03-10T07:59:59+00:00
+  syslog  4 lines, 2024-03-10T04:59:01+00:00 .. 2024-03-10T07:01:12+00:00
+window: 5 hours 59 minutes and 29 seconds (5 hours ago)
+== 438 meeting planner
+Design review, Thursday 7 March 2024 11:00 EST, in 6 days (2024-03-07T16:00:00+00:00)
+  2024-03-07 11:00 -05:00  London 16:00-17:00 | Berlin 17:00-18:00 | Kolkata 21:30-22:30*
+  2024-03-14 11:00 -04:00  London 15:00-16:00 | Berlin 16:00-17:00 | Kolkata 20:30-21:30*
+  2024-03-21 11:00 -04:00  London 15:00-16:00 | Berlin 16:00-17:00 | Kolkata 20:30-21:30*
+  2024-03-28 11:00 -04:00  London 15:00-16:00 | Berlin 16:00-17:00 | Kolkata 20:30-21:30*
+Release sync, Thursday 28 March 2024 17:30 CET, in 3 weeks (2024-03-28T16:30:00+00:00)
+  2024-03-28 17:30 +01:00  Los_Angeles 09:30-10:15 | New_York 12:30-13:15 | Tokyo 01:30-02:15 (Fri)*
+  2024-04-04 17:30 +02:00  Los_Angeles 08:30-09:15 | New_York 11:30-12:15 | Tokyo 00:30-01:15 (Fri)*
+  2024-04-11 17:30 +02:00  Los_Angeles 08:30-09:15 | New_York 11:30-12:15 | Tokyo 00:30-01:15 (Fri)*
+  2024-04-18 17:30 +02:00  Los_Angeles 08:30-09:15 | New_York 11:30-12:15 | Tokyo 00:30-01:15 (Fri)*
+On-call handover, Thursday 4 April 2024 09:00 AEDT, in a month (2024-04-03T22:00:00+00:00)
+  2024-04-04 09:00 +11:00  London 23:00-23:30 (Wed)* | Sao_Paulo 19:00-19:30 (Wed)*
+  2024-04-11 09:00 +10:00  London 00:00-00:30* | Sao_Paulo 20:00-20:30 (Wed)*
+  2024-04-18 09:00 +10:00  London 00:00-00:30* | Sao_Paulo 20:00-20:30 (Wed)*
+  2024-04-25 09:00 +10:00  London 00:00-00:30* | Sao_Paulo 20:00-20:30 (Wed)*
+Quarterly planning, Sunday 3 November 2024 01:30 PDT, in 8 months (2024-11-03T08:30:00+00:00); happens twice on the organizer's clock
+  2024-11-03 01:30 -07:00  New_York 03:30-06:30* | London 08:30-11:30
+Night maintenance, Sunday 10 March 2024 02:30 EDT, in a week (2024-03-10T06:30:00+00:00); does not exist on the organizer's clock
+  2024-03-10 02:30 -04:00  UTC 06:30-08:00* | Kolkata 12:00-13:30
+Customer demo, Wednesday 15 May 2024 18:00 IST, in 2 months (2024-05-15T12:30:00+00:00)
+  2024-05-15 18:00 +05:30  Los_Angeles 05:30-06:30* | Sydney 22:30-23:30* | Tokyo 21:30-22:30*
+Budget call: ValueError: day is out of range for month
+Offsite: ParserError: Could not parse timezone expression 'Moon/Base'.
+== 439 billing periods
+S-1001 America/New_York, Jan 31, 2024 10:00 to May 31, 2024 10:00 (open, four months shown)
+  2024-01     50399 of  2678399 s    0.92
+  2024-02   2505599 of  2505599 s   49.00
+  2024-03   2678399 of  2678399 s   49.00
+  2024-04   2591999 of  2591999 s   49.00
+  2024-05   2628000 of  2678399 s   48.07
+  total 195.99
+  renewals: Wed Jan 31, Thu Feb 29, Sun Mar 31, Tue Apr 30, Fri May 31
+S-1002 Europe/London, Feb 14, 2024 00:00 to May 20, 2024 12:00
+  2024-02   1382399 of  2505599 s    6.62
+  2024-03   2678399 of  2678399 s   12.00
+  2024-04   2591999 of  2591999 s   12.00
+  2024-05   1684800 of  2678399 s    7.54
+  total 38.16
+  renewals: Wed Feb 14, Thu Mar 14, Sun Apr 14, Tue May 14, Fri Jun 14
+S-1003 Europe/Berlin, Mar 1, 2024 00:00 to Mar 31, 2024 00:00
+  2024-03   2592000 of  2678399 s  289.35
+  total 289.35
+  renewals: Fri Mar 1, Mon Apr 1, Wed May 1, Sat Jun 1, Mon Jul 1
+S-1004 Asia/Kolkata, Dec 15, 2023 08:30 to Feb 29, 2024 23:59
+  2023-12   1438199 of  2678399 s    5.36
+  2024-01   2678399 of  2678399 s    9.99
+  2024-02   2505599 of  2505599 s    9.99
+  total 25.34
+  renewals: Fri Dec 15, Mon Jan 15, Thu Feb 15, Fri Mar 15, Mon Apr 15
+S-1005 Australia/Sydney, Oct 30, 2024 18:00 to Jan 2, 2025 00:00
+  2024-10    107999 of  2678399 s    3.02
+  2024-11   2591999 of  2591999 s   75.00
+  2024-12   2678399 of  2678399 s   75.00
+  2025-01     86400 of  2678399 s    2.41
+  total 155.43
+  renewals: Wed Oct 30, Sat Nov 30, Mon Dec 30, Thu Jan 30, Fri Feb 28
+S-1006: ValueError: day is out of range for month
+== 440 activity feed
+amara [today] pushed 3 commits to main, just now, Wed 15 May 12:59; back to 2024-05-15 12:00
+amara [today] opened issue #4412, an hour ago, Wed 15 May 11:10; back to 2024-05-15 11:00
+bruno [yesterday] comentou no PR #88, faz 12 horas, Ter 14 Mai 20:30; back to 2024-05-15 00:00
+chen [this week] 合并了分支 release, 2天前, 一 13  5 09:00; back to 2024-05-13 12:00
+dmitri [earlier] закрыл задачу, 2 недели назад, ср 1 май 08:00; back to 2024-05-01 12:00
+elise [upcoming] a publié la version 2.4, dans 30 minutes, mer 15 mai 14:30; back to 2024-05-15 12:30
+elise [earlier] a rejoint le projet, il y a 5 mois, dim 24 déc 18:00; back to 2023-12-15 12:00
+fumiko [today] レビューを依頼しました, 現在, 水 15  5 21:00; back to 2024-05-15 12:00
+greta [upcoming] plant das Release-Meeting, in 19 Stunden, Do 16 Mai 09:00; back to 2024-05-16 07:00
+hana [yesterday] 이슈를 닫았습니다, 어제, 화 14  5 12:00; ValueError: Dehumanize does not currently support the ko locale, please consider making a contribution to add support for this locale.
+ivan [earlier] dodał komentarz, 4 tygodnie temu, Pn 15 kwi 12:00; back to 2024-04-17 12:00
+jana [earlier] sloučila větev, Před 3 dny, ne 12 kvě 12:00; back to 2024-05-12 12:00
+kai [today] päivitti dokumentaation, 3 tuntia sitten, ke 15 touko 11:00; back to 2024-05-15 09:00
+lotte [earlier] heeft een release gemaakt, een week geleden, wo 8 mei 12:00; back to 2024-05-08 12:00
+marco [upcoming] ha pianificato la migrazione, tra un anno, ven 15 mag 12:00; back to 2025-05-15 12:00
+nuria [today] revisó el cambio, ahora, mie 15 may 14:00; back to 2024-05-15 12:00
+omar: ValueError: Unsupported locale 'tlh'.
+groups: upcoming 3, today 5, yesterday 2, this week 1, earlier 5
