@@ -197,6 +197,9 @@ pub struct Lowered {
     /// The reductions of the loops in [`Self::auto_par_tasks`], as
     /// `instance@line (acc at line, ..)`, one line per site.
     pub auto_par_reductions: Vec<String>,
+    /// Whether this is auto-par's recording build, whose bodies only the
+    /// verdicts read.
+    pub auto_par_record: bool,
 }
 
 /// What an `extern "C"` signature with a type no backend passes to C yet
@@ -500,6 +503,7 @@ fn lower_program_inner<'a>(
         auto_par_tasks: lcx.auto_par_done,
         auto_par_groups: lcx.auto_par_groups,
         auto_par_reductions: lcx.auto_par_reduced,
+        auto_par_record: matches!(lcx.auto_par, AutoPar::Record),
     }
 }
 
@@ -997,6 +1001,9 @@ struct ClosureJob<'a> {
     /// It is an auto-par task: in place of its body it runs these of a
     /// loop's iterations (M4 item 14).
     chunk: Option<ChunkJob<'a>>,
+    /// The function the closure is written in, whose type parameters its
+    /// body names (`|| T.zero()`).
+    outer: DefId,
 }
 
 /// A method of a resource's bound (core semantics §14.2).
@@ -1740,6 +1747,7 @@ impl<'a> Lcx<'a> {
             name: job.name.clone(),
         };
         let mut bx = Bx::new(self, instance, ret, job.args.clone());
+        bx.outer_fn = Some(job.outer);
         let _ = bx.lower_closure_body(&job, params, body);
         let (body, errors) = bx.finish();
         self.errors.extend(errors);
@@ -2596,6 +2604,12 @@ struct Bx<'l, 'a> {
     pinned: FxHashMap<NodeId, Place>,
     /// The captures a closure body assigns to, found with its moves.
     assigned_caps: std::cell::RefCell<FxHashSet<SymbolId>>,
+    /// Whether `moved_captures` is finding a task's: a library builtin's
+    /// argument then moves in (`String.from_utf8(bytes)`), where a closure
+    /// the program writes keeps the checker's capture modes.
+    task_moves: bool,
+    /// In a closure's body, the function the closure is written in.
+    outer_fn: Option<DefId>,
     /// `let f = |..| ..` bindings whose closure is later stored where it
     /// escapes, by the binding pattern's id (see `let_closure_escapes`).
     escaping_lets: FxHashSet<NodeId>,
@@ -2689,6 +2703,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             pinned: FxHashMap::default(),
             escaping_lets: FxHashSet::default(),
             assigned_caps: Default::default(),
+            task_moves: false,
+            outer_fn: None,
             ty_hints: FxHashMap::default(),
             par_acc: None,
             par_for_tasks: None,
@@ -4199,13 +4215,34 @@ impl<'l, 'a> Bx<'l, 'a> {
                 StmtKind::Expr(e) if self.discarded_dbg(e).is_none() => (e, None),
                 _ => return Ok(false),
             };
+            // A task's value outlives the task, so it holds no borrow of
+            // what the task owns (`ps.iter().min_by_key(..)`, an
+            // `Option[ref P]`).
             let t = self.expr_ty(e)?;
-            if self.is_reference(t) || matches!(self.tys().tcx().kind(t), HK::Never | HK::Fn { .. })
+            if crate::mir::borrowck::holds_borrow(self.tys(), t)
+                || matches!(self.tys().tcx().kind(t), HK::Never | HK::Fn { .. })
             {
                 return Ok(false);
             }
             es.push(e);
             slots.push((slot, t));
+        }
+        // A task takes what its statement moves, so a binding one statement
+        // moves (on any path, a `return` included) and another names keeps
+        // the run in order.
+        let caps: Vec<Vec<SymbolId>> = es.iter().map(|e| self.closure_captures(e)).collect();
+        for (k, e) in es.iter().enumerate() {
+            self.task_moves = true;
+            let moved = self.moved_captures(e, &caps[k]);
+            self.task_moves = false;
+            let shared = |s: &SymbolId| {
+                caps.iter()
+                    .enumerate()
+                    .any(|(j, c)| j != k && c.contains(s))
+            };
+            if moved.iter().any(shared) {
+                return Ok(false);
+            }
         }
         let region = self.open_par_region(ParKind::Block, run[0].span);
         let tys: Vec<Ty> = slots.iter().map(|&(_, t)| t).collect();
@@ -4348,12 +4385,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         let t = self.expr_ty(e)?;
         let x = self.temp(t);
         self.expr_into(e, Place::local(x))?;
+        // A term read through a reference (`hits + v` with `v: ref i64`)
+        // adds what it points at.
+        let mut p = Place::local(x);
+        let mut pt = t;
+        while let HK::Ref(inner) = self.tys().tcx().kind(pt) {
+            p = p.project(ProjElem::Deref);
+            pt = inner;
+        }
         let wt = self.b.local_ty(w.total);
         let xw = self.temp(wt);
-        self.assign(
-            xw,
-            Rvalue::Cast(CastKind::IntToInt, Operand::Move(Place::local(x)), wt),
-        );
+        self.assign(xw, Rvalue::Cast(CastKind::IntToInt, Operand::Copy(p), wt));
         // No run is long enough to overflow an `i128` total of 64-bit terms.
         self.assign(
             w.total,
@@ -10250,7 +10292,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                     ..
                 }
             );
-            if !vec || sites.len() > 1 {
+            let capacity = matches!(&self.lcx.auto_par, AutoPar::Apply(h) if h.observes_capacity);
+            if !vec || sites.len() > 1 || capacity {
                 return Ok(None);
             }
             return Ok(Some(Some(AutoRed {
@@ -10531,30 +10574,55 @@ impl<'l, 'a> Bx<'l, 'a> {
         let hi = self.temp(t);
         self.assign(hi, Rvalue::Use(end));
         // `n` iterations, cut into `k` runs: the first `n % k` one longer.
-        let n = self.temp(t);
-        self.assign(n, Rvalue::Use(int(0)));
+        // `n` is counted in an `i128` (a range of a narrower type), since
+        // `-100i8..100` has more iterations than an `i8` holds; `q`, `k`
+        // and `rem` are at most `n / k` and `k`, so they fit in `t`.
+        let c = match self.tys().tcx().kind(t) {
+            HK::Int(IntSize::I128) | HK::UInt(UIntSize::U128) => t,
+            _ => self.tys().tcx().intern(HK::Int(IntSize::I128)),
+        };
+        let wide = |v: u128| {
+            Operand::Const(Const {
+                ty: c,
+                kind: ConstKind::Scalar(v),
+            })
+        };
+        let widen = |me: &mut Self, l: Local| {
+            let w = me.temp(c);
+            me.assign(w, Rvalue::Cast(CastKind::IntToInt, copy(l), c));
+            w
+        };
+        let narrow = |me: &mut Self, w: Local| {
+            let l = me.temp(t);
+            me.assign(l, Rvalue::Cast(CastKind::IntToInt, copy(w), t));
+            l
+        };
+        let n = self.temp(c);
+        self.assign(n, Rvalue::Use(wide(0)));
         let some = self.temp(bool_t);
         self.assign(some, Rvalue::BinaryOp(BinOp::Lt, copy(lo), copy(hi)));
+        let (lo_c, hi_c) = (widen(self, lo), widen(self, hi));
         self.when(some, |b| {
-            b.assign(n, Rvalue::BinaryOp(BinOp::Sub, copy(hi), copy(lo)));
+            b.assign(n, Rvalue::BinaryOp(BinOp::Sub, copy(hi_c), copy(lo_c)));
         });
-        let k = self.temp(t);
-        self.assign(k, Rvalue::Use(int(AUTO_PAR_TASKS)));
+        let kc = self.temp(c);
+        self.assign(kc, Rvalue::Use(wide(AUTO_PAR_TASKS)));
         let few = self.temp(bool_t);
         self.assign(
             few,
-            Rvalue::BinaryOp(BinOp::Lt, copy(n), int(AUTO_PAR_TASKS)),
+            Rvalue::BinaryOp(BinOp::Lt, copy(n), wide(AUTO_PAR_TASKS)),
         );
-        self.when(few, |b| b.assign(k, Rvalue::Use(copy(n))));
+        self.when(few, |b| b.assign(kc, Rvalue::Use(copy(n))));
         let none = self.temp(bool_t);
-        self.assign(none, Rvalue::BinaryOp(BinOp::Eq, copy(k), int(0)));
-        let d = self.temp(t);
-        self.assign(d, Rvalue::Use(copy(k)));
-        self.when(none, |b| b.assign(d, Rvalue::Use(int(1))));
-        let q = self.temp(t);
-        self.assign(q, Rvalue::BinaryOp(BinOp::Div, copy(n), copy(d)));
-        let rem = self.temp(t);
-        self.assign(rem, Rvalue::BinaryOp(BinOp::Rem, copy(n), copy(d)));
+        self.assign(none, Rvalue::BinaryOp(BinOp::Eq, copy(kc), wide(0)));
+        let d = self.temp(c);
+        self.assign(d, Rvalue::Use(copy(kc)));
+        self.when(none, |b| b.assign(d, Rvalue::Use(wide(1))));
+        let qc = self.temp(c);
+        self.assign(qc, Rvalue::BinaryOp(BinOp::Div, copy(n), copy(d)));
+        let remc = self.temp(c);
+        self.assign(remc, Rvalue::BinaryOp(BinOp::Rem, copy(n), copy(d)));
+        let (k, q, rem) = (narrow(self, kc), narrow(self, qc), narrow(self, remc));
         let j = self.temp(t);
         self.assign(j, Rvalue::Use(int(0)));
         let from = self.temp(t);
@@ -14390,7 +14458,8 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The type a generic parameter named `name` has in this instance.
     fn type_param(&self, name: &str) -> Option<Ty> {
-        let item = self.lcx.fns.get(&self.b.instance().def)?;
+        let def = self.outer_fn.unwrap_or(self.b.instance().def);
+        let item = self.lcx.fns.get(&def)?;
         let names = item
             .impl_generics
             .into_iter()
@@ -18085,10 +18154,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     def.is_some_and(|d| self.lcx.defs.table.get(d).kind == DefKind::Variant);
                 // `with_provider[R](p, f)` takes its provider by value (§14.4).
                 let binds = with_provider_resource(callee).is_some();
+                // A library builtin (`String.from_utf8(bytes)`) takes its
+                // arguments as operands, so a non-`Copy` one moves into a
+                // task.
+                let builtin = self.task_moves
+                    && matches!(callee.kind, ExprKind::Path { .. })
+                    && def.is_none_or(|d| !self.lcx.fns.contains_key(&d));
                 go(callee, false, out);
                 for (i, a) in args.iter().enumerate() {
-                    let owned =
-                        variant || (binds && i == 0) || def.is_some_and(|d| self.owned_param(d, i));
+                    let owned = variant
+                        || builtin
+                        || (binds && i == 0)
+                        || def.is_some_and(|d| self.owned_param(d, i));
                     // `f(mut x)` lends the capture mutably.
                     if a.mut_marker {
                         self.note_assigned(&a.value, caps);
@@ -18275,7 +18352,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         captured.retain(|s| !skip_caps.contains(s));
         captured.extend(extra_caps);
         self.assigned_caps.borrow_mut().clear();
+        self.task_moves = task;
         let moved = self.moved_captures(body, &captured);
+        self.task_moves = false;
         let assigned = std::mem::take(&mut *self.assigned_caps.borrow_mut());
         // The places a task takes by move because they drop before its
         // group (core semantics §9.5), as the checker found them.
@@ -18468,6 +18547,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             exit,
             ret_capture,
             chunk,
+            outer: self.outer_fn.unwrap_or(self.b.instance().def),
         });
         let l = self.scoped_temp(ty);
         self.assign(l, Rvalue::Aggregate(AggregateKind::Closure { ty }, ops));
@@ -21063,6 +21143,7 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
         }
     }
     let mut hints = AutoParHints::of(&verdicts);
+    hints.observes_capacity = src.contains("capacity(");
     while !hints.is_empty() {
         let second = match lower_source_for_checks(src, false, AutoPar::Apply(hints.clone()))
             .and_then(finish_build)
@@ -21077,6 +21158,26 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
                 break;
             }
         };
+        // The parallel form must pass the `par` check a run makes; a
+        // function whose tasks it refuses keeps its statements in order.
+        let report = crate::mir::effects::analyze(&second.program, &second.tys);
+        if let Some((name, c)) = par_conflict(&report) {
+            if debug {
+                eprintln!(
+                    "auto-par: `{name}` at line {} keeps its order: {}",
+                    c.line,
+                    par_conflict_text(c)
+                );
+            }
+            let name = name.clone();
+            let before = hints.len();
+            hints.loops.retain(|(instance, _, _), _| *instance != name);
+            hints.stmts.retain(|(instance, _, _), _| *instance != name);
+            if hints.len() == before {
+                break;
+            }
+            continue;
+        }
         let Some(name) = suspends_as_value(&first, &second) else {
             for (what, done) in [
                 ("loops as tasks", &second.auto_par_tasks),
@@ -21146,6 +21247,10 @@ pub(crate) enum AutoPar {
 pub(crate) struct AutoParHints {
     loops: FxHashMap<(String, usize, usize), Vec<Span>>,
     stmts: FxHashMap<(String, usize, usize), Vec<Vec<usize>>>,
+    /// Whether the program reads a `capacity()`, which a collecting loop's
+    /// tasks would change: they grow their own `Vec`s, which the join then
+    /// appends, where the loop grew one by its pushes.
+    observes_capacity: bool,
 }
 
 impl AutoParHints {
@@ -21165,7 +21270,11 @@ impl AutoParHints {
                 _ => {}
             }
         }
-        AutoParHints { loops, stmts }
+        AutoParHints {
+            loops,
+            stmts,
+            observes_capacity: false,
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -21657,8 +21766,10 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         }
     }
     // `KARAC_MIR_LITERAL_TABLES=0` builds a table of literals on every call
-    // (`literal_tables`).
-    if std::env::var("KARAC_MIR_LITERAL_TABLES").as_deref() != Ok("0") {
+    // (`literal_tables`). Auto-par's recording build keeps each table's
+    // write, so the verdicts see the statements that read the table
+    // depend on the `let` that builds it.
+    if std::env::var("KARAC_MIR_LITERAL_TABLES").as_deref() != Ok("0") && !lowered.auto_par_record {
         crate::mir::literal_tables::promote_literal_tables(&mut lowered.program, &coroutines);
     }
     // `KARAC_MIR_RC_BORROW=0` counts every handle read out of a borrowed

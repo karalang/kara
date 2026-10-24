@@ -887,3 +887,112 @@ fn main() {
         assert_eq!(reduced(&par.stderr), reductions);
     }
 }
+
+/// Shapes from the corpus run with auto-par on, each of which once changed
+/// a program's output or made the parallel build fall back: a sum of
+/// `ref` terms, a range of `i8`s with more iterations than an `i8` holds,
+/// a collecting loop in a program that reads `capacity()` (kept in
+/// order), statements reading a table of literals built by the `let`
+/// before them, statements that move a local into a builtin call, values
+/// that borrow what their task would own (kept in order), a statement
+/// that reads on its way to a `return` what a sibling writes (kept in
+/// order), and `|| T.zero()` in a generic function's closure. No build
+/// falls back.
+#[test]
+fn mir_auto_par_corpus_shapes_keep_their_output() {
+    let src = r#"#[derive(Hash, Eq, PartialEq)]
+enum Tag { Named { s: String }, Anon }
+
+trait Zero { fn zero() -> Self; }
+impl Zero for i64 { fn zero() -> i64 { 0 } }
+
+struct P { name: String, age: i64 }
+
+fn total(v: ref Vec[i64]) -> i64 {
+    let mut t = 0;
+    for x in v.iter() { t = t + *x; }
+    t
+}
+
+fn ones(s: own String) -> i64 {
+    let mut n = 0;
+    for b in s.bytes() { if b == b'1' { n = n + 1; } }
+    n
+}
+
+fn filled[T: Zero + Copy](n: i64) -> Vec[T] {
+    let zero = || T.zero();
+    let mut v: Vec[T] = Vec.new();
+    for _ in 0..n { v.push(zero()); }
+    v
+}
+
+fn fill(v: mut ref Vec[i64], n: i64) {
+    for i in 0..n { v.push(i); }
+}
+
+fn early(c: bool) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    fill(mut v, 100);
+    if c {
+        let mut t = 0;
+        for x in v.iter() { t = t + *x; }
+        return t;
+    }
+    total(v)
+}
+
+fn main() {
+    let mut m: Map[Tag, i64] = Map.new();
+    m.insert(Tag.Named { s: "k-3" }, 7);
+    let mut hits = 0;
+    let mut j = 0;
+    while j < 6 {
+        match m.get(Tag.Named { s: f"k-{j}" }) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j += 1;
+    }
+    let lo: i8 = -100;
+    let hi: i8 = 100;
+    let mut n: i32 = 0;
+    for q in lo..hi { n = n + (q as i32); }
+    println(f"{hits} {n}");
+    let mut c: Vec[i64] = Vec.new();
+    for i in 0..26 { c.push(i); }
+    println(f"{c.len()} {c.capacity()}");
+    let w: Vec[i64] = [3, 1, 4, 1, 5, 9, 2, 6];
+    let a = total(w);
+    let b = total(w);
+    println(a + b);
+    let mut back: Vec[u8] = Vec.new();
+    let mut alt: Vec[u8] = Vec.new();
+    for i in 0..40 {
+        back.push(if i < 20 { b'1' } else { b'0' });
+        alt.push(if i % 2 == 0 { b'0' } else { b'1' });
+    }
+    let x = ones(String.from_utf8(back).unwrap());
+    let y = ones(String.from_utf8(alt).unwrap());
+    println(f"{x} {y}");
+    let ps: Vec[P] = vec![P { name: "ann".to_string(), age: 30 }, P { name: "bob".to_string(), age: 25 }];
+    let young = ps.iter().min_by_key(|p| p.age);
+    let old = ps.iter().max_by_key(|p| p.age);
+    match (young, old) {
+        (Some(y), Some(o)) => println(f"{y.name} {o.name}"),
+        _ => println("none"),
+    }
+    let z: Vec[i64] = filled(3);
+    println(f"{z.len()} {early(true)} {early(false)}");
+}
+"#;
+    let (out, code, err) = same_both_ways("corpus-shapes", src, &["main@48", "main@58"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, "7 -100\n26 26\n62\n20 20\nbob ann\n3 4950 4950\n");
+    let par = interp_run("corpus-shapes-report", src, true);
+    let report = String::from_utf8_lossy(&par.stderr);
+    assert_eq!(grouped(&par.stderr), ["main@64", "main@73"], "{report}");
+    for fallback in ["was refused", "keeps its order"] {
+        assert!(!report.contains(fallback), "{report}");
+    }
+}
