@@ -2296,6 +2296,20 @@ impl<'a> Interp<'a> {
             {
                 self.view_method(name, method, args, ret)
             }
+            // A value's `Debug` text, as `dbg` shows it, in a new String
+            // (a failed `assert_eq`'s operands).
+            ("debug_string", "") => {
+                let [value] = args.as_slice() else {
+                    return err(format!("{name} takes one value"));
+                };
+                self.debug_render = true;
+                let shown = match arg_tys.first() {
+                    Some(&t) => self.display_typed(value, t),
+                    None => self.display(value),
+                };
+                self.debug_render = false;
+                Ok(self.alloc_box("String", Value::Str(shown?)))
+            }
             ("format_spec", "") => {
                 // One hole with a spec (`{x:.3}`, `{n:04}`, `{s:>10}`): the
                 // value, then the raw spec text after the colon.

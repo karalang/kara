@@ -8738,3 +8738,60 @@ fn main() {
         }
     }
 }
+
+/// A failed `assert_eq` shows both operands' `Debug` text and `assert_ne`
+/// the one value (design.md § Assertions), and each operand is evaluated
+/// once, the message reading the value the comparison saw
+/// (B-2026-10-22-44).
+#[test]
+fn mir_a_failed_assertion_shows_its_operands() {
+    let src = r#"#[derive(Debug, PartialEq)]
+struct P { x: i64, name: String }
+fn noisy(n: i64) -> i64 { println(f"noisy {n}"); n }
+fn word(s: Str) -> String { println(f"word {s}"); s.to_string() }
+fn pt(x: i64) -> P { println(f"pt {x}"); P { x: x, name: "p".to_string() } }
+fn opt(n: i64) -> Option[i64] { println(f"opt {n}"); if n > 0 { Some(n) } else { None } }
+fn main() {
+    let v = [1, 2, 3];
+    let u: u8 = 4;
+    assert_eq(noisy(3), 3);
+    assert_eq(word("a"), "a");
+    assert_eq(pt(1), P { x: 1, name: "p".to_string() });
+    assert_eq(opt(2), Some(2));
+    assert_eq(opt(0), None);
+    assert_eq(v[1], 2);
+    assert_eq(u, 4);
+    assert_ne(noisy(5), 6);
+    assert_eq(pt(1).x, 1);
+    println("passed");
+    if v.len() == 3 {
+        assert_eq(pt(2), P { x: 3, name: "q".to_string() });
+    }
+}
+"#;
+    let out = "noisy 3\nword a\npt 1\nopt 2\nopt 0\nnoisy 5\npt 1\npassed\npt 2\n";
+    let err = "runtime error: assertion failed: left != right\n  left:  P { x: 2, name: \"p\" }\n  right: P { x: 3, name: \"q\" }\n  at {f}:21:9\nError return trace:\n  {f}:21:9\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, out, "__mir-run");
+    assert_eq!(interp.stderr, err.replace("{f}", "<unknown>"), "__mir-run");
+    let ne = "fn main() {\n    let v = vec![1, 2, 3];\n    assert_ne(v.len(), 3);\n}\n";
+    let r = karac::mir::lower::run_source(ne).expect("MIR interpreter");
+    assert!(
+        r.stderr
+            .starts_with("runtime error: assertion failed: left == right\n  value: 3\n  at "),
+        "{}",
+        r.stderr
+    );
+    for opt in ["0", "2"] {
+        let dir = Scratch::new();
+        let Some(exe) = cli_build(&dir, src, &[("KARAC_MIR_OPT", opt)]) else {
+            return;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(run.status.code(), Some(101), "at -O{opt}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), out, "at -O{opt}");
+        let f = dir.path().join("main.kara");
+        let want = err.replace("{f}", &f.to_string_lossy());
+        assert_eq!(String::from_utf8_lossy(&run.stderr), want, "at -O{opt}");
+    }
+}

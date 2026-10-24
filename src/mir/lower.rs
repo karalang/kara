@@ -482,7 +482,13 @@ fn view_result(t: &ast::TypeExpr, params: &[&str]) -> bool {
 
 /// The natives the builder calls by bare name rather than through a
 /// definition.
-const BUILDER_NATIVES: [&str; 4] = ["format", "format_spec", "panic_message", "dbg"];
+const BUILDER_NATIVES: [&str; 5] = [
+    "format",
+    "format_spec",
+    "panic_message",
+    "dbg",
+    "debug_string",
+];
 
 struct FnItem<'a> {
     f: &'a Function,
@@ -2227,6 +2233,10 @@ struct Bx<'l, 'a> {
     /// The next closure literal lowered escapes (it is stored as a
     /// function value), so it captures by move.
     closure_escapes: bool,
+    /// Expressions already evaluated, and the places that hold their
+    /// values: an assertion's operands, which its failure message reads
+    /// again without running them twice.
+    pinned: FxHashMap<NodeId, Place>,
     /// The captures a closure body assigns to, found with its moves.
     assigned_caps: std::cell::RefCell<FxHashSet<SymbolId>>,
     /// `let f = |..| ..` bindings whose closure is later stored where it
@@ -2287,6 +2297,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_exit: None,
             par_exit: None,
             closure_escapes: false,
+            pinned: FxHashMap::default(),
             escaping_lets: FxHashSet::default(),
             assigned_caps: Default::default(),
             ty_hints: FxHashMap::default(),
@@ -4540,6 +4551,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// Is `e` a place expression (it names memory rather than computing a
     /// value)?
     fn is_place(&self, e: &Expr) -> bool {
+        if self.pinned.contains_key(&e.id) {
+            return true;
+        }
         match &e.kind {
             ExprKind::Identifier(_) => match self.lcx.res.get(&e.id) {
                 Some(Res::Local(_)) => true,
@@ -4728,6 +4742,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn expr_place_of(&mut self, e: &'a Expr, mutable: bool) -> R<Place> {
+        if let Some(p) = self.pinned.get(&e.id) {
+            return Ok(p.clone());
+        }
         match &e.kind {
             ExprKind::Identifier(name) => match self.lcx.res.get(&e.id) {
                 Some(Res::Local(sym)) => match self.locals.get(sym) {
@@ -7990,6 +8007,53 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// The library's `dbg` writing `[file:line] text = <value>` to stderr,
     /// for `value`, a reference to what `a` evaluated to. A release build
     /// evaluates the argument and prints nothing (design.md § `dbg()`).
+    /// Evaluate an assertion's operand `x` once, now: a pure one (a
+    /// literal, a constant, a path) is read again where it is used, any
+    /// other's place is kept for the comparison and the failure message.
+    fn pin_operand(&mut self, x: &'a Expr) -> R<()> {
+        let pure = matches!(
+            x.kind,
+            ExprKind::StringLit(_)
+                | ExprKind::Identifier(_)
+                | ExprKind::Path { .. }
+                | ExprKind::SelfValue
+        ) || self.constant(x)?.is_some();
+        if pure {
+            return Ok(());
+        }
+        let p = if self.is_place(x) {
+            self.expr_place(x, false)?
+        } else {
+            let t = self.expr_ty(x)?;
+            let l = self.scoped_temp(t);
+            self.expr_into(x, Place::local(l))?;
+            Place::local(l)
+        };
+        self.pinned.insert(x.id, p);
+        Ok(())
+    }
+
+    /// An assertion operand's `Debug` text, for its failure message.
+    fn assert_side_debug(&mut self, side: &AssertSide<'a>) -> R<Operand> {
+        // A borrow of the value, as `dbg` takes it.
+        let (p, t) = match side {
+            AssertSide::Place(p, t) => (p.clone(), *t),
+            AssertSide::Expr(x) => {
+                let t = self.expr_ty(x)?;
+                let p = match self.is_place(x) {
+                    true => self.expr_place(x, false)?,
+                    false => Place::local(self.temp_of(x, t)?),
+                };
+                (p, t)
+            }
+        };
+        let value = self.ref_to(p, t);
+        let st = self.tys().tcx().intern(HK::Str);
+        let s = self.temp(st);
+        self.call_native("debug_string", vec![value], Place::local(s));
+        Ok(self.ref_to(Place::local(s), st))
+    }
+
     fn dbg_print(&mut self, e: &Expr, a: &Expr, value: Operand) {
         if release_strips("KARAC_STRIP_DBG") {
             return;
@@ -13757,6 +13821,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             "assert" | "assert_eq" | "assert_ne" => {
                 let bool_t = self.tys().bool();
                 let ok = self.temp(bool_t);
+                // What `assert_eq` and `assert_ne` show when they fail.
+                let mut sides = Vec::new();
                 match (name, args) {
                     ("assert", [c, ..]) => {
                         let c = self.operand_at(&c.value, bool_t)?;
@@ -13813,6 +13879,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 true => (Place::local(op), sp),
                                 false => (sp, Place::local(op)),
                             };
+                            sides.push(AssertSide::Place(lp.clone(), t));
+                            sides.push(AssertSide::Place(rp.clone(), t));
                             let eq = self.temp(bool_t);
                             self.eq_places(e.span, lp, rp, t, Place::local(eq))?;
                             let v = Operand::Move(Place::local(eq));
@@ -13826,6 +13894,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                             // any other pair of types has no `==`.
                             return self.unsupported(e.span, &format!("`{name}` of two types"));
                         } else {
+                            // Each operand is evaluated once, before the
+                            // comparison, so the message reads the values
+                            // it compared.
+                            self.pin_operand(&a.value)?;
+                            self.pin_operand(&b.value)?;
+                            sides.push(AssertSide::Expr(&a.value));
+                            sides.push(AssertSide::Expr(&b.value));
                             self.binary(
                                 if ne { AstBinOp::NotEq } else { AstBinOp::Eq },
                                 &a.value,
@@ -13848,16 +13923,30 @@ impl<'l, 'a> Bx<'l, 'a> {
                     fail,
                 );
                 // Legacy's message: `assert`'s literal one if it has one.
+                // `assert_eq` adds both operands' `Debug` text and
+                // `assert_ne` the one value (design.md § Assertions).
                 let msg = match (name, args.get(1).map(|a| &a.value.kind)) {
                     ("assert", Some(ExprKind::StringLit(m))) => m.as_str(),
                     ("assert", _) => "assertion failed",
                     ("assert_eq", _) => "assertion failed: left != right",
                     _ => "assertion failed: left == right",
                 };
-                let msg = self.static_str(msg);
+                let mut ops = vec![self.static_str(msg)];
+                let labels: &[&str] = match name {
+                    "assert_eq" => &["\n  left:  ", "\n  right: "],
+                    _ => &["\n  value: "],
+                };
+                for (side, label) in sides.iter().zip(labels) {
+                    ops.push(self.static_str(label));
+                    let op = self.assert_side_debug(side)?;
+                    ops.push(op);
+                }
+                for a in args {
+                    self.pinned.remove(&a.value.id);
+                }
                 let unit_t = self.tys().unit();
                 let l = self.temp(unit_t);
-                self.call_native("panic_message", vec![msg], Place::local(l));
+                self.call_native("panic_message", ops, Place::local(l));
                 self.diverge(TerminatorKind::Abort {
                     reason: AbortReason::Panic,
                 });
@@ -17464,6 +17553,13 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 }
 
+/// An operand of a failed `assert_eq` or `assert_ne`: a place the
+/// comparison built, or the operand as written (evaluated already).
+enum AssertSide<'a> {
+    Place(Place, Ty),
+    Expr(&'a Expr),
+}
+
 /// A method receiver whose borrow is not taken yet: an operand already in
 /// hand, or the place to borrow, its type and whether mutably.
 enum PendingRecv<'a> {
@@ -19714,7 +19810,7 @@ fn main() {
             ),
             (
                 "fn main() {\n    let x = 3;\n    assert_eq(x, 4);\n}\n",
-                "assertion failed: left != right",
+                "assertion failed: left != right\n  left:  3\n  right: 4",
                 "3:5",
             ),
         ];

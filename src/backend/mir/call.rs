@@ -673,6 +673,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("format_spec", "") => self.format_spec(args, dest),
             ("dbg", "") => self.dbg(args),
+            ("debug_string", "") => self.debug_string(args, dest),
             // One thread runs the program; a fence orders nothing.
             ("fence" | "compiler_fence", "") => Ok(()),
             ("__ready", "") => self.ready_native(args, dest),

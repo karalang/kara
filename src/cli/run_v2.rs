@@ -358,6 +358,10 @@ pub(super) struct Fault {
     pub(super) at: Option<(String, usize, usize)>,
 }
 
+/// The lines a failed `assert_eq` (`left`, `right`) or `assert_ne`
+/// (`value`) puts after its message, each its operand's `Debug` text.
+pub(super) const ASSERT_OPERANDS: [&str; 3] = ["  left:  ", "  right: ", "  value: "];
+
 /// The reports a v2 program writes to stderr, read back out of it.
 #[derive(Default)]
 pub(super) struct RuntimeReports {
@@ -388,15 +392,23 @@ impl RuntimeReports {
         while i < lines.len() {
             let line = lines[i];
             if let Some(message) = line.strip_prefix("runtime error: ") {
+                // A failed `assert_eq` / `assert_ne` shows its operands on
+                // the lines after its message.
+                let mut message = message.to_string();
+                while let Some(l) = lines
+                    .get(i + 1)
+                    .filter(|l| ASSERT_OPERANDS.iter().any(|p| l.starts_with(p)))
+                {
+                    message.push('\n');
+                    message.push_str(l);
+                    i += 1;
+                }
                 let at = lines
                     .get(i + 1)
                     .and_then(|l| l.strip_prefix("  at "))
                     .and_then(location);
                 i += if at.is_some() { 2 } else { 1 };
-                r.faults.push(Fault {
-                    message: message.to_string(),
-                    at,
-                });
+                r.faults.push(Fault { message, at });
                 continue;
             }
             if line == "Error return trace:" {

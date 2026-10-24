@@ -1330,6 +1330,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Parser", "parse") => vec![(Reads, "Env", None), HEAP, PANICS],
         ("Parser", _) => vec![HEAP, PANICS],
         ("format_spec", "") => vec![HEAP],
+        ("debug_string", "") => vec![HEAP],
         // A tracing value is built without emitting it; the stdout exporter
         // prints. `Log.*` is left out: it calls whichever exporter is
         // registered, which can be the program's own.

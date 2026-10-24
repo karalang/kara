@@ -91,6 +91,11 @@ fn test_v2_reports_each_case() {
             "{lane:?}: {wrong}"
         );
         assert!(wrong.contains("\"message\":\"assertion failed: left != right\""));
+        // The operands' `Debug` text rides on the event (B-2026-10-22-44).
+        assert!(
+            wrong.contains("\"left\":\"4\",\"right\":\"5\""),
+            "{lane:?}: {wrong}"
+        );
         // A fault in the code under test names that code's file.
         let pick = event(&stdout, "pick faults");
         assert!(
@@ -195,9 +200,10 @@ fn test_v2_legacy_flag_is_refused_and_env_is_ignored() {
         .args(["test", "wrong"])
         .output()
         .unwrap();
-    // v2's `assert_eq` failure carries no `left` / `right`; legacy's did.
+    // The case ran on v2, whose `assert_eq` failure carries its operands
+    // (B-2026-10-22-44).
     assert!(
-        !text(&env.stdout).contains("\"left\":"),
+        text(&env.stdout).contains("\"left\":\"4\",\"right\":\"5\""),
         "{}",
         text(&env.stdout)
     );

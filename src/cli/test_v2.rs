@@ -168,6 +168,25 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
             continue;
         }
         let at = fault.and_then(|f| f.at.clone());
+        // A failed `assert_eq` / `assert_ne` carries its operands on the
+        // lines after its message (design.md § Test runner output).
+        let [lp, rp, vp] = super::run_v2::ASSERT_OPERANDS;
+        let mut lines = message.lines();
+        let head = lines.next().unwrap_or_default().to_string();
+        let (mut left, mut right) = (None, None);
+        for l in lines {
+            if let Some(v) = l.strip_prefix(lp) {
+                left = Some(v.to_string());
+            } else if let Some(v) = l.strip_prefix(rp) {
+                right = Some(v.to_string());
+            } else if let Some(v) = l.strip_prefix(vp) {
+                (left, right) = (Some(v.to_string()), Some(v.to_string()));
+            }
+        }
+        let message = match left {
+            Some(_) => head,
+            None => message,
+        };
         let outcome = TestOutcome {
             message: Some(message),
             span: at.as_ref().map(|(_, line, column)| crate::token::Span {
@@ -176,8 +195,8 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
                 offset: 0,
                 length: 0,
             }),
-            left: None,
-            right: None,
+            left,
+            right,
         };
         let file = at.map(|(file, _, _)| file).unwrap_or_default();
         let providers: Vec<String> = t

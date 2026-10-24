@@ -439,6 +439,24 @@ impl<'ctx> Cx<'ctx, '_> {
         self.drop_moved(args)
     }
 
+    /// A value's `Debug` text, as `dbg` shows it, in a new String (a
+    /// failed `assert_eq`'s operands).
+    pub(super) fn debug_string(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let [value] = args else {
+            return Err("debug_string takes one value".into());
+        };
+        self.rt("fmt_begin", &[])?;
+        let vt = self.operand_type(value)?;
+        let p = self.operand_ptr(value)?;
+        self.fmt.debug = true;
+        let f = self.fmt_fn(vt);
+        self.fmt.debug = false;
+        self.builder.build_call(f, &[p.into()], "").map_err(e)?;
+        let d = self.place_ptr(dest)?;
+        self.rt("fmt_end_string", &[d.into()])?;
+        self.drop_moved(args)
+    }
+
     fn fmt_adt(&mut self, p: PointerValue<'ctx>, ty: Ty, a: crate::mir::ty::AdtId) -> R<()> {
         let program = self.program;
         let style = program.display_styles.get(&a).copied();
