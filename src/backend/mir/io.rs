@@ -978,7 +978,6 @@ impl<'ctx> Cx<'ctx, '_> {
             ("TcpStream", "shutdown_write") => 4,
             ("TcpStream", "read") => 5,
             ("TcpStream", "write") => 6,
-            ("TcpStream", "write_all") => 7,
             _ => return self.net_native(base, method, args, dest),
         };
         let null = self.ptr_ty().const_null();

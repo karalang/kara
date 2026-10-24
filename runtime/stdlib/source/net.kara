@@ -94,9 +94,21 @@ impl TcpStream {
         Err(NetError.Other(-1))
     }
 
-    #[compiler_builtin]
+    // Every byte of `buf`, by `write` until none is left: a partial write
+    // goes round again, and so does `Interrupted`. Inside a task each
+    // `write` suspends on its own, so one that would block keeps the bytes
+    // already sent (M4 item 2).
     fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
-        Err(NetError.Other(-1))
+        let mut done = 0;
+        while done < buf.len() {
+            match self.write(buf[done..buf.len()]) {
+                Ok(0) => return Ok(done),
+                Ok(n) => done = done + n,
+                Err(NetError.Interrupted) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(done)
     }
 
     // How long a `read` waits before failing with `TimedOut`, in

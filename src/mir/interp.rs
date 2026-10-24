@@ -5683,7 +5683,7 @@ impl<'a> Interp<'a> {
                         }
                         got.map(|n| Value::Int(n as i128))
                     }
-                    ("TcpStream", "write" | "write_all", [buf]) => {
+                    ("TcpStream", "write", [buf]) => {
                         let (at, lo, len) = self.view_of(buf)?;
                         let mut bytes = Vec::with_capacity(len as usize);
                         for i in 0..len {
@@ -5695,26 +5695,10 @@ impl<'a> Interp<'a> {
                         match self.sockets.streams.get_mut(&fd) {
                             None => Err(not_open()),
                             Some(_) if bytes.is_empty() => Ok(Value::Int(0)),
-                            Some(s) if method == "write" => s
+                            Some(s) => s
                                 .write(&bytes)
                                 .map(|n| Value::Int(n as i128))
                                 .map_err(|e| syscall(&e)),
-                            // Partial writes go round again, and so does EINTR.
-                            Some(s) => {
-                                let mut done = 0;
-                                loop {
-                                    match s.write(&bytes[done..]) {
-                                        Ok(n) => {
-                                            done += n;
-                                            if done == bytes.len() || n == 0 {
-                                                break Ok(Value::Int(done as i128));
-                                            }
-                                        }
-                                        Err(e) if e.raw_os_error() == Some(4) => {}
-                                        Err(e) => break Err(("Other", syscall(&e).1.or(Some(1)))),
-                                    }
-                                }
-                            }
                         }
                     }
                     _ => return err(format!("call of unknown function {name}")),
