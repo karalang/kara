@@ -1,0 +1,120 @@
+// LeetCode #956: Tallest Billboard -- a full table.
+//
+// A row per prefix of the rods: table[i][d] is the tallest shorter side
+// the first i rods reach with the sides d apart, -1 when none does. Row
+// i + 1 takes each entry of row i with the next rod left out, on the
+// taller side, or on the shorter one. O(n s) time and space.
+
+fn tallest_billboard(rods: Vec[i64]) -> i64 {
+    let n = rods.len();
+    let mut total = 0;
+    for r in rods.iter() {
+        total += *r;
+    }
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        table.push(Vec.filled(total + 1, -1));
+    }
+    table[0][0] = 0;
+    for i in 0..n {
+        let r = rods[i];
+        for d in 0..total + 1 {
+            let short = table[i][d];
+            if short < 0 {
+                continue;
+            }
+            if short > table[i + 1][d] {
+                table[i + 1][d] = short;
+            }
+            if d + r <= total and short > table[i + 1][d + r] {
+                table[i + 1][d + r] = short;
+            }
+            let nd = if d > r { d - r } else { r - d };
+            let ns = if d > r { short + r } else { short + d };
+            if ns > table[i + 1][nd] {
+                table[i + 1][nd] = ns;
+            }
+        }
+    }
+    table[n][0]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(rods: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..rods.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{rods[i]}";
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![1, 2, 3, 6],
+        vec![1, 2, 3, 4, 5, 6],
+        vec![1, 2],
+        vec![1],
+        vec![5, 5],
+        vec![1, 1, 1, 1],
+        vec![3, 4, 5, 6, 7],
+        vec![100, 1, 2, 4],
+        vec![2, 4, 8, 16],
+    ];
+    for rods in cases.iter() {
+        println(f"{show(rods)}: {tallest_billboard(rods.clone())}");
+    }
+    // 300 random cases of 1 to 10 rods from 1 to 20
+    let mut seed = 956;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10;
+        let mut rods: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            rods.push(1 + next_random(mut seed) % 20);
+        }
+        let h = tallest_billboard(rods);
+        count += n;
+        total += h;
+        check = (check * 31 + h) % 1000000007;
+    }
+    println(f"300 random cases of {count} rods: heights adding to {total}, checksum {check}");
+    // LeetCode's largest: 20 rods adding to at most 5000
+    let mut wide: Vec[i64] = Vec.new();
+    for _ in 0..20 {
+        wide.push(1 + next_random(mut seed) % 250);
+    }
+    println(f"20 random rods up to 250: {tallest_billboard(wide)}");
+    let mut odd: Vec[i64] = Vec.new();
+    for _ in 0..20 {
+        odd.push(1 + 2 * (next_random(mut seed) % 125));
+    }
+    println(f"20 random odd rods up to 249: {tallest_billboard(odd)}");
+    println(f"20 rods of 250: {tallest_billboard(Vec.filled(20, 250))}");
+    let mut upto: Vec[i64] = Vec.new();
+    for i in 1..21 {
+        upto.push(i);
+    }
+    println(f"rods 1 to 20: {tallest_billboard(upto)}");
+    let mut powers: Vec[i64] = Vec.new();
+    for i in 0..12 {
+        powers.push(1 << i);
+    }
+    println(f"rods 1 to 2048, the powers of 2: {tallest_billboard(powers)}");
+    let mut big: Vec[i64] = vec![4981];
+    for _ in 0..19 {
+        big.push(1);
+    }
+    println(f"one rod of 4981 and 19 of 1: {tallest_billboard(big)}");
+}

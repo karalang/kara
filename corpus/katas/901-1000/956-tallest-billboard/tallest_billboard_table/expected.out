@@ -1,0 +1,16 @@
+[1,2,3,6]: 6
+[1,2,3,4,5,6]: 10
+[1,2]: 0
+[1]: 0
+[5,5]: 5
+[1,1,1,1]: 2
+[3,4,5,6,7]: 11
+[100,1,2,4]: 0
+[2,4,8,16]: 0
+300 random cases of 1682 rods: heights adding to 6918, checksum 108192556
+20 random rods up to 250: 1181
+20 random odd rods up to 249: 1403
+20 rods of 250: 2500
+rods 1 to 20: 105
+rods 1 to 2048, the powers of 2: 0
+one rod of 4981 and 19 of 1: 9

@@ -1,0 +1,315 @@
+// LeetCode #956: Tallest Billboard -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: you are installing a billboard and want it to have the
+// largest height. The billboard will have two steel supports, one on each
+// side. Each steel support must be an equal height. You are given a
+// collection of rods that can be welded together. Return the largest
+// possible height of your billboard installation. If you cannot support
+// the billboard, return 0.
+
+// ---- the ★ arm: the shorter side by difference ----------------------------
+fn star_tallest_billboard(rods: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for r in rods.iter() {
+        total += *r;
+    }
+    // best[d]: the tallest shorter side at difference d, -1 for none
+    let mut best: Vec[i64] = Vec.filled(total + 1, -1);
+    best[0] = 0;
+    for r in rods.iter() {
+        let prev = best.clone();
+        for d in 0..total + 1 {
+            if prev[d] < 0 {
+                continue;
+            }
+            let short = prev[d];
+            if d + *r <= total and short > best[d + *r] {
+                best[d + *r] = short;
+            }
+            let nd = (d - *r).abs();
+            let ns = short + d.min(*r);
+            if ns > best[nd] {
+                best[nd] = ns;
+            }
+        }
+    }
+    best[0]
+}
+
+// ---- the map arm: reachable differences in a map --------------------------
+fn map_tallest_billboard(rods: Vec[i64]) -> i64 {
+    let mut best: Map[i64, i64] = Map.new();
+    best.insert(0, 0);
+    for r in rods.iter() {
+        let prev = best.clone();
+        for (d, short) in prev.iter() {
+            let up = *d + *r;
+            if *short > (best.get(up) ?? -1) {
+                best[up] = *short;
+            }
+            let nd = (*d - *r).abs();
+            let ns = *short + (*d).min(*r);
+            if ns > (best.get(nd) ?? -1) {
+                best[nd] = ns;
+            }
+        }
+    }
+    best.get(0) ?? 0
+}
+
+// ---- the halves arm: meet in the middle -----------------------------------
+fn halves_place(rods: ref Vec[i64], i: i64, hi: i64, left: i64, right: i64, out: mut ref Map[i64, i64]) {
+    if i == hi {
+        let d = left - right;
+        if left > (out.get(d) ?? -1) {
+            out[d] = left;
+        }
+        return;
+    }
+    halves_place(rods, i + 1, hi, left, right, mut out);
+    halves_place(rods, i + 1, hi, left + rods[i], right, mut out);
+    halves_place(rods, i + 1, hi, left, right + rods[i], mut out);
+}
+
+fn halves_tallest_billboard(rods: Vec[i64]) -> i64 {
+    let mid = rods.len() / 2;
+    let mut first: Map[i64, i64] = Map.new();
+    let mut second: Map[i64, i64] = Map.new();
+    halves_place(rods, 0, mid, 0, 0, mut first);
+    halves_place(rods, mid, rods.len(), 0, 0, mut second);
+    let mut best = 0;
+    for (d, left) in first.iter() {
+        match second.get(-*d) {
+            Some(other) => {
+                if *left + *other > best {
+                    best = *left + *other;
+                }
+            }
+            None => {}
+        }
+    }
+    best
+}
+
+// ---- the table arm: a full table ------------------------------------------
+fn table_tallest_billboard(rods: Vec[i64]) -> i64 {
+    let n = rods.len();
+    let mut total = 0;
+    for r in rods.iter() {
+        total += *r;
+    }
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        table.push(Vec.filled(total + 1, -1));
+    }
+    table[0][0] = 0;
+    for i in 0..n {
+        let r = rods[i];
+        for d in 0..total + 1 {
+            let short = table[i][d];
+            if short < 0 {
+                continue;
+            }
+            if short > table[i + 1][d] {
+                table[i + 1][d] = short;
+            }
+            if d + r <= total and short > table[i + 1][d + r] {
+                table[i + 1][d + r] = short;
+            }
+            let nd = if d > r { d - r } else { r - d };
+            let ns = if d > r { short + r } else { short + d };
+            if ns > table[i + 1][nd] {
+                table[i + 1][nd] = ns;
+            }
+        }
+    }
+    table[n][0]
+}
+
+// ---- the memo arm: a memoised search --------------------------------------
+fn memo_grow(rods: ref Vec[i64], i: i64, d: i64, memo: mut ref Map[i64, i64]) -> i64 {
+    if i == rods.len() {
+        return if d == 0 { 0 } else { -1000000 };
+    }
+    let key = i * 20001 + d + 10000;
+    match memo.get(key) {
+        Some(v) => {
+            return *v;
+        }
+        None => {}
+    }
+    let mut best = memo_grow(rods, i + 1, d, mut memo);
+    let left = rods[i] + memo_grow(rods, i + 1, d + rods[i], mut memo);
+    if left > best {
+        best = left;
+    }
+    let right = memo_grow(rods, i + 1, d - rods[i], mut memo);
+    if right > best {
+        best = right;
+    }
+    memo.insert(key, best);
+    best
+}
+
+fn memo_tallest_billboard(rods: Vec[i64]) -> i64 {
+    let mut memo: Map[i64, i64] = Map.new();
+    memo_grow(rods, 0, 0, mut memo)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, rods: Vec[i64]) -> i64 {
+    if x == 0 {
+        star_tallest_billboard(rods)
+    } else if x == 1 {
+        map_tallest_billboard(rods)
+    } else if x == 2 {
+        halves_tallest_billboard(rods)
+    } else if x == 3 {
+        table_tallest_billboard(rods)
+    } else {
+        memo_tallest_billboard(rods)
+    }
+}
+
+// The statement read literally: every way to give each rod to the left
+// support, the right one or neither, the tallest pair of equal supports.
+fn statement(rods: ref Vec[i64]) -> i64 {
+    let n = rods.len();
+    let mut ways = 1;
+    for _ in 0..n {
+        ways *= 3;
+    }
+    let mut best = 0;
+    for w in 0..ways {
+        let mut code = w;
+        let mut left = 0;
+        let mut right = 0;
+        for i in 0..n {
+            if code % 3 == 1 {
+                left += rods[i];
+            } else if code % 3 == 2 {
+                right += rods[i];
+            }
+            code = code / 3;
+        }
+        if left == right and left > best {
+            best = left;
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random order of the same rods.
+fn shuffled(seed: mut ref i64, rods: ref Vec[i64]) -> Vec[i64] {
+    let mut out = rods.clone();
+    for i in 0..out.len() {
+        let j = i + next_random(mut seed) % (out.len() - i);
+        out.swap(i, j);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, rods: Vec[i64], small: bool) -> i64 {
+    let want = if small { statement(rods) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, rods.clone()));
+    }
+    let mut total = 0;
+    for r in rods.iter() {
+        total += *r;
+    }
+    // the inputs P2 to P5 share: a new order, every rod times k, a rod
+    // longer than all the others together, and every rod twice
+    let order = shuffled(mut seed, rods);
+    let k = if total * 4 <= 5000 { 2 + next_random(mut seed) % 3 } else { 2 };
+    let mut scaled: Vec[i64] = Vec.new();
+    let mut twice = rods.clone();
+    for r in rods.iter() {
+        scaled.push(k * *r);
+        twice.push(*r);
+    }
+    let mut longer = rods.clone();
+    longer.insert(next_random(mut seed) % (rods.len() + 1), total + 1 + next_random(mut seed) % 5);
+    for x in 0..5 {
+        let r = got[x];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, r == want);
+        }
+        // P2: the rods in another order, the same answer
+        check(mut t, 2, arm(x, order.clone()) == r);
+        // P3: every rod times k, every height times k
+        check(mut t, 3, arm(x, scaled.clone()) == k * r);
+        // P4: a rod longer than all the others together can never be
+        // matched, the same answer
+        check(mut t, 4, arm(x, longer.clone()) == r);
+        // P5: every rod twice: each rod against its copy uses them all,
+        // so the answer is the sum of the rods
+        check(mut t, 5, arm(x, twice.clone()) == total);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == r {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 956;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 cases of 1 to 6 rods from 1 to 10, against the statement, then
+    // 200 of 1 to 8 rods from 1 to 120, so that every property stays
+    // within LeetCode's 20 rods adding to at most 5000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 8 };
+        let top = if small { 10 } else { 120 };
+        let mut rods: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            rods.push(1 + next_random(mut seed) % top);
+        }
+        count += n;
+        let h = properties(mut t, mut seed, rods, small);
+        total += h;
+        check_sum = (check_sum * 31 + h) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {count} rods: heights adding to {total}, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

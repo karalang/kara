@@ -1,0 +1,68 @@
+// LeetCode #956: Tallest Billboard -- the shorter side by difference.
+//
+// Each rod goes on the left support, on the right one, or nowhere. Track,
+// for every difference d between the two sides, the tallest shorter side
+// any choice so far reaches; a rod either widens the difference on the
+// taller side or goes on the shorter side, which grows by the smaller of
+// the rod and d. The answer is the shorter side at difference 0. O(n s)
+// for n rods adding up to s.
+
+fn tallest_billboard(rods: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for r in rods.iter() {
+        total += *r;
+    }
+    // best[d]: the tallest shorter side at difference d, -1 for none
+    let mut best: Vec[i64] = Vec.filled(total + 1, -1);
+    best[0] = 0;
+    for r in rods.iter() {
+        let prev = best.clone();
+        for d in 0..total + 1 {
+            if prev[d] < 0 {
+                continue;
+            }
+            let short = prev[d];
+            if d + *r <= total and short > best[d + *r] {
+                best[d + *r] = short;
+            }
+            let nd = (d - *r).abs();
+            let ns = short + d.min(*r);
+            if ns > best[nd] {
+                best[nd] = ns;
+            }
+        }
+    }
+    best[0]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 30;
+    let count = 200;
+    let n = 20;
+    let mut seed = 956;
+    // 200 sets of 20 rods from 1 to 250, at most 5000 in all
+    let mut sets: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut rods: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            rods.push(1 + next_random(mut seed) % 250);
+        }
+        sets.push(rods);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let k = (r + i) % count;
+            let h = tallest_billboard(sets[k]);
+            total += h;
+            check = (check * 31 + h) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} sets of {n} rods up to 250: heights adding to {total}, checksum {check}");
+}
