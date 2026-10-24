@@ -1,0 +1,400 @@
+// LeetCode #988: Smallest String Starting From Leaf -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star ----
+
+fn star_walk(t: TreeNode, path: mut ref Vec[char], best: mut ref Option[String]) {
+    path.push((97 + t.val) as u8 as char);
+    if t.left.is_none() and t.right.is_none() {
+        let s: String = path.iter().rev().collect();
+        let smaller = match best {
+            Some(b) => s < *b,
+            None => true,
+        };
+        if smaller {
+            *best = Some(s);
+        }
+    } else {
+        if let Some(l) = t.left {
+            star_walk(l, mut path, mut best);
+        }
+        if let Some(r) = t.right {
+            star_walk(r, mut path, mut best);
+        }
+    }
+    path.pop();
+}
+
+fn star_smallest_from_leaf(root: TreeNode) -> String {
+    let mut path: Vec[char] = Vec.new();
+    let mut best: Option[String] = None;
+    star_walk(root, mut path, mut best);
+    best.unwrap()
+}
+
+// ---- bfs ----
+
+fn bfs_letter(v: i64) -> String {
+    let mut s = String.new();
+    s.push((97 + v) as u8 as char);
+    s
+}
+
+fn bfs_smallest_from_leaf(root: TreeNode) -> String {
+    let mut queue: VecDeque[(TreeNode, String)] = VecDeque.new();
+    queue.push_back((root, bfs_letter(root.val)));
+    let mut best: Option[String] = None;
+    while let Some((node, up)) = queue.pop_front() {
+        if node.left.is_none() and node.right.is_none() {
+            let smaller = match best {
+                Some(ref b) => up < b,
+                None => true,
+            };
+            if smaller {
+                best = Some(up);
+            }
+        } else {
+            if let Some(l) = node.left {
+                queue.push_back((l, bfs_letter(l.val) + up));
+            }
+            if let Some(r) = node.right {
+                queue.push_back((r, bfs_letter(r.val) + up));
+            }
+        }
+    }
+    best.unwrap()
+}
+
+// ---- stack ----
+
+// Whether `path` read from its end is stack_smaller than `best` read from
+// its end; a string that runs out first is the stack_smaller.
+fn stack_smaller(path: ref Vec[i64], best: ref Vec[i64]) -> bool {
+    let mut i = 0;
+    while i < path.len() and i < best.len() {
+        let a = path[path.len() - 1 - i];
+        let b = best[best.len() - 1 - i];
+        if a != b {
+            return a < b;
+        }
+        i += 1;
+    }
+    path.len() < best.len()
+}
+
+fn stack_smallest_from_leaf(root: TreeNode) -> String {
+    let mut stack: Vec[(TreeNode, i64)] = vec![(root, 0)];
+    let mut path: Vec[i64] = Vec.new();
+    let mut best: Vec[i64] = Vec.new();
+    while let Some((node, depth)) = stack.pop() {
+        path.truncate(depth);
+        path.push(node.val);
+        if node.left.is_none() and node.right.is_none() {
+            if best.len() == 0 or stack_smaller(path, best) {
+                best = path.clone();
+            }
+        }
+        if let Some(r) = node.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = node.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    best.iter().rev().map(|v| (97 + v) as u8 as char).collect()
+}
+
+// ---- lists ----
+
+fn lists_from_leaves(t: TreeNode) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let Some(l) = t.left {
+        out = lists_from_leaves(l);
+    }
+    if let Some(r) = t.right {
+        for s in lists_from_leaves(r).into_iter() {
+            out.push(s);
+        }
+    }
+    if out.len() == 0 {
+        out.push(String.new());
+    }
+    let c = (97 + t.val) as u8 as char;
+    for s in out.iter_mut() {
+        s.push(c);
+    }
+    out
+}
+
+fn lists_smallest_from_leaf(root: TreeNode) -> String {
+    let all = lists_from_leaves(root);
+    let mut best = all[0].clone();
+    for s in all.iter() {
+        if s < best {
+            best = s.clone();
+        }
+    }
+    best
+}
+
+// ---- suffix ----
+
+fn suffix_smallest_below(t: TreeNode, above: Str) -> String {
+    let mut up = String.new();
+    up.push((97 + t.val) as u8 as char);
+    up.push_str(above);
+    match (t.left, t.right) {
+        (None, None) => up,
+        (Some(l), None) => suffix_smallest_below(l, up),
+        (None, Some(r)) => suffix_smallest_below(r, up),
+        (Some(l), Some(r)) => {
+            let a = suffix_smallest_below(l, up);
+            let b = suffix_smallest_below(r, up);
+            if a <= b { a } else { b }
+        }
+    }
+}
+
+fn suffix_smallest_from_leaf(root: TreeNode) -> String {
+    suffix_smallest_below(root, "")
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape, each with one of the first `letters`
+// letters.
+fn random_tree(n: i64, letters: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: next_random(mut seed) % letters, left: None, right: None };
+    for _ in 1..n {
+        let node = TreeNode { val: next_random(mut seed) % letters, left: None, right: None };
+        attach(root, node, mut seed);
+    }
+    root
+}
+
+fn arm(k: i64, root: TreeNode) -> String {
+    if k == 0 {
+        star_smallest_from_leaf(root)
+    } else if k == 1 {
+        bfs_smallest_from_leaf(root)
+    } else if k == 2 {
+        stack_smallest_from_leaf(root)
+    } else if k == 3 {
+        lists_smallest_from_leaf(root)
+    } else {
+        suffix_smallest_from_leaf(root)
+    }
+}
+
+// The statement read literally: every node listed with its parent's
+// place in the list; from each leaf, the letters up the parents to the
+// root make a string, and the answer is the smallest.
+fn literal(root: TreeNode) -> String {
+    let mut nodes: Vec[TreeNode] = vec![root];
+    let mut parent: Vec[i64] = vec![-1];
+    let mut i = 0;
+    while i < nodes.len() {
+        let node = nodes[i];
+        if let Some(l) = node.left {
+            nodes.push(l);
+            parent.push(i);
+        }
+        if let Some(r) = node.right {
+            nodes.push(r);
+            parent.push(i);
+        }
+        i += 1;
+    }
+    let mut best: Option[String] = None;
+    for k in 0..nodes.len() {
+        if nodes[k].left.is_none() and nodes[k].right.is_none() {
+            let mut s = String.new();
+            let mut at = k;
+            while at >= 0 {
+                s.push((97 + nodes[at].val) as u8 as char);
+                at = parent[at];
+            }
+            let smaller = match best {
+                Some(ref b) => s < b,
+                None => true,
+            };
+            if smaller {
+                best = Some(s);
+            }
+        }
+    }
+    best.unwrap()
+}
+
+fn mirror(t: TreeNode) -> TreeNode {
+    TreeNode {
+        val: t.val,
+        left: t.right.map(|r| mirror(r)),
+        right: t.left.map(|l| mirror(l)),
+    }
+}
+
+// Whether `rest`, from place `at` back to 0, spells a path down from t
+// to a leaf, t's letter first.
+fn spells(t: TreeNode, rest: Slice[u8], at: i64) -> bool {
+    if at < 0 or rest[at] as i64 != 97 + t.val {
+        return false;
+    }
+    if t.left.is_none() and t.right.is_none() {
+        return at == 0;
+    }
+    let down_left = match t.left {
+        Some(l) => spells(l, rest, at - 1),
+        None => false,
+    };
+    let down_right = match t.right {
+        Some(r) => spells(r, rest, at - 1),
+        None => false,
+    };
+    down_left or down_right
+}
+
+// The string from a leaf found by stepping down at random.
+fn random_leaf(root: TreeNode, seed: mut ref i64) -> String {
+    let mut up: Vec[char] = Vec.new();
+    let mut cur = root;
+    loop {
+        up.push((97 + cur.val) as u8 as char);
+        let next = match (cur.left, cur.right) {
+            (None, None) => None,
+            (Some(l), None) => Some(l),
+            (None, Some(r)) => Some(r),
+            (Some(l), Some(r)) => if next_random(mut seed) % 2 == 0 { Some(l) } else { Some(r) },
+        };
+        match next {
+            Some(n) => cur = n,
+            None => break,
+        }
+    }
+    up.iter().rev().collect()
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, root: TreeNode, small: bool, seed: mut ref i64) -> String {
+    let truth = if small { literal(root) } else { String.new() };
+    let mut got: Vec[String] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, root));
+    }
+    let flipped = mirror(root);
+    let raised = TreeNode { val: 0, left: None, right: Some(root) };
+    let leaf = random_leaf(root, mut seed);
+    for k in 0..5 {
+        let a = got[k].clone();
+        // P1: the statement's answer, on the first 3000 trees
+        if small {
+            check(mut tally, 1, a == truth);
+        }
+        // P2: the mirror image has the same strings
+        check(mut tally, 2, arm(k, flipped) == a);
+        // P3: a new root `a` above adds `a` to the end of every string,
+        // which keeps the smallest the smallest: a string that has the
+        // answer as a prefix still has the answer and an `a` as one, or
+        // a letter after `a` where the `a` goes
+        let mut longer = a.clone();
+        longer.push('a');
+        check(mut tally, 3, arm(k, raised) == longer);
+        // P4: the answer is the string of a path from a leaf to the root
+        check(mut tally, 4, spells(root, a.bytes(), a.len() - 1));
+        // P5: no greater than the string from a random leaf
+        check(mut tally, 5, a <= leaf);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == a {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 988;
+    let mut total = 0;
+    let mut letters_out = 0;
+    let mut check_sum = 0;
+    // 3000 trees of up to 10 nodes over 3 letters against the statement,
+    // then 200 of up to 500 nodes, over 2 letters and over 26 in turn
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most = if small { 10 } else { 500 };
+        let letters = if small { 3 } else if c % 2 == 0 { 2 } else { 26 };
+        let n = 1 + next_random(mut seed) % most;
+        let root = random_tree(n, letters, mut seed);
+        let got = properties(mut tally, root, small, mut seed);
+        total += n;
+        letters_out += got.len();
+        for b in got.bytes() {
+            check_sum = (check_sum * 31 + b as i64) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 trees of {total} nodes: {letters_out} letters, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

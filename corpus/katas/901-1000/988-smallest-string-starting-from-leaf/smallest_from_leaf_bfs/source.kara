@@ -1,0 +1,200 @@
+// LeetCode #988: Smallest String Starting From Leaf -- level by level,
+// each node with its string.
+//
+// A breadth-first walk carries with every node the string from it up to
+// the root: a child's is its own letter followed by its parent's. At a
+// leaf that string is a candidate, and the answer is the smallest.
+// O(n h) for the strings.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn letter(v: i64) -> String {
+    let mut s = String.new();
+    s.push((97 + v) as u8 as char);
+    s
+}
+
+fn smallest_from_leaf(root: TreeNode) -> String {
+    let mut queue: VecDeque[(TreeNode, String)] = VecDeque.new();
+    queue.push_back((root, letter(root.val)));
+    let mut best: Option[String] = None;
+    while let Some((node, up)) = queue.pop_front() {
+        if node.left.is_none() and node.right.is_none() {
+            let smaller = match best {
+                Some(ref b) => up < b,
+                None => true,
+            };
+            if smaller {
+                best = Some(up);
+            }
+        } else {
+            if let Some(l) = node.left {
+                queue.push_back((l, letter(l.val) + up));
+            }
+            if let Some(r) = node.right {
+                queue.push_back((r, letter(r.val) + up));
+            }
+        }
+    }
+    best.unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: ref Vec[Option[i64]]) -> TreeNode {
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    root
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape, each with one of the first `letters`
+// letters.
+fn random_tree(n: i64, letters: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: next_random(mut seed) % letters, left: None, right: None };
+    for _ in 1..n {
+        let node = TreeNode { val: next_random(mut seed) % letters, left: None, right: None };
+        attach(root, node, mut seed);
+    }
+    root
+}
+
+// The complete tree of n nodes, node i's children nodes 2i + 1 and
+// 2i + 2, node i's letter 7i mod 26.
+fn complete_tree(n: i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for i in 0..n {
+        nodes.push(TreeNode { val: i * 7 % 26, left: None, right: None });
+    }
+    for i in 1..n {
+        if i % 2 == 1 {
+            nodes[(i - 1) / 2].left = Some(nodes[i]);
+        } else {
+            nodes[(i - 1) / 2].right = Some(nodes[i]);
+        }
+    }
+    nodes[0]
+}
+
+// A path of n nodes turning left and right in turn, the letters running
+// through the alphabet from the leaf.
+fn path(n: i64) -> TreeNode {
+    let mut t = TreeNode { val: 0, left: None, right: None };
+    for i in 1..n {
+        if i % 2 == 0 {
+            t = TreeNode { val: i % 26, left: None, right: Some(t) };
+        } else {
+            t = TreeNode { val: i % 26, left: Some(t), right: None };
+        }
+    }
+    t
+}
+
+fn level_order_text(vals: ref Vec[Option[i64]]) -> String {
+    let parts: Vec[String] = vals.iter().map(|v| match v {
+        Some(x) => f"{x}",
+        None => "null".to_string(),
+    }).collect();
+    "[" + parts.join(", ") + "]"
+}
+
+fn shown(s: Str) -> String {
+    if s.len() > 20 {
+        f"{s.len()} letters, starting {s.substring(0, 12)}"
+    } else {
+        f"\"{s}\""
+    }
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[Option[i64]]] = vec![
+        vec![Some(0), Some(1), Some(2), Some(3), Some(4), Some(3), Some(4)],
+        vec![Some(25), Some(1), Some(3), Some(1), Some(3), Some(0), Some(2)],
+        vec![Some(2), Some(2), Some(1), None, Some(1), Some(0), None, Some(0)],
+        vec![Some(7)],
+        vec![Some(25), Some(1), Some(0), None, None, Some(1)],
+        vec![Some(0), Some(0), Some(0), Some(0), None, None, None, Some(0)],
+        vec![Some(3), Some(1), Some(1), None, None, Some(2), Some(0), None, None, Some(0), Some(1)],
+        vec![Some(1), Some(0), Some(0), Some(0), None, Some(0)],
+        vec![Some(25), Some(24), Some(23), Some(22)],
+        vec![Some(0), Some(1), Some(1), Some(1), None, None, Some(1), Some(1)],
+    ];
+    for c in cases.iter() {
+        println(f"{level_order_text(c)} -> {shown(smallest_from_leaf(from_level_order(c)))}");
+    }
+    println(f"the complete tree of 8500 nodes: {shown(smallest_from_leaf(complete_tree(8500)))}");
+    println(f"a zigzag path of 8500 nodes: {shown(smallest_from_leaf(path(8500)))}");
+    // random trees: 300 of up to 10 nodes over 3 letters, 3000 of up to
+    // 100 over 26, 300 of up to 300 over 2, and three of LeetCode's
+    // largest, 8500 nodes
+    let mut seed = 988;
+    for (count, most, letters) in vec![(300, 10, 3), (3000, 100, 26), (300, 300, 2), (3, 8500, 26)] {
+        let mut nodes = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if count == 3 { most } else { 1 + next_random(mut seed) % most };
+            let s = smallest_from_leaf(random_tree(n, letters, mut seed));
+            nodes += n;
+            total += s.len();
+            for b in s.bytes() {
+                check = (check * 31 + b as i64) % 1000000007;
+            }
+        }
+        println(f"{count} random trees of {nodes} nodes, letters below {letters}: {total} letters, checksum {check}");
+    }
+}

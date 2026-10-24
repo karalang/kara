@@ -1,0 +1,96 @@
+// Benchmark: LeetCode #988 Smallest String Starting From Leaf -- the ★
+// arm, a walk carrying the path, on random trees of 8500 nodes,
+// LeetCode's largest. Mirrors smallest_from_leaf.rs, .c, .py and go-seq/.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn walk(t: TreeNode, path: mut ref Vec[char], best: mut ref Option[String]) {
+    path.push((97 + t.val) as u8 as char);
+    if t.left.is_none() and t.right.is_none() {
+        let s: String = path.iter().rev().collect();
+        let smaller = match best {
+            Some(b) => s < *b,
+            None => true,
+        };
+        if smaller {
+            *best = Some(s);
+        }
+    } else {
+        if let Some(l) = t.left {
+            walk(l, mut path, mut best);
+        }
+        if let Some(r) = t.right {
+            walk(r, mut path, mut best);
+        }
+    }
+    path.pop();
+}
+
+fn smallest_from_leaf(root: TreeNode) -> String {
+    let mut path: Vec[char] = Vec.new();
+    let mut best: Option[String] = None;
+    walk(root, mut path, mut best);
+    best.unwrap()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn random_tree(n: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: next_random(mut seed) % 4, left: None, right: None };
+    for _ in 1..n {
+        let node = TreeNode { val: next_random(mut seed) % 4, left: None, right: None };
+        attach(root, node, mut seed);
+    }
+    root
+}
+
+fn main() {
+    let rounds = 100;
+    let mut seed = 988;
+    let mut trees: Vec[TreeNode] = Vec.new();
+    for _ in 0..20 {
+        trees.push(random_tree(8500, mut seed));
+    }
+    let mut letters = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let s = smallest_from_leaf(trees[(r + i) % 20]);
+            letters += s.len();
+            for b in s.bytes() {
+                check = (check * 31 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over 20 trees of 8500 nodes: {letters} letters, checksum {check}");
+}
