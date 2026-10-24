@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | miscompile | 3 |
 | run-vs-build | 3 |
 | other | 2 |
-| codegen-gap | 1 |
+| codegen-gap | 2 |
 
 ### By surface
 
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 14 |
 | runtime | 7 |
 | cli | 7 |
-| mir | 5 |
+| mir | 6 |
 | ownership | 4 |
 | other | 2 |
 | mir-llvm | 1 |
@@ -107,7 +107,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-21-22 | 2026-10-21 | typecheck | medium | `AnyError`, which docs/library/README.md lists in the prelude and design.md §10 uses for `main` and `?`, is not defined: `fn main() -> Result[(), AnyError]` is "undefined type 'AnyError'" | — |
 | B-2026-10-21-29 | 2026-10-21 | ownership+typecheck | medium | `karac check` disagrees with collections.md on borrows in four places. It refuses: `a.union(b)` then `a.intersection(b)` ("value 'b' moved here"; Set and SortedSet `union`/`intersection`/`difference` take `other` bare, which borrows under D5), and `a[0] = 10` through a half of `v.split_at_mut(2)` ("declared without `mut`", while patterns cannot carry `mut`). It accepts what the page rejects: `v.len()` while both `split_at_mut` halves are live, and `s.iter_mut()` on a `Set`/`SortedSet` ("have no `iter_mut`"); the MIR backends then exit 3 on the latter. It also types a `VecDeque` with `Vec`'s whole method surface, so `d.sort()`, `d.truncate(n)` and `d.contains(x)` check though the page's VecDeque table has none of them. Later. | — |
 | B-2026-10-21-44 | 2026-10-21 | runtime+codegen+interp | medium | Connection pool `acquire` never waits and has no `Busy`: at capacity it returns `Timeout` at once whatever the timeout, and `max_waiters` limits nothing, where docs/library/pool.md specifies waiting up to the timeout for a value to come back and `PoolError.Busy` at once when `max_waiters` callers are already waiting | — |
-| B-2026-10-21-80 | 2026-10-21 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A'", while `(A.Y).into()` and `let a = A.Y; a.into()` convert | — |
 | B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
 | B-2026-10-22-16 | 2026-10-22 | other | low | The drop model refuses 10 more programs that check accepts: 4 count a Copy value (`Str`, a `T: Copy` parameter) as moved, 1 is an unparsed construct reported as a rejection, 5 not yet traced | — |
 | B-2026-10-22-36 | 2026-10-22 | interp+codegen | medium | MIR builder gaps from the legacy test programs: raw pointer methods and `ptr.null`/`dangling`/`is_null` (M3, needed for FFI), associated functions and comparison methods on primitives (`i64.zero()`, `impl i64 { fn two }`, `a.lt(b)` on u8/bool), collection literals typed `VecDeque` or nested, indexing by a let-bound range, an uppercase local binding (`let F = Foo {..}; F.value`), literal patterns (negative, float, string inside `Option`), and a tail of single constructs | — |
@@ -132,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-5 | 2026-10-24 | mir | high | MIR borrowck lets the borrowed place change while a ref read through a borrowed struct's `mut ref` field is still live, a use-after-free that `karac check` accepts | — |
 | B-2026-10-24-6 | 2026-10-24 | codegen+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 93 per word hash, against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
 | B-2026-10-24-7 | 2026-10-24 | typecheck | low | `c as i128` and `c as u128` on a `char` are refused with a bare "cannot cast 'char' to 'i128'", though `c as i64` and `c as u64` are accepted: integer_width_bits has no 128-bit entries, so check_cast_pair's char-to-wide-integer rule never sees them | — |
+| B-2026-10-24-8 | 2026-10-24 | mir | low | The MIR builder refuses `.into()` called straight on a unit-variant literal: `let b: B = A.Y.into();` checks (since eb790336d3), and `__mir-run` and `__mir-llvm-run` stop with "a call with no resolved callee is not lowered yet", while `(A.Y).into()` prints `Q` | — |
 
 ### Fixed
 
@@ -151,6 +151,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-21-76 | typecheck | medium | `for x in s` over a value that is not iterable passes `karac check` and binds the value itself: `for msg in rx {}` over a `Receiver[i64]` types `msg`… | 1f45c953c4 |
 | B-2026-10-21-77 | typecheck | low | `karac __mir-run` and `__mir-llvm-run` run a program whose forwarded `mut ref` argument has no call-site `mut` marker, which `karac check` and `karac… | 7469db271d |
 | B-2026-10-21-79 | typecheck | low | A type mismatch prints the string view as `StringSlice` where the source and the pages write `Str`: `Command.new("echo").args(a)` with `a: Vec[String… | f73dcc99bb |
+| B-2026-10-21-80 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A… | eb790336d3 |
 | B-2026-10-22-44 | cli+codegen | medium | A v2 `karac test` failure from `assert_eq`/`assert_ne` carries no `left`/`right`: the MIR assertion aborts with "assertion failed: left != right" and… | 31c59a1eb5 |
 | B-2026-10-24-3 | interp+codegen | high | `v.push(m.get(k).unwrap())` into a `Vec[i64]` stores the ADDRESS of the map's value, not the value: on mir-llvm and `karac build --mir` the element p… | bd015b5c7c |
 
