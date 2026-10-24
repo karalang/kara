@@ -1254,7 +1254,7 @@ impl<'a> super::TypeChecker<'a> {
     /// parameter that borrows only because it is bare. A borrowed receiver
     /// reads as its value type rather than as `ref Self`, so giving away
     /// `self` from a `ref self` method is caught here too.
-    fn d5_give_away(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+    pub(super) fn d5_give_away(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
         if !self.cli_lint_overrides.strict_core
             || matches!(
                 expected,

@@ -12841,3 +12841,41 @@ fn an_index_let_held_across_a_write_keeps_the_copy_fix() {
         rejected_then_fixed_in(tag, &src, "the fix derives one", "let t = v[0].clone();", 2);
     }
 }
+
+#[test]
+fn a_bare_parameter_pushed_into_a_collection_gets_the_own_fix() {
+    // B-2026-10-24-19: `v.push(e)` gives away the borrow a bare parameter
+    // holds, as `return e` does, so it gets the same message and `own` fix,
+    // for a bare parameter and for a binding out of one, Clone or not.
+    for (tag, derive, f) in [
+        (
+            "push-bare-param",
+            "",
+            "fn one(e: E) -> Vec[E] {\n    let mut v: Vec[E] = Vec.new();\n    v.push(e);\n    v\n}\n",
+        ),
+        (
+            "push-bare-param-clone",
+            "#[derive(Clone)]\n",
+            "fn one(e: E) -> Vec[E] {\n    let mut v: Vec[E] = Vec.new();\n    v.push(e);\n    v\n}\n",
+        ),
+        (
+            "push-part-of-bare-param",
+            "",
+            "fn one(o: Option[E]) -> Vec[E] {\n    let mut v: Vec[E] = Vec.new();\n    \
+             match o {\n        Some(x) => v.push(x),\n        None => {}\n    }\n    v\n}\n",
+        ),
+        (
+            "insert-bare-param",
+            "",
+            "fn one(e: E) -> Vec[E] {\n    let mut v: Vec[E] = Vec.new();\n    v.insert(0, e);\n    v\n}\n",
+        ),
+    ] {
+        let arg = if tag.contains("part") { "Some(E { v: Vec.new() })" } else { "E { v: Vec.new() }" };
+        let src = format!(
+            "{derive}struct E {{\n    v: Vec[u8],\n}}\n{f}fn main() {{\n    \
+             let n = one({arg}).len();\n    println(f\"{{n}}\");\n}}\n"
+        );
+        let edit = if tag.contains("part") { "o: own Option[E]" } else { "e: own E" };
+        rejected_then_fixed_by(tag, &src, "a bare parameter borrows (core-semantics §4.1)", edit);
+    }
+}

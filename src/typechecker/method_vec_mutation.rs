@@ -675,6 +675,14 @@ impl<'a> super::TypeChecker<'a> {
         if literal && super::exprs::expectation_is_concrete(&slot) {
             return self.check_expr(arg, &slot);
         }
+        // A bare parameter, or a binding out of one, pushed into an owned
+        // element slot gives away a borrow: the same message and `own` fix
+        // as returning it (D5, core-semantics §4.1; B-2026-10-24-19).
+        if super::exprs::expectation_is_concrete(&slot) {
+            if let Some(ty) = self.d5_give_away(arg, &slot) {
+                return ty;
+            }
+        }
         let ty = self.infer_expr(arg);
         // A tuple literal's elements meet their slots (B-2026-10-24-17).
         if matches!(arg.kind, ExprKind::Tuple(_)) {
