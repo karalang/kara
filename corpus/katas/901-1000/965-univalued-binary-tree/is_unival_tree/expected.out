@@ -1,0 +1,18 @@
+case 1: true
+case 2: false
+case 3: true
+case 4: true
+case 5: false
+case 6: false
+case 7: true
+case 8: false
+case 9: false
+case 10: false
+case 11: false
+case 12: true
+300 random trees of 1944 nodes: 125 univalued (111, 8, 6 by spoiled picks), checksum 640448638
+100 nodes, 0 spoiled: true
+100 nodes, 1 spoiled: false
+100 nodes, 2 spoiled: false
+a path of 100 nodes: true
+the same with its deepest node changed: false

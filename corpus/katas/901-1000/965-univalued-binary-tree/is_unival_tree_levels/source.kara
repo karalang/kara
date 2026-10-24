@@ -1,0 +1,168 @@
+// LeetCode #965: Univalued Binary Tree -- level order.
+//
+// Walk the tree a level at a time from a queue, comparing every node with
+// the root's value. O(n) time, O(width) space.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn is_unival_tree(root: Option[TreeNode]) -> bool {
+    let Some(top) = root else {
+        return true;
+    };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(top);
+    while let Some(node) = queue.pop_front() {
+        if node.val != top.val {
+            return false;
+        }
+        if let Some(l) = node.left {
+            queue.push_back(l);
+        }
+        if let Some(r) = node.right {
+            queue.push_back(r);
+        }
+    }
+    true
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape, every value v except `spoiled` picks at
+// random (the root among them), which get a value from 0 to 99 instead
+// (possibly v again).
+fn random_tree(n: i64, v: i64, spoiled: i64, seed: mut ref i64) -> TreeNode {
+    let mut odd: Vec[bool] = vec![false; n];
+    for _ in 0..spoiled {
+        odd[next_random(mut seed) % n] = true;
+    }
+    let root = TreeNode { val: if odd[0] { next_random(mut seed) % 100 } else { v }, left: None, right: None };
+    for i in 1..n {
+        let val = if odd[i] { next_random(mut seed) % 100 } else { v };
+        attach(root, TreeNode { val: val, left: None, right: None }, mut seed);
+    }
+    root
+}
+
+fn size(t: ref Option[TreeNode]) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => 1 + size(node.left) + size(node.right),
+    }
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[Option[i64]]] = vec![
+        vec![Some(1), Some(1), Some(1), Some(1), Some(1), None, Some(1)],
+        vec![Some(2), Some(2), Some(2), Some(5), Some(2)],
+        vec![Some(1)],
+        vec![Some(0), None, Some(0)],
+        vec![Some(1), Some(1), Some(2)],
+        vec![Some(2), Some(1), Some(1)],
+        vec![Some(1), Some(1), None, Some(1), None, Some(1)],
+        vec![Some(1), Some(1), Some(1), Some(1), Some(1), Some(1), Some(0)],
+        vec![Some(5), Some(5), Some(5), None, None, Some(5), Some(6)],
+        vec![Some(3), None, Some(3), None, Some(3), None, Some(4)],
+        vec![Some(9), Some(9), Some(9), Some(9), None, None, Some(9), None, Some(8)],
+        vec![Some(99), Some(99), Some(99), Some(99), Some(99), Some(99), Some(99)],
+    ];
+    for i in 0..cases.len() {
+        println(f"case {i + 1}: {is_unival_tree(from_level_order(cases[i].clone()))}");
+    }
+    // 300 random trees of 1 to 12 nodes with none, one or two spoiled picks
+    let mut seed = 965;
+    let mut nodes = 0;
+    let mut yes = 0;
+    let mut by_spoiled: Vec[i64] = vec![0, 0, 0];
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let v = next_random(mut seed) % 100;
+        let spoiled = next_random(mut seed) % 3;
+        let t = Some(random_tree(n, v, spoiled, mut seed));
+        nodes += size(t);
+        let bit = if is_unival_tree(t) { 1 } else { 0 };
+        yes += bit;
+        by_spoiled[spoiled] += bit;
+        check = (check * 31 + bit + 1) % 1000000007;
+    }
+    println(f"300 random trees of {nodes} nodes: {yes} univalued ({by_spoiled[0]}, {by_spoiled[1]}, {by_spoiled[2]} by spoiled picks), checksum {check}");
+    // LeetCode's largest trees, 100 nodes, with none, one or two spoiled picks
+    for spoiled in 0..3 {
+        let t = Some(random_tree(100, 50, spoiled, mut seed));
+        println(f"{size(t)} nodes, {spoiled} spoiled: {is_unival_tree(t)}");
+    }
+    // a path of 100 nodes, every child on the left, then its deepest node changed
+    let mut path = TreeNode { val: 7, left: None, right: None };
+    let mut bent = TreeNode { val: 8, left: None, right: None };
+    for _ in 1..100 {
+        path = TreeNode { val: 7, left: Some(path), right: None };
+        bent = TreeNode { val: 7, left: Some(bent), right: None };
+    }
+    println(f"a path of 100 nodes: {is_unival_tree(Some(path))}");
+    println(f"the same with its deepest node changed: {is_unival_tree(Some(bent))}");
+}

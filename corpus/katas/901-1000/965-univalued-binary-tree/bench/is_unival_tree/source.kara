@@ -1,0 +1,98 @@
+// Benchmark: LeetCode #965 Univalued Binary Tree -- the ★ arm, depth
+// first, on trees of 100 nodes, LeetCode's largest. Mirrors
+// is_unival_tree.c, .rs, .py and go-seq/.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn holds(t: ref Option[TreeNode], v: i64) -> bool {
+    match t {
+        None => true,
+        Some(node) => node.val == v and holds(node.left, v) and holds(node.right, v),
+    }
+}
+
+fn is_unival_tree(root: Option[TreeNode]) -> bool {
+    match root {
+        None => true,
+        Some(node) => holds(node.left, node.val) and holds(node.right, node.val),
+    }
+}
+
+// ---- workload ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// The tree of a random case, n nodes in a random shape, by kind: 0 every
+// value v, 1 and 2 the same with one or two picks at random (the root
+// among them) given a value from 0 to 99 instead (possibly v again), 3
+// every value 0 or 1 at random.
+fn make_tree(kind: i64, n: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let v = next_random(mut seed) % 100;
+    let mut vals: Vec[i64] = vec![v; n];
+    if kind == 3 {
+        for i in 0..n {
+            vals[i] = next_random(mut seed) % 2;
+        }
+    } else {
+        for _ in 0..kind {
+            vals[next_random(mut seed) % n] = next_random(mut seed) % 100;
+        }
+    }
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for i in 1..n {
+        attach(root, TreeNode { val: vals[i], left: None, right: None }, mut seed);
+    }
+    Some(root)
+}
+
+fn main() {
+    let rounds = 4000;
+    // 200 trees of 100 nodes, made once, of the four kinds in turn
+    let mut seed = 965;
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    for i in 0..200 {
+        trees.push(make_tree(i % 4, 100, mut seed));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..200 {
+            let bit = if is_unival_tree(trees[(r + i) % 200]) { 1 } else { 0 };
+            total += bit;
+            check = (check * 31 + bit + 1 + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 200 trees of 100 nodes: {total} univalued, checksum {check}");
+}

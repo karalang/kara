@@ -1,0 +1,355 @@
+// LeetCode #965: Univalued Binary Tree -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random trees: every value the same, one or two nodes given
+// another value, and every value 0 or 1.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star ----
+
+fn star_holds(t: ref Option[TreeNode], v: i64) -> bool {
+    match t {
+        None => true,
+        Some(node) => node.val == v and star_holds(node.left, v) and star_holds(node.right, v),
+    }
+}
+
+fn star_is_unival_tree(root: Option[TreeNode]) -> bool {
+    match root {
+        None => true,
+        Some(node) => star_holds(node.left, node.val) and star_holds(node.right, node.val),
+    }
+}
+
+// ---- stack ----
+
+fn stack_is_unival_tree(root: Option[TreeNode]) -> bool {
+    let Some(top) = root else {
+        return true;
+    };
+    let v = top.val;
+    let mut stack: Vec[TreeNode] = vec![top];
+    while let Some(node) = stack.pop() {
+        if node.val != v {
+            return false;
+        }
+        if let Some(l) = node.left {
+            stack.push(l);
+        }
+        if let Some(r) = node.right {
+            stack.push(r);
+        }
+    }
+    true
+}
+
+// ---- levels ----
+
+fn levels_is_unival_tree(root: Option[TreeNode]) -> bool {
+    let Some(top) = root else {
+        return true;
+    };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(top);
+    while let Some(node) = queue.pop_front() {
+        if node.val != top.val {
+            return false;
+        }
+        if let Some(l) = node.left {
+            queue.push_back(l);
+        }
+        if let Some(r) = node.right {
+            queue.push_back(r);
+        }
+    }
+    true
+}
+
+// ---- set ----
+
+fn set_gather(t: ref Option[TreeNode], seen: mut ref Set[i64]) {
+    if let Some(node) = t {
+        seen.insert(node.val);
+        set_gather(node.left, mut seen);
+        set_gather(node.right, mut seen);
+    }
+}
+
+fn set_is_unival_tree(root: Option[TreeNode]) -> bool {
+    let mut seen: Set[i64] = Set.new();
+    set_gather(root, mut seen);
+    seen.len() <= 1
+}
+
+// ---- edges ----
+
+fn edges_is_unival_tree(root: Option[TreeNode]) -> bool {
+    match root {
+        None => true,
+        Some(node) => {
+            let left_ok = match node.left {
+                None => true,
+                Some(l) => l.val == node.val and edges_is_unival_tree(node.left),
+            };
+            let right_ok = match node.right {
+                None => true,
+                Some(r) => r.val == node.val and edges_is_unival_tree(node.right),
+            };
+            left_ok and right_ok
+        }
+    }
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// The tree of a random case, n nodes in a random shape, by kind: 0 every
+// value v, 1 and 2 the same with one or two picks at random (the root
+// among them) given a value from 0 to 99 instead (possibly v again), 3
+// every value 0 or 1 at random.
+fn make_tree(kind: i64, n: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let v = next_random(mut seed) % 100;
+    let mut vals: Vec[i64] = vec![v; n];
+    if kind == 3 {
+        for i in 0..n {
+            vals[i] = next_random(mut seed) % 2;
+        }
+    } else {
+        for _ in 0..kind {
+            vals[next_random(mut seed) % n] = next_random(mut seed) % 100;
+        }
+    }
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for i in 1..n {
+        attach(root, TreeNode { val: vals[i], left: None, right: None }, mut seed);
+    }
+    Some(root)
+}
+
+fn size(t: ref Option[TreeNode]) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => 1 + size(node.left) + size(node.right),
+    }
+}
+
+// The statement read literally: every node has the same value, every
+// pair of nodes compared.
+fn values(t: ref Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(node) = t {
+        values(node.left, mut out);
+        out.push(node.val);
+        values(node.right, mut out);
+    }
+}
+
+fn literal(t: ref Option[TreeNode]) -> bool {
+    let mut vals: Vec[i64] = Vec.new();
+    values(t, mut vals);
+    for i in 0..vals.len() {
+        for j in 0..vals.len() {
+            if vals[i] != vals[j] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn lowest(t: ref Option[TreeNode]) -> i64 {
+    match t {
+        None => 100,
+        Some(node) => node.val.min(lowest(node.left)).min(lowest(node.right)),
+    }
+}
+
+fn highest(t: ref Option[TreeNode]) -> i64 {
+    match t {
+        None => -1,
+        Some(node) => node.val.max(highest(node.left)).max(highest(node.right)),
+    }
+}
+
+fn mirror(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: node.val, left: mirror(node.right), right: mirror(node.left) }),
+    }
+}
+
+// A copy of the tree with every value v.
+fn recolour(t: ref Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: v, left: recolour(node.left, v), right: recolour(node.right, v) }),
+    }
+}
+
+// A copy of the tree with the leaf at the end of its leftmost path given
+// value v.
+fn bent(t: ref Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => {
+            if node.left.is_some() {
+                Some(TreeNode { val: node.val, left: bent(node.left, v), right: copy(node.right) })
+            } else if node.right.is_some() {
+                Some(TreeNode { val: node.val, left: None, right: bent(node.right, v) })
+            } else {
+                Some(TreeNode { val: v, left: None, right: None })
+            }
+        }
+    }
+}
+
+fn copy(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: node.val, left: copy(node.left), right: copy(node.right) }),
+    }
+}
+
+fn arm(x: i64, t: Option[TreeNode]) -> bool {
+    if x == 0 {
+        star_is_unival_tree(t)
+    } else if x == 1 {
+        stack_is_unival_tree(t)
+    } else if x == 2 {
+        levels_is_unival_tree(t)
+    } else if x == 3 {
+        set_is_unival_tree(t)
+    } else {
+        edges_is_unival_tree(t)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, tree: Option[TreeNode], small: bool) -> bool {
+    let truth = if small { literal(tree) } else { false };
+    let mut got: Vec[bool] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, tree));
+    }
+    let even = lowest(tree) == highest(tree);
+    let flipped = mirror(tree);
+    let root = tree.unwrap();
+    let v = root.val;
+    let lifted = Some(TreeNode { val: v, left: None, right: tree });
+    let n = size(tree);
+    let plain = recolour(tree, v + 1);
+    let spoilt = bent(tree, v + 1);
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the first 3000 trees
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: univalued exactly when the lowest value is the highest
+        check(mut t, 2, a == even);
+        // P3: the same answer for the mirror, and for the tree hung right
+        // of a new root holding the root's value
+        check(mut t, 3, arm(x, flipped) == a and arm(x, lifted) == a);
+        // P4: univalued exactly when each child holds the root's value
+        // and its subtree is univalued
+        let left_ok = match root.left {
+            None => true,
+            Some(l) => l.val == v and arm(x, root.left),
+        };
+        let right_ok = match root.right {
+            None => true,
+            Some(r) => r.val == v and arm(x, root.right),
+        };
+        check(mut t, 4, a == (left_ok and right_ok));
+        // P5: every value made one value gives true; one leaf given
+        // another value than the root's gives false, unless it is the root
+        check(mut t, 5, arm(x, plain) and arm(x, spoilt) == (n == 1));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 965;
+    let mut nodes = 0;
+    let mut yes = 0;
+    let mut check_sum = 0;
+    // 3000 trees of up to 8 nodes, against the statement, then 200 of up
+    // to 100 nodes; every value the same, one or two picks given another
+    // value, every value 0 or 1
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 100 };
+        let kind = next_random(mut seed) % 4;
+        let tree = make_tree(kind, n, mut seed);
+        nodes += size(tree);
+        let r = properties(mut t, tree, small);
+        let bit = if r { 1 } else { 0 };
+        yes += bit;
+        check_sum = (check_sum * 31 + bit + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 trees of {nodes} nodes, {yes} univalued, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/965-univalued-binary-tree/bench/is_unival_tree.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "efe6bb272"
+extracted_src = "9b675c3f"
