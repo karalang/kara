@@ -1,0 +1,461 @@
+// LeetCode #968: Binary Tree Cameras -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random trees.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star ----
+
+fn star_watch(t: ref Option[TreeNode], cameras: mut ref i64) -> i64 {
+    match t {
+        // a missing child needs nothing
+        None => 2,
+        Some(node) => {
+            let l = star_watch(node.left, mut cameras);
+            let r = star_watch(node.right, mut cameras);
+            if l == 0 or r == 0 {
+                *cameras += 1;
+                1
+            } else if l == 1 or r == 1 {
+                2
+            } else {
+                0
+            }
+        }
+    }
+}
+
+fn star_min_camera_cover(root: Option[TreeNode]) -> i64 {
+    let mut cameras = 0;
+    if star_watch(root, mut cameras) == 0 {
+        cameras += 1;
+    }
+    cameras
+}
+
+// ---- stack ----
+
+fn stack_min_camera_cover(root: Option[TreeNode]) -> i64 {
+    let Some(top) = root else {
+        return 0;
+    };
+    let mut cameras = 0;
+    let mut states: Vec[i64] = Vec.new();
+    let mut stack: Vec[(TreeNode, bool)] = vec![(top, false)];
+    while let Some((node, ready)) = stack.pop() {
+        if ready {
+            let l = if node.left.is_some() { states.pop().unwrap() } else { 2 };
+            let r = if node.right.is_some() { states.pop().unwrap() } else { 2 };
+            let s = if l == 0 or r == 0 {
+                cameras += 1;
+                1
+            } else if l == 1 or r == 1 {
+                2
+            } else {
+                0
+            };
+            states.push(s);
+        } else {
+            stack.push((node, true));
+            if let Some(l) = node.left {
+                stack.push((l, false));
+            }
+            if let Some(r) = node.right {
+                stack.push((r, false));
+            }
+        }
+    }
+    if states.pop().unwrap() == 0 {
+        cameras += 1;
+    }
+    cameras
+}
+
+// ---- dp ----
+
+struct Costs {
+    placed: i64,
+    covered: i64,
+    open: i64,
+}
+
+// More than any tree of 1000 nodes needs, for a choice that is not
+// allowed.
+const NEVER: i64 = 1000000;
+
+fn dp_costs(t: ref Option[TreeNode]) -> Costs {
+    match t {
+        // a missing child cannot hold a camera, and needs no watching
+        None => Costs { placed: NEVER, covered: 0, open: 0 },
+        Some(node) => {
+            let l = dp_costs(node.left);
+            let r = dp_costs(node.right);
+            let best_l = l.placed.min(l.covered);
+            let best_r = r.placed.min(r.covered);
+            Costs {
+                // a camera here covers the children, which may be open
+                placed: 1 + best_l.min(l.open) + best_r.min(r.open),
+                // at least one child holds a camera, neither is open
+                covered: (l.placed + best_r).min(best_l + r.placed),
+                // no camera here or on either child, both covered from
+                // below
+                open: l.covered + r.covered,
+            }
+        }
+    }
+}
+
+fn dp_min_camera_cover(root: Option[TreeNode]) -> i64 {
+    let c = dp_costs(root);
+    c.placed.min(c.covered)
+}
+
+// ---- levels ----
+
+fn levels_min_camera_cover(root: Option[TreeNode]) -> i64 {
+    let Some(top) = root else {
+        return 0;
+    };
+    let mut nodes: Vec[TreeNode] = vec![top];
+    let mut parent: Vec[i64] = vec![-1];
+    let mut i = 0;
+    while i < nodes.len() {
+        let node = nodes[i];
+        if let Some(l) = node.left {
+            nodes.push(l);
+            parent.push(i);
+        }
+        if let Some(r) = node.right {
+            nodes.push(r);
+            parent.push(i);
+        }
+        i += 1;
+    }
+    let n = nodes.len();
+    let mut camera: Vec[bool] = vec![false; n];
+    let mut covered: Vec[bool] = vec![false; n];
+    let mut cameras = 0;
+    let mut j = n - 1;
+    while j > 0 {
+        if not covered[j] {
+            let p = parent[j];
+            if not camera[p] {
+                camera[p] = true;
+                cameras += 1;
+            }
+            covered[j] = true;
+            covered[p] = true;
+            if parent[p] >= 0 {
+                covered[parent[p]] = true;
+            }
+        }
+        j -= 1;
+    }
+    if not covered[0] {
+        cameras += 1;
+    }
+    cameras
+}
+
+// ---- peel ----
+
+fn peel_min_camera_cover(root: Option[TreeNode]) -> i64 {
+    let Some(top) = root else {
+        return 0;
+    };
+    // (depth, node index), nodes with their parents' indices
+    let mut nodes: Vec[TreeNode] = vec![top];
+    let mut parent: Vec[i64] = vec![-1];
+    let mut order: Vec[(i64, i64)] = vec![(0, 0)];
+    let mut i = 0;
+    while i < nodes.len() {
+        let node = nodes[i];
+        let depth = order[i].0;
+        for child in [node.left, node.right] {
+            if let Some(c) = child {
+                order.push((depth + 1, nodes.len()));
+                parent.push(i);
+                nodes.push(c);
+            }
+        }
+        i += 1;
+    }
+    let mut children: Vec[Vec[i64]] = vec![Vec.new(); nodes.len()];
+    for v in 1..nodes.len() {
+        children[parent[v]].push(v);
+    }
+    let mut deepest = order.clone();
+    deepest.sort();
+    deepest.reverse();
+    let mut covered: Vec[bool] = vec![false; nodes.len()];
+    let mut cameras = 0;
+    for (_, v) in deepest {
+        if covered[v] {
+            continue;
+        }
+        let at = if parent[v] >= 0 { parent[v] } else { v };
+        cameras += 1;
+        covered[at] = true;
+        if parent[at] >= 0 {
+            covered[parent[at]] = true;
+        }
+        for c in children[at] {
+            covered[*c] = true;
+        }
+    }
+    cameras
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape.
+fn random_tree(n: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: 0, left: None, right: None };
+    for _ in 1..n {
+        attach(root, TreeNode { val: 0, left: None, right: None }, mut seed);
+    }
+    root
+}
+
+// The complete tree of n nodes, node i's children nodes 2i + 1 and 2i + 2.
+fn complete_tree(n: i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for _ in 0..n {
+        nodes.push(TreeNode { val: 0, left: None, right: None });
+    }
+    for i in 1..n {
+        if i % 2 == 1 {
+            nodes[(i - 1) / 2].left = Some(nodes[i]);
+        } else {
+            nodes[(i - 1) / 2].right = Some(nodes[i]);
+        }
+    }
+    nodes[0]
+}
+
+// A path of n nodes, every child on the left.
+fn path(n: i64) -> TreeNode {
+    let mut t = TreeNode { val: 0, left: None, right: None };
+    for _ in 1..n {
+        t = TreeNode { val: 0, left: Some(t), right: None };
+    }
+    t
+}
+
+fn size(t: ref Option[TreeNode]) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => 1 + size(node.left) + size(node.right),
+    }
+}
+
+// The nodes in level order and each one's parent, -1 for the root.
+fn flatten(root: TreeNode) -> (Vec[TreeNode], Vec[i64]) {
+    let mut nodes: Vec[TreeNode] = vec![root];
+    let mut parent: Vec[i64] = vec![-1];
+    let mut i = 0;
+    while i < nodes.len() {
+        let node = nodes[i];
+        if let Some(l) = node.left {
+            nodes.push(l);
+            parent.push(i);
+        }
+        if let Some(r) = node.right {
+            nodes.push(r);
+            parent.push(i);
+        }
+        i += 1;
+    }
+    (nodes, parent)
+}
+
+// The statement read literally: the smallest set of nodes such that every
+// node holds a camera or is next to one, tried over every set; for trees
+// of up to 8 nodes.
+fn literal(root: TreeNode) -> i64 {
+    let (nodes, parent) = flatten(root);
+    let n = nodes.len();
+    let mut best = n;
+    for set in 0..(1 << n) {
+        let mut watched: Vec[bool] = vec![false; n];
+        let mut count = 0;
+        for v in 0..n {
+            if (set >> v) & 1 == 1 {
+                count += 1;
+                watched[v] = true;
+                if parent[v] >= 0 {
+                    watched[parent[v]] = true;
+                }
+            }
+        }
+        for v in 1..n {
+            if (set >> parent[v]) & 1 == 1 {
+                watched[v] = true;
+            }
+        }
+        let mut all = true;
+        for w in watched {
+            all = all and w;
+        }
+        if all and count < best {
+            best = count;
+        }
+    }
+    best
+}
+
+fn mirror(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: 0, left: mirror(node.right), right: mirror(node.left) }),
+    }
+}
+
+fn copy(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: 0, left: copy(node.left), right: copy(node.right) }),
+    }
+}
+
+// A copy with a new leaf at the end of its leftmost path.
+fn grown(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => Some(TreeNode { val: 0, left: None, right: None }),
+        Some(node) => Some(TreeNode { val: 0, left: grown(node.left), right: copy(node.right) }),
+    }
+}
+
+fn arm(x: i64, t: Option[TreeNode]) -> i64 {
+    if x == 0 {
+        star_min_camera_cover(t)
+    } else if x == 1 {
+        stack_min_camera_cover(t)
+    } else if x == 2 {
+        dp_min_camera_cover(t)
+    } else if x == 3 {
+        levels_min_camera_cover(t)
+    } else {
+        peel_min_camera_cover(t)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, tree: Option[TreeNode], small: bool) -> i64 {
+    let truth = if small { literal(tree.unwrap()) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, tree));
+    }
+    let n = size(tree);
+    let flipped = mirror(tree);
+    let bigger = grown(tree);
+    let twins = Some(TreeNode { val: 0, left: copy(tree), right: copy(tree) });
+    let line = Some(path(n));
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the first 3000 trees
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: a camera watches at most four nodes, and a tree of two or
+        // more nodes is watched by half of them
+        check(mut t, 2, 4 * a >= n and (n == 1 or 2 * a <= n) and a >= 1);
+        // P3: the same for the mirror
+        check(mut t, 3, arm(x, flipped) == a);
+        // P4: a new leaf adds at most one camera and never saves one
+        let b = arm(x, bigger);
+        check(mut t, 4, a <= b and b <= a + 1);
+        // P5: two copies under a new root need at least two fewer and at
+        // most one more than twice as many, and a path of n nodes needs
+        // n / 3 rounded up
+        let w = arm(x, twins);
+        check(mut t, 5, 2 * a - 2 <= w and w <= 2 * a + 1 and arm(x, line) == (n + 2) / 3);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 968;
+    let mut nodes = 0;
+    let mut cameras = 0;
+    let mut check_sum = 0;
+    // 3000 random trees of up to 8 nodes, against the statement, then 200
+    // of up to 400 nodes
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 400 };
+        let tree = Some(random_tree(n, mut seed));
+        nodes += n;
+        let r = properties(mut t, tree, small);
+        cameras += r;
+        check_sum = (check_sum * 31 + r + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 trees of {nodes} nodes: {cameras} cameras, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,97 @@
+// Benchmark: LeetCode #968 Binary Tree Cameras -- the ★ arm, greedy from
+// the leaves, on random trees of 1000 nodes, LeetCode's largest. Mirrors
+// min_camera_cover.c, .rs, .py and go-seq/.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn watch(t: ref Option[TreeNode], cameras: mut ref i64) -> i64 {
+    match t {
+        // a missing child needs nothing
+        None => 2,
+        Some(node) => {
+            let l = watch(node.left, mut cameras);
+            let r = watch(node.right, mut cameras);
+            if l == 0 or r == 0 {
+                *cameras += 1;
+                1
+            } else if l == 1 or r == 1 {
+                2
+            } else {
+                0
+            }
+        }
+    }
+}
+
+fn min_camera_cover(root: Option[TreeNode]) -> i64 {
+    let mut cameras = 0;
+    if watch(root, mut cameras) == 0 {
+        cameras += 1;
+    }
+    cameras
+}
+
+// ---- workload ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape.
+fn random_tree(n: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: 0, left: None, right: None };
+    for _ in 1..n {
+        attach(root, TreeNode { val: 0, left: None, right: None }, mut seed);
+    }
+    root
+}
+
+fn main() {
+    let rounds = 200;
+    // 200 random trees of 1000 nodes, made once
+    let mut seed = 968;
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    for _ in 0..200 {
+        trees.push(Some(random_tree(1000, mut seed)));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..200 {
+            let c = min_camera_cover(trees[(r + i) % 200]);
+            total += c;
+            check = (check * 31 + c + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 200 trees of 1000 nodes: {total} cameras, checksum {check}");
+}

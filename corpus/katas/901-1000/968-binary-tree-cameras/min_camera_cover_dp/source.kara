@@ -1,0 +1,193 @@
+// LeetCode #968: Binary Tree Cameras -- three costs per subtree.
+//
+// For each subtree, the fewest cameras that watch all of it below its
+// root given three things about the root: it holds a camera (placed),
+// it holds none but a child's camera covers it (covered), or it holds
+// none and nothing below covers it, its parent must (open). Each comes
+// from the children's costs; the answer is the better of placed and
+// covered at the root. O(n) time, O(height) stack.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+struct Costs {
+    placed: i64,
+    covered: i64,
+    open: i64,
+}
+
+// More than any tree of 1000 nodes needs, for a choice that is not
+// allowed.
+const NEVER: i64 = 1000000;
+
+fn costs(t: ref Option[TreeNode]) -> Costs {
+    match t {
+        // a missing child cannot hold a camera, and needs no watching
+        None => Costs { placed: NEVER, covered: 0, open: 0 },
+        Some(node) => {
+            let l = costs(node.left);
+            let r = costs(node.right);
+            let best_l = l.placed.min(l.covered);
+            let best_r = r.placed.min(r.covered);
+            Costs {
+                // a camera here covers the children, which may be open
+                placed: 1 + best_l.min(l.open) + best_r.min(r.open),
+                // at least one child holds a camera, neither is open
+                covered: (l.placed + best_r).min(best_l + r.placed),
+                // no camera here or on either child, both covered from
+                // below
+                open: l.covered + r.covered,
+            }
+        }
+    }
+}
+
+fn min_camera_cover(root: Option[TreeNode]) -> i64 {
+    let c = costs(root);
+    c.placed.min(c.covered)
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape.
+fn random_tree(n: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: 0, left: None, right: None };
+    for _ in 1..n {
+        attach(root, TreeNode { val: 0, left: None, right: None }, mut seed);
+    }
+    root
+}
+
+// The complete tree of n nodes, node i's children nodes 2i + 1 and 2i + 2.
+fn complete_tree(n: i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for _ in 0..n {
+        nodes.push(TreeNode { val: 0, left: None, right: None });
+    }
+    for i in 1..n {
+        if i % 2 == 1 {
+            nodes[(i - 1) / 2].left = Some(nodes[i]);
+        } else {
+            nodes[(i - 1) / 2].right = Some(nodes[i]);
+        }
+    }
+    nodes[0]
+}
+
+// A path of n nodes, every child on the left.
+fn path(n: i64) -> TreeNode {
+    let mut t = TreeNode { val: 0, left: None, right: None };
+    for _ in 1..n {
+        t = TreeNode { val: 0, left: Some(t), right: None };
+    }
+    t
+}
+
+fn size(t: ref Option[TreeNode]) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => 1 + size(node.left) + size(node.right),
+    }
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let z = Some(0);
+    let cases: Vec[Vec[Option[i64]]] = vec![
+        vec![z, z, None, z, z],
+        vec![z, z, None, z, None, z, None, None, z],
+        vec![z],
+        vec![z, z],
+        vec![z, z, z],
+        vec![z, z, None, z, None, z],
+        vec![z, z, z, z, z, z, z],
+        vec![z, z, z, None, z, None, z, None, z],
+        vec![z, z, z, z, None, None, z, z, None, None, z],
+        vec![z, None, z, None, z, None, z, None, z],
+    ];
+    for i in 0..cases.len() {
+        println(f"case {i + 1}: {min_camera_cover(from_level_order(cases[i].clone()))}");
+    }
+    // 300 random trees of 1 to 12 nodes
+    let mut seed = 968;
+    let mut nodes = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let t = Some(random_tree(n, mut seed));
+        nodes += size(t);
+        let c = min_camera_cover(t);
+        total += c;
+        check = (check * 31 + c + 1) % 1000000007;
+    }
+    println(f"300 random trees of {nodes} nodes: {total} cameras, checksum {check}");
+    // LeetCode's largest, 1000 nodes: a random tree, the complete tree and
+    // a path
+    println(f"a random tree of 1000 nodes: {min_camera_cover(Some(random_tree(1000, mut seed)))} cameras");
+    println(f"the complete tree of 1000 nodes: {min_camera_cover(Some(complete_tree(1000)))} cameras");
+    println(f"a path of 1000 nodes: {min_camera_cover(Some(path(1000)))} cameras");
+}
