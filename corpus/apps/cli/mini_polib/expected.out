@@ -1,0 +1,1223 @@
+== detect | data/messages.pot
+utf-8
+== detect | data/de.po
+UTF-8
+== detect | data/fr.po
+utf8
+== detect | data/ja.po
+UTF-8
+== detect | data/fr_legacy.po
+ISO-8859-1
+== detect | data/legacy_es.mo
+UTF-8
+== detect | data/bad_magic.mo
+UTF-8
+== stats | data/messages.pot
+0% translated; translated 0, untranslated 27, fuzzy 0, obsolete 0; 27 entries; header flags ['fuzzy'], encoding utf-8
+== stats | data/de.po
+88% translated; translated 24, untranslated 1, fuzzy 2, obsolete 3; 30 entries; header flags [], encoding UTF-8
+== stats | data/fr.po
+83% translated; translated 15, untranslated 2, fuzzy 1, obsolete 0; 18 entries; header flags [], encoding utf8
+== stats | data/ja.po
+100% translated; translated 8, untranslated 0, fuzzy 0, obsolete 0; 8 entries; header flags [], encoding UTF-8
+== stats | data/pt_BR.po
+91% translated; translated 11, untranslated 0, fuzzy 1, obsolete 0; 12 entries; header flags [], encoding UTF-8
+== stats | data/fr_legacy.po
+100% translated; translated 5, untranslated 0, fuzzy 0, obsolete 0; 5 entries; header flags [], encoding ISO-8859-1
+== metadata | data/de.po
+  Project-Id-Version: 'Larkfield 4.2'
+  Report-Msgid-Bugs-To: 'translators@larkfield.example'
+  POT-Creation-Date: '2026-10-20 09:14+0000'
+  PO-Revision-Date: '2026-10-22 18:40+0200'
+  Last-Translator: 'Jana Vogt <jana.vogt@example.de>'
+  Language-Team: 'German <de@larkfield.example>'
+  Language: 'de'
+  MIME-Version: '1.0'
+  Content-Type: 'text/plain; charset=UTF-8'
+  Content-Transfer-Encoding: '8bit'
+  Plural-Forms: 'nplurals=2; plural=(n != 1);'
+  Generated-By: 'Babel 2.16.0'
+  X-Crowdin-Project: 'larkfield'
+  X-Generator: 'Poedit 3.5'
+  X-Poedit-SearchPath-0: 'larkfield'
+  X-Poedit-SearchPath-9: 'templates'
+  X-Poedit-SearchPath-10: 'static'
+== metadata | data/messages.pot
+  Project-Id-Version: 'Larkfield 4.2'
+  Report-Msgid-Bugs-To: 'translators@larkfield.example'
+  POT-Creation-Date: '2026-10-20 09:14+0000'
+  PO-Revision-Date: 'YEAR-MO-DA HO:MI+ZONE'
+  Last-Translator: 'FULL NAME <EMAIL@ADDRESS>'
+  Language-Team: 'LANGUAGE <LL@li.org>'
+  Language: ''
+  MIME-Version: '1.0'
+  Content-Type: 'text/plain; charset=CHARSET'
+  Content-Transfer-Encoding: '8bit'
+  Plural-Forms: 'nplurals=INTEGER; plural=EXPRESSION;'
+  Generated-By: 'Babel 2.16.0'
+== entries | data/de.po
+  id='Search the catalog' str='Katalog durchsuchen' occ=2 first=('larkfield/views/catalog.py', '41') line 26
+  id='%(count)d result for "%(query)s"' plural='%(count)d results for "%(query)s"' [0]='%(count)d Treffer für „%(query)s“' [1]='%(count)d Treffer für „%(query)s“' flags=['python-format'] occ=1 first=('larkfield/views/catalog.py', '58') line 30
+  ctx='button' id='Hold' str='Vormerken' occ=1 first=('templates/catalog/detail.html', '88') gc='Button label: places a hold on a book that is out on loan.' line 37
+  ctx='heading' id='Holds' str='Vormerkungen' occ=1 first=('templates/members/account.html', '30') gc='Heading of the list of holds a member has placed.' line 43
+  id='Holds' str='Vormerkungen' occ=1 first=('templates/members/account.html', '31') line 49
+  id='Return by %(date)s' str='Rückgabe bis %(date)s' flags=['python-format'] occ=7 first=('larkfield/views/loans.py', '102') line 53
+  id='You have %(n)d overdue item' plural='You have %(n)d overdue items' [0]='Sie haben %(n)d überfälliges Medium' [1]='Sie haben %(n)d überfällige Medien' flags=['python-format'] occ=1 first=('larkfield/views/loans.py', '180') tc='Jana: "überfällig" is the word the branches use on their notices.' line 61
+  id='Fines are charged at 25 cents a day after a grace period of three days, up to the replacement cost of the item. Fines under one dollar are waived at checkout.' str='Säumnisgebühren betragen nach einer Kulanzfrist von drei Tagen 20 Cent pro Tag, höchstens jedoch den Wiederbeschaffungswert des Mediums.' flags=['fuzzy'] occ=1 first=('templates/members/fines.html', '14') gc='This is shown on the account page under the loan list, and is the one\nplace where the fine schedule is explained, so keep the amounts and the\ngrace period exactly as written in the source text.' prev_id='Fines are charged at 20 cents a day after a grace period of three days, up to the replacement cost of the item.' line 69
+  id='Dear member,\n\nYour card expires on %(date)s. Renew it at any branch desk.\n' str='Liebes Mitglied,\n\nIhr Ausweis läuft am %(date)s ab. Sie können ihn an jeder Theke verlängern.\n' occ=1 first=('templates/members/fines.html', '20') line 85
+  id='Library card number' str='Ausweisnummer' occ=1 first=('larkfield/forms.py', '22') line 95
+  id='PIN' str='PIN' occ=1 first=('larkfield/forms.py', '23') line 99
+  id='The PIN must be {min} to {max} digits long.' str='Die PIN muss {min} bis {max} Ziffern lang sein.' flags=['python-brace-format'] occ=1 first=('larkfield/forms.py', '40') line 103
+  id='Signed in as "{name}"\t(change)' str='Angemeldet als „{name}“\t(ändern)' occ=1 first=('larkfield/forms.py', '58') line 108
+  id='Larkfield - your library, online' str='Larkfield - Ihre Bibliothek, online' occ=1 first=('templates/base.html', '5') line 112
+  id='Sign out' str='Abmelden' occ=1 first=('templates/base.html', '17') line 116
+  id='My account' str='Mein Konto' occ=2 first=('templates/base.html', '18') line 120
+  id='Available' str='Verfügbar' occ=1 first=('templates/catalog/detail.html', '12') line 124
+  id='On loan' str='Ausgeliehen' occ=1 first=('templates/catalog/detail.html', '13') line 128
+  ctx='verb' id='Open' str='Öffnen' occ=1 first=('templates/catalog/detail.html', '40') line 132
+  ctx='adjective' id='Open' str='Geöffnet' occ=1 first=('templates/branches/hours.html', '8') line 137
+  id='Closed' str='Geschlossen' occ=1 first=('templates/branches/hours.html', '9') line 142
+  id='%(title)s is ready for pickup at %(branch)s until %(date)s.' str='%(title)s liegt in %(branch)s zur Abholung bereit.' flags=['fuzzy', 'python-format'] occ=1 first=('larkfield/views/holds.py', '66') prev_id='%(title)s is ready for pickup at %(branch)s.' line 146
+  id='%(n)d hold' plural='%(n)d holds' [0]='%(n)d Vormerkung' [1]='%(n)d Vormerkungen' flags=['python-format'] occ=1 first=('larkfield/views/holds.py', '90') line 152
+  id='Circulation by branch and collection, last twelve months' str='Ausleihen nach Zweigstelle und Bestand, letzte zwölf Monate' occ=1 first=('larkfield/admin/reports.py', '12') line 159
+  id='C:\\Exports\\circulation.csv' str='C:\\Export\\Ausleihen.csv' occ=1 first=('larkfield/admin/reports.py', '31') line 163
+  id='Something went wrong. Please try again in a few minutes, or contact the help desk.' str='Etwas ist schiefgelaufen. Bitte versuchen Sie es in ein paar Minuten noch einmal oder wenden Sie sich an die Auskunft.' occ=1 first=('larkfield/api/errors.py', '8') line 167
+  id='Type at least three letters' str='' occ=1 first=('static/js/search-box.js', '44') line 175
+  id='Renew all' str='Alle verlängern' obsolete line 179
+  id='Due on %(date)s' str='Fällig am %(date)s' flags=['python-format'] obsolete line 182
+  ctx='ticket' id="Ask at the desk for a reader's ticket. You will need a proof of address and one photograph." str='Fragen Sie an der Theke nach einem Leseausweis. Sie brauchen einen Adressnachweis und ein Passbild.' tc='Removed with the old reader-ticket system.' obsolete line 187
+== entries | data/ja.po
+  id='Search the catalog' str='蔵書を検索' occ=2 first=('larkfield/views/catalog.py', '41') line 17
+  id='%(count)d result for "%(query)s"' plural='%(count)d results for "%(query)s"' [0]='「%(query)s」の検索結果：%(count)d件' flags=['python-format'] occ=1 first=('larkfield/views/catalog.py', '58') line 21
+  id='Return by %(date)s' str='返却期限：%(date)s' flags=['python-format'] occ=1 first=('larkfield/views/loans.py', '102') line 27
+  id='You have %(n)d overdue item' plural='You have %(n)d overdue items' [0]='延滞中の資料が%(n)d点あります' flags=['python-format'] occ=1 first=('larkfield/views/loans.py', '180') line 32
+  id='Fines are charged at 25 cents a day after a grace period of three days, up to the replacement cost of the item. Fines under one dollar are waived at checkout.' str='延滞料は猶予期間の三日を過ぎると一日25セントかかり、資料の弁償額が上限です。一ドル未満の延滞料は貸出時に免除されます。' occ=1 first=('templates/members/fines.html', '14') line 38
+  id='Sign out' str='ログアウト' occ=1 first=('templates/base.html', '17') line 45
+  ctx='verb' id='Open' str='開く' occ=1 first=('templates/catalog/detail.html', '40') line 49
+  ctx='adjective' id='Open' str='開館中' occ=1 first=('templates/branches/hours.html', '8') line 54
+== entries | data/fr_legacy.po
+  id='Place your card on the reader' str='Posez votre carte sur le lecteur' occ=1 first=('kiosk/screens.py', '10') line 12
+  id='Item checked out' str='Document emprunté' occ=1 first=('kiosk/screens.py', '22') line 16
+  id='%(n)d item checked out' plural='%(n)d items checked out' [0]='%(n)d document emprunté' [1]='%(n)d documents empruntés' flags=['python-format'] occ=1 first=('kiosk/screens.py', '23') line 20
+  id='Receipt' str='Reçu' occ=1 first=('kiosk/screens.py', '40') line 27
+  id='Please take your receipt' str='Veuillez prendre votre reçu' occ=1 first=('kiosk/screens.py', '41') line 31
+== find | data/de.po | msgid | Holds
+id='Holds' str='Vormerkungen' occ=1 first=('templates/members/account.html', '31') line 49
+== find | data/de.po | msgid | Holds | heading
+ctx='heading' id='Holds' str='Vormerkungen' occ=1 first=('templates/members/account.html', '30') gc='Heading of the list of holds a member has placed.' line 43
+== find | data/de.po | msgid | Open
+ctx='verb' id='Open' str='Öffnen' occ=1 first=('templates/catalog/detail.html', '40') line 132
+== find | data/de.po | msgid | Open | verb
+ctx='verb' id='Open' str='Öffnen' occ=1 first=('templates/catalog/detail.html', '40') line 132
+== find | data/de.po | msgid | Open | adverb
+None
+== find | data/de.po | msgstr | Vormerkungen
+id='Holds' str='Vormerkungen' occ=1 first=('templates/members/account.html', '31') line 49
+== find | data/de.po | msgid | Renew all
+None
+== find-all | data/de.po | msgid | Renew all
+id='Renew all' str='Alle verlängern' obsolete line 179
+== find | data/ja.po | msgid | Open
+ctx='verb' id='Open' str='開く' occ=1 first=('templates/catalog/detail.html', '40') line 49
+== find | data/fr.po | msgid_plural | %(n)d holds
+id='%(n)d hold' plural='%(n)d holds' [0]='%(n)d réservation' [1]='%(n)d réservations' flags=['python-format'] occ=1 first=('larkfield/views/holds.py', '90') line 99
+== contains | data/fr.po | Holds
+True
+== contains | data/fr.po | Hold | button
+True
+== contains | data/fr.po | Hold
+False
+== roundtrip | data/de.po
+differs: 194 lines written, 195 read; first at line 13: '"Language-Team: German <de@larkfield.example>\\n"' for '"Language: de\\n"'
+== roundtrip | data/fr.po
+differs: 115 lines written, 115 read; first at line 108: '"Something went wrong. Please try again in a few minutes, or contact the help"' for '"Something went wrong. Please try again in a few minutes, or contact the help "'
+== roundtrip | data/ja.po
+same
+== roundtrip | data/messages.pot
+differs: 161 lines written, 159 read; first at line 153: 'msgid ""' for 'msgid "Something went wrong. Please try again in a few minutes, or contact the help desk."'
+== roundtrip | data/fr_legacy.po
+same
+== print | data/de.po | 78
+  |# German translation of Larkfield.
+  |# Copyright (C) 2026 The Larkfield contributors
+  |# This file is distributed under the same license as the Larkfield project.
+  |# Jana Vogt <jana.vogt@example.de>, 2025, 2026.
+  |#
+  |msgid ""
+  |msgstr ""
+  |"Project-Id-Version: Larkfield 4.2\n"
+  |"Report-Msgid-Bugs-To: translators@larkfield.example\n"
+  |"POT-Creation-Date: 2026-10-20 09:14+0000\n"
+  |"PO-Revision-Date: 2026-10-22 18:40+0200\n"
+  |"Last-Translator: Jana Vogt <jana.vogt@example.de>\n"
+  |"Language-Team: German <de@larkfield.example>\n"
+  |"Language: de\n"
+  |"MIME-Version: 1.0\n"
+  |"Content-Type: text/plain; charset=UTF-8\n"
+  |"Content-Transfer-Encoding: 8bit\n"
+  |"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+  |"Generated-By: Babel 2.16.0\n"
+  |"X-Crowdin-Project: larkfield\n"
+  |"X-Generator: Poedit 3.5\n"
+  |"X-Poedit-SearchPath-0: larkfield\n"
+  |"X-Poedit-SearchPath-9: templates\n"
+  |"X-Poedit-SearchPath-10: static\n"
+  |
+  |#: larkfield/views/catalog.py:41 templates/catalog/search.html:12
+  |msgid "Search the catalog"
+  |msgstr "Katalog durchsuchen"
+  |
+  |#: larkfield/views/catalog.py:58
+  |#, python-format
+  |msgid "%(count)d result for \"%(query)s\""
+  |msgid_plural "%(count)d results for \"%(query)s\""
+  |msgstr[0] "%(count)d Treffer für „%(query)s“"
+  |msgstr[1] "%(count)d Treffer für „%(query)s“"
+  |
+  |#. Button label: places a hold on a book that is out on loan.
+  |#: templates/catalog/detail.html:88
+  |msgctxt "button"
+  |msgid "Hold"
+  |msgstr "Vormerken"
+  |
+  |#. Heading of the list of holds a member has placed.
+  |#: templates/members/account.html:30
+  |msgctxt "heading"
+  |msgid "Holds"
+  |msgstr "Vormerkungen"
+  |
+  |#: templates/members/account.html:31
+  |msgid "Holds"
+  |msgstr "Vormerkungen"
+  |
+  |#: larkfield/views/loans.py:102 larkfield/views/loans.py:147
+  |#: larkfield/emails/reminders.py:33 larkfield/emails/reminders.py:71
+  |#: templates/loans/overdue-notice.html:9 templates/loans/overdue-notice.txt:4
+  |#: static/js/loan-calendar.js:210
+  |#, python-format
+  |msgid "Return by %(date)s"
+  |msgstr "Rückgabe bis %(date)s"
+  |
+  |# Jana: "überfällig" is the word the branches use on their notices.
+  |#: larkfield/views/loans.py:180
+  |#, python-format
+  |msgid "You have %(n)d overdue item"
+  |msgid_plural "You have %(n)d overdue items"
+  |msgstr[0] "Sie haben %(n)d überfälliges Medium"
+  |msgstr[1] "Sie haben %(n)d überfällige Medien"
+  |
+  |#. This is shown on the account page under the loan list, and is the one
+  |#. place where the fine schedule is explained, so keep the amounts and the
+  |#. grace period exactly as written in the source text.
+  |#: templates/members/fines.html:14
+  |#, fuzzy
+  |#| msgid ""
+  |#| "Fines are charged at 20 cents a day after a grace period of three days, up "
+  |#| "to the replacement cost of the item."
+  |msgid ""
+  |"Fines are charged at 25 cents a day after a grace period of three days, up "
+  |"to the replacement cost of the item. Fines under one dollar are waived at "
+  |"checkout."
+  |msgstr ""
+  |"Säumnisgebühren betragen nach einer Kulanzfrist von drei Tagen 20 Cent pro "
+  |"Tag, höchstens jedoch den Wiederbeschaffungswert des Mediums."
+  |
+  |#: templates/members/fines.html:20
+  |msgid ""
+  |"Dear member,\n"
+  |"\n"
+  |"Your card expires on %(date)s. Renew it at any branch desk.\n"
+  |msgstr ""
+  |"Liebes Mitglied,\n"
+  |"\n"
+  |"Ihr Ausweis läuft am %(date)s ab. Sie können ihn an jeder Theke verlängern.\n"
+  |
+  |#: larkfield/forms.py:22
+  |msgid "Library card number"
+  |msgstr "Ausweisnummer"
+  |
+  |#: larkfield/forms.py:23
+  |msgid "PIN"
+  |msgstr "PIN"
+  |
+  |#: larkfield/forms.py:40
+  |#, python-brace-format
+  |msgid "The PIN must be {min} to {max} digits long."
+  |msgstr "Die PIN muss {min} bis {max} Ziffern lang sein."
+  |
+  |#: larkfield/forms.py:58
+  |msgid "Signed in as \"{name}\"\t(change)"
+  |msgstr "Angemeldet als „{name}“\t(ändern)"
+  |
+  |#: templates/base.html:5
+  |msgid "Larkfield - your library, online"
+  |msgstr "Larkfield - Ihre Bibliothek, online"
+  |
+  |#: templates/base.html:17
+  |msgid "Sign out"
+  |msgstr "Abmelden"
+  |
+  |#: templates/base.html:18 templates/base.html:44
+  |msgid "My account"
+  |msgstr "Mein Konto"
+  |
+  |#: templates/catalog/detail.html:12
+  |msgid "Available"
+  |msgstr "Verfügbar"
+  |
+  |#: templates/catalog/detail.html:13
+  |msgid "On loan"
+  |msgstr "Ausgeliehen"
+  |
+  |#: templates/catalog/detail.html:40
+  |msgctxt "verb"
+  |msgid "Open"
+  |msgstr "Öffnen"
+  |
+  |#: templates/branches/hours.html:8
+  |msgctxt "adjective"
+  |msgid "Open"
+  |msgstr "Geöffnet"
+  |
+  |#: templates/branches/hours.html:9
+  |msgid "Closed"
+  |msgstr "Geschlossen"
+  |
+  |#: larkfield/views/holds.py:66
+  |#, fuzzy, python-format
+  |#| msgid "%(title)s is ready for pickup at %(branch)s."
+  |msgid "%(title)s is ready for pickup at %(branch)s until %(date)s."
+  |msgstr "%(title)s liegt in %(branch)s zur Abholung bereit."
+  |
+  |#: larkfield/views/holds.py:90
+  |#, python-format
+  |msgid "%(n)d hold"
+  |msgid_plural "%(n)d holds"
+  |msgstr[0] "%(n)d Vormerkung"
+  |msgstr[1] "%(n)d Vormerkungen"
+  |
+  |#: larkfield/admin/reports.py:12
+  |msgid "Circulation by branch and collection, last twelve months"
+  |msgstr "Ausleihen nach Zweigstelle und Bestand, letzte zwölf Monate"
+  |
+  |#: larkfield/admin/reports.py:31
+  |msgid "C:\\Exports\\circulation.csv"
+  |msgstr "C:\\Export\\Ausleihen.csv"
+  |
+  |#: larkfield/api/errors.py:8
+  |msgid ""
+  |"Something went wrong. Please try again in a few minutes, or contact the help"
+  |" desk."
+  |msgstr ""
+  |"Etwas ist schiefgelaufen. Bitte versuchen Sie es in ein paar Minuten noch "
+  |"einmal oder wenden Sie sich an die Auskunft."
+  |
+  |#: static/js/search-box.js:44
+  |msgid "Type at least three letters"
+  |msgstr ""
+  |
+  |#~ msgid "Renew all"
+  |#~ msgstr "Alle verlängern"
+  |
+  |#, python-format
+  |#~ msgid "Due on %(date)s"
+  |#~ msgstr "Fällig am %(date)s"
+  |
+  |# Removed with the old reader-ticket system.
+  |#~ msgctxt "ticket"
+  |#~ msgid ""
+  |#~ "Ask at the desk for a reader's ticket. You will need a proof of address and "
+  |#~ "one photograph."
+  |#~ msgstr ""
+  |#~ "Fragen Sie an der Theke nach einem Leseausweis. Sie brauchen einen "
+  |#~ "Adressnachweis und ein Passbild."
+  |
+== print | data/fr.po | 40
+  |# French translation of Larkfield.
+  |# Copyright (C) 2026 The Larkfield contributors
+  |# Élodie Marchand <elodie@example.fr>, 2026.
+  |#
+  |msgid ""
+  |msgstr ""
+  |"Project-Id-Version: Larkfield 4.2\n"
+  |"Report-Msgid-Bugs-To: translators@larkfield.example\n"
+  |"POT-Creation-Date: 2026-10-20 09:14+0000\n"
+  |"PO-Revision-Date: 2026-10-21 11:02+0200\n"
+  |"Last-Translator: Élodie Marchand <elodie@example.fr>\n"
+  |"Language-Team: French <fr@larkfield.example>\n"
+  |"Language: fr\n"
+  |"MIME-Version: 1.0\n"
+  |"Content-Type: text/plain; charset=utf8\n"
+  |"Content-Transfer-Encoding: 8bit\n"
+  |"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+  |
+  |#: larkfield/views/catalog.py:41
+  |#: templates/catalog/search.html:12
+  |msgid "Search the catalog"
+  |msgstr "Rechercher dans le catalogue"
+  |
+  |#: larkfield/views/catalog.py:58
+  |#, python-format
+  |msgid "%(count)d result for \"%(query)s\""
+  |msgid_plural ""
+  |"%(count)d results for \"%(query)s\""
+  |msgstr[0] ""
+  |"%(count)d résultat pour « %(query)s »"
+  |msgstr[1] ""
+  |
+  |#. Button label: places a hold on a book
+  |#. that is out on loan.
+  |#: templates/catalog/detail.html:88
+  |msgctxt "button"
+  |msgid "Hold"
+  |msgstr "Réserver"
+  |
+  |#: templates/members/account.html:31
+  |msgid "Holds"
+  |msgstr "Réservations"
+  |
+  |#: larkfield/views/loans.py:102
+  |#: larkfield/views/loans.py:147
+  |#: larkfield/emails/reminders.py:33
+  |#: larkfield/emails/reminders.py:71
+  |#: templates/loans/overdue-notice.html:9
+  |#: templates/loans/overdue-notice.txt:4
+  |#: static/js/loan-calendar.js:210
+  |#, python-format
+  |msgid "Return by %(date)s"
+  |msgstr "À rendre avant le %(date)s"
+  |
+  |#. This is shown on the account page
+  |#. under the loan list, and is the one
+  |#. place where the fine schedule is
+  |#. explained, so keep the amounts and
+  |#. the
+  |#. grace period exactly as written in
+  |#. the source text.
+  |#: templates/members/fines.html:14
+  |msgid ""
+  |"Fines are charged at 25 cents a day "
+  |"after a grace period of three days, up"
+  |" to the replacement cost of the item. "
+  |"Fines under one dollar are waived at "
+  |"checkout."
+  |msgstr ""
+  |"Les pénalités sont de 25 centimes par "
+  |"jour après un délai de grâce de trois "
+  |"jours, dans la limite du coût de "
+  |"remplacement du document. Les "
+  |"pénalités inférieures à un dollar sont"
+  |" annulées au moment de l'emprunt."
+  |
+  |#: larkfield/forms.py:22
+  |msgid "Library card number"
+  |msgstr "Numéro de carte"
+  |
+  |#: larkfield/forms.py:23
+  |msgid "PIN"
+  |msgstr "Code"
+  |
+  |#: templates/base.html:5
+  |msgid "Larkfield - your library, online"
+  |msgstr ""
+  |"Larkfield - votre bibliothèque en "
+  |"ligne"
+  |
+  |#: templates/base.html:17
+  |msgid "Sign out"
+  |msgstr "Se déconnecter"
+  |
+  |#: templates/base.html:18
+  |#: templates/base.html:44
+  |msgid "My account"
+  |msgstr "Mon compte"
+  |
+  |#: templates/catalog/detail.html:12
+  |#, fuzzy
+  |msgid "Available"
+  |msgstr "Libre"
+  |
+  |#: templates/catalog/detail.html:13
+  |msgid "On loan"
+  |msgstr "Emprunté"
+  |
+  |#: templates/branches/hours.html:8
+  |msgctxt "adjective"
+  |msgid "Open"
+  |msgstr "Ouvert"
+  |
+  |#: templates/branches/hours.html:9
+  |msgid "Closed"
+  |msgstr "Fermé"
+  |
+  |#: larkfield/views/holds.py:90
+  |#, python-format
+  |msgid "%(n)d hold"
+  |msgid_plural "%(n)d holds"
+  |msgstr[0] "%(n)d réservation"
+  |msgstr[1] "%(n)d réservations"
+  |
+  |#: larkfield/api/errors.py:8
+  |msgid ""
+  |"Something went wrong. Please try again"
+  |" in a few minutes, or contact the help"
+  |" desk."
+  |msgstr ""
+  |
+  |#: static/js/search-box.js:44
+  |msgid "Type at least three letters"
+  |msgstr ""
+  |"Saisissez au moins trois lettres"
+  |
+== print | data/ja.po | 0
+  |# Japanese translation of Larkfield.
+  |# 佐藤 美咲 <misaki@example.jp>, 2026.
+  |#
+  |msgid ""
+  |msgstr ""
+  |"Project-Id-Version: Larkfield 4.2\n"
+  |"POT-Creation-Date: 2026-10-20 09:14+0000\n"
+  |"PO-Revision-Date: 2026-10-23 08:15+0900\n"
+  |"Last-Translator: 佐藤 美咲 <misaki@example.jp>\n"
+  |"Language-Team: Japanese\n"
+  |"Language: ja\n"
+  |"MIME-Version: 1.0\n"
+  |"Content-Type: text/plain; charset=UTF-8\n"
+  |"Content-Transfer-Encoding: 8bit\n"
+  |"Plural-Forms: nplurals=1; plural=0;\n"
+  |
+  |#: larkfield/views/catalog.py:41 templates/catalog/search.html:12
+  |msgid "Search the catalog"
+  |msgstr "蔵書を検索"
+  |
+  |#: larkfield/views/catalog.py:58
+  |#, python-format
+  |msgid "%(count)d result for \"%(query)s\""
+  |msgid_plural "%(count)d results for \"%(query)s\""
+  |msgstr[0] "「%(query)s」の検索結果：%(count)d件"
+  |
+  |#: larkfield/views/loans.py:102
+  |#, python-format
+  |msgid "Return by %(date)s"
+  |msgstr "返却期限：%(date)s"
+  |
+  |#: larkfield/views/loans.py:180
+  |#, python-format
+  |msgid "You have %(n)d overdue item"
+  |msgid_plural "You have %(n)d overdue items"
+  |msgstr[0] "延滞中の資料が%(n)d点あります"
+  |
+  |#: templates/members/fines.html:14
+  |msgid "Fines are charged at 25 cents a day after a grace period of three days, up to the replacement cost of the item. Fines under one dollar are waived at checkout."
+  |msgstr "延滞料は猶予期間の三日を過ぎると一日25セントかかり、資料の弁償額が上限です。一ドル未満の延滞料は貸出時に免除されます。"
+  |
+  |#: templates/base.html:17
+  |msgid "Sign out"
+  |msgstr "ログアウト"
+  |
+  |#: templates/catalog/detail.html:40
+  |msgctxt "verb"
+  |msgid "Open"
+  |msgstr "開く"
+  |
+  |#: templates/branches/hours.html:8
+  |msgctxt "adjective"
+  |msgid "Open"
+  |msgstr "開館中"
+  |
+== print | data/messages.pot | 60
+  |# Larkfield translation template.
+  |# Copyright (C) 2026 The Larkfield contributors
+  |# This file is distributed under the same license as the Larkfield project.
+  |# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+  |#
+  |#, fuzzy
+  |msgid ""
+  |msgstr ""
+  |"Project-Id-Version: Larkfield 4.2\n"
+  |"Report-Msgid-Bugs-To: translators@larkfield.example\n"
+  |"POT-Creation-Date: 2026-10-20 09:14+0000\n"
+  |"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+  |"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+  |"Language-Team: LANGUAGE <LL@li.org>\n"
+  |"Language: \n"
+  |"MIME-Version: 1.0\n"
+  |"Content-Type: text/plain; charset=CHARSET\n"
+  |"Content-Transfer-Encoding: 8bit\n"
+  |"Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
+  |"Generated-By: Babel 2.16.0\n"
+  |
+  |#: larkfield/views/catalog.py:41
+  |#: templates/catalog/search.html:12
+  |msgid "Search the catalog"
+  |msgstr ""
+  |
+  |#: larkfield/views/catalog.py:58
+  |#, python-format
+  |msgid "%(count)d result for \"%(query)s\""
+  |msgid_plural "%(count)d results for \"%(query)s\""
+  |msgstr[0] ""
+  |msgstr[1] ""
+  |
+  |#. Button label: places a hold on a book that is out on
+  |#. loan.
+  |#: templates/catalog/detail.html:88
+  |msgctxt "button"
+  |msgid "Hold"
+  |msgstr ""
+  |
+  |#. Heading of the list of holds a member has placed.
+  |#: templates/members/account.html:30
+  |msgctxt "heading"
+  |msgid "Holds"
+  |msgstr ""
+  |
+  |#: templates/members/account.html:31
+  |msgid "Holds"
+  |msgstr ""
+  |
+  |#: larkfield/views/loans.py:102 larkfield/views/loans.py:147
+  |#: larkfield/emails/reminders.py:33
+  |#: larkfield/emails/reminders.py:71
+  |#: templates/loans/overdue-notice.html:9
+  |#: templates/loans/overdue-notice.txt:4
+  |#: static/js/loan-calendar.js:210
+  |#, python-format
+  |msgid "Return by %(date)s"
+  |msgstr ""
+  |
+  |#: larkfield/views/loans.py:180
+  |#, python-format
+  |msgid "You have %(n)d overdue item"
+  |msgid_plural "You have %(n)d overdue items"
+  |msgstr[0] ""
+  |msgstr[1] ""
+  |
+  |#. This is shown on the account page under the loan list,
+  |#. and is the one
+  |#. place where the fine schedule is explained, so keep the
+  |#. amounts and the
+  |#. grace period exactly as written in the source text.
+  |#: templates/members/fines.html:14
+  |msgid ""
+  |"Fines are charged at 25 cents a day after a grace period "
+  |"of three days, up to the replacement cost of the item. "
+  |"Fines under one dollar are waived at checkout."
+  |msgstr ""
+  |
+  |#: templates/members/fines.html:20
+  |msgid ""
+  |"Dear member,\n"
+  |"\n"
+  |"Your card expires on %(date)s. Renew it at any branch desk.\n"
+  |msgstr ""
+  |
+  |#: larkfield/forms.py:22
+  |msgid "Library card number"
+  |msgstr ""
+  |
+  |#: larkfield/forms.py:23
+  |msgid "PIN"
+  |msgstr ""
+  |
+  |#: larkfield/forms.py:40
+  |#, python-brace-format
+  |msgid "The PIN must be {min} to {max} digits long."
+  |msgstr ""
+  |
+  |#: larkfield/forms.py:58
+  |msgid "Signed in as \"{name}\"\t(change)"
+  |msgstr ""
+  |
+  |#: templates/base.html:5
+  |msgid "Larkfield - your library, online"
+  |msgstr ""
+  |
+  |#: templates/base.html:17
+  |msgid "Sign out"
+  |msgstr ""
+  |
+  |#: templates/base.html:18 templates/base.html:44
+  |msgid "My account"
+  |msgstr ""
+  |
+  |#: templates/catalog/detail.html:12
+  |msgid "Available"
+  |msgstr ""
+  |
+  |#: templates/catalog/detail.html:13
+  |msgid "On loan"
+  |msgstr ""
+  |
+  |#: templates/catalog/detail.html:40
+  |msgctxt "verb"
+  |msgid "Open"
+  |msgstr ""
+  |
+  |#: templates/branches/hours.html:8
+  |msgctxt "adjective"
+  |msgid "Open"
+  |msgstr ""
+  |
+  |#: templates/branches/hours.html:9
+  |msgid "Closed"
+  |msgstr ""
+  |
+  |#: larkfield/views/holds.py:66
+  |#, python-format
+  |msgid ""
+  |"%(title)s is ready for pickup at %(branch)s until "
+  |"%(date)s."
+  |msgstr ""
+  |
+  |#: larkfield/views/holds.py:90
+  |#, python-format
+  |msgid "%(n)d hold"
+  |msgid_plural "%(n)d holds"
+  |msgstr[0] ""
+  |msgstr[1] ""
+  |
+  |#: larkfield/admin/reports.py:12
+  |msgid ""
+  |"Circulation by branch and collection, last twelve months"
+  |msgstr ""
+  |
+  |#: larkfield/admin/reports.py:31
+  |msgid "C:\\Exports\\circulation.csv"
+  |msgstr ""
+  |
+  |#: larkfield/api/errors.py:8
+  |msgid ""
+  |"Something went wrong. Please try again in a few minutes, "
+  |"or contact the help desk."
+  |msgstr ""
+  |
+  |#: static/js/search-box.js:44
+  |msgid "Type at least three letters"
+  |msgstr ""
+  |
+== print | data/pt_BR.po | 120
+  |# Brazilian Portuguese translation of Larkfield.
+  |# Rafael Costa <rafael@example.com.br>, 2025.
+  |#
+  |msgid ""
+  |msgstr ""
+  |"Project-Id-Version: Larkfield 4.1\n"
+  |"POT-Creation-Date: 2025-11-02 14:00+0000\n"
+  |"PO-Revision-Date: 2025-11-09 20:31-0300\n"
+  |"Last-Translator: Rafael Costa <rafael@example.com.br>\n"
+  |"Language-Team: Portuguese (Brazil)\n"
+  |"Language: pt_BR\n"
+  |"MIME-Version: 1.0\n"
+  |"Content-Type: text/plain; charset=UTF-8\n"
+  |"Content-Transfer-Encoding: 8bit\n"
+  |"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+  |
+  |# Rafael: "acervo" reads better than "catálogo" here.
+  |#: larkfield/views/catalog.py:39
+  |msgid "Search the catalog"
+  |msgstr "Pesquisar no acervo"
+  |
+  |#: larkfield/views/catalog.py:55
+  |#, python-format
+  |msgid "%(count)d result for \"%(query)s\""
+  |msgid_plural "%(count)d results for \"%(query)s\""
+  |msgstr[0] "%(count)d resultado para \"%(query)s\""
+  |msgstr[1] "%(count)d resultados para \"%(query)s\""
+  |
+  |#: larkfield/views/loans.py:98
+  |#, python-format
+  |msgid "Return by %(date)s"
+  |msgstr "Devolver até %(date)s"
+  |
+  |#: templates/members/fines.html:14
+  |#, fuzzy
+  |msgid "Fines are charged at 20 cents a day after a grace period of three days, up to the replacement cost of the item."
+  |msgstr "As multas são de 20 centavos por dia após um prazo de carência de três dias, até o custo de reposição do item."
+  |
+  |#: larkfield/forms.py:21
+  |msgid "Library card number"
+  |msgstr "Número da carteirinha"
+  |
+  |#: templates/base.html:16
+  |msgid "Sign out"
+  |msgstr "Sair"
+  |
+  |#: templates/base.html:17
+  |msgid "My account"
+  |msgstr "Minha conta"
+  |
+  |#: templates/catalog/detail.html:11
+  |msgid "Available"
+  |msgstr "Disponível"
+  |
+  |#: templates/catalog/detail.html:12
+  |msgid "On loan"
+  |msgstr "Emprestado"
+  |
+  |#: larkfield/views/holds.py:80
+  |#, python-format
+  |msgid "%(n)d hold"
+  |msgid_plural "%(n)d holds"
+  |msgstr[0] "%(n)d reserva"
+  |msgstr[1] "%(n)d reservas"
+  |
+  |#: larkfield/views/renewals.py:12
+  |msgid "Renew all"
+  |msgstr "Renovar tudo"
+  |
+  |#: larkfield/views/renewals.py:30
+  |#, python-format
+  |msgid "Renewed until %(date)s"
+  |msgstr "Renovado até %(date)s"
+  |
+== fuzzy | data/de.po | Return by %(date)s | on
+flags ['fuzzy', 'python-format']; translated False; 85% translated
+  |#: larkfield/views/loans.py:102 larkfield/views/loans.py:147
+  |#: larkfield/emails/reminders.py:33 larkfield/emails/reminders.py:71
+  |#: templates/loans/overdue-notice.html:9 templates/loans/overdue-notice.txt:4
+  |#: static/js/loan-calendar.js:210
+  |#, fuzzy, python-format
+  |msgid "Return by %(date)s"
+  |msgstr "Rückgabe bis %(date)s"
+  |
+== fuzzy | data/de.po | %(title)s is ready for pickup at %(branch)s until %(date)s. | off
+flags ['python-format']; translated True; 92% translated
+  |#: larkfield/views/holds.py:66
+  |#, python-format
+  |#| msgid "%(title)s is ready for pickup at %(branch)s."
+  |msgid "%(title)s is ready for pickup at %(branch)s until %(date)s."
+  |msgstr "%(title)s liegt in %(branch)s zur Abholung bereit."
+  |
+== fuzzy | data/fr.po | Available | off
+flags []; translated True; 88% translated
+  |#: templates/catalog/detail.html:12
+  |msgid "Available"
+  |msgstr "Libre"
+  |
+== fuzzy | data/fr.po | Closed | off
+flags []; translated True; 83% translated
+  |#: templates/branches/hours.html:9
+  |msgid "Closed"
+  |msgstr "Fermé"
+  |
+== merge | data/pt_BR.po | data/messages.pot | data/out/pt_BR.po
+33% translated; translated 9, untranslated 18, fuzzy 0, obsolete 3; 30 entries; header flags [], encoding UTF-8
+wrote data/out/pt_BR.po: 4321 bytes, fnv cad26402
+  |# Brazilian Portuguese translation of Larkfield.
+  |# Rafael Costa <rafael@example.com.br>, 2025.
+  |#
+  |msgid ""
+  |msgstr ""
+  |"Project-Id-Version: Larkfield 4.1\n"
+  |"POT-Creation-Date: 2025-11-02 14:00+0000\n"
+  |"PO-Revision-Date: 2025-11-09 20:31-0300\n"
+  |"Last-Translator: Rafael Costa <rafael@example.com.br>\n"
+  |"Language-Team: Portuguese (Brazil)\n"
+  |"Language: pt_BR\n"
+  |"MIME-Version: 1.0\n"
+  |"Content-Type: text/plain; charset=UTF-8\n"
+  |"Content-Transfer-Encoding: 8bit\n"
+  |"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+  |
+  |# Rafael: "acervo" reads better than "catálogo" here.
+  |#: larkfield/views/catalog.py:41 templates/catalog/search.html:12
+  |msgid "Search the catalog"
+  |msgstr "Pesquisar no acervo"
+  |
+  |#: larkfield/views/catalog.py:58
+  |#, python-format
+  |msgid "%(count)d result for \"%(query)s\""
+  |msgid_plural "%(count)d results for \"%(query)s\""
+  |msgstr[0] "%(count)d resultado para \"%(query)s\""
+  |msgstr[1] "%(count)d resultados para \"%(query)s\""
+  |
+  |#: larkfield/views/loans.py:102 larkfield/views/loans.py:147
+  |#: larkfield/emails/reminders.py:33 larkfield/emails/reminders.py:71
+  |#: templates/loans/overdue-notice.html:9 templates/loans/overdue-notice.txt:4
+  |#: static/js/loan-calendar.js:210
+  |#, python-format
+  |msgid "Return by %(date)s"
+  |msgstr "Devolver até %(date)s"
+  |
+  |#: larkfield/forms.py:22
+  |msgid "Library card number"
+  |msgstr "Número da carteirinha"
+  |
+  |#: templates/base.html:17
+  |msgid "Sign out"
+  |msgstr "Sair"
+  |
+  |#: templates/base.html:18 templates/base.html:44
+  |msgid "My account"
+  |msgstr "Minha conta"
+  |
+  |#: templates/catalog/detail.html:12
+  |msgid "Available"
+  |msgstr "Disponível"
+  |
+  |#: templates/catalog/detail.html:13
+  |msgid "On loan"
+  |msgstr "Emprestado"
+  |
+  |#: larkfield/views/holds.py:90
+  |#, python-format
+  |msgid "%(n)d hold"
+  |msgid_plural "%(n)d holds"
+  |msgstr[0] "%(n)d reserva"
+  |msgstr[1] "%(n)d reservas"
+  |
+  |#. Button label: places a hold on a book that is out on loan.
+  |#: templates/catalog/detail.html:88
+  |msgctxt "button"
+  |msgid "Hold"
+  |msgstr ""
+  |
+  |#. Heading of the list of holds a member has placed.
+  |#: templates/members/account.html:30
+  |msgctxt "heading"
+  |msgid "Holds"
+  |msgstr ""
+  |
+  |#: templates/members/account.html:31
+  |msgid "Holds"
+  |msgstr ""
+  |
+  |#: larkfield/views/loans.py:180
+  |#, python-format
+  |msgid "You have %(n)d overdue item"
+  |msgid_plural "You have %(n)d overdue items"
+  |msgstr[0] ""
+  |msgstr[1] ""
+  |
+  |#. This is shown on the account page under the loan list, and is the one
+  |#. place where the fine schedule is explained, so keep the amounts and the
+  |#. grace period exactly as written in the source text.
+  |#: templates/members/fines.html:14
+  |msgid ""
+  |"Fines are charged at 25 cents a day after a grace period of three days, up "
+  |"to the replacement cost of the item. Fines under one dollar are waived at "
+  |"checkout."
+  |msgstr ""
+  |
+  |#: templates/members/fines.html:20
+  |msgid ""
+  |"Dear member,\n"
+  |"\n"
+  |"Your card expires on %(date)s. Renew it at any branch desk.\n"
+  |msgstr ""
+  |
+  |#: larkfield/forms.py:23
+  |msgid "PIN"
+  |msgstr ""
+  |
+  |#: larkfield/forms.py:40
+  |#, python-brace-format
+  |msgid "The PIN must be {min} to {max} digits long."
+  |msgstr ""
+  |
+  |#: larkfield/forms.py:58
+  |msgid "Signed in as \"{name}\"\t(change)"
+  |msgstr ""
+  |
+  |#: templates/base.html:5
+  |msgid "Larkfield - your library, online"
+  |msgstr ""
+  |
+  |#: templates/catalog/detail.html:40
+  |msgctxt "verb"
+  |msgid "Open"
+  |msgstr ""
+  |
+  |#: templates/branches/hours.html:8
+  |msgctxt "adjective"
+  |msgid "Open"
+  |msgstr ""
+  |
+  |#: templates/branches/hours.html:9
+  |msgid "Closed"
+  |msgstr ""
+  |
+  |#: larkfield/views/holds.py:66
+  |#, python-format
+  |msgid "%(title)s is ready for pickup at %(branch)s until %(date)s."
+  |msgstr ""
+  |
+  |#: larkfield/admin/reports.py:12
+  |msgid "Circulation by branch and collection, last twelve months"
+  |msgstr ""
+  |
+  |#: larkfield/admin/reports.py:31
+  |msgid "C:\\Exports\\circulation.csv"
+  |msgstr ""
+  |
+  |#: larkfield/api/errors.py:8
+  |msgid ""
+  |"Something went wrong. Please try again in a few minutes, or contact the help"
+  |" desk."
+  |msgstr ""
+  |
+  |#: static/js/search-box.js:44
+  |msgid "Type at least three letters"
+  |msgstr ""
+  |
+  |#, fuzzy
+  |#~ msgid ""
+  |#~ "Fines are charged at 20 cents a day after a grace period of three days, up "
+  |#~ "to the replacement cost of the item."
+  |#~ msgstr ""
+  |#~ "As multas são de 20 centavos por dia após um prazo de carência de três dias,"
+  |#~ " até o custo de reposição do item."
+  |
+  |#~ msgid "Renew all"
+  |#~ msgstr "Renovar tudo"
+  |
+  |#, python-format
+  |#~ msgid "Renewed until %(date)s"
+  |#~ msgstr "Renovado até %(date)s"
+  |
+  obsolete id='Fines are charged at 20 cents a day after a grace period of three days, up to the replacement cost of the item.' str='As multas são de 20 centavos por dia após um prazo de carência de três dias, até o custo de reposição do item.' flags=['fuzzy'] occ=1 first=('templates/members/fines.html', '14') obsolete line 34
+  obsolete id='Renew all' str='Renovar tudo' occ=1 first=('larkfield/views/renewals.py', '12') obsolete line 70
+  obsolete id='Renewed until %(date)s' str='Renovado até %(date)s' flags=['python-format'] occ=1 first=('larkfield/views/renewals.py', '30') obsolete line 74
+== merge | data/fr.po | data/messages.pot | data/out/fr.po
+55% translated; translated 15, untranslated 11, fuzzy 1, obsolete 0; 27 entries; header flags [], encoding utf8
+wrote data/out/fr.po: 4274 bytes, fnv 4e6cd67c
+== merge | data/de.po | data/messages.pot | data/out/de.po
+88% translated; translated 24, untranslated 1, fuzzy 2, obsolete 3; 30 entries; header flags [], encoding UTF-8
+wrote data/out/de.po: 5506 bytes, fnv 0032d5d7
+  obsolete id='Renew all' str='Alle verlängern' obsolete line 179
+  obsolete id='Due on %(date)s' str='Fällig am %(date)s' flags=['python-format'] obsolete line 182
+  obsolete ctx='ticket' id="Ask at the desk for a reader's ticket. You will need a proof of address and one photograph." str='Fragen Sie an der Theke nach einem Leseausweis. Sie brauchen einen Adressnachweis und ein Passbild.' tc='Removed with the old reader-ticket system.' obsolete line 187
+== merge | data/messages.pot | data/messages.pot | data/out/messages.pot
+0% translated; translated 0, untranslated 27, fuzzy 0, obsolete 0; 27 entries; header flags ['fuzzy'], encoding utf-8
+wrote data/out/messages.pot: 3835 bytes, fnv e8260b60
+== sort | data/de.po
+  ~ 'Due on %(date)s' []
+  ~ 'Renew all' []
+  ~ ticket|"Ask at the desk for a reader's ticket. You will need a proof of address and one photograph." []
+    'Circulation by branch and collection, last twelve months' ['larkfield/admin/reports.py:12']
+    'C:\\Exports\\circulation.csv' ['larkfield/admin/reports.py:31']
+    'Something went wrong. Please try again in a few minutes, or contact the help desk.' ['larkfield/api/errors.py:8']
+    'Return by %(date)s' ['larkfield/emails/reminders.py:33', 'larkfield/emails/reminders.py:71']
+    'Library card number' ['larkfield/forms.py:22']
+    'PIN' ['larkfield/forms.py:23']
+    'The PIN must be {min} to {max} digits long.' ['larkfield/forms.py:40']
+    'Signed in as "{name}"\t(change)' ['larkfield/forms.py:58']
+    'Search the catalog' ['larkfield/views/catalog.py:41', 'templates/catalog/search.html:12']
+    '%(count)d result for "%(query)s"' ['larkfield/views/catalog.py:58']
+    '%(title)s is ready for pickup at %(branch)s until %(date)s.' ['larkfield/views/holds.py:66']
+    '%(n)d hold' ['larkfield/views/holds.py:90']
+    'You have %(n)d overdue item' ['larkfield/views/loans.py:180']
+    'Type at least three letters' ['static/js/search-box.js:44']
+    'Sign out' ['templates/base.html:17']
+    'My account' ['templates/base.html:18', 'templates/base.html:44']
+    'Larkfield - your library, online' ['templates/base.html:5']
+    adjective|'Open' ['templates/branches/hours.html:8']
+    'Closed' ['templates/branches/hours.html:9']
+    'Available' ['templates/catalog/detail.html:12']
+    'On loan' ['templates/catalog/detail.html:13']
+    verb|'Open' ['templates/catalog/detail.html:40']
+    button|'Hold' ['templates/catalog/detail.html:88']
+    heading|'Holds' ['templates/members/account.html:30']
+    'Holds' ['templates/members/account.html:31']
+    'Fines are charged at 25 cents a day after a grace period of three days, up to the replacement cost of the item. Fines under one dollar are waived at checkout.' ['templates/members/fines.html:14']
+    'Dear member,\n\nYour card expires on %(date)s. Renew it at any branch desk.\n' ['templates/members/fines.html:20']
+== sort | data/fr.po
+    'Something went wrong. Please try again in a few minutes, or contact the help desk.' ['larkfield/api/errors.py:8']
+    'Return by %(date)s' ['larkfield/emails/reminders.py:33', 'larkfield/emails/reminders.py:71']
+    'Library card number' ['larkfield/forms.py:22']
+    'PIN' ['larkfield/forms.py:23']
+    'Search the catalog' ['larkfield/views/catalog.py:41', 'templates/catalog/search.html:12']
+    '%(count)d result for "%(query)s"' ['larkfield/views/catalog.py:58']
+    '%(n)d hold' ['larkfield/views/holds.py:90']
+    'Type at least three letters' ['static/js/search-box.js:44']
+    'Sign out' ['templates/base.html:17']
+    'My account' ['templates/base.html:18', 'templates/base.html:44']
+    'Larkfield - your library, online' ['templates/base.html:5']
+    adjective|'Open' ['templates/branches/hours.html:8']
+    'Closed' ['templates/branches/hours.html:9']
+    'Available' ['templates/catalog/detail.html:12']
+    'On loan' ['templates/catalog/detail.html:13']
+    button|'Hold' ['templates/catalog/detail.html:88']
+    'Holds' ['templates/members/account.html:31']
+    'Fines are charged at 25 cents a day after a grace period of three days, up to the replacement cost of the item. Fines under one dollar are waived at checkout.' ['templates/members/fines.html:14']
+== compile | data/de.po | data/out/de.mo
+wrote data/out/de.mo: 2459 bytes, fnv c978d981, header 2500072158 0 25 28 228 0 428
+  read back: 24 entries, 17 metadata fields, encoding UTF-8
+== compile | data/fr.po | data/out/fr.mo
+wrote data/out/fr.mo: 1558 bytes, fnv e4634fe5, header 2500072158 0 16 28 156 0 284
+  read back: 15 entries, 11 metadata fields, encoding utf8
+== compile | data/ja.po | data/out/ja.mo
+wrote data/out/ja.mo: 1196 bytes, fnv 25adf45c, header 2500072158 0 9 28 100 0 172
+  read back: 8 entries, 10 metadata fields, encoding UTF-8
+== compile | data/fr_legacy.po | data/out/fr_legacy.mo
+wrote data/out/fr_legacy.mo: 577 bytes, fnv 4bb3a282, header 2500072158 0 6 28 76 0 124
+  read back: 5 entries, 6 metadata fields, encoding ISO-8859-1
+== compile | data/messages.pot | data/out/messages.mo
+wrote data/out/messages.mo: 473 bytes, fnv 408cfafd, header 2500072158 0 1 28 36 0 44
+  read back: 0 entries, 12 metadata fields, encoding utf-8
+== mo | data/out/de.mo
+magic 950412de, version 0, 24 entries, encoding UTF-8
+  Project-Id-Version: 'Larkfield 4.2'
+  Report-Msgid-Bugs-To: 'translators@larkfield.example'
+  POT-Creation-Date: '2026-10-20 09:14+0000'
+  PO-Revision-Date: '2026-10-22 18:40+0200'
+  Last-Translator: 'Jana Vogt <jana.vogt@example.de>'
+  Language-Team: 'German <de@larkfield.example>'
+  Language: 'de'
+  MIME-Version: '1.0'
+  Content-Type: 'text/plain; charset=UTF-8'
+  Content-Transfer-Encoding: '8bit'
+  Plural-Forms: 'nplurals=2; plural=(n != 1);'
+  Generated-By: 'Babel 2.16.0'
+  X-Crowdin-Project: 'larkfield'
+  X-Generator: 'Poedit 3.5'
+  X-Poedit-SearchPath-0: 'larkfield'
+  X-Poedit-SearchPath-9: 'templates'
+  X-Poedit-SearchPath-10: 'static'
+  id='%(count)d result for "%(query)s"' plural='%(count)d results for "%(query)s"' [0]='%(count)d Treffer für „%(query)s“' [1]='%(count)d Treffer für „%(query)s“'
+  id='%(n)d hold' plural='%(n)d holds' [0]='%(n)d Vormerkung' [1]='%(n)d Vormerkungen'
+  id='Available' str='Verfügbar'
+  id='C:\\Exports\\circulation.csv' str='C:\\Export\\Ausleihen.csv'
+  id='Circulation by branch and collection, last twelve months' str='Ausleihen nach Zweigstelle und Bestand, letzte zwölf Monate'
+  id='Closed' str='Geschlossen'
+  id='Dear member,\n\nYour card expires on %(date)s. Renew it at any branch desk.\n' str='Liebes Mitglied,\n\nIhr Ausweis läuft am %(date)s ab. Sie können ihn an jeder Theke verlängern.\n'
+  id='Holds' str='Vormerkungen'
+  id='Larkfield - your library, online' str='Larkfield - Ihre Bibliothek, online'
+  id='Library card number' str='Ausweisnummer'
+  id='My account' str='Mein Konto'
+  id='On loan' str='Ausgeliehen'
+  id='PIN' str='PIN'
+  id='Return by %(date)s' str='Rückgabe bis %(date)s'
+  id='Search the catalog' str='Katalog durchsuchen'
+  id='Sign out' str='Abmelden'
+  id='Signed in as "{name}"\t(change)' str='Angemeldet als „{name}“\t(ändern)'
+  id='Something went wrong. Please try again in a few minutes, or contact the help desk.' str='Etwas ist schiefgelaufen. Bitte versuchen Sie es in ein paar Minuten noch einmal oder wenden Sie sich an die Auskunft.'
+  id='The PIN must be {min} to {max} digits long.' str='Die PIN muss {min} bis {max} Ziffern lang sein.'
+  id='You have %(n)d overdue item' plural='You have %(n)d overdue items' [0]='Sie haben %(n)d überfälliges Medium' [1]='Sie haben %(n)d überfällige Medien'
+  ctx='adjective' id='Open' str='Geöffnet'
+  ctx='button' id='Hold' str='Vormerken'
+  ctx='heading' id='Holds' str='Vormerkungen'
+  ctx='verb' id='Open' str='Öffnen'
+== mo | data/out/fr_legacy.mo
+magic 950412de, version 0, 5 entries, encoding ISO-8859-1
+  Project-Id-Version: 'Larkfield kiosk 1.9'
+  Language: 'fr'
+  MIME-Version: '1.0'
+  Content-Type: 'text/plain; charset=ISO-8859-1'
+  Content-Transfer-Encoding: '8bit'
+  Plural-Forms: 'nplurals=2; plural=(n > 1);'
+  id='%(n)d item checked out' plural='%(n)d items checked out' [0]='%(n)d document emprunté' [1]='%(n)d documents empruntés'
+  id='Item checked out' str='Document emprunté'
+  id='Place your card on the reader' str='Posez votre carte sur le lecteur'
+  id='Please take your receipt' str='Veuillez prendre votre reçu'
+  id='Receipt' str='Reçu'
+== mo | data/legacy_es.mo
+magic de120495, version 0, 9 entries, encoding UTF-8
+  Project-Id-Version: 'Larkfield 4.0'
+  Language: 'es'
+  MIME-Version: '1.0'
+  Content-Type: 'text/plain; charset=UTF-8'
+  Content-Transfer-Encoding: '8bit'
+  Plural-Forms: 'nplurals=2; plural=(n != 1);'
+  X-Legacy-Build: ''
+  id='Available' str='Disponible'
+  id='Closed' str='Cerrado'
+  id='My account' str='Mi cuenta'
+  id='On loan' str='Prestado'
+  id='Return by %(date)s' str='Devolver antes del %(date)s'
+  id='Search the catalog' str='Buscar en el catálogo'
+  id='Sign out' str='Cerrar sesión'
+  ctx='adjective' id='Open' str='Abierto'
+  id='%(n)d hold' plural='%(n)d holds' [0]='%(n)d reserva' [1]='%(n)d reservas'
+== mo | data/bad_magic.mo
+OSError: Invalid mo file, magic number is incorrect !
+== mo | data/rev2.mo
+OSError: Invalid mo file, unexpected major revision number
+== mo | data/rev1.mo
+magic 950412de, version 65537, 2 entries, encoding UTF-8
+  Project-Id-Version: 'Larkfield 4.0'
+  Language: 'es'
+  MIME-Version: '1.0'
+  Content-Type: 'text/plain; charset=UTF-8'
+  Content-Transfer-Encoding: '8bit'
+  Plural-Forms: 'nplurals=2; plural=(n != 1);'
+  X-Legacy-Build: ''
+  id='Available' str='Disponible'
+  id='Closed' str='Cerrado'
+== mo-to-po | data/legacy_es.mo | data/out/es.po
+  |msgid ""
+  |msgstr ""
+  |"Project-Id-Version: Larkfield 4.0\n"
+  |"Language: es\n"
+  |"MIME-Version: 1.0\n"
+  |"Content-Type: text/plain; charset=UTF-8\n"
+  |"Content-Transfer-Encoding: 8bit\n"
+  |"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+  |"X-Legacy-Build: \n"
+  |
+  |msgid "Available"
+  |msgstr "Disponible"
+  |
+  |msgid "Closed"
+  |msgstr "Cerrado"
+  |
+  |msgid "My account"
+  |msgstr "Mi cuenta"
+  |
+  |msgid "On loan"
+  |msgstr "Prestado"
+  |
+  |msgid "Return by %(date)s"
+  |msgstr "Devolver antes del %(date)s"
+  |
+  |msgid "Search the catalog"
+  |msgstr "Buscar en el catálogo"
+  |
+  |msgid "Sign out"
+  |msgstr "Cerrar sesión"
+  |
+  |msgctxt "adjective"
+  |msgid "Open"
+  |msgstr "Abierto"
+  |
+  |msgid "%(n)d hold"
+  |msgid_plural "%(n)d holds"
+  |msgstr[0] "%(n)d reserva"
+  |msgstr[1] "%(n)d reservas"
+  |
+== mo-save | data/legacy_es.mo | data/out/es.mo
+wrote data/out/es.mo: 649 bytes, fnv 343412a6, header 2500072158 0 10 28 108 0 188
+  id='%(n)d hold' plural='%(n)d holds' [0]='%(n)d reserva' [1]='%(n)d reservas'
+  id='Available' str='Disponible'
+  id='Closed' str='Cerrado'
+  id='My account' str='Mi cuenta'
+  id='On loan' str='Prestado'
+  id='Return by %(date)s' str='Devolver antes del %(date)s'
+  id='Search the catalog' str='Buscar en el catálogo'
+  id='Sign out' str='Cerrar sesión'
+  ctx='adjective' id='Open' str='Abierto'
+== po | data/out/es.po
+9 entries; 100% translated; translated 9, untranslated 0, fuzzy 0, obsolete 0; 9 entries; header flags [], encoding UTF-8
+== po | data/bad_quote.po
+OSError: Syntax error in po file data/bad_quote.po (line 6): unescaped double quote found
+== po | data/bad_prev.po
+OSError: Syntax error in po file data/bad_prev.po (line 6): unknown keyword msgtxt
+== po | data/bad_cont.po
+OSError: Syntax error in po file data/bad_cont.po (line 6): invalid continuation line
+== po | data/bad_order.po
+OSError: Syntax error in po file data/bad_order.po (line 5)
+== po | data/bad_line.po
+OSError: Syntax error in po file data/bad_line.po (line 7)
+== po | data/bad_index.po
+OSError: Syntax error in po file data/bad_index.po (line 8)
+== po | data/bad_cont_quote.po
+OSError: Syntax error in po file data/bad_cont_quote.po (line 7): unescaped double quote found
+== po | data/missing.po
+OSError: Syntax error in po file (line 1)
+== escape | Tab⇥and newline⏎and "quotes" and back\slash
+'Tab\\tand newline\\nand \\"quotes\\" and back\\\\slash'
+== unescape | Tab\tand newline\nand \"quotes\" and \\n and \q
+'Tab\tand newline\nand "quotes" and \\n and \\q'
+== natural-sort | X-Poedit-SearchPath-10 X-Poedit-SearchPath-9 x-alpha X-Beta item2 item10 Item1 item1b
+['Item1', 'item1b', 'item2', 'item10', 'x-alpha', 'X-Beta', 'X-Poedit-SearchPath-9', 'X-Poedit-SearchPath-10']

@@ -1,0 +1,2787 @@
+// mini_polib: polib 1.2.0 (David Jean Louis, MIT), the gettext catalog
+// library: PO and POT files parsed by its state machine, written back
+// with its wrapping, searched, merged against a template as msgmerge
+// does, compiled to MO files and read back from them, with its encoding
+// detection, escaping and natural sort.
+//
+// The run writes the catalogs of its data section into data/, then runs
+// every command in data/jobs.txt. polib wraps with Python's textwrap, so
+// the TextWrapper port of mini_textwrap comes first; text is handled as
+// Vec[char] wherever polib counts code points.
+
+// ------------------------------------------------------------ characters
+// textwrap's _whitespace: the only characters its regexes treat as space.
+fn is_ws(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\u{b}' or c == '\u{c}' or c == '\r'
+}
+
+// str.isspace, which str.strip and str.split use: Unicode White_Space plus
+// the four ASCII separators U+001C..U+001F.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+// The regex class \w.
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() or c == '_'
+}
+
+// textwrap's `letter`, [^\d\W]: a word character that is not a digit.
+fn is_letter(c: char) -> bool {
+    is_word(c) and not c.is_ascii_digit()
+}
+
+// textwrap's `word_punct`, [\w!"'&.,?].
+fn is_word_punct(c: char) -> bool {
+    is_word(c) or c == '!' or c == '"' or c == '\'' or c == '&' or c == '.' or c == ',' or c == '?'
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn is_blank(v: ref Vec[char]) -> bool {
+    v.iter().all(|c| py_space(*c))
+}
+
+fn lstrip(v: ref Vec[char]) -> Vec[char] {
+    let mut i = 0;
+    while i < v.len() and py_space(v[i]) {
+        i += 1;
+    }
+    v[i..].to_vec()
+}
+
+fn rstrip(v: ref Vec[char]) -> Vec[char] {
+    let mut n = v.len();
+    while n > 0 and py_space(v[n - 1]) {
+        n -= 1;
+    }
+    v[0..n].to_vec()
+}
+
+fn concat(parts: ref Vec[Vec[char]]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for p in parts.iter() {
+        for c in p.iter() {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+fn total_len(parts: ref Vec[Vec[char]]) -> i64 {
+    let mut n = 0;
+    for p in parts.iter() {
+        n += p.len();
+    }
+    n
+}
+
+// str.split() with no argument: runs of whitespace separate the words.
+fn py_split(v: ref Vec[char]) -> Vec[Vec[char]] {
+    let mut words: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    for c in v.iter() {
+        if py_space(*c) {
+            if not cur.is_empty() {
+                words.push(cur);
+                cur = Vec.new();
+            }
+        } else {
+            cur.push(*c);
+        }
+    }
+    if not cur.is_empty() {
+        words.push(cur);
+    }
+    words
+}
+
+// str.split(sep) for a one-character separator: always at least one piece.
+fn split_on(v: ref Vec[char], sep: char) -> Vec[Vec[char]] {
+    let mut pieces: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    for c in v.iter() {
+        if *c == sep {
+            pieces.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn join_on(pieces: ref Vec[Vec[char]], sep: char) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for i in 0..pieces.len() {
+        if i > 0 {
+            out.push(sep);
+        }
+        for c in pieces[i].iter() {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+fn starts_with(v: ref Vec[char], prefix: ref Vec[char]) -> bool {
+    if prefix.len() > v.len() {
+        return false;
+    }
+    for i in 0..prefix.len() {
+        if v[i] != prefix[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ TextWrapper
+
+struct Wrapper {
+    width: i64,
+    initial_indent: Vec[char],
+    subsequent_indent: Vec[char],
+    expand_tabs: bool,
+    tabsize: i64,
+    replace_whitespace: bool,
+    fix_sentence_endings: bool,
+    break_long_words: bool,
+    break_on_hyphens: bool,
+    drop_whitespace: bool,
+    max_lines: Option[i64],
+    placeholder: Vec[char],
+}
+
+impl Wrapper {
+    fn new(width: i64) -> Wrapper {
+        Wrapper {
+            width: width,
+            initial_indent: Vec.new(),
+            subsequent_indent: Vec.new(),
+            expand_tabs: true,
+            tabsize: 8,
+            replace_whitespace: true,
+            fix_sentence_endings: false,
+            break_long_words: true,
+            break_on_hyphens: true,
+            drop_whitespace: true,
+            max_lines: None,
+            placeholder: chars(" [...]"),
+        }
+    }
+
+    // _munge_whitespace: str.expandtabs, then every _whitespace character
+    // becomes a space.
+    fn munge(ref self, t: ref Vec[char]) -> Vec[char] {
+        let mut out: Vec[char] = Vec.new();
+        if self.expand_tabs {
+            let mut col = 0;
+            for c in t.iter() {
+                if *c == '\t' {
+                    if self.tabsize > 0 {
+                        let incr = self.tabsize - col % self.tabsize;
+                        for _ in 0..incr {
+                            out.push(' ');
+                        }
+                        col += incr;
+                    }
+                } else if *c == '\n' or *c == '\r' {
+                    out.push(*c);
+                    col = 0;
+                } else {
+                    out.push(*c);
+                    col += 1;
+                }
+            }
+        } else {
+            out = t.clone();
+        }
+        if self.replace_whitespace {
+            for i in 0..out.len() {
+                if is_ws(out[i]) {
+                    out[i] = ' ';
+                }
+            }
+        }
+        out
+    }
+
+    // _split: wordsep_re (or wordsep_simple_re) splits the text into
+    // chunks that tile it.
+    fn split(ref self, t: ref Vec[char]) -> Vec[Vec[char]] {
+        let n = t.len();
+        let mut chunks: Vec[Vec[char]] = Vec.new();
+        let mut i = 0;
+        while i < n {
+            let mut end = i;
+            if is_ws(t[i]) {
+                while end < n and is_ws(t[end]) {
+                    end += 1;
+                }
+            } else if not self.break_on_hyphens {
+                while end < n and not is_ws(t[end]) {
+                    end += 1;
+                }
+            } else {
+                end = match em_dash_at(t, i) {
+                    Some(e) => e,
+                    None => word_end(t, i),
+                };
+            }
+            chunks.push(t[i..end].to_vec());
+            i = end;
+        }
+        chunks
+    }
+
+    // _fix_sentence_endings
+    fn fix_endings(ref self, chunks: mut ref Vec[Vec[char]]) {
+        let mut i = 0;
+        while i + 1 < chunks.len() {
+            if chunks[i + 1] == vec![' '] and sentence_end(chunks[i]) {
+                chunks[i + 1] = vec![' ', ' '];
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // _handle_long_word
+    fn handle_long_word(ref self, rev: mut ref Vec[Vec[char]], cur_line: mut ref Vec[Vec[char]], cur_len: i64, width: i64) {
+        let space_left = if width < 1 { 1 } else { width - cur_len };
+        if self.break_long_words {
+            let mut end = space_left;
+            let last = rev.len() - 1;
+            let chunk = rev[last].clone();
+            if self.break_on_hyphens and chunk.len() > space_left {
+                // chunk.rfind('-', 0, space_left)
+                let mut hyphen = -1;
+                let mut k = space_left;
+                while k > 0 {
+                    k -= 1;
+                    if chunk[k] == '-' {
+                        hyphen = k;
+                        break;
+                    }
+                }
+                if hyphen > 0 and chunk[0..hyphen].iter().any(|c| *c != '-') {
+                    end = hyphen + 1;
+                }
+            }
+            if end > chunk.len() {
+                end = chunk.len();
+            }
+            cur_line.push(chunk[0..end].to_vec());
+            rev[last] = chunk[end..].to_vec();
+        } else if cur_line.is_empty() {
+            cur_line.push(rev.pop().unwrap());
+        }
+    }
+
+    // _wrap_chunks
+    fn wrap_chunks(ref self, chunks: own Vec[Vec[char]]) -> Result[Vec[Vec[char]], String] {
+        let mut lines: Vec[Vec[char]] = Vec.new();
+        if self.width <= 0 {
+            return Err(f"invalid width {self.width} (must be > 0)");
+        }
+        if let Some(ml) = self.max_lines {
+            let indent = if ml > 1 { self.subsequent_indent.clone() } else { self.initial_indent.clone() };
+            if indent.len() + lstrip(self.placeholder).len() > self.width {
+                return Err("placeholder too large for max width".to_string());
+            }
+        }
+        let mut rev = chunks;
+        rev.reverse();
+        while not rev.is_empty() {
+            let mut cur_line: Vec[Vec[char]] = Vec.new();
+            let mut cur_len = 0;
+            let indent = if lines.is_empty() { self.initial_indent.clone() } else { self.subsequent_indent.clone() };
+            let width = self.width - indent.len();
+            if self.drop_whitespace and is_blank(rev[rev.len() - 1]) and not lines.is_empty() {
+                rev.pop();
+            }
+            while not rev.is_empty() {
+                let l = rev[rev.len() - 1].len();
+                if cur_len + l <= width {
+                    cur_line.push(rev.pop().unwrap());
+                    cur_len += l;
+                } else {
+                    break;
+                }
+            }
+            if not rev.is_empty() and rev[rev.len() - 1].len() > width {
+                self.handle_long_word(mut rev, mut cur_line, cur_len, width);
+                cur_len = total_len(cur_line);
+            }
+            if self.drop_whitespace and not cur_line.is_empty() and is_blank(cur_line[cur_line.len() - 1]) {
+                cur_len -= cur_line[cur_line.len() - 1].len();
+                cur_line.pop();
+            }
+            if cur_line.is_empty() {
+                continue;
+            }
+            let fits = match self.max_lines {
+                None => true,
+                Some(ml) => {
+                    lines.len() + 1 < ml
+                        or ((rev.is_empty() or (self.drop_whitespace and rev.len() == 1 and is_blank(rev[0]))) and cur_len <= width)
+                }
+            };
+            if fits {
+                let mut line = indent.clone();
+                for c in concat(cur_line).iter() {
+                    line.push(*c);
+                }
+                lines.push(line);
+                continue;
+            }
+            // Truncate with the placeholder, and stop.
+            let mut placed = false;
+            while not cur_line.is_empty() {
+                if not is_blank(cur_line[cur_line.len() - 1]) and cur_len + self.placeholder.len() <= width {
+                    cur_line.push(self.placeholder.clone());
+                    let mut line = indent.clone();
+                    for c in concat(cur_line).iter() {
+                        line.push(*c);
+                    }
+                    lines.push(line);
+                    placed = true;
+                    break;
+                }
+                cur_len -= cur_line[cur_line.len() - 1].len();
+                cur_line.pop();
+            }
+            if not placed {
+                let mut done = false;
+                if not lines.is_empty() {
+                    let last = lines.len() - 1;
+                    let prev_line = rstrip(lines[last]);
+                    if prev_line.len() + self.placeholder.len() <= self.width {
+                        let mut line = prev_line;
+                        for c in self.placeholder.iter() {
+                            line.push(*c);
+                        }
+                        lines[last] = line;
+                        done = true;
+                    }
+                }
+                if not done {
+                    let mut line = indent.clone();
+                    for c in lstrip(self.placeholder).iter() {
+                        line.push(*c);
+                    }
+                    lines.push(line);
+                }
+            }
+            break;
+        }
+        Ok(lines)
+    }
+
+    fn wrap(ref self, t: ref Vec[char]) -> Result[Vec[Vec[char]], String] {
+        let mut chunks = self.split(self.munge(t));
+        if self.fix_sentence_endings {
+            self.fix_endings(mut chunks);
+        }
+        self.wrap_chunks(chunks)
+    }
+
+    fn fill(ref self, t: ref Vec[char]) -> Result[Vec[char], String] {
+        match self.wrap(t) {
+            Ok(lines) => Ok(join_on(lines, '\n')),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// The em-dash alternative of wordsep_re, (?<=word_punct) -{2,} (?=\w),
+// tried at i: the end of the dash run.
+fn em_dash_at(t: ref Vec[char], i: i64) -> Option[i64] {
+    if i == 0 or not is_word_punct(t[i - 1]) {
+        return None;
+    }
+    let mut k = i;
+    while k < t.len() and t[k] == '-' {
+        k += 1;
+    }
+    if k - i >= 2 and k < t.len() and is_word(t[k]) {
+        Some(k)
+    } else {
+        None
+    }
+}
+
+// (?=-{2,}\w) at j.
+fn dashes_then_word(t: ref Vec[char], j: i64) -> bool {
+    let mut k = j;
+    while k < t.len() and t[k] == '-' {
+        k += 1;
+    }
+    k - j >= 2 and k < t.len() and is_word(t[k])
+}
+
+// The word alternative of wordsep_re, tried at i (a non-space): the lazy
+// \S+? grows one character at a time until one of its three endings
+// matches.
+fn word_end(t: ref Vec[char], i: i64) -> i64 {
+    let n = t.len();
+    let mut j = i + 1;
+    loop {
+        // A hyphen inside a compound word: -(?:(?<=lt{2}-)|(?<=lt-lt-))(?=lt-?lt)
+        if j < n and t[j] == '-' {
+            let behind = (j >= 2 and is_letter(t[j - 2]) and is_letter(t[j - 1]))
+                or (j >= 3 and is_letter(t[j - 3]) and t[j - 2] == '-' and is_letter(t[j - 1]));
+            let ahead = j + 1 < n and is_letter(t[j + 1])
+                and ((j + 2 < n and is_letter(t[j + 2])) or (j + 3 < n and t[j + 2] == '-' and is_letter(t[j + 3])));
+            if behind and ahead {
+                return j + 1;
+            }
+        }
+        // The end of the word: (?=ws|\Z)
+        if j == n or is_ws(t[j]) {
+            return j;
+        }
+        // An em-dash follows: (?<=word_punct)(?=-{2,}\w)
+        if is_word_punct(t[j - 1]) and dashes_then_word(t, j) {
+            return j;
+        }
+        j += 1;
+    }
+}
+
+// sentence_end_re, [a-z][\.\!\?][\"\']?\Z, searched in a chunk.
+fn sentence_end(c: ref Vec[char]) -> bool {
+    let mut n = c.len();
+    if n > 0 and (c[n - 1] == '"' or c[n - 1] == '\'') {
+        n -= 1;
+    }
+    n >= 2 and c[n - 2] >= 'a' and c[n - 2] <= 'z' and (c[n - 1] == '.' or c[n - 1] == '!' or c[n - 1] == '?')
+}
+
+// ------------------------------------------------------------ Python's str
+
+struct PoErr {
+    kind: String,
+    msg: String,
+}
+
+fn err(kind: ref String, msg: ref String) -> PoErr {
+    PoErr { kind: kind.clone(), msg: msg.clone() }
+}
+
+fn clen(s: ref String) -> i64 {
+    s.chars().count() as i64
+}
+
+// s[a:b] counted in code points, with Python's clamping for a and b in
+// 0..len (callers resolve negative indexes).
+fn cslice(s: ref String, a: i64, b: i64) -> String {
+    let v = chars(s);
+    let n = v.len() as i64;
+    let lo = if a < 0 { 0 } else if a > n { n } else { a };
+    let hi = if b < lo { lo } else if b > n { n } else { b };
+    text(v[lo..hi].to_vec())
+}
+
+// s[a:], in code points.
+fn cfrom(s: ref String, a: i64) -> String {
+    cslice(s, a, clen(s))
+}
+
+// s[1:-1], in code points.
+fn inner(s: ref String) -> String {
+    cslice(s, 1, clen(s) - 1)
+}
+
+fn py_strip(s: ref String) -> String {
+    text(rstrip(lstrip(chars(s))))
+}
+
+fn py_lstrip(s: ref String) -> String {
+    text(lstrip(chars(s)))
+}
+
+// str.split(None, maxsplit) on a string that has no surrounding space.
+fn split_ws(s: ref String, maxsplit: i64) -> Vec[String] {
+    let v = chars(s);
+    let n = v.len() as i64;
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        while i < n and py_space(v[i]) {
+            i += 1;
+        }
+        if i >= n {
+            break;
+        }
+        if maxsplit >= 0 and out.len() as i64 == maxsplit {
+            out.push(text(v[i..n].to_vec()));
+            break;
+        }
+        let start = i;
+        while i < n and not py_space(v[i]) {
+            i += 1;
+        }
+        out.push(text(v[start..i].to_vec()));
+    }
+    out
+}
+
+fn is_ascii_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+// str.splitlines(keepends): the line boundaries of str, ASCII and the
+// three Unicode ones.
+fn splitlines(s: ref String, keep: bool) -> Vec[String] {
+    let v = chars(s);
+    let n = v.len() as i64;
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        let c = v[i];
+        let is_break = c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}' or c == '\u{1c}' or c == '\u{1d}' or c == '\u{1e}' or c == '\u{85}' or c == '\u{2028}' or c == '\u{2029}';
+        if is_break {
+            let mut end = i + 1;
+            if c == '\r' and i + 1 < n and v[i + 1] == '\n' {
+                end = i + 2;
+            }
+            if keep {
+                out.push(text(v[start..end].to_vec()));
+            } else {
+                out.push(text(v[start..i].to_vec()));
+            }
+            start = end;
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    if start < n {
+        out.push(text(v[start..n].to_vec()));
+    }
+    out
+}
+
+fn split_str(s: ref String, sep: ref String) -> Vec[String] {
+    s.split(sep).map(|x| x.to_string()).collect()
+}
+
+// str.isprintable for the characters this port can meet: controls,
+// the C1 block, the separators and the format characters are not.
+fn printable(c: char) -> bool {
+    let u = c as u32;
+    if u < 32 or u == 127 {
+        return false;
+    }
+    if u < 128 {
+        return true;
+    }
+    not ((u >= 0x80 and u <= 0xa0) or u == 0xad or (u >= 0x2000 and u <= 0x200f) or (u >= 0x2028 and u <= 0x202f) or (u >= 0x205f and u <= 0x206f) or u == 0x3000 or u == 0xfeff)
+}
+
+fn hex_digits(u: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".to_string();
+    let mut out = String.new();
+    let mut k = width - 1;
+    while k >= 0 {
+        let d = (u >> (4 * k)) & 15;
+        out.push_str(digits.substring(d, d + 1));
+        k -= 1;
+    }
+    out
+}
+
+// repr() of a str.
+fn py_repr(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let q = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if printable(c) {
+            out.push(c);
+        } else {
+            let u = c as u32 as i64;
+            if u < 256 {
+                out.push_str(f"\\x{hex_digits(u, 2)}");
+            } else if u < 65536 {
+                out.push_str(f"\\u{hex_digits(u, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(u, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_list(v: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in v {
+        parts.push(py_repr(s));
+    }
+    f"[{parts.join(", ")}]"
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// ------------------------------------------------------------ polib's helpers
+
+// polib.escape: backslash, the five control escapes and the double quote.
+fn escape(st: ref String) -> String {
+    let mut out = String.new();
+    for c in st.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\u{b}' {
+            out.push_str("\\v");
+        } else if c == '\u{8}' {
+            out.push_str("\\b");
+        } else if c == '\u{c}' {
+            out.push_str("\\f");
+        } else if c == '"' {
+            out.push_str("\\\"");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// polib.unescape: re.sub(r'\\(\\|n|t|r|v|b|f|")', ...), left to right.
+fn unescape(st: ref String) -> String {
+    let v = chars(st);
+    let n = v.len() as i64;
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        if v[i] == '\\' and i + 1 < n {
+            let m = v[i + 1];
+            let rep = if m == 'n' {
+                Some('\n')
+            } else if m == 't' {
+                Some('\t')
+            } else if m == 'r' {
+                Some('\r')
+            } else if m == 'v' {
+                Some('\u{b}')
+            } else if m == 'b' {
+                Some('\u{8}')
+            } else if m == 'f' {
+                Some('\u{c}')
+            } else if m == '\\' {
+                Some('\\')
+            } else if m == '"' {
+                Some('"')
+            } else {
+                None
+            };
+            match rep {
+                Some(r) => {
+                    out.push(r);
+                    i += 2;
+                    continue;
+                }
+                None => {}
+            }
+        }
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+// The parser's check, re.search(r'([^\\]|^)"', s): a quote at the start
+// or after anything but a backslash.
+fn unescaped_quote(s: ref String) -> bool {
+    let v = chars(s);
+    for i in 0..v.len() as i64 {
+        if v[i] == '"' and (i == 0 or v[i - 1] != '\\') {
+            return true;
+        }
+    }
+    false
+}
+
+// natural_sort's key, [int(t) if t.isdigit() else t.lower() for t in
+// re.split('([0-9]+)', key)]: text and numbers alternate, text first.
+struct NatPart {
+    num: bool,
+    n: i64,
+    t: String,
+}
+
+fn nat_key(s: ref String) -> Vec[NatPart] {
+    let v = chars(s);
+    let n = v.len() as i64;
+    let mut out: Vec[NatPart] = Vec.new();
+    let mut i = 0;
+    let mut cur = String.new();
+    while i < n {
+        if v[i].is_ascii_digit() {
+            out.push(NatPart { num: false, n: 0, t: cur.to_lowercase() });
+            cur = String.new();
+            let start = i;
+            while i < n and v[i].is_ascii_digit() {
+                i += 1;
+            }
+            let digits = text(v[start..i].to_vec());
+            let value = match i64.parse(digits) {
+                Ok(x) => x,
+                Err(_) => 0,
+            };
+            out.push(NatPart { num: true, n: value, t: String.new() });
+        } else {
+            cur.push(v[i]);
+            i += 1;
+        }
+    }
+    out.push(NatPart { num: false, n: 0, t: cur.to_lowercase() });
+    out
+}
+
+fn nat_cmp(a: ref Vec[NatPart], b: ref Vec[NatPart]) -> i64 {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    for i in 0..n as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.num {
+            if x.n != y.n {
+                return if x.n < y.n { -1 } else { 1 };
+            }
+        } else if x.t != y.t {
+            return if x.t < y.t { -1 } else { 1 };
+        }
+    }
+    if a.len() < b.len() {
+        -1
+    } else if a.len() > b.len() {
+        1
+    } else {
+        0
+    }
+}
+
+// polib.natural_sort (sorted() is stable).
+fn natural_sort(lst: ref Vec[String]) -> Vec[String] {
+    let mut keyed: Vec[(Vec[NatPart], i64)] = Vec.new();
+    for i in 0..lst.len() as i64 {
+        keyed.push((nat_key(lst[i]), i));
+    }
+    keyed.sort_by(|a, b| {
+        let c = nat_cmp(a.0, b.0);
+        if c != 0 { c.cmp(0) } else { a.1.cmp(b.1) }
+    });
+    let mut out: Vec[String] = Vec.new();
+    for k in keyed {
+        out.push(lst[k.1].clone());
+    }
+    out
+}
+
+// textwrap.wrap with break_long_words=False, as polib calls it.
+fn tw_wrap(t: ref String, width: i64, initial: ref String, subsequent: ref String, drop_ws: bool) -> Result[Vec[String], PoErr] {
+    let mut w = Wrapper.new(width);
+    w.break_long_words = false;
+    w.drop_whitespace = drop_ws;
+    w.initial_indent = chars(initial);
+    w.subsequent_indent = chars(subsequent);
+    match w.wrap(chars(t)) {
+        Ok(lines) => {
+            let mut out: Vec[String] = Vec.new();
+            for l in lines {
+                out.push(text(l));
+            }
+            Ok(out)
+        }
+        Err(e) => Err(err("ValueError", e)),
+    }
+}
+
+// ------------------------------------------------------------ entries
+
+// A POEntry (or an MOEntry, whose comments, occurrences, flags and
+// previous fields stay empty and which has no line number).
+#[derive(Clone)]
+struct PoEntry {
+    msgid: String,
+    msgstr: String,
+    msgid_plural: String,
+    // msgstr_plural, a dict: kept in insertion order
+    plural: Vec[(i64, String)],
+    msgctxt: Option[String],
+    obsolete: bool,
+    comment: String,
+    tcomment: String,
+    occurrences: Vec[(String, String)],
+    flags: Vec[String],
+    prev_ctxt: Option[String],
+    prev_id: Option[String],
+    prev_plural: Option[String],
+    linenum: Option[i64],
+}
+
+fn new_entry(linenum: Option[i64]) -> PoEntry {
+    PoEntry {
+        msgid: String.new(),
+        msgstr: String.new(),
+        msgid_plural: String.new(),
+        plural: Vec.new(),
+        msgctxt: None,
+        obsolete: false,
+        comment: String.new(),
+        tcomment: String.new(),
+        occurrences: Vec.new(),
+        flags: Vec.new(),
+        prev_ctxt: None,
+        prev_id: None,
+        prev_plural: None,
+        linenum: linenum,
+    }
+}
+
+fn plural_pos(e: ref PoEntry, k: i64) -> i64 {
+    for i in 0..e.plural.len() as i64 {
+        if e.plural[i].0 == k {
+            return i;
+        }
+    }
+    -1
+}
+
+fn plural_set(e: mut ref PoEntry, k: i64, v: ref String) {
+    let p = plural_pos(e, k);
+    if p >= 0 {
+        e.plural[p].1 = v.clone();
+    } else {
+        e.plural.push((k, v.clone()));
+    }
+}
+
+fn plural_keys(e: ref PoEntry) -> Vec[i64] {
+    let mut ks: Vec[i64] = Vec.new();
+    for p in e.plural {
+        ks.push(p.0);
+    }
+    ks.sort();
+    ks
+}
+
+fn plural_at(e: ref PoEntry, k: i64) -> String {
+    let p = plural_pos(e, k);
+    e.plural[p].1.clone()
+}
+
+fn has_flag(e: ref PoEntry, f: ref String) -> bool {
+    for x in e.flags {
+        if x == f {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_fuzzy(e: ref PoEntry) -> bool {
+    has_flag(e, "fuzzy")
+}
+
+// The fuzzy property's setter.
+fn set_fuzzy(e: mut ref PoEntry, value: bool) {
+    if value and not is_fuzzy(e) {
+        e.flags.insert(0, "fuzzy".to_string());
+    } else if not value and is_fuzzy(e) {
+        let mut at = 0;
+        while e.flags[at] != "fuzzy" {
+            at += 1;
+        }
+        e.flags.remove(at);
+    }
+}
+
+fn translated(e: ref PoEntry) -> bool {
+    if e.obsolete or is_fuzzy(e) {
+        return false;
+    }
+    if e.msgstr != "" {
+        return true;
+    }
+    if e.plural.len() > 0 {
+        for p in e.plural {
+            if p.1 == "" {
+                return false;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+fn ctx_truthy(c: ref Option[String]) -> bool {
+    match c {
+        Some(s) => s.len() > 0,
+        None => false,
+    }
+}
+
+fn ctx_text(c: ref Option[String]) -> String {
+    match c {
+        Some(s) => s.clone(),
+        None => String.new(),
+    }
+}
+
+// msgid_with_context
+fn ctx_key(e: ref PoEntry) -> String {
+    if ctx_truthy(e.msgctxt) {
+        f"{ctx_text(e.msgctxt)}\u{4}{e.msgid}"
+    } else {
+        e.msgid.clone()
+    }
+}
+
+fn cmp_str(a: ref String, b: ref String) -> i64 {
+    if a < b {
+        -1
+    } else if a > b {
+        1
+    } else {
+        0
+    }
+}
+
+fn cmp_occ(a: ref (String, String), b: ref (String, String)) -> i64 {
+    let c = cmp_str(a.0, b.0);
+    if c != 0 { c } else { cmp_str(a.1, b.1) }
+}
+
+fn sorted_occ(e: ref PoEntry) -> Vec[(String, String)] {
+    let mut v = e.occurrences.clone();
+    v.sort_by(|a, b| cmp_occ(a, b).cmp(0));
+    v
+}
+
+fn cmp_list(a: ref Vec[String], b: ref Vec[String]) -> i64 {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    for i in 0..n as i64 {
+        let c = cmp_str(a[i], b[i]);
+        if c != 0 {
+            return c;
+        }
+    }
+    if a.len() < b.len() {
+        -1
+    } else if a.len() > b.len() {
+        1
+    } else {
+        0
+    }
+}
+
+fn or_zero(c: ref Option[String]) -> String {
+    if ctx_truthy(c) { ctx_text(c) } else { "0".to_string() }
+}
+
+fn plural_values(e: ref PoEntry) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for p in e.plural {
+        v.push(p.1.clone());
+    }
+    v
+}
+
+// POEntry.__cmp__
+fn entry_cmp(a: ref PoEntry, b: ref PoEntry) -> i64 {
+    if a.obsolete != b.obsolete {
+        return if a.obsolete { -1 } else { 1 };
+    }
+    let o1 = sorted_occ(a);
+    let o2 = sorted_occ(b);
+    let n = if o1.len() < o2.len() { o1.len() } else { o2.len() };
+    for i in 0..n as i64 {
+        let c = cmp_occ(o1[i], o2[i]);
+        if c != 0 {
+            return c;
+        }
+    }
+    if o1.len() != o2.len() {
+        return if o1.len() < o2.len() { -1 } else { 1 };
+    }
+    let c = cmp_str(or_zero(a.msgctxt), or_zero(b.msgctxt));
+    if c != 0 {
+        return c;
+    }
+    let pa = if a.msgid_plural.len() > 0 { a.msgid_plural.clone() } else { "0".to_string() };
+    let pb = if b.msgid_plural.len() > 0 { b.msgid_plural.clone() } else { "0".to_string() };
+    let c = cmp_str(pa, pb);
+    if c != 0 {
+        return c;
+    }
+    let c = cmp_list(plural_values(a), plural_values(b));
+    if c != 0 {
+        return c;
+    }
+    let c = cmp_str(a.msgid, b.msgid);
+    if c != 0 {
+        return c;
+    }
+    cmp_str(a.msgstr, b.msgstr)
+}
+
+// _BaseEntry._str_field
+fn str_field(fieldname: ref String, delflag: ref String, plural_index: ref String, field: ref String, wrapwidth: i64) -> Result[Vec[String], PoErr] {
+    let mut lines = splitlines(field, true);
+    if lines.len() > 1 {
+        lines.insert(0, String.new());
+    } else {
+        let escaped = escape(field);
+        let mut specials = 0;
+        for c in field.chars() {
+            if c == '\\' or c == '\n' or c == '\r' or c == '\t' or c == '\u{b}' or c == '\u{8}' or c == '\u{c}' or c == '"' {
+                specials += 1;
+            }
+        }
+        let mut flength = clen(fieldname) + 3;
+        if plural_index.len() > 0 {
+            flength += clen(plural_index);
+        }
+        let real = wrapwidth - flength + specials;
+        if wrapwidth > 0 and clen(field) > real {
+            lines = [String.new()].to_vec();
+            for item in tw_wrap(escaped, wrapwidth - 2, String.new(), String.new(), false)? {
+                lines.push(unescape(item));
+            }
+        } else {
+            lines = [field.clone()].to_vec();
+        }
+    }
+    let name = if fieldname.starts_with("previous_") { cfrom(fieldname, 9) } else { fieldname.clone() };
+    let mut ret: Vec[String] = Vec.new();
+    ret.push(f"{delflag}{name}{plural_index} \"{escape(lines[0])}\"");
+    for i in 1..lines.len() as i64 {
+        ret.push(f"{delflag}\"{escape(lines[i])}\"");
+    }
+    Ok(ret)
+}
+
+// _BaseEntry.__unicode__
+fn base_unicode(e: ref PoEntry, wrapwidth: i64) -> Result[String, PoErr] {
+    let delflag = if e.obsolete { "#~ ".to_string() } else { String.new() };
+    let mut ret: Vec[String] = Vec.new();
+    match e.msgctxt {
+        Some(c) => {
+            for l in str_field("msgctxt", delflag, "", c, wrapwidth)?.into_iter() {
+                ret.push(l);
+            }
+        }
+        None => {}
+    }
+    for l in str_field("msgid", delflag, "", e.msgid, wrapwidth)?.into_iter() {
+        ret.push(l);
+    }
+    if e.msgid_plural.len() > 0 {
+        for l in str_field("msgid_plural", delflag, "", e.msgid_plural, wrapwidth)?.into_iter() {
+            ret.push(l);
+        }
+    }
+    if e.plural.len() > 0 {
+        for k in plural_keys(e) {
+            for l in str_field("msgstr", delflag, f"[{k}]", plural_at(e, k), wrapwidth)?.into_iter() {
+                ret.push(l);
+            }
+        }
+    } else {
+        for l in str_field("msgstr", delflag, "", e.msgstr, wrapwidth)?.into_iter() {
+            ret.push(l);
+        }
+    }
+    ret.push(String.new());
+    Ok(ret.join("\n"))
+}
+
+fn push_comments(ret: mut ref Vec[String], val: ref String, prefix: ref String, wrapwidth: i64) -> Result[(), PoErr] {
+    if val.len() == 0 {
+        return Ok(());
+    }
+    for comment in split_str(val, "\n") {
+        if wrapwidth > 0 and clen(comment) + clen(prefix) > wrapwidth {
+            for l in tw_wrap(comment, wrapwidth, prefix, prefix, true)?.into_iter() {
+                ret.push(l);
+            }
+        } else {
+            ret.push(f"{prefix}{comment}");
+        }
+    }
+    Ok(())
+}
+
+// POEntry.__unicode__
+fn entry_unicode(e: ref PoEntry, wrapwidth: i64) -> Result[String, PoErr] {
+    let mut ret: Vec[String] = Vec.new();
+    push_comments(mut ret, e.tcomment, "# ", wrapwidth)?;
+    if not e.obsolete {
+        push_comments(mut ret, e.comment, "#. ", wrapwidth)?;
+    }
+    if not e.obsolete and e.occurrences.len() > 0 {
+        let mut files: Vec[String] = Vec.new();
+        for o in e.occurrences {
+            if o.1.len() > 0 {
+                files.push(f"{o.0}:{o.1}");
+            } else {
+                files.push(o.0.clone());
+            }
+        }
+        let filestr = files.join(" ");
+        if wrapwidth > 0 and clen(filestr) + 3 > wrapwidth {
+            // textwrap would break at the hyphens of a file name, so they
+            // are swapped for a character a file name cannot hold.
+            for l in tw_wrap(filestr.replace("-", "*"), wrapwidth, "#: ", "#: ", true)? {
+                ret.push(l.replace("*", "-"));
+            }
+        } else {
+            ret.push(f"#: {filestr}");
+        }
+    }
+    if e.flags.len() > 0 {
+        ret.push(f"#, {e.flags.join(", ")}");
+    }
+    let prefix = if e.obsolete { "#~| ".to_string() } else { "#| ".to_string() };
+    match e.prev_ctxt {
+        Some(v) => {
+            for l in str_field("previous_msgctxt", prefix, "", v, wrapwidth)?.into_iter() {
+                ret.push(l);
+            }
+        }
+        None => {}
+    }
+    match e.prev_id {
+        Some(v) => {
+            for l in str_field("previous_msgid", prefix, "", v, wrapwidth)?.into_iter() {
+                ret.push(l);
+            }
+        }
+        None => {}
+    }
+    match e.prev_plural {
+        Some(v) => {
+            for l in str_field("previous_msgid_plural", prefix, "", v, wrapwidth)?.into_iter() {
+                ret.push(l);
+            }
+        }
+        None => {}
+    }
+    ret.push(base_unicode(e, wrapwidth)?);
+    Ok(ret.join("\n"))
+}
+
+// POEntry.merge: take the template entry's ids, comments, occurrences and
+// flags, keep the translation, the translator comment and a fuzzy flag.
+fn entry_merge(e: mut ref PoEntry, other: ref PoEntry) {
+    e.msgid = other.msgid.clone();
+    e.msgctxt = other.msgctxt.clone();
+    e.occurrences = other.occurrences.clone();
+    e.comment = other.comment.clone();
+    let fuzzy = is_fuzzy(e);
+    e.flags = other.flags.clone();
+    if fuzzy {
+        e.flags.push("fuzzy".to_string());
+    }
+    e.msgid_plural = other.msgid_plural.clone();
+    e.obsolete = other.obsolete;
+    e.prev_ctxt = other.prev_ctxt.clone();
+    e.prev_id = other.prev_id.clone();
+    e.prev_plural = other.prev_plural.clone();
+    for p in other.plural {
+        if plural_pos(e, p.0) < 0 {
+            e.plural.push((p.0, String.new()));
+        }
+    }
+}
+
+// ------------------------------------------------------------ catalogs
+
+// A POFile or an MOFile.
+struct Catalog {
+    entries: Vec[PoEntry],
+    header: String,
+    // a dict: kept in insertion order
+    metadata: Vec[(String, String)],
+    // metadata_is_fuzzy: 0 until a header entry is found, then its flags
+    meta_flags: Option[Vec[String]],
+    fpath: Option[String],
+    wrapwidth: i64,
+    encoding: String,
+    is_mo: bool,
+    magic: i64,
+    version: i64,
+}
+
+fn new_catalog(fpath: own Option[String], encoding: ref String, is_mo: bool) -> Catalog {
+    Catalog {
+        entries: Vec.new(),
+        header: String.new(),
+        metadata: Vec.new(),
+        meta_flags: None,
+        fpath: fpath,
+        wrapwidth: 78,
+        encoding: encoding.clone(),
+        is_mo: is_mo,
+        magic: -1,
+        version: 0,
+    }
+}
+
+fn meta_pos(cat: ref Catalog, k: ref String) -> i64 {
+    for i in 0..cat.metadata.len() as i64 {
+        if cat.metadata[i].0 == k {
+            return i;
+        }
+    }
+    -1
+}
+
+fn meta_set(cat: mut ref Catalog, k: ref String, v: ref String) {
+    let p = meta_pos(cat, k);
+    if p >= 0 {
+        cat.metadata[p].1 = v.clone();
+    } else {
+        cat.metadata.push((k.clone(), v.clone()));
+    }
+}
+
+fn meta_flags_repr(cat: ref Catalog) -> String {
+    match cat.meta_flags {
+        Some(f) => repr_list(f),
+        None => "0".to_string(),
+    }
+}
+
+fn meta_fuzzy(cat: ref Catalog) -> bool {
+    match cat.meta_flags {
+        Some(f) => f.len() > 0,
+        None => false,
+    }
+}
+
+const DATA_ORDER: Array[Str, 11] = [
+    "Project-Id-Version",
+    "Report-Msgid-Bugs-To",
+    "POT-Creation-Date",
+    "PO-Revision-Date",
+    "Last-Translator",
+    "Language-Team",
+    "Language",
+    "MIME-Version",
+    "Content-Type",
+    "Content-Transfer-Encoding",
+    "Plural-Forms",
+];
+
+fn in_data_order(k: ref String) -> bool {
+    for i in 0..11 {
+        if k == DATA_ORDER[i] {
+            return true;
+        }
+    }
+    false
+}
+
+// The known fields in their order, then the rest naturally sorted.
+fn ordered_metadata(cat: ref Catalog) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for i in 0..11 {
+        let name = DATA_ORDER[i].to_string();
+        let p = meta_pos(cat, name);
+        if p >= 0 {
+            out.push((name, cat.metadata[p].1.clone()));
+        }
+    }
+    let mut rest: Vec[String] = Vec.new();
+    for m in cat.metadata {
+        if not in_data_order(m.0) {
+            rest.push(m.0.clone());
+        }
+    }
+    for k in natural_sort(rest).into_iter() {
+        let p = meta_pos(cat, k);
+        out.push((k, cat.metadata[p].1.clone()));
+    }
+    out
+}
+
+fn metadata_as_entry(cat: ref Catalog) -> PoEntry {
+    let mut e = new_entry(None);
+    let md = ordered_metadata(cat);
+    if md.len() > 0 {
+        let mut strs: Vec[String] = Vec.new();
+        for m in md {
+            strs.push(f"{m.0}: {m.1}");
+        }
+        e.msgstr = f"{strs.join("\n")}\n";
+    }
+    if meta_fuzzy(cat) {
+        e.flags.push("fuzzy".to_string());
+    }
+    e
+}
+
+// _BaseFile.__unicode__, after POFile's header comment.
+fn cat_unicode(cat: ref Catalog) -> Result[String, PoErr] {
+    let mut ret = String.new();
+    if not cat.is_mo {
+        for h in split_str(cat.header, "\n") {
+            if h.len() == 0 {
+                ret.push_str("#\n");
+            } else if h.starts_with(",") or h.starts_with(":") {
+                ret.push_str(f"#{h}\n");
+            } else {
+                ret.push_str(f"# {h}\n");
+            }
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    parts.push(entry_unicode(metadata_as_entry(cat), cat.wrapwidth)?);
+    for e in cat.entries {
+        if not e.obsolete {
+            parts.push(entry_unicode(e, cat.wrapwidth)?);
+        }
+    }
+    for e in cat.entries {
+        if e.obsolete {
+            parts.push(entry_unicode(e, cat.wrapwidth)?);
+        }
+    }
+    ret.push_str(parts.join("\n"));
+    Ok(ret)
+}
+
+// find()'s msgctxt argument: not given, None, or a context.
+enum Ctx {
+    Any,
+    NoCtx,
+    Is(String),
+}
+
+fn field_of(e: ref PoEntry, by: ref String) -> Option[String] {
+    if by == "msgid" {
+        Some(e.msgid.clone())
+    } else if by == "msgstr" {
+        Some(e.msgstr.clone())
+    } else if by == "msgid_plural" {
+        Some(e.msgid_plural.clone())
+    } else if by == "msgctxt" {
+        e.msgctxt.clone()
+    } else {
+        None
+    }
+}
+
+fn ctx_matches(e: ref PoEntry, ctx: ref Ctx) -> bool {
+    match ctx {
+        Ctx.Any => true,
+        Ctx.NoCtx => e.msgctxt.is_none(),
+        Ctx.Is(c) => match e.msgctxt {
+            Some(x) => x == c,
+            None => false,
+        },
+    }
+}
+
+fn ctx_given_truthy(ctx: ref Ctx) -> bool {
+    match ctx {
+        Ctx.Is(c) => c.len() > 0,
+        _ => false,
+    }
+}
+
+// _BaseFile.find: the index of the entry, or -1.
+fn find(cat: ref Catalog, st: ref String, by: ref String, include_obsolete: bool, ctx: ref Ctx) -> i64 {
+    let mut matches: Vec[i64] = Vec.new();
+    for i in 0..cat.entries.len() as i64 {
+        let e = ref cat.entries[i];
+        if e.obsolete and not include_obsolete {
+            continue;
+        }
+        let hit = match field_of(e, by) {
+            Some(v) => v == st,
+            None => false,
+        };
+        if hit and ctx_matches(e, ctx) {
+            matches.push(i);
+        }
+    }
+    if matches.len() == 1 {
+        return matches[0];
+    }
+    if matches.len() > 1 and not ctx_given_truthy(ctx) {
+        // the entry with no context, else the first one
+        let mut found = -1;
+        for m in matches {
+            if not ctx_truthy(cat.entries[m].msgctxt) {
+                found = m;
+            }
+        }
+        if found >= 0 {
+            return found;
+        }
+        return matches[0];
+    }
+    -1
+}
+
+fn count_translated(cat: ref Catalog) -> i64 {
+    if cat.is_mo {
+        return cat.entries.len() as i64;
+    }
+    let mut n = 0;
+    for e in cat.entries {
+        if translated(e) {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn count_untranslated(cat: ref Catalog) -> i64 {
+    if cat.is_mo {
+        return 0;
+    }
+    let mut n = 0;
+    for e in cat.entries {
+        if not translated(e) and not e.obsolete and not is_fuzzy(e) {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn count_fuzzy(cat: ref Catalog) -> i64 {
+    if cat.is_mo {
+        return 0;
+    }
+    let mut n = 0;
+    for e in cat.entries {
+        if is_fuzzy(e) and not e.obsolete {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn count_obsolete(cat: ref Catalog) -> i64 {
+    if cat.is_mo {
+        return 0;
+    }
+    let mut n = 0;
+    for e in cat.entries {
+        if e.obsolete {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn percent_translated(cat: ref Catalog) -> i64 {
+    if cat.is_mo {
+        return 100;
+    }
+    let total = cat.entries.len() as i64 - count_obsolete(cat);
+    if total == 0 {
+        return 100;
+    }
+    count_translated(cat) * 100 / total
+}
+
+// POFile.merge, as msgmerge does it: every template entry updates its
+// match (or a new entry at the end), and what the template lacks becomes
+// obsolete.
+fn merge(cat: mut ref Catalog, refpot: ref Catalog) {
+    let mut index: Map[String, i64] = Map.new();
+    for i in 0..cat.entries.len() as i64 {
+        index.insert(ctx_key(cat.entries[i]), i);
+    }
+    let mut keys: Map[String, bool] = Map.new();
+    for e in refpot.entries {
+        keys.insert(ctx_key(e), true);
+    }
+    for e in refpot.entries {
+        let at = match index.get(ctx_key(e)) {
+            Some(i) => *i,
+            None => {
+                cat.entries.push(new_entry(None));
+                cat.entries.len() as i64 - 1
+            }
+        };
+        entry_merge(mut cat.entries[at], e);
+    }
+    for i in 0..cat.entries.len() as i64 {
+        if not keys.contains_key(ctx_key(cat.entries[i])) {
+            cat.entries[i].obsolete = true;
+        }
+    }
+}
+
+// ------------------------------------------------------------ encodings
+
+const ENC_UTF8: i64 = 0;
+const ENC_LATIN1: i64 = 1;
+const ENC_ASCII: i64 = 2;
+
+// encodings.normalize_encoding after codecs.lookup's lower-casing.
+fn normalize_encoding(name: ref String) -> String {
+    let mut out = String.new();
+    let mut punct = false;
+    for c in name.to_lowercase().chars() {
+        if c.is_alphanumeric() or c == '.' {
+            if punct and out.len() > 0 {
+                out.push('_');
+            }
+            if (c as u32) < 128 {
+                out.push(c);
+            }
+            punct = false;
+        } else {
+            punct = true;
+        }
+    }
+    out
+}
+
+// The codec behind a name codecs.lookup knows, or -1: the UTF-8, Latin-1
+// and ASCII families with their aliases.
+fn codec_of(name: ref String) -> i64 {
+    let n = normalize_encoding(name);
+    let utf8 = ["utf_8", "utf8", "u8", "utf", "utf8_ucs2", "utf8_ucs4", "cp65001"];
+    let latin1 = ["latin_1", "latin1", "latin", "l1", "iso_8859_1", "iso8859_1", "iso_8859_1_1987", "iso_ir_100", "8859", "cp819", "ibm819", "csisolatin1"];
+    let ascii = ["ascii", "us_ascii", "646", "us", "ansi_x3.4_1968", "ansi_x3_4_1968", "ansi_x3.4_1986", "cp367", "csascii", "ibm367", "iso646_us", "iso_646.irv_1991", "iso_ir_6"];
+    for a in utf8 {
+        if n == a {
+            return ENC_UTF8;
+        }
+    }
+    for a in latin1 {
+        if n == a {
+            return ENC_LATIN1;
+        }
+    }
+    for a in ascii {
+        if n == a {
+            return ENC_ASCII;
+        }
+    }
+    -1
+}
+
+fn push_utf8(out: mut ref Vec[u8], u: i64) {
+    if u < 128 {
+        out.push(u as u8);
+    } else if u < 2048 {
+        out.push((0xC0 | (u >> 6)) as u8);
+        out.push((0x80 | (u & 0x3F)) as u8);
+    } else if u < 65536 {
+        out.push((0xE0 | (u >> 12)) as u8);
+        out.push((0x80 | ((u >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (u & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (u >> 18)) as u8);
+        out.push((0x80 | ((u >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((u >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (u & 0x3F)) as u8);
+    }
+}
+
+fn decode(enc: ref String, b: ref Vec[u8]) -> Result[String, PoErr] {
+    let codec = codec_of(enc);
+    if codec == ENC_UTF8 {
+        return match String.from_utf8(b.clone()) {
+            Ok(s) => Ok(s),
+            Err(_) => Err(err("UnicodeDecodeError", f"'utf-8' codec can't decode the data")),
+        };
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() as i64 {
+        let x = b[i] as i64;
+        if codec == ENC_ASCII and x >= 128 {
+            return Err(err("UnicodeDecodeError", f"'ascii' codec can't decode byte 0x{hex_digits(x, 2)} in position {i}: ordinal not in range(128)"));
+        }
+        push_utf8(mut out, x);
+    }
+    Ok(String.from_utf8(out).unwrap())
+}
+
+fn encode(enc: ref String, s: ref String) -> Result[Vec[u8], PoErr] {
+    let codec = codec_of(enc);
+    if codec == ENC_UTF8 {
+        return Ok(s.bytes().to_vec());
+    }
+    let limit = if codec == ENC_ASCII { 128 } else { 256 };
+    let name = if codec == ENC_ASCII { "ascii" } else { "latin-1" };
+    let mut out: Vec[u8] = Vec.new();
+    let mut pos = 0;
+    for c in s.chars() {
+        let u = c as u32 as i64;
+        if u >= limit {
+            return Err(err("UnicodeEncodeError", f"'{name}' codec can't encode character {py_repr(c.to_string())} in position {pos}: ordinal not in range({limit})"));
+        }
+        out.push(u as u8);
+        pos += 1;
+    }
+    Ok(out)
+}
+
+fn is_file(path: ref String) -> bool {
+    fs.exists(path)
+}
+
+fn read_file(path: ref String) -> Result[Vec[u8], PoErr] {
+    match fs.read_bytes(path.clone()) {
+        Ok(b) => Ok(b),
+        Err(_) => Err(err("FileNotFoundError", f"[Errno 2] No such file or directory: {py_repr(path)}")),
+    }
+}
+
+fn write_file(path: ref String, b: ref Vec[u8]) -> Result[(), PoErr] {
+    match fs.write_bytes(path.clone(), b.clone()) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(err("OSError", f"could not write {path}")),
+    }
+}
+
+fn is_charset_byte(x: u8) -> bool {
+    (x >= b'a' and x <= b'z') or (x >= b'A' and x <= b'Z') or (x >= b'0' and x <= b'9') or x == b'_' or x == b'-' or x == b':' or x == b'.'
+}
+
+fn bytes_at(b: ref Vec[u8], at: i64, lit: ref String) -> bool {
+    let l: Vec[u8] = lit.bytes().to_vec();
+    if at + l.len() as i64 > b.len() as i64 {
+        return false;
+    }
+    for k in 0..l.len() as i64 {
+        if b[at + k] != l[k] {
+            return false;
+        }
+    }
+    true
+}
+
+// The first match of '"?Content-Type:.+? charset=([\w_\-:\.]+)' in
+// b[lo..hi]: the captured charset.
+fn charset_match(b: ref Vec[u8], lo: i64, hi: i64) -> Option[String] {
+    let mut p = lo;
+    while p < hi {
+        if bytes_at(b, p, "Content-Type:") {
+            // .+? : at least one character that is not a newline, as few
+            // as can be.
+            let mut q = p + 14;
+            while q <= hi and b[q - 1] != b'\n' {
+                if q + 9 < hi and bytes_at(b, q, " charset=") and is_charset_byte(b[q + 9]) {
+                    let mut r = q + 9;
+                    while r < hi and is_charset_byte(b[r]) {
+                        r += 1;
+                    }
+                    return Some(String.from_utf8(b[q + 9..r].to_vec()).unwrap());
+                }
+                q += 1;
+            }
+        }
+        p += 1;
+    }
+    None
+}
+
+// polib.detect_encoding for a path (read line by line, as bytes) or for
+// the contents themselves.
+fn detect_encoding(arg: ref String) -> String {
+    if not is_file(arg) {
+        let b: Vec[u8] = arg.bytes().to_vec();
+        match charset_match(b, 0, b.len() as i64) {
+            Some(c) => {
+                let enc = py_strip(c);
+                if codec_of(enc) >= 0 {
+                    return enc;
+                }
+            }
+            None => {}
+        }
+        return "utf-8".to_string();
+    }
+    let b = match read_file(arg) {
+        Ok(b) => b,
+        Err(_) => return "utf-8".to_string(),
+    };
+    let n = b.len() as i64;
+    let mut start = 0;
+    while start < n {
+        let mut end = start;
+        while end < n and b[end] != b'\n' {
+            end += 1;
+        }
+        if end < n {
+            end += 1;
+        }
+        match charset_match(b, start, end) {
+            Some(c) => {
+                let enc = py_strip(c);
+                if codec_of(enc) >= 0 {
+                    return enc;
+                }
+            }
+            None => {}
+        }
+        start = end;
+    }
+    "utf-8".to_string()
+}
+
+// ------------------------------------------------------------ the PO parser
+
+// The state machine's transitions: the next state for a symbol read in a
+// state, or "" for none.
+fn transition(sym: ref String, st: ref String) -> String {
+    let all = ["st", "he", "gc", "oc", "fl", "ct", "pc", "pm", "pp", "tc", "ms", "mp", "mx", "mi"].to_vec();
+    let mut from: Vec[String] = Vec.new();
+    let mut next = sym.clone();
+    if sym == "tc" {
+        if st == "st" or st == "he" {
+            return "he".to_string();
+        }
+        from = ["gc", "oc", "fl", "tc", "pc", "pm", "pp", "ms", "mp", "mx", "mi"].to_vec();
+    } else if sym == "gc" or sym == "oc" or sym == "fl" or sym == "pc" or sym == "pm" or sym == "pp" {
+        from = all;
+    } else if sym == "ct" {
+        from = ["st", "he", "gc", "oc", "fl", "tc", "pc", "pm", "pp", "ms", "mx"].to_vec();
+    } else if sym == "mi" {
+        from = ["st", "he", "gc", "oc", "fl", "ct", "tc", "pc", "pm", "pp", "ms", "mx"].to_vec();
+    } else if sym == "mp" {
+        from = ["tc", "gc", "pc", "pm", "pp", "mi"].to_vec();
+    } else if sym == "ms" {
+        from = ["mi", "mp", "tc"].to_vec();
+    } else if sym == "mx" {
+        from = ["mi", "mx", "mp", "tc"].to_vec();
+    } else if sym == "mc" {
+        from = ["ct", "mi", "mp", "ms", "mx", "pm", "pp", "pc"].to_vec();
+    } else {
+        next = String.new();
+    }
+    for s in from {
+        if st == s {
+            return next;
+        }
+    }
+    String.new()
+}
+
+struct PoParser {
+    cat: Catalog,
+    cur: PoEntry,
+    state: String,
+    token: String,
+    msgstr_index: i64,
+    entry_obsolete: bool,
+    line: i64,
+}
+
+impl PoParser {
+    fn fpath_prefix(ref self) -> String {
+        match self.cat.fpath {
+            Some(p) => f"{p} ",
+            None => String.new(),
+        }
+    }
+
+    fn syntax(ref self, what: ref String) -> PoErr {
+        err("OSError", f"Syntax error in po file {self.fpath_prefix()}(line {self.line}){what}")
+    }
+
+    // Starts a new entry when the last one is complete.
+    fn close_entry(mut ref self) {
+        if self.state == "mc" or self.state == "ms" or self.state == "mx" {
+            self.cat.entries.push(self.cur.clone());
+            self.cur = new_entry(Some(self.line));
+        }
+    }
+
+    // The handler of the state the transition goes to: Ok(true) moves the
+    // machine there, Err is any exception, which process() reports as a
+    // syntax error.
+    fn handle(mut ref self, next: ref String) -> Result[bool, ()] {
+        let token = self.token.clone();
+        if next == "he" {
+            if self.cat.header != "" {
+                self.cat.header.push_str("\n");
+            }
+            self.cat.header.push_str(cfrom(token, 2));
+            return Ok(true);
+        }
+        if next == "mp" {
+            self.cur.msgid_plural = unescape(inner(token));
+            return Ok(true);
+        }
+        if next == "ms" {
+            self.cur.msgstr = unescape(inner(token));
+            return Ok(true);
+        }
+        if next == "mx" {
+            let v = chars(token);
+            if v.len() <= 7 or not v[7].is_ascii_digit() {
+                return Err(());
+            }
+            let index = (v[7] as u32 as i64) - 48;
+            let q = match token.find("\"") {
+                Some(i) => clen(token.substring(0, i)) + 1,
+                None => 0,
+            };
+            let value = cslice(token, q, clen(token) - 1);
+            plural_set(mut self.cur, index, unescape(value));
+            self.msgstr_index = index;
+            return Ok(true);
+        }
+        if next == "mc" {
+            let t = unescape(inner(token));
+            let st = self.state.clone();
+            if st == "ct" {
+                self.cur.msgctxt = Some(f"{ctx_text(self.cur.msgctxt)}{t}");
+            } else if st == "mi" {
+                self.cur.msgid.push_str(t);
+            } else if st == "mp" {
+                self.cur.msgid_plural.push_str(t);
+            } else if st == "ms" {
+                self.cur.msgstr.push_str(t);
+            } else if st == "mx" {
+                let k = self.msgstr_index;
+                let p = plural_pos(self.cur, k);
+                if p < 0 {
+                    return Err(());
+                }
+                self.cur.plural[p].1.push_str(t);
+            } else if st == "pp" {
+                self.cur.prev_plural = Some(f"{ctx_text(self.cur.prev_plural)}{t}");
+            } else if st == "pm" {
+                self.cur.prev_id = Some(f"{ctx_text(self.cur.prev_id)}{t}");
+            } else if st == "pc" {
+                self.cur.prev_ctxt = Some(f"{ctx_text(self.cur.prev_ctxt)}{t}");
+            }
+            return Ok(false);
+        }
+        self.close_entry();
+        if next == "tc" {
+            if self.cur.tcomment != "" {
+                self.cur.tcomment.push_str("\n");
+            }
+            let mut v = chars(token);
+            let mut k = 0;
+            while k < v.len() and v[k] == '#' {
+                k += 1;
+            }
+            if k < v.len() and v[k] == ' ' {
+                k += 1;
+            }
+            v = v[k..].to_vec();
+            self.cur.tcomment.push_str(text(v));
+        } else if next == "gc" {
+            if self.cur.comment != "" {
+                self.cur.comment.push_str("\n");
+            }
+            self.cur.comment.push_str(cfrom(token, 3));
+        } else if next == "oc" {
+            for occ in split_ws(cfrom(token, 3), -1) {
+                match occ.rfind(":") {
+                    Some(i) => {
+                        let fil = occ.substring(0, i);
+                        let line = occ.substring(i + 1, occ.len());
+                        if is_ascii_digits(line) {
+                            self.cur.occurrences.push((fil, line));
+                        } else {
+                            self.cur.occurrences.push((occ.clone(), String.new()));
+                        }
+                    }
+                    None => self.cur.occurrences.push((occ.clone(), String.new())),
+                }
+            }
+        } else if next == "fl" {
+            for c in split_str(cfrom(token, 3), ",") {
+                self.cur.flags.push(py_strip(c));
+            }
+        } else if next == "pp" {
+            self.cur.prev_plural = Some(unescape(inner(token)));
+        } else if next == "pm" {
+            self.cur.prev_id = Some(unescape(inner(token)));
+        } else if next == "pc" {
+            self.cur.prev_ctxt = Some(unescape(inner(token)));
+        } else if next == "ct" {
+            self.cur.msgctxt = Some(unescape(inner(token)));
+        } else if next == "mi" {
+            self.cur.obsolete = self.entry_obsolete;
+            self.cur.msgid = unescape(inner(token));
+        }
+        Ok(true)
+    }
+
+    fn process(mut ref self, sym: ref String) -> Result[(), PoErr] {
+        let next = transition(sym, self.state);
+        if next == "" {
+            return Err(self.syntax(""));
+        }
+        match self.handle(next) {
+            Ok(true) => {
+                self.state = next;
+                Ok(())
+            }
+            Ok(false) => Ok(()),
+            Err(_) => Err(self.syntax("")),
+        }
+    }
+}
+
+fn keyword_symbol(t: ref String) -> String {
+    if t == "msgctxt" {
+        "ct".to_string()
+    } else if t == "msgid" {
+        "mi".to_string()
+    } else if t == "msgstr" {
+        "ms".to_string()
+    } else if t == "msgid_plural" {
+        "mp".to_string()
+    } else {
+        String.new()
+    }
+}
+
+fn prev_symbol(t: ref String) -> String {
+    if t == "msgid_plural" {
+        "pp".to_string()
+    } else if t == "msgid" {
+        "pm".to_string()
+    } else if t == "msgctxt" {
+        "pc".to_string()
+    } else {
+        String.new()
+    }
+}
+
+// Python's text-mode newline translation.
+fn universal_newlines(s: ref String) -> String {
+    s.replace("\r\n", "\n").replace("\r", "\n")
+}
+
+// polib.pofile: a path, or the contents of a PO file.
+fn pofile(arg: ref String, wrapwidth: i64) -> Result[Catalog, PoErr] {
+    let enc = detect_encoding(arg);
+    let mut lines: Vec[String] = Vec.new();
+    let mut fpath: Option[String] = None;
+    if is_file(arg) {
+        let t = universal_newlines(decode(enc, read_file(arg)?)?);
+        lines = split_str(t, "\n");
+        if lines.len() > 0 and lines[lines.len() - 1] == "" {
+            lines.pop();
+        }
+        fpath = Some(arg.clone());
+    } else {
+        lines = splitlines(arg, false);
+    }
+    let mut p = PoParser {
+        cat: new_catalog(fpath, enc, false),
+        cur: new_entry(Some(0)),
+        state: "st".to_string(),
+        token: String.new(),
+        msgstr_index: 0,
+        entry_obsolete: false,
+        line: 0,
+    };
+    let mut tokens: Vec[String] = Vec.new();
+    for raw in lines {
+        p.line += 1;
+        let mut line = raw.clone();
+        if p.line == 1 and line.starts_with("\u{feff}") {
+            line = cfrom(line, 1);
+        }
+        line = py_strip(line);
+        if line == "" {
+            continue;
+        }
+        tokens = split_ws(line, 2);
+        if tokens[0] == "#~|" {
+            continue;
+        }
+        if tokens[0] == "#~" and tokens.len() > 1 {
+            line = py_strip(cfrom(line, 3));
+            tokens.remove(0);
+            p.entry_obsolete = true;
+        } else {
+            p.entry_obsolete = false;
+        }
+        let nb = tokens.len();
+        let kw = keyword_symbol(tokens[0]);
+        if kw != "" and nb > 1 {
+            line = py_lstrip(cfrom(line, clen(tokens[0])));
+            if unescaped_quote(inner(line)) {
+                return Err(p.syntax(": unescaped double quote found"));
+            }
+            p.token = line.clone();
+            p.process(kw)?;
+            continue;
+        }
+        p.token = line.clone();
+        if tokens[0] == "#:" {
+            if nb <= 1 {
+                continue;
+            }
+            p.process("oc")?;
+        } else if line.starts_with("\"") {
+            if unescaped_quote(inner(line)) {
+                return Err(p.syntax(": unescaped double quote found"));
+            }
+            p.process("mc")?;
+        } else if line.starts_with("msgstr[") {
+            p.process("mx")?;
+        } else if tokens[0] == "#," {
+            if nb <= 1 {
+                continue;
+            }
+            p.process("fl")?;
+        } else if tokens[0] == "#" or tokens[0].starts_with("##") {
+            if line == "#" {
+                p.token = "# ".to_string();
+            }
+            p.process("tc")?;
+        } else if tokens[0] == "#." {
+            if nb <= 1 {
+                continue;
+            }
+            p.process("gc")?;
+        } else if tokens[0] == "#|" {
+            if nb <= 1 {
+                return Err(p.syntax(""));
+            }
+            line = py_lstrip(cfrom(line, 2));
+            p.token = line.clone();
+            if tokens[1].starts_with("\"") {
+                p.process("mc")?;
+                continue;
+            }
+            if nb == 2 {
+                return Err(p.syntax(": invalid continuation line"));
+            }
+            let ps = prev_symbol(tokens[1]);
+            if ps == "" {
+                return Err(p.syntax(f": unknown keyword {tokens[1]}"));
+            }
+            line = py_lstrip(cfrom(line, clen(tokens[1])));
+            p.token = line.clone();
+            p.process(ps)?;
+        } else {
+            return Err(p.syntax(""));
+        }
+    }
+    if tokens.len() > 0 and not tokens[0].starts_with("#") {
+        p.cat.entries.push(p.cur.clone());
+    }
+    let mut cat = p.cat;
+    // The header entry becomes the metadata.
+    let m = find(cat, "", "msgid", false, Ctx.Any);
+    if m >= 0 {
+        let meta = cat.entries[m].clone();
+        let mut at = 0;
+        while entry_cmp(cat.entries[at], meta) != 0 {
+            at += 1;
+        }
+        cat.entries.remove(at);
+        cat.meta_flags = Some(meta.flags.clone());
+        let mut key: Option[String] = None;
+        for msg in splitlines(meta.msgstr, false) {
+            match msg.find(":") {
+                Some(i) => {
+                    let k = msg.substring(0, i);
+                    meta_set(mut cat, k, py_strip(msg.substring(i + 1, msg.len())));
+                    key = Some(k);
+                }
+                None => {
+                    match key {
+                        Some(ref k) => {
+                            let p = meta_pos(cat, k);
+                            cat.metadata[p].1.push_str(f"\n{py_strip(msg)}");
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+    }
+    cat.wrapwidth = wrapwidth;
+    Ok(cat)
+}
+
+// ------------------------------------------------------------ MO files
+
+const MO_MAGIC: i64 = 2500072158;
+const MO_MAGIC_SWAPPED: i64 = 3725722773;
+
+fn push_u32(out: mut ref Vec[u8], v: i64) {
+    out.push((v & 255) as u8);
+    out.push(((v >> 8) & 255) as u8);
+    out.push(((v >> 16) & 255) as u8);
+    out.push(((v >> 24) & 255) as u8);
+}
+
+fn append(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for x in b {
+        out.push(*x);
+    }
+}
+
+fn cmp_bytes(a: ref Vec[u8], b: ref Vec[u8]) -> i64 {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    for i in 0..n as i64 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+    }
+    if a.len() < b.len() {
+        -1
+    } else if a.len() > b.len() {
+        1
+    } else {
+        0
+    }
+}
+
+// _BaseFile.to_binary: the translated entries sorted by their UTF-8
+// msgid_with_context, after the header entry, with no hash table. An
+// MOFile's translated entries are the file itself, so it is sorted in
+// place.
+fn to_binary(cat: mut ref Catalog) -> Result[Vec[u8], PoErr] {
+    let mut list: Vec[PoEntry] = Vec.new();
+    for e in cat.entries {
+        if cat.is_mo or translated(e) {
+            list.push(e.clone());
+        }
+    }
+    let mut keyed: Vec[(Vec[u8], i64)] = Vec.new();
+    for i in 0..list.len() as i64 {
+        let k: Vec[u8] = ctx_key(list[i]).bytes().to_vec();
+        keyed.push((k, i));
+    }
+    keyed.sort_by(|a, b| {
+        let c = cmp_bytes(a.0, b.0);
+        if c != 0 { c.cmp(0) } else { a.1.cmp(b.1) }
+    });
+    let mut sorted: Vec[PoEntry] = Vec.new();
+    for k in keyed {
+        sorted.push(list[k.1].clone());
+    }
+    if cat.is_mo {
+        cat.entries = sorted.clone();
+    }
+    let mut entries: Vec[PoEntry] = Vec.new();
+    entries.push(metadata_as_entry(cat));
+    for e in sorted.into_iter() {
+        entries.push(e);
+    }
+    let n = entries.len() as i64;
+    let mut ids: Vec[u8] = Vec.new();
+    let mut strs: Vec[u8] = Vec.new();
+    let mut offsets: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for e in entries {
+        let mut msgid: Vec[u8] = Vec.new();
+        if ctx_truthy(e.msgctxt) {
+            msgid = encode(cat.encoding, f"{ctx_text(e.msgctxt)}\u{4}")?;
+        }
+        let mut msgstr: Vec[u8] = Vec.new();
+        if e.msgid_plural.len() > 0 {
+            let mut parts: Vec[String] = Vec.new();
+            for k in plural_keys(e) {
+                parts.push(plural_at(e, k));
+            }
+            append(mut msgid, encode(cat.encoding, f"{e.msgid}\u{0}{e.msgid_plural}")?);
+            msgstr = encode(cat.encoding, parts.join("\u{0}"))?;
+        } else {
+            append(mut msgid, encode(cat.encoding, e.msgid)?);
+            msgstr = encode(cat.encoding, e.msgstr)?;
+        }
+        offsets.push((ids.len() as i64, msgid.len() as i64, strs.len() as i64, msgstr.len() as i64));
+        append(mut ids, msgid);
+        ids.push(0);
+        append(mut strs, msgstr);
+        strs.push(0);
+    }
+    let keystart = 7 * 4 + 16 * n;
+    let valuestart = keystart + ids.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    push_u32(mut out, MO_MAGIC);
+    push_u32(mut out, 0);
+    push_u32(mut out, n);
+    push_u32(mut out, 7 * 4);
+    push_u32(mut out, 7 * 4 + n * 8);
+    push_u32(mut out, 0);
+    push_u32(mut out, keystart);
+    for o in offsets {
+        push_u32(mut out, o.1);
+        push_u32(mut out, o.0 + keystart);
+    }
+    for o in offsets {
+        push_u32(mut out, o.3);
+        push_u32(mut out, o.2 + valuestart);
+    }
+    append(mut out, ids);
+    append(mut out, strs);
+    Ok(out)
+}
+
+// _BaseFile.save: the text in the file's encoding.
+fn save(cat: ref Catalog, path: ref String) -> Result[(), PoErr] {
+    let t = cat_unicode(cat)?;
+    write_file(path, encode(cat.encoding, t)?)
+}
+
+fn save_binary(cat: mut ref Catalog, path: ref String) -> Result[(), PoErr] {
+    let b = to_binary(mut cat)?;
+    write_file(path, b)
+}
+
+fn short_read(n: i64) -> PoErr {
+    err("error", f"unpack requires a buffer of {n} bytes")
+}
+
+fn u32_at(b: ref Vec[u8], at: i64, big: bool) -> Result[i64, PoErr] {
+    if at < 0 or at + 4 > b.len() as i64 {
+        return Err(short_read(4));
+    }
+    let x0 = b[at] as i64;
+    let x1 = b[at + 1] as i64;
+    let x2 = b[at + 2] as i64;
+    let x3 = b[at + 3] as i64;
+    if big {
+        Ok((x0 << 24) | (x1 << 16) | (x2 << 8) | x3)
+    } else {
+        Ok((x3 << 24) | (x2 << 16) | (x1 << 8) | x0)
+    }
+}
+
+// file.read(n) after a seek: what is there, up to n bytes.
+fn read_at(b: ref Vec[u8], at: i64, n: i64) -> Vec[u8] {
+    let len = b.len() as i64;
+    if at >= len {
+        return Vec.new();
+    }
+    let end = if at + n > len { len } else { at + n };
+    b[at..end].to_vec()
+}
+
+fn split_byte(b: ref Vec[u8], sep: u8) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for x in b {
+        if *x == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*x);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// _MOFileParser._build_entry
+fn build_mo_entry(enc: ref String, msgid: ref Vec[u8], msgstr: ref Vec[u8], msgid_plural: ref Vec[u8], plurals: ref Vec[Vec[u8]]) -> Result[PoEntry, PoErr] {
+    let mut e = new_entry(None);
+    let parts = split_byte(msgid, 4);
+    if parts.len() > 1 {
+        e.msgctxt = Some(decode(enc, parts[0])?);
+        e.msgid = decode(enc, parts[1])?;
+    } else {
+        e.msgid = decode(enc, msgid)?;
+    }
+    if msgstr.len() > 0 {
+        e.msgstr = decode(enc, msgstr)?;
+    }
+    if msgid_plural.len() > 0 {
+        e.msgid_plural = decode(enc, msgid_plural)?;
+    }
+    for k in 0..plurals.len() as i64 {
+        e.plural.push((k, decode(enc, plurals[k])?));
+    }
+    Ok(e)
+}
+
+// polib.mofile
+fn mofile(path: ref String) -> Result[Catalog, PoErr] {
+    let enc = detect_encoding(path);
+    let b = read_file(path)?;
+    let mut cat = new_catalog(Some(path.clone()), enc, true);
+    let magic = u32_at(b, 0, false)?;
+    let big = if magic == MO_MAGIC {
+        false
+    } else if magic == MO_MAGIC_SWAPPED {
+        true
+    } else {
+        return Err(err("OSError", "Invalid mo file, magic number is incorrect !"));
+    };
+    cat.magic = magic;
+    let version = u32_at(b, 4, big)?;
+    let count = u32_at(b, 8, big)?;
+    let major = version >> 16;
+    if major != 0 and major != 1 {
+        return Err(err("OSError", "Invalid mo file, unexpected major revision number"));
+    }
+    cat.version = version;
+    let ids_at = u32_at(b, 12, big)?;
+    let strs_at = u32_at(b, 16, big)?;
+    for i in 0..count {
+        let id_len = u32_at(b, ids_at + 8 * i, big)?;
+        let id_off = u32_at(b, ids_at + 8 * i + 4, big)?;
+        let str_len = u32_at(b, strs_at + 8 * i, big)?;
+        let str_off = u32_at(b, strs_at + 8 * i + 4, big)?;
+        let msgid = read_at(b, id_off, id_len);
+        let msgstr = read_at(b, str_off, str_len);
+        if i == 0 and msgid.len() == 0 {
+            // the header entry
+            let mut md: Vec[(String, String)] = Vec.new();
+            for line in split_byte(msgstr, b'\n') {
+                let tokens = split_byte_once(line, b':');
+                if tokens[0].len() > 0 {
+                    let k = decode(enc, tokens[0])?;
+                    let v = if tokens.len() > 1 { py_strip(decode(enc, tokens[1])?) } else { String.new() };
+                    let mut found = false;
+                    for j in 0..md.len() as i64 {
+                        if md[j].0 == k {
+                            md[j].1 = v.clone();
+                            found = true;
+                        }
+                    }
+                    if not found {
+                        md.push((k, v));
+                    }
+                }
+            }
+            cat.metadata = md;
+            continue;
+        }
+        let id_parts = split_byte(msgid, 0);
+        let e = if id_parts.len() > 1 {
+            build_mo_entry(enc, id_parts[0], Vec.new(), id_parts[1], split_byte(msgstr, 0))?
+        } else {
+            build_mo_entry(enc, msgid, msgstr, Vec.new(), Vec.new())?
+        };
+        cat.entries.push(e);
+    }
+    Ok(cat)
+}
+
+// bytes.split(sep, 1)
+fn split_byte_once(b: ref Vec[u8], sep: u8) -> Vec[Vec[u8]] {
+    for i in 0..b.len() as i64 {
+        if b[i] == sep {
+            return [b[0..i].to_vec(), b[i + 1..].to_vec()].to_vec();
+        }
+    }
+    [b.clone()].to_vec()
+}
+
+// ------------------------------------------------------------ the jobs
+
+const MASK32: i64 = 4294967295;
+
+fn fnv(b: ref Vec[u8]) -> i64 {
+    let mut h = 2166136261;
+    for x in b {
+        h = ((h ^ (*x as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn markers(s: ref String) -> String {
+    s.replace("⏎", "\n").replace("⇥", "\t")
+}
+
+fn opt_repr(o: ref Option[String]) -> String {
+    match o {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+fn entry_line(e: ref PoEntry) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    match e.msgctxt {
+        Some(c) => parts.push(f"ctx={py_repr(c)}"),
+        None => {}
+    }
+    parts.push(f"id={py_repr(e.msgid)}");
+    if e.msgid_plural.len() > 0 {
+        parts.push(f"plural={py_repr(e.msgid_plural)}");
+    }
+    if e.plural.len() > 0 {
+        for k in plural_keys(e) {
+            parts.push(f"[{k}]={py_repr(plural_at(e, k))}");
+        }
+    } else {
+        parts.push(f"str={py_repr(e.msgstr)}");
+    }
+    if e.flags.len() > 0 {
+        parts.push(f"flags={repr_list(e.flags)}");
+    }
+    if e.occurrences.len() > 0 {
+        let o = ref e.occurrences[0];
+        parts.push(f"occ={e.occurrences.len()} first=({py_repr(o.0)}, {py_repr(o.1)})");
+    }
+    if e.tcomment.len() > 0 {
+        parts.push(f"tc={py_repr(e.tcomment)}");
+    }
+    if e.comment.len() > 0 {
+        parts.push(f"gc={py_repr(e.comment)}");
+    }
+    if e.prev_ctxt.is_some() {
+        parts.push(f"prev_ctx={opt_repr(e.prev_ctxt)}");
+    }
+    if e.prev_id.is_some() {
+        parts.push(f"prev_id={opt_repr(e.prev_id)}");
+    }
+    if e.prev_plural.is_some() {
+        parts.push(f"prev_plural={opt_repr(e.prev_plural)}");
+    }
+    if e.obsolete {
+        parts.push("obsolete".to_string());
+    }
+    match e.linenum {
+        Some(n) => parts.push(f"line {n}"),
+        None => {}
+    }
+    parts.join(" ")
+}
+
+fn stats(cat: ref Catalog) -> String {
+    f"{percent_translated(cat)}% translated; translated {count_translated(cat)}, untranslated {count_untranslated(cat)}, fuzzy {count_fuzzy(cat)}, obsolete {count_obsolete(cat)}; {cat.entries.len()} entries; header flags {meta_flags_repr(cat)}, encoding {cat.encoding}"
+}
+
+fn show_text(out: mut ref String, t: ref String) {
+    for line in split_str(t, "\n") {
+        out.push_str(f"  |{line}\n");
+    }
+}
+
+fn mo_header(b: ref Vec[u8]) -> String {
+    if b.len() < 28 {
+        return "short".to_string();
+    }
+    let mut vals: Vec[String] = Vec.new();
+    for k in 0..7 {
+        vals.push(f"{u32_at(b, 4 * k, false) ?? 0}");
+    }
+    vals.join(" ")
+}
+
+fn field(f: ref Vec[String], i: i64) -> String {
+    if i < f.len() as i64 { f[i].clone() } else { String.new() }
+}
+
+fn to_width(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 78,
+    }
+}
+
+fn job(f: ref Vec[String], out: mut ref String) -> Result[(), PoErr] {
+    let cmd = f[0].clone();
+    let a = field(f, 1);
+    if cmd == "detect" {
+        out.push_str(f"{detect_encoding(a)}\n");
+    } else if cmd == "stats" {
+        out.push_str(f"{stats(pofile(a, 78)?)}\n");
+    } else if cmd == "metadata" {
+        let po = pofile(a, 78)?;
+        for m in ordered_metadata(po) {
+            out.push_str(f"  {m.0}: {py_repr(m.1)}\n");
+        }
+    } else if cmd == "entries" {
+        let po = pofile(a, 78)?;
+        for e in po.entries {
+            out.push_str(f"  {entry_line(e)}\n");
+        }
+    } else if cmd == "find" or cmd == "find-all" {
+        let po = pofile(a, 78)?;
+        let ctx = if f.len() > 4 { Ctx.Is(f[4].clone()) } else { Ctx.Any };
+        let i = find(po, f[3], f[2], cmd == "find-all", ctx);
+        if i >= 0 {
+            out.push_str(f"{entry_line(po.entries[i])}\n");
+        } else {
+            out.push_str("None\n");
+        }
+    } else if cmd == "contains" {
+        let po = pofile(a, 78)?;
+        let ctx = if f.len() > 3 { Ctx.Is(f[3].clone()) } else { Ctx.NoCtx };
+        out.push_str(f"{py_bool(find(po, f[2], "msgid", false, ctx) >= 0)}\n");
+    } else if cmd == "roundtrip" {
+        let po = pofile(a, 78)?;
+        let mut t = decode(po.encoding, read_file(a)?)?;
+        if t.starts_with("\u{feff}") {
+            t = cfrom(t, 1);
+        }
+        let w = cat_unicode(po)?;
+        if w == t {
+            out.push_str("same\n");
+        } else {
+            let x = split_str(w, "\n");
+            let y = split_str(t, "\n");
+            let mut k = 0;
+            while k < x.len() and k < y.len() and x[k] == y[k] {
+                k += 1;
+            }
+            let nx = if k < x.len() { py_repr(x[k]) } else { "None".to_string() };
+            let ny = if k < y.len() { py_repr(y[k]) } else { "None".to_string() };
+            out.push_str(f"differs: {x.len()} lines written, {y.len()} read; first at line {k + 1}: {nx} for {ny}\n");
+        }
+    } else if cmd == "print" {
+        let po = pofile(a, to_width(f[2]))?;
+        show_text(mut out, cat_unicode(po)?);
+    } else if cmd == "fuzzy" {
+        let mut po = pofile(a, 78)?;
+        let i = find(po, f[2], "msgid", false, Ctx.Any);
+        if i < 0 {
+            return Err(err("AttributeError", "'NoneType' object has no attribute 'fuzzy'"));
+        }
+        set_fuzzy(mut po.entries[i], f[3] == "on");
+        let e = ref po.entries[i];
+        out.push_str(f"flags {repr_list(e.flags)}; translated {py_bool(translated(e))}; {percent_translated(po)}% translated\n");
+        show_text(mut out, entry_unicode(e, 78)?);
+    } else if cmd == "merge" {
+        let mut po = pofile(a, 78)?;
+        let pot = pofile(f[2], 78)?;
+        merge(mut po, pot);
+        save(po, f[3])?;
+        out.push_str(f"{stats(po)}\n");
+        let b = read_file(f[3])?;
+        out.push_str(f"wrote {f[3]}: {b.len()} bytes, fnv {fnv(b):08x}\n");
+        if a.ends_with("pt_BR.po") {
+            show_text(mut out, decode("utf-8", b)?);
+        }
+        for e in po.entries {
+            if e.obsolete {
+                out.push_str(f"  obsolete {entry_line(e)}\n");
+            }
+        }
+    } else if cmd == "sort" {
+        let po = pofile(a, 78)?;
+        let mut idx: Vec[i64] = Vec.new();
+        for i in 0..po.entries.len() as i64 {
+            idx.push(i);
+        }
+        idx.sort_by(|x, y| {
+            let c = entry_cmp(po.entries[x], po.entries[y]);
+            if c != 0 { c.cmp(0) } else { x.cmp(y) }
+        });
+        for i in idx {
+            let e = ref po.entries[i];
+            let ctx = if ctx_truthy(e.msgctxt) { f"{ctx_text(e.msgctxt)}|" } else { String.new() };
+            let mut occ: Vec[String] = Vec.new();
+            for o in sorted_occ(e) {
+                if occ.len() < 2 {
+                    occ.push(f"{o.0}:{o.1}");
+                }
+            }
+            let mark = if e.obsolete { "~" } else { " " };
+            out.push_str(f"  {mark} {ctx}{py_repr(e.msgid)} {repr_list(occ)}\n");
+        }
+    } else if cmd == "compile" {
+        let mut po = pofile(a, 78)?;
+        save_binary(mut po, f[2])?;
+        let b = read_file(f[2])?;
+        out.push_str(f"wrote {f[2]}: {b.len()} bytes, fnv {fnv(b):08x}, header {mo_header(b)}\n");
+        let mo = mofile(f[2])?;
+        out.push_str(f"  read back: {mo.entries.len()} entries, {mo.metadata.len()} metadata fields, encoding {mo.encoding}\n");
+    } else if cmd == "mo" {
+        let mo = mofile(a)?;
+        out.push_str(f"magic {hex_digits(mo.magic, 8)}, version {mo.version}, {mo.entries.len()} entries, encoding {mo.encoding}\n");
+        for m in ordered_metadata(mo) {
+            out.push_str(f"  {m.0}: {py_repr(m.1)}\n");
+        }
+        for e in mo.entries {
+            out.push_str(f"  {entry_line(e)}\n");
+        }
+    } else if cmd == "mo-to-po" {
+        let mo = mofile(a)?;
+        save(mo, f[2])?;
+        show_text(mut out, decode("utf-8", read_file(f[2])?)?);
+    } else if cmd == "mo-save" {
+        let mut mo = mofile(a)?;
+        save_binary(mut mo, f[2])?;
+        let b = read_file(f[2])?;
+        out.push_str(f"wrote {f[2]}: {b.len()} bytes, fnv {fnv(b):08x}, header {mo_header(b)}\n");
+        for e in mofile(f[2])?.entries {
+            out.push_str(f"  {entry_line(e)}\n");
+        }
+    } else if cmd == "po" {
+        let po = pofile(a, 78)?;
+        out.push_str(f"{po.entries.len()} entries; {stats(po)}\n");
+    } else if cmd == "escape" {
+        out.push_str(f"{py_repr(escape(markers(a)))}\n");
+    } else if cmd == "unescape" {
+        out.push_str(f"{py_repr(unescape(markers(a)))}\n");
+    } else if cmd == "natural-sort" {
+        out.push_str(f"{repr_list(natural_sort(split_str(a, " ")))}\n");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the run
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        (c as u32 as i64) - 48
+    } else if c >= 'a' and c <= 'f' {
+        (c as u32 as i64) - 87
+    } else {
+        -1
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let v = chars(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < v.len() {
+        out.push((hex_val(v[i]) * 16 + hex_val(v[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn main() {
+    if fs.create_dir_all("data/out").is_err() {
+        println("could not create data/out");
+        return;
+    }
+    for d in data_files() {
+        if fs.write_bytes(f"data/{d.0}", unhex(d.1)).is_err() {
+            println(f"could not write data/{d.0}");
+            return;
+        }
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt") {
+        Ok(t) => t,
+        Err(_) => {
+            println("could not read data/jobs.txt");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in split_str(jobs, "\n") {
+        if line == "" {
+            continue;
+        }
+        let f = split_str(line, "\t");
+        out.push_str(f"== {f.join(" | ")}\n");
+        match job(f, mut out) {
+            Ok(_) => {}
+            Err(e) => out.push_str(f"{e.kind}: {e.msg}\n"),
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ the data
+
+// The catalogs mk.py wrote, as hex, so the program carries its inputs.
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut h = String.new();
+    h.push_str("6d736769642022220a6d73677374722022220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a0a232c2066757a7a790a237c206d736769640a6d73676964202252656e657720616c6c220a6d73677374722022416c6c65207665726cc3a46e6765726e220a");
+    v.push(("bad_cont.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("6d736769642022220a6d73677374722022220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a0a6d736769642022220a224c696e65206f6e6520220a227468656e2022612071756f74652220696e206c696e652074776f220a6d73677374722022220a");
+    v.push(("bad_cont_quote.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("6d736769642022220a6d73677374722022220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a0a6d73676964202225286e296420686f6c64220a6d736769645f706c7572616c202225286e296420686f6c6473220a6d73677374725b305d202225286e296420566f726d65726b756e67220a6d73677374725b785d202225286e296420566f726d65726b756e67656e220a");
+    v.push(("bad_index.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("6d736769642022220a6d73677374722022220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a0a6d736769642022436c6f736564220a6d7367737472202247657363686c6f7373656e220a7472616e736c617465642062792068616e642c20636865636b206c617465720a");
+    v.push(("bad_line.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("950412df00000000030000001c00000034000000000000004c000000000000004c000000090000004d0000000600000057000000c30000005e0000000a00000022010000070000002d01000000417661696c61626c6500436c6f7365640050726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e300a4c616e67756167653a2065730a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a582d4c65676163792d4275696c640a00446973706f6e69626c65004365727261646f00");
+    v.push(("bad_magic.mo".to_string(), h));
+    let mut h = String.new();
+    h.push_str("6d736769642022220a6d73677374722022220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a0a6d7367737472202241626d656c64656e220a6d7367696420225369676e206f7574220a");
+    v.push(("bad_order.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("6d736769642022220a6d73677374722022220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a0a232c2066757a7a790a237c206d73677478742022447565202528646174652973220a6d736769642022447565206f6e202528646174652973220a6d7367737472202246c3a46c6c696720616d202528646174652973220a");
+    v.push(("bad_prev.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("6d736769642022220a6d73677374722022220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a0a6d7367696420225369676e206f7574220a6d73677374722022436c69636b20225369676e206f757422207768656e20796f752061726520646f6e65220a");
+    v.push(("bad_quote.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("23204765726d616e207472616e736c6174696f6e206f66204c61726b6669656c642e0a2320436f7079726967687420284329203230323620546865204c61726b6669656c6420636f6e7472696275746f72730a2320546869732066696c6520697320646973747269627574656420756e646572207468652073616d65206c6963656e736520617320746865204c61726b6669656c642070726f6a6563742e0a23204a616e6120566f6774203c6a616e612e766f6774406578616d706c652e64653e2c20323032352c20323032362e0a230a6d736769642022220a6d73677374722022220a2250726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e325c6e220a225265706f72742d4d736769642d427567732d546f3a207472616e736c61746f7273406c61726b6669656c642e6578616d706c655c6e220a22504f542d4372656174696f6e2d446174653a20323032362d31302d32302030393a31342b303030305c6e220a22504f2d5265766973696f6e2d446174653a20323032362d31302d32322031383a34302b303230305c6e220a224c6173742d5472616e736c61746f723a204a616e6120566f6774203c6a616e612e766f6774406578616d706c652e64653e5c6e220a224c616e67756167653a2064655c6e220a224c616e67756167652d5465616d3a204765726d616e203c6465406c61726b6669656c642e6578616d706c653e5c6e220a22506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b5c6e220a224d494d452d56657273696f6e3a20312e305c6e220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a22436f6e74656e742d5472616e736665722d456e636f64696e673a20386269745c6e220a2247656e6572617465642d42793a20426162656c20322e31362e305c6e220a22582d47656e657261746f723a20506f6564697420332e355c6e220a22582d506f656469742d536561726368506174682d31303a207374617469635c6e220a22582d506f656469742d536561726368506174682d393a2074656d706c617465735c6e220a22582d506f656469742d536561726368506174682d303a206c61726b6669656c645c6e220a22582d43726f7764696e2d50726f6a6563743a206c61726b6669656c645c6e220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a34312074656d706c617465732f636174616c6f672f7365617263682e68746d6c3a31320a6d7367696420225365617263682074686520636174616c6f67220a6d736773747220224b6174616c6f6720647572636873756368");
+    h.push_str("656e220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a35380a232c20707974686f6e2d666f726d61740a6d7367696420222528636f756e74296420726573756c7420666f72205c222528717565727929735c22220a6d736769645f706c7572616c20222528636f756e74296420726573756c747320666f72205c222528717565727929735c22220a6d73677374725b305d20222528636f756e74296420547265666665722066c3bc7220e2809e252871756572792973e2809c220a6d73677374725b315d20222528636f756e74296420547265666665722066c3bc7220e2809e252871756572792973e2809c220a0a232e20427574746f6e206c6162656c3a20706c61636573206120686f6c64206f6e206120626f6f6b2074686174206973206f7574206f6e206c6f616e2e0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a38380a6d7367637478742022627574746f6e220a6d736769642022486f6c64220a6d73677374722022566f726d65726b656e220a0a232e2048656164696e67206f6620746865206c697374206f6620686f6c64732061206d656d6265722068617320706c616365642e0a233a2074656d706c617465732f6d656d626572732f6163636f756e742e68746d6c3a33300a6d736763747874202268656164696e67220a6d736769642022486f6c6473220a6d73677374722022566f726d65726b756e67656e220a0a233a2074656d706c617465732f6d656d626572732f6163636f756e742e68746d6c3a33310a6d736769642022486f6c6473220a6d73677374722022566f726d65726b756e67656e220a0a233a206c61726b6669656c642f76696577732f6c6f616e732e70793a313032206c61726b6669656c642f76696577732f6c6f616e732e70793a3134370a233a206c61726b6669656c642f656d61696c732f72656d696e646572732e70793a3333206c61726b6669656c642f656d61696c732f72656d696e646572732e70793a37310a233a2074656d706c617465732f6c6f616e732f6f7665726475652d6e6f746963652e68746d6c3a392074656d706c617465732f6c6f616e732f6f7665726475652d6e6f746963652e7478743a340a233a207374617469632f6a732f6c6f616e2d63616c656e6461722e6a733a3231300a232c20707974686f6e2d666f726d61740a6d73676964202252657475726e206279202528646174652973220a6d7367737472202252c3bc636b6761626520626973202528646174652973220a0a23204a616e613a2022c3bc62657266c3a46c6c6967222069732074686520776f726420746865206272616e6368657320757365206f6e207468656972206e");
+    h.push_str("6f74696365732e0a233a206c61726b6669656c642f76696577732f6c6f616e732e70793a3138300a232c20707974686f6e2d666f726d61740a6d736769642022596f7520686176652025286e2964206f766572647565206974656d220a6d736769645f706c7572616c2022596f7520686176652025286e2964206f766572647565206974656d73220a6d73677374725b305d202253696520686162656e2025286e296420c3bc62657266c3a46c6c69676573204d656469756d220a6d73677374725b315d202253696520686162656e2025286e296420c3bc62657266c3a46c6c696765204d656469656e220a0a232e20546869732069732073686f776e206f6e20746865206163636f756e74207061676520756e64657220746865206c6f616e206c6973742c20616e6420697320746865206f6e650a232e20706c616365207768657265207468652066696e65207363686564756c65206973206578706c61696e65642c20736f206b6565702074686520616d6f756e747320616e64207468650a232e20677261636520706572696f642065786163746c79206173207772697474656e20696e2074686520736f7572636520746578742e0a233a2074656d706c617465732f6d656d626572732f66696e65732e68746d6c3a31340a232c2066757a7a790a237c206d736769642022220a237c202246696e65732061726520636861726765642061742032302063656e7473206120646179206166746572206120677261636520706572696f64206f6620746872656520646179732c20757020220a237c2022746f20746865207265706c6163656d656e7420636f7374206f6620746865206974656d2e220a6d736769642022220a2246696e65732061726520636861726765642061742032352063656e7473206120646179206166746572206120677261636520706572696f64206f6620746872656520646179732c20757020220a22746f20746865207265706c6163656d656e7420636f7374206f6620746865206974656d2e2046696e657320756e646572206f6e6520646f6c6c6172206172652077616976656420617420220a22636865636b6f75742e220a6d73677374722022220a2253c3a4756d6e6973676562c3bc6872656e20626574726167656e206e6163682065696e6572204b756c616e7a667269737420766f6e206472656920546167656e2032302043656e742070726f20220a225461672c2068c3b663687374656e73206a65646f63682064656e205769656465726265736368616666756e67737765727420646573204d656469756d732e220a0a233a2074656d706c617465732f6d656d626572732f66696e65732e68746d6c3a32300a6d736769642022220a2244656172");
+    h.push_str("206d656d6265722c5c6e220a225c6e220a22596f757220636172642065787069726573206f6e2025286461746529732e2052656e657720697420617420616e79206272616e6368206465736b2e5c6e220a6d73677374722022220a224c6965626573204d6974676c6965642c5c6e220a225c6e220a224968722041757377656973206cc3a475667420616d2025286461746529732061622e20536965206bc3b66e6e656e2069686e20616e206a65646572205468656b65207665726cc3a46e6765726e2e5c6e220a0a233a206c61726b6669656c642f666f726d732e70793a32320a6d7367696420224c6962726172792063617264206e756d626572220a6d73677374722022417573776569736e756d6d6572220a0a233a206c61726b6669656c642f666f726d732e70793a32330a6d73676964202250494e220a6d7367737472202250494e220a0a233a206c61726b6669656c642f666f726d732e70793a34300a232c20707974686f6e2d62726163652d666f726d61740a6d7367696420225468652050494e206d757374206265207b6d696e7d20746f207b6d61787d20646967697473206c6f6e672e220a6d736773747220224469652050494e206d757373207b6d696e7d20626973207b6d61787d205a69666665726e206c616e67207365696e2e220a0a233a206c61726b6669656c642f666f726d732e70793a35380a6d7367696420225369676e656420696e206173205c227b6e616d657d5c225c74286368616e676529220a6d73677374722022416e67656d656c64657420616c7320e2809e7b6e616d657de2809c5c7428c3a46e6465726e29220a0a233a2074656d706c617465732f626173652e68746d6c3a350a6d7367696420224c61726b6669656c64202d20796f7572206c6962726172792c206f6e6c696e65220a6d736773747220224c61726b6669656c64202d2049687265204269626c696f7468656b2c206f6e6c696e65220a0a233a2074656d706c617465732f626173652e68746d6c3a31370a6d7367696420225369676e206f7574220a6d7367737472202241626d656c64656e220a0a233a2074656d706c617465732f626173652e68746d6c3a31382074656d706c617465732f626173652e68746d6c3a34340a6d7367696420224d79206163636f756e74220a6d736773747220224d65696e204b6f6e746f220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a31320a6d736769642022417661696c61626c65220a6d7367737472202256657266c3bc67626172220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a31330a6d7367696420224f6e206c6f616e220a6d736773747220");
+    h.push_str("2241757367656c696568656e220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a34300a6d736763747874202276657262220a6d7367696420224f70656e220a6d73677374722022c39666666e656e220a0a233a2074656d706c617465732f6272616e636865732f686f7572732e68746d6c3a380a6d736763747874202261646a656374697665220a6d7367696420224f70656e220a6d736773747220224765c3b666666e6574220a0a233a2074656d706c617465732f6272616e636865732f686f7572732e68746d6c3a390a6d736769642022436c6f736564220a6d7367737472202247657363686c6f7373656e220a0a233a206c61726b6669656c642f76696577732f686f6c64732e70793a36360a232c2066757a7a792c20707974686f6e2d666f726d61740a237c206d73676964202225287469746c65297320697320726561647920666f72207069636b75702061742025286272616e636829732e220a6d73676964202225287469746c65297320697320726561647920666f72207069636b75702061742025286272616e6368297320756e74696c2025286461746529732e220a6d7367737472202225287469746c652973206c6965677420696e2025286272616e63682973207a7572204162686f6c756e67206265726569742e220a0a233a206c61726b6669656c642f76696577732f686f6c64732e70793a39300a232c20707974686f6e2d666f726d61740a6d73676964202225286e296420686f6c64220a6d736769645f706c7572616c202225286e296420686f6c6473220a6d73677374725b305d202225286e296420566f726d65726b756e67220a6d73677374725b315d202225286e296420566f726d65726b756e67656e220a0a233a206c61726b6669656c642f61646d696e2f7265706f7274732e70793a31320a6d73676964202243697263756c6174696f6e206279206272616e636820616e6420636f6c6c656374696f6e2c206c617374207477656c7665206d6f6e746873220a6d736773747220224175736c656968656e206e616368205a776569677374656c6c6520756e642042657374616e642c206c65747a7465207a77c3b66c66204d6f6e617465220a0a233a206c61726b6669656c642f61646d696e2f7265706f7274732e70793a33310a6d736769642022433a5c5c4578706f7274735c5c63697263756c6174696f6e2e637376220a6d73677374722022433a5c5c4578706f72745c5c4175736c656968656e2e637376220a0a233a206c61726b6669656c642f6170692f6572726f72732e70793a380a6d736769642022220a22536f6d657468696e672077656e742077726f6e672e20506c65617365207472792061");
+    h.push_str("6761696e20696e206120666577206d696e757465732c206f7220636f6e74616374207468652068656c7020220a226465736b2e220a6d73677374722022220a224574776173206973742073636869656667656c617566656e2e2042697474652076657273756368656e2053696520657320696e2065696e2070616172204d696e7574656e206e6f636820220a2265696e6d616c206f6465722077656e64656e20536965207369636820616e20646965204175736b756e66742e220a0a233a207374617469632f6a732f7365617263682d626f782e6a733a34340a6d73676964202254797065206174206c65617374207468726565206c657474657273220a6d73677374722022220a0a237e206d73676964202252656e657720616c6c220a237e206d73677374722022416c6c65207665726cc3a46e6765726e220a0a232c20707974686f6e2d666f726d61740a237e7c206d736769642022447565202528646174652973220a237e206d736769642022447565206f6e202528646174652973220a237e206d7367737472202246c3a46c6c696720616d202528646174652973220a0a232052656d6f766564207769746820746865206f6c64207265616465722d7469636b65742073797374656d2e0a237e206d73676374787420227469636b6574220a237e206d736769642022220a237e202241736b20617420746865206465736b20666f722061207265616465722773207469636b65742e20596f752077696c6c206e65656420612070726f6f66206f66206164647265737320220a237e2022616e64206f6e652070686f746f67726170682e220a237e206d73677374722022220a237e202246726167656e2053696520616e20646572205468656b65206e6163682065696e656d204c657365617573776569732e2053696520627261756368656e2065696e656e20220a237e20224164726573736e6163687765697320756e642065696e205061737362696c642e220a");
+    v.push(("de.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("23204672656e6368207472616e736c6174696f6e206f66204c61726b6669656c642e0a2320436f7079726967687420284329203230323620546865204c61726b6669656c6420636f6e7472696275746f72730a2320c3896c6f646965204d61726368616e64203c656c6f646965406578616d706c652e66723e2c20323032362e0a230a6d736769642022220a6d73677374722022220a2250726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e325c6e220a225265706f72742d4d736769642d427567732d546f3a207472616e736c61746f7273406c61726b6669656c642e6578616d706c655c6e220a22504f542d4372656174696f6e2d446174653a20323032362d31302d32302030393a31342b303030305c6e220a22504f2d5265766973696f6e2d446174653a20323032362d31302d32312031313a30322b303230305c6e220a224c6173742d5472616e736c61746f723a20c3896c6f646965204d61726368616e64203c656c6f646965406578616d706c652e66723e5c6e220a224c616e67756167652d5465616d3a204672656e6368203c6672406c61726b6669656c642e6578616d706c653e5c6e220a224c616e67756167653a2066725c6e220a224d494d452d56657273696f6e3a20312e305c6e220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d757466385c6e220a22436f6e74656e742d5472616e736665722d456e636f64696e673a20386269745c6e220a22506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e203e2031293b5c6e220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a34312074656d706c617465732f636174616c6f672f7365617263682e68746d6c3a31320a6d7367696420225365617263682074686520636174616c6f67220a6d73677374722022526563686572636865722064616e73206c6520636174616c6f677565220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a35380a232c20707974686f6e2d666f726d61740a6d7367696420222528636f756e74296420726573756c7420666f72205c222528717565727929735c22220a6d736769645f706c7572616c20222528636f756e74296420726573756c747320666f72205c222528717565727929735c22220a6d73677374725b305d20222528636f756e7429642072c3a973756c74617420706f757220c2ab2025287175657279297320c2bb220a6d73677374725b315d2022220a0a232e20427574746f6e206c6162656c3a20706c61636573206120686f6c64206f6e206120626f6f6b2074686174206973206f7574");
+    h.push_str("206f6e206c6f616e2e0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a38380a6d7367637478742022627574746f6e220a6d736769642022486f6c64220a6d7367737472202252c3a9736572766572220a0a233a2074656d706c617465732f6d656d626572732f6163636f756e742e68746d6c3a33310a6d736769642022486f6c6473220a6d7367737472202252c3a9736572766174696f6e73220a0a233a206c61726b6669656c642f76696577732f6c6f616e732e70793a313032206c61726b6669656c642f76696577732f6c6f616e732e70793a3134370a233a206c61726b6669656c642f656d61696c732f72656d696e646572732e70793a3333206c61726b6669656c642f656d61696c732f72656d696e646572732e70793a37310a233a2074656d706c617465732f6c6f616e732f6f7665726475652d6e6f746963652e68746d6c3a392074656d706c617465732f6c6f616e732f6f7665726475652d6e6f746963652e7478743a340a233a207374617469632f6a732f6c6f616e2d63616c656e6461722e6a733a3231300a232c20707974686f6e2d666f726d61740a6d73676964202252657475726e206279202528646174652973220a6d73677374722022c3802072656e647265206176616e74206c65202528646174652973220a0a232e20546869732069732073686f776e206f6e20746865206163636f756e74207061676520756e64657220746865206c6f616e206c6973742c20616e6420697320746865206f6e650a232e20706c616365207768657265207468652066696e65207363686564756c65206973206578706c61696e65642c20736f206b6565702074686520616d6f756e747320616e64207468650a232e20677261636520706572696f642065786163746c79206173207772697474656e20696e2074686520736f7572636520746578742e0a233a2074656d706c617465732f6d656d626572732f66696e65732e68746d6c3a31340a6d736769642022220a2246696e65732061726520636861726765642061742032352063656e7473206120646179206166746572206120677261636520706572696f64206f6620746872656520646179732c20757020220a22746f20746865207265706c6163656d656e7420636f7374206f6620746865206974656d2e2046696e657320756e646572206f6e6520646f6c6c6172206172652077616976656420617420220a22636865636b6f75742e220a6d73677374722022220a224c65732070c3a96e616c6974c3a97320736f6e742064652032352063656e74696d657320706172206a6f757220617072c3a87320756e2064c3a96c6169206465206772c3a263652064652074726f6973");
+    h.push_str("20220a226a6f7572732c2064616e73206c61206c696d69746520647520636fc3bb742064652072656d706c6163656d656e7420647520646f63756d656e742e204c65732070c3a96e616c6974c3a97320220a22696e66c3a97269657572657320c3a020756e20646f6c6c617220736f6e7420616e6e756cc3a96573206175206d6f6d656e74206465206c27656d7072756e742e220a0a233a206c61726b6669656c642f666f726d732e70793a32320a6d7367696420224c6962726172792063617264206e756d626572220a6d736773747220224e756dc3a9726f206465206361727465220a0a233a206c61726b6669656c642f666f726d732e70793a32330a6d73676964202250494e220a6d73677374722022436f6465220a0a233a2074656d706c617465732f626173652e68746d6c3a350a6d7367696420224c61726b6669656c64202d20796f7572206c6962726172792c206f6e6c696e65220a6d736773747220224c61726b6669656c64202d20766f747265206269626c696f7468c3a871756520656e206c69676e65220a0a233a2074656d706c617465732f626173652e68746d6c3a31370a6d7367696420225369676e206f7574220a6d7367737472202253652064c3a9636f6e6e6563746572220a0a233a2074656d706c617465732f626173652e68746d6c3a31382074656d706c617465732f626173652e68746d6c3a34340a6d7367696420224d79206163636f756e74220a6d736773747220224d6f6e20636f6d707465220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a31320a232c2066757a7a790a6d736769642022417661696c61626c65220a6d736773747220224c69627265220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a31330a6d7367696420224f6e206c6f616e220a6d73677374722022456d7072756e74c3a9220a0a233a2074656d706c617465732f6272616e636865732f686f7572732e68746d6c3a380a6d736763747874202261646a656374697665220a6d7367696420224f70656e220a6d736773747220224f7576657274220a0a233a2074656d706c617465732f6272616e636865732f686f7572732e68746d6c3a390a6d736769642022436c6f736564220a6d736773747220224665726dc3a9220a0a233a206c61726b6669656c642f76696577732f686f6c64732e70793a39300a232c20707974686f6e2d666f726d61740a6d73676964202225286e296420686f6c64220a6d736769645f706c7572616c202225286e296420686f6c6473220a6d73677374725b305d202225286e29642072c3a9736572766174696f6e220a6d73677374725b315d202225286e29");
+    h.push_str("642072c3a9736572766174696f6e73220a0a233a206c61726b6669656c642f6170692f6572726f72732e70793a380a6d736769642022220a22536f6d657468696e672077656e742077726f6e672e20506c656173652074727920616761696e20696e206120666577206d696e757465732c206f7220636f6e74616374207468652068656c7020220a226465736b2e220a6d73677374722022220a0a233a207374617469632f6a732f7365617263682d626f782e6a733a34340a6d73676964202254797065206174206c65617374207468726565206c657474657273220a6d7367737472202253616973697373657a206175206d6f696e732074726f6973206c657474726573220a");
+    v.push(("fr.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("2320436174616c6f677565206465206c6120626f726e65206465207072ea742028616e6369656e20666f726d6174292e0a230a6d736769642022220a6d73677374722022220a2250726f6a6563742d49642d56657273696f6e3a204c61726b6669656c64206b696f736b20312e395c6e220a224c616e67756167653a2066725c6e220a224d494d452d56657273696f6e3a20312e305c6e220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d49534f2d383835392d315c6e220a22436f6e74656e742d5472616e736665722d456e636f64696e673a20386269745c6e220a22506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e203e2031293b5c6e220a0a233a206b696f736b2f73637265656e732e70793a31300a6d736769642022506c61636520796f75722063617264206f6e2074686520726561646572220a6d73677374722022506f73657a20766f74726520636172746520737572206c65206c656374657572220a0a233a206b696f736b2f73637265656e732e70793a32320a6d7367696420224974656d20636865636b6564206f7574220a6d73677374722022446f63756d656e7420656d7072756e74e9220a0a233a206b696f736b2f73637265656e732e70793a32330a232c20707974686f6e2d666f726d61740a6d73676964202225286e2964206974656d20636865636b6564206f7574220a6d736769645f706c7572616c202225286e2964206974656d7320636865636b6564206f7574220a6d73677374725b305d202225286e296420646f63756d656e7420656d7072756e74e9220a6d73677374725b315d202225286e296420646f63756d656e747320656d7072756e74e973220a0a233a206b696f736b2f73637265656e732e70793a34300a6d73676964202252656365697074220a6d736773747220225265e775220a0a233a206b696f736b2f73637265656e732e70793a34310a6d736769642022506c656173652074616b6520796f75722072656365697074220a6d73677374722022566575696c6c657a207072656e64726520766f747265207265e775220a");
+    v.push(("fr_legacy.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("efbbbf23204a6170616e657365207472616e736c6174696f6e206f66204c61726b6669656c642e0a2320e4bd90e897a420e7be8ee592b2203c6d6973616b69406578616d706c652e6a703e2c20323032362e0a230a6d736769642022220a6d73677374722022220a2250726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e325c6e220a22504f542d4372656174696f6e2d446174653a20323032362d31302d32302030393a31342b303030305c6e220a22504f2d5265766973696f6e2d446174653a20323032362d31302d32332030383a31352b303930305c6e220a224c6173742d5472616e736c61746f723a20e4bd90e897a420e7be8ee592b2203c6d6973616b69406578616d706c652e6a703e5c6e220a224c616e67756167652d5465616d3a204a6170616e6573655c6e220a224c616e67756167653a206a615c6e220a224d494d452d56657273696f6e3a20312e305c6e220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a22436f6e74656e742d5472616e736665722d456e636f64696e673a20386269745c6e220a22506c7572616c2d466f726d733a206e706c7572616c733d313b20706c7572616c3d303b5c6e220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a34312074656d706c617465732f636174616c6f672f7365617263682e68746d6c3a31320a6d7367696420225365617263682074686520636174616c6f67220a6d73677374722022e894b5e69bb8e38292e6a49ce7b4a2220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a35380a232c20707974686f6e2d666f726d61740a6d7367696420222528636f756e74296420726573756c7420666f72205c222528717565727929735c22220a6d736769645f706c7572616c20222528636f756e74296420726573756c747320666f72205c222528717565727929735c22220a6d73677374725b305d2022e3808c252871756572792973e3808de381aee6a49ce7b4a2e7b590e69e9cefbc9a2528636f756e742964e4bbb6220a0a233a206c61726b6669656c642f76696577732f6c6f616e732e70793a3130320a232c20707974686f6e2d666f726d61740a6d73676964202252657475726e206279202528646174652973220a6d73677374722022e8bf94e58db4e69c9fe99990efbc9a2528646174652973220a0a233a206c61726b6669656c642f76696577732f6c6f616e732e70793a3138300a232c20707974686f6e2d666f726d61740a6d736769642022596f7520686176652025286e2964206f766572647565206974656d220a6d736769645f706c75");
+    h.push_str("72616c2022596f7520686176652025286e2964206f766572647565206974656d73220a6d73677374725b305d2022e5bbb6e6bb9ee4b8ade381aee8b387e69699e3818c25286e2964e782b9e38182e3828ae381bee38199220a0a233a2074656d706c617465732f6d656d626572732f66696e65732e68746d6c3a31340a6d736769642022220a2246696e65732061726520636861726765642061742032352063656e7473206120646179206166746572206120677261636520706572696f64206f6620746872656520646179732c20757020220a22746f20746865207265706c6163656d656e7420636f7374206f6620746865206974656d2e2046696e657320756e646572206f6e6520646f6c6c6172206172652077616976656420617420220a22636865636b6f75742e220a6d73677374722022e5bbb6e6bb9ee69699e381afe78cb6e4ba88e69c9fe99693e381aee4b889e697a5e38292e9818ee3818ee3828be381a8e4b880e697a53235e382bbe383b3e38388e3818be3818be3828ae38081e8b387e69699e381aee5bc81e5849fe9a18de3818ce4b88ae99990e381a7e38199e38082e4b880e38389e383abe69caae6ba80e381aee5bbb6e6bb9ee69699e381afe8b2b8e587bae69982e381abe5858de999a4e38195e3828ce381bee38199e38082220a0a233a2074656d706c617465732f626173652e68746d6c3a31370a6d7367696420225369676e206f7574220a6d73677374722022e383ade382b0e382a2e382a6e38388220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a34300a6d736763747874202276657262220a6d7367696420224f70656e220a6d73677374722022e9968be3818f220a0a233a2074656d706c617465732f6272616e636865732f686f7572732e68746d6c3a380a6d736763747874202261646a656374697665220a6d7367696420224f70656e220a6d73677374722022e9968be9a4a8e4b8ad220a");
+    v.push(("ja.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("64657465637409646174612f6d657373616765732e706f740a64657465637409646174612f64652e706f0a64657465637409646174612f66722e706f0a64657465637409646174612f6a612e706f0a64657465637409646174612f66725f6c65676163792e706f0a64657465637409646174612f6c65676163795f65732e6d6f0a64657465637409646174612f6261645f6d616769632e6d6f0a737461747309646174612f6d657373616765732e706f740a737461747309646174612f64652e706f0a737461747309646174612f66722e706f0a737461747309646174612f6a612e706f0a737461747309646174612f70745f42522e706f0a737461747309646174612f66725f6c65676163792e706f0a6d6574616461746109646174612f64652e706f0a6d6574616461746109646174612f6d657373616765732e706f740a656e747269657309646174612f64652e706f0a656e747269657309646174612f6a612e706f0a656e747269657309646174612f66725f6c65676163792e706f0a66696e6409646174612f64652e706f096d7367696409486f6c64730a66696e6409646174612f64652e706f096d7367696409486f6c64730968656164696e670a66696e6409646174612f64652e706f096d73676964094f70656e0a66696e6409646174612f64652e706f096d73676964094f70656e09766572620a66696e6409646174612f64652e706f096d73676964094f70656e096164766572620a66696e6409646174612f64652e706f096d736773747209566f726d65726b756e67656e0a66696e6409646174612f64652e706f096d736769640952656e657720616c6c0a66696e642d616c6c09646174612f64652e706f096d736769640952656e657720616c6c0a66696e6409646174612f6a612e706f096d73676964094f70656e0a66696e6409646174612f66722e706f096d736769645f706c7572616c0925286e296420686f6c64730a636f6e7461696e7309646174612f66722e706f09486f6c64730a636f6e7461696e7309646174612f66722e706f09486f6c6409627574746f6e0a636f6e7461696e7309646174612f66722e706f09486f6c640a726f756e647472697009646174612f64652e706f0a726f756e647472697009646174612f66722e706f0a726f756e647472697009646174612f6a612e706f0a726f756e647472697009646174612f6d657373616765732e706f740a726f756e647472697009646174612f66725f6c65676163792e706f0a7072696e7409646174612f64652e706f0937380a7072696e7409646174612f66722e706f0934300a7072696e7409646174612f6a612e706f09300a7072696e7409646174612f6d657373616765732e706f74093630");
+    h.push_str("0a7072696e7409646174612f70745f42522e706f093132300a66757a7a7909646174612f64652e706f0952657475726e206279202528646174652973096f6e0a66757a7a7909646174612f64652e706f0925287469746c65297320697320726561647920666f72207069636b75702061742025286272616e6368297320756e74696c2025286461746529732e096f66660a66757a7a7909646174612f66722e706f09417661696c61626c65096f66660a66757a7a7909646174612f66722e706f09436c6f736564096f66660a6d6572676509646174612f70745f42522e706f09646174612f6d657373616765732e706f7409646174612f6f75742f70745f42522e706f0a6d6572676509646174612f66722e706f09646174612f6d657373616765732e706f7409646174612f6f75742f66722e706f0a6d6572676509646174612f64652e706f09646174612f6d657373616765732e706f7409646174612f6f75742f64652e706f0a6d6572676509646174612f6d657373616765732e706f7409646174612f6d657373616765732e706f7409646174612f6f75742f6d657373616765732e706f740a736f727409646174612f64652e706f0a736f727409646174612f66722e706f0a636f6d70696c6509646174612f64652e706f09646174612f6f75742f64652e6d6f0a636f6d70696c6509646174612f66722e706f09646174612f6f75742f66722e6d6f0a636f6d70696c6509646174612f6a612e706f09646174612f6f75742f6a612e6d6f0a636f6d70696c6509646174612f66725f6c65676163792e706f09646174612f6f75742f66725f6c65676163792e6d6f0a636f6d70696c6509646174612f6d657373616765732e706f7409646174612f6f75742f6d657373616765732e6d6f0a6d6f09646174612f6f75742f64652e6d6f0a6d6f09646174612f6f75742f66725f6c65676163792e6d6f0a6d6f09646174612f6c65676163795f65732e6d6f0a6d6f09646174612f6261645f6d616769632e6d6f0a6d6f09646174612f726576322e6d6f0a6d6f09646174612f726576312e6d6f0a6d6f2d746f2d706f09646174612f6c65676163795f65732e6d6f09646174612f6f75742f65732e706f0a6d6f2d7361766509646174612f6c65676163795f65732e6d6f09646174612f6f75742f65732e6d6f0a706f09646174612f6f75742f65732e706f0a706f09646174612f6261645f71756f74652e706f0a706f09646174612f6261645f707265762e706f0a706f09646174612f6261645f636f6e742e706f0a706f09646174612f6261645f6f726465722e706f0a706f09646174612f6261645f6c696e652e706f0a706f09646174612f6261645f696e6465782e706f0a706f09646174");
+    h.push_str("612f6261645f636f6e745f71756f74652e706f0a706f09646174612f6d697373696e672e706f0a65736361706509546162e287a5616e64206e65776c696e65e28f8e616e64202271756f7465732220616e64206261636b5c736c6173680a756e657363617065095461625c74616e64206e65776c696e655c6e616e64205c2271756f7465735c2220616e64205c5c6e20616e64205c710a6e61747572616c2d736f727409582d506f656469742d536561726368506174682d313020582d506f656469742d536561726368506174682d3920782d616c70686120582d42657461206974656d32206974656d3130204974656d31206974656d31620a");
+    v.push(("jobs.txt".to_string(), h));
+    let mut h = String.new();
+    h.push_str("950412de000000000000000a0000001c0000006c00000000000000bc00000000000000bc00000009000000bd00000006000000c70000000a000000ce00000007000000d900000012000000e100000012000000f400000008000001070000000e00000110000000160000011f000000c3000001360000000a000001fa0000000700000205000000090000020d00000008000002170000001b00000220000000160000023c0000000e0000025300000007000002620000001c0000026a00417661696c61626c6500436c6f736564004d79206163636f756e74004f6e206c6f616e0052657475726e206279202528646174652973005365617263682074686520636174616c6f67005369676e206f75740061646a656374697665044f70656e0025286e296420686f6c640025286e296420686f6c64730050726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e300a4c616e67756167653a2065730a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a582d4c65676163792d4275696c640a00446973706f6e69626c65004365727261646f004d69206375656e746100507265737461646f004465766f6c76657220616e7465732064656c2025286461746529730042757363617220656e20656c20636174c3a16c6f676f004365727261722073657369c3b36e004162696572746f0025286e296420726573657276610025286e296420726573657276617300");
+    v.push(("legacy_es.mo".to_string(), h));
+    let mut h = String.new();
+    h.push_str("23204c61726b6669656c64207472616e736c6174696f6e2074656d706c6174652e0a2320436f7079726967687420284329203230323620546865204c61726b6669656c6420636f6e7472696275746f72730a2320546869732066696c6520697320646973747269627574656420756e646572207468652073616d65206c6963656e736520617320746865204c61726b6669656c642070726f6a6563742e0a2320464952535420415554484f52203c454d41494c40414444524553533e2c20594541522e0a230a232c2066757a7a790a6d736769642022220a6d73677374722022220a2250726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e325c6e220a225265706f72742d4d736769642d427567732d546f3a207472616e736c61746f7273406c61726b6669656c642e6578616d706c655c6e220a22504f542d4372656174696f6e2d446174653a20323032362d31302d32302030393a31342b303030305c6e220a22504f2d5265766973696f6e2d446174653a20594541522d4d4f2d444120484f3a4d492b5a4f4e455c6e220a224c6173742d5472616e736c61746f723a2046554c4c204e414d45203c454d41494c40414444524553533e5c6e220a224c616e67756167652d5465616d3a204c414e4755414745203c4c4c406c692e6f72673e5c6e220a224c616e67756167653a205c6e220a224d494d452d56657273696f6e3a20312e305c6e220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d434841525345545c6e220a22436f6e74656e742d5472616e736665722d456e636f64696e673a20386269745c6e220a22506c7572616c2d466f726d733a206e706c7572616c733d494e54454745523b20706c7572616c3d45585052455353494f4e3b5c6e220a2247656e6572617465642d42793a20426162656c20322e31362e305c6e220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a34312074656d706c617465732f636174616c6f672f7365617263682e68746d6c3a31320a6d7367696420225365617263682074686520636174616c6f67220a6d73677374722022220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a35380a232c20707974686f6e2d666f726d61740a6d7367696420222528636f756e74296420726573756c7420666f72205c222528717565727929735c22220a6d736769645f706c7572616c20222528636f756e74296420726573756c747320666f72205c222528717565727929735c22220a6d73677374725b305d2022220a6d73677374725b315d2022220a0a232e20427574746f6e206c6162656c3a20706c61636573");
+    h.push_str("206120686f6c64206f6e206120626f6f6b2074686174206973206f7574206f6e206c6f616e2e0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a38380a6d7367637478742022627574746f6e220a6d736769642022486f6c64220a6d73677374722022220a0a232e2048656164696e67206f6620746865206c697374206f6620686f6c64732061206d656d6265722068617320706c616365642e0a233a2074656d706c617465732f6d656d626572732f6163636f756e742e68746d6c3a33300a6d736763747874202268656164696e67220a6d736769642022486f6c6473220a6d73677374722022220a0a233a2074656d706c617465732f6d656d626572732f6163636f756e742e68746d6c3a33310a6d736769642022486f6c6473220a6d73677374722022220a0a233a206c61726b6669656c642f76696577732f6c6f616e732e70793a313032206c61726b6669656c642f76696577732f6c6f616e732e70793a3134370a233a206c61726b6669656c642f656d61696c732f72656d696e646572732e70793a3333206c61726b6669656c642f656d61696c732f72656d696e646572732e70793a37310a233a2074656d706c617465732f6c6f616e732f6f7665726475652d6e6f746963652e68746d6c3a392074656d706c617465732f6c6f616e732f6f7665726475652d6e6f746963652e7478743a340a233a207374617469632f6a732f6c6f616e2d63616c656e6461722e6a733a3231300a232c20707974686f6e2d666f726d61740a6d73676964202252657475726e206279202528646174652973220a6d73677374722022220a0a233a206c61726b6669656c642f76696577732f6c6f616e732e70793a3138300a232c20707974686f6e2d666f726d61740a6d736769642022596f7520686176652025286e2964206f766572647565206974656d220a6d736769645f706c7572616c2022596f7520686176652025286e2964206f766572647565206974656d73220a6d73677374725b305d2022220a6d73677374725b315d2022220a0a232e20546869732069732073686f776e206f6e20746865206163636f756e74207061676520756e64657220746865206c6f616e206c6973742c20616e6420697320746865206f6e650a232e20706c616365207768657265207468652066696e65207363686564756c65206973206578706c61696e65642c20736f206b6565702074686520616d6f756e747320616e64207468650a232e20677261636520706572696f642065786163746c79206173207772697474656e20696e2074686520736f7572636520746578742e0a233a2074656d706c617465732f6d656d626572732f66696e65732e68746d6c3a31");
+    h.push_str("340a6d736769642022220a2246696e65732061726520636861726765642061742032352063656e7473206120646179206166746572206120677261636520706572696f64206f6620746872656520646179732c20757020220a22746f20746865207265706c6163656d656e7420636f7374206f6620746865206974656d2e2046696e657320756e646572206f6e6520646f6c6c6172206172652077616976656420617420220a22636865636b6f75742e220a6d73677374722022220a0a233a2074656d706c617465732f6d656d626572732f66696e65732e68746d6c3a32300a6d736769642022220a2244656172206d656d6265722c5c6e220a225c6e220a22596f757220636172642065787069726573206f6e2025286461746529732e2052656e657720697420617420616e79206272616e6368206465736b2e5c6e220a6d73677374722022220a0a233a206c61726b6669656c642f666f726d732e70793a32320a6d7367696420224c6962726172792063617264206e756d626572220a6d73677374722022220a0a233a206c61726b6669656c642f666f726d732e70793a32330a6d73676964202250494e220a6d73677374722022220a0a233a206c61726b6669656c642f666f726d732e70793a34300a232c20707974686f6e2d62726163652d666f726d61740a6d7367696420225468652050494e206d757374206265207b6d696e7d20746f207b6d61787d20646967697473206c6f6e672e220a6d73677374722022220a0a233a206c61726b6669656c642f666f726d732e70793a35380a6d7367696420225369676e656420696e206173205c227b6e616d657d5c225c74286368616e676529220a6d73677374722022220a0a233a2074656d706c617465732f626173652e68746d6c3a350a6d7367696420224c61726b6669656c64202d20796f7572206c6962726172792c206f6e6c696e65220a6d73677374722022220a0a233a2074656d706c617465732f626173652e68746d6c3a31370a6d7367696420225369676e206f7574220a6d73677374722022220a0a233a2074656d706c617465732f626173652e68746d6c3a31382074656d706c617465732f626173652e68746d6c3a34340a6d7367696420224d79206163636f756e74220a6d73677374722022220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a31320a6d736769642022417661696c61626c65220a6d73677374722022220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a31330a6d7367696420224f6e206c6f616e220a6d73677374722022220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d");
+    h.push_str("6c3a34300a6d736763747874202276657262220a6d7367696420224f70656e220a6d73677374722022220a0a233a2074656d706c617465732f6272616e636865732f686f7572732e68746d6c3a380a6d736763747874202261646a656374697665220a6d7367696420224f70656e220a6d73677374722022220a0a233a2074656d706c617465732f6272616e636865732f686f7572732e68746d6c3a390a6d736769642022436c6f736564220a6d73677374722022220a0a233a206c61726b6669656c642f76696577732f686f6c64732e70793a36360a232c20707974686f6e2d666f726d61740a6d73676964202225287469746c65297320697320726561647920666f72207069636b75702061742025286272616e6368297320756e74696c2025286461746529732e220a6d73677374722022220a0a233a206c61726b6669656c642f76696577732f686f6c64732e70793a39300a232c20707974686f6e2d666f726d61740a6d73676964202225286e296420686f6c64220a6d736769645f706c7572616c202225286e296420686f6c6473220a6d73677374725b305d2022220a6d73677374725b315d2022220a0a233a206c61726b6669656c642f61646d696e2f7265706f7274732e70793a31320a6d73676964202243697263756c6174696f6e206279206272616e636820616e6420636f6c6c656374696f6e2c206c617374207477656c7665206d6f6e746873220a6d73677374722022220a0a233a206c61726b6669656c642f61646d696e2f7265706f7274732e70793a33310a6d736769642022433a5c5c4578706f7274735c5c63697263756c6174696f6e2e637376220a6d73677374722022220a0a233a206c61726b6669656c642f6170692f6572726f72732e70793a380a6d736769642022536f6d657468696e672077656e742077726f6e672e20506c656173652074727920616761696e20696e206120666577206d696e757465732c206f7220636f6e74616374207468652068656c70206465736b2e220a6d73677374722022220a0a233a207374617469632f6a732f7365617263682d626f782e6a733a34340a6d73676964202254797065206174206c65617374207468726565206c657474657273220a6d73677374722022220a");
+    v.push(("messages.pot".to_string(), h));
+    let mut h = String.new();
+    h.push_str("23204272617a696c69616e20506f7274756775657365207472616e736c6174696f6e206f66204c61726b6669656c642e0a232052616661656c20436f737461203c72616661656c406578616d706c652e636f6d2e62723e2c20323032352e0a230a6d736769642022220a6d73677374722022220a2250726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e315c6e220a22504f542d4372656174696f6e2d446174653a20323032352d31312d30322031343a30302b303030305c6e220a22504f2d5265766973696f6e2d446174653a20323032352d31312d30392032303a33312d303330305c6e220a224c6173742d5472616e736c61746f723a2052616661656c20436f737461203c72616661656c406578616d706c652e636f6d2e62723e5c6e220a224c616e67756167652d5465616d3a20506f727475677565736520284272617a696c295c6e220a224c616e67756167653a2070745f42525c6e220a224d494d452d56657273696f6e3a20312e305c6e220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d385c6e220a22436f6e74656e742d5472616e736665722d456e636f64696e673a20386269745c6e220a22506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e203e2031293b5c6e220a0a232052616661656c3a202261636572766f2220726561647320626574746572207468616e2022636174c3a16c6f676f2220686572652e0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a33390a6d7367696420225365617263682074686520636174616c6f67220a6d73677374722022506573717569736172206e6f2061636572766f220a0a233a206c61726b6669656c642f76696577732f636174616c6f672e70793a35350a232c20707974686f6e2d666f726d61740a6d7367696420222528636f756e74296420726573756c7420666f72205c222528717565727929735c22220a6d736769645f706c7572616c20222528636f756e74296420726573756c747320666f72205c222528717565727929735c22220a6d73677374725b305d20222528636f756e74296420726573756c7461646f2070617261205c222528717565727929735c22220a6d73677374725b315d20222528636f756e74296420726573756c7461646f732070617261205c222528717565727929735c22220a0a233a206c61726b6669656c642f76696577732f6c6f616e732e70793a39380a232c20707974686f6e2d666f726d61740a6d73676964202252657475726e206279202528646174652973220a6d736773747220224465766f6c766572206174c3a92025");
+    h.push_str("28646174652973220a0a233a2074656d706c617465732f6d656d626572732f66696e65732e68746d6c3a31340a232c2066757a7a790a6d736769642022220a2246696e65732061726520636861726765642061742032302063656e7473206120646179206166746572206120677261636520706572696f64206f6620746872656520646179732c20757020220a22746f20746865207265706c6163656d656e7420636f7374206f6620746865206974656d2e220a6d73677374722022220a224173206d756c7461732073c3a36f2064652032302063656e7461766f7320706f7220646961206170c3b37320756d207072617a6f20646520636172c3aa6e636961206465207472c3aa7320220a22646961732c206174c3a9206f20637573746f206465207265706f7369c3a7c3a36f20646f206974656d2e220a0a233a206c61726b6669656c642f666f726d732e70793a32310a6d7367696420224c6962726172792063617264206e756d626572220a6d736773747220224ec3ba6d65726f2064612063617274656972696e6861220a0a233a2074656d706c617465732f626173652e68746d6c3a31360a6d7367696420225369676e206f7574220a6d7367737472202253616972220a0a233a2074656d706c617465732f626173652e68746d6c3a31370a6d7367696420224d79206163636f756e74220a6d736773747220224d696e686120636f6e7461220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a31310a6d736769642022417661696c61626c65220a6d73677374722022446973706f6ec3ad76656c220a0a233a2074656d706c617465732f636174616c6f672f64657461696c2e68746d6c3a31320a6d7367696420224f6e206c6f616e220a6d73677374722022456d707265737461646f220a0a233a206c61726b6669656c642f76696577732f686f6c64732e70793a38300a232c20707974686f6e2d666f726d61740a6d73676964202225286e296420686f6c64220a6d736769645f706c7572616c202225286e296420686f6c6473220a6d73677374725b305d202225286e29642072657365727661220a6d73677374725b315d202225286e2964207265736572766173220a0a233a206c61726b6669656c642f76696577732f72656e6577616c732e70793a31320a6d73676964202252656e657720616c6c220a6d7367737472202252656e6f766172207475646f220a0a233a206c61726b6669656c642f76696577732f72656e6577616c732e70793a33300a232c20707974686f6e2d666f726d61740a6d73676964202252656e6577656420756e74696c202528646174652973220a6d7367737472202252656e6f7661646f206174c3a9");
+    h.push_str("202528646174652973220a");
+    v.push(("pt_BR.po".to_string(), h));
+    let mut h = String.new();
+    h.push_str("de12049501000100030000001c00000034000000000000004c000000000000004c000000090000004d0000000600000057000000c30000005e0000000a00000022010000070000002d01000000417661696c61626c6500436c6f7365640050726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e300a4c616e67756167653a2065730a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a582d4c65676163792d4275696c640a00446973706f6e69626c65004365727261646f00");
+    v.push(("rev1.mo".to_string(), h));
+    let mut h = String.new();
+    h.push_str("de12049500000200030000001c00000034000000000000004c000000000000004c000000090000004d0000000600000057000000c30000005e0000000a00000022010000070000002d01000000417661696c61626c6500436c6f7365640050726f6a6563742d49642d56657273696f6e3a204c61726b6669656c6420342e300a4c616e67756167653a2065730a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a582d4c65676163792d4275696c640a00446973706f6e69626c65004365727261646f00");
+    v.push(("rev2.mo".to_string(), h));
+    v
+}
