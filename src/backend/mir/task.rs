@@ -2,11 +2,13 @@
 //! native `__ready`, `TaskGroup.spawn_frame`, and the poll functions the
 //! runtime's executor (`runtime/src/mir_task.rs`) runs tasks through.
 //!
-//! A `TaskHandle` is a malloc'd block: a state word (`RUNNING`, `DONE`, or
-//! `DETACHED` once its handle dropped first), then the task's result at
-//! [`Cx::task_result_offset`]. A task's poll function resumes its frame
-//! once; when the frame returns, it stores the result and marks the block
-//! done, or, detached, drops the result and frees the block.
+//! A `TaskHandle` is a malloc'd block: a state word (`RUNNING`, `DONE`,
+//! `DETACHED` once its handle dropped first, or `CANCELLED`), then the
+//! task's result at [`Cx::task_result_offset`]. A task's poll function
+//! resumes its frame once; when the frame returns, it stores the result and
+//! marks the block done, or, detached, drops the result and frees the
+//! block. A frame that returned by its cancel exits (core-semantics §11.9)
+//! has no result: the block is marked cancelled, or, detached, freed.
 
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
@@ -26,6 +28,8 @@ pub(super) const RUNNING: u64 = 0;
 pub(super) const DONE: u64 = 1;
 /// Its handle dropped while the task ran; the task frees the block.
 pub(super) const DETACHED: u64 = 2;
+/// The task was torn down (core-semantics §11.9): no result.
+pub(super) const CANCELLED: u64 = 3;
 
 impl<'ctx> Cx<'ctx, '_> {
     /// Where a `TaskHandle[T]`'s block holds the `T`: after the state word,
@@ -61,13 +65,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ms = self.int_arg(ms)?;
                 self.rt_flag("ready_sleep", &[ms.into()])?
             }
-            ("TaskHandle", "join", [h, ..]) => {
+            // Returned, or torn down.
+            ("TaskHandle", "join" | "try_join", [h, ..]) => {
                 let (cell, _) = self.cell_arg(h)?;
                 let block = self.load_ptr(cell)?;
                 let state = self.load_i64(block)?;
                 let done = self
                     .builder
-                    .build_int_compare(IntPredicate::EQ, state, self.i64(DONE), "")
+                    .build_int_compare(IntPredicate::NE, state, self.i64(RUNNING), "")
                     .map_err(e)?;
                 self.ready_flag(done)?
             }
@@ -158,7 +163,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// The runtime state a `TaskGroup` operand (the group, or a reference
     /// to it) points at.
-    fn group_handle(&mut self, g: &Operand) -> R<PointerValue<'ctx>> {
+    pub(super) fn group_handle(&mut self, g: &Operand) -> R<PointerValue<'ctx>> {
         let (at, _) = self.behind_refs(g)?;
         self.load_ptr(at)
     }
@@ -305,12 +310,20 @@ impl<'ctx> Cx<'ctx, '_> {
                     .builder
                     .build_int_compare(IntPredicate::EQ, state, cx.i64(DETACHED), "")
                     .map_err(e)?;
+                let torn = cx.rt_flag("unwinding", &[])?;
                 let f = cx.cur_fn()?;
-                let (keep, drop, end) = (
+                let (returned, keep, drop, cancelled, gone, end) = (
+                    cx.llcx.append_basic_block(f, "returned"),
                     cx.llcx.append_basic_block(f, "keep"),
                     cx.llcx.append_basic_block(f, "detached"),
+                    cx.llcx.append_basic_block(f, "cancelled"),
+                    cx.llcx.append_basic_block(f, "cancelled.gone"),
                     cx.llcx.append_basic_block(f, "freed"),
                 );
+                cx.builder
+                    .build_conditional_branch(torn, cancelled, returned)
+                    .map_err(e)?;
+                cx.builder.position_at_end(returned);
                 cx.builder
                     .build_conditional_branch(detached, drop, keep)
                     .map_err(e)?;
@@ -323,6 +336,18 @@ impl<'ctx> Cx<'ctx, '_> {
                 if cx.tys.needs_drop(held) {
                     cx.call_glue(v, held)?;
                 }
+                cx.free(b)?;
+                cx.builder.build_unconditional_branch(end).map_err(e)?;
+                // Torn down, it left no result.
+                cx.builder.position_at_end(cancelled);
+                let mark = cx.llcx.append_basic_block(f, "cancelled.mark");
+                cx.builder
+                    .build_conditional_branch(detached, gone, mark)
+                    .map_err(e)?;
+                cx.builder.position_at_end(mark);
+                cx.store(b, cx.i64(CANCELLED).into())?;
+                cx.builder.build_unconditional_branch(end).map_err(e)?;
+                cx.builder.position_at_end(gone);
                 cx.free(b)?;
                 cx.builder.build_unconditional_branch(end).map_err(e)?;
                 cx.builder.position_at_end(end);

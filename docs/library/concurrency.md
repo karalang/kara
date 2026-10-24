@@ -147,12 +147,12 @@ impl[T] TaskHandle[T] {
 - **Dropping a group joins every task it started**, so every task finishes before the scope that owns the group ends, and the drop waits (`blocks`).
 - **`TaskHandle[T]`** owns its task's result and borrows nothing, so it may outlive its group. `join` waits for the task and returns its result. After the group has dropped, every task is done, and `join` returns the stored result at once. A result that is never joined drops with its handle, or with the group if the handle dropped first.
 - **Tasks are not checked against each other for effect conflicts.** The borrow rules and `CrossTask` keep them from racing on memory, but two tasks may both print, or both write to one database, and their order is not fixed ([design.md §13](../design.md#taskgroup)). `par {}` and `par for` are the deterministic constructs.
-- **Failure.** A task that returns `Err` does not affect its siblings; the error reaches whoever joins its handle. A panic in any task ends the process ([core-semantics.md §11.4](../core-semantics.md#11-concurrency-c9)). v1 cancels nothing.
-- **From the services track (M4a)** ([core-semantics.md §11.9–§11.12](../core-semantics.md#11-concurrency-c9)):
-  - `fn cancel(self)` cancels every unfinished task; each stops at its next suspension point, running its cleanup as an error exit.
+- **Failure.** A task that returns `Err` does not affect its siblings; the error reaches whoever joins its handle. A panic in any task ends the process ([core-semantics.md §11.4](../core-semantics.md#11-concurrency-c9)).
+- **Cancellation** ([core-semantics.md §11.9–§11.10](../core-semantics.md#11-concurrency-c9)):
+  - `fn cancel(self)` cancels every unfinished task. A task suspended at a wait is torn down there at once, and the running task at the next wait it suspends in; a task past its last wait completes and keeps its result. A torn-down task leaves as by an error exit from every frame on its chain, innermost first: each frame's drops, `defer`s and `errdefer`s run (an `errdefer(e)` has no error to name, and is skipped), and the call it waited in is never made. The groups a cancelled task made are cancelled before it.
   - `fn with_deadline(own self, d: Duration) -> TaskGroup` cancels the group once `d` has passed.
-  - `TaskGroup.isolating(; limit: i64 = i64.MAX) -> IsolatingGroup` contains its tasks' panics: its `spawn` returns `TaskHandle[Result[T, TaskFailed]]`, and the other tasks run on. `TaskFailed` is `Panicked { message, location }` or `Cancelled`.
-  - `TaskHandle.try_join(own self) -> Result[T, TaskFailed]`; plain `join` on a cancelled task of an ordinary group panics.
+  - `TaskHandle.try_join(own self) -> Result[T, TaskFailed]` returns `Err(TaskFailed.Cancelled)` for a cancelled task; plain `join` on one panics, since it has no value to return.
+- **From the services track (M4a)** ([core-semantics.md §11.12](../core-semantics.md#11-concurrency-c9)): `TaskGroup.isolating(; limit: i64 = i64.MAX) -> IsolatingGroup` contains its tasks' panics: its `spawn` returns `TaskHandle[Result[T, TaskFailed]]`, and the other tasks run on. `TaskFailed` is `Panicked { message, location }` or `Cancelled`.
 
 An accept loop, one task per connection, at most 1000 at a time:
 

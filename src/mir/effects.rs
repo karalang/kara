@@ -1269,6 +1269,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // A `select` (core-semantics §11.11): the count of channel changes
         // touches nothing, and the wait with no arm ready blocks.
         ("__select_epoch", "") => vec![],
+        // A task's teardown (core-semantics §11.9): flags of the running
+        // task.
+        ("__cancelled" | "__unwinding" | "__unwind", "") => vec![],
         ("__select_park", "") => vec![(Blocks, "", None)],
         // The collections the MIR interpreter implements natively: they
         // allocate, and an out-of-range index or a missing key panics.

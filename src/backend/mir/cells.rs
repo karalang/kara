@@ -1162,7 +1162,20 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, g)?;
             }
             // `end` waits in its readiness loop; the drop frees the group.
-            ("TaskGroup", "cancel" | "drop" | "end", _) => {}
+            ("TaskGroup", "drop" | "end", _) => {}
+            // Core-semantics §11.9 and §11.10: the executor tears the
+            // group's tasks down, now or once the clock reads `at`.
+            ("TaskGroup", "cancel", [g]) => {
+                let g = self.group_handle(g)?;
+                self.rt("group_cancel", &[g.into()])?;
+            }
+            ("TaskGroup", "__deadline_at", [g, at]) => {
+                let at = self.int_arg(at)?;
+                let gp = self.group_handle(g)?;
+                self.rt("group_deadline", &[gp.into(), at.into()])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, gp.into())?;
+            }
             ("TaskGroup", "spawn", [_, f]) => {
                 let held = self
                     .tys
@@ -1199,12 +1212,74 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             // Under the executor, the coroutine transform's spawns.
             ("TaskGroup", "spawn_frame", _) => self.spawn_frame(args, dest)?,
+            // A cancelled task has no value to join (core-semantics §11.9).
             ("TaskHandle", "join", [h]) => {
                 let (cell, _) = self.cell_arg(h)?;
                 let block = self.load_ptr(cell)?;
+                let state = self.load_i64(block)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        state,
+                        self.i64(super::task::CANCELLED),
+                        "",
+                    )
+                    .map_err(e)?;
+                self.abort_unless(ok, "joined a cancelled task")?;
                 let d = self.place_ptr(dest)?;
                 let at = self.offset(block, self.task_result_offset(dty)?)?;
                 self.copy(d, at, dty)?;
+                self.free(block)?;
+                self.store(cell, self.ptr_ty().const_null().into())?;
+            }
+            // `Ok` of what `join` gives, or `Err(TaskFailed.Cancelled)`.
+            ("TaskHandle", "try_join", [h]) => {
+                let (cell, _) = self.cell_arg(h)?;
+                let block = self.load_ptr(cell)?;
+                let state = self.load_i64(block)?;
+                let cancelled = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        state,
+                        self.i64(super::task::CANCELLED),
+                        "",
+                    )
+                    .map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                let held = self
+                    .tys
+                    .field_ty(dty, Some(self.variant_of(dty, "Ok")?), 0)
+                    .ok_or("a try_join without its Ok type")?;
+                let failed = self
+                    .tys
+                    .field_ty(dty, Some(self.variant_of(dty, "Err")?), 0)
+                    .ok_or("a try_join without its Err type")?;
+                let f = self.cur_fn()?;
+                let (yes, no, end) = (
+                    self.llcx.append_basic_block(f, "joined.cancelled"),
+                    self.llcx.append_basic_block(f, "joined"),
+                    self.llcx.append_basic_block(f, "try_joined"),
+                );
+                self.builder
+                    .build_conditional_branch(cancelled, yes, no)
+                    .map_err(e)?;
+                self.builder.position_at_end(yes);
+                let errv = self.variant_of(dty, "Err")?;
+                self.store_tag(d, dty, errv)?;
+                let fp = self.offset(d, self.field_offset(dty, Some(errv), 0)?)?;
+                let cv = self.variant_of(failed, "Cancelled")?;
+                self.store_tag(fp, failed, cv)?;
+                self.builder.build_unconditional_branch(end).map_err(e)?;
+                self.builder.position_at_end(no);
+                let okv = self.variant_of(dty, "Ok")?;
+                self.store_tag(d, dty, okv)?;
+                let vp = self.offset(d, self.field_offset(dty, Some(okv), 0)?)?;
+                let at = self.offset(block, self.task_result_offset(held)?)?;
+                self.copy(vp, at, held)?;
+                self.builder.build_unconditional_branch(end).map_err(e)?;
+                self.builder.position_at_end(end);
                 self.free(block)?;
                 self.store(cell, self.ptr_ty().const_null().into())?;
             }

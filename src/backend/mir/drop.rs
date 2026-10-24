@@ -394,9 +394,21 @@ impl<'ctx> Cx<'ctx, '_> {
                         .build_unconditional_branch(end)
                         .map_err(|e| e.to_string())?;
                     cx.builder.position_at_end(done);
+                    // A cancelled task left no result.
                     if cx.tys.needs_drop(held) {
-                        let at = cx.offset(h, cx.task_result_offset(held)?)?;
-                        cx.call_glue(at, held)?;
+                        let returned = cx
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                state,
+                                cx.i64(super::task::CANCELLED),
+                                "",
+                            )
+                            .map_err(|e| e.to_string())?;
+                        cx.if_then(returned, |cx| {
+                            let at = cx.offset(h, cx.task_result_offset(held)?)?;
+                            cx.call_glue(at, held)
+                        })?;
                     }
                     cx.free(h)?;
                     cx.builder

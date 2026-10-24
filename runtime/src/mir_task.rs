@@ -101,12 +101,22 @@ enum Wait {
 /// and how many do. Its handle is a pointer to this, freed once the group
 /// has dropped and its last task has returned.
 struct Group {
+    /// Never reused, so a deadline that names a group already freed names
+    /// none.
+    id: u64,
     limit: i64,
     live: i64,
     dropped: bool,
+    /// The task that made it (0: none), whose teardown cancels it first
+    /// (core-semantics §11.9).
+    owner: u64,
+    /// When it is cancelled (`with_deadline`, §11.10).
+    deadline: Option<Instant>,
 }
 
 struct Task {
+    /// Never reused; `main` is 1.
+    id: u64,
     /// The group that spawned it, or null for `main`.
     group: *mut Group,
     poll: TaskPoll,
@@ -123,15 +133,56 @@ struct Task {
     /// Its active span stack, swapped into the thread's while it runs: span
     /// context is per task, inherited from the spawner.
     spans: Vec<i64>,
+    /// Cancelled (core-semantics §11.9): it is torn down at the wait it is
+    /// suspended in, or the next one it reaches.
+    cancel: bool,
+    /// Its teardown has begun ([`karac_mir_cancelled`]).
+    torn: bool,
+    /// A frame of its chain is leaving by its cancel exit
+    /// ([`karac_mir_unwind`]).
+    unwind: bool,
 }
 
 /// The running task's own state, while it runs.
 #[derive(Clone, Copy)]
 struct Cur {
+    id: u64,
+    group: *mut Group,
     deadline: Option<Instant>,
     slept: bool,
     wait: Wait,
     inflight: Option<i32>,
+    cancel: bool,
+    torn: bool,
+    unwind: bool,
+}
+
+impl Task {
+    /// Its state while it runs.
+    fn cur(&self) -> Cur {
+        Cur {
+            id: self.id,
+            group: self.group,
+            deadline: self.deadline,
+            slept: self.slept,
+            wait: Wait::None,
+            inflight: self.inflight,
+            cancel: self.cancel,
+            torn: self.torn,
+            unwind: self.unwind,
+        }
+    }
+
+    /// Keeps what running it left.
+    fn keep(&mut self, c: Cur) {
+        self.deadline = c.deadline;
+        self.slept = c.slept;
+        self.wait = c.wait;
+        self.inflight = c.inflight;
+        self.cancel = c.cancel;
+        self.torn = c.torn;
+        self.unwind = c.unwind;
+    }
 }
 
 #[derive(Default)]
@@ -151,9 +202,22 @@ struct Exec {
     parked: HashMap<i32, Vec<u64>>,
     reactor: Reactor,
     cur: Option<Cur>,
+    /// The tasks a teardown interrupted ([`poll_nested`]), outermost first.
+    outer: Vec<Cur>,
     /// Bumped whenever something may have made a waiting task ready: a
     /// readiness check that passed, a spawn, or a task that returned.
     progress: u64,
+    /// The last task id given out.
+    ids: u64,
+    /// The live groups, by id.
+    groups: HashMap<u64, *mut Group>,
+    group_ids: u64,
+    /// The deadlines set on groups, with the group's id: one that is not
+    /// the group's own any more (it fired, or the group is gone) is stale.
+    deadlines: Vec<(Instant, u64)>,
+    /// Called with a task's id when it ends, returned or torn down
+    /// ([`on_task_end`]).
+    hooks: Vec<fn(u64)>,
 }
 
 impl Exec {
@@ -171,12 +235,10 @@ impl Exec {
         self.keys
     }
 
-    /// Queues the task put off with `key`, if it is still off, and takes
-    /// it off its descriptor's list; answers whether it was.
-    fn wake_key(&mut self, key: u64) -> bool {
-        let Some(t) = self.off.remove(&key) else {
-            return false;
-        };
+    /// The task put off with `key`, if it is still off, taken off its
+    /// descriptor's list.
+    fn take_key(&mut self, key: u64) -> Option<Task> {
+        let t = self.off.remove(&key)?;
         if let Wait::Fd(fd, _) | Wait::FdBy(fd, _, _) = t.wait {
             if let Some(keys) = self.parked.get_mut(&fd) {
                 keys.retain(|&k| k != key);
@@ -185,8 +247,32 @@ impl Exec {
                 }
             }
         }
+        Some(t)
+    }
+
+    /// Queues the task put off with `key`, if it is still off; answers
+    /// whether it was.
+    fn wake_key(&mut self, key: u64) -> bool {
+        let Some(t) = self.take_key(key) else {
+            return false;
+        };
         self.wake(t);
         true
+    }
+
+    /// The nearest deadline of a group that still runs tasks.
+    fn next_group_deadline(&self) -> Option<Instant> {
+        self.deadlines
+            .iter()
+            .filter(|&&(at, id)| {
+                self.groups.get(&id).is_some_and(|&g| {
+                    // SAFETY: a registered group is live.
+                    let g = unsafe { &*g };
+                    g.deadline == Some(at) && g.live > 0
+                })
+            })
+            .map(|&(at, _)| at)
+            .min()
     }
 
     /// The nearest deadline of a task still off, dropping the timers of
@@ -239,11 +325,62 @@ fn bump() {
 /// tasks run at once.
 #[no_mangle]
 pub extern "C" fn karac_mir_group_new(limit: i64) -> *mut u8 {
-    Box::into_raw(Box::new(Group {
-        limit,
-        live: 0,
-        dropped: false,
-    })) as *mut u8
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        e.group_ids += 1;
+        let g = Box::into_raw(Box::new(Group {
+            id: e.group_ids,
+            limit,
+            live: 0,
+            dropped: false,
+            owner: e.cur.map_or(0, |c| c.id),
+            deadline: None,
+        }));
+        let id = e.group_ids;
+        e.groups.insert(id, g);
+        g as *mut u8
+    })
+}
+
+/// Frees group `g`, dropped with no task left.
+fn free_group(g: *mut Group) {
+    // SAFETY: `g` is live, and freed once.
+    let g = unsafe { Box::from_raw(g) };
+    let _ = EXEC.try_with(|e| {
+        if let Ok(mut e) = e.try_borrow_mut() {
+            e.groups.remove(&g.id);
+            e.deadlines.retain(|&(_, id)| id != g.id);
+        }
+    });
+}
+
+/// `TaskGroup.cancel(g)` (core-semantics §11.9): every task of `g` that
+/// has not finished is torn down at the wait it is suspended in, now, or,
+/// when it is the running task, at the next wait it reaches.
+///
+/// # Safety
+/// `g` is a live group handle.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_group_cancel(g: *mut u8) {
+    let g = g as *mut Group;
+    cancel_where(|t| t.group == g);
+}
+
+/// `TaskGroup.__deadline_at(g, at)` (§11.10): `g` is cancelled once the
+/// monotonic clock reads `at` nanoseconds, or at an earlier deadline it
+/// has.
+///
+/// # Safety
+/// `g` is a live group handle.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_group_deadline(g: *mut u8, at_ns: i64) {
+    let left = at_ns - crate::karac_runtime_clock_monotonic_ns();
+    let at = Instant::now() + Duration::from_nanos(left.max(0) as u64);
+    // SAFETY: the caller's contract.
+    let g = unsafe { &mut *(g as *mut Group) };
+    let at = g.deadline.map_or(at, |d| d.min(at));
+    g.deadline = Some(at);
+    EXEC.with(|e| e.borrow_mut().deadlines.push((at, g.id)));
 }
 
 /// A group's drop. Under the executor its tasks have all returned (the
@@ -258,7 +395,7 @@ pub unsafe extern "C" fn karac_mir_group_drop(g: *mut u8) {
     // SAFETY: the caller's contract.
     unsafe {
         if (*g).live == 0 {
-            drop(Box::from_raw(g));
+            free_group(g);
         } else {
             (*g).dropped = true;
         }
@@ -283,18 +420,236 @@ pub unsafe extern "C" fn karac_mir_ready_group(g: *mut u8, end: u8) -> u8 {
     note(ready, Wait::Task)
 }
 
-/// A task of `group` returned.
-fn task_done(group: *mut Group) {
-    if group.is_null() {
-        return;
-    }
-    // SAFETY: a group outlives its tasks (`karac_mir_group_drop`).
-    unsafe {
-        (*group).live -= 1;
-        if (*group).dropped && (*group).live == 0 {
-            drop(Box::from_raw(group));
+/// Task `t` ended, returned or torn down: its group runs one task fewer,
+/// and the end hooks hear of it.
+fn task_done(t: &Task) {
+    let group = t.group;
+    if !group.is_null() {
+        // SAFETY: a group outlives its tasks (`karac_mir_group_drop`).
+        unsafe {
+            (*group).live -= 1;
+            if (*group).dropped && (*group).live == 0 {
+                free_group(group);
+            }
         }
     }
+    bump();
+    let hooks = EXEC.with(|e| e.borrow().hooks.clone());
+    for h in hooks {
+        h(t.id);
+    }
+}
+
+/// The running task's id, inside the executor.
+#[allow(dead_code)] // for the natives that keep per-task state (M4 item 5)
+pub(crate) fn current_task() -> Option<u64> {
+    EXEC.with(|e| e.borrow().cur.map(|c| c.id))
+}
+
+/// Calls `f` with a task's id whenever a task ends, returned or torn down.
+#[allow(dead_code)] // for the natives that keep per-task state (M4 item 5)
+pub(crate) fn on_task_end(f: fn(u64)) {
+    EXEC.with(|e| e.borrow_mut().hooks.push(f));
+}
+
+/// Cancels task `id` (core-semantics §11.9), as `TaskGroup.cancel` cancels
+/// each task of its group.
+#[allow(dead_code)] // for the natives that keep per-task state (M4 item 5)
+pub(crate) fn cancel(id: u64) {
+    cancel_where(|t| t.id == id);
+}
+
+/// Cancels each unfinished task `doomed` picks: a suspended one is torn
+/// down now, in the order they were spawned, and a running one (or one a
+/// teardown interrupted) at the next wait it reaches.
+fn cancel_where(doomed: impl Fn(&Cur) -> bool) {
+    let mut tasks: Vec<Task> = EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let e = &mut *e;
+        for c in e.cur.iter_mut().chain(e.outer.iter_mut()) {
+            if doomed(c) && !c.torn {
+                c.cancel = true;
+            }
+        }
+        let pick = |t: &Task| !t.cancel && doomed(&t.cur());
+        let mut out = Vec::new();
+        let queue = std::mem::take(&mut e.queue);
+        for t in queue {
+            if pick(&t) {
+                out.push(t);
+            } else {
+                e.queue.push_back(t);
+            }
+        }
+        let keys: Vec<u64> = e
+            .off
+            .iter()
+            .filter(|(_, t)| pick(t))
+            .map(|(&k, _)| k)
+            .collect();
+        out.extend(keys.into_iter().filter_map(|k| e.take_key(k)));
+        out
+    });
+    tasks.sort_by_key(|t| t.id);
+    for t in tasks {
+        tear_down(t);
+    }
+}
+
+/// Tears task `t` down (core-semantics §11.9): the groups it made first,
+/// since their tasks may borrow from its frame, then the task itself,
+/// resumed cancelled, which leaves its wait by the cancel exits of its
+/// frames. A task that has not reached a wait yet runs to its first one.
+/// One whose exit suspends, or that waits where no cancel exit is, goes
+/// back to wait as before, still cancelled.
+fn tear_down(mut t: Task) {
+    let mut owned: Vec<(u64, *mut Group)> = EXEC.with(|e| {
+        e.borrow()
+            .groups
+            .iter()
+            // SAFETY: a registered group is live.
+            .filter(|(_, &g)| unsafe { (*g).owner } == t.id)
+            .map(|(&id, &g)| (id, g))
+            .collect()
+    });
+    owned.sort_by_key(|&(id, _)| id);
+    for (_, g) in owned {
+        cancel_where(|c| c.group == g);
+    }
+    t.cancel = true;
+    for _ in 0..2 {
+        if poll_nested(&mut t) {
+            task_done(&t);
+            return;
+        }
+        if t.torn {
+            break;
+        }
+    }
+    settle(t);
+}
+
+/// Resumes `t` once, from inside whatever runs now; answers whether it
+/// returned.
+fn poll_nested(t: &mut Task) -> bool {
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        if let Some(c) = e.cur.take() {
+            e.outer.push(c);
+        }
+        e.cur = Some(t.cur());
+    });
+    let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
+    // SAFETY: the task has not answered 1 yet.
+    let done = unsafe { (t.poll)(t.a, t.b) } != 0;
+    t.spans = crate::mir::swap_spans(outer);
+    let cur = EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let cur = e.cur.take();
+        e.cur = e.outer.pop();
+        cur
+    });
+    if let Some(cur) = cur {
+        t.keep(cur);
+    }
+    done
+}
+
+/// Puts `t`, which did not return, where its wait says: asleep, parked on
+/// its descriptor, or on the queue. Answers whether it went on the queue.
+fn settle(t: Task) -> bool {
+    match t.wait {
+        Wait::Until(at) => {
+            EXEC.with(|e| {
+                let mut e = e.borrow_mut();
+                let key = e.put_off(t);
+                e.timers.push(Reverse((at, key)));
+            });
+            false
+        }
+        Wait::Fd(fd, events) => {
+            park(t, fd, events);
+            false
+        }
+        // Whichever comes first, the descriptor or the deadline, wakes
+        // the task.
+        Wait::FdBy(fd, events, at) => {
+            if let Some(key) = park(t, fd, events) {
+                EXEC.with(|e| e.borrow_mut().timers.push(Reverse((at, key))));
+            }
+            false
+        }
+        _ => {
+            EXEC.with(|e| e.borrow_mut().queue.push_back(t));
+            true
+        }
+    }
+}
+
+/// Cancels each group whose deadline has passed (§11.10).
+fn fire_deadlines() {
+    loop {
+        let due = EXEC.with(|e| {
+            let mut e = e.borrow_mut();
+            let e = &mut *e;
+            let now = Instant::now();
+            let i = e.deadlines.iter().position(|&(at, _)| at <= now)?;
+            let (at, id) = e.deadlines.swap_remove(i);
+            let g = *e.groups.get(&id)?;
+            // SAFETY: a registered group is live.
+            let gr = unsafe { &mut *g };
+            (gr.deadline == Some(at)).then(|| {
+                gr.deadline = None;
+                g
+            })
+        });
+        match due {
+            Some(g) => cancel_where(|c| c.group == g),
+            None => {
+                let more = EXEC.with(|e| {
+                    let e = e.borrow();
+                    let now = Instant::now();
+                    e.deadlines.iter().any(|&(at, _)| at <= now)
+                });
+                if !more {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// `__cancelled()`, in a readiness loop resumed from its wait: whether the
+/// running task was cancelled, once, when its teardown begins.
+#[no_mangle]
+pub extern "C" fn karac_mir_cancelled() -> u8 {
+    EXEC.with(|e| match e.borrow_mut().cur.as_mut() {
+        Some(c) if c.cancel && !c.torn => {
+            c.torn = true;
+            c.deadline = None;
+            c.slept = false;
+            c.inflight = None;
+            1
+        }
+        _ => 0,
+    })
+}
+
+/// `__unwinding()`, after a suspending call: whether it returned by its
+/// cancel exit.
+#[no_mangle]
+pub extern "C" fn karac_mir_unwinding() -> u8 {
+    EXEC.with(|e| u8::from(e.borrow().cur.is_some_and(|c| c.unwind)))
+}
+
+/// `__unwind(on)`: a cancel exit begins (`on` 0) or ends (`on` 1).
+#[no_mangle]
+pub extern "C" fn karac_mir_unwind(on: u8) {
+    EXEC.with(|e| {
+        if let Some(c) = e.borrow_mut().cur.as_mut() {
+            c.unwind = on != 0;
+        }
+    });
 }
 
 /// Queues a task of the group `group` (null for `main`).
@@ -316,7 +671,10 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
     }
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
+        e.ids += 1;
+        let id = e.ids;
         e.queue.push_back(Task {
+            id,
             group,
             poll,
             a,
@@ -326,6 +684,9 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             wait: Wait::None,
             inflight: None,
             spans: crate::mir::current_spans(),
+            cancel: false,
+            torn: false,
+            unwind: false,
         });
         e.progress += 1;
     });
@@ -352,6 +713,7 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             let e = e.borrow();
             !e.parked.is_empty() && since >= e.queue.len()
         });
+        fire_deadlines();
         let mut woken = 0;
         if ask {
             woken += wait_reactor(Some(Duration::ZERO));
@@ -365,12 +727,7 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             let mut e = e.borrow_mut();
             let t = e.queue.pop_front();
             if let Some(t) = &t {
-                e.cur = Some(Cur {
-                    deadline: t.deadline,
-                    slept: t.slept,
-                    wait: Wait::None,
-                    inflight: t.inflight,
-                });
+                e.cur = Some(t.cur());
             }
             t
         }) else {
@@ -392,50 +749,30 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             let mut e = e.borrow_mut();
             (e.progress, e.cur.take())
         });
+        if let Some(cur) = cur {
+            t.keep(cur);
+        }
         if done {
-            task_done(t.group);
-            bump();
+            task_done(&t);
             idle = 0;
             continue;
         }
-        if let Some(cur) = cur {
-            t.deadline = cur.deadline;
-            t.slept = cur.slept;
-            t.wait = cur.wait;
-            t.inflight = cur.inflight;
+        // Cancelled while it ran, it is torn down at the wait it reached.
+        if t.cancel && !t.torn {
+            tear_down(t);
+            idle = 0;
+            continue;
         }
         if after != before || t.wait == Wait::None {
             idle = 0;
         }
-        match t.wait {
-            Wait::Until(at) => {
-                EXEC.with(|e| {
-                    let mut e = e.borrow_mut();
-                    let key = e.put_off(t);
-                    e.timers.push(Reverse((at, key)));
-                });
-                continue;
-            }
-            Wait::Fd(fd, events) => {
-                park(t, fd, events);
-                continue;
-            }
-            // Whichever comes first, the descriptor or the deadline, wakes
-            // the task.
-            Wait::FdBy(fd, events, at) => {
-                if let Some(key) = park(t, fd, events) {
-                    EXEC.with(|e| e.borrow_mut().timers.push(Reverse((at, key))));
-                }
-                continue;
-            }
-            Wait::Task | Wait::TaskBy(_) if after == before => idle += 1,
-            _ => {}
+        if matches!(t.wait, Wait::Task | Wait::TaskBy(_)) && after == before {
+            idle += 1;
         }
-        let stuck = EXEC.with(|e| {
-            let mut e = e.borrow_mut();
-            e.queue.push_back(t);
-            idle >= e.queue.len()
-        });
+        if !settle(t) {
+            continue;
+        }
+        let stuck = EXEC.with(|e| idle >= e.borrow().queue.len());
         if stuck {
             block();
             idle = 0;
@@ -473,14 +810,16 @@ fn block() {
 /// descriptor, whichever comes first, and queues what woke; false when
 /// there is none of them to wait for.
 fn idle_wait(by: Option<Instant>) -> bool {
-    let (next, parked) = EXEC.with(|e| {
+    let (next, group, parked) = EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        (e.next_deadline(), !e.parked.is_empty())
+        (
+            e.next_deadline(),
+            e.next_group_deadline(),
+            !e.parked.is_empty(),
+        )
     });
-    let until = match (next, by) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
+    // A group's deadline cancels its tasks (§11.10).
+    let until = [next, by, group].into_iter().flatten().min();
     if until.is_none() && !parked {
         return false;
     }
@@ -491,6 +830,7 @@ fn idle_wait(by: Option<Instant>) -> bool {
         std::thread::sleep(d);
     }
     EXEC.with(|e| e.borrow_mut().wake_timers());
+    fire_deadlines();
     true
 }
 

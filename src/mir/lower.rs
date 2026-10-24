@@ -255,6 +255,7 @@ pub fn lower_program_with_library<'a>(
         None,
         None,
         AutoPar::Off,
+        None,
     )
 }
 
@@ -277,6 +278,7 @@ fn lower_program_inner<'a>(
     signatures_only_from: Option<usize>,
     roots: Option<&[String]>,
     auto_par: AutoPar,
+    cancel_at: Option<FxHashSet<String>>,
 ) -> Lowered {
     let user_types: FxHashSet<String> = match user_len {
         Some(n) => program
@@ -394,6 +396,7 @@ fn lower_program_inner<'a>(
         fn_param_tys: FxHashMap::default(),
         own_self_trait_methods: FxHashSet::default(),
         extern_fns: FxHashMap::default(),
+        cancel_at,
     };
     lcx.index_functions(program);
     // Statics are initialized in declaration order, so they are numbered
@@ -935,6 +938,10 @@ struct Lcx<'a> {
     /// The functions declared in an `extern "C"` block (or as a lone
     /// `extern "C" fn`): their calls go to the native library.
     extern_fns: FxHashMap<DefId, &'a ast::ExternFunction>,
+    /// In a program that cancels tasks (core-semantics §11.9), the
+    /// functions that suspend: a call to one, or to a suspending native,
+    /// gets a cancel exit ([`Bx::cancel_exit`]).
+    cancel_at: Option<FxHashSet<String>>,
 }
 
 /// An element position in a sequence a slice pattern matches.
@@ -2673,6 +2680,8 @@ struct Bx<'l, 'a> {
     pre_indices: FxHashMap<NodeId, Operand>,
     /// The types whose derived `==` is being inlined, outermost first.
     eq_stack: Vec<Ty>,
+    /// Building a cancel exit, whose calls get none of their own.
+    in_cancel_exit: bool,
 }
 
 type R<T> = Result<T, ()>;
@@ -2731,6 +2740,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             impl_target: None,
             pre_indices: FxHashMap::default(),
             eq_stack: Vec::new(),
+            in_cancel_exit: false,
         }
     }
 
@@ -3352,10 +3362,119 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// End the current block with `kind`; continue in `next`.
-    fn goto_with(&mut self, kind: TerminatorKind, next: BasicBlock) {
+    fn goto_with(&mut self, mut kind: TerminatorKind, next: BasicBlock) {
+        let cancel = self.cancel_point(&mut kind);
         let bb = self.cur;
         self.b.terminate(bb, kind);
         self.cur = next;
+        if let Some((check, cont, back)) = cancel {
+            self.cancel_exit(check, cont, back);
+        }
+    }
+
+    /// When `kind` is a call that suspends in a program that cancels tasks
+    /// (`Lcx::cancel_at`): points it at a fresh block, where the check for
+    /// a cancelled callee goes, and answers that block, the call's own
+    /// target and, for a result that needs dropping, the place it belongs
+    /// in and the temporary the call now returns into.
+    #[allow(clippy::type_complexity)]
+    fn cancel_point(
+        &mut self,
+        kind: &mut TerminatorKind,
+    ) -> Option<(BasicBlock, BasicBlock, Option<(Place, Local)>)> {
+        if self.in_cancel_exit || self.lcx.cancel_at.is_none() {
+            return None;
+        }
+        let TerminatorKind::Call {
+            func:
+                Operand::Const(Const {
+                    kind: ConstKind::FnDef(callee),
+                    ..
+                }),
+            destination,
+            target: Some(target),
+            ..
+        } = kind
+        else {
+            return None;
+        };
+        let n = callee.name.as_str();
+        let suspends = n == "TaskGroup.spawn"
+            || crate::mir::coroutine::suspends_native(n)
+            || self.lcx.cancel_at.as_ref().is_some_and(|a| a.contains(n));
+        if !suspends {
+            return None;
+        }
+        let cont = *target;
+        let check = self.b.new_block();
+        *target = check;
+        let dt = self.place_type(destination);
+        let back = self.needs_drop(dt).then(|| {
+            let t = self.temp(dt);
+            (std::mem::replace(destination, Place::local(t)), t)
+        });
+        Some((check, cont, back))
+    }
+
+    /// A call's cancel exit (core-semantics §11.9): in `check`, the call
+    /// returned, and `__unwinding` says whether that is because its task is
+    /// being torn down at a wait the callee suspended in. If not, the
+    /// result moves to where it belongs (`back`) and the body goes on to
+    /// `cont`. If so, the result is no value and is left alone, and the
+    /// function leaves as by an error exit from here: every scope's drops,
+    /// `defer`s and `errdefer`s, innermost first. The exit's own calls are
+    /// not cancelled, so `__unwind(false)` stops its callees from reading
+    /// the callee's teardown as theirs, and `__unwind(true)` passes the
+    /// teardown on to the caller.
+    ///
+    /// The coroutine transform makes the waits themselves cancellable: a
+    /// suspending native whose call continues to a check like this one
+    /// leaves its readiness loop for the cancel exit when its task is
+    /// cancelled.
+    fn cancel_exit(&mut self, check: BasicBlock, cont: BasicBlock, back: Option<(Place, Local)>) {
+        let resume = self.cur;
+        let bool_t = self.tys().bool();
+        let unwinding = self.temp(bool_t);
+        let (sw, go, exit) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        let func = self.fn_operand(
+            crate::mir::coroutine::UNWINDING,
+            DefId(u32::MAX),
+            Vec::new(),
+        );
+        self.b.terminate(
+            check,
+            TerminatorKind::Call {
+                func,
+                args: Vec::new(),
+                destination: Place::local(unwinding),
+                target: Some(sw),
+                unwind: UnwindAction::Abort,
+            },
+        );
+        self.b.terminate(
+            sw,
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(unwinding)),
+                targets: SwitchTargets::if_else(exit, go),
+            },
+        );
+        self.cur = go;
+        if let Some((place, t)) = back {
+            self.assign(place, Rvalue::Use(Operand::Move(Place::local(t))));
+        }
+        self.goto(cont);
+        self.cur = exit;
+        self.in_cancel_exit = true;
+        let unit = self.unit();
+        let u = self.temp(unit);
+        let unwind = crate::mir::coroutine::UNWIND;
+        self.call_native(unwind, vec![bool_const(bool_t, false)], Place::local(u));
+        // An error is recorded where it happens.
+        let _ = self.exit_to(0, true);
+        self.call_native(unwind, vec![bool_const(bool_t, true)], Place::local(u));
+        self.diverge(TerminatorKind::Return);
+        self.in_cancel_exit = false;
+        self.cur = resume;
     }
 
     fn goto(&mut self, target: BasicBlock) {
@@ -3768,7 +3887,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 ScopeEntry::Defer(body) => self.defer_body(body)?,
                 ScopeEntry::ErrDefer(body, None) if error => self.defer_body(body)?,
-                ScopeEntry::ErrDefer(body, Some((name, node))) if error => {
+                // A cancelled task returns no error for the binding to name.
+                ScopeEntry::ErrDefer(body, Some((name, node))) if error && !self.in_cancel_exit => {
                     self.errdefer_bound(body, name, *node)?
                 }
                 ScopeEntry::ErrDefer(..) => {}
@@ -21253,6 +21373,7 @@ pub fn build_source_recording(src: &str) -> Result<Lowered, String> {
 }
 
 /// What a build does about automatic parallelism (M4 item 14).
+#[derive(Clone)]
 pub(crate) enum AutoPar {
     Off,
     /// Record each body's candidates ([`Body::auto_par_candidates`]).
@@ -21627,9 +21748,34 @@ pub fn lower_program_with_roots(
         None,
         Some(roots),
         AutoPar::Off,
+        None,
     );
     lowered.program.user_source_len = user_len;
     lowered
+}
+
+/// When `lowered` cancels tasks (a `TaskGroup.cancel`, or a group's
+/// deadline) and has tasks that suspend: the functions that suspend, whose
+/// calls get a cancel exit when the program is built again.
+fn cancel_points(lowered: &Lowered) -> Option<FxHashSet<String>> {
+    let cancels = lowered.program.bodies.values().any(|b| {
+        b.blocks.iter().any(|bb| match &bb.terminator.kind {
+            TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(i),
+                        ..
+                    }),
+                ..
+            } => i.name == "TaskGroup.cancel" || i.name == "TaskGroup.__deadline_at",
+            _ => false,
+        })
+    });
+    if !cancels || !crate::mir::coroutine::may_suspend(lowered.program.bodies.values()) {
+        return None;
+    }
+    let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+    Some(report.suspending().into_iter().collect())
 }
 
 /// The back half of [`lower_source_for_checks`]: a program with the library,
@@ -21655,20 +21801,33 @@ fn lower_typed(
     phase_time("defs+node_res", &mut t);
     let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
     phase_time("typed_hir", &mut t);
-    let mut lowered = lower_program_inner(
-        program,
-        src,
-        Some(user_len),
-        tc,
-        &defs,
-        &res,
-        r,
-        hir,
-        captures,
-        check_only.then_some(user_len),
-        None,
-        auto_par,
-    );
+    let lower = |hir, cancel_at| {
+        lower_program_inner(
+            program,
+            src,
+            Some(user_len),
+            tc,
+            &defs,
+            &res,
+            r,
+            hir,
+            captures,
+            check_only.then_some(user_len),
+            None,
+            auto_par.clone(),
+            cancel_at,
+        )
+    };
+    let mut lowered = lower(hir, None);
+    // A program that cancels tasks is built again, now knowing which calls
+    // suspend, so that each gets its cancel exit (core-semantics §11.9).
+    if !check_only && lowered.errors.is_empty() {
+        if let Some(at) = cancel_points(&lowered) {
+            let hir =
+                crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
+            lowered = lower(hir, Some(at));
+        }
+    }
     lowered.program.user_source_len = Some(user_len);
     phase_time("mir_builder", &mut t);
     if !lowered.errors.is_empty() {

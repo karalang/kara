@@ -182,10 +182,6 @@ fn main() {
     );
 }
 
-// The cancellation pins run on the interpreter until the compiled
-// executor cancels too (the drop schedule's half of M4 item 5), when they
-// move to `stdout_on_both`.
-
 /// `TaskGroup.cancel` tears each unfinished task down at the wait it is
 /// suspended in (core-semantics §11.9): its drops run then, a task that
 /// returned keeps its value, and `try_join` tells a cancelled task by
@@ -251,11 +247,14 @@ fn main() {
     println("done");
 }
 "#;
-    assert_eq!(stdout_on_interp("cancel", src), "cancelling\ndrop waiter\ndrop sleeper\nafter\nquick 7\nwaiter cancelled\nsleeper cancelled\ndone\n");
+    assert_eq!(
+        stdout_on_both("cancel", src),
+        "cancelling\ndrop waiter\ndrop sleeper\nafter\nquick 7\nwaiter cancelled\nsleeper cancelled\ndone\n"
+    );
 }
 
 /// Cancelling a task cancels the groups it made, innermost first: the
-/// inner task's drops run before its owner's.
+/// inner task's drops and `defer`s run before its owner's.
 #[test]
 fn mir_deadline_cancel_reaches_nested_groups() {
     let src = r#"
@@ -293,8 +292,8 @@ fn main() {
 }
 "#;
     assert_eq!(
-        stdout_on_interp("nested", src),
-        "drop inner\ndrop inner\ndrop outer\ncancelled\n"
+        stdout_on_both("nested", src),
+        "drop inner\ndeferred\ndrop inner\ndeferred\ndrop outer\ncancelled\n"
     );
 }
 
@@ -339,7 +338,7 @@ fn main() {
 }
 "#;
     assert_eq!(
-        stdout_on_interp("with_deadline", src),
+        stdout_on_both("with_deadline", src),
         "drop slow 5\nb 5\na cancelled\n"
     );
 }

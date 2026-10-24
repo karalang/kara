@@ -704,6 +704,8 @@ fn run_with(
         groups: Vec::new(),
         spawned: Vec::new(),
         torn: Vec::new(),
+        requeue: Vec::new(),
+        outer_tasks: Vec::new(),
         cur_task: 0,
         wait: None,
     };
@@ -1108,6 +1110,11 @@ struct Interp<'a> {
     /// Tasks torn down by a cancel while another task ran, which the
     /// executor takes off its queue.
     torn: Vec<usize>,
+    /// Torn-down tasks whose teardown did not finish, back to the queue
+    /// with what each waits for.
+    requeue: Vec<(usize, Option<Wait>)>,
+    /// The tasks a teardown interrupted, outermost first.
+    outer_tasks: Vec<usize>,
     /// The task the executor is running.
     cur_task: usize,
     /// What the running task's last `__ready` reported it waits for.
@@ -1726,6 +1733,27 @@ impl<'a> Interp<'a> {
             ("__ready", "") => self.ready(&args),
             // The interpreter's descriptor calls complete when made.
             ("__io_again", "") => Ok(Value::Bool(false)),
+            // A task's teardown (core-semantics §11.9, `coroutine::CANCELLED`).
+            ("__cancelled", "") => Ok(Value::Bool(match self.tasks.get_mut(self.cur_task) {
+                Some(t) if t.cancelled && !t.torn => {
+                    t.torn = true;
+                    t.deadline = None;
+                    t.slept = false;
+                    true
+                }
+                _ => false,
+            })),
+            ("__unwinding", "") => Ok(Value::Bool(
+                self.tasks.get(self.cur_task).is_some_and(|t| t.unwind),
+            )),
+            ("__unwind", "") => {
+                if let (Some(t), [Value::Bool(on)]) =
+                    (self.tasks.get_mut(self.cur_task), args.as_slice())
+                {
+                    t.unwind = *on;
+                }
+                Ok(Value::Unit)
+            }
             ("fence" | "compiler_fence", "") => {
                 // One thread runs the program; a fence orders nothing. A
                 // `Relaxed` one is refused, as legacy refuses it.
@@ -6192,6 +6220,8 @@ impl<'a> Interp<'a> {
             http: None,
             spans: self.active_spans.clone(),
             cancelled: false,
+            torn: false,
+            unwind: false,
         });
         self.spawned.push(self.tasks.len() - 1);
         Ok(Value::Agg(vec![Value::Int(handle as i128), Value::Unit]))
@@ -6204,10 +6234,10 @@ impl<'a> Interp<'a> {
     /// tasks may borrow from its frame.
     fn cancel_group(&mut self, g: usize) -> R<()> {
         let doomed: Vec<usize> = (1..self.tasks.len())
-            .filter(|&t| self.tasks[t].group == g && !self.task_done(t))
+            .filter(|&t| self.tasks[t].group == g && !self.tasks[t].cancelled && !self.task_done(t))
             .collect();
         for t in doomed {
-            if t == self.cur_task {
+            if t == self.cur_task || self.outer_tasks.contains(&t) {
                 self.tasks[t].cancelled = true;
                 continue;
             }
@@ -6237,9 +6267,12 @@ impl<'a> Interp<'a> {
             .is_none_or(|h| h.done)
     }
 
-    /// Spawned task `t`, suspended, is cancelled: the groups it made are
-    /// cancelled, its frame is dropped through its `drop_frame`, and its
-    /// group runs one task fewer. The executor drops it from its queue
+    /// Spawned task `t`, suspended, is cancelled (§11.9): the groups it
+    /// made are cancelled first, then the task is resumed cancelled, and
+    /// leaves its wait by the cancel exits of its frames. A task that has
+    /// not reached a wait yet runs to its first one. One whose exit
+    /// suspends, or that waits where no cancel exit is, goes back to the
+    /// queue, still cancelled. The executor drops it from its queue
     /// (`torn`).
     fn tear_down(&mut self, t: usize) -> R<()> {
         let made: Vec<usize> = (1..=self.groups.len())
@@ -6248,43 +6281,94 @@ impl<'a> Interp<'a> {
         for g in made {
             self.cancel_group(g)?;
         }
+        self.tasks[t].cancelled = true;
         self.torn.push(t);
-        let slot = self.tasks[t].frame;
+        let (cur, wait) = (self.cur_task, self.wait.take());
+        self.outer_tasks.push(cur);
+        self.cur_task = t;
+        let mut returned = Ok(false);
+        for _ in 0..2 {
+            returned = self.resume_task(t);
+            if !matches!(returned, Ok(false)) || self.tasks[t].torn {
+                break;
+            }
+        }
+        let left = self.wait.take();
+        self.outer_tasks.pop();
+        self.cur_task = cur;
+        self.wait = wait;
+        if !returned? {
+            self.requeue.push((t, left));
+        }
+        Ok(())
+    }
+
+    /// Resumes task `t`, the running one, once; answers whether it
+    /// returned, and, when it did, records how it ended.
+    fn resume_task(&mut self, t: usize) -> R<bool> {
+        let (slot, frame_ty) = (self.tasks[t].frame, self.tasks[t].frame_ty);
         let resume = self.tasks[t].resume.clone();
-        let Some(entry) = resume.strip_suffix("#resume") else {
-            return err(format!("task {t} resumes through {resume}"));
-        };
-        let drop = coroutine::drop_frame_name(entry);
         let at = Addr {
             root: Root::Heap(slot),
             path: Path::new(),
         };
-        let (cur, wait) = (self.cur_task, self.wait.take());
-        self.cur_task = t;
-        let dropped = self.call(&drop, vec![Value::Ref(at)]);
-        self.cur_task = cur;
-        self.wait = wait;
-        dropped?;
-        self.free_slot(slot);
-        let task = &mut self.tasks[t];
-        task.deadline = None;
-        // A request already on its helper runs to its end; its result is
-        // dropped there.
-        task.http = None;
-        if let Some(p) = task.pool_wait.take() {
-            if let Some(p) = self.pool(p) {
-                p.waiting -= 1;
+        let outer = std::mem::replace(
+            &mut self.active_spans,
+            std::mem::take(&mut self.tasks[t].spans),
+        );
+        self.wait = None;
+        let polled = self.call(&resume, vec![Value::Ref(at)]);
+        self.tasks[t].spans = std::mem::replace(&mut self.active_spans, outer);
+        match polled? {
+            Value::Variant(0, mut fs) if fs.len() == 1 => {
+                self.task_ended(t, slot, frame_ty, &resume, fs.remove(0))?;
+                Ok(true)
             }
+            Value::Variant(1, _) => Ok(false),
+            other => err(format!("{resume} returned {other:?}, not a Poll")),
         }
-        let (group, handle) = (self.tasks[t].group, self.tasks[t].handle);
-        if let Some(g) = group.checked_sub(1).and_then(|g| self.groups.get_mut(g)) {
-            g.live -= 1;
+    }
+
+    /// Task `t` returned `v` from its frame, in `slot`: by its cancel exits,
+    /// with no value, or with its result.
+    fn task_ended(
+        &mut self,
+        t: usize,
+        slot: AllocId,
+        frame_ty: Ty,
+        resume: &str,
+        v: Value,
+    ) -> R<()> {
+        if self.tasks[t].unwind {
+            self.free_slot(slot);
+            let task = &mut self.tasks[t];
+            task.deadline = None;
+            // A request already on its helper runs to its end; its result
+            // is dropped there.
+            task.http = None;
+            if let Some(p) = task.pool_wait.take() {
+                if let Some(p) = self.pool(p) {
+                    p.waiting -= 1;
+                }
+            }
+            let (group, handle) = (self.tasks[t].group, self.tasks[t].handle);
+            if let Some(g) = group.checked_sub(1).and_then(|g| self.groups.get_mut(g)) {
+                g.live -= 1;
+            }
+            if let Some(h) = handle.checked_sub(1).and_then(|h| self.handles.get_mut(h)) {
+                h.done = true;
+                h.cancelled = true;
+            }
+            return Ok(());
         }
-        if let Some(h) = handle.checked_sub(1).and_then(|h| self.handles.get_mut(h)) {
-            h.done = true;
-            h.cancelled = true;
+        let frame = self.live(slot)?.value.clone();
+        if let Some(field) = self.frame_holds(&frame, frame_ty) {
+            return err(format!(
+                "{resume} returned with its frame still holding a value in {field}"
+            ));
         }
-        Ok(())
+        self.free_slot(slot);
+        self.task_returned(t, v)
     }
 
     /// Spawned task `t` returned `v`: its handle holds it, or, dropped
@@ -10625,7 +10709,9 @@ impl<'a> Interp<'a> {
                 ));
             }
         }
-        if !frame.locals[0].fully_init() {
+        // A frame leaving by its cancel exit returns no value (§11.9).
+        if !frame.locals[0].fully_init() && !self.tasks.get(self.cur_task).is_some_and(|t| t.unwind)
+        {
             return err("return with _0 not initialized");
         }
         // The frame is popped next; `_0` moves out of it.
@@ -11228,13 +11314,17 @@ impl<'a> Interp<'a> {
             }
             Operand::Copy(p) | Operand::Move(p) => {
                 let is_move = matches!(o, Operand::Move(_));
+                // A frame leaving by its cancel exit returns no value
+                // (core-semantics §11.9), which its caller's exit leaves
+                // alone.
+                let unwinding = self.tasks.get(self.cur_task).is_some_and(|t| t.unwind);
                 // A copied tuple of scalars goes into a reused buffer.
                 let mut buf = self.small_buf();
                 let (v, ty) = if p.projection.is_empty() {
                     // A bare local: read the frame slot directly.
                     let ty = body.local(p.local).ty;
                     let slot = &mut self.frames.last_mut().expect("frame").locals[p.local.index()];
-                    if !slot.fully_init() {
+                    if !slot.fully_init() && !unwinding {
                         return err(format!("read of uninitialized {}", self.place_str(body, p)));
                     }
                     let v = if is_move {
@@ -11246,7 +11336,7 @@ impl<'a> Interp<'a> {
                     };
                     (v, ty)
                 } else if let Some((slot, ty)) = self.local_fields_mut(body, p) {
-                    if !slot.fully_init() {
+                    if !slot.fully_init() && !unwinding {
                         return err(format!("read of uninitialized {}", self.place_str(body, p)));
                     }
                     let v = if is_move {
@@ -11260,7 +11350,7 @@ impl<'a> Interp<'a> {
                 } else {
                     let (addr, ty) = self.resolve_read(body, p)?;
                     let slot = self.slot_mut(&addr)?;
-                    if !slot.fully_init() {
+                    if !slot.fully_init() && !unwinding {
                         return err(format!("read of uninitialized {}", self.place_str(body, p)));
                     }
                     let v = if is_move {
@@ -12618,6 +12708,8 @@ impl<'a> Interp<'a> {
             http: None,
             spans: self.active_spans.clone(),
             cancelled: false,
+            torn: false,
+            unwind: false,
         });
         self.run_tasks(entry)
     }
@@ -12638,6 +12730,12 @@ impl<'a> Interp<'a> {
                 let torn = std::mem::take(&mut self.torn);
                 queue.retain(|t| !torn.contains(t));
                 parked.retain(|(t, _)| !torn.contains(t));
+            }
+            for (t, w) in std::mem::take(&mut self.requeue) {
+                match w {
+                    Some(w) => parked.push((t, w)),
+                    None => queue.push_back(t),
+                }
             }
             let Some(t) = queue.pop_front() else {
                 if parked.is_empty() {
@@ -12676,17 +12774,17 @@ impl<'a> Interp<'a> {
             queue.extend(std::mem::take(&mut self.spawned));
             match polled {
                 Value::Variant(0, mut fs) if fs.len() == 1 => {
-                    let frame = self.live(slot)?.value.clone();
-                    if let Some(field) = self.frame_holds(&frame, frame_ty) {
-                        return err(format!(
-                            "{resume} returned with its frame still holding a value in {field}"
-                        ));
-                    }
-                    self.free_slot(slot);
                     if t == 0 {
+                        let frame = self.live(slot)?.value.clone();
+                        if let Some(field) = self.frame_holds(&frame, frame_ty) {
+                            return err(format!(
+                                "{resume} returned with its frame still holding a value in {field}"
+                            ));
+                        }
+                        self.free_slot(slot);
                         root = Some(fs.remove(0));
                     } else {
-                        self.task_returned(t, fs.remove(0))?;
+                        self.task_ended(t, slot, frame_ty, &resume, fs.remove(0))?;
                     }
                 }
                 Value::Variant(1, _) => {
@@ -12719,6 +12817,12 @@ impl<'a> Interp<'a> {
                 let torn = std::mem::take(&mut self.torn);
                 queue.retain(|t| !torn.contains(t));
                 parked.retain(|(t, _)| !torn.contains(t));
+            }
+            for (t, w) in std::mem::take(&mut self.requeue) {
+                match w {
+                    Some(w) => parked.push((t, w)),
+                    None => queue.push_back(t),
+                }
             }
         }
         root.ok_or_else(|| Stop::Error(format!("{entry} never finished")))
@@ -14694,9 +14798,13 @@ struct TaskSlot {
     /// Its active span stack while it is not running (B-2026-10-20-37):
     /// span context is per task, inherited from the spawner.
     spans: Vec<i128>,
-    /// Its group was cancelled while it ran: it is torn down at the wait
-    /// it reaches (§11.9).
+    /// Cancelled (§11.9): it is torn down at the wait it is suspended
+    /// in, or the next one it reaches.
     cancelled: bool,
+    /// Its teardown has begun (`__cancelled`).
+    torn: bool,
+    /// A frame of its chain is leaving by its cancel exit (`__unwind`).
+    unwind: bool,
 }
 
 /// A spawned task's handle under the executor: its result once the task

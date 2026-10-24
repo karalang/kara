@@ -681,6 +681,20 @@ impl<'ctx> Cx<'ctx, '_> {
                 let again = self.rt_flag("io_again", &[])?;
                 self.store_bool(dest, again)
             }
+            // A task's teardown (core-semantics §11.9, `coroutine::CANCELLED`).
+            ("__cancelled" | "__unwinding", "") => {
+                let name = &base[2..];
+                let on = self.rt_flag(name, &[])?;
+                self.store_bool(dest, on)
+            }
+            ("__unwind", "") => {
+                let on = self.operand_scalar(&args[0])?.into_int_value();
+                let on = self
+                    .builder
+                    .build_int_z_extend_or_bit_cast(on, self.llcx.i8_type(), "")
+                    .map_err(e)?;
+                self.rt("unwind", &[on.into()])
+            }
             // `PanicInfo`'s parts, for the panic handler's thunk.
             ("__karac_panic_message" | "__karac_panic_location", "") => {
                 let d = self.place_ptr(dest)?;

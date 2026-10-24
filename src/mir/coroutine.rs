@@ -62,6 +62,59 @@ pub const READY: &str = "__ready";
 /// so the loop asks `__ready` again.
 pub const IO_AGAIN: &str = "__io_again";
 
+/// Cancellation (core-semantics §11.9) tears a task down at the wait it is
+/// suspended in, as an error exit from every frame on its chain. In a
+/// program that cancels, the MIR builder follows each suspending call with
+/// a cancel exit: `__unwinding()` is `true` when the call returned because
+/// its callee was torn down, and the exit then runs every scope's drops and
+/// `defer`s, between `__unwind(false)` and `__unwind(true)`, and returns.
+/// The readiness loop of a suspending native with such an exit asks
+/// `__cancelled()` each time its task resumes from the wait: `true` once,
+/// when the task has been cancelled, and the loop then drops the call's
+/// arguments and leaves for the exit, the call not made.
+pub const CANCELLED: &str = "__cancelled";
+/// See [`CANCELLED`].
+pub const UNWINDING: &str = "__unwinding";
+/// See [`CANCELLED`].
+pub const UNWIND: &str = "__unwind";
+
+/// The cancel exit the builder put after a call that continues to
+/// `target`: the statements of the edge blocks drop elaboration put
+/// before it, and the exit's first block.
+fn cancel_exit_of(body: &Body, target: BasicBlock) -> Option<(Vec<Statement>, BasicBlock)> {
+    let mut stmts = Vec::new();
+    let mut b = target;
+    for _ in 0..8 {
+        let d = &body.blocks[b.index()];
+        match &d.terminator.kind {
+            TerminatorKind::Goto { target } => {
+                stmts.extend(d.statements.iter().cloned());
+                b = *target;
+            }
+            TerminatorKind::Call {
+                func,
+                destination,
+                target: Some(sw),
+                ..
+            } if direct_callee(func) == Some(UNWINDING) && d.statements.is_empty() => {
+                let TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(p),
+                    targets,
+                } = &body.blocks[sw.index()].terminator.kind
+                else {
+                    return None;
+                };
+                return match targets.values.as_slice() {
+                    [(0, _)] if p == destination => Some((stmts, targets.otherwise)),
+                    _ => None,
+                };
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// Whether the suspending native `name` waits on a descriptor, and may find
 /// it not ready after all when called.
 fn on_descriptor(name: &str) -> bool {
@@ -227,6 +280,13 @@ fn insert_ready_loops(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
                 unwind,
             },
         ));
+        // A wait with a cancel exit, found before the call moves.
+        let exit = match &orig.kind {
+            TerminatorKind::Call {
+                target: Some(t), ..
+            } => cancel_exit_of(body, *t),
+            _ => None,
+        };
         let mut orig = orig;
         if on_descriptor(&callee) {
             let TerminatorKind::Call { target, .. } = &mut orig.kind else {
@@ -260,12 +320,63 @@ fn insert_ready_loops(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
                     },
                 },
             ));
-            continue;
+        } else {
+            body.blocks.push(BasicBlockData {
+                statements: vec![],
+                terminator: orig,
+            });
         }
-        body.blocks.push(BasicBlockData {
-            statements: vec![],
-            terminator: orig,
-        });
+        // Resumed from the yield, the loop asks whether its task was
+        // cancelled, and if so drops the arguments the call would have
+        // moved, last first, runs the edge's flag updates and leaves for
+        // the exit.
+        let Some((edge, exit)) = exit else {
+            continue;
+        };
+        let drops: Vec<Place> = args
+            .iter()
+            .rev()
+            .filter_map(|a| match a {
+                Operand::Move(p) => Some(p.clone()),
+                _ => None,
+            })
+            .filter(|p| super::place_ty::place_ty(body, tys, p).is_ok_and(|t| tys.needs_drop(t.ty)))
+            .collect();
+        let c = new_local(body, bool_t);
+        let cx = BasicBlock(body.blocks.len() as u32);
+        if let TerminatorKind::Call { target, .. } = &mut body.blocks[y.index()].terminator.kind {
+            *target = Some(cx);
+        }
+        body.blocks.push(block(
+            vec![],
+            TerminatorKind::Call {
+                func: native(CANCELLED),
+                args: vec![],
+                destination: Place::local(c),
+                target: Some(BasicBlock(cx.0 + 1)),
+                unwind,
+            },
+        ));
+        let leave = BasicBlock(cx.0 + 2);
+        body.blocks.push(block(
+            vec![],
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(leave, chk),
+            },
+        ));
+        for (k, p) in drops.into_iter().enumerate() {
+            body.blocks.push(block(
+                vec![],
+                TerminatorKind::Drop {
+                    place: p,
+                    target: BasicBlock(leave.0 + k as u32 + 1),
+                    unwind,
+                },
+            ));
+        }
+        body.blocks
+            .push(block(edge, TerminatorKind::Goto { target: exit }));
     }
     Ok(())
 }
