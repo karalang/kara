@@ -1,0 +1,1304 @@
+// pipeline/cdr_rating
+//
+// A mobile operator's monthly rating batch, the job a carrier's billing
+// system runs at the end of each month over its regions: for each of four
+// regions (north, coast, valley and metro) it builds the subscriber book
+// and September's call detail records, writes them as CSV, reads them
+// back and parses them with the loader's checks, drops the records a
+// switch delivered twice, rates every call, text, data session and
+// top-up in time order against the subscriber's plan (bundles, charging
+// increments, peak hours, the longest-prefix tariff, roaming, prepaid
+// credit), scores every line for fraud, bills the postpaid lines, and runs
+// five reports. Then it settles the off-net minutes of all four regions
+// with the one partner network that terminates them.
+//
+// The builds, the writes, the reads, the parses, the dedupes, the
+// ratings, the fraud scoring, the bills and the reports are each a group
+// of statements that do not depend on each other (a stmt-par app). The
+// interconnect rate falls as the month's minutes pass each volume tier,
+// a rebate is credited once when they pass the rebate mark, and invoices
+// and credit notes are numbered as they are issued, so the four
+// settlements have to run in order.
+
+const MASK32: i64 = 4294967295;
+const SUBS: i64 = 480;
+const CDRS: i64 = 5200;
+const SIMBOX_CALLS: i64 = 160;
+const RETRIES: i64 = 80;
+const DAYS: i64 = 30;
+const DAY_SECS: i64 = 86400;
+const TYPES: Array[Str, 4] = ["voice", "sms", "data", "topup"];
+const PLANS: Array[Str, 5] = ["prepaid", "basic", "plus", "unlimited", "business"];
+// Per plan: the monthly fee and credit limit in cents, the bundle of
+// domestic minutes, texts and data in KB (-1 is unlimited), the charging
+// increments in seconds (the first, then each next), the data rate in
+// cents per MB beyond the bundle and the discount on international calls.
+const FEE: Array[i64, 5] = [0, 1500, 3000, 6000, 4500];
+const CREDIT: Array[i64, 5] = [0, 5000, 12000, 20000, 40000];
+const BUNDLE_MIN: Array[i64, 5] = [0, 300, 1000, -1, 2000];
+const BUNDLE_SMS: Array[i64, 5] = [0, 100, 500, -1, -1];
+const BUNDLE_KB: Array[i64, 5] = [0, 2097152, 10485760, 52428800, 20971520];
+const FIRST_INC: Array[i64, 5] = [60, 60, 30, 1, 1];
+const NEXT_INC: Array[i64, 5] = [60, 60, 6, 1, 1];
+const DATA_RATE: Array[i64, 5] = [20, 10, 10, 0, 10];
+const INTL_OFF: Array[i64, 5] = [0, 0, 0, 0, 20];
+// The tariff: a destination's class is its longest matching prefix; the
+// rates are cents per minute at peak and off peak.
+const PREFIX: Array[Str, 16] = ["7", "8", "2", "3", "4", "5", "800", "900", "00", "001", "0044", "0049", "0033", "0091", "0086", "00881"];
+const PREFIX_CLASS: Array[i64, 16] = [0, 1, 2, 2, 2, 2, 3, 4, 5, 6, 7, 7, 7, 8, 8, 9];
+const PEAK_RATE: Array[i64, 16] = [6, 14, 8, 8, 8, 8, 0, 199, 150, 25, 45, 45, 45, 60, 60, 900];
+const OFF_RATE: Array[i64, 16] = [3, 9, 5, 5, 5, 5, 0, 199, 150, 25, 40, 40, 40, 50, 50, 900];
+const CLASSES: Array[Str, 11] = ["onnet", "offnet", "fixed", "tollfree", "premium", "intl-world", "intl-na", "intl-europe", "intl-asia", "satellite", "roaming"];
+const ONNET: i64 = 0;
+const OFFNET: i64 = 1;
+const FIXED: i64 = 2;
+const TOLLFREE: i64 = 3;
+const PREMIUM: i64 = 4;
+const ROAMING: i64 = 10;
+const INTL_CC: Array[Str, 8] = ["1", "44", "49", "33", "91", "86", "61", "881"];
+const ROAM_CC: Array[Str, 4] = ["44", "49", "33", "1"];
+const TOPUPS: Array[i64, 4] = [500, 1000, 2000, 5000];
+const ROAM_VOICE: i64 = 99;
+const ROAM_SMS: i64 = 30;
+const ROAM_DATA: i64 = 50;
+const SMS_RATE: i64 = 10;
+const SMS_INTL: i64 = 25;
+const SMS_PREMIUM: i64 = 99;
+const TAX_BP: i64 = 825;
+// Usage categories on a line's account.
+const CAT_VOICE: i64 = 0;
+const CAT_SMS: i64 = 1;
+const CAT_DATA: i64 = 2;
+const CAT_INTL: i64 = 3;
+const CAT_PREMIUM: i64 = 4;
+const CAT_ROAMING: i64 = 5;
+// Fraud points.
+const SHORT_CALL: i64 = 90;
+const SIMBOX_DISTINCT: i64 = 100;
+const FLAG_AT: i64 = 50;
+const WATCH_AT: i64 = 30;
+// The interconnect agreement with the partner network that terminates
+// the off-net calls of all four regions: a rate per minute in tenths of a
+// cent that falls at each cumulative volume tier, and a volume rebate,
+// once, when the month's minutes pass REBATE_AT.
+const TIER_AT: Array[i64, 2] = [6000, 12000];
+const TIER_RATE: Array[i64, 3] = [12, 9, 6];
+const REBATE_AT: i64 = 15000;
+const REBATE_TENTHS: i64 = 2;
+
+struct Region {
+    name: String,
+    code: String,
+    digit: i64,
+    seed: i64,
+    // prepaid, basic, plus, unlimited and business shares in percent
+    plan_pct: Vec[i64],
+}
+
+struct Sub {
+    msisdn: String,
+    plan: i64,
+    // the day of September the line was activated, 0 for the 1st
+    act: i64,
+    // cents
+    limit: i64,
+    bal: i64,
+}
+
+#[derive(Clone)]
+struct Cdr {
+    id: String,
+    kind: i64,
+    a: String,
+    b: String,
+    // seconds since 2026-09-01 00:00:00
+    start: i64,
+    // seconds for a call, 1 for a text, KB for data, cents for a top-up
+    amount: i64,
+    roam: String,
+    switch_id: String,
+}
+
+struct Rated {
+    // per line, the charges in each usage category
+    usage: Vec[Vec[i64]],
+    bal: Vec[i64],
+    topped: Vec[i64],
+    blocked: Vec[i64],
+    // per record: its charge, its call class (-1 for no call) and its
+    // status (0 rated, 1 refused for credit, 2 before activation)
+    charge: Vec[i64],
+    cls: Vec[i64],
+    status: Vec[i64],
+    covered: i64,
+}
+
+struct Fraud {
+    pts: Vec[i64],
+    reasons: Vec[Vec[String]],
+}
+
+struct Bill {
+    postpaid: bool,
+    fee: i64,
+    usage: i64,
+    tax: i64,
+    total: i64,
+    barred: bool,
+}
+
+struct Interconnect {
+    minutes: i64,
+    tenths: i64,
+    invoices: i64,
+    credits: i64,
+    rebated: bool,
+    log: String,
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn pct(a: i64, b: i64) -> String {
+    if b == 0 {
+        return "0.0%".to_string();
+    }
+    let q = a * 1000 / b;
+    f"{q / 10}.{q % 10}%"
+}
+
+fn gb(kb: i64) -> String {
+    let q = kb * 100 / 1048576;
+    f"{q / 100}.{q % 100:02} GB"
+}
+
+fn ceil_div(a: i64, b: i64) -> i64 {
+    (a + b - 1) / b
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+fn sum_of(xs: ref Vec[i64]) -> i64 {
+    let mut t = 0;
+    for x in xs {
+        t += *x;
+    }
+    t
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+fn stamp(s: i64) -> String {
+    let d = s / DAY_SECS;
+    let r = s % DAY_SECS;
+    f"2026-09-{d + 1:02} {r / 3600:02}:{r % 3600 / 60:02}:{r % 60:02}"
+}
+
+fn date_of(d: i64) -> String {
+    f"2026-09-{d + 1:02}"
+}
+
+// The seconds since 2026-09-01 00:00:00 of a timestamp in September 2026,
+// or None.
+fn secs_of(t: ref String) -> Option[i64] {
+    if t.len() != 19 or t.substring(4, 5) != "-" or t.substring(7, 8) != "-" or t.substring(10, 11) != " " or t.substring(13, 14) != ":" or t.substring(16, 17) != ":" {
+        return None;
+    }
+    let parts = [t.substring(0, 4), t.substring(5, 7), t.substring(8, 10), t.substring(11, 13), t.substring(14, 16), t.substring(17, 19)];
+    for p in parts {
+        if not is_digits(p) {
+            return None;
+        }
+    }
+    let y = to_int(parts[0]);
+    let m = to_int(parts[1]);
+    let d = to_int(parts[2]);
+    let hh = to_int(parts[3]);
+    let mm = to_int(parts[4]);
+    let ss = to_int(parts[5]);
+    if y != 2026 or m != 9 or d < 1 or d > DAYS or hh > 23 or mm > 59 or ss > 59 {
+        return None;
+    }
+    Some((d - 1) * DAY_SECS + hh * 3600 + mm * 60 + ss)
+}
+
+fn day_of(t: ref String) -> Option[i64] {
+    if t.len() != 10 or not t.starts_with("2026-09-") or not is_digits(t.substring(8, 10)) {
+        return None;
+    }
+    let d = to_int(t.substring(8, 10));
+    if d < 1 or d > DAYS {
+        return None;
+    }
+    Some(d - 1)
+}
+
+// Monday to Friday, 08:00 to 19:59; 2026-09-01 is a Tuesday.
+fn is_peak(s: i64) -> bool {
+    let day = s / DAY_SECS;
+    let weekday = (1 + day) % 7;
+    let r = s % DAY_SECS;
+    weekday < 5 and r >= 8 * 3600 and r < 20 * 3600
+}
+
+fn msisdn(digit: i64, k: i64) -> String {
+    f"7{digit}{100000 + k * 13:06}"
+}
+
+fn pick_plan(rg: ref Region, r: i64) -> i64 {
+    let x = r % 100;
+    let mut acc = 0;
+    for p in 0..5 {
+        acc += rg.plan_pct[p];
+        if x < acc {
+            return p;
+        }
+    }
+    4
+}
+
+fn plan_index(t: ref String) -> i64 {
+    for i in 0..5 {
+        if t == PLANS[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn type_index(t: ref String) -> i64 {
+    for i in 0..4 {
+        if t == TYPES[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ the books
+
+fn build_subs(rg: ref Region) -> Vec[Sub] {
+    let mut out: Vec[Sub] = Vec.new();
+    for i in 0..SUBS {
+        let plan = pick_plan(rg, mix(rg.seed, i, 1));
+        let r2 = mix(rg.seed, i, 2);
+        let act = if r2 % 10 != 0 { 0 } else { 1 + r2 % 28 };
+        let bal = if plan == 0 { 200 + mix(rg.seed, i, 3) % 2000 } else { 0 };
+        out.push(Sub { msisdn: msisdn(rg.digit, i), plan: plan, act: act, limit: CREDIT[plan], bal: bal });
+    }
+    out
+}
+
+fn simbox_subs(rg: ref Region) -> Vec[i64] {
+    [rg.seed * 7 % SUBS, rg.seed * 11 % SUBS].to_vec()
+}
+
+fn destination(rg: ref Region, i: i64) -> String {
+    let d = mix(rg.seed, i, 5) % 100;
+    let r = mix(rg.seed, i, 6);
+    if d < 38 or d >= 95 {
+        let digit = if r % 3 != 0 { rg.digit } else { 1 + r % 4 };
+        return msisdn(digit, r % SUBS);
+    }
+    if d < 62 {
+        return f"8{r % 10000000:07}";
+    }
+    if d < 78 {
+        return f"{2 + r % 4}{r % 10000000:07}";
+    }
+    if d < 88 {
+        return f"00{INTL_CC[r % 8]}{r % 100000000:08}";
+    }
+    if d < 91 {
+        return f"900{r % 100000:05}";
+    }
+    f"800{r % 100000:05}"
+}
+
+fn build_cdrs(rg: ref Region, subs: ref Vec[Sub]) -> Vec[Cdr] {
+    let mut out: Vec[Cdr] = Vec.new();
+    for i in 0..CDRS {
+        let r = mix(rg.seed, i, 1);
+        let s = if r % 4 == 0 { r % 60 } else { r % SUBS };
+        let sub = ref subs[s];
+        let t = mix(rg.seed, i, 2) % 100;
+        let mut kind = if t < 56 { 0 } else if t < 80 { 1 } else if t < 97 { 2 } else { 3 };
+        if kind == 3 and sub.plan != 0 {
+            kind = 2;
+        }
+        let day = mix(rg.seed, i, 3) % DAYS;
+        let r5 = mix(rg.seed, i, 4);
+        let sec = if r5 % 10 < 6 { 8 * 3600 + r5 % (12 * 3600) } else { r5 % DAY_SECS };
+        let r7 = mix(rg.seed, i, 7);
+        let mut b = "-".to_string();
+        let mut amount = 0;
+        if kind == 0 {
+            b = destination(rg, i);
+            if r7 % 50 == 0 {
+                amount = 0;
+            } else if r7 % 10 == 0 {
+                amount = 600 + r7 % 3000;
+            } else {
+                amount = 5 + r7 % 400;
+            }
+        } else if kind == 1 {
+            b = destination(rg, i);
+            amount = 1;
+        } else if kind == 2 {
+            amount = if r7 % 8 == 0 { 50000 + r7 % 400000 } else { 10 + r7 % 30000 };
+        } else {
+            amount = TOPUPS[r7 % 4];
+        }
+        let r8 = mix(rg.seed, i, 8);
+        let roam = if kind != 3 and r8 % 100 < 5 { ROAM_CC[r8 % 4].to_string() } else { "-".to_string() };
+        out.push(Cdr {
+            id: String.new(),
+            kind: kind,
+            a: sub.msisdn.clone(),
+            b: b,
+            start: day * DAY_SECS + sec,
+            amount: amount,
+            roam: roam,
+            switch_id: f"MSC{1 + mix(rg.seed, i, 9) % 3}",
+        });
+    }
+    // Two SIM boxes: lines that turn calls from the partner network into
+    // cheap on-net minutes make many short calls to distinct numbers.
+    let boxes = simbox_subs(rg);
+    for k in 0..2 {
+        let s = boxes[k];
+        for j in 0..SIMBOX_CALLS {
+            let m = mix(rg.seed, j, 20 + k);
+            out.push(Cdr {
+                id: String.new(),
+                kind: 0,
+                a: subs[s].msisdn.clone(),
+                b: f"8{(rg.seed * 1000 + j * 7919 + k * 31) % 10000000:07}",
+                start: (j % DAYS) * DAY_SECS + 9 * 3600 + (j * 397 + k * 1201) % (10 * 3600),
+                amount: 12 + m % 50,
+                roam: "-".to_string(),
+                switch_id: "MSC2".to_string(),
+            });
+        }
+    }
+    // Switch retries: the same record delivered again later.
+    for j in 0..RETRIES {
+        let c = out[mix(rg.seed, j, 40) % CDRS].clone();
+        out.push(c);
+    }
+    for n in 0..out.len() as i64 {
+        out[n].id = f"{rg.code}{n + 1:06}";
+    }
+    out
+}
+
+fn sub_header() -> String {
+    "msisdn,plan,activated,credit_limit,balance".to_string()
+}
+
+fn cdr_header() -> String {
+    "id,type,a,b,start,amount,roam,switch".to_string()
+}
+
+fn encode_subs(ss: ref Vec[Sub]) -> String {
+    let mut out = f"{sub_header()}\n";
+    for s in ss {
+        out.push_str(f"{s.msisdn},{PLANS[s.plan]},{date_of(s.act)},{dollars(s.limit)},{dollars(s.bal)}\n");
+    }
+    out
+}
+
+fn encode_cdrs(cs: ref Vec[Cdr]) -> String {
+    let mut out = f"{cdr_header()}\n";
+    for c in cs {
+        out.push_str(f"{c.id},{TYPES[c.kind]},{c.a},{c.b},{stamp(c.start)},{c.amount},{c.roam},{c.switch_id}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"could not read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+fn msisdn_ok(t: ref String, digit: i64) -> bool {
+    t.len() == 8 and t.starts_with(f"7{digit}") and is_digits(t)
+}
+
+fn parse_subs(path: ref String, rg: ref Region, text: ref String) -> Result[Vec[Sub], BatchError] {
+    let lines = split_on(text, "\n");
+    if lines[0] != sub_header() {
+        return Err(bad(f"{path}: bad header"));
+    }
+    let mut out: Vec[Sub] = Vec.new();
+    for k in 1..lines.len() as i64 {
+        let line = lines[k].clone();
+        if line == "" {
+            continue;
+        }
+        let n = k + 1;
+        let f = split_on(line, ",");
+        if f.len() as i64 != 5 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields"));
+        }
+        if not msisdn_ok(f[0], rg.digit) {
+            return Err(bad(f"{path} line {n}: bad number '{f[0]}'"));
+        }
+        let plan = plan_index(f[1]);
+        if plan < 0 {
+            return Err(bad(f"{path} line {n}: bad plan '{f[1]}'"));
+        }
+        let act = match day_of(f[2]) {
+            Some(d) => d,
+            None => return Err(bad(f"{path} line {n}: bad activation '{f[2]}'")),
+        };
+        let limit = match cents_of(f[3]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad credit limit '{f[3]}'")),
+        };
+        let bal = match cents_of(f[4]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad balance '{f[4]}'")),
+        };
+        out.push(Sub { msisdn: f[0].clone(), plan: plan, act: act, limit: limit, bal: bal });
+    }
+    Ok(out)
+}
+
+fn parse_cdrs(path: ref String, rg: ref Region, text: ref String) -> Result[Vec[Cdr], BatchError] {
+    let lines = split_on(text, "\n");
+    if lines[0] != cdr_header() {
+        return Err(bad(f"{path}: bad header"));
+    }
+    let mut out: Vec[Cdr] = Vec.new();
+    for k in 1..lines.len() as i64 {
+        let line = lines[k].clone();
+        if line == "" {
+            continue;
+        }
+        let n = k + 1;
+        let f = split_on(line, ",");
+        if f.len() as i64 != 8 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields"));
+        }
+        if f[0].len() != 7 or f[0].substring(0, 1) != rg.code or not is_digits(f[0].substring(1, 7)) {
+            return Err(bad(f"{path} line {n}: bad record id '{f[0]}'"));
+        }
+        let kind = type_index(f[1]);
+        if kind < 0 {
+            return Err(bad(f"{path} line {n}: bad type '{f[1]}'"));
+        }
+        if not msisdn_ok(f[2], rg.digit) {
+            return Err(bad(f"{path} line {n}: caller '{f[2]}' is not a {rg.name} number"));
+        }
+        if kind < 2 {
+            if not is_digits(f[3]) or f[3].len() < 4 or f[3].len() > 15 {
+                return Err(bad(f"{path} line {n}: bad destination '{f[3]}'"));
+            }
+        } else if f[3] != "-" {
+            return Err(bad(f"{path} line {n}: a {f[1]} record with a destination"));
+        }
+        let start = match secs_of(f[4]) {
+            Some(s) => s,
+            None => return Err(bad(f"{path} line {n}: bad start '{f[4]}'")),
+        };
+        if not is_digits(f[5]) {
+            return Err(bad(f"{path} line {n}: bad amount '{f[5]}'"));
+        }
+        let amount = to_int(f[5]);
+        if (kind == 0 and amount > DAY_SECS) or (kind == 1 and amount != 1) or (kind >= 2 and amount == 0) {
+            return Err(bad(f"{path} line {n}: bad amount '{f[5]}' for {f[1]}"));
+        }
+        if f[6] != "-" and (not is_digits(f[6]) or f[6].len() > 3) {
+            return Err(bad(f"{path} line {n}: bad roaming country '{f[6]}'"));
+        }
+        let sw = f[7].clone();
+        if sw.len() != 4 or not sw.starts_with("MSC") or not "123".contains(sw.substring(3, 4)) {
+            return Err(bad(f"{path} line {n}: bad switch '{sw}'"));
+        }
+        out.push(Cdr {
+            id: f[0].clone(),
+            kind: kind,
+            a: f[2].clone(),
+            b: f[3].clone(),
+            start: start,
+            amount: amount,
+            roam: f[6].clone(),
+            switch_id: sw,
+        });
+    }
+    Ok(out)
+}
+
+fn same_subs(a: ref Vec[Sub], b: ref Vec[Sub]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.msisdn != y.msisdn or x.plan != y.plan or x.act != y.act or x.limit != y.limit or x.bal != y.bal {
+            return false;
+        }
+    }
+    true
+}
+
+fn same_cdrs(a: ref Vec[Cdr], b: ref Vec[Cdr]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.id != y.id or x.kind != y.kind or x.a != y.a or x.b != y.b or x.start != y.start or x.amount != y.amount or x.roam != y.roam or x.switch_id != y.switch_id {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ dedupe
+
+// The first copy of each record a switch delivered more than once.
+fn dedupe(cs: ref Vec[Cdr]) -> Vec[Cdr] {
+    let mut seen: Map[String, i64] = Map.new();
+    let mut out: Vec[Cdr] = Vec.new();
+    for c in cs {
+        let key = f"{c.kind}|{c.a}|{c.b}|{c.start}|{c.amount}";
+        if seen.contains_key(key) {
+            continue;
+        }
+        seen.insert(key, out.len() as i64);
+        out.push(c.clone());
+    }
+    out
+}
+
+// ------------------------------------------------------------ rating
+
+// The tariff entry with the longest prefix of b.
+fn classify(b: ref String) -> i64 {
+    let mut best = -1;
+    let mut best_len = 0;
+    for k in 0..16 {
+        let p = PREFIX[k];
+        if p.len() > best_len and b.starts_with(p) {
+            best = k;
+            best_len = p.len();
+        }
+    }
+    best
+}
+
+fn billed_secs(d: i64, first: i64, next: i64) -> i64 {
+    if d == 0 {
+        return 0;
+    }
+    if d <= first {
+        return first;
+    }
+    first + ceil_div(d - first, next) * next
+}
+
+// Indexes ordered by a key, then by position.
+fn order_by(keys: ref Vec[i64]) -> Vec[i64] {
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..keys.len() as i64 {
+        pairs.push((keys[i], i));
+    }
+    pairs.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+    let mut out: Vec[i64] = Vec.new();
+    for p in pairs {
+        out.push(p.1);
+    }
+    out
+}
+
+// Indexes ordered by a count, largest first, then by position.
+fn rank(counts: ref Vec[i64]) -> Vec[i64] {
+    let mut neg: Vec[i64] = Vec.new();
+    for c in counts {
+        neg.push(0 - *c);
+    }
+    order_by(neg)
+}
+
+fn sub_index(subs: ref Vec[Sub]) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    for i in 0..subs.len() as i64 {
+        m.insert(subs[i].msisdn.clone(), i);
+    }
+    m
+}
+
+// Every record in time order (then file order) against its line's plan:
+// a call takes the plan's increments and the tariff's rate at its start,
+// domestic minutes, texts and data come out of the bundle first, a
+// prepaid line pays from its balance or has the record refused, and a
+// top-up adds to the balance for whatever comes after it.
+fn rate(subs: ref Vec[Sub], cs: ref Vec[Cdr]) -> Rated {
+    let idx = sub_index(subs);
+    let n = subs.len() as i64;
+    let mut mins_left: Vec[i64] = Vec.new();
+    let mut sms_left: Vec[i64] = Vec.new();
+    let mut kb_left: Vec[i64] = Vec.new();
+    let mut bal: Vec[i64] = Vec.new();
+    let mut usage: Vec[Vec[i64]] = Vec.new();
+    for s in subs {
+        mins_left.push(BUNDLE_MIN[s.plan] * 60);
+        sms_left.push(BUNDLE_SMS[s.plan]);
+        kb_left.push(BUNDLE_KB[s.plan]);
+        bal.push(s.bal);
+        usage.push(Vec.filled(6, 0));
+    }
+    let mut topped: Vec[i64] = Vec.filled(n, 0);
+    let mut blocked: Vec[i64] = Vec.filled(n, 0);
+    let m = cs.len() as i64;
+    let mut charge: Vec[i64] = Vec.filled(m, 0);
+    let mut cls: Vec[i64] = Vec.filled(m, -1);
+    let mut status: Vec[i64] = Vec.filled(m, 0);
+    let mut covered_secs = 0;
+    let mut starts: Vec[i64] = Vec.new();
+    for c in cs {
+        starts.push(c.start);
+    }
+    for i in order_by(starts) {
+        let c = ref cs[i];
+        let si = idx.get(c.a) ?? -1;
+        let plan = subs[si].plan;
+        if c.start / DAY_SECS < subs[si].act {
+            status[i] = 2;
+            continue;
+        }
+        if c.kind == 3 {
+            bal[si] += c.amount;
+            topped[si] += c.amount;
+            continue;
+        }
+        let mut cat = CAT_VOICE;
+        let mut ch = 0;
+        let roaming = c.roam != "-";
+        if c.kind == 0 {
+            let billed = billed_secs(c.amount, FIRST_INC[plan], NEXT_INC[plan]);
+            if roaming {
+                cls[i] = ROAMING;
+                cat = CAT_ROAMING;
+                ch = ceil_div(billed * ROAM_VOICE, 60);
+            } else {
+                let k = classify(c.b);
+                let class = PREFIX_CLASS[k];
+                cls[i] = class;
+                let r = if is_peak(c.start) { PEAK_RATE[k] } else { OFF_RATE[k] };
+                if class == ONNET or class == OFFNET or class == FIXED {
+                    let mut rest = billed;
+                    if BUNDLE_MIN[plan] < 0 {
+                        rest = 0;
+                    } else if mins_left[si] > 0 {
+                        let cover = if billed < mins_left[si] { billed } else { mins_left[si] };
+                        mins_left[si] -= cover;
+                        rest = billed - cover;
+                    }
+                    covered_secs += billed - rest;
+                    ch = ceil_div(rest * r, 60);
+                } else if class == PREMIUM {
+                    cat = CAT_PREMIUM;
+                    ch = ceil_div(billed * r, 60);
+                } else if class == TOLLFREE {
+                    ch = 0;
+                } else {
+                    cat = CAT_INTL;
+                    ch = ceil_div(billed * r, 60);
+                    ch -= ch * INTL_OFF[plan] / 100;
+                }
+            }
+        } else if c.kind == 1 {
+            cat = CAT_SMS;
+            if roaming {
+                cat = CAT_ROAMING;
+                ch = ROAM_SMS;
+            } else if c.b.starts_with("00") {
+                cat = CAT_INTL;
+                ch = SMS_INTL;
+            } else if c.b.starts_with("900") {
+                cat = CAT_PREMIUM;
+                ch = SMS_PREMIUM;
+            } else if BUNDLE_SMS[plan] < 0 {
+                ch = 0;
+            } else if sms_left[si] > 0 {
+                sms_left[si] -= 1;
+                ch = 0;
+            } else {
+                ch = SMS_RATE;
+            }
+        } else {
+            cat = CAT_DATA;
+            let units = ceil_div(c.amount, 10) * 10;
+            if roaming {
+                cat = CAT_ROAMING;
+                ch = ceil_div(units * ROAM_DATA, 1024);
+            } else {
+                let cover = if units < kb_left[si] { units } else { kb_left[si] };
+                kb_left[si] -= cover;
+                ch = ceil_div((units - cover) * DATA_RATE[plan], 1024);
+            }
+        }
+        if plan == 0 {
+            if ch > bal[si] {
+                status[i] = 1;
+                blocked[si] += 1;
+                continue;
+            }
+            bal[si] -= ch;
+        }
+        charge[i] = ch;
+        usage[si][cat] += ch;
+    }
+    Rated { usage: usage, bal: bal, topped: topped, blocked: blocked, charge: charge, cls: cls, status: status, covered: covered_secs }
+}
+
+// ------------------------------------------------------------ fraud
+
+fn short_target(b: ref String) -> bool {
+    let first = b.substring(0, 1);
+    "82345".contains(first)
+}
+
+fn score(subs: ref Vec[Sub], cs: ref Vec[Cdr], rt: ref Rated) -> Fraud {
+    let idx = sub_index(subs);
+    let n = subs.len() as i64;
+    let mut pairs: Map[String, i64] = Map.new();
+    let mut distinct: Vec[i64] = Vec.filled(n, 0);
+    let mut short: Vec[i64] = Vec.filled(n, 0);
+    let mut calls: Vec[i64] = Vec.filled(n, 0);
+    for i in 0..cs.len() as i64 {
+        let c = ref cs[i];
+        if c.kind != 0 or rt.status[i] != 0 or c.roam != "-" {
+            continue;
+        }
+        let si = idx.get(c.a) ?? -1;
+        calls[si] += 1;
+        if c.amount < SHORT_CALL and short_target(c.b) {
+            short[si] += 1;
+            let key = f"{c.a}|{c.b}";
+            if not pairs.contains_key(key) {
+                pairs.insert(key, 1);
+                distinct[si] += 1;
+            }
+        }
+    }
+    let mut pts: Vec[i64] = Vec.filled(n, 0);
+    let mut reasons: Vec[Vec[String]] = Vec.new();
+    for si in 0..n {
+        let u = ref rt.usage[si];
+        let mut why: Vec[String] = Vec.new();
+        if distinct[si] >= SIMBOX_DISTINCT {
+            pts[si] += 60;
+            why.push(f"simbox x{distinct[si]}");
+        }
+        if calls[si] >= 20 and short[si] * 100 >= calls[si] * 70 {
+            pts[si] += 20;
+            why.push("short".to_string());
+        }
+        if u[CAT_PREMIUM] > 3000 {
+            pts[si] += 30;
+            why.push("premium".to_string());
+        }
+        if u[CAT_ROAMING] > 5000 {
+            pts[si] += 15;
+            why.push("roaming".to_string());
+        }
+        if subs[si].plan == 0 and rt.blocked[si] >= 5 {
+            pts[si] += 10;
+            why.push("refused".to_string());
+        }
+        reasons.push(why);
+    }
+    Fraud { pts: pts, reasons: reasons }
+}
+
+// ------------------------------------------------------------ billing
+
+fn bill(subs: ref Vec[Sub], rt: ref Rated) -> Vec[Bill] {
+    let mut out: Vec[Bill] = Vec.new();
+    for si in 0..subs.len() as i64 {
+        let s = ref subs[si];
+        if s.plan == 0 {
+            out.push(Bill { postpaid: false, fee: 0, usage: 0, tax: 0, total: 0, barred: false });
+            continue;
+        }
+        let fee = FEE[s.plan] * (DAYS - s.act) / DAYS;
+        let usage = sum_of(rt.usage[si]);
+        let sub = fee + usage;
+        let tax = (sub * TAX_BP + 5000) / 10000;
+        let total = sub + tax;
+        out.push(Bill { postpaid: true, fee: fee, usage: usage, tax: tax, total: total, barred: total > s.limit });
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn traffic_report(rg: ref Region, raw: ref Vec[Cdr], cs: ref Vec[Cdr], rt: ref Rated) -> String {
+    let mut calls = 0;
+    let mut mins = 0;
+    let mut peak = 0;
+    let mut texts = 0;
+    let mut kb = 0;
+    let mut tops = 0;
+    let mut topped = 0;
+    for c in cs {
+        if c.kind == 0 {
+            calls += 1;
+            mins += ceil_div(c.amount, 60);
+            if is_peak(c.start) {
+                peak += 1;
+            }
+        } else if c.kind == 1 {
+            texts += 1;
+        } else if c.kind == 2 {
+            kb += c.amount;
+        } else {
+            tops += 1;
+            topped += c.amount;
+        }
+    }
+    let mut before = 0;
+    for s in rt.status {
+        if *s == 2 {
+            before += 1;
+        }
+    }
+    let dropped = raw.len() as i64 - cs.len() as i64;
+    f"{rg.name} traffic: {group3(raw.len() as i64)} records, {dropped} switch retries dropped, {before} before activation; {group3(calls)} calls for {group3(mins)} minutes ({pct(peak, calls)} at peak), {group3(texts)} texts, {gb(kb)}, {tops} top-ups for {money(topped)}"
+}
+
+fn class_report(rg: ref Region, cs: ref Vec[Cdr], rt: ref Rated) -> String {
+    let mut mins: Vec[i64] = Vec.filled(11, 0);
+    let mut rev: Vec[i64] = Vec.filled(11, 0);
+    for i in 0..cs.len() as i64 {
+        let k = rt.cls[i];
+        if k < 0 or rt.status[i] != 0 {
+            continue;
+        }
+        mins[k] += ceil_div(cs[i].amount, 60);
+        rev[k] += rt.charge[i];
+    }
+    let mut most: Vec[String] = Vec.new();
+    let by_mins = rank(mins);
+    for j in 0..3 {
+        let k = by_mins[j];
+        if mins[k] > 0 {
+            most.push(f"{CLASSES[k]} {mins[k]}");
+        }
+    }
+    let mut revs: Vec[String] = Vec.new();
+    let by_rev = rank(rev);
+    for j in 0..3 {
+        let k = by_rev[j];
+        revs.push(f"{CLASSES[k]} {money(rev[k])}");
+    }
+    f"{rg.name} classes: most minutes {most.join(", ")}; most revenue {revs.join(", ")}; {group3(rt.covered / 60)} bundle minutes used"
+}
+
+fn billing_report(rg: ref Region, subs: ref Vec[Sub], bills: ref Vec[Bill]) -> String {
+    let mut n = 0;
+    let mut fee = 0;
+    let mut usage = 0;
+    let mut tax = 0;
+    let mut total = 0;
+    let mut barred = 0;
+    let mut top = -1;
+    for si in 0..bills.len() as i64 {
+        let b = ref bills[si];
+        if not b.postpaid {
+            continue;
+        }
+        n += 1;
+        fee += b.fee;
+        usage += b.usage;
+        tax += b.tax;
+        total += b.total;
+        if b.barred {
+            barred += 1;
+        }
+        if top < 0 or b.total > bills[top].total {
+            top = si;
+        }
+    }
+    let arpu = if n > 0 { total / n } else { 0 };
+    f"{rg.name} postpaid: {n} bills for {money(total)} (fees {money(fee)}, usage {money(usage)}, tax {money(tax)}), ARPU {money(arpu)}; {barred} over their credit limit; largest {subs[top].msisdn} {money(bills[top].total)}"
+}
+
+fn prepaid_report(rg: ref Region, subs: ref Vec[Sub], rt: ref Rated) -> String {
+    let mut n = 0;
+    let mut topped = 0;
+    let mut spent = 0;
+    let mut refused = 0;
+    let mut empty = 0;
+    let mut held = 0;
+    for si in 0..subs.len() as i64 {
+        if subs[si].plan != 0 {
+            continue;
+        }
+        n += 1;
+        topped += rt.topped[si];
+        spent += sum_of(rt.usage[si]);
+        refused += rt.blocked[si];
+        if rt.bal[si] < 10 {
+            empty += 1;
+        }
+        held += rt.bal[si];
+    }
+    f"{rg.name} prepaid: {n} lines, {money(topped)} topped up, {money(spent)} spent, {refused} events refused for credit, {empty} lines under 10 cents; {money(held)} held"
+}
+
+fn fraud_report(rg: ref Region, subs: ref Vec[Sub], fr: ref Fraud) -> String {
+    let mut flagged = 0;
+    let mut watch = 0;
+    for p in fr.pts {
+        if *p >= FLAG_AT {
+            flagged += 1;
+        } else if *p >= WATCH_AT {
+            watch += 1;
+        }
+    }
+    let order = rank(fr.pts);
+    let mut tops: Vec[String] = Vec.new();
+    for j in 0..3 {
+        let k = order[j];
+        tops.push(f"{subs[k].msisdn} {fr.pts[k]} ({fr.reasons[k].join(" ")})");
+    }
+    f"{rg.name} fraud: {flagged} flagged, {watch} to watch; highest {tops.join("; ")}"
+}
+
+// ------------------------------------------------------------ interconnect
+
+fn tier_of(m: i64) -> i64 {
+    let mut t = 0;
+    while t < 2 and m >= TIER_AT[t] {
+        t += 1;
+    }
+    t
+}
+
+// Invoice a week's off-net calls to the partner as the next invoice.
+fn close_week(ic: mut ref Interconnect, rg: ref Region, week: i64, calls: i64, mins: i64, tenths: i64) -> bool {
+    if calls == 0 {
+        return false;
+    }
+    ic.invoices += 1;
+    ic.log.push_str(f"IC-{ic.invoices:04},{rg.name},week {week + 1},{calls},{mins},{dollars((tenths + 5) / 10)}\n");
+    true
+}
+
+// The region's off-net calls in time order go onto the one month of
+// minutes with the partner: each minute takes the rate of the tier the
+// month has reached, the calls are invoiced weekly, and the rebate is
+// credited when the month passes REBATE_AT.
+fn settle(ic: mut ref Interconnect, rg: ref Region, cs: ref Vec[Cdr], rt: ref Rated) -> String {
+    let mut keys: Vec[i64] = Vec.new();
+    let mut ix: Vec[i64] = Vec.new();
+    for i in 0..cs.len() as i64 {
+        if rt.cls[i] == OFFNET and rt.status[i] == 0 and cs[i].amount > 0 {
+            keys.push(cs[i].start);
+            ix.push(i);
+        }
+    }
+    let mut calls = 0;
+    let mut mins = 0;
+    let mut tenths = 0;
+    let mut first = -1;
+    let mut week = -1;
+    let mut w_calls = 0;
+    let mut w_mins = 0;
+    let mut w_tenths = 0;
+    let mut notes: Vec[String] = Vec.new();
+    for k in order_by(keys) {
+        let c = ref cs[ix[k]];
+        let wk = if c.start / DAY_SECS / 7 < 3 { c.start / DAY_SECS / 7 } else { 3 };
+        if wk != week {
+            if close_week(mut ic, rg, week, w_calls, w_mins, w_tenths) and first < 0 {
+                first = ic.invoices;
+            }
+            week = wk;
+            w_calls = 0;
+            w_mins = 0;
+            w_tenths = 0;
+        }
+        let m = ceil_div(c.amount, 60);
+        let mut fee = 0;
+        for _ in 0..m {
+            fee += TIER_RATE[tier_of(ic.minutes)];
+            ic.minutes += 1;
+        }
+        calls += 1;
+        mins += m;
+        tenths += fee;
+        w_calls += 1;
+        w_mins += m;
+        w_tenths += fee;
+        ic.tenths += fee;
+        if not ic.rebated and ic.minutes >= REBATE_AT {
+            ic.rebated = true;
+            ic.credits += 1;
+            let back = ic.minutes * REBATE_TENTHS;
+            ic.tenths -= back;
+            ic.log.push_str(f"CN-{ic.credits:04},{rg.name},{stamp(c.start)},{ic.minutes},-{dollars((back + 5) / 10)}\n");
+            notes.push(f"rebate CN-{ic.credits:04} of {money((back + 5) / 10)} at {stamp(c.start)}");
+        }
+    }
+    if close_week(mut ic, rg, week, w_calls, w_mins, w_tenths) and first < 0 {
+        first = ic.invoices;
+    }
+    let n_inv = if first > 0 { ic.invoices - first + 1 } else { 0 };
+    let inv = if n_inv > 1 {
+        f"invoices IC-{first:04} to IC-{ic.invoices:04}"
+    } else if n_inv == 1 {
+        f"invoice IC-{first:04}"
+    } else {
+        "no invoices".to_string()
+    };
+    let extra = if notes.len() > 0 { f"; {notes.join("; ")}" } else { String.new() };
+    f"{rg.name} interconnect: {calls} calls, {group3(mins)} minutes, {money((tenths + 5) / 10)} in {inv}{extra}; month to date {group3(ic.minutes)} minutes in tier {tier_of(ic.minutes) + 1}, owed {money((ic.tenths + 5) / 10)}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let north = Region { name: "north", code: "N", digit: 1, seed: 13, plan_pct: [30, 25, 20, 10, 15].to_vec() };
+    let coast = Region { name: "coast", code: "C", digit: 2, seed: 29, plan_pct: [40, 20, 20, 10, 10].to_vec() };
+    let valley = Region { name: "valley", code: "V", digit: 3, seed: 41, plan_pct: [45, 30, 15, 5, 5].to_vec() };
+    let metro = Region { name: "metro", code: "M", digit: 4, seed: 59, plan_pct: [20, 15, 25, 20, 20].to_vec() };
+
+    // Four subscriber books.
+    let s1 = build_subs(north);
+    let s2 = build_subs(coast);
+    let s3 = build_subs(valley);
+    let s4 = build_subs(metro);
+
+    // Four months of records from the switches.
+    let c1 = build_cdrs(north, s1);
+    let c2 = build_cdrs(coast, s2);
+    let c3 = build_cdrs(valley, s3);
+    let c4 = build_cdrs(metro, s4);
+
+    // Eight writes.
+    let w1 = fs.write("north_subs.csv", encode_subs(s1));
+    let w2 = fs.write("coast_subs.csv", encode_subs(s2));
+    let w3 = fs.write("valley_subs.csv", encode_subs(s3));
+    let w4 = fs.write("metro_subs.csv", encode_subs(s4));
+    let w5 = fs.write("north_cdrs.csv", encode_cdrs(c1));
+    let w6 = fs.write("coast_cdrs.csv", encode_cdrs(c2));
+    let w7 = fs.write("valley_cdrs.csv", encode_cdrs(c3));
+    let w8 = fs.write("metro_cdrs.csv", encode_cdrs(c4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() {
+        return Err(bad("could not write the region files"));
+    }
+
+    let whole = read_text("coast_cdrs.csv")?;
+    if fs.write("coast_cdrs.bad", damage(whole, 2077, 4, "2026-09-31 10:00:00")).is_err() {
+        return Err(bad("could not write coast_cdrs.bad"));
+    }
+
+    // Eight reads.
+    let ts1 = read_text("north_subs.csv")?;
+    let ts2 = read_text("coast_subs.csv")?;
+    let ts3 = read_text("valley_subs.csv")?;
+    let ts4 = read_text("metro_subs.csv")?;
+    let tc1 = read_text("north_cdrs.csv")?;
+    let tc2 = read_text("coast_cdrs.csv")?;
+    let tc3 = read_text("valley_cdrs.csv")?;
+    let tc4 = read_text("metro_cdrs.csv")?;
+    println(f"north: subscribers {group3(ts1.len() as i64)} bytes, fnv {text_sum(ts1):08x}; records {group3(tc1.len() as i64)} bytes, fnv {text_sum(tc1):08x}");
+    println(f"coast: subscribers {group3(ts2.len() as i64)} bytes, fnv {text_sum(ts2):08x}; records {group3(tc2.len() as i64)} bytes, fnv {text_sum(tc2):08x}");
+    println(f"valley: subscribers {group3(ts3.len() as i64)} bytes, fnv {text_sum(ts3):08x}; records {group3(tc3.len() as i64)} bytes, fnv {text_sum(tc3):08x}");
+    println(f"metro: subscribers {group3(ts4.len() as i64)} bytes, fnv {text_sum(ts4):08x}; records {group3(tc4.len() as i64)} bytes, fnv {text_sum(tc4):08x}");
+
+    // Eight parses. Each can fail with `?`, so a parallel run has to
+    // report the first failure in source order.
+    let gs1 = parse_subs("north_subs.csv", north, ts1)?;
+    let gs2 = parse_subs("coast_subs.csv", coast, ts2)?;
+    let gs3 = parse_subs("valley_subs.csv", valley, ts3)?;
+    let gs4 = parse_subs("metro_subs.csv", metro, ts4)?;
+    let gc1 = parse_cdrs("north_cdrs.csv", north, tc1)?;
+    let gc2 = parse_cdrs("coast_cdrs.csv", coast, tc2)?;
+    let gc3 = parse_cdrs("valley_cdrs.csv", valley, tc3)?;
+    let gc4 = parse_cdrs("metro_cdrs.csv", metro, tc4)?;
+    match parse_cdrs("coast_cdrs.bad", coast, read_text("coast_cdrs.bad")?) {
+        Ok(_) => println("coast_cdrs.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_cdrs("metro_cdrs.csv", north, tc4) {
+        Ok(_) => println("metro_cdrs.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_subs(gs1, s1) and same_subs(gs2, s2) and same_subs(gs3, s3) and same_subs(gs4, s4) and same_cdrs(gc1, c1) and same_cdrs(gc2, c2) and same_cdrs(gc3, c3) and same_cdrs(gc4, c4);
+    println(f"parsed files match the built ones: {same}");
+
+    // Four dedupes.
+    let d1 = dedupe(gc1);
+    let d2 = dedupe(gc2);
+    let d3 = dedupe(gc3);
+    let d4 = dedupe(gc4);
+
+    // Four ratings.
+    let r1 = rate(gs1, d1);
+    let r2 = rate(gs2, d2);
+    let r3 = rate(gs3, d3);
+    let r4 = rate(gs4, d4);
+
+    // Four fraud scorings and four bill runs.
+    let f1 = score(gs1, d1, r1);
+    let f2 = score(gs2, d2, r2);
+    let f3 = score(gs3, d3, r3);
+    let f4 = score(gs4, d4, r4);
+    let b1 = bill(gs1, r1);
+    let b2 = bill(gs2, r2);
+    let b3 = bill(gs3, r3);
+    let b4 = bill(gs4, r4);
+
+    // Reports that only read what came before.
+    let t1 = traffic_report(north, gc1, d1, r1);
+    let t2 = traffic_report(coast, gc2, d2, r2);
+    let t3 = traffic_report(valley, gc3, d3, r3);
+    let t4 = traffic_report(metro, gc4, d4, r4);
+    let k1 = class_report(north, d1, r1);
+    let k2 = class_report(coast, d2, r2);
+    let k3 = class_report(valley, d3, r3);
+    let k4 = class_report(metro, d4, r4);
+    let p1 = billing_report(north, gs1, b1);
+    let p2 = billing_report(coast, gs2, b2);
+    let p3 = billing_report(valley, gs3, b3);
+    let p4 = billing_report(metro, gs4, b4);
+    let q1 = prepaid_report(north, gs1, r1);
+    let q2 = prepaid_report(coast, gs2, r2);
+    let q3 = prepaid_report(valley, gs3, r3);
+    let q4 = prepaid_report(metro, gs4, r4);
+    let x1 = fraud_report(north, gs1, f1);
+    let x2 = fraud_report(coast, gs2, f2);
+    let x3 = fraud_report(valley, gs3, f3);
+    let x4 = fraud_report(metro, gs4, f4);
+    for line in [t1, t2, t3, t4, k1, k2, k3, k4, p1, p2, p3, p4, q1, q2, q3, q4, x1, x2, x3, x4] {
+        println(line);
+    }
+
+    // One interconnect month: each region's minutes land on the minutes
+    // of the regions before it, and invoices and credit notes are
+    // numbered as they go.
+    let mut ic = Interconnect { minutes: 0, tenths: 0, invoices: 0, credits: 0, rebated: false, log: String.new() };
+    println(settle(mut ic, north, d1, r1));
+    println(settle(mut ic, coast, d2, r2));
+    println(settle(mut ic, valley, d3, r3));
+    println(settle(mut ic, metro, d4, r4));
+    if fs.write("settle.log", ic.log).is_err() {
+        return Err(bad("could not write settle.log"));
+    }
+    let back = read_text("settle.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"settle.log: {rows} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["north_subs.csv", "coast_subs.csv", "valley_subs.csv", "metro_subs.csv", "north_cdrs.csv", "coast_cdrs.csv", "valley_cdrs.csv", "metro_cdrs.csv", "coast_cdrs.bad", "settle.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"cdr_rating failed: {e.describe()}"),
+    }
+}

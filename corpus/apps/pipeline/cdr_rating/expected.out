@@ -1,0 +1,32 @@
+north: subscribers 18,551 bytes, fnv b9b96c87; records 342,486 bytes, fnv 55d8a374
+coast: subscribers 18,567 bytes, fnv dce649ad; records 342,289 bytes, fnv 2df11eb3
+valley: subscribers 18,338 bytes, fnv f8391a02; records 341,931 bytes, fnv f9b695d3
+metro: subscribers 18,830 bytes, fnv 4c4abbc9; records 342,528 bytes, fnv f2d94121
+coast_cdrs.bad line 2078: bad start '2026-09-31 10:00:00'
+metro_cdrs.csv line 2: bad record id 'M000001'
+parsed files match the built ones: true
+north traffic: 5,600 records, 80 switch retries dropped, 337 before activation; 3,284 calls for 19,593 minutes (59.5% at peak), 1,190 texts, 47.15 GB, 42 top-ups for $890.00
+coast traffic: 5,600 records, 80 switch retries dropped, 224 before activation; 3,252 calls for 19,208 minutes (60.9% at peak), 1,232 texts, 39.61 GB, 82 top-ups for $1,670.00
+valley traffic: 5,600 records, 80 switch retries dropped, 156 before activation; 3,174 calls for 18,934 minutes (62.3% at peak), 1,294 texts, 45.29 GB, 55 top-ups for $1,075.00
+metro traffic: 5,600 records, 80 switch retries dropped, 408 before activation; 3,272 calls for 18,387 minutes (60.1% at peak), 1,238 texts, 42.49 GB, 30 top-ups for $605.00
+north classes: most minutes onnet 7027, offnet 4189, fixed 2454; most revenue satellite $1,162.38, premium $659.08, roaming $578.95; 9,835 bundle minutes used
+coast classes: most minutes onnet 6293, offnet 4470, fixed 2530; most revenue satellite $954.90, premium $609.73, roaming $514.97; 8,284 bundle minutes used
+valley classes: most minutes onnet 6317, offnet 3629, fixed 2846; most revenue premium $1,016.17, satellite $824.22, roaming $660.79; 7,877 bundle minutes used
+metro classes: most minutes onnet 7131, offnet 3539, fixed 2534; most revenue satellite $1,618.83, premium $857.00, roaming $693.38; 10,364 bundle minutes used
+north postpaid: 348 bills for $15,851.25 (fees $10,562.50, usage $4,080.45, tax $1,208.30), ARPU $45.54; 21 over their credit limit; largest 71100416 $504.29
+coast postpaid: 285 bills for $12,807.09 (fees $8,981.00, usage $2,849.82, tax $976.27), ARPU $44.93; 12 over their credit limit; largest 72102314 $261.15
+valley postpaid: 270 bills for $10,676.19 (fees $6,647.00, usage $3,215.25, tax $813.94), ARPU $39.54; 17 over their credit limit; largest 73100052 $555.96
+metro postpaid: 387 bills for $20,195.92 (fees $14,094.00, usage $4,562.54, tax $1,539.38), ARPU $52.18; 9 over their credit limit; largest 74100572 $650.17
+north prepaid: 132 lines, $780.00 topped up, $837.66 spent, 327 events refused for credit, 9 lines under 10 cents; $1,395.57 held
+coast prepaid: 195 lines, $1,600.00 topped up, $1,634.20 spent, 336 events refused for credit, 15 lines under 10 cents; $2,266.59 held
+valley prepaid: 210 lines, $1,055.00 topped up, $1,361.73 spent, 416 events refused for credit, 12 lines under 10 cents; $2,153.21 held
+metro prepaid: 93 lines, $605.00 topped up, $686.54 spent, 80 events refused for credit, 5 lines under 10 cents; $999.42 held
+north fraud: 2 flagged, 3 to watch; highest 71101183 80 (simbox x160 short); 71101859 80 (simbox x160 short); 71100910 30 (premium)
+coast fraud: 2 flagged, 3 to watch; highest 72102639 80 (simbox x160 short); 72104147 80 (simbox x106 short); 72100728 30 (premium)
+valley fraud: 2 flagged, 11 to watch; highest 73103731 80 (simbox x160 short); 73105863 80 (simbox x160 short); 73100572 45 (premium roaming)
+metro fraud: 1 flagged, 5 to watch; highest 74102197 80 (simbox x162 short); 74100182 30 (premium); 74100312 30 (premium)
+north interconnect: 888 calls, 4,189 minutes, $50.27 in invoices IC-0001 to IC-0004; month to date 4,189 minutes in tier 1, owed $50.27
+coast interconnect: 852 calls, 4,470 minutes, $45.66 in invoices IC-0005 to IC-0008; month to date 8,659 minutes in tier 2, owed $95.93
+valley interconnect: 871 calls, 3,629 minutes, $31.80 in invoices IC-0009 to IC-0012; month to date 12,288 minutes in tier 3, owed $127.73
+metro interconnect: 840 calls, 3,539 minutes, $21.23 in invoices IC-0013 to IC-0016; rebate CN-0001 of $30.00 at 2026-09-24 17:47:09; month to date 15,827 minutes in tier 3, owed $118.96
+settle.log: 17 entries, 609 bytes, fnv cdb5d348
