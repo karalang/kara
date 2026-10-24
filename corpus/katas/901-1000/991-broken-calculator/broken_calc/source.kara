@@ -1,0 +1,56 @@
+// LeetCode #991: Broken Calculator -- greedy from the target back
+//
+// Run backwards, the two keys become "add 1" and "halve an even
+// number". While the target is above the start, halving an even target
+// is always right, and an odd one has to be made even first; once it
+// is at or below the start, the rest is adding 1 until it meets the
+// start, which forwards is pressing Decrement first. O(log target).
+
+fn broken_calc(start_value: i64, target: i64) -> i64 {
+    let mut ops = 0;
+    let mut t = target;
+    while t > start_value {
+        if t % 2 == 1 {
+            t += 1;
+        } else {
+            t /= 2;
+        }
+        ops += 1;
+    }
+    ops + start_value - t
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(i64, i64)] = vec![
+        (2, 3), (5, 8), (3, 10),
+        (1, 1), (10, 1), (1, 1000000000), (1000000000, 1),
+        (1000000000, 1000000000), (7, 1000000000), (999999999, 1000000000),
+        (3, 1024), (1, 536870913),
+    ];
+    for (s, t) in cases {
+        println(f"startValue = {s}, target = {t} -> {broken_calc(s, t)}");
+    }
+    // random pairs: 300 up to 20, 3000 up to 1000, 3000 up to 10^9, and
+    // 300 with the start up to 1000 and the target up to 10^9
+    let mut seed = 991;
+    for (count, most_s, most_t) in vec![(300, 20, 20), (3000, 1000, 1000), (3000, 1000000000, 1000000000), (300, 1000, 1000000000)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let s = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % most_s;
+            let t = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % most_t;
+            let got = broken_calc(s, t);
+            total += got;
+            check = (check * 31 + got + 1) % 1000000007;
+        }
+        println(f"{count} random pairs, start up to {most_s}, target up to {most_t}: {total} operations, checksum {check}");
+    }
+}

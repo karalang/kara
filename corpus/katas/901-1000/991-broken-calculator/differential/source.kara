@@ -1,0 +1,254 @@
+// LeetCode #991: Broken Calculator -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random pairs.
+
+// ---- star ----
+
+fn star_broken_calc(start_value: i64, target: i64) -> i64 {
+    let mut ops = 0;
+    let mut t = target;
+    while t > start_value {
+        if t % 2 == 1 {
+            t += 1;
+        } else {
+            t /= 2;
+        }
+        ops += 1;
+    }
+    ops + start_value - t
+}
+
+// ---- recursive ----
+
+fn recursive_broken_calc(start_value: i64, target: i64) -> i64 {
+    if target <= start_value {
+        start_value - target
+    } else if target % 2 == 0 {
+        1 + recursive_broken_calc(start_value, target / 2)
+    } else {
+        1 + recursive_broken_calc(start_value, target + 1)
+    }
+}
+
+// ---- doublings ----
+
+fn doublings_ones(x: i64) -> i64 {
+    let mut n = 0;
+    let mut rest = x;
+    while rest > 0 {
+        n += rest % 2;
+        rest /= 2;
+    }
+    n
+}
+
+fn doublings_broken_calc(start_value: i64, target: i64) -> i64 {
+    let mut best = -1;
+    let mut reach = start_value;
+    let mut power = 1;
+    for d in 0..33 {
+        if reach >= target {
+            let over = reach - target;
+            let cost = d + over / power + doublings_ones(over % power);
+            if best < 0 or cost < best {
+                best = cost;
+            }
+        }
+        reach *= 2;
+        power *= 2;
+    }
+    best
+}
+
+// ---- closed ----
+
+fn closed_broken_calc(start_value: i64, target: i64) -> i64 {
+    if target <= start_value {
+        return start_value - target;
+    }
+    let mut h = 0;
+    let mut power = 1;
+    while (target + power - 1) / power > start_value {
+        h += 1;
+        power *= 2;
+    }
+    let c = (target + power - 1) / power;
+    let mut rounding = c * power - target;
+    let mut ones = 0;
+    while rounding > 0 {
+        ones += rounding % 2;
+        rounding /= 2;
+    }
+    h + ones + start_value - c
+}
+
+// ---- replay ----
+
+fn replay_broken_calc(start_value: i64, target: i64) -> i64 {
+    let mut d = 0;
+    let mut power = 1;
+    while start_value * power < target {
+        d += 1;
+        power *= 2;
+    }
+    let over = start_value * power - target;
+    let mut x = start_value - over / power;
+    let mut presses = over / power;
+    let mut bit = power / 2;
+    for _ in 0..d {
+        x *= 2;
+        presses += 1;
+        if over % (2 * bit) >= bit {
+            x -= 1;
+            presses += 1;
+        }
+        bit /= 2;
+    }
+    if x != target {
+        panic("the plan missed the target");
+    }
+    presses
+}
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(k: i64, s: i64, t: i64) -> i64 {
+    if k == 0 {
+        star_broken_calc(s, t)
+    } else if k == 1 {
+        recursive_broken_calc(s, t)
+    } else if k == 2 {
+        doublings_broken_calc(s, t)
+    } else if k == 3 {
+        closed_broken_calc(s, t)
+    } else {
+        replay_broken_calc(s, t)
+    }
+}
+
+// The statement read literally: the fewest presses of Double and
+// Decrement from s to t, by a breadth-first search over the values the
+// display can show, kept between 1 and four times the larger of s and
+// t.
+fn literal(s: i64, t: i64) -> i64 {
+    let cap = 4 * (if s > t { s } else { t });
+    let mut dist: Vec[i64] = Vec.filled(cap + 1, -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    dist[s] = 0;
+    queue.push_back(s);
+    while let Some(x) = queue.pop_front() {
+        if x == t {
+            return dist[x];
+        }
+        for y in vec![2 * x, x - 1] {
+            if y >= 1 and y <= cap and dist[y] < 0 {
+                dist[y] = dist[x] + 1;
+                queue.push_back(y);
+            }
+        }
+    }
+    -1
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, s: i64, t: i64, small: bool, seed: mut ref i64) -> i64 {
+    let truth = if small { literal(s, t) } else { -1 };
+    let mut got: Vec[i64] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, s, t));
+    }
+    // the fewest doublings that take s to t or past it
+    let mut fewest = 0;
+    let mut reach = s;
+    while reach < t {
+        fewest += 1;
+        reach *= 2;
+    }
+    // a random k with s * 2^k no more than 10^9
+    let mut room = 0;
+    let mut grown = s;
+    while grown * 2 <= 1000000000 {
+        room += 1;
+        grown *= 2;
+    }
+    let k_up = next_random(mut seed) % (room + 1);
+    let mut scaled = s;
+    for _ in 0..k_up {
+        scaled *= 2;
+    }
+    for k in 0..5 {
+        let a = got[k];
+        // P1: the statement's answer, on the first 3000 pairs
+        if small {
+            check(mut tally, 1, a == truth);
+        }
+        // P2: a target one higher, or half as high, is at most one press
+        // further back: Decrement, or Double, last
+        check(mut tally, 2, a <= 1 + arm(k, s, t + 1) and arm(k, s, 2 * t) <= 1 + a);
+        // P3: s - t when t is not above s; otherwise at least the fewest
+        // doublings that reach t, and at most twice those plus s
+        let bounded = if t <= s { a == s - t } else { a >= fewest and a <= 2 * fewest + s };
+        check(mut tally, 3, bounded);
+        // P4: a start one higher is at most one press further: Decrement
+        // first
+        check(mut tally, 4, arm(k, s + 1, t) <= 1 + a);
+        // P5: s * 2^k takes exactly k presses
+        check(mut tally, 5, arm(k, s, scaled) == k_up);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == a {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 991;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 pairs up to 40 against the statement, then 200 up to 10^9,
+    // with the start up to 10^9 and up to 1000 in turn
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most_s = if small { 40 } else if c % 2 == 0 { 1000000000 } else { 1000 };
+        let most_t = if small { 40 } else { 1000000000 };
+        let s = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % most_s;
+        let t = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % most_t;
+        let got = properties(mut tally, s, t, small, mut seed);
+        total += got;
+        check_sum = (check_sum * 31 + got + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 pairs: {total} operations, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

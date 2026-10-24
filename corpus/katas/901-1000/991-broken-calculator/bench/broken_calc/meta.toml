@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/991-broken-calculator/bench/broken_calc.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "123a5dc8e"
+extracted_src = "340f8ac6"

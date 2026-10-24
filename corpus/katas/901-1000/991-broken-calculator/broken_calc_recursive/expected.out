@@ -1,0 +1,16 @@
+startValue = 2, target = 3 -> 2
+startValue = 5, target = 8 -> 2
+startValue = 3, target = 10 -> 3
+startValue = 1, target = 1 -> 0
+startValue = 10, target = 1 -> 9
+startValue = 1, target = 1000000000 -> 39
+startValue = 1000000000, target = 1 -> 999999999
+startValue = 1000000000, target = 1000000000 -> 0
+startValue = 7, target = 1000000000 -> 40
+startValue = 999999999, target = 1000000000 -> 500000000
+startValue = 3, target = 1024 -> 10
+startValue = 1, target = 536870913 -> 59
+300 random pairs, start up to 20, target up to 20: 1614 operations, checksum 329204367
+3000 random pairs, start up to 1000, target up to 1000: 663779 operations, checksum 324027524
+3000 random pairs, start up to 1000000000, target up to 1000000000: 678414593437 operations, checksum 107129009
+300 random pairs, start up to 1000, target up to 1000000000: 48017 operations, checksum 111264715
