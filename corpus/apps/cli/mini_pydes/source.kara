@@ -1,0 +1,1257 @@
+// cli/mini_pydes
+//
+// A port of pyDes 2.0.1 (MIT; Todd Whiteman), the pure-Python DES and
+// Triple DES library: the bit-list DES of `des`, its sub-key schedule,
+// ECB and CBC, PAD_NORMAL and PAD_PKCS5 padding, `triple_des` in its
+// EDE3 and EDE2 forms with its own CBC loop, every argument check and
+// setter, and the str-or-bytes guard. On top of it sit the tools a payment
+// terminal or a key-management job builds from DES: key check values,
+// ISO 9564 format 0 PIN blocks, PIN translation between zone keys, and
+// the ANSI X9.19 retail MAC.
+//
+// The jobs are in jobs_text(), generated from data/jobs.txt; oracle.py
+// plays the same jobs through the vendored pyDes.
+
+const ECB: i64 = 0;
+const CBC: i64 = 1;
+const PAD_NORMAL: i64 = 1;
+const PAD_PKCS5: i64 = 2;
+const ENCRYPT: i64 = 0;
+const DECRYPT: i64 = 1;
+const BLOCK_SIZE: i64 = 8;
+const MASK32: i64 = 4294967295;
+
+// Permutation and translation tables for DES
+const PC1: Array[i64, 56] = [
+    56, 48, 40, 32, 24, 16, 8,
+    0, 57, 49, 41, 33, 25, 17,
+    9, 1, 58, 50, 42, 34, 26,
+    18, 10, 2, 59, 51, 43, 35,
+    62, 54, 46, 38, 30, 22, 14,
+    6, 61, 53, 45, 37, 29, 21,
+    13, 5, 60, 52, 44, 36, 28,
+    20, 12, 4, 27, 19, 11, 3,
+];
+
+// number left rotations of pc1
+const LEFT_ROTATIONS: Array[i64, 16] = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1];
+
+// permuted choice key (table 2)
+const PC2: Array[i64, 48] = [
+    13, 16, 10, 23, 0, 4,
+    2, 27, 14, 5, 20, 9,
+    22, 18, 11, 3, 25, 7,
+    15, 6, 26, 19, 12, 1,
+    40, 51, 30, 36, 46, 54,
+    29, 39, 50, 44, 32, 47,
+    43, 48, 38, 55, 33, 52,
+    45, 41, 49, 35, 28, 31,
+];
+
+// initial permutation IP
+const IP: Array[i64, 64] = [
+    57, 49, 41, 33, 25, 17, 9, 1,
+    59, 51, 43, 35, 27, 19, 11, 3,
+    61, 53, 45, 37, 29, 21, 13, 5,
+    63, 55, 47, 39, 31, 23, 15, 7,
+    56, 48, 40, 32, 24, 16, 8, 0,
+    58, 50, 42, 34, 26, 18, 10, 2,
+    60, 52, 44, 36, 28, 20, 12, 4,
+    62, 54, 46, 38, 30, 22, 14, 6,
+];
+
+// Expansion table for turning 32 bit blocks into 48 bits
+const EXPANSION_TABLE: Array[i64, 48] = [
+    31, 0, 1, 2, 3, 4,
+    3, 4, 5, 6, 7, 8,
+    7, 8, 9, 10, 11, 12,
+    11, 12, 13, 14, 15, 16,
+    15, 16, 17, 18, 19, 20,
+    19, 20, 21, 22, 23, 24,
+    23, 24, 25, 26, 27, 28,
+    27, 28, 29, 30, 31, 0,
+];
+
+// The (in)famous S-boxes
+const SBOX: Array[Array[i64, 64], 8] = [
+    // S1
+    [14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7,
+     0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8,
+     4, 1, 14, 8, 13, 6, 2, 11, 15, 12, 9, 7, 3, 10, 5, 0,
+     15, 12, 8, 2, 4, 9, 1, 7, 5, 11, 3, 14, 10, 0, 6, 13],
+    // S2
+    [15, 1, 8, 14, 6, 11, 3, 4, 9, 7, 2, 13, 12, 0, 5, 10,
+     3, 13, 4, 7, 15, 2, 8, 14, 12, 0, 1, 10, 6, 9, 11, 5,
+     0, 14, 7, 11, 10, 4, 13, 1, 5, 8, 12, 6, 9, 3, 2, 15,
+     13, 8, 10, 1, 3, 15, 4, 2, 11, 6, 7, 12, 0, 5, 14, 9],
+    // S3
+    [10, 0, 9, 14, 6, 3, 15, 5, 1, 13, 12, 7, 11, 4, 2, 8,
+     13, 7, 0, 9, 3, 4, 6, 10, 2, 8, 5, 14, 12, 11, 15, 1,
+     13, 6, 4, 9, 8, 15, 3, 0, 11, 1, 2, 12, 5, 10, 14, 7,
+     1, 10, 13, 0, 6, 9, 8, 7, 4, 15, 14, 3, 11, 5, 2, 12],
+    // S4
+    [7, 13, 14, 3, 0, 6, 9, 10, 1, 2, 8, 5, 11, 12, 4, 15,
+     13, 8, 11, 5, 6, 15, 0, 3, 4, 7, 2, 12, 1, 10, 14, 9,
+     10, 6, 9, 0, 12, 11, 7, 13, 15, 1, 3, 14, 5, 2, 8, 4,
+     3, 15, 0, 6, 10, 1, 13, 8, 9, 4, 5, 11, 12, 7, 2, 14],
+    // S5
+    [2, 12, 4, 1, 7, 10, 11, 6, 8, 5, 3, 15, 13, 0, 14, 9,
+     14, 11, 2, 12, 4, 7, 13, 1, 5, 0, 15, 10, 3, 9, 8, 6,
+     4, 2, 1, 11, 10, 13, 7, 8, 15, 9, 12, 5, 6, 3, 0, 14,
+     11, 8, 12, 7, 1, 14, 2, 13, 6, 15, 0, 9, 10, 4, 5, 3],
+    // S6
+    [12, 1, 10, 15, 9, 2, 6, 8, 0, 13, 3, 4, 14, 7, 5, 11,
+     10, 15, 4, 2, 7, 12, 9, 5, 6, 1, 13, 14, 0, 11, 3, 8,
+     9, 14, 15, 5, 2, 8, 12, 3, 7, 0, 4, 10, 1, 13, 11, 6,
+     4, 3, 2, 12, 9, 5, 15, 10, 11, 14, 1, 7, 6, 0, 8, 13],
+    // S7
+    [4, 11, 2, 14, 15, 0, 8, 13, 3, 12, 9, 7, 5, 10, 6, 1,
+     13, 0, 11, 7, 4, 9, 1, 10, 14, 3, 5, 12, 2, 15, 8, 6,
+     1, 4, 11, 13, 12, 3, 7, 14, 10, 15, 6, 8, 0, 5, 9, 2,
+     6, 11, 13, 8, 1, 4, 10, 7, 9, 5, 0, 15, 14, 2, 3, 12],
+    // S8
+    [13, 2, 8, 4, 6, 15, 11, 1, 10, 9, 3, 14, 5, 0, 12, 7,
+     1, 15, 13, 8, 10, 3, 7, 4, 12, 5, 6, 11, 0, 14, 9, 2,
+     7, 11, 4, 1, 9, 12, 14, 2, 0, 6, 10, 13, 15, 3, 5, 8,
+     2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11],
+];
+
+// 32-bit permutation function P used on the output of the S-boxes
+const PERM_P: Array[i64, 32] = [
+    15, 6, 19, 20, 28, 11,
+    27, 16, 0, 14, 22, 25,
+    4, 17, 30, 9, 1, 7,
+    23, 13, 31, 26, 2, 8,
+    18, 12, 29, 5, 21, 10,
+    3, 24,
+];
+
+// final permutation IP^-1
+const FP: Array[i64, 64] = [
+    39, 7, 47, 15, 55, 23, 63, 31,
+    38, 6, 46, 14, 54, 22, 62, 30,
+    37, 5, 45, 13, 53, 21, 61, 29,
+    36, 4, 44, 12, 52, 20, 60, 28,
+    35, 3, 43, 11, 51, 19, 59, 27,
+    34, 2, 42, 10, 50, 18, 58, 26,
+    33, 1, 41, 9, 49, 17, 57, 25,
+    32, 0, 40, 8, 48, 16, 56, 24,
+];
+
+// ------------------------------------------------------------ Python values
+
+// What pyDes is handed and hands back: bytes, a str (only ASCII text
+// survives the guard, and crypt() returns '' for empty data), or None.
+#[derive(Clone)]
+enum PyVal {
+    Bytes(Vec[u8]),
+    Str(String),
+    Nothing,
+}
+
+impl PyVal {
+    fn truthy(ref self) -> bool {
+        match self {
+            PyVal.Bytes(b) => b.len() > 0,
+            PyVal.Str(s) => s.len() > 0,
+            PyVal.Nothing => false,
+        }
+    }
+
+    // len(): bytes, or the code points of a str.
+    fn length(ref self) -> i64 {
+        match self {
+            PyVal.Bytes(b) => b.len() as i64,
+            PyVal.Str(s) => s.chars().count() as i64,
+            PyVal.Nothing => 0,
+        }
+    }
+
+    fn slice(ref self, from: i64, to: i64) -> PyVal {
+        match self {
+            PyVal.Bytes(b) => PyVal.Bytes(sub(b, imin(from, b.len() as i64), imin(to, b.len() as i64))),
+            PyVal.Str(s) => {
+                let cs: Vec[char] = s.chars().collect();
+                let n = cs.len() as i64;
+                let mut out = String.new();
+                for i in imin(from, n)..imin(to, n) {
+                    out.push(cs[i]);
+                }
+                PyVal.Str(out)
+            }
+            PyVal.Nothing => PyVal.Nothing,
+        }
+    }
+
+    // The bytes of a value the guard has passed.
+    fn bytes(ref self) -> Vec[u8] {
+        match self {
+            PyVal.Bytes(b) => b.clone(),
+            PyVal.Str(s) => s.bytes().to_vec(),
+            PyVal.Nothing => Vec.new(),
+        }
+    }
+
+    fn repr(ref self) -> String {
+        match self {
+            PyVal.Bytes(b) => bytes_repr(b),
+            PyVal.Str(s) => str_repr(s),
+            PyVal.Nothing => "None".to_string(),
+        }
+    }
+}
+
+enum DesError {
+    Value(String),
+}
+
+impl DesError {
+    fn describe(ref self) -> String {
+        match self {
+            DesError.Value(m) => "ValueError: " + m.replace("\n", "\\n"),
+        }
+    }
+}
+
+fn value_error(msg: ref String) -> DesError {
+    DesError.Value(msg.clone())
+}
+
+fn imin(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn sub(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = from;
+    while i < to {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for x in b {
+        if x == b'\'' {
+            has_single = true;
+        }
+        if x == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let mut out = String.new();
+    out.push('b');
+    out.push(chr(q as i64));
+    for c in b {
+        if c == q or c == b'\\' {
+            out.push('\\');
+            out.push(chr(c as i64));
+        } else if c == b'\n' {
+            out.push_str("\\n");
+        } else if c == b'\r' {
+            out.push_str("\\r");
+        } else if c == b'\t' {
+            out.push_str("\\t");
+        } else if c < 32 or c >= 127 {
+            let n = c as i64;
+            out.push_str(f"\\x{n:02x}");
+        } else {
+            out.push(chr(c as i64));
+        }
+    }
+    out.push(chr(q as i64));
+    out
+}
+
+// repr() of an ASCII str.
+fn str_repr(s: ref String) -> String {
+    let body = bytes_repr(s.bytes().to_vec());
+    body.substring(1)
+}
+
+fn hex_digit(b: u8) -> i64 {
+    if b >= b'0' and b <= b'9' {
+        (b - b'0') as i64
+    } else if b >= b'a' and b <= b'f' {
+        (b - b'a') as i64 + 10
+    } else if b >= b'A' and b <= b'F' {
+        (b - b'A') as i64 + 10
+    } else {
+        -1
+    }
+}
+
+fn from_hex(text: ref String) -> Vec[u8] {
+    let raw = text.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < raw.len() as i64 {
+        out.push((hex_digit(raw[i]) * 16 + hex_digit(raw[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn to_hex(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        let n = x as i64;
+        out.push_str(f"{n:02x}");
+    }
+    out
+}
+
+fn repeat_bytes(pat: ref Vec[u8], times: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for _ in 0..times {
+        for x in pat {
+            out.push(x);
+        }
+    }
+    out
+}
+
+// _baseDes._guardAgainstUnicode: a str must be ASCII and becomes bytes.
+fn guard(data: ref PyVal) -> Result[PyVal, DesError] {
+    match data {
+        PyVal.Str(s) => {
+            for b in s.bytes() {
+                if b >= 128 {
+                    return Err(value_error("pyDes can only work with encoded strings, not Unicode."));
+                }
+            }
+            Ok(PyVal.Bytes(s.bytes().to_vec()))
+        }
+        _ => Ok(data.clone()),
+    }
+}
+
+// ------------------------------------------------------------ _baseDes
+
+struct Base {
+    mode: i64,
+    iv: PyVal,
+    padding: PyVal,
+    padmode: i64,
+    key: PyVal,
+}
+
+fn new_base(mode: i64, iv: ref PyVal, pad: ref PyVal, padmode: i64) -> Result[Base, DesError] {
+    let mut iv_v = iv.clone();
+    let mut pad_v = pad.clone();
+    if iv_v.truthy() {
+        iv_v = guard(iv_v)?;
+    }
+    if pad_v.truthy() {
+        pad_v = guard(pad_v)?;
+    }
+    // Sanity checking of arguments.
+    if pad_v.truthy() and padmode == PAD_PKCS5 {
+        return Err(value_error("Cannot use a pad character with PAD_PKCS5"));
+    }
+    if iv_v.truthy() and iv_v.length() != BLOCK_SIZE {
+        return Err(value_error(f"Invalid Initial Value (IV), must be a multiple of {BLOCK_SIZE} bytes"));
+    }
+    Ok(Base { mode: mode, iv: iv_v, padding: pad_v, padmode: padmode, key: PyVal.Nothing })
+}
+
+impl Base {
+    fn set_padding(mut ref self, pad: ref PyVal) -> Result[(), DesError] {
+        self.padding = match pad {
+            PyVal.Nothing => PyVal.Nothing,
+            _ => guard(pad)?,
+        };
+        Ok(())
+    }
+
+    fn set_iv(mut ref self, iv: ref PyVal) -> Result[(), DesError] {
+        if not iv.truthy() or iv.length() != BLOCK_SIZE {
+            return Err(value_error(f"Invalid Initial Value (IV), must be a multiple of {BLOCK_SIZE} bytes"));
+        }
+        self.iv = guard(iv)?;
+        Ok(())
+    }
+
+    fn pad_data(ref self, data: own Vec[u8], pad: ref PyVal, padmode: Option[i64]) -> Result[Vec[u8], DesError] {
+        // Pad data depending on the mode
+        let mode = padmode ?? self.padmode;
+        if pad.truthy() and mode == PAD_PKCS5 {
+            return Err(value_error("Cannot use a pad character with PAD_PKCS5"));
+        }
+        let mut out = data;
+        if mode == PAD_NORMAL {
+            if out.len() as i64 % BLOCK_SIZE == 0 {
+                // No padding required.
+                return Ok(out);
+            }
+            let p = if pad.truthy() { pad.bytes() } else { self.padding.bytes() };
+            if p.len() == 0 {
+                return Err(value_error(f"Data must be a multiple of {BLOCK_SIZE} bytes in length. Use padmode=PAD_PKCS5 or set the pad character."));
+            }
+            let extra = repeat_bytes(p, BLOCK_SIZE - out.len() as i64 % BLOCK_SIZE);
+            for x in extra {
+                out.push(x);
+            }
+        } else if mode == PAD_PKCS5 {
+            let pad_len = 8 - out.len() as i64 % BLOCK_SIZE;
+            for _ in 0..pad_len {
+                out.push(pad_len as u8);
+            }
+        }
+        Ok(out)
+    }
+
+    fn unpad_data(ref self, data: own PyVal, pad: ref PyVal, padmode: Option[i64]) -> Result[PyVal, DesError] {
+        // Unpad data depending on the mode.
+        if not data.truthy() {
+            return Ok(data);
+        }
+        if pad.truthy() and padmode == Some(PAD_PKCS5) {
+            return Err(value_error("Cannot use a pad character with PAD_PKCS5"));
+        }
+        let mode = padmode ?? self.padmode;
+        let b = data.bytes();
+        let n = b.len() as i64;
+        if mode == PAD_NORMAL {
+            let p = if pad.truthy() { pad.bytes() } else { self.padding.bytes() };
+            if p.len() > 0 {
+                let cut = imin(BLOCK_SIZE, n);
+                let mut end = n;
+                while end > n - cut and p.contains(b[end - 1]) {
+                    end -= 1;
+                }
+                return Ok(PyVal.Bytes(sub(b, 0, end)));
+            }
+            return Ok(data);
+        } else if mode == PAD_PKCS5 {
+            let pad_len = b[n - 1] as i64;
+            let keep = if pad_len == 0 or pad_len > n { 0 } else { n - pad_len };
+            return Ok(PyVal.Bytes(sub(b, 0, keep)));
+        }
+        Ok(data)
+    }
+}
+
+// ------------------------------------------------------------ des
+
+struct Des {
+    base: Base,
+    kn: Vec[Vec[i64]],
+}
+
+fn new_des(key: ref PyVal, mode: i64, iv: ref PyVal, pad: ref PyVal, padmode: i64) -> Result[Des, DesError] {
+    // Sanity checking of arguments.
+    if key.length() != 8 {
+        return Err(value_error("Invalid DES key size. Key must be exactly 8 bytes long."));
+    }
+    let base = new_base(mode, iv, pad, padmode)?;
+    let mut d = Des { base: base, kn: Vec.new() };
+    d.set_key(key)?;
+    Ok(d)
+}
+
+// Turn the string data, into a list of bits (1, 0)'s
+fn string_to_bit_list(data: ref Vec[u8]) -> Vec[i64] {
+    let mut result: Vec[i64] = Vec.new();
+    for ch in data {
+        let c = ch as i64;
+        let mut i = 7;
+        while i >= 0 {
+            if c & (1 << i) != 0 {
+                result.push(1);
+            } else {
+                result.push(0);
+            }
+            i -= 1;
+        }
+    }
+    result
+}
+
+// Turn the list of bits -> data, into a string
+fn bit_list_to_string(data: ref Vec[i64]) -> Vec[u8] {
+    let mut result: Vec[u8] = Vec.new();
+    let mut c = 0;
+    for pos in 0..data.len() as i64 {
+        c += data[pos] << (7 - pos % 8);
+        if pos % 8 == 7 {
+            result.push(c as u8);
+            c = 0;
+        }
+    }
+    result
+}
+
+// Permutate this block with the specified table
+fn permutate(table: ref Slice[i64], block: ref Vec[i64]) -> Vec[i64] {
+    table.iter().map(|x| block[x]).collect()
+}
+
+fn xor_bits(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..a.len() as i64 {
+        out.push(a[i] ^ b[i]);
+    }
+    out
+}
+
+fn bits_slice(v: ref Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in from..to {
+        out.push(v[i]);
+    }
+    out
+}
+
+fn concat_bits(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    for x in b {
+        out.push(x);
+    }
+    out
+}
+
+impl Des {
+    // Will set the crypting key for this object. Must be 8 bytes.
+    fn set_key(mut ref self, key: ref PyVal) -> Result[(), DesError] {
+        self.base.key = guard(key)?;
+        self.create_sub_keys();
+        Ok(())
+    }
+
+    // Create the 16 subkeys K[1] to K[16] from the given key
+    fn create_sub_keys(mut ref self) {
+        let key = permutate(PC1, string_to_bit_list(self.base.key.bytes()));
+        // Split into Left and Right sections
+        let mut l = bits_slice(key, 0, 28);
+        let mut r = bits_slice(key, 28, 56);
+        self.kn = Vec.new();
+        for i in 0..16 {
+            // Perform circular left shifts
+            for _ in 0..LEFT_ROTATIONS[i] {
+                let a = l.remove(0);
+                l.push(a);
+                let b = r.remove(0);
+                r.push(b);
+            }
+            // Create one of the 16 subkeys through pc2 permutation
+            self.kn.push(permutate(PC2, concat_bits(l, r)));
+        }
+    }
+
+    // Crypt the block of data through DES bit-manipulation
+    fn des_crypt(ref self, block: ref Vec[i64], crypt_type: i64) -> Vec[i64] {
+        let block = permutate(IP, block);
+        let mut l = bits_slice(block, 0, 32);
+        let mut r = bits_slice(block, 32, 64);
+        // Encryption starts from Kn[1] through to Kn[16]; decryption
+        // starts from Kn[16] down to Kn[1]
+        let mut iteration = if crypt_type == ENCRYPT { 0 } else { 15 };
+        let adjustment = if crypt_type == ENCRYPT { 1 } else { -1 };
+        for _ in 0..16 {
+            // Make a copy of R[i-1], this will later become L[i]
+            let temp_r = r.clone();
+            // Permutate R[i - 1] to start creating R[i]
+            r = permutate(EXPANSION_TABLE, r);
+            // Exclusive or R[i - 1] with K[i]
+            r = xor_bits(r, self.kn[iteration]);
+            // Permutate B[1] to B[8] using the S-Boxes
+            let mut bn: Vec[i64] = Vec.new();
+            for j in 0..8 {
+                let b = j * 6;
+                // Work out the offsets
+                let m = (r[b] << 1) + r[b + 5];
+                let n = (r[b + 1] << 3) + (r[b + 2] << 2) + (r[b + 3] << 1) + r[b + 4];
+                // Find the permutation value
+                let v = SBOX[j][(m << 4) + n];
+                // Turn value into bits, add it to result: Bn
+                bn.push((v & 8) >> 3);
+                bn.push((v & 4) >> 2);
+                bn.push((v & 2) >> 1);
+                bn.push(v & 1);
+            }
+            // Permutate the concatination of B[1] to B[8] (Bn)
+            r = permutate(PERM_P, bn);
+            // Xor with L[i - 1]
+            r = xor_bits(r, l);
+            // L[i] becomes R[i - 1]
+            l = temp_r;
+            iteration += adjustment;
+        }
+        // Final permutation of R[16]L[16]
+        permutate(FP, concat_bits(r, l))
+    }
+
+    // Crypt the data in blocks, running it through des_crypt()
+    fn crypt(ref self, data: ref PyVal, crypt_type: i64) -> Result[PyVal, DesError] {
+        // Error check the data
+        if not data.truthy() {
+            return Ok(PyVal.Str(String.new()));
+        }
+        let mut bytes = data.bytes();
+        if bytes.len() as i64 % BLOCK_SIZE != 0 {
+            if crypt_type == DECRYPT {
+                return Err(value_error(f"Invalid data length, data must be a multiple of {BLOCK_SIZE} bytes\n."));
+            }
+            if not self.base.padding.truthy() {
+                return Err(value_error(f"Invalid data length, data must be a multiple of {BLOCK_SIZE} bytes\n. Try setting the optional padding character"));
+            }
+            let extra = repeat_bytes(self.base.padding.bytes(), BLOCK_SIZE - bytes.len() as i64 % BLOCK_SIZE);
+            for x in extra {
+                bytes.push(x);
+            }
+        }
+        let mut iv: Vec[i64] = Vec.new();
+        if self.base.mode == CBC {
+            if self.base.iv.truthy() {
+                iv = string_to_bit_list(self.base.iv.bytes());
+            } else {
+                return Err(value_error("For CBC mode, you must supply the Initial Value (IV) for ciphering"));
+            }
+        }
+        // Split the data into blocks, crypting each one seperately
+        let mut result: Vec[u8] = Vec.new();
+        let mut i = 0;
+        let n = bytes.len() as i64;
+        while i < n {
+            let mut block = string_to_bit_list(sub(bytes, i, imin(i + 8, n)));
+            let mut processed: Vec[i64] = Vec.new();
+            // Xor with IV if using CBC mode
+            if self.base.mode == CBC {
+                if crypt_type == ENCRYPT {
+                    block = xor_bits(block, iv);
+                }
+                processed = self.des_crypt(block, crypt_type);
+                if crypt_type == DECRYPT {
+                    processed = xor_bits(processed, iv);
+                    iv = block;
+                } else {
+                    iv = processed.clone();
+                }
+            } else {
+                processed = self.des_crypt(block, crypt_type);
+            }
+            // Add the resulting crypted block to our list
+            for x in bit_list_to_string(processed) {
+                result.push(x);
+            }
+            i += 8;
+        }
+        Ok(PyVal.Bytes(result))
+    }
+
+    fn encrypt(ref self, data: ref PyVal, pad: ref PyVal, padmode: Option[i64]) -> Result[PyVal, DesError] {
+        let d = guard(data)?;
+        let p = guard(pad)?;
+        let padded = self.base.pad_data(d.bytes(), p, padmode)?;
+        self.crypt(PyVal.Bytes(padded), ENCRYPT)
+    }
+
+    fn decrypt(ref self, data: ref PyVal, pad: ref PyVal, padmode: Option[i64]) -> Result[PyVal, DesError] {
+        let d = guard(data)?;
+        let p = guard(pad)?;
+        let out = self.crypt(d, DECRYPT)?;
+        self.base.unpad_data(out, p, padmode)
+    }
+}
+
+// ------------------------------------------------------------ triple_des
+
+struct TripleDes {
+    base: Base,
+    key_size: i64,
+    key1: Des,
+    key2: Des,
+    key3: Des,
+}
+
+// The three DES keys of setKey(): DES-EDE3 with a 24 byte key, DES-EDE2
+// (the first key again as the third) with a 16 byte key.
+fn triple_keys(base: mut ref Base, key: ref PyVal) -> Result[(i64, Des, Des, Des), DesError] {
+    let mut key_size = 24;
+    if key.length() != key_size {
+        if key.length() == 16 {
+            key_size = 16;
+        } else {
+            return Err(value_error("Invalid triple DES key size. Key must be either 16 or 24 bytes long"));
+        }
+    }
+    if base.mode == CBC {
+        if not base.iv.truthy() {
+            // Use the first 8 bytes of the key
+            base.iv = key.slice(0, BLOCK_SIZE);
+        }
+        if base.iv.length() != BLOCK_SIZE {
+            return Err(value_error("Invalid IV, must be 8 bytes in length"));
+        }
+    }
+    let key1 = new_des(key.slice(0, 8), base.mode, base.iv, base.padding, base.padmode)?;
+    let key2 = new_des(key.slice(8, 16), base.mode, base.iv, base.padding, base.padmode)?;
+    let key3 = if key_size == 16 {
+        new_des(key.slice(0, 8), base.mode, base.iv, base.padding, base.padmode)?
+    } else {
+        new_des(key.slice(16, key.length()), base.mode, base.iv, base.padding, base.padmode)?
+    };
+    base.key = guard(key)?;
+    Ok((key_size, key1, key2, key3))
+}
+
+fn new_triple(key: ref PyVal, mode: i64, iv: ref PyVal, pad: ref PyVal, padmode: i64) -> Result[TripleDes, DesError] {
+    let mut base = new_base(mode, iv, pad, padmode)?;
+    let (key_size, key1, key2, key3) = triple_keys(mut base, key)?;
+    Ok(TripleDes { base: base, key_size: key_size, key1: key1, key2: key2, key3: key3 })
+}
+
+fn join_blocks(blocks: ref Vec[PyVal]) -> PyVal {
+    let mut out: Vec[u8] = Vec.new();
+    for b in blocks {
+        for x in b.bytes() {
+            out.push(x);
+        }
+    }
+    PyVal.Bytes(out)
+}
+
+impl TripleDes {
+    fn set_key(mut ref self, key: ref PyVal) -> Result[(), DesError] {
+        let (key_size, key1, key2, key3) = triple_keys(mut self.base, key)?;
+        self.key_size = key_size;
+        self.key1 = key1;
+        self.key2 = key2;
+        self.key3 = key3;
+        Ok(())
+    }
+
+    fn set_iv_all(mut ref self, iv: ref PyVal) -> Result[(), DesError] {
+        self.key1.base.set_iv(iv)?;
+        self.key2.base.set_iv(iv)?;
+        self.key3.base.set_iv(iv)?;
+        Ok(())
+    }
+
+    fn encrypt(mut ref self, data: ref PyVal, pad: ref PyVal, padmode: Option[i64]) -> Result[PyVal, DesError] {
+        let d = guard(data)?;
+        let p = guard(pad)?;
+        // Pad the data accordingly.
+        let padded = PyVal.Bytes(self.base.pad_data(d.bytes(), p, padmode)?);
+        if self.base.mode == CBC {
+            let iv = self.base.iv.clone();
+            self.set_iv_all(iv)?;
+            let mut result: Vec[PyVal] = Vec.new();
+            let mut i = 0;
+            while i < padded.length() {
+                let mut block = self.key1.crypt(padded.slice(i, i + 8), ENCRYPT)?;
+                block = self.key2.crypt(block, DECRYPT)?;
+                block = self.key3.crypt(block, ENCRYPT)?;
+                self.set_iv_all(block)?;
+                result.push(block);
+                i += 8;
+            }
+            Ok(join_blocks(result))
+        } else {
+            let mut out = self.key1.crypt(padded, ENCRYPT)?;
+            out = self.key2.crypt(out, DECRYPT)?;
+            self.key3.crypt(out, ENCRYPT)
+        }
+    }
+
+    fn decrypt(mut ref self, data: ref PyVal, pad: ref PyVal, padmode: Option[i64]) -> Result[PyVal, DesError] {
+        let d = guard(data)?;
+        let p = guard(pad)?;
+        let mut out = PyVal.Nothing;
+        if self.base.mode == CBC {
+            let iv = self.base.iv.clone();
+            self.set_iv_all(iv)?;
+            let mut result: Vec[PyVal] = Vec.new();
+            let mut i = 0;
+            while i < d.length() {
+                let iv = d.slice(i, i + 8);
+                let mut block = self.key3.crypt(iv, DECRYPT)?;
+                block = self.key2.crypt(block, ENCRYPT)?;
+                block = self.key1.crypt(block, DECRYPT)?;
+                self.set_iv_all(iv)?;
+                result.push(block);
+                i += 8;
+            }
+            out = join_blocks(result);
+        } else {
+            out = self.key3.crypt(d, DECRYPT)?;
+            out = self.key2.crypt(out, ENCRYPT)?;
+            out = self.key1.crypt(out, DECRYPT)?;
+        }
+        self.base.unpad_data(out, p, padmode)
+    }
+}
+
+// ------------------------------------------------------------ either one
+
+enum Cipher {
+    Single(Des),
+    Triple(TripleDes),
+}
+
+impl Cipher {
+    fn base(ref self) -> ref Base {
+        match self {
+            Cipher.Single(d) => ref d.base,
+            Cipher.Triple(t) => ref t.base,
+        }
+    }
+
+    fn encrypt(mut ref self, data: ref PyVal, pad: ref PyVal, padmode: Option[i64]) -> Result[PyVal, DesError] {
+        match self {
+            Cipher.Single(d) => d.encrypt(data, pad, padmode),
+            Cipher.Triple(t) => t.encrypt(data, pad, padmode),
+        }
+    }
+
+    fn decrypt(mut ref self, data: ref PyVal, pad: ref PyVal, padmode: Option[i64]) -> Result[PyVal, DesError] {
+        match self {
+            Cipher.Single(d) => d.decrypt(data, pad, padmode),
+            Cipher.Triple(t) => t.decrypt(data, pad, padmode),
+        }
+    }
+
+    fn set_key(mut ref self, key: ref PyVal) -> Result[(), DesError] {
+        match self {
+            Cipher.Single(d) => d.set_key(key),
+            Cipher.Triple(t) => t.set_key(key),
+        }
+    }
+
+    fn set_mode(mut ref self, mode: i64) {
+        match self {
+            Cipher.Single(d) => d.base.mode = mode,
+            Cipher.Triple(t) => {
+                t.base.mode = mode;
+                t.key1.base.mode = mode;
+                t.key2.base.mode = mode;
+                t.key3.base.mode = mode;
+            }
+        }
+    }
+
+    fn set_padding(mut ref self, pad: ref PyVal) -> Result[(), DesError] {
+        match self {
+            Cipher.Single(d) => d.base.set_padding(pad),
+            Cipher.Triple(t) => {
+                t.base.set_padding(pad)?;
+                t.key1.base.set_padding(pad)?;
+                t.key2.base.set_padding(pad)?;
+                t.key3.base.set_padding(pad)
+            }
+        }
+    }
+
+    fn set_padmode(mut ref self, mode: i64) {
+        match self {
+            Cipher.Single(d) => d.base.padmode = mode,
+            Cipher.Triple(t) => {
+                t.base.padmode = mode;
+                t.key1.base.padmode = mode;
+                t.key2.base.padmode = mode;
+                t.key3.base.padmode = mode;
+            }
+        }
+    }
+
+    fn set_iv(mut ref self, iv: ref PyVal) -> Result[(), DesError] {
+        match self {
+            Cipher.Single(d) => d.base.set_iv(iv),
+            Cipher.Triple(t) => {
+                t.base.set_iv(iv)?;
+                t.set_iv_all(iv)
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ payment tools
+
+fn fnv(data: ref Vec[u8]) -> i64 {
+    let mut h = 2166136261;
+    for c in data {
+        h = ((h ^ (c as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn cipher_for(key: ref PyVal) -> Result[Cipher, DesError] {
+    if key.length() == 8 {
+        return Ok(Cipher.Single(new_des(key, ECB, PyVal.Nothing, PyVal.Nothing, PAD_NORMAL)?));
+    }
+    Ok(Cipher.Triple(new_triple(key, ECB, PyVal.Nothing, PyVal.Nothing, PAD_NORMAL)?))
+}
+
+fn zeros(n: i64) -> Vec[u8] {
+    Vec.filled(n, 0 as u8)
+}
+
+// The key check value: the first three bytes of eight zero bytes encrypted.
+fn kcv(key: ref PyVal) -> Result[String, DesError] {
+    let mut c = cipher_for(key)?;
+    let out = c.encrypt(PyVal.Bytes(zeros(8)), PyVal.Nothing, None)?;
+    Ok(to_hex(sub(out.bytes(), 0, 3)).to_uppercase())
+}
+
+fn xor_bytes(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..a.len() as i64 {
+        out.push(a[i] ^ b[i]);
+    }
+    out
+}
+
+// The PAN field: four zeros and the twelve digits before the check digit.
+fn account_field(pan: ref String) -> Vec[u8] {
+    let n = pan.len() as i64;
+    from_hex("0000" + pan.substring(n - 13, n - 1))
+}
+
+// ISO 9564 format 0: 0, the PIN length, the PIN, F padding, XOR the PAN field.
+fn pin_block(pan: ref String, pin: ref String) -> Vec[u8] {
+    let n = pin.len() as i64;
+    let mut field = f"0{n:X}{pin}";
+    while field.len() < 16 {
+        field.push('F');
+    }
+    xor_bytes(from_hex(field), account_field(pan))
+}
+
+fn pin_from_block(block: ref Vec[u8], pan: ref String) -> (String, String) {
+    let clear = to_hex(xor_bytes(block, account_field(pan))).to_uppercase();
+    let n = hex_digit(clear.bytes()[1]);
+    (clear.substring(0, 1), clear.substring(2, 2 + n))
+}
+
+// ANSI X9.19: single DES CBC over the zero-padded data under the left key,
+// then the last block decrypted under the right key and encrypted again.
+fn retail_mac(key: ref Vec[u8], data: ref Vec[u8]) -> Result[Vec[u8], DesError] {
+    let mut padded = data.clone();
+    if padded.len() % 8 != 0 or padded.len() == 0 {
+        let extra = 8 - padded.len() as i64 % 8;
+        for _ in 0..extra {
+            padded.push(0);
+        }
+    }
+    let k1 = PyVal.Bytes(sub(key, 0, 8));
+    let cbc = new_des(k1, CBC, PyVal.Bytes(zeros(8)), PyVal.Nothing, PAD_NORMAL)?;
+    let all = cbc.encrypt(PyVal.Bytes(padded), PyVal.Nothing, None)?.bytes();
+    let n = all.len() as i64;
+    let last = sub(all, n - 8, n);
+    if key.len() == 8 {
+        return Ok(last);
+    }
+    let k2 = PyVal.Bytes(sub(key, 8, 16));
+    let right = new_des(k2, ECB, PyVal.Nothing, PyVal.Nothing, PAD_NORMAL)?;
+    let left = new_des(k1, ECB, PyVal.Nothing, PyVal.Nothing, PAD_NORMAL)?;
+    let mid = right.decrypt(PyVal.Bytes(last), PyVal.Nothing, None)?;
+    Ok(left.encrypt(mid, PyVal.Nothing, None)?.bytes())
+}
+
+// ------------------------------------------------------------ the jobs
+
+struct State {
+    objs: Map[String, Cipher],
+    last: PyVal,
+}
+
+// A job token's ~XX escapes: bytes, or a str of code points.
+fn unesc_bytes(text: ref String) -> Vec[u8] {
+    let raw = text.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < raw.len() as i64 {
+        if raw[i] == b'~' {
+            out.push((hex_digit(raw[i + 1]) * 16 + hex_digit(raw[i + 2])) as u8);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn unesc_str(text: ref String) -> String {
+    let mut out = String.new();
+    for b in unesc_bytes(text) {
+        out.push(chr(b as i64));
+    }
+    out
+}
+
+fn value(st: ref State, tok: ref String) -> PyVal {
+    if tok == "n" {
+        return PyVal.Nothing;
+    }
+    if tok == "@" {
+        return st.last.clone();
+    }
+    let body = tok.substring(2);
+    if tok.starts_with("h:") {
+        return PyVal.Bytes(from_hex(body));
+    }
+    if tok.starts_with("b:") {
+        return PyVal.Bytes(unesc_bytes(body));
+    }
+    if tok.starts_with("s:") {
+        return PyVal.Str(unesc_str(body));
+    }
+    // r:<n>:<hex>
+    let parts: Vec[String] = tok.split(":").map(|x| x.to_string()).collect();
+    let n = match i64.parse(parts[1]) {
+        Ok(v) => v,
+        Err(_) => 0,
+    };
+    let pat = from_hex(parts[2]);
+    PyVal.Bytes(sub(repeat_bytes(pat, n / pat.len() as i64 + 1), 0, n))
+}
+
+fn mode_of(word: ref String) -> i64 {
+    if word == "CBC" { CBC } else { ECB }
+}
+
+fn show(x: ref PyVal) -> String {
+    match x {
+        PyVal.Bytes(b) => "h:" + to_hex(b),
+        _ => x.repr(),
+    }
+}
+
+struct Opts {
+    key: PyVal,
+    mode: i64,
+    iv: PyVal,
+    pad: PyVal,
+    padmode: Option[i64],
+}
+
+fn options(st: ref State, toks: ref Vec[String], from: i64) -> Opts {
+    let mut o = Opts { key: PyVal.Nothing, mode: ECB, iv: PyVal.Nothing, pad: PyVal.Nothing, padmode: None };
+    for i in from..toks.len() as i64 {
+        let (k, v) = match toks[i].split_once("=") {
+            Some((a, b)) => (a.to_string(), b.to_string()),
+            None => (toks[i].clone(), String.new()),
+        };
+        match k.as_str() {
+            "key" => o.key = value(st, v),
+            "mode" => o.mode = mode_of(v),
+            "iv" => o.iv = value(st, v),
+            "pad" => o.pad = value(st, v),
+            "padmode" => o.padmode = i64.parse(v).ok(),
+            _ => {}
+        }
+    }
+    o
+}
+
+fn run_step(st: mut ref State, line: ref String) -> Result[(), DesError] {
+    let toks: Vec[String] = line.split(" ").map(|x| x.to_string()).collect();
+    let op = toks[0].clone();
+    if op == "new" {
+        let name = toks[1].clone();
+        let o = options(st, toks, 3);
+        let padmode = o.padmode ?? PAD_NORMAL;
+        let made = if toks[2] == "des" {
+            match new_des(o.key, o.mode, o.iv, o.pad, padmode) {
+                Ok(d) => Ok(Cipher.Single(d)),
+                Err(e) => Err(e),
+            }
+        } else {
+            match new_triple(o.key, o.mode, o.iv, o.pad, padmode) {
+                Ok(t) => Ok(Cipher.Triple(t)),
+                Err(e) => Err(e),
+            }
+        };
+        match made {
+            Ok(c) => {
+                st.objs.insert(name.clone(), c);
+                println(f"new {name} = ok");
+            }
+            Err(e) => {
+                st.objs.remove(name);
+                println(f"new {name} ! {e.describe()}");
+            }
+        }
+    } else if op == "enc" or op == "dec" or op == "sum" {
+        let data = value(st, toks[2]);
+        let o = options(st, toks, 3);
+        let obj = match st.objs.get_mut(toks[1]) {
+            Some(c) => c,
+            None => return Err(value_error("no such object")),
+        };
+        let r = if op == "dec" { obj.decrypt(data, o.pad, o.padmode) } else { obj.encrypt(data, o.pad, o.padmode) };
+        match r {
+            Err(e) => println(f"{op} ! {e.describe()}"),
+            Ok(v) => {
+                if op == "dec" {
+                    println(f"dec = {v.repr()}");
+                } else if op == "enc" {
+                    println(f"enc = {show(v)}");
+                } else {
+                    let b = v.bytes();
+                    let start = to_hex(sub(b, 0, imin(8, b.len() as i64)));
+                    println(f"sum = {b.len()} bytes, fnv {fnv(b):08x}, starts {start}");
+                }
+                st.last = v;
+            }
+        }
+    } else if op == "get" {
+        let obj = match st.objs.get(toks[1]) {
+            Some(c) => c,
+            None => return Err(value_error("no such object")),
+        };
+        let base = obj.base();
+        let what = toks[2].clone();
+        let r = match what.as_str() {
+            "key" => base.key.repr(),
+            "iv" => base.iv.repr(),
+            "mode" => f"{base.mode}",
+            "pad" => base.padding.repr(),
+            _ => f"{base.padmode}",
+        };
+        println(f"get {what} = {r}");
+    } else if op == "set" {
+        let what = toks[2].clone();
+        let arg = if toks.len() > 3 { toks[3].clone() } else { String.new() };
+        let v = if what == "key" or what == "iv" or what == "pad" { value(st, arg) } else { PyVal.Nothing };
+        let obj = match st.objs.get_mut(toks[1]) {
+            Some(c) => c,
+            None => return Err(value_error("no such object")),
+        };
+        let r = match what.as_str() {
+            "key" => obj.set_key(v),
+            "iv" => obj.set_iv(v),
+            "mode" => {
+                obj.set_mode(mode_of(arg));
+                Ok(())
+            }
+            "pad" => obj.set_padding(v),
+            _ => {
+                obj.set_padmode(i64.parse(arg).ok() ?? 0);
+                Ok(())
+            }
+        };
+        match r {
+            Ok(_) => println(f"set {what} = ok"),
+            Err(e) => println(f"set {what} ! {e.describe()}"),
+        }
+    } else if op == "kcv" {
+        let key = value(st, toks[1]);
+        match kcv(key) {
+            Ok(k) => println(f"kcv {to_hex(key.bytes())} = {k}"),
+            Err(e) => println(f"kcv ! {e.describe()}"),
+        }
+    } else if op == "pin" {
+        let zpk = value(st, toks[1]);
+        let pan = toks[2].clone();
+        let pin = toks[3].clone();
+        let clear = pin_block(pan, pin);
+        let enc = cipher_for(zpk)?.encrypt(PyVal.Bytes(clear.clone()), PyVal.Nothing, None)?;
+        let dec = cipher_for(zpk)?.decrypt(enc, PyVal.Nothing, None)?;
+        let (fmt, back) = pin_from_block(dec.bytes(), pan);
+        let clear_hex = to_hex(clear).to_uppercase();
+        let enc_hex = to_hex(enc.bytes()).to_uppercase();
+        println(f"pin {pan} {pin}: clear {clear_hex}, under ZPK {enc_hex}, format {fmt}, recovered {back}");
+    } else if op == "translate" {
+        let zpk1 = value(st, toks[1]);
+        let zpk2 = value(st, toks[2]);
+        let pan = toks[3].clone();
+        let pin = toks[4].clone();
+        let enc1 = cipher_for(zpk1)?.encrypt(PyVal.Bytes(pin_block(pan, pin)), PyVal.Nothing, None)?;
+        let clear = cipher_for(zpk1)?.decrypt(enc1, PyVal.Nothing, None)?;
+        let enc2 = cipher_for(zpk2)?.encrypt(clear, PyVal.Nothing, None)?;
+        let (_, back) = pin_from_block(cipher_for(zpk2)?.decrypt(enc2, PyVal.Nothing, None)?.bytes(), pan);
+        let h1 = to_hex(enc1.bytes()).to_uppercase();
+        let h2 = to_hex(enc2.bytes()).to_uppercase();
+        println(f"translate {pan}: {h1} -> {h2}, recovered {back}");
+    } else if op == "mac" {
+        let key = value(st, toks[1]).bytes();
+        let data = value(st, toks[2]).bytes();
+        let m = retail_mac(key, data)?;
+        let short = to_hex(sub(m, 0, 4)).to_uppercase();
+        let full = to_hex(m).to_uppercase();
+        println(f"mac {data.len()} bytes = {short} (full {full})");
+    } else if op == "roundtrip" {
+        let data = value(st, toks[2]);
+        let obj = match st.objs.get_mut(toks[1]) {
+            Some(c) => c,
+            None => return Err(value_error("no such object")),
+        };
+        let e = obj.encrypt(data, PyVal.Nothing, None)?;
+        let d = obj.decrypt(e, PyVal.Nothing, None)?;
+        let verdict = if d.bytes() == data.bytes() { "ok".to_string() } else { "MISMATCH " + d.repr() };
+        let eb = e.bytes();
+        println(f"roundtrip {toks[1]} {data.length()} -> {eb.len()} bytes {to_hex(eb)}, {verdict}");
+    } else {
+        return Err(value_error(f"bad step {line}"));
+    }
+    Ok(())
+}
+
+fn main() {
+    let text = unesc(jobs_text());
+    let mut st = State { objs: Map.new(), last: PyVal.Nothing };
+    for line in text.split("\n") {
+        let line = line.to_string();
+        if line == "" {
+            continue;
+        }
+        if line.starts_with("job ") {
+            st = State { objs: Map.new(), last: PyVal.Nothing };
+            println(f"== {line.substring(4)}");
+            continue;
+        }
+        match run_step(mut st, line) {
+            Ok(_) => {}
+            Err(e) => {
+                println(f"step failed: {e.describe()}");
+                return;
+            }
+        }
+    }
+}
+
+// The ~ escapes gen_kara.py writes for characters a string literal treats
+// specially.
+fn unesc(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < cs.len() as i64 {
+        if cs[i] == '~' and i + 1 < cs.len() as i64 {
+            let c = cs[i + 1];
+            out.push(if c == 't' { '~' } else if c == 'b' { '\\' } else if c == 'q' { '"' } else if c == 'o' { '{' } else { '}' });
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("job FIPS 81 and the classic DES vectors\nnew k des key=h:0123456789abcdef\nenc k b:Now~t20is~t20the~t20time~t20for~t20all~t20\ndec k @\nnew c des key=h:0123456789abcdef mode=CBC iv=h:1234567890abcdef\nenc c b:Now~t20is~t20the~t20time~t20for~t20all~t20\ndec c @\nnew v des key=h:133457799bbcdff1\nenc v h:0123456789abcdef\ndec v @\njob NIST SP 800-17 variable plaintext, key 0101010101010101\nnew k des key=h:0101010101010101\nenc k h:8000000000000000\nenc k h:0800000000000000\nenc k h:0080000000000000\nenc k h:0008000000000000\nenc k h:0000800000000000\nenc k h:0000080000000000\nenc k h:0000008000000000\nenc k h:0000000800000000\nenc k h:0000000080000000\nenc k h:0000000008000000\nenc k h:0000000000800000\nenc k h:0000000000080000\nenc k h:0000000000008000\nenc k h:0000000000000800\nenc k h:0000000000000080\nenc k h:0000000000000008\njob NIST SP 800-17 variable key, plaintext zero\nnew k des key=h:8001010101010101\nenc k h:0000000000000000\nnew k des key=h:0180010101010101\nenc k h:0000000000000000\nnew k des key=h:0101800101010101\nenc k h:0000000000000000\nnew k des key=h:0101018001010101\nenc k h:0000000000000000\nnew k des key=h:0101010180010101\nenc k h:0000000000000000\nnew k des key=h:0101010101800101\nenc k h:0000000000000000\nnew k des key=h:0101010101018001\nenc k h:0000000000000000\nnew k des key=h:0101010101010180\nenc k h:0000000000000000\njob The pyDes docstring example\nnew k des key=s:DESCRYPT mode=CBC iv=b:~t00~t00~t00~t00~t00~t00~t00~t00 pad=n padmode=2\nenc k b:Please~t20encrypt~t20my~t20data\ndec k @\ndec k @ padmode=2\njob Triple DES, three keys and two\nnew t3 3des key=h:0123456789abcdef23456789abcdef01456789abcdef0123\nenc t3 b:The~t20quick~t20brown~t20fox~t20jump\ndec t3 @\nnew t2 3des key=h:0123456789abcdeffedcba9876543210\nenc t2 h:0123456789abcdef0123456789abcdef\ndec t2 @\nnew same 3des key=h:0123456789abcdef0123456789abcdef\nenc same h:4e6f772069732074\nnew single des key=h:0123456789abcdef\nenc single h:4e6f772069732074\njob Triple DES CBC, with an IV and with the key's first half\n");
+    s.push_str("new a 3des key=h:0123456789abcdeffedcba9876543210 mode=CBC iv=h:0011223344556677 padmode=2\nenc a b:card~t204111111111111111~t20exp~t202612\ndec a @\nget a iv\nnew b 3des key=b:K1K1K1K1K2K2K2K2K3K3K3K3 mode=CBC padmode=2\nget b iv\nenc b b:approved~t20000123\ndec b @\nnew c 3des key=s:K1K1K1K1K2K2K2K2K3K3K3K3 mode=CBC padmode=2\nget c iv\nget c key\nenc c b:approved~t20000123\njob PAD_NORMAL with a pad character\nnew k des key=b:8bytekey pad=b:*\nenc k b:ABCDE\ndec k @\nenc k b:ABCDE pad=b:#\ndec k @ pad=b:#\ndec k @ pad=b:*\nenc k b:12345678\ndec k @\njob PAD_NORMAL strips real data that ends in the pad character\nnew k des key=b:8bytekey pad=b:0\nenc k b:total~t201000\ndec k @\nenc k b:pad0pad00000\ndec k @\nenc k b:x0000000\ndec k @\ndec k @ pad=b:x0\njob PAD_NORMAL with no pad character\nnew k des key=b:8bytekey\nenc k b:short\nenc k b:short pad=b:~t20\ndec k @\ndec k @ pad=b:~t20\njob A pad of more than one byte\nnew k des key=b:8bytekey\nenc k b:abc pad=b:xy\nnew p des key=b:8bytekey pad=b:.\nenc p b:abc pad=b:xy\ndec p @ pad=b:xy\nenc p b:abcdefg pad=b:xy\ndec p @\njob PAD_PKCS5\nnew k des key=b:pkcs5key padmode=2\nenc k r:0:41\ndec k @\nenc k r:1:41\ndec k @\nenc k r:7:41\ndec k @\nenc k r:8:41\ndec k @\nenc k r:9:41\ndec k @\nenc k r:15:41\ndec k @\nenc k r:16:41\ndec k @\nenc k b:tail pad=b:*\ndec k h:0000000000000000 pad=b:*\njob PAD_PKCS5 decryption under the wrong key\nnew k des key=b:rightkey padmode=2\nnew w des key=b:wrongkey padmode=2\nenc k b:a~t20message~t20of~t20thirty-one~t20bytes!!\ndec w @\nenc k b:abc\ndec w @\nenc k b:abcdefghijklmnopqrstuvwxyz\ndec w @\njob Padding mode per call\nnew k des key=b:callmode\nenc k b:hello padmode=2\ndec k @\ndec k @ padmode=2\ndec k @ padmode=1 pad=b:~t03\nenc k b:hello padmode=1 pad=b:!\ndec k @ padmode=1\njob Empty data\nnew d des key=b:emptykey\nenc d b:\ndec d b:\ndec d @\nnew e des key=b:emptykey padmode=2\nenc e b:\ndec e @\nnew t 3des key=h:0123456789abcdeffedcba9876543210\nenc t b:\ndec t b:\nnew tc 3des key=h:0123456789abcdeffedcba9876543210 mode=CBC\n");
+    s.push_str("enc tc b:\ndec tc b:\nnew dc des key=b:emptykey mode=CBC\nenc dc b:\njob Key and IV checks\nnew a des key=b:7bytes!\nnew a des key=b:9bytes!!!\nnew a des key=b:\nnew a 3des key=b:8bytekey\nnew a 3des key=b:17bytekey17bytek!\nnew a 3des key=r:32:00\nnew a des key=b:8bytekey mode=CBC iv=b:short\nnew a des key=b:8bytekey mode=CBC iv=b:\nnew a des key=b:8bytekey pad=b:* padmode=2\nnew a 3des key=r:16:01 pad=b:* padmode=2\nnew a 3des key=r:16:01 mode=CBC iv=b:9bytes!!!\nnew a des key=b:8bytekey mode=ECB iv=b:12345678\nget a mode\nget a iv\njob CBC without an IV\nnew k des key=b:8bytekey mode=CBC\nenc k b:12345678\nenc k b:1234567\nset k iv b:12345678\nenc k b:12345678\ndec k @\njob Lengths that are not a multiple of 8\nnew k des key=b:8bytekey\ndec k b:1234567\ndec k b:123456789\nenc k b:123456789\nnew t 3des key=r:24:5a mode=CBC\ndec t b:123456789\nnew e 3des key=r:24:5a\ndec e b:12345\njob Unicode arguments\nnew k des key=s:asciikey\nget k key\nenc k s:plain~t20text\ndec k @\nenc k s:caf~te9\nnew u des key=s:k~te9y~te9~te9~te9~te9~te9\nnew u des key=s:k~te9y\nnew p des key=b:8bytekey pad=s:~te9\nnew q des key=b:8bytekey pad=s:*\nenc q b:abc\ndec q @\nenc q b:abc pad=s:~t2b\ndec q @ pad=s:+\njob Setters and getters\nnew k des key=b:firstkey mode=CBC iv=b:initvect padmode=2\nget k key\nget k mode\nget k iv\nget k pad\nget k padmode\nenc k b:rotate~t20me\nset k key b:secondky\nget k key\nenc k b:rotate~t20me\nset k iv b:othervec\nenc k b:rotate~t20me\nset k iv b:bad\nset k iv n\nset k mode ECB\nenc k b:rotate~t20me\nset k padmode 1\nenc k b:rotate~t20me\nset k pad b:_\nenc k b:rotate~t20me\ndec k @\nset k pad n\nget k pad\nset k pad s:~te9\njob Triple DES setters\nnew t 3des key=h:0123456789abcdeffedcba9876543210\nenc t b:ECB~t20first\nset t mode CBC\nenc t b:ECB~t20first\nset t iv b:12345678\nenc t b:ECB~t20first pad=b:~t00\ndec t @ pad=b:~t00\nset t key h:89abcdef01234567fedcba9876543210\nget t iv\nenc t b:ECB~t20first pad=b:~t00\nset t padmode 2\nenc t b:ECB~t20first\n");
+    s.push_str("dec t @\nset t pad b:*\nset t padmode 1\nset t pad b:*\nenc t b:ECB~t20first\ndec t @\nset t key b:short\nset t iv b:1234\njob Key check values\nkcv h:0123456789abcdeffedcba9876543210\nkcv h:0123456789abcdef0123456789abcdef\nkcv h:c8a7f2e1d0b3a4958677c8f9e0d1b2a3\nkcv h:0123456789abcdeffedcba987654321089abcdef01234567\nkcv h:1111111111111111\nkcv h:0000000000000000\nkcv b:shortkey!\njob ISO 9564 format 0 PIN blocks under a zone PIN key\npin h:0123456789abcdeffedcba9876543210 4111111111111111 1234\npin h:0123456789abcdeffedcba9876543210 5500005555555559 0000\npin h:0123456789abcdeffedcba9876543210 340000000000009 987654\npin h:0123456789abcdeffedcba9876543210 6011000990139424 4321\npin h:0123456789abcdeffedcba9876543210 4012888888881881 123456789012\npin h:0123456789abcdeffedcba9876543210 3530111333300000 55\npin h:0123456789abcdeffedcba9876543210 4000056655665556 7777\npin h:0123456789abcdeffedcba9876543210 5105105105105100 135790\njob PIN translation from one zone key to another\ntranslate h:0123456789abcdeffedcba9876543210 h:c8a7f2e1d0b3a4958677c8f9e0d1b2a3 4111111111111111 1234\ntranslate h:0123456789abcdeffedcba9876543210 h:c8a7f2e1d0b3a4958677c8f9e0d1b2a3 5500005555555559 0000\ntranslate h:0123456789abcdeffedcba9876543210 h:c8a7f2e1d0b3a4958677c8f9e0d1b2a3 340000000000009 987654\ntranslate h:0123456789abcdeffedcba9876543210 h:c8a7f2e1d0b3a4958677c8f9e0d1b2a3 6011000990139424 4321\njob ANSI X9.19 retail MAC\nmac h:0123456789abcdeffedcba9876543210 h:4E6F77206973207468652074696D6520666F7220616C6C20\nmac h:0123456789abcdeffedcba9876543210 h:\nmac h:0123456789abcdeffedcba9876543210 h:00\nmac h:0123456789abcdeffedcba9876543210 h:0102030405060708\nmac h:0123456789abcdeffedcba9876543210 h:0102030405060708090a\nmac h:0123456789abcdeffedcba9876543210 b:cryptogram~t20i\nmac h:0123456789abcdeffedcba9876543210 b:terminal~t20refund~t20settlement~t20approved~t20serv\nmac h:0123456789abcdeffedcba9876543210 b:batch~t20code~t20terminal~t20amount~t20service~t20service~t20currency~t20track~t20service~t20issuer~t20issu\n");
+    s.push_str("mac h:0123456789abcdef b:single~t20length\njob A settlement file, Triple DES CBC with PKCS5\nnew f 3des key=h:0123456789abcdef23456789abcdef01456789abcdef0123 mode=CBC iv=h:a1b2c3d4e5f60718 padmode=2\nsum f b:0001,5100,3562.62~t0a0002,1881,2082.47~t0a0003,0000,2339.09~t0a0004,1111,3436.07~t0a0005,0009,2544.92~t0a0006,0009,1090.34~t0a0007,5559,3015.30~t0a0008,1111,4548.39~t0a0009,0000,3750.07~t0a0010,1111,3303.24~t0a0011,5559,4083.62~t0a0012,5559,4384.06~t0a0013,5100,1523.45~t0a0014,9424,106.07~t0a0015,1111,3358.09~t0a0016,1881,4283.22~t0a0017,0009,453.59~t0a0018,0009,2164.88~t0a0019,5556,4607.13~t0a0020,9424,2449.23~t0a0021,9424,441.70~t0a0022,0009,3683.82~t0a0023,5556,4562.78~t0a0024,1881,2306.16~t0a\ndec f @\njob Round trips\nnew m0 des key=b:roundkey padmode=2\nnew m1 des key=b:roundkey mode=CBC iv=b:rounviv! padmode=2\nnew m2 3des key=b:roundkeyroundkey mode=CBC padmode=2\nnew m3 3des key=b:roundkeyroundkeyroundkey padmode=2\nroundtrip m1 h:46c3235af178cda5e6c344bf83c4b8be8fad9032667c0f2560fc\nroundtrip m3 h:0101e42f79e3009dd236b485093373e03349111b15d7fecee3\nroundtrip m2 h:ddb1dd7cb2b47fa738d2bbec4c8df006c2935bc77b2d03523e30\nroundtrip m0 h:a4768668ae0578dc929c75a6760dbdb119498feb13\nroundtrip m0 h:3b65046d2d149f6c4ea29eb5302e1b6691a2835e\nroundtrip m1 h:67ffffda24134f3d\nroundtrip m1 h:80a8aeaf7e6560b08dea931d72399532\nroundtrip m2 h:418c624f9bac843d8882a2e7ef39129cdb664579\nroundtrip m1 h:e88fe3d1da46bed2f07f96ee23646bb9007901beb2b5fbf9a9\nroundtrip m0 h:517f5685bfc35f9555a29120e1\nroundtrip m3 h:\nroundtrip m1 h:bde875fb15f476\nroundtrip m3 h:0e49a8335a59bb578cd09922940aea798b1a7d355579f655\nroundtrip m2 h:2eebd16d781fe19401e12b43a69be5a5140459f933dad3382b\nroundtrip m0 h:77d22a8f5f10896ae4a985a905bf6debef7f82e6ef7c06917d92b115\nroundtrip m3 h:76f0909b4f78f175fbb8c29c683e48d58d58b6cca4a85ede4acfb1644c\njob A long record under single DES, ECB\nnew k des key=b:longrecs pad=b:~t20\nsum k b:terminal~t20card~t20holder~t20track~t20cryptogram~t20batch~t20expiry~t20holder~t20acquirer~t20refund~t20terminal~t20reversal~t20batch~t20acquirer~t20terminal~t20acquirer~t20amount~t20track~t20refund~t20issuer~t20reversal~t20merchant~t20track~t20holder~t20holder~t20approved~t20expiry~t20approved~t20service~t20card~t20reversal~t20merchant~t20reversal~t20amount~t20code~t20merchant~t20issuer~t20issuer~t20expiry~t20bat\n");
+    s.push_str("dec k @\n");
+    s
+}

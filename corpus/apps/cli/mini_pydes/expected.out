@@ -1,0 +1,309 @@
+== FIPS 81 and the classic DES vectors
+new k = ok
+enc = h:3fa40e8a984d48156a271787ab8883f9893d51ec4b563b53
+dec = b'Now is the time for all '
+new c = ok
+enc = h:e5c7cdde872bf27c43e934008c389c0f683788499a7c05f6
+dec = b'Now is the time for all '
+new v = ok
+enc = h:85e813540f0ab405
+dec = b'\x01#Eg\x89\xab\xcd\xef'
+== NIST SP 800-17 variable plaintext, key 0101010101010101
+new k = ok
+enc = h:95f8a5e5dd31d900
+enc = h:20b9e767b2fb1456
+enc = h:d9031b0271bd5a0a
+enc = h:add0cc8d6e5deba1
+enc = h:2b9f982f20037fa9
+enc = h:e7fce22557d23c97
+enc = h:750d079407521363
+enc = h:d106ff0bed5255d7
+enc = h:e943d7568aec0c5c
+enc = h:ca3a2b036dbc8502
+enc = h:25eb5fc3f8cf0621
+enc = h:8b54536f2f3e64a8
+enc = h:1029d55e880ec2d0
+enc = h:8405d1abe24fb942
+enc = h:2fbc291a570db5c4
+enc = h:cc083f1e6d9e85f6
+== NIST SP 800-17 variable key, plaintext zero
+new k = ok
+enc = h:95a8d72813daa94d
+new k = ok
+enc = h:2055123350c00858
+new k = ok
+enc = h:a2dc9e92fd3cde92
+new k = ok
+enc = h:5199c29a52c9f059
+new k = ok
+enc = h:19d032e64ab0bd8b
+new k = ok
+enc = h:8638809e878787a0
+new k = ok
+enc = h:d1399712f99bf02e
+new k = ok
+enc = h:9cc62df43b6eed74
+== The pyDes docstring example
+new k = ok
+enc = h:6fce536566e6a68f8298c756d049dc031e97e49926079c49
+dec = b'Please encrypt my data'
+dec ! ValueError: Invalid data length, data must be a multiple of 8 bytes\n.
+== Triple DES, three keys and two
+new t3 = ok
+enc = h:1ccf23869d09333ecce21c8112256fe668d5c05dd9b6b900
+dec = b'The quick brown fox jump'
+new t2 = ok
+enc = h:1a4d672dca6cb3351a4d672dca6cb335
+dec = b'\x01#Eg\x89\xab\xcd\xef\x01#Eg\x89\xab\xcd\xef'
+new same = ok
+enc = h:3fa40e8a984d4815
+new single = ok
+enc = h:3fa40e8a984d4815
+== Triple DES CBC, with an IV and with the key's first half
+new a = ok
+enc = h:9d558538ce9064260328faec4722f7906c779fa1c98dcdb9e13cbc4e370483b0
+dec = b'card 4111111111111111 exp 2612'
+get iv = b'\x00\x11"3DUfw'
+new b = ok
+get iv = b'K1K1K1K1'
+enc = h:0860651fbd82e77ccd425cfd138779f1
+dec = b'approved 000123'
+new c = ok
+get iv = 'K1K1K1K1'
+get key = b'K1K1K1K1K2K2K2K2K3K3K3K3'
+enc = h:0860651fbd82e77ccd425cfd138779f1
+== PAD_NORMAL with a pad character
+new k = ok
+enc = h:3a889f2e6d217997
+dec = b'ABCDE'
+enc = h:0efc1ee0b1d60a3b
+dec = b'ABCDE'
+dec ! ValueError: Invalid data length, data must be a multiple of 8 bytes\n.
+enc = h:9f1a74ec160843d7
+dec = b'12345678'
+== PAD_NORMAL strips real data that ends in the pad character
+new k = ok
+enc = h:8141dce590fdd6ad4c9275ba9dc0ba47
+dec = b'total 10'
+enc = h:cc7da7b7e59963064c9275ba9dc0ba47
+dec = b'pad0pad0'
+enc = h:986101314a3d3d80
+dec = b'x'
+dec ! ValueError: Invalid data length, data must be a multiple of 8 bytes\n.
+== PAD_NORMAL with no pad character
+new k = ok
+enc ! ValueError: Data must be a multiple of 8 bytes in length. Use padmode=PAD_PKCS5 or set the pad character.
+enc = h:a6b0aab0b9f9665d
+dec = b'short   '
+dec = b"\xdf\x85hH\x1b'\xa9\xd3"
+== A pad of more than one byte
+new k = ok
+enc ! ValueError: Invalid data length, data must be a multiple of 8 bytes\n. Try setting the optional padding character
+new p = ok
+enc = h:901c58409d120d32a39fff77e0ea084e
+dec = b'abcxyxyxyxyxy...'
+enc = h:c017944f86b4686f09e64cfa0009ecac
+dec = b'abcdefgxy'
+== PAD_PKCS5
+new k = ok
+enc = h:7c60f860e2d7b25f
+dec = b''
+enc = h:82e6da86c70a5efc
+dec = b'A'
+enc = h:391d315a99622d89
+dec = b'AAAAAAA'
+enc = h:08c90b4c01c5cc8f7c60f860e2d7b25f
+dec = b'AAAAAAAA'
+enc = h:08c90b4c01c5cc8f82e6da86c70a5efc
+dec = b'AAAAAAAAA'
+enc = h:08c90b4c01c5cc8f391d315a99622d89
+dec = b'AAAAAAAAAAAAAAA'
+enc = h:08c90b4c01c5cc8f08c90b4c01c5cc8f7c60f860e2d7b25f
+dec = b'AAAAAAAAAAAAAAAA'
+enc ! ValueError: Cannot use a pad character with PAD_PKCS5
+dec = b''
+== PAD_PKCS5 decryption under the wrong key
+new k = ok
+new w = ok
+enc = h:26c2f0068bce35c09bc7140e3020847c59cb630933a67a93615646e19e144841
+dec = b''
+enc = h:fb1e169129ad5c3b
+dec = b''
+enc = h:26176c5d6fa3017c14782b9865d508bad973db7ccee051c716e945b788b45db7
+dec = b''
+== Padding mode per call
+new k = ok
+enc = h:481b7c843ced1614
+dec = b'hello\x03\x03\x03'
+dec = b''
+dec = ''
+enc = h:66814997f162adc1
+dec = b'hello!!!'
+== Empty data
+new d = ok
+enc = ''
+dec = ''
+dec = ''
+new e = ok
+enc = h:2f4d9d8f89ed3565
+dec = b''
+new t = ok
+enc = ''
+dec = ''
+new tc = ok
+enc = h:
+dec = b''
+new dc = ok
+enc = ''
+== Key and IV checks
+new a ! ValueError: Invalid DES key size. Key must be exactly 8 bytes long.
+new a ! ValueError: Invalid DES key size. Key must be exactly 8 bytes long.
+new a ! ValueError: Invalid DES key size. Key must be exactly 8 bytes long.
+new a ! ValueError: Invalid triple DES key size. Key must be either 16 or 24 bytes long
+new a ! ValueError: Invalid triple DES key size. Key must be either 16 or 24 bytes long
+new a ! ValueError: Invalid triple DES key size. Key must be either 16 or 24 bytes long
+new a ! ValueError: Invalid Initial Value (IV), must be a multiple of 8 bytes
+new a = ok
+new a ! ValueError: Cannot use a pad character with PAD_PKCS5
+new a ! ValueError: Cannot use a pad character with PAD_PKCS5
+new a ! ValueError: Invalid Initial Value (IV), must be a multiple of 8 bytes
+new a = ok
+get mode = 0
+get iv = b'12345678'
+== CBC without an IV
+new k = ok
+enc ! ValueError: For CBC mode, you must supply the Initial Value (IV) for ciphering
+enc ! ValueError: Data must be a multiple of 8 bytes in length. Use padmode=PAD_PKCS5 or set the pad character.
+set iv = ok
+enc = h:ca0f162190167730
+dec = b'12345678'
+== Lengths that are not a multiple of 8
+new k = ok
+dec ! ValueError: Invalid data length, data must be a multiple of 8 bytes\n.
+dec ! ValueError: Invalid data length, data must be a multiple of 8 bytes\n.
+enc ! ValueError: Data must be a multiple of 8 bytes in length. Use padmode=PAD_PKCS5 or set the pad character.
+new t = ok
+dec ! ValueError: Invalid data length, data must be a multiple of 8 bytes\n.
+new e = ok
+dec ! ValueError: Invalid data length, data must be a multiple of 8 bytes\n.
+== Unicode arguments
+new k = ok
+get key = b'asciikey'
+enc ! ValueError: Data must be a multiple of 8 bytes in length. Use padmode=PAD_PKCS5 or set the pad character.
+dec = ''
+enc ! ValueError: pyDes can only work with encoded strings, not Unicode.
+new u ! ValueError: pyDes can only work with encoded strings, not Unicode.
+new u ! ValueError: Invalid DES key size. Key must be exactly 8 bytes long.
+new p ! ValueError: pyDes can only work with encoded strings, not Unicode.
+new q = ok
+enc = h:d8e14889011601c4
+dec = b'abc'
+enc = h:b6fafa53956fb8e0
+dec = b'abc'
+== Setters and getters
+new k = ok
+get key = b'firstkey'
+get mode = 1
+get iv = b'initvect'
+get pad = None
+get padmode = 2
+enc = h:61115c2bc1299503099c2e1f3a481f23
+set key = ok
+get key = b'secondky'
+enc = h:400a4fb42b7288c3e848016b5a8dd2b6
+set iv = ok
+enc = h:dc40c027e58a88acbff7e7781776ed3a
+set iv ! ValueError: Invalid Initial Value (IV), must be a multiple of 8 bytes
+set iv ! ValueError: Invalid Initial Value (IV), must be a multiple of 8 bytes
+set mode = ok
+enc = h:ac96b457c4235f37cc5764d2f25d69ab
+set padmode = ok
+enc ! ValueError: Data must be a multiple of 8 bytes in length. Use padmode=PAD_PKCS5 or set the pad character.
+set pad = ok
+enc = h:ac96b457c4235f3744fa02ef4cd9db03
+dec = b'rotate me'
+set pad = ok
+get pad = None
+set pad ! ValueError: pyDes can only work with encoded strings, not Unicode.
+== Triple DES setters
+new t = ok
+enc ! ValueError: Data must be a multiple of 8 bytes in length. Use padmode=PAD_PKCS5 or set the pad character.
+set mode = ok
+enc ! ValueError: Data must be a multiple of 8 bytes in length. Use padmode=PAD_PKCS5 or set the pad character.
+set iv = ok
+enc = h:2a6e0891632b79466593279e5254861a
+dec = b'ECB first'
+set key = ok
+get iv = b'12345678'
+enc = h:882c8058570be6d7700f4264e3cb6f59
+set padmode = ok
+enc = h:882c8058570be6d784b63ff2387f0b5d
+dec = b'ECB first'
+set pad = ok
+set padmode = ok
+set pad = ok
+enc = h:882c8058570be6d71a54538e82997a56
+dec = b'ECB first'
+set key ! ValueError: Invalid triple DES key size. Key must be either 16 or 24 bytes long
+set iv ! ValueError: Invalid Initial Value (IV), must be a multiple of 8 bytes
+== Key check values
+kcv 0123456789abcdeffedcba9876543210 = 08D7B4
+kcv 0123456789abcdef0123456789abcdef = D5D44F
+kcv c8a7f2e1d0b3a4958677c8f9e0d1b2a3 = 6D75FA
+kcv 0123456789abcdeffedcba987654321089abcdef01234567 = 3FD539
+kcv 1111111111111111 = 82E136
+kcv 0000000000000000 = 8CA64D
+kcv ! ValueError: Invalid triple DES key size. Key must be either 16 or 24 bytes long
+== ISO 9564 format 0 PIN blocks under a zone PIN key
+pin 4111111111111111 1234: clear 041225EEEEEEEEEE, under ZPK 2A3D408A1977DDE9, format 0, recovered 1234
+pin 5500005555555559 0000: clear 040000FAAAAAAAAA, under ZPK 6BD861422B3DAB59, format 0, recovered 0000
+pin 340000000000009 987654: clear 06987654FFFFFFFF, under ZPK 64B3962511255B0F, format 0, recovered 987654
+pin 6011000990139424 4321: clear 044331FF66FEC6BD, under ZPK 5B0E2E3289239FA4, format 0, recovered 4321
+pin 4012888888881881 123456789012: clear 0C121CDEF0189377, under ZPK 64F636CE70CF7CB9, format 0, recovered 123456789012
+pin 3530111333300000 55: clear 0255FEEECCCCFFFF, under ZPK 33080B45619C17B2, format 0, recovered 55
+pin 4000056655665556 7777: clear 047777A99AA99AAA, under ZPK 56BBDC95493B6040, format 0, recovered 7777
+pin 5105105105105100 135790: clear 06130695EFAEFAEF, under ZPK 4F81453DA99C310B, format 0, recovered 135790
+== PIN translation from one zone key to another
+translate 4111111111111111: 2A3D408A1977DDE9 -> 3CAF3C08002CD131, recovered 1234
+translate 5500005555555559: 6BD861422B3DAB59 -> 13A5855311FB2B21, recovered 0000
+translate 340000000000009: 64B3962511255B0F -> ED670DA7EDB997D5, recovered 987654
+translate 6011000990139424: 5B0E2E3289239FA4 -> ACEC99BE51E4449D, recovered 4321
+== ANSI X9.19 retail MAC
+mac 24 bytes = A1C72E74 (full A1C72E74EA3FA9B6)
+mac 0 bytes = 08D7B4FB (full 08D7B4FB629D0885)
+mac 1 bytes = 08D7B4FB (full 08D7B4FB629D0885)
+mac 8 bytes = A85CEB8C (full A85CEB8CDADFF808)
+mac 10 bytes = 0E7E72E1 (full 0E7E72E14ABF9754)
+mac 12 bytes = BC221B89 (full BC221B894829E96D)
+mac 40 bytes = 44CFBC48 (full 44CFBC4835817704)
+mac 77 bytes = 17519B7C (full 17519B7C612DB766)
+mac 13 bytes = 14D9EEAA (full 14D9EEAA1AA6FCDC)
+== A settlement file, Triple DES CBC with PKCS5
+new f = ok
+sum = 432 bytes, fnv 0be420ed, starts a228fa2d945aa01a
+dec = b'0001,5100,3562.62\n0002,1881,2082.47\n0003,0000,2339.09\n0004,1111,3436.07\n0005,0009,2544.92\n0006,0009,1090.34\n0007,5559,3015.30\n0008,1111,4548.39\n0009,0000,3750.07\n0010,1111,3303.24\n0011,5559,4083.62\n0012,5559,4384.06\n0013,5100,1523.45\n0014,9424,106.07\n0015,1111,3358.09\n0016,1881,4283.22\n0017,0009,453.59\n0018,0009,2164.88\n0019,5556,4607.13\n0020,9424,2449.23\n0021,9424,441.70\n0022,0009,3683.82\n0023,5556,4562.78\n0024,1881,2306.16\n'
+== Round trips
+new m0 = ok
+new m1 = ok
+new m2 = ok
+new m3 = ok
+roundtrip m1 26 -> 32 bytes 6c368d576040cc10e7e5393c8e919da7925eada86be5112a481213f37ddc320d, ok
+roundtrip m3 25 -> 32 bytes 3f85ef5edaeddeca6f940172d8c9d14173f8fa08d98063b73f4098cf4393d859, ok
+roundtrip m2 26 -> 32 bytes 24be79e579bf049dd6ce0c2137201e1631890ee0928d9db660ec9d7d3b533de7, ok
+roundtrip m0 21 -> 24 bytes 382e4ee1b03aa30a0cf319e9db5b575e58f2d886d61d7839, ok
+roundtrip m0 20 -> 24 bytes e97c079d76bfc6e53007b54fc5d5fb2f499a96a21edd2fcf, ok
+roundtrip m1 8 -> 16 bytes a44cbd1f7c799f77a0dfc0ffb6a52893, ok
+roundtrip m1 16 -> 24 bytes 8d113c952b3e8dd84645a47d5e3b70563a467944a2732b2a, ok
+roundtrip m2 20 -> 24 bytes fbdad22c7305d5c212b70335a87fd3f39ac12e6d03cb6a5b, ok
+roundtrip m1 25 -> 32 bytes 8edcfcbebf485fb446d92bd32b02878ff62c01ce83d4dae773387a60c9d68f0d, ok
+roundtrip m0 13 -> 16 bytes 227f23a6647c27fe65078e3143c7273c, ok
+roundtrip m3 0 -> 8 bytes 0cea479788c3d192, ok
+roundtrip m1 7 -> 8 bytes e02373ef2745c6be, ok
+roundtrip m3 24 -> 32 bytes 61f7b582f42e8e2de783690e787c7ed10af383ff843e72540cea479788c3d192, ok
+roundtrip m2 25 -> 32 bytes 5811a872aecaf49ddbfa6969d427c9e78c92e63133521efa0a70f00a4f82a0eb, ok
+roundtrip m0 28 -> 32 bytes 206165f7c09f83f136b2e9b89ef7a0f6a97b9585c13dd2f79384faa596bea02a, ok
+roundtrip m3 29 -> 32 bytes b90314ed0ad558fe5734ba13dd5bfb8a9125d7fe672a2eb7917216eac7261afe, ok
+== A long record under single DES, ECB
+new k = ok
+sum = 304 bytes, fnv e1218bee, starts f020157790451dfa
+dec = b'terminal card holder track cryptogram batch expiry holder acquirer refund terminal reversal batch acquirer terminal acquirer amount track refund issuer reversal merchant track holder holder approved expiry approved service card reversal merchant reversal amount code merchant issuer issuer expiry bat'
