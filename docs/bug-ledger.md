@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 289 |
 | other | 199 |
 | diagnostics | 192 |
-| perf | 185 |
+| perf | 186 |
 | soundness | 138 |
 | crash | 129 |
 | use-after-free | 92 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3046 |
+| codegen | 3047 |
 | interp | 1056 |
 | typecheck | 581 |
 | ownership | 133 |
@@ -137,8 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-02-39 | 2026-10-02 | runtime+codegen | low | A growth-heavy `Map[i64, i64]` workload runs 1.63x Rust's `HashMap` at equal hashing (SipHash-1-3 both), and ties a plain C linear-probing table: kata:325's bench, 857.5 ms against 520.6 for rust_ovf | — |
 | B-2026-10-03-10 | 2026-10-03 | codegen+runtime | medium | `for tok in s.split(",")` heap-allocates and frees every token even when the loop only compares it, so kata 331's benchmark runs 5.3x Rust, 8.8x C and slower than CPython (2.31 s against 1.91 s) | — |
 | B-2026-10-04-79 | 2026-10-04 | codegen+runtime | medium | AFTER B-2026-10-04-56 KATA 340'S `Map[char, i64]` BENCH STILL RUNS 1.85x RUST AT EQUAL HASHING (399 ms vs 216): each hash costs 92 instructions against Rust's ~74, the erased `remove` path hashes a key the `get` before it already hashed, and the mono insert costs ~70 instructions a call beyond its hash | — |
-| B-2026-10-13-18 | 2026-10-13 | codegen+runtime | medium | `Vec.sort_by_key` and `sort_by` on the MIR compiled backend run about 3.5-4x slower than Rust's `sort_by_key`: `karac_mir_sort_ctx` (runtime/src/mir.rs) is a bottom-up merge sort that calls the comparison through a function pointer for every comparison, and the emitted comparison calls the key closure, not inlined, for each side. Sorting 1M indices by an i64 key 10 times takes 2.74-2.78 s on `karac build --mir` and 0.65-0.77 s on `rustc -O`; in kata 502's bench the sort is 63% of all instructions | — |
-| B-2026-10-13-31 | 2026-10-13 | codegen+runtime | medium | Walking a `Str`'s `chars()` on the MIR compiled backend costs about 3.6 ns a char against 1.0 for its `bytes()` and 0.9 for Rust's `chars()`, and a char predicate such as `is_ascii_uppercase` is a runtime call that finds the method by comparing names: kata 520's bench (`word.chars().filter(|c| c.is_ascii_uppercase()).count()`) runs 2.0 to 2.2 s under `karac build --mir` against 0.20 to 0.25 s for `rustc -O` | — |
 | B-2026-10-14-29 | 2026-10-14 | interp+codegen | medium | The MIR borrow checker keeps a `Vec[(ref Node, i64)]` borrowed for as long as a `ref Node` copied out of one of its elements is live: `let (a, n) = v[0]; v.pop(); a.val` is refused on both MIR backends ("mutable borrow of _2 while it is borrowed", E0516), though core-semantics §1.1 makes the tuple `Copy` and the copied reference keeps the origin of the node, not of the vector; the same read out of a `Vec[ref Node]` runs, and `karac check` passes both | — |
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
 | B-2026-10-15-10 | 2026-10-15 | runtime | medium | NARROWED AGAIN 2026-10-19 (Thread A, d3124030ef): `std.sync.MutexGuard` has landed (`m.lock()` returns one, and a `lock` block lowers onto it; B-2026-10-19-23). Still specified-only: `std.iter.Extend` and all of `std.log`. PREVIOUSLY: NARROWED AGAIN 2026-10-19 (Thread A, 7794d0fad9): `std.process.exit` (a gated Kāra module over the native; `-> Never` now lowers) and `std.iter.DoubleEndedIterator` (already the library's trait, only its import was missing) have landed. Still specified-only: `std.sync.MutexGuard`, `std.iter.Extend` and all of `std.log`. MEASURED at 7794d0fad9: `Mutex` has no `lock()` method at all (`no method 'lock' on type 'Mutex'`), only the `lock m x { }` block (which does exclude: 8 tasks of 200000 increments each reach 1600000 on `__mir-llvm-run`, three runs of three); `Extend` has no trait signature anywhere in docs/library (README names it; collections.md gives only `Vec.extend[I: IntoIterator[Item = T]]`), and the v2 library has no `IntoIterator` trait; `std.log` needs `key: value` call fields. PREVIOUSLY: NARROWED 2026-10-19 (Thread A, read off prelude::LIBRARY_GLOBAL_MODULES at bdea5d5967): std.time (Instant partly, B-2026-10-15-112; SystemTime, Duration, sleep), std.random.next_u64 and std.uuid.v4 have landed (aff0e47fee, 3c1fb1d390, d0d9258c19); still specified-only are `std.sync.MutexGuard`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit` and all of `std.log`. WAS: Library items that docs/library/README.md's module table specifies are not implemented: `std.time.{Instant, SystemTime, Duration, sleep}`, `std.random.next_u64`, `std.uuid.v4`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit`, `std.sync.MutexGuard` and all of `std.log`; importing one now says "is in the library spec (docs/library) but not implemented yet" | — |
@@ -177,6 +175,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-23-12 | 2026-10-23 | typecheck | medium | `karac check` accepts a `Map` whose value type defaulted to `i64` (`let mut m = Map.new(); m.insert(5, 9)`) where `Map[i64, u64]` is wanted as a struct or variant field (`S { m: m }`, `Store.Full(m)`) or a call argument, so the MIR builder makes invalid MIR ("field 0 of S has the wrong type"); the same shape on `Vec` (`let w: Vec[u8] = v` after `v.push(3)`) is refused | — |
 | B-2026-10-23-13 | 2026-10-23 | codegen | low | A `match` on a tuple of handle locals (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`) counts each handle into a built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads: kata 558's `intersect` pays four increments and four `drop.shared` calls per Split node for it, 8 of the 8 count sites its IR has left | — |
 | B-2026-10-24-1 | 2026-10-24 | cli+interp | low | The v2 REPL's remaining legacy-only pieces: `%show` and `--auto-clone` / `%set auto-clone` refuse on v2, `:provide` does not check that the provider implements the resource's trait until the next cell, and the `:provide` construction program still replays every earlier cell | — |
+| B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
 
 ### Relocated
 
@@ -3996,6 +3995,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-13-15 | codegen | low | `karac build --mir` runs kata 495's bench 3.6x slower than C, Rust and legacy `karac build` (0.36-0.44 s against 0.07-0.12 s): the x86 code for the h… | 757ab145a7 |
 | B-2026-10-13-16 | parser+typecheck | low | `karac fix` rewrites `!x` to `not x` whatever the operand's type, so on an INTEGER operand (Rust's bitwise complement, `m & !row == 0`) the first pas… | 56a1b16034 |
 | B-2026-10-13-17 | typecheck+interp+codegen | medium | `ref_eq` has no v2 form: the spec's method `a.ref_eq(b)` on a `shared` handle (design.md § Equality, "a method the compiler provides on every `shared… | 32540012cd |
+| B-2026-10-13-18 | codegen+runtime | medium | `Vec.sort_by_key` and `sort_by` on the MIR compiled backend run about 3.5-4x slower than Rust's `sort_by_key`: `karac_mir_sort_ctx` (runtime/src/mir.… | 6566f6fa2c |
 | B-2026-10-13-19 | typecheck | medium | `Vec.extend` accepts only a `Vec`, `Slice` or `Array`, where the spec gives `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)`: `d.ex… | 36fc6a0f92 |
 | B-2026-10-13-20 | codegen+runtime | low | An f-string with one integer hole, `f"{n}"`, costs three allocations, two frees and four thread-local `RefCell` borrows on the v2 compiled backend: 4… | fdb1d5fc22 |
 | B-2026-10-13-21 | interp+codegen | high | An `as` cast to a narrower integer, widened implicitly into a wider binding or return slot, is never widened by the MIR: `let y: i64 = x as u8;` and… | 64dbf3323c |
@@ -4008,6 +4008,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-13-28 | typecheck | low | `karac check` loses the `ref` of a `Map.get` result once it is stored in a tuple local: `let t = (m.get("a"), 5); match t { (Some(i), k) => *i + k, _… | 25a5cd8776 |
 | B-2026-10-13-29 | ownership | high | The MIR borrow checker does not see a `Str` view of a `String` as a borrow: `let v = owned.as_str(); owned.push_str(..); println(v)` runs on `__mir-r… | 4aafb22aa4 |
 | B-2026-10-13-30 | codegen+runtime | medium | `String.push(c)` on the MIR compiled backend is an out-of-line runtime call per char (`karac_mir_string_push_char` -> `karac_mir_string_push_str` ->… | 16cbe03472 |
+| B-2026-10-13-31 | codegen+runtime | medium | Walking a `Str`'s `chars()` on the MIR compiled backend costs about 3.6 ns a char against 1.0 for its `bytes()` and 0.9 for Rust's `chars()`, and a c… | e2873a1fc7 |
 | B-2026-10-13-32 | typecheck | low | The library pipeline (the MIR front end and `KARAC_CHECK_LIBRARY=1`), and by now `karac check` too, accept `*c` on a `filter` closure's `char` parame… | 448e8fb927 |
 | B-2026-10-13-33 | ownership | medium | The MIR borrow checker refuses a write to a `mut` field of a shared value reached by indexing a borrowed `Vec` (`nodes[i].val = v` with `nodes` a `re… | 554093e8e5 |
 | B-2026-10-13-34 | codegen+runtime | medium | `i64.parse` on the MIR compiled backend costs about 30 ns for a 2-byte slice, because `karac_mir_parse_int` copies the text into a fresh heap `String… | b09cd37112 |
