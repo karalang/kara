@@ -13181,3 +13181,25 @@ fn a_lone_file_package_is_checked_against_the_v2_library() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn as_bytes_on_a_string_names_bytes_and_fixes_to_it() {
+    // B-2026-10-24-42: `.as_bytes()` is the Rust spelling of a string's
+    // `.bytes()` (library/strings.md); the error names it and the fix writes
+    // it, on a `String` and on a `Str`.
+    let src = "fn main() {\n    let s = \"abc\".to_string();\n    let b = s.as_bytes();\n    \
+               let t: Str = \"xy\";\n    let c = t.as_bytes();\n    println(f\"{b.len()} {c[1]}\");\n}\n";
+    for edit in ["let b = s.bytes();", "let c = t.bytes();"] {
+        rejected_then_fixed_by(
+            "string-as-bytes",
+            src,
+            "no method 'as_bytes' on type 'String': a string's UTF-8 bytes are `.bytes()`",
+            edit,
+        );
+    }
+    accepted_and_runs(
+        "string-bytes",
+        "fn main() {\n    let t: Str = \"xy\";\n    let c = t.bytes();\n    println(f\"{c.len()} {c[1]}\");\n}\n",
+        "2 121\n",
+    );
+}

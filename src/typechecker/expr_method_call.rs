@@ -2297,6 +2297,46 @@ impl<'a> super::TypeChecker<'a> {
         // deliberate: it makes this purely additive, since a program that
         // compiles today resolves every one of its String calls through the
         // builtin surface and continues to.
+        // B-2026-10-24-42: `.as_bytes()` is the Rust spelling of a string's
+        // `.bytes()`, the `Slice[u8]` of its UTF-8 bytes (library/strings.md).
+        let text = match &obj_ty {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        if method == "as_bytes"
+            && args.is_empty()
+            && self
+                .env
+                .find_methods_with_args("String", &[], method)
+                .is_empty()
+            && (*text == Type::Str
+                || matches!(text, Type::Named { name, args } if name == "StringSlice" && args.is_empty()))
+        {
+            if let Some(offset) = args_close_span
+                .offset
+                .checked_sub(1 + method.len())
+                .filter(|&o| o > object.span.offset)
+            {
+                self.type_error_with_fix_it(
+                    format!(
+                        "no method 'as_bytes' on type '{}': a string's UTF-8 bytes are \
+                         `.bytes()`, a `Slice[u8]` (library/strings.md)",
+                        type_display(text)
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                    super::FixIt {
+                        span: Span {
+                            offset,
+                            length: method.len(),
+                            ..*args_close_span
+                        },
+                        replacement: "bytes".to_string(),
+                    },
+                );
+                return Type::Error;
+            }
+        }
         let str_routes_to_user_impl = matches!(&obj_ty_for_named, Type::Str)
             && !STRING_BUILTIN_METHODS.contains(&method)
             && !self
