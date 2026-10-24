@@ -1,0 +1,852 @@
+// pipeline/index_build
+//
+// A search index build, the shape of a site-search or log-search nightly
+// job over four content shards. It generates each shard's documents,
+// writes them as TSV, reads the files back and parses them, tokenizes
+// (lowercase, stopwords, a small suffix stemmer) and builds an inverted
+// index per shard, writes each index in a delta-coded text format, reads
+// it back and parses it, runs a batch of BM25 queries against every
+// shard, runs five reports per shard, and merges the shards into one
+// catalog.
+//
+// The builds, the writes, the reads, the parses, the indexes, the index
+// writes and reads, the query runs and the reports are each a group of
+// statements that do not depend on each other (a stmt-par app). The
+// catalog keeps the newest copy of a URL and hands out term ids in the
+// order terms arrive, so the merges have to run in order.
+
+const MASK32: i64 = 4294967295;
+const DOCS: i64 = 500;
+const URLS: i64 = 1400;
+const QUERIES: i64 = 24;
+const K1: i64 = 1200;
+const BM25_B: i64 = 750;
+const TOP: i64 = 5;
+const HEADER: Str = "id\turl\ttitle\tbody";
+const DIGITS: Str = "0123456789abcdefghijklmnopqrstuvwxyz";
+const SYLLABLES: Array[Str, 20] = ["ka", "ri", "to", "men", "sa", "lo", "vi", "dan", "el", "mor", "ra", "ne",
+                                   "jo", "lin", "ta", "bo", "qu", "est", "par", "ix"];
+const STOPWORDS: Array[Str, 12] = ["the", "a", "of", "and", "to", "in", "is", "for", "on", "with", "as", "by"];
+const SUFFIXES: Array[Str, 7] = ["", "", "", "", "s", "ing", "ed"];
+
+struct Doc {
+    did: String,
+    url: String,
+    title: String,
+    body: String,
+}
+
+struct Shard {
+    name: String,
+    seed: i64,
+}
+
+struct Stats {
+    tokens: i64,
+    stopped: i64,
+    stem_s: i64,
+    stem_ing: i64,
+    stem_ed: i64,
+}
+
+struct Index {
+    terms: Vec[String],
+    postings: Vec[Vec[(i64, i64)]],
+    lengths: Vec[i64],
+    total: i64,
+    stats: Stats,
+}
+
+struct Live {
+    url: String,
+    shard: String,
+    did: String,
+}
+
+struct Catalog {
+    urls: Vec[String],
+    live: Vec[Live],
+    term_ids: Map[String, i64],
+    next_term: i64,
+    log: String,
+}
+
+enum BuildError {
+    Bad(String),
+}
+
+impl BuildError {
+    fn describe(ref self) -> String {
+        match self {
+            BuildError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BuildError {
+    BuildError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn new_stats() -> Stats {
+    Stats { tokens: 0, stopped: 0, stem_s: 0, stem_ing: 0, stem_ed: 0 }
+}
+
+fn new_index() -> Index {
+    Index { terms: Vec.new(), postings: Vec.new(), lengths: Vec.new(), total: 0, stats: new_stats() }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+// ------------------------------------------------------------ the data
+
+fn vocabulary() -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    for i in 0..1200 {
+        let h = hash32(i * 7919 + 17);
+        let n = 2 + h % 3;
+        let mut w = String.new();
+        for j in 0..n {
+            w.push_str(SYLLABLES[(h >> (5 * j + 2)) % 20]);
+        }
+        words.push(w);
+    }
+    words
+}
+
+fn pick_word(vocab: ref Vec[String], h: i64) -> String {
+    vocab[((h % 1200) * ((h >> 11) % 1200)) / 1200].clone()
+}
+
+fn build_docs(shard: ref Shard, vocab: ref Vec[String]) -> Vec[Doc] {
+    let s = shard.seed;
+    let mut out: Vec[Doc] = Vec.new();
+    for i in 0..DOCS {
+        let did = f"{shard.name}-{i + 1:04}";
+        let url = f"doc/{mix(s, i, 1) % URLS}";
+        let nt = 3 + mix(s, i, 2) % 4;
+        let mut title: Vec[String] = Vec.new();
+        for j in 0..nt {
+            let w = pick_word(vocab, mix(s, i * 8 + j, 3));
+            if j == 0 {
+                title.push(w.substring(0, 1).to_uppercase() + w.substring(1));
+            } else {
+                title.push(w);
+            }
+        }
+        let nb = 20 + mix(s, i, 4) % 81;
+        let mut body: Vec[String] = Vec.new();
+        for j in 0..nb {
+            let h = mix(s, i * 128 + j, 5);
+            if h % 5 == 0 {
+                body.push(STOPWORDS[(h >> 3) % 12].to_string());
+            } else {
+                body.push(pick_word(vocab, h >> 3) + SUFFIXES[(h >> 20) % 7]);
+            }
+        }
+        out.push(Doc { did: did, url: url, title: title.join(" "), body: body.join(" ") });
+    }
+    out
+}
+
+fn encode_docs(docs: ref Vec[Doc]) -> String {
+    let mut out = String.new();
+    out.push_str(HEADER);
+    out.push_str("\n");
+    for d in docs {
+        out.push_str(f"{d.did}\t{d.url}\t{d.title}\t{d.body}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BuildError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"could not read {path}")),
+    }
+}
+
+// Turn the first space of the n-th document into a tab.
+fn damage(text: ref String, n: i64) -> String {
+    let mut lines = split_on(text, "\n");
+    let line = lines[n + 1].clone();
+    match line.find(" ") {
+        Some(at) => lines[n + 1] = line.substring(0, at) + "\t" + line.substring(at + 1),
+        None => {}
+    }
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ the parsers
+
+fn is_digits(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for b in s.bytes() {
+        if b < 48 or b > 57 {
+            return false;
+        }
+    }
+    true
+}
+
+fn to_int(s: ref String) -> i64 {
+    let mut v = 0;
+    for b in s.bytes() {
+        v = v * 10 + (b as i64 - 48);
+    }
+    v
+}
+
+fn parse_docs(path: ref String, name: ref String, text: ref String) -> Result[Vec[Doc], BuildError] {
+    let lines = split_on(text, "\n");
+    if lines.len() == 0 or lines[0] != HEADER {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    let prefix = f"{name}-";
+    let mut out: Vec[Doc] = Vec.new();
+    for n in 1..lines.len() as i64 {
+        let line = ref lines[n];
+        if line == "" {
+            continue;
+        }
+        let where_ = f"{path} line {n + 1}: ";
+        let f = split_on(line, "\t");
+        if f.len() != 4 {
+            return Err(bad(f"{where_}{f.len()} fields"));
+        }
+        if not f[0].starts_with(prefix) or not is_digits(f[0].substring(prefix.len() as i64)) {
+            return Err(bad(f"{where_}bad id '{f[0]}'"));
+        }
+        if not f[1].starts_with("doc/") or not is_digits(f[1].substring(4)) {
+            return Err(bad(f"{where_}bad url '{f[1]}'"));
+        }
+        if f[2] == "" or f[3] == "" {
+            return Err(bad(f"{where_}empty title or body"));
+        }
+        out.push(Doc { did: f[0].clone(), url: f[1].clone(), title: f[2].clone(), body: f[3].clone() });
+    }
+    Ok(out)
+}
+
+fn same_docs(a: ref Vec[Doc], b: ref Vec[Doc]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.did != y.did or x.url != y.url or x.title != y.title or x.body != y.body {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ analysis
+
+fn stem(w: own String, st: mut ref Stats) -> String {
+    let n = w.len() as i64;
+    if n > 5 and w.ends_with("ing") {
+        st.stem_ing += 1;
+        return w.substring(0, n - 3);
+    }
+    if n > 4 and w.ends_with("ed") {
+        st.stem_ed += 1;
+        return w.substring(0, n - 2);
+    }
+    if n > 3 and w.ends_with("s") and not w.ends_with("ss") {
+        st.stem_s += 1;
+        return w.substring(0, n - 1);
+    }
+    w
+}
+
+fn tokenize(text: ref String, st: mut ref Stats) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut word = String.new();
+    let lower = text.to_lowercase() + " ";
+    for c in lower.chars() {
+        if (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') {
+            word.push(c);
+        } else if word != "" {
+            st.tokens += 1;
+            if STOPWORDS.contains(word) {
+                st.stopped += 1;
+            } else {
+                out.push(stem(word, mut st));
+            }
+            word = String.new();
+        }
+    }
+    out
+}
+
+fn build_index(docs: ref Vec[Doc]) -> Index {
+    let mut ix = new_index();
+    let mut triples: Vec[(String, i64, i64)] = Vec.new();
+    for k in 0..docs.len() as i64 {
+        let d = ref docs[k];
+        let mut toks = tokenize(d.title + " " + d.body, mut ix.stats);
+        ix.lengths.push(toks.len() as i64);
+        ix.total += toks.len() as i64;
+        toks.sort();
+        let mut i = 0;
+        let n = toks.len() as i64;
+        while i < n {
+            let mut j = i;
+            while j < n and toks[j] == toks[i] {
+                j += 1;
+            }
+            triples.push((toks[i].clone(), k, j - i));
+            i = j;
+        }
+    }
+    triples.sort();
+    for (term, k, tf) in triples {
+        if ix.terms.len() == 0 or ix.terms[ix.terms.len() as i64 - 1] != term {
+            ix.terms.push(term);
+            ix.postings.push(Vec.new());
+        }
+        let last = ix.postings.len() as i64 - 1;
+        ix.postings[last].push((k, tf));
+    }
+    ix
+}
+
+fn base36(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    let mut v = n;
+    while v > 0 {
+        digits.insert(0, DIGITS.bytes()[v % 36]);
+        v /= 36;
+    }
+    match String.from_utf8(digits) {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+
+fn encode_index(ix: ref Index) -> String {
+    let mut out = f"#index {ix.lengths.len()} {ix.terms.len()}\n#lengths";
+    for n in ix.lengths {
+        out.push_str(" ");
+        out.push_str(base36(n));
+    }
+    out.push_str("\n");
+    for t in 0..ix.terms.len() as i64 {
+        let mut last = 0;
+        let mut parts: Vec[String] = Vec.new();
+        for (k, tf) in ix.postings[t] {
+            parts.push(f"{base36(k - last)}:{base36(tf)}");
+            last = k;
+        }
+        out.push_str(f"{ix.terms[t]}\t{ix.postings[t].len()}\t{parts.join(" ")}\n");
+    }
+    out
+}
+
+fn from_base36(s: ref String, where_: ref String) -> Result[i64, BuildError] {
+    if s == "" {
+        return Err(bad(f"{where_}empty number"));
+    }
+    let mut n = 0;
+    for c in s.chars() {
+        let d = match DIGITS.find(c.to_string()) {
+            Some(d) => d,
+            None => return Err(bad(f"{where_}bad digit '{c}'")),
+        };
+        n = n * 36 + d;
+    }
+    Ok(n)
+}
+
+fn parse_index(path: ref String, text: ref String) -> Result[Index, BuildError] {
+    let lines = split_on(text, "\n");
+    let head = split_on(lines[0], " ");
+    if head.len() != 3 or head[0] != "#index" or not is_digits(head[1]) or not is_digits(head[2]) {
+        return Err(bad(f"{path} line 1: not an index"));
+    }
+    let ndocs = to_int(head[1]);
+    let nterms = to_int(head[2]);
+    let mut ix = new_index();
+    let lens = split_on(lines[1], " ");
+    if lens[0] != "#lengths" or lens.len() as i64 != ndocs + 1 {
+        return Err(bad(f"{path} line 2: bad lengths"));
+    }
+    for i in 1..lens.len() as i64 {
+        let n = from_base36(lens[i], f"{path} line 2: ")?;
+        ix.lengths.push(n);
+        ix.total += n;
+    }
+    for n in 2..lines.len() as i64 {
+        let line = ref lines[n];
+        if line == "" {
+            continue;
+        }
+        let where_ = f"{path} line {n + 1}: ";
+        let f = split_on(line, "\t");
+        if f.len() != 3 or not is_digits(f[1]) {
+            return Err(bad(f"{where_}bad entry"));
+        }
+        let df = to_int(f[1]);
+        let parts = split_on(f[2], " ");
+        if parts.len() as i64 != df {
+            return Err(bad(f"{where_}df {df} but {parts.len()} postings"));
+        }
+        let mut plist: Vec[(i64, i64)] = Vec.new();
+        let mut last = 0;
+        for p in parts {
+            let (dk, tf) = match p.split_once(":") {
+                Some((a, b)) => (a.to_string(), b.to_string()),
+                None => (p.clone(), String.new()),
+            };
+            last += from_base36(dk, where_)?;
+            plist.push((last, from_base36(tf, where_)?));
+        }
+        if ix.terms.len() > 0 and ix.terms[ix.terms.len() as i64 - 1] >= f[0] {
+            return Err(bad(f"{where_}terms out of order"));
+        }
+        ix.terms.push(f[0].clone());
+        ix.postings.push(plist);
+    }
+    if ix.terms.len() as i64 != nterms {
+        return Err(bad(f"{path}: {nterms} terms declared, {ix.terms.len()} found"));
+    }
+    Ok(ix)
+}
+
+fn same_index(a: ref Index, b: ref Index) -> bool {
+    a.terms == b.terms and a.postings == b.postings and a.lengths == b.lengths
+}
+
+fn find_term(ix: ref Index, term: ref String) -> i64 {
+    let mut lo = 0;
+    let mut hi = ix.terms.len() as i64;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if ix.terms[mid] < term {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < ix.terms.len() as i64 and ix.terms[lo] == term {
+        return lo;
+    }
+    -1
+}
+
+// ------------------------------------------------------------ ranking
+
+// log2(x / 1000) in units of 1/1024, for x >= 1000.
+fn log2_fixed(x0: i64) -> i64 {
+    let mut x = x0;
+    let mut k = 0;
+    while x >= 2000 {
+        x /= 2;
+        k += 1;
+    }
+    let mut r = k * 1024;
+    let mut bit = 512;
+    for _ in 0..10 {
+        x = x * x / 1000;
+        if x >= 2000 {
+            x /= 2;
+            r += bit;
+        }
+        bit /= 2;
+    }
+    r
+}
+
+fn idf(n: i64, df: i64) -> i64 {
+    log2_fixed(((n - df) * 2 + 1) * 1000 / (df * 2 + 1) + 1000)
+}
+
+fn make_queries(shard: ref Shard, vocab: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for q in 0..QUERIES {
+        let h = mix(shard.seed, q, 9);
+        let n = 1 + h % 3;
+        let mut words: Vec[String] = Vec.new();
+        for j in 0..n {
+            words.push(pick_word(vocab, mix(shard.seed, q * 4 + j, 10)) + SUFFIXES[(h >> (3 * j + 4)) % 7]);
+        }
+        out.push(words.join(" "));
+    }
+    out
+}
+
+struct Result_ {
+    top: Vec[(i64, i64)],
+    total: i64,
+}
+
+fn search(ix: ref Index, query: ref String) -> Result_ {
+    let mut st = new_stats();
+    let terms = tokenize(query, mut st);
+    let n = ix.lengths.len() as i64;
+    let avg = ix.total * 1000 / n;
+    let mut scores = Vec.filled(n, 0);
+    let mut hit = Vec.filled(n, false);
+    for term in terms {
+        let t = find_term(ix, term);
+        if t < 0 {
+            continue;
+        }
+        let w = idf(n, ix.postings[t].len() as i64);
+        for (k, tf) in ix.postings[t] {
+            let norm = 1000 - BM25_B + BM25_B * ix.lengths[k] * 1000 / avg;
+            scores[k] += w * tf * (K1 + 1000) / (tf * 1000 + K1 * norm / 1000);
+            hit[k] = true;
+        }
+    }
+    let mut ranked: Vec[i64] = (0..n).filter(|k| hit[k]).collect();
+    ranked.sort_by(|a, b| if scores[a] != scores[b] { scores[b].cmp(scores[a]) } else { a.cmp(b) });
+    let mut top: Vec[(i64, i64)] = Vec.new();
+    for k in ranked.iter().take(TOP) {
+        top.push((k, scores[k]));
+    }
+    Result_ { top: top, total: ranked.len() as i64 }
+}
+
+fn run_queries(ix: ref Index, queries: ref Vec[String]) -> Vec[Result_] {
+    queries.iter().map(|q| search(ix, q)).collect()
+}
+
+// ------------------------------------------------------------ reports
+
+fn totals_report(shard: ref Shard, docs: ref Vec[Doc], ix: ref Index) -> String {
+    let mut raw = 0;
+    for d in docs {
+        raw += d.title.len() as i64 + d.body.len() as i64;
+    }
+    let mut postings = 0;
+    for p in ix.postings {
+        postings += p.len() as i64;
+    }
+    let n = docs.len() as i64;
+    let mut out = f"{shard.name} totals: {n} documents, {ix.stats.tokens} tokens ({ix.stats.stopped} stopwords), ";
+    out.push_str(f"{ix.terms.len()} terms, {postings} postings, mean length {ix.total / n}, text {raw} bytes");
+    out
+}
+
+fn terms_report(shard: ref Shard, ix: ref Index) -> String {
+    let mut order: Vec[i64] = (0..ix.terms.len() as i64).collect();
+    order.sort_by(|a, b| {
+        let da = ix.postings[a].len();
+        let db = ix.postings[b].len();
+        if da != db { db.cmp(da) } else { ix.terms[a].cmp(ix.terms[b]) }
+    });
+    let mut tops: Vec[String] = Vec.new();
+    for t in order.iter().take(5) {
+        tops.push(f"{ix.terms[t]} {ix.postings[t].len()}");
+    }
+    let once = ix.postings.iter().filter(|p| p.len() == 1).count();
+    f"{shard.name} terms: most frequent {tops.join(", ")}; {once} in one document"
+}
+
+fn query_report(shard: ref Shard, docs: ref Vec[Doc], queries: ref Vec[String], results: ref Vec[Result_]) -> String {
+    let mut h = 2166136261;
+    let mut hits = 0;
+    for r in results {
+        hits += r.total;
+        for (k, s) in r.top {
+            h = ((h ^ (k * 65536 + s % 65536)) * 16777619) & MASK32;
+        }
+    }
+    let mut out = f"{shard.name} queries: {queries.len()} run, {hits} matching documents, results fnv {h:08x}";
+    for q in 0..3 {
+        let r = ref results[q];
+        let mut shown: Vec[String] = Vec.new();
+        for (k, s) in r.top.iter().take(3) {
+            shown.push(f"{docs[k].did} {s}");
+        }
+        let list = if shown.len() > 0 { shown.join(", ") } else { "none".to_string() };
+        out.push_str(f"\n  '{queries[q]}': {r.total} matches; {list}");
+    }
+    out
+}
+
+fn length_report(shard: ref Shard, ix: ref Index) -> String {
+    let mut buckets = Vec.filled(6, 0);
+    for n in ix.lengths {
+        let mut b = n / 20;
+        if b > 5 {
+            b = 5;
+        }
+        buckets[b] += 1;
+    }
+    let mut out = f"{shard.name} lengths:";
+    for b in 0..6 {
+        let label = if b < 5 { f"{b * 20}-{b * 20 + 19}" } else { "100+".to_string() };
+        out.push_str(f" {label}:{buckets[b]}");
+    }
+    let mut longest = 0;
+    for k in 0..ix.lengths.len() as i64 {
+        if ix.lengths[k] > ix.lengths[longest] {
+            longest = k;
+        }
+    }
+    out.push_str(f"; longest {ix.lengths[longest]} terms");
+    out
+}
+
+fn stem_report(shard: ref Shard, ix: ref Index, index_bytes: i64) -> String {
+    let st = ref ix.stats;
+    let mut raw = 0;
+    for p in ix.postings {
+        raw += p.len() as i64 * 8;
+    }
+    let mut out = f"{shard.name} analysis: stemmed {st.stem_s} -s, {st.stem_ing} -ing, {st.stem_ed} -ed; ";
+    out.push_str(f"index file {index_bytes} bytes for {raw} bytes of fixed-width postings");
+    out
+}
+
+// ------------------------------------------------------------ the merge
+
+fn find_url(cat: ref Catalog, url: ref String) -> i64 {
+    let mut lo = 0;
+    let mut hi = cat.urls.len() as i64;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if cat.urls[mid] < url {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn merge(cat: mut ref Catalog, shard: ref Shard, docs: ref Vec[Doc], ix: ref Index) -> String {
+    let mut fresh = 0;
+    let mut replaced = 0;
+    let mut first = String.new();
+    for d in docs {
+        let at = find_url(cat, d.url);
+        if at < cat.urls.len() as i64 and cat.urls[at] == d.url {
+            let old = cat.live[at].did.clone();
+            if replaced == 0 {
+                first = f"{d.url} (was {old})";
+            }
+            replaced += 1;
+            cat.live[at] = Live { url: d.url.clone(), shard: shard.name.clone(), did: d.did.clone() };
+            cat.log.push_str(f"replace {d.url} {old} {d.did}\n");
+        } else {
+            cat.urls.insert(at, d.url.clone());
+            cat.live.insert(at, Live { url: d.url.clone(), shard: shard.name.clone(), did: d.did.clone() });
+            fresh += 1;
+            cat.log.push_str(f"add {d.url} {d.did}\n");
+        }
+    }
+    let lo = cat.next_term;
+    for term in ix.terms {
+        if not cat.term_ids.contains_key(term) {
+            cat.term_ids.insert(term.clone(), cat.next_term);
+            cat.next_term += 1;
+        }
+    }
+    let new_terms = cat.next_term - lo;
+    let ids = if new_terms > 0 { f"ids {lo}-{cat.next_term - 1}" } else { "no new ids".to_string() };
+    let rep = if replaced > 0 { f"first {first}" } else { "none replaced".to_string() };
+    let mut out = f"{shard.name} merged: {fresh} new, {replaced} replace older copies ({rep}); ";
+    out.push_str(f"{new_terms} new terms, {ids}; catalog {cat.urls.len()} urls");
+    out
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BuildError] {
+    let vocab = vocabulary();
+    let news = Shard { name: "news".to_string(), seed: 11 };
+    let docs = Shard { name: "docs".to_string(), seed: 23 };
+    let forum = Shard { name: "forum".to_string(), seed: 37 };
+    let wiki = Shard { name: "wiki".to_string(), seed: 41 };
+
+    // Four shards of documents.
+    let d1 = build_docs(news, vocab);
+    let d2 = build_docs(docs, vocab);
+    let d3 = build_docs(forum, vocab);
+    let d4 = build_docs(wiki, vocab);
+
+    // Four writes.
+    let w1 = fs.write("news.tsv", encode_docs(d1));
+    let w2 = fs.write("docs.tsv", encode_docs(d2));
+    let w3 = fs.write("forum.tsv", encode_docs(d3));
+    let w4 = fs.write("wiki.tsv", encode_docs(d4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() {
+        return Err(bad("could not write the documents"));
+    }
+
+    let whole = read_text("forum.tsv")?;
+    if fs.write("forum.bad", damage(whole, 200)).is_err() {
+        return Err(bad("could not write forum.bad"));
+    }
+
+    // Four reads.
+    let t1 = read_text("news.tsv")?;
+    let t2 = read_text("docs.tsv")?;
+    let t3 = read_text("forum.tsv")?;
+    let t4 = read_text("wiki.tsv")?;
+    println(f"news.tsv: {t1.len()} bytes, fnv {text_sum(t1):08x}");
+    println(f"docs.tsv: {t2.len()} bytes, fnv {text_sum(t2):08x}");
+    println(f"forum.tsv: {t3.len()} bytes, fnv {text_sum(t3):08x}");
+    println(f"wiki.tsv: {t4.len()} bytes, fnv {text_sum(t4):08x}");
+
+    // Four parses.
+    let g1 = parse_docs("news.tsv", "news", t1)?;
+    let g2 = parse_docs("docs.tsv", "docs", t2)?;
+    let g3 = parse_docs("forum.tsv", "forum", t3)?;
+    let g4 = parse_docs("wiki.tsv", "wiki", t4)?;
+    match parse_docs("forum.bad", "forum", read_text("forum.bad")?) {
+        Ok(_) => println("forum.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_docs("wiki.tsv", "news", t4) {
+        Ok(_) => println("wiki.tsv as news: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_docs(g1, d1) and same_docs(g2, d2) and same_docs(g3, d3) and same_docs(g4, d4);
+    println(f"parsed documents match the built ones: {same}");
+
+    // Four inverted indexes.
+    let x1 = build_index(g1);
+    let x2 = build_index(g2);
+    let x3 = build_index(g3);
+    let x4 = build_index(g4);
+
+    // Four index writes.
+    let v1 = fs.write("news.idx", encode_index(x1));
+    let v2 = fs.write("docs.idx", encode_index(x2));
+    let v3 = fs.write("forum.idx", encode_index(x3));
+    let v4 = fs.write("wiki.idx", encode_index(x4));
+    if v1.is_err() or v2.is_err() or v3.is_err() or v4.is_err() {
+        return Err(bad("could not write the indexes"));
+    }
+
+    // Four index reads.
+    let i1 = read_text("news.idx")?;
+    let i2 = read_text("docs.idx")?;
+    let i3 = read_text("forum.idx")?;
+    let i4 = read_text("wiki.idx")?;
+    println(f"news.idx: {i1.len()} bytes, fnv {text_sum(i1):08x}");
+    println(f"docs.idx: {i2.len()} bytes, fnv {text_sum(i2):08x}");
+    println(f"forum.idx: {i3.len()} bytes, fnv {text_sum(i3):08x}");
+    println(f"wiki.idx: {i4.len()} bytes, fnv {text_sum(i4):08x}");
+
+    // Four index parses.
+    let y1 = parse_index("news.idx", i1)?;
+    let y2 = parse_index("docs.idx", i2)?;
+    let y3 = parse_index("forum.idx", i3)?;
+    let y4 = parse_index("wiki.idx", i4)?;
+    match parse_index("news.tsv", t1) {
+        Ok(_) => println("news.tsv as an index: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same_x = same_index(y1, x1) and same_index(y2, x2) and same_index(y3, x3) and same_index(y4, x4);
+    println(f"parsed indexes match the built ones: {same_x}");
+
+    // Four query batches.
+    let q1 = make_queries(news, vocab);
+    let q2 = make_queries(docs, vocab);
+    let q3 = make_queries(forum, vocab);
+    let q4 = make_queries(wiki, vocab);
+
+    // Four ranking runs.
+    let r1 = run_queries(y1, q1);
+    let r2 = run_queries(y2, q2);
+    let r3 = run_queries(y3, q3);
+    let r4 = run_queries(y4, q4);
+
+    // Reports that only read what came before.
+    let a1 = totals_report(news, g1, x1);
+    let a2 = totals_report(docs, g2, x2);
+    let a3 = totals_report(forum, g3, x3);
+    let a4 = totals_report(wiki, g4, x4);
+    let b1 = terms_report(news, y1);
+    let b2 = terms_report(docs, y2);
+    let b3 = terms_report(forum, y3);
+    let b4 = terms_report(wiki, y4);
+    let c1 = query_report(news, g1, q1, r1);
+    let c2 = query_report(docs, g2, q2, r2);
+    let c3 = query_report(forum, g3, q3, r3);
+    let c4 = query_report(wiki, g4, q4, r4);
+    let e1 = length_report(news, y1);
+    let e2 = length_report(docs, y2);
+    let e3 = length_report(forum, y3);
+    let e4 = length_report(wiki, y4);
+    let s1 = stem_report(news, x1, i1.len() as i64);
+    let s2 = stem_report(docs, x2, i2.len() as i64);
+    let s3 = stem_report(forum, x3, i3.len() as i64);
+    let s4 = stem_report(wiki, x4, i4.len() as i64);
+    for line in [a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4, e1, e2, e3, e4, s1, s2, s3, s4] {
+        println(line);
+    }
+
+    // One catalog: the newest copy of a URL wins, and term ids go out in
+    // the order terms arrive.
+    let mut cat = Catalog { urls: Vec.new(), live: Vec.new(), term_ids: Map.new(), next_term: 1, log: String.new() };
+    println(merge(mut cat, news, g1, y1));
+    println(merge(mut cat, docs, g2, y2));
+    println(merge(mut cat, forum, g3, y3));
+    println(merge(mut cat, wiki, g4, y4));
+    if fs.write("catalog.log", cat.log).is_err() {
+        return Err(bad("could not write catalog.log"));
+    }
+    let back = read_text("catalog.log")?;
+    let mut live_news = 0;
+    let mut live_docs = 0;
+    let mut live_forum = 0;
+    let mut live_wiki = 0;
+    for live in cat.live {
+        match live.shard.as_str() {
+            "news" => live_news += 1,
+            "docs" => live_docs += 1,
+            "forum" => live_forum += 1,
+            _ => live_wiki += 1,
+        }
+    }
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    let mut summary = f"catalog.log: {rows} entries, live news {live_news}, docs {live_docs}, forum {live_forum}, ";
+    summary.push_str(f"wiki {live_wiki}, {cat.next_term - 1} terms, {back.len()} bytes, fnv {text_sum(back):08x}");
+    println(summary);
+
+    for p in ["news.tsv", "docs.tsv", "forum.tsv", "wiki.tsv", "forum.bad", "news.idx", "docs.idx", "forum.idx",
+              "wiki.idx", "catalog.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"index_build failed: {e.describe()}"),
+    }
+}

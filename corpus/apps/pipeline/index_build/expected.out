@@ -1,0 +1,50 @@
+news.tsv: 266822 bytes, fnv f50430c1
+docs.tsv: 258723 bytes, fnv 2397fce5
+forum.tsv: 258812 bytes, fnv 0c00662b
+wiki.tsv: 258718 bytes, fnv 4e3577fe
+forum.bad line 202: 5 fields
+wiki.tsv line 2: bad id 'wiki-0001'
+parsed documents match the built ones: true
+news.idx: 117817 bytes, fnv def01665
+docs.idx: 115032 bytes, fnv 2e069ecd
+forum.idx: 114587 bytes, fnv 3d0d4a7a
+wiki.idx: 114768 bytes, fnv ff1ee125
+news.tsv line 1: not an index
+parsed indexes match the built ones: true
+news totals: 500 documents, 33321 tokens (6198 stopwords), 993 terms, 25625 postings, mean length 54, text 256702 bytes
+docs totals: 500 documents, 32375 tokens (6047 stopwords), 997 terms, 24882 postings, mean length 52, text 248594 bytes
+forum totals: 500 documents, 32178 tokens (5901 stopwords), 994 terms, 24799 postings, mean length 52, text 248165 bytes
+wiki totals: 500 documents, 32342 tokens (6095 stopwords), 999 terms, 24846 postings, mean length 52, text 248606 bytes
+news terms: most frequent bolinmorest 173, sajo 168, neestparta 144, estqu 142, vilo 139; 42 in one document
+docs terms: most frequent sajo 159, bolinmorest 150, neestparta 140, vilo 140, estqu 136; 31 in one document
+forum terms: most frequent bolinmorest 176, sajo 163, estqu 145, vilo 135, neestparta 131; 32 in one document
+wiki terms: most frequent bolinmorest 170, sajo 162, vilo 146, neestparta 129, estqu 125; 44 in one document
+news queries: 24 run, 1730 matching documents, results fnv fe762e10
+  'estriraed nejoestri': 60 matches; news-0314 8324, news-0220 7622, news-0256 5231
+  'sajo bosajolos': 225 matches; news-0357 5926, news-0192 5828, news-0203 5444
+  'parelka estmorqulin': 24 matches; news-0317 5613, news-0126 5460, news-0363 5126
+docs queries: 24 run, 1857 matching documents, results fnv 5868a730
+  'menrasadaned tatone tolotolo': 135 matches; docs-0237 10590, docs-0386 8343, docs-0227 8107
+  'neest qurinebo': 31 matches; docs-0134 8126, docs-0073 7175, docs-0356 6856
+  'nemennepar tataqujos': 118 matches; docs-0173 8065, docs-0006 6801, docs-0033 5919
+forum queries: 24 run, 2213 matching documents, results fnv 495a4ebe
+  'bolintamors': 39 matches; forum-0291 5287, forum-0224 4827, forum-0443 4827
+  'lindan ralinesting': 41 matches; forum-0331 6617, forum-0176 6440, forum-0288 6258
+  'loixelixed sael ixsaest': 89 matches; forum-0095 7939, forum-0146 6259, forum-0007 6026
+wiki queries: 24 run, 2343 matching documents, results fnv 68317357
+  'neixs': 61 matches; wiki-0394 4331, wiki-0381 4294, wiki-0352 4138
+  'taelboix linelsaparing neixing': 122 matches; wiki-0019 9746, wiki-0334 8197, wiki-0098 7505
+  'jovi saquri': 63 matches; wiki-0290 7977, wiki-0313 5120, wiki-0446 5074
+news lengths: 0-19:2 20-39:128 40-59:161 60-79:159 80-99:50 100+:0; longest 94 terms
+docs lengths: 0-19:1 20-39:145 40-59:158 60-79:153 80-99:43 100+:0; longest 90 terms
+forum lengths: 0-19:9 20-39:144 40-59:149 60-79:156 80-99:42 100+:0; longest 89 terms
+wiki lengths: 0-19:5 20-39:147 40-59:149 60-79:167 80-99:32 100+:0; longest 89 terms
+news analysis: stemmed 3531 -s, 3587 -ing, 3591 -ed; index file 117817 bytes for 205000 bytes of fixed-width postings
+docs analysis: stemmed 3427 -s, 3407 -ing, 3378 -ed; index file 115032 bytes for 199056 bytes of fixed-width postings
+forum analysis: stemmed 3463 -s, 3411 -ing, 3330 -ed; index file 114587 bytes for 198392 bytes of fixed-width postings
+wiki analysis: stemmed 3514 -s, 3456 -ing, 3358 -ed; index file 114768 bytes for 198768 bytes of fixed-width postings
+news merged: 423 new, 77 replace older copies (first doc/594 (was news-0007)); 993 new terms, ids 1-993; catalog 423 urls
+docs merged: 288 new, 212 replace older copies (first doc/1066 (was news-0410)); 22 new terms, ids 994-1015; catalog 711 urls
+forum merged: 215 new, 285 replace older copies (first doc/1398 (was docs-0488)); 6 new terms, ids 1016-1021; catalog 926 urls
+wiki merged: 140 new, 360 replace older copies (first doc/626 (was forum-0227)); 6 new terms, ids 1022-1027; catalog 1066 urls
+catalog.log: 2000 entries, live news 149, docs 206, forum 292, wiki 419, 1027 terms, 58220 bytes, fnv 1491d437
