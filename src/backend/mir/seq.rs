@@ -777,6 +777,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 let hi = self.int_arg(hi)?;
                 let mode = self.llcx.i32_type().const_int(2, false);
                 let d = self.place_ptr(dest)?;
+                if self.str_cut(dty) == "str_view" {
+                    self.str_view_inline(d, p, n, lo, hi, 2)?;
+                    return Ok(Some(()));
+                }
                 self.rt_int(
                     self.str_cut(dty),
                     &[
@@ -803,7 +807,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .const_int(u64::from(method == "index_range"), false);
                 let d = self.place_ptr(dest)?;
                 if method == "index_range" && self.str_cut(dty) == "str_view" {
-                    self.str_view_inline(d, p, n, lo, hi)?;
+                    self.str_view_inline(d, p, n, lo, hi, 1)?;
                     return Ok(Some(()));
                 }
                 let r = self.rt_int(
@@ -836,17 +840,7 @@ impl<'ctx> Cx<'ctx, '_> {
                         .map_err(e)?
                 };
                 let n = self.builder.build_int_sub(sn, from, "").map_err(e)?;
-                let at = self.rt_int(
-                    "str_find",
-                    &[
-                        p.into(),
-                        n.into(),
-                        np.into(),
-                        nn.into(),
-                        self.i64(u64::MAX).into(),
-                    ],
-                    64,
-                )?;
+                let at = self.find_text(p, n, np, nn)?;
                 let found = self.non_negative(at)?;
                 let shifted = self.builder.build_int_add(at, from, "").map_err(e)?;
                 let at = self
@@ -1133,10 +1127,102 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
-    /// `s[lo..hi]` as a view `{ptr, len}` at `d`. A range inside the text
-    /// whose ends both fall on char boundaries is cut inline; any other
-    /// range goes to `karac_mir_str_view`, which sets the panic message
-    /// and aborts (B-2026-10-18-34).
+    /// The byte offset of the first `needle` (`nn` bytes at `np`) in the
+    /// `n` bytes at `p`, or -1: a one-byte needle, a splitter's usual
+    /// separator, is scanned for in line; any other is
+    /// `karac_mir_str_find`'s. A one-byte needle is ASCII, so a byte
+    /// equal to it is never inside a char.
+    fn find_text(
+        &mut self,
+        p: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        np: PointerValue<'ctx>,
+        nn: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let (i8t, i64t) = (self.llcx.i8_type(), self.llcx.i64_type());
+        let f = self.cur_fn()?;
+        let block = |name| self.llcx.append_basic_block(f, name);
+        let (byte, head, body, step, miss, call, done) = (
+            block("find.byte"),
+            block("find"),
+            block("find.at"),
+            block("find.next"),
+            block("find.miss"),
+            block("find.rt"),
+            block("find.done"),
+        );
+        let one = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, nn, self.i64(1), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(one, byte, call)
+            .map_err(e)?;
+        self.builder.position_at_end(byte);
+        let want = self
+            .builder
+            .build_load(i8t, np, "")
+            .map_err(e)?
+            .into_int_value();
+        self.builder.build_unconditional_branch(head).map_err(e)?;
+        self.builder.position_at_end(head);
+        let i = self.builder.build_phi(i64t, "").map_err(e)?;
+        let iv = i.as_basic_value().into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, n, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(more, body, miss)
+            .map_err(e)?;
+        self.builder.position_at_end(body);
+        // SAFETY of the read: i < n.
+        let q = unsafe { self.builder.build_in_bounds_gep(i8t, p, &[iv], "") }.map_err(e)?;
+        let b = self
+            .builder
+            .build_load(i8t, q, "")
+            .map_err(e)?
+            .into_int_value();
+        let hit = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, b, want, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(hit, done, step)
+            .map_err(e)?;
+        self.builder.position_at_end(step);
+        let next = self.builder.build_int_add(iv, self.i64(1), "").map_err(e)?;
+        self.builder.build_unconditional_branch(head).map_err(e)?;
+        i.add_incoming(&[(&self.i64(0), byte), (&next, step)]);
+        self.builder.position_at_end(miss);
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(call);
+        let r = self.rt_int(
+            "str_find",
+            &[
+                p.into(),
+                n.into(),
+                np.into(),
+                nn.into(),
+                self.i64(u64::MAX).into(),
+            ],
+            64,
+        )?;
+        let called = self.builder.get_insert_block().ok_or("no block")?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        let phi = self.builder.build_phi(i64t, "").map_err(e)?;
+        let minus = i64t.const_all_ones();
+        phi.add_incoming(&[(&iv, body), (&minus, miss), (&r, called)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
+    /// `s[lo..hi]` (`mode` 1) or `s.slice(lo, hi)` (`mode` 2) as a view
+    /// `{ptr, len}` at `d`. A range inside the text whose ends both fall on
+    /// char boundaries is cut inline, the end of a `slice` first clamped
+    /// as the runtime clamps it; any other range goes to
+    /// `karac_mir_str_view`, which for `s[lo..hi]` sets the panic message
+    /// and aborts (B-2026-10-18-34), and for a `slice` is empty or lossy.
     fn str_view_inline(
         &mut self,
         d: PointerValue<'ctx>,
@@ -1144,7 +1230,32 @@ impl<'ctx> Cx<'ctx, '_> {
         n: IntValue<'ctx>,
         lo: IntValue<'ctx>,
         hi: IntValue<'ctx>,
+        mode: u64,
     ) -> R<()> {
+        let asked = hi;
+        let hi = if mode == 2 {
+            // `hi.clamp(lo, n)`: a start outside the text fails the test
+            // below and takes the runtime's path.
+            let below = self
+                .builder
+                .build_int_compare(IntPredicate::SLT, hi, lo, "")
+                .map_err(e)?;
+            let hi = self
+                .builder
+                .build_select(below, lo, hi, "")
+                .map_err(e)?
+                .into_int_value();
+            let above = self
+                .builder
+                .build_int_compare(IntPredicate::SGT, hi, n, "")
+                .map_err(e)?;
+            self.builder
+                .build_select(above, n, hi, "")
+                .map_err(e)?
+                .into_int_value()
+        } else {
+            hi
+        };
         let i8t = self.llcx.i8_type();
         let f = self.cur_fn()?;
         let lo_in = self.llcx.append_basic_block(f, "cut.lo");
@@ -1207,7 +1318,7 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.build_store(dl, len).map_err(e)?;
         self.builder.build_unconditional_branch(join).map_err(e)?;
         self.builder.position_at_end(slow);
-        let mode = self.llcx.i32_type().const_int(1, false);
+        let op = self.llcx.i32_type().const_int(mode, false);
         let r = self.rt_int(
             "str_view",
             &[
@@ -1215,12 +1326,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 p.into(),
                 n.into(),
                 lo.into(),
-                hi.into(),
-                mode.into(),
+                asked.into(),
+                op.into(),
             ],
             8,
         )?;
-        self.abort_on(r, "index out of bounds")?;
+        if mode == 1 {
+            self.abort_on(r, "index out of bounds")?;
+        }
         self.builder.build_unconditional_branch(join).map_err(e)?;
         self.builder.position_at_end(join);
         Ok(())
