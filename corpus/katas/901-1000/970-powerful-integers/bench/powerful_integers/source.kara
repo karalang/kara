@@ -1,0 +1,49 @@
+// Benchmark: LeetCode #970 Powerful Integers -- the ★ arm, every pair of
+// powers in a set, for every x and y from 1 to 100 with bound 10^6.
+// Mirrors powerful_integers.c, .rs, .py and go-seq/.
+
+fn powers(base: i64, bound: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut p = 1;
+    while p <= bound {
+        out.push(p);
+        if base == 1 {
+            break;
+        }
+        p *= base;
+    }
+    out
+}
+
+fn powerful_integers(x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut seen: Set[i64] = Set.new();
+    for a in powers(x, bound) {
+        for b in powers(y, bound - a) {
+            seen.insert(a + b);
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in seen {
+        out.push(v);
+    }
+    out
+}
+
+fn main() {
+    let rounds = 100;
+    let mut found = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for x in 1..101 {
+            for y in 1..101 {
+                // the set hands its values back in no set order, so they
+                // are folded in a way that ignores it
+                for v in powerful_integers(x, y, 1000000 - r) {
+                    found += 1;
+                    check = (check + v * v) % 1000000007;
+                }
+            }
+        }
+    }
+    println(f"{rounds} rounds over x and y from 1 to 100: {found} powerful integers, checksum {check}");
+}

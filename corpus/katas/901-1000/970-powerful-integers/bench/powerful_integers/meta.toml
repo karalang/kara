@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/970-powerful-integers/bench/powerful_integers.kara"
+dedup_of = []
+tags = ["lib:set", "bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "262f7913f"
+extracted_src = "2c4bc72e"

@@ -1,0 +1,111 @@
+// LeetCode #970: Powerful Integers -- sorted rows merged two at a time.
+//
+// For each power a of x, the sums a + 1, a + y, a + y^2, ... up to bound
+// form an ascending row; the answer so far, ascending and without
+// duplicates, is merged with each row in turn the way merge sort merges
+// two runs, a value in both kept once. No hashing and no heap.
+fn merge(old: Vec[i64], row: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < old.len() or j < row.len() {
+        if j == row.len() or (i < old.len() and old[i] < row[j]) {
+            out.push(old[i]);
+            i += 1;
+        } else if i == old.len() or row[j] < old[i] {
+            out.push(row[j]);
+            j += 1;
+        } else {
+            out.push(old[i]);
+            i += 1;
+            j += 1;
+        }
+    }
+    out
+}
+
+fn powerful_integers(x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut a = 1;
+    while a + 1 <= bound {
+        let mut row: Vec[i64] = Vec.new();
+        let mut b = 1;
+        while a + b <= bound {
+            row.push(a + b);
+            if y == 1 {
+                break;
+            }
+            b *= y;
+        }
+        out = merge(out, row);
+        if x == 1 {
+            break;
+        }
+        a *= x;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(v: Vec[i64]) -> String {
+    let mut s = String.from("[");
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more, each sorted
+    let examples: Vec[(i64, i64, i64)] = vec![
+        (2, 3, 10),
+        (3, 5, 15),
+        (1, 1, 1),
+        (1, 1, 2),
+        (2, 3, 0),
+        (1, 2, 10),
+        (3, 1, 30),
+        (2, 2, 20),
+        (100, 100, 1000000),
+        (10, 7, 120),
+    ];
+    for (x, y, bound) in examples {
+        let mut got = powerful_integers(x, y, bound);
+        got.sort();
+        println(f"x = {x}, y = {y}, bound = {bound}: {show(got)}");
+    }
+    // every x and y from 1 to 100, with bounds 100 and 10^6: how many
+    // powerful integers, their sum and a checksum of the sorted lists
+    for bound in vec![100, 1000000] {
+        let mut count = 0;
+        let mut sum = 0;
+        let mut check = 0;
+        for x in 1..101 {
+            for y in 1..101 {
+                let mut got = powerful_integers(x, y, bound);
+                got.sort();
+                count += got.len();
+                for v in got {
+                    sum += v;
+                    check = (check * 31 + v) % 1000000007;
+                }
+            }
+        }
+        println(f"x and y from 1 to 100, bound {bound}: {count} powerful integers summing to {sum}, checksum {check}");
+    }
+    // LeetCode's largest bound with the smallest bases
+    for (x, y) in vec![(2, 3), (2, 2), (2, 1), (1, 1), (3, 99)] {
+        let mut got = powerful_integers(x, y, 1000000);
+        got.sort();
+        let mut check = 0;
+        for v in got.clone() {
+            check = (check * 31 + v) % 1000000007;
+        }
+        println(f"x = {x}, y = {y}, bound = 1000000: {got.len()} powerful integers, largest {if got.len() > 0 { got[got.len() - 1] } else { 0 }}, checksum {check}");
+    }
+}

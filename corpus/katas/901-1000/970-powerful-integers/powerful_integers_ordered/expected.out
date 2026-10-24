@@ -1,0 +1,17 @@
+x = 2, y = 3, bound = 10: [2,3,4,5,7,9,10]
+x = 3, y = 5, bound = 15: [2,4,6,8,10,14]
+x = 1, y = 1, bound = 1: []
+x = 1, y = 1, bound = 2: [2]
+x = 2, y = 3, bound = 0: []
+x = 1, y = 2, bound = 10: [2,3,5,9]
+x = 3, y = 1, bound = 30: [2,4,10,28]
+x = 2, y = 2, bound = 20: [2,3,4,5,6,8,9,10,12,16,17,18,20]
+x = 100, y = 100, bound = 1000000: [2,101,200,10001,10100,20000]
+x = 10, y = 7, bound = 120: [2,8,11,17,50,59,101,107]
+x and y from 1 to 100, bound 100: 39080 powerful integers summing to 1586662, checksum 263680282
+x and y from 1 to 100, bound 1000000: 220633 powerful integers summing to 32878410440, checksum 533428383
+x = 2, y = 3, bound = 1000000: 254 powerful integers, largest 793585, checksum 670023790
+x = 2, y = 2, bound = 1000000: 209 powerful integers, largest 786432, checksum 862986745
+x = 2, y = 1, bound = 1000000: 20 powerful integers, largest 524289, checksum 583683656
+x = 1, y = 1, bound = 1000000: 1 powerful integers, largest 2, checksum 2
+x = 3, y = 99, bound = 1000000: 49 powerful integers, largest 989982, checksum 795454353

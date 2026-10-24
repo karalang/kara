@@ -1,0 +1,351 @@
+// LeetCode #970: Powerful Integers -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random bases and bounds.
+
+// ---- star ----
+
+fn star_powers(base: i64, bound: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut p = 1;
+    while p <= bound {
+        out.push(p);
+        if base == 1 {
+            break;
+        }
+        p *= base;
+    }
+    out
+}
+
+fn star_powerful_integers(x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut seen: Set[i64] = Set.new();
+    for a in star_powers(x, bound) {
+        for b in star_powers(y, bound - a) {
+            seen.insert(a + b);
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in seen {
+        out.push(v);
+    }
+    out
+}
+
+// ---- sorted ----
+
+fn sorted_powerful_integers(x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut sums: Vec[i64] = Vec.new();
+    let mut a = 1;
+    while a < bound {
+        let mut b = 1;
+        while a + b <= bound {
+            sums.push(a + b);
+            if y == 1 {
+                break;
+            }
+            b *= y;
+        }
+        if x == 1 {
+            break;
+        }
+        a *= x;
+    }
+    sums.sort();
+    sums.dedup();
+    sums
+}
+
+// ---- ordered ----
+
+fn ordered_powerful_integers(x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut ys: Vec[i64] = vec![1];
+    while y > 1 and ys[ys.len() - 1] * y < bound {
+        ys.push(ys[ys.len() - 1] * y);
+    }
+    let mut found: SortedSet[i64] = SortedSet.new();
+    let mut a = 1;
+    while a < bound {
+        for b in ys.clone() {
+            if a + b > bound {
+                break;
+            }
+            found.insert(a + b);
+        }
+        if x == 1 {
+            break;
+        }
+        a *= x;
+    }
+    found.into_iter().collect()
+}
+
+// ---- heap ----
+
+fn heap_powers(base: i64, bound: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = vec![1];
+    while base > 1 and out[out.len() - 1] * base <= bound {
+        out.push(out[out.len() - 1] * base);
+    }
+    out
+}
+
+fn heap_powerful_integers(x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if bound < 2 {
+        return out;
+    }
+    let xs = heap_powers(x, bound);
+    let ys = heap_powers(y, bound);
+    // (sum, row, column)
+    let mut heap: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    for i in 0..xs.len() {
+        heap.push((xs[i] + ys[0], i, 0));
+    }
+    while let Some((s, i, j)) = heap.pop() {
+        if s > bound {
+            break;
+        }
+        if out.len() == 0 or out[out.len() - 1] != s {
+            out.push(s);
+        }
+        if j + 1 < ys.len() {
+            heap.push((xs[i] + ys[j + 1], i, j + 1));
+        }
+    }
+    out
+}
+
+// ---- merge ----
+
+fn merge_runs(old: Vec[i64], row: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < old.len() or j < row.len() {
+        if j == row.len() or (i < old.len() and old[i] < row[j]) {
+            out.push(old[i]);
+            i += 1;
+        } else if i == old.len() or row[j] < old[i] {
+            out.push(row[j]);
+            j += 1;
+        } else {
+            out.push(old[i]);
+            i += 1;
+            j += 1;
+        }
+    }
+    out
+}
+
+fn merge_powerful_integers(x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut a = 1;
+    while a + 1 <= bound {
+        let mut row: Vec[i64] = Vec.new();
+        let mut b = 1;
+        while a + b <= bound {
+            row.push(a + b);
+            if y == 1 {
+                break;
+            }
+            b *= y;
+        }
+        out = merge_runs(out, row);
+        if x == 1 {
+            break;
+        }
+        a *= x;
+    }
+    out
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether v is a power of base: divided by base while it can be, it ends
+// at 1 (and base 1 has only the power 1).
+fn is_power(v: i64, base: i64) -> bool {
+    if v < 1 {
+        return false;
+    }
+    if base == 1 {
+        return v == 1;
+    }
+    let mut w = v;
+    while w % base == 0 {
+        w /= base;
+    }
+    w == 1
+}
+
+// The statement read literally: every v up to bound for which some
+// x^i + y^j equals it, x^i tried for i = 0, 1, 2, ... while it is below v.
+fn literal(x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in 1..bound + 1 {
+        let mut a = 1;
+        let mut found = false;
+        while a < v and not found {
+            if is_power(v - a, y) {
+                found = true;
+            }
+            if x == 1 {
+                break;
+            }
+            a *= x;
+        }
+        if found {
+            out.push(v);
+        }
+    }
+    out
+}
+
+// Whether v is x^i + y^j for some i and j.
+fn powerful(v: i64, x: i64, y: i64) -> bool {
+    let mut a = 1;
+    while a < v {
+        if is_power(v - a, y) {
+            return true;
+        }
+        if x == 1 {
+            return false;
+        }
+        a *= x;
+    }
+    false
+}
+
+fn arm(k: i64, x: i64, y: i64, bound: i64) -> Vec[i64] {
+    let mut got = if k == 0 {
+        star_powerful_integers(x, y, bound)
+    } else if k == 1 {
+        sorted_powerful_integers(x, y, bound)
+    } else if k == 2 {
+        ordered_powerful_integers(x, y, bound)
+    } else if k == 3 {
+        heap_powerful_integers(x, y, bound)
+    } else {
+        merge_powerful_integers(x, y, bound)
+    };
+    got.sort();
+    got
+}
+
+// Whether every value of the sorted small is in the sorted big.
+fn within(small: Vec[i64], big: Vec[i64]) -> bool {
+    let mut j = 0;
+    for v in small {
+        while j < big.len() and big[j] < v {
+            j += 1;
+        }
+        if j == big.len() or big[j] != v {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, x: i64, y: i64, bound: i64, small: bool) -> Vec[i64] {
+    let truth = if small { literal(x, y, bound) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, x, y, bound));
+    }
+    for k in 0..5 {
+        let a = got[k].clone();
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: strictly increasing, so each value once, every value from 2
+        // to bound and a power of x plus a power of y
+        let mut sound = true;
+        for i in 0..a.len() {
+            if a[i] < 2 or a[i] > bound or (i > 0 and a[i] <= a[i - 1]) or not powerful(a[i], x, y) {
+                sound = false;
+            }
+        }
+        check(mut t, 2, sound);
+        // P3: the same answer with x and y swapped
+        check(mut t, 3, arm(k, y, x, bound) == a);
+        // P4: the answer for half the bound is this one's values up to it
+        let half = bound / 2;
+        let mut low: Vec[i64] = Vec.new();
+        for v in a.clone() {
+            if v <= half {
+                low.push(v);
+            }
+        }
+        check(mut t, 4, arm(k, x, y, half) == low);
+        // P5: 1 is a power of every base, and every power of x * x is a
+        // power of x, so the answers with y or x replaced by 1, and with x
+        // replaced by x * x, are within this one
+        check(mut t, 5, within(arm(k, x, 1, bound), a.clone()) and within(arm(k, 1, y, bound), a.clone()) and within(arm(k, x * x, y, bound), a.clone()));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 970;
+    let mut found = 0;
+    let mut check_sum = 0;
+    // 3000 cases of bases up to 10 and bounds up to 200, against the
+    // statement, then 200 of bases up to 100 (half of them up to 6) and
+    // bounds up to 10^6
+    for c in 0..3200 {
+        let small = c < 3000;
+        let (x, y, bound) = if small {
+            (1 + next_random(mut seed) % 10, 1 + next_random(mut seed) % 10, next_random(mut seed) % 201)
+        } else {
+            let top = if next_random(mut seed) % 2 == 0 { 6 } else { 100 };
+            let x = 1 + next_random(mut seed) % top;
+            let y = 1 + next_random(mut seed) % top;
+            (x, y, (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000001)
+        };
+        let a = properties(mut t, x, y, bound, small);
+        found += a.len();
+        for v in a {
+            check_sum = (check_sum * 31 + v) % 1000000007;
+        }
+        check_sum = (check_sum * 31 + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases: {found} powerful integers, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
