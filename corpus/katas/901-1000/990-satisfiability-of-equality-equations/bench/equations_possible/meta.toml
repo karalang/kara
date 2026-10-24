@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/990-satisfiability-of-equality-equations/bench/equations_possible.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 990 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "57e0d33f6"
+classified_with = "d49fb2c0e"
 extracted_src = "5e474849"
