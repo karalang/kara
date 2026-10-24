@@ -14,7 +14,7 @@ Four legs, all clean before any commit lands:
 cargo fmt --all -- --check                                       # first action of every session
 cargo clippy --all --all-targets -- -D warnings                  # CI's leg, the one easiest to miss
 cargo clippy --all --all-targets --features llvm -- -D warnings  # the backend surface
-cargo test                                                       # front end, MIR, MIR interpreter
+cargo test --all                                                 # every workspace crate: front end, MIR, kernel, lsp, runtime
 cargo test --features llvm                                       # everything, including the compiled backend
 ```
 
@@ -26,6 +26,9 @@ cargo test --features llvm                                       # everything, i
 - **Wasm cfgs** are invisible to native clippy. When touching runtime code under
   a wasm cfg: `cargo clippy -p karac-runtime --target wasm32-wasip1 --no-default-features`
   and `cargo clippy -p karac-runtime --target wasm32-wasip1-threads --no-default-features --features wasm-threads`.
+- **`--all` on the default test leg.** Bare `cargo test` tests only the root
+  package, so the kernel, lsp and runtime crates' tests never run; CI runs
+  `--all` (measured at M3: two kernel reds reached main this way).
 - `cargo test lexer` runs one test file; `cargo test -- <name>` runs one test.
 
 ## Runtime archives
