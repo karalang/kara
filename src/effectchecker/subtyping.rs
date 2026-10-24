@@ -20,8 +20,8 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::{
-    format_monomorphized_signature, verb_name, Effect, EffectError, EffectErrorKind,
-    EffectSubtypeTrace,
+    declared_admits, format_monomorphized_signature, verb_name, Effect, EffectError,
+    EffectErrorKind, EffectSubtypeTrace,
 };
 
 /// The `subject` string for a binding's diagnostic. Shared so the `let`,
@@ -485,7 +485,8 @@ impl<'a> super::EffectChecker<'a> {
                 .effects
                 .iter()
                 .filter(|te| {
-                    !self.is_slot_transparent(&te.effect) && !slot_effects.contains(&te.effect)
+                    !self.is_slot_transparent(&te.effect)
+                        && !declared_admits(&slot_effects, &te.effect)
                 })
                 .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
                 .collect();
@@ -508,7 +509,7 @@ impl<'a> super::EffectChecker<'a> {
 
             for te in &arg_effects.effects {
                 let is_transparent = self.is_slot_transparent(&te.effect);
-                if !slot_effects.contains(&te.effect) && !is_transparent {
+                if !declared_admits(&slot_effects, &te.effect) && !is_transparent {
                     let effect_str =
                         format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);
                     let mut message = format!(
@@ -1058,13 +1059,13 @@ impl<'a> super::EffectChecker<'a> {
             .effects
             .iter()
             .filter(|te| {
-                !self.is_slot_transparent(&te.effect) && !slot_effects.contains(&te.effect)
+                !self.is_slot_transparent(&te.effect) && !declared_admits(&slot_effects, &te.effect)
             })
             .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
             .collect();
 
         for te in &value_effects.effects {
-            if slot_effects.contains(&te.effect) || self.is_slot_transparent(&te.effect) {
+            if declared_admits(&slot_effects, &te.effect) || self.is_slot_transparent(&te.effect) {
                 continue;
             }
             let effect_str = format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);

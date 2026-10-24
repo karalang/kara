@@ -63,6 +63,23 @@ pub struct Effect {
     pub resource: String,
 }
 
+/// Whether a declared effect clause covers `effect`, wherever a declared set
+/// is checked as a ceiling: a public function's `with`, the fixed part of
+/// `with E ...`, a trait method's ceiling, and a function-typed slot.
+/// `blocks` admits `suspends` (core-semantics §11.8): a clause that lets a
+/// function hold its worker while it waits also lets it give the worker up,
+/// so no `blocks` declaration has to change when a callee moves to
+/// `suspends`. The other way round is refused: `suspends` alone promises
+/// never to hold the worker.
+pub(crate) fn declared_admits(declared: &HashSet<Effect>, effect: &Effect) -> bool {
+    declared.contains(effect)
+        || (effect.verb == EffectVerbKind::Suspends
+            && declared.contains(&Effect {
+                verb: EffectVerbKind::Blocks,
+                resource: effect.resource.clone(),
+            }))
+}
+
 /// Where an effect originates (for diagnostic tracing).
 #[derive(Debug, Clone)]
 pub enum EffectOrigin {

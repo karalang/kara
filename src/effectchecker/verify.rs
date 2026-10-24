@@ -19,7 +19,8 @@ use crate::intern::Symbol;
 use crate::token::Span;
 
 use super::{
-    verb_name, DeclaredEffects, EffectError, EffectErrorKind, PublicEffectsPolicy, TracedEffect,
+    declared_admits, verb_name, DeclaredEffects, EffectError, EffectErrorKind, PublicEffectsPolicy,
+    TracedEffect,
 };
 
 impl<'a> super::EffectChecker<'a> {
@@ -154,7 +155,7 @@ impl<'a> super::EffectChecker<'a> {
                             if self.effect_came_via_polymorphic_callee(te, sym) {
                                 continue;
                             }
-                            if !fixed_set.contains(&te.effect) {
+                            if !declared_admits(&fixed_set, &te.effect) {
                                 let origin_msg = self.format_effect_origin(sym, &te.effect);
                                 self.errors.push(EffectError {
                                     message: format!(
@@ -198,7 +199,7 @@ impl<'a> super::EffectChecker<'a> {
                             if self.is_synthetic_modbind_resource(&effect.resource) {
                                 continue;
                             }
-                            if !declared_effects.contains(effect) {
+                            if !declared_admits(&declared_effects, effect) {
                                 let origin_msg = self.format_effect_origin(sym, effect);
                                 self.errors.push(EffectError {
                                     message: format!(
@@ -656,7 +657,7 @@ impl<'a> super::EffectChecker<'a> {
                     if self.is_transparent_verb(&te.effect.verb) {
                         continue;
                     }
-                    if !ceiling_set.contains(&te.effect) {
+                    if !declared_admits(&ceiling_set, &te.effect) {
                         new_errors.push(EffectError {
                             message: format!(
                                 "impl method '{}.{}' performs {}({}) but trait '{}.{}' \
@@ -821,7 +822,7 @@ impl<'a> super::EffectChecker<'a> {
                     if self.is_transparent_verb(&te.effect.verb) {
                         continue;
                     }
-                    if !ceiling_set.contains(&te.effect) {
+                    if !declared_admits(&ceiling_set, &te.effect) {
                         new_errors.push(EffectError {
                             message: format!(
                                 "default body of '{}.{}' performs {}({}) but the method \
