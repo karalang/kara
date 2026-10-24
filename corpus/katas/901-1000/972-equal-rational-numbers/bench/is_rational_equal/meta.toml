@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/972-equal-rational-numbers/bench/is_rational_equal.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
-bucket = "e-differs:stdout"
-classified_with = "62462b524"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 972 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "bab3ef594"
 extracted_src = "e57036c1"
