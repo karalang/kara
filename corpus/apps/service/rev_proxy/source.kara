@@ -526,8 +526,8 @@ fn post(path: Str, body: Str) -> String {
     f"POST {path} HTTP/1.1\r\nHost: shop.test\r\nContent-Type: application/json\r\nContent-Length: {body.len()}\r\n\r\n{body}"
 }
 
-fn upstream(name: Str, port: i64) -> Upstream {
-    Upstream { name: name.to_string(), addr: f"127.0.0.1:{port}", down_for: 0, refused: 0, served: 0 }
+fn upstream(name: Str, host: Str, port: i64) -> Upstream {
+    Upstream { name: name.to_string(), addr: f"{host}:{port}", down_for: 0, refused: 0, served: 0 }
 }
 
 fn origin(name: Str, port: i64) -> Origin {
@@ -560,8 +560,8 @@ fn main() {
             Route { prefix: "/static/".to_string(), pool: 1, strip: false },
         ],
         pools: vec![
-            Cluster { name: "api".to_string(), members: vec![upstream("b1", 47738), upstream("b2", 47739), upstream("b4", 27740)], next: 0 },
-            Cluster { name: "static".to_string(), members: vec![upstream("s1", 27741)], next: 0 },
+            Cluster { name: "api".to_string(), members: vec![upstream("b1", "127.0.0.1", 47738), upstream("b2", "127.0.0.1", 47739), upstream("b4", "127.0.0.2", 27740)], next: 0 },
+            Cluster { name: "static".to_string(), members: vec![upstream("s1", "127.0.0.2", 27741)], next: 0 },
         ],
         log: Vec.new(),
     };
