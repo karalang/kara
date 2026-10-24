@@ -1,0 +1,14 @@
+[100] with power 50: score 0
+[200,100] with power 150: score 1
+[100,200,300,400] with power 200: score 2
+[] with power 9999: score 0
+[0,0,0] with power 0: score 3
+[5,5,5] with power 5: score 1
+[1,10,10,10,100] with power 1: score 3
+[100,200,300,400] with power 1000: score 4
+300 random bags of 6111 tokens: scores adding to 2688, checksum 598389421
+1000 random tokens, power 5000: score 454
+1000 random tokens, power 0: score 0
+1000 random tokens, power their sum 4618511: score 1000
+tokens 1 to 1000, power 1: score 413
+1000 tokens of 9999, power 9999: score 1

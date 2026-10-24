@@ -1,0 +1,62 @@
+// Benchmark: LeetCode #948 Bag of Tokens -- the ★ arm, sorted and played
+// from both ends, on bags of 1000 tokens, LeetCode's largest. Mirrors
+// bag_of_tokens_score.c, .rs, .py and go-seq/.
+
+fn bag_of_tokens_score(tokens: Vec[i64], power: i64) -> i64 {
+    let mut t = tokens.clone();
+    t.sort();
+    let mut lo = 0;
+    let mut hi = t.len() - 1;
+    let mut p = power;
+    let mut score = 0;
+    let mut best = 0;
+    while lo <= hi {
+        if p >= t[lo] {
+            p -= t[lo];
+            lo += 1;
+            score += 1;
+            best = best.max(score);
+        } else if score > 0 and lo < hi {
+            p += t[hi];
+            hi -= 1;
+            score -= 1;
+        } else {
+            break;
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 500;
+    let count = 20;
+    let n = 1000;
+    let mut seed = 948;
+    // tokens from 0 to 9999, power from 0 to 9999
+    let mut bags: Vec[Vec[i64]] = Vec.new();
+    let mut powers: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        let mut tokens: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            tokens.push(next_random(mut seed) % 10000);
+        }
+        bags.push(tokens);
+        powers.push(next_random(mut seed) % 10000);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let b = (r + i) % count;
+            let s = bag_of_tokens_score(bags[b], powers[b]);
+            total += s;
+            check = (check * 1000003 + s) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} bags of {n} tokens: scores adding to {total}, checksum {check}");
+}

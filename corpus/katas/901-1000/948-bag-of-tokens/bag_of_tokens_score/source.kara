@@ -1,0 +1,109 @@
+// LeetCode #948: Bag of Tokens -- sorted, played from both ends.
+//
+// Sort the tokens. A face-up play should cost as little power as it can
+// and a face-down play bring as much as it can, so play the smallest
+// token face up while the power pays for it, and when it does not, give
+// up a point to play the largest face down, as long as a point and at
+// least one other token are left; the best score seen on the way is the
+// answer. O(n log n) time.
+
+fn bag_of_tokens_score(tokens: Vec[i64], power: i64) -> i64 {
+    let mut t = tokens.clone();
+    t.sort();
+    let mut lo = 0;
+    let mut hi = t.len() - 1;
+    let mut p = power;
+    let mut score = 0;
+    let mut best = 0;
+    while lo <= hi {
+        if p >= t[lo] {
+            p -= t[lo];
+            lo += 1;
+            score += 1;
+            best = best.max(score);
+        } else if score > 0 and lo < hi {
+            p += t[hi];
+            hi -= 1;
+            score -= 1;
+        } else {
+            break;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(tokens: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..tokens.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{tokens[i]}";
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![100],
+        vec![200, 100],
+        vec![100, 200, 300, 400],
+        Vec.new(),
+        vec![0, 0, 0],
+        vec![5, 5, 5],
+        vec![1, 10, 10, 10, 100],
+        vec![100, 200, 300, 400],
+    ];
+    let powers: Vec[i64] = vec![50, 150, 200, 9999, 0, 5, 1, 1000];
+    for i in 0..examples.len() {
+        let score = bag_of_tokens_score(examples[i], powers[i]);
+        println(f"{show(examples[i])} with power {powers[i]}: score {score}");
+    }
+    // 300 random bags of 0 to 40 tokens from 0 to 99, power 0 to 199
+    let mut seed = 948;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 41;
+        let mut tokens: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            tokens.push(next_random(mut seed) % 100);
+        }
+        let power = next_random(mut seed) % 200;
+        let score = bag_of_tokens_score(tokens, power);
+        count += n;
+        total += score;
+        check = (check * 31 + score) % 1000000007;
+    }
+    println(f"300 random bags of {count} tokens: scores adding to {total}, checksum {check}");
+    // LeetCode's largest, 1000 tokens
+    let mut random: Vec[i64] = Vec.new();
+    let mut sum = 0;
+    for _ in 0..1000 {
+        let v = next_random(mut seed) % 10000;
+        random.push(v);
+        sum += v;
+    }
+    println(f"1000 random tokens, power 5000: score {bag_of_tokens_score(random, 5000)}");
+    println(f"1000 random tokens, power 0: score {bag_of_tokens_score(random, 0)}");
+    println(f"1000 random tokens, power their sum {sum}: score {bag_of_tokens_score(random, sum)}");
+    let mut rising: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        rising.push(i + 1);
+    }
+    println(f"tokens 1 to 1000, power 1: score {bag_of_tokens_score(rising, 1)}");
+    let mut same: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        same.push(9999);
+    }
+    println(f"1000 tokens of 9999, power 9999: score {bag_of_tokens_score(same, 9999)}");
+}
