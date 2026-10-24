@@ -1017,6 +1017,11 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     let item =
                         self.resolve_assoc_projections(&substitute_type_params(&item, &self_subs));
+                    // An adaptor that keeps its source's items (`IterFilter`,
+                    // `IterTake`) names them `I.Item`; under the enclosing
+                    // `I: Iterator[Item = i64]` that is an `i64`
+                    // (B-2026-10-24-16).
+                    let item = self.resolve_enclosing_assoc_eqs(&item);
                     // `cloned`'s `ItemV` is the type a `ref` item views,
                     // whether or not it is `Copy`.
                     let value = match &item {

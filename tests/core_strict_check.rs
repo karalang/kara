@@ -12623,3 +12623,46 @@ fn a_list_literal_into_a_container_element_follows_the_element_type() {
         "integer literal 300 out of range for 'u8'",
     );
 }
+
+#[test]
+fn an_integer_literal_in_a_tuple_literal_must_fit_its_slot() {
+    // B-2026-10-24-17: `(1, 300)` for an `(i64, u8)` is refused as
+    // `let x: u8 = 300` is, nested and pushed tuples too; an in-range
+    // literal still takes the slot's type.
+    rejected(
+        "tuple-literal-out-of-range",
+        "fn main() {\n    let t: (i64, u8) = (1, 300);\n    println(f\"{t.1}\");\n}\n",
+        "integer literal 300 out of range for 'u8'",
+    );
+    rejected(
+        "nested-tuple-literal-out-of-range",
+        "fn main() {\n    let n: ((i64, i8), i64) = ((1, 200), 2);\n    println(n.1);\n}\n",
+        "integer literal 200 out of range for 'i8'",
+    );
+    rejected(
+        "pushed-tuple-literal-out-of-range",
+        "fn main() {\n    let mut v: Vec[(u8, i64)] = Vec.new();\n    v.push((300, 1));\n    println(v.len());\n}\n",
+        "integer literal 300 out of range for 'u8'",
+    );
+    accepted_and_runs(
+        "tuple-literals-in-range",
+        "fn main() {\n    let t: (i64, u8) = (1, 255);\n    let mut v: Vec[(u8, i64)] = Vec.new();\n    \
+         v.push((200, -1));\n    println(f\"{t.1} {v[0].0}\");\n}\n",
+        "255 200\n",
+    );
+}
+
+#[test]
+fn collect_after_an_item_keeping_adaptor_on_a_generic_iterator_checks() {
+    // B-2026-10-24-16: `IterFilter` / `IterTake` name their items `I.Item`,
+    // which the enclosing `I: Iterator[Item = i64]` fixes.
+    accepted_and_runs(
+        "filter-take-collect-under-a-bound",
+        "fn ev[I: Iterator[Item = i64]](it: own I) -> Vec[i64] {\n    it.filter(|x| x % 2 == 0).collect()\n}\n\
+         fn tk[I](it: own I) -> i64 where I: Iterator, I.Item = i64 {\n    \
+         let r: Vec[i64] = it.take(2).collect();\n    r.len()\n}\n\
+         fn main() {\n    let v: Vec[i64] = [1, 2, 3, 4];\n    println(ev(v.into_iter()).len());\n    \
+         let w: Vec[i64] = [1, 2, 3, 4];\n    println(tk(w.into_iter()));\n}\n",
+        "2\n2\n",
+    );
+}

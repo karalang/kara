@@ -657,7 +657,8 @@ impl<'a> super::TypeChecker<'a> {
     /// the element type, as at a `let` annotation (B-2026-10-19-32): `[3]`
     /// into a `Vec[u64]` element builds a `Vec[u64]`, and `[0, 1]` into an
     /// `Array[i64, 2]` element builds the array. Anything else is inferred,
-    /// and the caller checks it against the slot.
+    /// and the caller checks it against the slot; a tuple literal's elements
+    /// are range-checked against theirs first.
     pub(super) fn infer_element_arg(&mut self, arg: &Expr, elem: &Type) -> Type {
         let literal = matches!(
             &arg.kind,
@@ -668,10 +669,14 @@ impl<'a> super::TypeChecker<'a> {
         );
         let slot = resolve_type_var_top(elem, &self.env.substitutions);
         if literal && super::exprs::expectation_is_concrete(&slot) {
-            self.check_expr(arg, &slot)
-        } else {
-            self.infer_expr(arg)
+            return self.check_expr(arg, &slot);
         }
+        let ty = self.infer_expr(arg);
+        // A tuple literal's elements meet their slots (B-2026-10-24-17).
+        if matches!(arg.kind, ExprKind::Tuple(_)) {
+            self.check_tuple_literal_element(arg, &slot, &ty);
+        }
+        ty
     }
 
     /// The item type of an owned `extend` source that is not slice-shaped:

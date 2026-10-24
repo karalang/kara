@@ -3448,8 +3448,7 @@ impl<'a> super::TypeChecker<'a> {
         {
             if elems.len() == slots.len() && elems.len() == actuals.len() {
                 for ((e, slot), got) in elems.iter().zip(slots.iter()).zip(actuals.iter()) {
-                    self.check_int_widening_coercion(e, slot, got);
-                    self.check_float_narrowing_coercion(e, slot, got);
+                    self.check_tuple_literal_element(e, slot, got);
                 }
             }
         }
@@ -7459,6 +7458,37 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => n,
         }
+    }
+
+    /// One element of a tuple literal against its slot. A literal element
+    /// is range-checked against the slot as a lone literal is (`(1, 300)`
+    /// for an `(i64, u8)`, B-2026-10-24-17), a nested tuple literal is
+    /// walked, and any other element meets the widening and narrowing gates
+    /// (B-2026-08-14-1).
+    pub(super) fn check_tuple_literal_element(&mut self, e: &Expr, slot: &Type, got: &Type) {
+        let ctx = match slot {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        if let Some(v) = Self::unsuffixed_int_literal_value(e) {
+            self.check_int_literal_fits(v, ctx, &e.span, None);
+            return;
+        }
+        if let Some((v, sfx)) = Self::suffixed_int_literal_value(e) {
+            self.check_int_literal_fits(v, ctx, &e.span, sfx);
+            return;
+        }
+        if let (ExprKind::Tuple(elems), Type::Tuple(slots), Type::Tuple(gots)) = (&e.kind, ctx, got)
+        {
+            if elems.len() == slots.len() && elems.len() == gots.len() {
+                for ((e, slot), got) in elems.iter().zip(slots).zip(gots) {
+                    self.check_tuple_literal_element(e, slot, got);
+                }
+            }
+            return;
+        }
+        self.check_int_widening_coercion(e, slot, got);
+        self.check_float_narrowing_coercion(e, slot, got);
     }
 
     /// Emit the out-of-range diagnostic when `value` does not fit `ty`'s

@@ -1158,6 +1158,28 @@ impl<'a> super::TypeChecker<'a> {
         self.dispatch_trait_method_on(self_ty, method, trait_subs, None, None, args, span)
     }
 
+    /// `ty` with each `P.A` that an enclosing `where P.A = T` (or a
+    /// `P: Trait[A = T]` bound) fixes replaced by that `T`
+    /// (B-2026-10-21-60, B-2026-10-24-16).
+    pub(super) fn resolve_enclosing_assoc_eqs(&mut self, ty: &Type) -> Type {
+        if self.enclosing_assoc_eqs.is_empty() {
+            return ty.clone();
+        }
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        let mut eqs: Vec<(String, String, crate::ast::TypeExpr)> = self
+            .enclosing_assoc_eqs
+            .iter()
+            .map(|((p, a), te)| (p.clone(), a.clone(), te.clone()))
+            .collect();
+        eqs.sort_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+        let mut out = ty.clone();
+        for (param, assoc, te) in eqs {
+            let bound = self.lower_type_expr(&te, &scope);
+            out = substitute_existential_assoc_bindings(&out, &param, &[(assoc, bound)]);
+        }
+        out
+    }
+
     /// [`Self::dispatch_trait_method_as`], where the receiver may be an
     /// `impl Trait` value (`existential`). Its inline bindings name the
     /// trait's associated types in the signature, and a method with type
