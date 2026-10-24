@@ -1,0 +1,135 @@
+// LeetCode #984: String Without AAA or BBB -- the run so far as a state.
+//
+// The greedy rule needs only the run the answer ends in, so that is kept
+// as an enum, nothing or a run of one or two of a letter, and the letters
+// are gathered in a `Vec[char]`. A run of two forces the other letter;
+// otherwise the letter with more left goes next, `a` when they are
+// even. O(a + b).
+enum Run {
+    Nothing,
+    A(i64),
+    B(i64),
+}
+
+fn str_without_3a3b(a: i64, b: i64) -> String {
+    let mut letters: Vec[char] = Vec.new();
+    let mut run = Run.Nothing;
+    let mut left_a = a;
+    let mut left_b = b;
+    while left_a > 0 or left_b > 0 {
+        run = match run {
+            Run.A(2) => Run.B(1),
+            Run.B(2) => Run.A(1),
+            Run.A(n) => if left_a >= left_b { Run.A(n + 1) } else { Run.B(1) },
+            Run.B(n) => if left_a >= left_b { Run.A(1) } else { Run.B(n + 1) },
+            Run.Nothing => if left_a >= left_b { Run.A(1) } else { Run.B(1) },
+        };
+        match run {
+            Run.A(_) => {
+                letters.push('a');
+                left_a -= 1;
+            }
+            _ => {
+                letters.push('b');
+                left_b -= 1;
+            }
+        }
+    }
+    let mut s = String.new();
+    for c in letters {
+        s.push(c);
+    }
+    s
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A long answer as its first 12 letters, its last 6 and its length.
+fn shown(s: String) -> String {
+    let n = s.len();
+    if n > 24 { f"{s.substring(0, 12)}...{s.substring(n - 6)} ({n} letters)" } else { s.clone() }
+}
+
+fn show(a: i64, b: i64) {
+    println(f"a = {a}, b = {b} -> {shown(str_without_3a3b(a, b))}");
+}
+
+// LeetCode promises an answer exists: neither letter can outnumber
+// what two of it on each side of every other letter would hold.
+fn possible(a: i64, b: i64) -> bool {
+    a + b > 0 and a <= 2 * b + 2 and b <= 2 * a + 2
+}
+
+struct Tally {
+    letters: i64,
+    doubled: i64,
+    check: i64,
+}
+
+// Counts the letters and the letters that repeat the one before, and
+// folds every letter into the checksum, with a mark between answers.
+fn add(t: mut ref Tally, s: String) {
+    let mut prev = ' ';
+    for c in s.chars() {
+        if c == prev {
+            t.doubled += 1;
+        }
+        prev = c;
+        t.check = (t.check * 31 + (if c == 'a' { 1 } else { 2 })) % 1000000007;
+    }
+    t.letters += s.len();
+    t.check = (t.check * 31 + 3) % 1000000007;
+}
+
+fn line(t: Tally, what: String) -> String {
+    f"{what}: {t.letters} letters, {t.doubled} doubled, checksum {t.check}"
+}
+
+fn main() {
+    // LeetCode's examples
+    show(1, 2);
+    show(4, 1);
+    // a few more: one letter, two of one letter, even counts, the most
+    // a's and the most b's that fit, one letter ahead by two either way,
+    // and LeetCode's largest
+    show(1, 0);
+    show(0, 2);
+    show(3, 3);
+    show(6, 2);
+    show(2, 6);
+    show(5, 3);
+    show(3, 5);
+    show(100, 100);
+    // random pairs that have an answer, then every such pair up to
+    // LeetCode's 100
+    let mut seed = 984;
+    for (count, top) in vec![(300, 10), (3000, 100)] {
+        let mut t = Tally { letters: 0, doubled: 0, check: 0 };
+        for _ in 0..count {
+            let mut a = next_random(mut seed) % (top + 1);
+            let mut b = next_random(mut seed) % (top + 1);
+            while not possible(a, b) {
+                a = next_random(mut seed) % (top + 1);
+                b = next_random(mut seed) % (top + 1);
+            }
+            add(mut t, str_without_3a3b(a, b));
+        }
+        println(line(t, f"{count} random pairs up to {top}"));
+    }
+    let mut t = Tally { letters: 0, doubled: 0, check: 0 };
+    let mut count = 0;
+    for a in 0..101 {
+        for b in 0..101 {
+            if possible(a, b) {
+                add(mut t, str_without_3a3b(a, b));
+                count += 1;
+            }
+        }
+    }
+    println(line(t, f"all {count} pairs up to 100"));
+}

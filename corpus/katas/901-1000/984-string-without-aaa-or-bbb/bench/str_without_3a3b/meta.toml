@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/984-string-without-aaa-or-bbb/bench/str_without_3a3b.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "87381f75b"
+extracted_src = "68860bf1"

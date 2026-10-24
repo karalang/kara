@@ -1,0 +1,13 @@
+a = 1, b = 2 -> bab
+a = 4, b = 1 -> aabaa
+a = 1, b = 0 -> a
+a = 0, b = 2 -> bb
+a = 3, b = 3 -> ababab
+a = 6, b = 2 -> aabaabaa
+a = 2, b = 6 -> bbabbabb
+a = 5, b = 3 -> aabaabab
+a = 3, b = 5 -> bbababab
+a = 100, b = 100 -> abababababab...ababab (200 letters)
+300 random pairs up to 10: 3213 letters, 512 doubled, checksum 64675467
+3000 random pairs up to 100: 345598 letters, 48836 doubled, checksum 99344599
+all 5300 pairs up to 100: 610950 letters, 88350 doubled, checksum 212692211

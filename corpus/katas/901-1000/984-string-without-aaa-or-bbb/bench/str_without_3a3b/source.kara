@@ -1,0 +1,52 @@
+// Benchmark: LeetCode #984 String Without AAA or BBB -- the ★ arm, greedy,
+// reading the tail, on every pair of counts up to LeetCode's 100.
+// Mirrors str_without_3a3b.rs, .c, .py and go-seq/.
+
+fn str_without_3a3b(a: i64, b: i64) -> String {
+    let mut s = String.new();
+    let mut left_a = a;
+    let mut left_b = b;
+    while left_a > 0 or left_b > 0 {
+        let write_a = if s.ends_with("aa") {
+            false
+        } else if s.ends_with("bb") {
+            true
+        } else {
+            left_a >= left_b
+        };
+        if write_a {
+            s.push('a');
+            left_a -= 1;
+        } else {
+            s.push('b');
+            left_b -= 1;
+        }
+    }
+    s
+}
+
+fn main() {
+    let rounds = 100;
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for a in 0..101 {
+        for b in 0..101 {
+            if a + b > 0 and a <= 2 * b + 2 and b <= 2 * a + 2 {
+                pairs.push((a, b));
+            }
+        }
+    }
+    let n = pairs.len();
+    let mut letters = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..n {
+            let (a, b) = pairs[(r + i) % n];
+            let s = str_without_3a3b(a, b);
+            let len = s.len();
+            let middle = if s.bytes()[len / 2] == 97 { 1 } else { 2 };
+            letters += len;
+            check = (check * 31 + len * 3 + middle) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {n} pairs up to 100: {letters} letters, checksum {check}");
+}
