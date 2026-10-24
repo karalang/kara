@@ -12879,3 +12879,27 @@ fn a_bare_parameter_pushed_into_a_collection_gets_the_own_fix() {
         rejected_then_fixed_by(tag, &src, "a bare parameter borrows (core-semantics §4.1)", edit);
     }
 }
+
+#[test]
+fn a_str_right_operand_of_string_concat_gets_the_to_string_fix() {
+    // B-2026-10-24-24: `String + Str` is refused, as `Add` on `String` takes
+    // a `String`; the error now carries the `.to_string()` the call-site
+    // mismatch does, for a constant, an array element and a method result.
+    for (tag, rhs) in [
+        ("concat-str-const", "SUF"),
+        ("concat-str-array-elem", "SUFS[1]"),
+        ("concat-str-method", "t.trim()"),
+    ] {
+        let src = format!(
+            "const SUF: Str = \"ing\";\nconst SUFS: Array[Str, 2] = [\"s\", \"ed\"];\n\
+             fn main() {{\n    let w = \"walk\".to_string();\n    let t: Str = \" x \";\n    \
+             let a = w + {rhs};\n    println(a);\n}}\n"
+        );
+        rejected_then_fixed_by(
+            tag,
+            &src,
+            "Take an owned copy with `.to_string()`",
+            &format!("w + {rhs}.to_string()"),
+        );
+    }
+}

@@ -321,7 +321,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     (
         "E0208",
-        ty("InvalidBinaryOp", Some(DiagnosticClass::InvalidUnaryOp)),
+        ty("InvalidBinaryOp", Some(DiagnosticClass::InvalidBinaryOp)),
     ),
     (
         "E0209",
@@ -1108,6 +1108,7 @@ fn all_classes() -> &'static [DiagnosticClass] {
         DiagnosticClass::NoMethodFound,
         DiagnosticClass::InvalidCast,
         DiagnosticClass::InvalidUnaryOp,
+        DiagnosticClass::InvalidBinaryOp,
         DiagnosticClass::TraitBoundNotSatisfied,
         DiagnosticClass::RefutablePattern,
         DiagnosticClass::CannotInferTypeParam,
@@ -1228,6 +1229,11 @@ fn class_description(class: DiagnosticClass) -> &'static str {
             "A unary or pipe-style operator was applied to an unsupported operand. \
              Includes raw-pointer place-form rejections (`ptr.const(non-place)`), \
              deref of non-pointer values, and pipe-placeholder misuse."
+        }
+        DiagnosticClass::InvalidBinaryOp => {
+            "A binary operator was applied to operands it does not take: `+` on a \
+             `String` whose right operand is not a `String` (append `.to_string()` to \
+             a `Str`), or arithmetic on a type with no operator impl."
         }
         DiagnosticClass::TraitBoundNotSatisfied => {
             "A required trait bound isn't satisfied by the supplied type. Routes \

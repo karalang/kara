@@ -1576,9 +1576,10 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::AmbiguousMethod
         | TypeErrorKind::CannotInferAssocFn => Some(DC::NoMethodFound),
         TypeErrorKind::InvalidCast => Some(DC::InvalidCast),
-        TypeErrorKind::InvalidUnaryOp
-        | TypeErrorKind::InvalidBinaryOp
-        | TypeErrorKind::InvalidPipePlaceholder => Some(DC::InvalidUnaryOp),
+        TypeErrorKind::InvalidUnaryOp | TypeErrorKind::InvalidPipePlaceholder => {
+            Some(DC::InvalidUnaryOp)
+        }
+        TypeErrorKind::InvalidBinaryOp => Some(DC::InvalidBinaryOp),
         TypeErrorKind::TraitBoundNotSatisfied
         | TypeErrorKind::MissingSupertrait
         | TypeErrorKind::TypeAliasBoundNotSatisfied => Some(DC::TraitBoundNotSatisfied),

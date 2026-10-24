@@ -53450,3 +53450,16 @@ fn unsuffixed_literals_past_i64_take_their_type_from_inference() {
         );
     }
 }
+
+#[test]
+fn diagnostic_class_invalid_binary_op_for_string_plus_int() {
+    use karac::diagnostic_class::DiagnosticClass;
+    // B-2026-10-24-24: a binary operator's rejection names a binary class.
+    let errs = typecheck_errors("fn main() {\n    let s = \"a\".to_string() + 1;\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.class == Some(DiagnosticClass::InvalidBinaryOp)),
+        "expected InvalidBinaryOp class; got classes: {:?}",
+        errs.iter().map(|e| e.class).collect::<Vec<_>>()
+    );
+}

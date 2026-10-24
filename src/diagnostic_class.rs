@@ -45,6 +45,10 @@ pub enum DiagnosticClass {
     /// Unary operator (`*`, `-`, `!`) applied to an unsupported
     /// operand type, or to an unsupported place expression.
     InvalidUnaryOp,
+    /// Binary operator applied to operands it does not take: `+` on a
+    /// `String` with a non-`String` right operand, arithmetic on a type
+    /// with no operator impl (B-2026-10-24-24).
+    InvalidBinaryOp,
     /// A required trait bound isn't satisfied by the supplied
     /// type / type-argument. Routes both `where`-clause failures
     /// and inline bound failures.
@@ -129,6 +133,7 @@ impl DiagnosticClass {
             DiagnosticClass::NoMethodFound => "NO_METHOD_FOUND",
             DiagnosticClass::InvalidCast => "INVALID_CAST",
             DiagnosticClass::InvalidUnaryOp => "INVALID_UNARY_OP",
+            DiagnosticClass::InvalidBinaryOp => "INVALID_BINARY_OP",
             DiagnosticClass::TraitBoundNotSatisfied => "TRAIT_BOUND_NOT_SATISFIED",
             DiagnosticClass::RefutablePattern => "REFUTABLE_PATTERN",
             DiagnosticClass::CannotInferTypeParam => "CANNOT_INFER_TYPE_PARAM",
@@ -168,6 +173,10 @@ mod tests {
         assert_eq!(DiagnosticClass::NoMethodFound.as_str(), "NO_METHOD_FOUND");
         assert_eq!(DiagnosticClass::InvalidCast.as_str(), "INVALID_CAST");
         assert_eq!(DiagnosticClass::InvalidUnaryOp.as_str(), "INVALID_UNARY_OP");
+        assert_eq!(
+            DiagnosticClass::InvalidBinaryOp.as_str(),
+            "INVALID_BINARY_OP"
+        );
         assert_eq!(
             DiagnosticClass::TraitBoundNotSatisfied.as_str(),
             "TRAIT_BOUND_NOT_SATISFIED"
@@ -229,6 +238,7 @@ mod tests {
             DiagnosticClass::NoMethodFound,
             DiagnosticClass::InvalidCast,
             DiagnosticClass::InvalidUnaryOp,
+            DiagnosticClass::InvalidBinaryOp,
             DiagnosticClass::TraitBoundNotSatisfied,
             DiagnosticClass::RefutablePattern,
             DiagnosticClass::CannotInferTypeParam,

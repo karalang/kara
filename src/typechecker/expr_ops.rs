@@ -2984,6 +2984,44 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// An operator with no entry in the table above keeps the old operator-
     /// language wording rather than inventing a trait name for it.
+    /// `String + t` with `t` a `Str`: the edit that appends `.to_string()`
+    /// to `t`, where `t`'s end is known (B-2026-10-24-24).
+    fn str_concat_operand_fix(
+        &self,
+        op: &BinOp,
+        left_ty: &Type,
+        right: &Expr,
+        right_ty: &Type,
+    ) -> Option<FixIt> {
+        let is_str = |t: &Type| matches!(t, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
+        let str_right = match right_ty {
+            Type::Ref(inner) => is_str(inner),
+            t => is_str(t),
+        };
+        if !matches!(op, BinOp::Add) || !is_string_concat_operand(left_ty) || !str_right {
+            return None;
+        }
+        let end = match &right.kind {
+            ExprKind::MethodCall {
+                args_close_span, ..
+            } => args_close_span.offset + args_close_span.length,
+            ExprKind::Identifier(_)
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::TupleIndex { .. }
+            | ExprKind::Call { .. } => right.span.offset + right.span.length,
+            _ => return None,
+        };
+        Some(FixIt {
+            span: Span {
+                offset: end,
+                length: 0,
+                ..right.span
+            },
+            replacement: ".to_string()".to_string(),
+        })
+    }
+
     pub(super) fn arithmetic_rejection_message(
         &self,
         op: &BinOp,
@@ -3760,11 +3798,20 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     left_ty
                 } else {
-                    self.type_error(
-                        self.arithmetic_rejection_message(op, &left_ty, &right_ty),
-                        left.span,
-                        TypeErrorKind::InvalidBinaryOp,
-                    );
+                    let message = self.arithmetic_rejection_message(op, &left_ty, &right_ty);
+                    match self.str_concat_operand_fix(op, &left_ty, right, &right_ty) {
+                        Some(fix) => self.type_error_with_fix_it(
+                            format!(
+                                "{message}: a `Str` is a view and `+` appends an owned \
+                                 `String` (design.md § Operator traits). Take an owned copy \
+                                 with `.to_string()`"
+                            ),
+                            left.span,
+                            TypeErrorKind::InvalidBinaryOp,
+                            fix,
+                        ),
+                        None => self.type_error(message, left.span, TypeErrorKind::InvalidBinaryOp),
+                    }
                     Type::Error
                 }
             }
