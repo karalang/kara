@@ -1,0 +1,120 @@
+// LeetCode #945: Minimum Increment to Make Array Unique -- free slots.
+//
+// Take the values in the order given, each moving up to the first value
+// not yet taken, found by following links from each taken value to the
+// one after it (union-find, with paths shortened). The set of values
+// taken does not depend on the order, so neither does the total.
+// O(n α(n)) after O(max + n) set-up.
+
+fn find(next: mut ref Vec[i64], v: i64) -> i64 {
+    let mut root = v;
+    while next[root] != root {
+        root = next[root];
+    }
+    let mut x = v;
+    while next[x] != root {
+        let up = next[x];
+        next[x] = root;
+        x = up;
+    }
+    root
+}
+
+fn min_increment_for_unique(nums: Vec[i64]) -> i64 {
+    let mut top = 0;
+    for v in nums.iter() {
+        top = top.max(*v);
+    }
+    // values up to top + n are enough for every one
+    let size = top + nums.len() + 1;
+    let mut next: Vec[i64] = Vec.new();
+    for v in 0..size {
+        next.push(v);
+    }
+    let mut moves = 0;
+    for v in nums.iter() {
+        let slot = find(mut next, *v);
+        moves += slot - *v;
+        next[slot] = slot + 1;
+    }
+    moves
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{nums[i]}";
+    }
+    f"[{s}]"
+}
+
+fn moves_text(m: i64) -> String {
+    if m == 1 { "1 move".to_string() } else { f"{m} moves" }
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![1, 2, 2],
+        vec![3, 2, 1, 2, 1, 7],
+        vec![0],
+        vec![5, 5, 5, 5],
+        vec![1, 2, 3],
+        vec![100000, 100000],
+        vec![0, 0, 2, 2],
+        vec![4, 0, 4, 1, 1, 2],
+    ];
+    for nums in examples.iter() {
+        println(f"{show(nums)}: {moves_text(min_increment_for_unique(nums))}");
+    }
+    // 300 random arrays of 1 to 50 values from 0 to 30
+    let mut seed = 945;
+    let mut values = 0;
+    let mut moves = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 50;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 31);
+        }
+        let m = min_increment_for_unique(nums);
+        values += n;
+        moves += m;
+        check = (check * 31 + m) % 1000000007;
+    }
+    println(f"300 random arrays of {values} values: {moves} moves, checksum {check}");
+    // LeetCode's longest, 100000 values
+    let mut random: Vec[i64] = Vec.new();
+    for _ in 0..100000 {
+        let wide = next_random(mut seed) * 32768 + next_random(mut seed);
+        random.push(wide % 100001);
+    }
+    println(f"100000 random values: {min_increment_for_unique(random)} moves");
+    let mut distinct: Vec[i64] = Vec.new();
+    for v in 0..100000 {
+        distinct.push(99999 - v);
+    }
+    println(f"100000 distinct values, falling: {min_increment_for_unique(distinct)} moves");
+    let mut pairs: Vec[i64] = Vec.new();
+    for v in 0..100000 {
+        pairs.push(v / 2 * 2);
+    }
+    println(f"each even number from 0 to 99998 twice: {min_increment_for_unique(pairs)} moves");
+    // the largest answer that fits in 32 bits from equal values
+    let mut same: Vec[i64] = Vec.new();
+    for _ in 0..65536 {
+        same.push(100000);
+    }
+    println(f"65536 times 100000: {min_increment_for_unique(same)} moves");
+}

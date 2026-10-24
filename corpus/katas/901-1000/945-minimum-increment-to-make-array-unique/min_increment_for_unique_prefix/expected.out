@@ -1,0 +1,13 @@
+[1,2,2]: 1 move
+[3,2,1,2,1,7]: 6 moves
+[0]: 0 moves
+[5,5,5,5]: 6 moves
+[1,2,3]: 0 moves
+[100000,100000]: 1 move
+[0,0,2,2]: 2 moves
+[4,0,4,1,1,2]: 3 moves
+300 random arrays of 7668 values: 32335 moves, checksum 507767046
+100000 random values: 15458628 moves
+100000 distinct values, falling: 0 moves
+each even number from 0 to 99998 twice: 50000 moves
+65536 times 100000: 2147450880 moves

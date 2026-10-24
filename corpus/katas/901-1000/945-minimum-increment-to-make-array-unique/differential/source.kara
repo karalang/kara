@@ -1,0 +1,290 @@
+// LeetCode #945: Minimum Increment to Make Array Unique -- differential
+// test of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: you are given an integer array nums. In one move, you
+// can pick an index i where 0 <= i < nums.length and increment nums[i] by
+// 1. Return the minimum number of moves to make every value in nums
+// unique.
+
+// ---- the ★ arm: sorted, raised --------------------------------------------
+fn star_min_increment_for_unique(nums: Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut moves = 0;
+    let mut floor = -1;
+    for v in a.iter() {
+        let end = (*v).max(floor + 1);
+        moves += end - *v;
+        floor = end;
+    }
+    moves
+}
+
+// ---- the count arm: counts carried ----------------------------------------
+fn count_min_increment_for_unique(nums: Vec[i64]) -> i64 {
+    let mut top = 0;
+    for v in nums.iter() {
+        top = top.max(*v);
+    }
+    let mut count: Vec[i64] = Vec.filled(top + 1, 0);
+    for v in nums.iter() {
+        count[*v] += 1;
+    }
+    let mut moves = 0;
+    let mut carry = 0;
+    for v in 0..(top + 1) {
+        let here = carry + count[v];
+        if here > 0 {
+            carry = here - 1;
+        } else {
+            carry = 0;
+        }
+        moves += carry;
+    }
+    // the carried copies settle at top + 1, top + 2, ...
+    moves += carry * (carry - 1) / 2;
+    moves
+}
+
+// ---- the slots arm: free slots --------------------------------------------
+fn slots_find(next: mut ref Vec[i64], v: i64) -> i64 {
+    let mut root = v;
+    while next[root] != root {
+        root = next[root];
+    }
+    let mut x = v;
+    while next[x] != root {
+        let up = next[x];
+        next[x] = root;
+        x = up;
+    }
+    root
+}
+
+fn slots_min_increment_for_unique(nums: Vec[i64]) -> i64 {
+    let mut top = 0;
+    for v in nums.iter() {
+        top = top.max(*v);
+    }
+    // values up to top + n are enough for every one
+    let size = top + nums.len() + 1;
+    let mut next: Vec[i64] = Vec.new();
+    for v in 0..size {
+        next.push(v);
+    }
+    let mut moves = 0;
+    for v in nums.iter() {
+        let slot = slots_find(mut next, *v);
+        moves += slot - *v;
+        next[slot] = slot + 1;
+    }
+    moves
+}
+
+// ---- the prefix arm: a closed form ----------------------------------------
+fn prefix_min_increment_for_unique(nums: Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut best = a[0];
+    let mut ends = 0;
+    let mut total = 0;
+    for i in 0..a.len() {
+        best = best.max(a[i] - i);
+        ends += best + i;
+        total += a[i];
+    }
+    ends - total
+}
+
+// ---- the holes arm: holes filled ------------------------------------------
+fn holes_min_increment_for_unique(nums: Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut waiting = 0;
+    let mut moved = 0;
+    let mut filled = 0;
+    let mut i = 0;
+    while i < a.len() {
+        let v = a[i];
+        let mut j = i + 1;
+        while j < a.len() and a[j] == v {
+            waiting += 1;
+            moved += v;
+            j += 1;
+        }
+        // the holes up to the next value held, or above the largest
+        let next = if j < a.len() { a[j] } else { v + waiting + 1 };
+        let mut hole = v + 1;
+        while hole < next and waiting > 0 {
+            filled += hole;
+            waiting -= 1;
+            hole += 1;
+        }
+        i = j;
+    }
+    filled - moved
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, nums: Vec[i64]) -> i64 {
+    if x == 0 {
+        star_min_increment_for_unique(nums)
+    } else if x == 1 {
+        count_min_increment_for_unique(nums)
+    } else if x == 2 {
+        slots_min_increment_for_unique(nums)
+    } else if x == 3 {
+        prefix_min_increment_for_unique(nums)
+    } else {
+        holes_min_increment_for_unique(nums)
+    }
+}
+
+// The statement read literally: every way of ending with distinct values,
+// each no smaller than where it started, the least total of increments.
+// No value need end above the largest plus the number of values.
+fn assign(nums: ref Vec[i64], i: i64, top: i64, used: mut ref Vec[bool], cost: i64, best: mut ref i64) {
+    if cost >= *best {
+        return;
+    }
+    if i == nums.len() {
+        *best = cost;
+        return;
+    }
+    for t in nums[i]..(top + 1) {
+        if not used[t] {
+            used[t] = true;
+            assign(nums, i + 1, top, mut used, cost + t - nums[i], mut best);
+            used[t] = false;
+        }
+    }
+}
+
+fn literal(nums: ref Vec[i64]) -> i64 {
+    let mut top = 0;
+    for v in nums.iter() {
+        top = top.max(*v);
+    }
+    top += nums.len();
+    let mut used: Vec[bool] = Vec.filled(top + 1, false);
+    let mut best = top * nums.len() + 1;
+    assign(nums, 0, top, mut used, 0, mut best);
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, nums: Vec[i64], small: bool) -> i64 {
+    let n = nums.len();
+    let truth = if small { literal(nums) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, nums));
+    }
+    // how many different values
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut distinct = 1;
+    for i in 1..n {
+        if sorted[i] != sorted[i - 1] {
+            distinct += 1;
+        }
+    }
+    let top = sorted[n - 1];
+    // the inputs P3 to P5 share: the values shuffled and 7 added; the
+    // values beside a copy raised past them all; one more random value,
+    // and one more copy of a value already there
+    let mut shuffled: Vec[i64] = Vec.new();
+    for v in nums.iter() {
+        shuffled.push(*v + 7);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        shuffled.swap(i, j);
+    }
+    let mut apart = nums.clone();
+    for v in nums.iter() {
+        apart.push(*v + top + n + 1);
+    }
+    let mut more = nums.clone();
+    more.push(next_random(mut seed) % (top + 2));
+    let mut copy = nums.clone();
+    copy.push(nums[next_random(mut seed) % n]);
+    for x in 0..5 {
+        let m = got[x];
+        // P1: the statement's least total, on the small arrays
+        if small {
+            check(mut t, 1, m == truth);
+        }
+        // P2: at least one move for each repeated value, and none exactly
+        // when the values are all different
+        check(mut t, 2, m >= n - distinct and ((m == 0) == (distinct == n)));
+        // P3: the values shuffled with 7 added, the same
+        check(mut t, 3, arm(x, shuffled) == m);
+        // P4: beside a copy of themselves raised past them all, twice
+        check(mut t, 4, arm(x, apart) == 2 * m);
+        // P5: one more value, random or a copy, never fewer
+        check(mut t, 5, arm(x, more) >= m and arm(x, copy) >= m);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == m {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 945;
+    let mut arrays = 0;
+    let mut values = 0;
+    let mut check_sum = 0;
+    // up to 5 values from 0 to 2 against the statement, then up to 2000
+    // values from 0 to as many as 2000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 5 } else { 1 + next_random(mut seed) % 2000 };
+        let range = if small { 3 } else { 1 + next_random(mut seed) % 2001 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % range);
+        }
+        arrays += 1;
+        values += n;
+        let m = properties(mut t, mut seed, nums, small);
+        check_sum = (check_sum * 1000003 + m) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{arrays} arrays of {values} values, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
