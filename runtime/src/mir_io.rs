@@ -676,21 +676,41 @@ unsafe fn tcp_unix(op: i32, fd: i64, ptr: *mut u8, len: i64, value: *mut i64) ->
     };
     let mut infl = -1;
     let got = match op {
-        1 => {
-            // SAFETY: the caller's contract.
-            let text = unsafe { std::str::from_utf8(buf_bytes(ptr, len.max(0) as usize)) };
-            match text
-                .ok()
-                .and_then(|t| t.parse::<std::net::SocketAddr>().ok())
-            {
-                None => (7, 0),
-                Some(at) => match sock::connect(at, armed, &mut infl) {
+        // The retry of a connect the running task has under way ends it,
+        // once the readiness loop saw its socket writable.
+        1 => match crate::mir_task::take_inflight() {
+            Some(c) => {
+                if !armed {
+                    sock::karac_mir_io_wait(i64::from(c), 1, -1);
+                }
+                match sock::connect_finish(c) {
                     Got::Done(c) => (-1, c),
-                    Got::NotReady => (sock::IO_IN_PROGRESS, infl),
+                    Got::NotReady => {
+                        crate::mir_task::set_inflight(c);
+                        (sock::IO_NOT_READY, 0)
+                    }
                     Got::Fail(e) => net_cause(&e),
-                },
+                }
             }
-        }
+            None => {
+                // SAFETY: the caller's contract.
+                let text = unsafe { std::str::from_utf8(buf_bytes(ptr, len.max(0) as usize)) };
+                match text
+                    .ok()
+                    .and_then(|t| t.parse::<std::net::SocketAddr>().ok())
+                {
+                    None => (7, 0),
+                    Some(at) => match sock::connect(at, armed, &mut infl) {
+                        Got::Done(c) => (-1, c),
+                        Got::NotReady => {
+                            crate::mir_task::set_inflight(infl as i32);
+                            (sock::IO_IN_PROGRESS, infl)
+                        }
+                        Got::Fail(e) => net_cause(&e),
+                    },
+                }
+            }
+        },
         8 => match sock::connect_finish(raw) {
             Got::Done(c) => (-1, c),
             Got::NotReady => (sock::IO_NOT_READY, 0),

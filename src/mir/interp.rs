@@ -55,6 +55,12 @@ pub struct Program {
     /// declared signatures: a call to one is a call into a native library
     /// (design.md § FFI), not to a body or a library native.
     pub externs: BTreeMap<String, ExternSig>,
+    /// The instances the effects report says suspend
+    /// ([`super::effects::EffectReport::suspending`], M4 item 3), as the
+    /// program was built: the coroutine transform starts from them. `None`
+    /// for a program made otherwise (from MIR text), whose coroutines the
+    /// transform finds from the bodies alone.
+    pub suspending: Option<std::collections::BTreeSet<String>>,
 }
 
 /// An `extern "C"` function's declared parameter and return types.
@@ -561,7 +567,8 @@ pub fn coroutines_flag() -> bool {
 /// bodies (`coroutine::transform`).
 pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, String> {
     let bodies: Vec<Body> = program.bodies.values().cloned().collect();
-    let (bodies, _) = coroutine::transform(&bodies, tys)?;
+    let seed = program.suspending.clone().unwrap_or_default();
+    let (bodies, _) = coroutine::transform_from(&bodies, tys, &seed)?;
     let mut p = program.clone();
     p.bodies = bodies
         .into_iter()
@@ -1717,6 +1724,8 @@ impl<'a> Interp<'a> {
             }
             ("__yield_now", "") => Ok(Value::Unit),
             ("__ready", "") => self.ready(&args),
+            // The interpreter's descriptor calls complete when made.
+            ("__io_again", "") => Ok(Value::Bool(false)),
             ("fence" | "compiler_fence", "") => {
                 // One thread runs the program; a fence orders nothing. A
                 // `Relaxed` one is refused, as legacy refuses it.

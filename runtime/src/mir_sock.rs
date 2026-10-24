@@ -75,17 +75,6 @@ pub extern "C" fn karac_mir_io_wait(fd: i64, write: u8, timeout_ms: i64) -> i32 
     }
 }
 
-/// Clears the reactor's cached readiness of `fd` after a call answered
-/// `IO_NOT_READY`. Until the reactor lands readiness is asked afresh each
-/// time, so there is nothing to clear.
-#[no_mangle]
-pub extern "C" fn karac_mir_io_stale(_fd: i64, _write: u8) {}
-
-/// Deregisters `fd` from the reactor before it is closed. Until the
-/// reactor lands no descriptor is registered.
-#[no_mangle]
-pub extern "C" fn karac_mir_io_forget(_fd: i64) {}
-
 /// Sets or clears `O_NONBLOCK` on `fd`, a socket's or a pipe's.
 pub(crate) fn set_blocking(fd: RawFd, blocking: bool) -> std::io::Result<()> {
     // SAFETY: `fcntl` on a descriptor the caller holds open.
@@ -255,6 +244,7 @@ pub(crate) fn drive_for(
             Ok(n) => return Got::Done(n),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 if armed && deadline.is_none() {
+                    crate::mir_task::set_again();
                     return Got::NotReady;
                 }
                 let left = match deadline {
@@ -296,6 +286,7 @@ pub(crate) fn connect(at: std::net::SocketAddr, armed: bool, fd: &mut i64) -> Go
     let raw = sock.into_raw_fd();
     *fd = i64::from(raw);
     if armed {
+        crate::mir_task::set_again();
         return Got::NotReady;
     }
     karac_mir_io_wait(i64::from(raw), 1, -1);
@@ -312,6 +303,7 @@ pub(crate) fn connect_finish(fd: RawFd) -> Got {
     };
     // SAFETY: one initialized entry.
     if unsafe { libc::poll(&mut p, 1, 0) } == 0 {
+        crate::mir_task::set_again();
         return Got::NotReady;
     }
     // SAFETY: `fd` is the open socket of the connect.
@@ -328,7 +320,7 @@ pub(crate) fn connect_finish(fd: RawFd) -> Got {
 /// Closes `fd`, deregistering it from the reactor first, and dropping
 /// any TLS session on it, as `karac_runtime_tcp_close` does.
 pub(crate) fn close(fd: RawFd) {
-    karac_mir_io_forget(i64::from(fd));
+    crate::mir_task::karac_mir_io_forget(i64::from(fd));
     #[cfg(feature = "tls")]
     crate::tls::forget_session_for_fd(fd);
     // SAFETY: the caller owns `fd` and does not use it again.

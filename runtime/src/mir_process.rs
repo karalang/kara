@@ -406,6 +406,7 @@ pub unsafe extern "C" fn karac_mir_child(
                     Ok(None) => {
                         // SAFETY: the caller's contract.
                         unsafe { *value = 0 };
+                        crate::mir_task::set_again();
                         return NOT_READY;
                     }
                     r => r.map(|s| pack(s.expect("matched above"))),

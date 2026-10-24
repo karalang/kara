@@ -31,18 +31,20 @@
 //!   bit (`karac_mir_io_arm`), and every native takes it, clearing it, on
 //!   every path. An unarmed call (one through a function value, or in a
 //!   body that is no coroutine) blocks as outside a task.
-//! - **The readiness loop** codegen emits around a suspending fd call is
-//!   `loop { while !__ready(op, fd) { yield }; r = native(..); if r !=
-//!   IO_NOT_READY { break }; karac_mir_io_stale(fd, write) }`. `__ready`
-//!   reads the reactor's cached readiness. An fd's first query registers it
-//!   (epoll edge-triggered, kqueue `EV_CLEAR`) and answers ready, so the
-//!   first attempt is optimistic. `io_stale` clears the cached bit, and the
-//!   next event sets it again.
-//! - **Connect is two-phase.** On `EINPROGRESS`, `connect` returns
-//!   `IO_IN_PROGRESS` (101) with the fd in an out parameter. The loop waits
-//!   for that fd to be writable, then calls `connect_finish(fd)`, which
-//!   answers `IO_NOT_READY` while the connect is still under way and
-//!   otherwise reads `SO_ERROR` itself.
+//! - **The readiness loop** the coroutine transform puts around a
+//!   suspending fd call is `loop { while !__ready(op, fd) { yield }; r =
+//!   native(..); if !__io_again() { break } }`. `__ready` asks the fd's
+//!   readiness afresh (`poll(fd, 0)`), so it is never stale, and a ready
+//!   answer arms the call. A call that still finds nothing (another reader
+//!   took the data, a connection reset) answers `IO_NOT_READY`, sets the
+//!   thread's again bit ([`set_again`]) and stores nothing; codegen then
+//!   leaves its arguments unconsumed and `__io_again` sends the loop back
+//!   to `__ready`.
+//! - **Connect is two-phase.** On `EINPROGRESS` an armed `connect` keeps
+//!   the socket on the running task ([`set_inflight`]) and answers
+//!   `IO_IN_PROGRESS` (101), which codegen treats as `IO_NOT_READY`.
+//!   `__ready` of the retried connect waits for that fd to be writable, and
+//!   the retry ends the connect (`connect_finish`), which reads `SO_ERROR`.
 //! - **Close.** A native that closes a socket or pipe fd calls
 //!   `karac_mir_io_forget(fd)` first, so the reactor deregisters it before
 //!   the number can be reused. A `dup` shares the description, so it gets
@@ -58,13 +60,17 @@
 //! - **Wasm and non-unix** have no reactor. There `io_wait` is a sleep
 //!   loop, and nothing above changes what a program does.
 //!
-//! A task waiting on an fd leaves the run queue and parks on the reactor,
-//! and deadlines go in a heap. A round of the executor then costs O(ready)
-//! rather than O(tasks): the executor sleeps on one `epoll_wait` / `kevent`
-//! until the nearest deadline, and wakes only the tasks the events name.
+//! A task waiting on an fd leaves the run queue and parks on the reactor
+//! (oneshot `epoll` on Linux, `poll(2)` over the parked fds elsewhere), and
+//! a sleeping task goes in a deadline heap. A round of the executor then
+//! costs O(runnable) rather than O(tasks): the executor asks the reactor
+//! without waiting once a round, and when nothing can run it waits on the
+//! reactor until the nearest deadline, waking only the tasks the events
+//! name.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::cell::{Cell, RefCell};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 /// A task's poll function: resumes the task once, and answers 1 when it
@@ -75,9 +81,11 @@ pub type TaskPoll = unsafe extern "C" fn(*mut u8, *mut u8) -> u8;
 enum Wait {
     /// Runnable: not suspended, or suspended on a plain yield.
     None,
-    /// A `sleep_ms` that has not reached its deadline.
+    /// A `sleep_ms` that has not reached its deadline: the task sleeps in
+    /// the deadline heap.
     Until(Instant),
-    /// A socket to become readable (`events` is `POLLIN`) or writable.
+    /// A descriptor to become readable (`events` is `POLLIN`) or writable:
+    /// the task parks on the reactor.
     Fd(i32, i16),
     /// A socket to become readable, or its read timeout's deadline to pass
     /// (core-semantics §11.10). Unix only, as socket deadlines are.
@@ -85,6 +93,8 @@ enum Wait {
     FdBy(i32, i16, Instant),
     /// A join or a channel, which only another task can make ready.
     Task,
+    /// As `Task`, or until the deadline passes (a pool's `acquire`).
+    TaskBy(Instant),
 }
 
 /// A `TaskGroup` (B-2026-10-15-30): how many of its tasks may run at once
@@ -108,23 +118,117 @@ struct Task {
     /// at once.
     slept: bool,
     wait: Wait,
+    /// The socket of a `connect` it has under way ([`set_inflight`]).
+    inflight: Option<i32>,
     /// Its active span stack, swapped into the thread's while it runs: span
     /// context is per task, inherited from the spawner.
     spans: Vec<i64>,
 }
 
+/// The running task's own state, while it runs.
+#[derive(Clone, Copy)]
+struct Cur {
+    deadline: Option<Instant>,
+    slept: bool,
+    wait: Wait,
+    inflight: Option<i32>,
+}
+
 #[derive(Default)]
 struct Exec {
+    /// The tasks that can run, and those waiting on another task.
     queue: VecDeque<Task>,
-    /// The running task's deadline, `slept` flag and wait, while it runs.
-    cur: Option<(Option<Instant>, bool, Wait)>,
+    /// The tasks off the queue, sleeping or parked, by the key they were
+    /// put off with; a key is never reused, so a timer or a descriptor
+    /// that names a task already woken names no task.
+    off: HashMap<u64, Task>,
+    keys: u64,
+    /// Deadlines, each with the key of its task: the earliest first, and
+    /// in the order the tasks were put off at a tie.
+    timers: BinaryHeap<Reverse<(Instant, u64)>>,
+    /// The keys of the tasks parked on each descriptor, in the order they
+    /// parked.
+    parked: HashMap<i32, Vec<u64>>,
+    reactor: Reactor,
+    cur: Option<Cur>,
     /// Bumped whenever something may have made a waiting task ready: a
     /// readiness check that passed, a spawn, or a task that returned.
     progress: u64,
 }
 
+impl Exec {
+    /// Queues `t`, runnable.
+    fn wake(&mut self, mut t: Task) {
+        t.wait = Wait::None;
+        self.queue.push_back(t);
+    }
+
+    /// Takes `t` off the queue, waking by a timer or a descriptor; answers
+    /// its key.
+    fn put_off(&mut self, t: Task) -> u64 {
+        self.keys += 1;
+        self.off.insert(self.keys, t);
+        self.keys
+    }
+
+    /// Queues the task put off with `key`, if it is still off, and takes
+    /// it off its descriptor's list; answers whether it was.
+    fn wake_key(&mut self, key: u64) -> bool {
+        let Some(t) = self.off.remove(&key) else {
+            return false;
+        };
+        if let Wait::Fd(fd, _) | Wait::FdBy(fd, _, _) = t.wait {
+            if let Some(keys) = self.parked.get_mut(&fd) {
+                keys.retain(|&k| k != key);
+                if keys.is_empty() {
+                    self.parked.remove(&fd);
+                }
+            }
+        }
+        self.wake(t);
+        true
+    }
+
+    /// The nearest deadline of a task still off, dropping the timers of
+    /// tasks a descriptor already woke.
+    fn next_deadline(&mut self) -> Option<Instant> {
+        while let Some(&Reverse((at, key))) = self.timers.peek() {
+            if self.off.contains_key(&key) {
+                return Some(at);
+            }
+            self.timers.pop();
+        }
+        None
+    }
+
+    /// Queues the tasks whose deadline has passed; answers how many.
+    fn wake_timers(&mut self) -> usize {
+        let now = Instant::now();
+        let mut n = 0;
+        while let Some(at) = self.next_deadline() {
+            if at > now {
+                break;
+            }
+            let Some(Reverse((_, key))) = self.timers.pop() else {
+                break;
+            };
+            n += usize::from(self.wake_key(key));
+        }
+        n
+    }
+
+    /// Queues every task parked on `fd`; answers how many.
+    fn wake_fd(&mut self, fd: i32) -> usize {
+        let keys = self.parked.remove(&fd).unwrap_or_default();
+        keys.into_iter().filter(|&k| self.wake_key(k)).count()
+    }
+}
+
 thread_local! {
     static EXEC: RefCell<Exec> = RefCell::new(Exec::default());
+    /// Set by a native that answered `IO_NOT_READY` ([`set_again`]) and
+    /// taken by the `__io_again` after it.
+    static AGAIN: Cell<bool> = const { Cell::new(false) };
 }
 
 fn bump() {
@@ -220,6 +324,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             deadline: None,
             slept: false,
             wait: Wait::None,
+            inflight: None,
             spans: crate::mir::current_spans(),
         });
         e.progress += 1;
@@ -235,19 +340,49 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
 pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut u8) {
     // SAFETY: the caller's contract.
     unsafe { karac_mir_task_spawn(std::ptr::null_mut(), poll, a, b) };
-    // Tasks suspended in a row with nothing happening in between.
+    // Tasks that waited on another task in a row with nothing happening in
+    // between.
     let mut idle = 0usize;
+    // Tasks run since the reactor was last asked.
+    let mut since = 0usize;
     loop {
+        // Once a round, the parked tasks whose descriptor is ready, and the
+        // sleepers whose deadline passed, join the queue.
+        let ask = EXEC.with(|e| {
+            let e = e.borrow();
+            !e.parked.is_empty() && since >= e.queue.len()
+        });
+        let mut woken = 0;
+        if ask {
+            woken += wait_reactor(Some(Duration::ZERO));
+            since = 0;
+        }
+        woken += EXEC.with(|e| e.borrow_mut().wake_timers());
+        if woken > 0 {
+            idle = 0;
+        }
         let Some(mut t) = EXEC.with(|e| {
             let mut e = e.borrow_mut();
             let t = e.queue.pop_front();
             if let Some(t) = &t {
-                e.cur = Some((t.deadline, t.slept, Wait::None));
+                e.cur = Some(Cur {
+                    deadline: t.deadline,
+                    slept: t.slept,
+                    wait: Wait::None,
+                    inflight: t.inflight,
+                });
             }
             t
         }) else {
-            return;
+            // Nothing can run: every task left sleeps or waits on a
+            // descriptor, or none is left.
+            if !idle_wait(None) {
+                return;
+            }
+            idle = 0;
+            continue;
         };
+        since += 1;
         let before = EXEC.with(|e| e.borrow().progress);
         let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
         // SAFETY: the task has not answered 1 yet.
@@ -263,51 +398,182 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             idle = 0;
             continue;
         }
-        if let Some((deadline, slept, wait)) = cur {
-            t.deadline = deadline;
-            t.slept = slept;
-            t.wait = wait;
+        if let Some(cur) = cur {
+            t.deadline = cur.deadline;
+            t.slept = cur.slept;
+            t.wait = cur.wait;
+            t.inflight = cur.inflight;
         }
         if after != before || t.wait == Wait::None {
             idle = 0;
-        } else {
-            idle += 1;
         }
-        let waiting = EXEC.with(|e| {
+        match t.wait {
+            Wait::Until(at) => {
+                EXEC.with(|e| {
+                    let mut e = e.borrow_mut();
+                    let key = e.put_off(t);
+                    e.timers.push(Reverse((at, key)));
+                });
+                continue;
+            }
+            Wait::Fd(fd, events) => {
+                park(t, fd, events);
+                continue;
+            }
+            // Whichever comes first, the descriptor or the deadline, wakes
+            // the task.
+            Wait::FdBy(fd, events, at) => {
+                if let Some(key) = park(t, fd, events) {
+                    EXEC.with(|e| e.borrow_mut().timers.push(Reverse((at, key))));
+                }
+                continue;
+            }
+            Wait::Task | Wait::TaskBy(_) if after == before => idle += 1,
+            _ => {}
+        }
+        let stuck = EXEC.with(|e| {
             let mut e = e.borrow_mut();
             e.queue.push_back(t);
-            (idle >= e.queue.len()).then(|| e.queue.iter().map(|t| t.wait).collect::<Vec<_>>())
+            idle >= e.queue.len()
         });
-        if let Some(waits) = waiting {
-            block(&waits);
+        if stuck {
+            block();
             idle = 0;
         }
     }
 }
 
-/// Every task waits: sleeps until the nearest deadline or a socket.
-fn block(waits: &[Wait]) {
-    let until = waits
-        .iter()
-        .filter_map(|w| match w {
-            Wait::Until(t) | Wait::FdBy(_, _, t) => Some(*t),
-            _ => None,
-        })
-        .min();
-    let fds: Vec<(i32, i16)> = waits
-        .iter()
-        .filter_map(|w| match w {
-            Wait::Fd(fd, ev) | Wait::FdBy(fd, ev, _) => Some((*fd, *ev)),
-            _ => None,
-        })
-        .collect();
-    if until.is_none() && fds.is_empty() {
+/// Every task in the queue waits on another, with nothing having happened
+/// since each last ran: waits for a sleeper, a descriptor or a timed
+/// wait's deadline, or reports the deadlock when there is none.
+fn block() {
+    let (by, runnable) = EXEC.with(|e| {
+        let e = e.borrow();
+        let by = e
+            .queue
+            .iter()
+            .filter_map(|t| match t.wait {
+                Wait::TaskBy(at) => Some(at),
+                _ => None,
+            })
+            .min();
+        (by, e.queue.iter().any(|t| t.wait == Wait::None))
+    });
+    if runnable {
+        return;
+    }
+    if !idle_wait(by) {
         crate::mir::deadlock(
             "every task waits on a channel that no running task sends to or receives from",
         );
     }
+}
+
+/// Waits until `by`, the nearest sleeper's deadline or a parked
+/// descriptor, whichever comes first, and queues what woke; false when
+/// there is none of them to wait for.
+fn idle_wait(by: Option<Instant>) -> bool {
+    let (next, parked) = EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        (e.next_deadline(), !e.parked.is_empty())
+    });
+    let until = match (next, by) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    if until.is_none() && !parked {
+        return false;
+    }
     let timeout = until.map(|t| t.saturating_duration_since(Instant::now()));
-    wait_fds(&fds, timeout);
+    if parked {
+        wait_reactor(timeout);
+    } else if let Some(d) = timeout {
+        std::thread::sleep(d);
+    }
+    EXEC.with(|e| e.borrow_mut().wake_timers());
+    true
+}
+
+/// Parks `t` on `fd` until it is ready for `events`: with the reactor
+/// watching it for every waiter's events. Answers the task's key; a
+/// descriptor the reactor cannot watch leaves the task runnable, to ask
+/// its readiness again.
+fn park(t: Task, fd: i32, events: i16) -> Option<u64> {
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let e = &mut *e;
+        let want = e.parked.get(&fd).map_or(events, |keys| {
+            keys.iter()
+                .fold(events, |m, k| match e.off.get(k).map(|t| t.wait) {
+                    Some(Wait::Fd(_, ev) | Wait::FdBy(_, ev, _)) => m | ev,
+                    _ => m,
+                })
+        });
+        if e.reactor.watch(fd, want) {
+            let key = e.put_off(t);
+            e.parked.entry(fd).or_default().push(key);
+            Some(key)
+        } else {
+            e.wake(t);
+            None
+        }
+    })
+}
+
+/// Asks the reactor, waiting up to `timeout` (none: until a descriptor is
+/// ready), and queues the tasks parked on each ready descriptor; answers
+/// how many.
+fn wait_reactor(timeout: Option<Duration>) -> usize {
+    let ready = EXEC.with(|e| e.borrow_mut().reactor.wait(timeout));
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        ready.into_iter().map(|fd| e.wake_fd(fd)).sum()
+    })
+}
+
+/// Deregisters `fd` from the reactor before it is closed, so its number
+/// can be reused, and queues the tasks parked on it, which then find it
+/// closed.
+#[no_mangle]
+pub extern "C" fn karac_mir_io_forget(fd: i64) {
+    // A socket closed while the thread's state is torn down at exit has
+    // nothing left to tell.
+    let _ = EXEC.try_with(|e| {
+        if let Ok(mut e) = e.try_borrow_mut() {
+            e.reactor.forget(fd as i32);
+            e.wake_fd(fd as i32);
+        }
+    });
+}
+
+/// A call answered `IO_NOT_READY`, having done nothing: the readiness loop
+/// around it goes back to its `__ready`.
+pub(crate) fn set_again() {
+    AGAIN.with(|a| a.set(true));
+}
+
+/// `__io_again()`, after a call in a readiness loop: whether it answered
+/// `IO_NOT_READY` ([`set_again`]), clearing the bit.
+#[no_mangle]
+pub extern "C" fn karac_mir_io_again() -> u8 {
+    u8::from(AGAIN.with(|a| a.replace(false)))
+}
+
+/// Keeps `fd`, the socket of a connect under way, on the running task: the
+/// `connect` it retries ends that connect ([`take_inflight`]).
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
+pub(crate) fn set_inflight(fd: i32) {
+    EXEC.with(|e| {
+        if let Some(cur) = e.borrow_mut().cur.as_mut() {
+            cur.inflight = Some(fd);
+        }
+    });
+}
+
+/// The socket of the running task's connect under way, taken.
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
+pub(crate) fn take_inflight() -> Option<i32> {
+    EXEC.with(|e| e.borrow_mut().cur.as_mut().and_then(|c| c.inflight.take()))
 }
 
 #[cfg(unix)]
@@ -323,30 +589,163 @@ extern "C" {
     fn poll(fds: *mut PollFd, n: u64, timeout: i32) -> i32;
 }
 
-/// Waits until one of `fds` is ready or `timeout` passes (no timeout:
-/// until a socket is).
+/// `timeout` in whole milliseconds, rounded up so a deadline has passed
+/// when a wait returns; -1 for none.
 #[cfg(unix)]
-fn wait_fds(fds: &[(i32, i16)], timeout: Option<Duration>) {
-    let mut p: Vec<PollFd> = fds
-        .iter()
-        .map(|&(fd, events)| PollFd {
-            fd,
-            events,
-            revents: 0,
-        })
-        .collect();
-    let ms = match timeout {
-        // Rounded up, so the deadline has passed when it returns.
+fn timeout_ms(timeout: Option<Duration>) -> i32 {
+    match timeout {
         Some(d) => d.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32,
         None => -1,
-    };
-    // SAFETY: `p` holds `p.len()` initialized entries.
-    unsafe { poll(p.as_mut_ptr(), p.len() as u64, ms) };
+    }
 }
 
-#[cfg(not(unix))]
-fn wait_fds(_fds: &[(i32, i16)], timeout: Option<Duration>) {
-    std::thread::sleep(timeout.unwrap_or(Duration::from_millis(1)));
+/// The reactor on Linux: one `epoll` set, each descriptor watched oneshot
+/// for the events its parked tasks wait on, and re-armed when a task parks
+/// on it again.
+#[cfg(all(feature = "net", target_os = "linux"))]
+#[derive(Default)]
+struct Reactor {
+    /// The `epoll` descriptor, made when the first task parks.
+    ep: Option<i32>,
+    /// The descriptors registered with it.
+    known: std::collections::HashSet<i32>,
+}
+
+#[cfg(all(feature = "net", target_os = "linux"))]
+impl Reactor {
+    fn watch(&mut self, fd: i32, events: i16) -> bool {
+        let ep = match self.ep {
+            Some(ep) => ep,
+            None => {
+                // SAFETY: plain syscall.
+                let mut ep = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+                if ep < 0 {
+                    return false;
+                }
+                // Moved above the numbers a program's own descriptors take,
+                // so they are numbered as on the interpreter, which has no
+                // reactor descriptor.
+                // SAFETY: plain syscalls on the descriptor just made.
+                let high = unsafe { libc::fcntl(ep, libc::F_DUPFD_CLOEXEC, 100) };
+                if high >= 0 {
+                    // SAFETY: as above.
+                    unsafe { libc::close(ep) };
+                    ep = high;
+                }
+                self.ep = Some(ep);
+                ep
+            }
+        };
+        let mut want = libc::EPOLLONESHOT as u32;
+        if events & 1 != 0 {
+            want |= libc::EPOLLIN as u32;
+        }
+        if events & 4 != 0 {
+            want |= libc::EPOLLOUT as u32;
+        }
+        let ctl = |op: i32| {
+            let mut ev = libc::epoll_event {
+                events: want,
+                u64: fd as u64,
+            };
+            // SAFETY: `ev` is initialized; a bad `fd` is an error return.
+            if unsafe { libc::epoll_ctl(ep, op, fd, &mut ev) } == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error().raw_os_error())
+            }
+        };
+        // A descriptor closed without `io_forget` left the set by itself,
+        // and a new one may have its number.
+        let done = match ctl(if self.known.contains(&fd) {
+            libc::EPOLL_CTL_MOD
+        } else {
+            libc::EPOLL_CTL_ADD
+        }) {
+            Ok(()) => true,
+            Err(Some(libc::ENOENT)) => ctl(libc::EPOLL_CTL_ADD).is_ok(),
+            Err(Some(libc::EEXIST)) => ctl(libc::EPOLL_CTL_MOD).is_ok(),
+            Err(_) => false,
+        };
+        if done {
+            self.known.insert(fd);
+        } else {
+            self.known.remove(&fd);
+        }
+        done
+    }
+
+    fn forget(&mut self, fd: i32) {
+        if let (Some(ep), true) = (self.ep, self.known.remove(&fd)) {
+            // SAFETY: plain syscall; a closed `fd` is an error return.
+            unsafe { libc::epoll_ctl(ep, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut()) };
+        }
+    }
+
+    fn wait(&mut self, timeout: Option<Duration>) -> Vec<i32> {
+        let Some(ep) = self.ep else {
+            if let Some(d) = timeout {
+                std::thread::sleep(d);
+            }
+            return Vec::new();
+        };
+        let mut evs = [libc::epoll_event { events: 0, u64: 0 }; 256];
+        // SAFETY: `evs` holds 256 entries.
+        let n = unsafe { libc::epoll_wait(ep, evs.as_mut_ptr(), 256, timeout_ms(timeout)) };
+        evs[..n.max(0) as usize]
+            .iter()
+            .map(|ev| {
+                let fd = { ev.u64 };
+                fd as i32
+            })
+            .collect()
+    }
+}
+
+/// The reactor elsewhere: `poll(2)` over the parked descriptors, only once
+/// nothing can run or once a round.
+#[cfg(not(all(feature = "net", target_os = "linux")))]
+#[derive(Default)]
+struct Reactor {
+    fds: HashMap<i32, i16>,
+}
+
+#[cfg(not(all(feature = "net", target_os = "linux")))]
+impl Reactor {
+    fn watch(&mut self, fd: i32, events: i16) -> bool {
+        self.fds.insert(fd, events);
+        true
+    }
+
+    fn forget(&mut self, fd: i32) {
+        self.fds.remove(&fd);
+    }
+
+    #[cfg(unix)]
+    fn wait(&mut self, timeout: Option<Duration>) -> Vec<i32> {
+        let mut p: Vec<PollFd> = self
+            .fds
+            .iter()
+            .map(|(&fd, &events)| PollFd {
+                fd,
+                events,
+                revents: 0,
+            })
+            .collect();
+        // SAFETY: `p` holds `p.len()` initialized entries.
+        unsafe { poll(p.as_mut_ptr(), p.len() as u64, timeout_ms(timeout)) };
+        let ready: Vec<i32> = p.iter().filter(|p| p.revents != 0).map(|p| p.fd).collect();
+        for fd in &ready {
+            self.fds.remove(fd);
+        }
+        ready
+    }
+
+    #[cfg(not(unix))]
+    fn wait(&mut self, timeout: Option<Duration>) -> Vec<i32> {
+        std::thread::sleep(timeout.unwrap_or(Duration::from_millis(1)));
+        self.fds.drain().map(|(fd, _)| fd).collect()
+    }
 }
 
 /// Records the running task's readiness: when `ready` is 0 the task is
@@ -358,11 +757,11 @@ fn note(ready: bool, wait: Wait) -> u8 {
             return 1;
         };
         if ready {
-            cur.2 = Wait::None;
+            cur.wait = Wait::None;
             e.progress += 1;
             1
         } else {
-            cur.2 = wait;
+            cur.wait = wait;
             0
         }
     })
@@ -385,11 +784,11 @@ pub extern "C" fn karac_mir_ready_sleep(ms: i64) -> u8 {
         let cur = e.cur.as_mut()?;
         let now = Instant::now();
         let at = *cur
-            .0
+            .deadline
             .get_or_insert_with(|| now + Duration::from_millis(ms.max(0) as u64));
         if now >= at {
-            cur.0 = None;
-            cur.1 = true;
+            cur.deadline = None;
+            cur.slept = true;
         }
         Some(at)
     });
@@ -402,7 +801,7 @@ pub extern "C" fn karac_mir_ready_sleep(ms: i64) -> u8 {
 /// Whether the running task waits by a deadline (a pool's `acquire`, as
 /// [`ready_by`] keeps it), or `None` outside the executor.
 pub(crate) fn deadline_set() -> Option<bool> {
-    EXEC.with(|e| e.borrow().cur.as_ref().map(|cur| cur.0.is_some()))
+    EXEC.with(|e| e.borrow().cur.as_ref().map(|cur| cur.deadline.is_some()))
 }
 
 /// `__ready` of a call that waits up to `ns` nanoseconds for a condition
@@ -415,22 +814,22 @@ pub(crate) fn ready_by(ready: bool, ns: i64) -> (u8, bool) {
         let mut e = e.borrow_mut();
         let cur = e.cur.as_mut()?;
         if ready {
-            cur.0 = None;
+            cur.deadline = None;
             return None;
         }
         let now = Instant::now();
         let at = *cur
-            .0
+            .deadline
             .get_or_insert_with(|| now + Duration::from_nanos(ns.max(0) as u64));
         if now >= at {
-            cur.0 = None;
+            cur.deadline = None;
         }
         Some(at)
     });
     match at {
         None => (note(true, Wait::None), false),
         Some(at) if Instant::now() >= at => (note(true, Wait::None), true),
-        Some(at) => (note(false, Wait::Until(at)), false),
+        Some(at) => (note(false, Wait::TaskBy(at)), false),
     }
 }
 
@@ -469,7 +868,7 @@ pub extern "C" fn karac_mir_ready_select(epoch: i64, until: i64) -> u8 {
     let ready = karac_mir_select_epoch() != epoch || select_due(until);
     let wait = if until >= 0 {
         let left = until - crate::karac_runtime_clock_monotonic_ns();
-        Wait::Until(Instant::now() + Duration::from_nanos(left.max(0) as u64))
+        Wait::TaskBy(Instant::now() + Duration::from_nanos(left.max(0) as u64))
     } else {
         Wait::Task
     };
@@ -501,21 +900,33 @@ pub(crate) fn take_slept() -> bool {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
         match e.cur.as_mut() {
-            Some(cur) => std::mem::take(&mut cur.1),
+            Some(cur) => std::mem::take(&mut cur.slept),
             None => false,
         }
     })
+}
+
+/// Arms the call a ready answer guards (`mir_sock.rs`): it may then answer
+/// `IO_NOT_READY`, which the readiness loop retries on.
+fn arm() {
+    #[cfg(all(feature = "net", unix))]
+    crate::mir_sock::karac_mir_io_arm();
 }
 
 /// `__ready` of a socket call: whether `fd` is readable now (`write` 0)
 /// or writable, asked without blocking. A read on a socket with a read
 /// timeout also ends at the deadline its first ask sets (§11.10), and the
 /// read that follows then fails `TimedOut` ([`take_timed_out`]).
+/// A call with no descriptor to wait on (a child's wait where the platform
+/// gives none) is ready at once, unarmed, so it blocks.
 #[no_mangle]
 pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     let events: i16 = if write != 0 { 4 } else { 1 }; // POLLOUT, POLLIN
     if EXEC.with(|e| e.borrow().cur.is_none()) {
         return 1;
+    }
+    if fd < 0 {
+        return note(true, Wait::None);
     }
     #[cfg(unix)]
     if write == 0 {
@@ -536,22 +947,26 @@ pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     };
     #[cfg(not(unix))]
     let ready = true;
-    // A ready answer arms the call it guards (`mir_sock.rs`), which may
-    // then answer `IO_NOT_READY`; only once the readiness loop retries on
-    // that status.
-    #[cfg(all(feature = "net", unix))]
-    if ARM_ON_READY && ready {
-        crate::mir_sock::karac_mir_io_arm();
+    if ready {
+        arm();
     }
     note(ready, Wait::Fd(fd as i32, events))
 }
 
-/// Whether [`karac_mir_ready_fd`] arms the call after a ready answer: off
-/// until codegen's readiness loop handles `IO_NOT_READY`, since a call
-/// that still found nothing (a connection reset between the readiness
-/// check and its `accept`) would otherwise hand the status to Kāra code.
-#[cfg(all(feature = "net", unix))]
-const ARM_ON_READY: bool = false;
+/// `__ready("TcpStream.connect", ..)`: a fresh connect is ready at once,
+/// armed; one the running task has under way ([`set_inflight`]) once its
+/// socket is writable.
+#[no_mangle]
+pub extern "C" fn karac_mir_ready_connect() -> u8 {
+    match EXEC.with(|e| e.borrow().cur.map(|c| c.inflight)) {
+        None => 1,
+        Some(Some(fd)) => karac_mir_ready_fd(i64::from(fd), 1),
+        Some(None) => {
+            arm();
+            note(true, Wait::None)
+        }
+    }
+}
 
 thread_local! {
     /// The mutexes a task holds, by their cells' addresses (B-2026-10-19-23):
@@ -650,9 +1065,9 @@ fn read_by(fd: i32, readable: bool, events: i16, t: Duration) -> u8 {
     let at = EXEC.with(|e| {
         let mut e = e.borrow_mut();
         let cur = e.cur.as_mut().expect("asked inside the executor");
-        let at = *cur.0.get_or_insert(now + t);
+        let at = *cur.deadline.get_or_insert(now + t);
         if readable || now >= at {
-            cur.0 = None;
+            cur.deadline = None;
         }
         at
     });

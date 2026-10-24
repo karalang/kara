@@ -119,7 +119,8 @@ impl<'ctx> Cx<'ctx, '_> {
                     .into_int_value();
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
             }
-            ("TcpStream", "connect", _) => self.llcx.bool_type().const_int(1, false),
+            // Ready at once, armed, unless the task has a connect under way.
+            ("TcpStream", "connect", _) => self.rt_flag("ready_connect", &[])?,
             // A value to lend, by the timeout (B-2026-10-21-44).
             ("Pool", "acquire", [p, d, ..]) => {
                 let h = self.pool_handle(p)?;

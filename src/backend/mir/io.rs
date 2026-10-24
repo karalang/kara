@@ -602,17 +602,19 @@ impl<'ctx> Cx<'ctx, '_> {
             stdio.into(),
             i32t.const_int(u64::from(output), false).into(),
         ];
-        self.bytes_call("command", &vals, dest)
+        self.bytes_call("command", &vals, dest, false)
     }
 
     /// Calls the fallible `karac_mir_{name}(args.., value, out, err, msg)`
     /// and writes its `Result` at `dest`, an `Output` built from the bytes
-    /// it left at `out` and `err` when that is the payload.
+    /// it left at `out` and `err` when that is the payload; `retried` when
+    /// a readiness loop calls it again after `IO_NOT_READY`.
     fn bytes_call(
         &mut self,
         name: &str,
         call_args: &[BasicMetadataValueEnum<'ctx>],
         dest: &Place,
+        retried: bool,
     ) -> R<()> {
         let s = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
         let value = self.entry_slot(8, "io.value")?;
@@ -629,7 +631,15 @@ impl<'ctx> Cx<'ctx, '_> {
         let code = self.rt_int(name, &all, 32)?;
         let dty = self.place_type(dest)?;
         let d = self.place_ptr(dest)?;
-        self.store_io_result_at(d, dty, code, value, msg, Some((out, err)))
+        if !retried {
+            return self.store_io_result_at(d, dty, code, value, msg, Some((out, err)));
+        }
+        // A wait in a readiness loop that found the child still running
+        // stored nothing.
+        let done = self.io_done(code)?;
+        self.if_then(done, |cx| {
+            cx.store_io_result_at(d, dty, code, value, msg, Some((out, err)))
+        })
     }
 
     /// The methods of a `Child` through `karac_mir_child`; the receiver is
@@ -652,7 +662,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let call: Vec<BasicMetadataValueEnum<'ctx>> =
             vec![i32t.const_int(op, false).into(), handle.into()];
         if op <= 3 {
-            self.bytes_call("child", &call, dest)?;
+            self.bytes_call("child", &call, dest, op == 0)?;
             return Ok(Some(()));
         }
         // `id` cannot fail; a pipe is `Some` of its handle, or `None` (0).
@@ -1014,9 +1024,28 @@ impl<'ctx> Cx<'ctx, '_> {
             ],
             32,
         )?;
-        self.drop_moved(args)?;
-        self.store_net_result(dest, code, value, None)?;
+        // A call that found its descriptor not ready after all did nothing:
+        // the readiness loop calls it again with the same arguments.
+        let done = self.io_done(code)?;
+        self.if_then(done, |cx| {
+            cx.drop_moved(args)?;
+            cx.store_net_result(dest, code, value, None)
+        })?;
         Ok(Some(()))
+    }
+
+    /// Whether a socket call's `code` is its result, not the reactor
+    /// contract's `IO_NOT_READY` (100) or `IO_IN_PROGRESS` (101), after which
+    /// the call stored nothing and the readiness loop retries it.
+    fn io_done(&mut self, code: IntValue<'ctx>) -> R<IntValue<'ctx>> {
+        let i32t = self.llcx.i32_type();
+        let off = self
+            .builder
+            .build_int_sub(code, i32t.const_int(100, false), "")
+            .map_err(e)?;
+        self.builder
+            .build_int_compare(IntPredicate::UGT, off, i32t.const_int(1, false), "")
+            .map_err(e)
     }
 
     /// The socket methods `karac_mir_net` runs (`tcp_native`).
@@ -1077,8 +1106,11 @@ impl<'ctx> Cx<'ctx, '_> {
             ],
             32,
         )?;
-        self.drop_moved(args)?;
-        self.store_net_result(dest, code, value, Some(out))?;
+        let done = self.io_done(code)?;
+        self.if_then(done, |cx| {
+            cx.drop_moved(args)?;
+            cx.store_net_result(dest, code, value, Some(out))
+        })?;
         Ok(Some(()))
     }
 

@@ -52,6 +52,27 @@ pub fn suspends_native(name: &str) -> bool {
 /// complete now (B-2026-10-14-49).
 pub const READY: &str = "__ready";
 
+/// The native a readiness loop asks after a call on a descriptor:
+/// `__io_again()` is `true` when the call found nothing after all and did
+/// nothing (the reactor contract's `IO_NOT_READY`, `runtime/src/mir_task.rs`),
+/// so the loop asks `__ready` again.
+pub const IO_AGAIN: &str = "__io_again";
+
+/// Whether the suspending native `name` waits on a descriptor, and may find
+/// it not ready after all when called.
+fn on_descriptor(name: &str) -> bool {
+    let Some((ty, method)) = name.rsplit_once('.') else {
+        return false;
+    };
+    matches!(
+        (ty.split('[').next().unwrap_or(ty), method),
+        ("TcpListener", "accept")
+            | ("TcpStream", "read" | "write" | "connect")
+            | ("UdpSocket", "recv" | "recv_from")
+            | ("Child", "wait")
+    )
+}
+
 /// Puts a readiness loop before each suspending native of `body` other than
 /// `__yield_now`:
 ///
@@ -60,6 +81,15 @@ pub const READY: &str = "__ready";
 /// sw:   switchInt(copy r) -> [0: y, otherwise: call]
 /// y:    _ = __yield_now() -> chk
 /// call: dest = <native>(args..) -> next
+/// ```
+///
+/// and, after a native on a descriptor, the retry of a call that found it
+/// not ready after all:
+///
+/// ```text
+/// call: dest = <native>(args..) -> ag
+/// ag:   a = __io_again() -> sw2
+/// sw2:  switchInt(copy a) -> [0: next, otherwise: chk]
 /// ```
 ///
 /// so the task suspends only while the call cannot complete, and the
@@ -193,6 +223,41 @@ fn insert_ready_loops(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
                 unwind,
             },
         ));
+        let mut orig = orig;
+        if on_descriptor(&callee) {
+            let TerminatorKind::Call { target, .. } = &mut orig.kind else {
+                unreachable!("matched a call above")
+            };
+            let next = target
+                .replace(BasicBlock(base + 4))
+                .expect("a call that returns");
+            let a = new_local(body, bool_t);
+            body.blocks.push(BasicBlockData {
+                statements: vec![],
+                terminator: orig,
+            });
+            body.blocks.push(block(
+                vec![],
+                TerminatorKind::Call {
+                    func: native(IO_AGAIN),
+                    args: vec![],
+                    destination: Place::local(a),
+                    target: Some(BasicBlock(base + 5)),
+                    unwind,
+                },
+            ));
+            body.blocks.push(block(
+                vec![],
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(a)),
+                    targets: SwitchTargets {
+                        values: vec![(0, next)],
+                        otherwise: chk,
+                    },
+                },
+            ));
+            continue;
+        }
         body.blocks.push(BasicBlockData {
             statements: vec![],
             terminator: orig,
@@ -296,10 +361,42 @@ fn calls(body: &Body) -> impl Iterator<Item = (BasicBlock, &str)> {
 /// The bodies that are coroutines: those that declare `suspends`, and,
 /// transitively, those that call a coroutine or a suspending native.
 pub fn coroutines<'a>(bodies: impl IntoIterator<Item = &'a Body> + Clone) -> BTreeSet<String> {
+    coroutines_from(bodies, &BTreeSet::new())
+}
+
+/// Whether any of `bodies` declares `suspends` or names a suspending
+/// native, called or as a value: the sources of the effects report's
+/// `suspends`, without which no body suspends.
+pub fn may_suspend<'a>(bodies: impl IntoIterator<Item = &'a Body>) -> bool {
+    let native = |o: &Operand| matches!(direct_callee(o), Some(c) if suspends_native(c));
+    bodies.into_iter().any(|b| {
+        b.suspends
+            || b.blocks.iter().any(|d| match &d.terminator.kind {
+                TerminatorKind::Call { func, args, .. } => native(func) || args.iter().any(native),
+                _ => false,
+            })
+            || b.blocks
+                .iter()
+                .flat_map(|d| &d.statements)
+                .any(|s| match &s.kind {
+                    StatementKind::Assign(_, Rvalue::Use(o)) => native(o),
+                    _ => false,
+                })
+    })
+}
+
+/// As [`coroutines`], starting from `seed` as well: the instances the
+/// effects report says suspend (M4 item 3), so a body suspends exactly
+/// when its effects say so. The calls are still followed, for the bodies
+/// made after the report (task bodies, a span's direct call).
+pub fn coroutines_from<'a>(
+    bodies: impl IntoIterator<Item = &'a Body> + Clone,
+    seed: &BTreeSet<String>,
+) -> BTreeSet<String> {
     let mut set: BTreeSet<String> = bodies
         .clone()
         .into_iter()
-        .filter(|b| b.suspends)
+        .filter(|b| b.suspends || seed.contains(&b.instance.name))
         .map(|b| b.instance.name.clone())
         .collect();
     let mut changed = true;
@@ -771,17 +868,27 @@ pub fn transform(
     bodies: &[Body],
     tys: &TyInterner,
 ) -> Result<(Vec<Body>, BTreeMap<String, FrameInfo>), String> {
+    transform_from(bodies, tys, &BTreeSet::new())
+}
+
+/// [`transform`], with the coroutines found from `suspending`, the
+/// instances the effects report says suspend ([`coroutines_from`]).
+pub fn transform_from(
+    bodies: &[Body],
+    tys: &TyInterner,
+    suspending: &BTreeSet<String>,
+) -> Result<(Vec<Body>, BTreeMap<String, FrameInfo>), String> {
     // A spawned closure runs as a task: its task body is a task root, and
     // a coroutine, whether or not the closure suspends.
     let mut bodies: Vec<Body> = bodies.to_vec();
-    direct_span_bodies(&mut bodies, tys);
+    direct_span_bodies(&mut bodies, tys, suspending);
     let tasks = rewrite_spawns(&mut bodies, tys)?;
     let task_names: BTreeSet<String> = tasks.iter().map(|b| b.instance.name.clone()).collect();
     bodies.extend(tasks);
     for b in &mut bodies {
         insert_group_ends(b, tys)?;
     }
-    let mut set = coroutines(&bodies);
+    let mut set = coroutines_from(&bodies, suspending);
     set.extend(task_names.iter().cloned());
     let bodies = bodies.as_slice();
     // A spawned closure is made as a value, but its one caller is its task
@@ -910,8 +1017,8 @@ pub const SPAN_EXIT: &str = "with_span_exit";
 /// value, which cannot run a coroutine; the closure is made in the same
 /// block, so the call can name its body, and the caller then suspends with
 /// it like any other caller of a coroutine.
-fn direct_span_bodies(bodies: &mut [Body], tys: &TyInterner) {
-    let set = coroutines(bodies.iter());
+fn direct_span_bodies(bodies: &mut [Body], tys: &TyInterner, suspending: &BTreeSet<String>) {
+    let set = coroutines_from(bodies.iter(), suspending);
     // Each suspending closure's body and the type of its environment
     // parameter: the closure itself, or a borrow of it.
     let closures: BTreeMap<DefId, (InstanceId, Ty)> = bodies

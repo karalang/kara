@@ -677,6 +677,10 @@ impl<'ctx> Cx<'ctx, '_> {
             // One thread runs the program; a fence orders nothing.
             ("fence" | "compiler_fence", "") => Ok(()),
             ("__ready", "") => self.ready_native(args, dest),
+            ("__io_again", "") => {
+                let again = self.rt_flag("io_again", &[])?;
+                self.store_bool(dest, again)
+            }
             // `PanicInfo`'s parts, for the panic handler's thunk.
             ("__karac_panic_message" | "__karac_panic_location", "") => {
                 let d = self.place_ptr(dest)?;

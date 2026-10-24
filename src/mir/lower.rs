@@ -21721,7 +21721,25 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         }
         lowered.effects = Some(report);
     }
-    let coroutines = crate::mir::coroutine::coroutines(lowered.program.bodies.values());
+    // The coroutines are the bodies whose effects say they suspend (M4
+    // item 3), as the program stands once its providers are passed;
+    // `KARAC_MIR_EFFECTS=0` finds them from the bodies alone.
+    // A program with no suspending source (a declared `suspends`, a
+    // suspending native named anywhere) has none to find.
+    if std::env::var("KARAC_MIR_EFFECTS").as_deref() != Ok("0")
+        && crate::mir::coroutine::may_suspend(lowered.program.bodies.values())
+    {
+        let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+        lowered.program.suspending = Some(report.suspending());
+    }
+    let coroutines = crate::mir::coroutine::coroutines_from(
+        lowered.program.bodies.values(),
+        lowered
+            .program
+            .suspending
+            .as_ref()
+            .unwrap_or(&Default::default()),
+    );
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));

@@ -317,6 +317,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_ready,
         mir_task::karac_mir_ready_sleep,
         mir_task::karac_mir_ready_fd,
+        mir_task::karac_mir_ready_connect,
+        mir_task::karac_mir_io_again,
         mir_task::karac_mir_ready_group,
         mir_task::karac_mir_group_new,
         mir_task::karac_mir_group_drop,
@@ -596,8 +598,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     keep!(
         mir_sock::karac_mir_io_arm,
         mir_sock::karac_mir_io_wait,
-        mir_sock::karac_mir_io_stale,
-        mir_sock::karac_mir_io_forget,
+        mir_task::karac_mir_io_forget,
         mir_sock::karac_mir_sock_close,
     );
     // `Server.serve` and `Request` on the MIR backend (`src/http1.rs`).
