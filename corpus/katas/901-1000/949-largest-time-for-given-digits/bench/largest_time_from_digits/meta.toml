@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/949-largest-time-for-given-digits/bench/largest_time_from_digits.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "086f30490"
+extracted_src = "72932a25"

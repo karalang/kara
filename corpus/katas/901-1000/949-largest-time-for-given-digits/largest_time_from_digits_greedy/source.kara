@@ -1,0 +1,107 @@
+// LeetCode #949: Largest Time for Given Digits -- the largest digit that
+// fits, place by place.
+//
+// Fill HH:MM from the left, each place taking the largest unused digit
+// it allows (at most 2 for the tens of hours, 3 for the hours after a 2
+// and 9 otherwise, 5 for the tens of minutes, 9 for the last), and back
+// up to the next smaller digit when the places after it cannot be
+// filled. A later time is larger in its first differing place, so the
+// first time filled is the latest. O(1): at most 24 arrangements tried.
+
+fn fill(arr: ref Vec[i64], used: mut ref Vec[bool], digits: mut ref Vec[i64]) -> bool {
+    let p = digits.len();
+    if p == 4 {
+        return true;
+    }
+    let limit = if p == 0 {
+        2
+    } else if p == 1 {
+        if digits[0] == 2 { 3 } else { 9 }
+    } else if p == 2 {
+        5
+    } else {
+        9
+    };
+    let mut d = limit;
+    while d >= 0 {
+        let mut i = 0;
+        while i < 4 and (used[i] or arr[i] != d) {
+            i += 1;
+        }
+        if i < 4 {
+            used[i] = true;
+            digits.push(d);
+            if fill(arr, mut used, mut digits) {
+                return true;
+            }
+            used[i] = false;
+            digits.pop();
+        }
+        d -= 1;
+    }
+    false
+}
+
+fn largest_time_from_digits(arr: Vec[i64]) -> String {
+    let mut used: Vec[bool] = Vec.filled(4, false);
+    let mut digits: Vec[i64] = Vec.new();
+    if fill(arr, mut used, mut digits) {
+        f"{digits[0]}{digits[1]}:{digits[2]}{digits[3]}"
+    } else {
+        "".to_string()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(arr: ref Vec[i64]) -> String {
+    f"[{arr[0]},{arr[1]},{arr[2]},{arr[3]}]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![1, 2, 3, 4],
+        vec![5, 5, 5, 5],
+        vec![0, 0, 0, 0],
+        vec![0, 0, 1, 0],
+        vec![2, 0, 6, 6],
+        vec![1, 9, 6, 0],
+        vec![9, 5, 3, 2],
+        vec![2, 4, 5, 9],
+    ];
+    for arr in examples.iter() {
+        println(f"{show(arr)}: \"{largest_time_from_digits(arr)}\"");
+    }
+    // every array of four digits
+    let mut times = 0;
+    let mut minutes = 0;
+    let mut check = 0;
+    let mut seen: Vec[i64] = Vec.filled(1440, 0);
+    for code in 0..10000 {
+        let arr = vec![code / 1000, code / 100 % 10, code / 10 % 10, code % 10];
+        let s = largest_time_from_digits(arr);
+        let mut m = -1;
+        if s.len() > 0 {
+            let b = s.bytes().to_vec();
+            let h = (b[0] as i64 - 48) * 10 + (b[1] as i64 - 48);
+            m = h * 60 + (b[3] as i64 - 48) * 10 + (b[4] as i64 - 48);
+            times += 1;
+            minutes += m;
+            seen[m] += 1;
+        }
+        check = (check * 31 + m + 1) % 1000000007;
+    }
+    println(f"all 10000 arrays of four digits: {times} make a time, minutes adding to {minutes}, checksum {check}");
+    let mut distinct = 0;
+    let mut common = 0;
+    for t in 0..1440 {
+        if seen[t] > 0 {
+            distinct += 1;
+        }
+        if seen[t] > seen[common] {
+            common = t;
+        }
+    }
+    println(f"{distinct} different times; the most common, {common / 600}{common / 60 % 10}:{common % 60 / 10}{common % 10}, from {seen[common]} arrays");
+}

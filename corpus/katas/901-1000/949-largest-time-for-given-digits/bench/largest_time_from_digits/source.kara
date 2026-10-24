@@ -1,0 +1,54 @@
+// Benchmark: LeetCode #949 Largest Time for Given Digits -- the ★ arm,
+// every arrangement, on all 10000 arrays of four digits. Mirrors
+// largest_time_from_digits.c, .rs, .py and go-seq/.
+
+fn largest_time_from_digits(arr: Vec[i64]) -> String {
+    let mut best = -1;
+    for i in 0..4 {
+        for j in 0..4 {
+            if j == i {
+                continue;
+            }
+            for k in 0..4 {
+                if k == i or k == j {
+                    continue;
+                }
+                let l = 6 - i - j - k;
+                let hours = arr[i] * 10 + arr[j];
+                let minutes = arr[k] * 10 + arr[l];
+                if hours < 24 and minutes < 60 {
+                    best = best.max(hours * 60 + minutes);
+                }
+            }
+        }
+    }
+    if best < 0 {
+        return "".to_string();
+    }
+    f"{best / 600}{best / 60 % 10}:{best % 60 / 10}{best % 10}"
+}
+
+fn main() {
+    let rounds = 500;
+    let count = 10000;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for a in 0..count {
+        arrays.push(vec![a / 1000, a / 100 % 10, a / 10 % 10, a % 10]);
+    }
+    let mut times = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let s = largest_time_from_digits(arrays[(r * 37 + i) % count]);
+            let mut v = 0;
+            for c in s.bytes() {
+                v = v * 131 + c as i64;
+            }
+            if s.len() > 0 {
+                times += 1;
+            }
+            check = (check * 1000003 + v) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over all {count} arrays of four digits: {times} times, checksum {check}");
+}
