@@ -1,0 +1,76 @@
+// LeetCode #955: Delete Columns to Make Sorted II -- pairs settled.
+//
+// Take the columns left to right, keeping each one unless it puts some
+// pair of neighbouring strings out of order. A pair is settled once a
+// kept column has the upper string's letter smaller; until then the kept
+// columns are equal on it, so the next column decides. A column that
+// breaks an unsettled pair must go, since every kept column before it
+// is equal there; keeping every column that can stay only settles more
+// pairs. O(n m) for n strings of length m.
+
+fn min_deletion_size(strs: Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut settled: Vec[bool] = Vec.filled(n, false);
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut breaks = false;
+        for i in 0..n - 1 {
+            if not settled[i] and strs[i].bytes()[c] > strs[i + 1].bytes()[c] {
+                breaks = true;
+                break;
+            }
+        }
+        if breaks {
+            deleted += 1;
+            continue;
+        }
+        for i in 0..n - 1 {
+            if strs[i].bytes()[c] < strs[i + 1].bytes()[c] {
+                settled[i] = true;
+            }
+        }
+    }
+    deleted
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 120;
+    let count = 200;
+    let n = 100;
+    let m = 100;
+    let mut seed = 955;
+    // 200 sets of 100 strings of 100 letters from the first 2 to 4 letters,
+    // each set sorted by its strings' first 0 to 11 letters
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    for s in 0..count {
+        let letters = 2 + s % 3;
+        let mut strs: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let mut w = String.new();
+            for _ in 0..m {
+                w.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+            }
+            strs.push(w);
+        }
+        let p = s % 12;
+        strs.sort_by_key(|w| w.substring(0, p));
+        sets.push(strs);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let k = (r + i) % count;
+            let d = min_deletion_size(sets[k]);
+            total += d;
+            check = (check * 31 + d) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} sets of {n} strings of {m} letters: {total} columns deleted, checksum {check}");
+}

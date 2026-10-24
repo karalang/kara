@@ -1,0 +1,17 @@
+[ca,bb,ac]: 1
+[xc,yb,za]: 0
+[zyx,wvu,tsr]: 3
+[a]: 0
+[ab,aa]: 1
+[aa,aa]: 0
+[xga,xfb,yfa]: 1
+[abx,agz,bgc,bfc]: 1
+[ba,ab,ab]: 1
+300 random cases of 1319 strings: 665 columns deleted, checksum 978160682
+100 random strings of 100 letters: 100
+the same sorted: 0
+the same sorted backwards: 100
+100 random strings of 100 letters from a and b: 100
+the same sorted by their first 9 letters only: 11
+100 copies of one string: 0
+one string with a falling last letter: 1

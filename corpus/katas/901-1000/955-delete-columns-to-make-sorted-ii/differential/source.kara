@@ -1,0 +1,399 @@
+// LeetCode #955: Delete Columns to Make Sorted II -- differential test of
+// the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: given an array of n strings strs, all of the same
+// length, choose any deletion indices and delete all the characters in
+// those indices for each string. Return the minimum possible number of
+// deletions such that the final array has its elements in lexicographic
+// order (strs[0] <= strs[1] <= ... <= strs[n - 1]).
+
+// ---- the ★ arm: pairs settled ---------------------------------------------
+fn star_min_deletion_size(strs: Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut settled: Vec[bool] = Vec.filled(n, false);
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut breaks = false;
+        for i in 0..n - 1 {
+            if not settled[i] and strs[i].bytes()[c] > strs[i + 1].bytes()[c] {
+                breaks = true;
+                break;
+            }
+        }
+        if breaks {
+            deleted += 1;
+            continue;
+        }
+        for i in 0..n - 1 {
+            if strs[i].bytes()[c] < strs[i + 1].bytes()[c] {
+                settled[i] = true;
+            }
+        }
+    }
+    deleted
+}
+
+// ---- the kept arm: the kept strings ---------------------------------------
+fn kept_min_deletion_size(strs: Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut kept: Vec[String] = Vec.filled(n, String.new());
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut grown: Vec[String] = Vec.new();
+        for i in 0..n {
+            let mut s = kept[i].clone();
+            s.push(strs[i].bytes()[c] as char);
+            grown.push(s);
+        }
+        let mut in_order = true;
+        for i in 1..n {
+            if grown[i - 1] > grown[i] {
+                in_order = false;
+            }
+        }
+        if in_order {
+            kept = grown;
+        } else {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+// ---- the groups arm: runs still tied --------------------------------------
+fn groups_min_deletion_size(strs: Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    // runs as [start, end) ranges, all n strings tied at first
+    let mut runs: Vec[(i64, i64)] = vec![(0, n)];
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut falls = false;
+        for r in runs.iter() {
+            let (start, end) = *r;
+            for i in start + 1..end {
+                if strs[i - 1].bytes()[c] > strs[i].bytes()[c] {
+                    falls = true;
+                }
+            }
+        }
+        if falls {
+            deleted += 1;
+            continue;
+        }
+        let mut next: Vec[(i64, i64)] = Vec.new();
+        for r in runs.iter() {
+            let (start, end) = *r;
+            let mut from = start;
+            for i in start + 1..end {
+                if strs[i - 1].bytes()[c] != strs[i].bytes()[c] {
+                    if i - from > 1 {
+                        next.push((from, i));
+                    }
+                    from = i;
+                }
+            }
+            if end - from > 1 {
+                next.push((from, end));
+            }
+        }
+        runs = next;
+    }
+    deleted
+}
+
+// ---- the pending arm: a shrinking list ------------------------------------
+fn pending_min_deletion_size(strs: Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut pending: Vec[i64] = Vec.new();
+    for i in 0..n - 1 {
+        pending.push(i);
+    }
+    let mut deleted = 0;
+    for c in 0..m {
+        if pending.len() == 0 {
+            break;
+        }
+        let mut breaks = false;
+        for i in pending.iter() {
+            if strs[*i].bytes()[c] > strs[*i + 1].bytes()[c] {
+                breaks = true;
+            }
+        }
+        if breaks {
+            deleted += 1;
+        } else {
+            pending.retain(|i| strs[i].bytes()[c] == strs[i + 1].bytes()[c]);
+        }
+    }
+    deleted
+}
+
+// ---- the ranks arm: ranks by prefix ---------------------------------------
+fn ranks_min_deletion_size(strs: Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut rank: Vec[i64] = Vec.filled(n, 0);
+    let mut deleted = 0;
+    for c in 0..m {
+        let mut keys: Vec[i64] = Vec.new();
+        for i in 0..n {
+            keys.push(rank[i] * 256 + strs[i].bytes()[c] as i64);
+        }
+        let mut in_order = true;
+        for i in 1..n {
+            if keys[i - 1] > keys[i] {
+                in_order = false;
+            }
+        }
+        if not in_order {
+            deleted += 1;
+            continue;
+        }
+        let mut r = 0;
+        for i in 0..n {
+            if i > 0 and keys[i] != keys[i - 1] {
+                r += 1;
+            }
+            rank[i] = r;
+        }
+    }
+    deleted
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, strs: Vec[String]) -> i64 {
+    if x == 0 {
+        star_min_deletion_size(strs)
+    } else if x == 1 {
+        kept_min_deletion_size(strs)
+    } else if x == 2 {
+        groups_min_deletion_size(strs)
+    } else if x == 3 {
+        pending_min_deletion_size(strs)
+    } else {
+        ranks_min_deletion_size(strs)
+    }
+}
+
+// The statement read literally: every set of columns to delete is tried,
+// and the fewest that leave the strings in lexicographic order, every
+// string at most every string after it, is the answer.
+fn statement(strs: ref Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut best = m;
+    for mask in 0..(1 << m) {
+        let mut rows: Vec[String] = Vec.new();
+        let mut gone = 0;
+        for i in 0..n {
+            let mut s = String.new();
+            for c in 0..m {
+                if (mask >> c) & 1 == 0 {
+                    s.push(strs[i].bytes()[c] as char);
+                }
+            }
+            rows.push(s);
+        }
+        for c in 0..m {
+            gone += (mask >> c) & 1;
+        }
+        let mut sorted = true;
+        for i in 0..n {
+            for j in i + 1..n {
+                if rows[i] > rows[j] {
+                    sorted = false;
+                }
+            }
+        }
+        if sorted and gone < best {
+            best = gone;
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n strings of m letters from the first `letters` of the alphabet, every
+// second time sorted by a first few letters, which leaves the columns
+// after them to decide.
+fn random_strs(seed: mut ref i64, n: i64, m: i64, letters: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let mut s = String.new();
+        for _ in 0..m {
+            s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        out.push(s);
+    }
+    if next_random(mut seed) % 2 == 0 {
+        let p = next_random(mut seed) % (m + 1);
+        out.sort_by_key(|s| s.substring(0, p));
+    }
+    out
+}
+
+// The letters used renamed, in order, to as many random letters, so that
+// every comparison of two letters comes out the same.
+fn renamed_in_order(seed: mut ref i64, strs: ref Vec[String]) -> Vec[String] {
+    let mut used: Vec[bool] = Vec.filled(26, false);
+    for s in strs.iter() {
+        for c in s.bytes() {
+            used[(c - b'a') as i64] = true;
+        }
+    }
+    let mut k = 0;
+    for u in used.iter() {
+        if *u {
+            k += 1;
+        }
+    }
+    // k distinct letters chosen at random, in alphabetical order
+    let mut pool: Vec[i64] = Vec.new();
+    for i in 0..26 {
+        pool.push(i);
+    }
+    for i in 0..26 {
+        let j = i + next_random(mut seed) % (26 - i);
+        pool.swap(i, j);
+    }
+    let mut chosen: Vec[i64] = Vec.new();
+    for i in 0..k {
+        chosen.push(pool[i]);
+    }
+    chosen.sort();
+    let mut to: Vec[u8] = Vec.filled(26, b'a');
+    let mut next = 0;
+    for i in 0..26 {
+        if used[i] {
+            to[i] = b'a' + chosen[next] as u8;
+            next += 1;
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for s in strs.iter() {
+        let mut t = String.new();
+        for c in s.bytes() {
+            t.push(to[(c - b'a') as i64] as char);
+        }
+        out.push(t);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, strs: Vec[String], small: bool) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let want = if small { statement(strs) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, strs.clone()));
+    }
+    // the inputs P2 to P5 share: the letters renamed in order, a column of
+    // one letter put in, one string written twice, every column twice
+    let renamed = renamed_in_order(mut seed, strs);
+    let at = next_random(mut seed) % (m + 1);
+    let letter = (b'a' + (next_random(mut seed) % 26) as u8) as char;
+    let mut flat: Vec[String] = Vec.new();
+    let mut doubled: Vec[String] = Vec.new();
+    for s in strs.iter() {
+        let mut f = s.substring(0, at);
+        f.push(letter);
+        flat.push(f + s.substring(at));
+        let mut d = String.new();
+        for c in s.bytes() {
+            d.push(c as char);
+            d.push(c as char);
+        }
+        doubled.push(d);
+    }
+    let twice = next_random(mut seed) % n;
+    let mut repeated: Vec[String] = Vec.new();
+    for i in 0..n {
+        repeated.push(strs[i].clone());
+        if i == twice {
+            repeated.push(strs[i].clone());
+        }
+    }
+    for x in 0..5 {
+        let r = got[x];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, r == want);
+        }
+        // P2: the letters renamed in order, the same answer
+        check(mut t, 2, arm(x, renamed.clone()) == r);
+        // P3: a column of one letter put in anywhere never breaks a pair
+        // nor settles one, the same answer
+        check(mut t, 3, arm(x, flat.clone()) == r);
+        // P4: one string written twice in a row, the same answer
+        check(mut t, 4, arm(x, repeated.clone()) == r);
+        // P5: every column written twice: both copies go or both stay,
+        // twice the answer
+        check(mut t, 5, arm(x, doubled.clone()) == 2 * r);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == r {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 955;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 cases of 1 to 6 strings of 1 to 6 letters from 1 to 3 letters,
+    // against the statement, then 200 of up to 100 strings of up to 50
+    // letters from 1 to 26 letters, so that P5 stays within 100
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 100 };
+        let m = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 50 };
+        let letters = if small { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 26 };
+        let strs = random_strs(mut seed, n, m, letters);
+        count += n;
+        let d = properties(mut t, mut seed, strs, small);
+        total += d;
+        check_sum = (check_sum * 31 + d) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {count} strings: {total} columns deleted, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

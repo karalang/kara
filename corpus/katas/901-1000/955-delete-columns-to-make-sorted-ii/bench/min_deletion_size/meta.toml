@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/955-delete-columns-to-make-sorted-ii/bench/min_deletion_size.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "781f1e251"
+extracted_src = "82383398"
