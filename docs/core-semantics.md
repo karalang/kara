@@ -606,7 +606,7 @@ Pin: `err_par_conflict` (already an error today, E0408).
 
 Shared handles may not.
 
-**11.4 Panics** in a task end the process (§10).
+**11.4 Panics** in a task end the process (§10), except in an isolating `TaskGroup` (§11.12).
 
 **11.5 Automatic parallelisation** of loops, and of statements from M4, is an optimisation, and it may change nothing observable:
 - the same output;
@@ -620,15 +620,60 @@ It applies only where the compiler proves all of that. In particular, it does no
 **11.7 Failure in `par {}`** (2026-10-07, D4).
 - **`?` in a branch** keeps `design.md`'s block-piercing meaning. It ends that branch, running the branch's drops, `defer`s and `errdefer`s as an error exit (§7.6–§7.7). The error is returned from the enclosing function once the block is done.
 - **`return` in a branch** is the same early exit as `?`, with any value: `?` is a `return` of the error. It ends that branch, running the branch's drops and `defer`s, and its `errdefer`s if the value is an `Err` (§7.6–§7.7), and the enclosing function returns the value once the block is done. `break` and `continue` cannot leave a branch; aiming one at a loop outside the block is an error (review-thread ruling 2026-10-22, B-2026-10-21-68 follow-up).
-- **No branch is cancelled.** Every other branch runs to completion.
+- **The branches after it are cancelled** (§11.9, from M4 item 5). When a branch exits early, every branch after it in source order (iteration order for `par for`) is cancelled; it stops at its next suspension point, if it reaches one. The branches before it run to completion, because one of them may still be the source-earliest exit.
 - **When the block is done:**
-  - If any branch exited early (`?` or `return`), the enclosing function returns the **source-earliest** one's value (for `par for`, the earliest in iteration order). That holds whichever exited first, so the result is deterministic. The block's other values, errors included, drop in reverse source order as the block is left (§7.6).
+  - If any branch exited early (`?` or `return`), the enclosing function returns the **source-earliest** one's value (for `par for`, the earliest in iteration order). That holds whichever exited first, so the result is deterministic. A branch cancelled after it cannot change that result. The block's other values, errors included, drop in reverse source order as the block is left (§7.6); a branch torn down by cancellation has no value.
   - Otherwise the block has its value, as `design.md` defines it.
 - **A panic** in any branch ends the process (§11.4).
 - **Removed.** `Cancellable`, `#[derive(Cancellable)]`, `collect_all` and `collect_all_vec` are removed. A block whose branches produce `Result` values without `?` already returns every result, in source order.
-- **Planned for M4, not yet core:** cooperative cancellation. Once a branch fails or a deadline passes, a sibling's next I/O or suspending call returns `Err(Cancelled)`, which converts into the branch's error type through `From` and propagates with `?`. Pure computation is never interrupted.
 
 Pin: `par_error_runs_siblings`.
+
+**The M4a rules (§11.8–§11.12).** Decided 2026-10-24: Gowtham chose teardown at the wait for cancellation and opt-in isolating groups for panics, and the rest are review-thread rulings (`review/m4a-spec-draft.md` in the shared folder). Each rule takes effect when its M4 plan item lands (`review/m4-plan-2026-10-24.md`): §11.8 with items 2–4, §11.9 and §11.10 with item 5, §11.11 with item 6 and §11.12 with item 9. Until then `karac` cancels nothing, and every panic ends the process. Each rule gets its pin in `corpus/core/` when it lands.
+
+**11.8 Waiting: which calls suspend a task.**
+- Every program runs as tasks. `main` is the root task, and `par {}` branches, `par for` iterations and `TaskGroup.spawn` closures are tasks.
+- A call **suspends** its task when it waits on a timer, a channel (`send`, `recv`), a join, a held `Mutex`, or a socket (`accept`, `connect`, `read`, `write`, UDP `send` and `recv`, and the HTTP client's request). While the task is suspended, other tasks run on the same worker. These calls carry the `suspends` effect. They are the **suspension points** of §11.1, §11.9 and §11.11.
+- Every other waiting call **blocks** its worker: file I/O, any `extern` call, and a process wait or pipe read until item 2 moves them to `suspends`. These carry `blocks`. With one worker, a blocking call stops every task until it returns. With several workers (M4 item 10), the runtime may start another worker to make up for it.
+- **`blocks` admits `suspends`.** A public function that declares `blocks` may call a `suspends` callee, so no existing declaration has to change. Declaring `suspends` alone is the narrower promise: the function never holds its worker while it waits.
+- **Every body that may suspend is a coroutine** (the stackless transform, `docs/spikes/coroutines.md`), not only a function with network effects. This supersedes deferred.md's network-boundary-only lowering.
+- **No rule about `ref` across a wait.** A task's frame never moves, and no frame is a value (§9.5), so a `ref` held across a suspension point needs no rule beyond §5.
+- **Foreign calls do not suspend.** An `extern` call runs to completion on the worker that made it. Whether a task may resume on a different worker after a wait, and so whether a foreign library's thread-local state survives a wait, is settled with M4 item 10.
+
+**11.9 Cancellation.**
+- **Who cancels.**
+  - An early exit in `par {}` or `par for` cancels the branches after it (§11.7).
+  - `TaskGroup.cancel(self)` cancels every task in the group that has not finished.
+  - A deadline that passes cancels the work it covers (§11.10).
+  - Cancelling a task cancels the `par`, `par for` and `TaskGroup` scopes running inside it.
+- **When it takes effect.** Only at a suspension point (§11.8), never in pure computation. A task that is already past its last wait completes and keeps its result: completion wins. A loop with no wait inside it cannot be cancelled.
+- **How the task stops: it is torn down at the wait.** The suspended call does not return. The task ends there, as an error exit from every frame on its chain, innermost first: each frame's drops, `defer`s and `errdefer`s run as §7.6 and §7.7 say for a `?` exit. No other code of the task runs after the wait.
+  - Every suspension point can be cancelled, including `sleep`, `recv`, `join` and a `Mutex` lock, none of which returns a `Result`.
+  - A cancelled `par` branch or `TaskGroup` task has no value, and its scope ignores it. `try_join` on its handle returns `Err(Cancelled)`; plain `join` on a cancelled task of an ordinary group panics, since there is no value to return (review-thread ruling).
+  - No value of type `Cancelled` reaches the cancelled task's own code, and no library signature changes for cancellation.
+  - The teardown runs the drops an error exit already runs, so no rule restricts what may be held across a wait. deferred.md's `CancelSafe` marker and `E_RAII_ACROSS_YIELD` are withdrawn.
+- **What is not deterministic.** How far a cancelled branch got before it stopped depends on timing, so its effects up to that point may or may not have happened. The block's value does not depend on timing (§11.7).
+
+**11.10 Deadlines.**
+- `std.time.timeout(d: Duration, f: OnceFn() -> T) -> Result[T, TimedOut]` runs `f` as a task scope. If `d` passes first, the scope is cancelled (§11.9) and the call returns `Err(TimedOut)`. Otherwise it returns `Ok` of `f`'s value. A `?` inside `f` behaves as in any closure.
+- `TaskGroup.with_deadline(own self, d: Duration) -> TaskGroup` returns the group with a deadline: once `d` has passed, the group is cancelled.
+- A socket's `set_read_timeout` also bounds a suspended read, which then returns `Err(TimedOut)`, the existing `NetError` arm.
+- Deadlines nest, and the earliest deadline covering a wait is the one that fires.
+
+**11.11 `select`.**
+- The syntax and meaning are as in deferred.md § `select` Across Channels. Arms are `recv`, `send` or `after(d)`, with an optional `default`. The first arm to become ready runs, and the block's value is that arm's value.
+- **When several arms are ready at once, the source-first ready arm wins.** That is deterministic, unlike Go's random choice. The fairness cost is accepted: order the arms to suit.
+- A `select` with no `default` is a suspension point, and so a cancellation point (§11.9).
+- `recv_timeout` and `send_timeout` arrive with it. Each is defined as a two-arm `select`.
+
+**11.12 Task failure: isolating groups.**
+- `TaskGroup.isolating(; limit: i64 = i64.MAX) -> IsolatingGroup` makes a group that contains its tasks' panics. It has `TaskGroup`'s methods, except that `spawn` returns `TaskHandle[Result[T, TaskFailed]]`, so `join` on its tasks returns `Result[T, TaskFailed]`.
+  - `TaskFailed` is `Panicked { message, location }` or `Cancelled`. On an ordinary group, `TaskHandle.try_join(own self) -> Result[T, TaskFailed]` gives the same view, where only `Cancelled` can occur.
+  - A task that panics in such a group is torn down like a cancelled task (§11.9): its drops, `defer`s and `errdefer`s run, and its handle holds `Err(Panicked { .. })`.
+  - The group's other tasks run on.
+- Everywhere else (`par {}`, `par for`, an ordinary `TaskGroup` and `main`), a panic still ends the process as §10.2 says.
+- A server writes one isolating group per accept loop, so a bad request ends its own connection's task, not the server.
+- The unwind slot every MIR `Call` and `Drop` already carries (always `Abort` in v1) is what the teardown uses.
 
 ---
 

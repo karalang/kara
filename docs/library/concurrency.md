@@ -56,7 +56,7 @@ Sending returns a `Result` instead of panicking because a panic ends the whole p
 
 **Moving the ends.** `Sender[T]` and `Receiver[T]` are ordinary owned values. They can be moved into tasks, passed to functions and returned.
 
-**Deferred.** `select` across several channels, receive and send timeouts, unbounded channels and fan-out or fan-in combinators come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
+**Deferred.** `select` across several channels, receive and send timeouts, unbounded channels and fan-out or fan-in combinators come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services). The rules for `select` and the timeouts are already fixed in [core-semantics.md §11.11](../core-semantics.md#11-concurrency-c9).
 
 ```kara
 import std.sync.{channel, Sender, Receiver, SendError};
@@ -105,7 +105,12 @@ impl[T] TaskHandle[T] {
 - **Dropping a group joins every task it started**, so every task finishes before the scope that owns the group ends, and the drop waits (`blocks`).
 - **`TaskHandle[T]`** owns its task's result and borrows nothing, so it may outlive its group. `join` waits for the task and returns its result. After the group has dropped, every task is done, and `join` returns the stored result at once. A result that is never joined drops with its handle, or with the group if the handle dropped first.
 - **Tasks are not checked against each other for effect conflicts.** The borrow rules and `CrossTask` keep them from racing on memory, but two tasks may both print, or both write to one database, and their order is not fixed ([design.md §13](../design.md#taskgroup)). `par {}` and `par for` are the deterministic constructs.
-- **Failure.** A task that returns `Err` does not affect its siblings; the error reaches whoever joins its handle. A panic in any task ends the process ([core-semantics.md §11.4](../core-semantics.md#11-concurrency-c9)). v1 cancels nothing; cooperative cancellation and deadlines come with the services track (M4a).
+- **Failure.** A task that returns `Err` does not affect its siblings; the error reaches whoever joins its handle. A panic in any task ends the process ([core-semantics.md §11.4](../core-semantics.md#11-concurrency-c9)). v1 cancels nothing.
+- **From the services track (M4a)** ([core-semantics.md §11.9–§11.12](../core-semantics.md#11-concurrency-c9)):
+  - `fn cancel(self)` cancels every unfinished task; each stops at its next suspension point, running its cleanup as an error exit.
+  - `fn with_deadline(own self, d: Duration) -> TaskGroup` cancels the group once `d` has passed.
+  - `TaskGroup.isolating(; limit: i64 = i64.MAX) -> IsolatingGroup` contains its tasks' panics: its `spawn` returns `TaskHandle[Result[T, TaskFailed]]`, and the other tasks run on. `TaskFailed` is `Panicked { message, location }` or `Cancelled`.
+  - `TaskHandle.try_join(own self) -> Result[T, TaskFailed]`; plain `join` on a cancelled task of an ordinary group panics.
 
 An accept loop, one task per connection, at most 1000 at a time:
 

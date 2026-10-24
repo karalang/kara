@@ -5534,7 +5534,7 @@ The diagnostic points at the impl method, names the extra effect and quotes the 
 
 ### Design principles
 
-**1. An effect is a capability the function exercises, not control flow imposed from outside.** Effects answer "what does this function reach for?". They do not encode outside interruptions, which use the return channel. That is why `panics` is an effect (the function, or a callee, may choose to stop the process) while cancellation, when it arrives with the services track, is not: a cancelled call sees `Err(Cancelled)` through its `Result`. Making cancellation an effect would widen every `Result`-returning function without telling the reader anything the `Result` does not.
+**1. An effect is a capability the function exercises, not control flow imposed from outside.** Effects answer "what does this function reach for?". They do not encode outside interruptions, which use the return channel. That is why `panics` is an effect (the function, or a callee, may choose to stop the process) while cancellation, which arrives with the services track, is not: a cancelled task is torn down at its suspension point and runs the cleanup of an error exit ([core-semantics.md §11.9](core-semantics.md#11-concurrency-c9)), so no signature has to mention it.
 
 **2. Substrate effects are permitted by default; scoped capabilities are declared.** A *substrate* effect is one that nearly every non-trivial function exercises; a *scoped capability* is a deliberate access to a named resource, such as `reads(UserDb)` or `sends(Network)`. Declaring a substrate effect everywhere would make the declaration noise, present on nearly every function and so informative about none. Declaring a scoped capability carries information because it is the exception. The substrate set in v1 is exactly `{allocates(Heap), panics}`. A program for which a substrate effect is scoped, such as a real-time or embedded one, forbids it with `#[no_effect]`. A proposal to add a substrate effect must show that the great majority of functions exercise it.
 
@@ -5795,15 +5795,15 @@ The language-level rules:
 - **`send` and `recv` have `blocks`**, because they may wait. On sequential `wasm_wasi`, `recv` yields instead, and panics with kind `deadlock` if no task can run ([§16](#concurrency-across-targets)).
 - **The ends are ordinary owned values.** They can be moved into tasks, passed to functions and returned.
 
-`select` across several channels, and send and receive timeouts, arrive with the services track (M4a).
+`select` across several channels, and send and receive timeouts, arrive with the services track (M4a); their rules are [core-semantics.md §11.11](core-semantics.md#11-concurrency-c9).
 
 ### Failure
 
 What happens when a branch fails is [core-semantics.md §11.7](core-semantics.md#11-concurrency-c9):
 - **`?` in a branch** ends that branch as an error exit: its drops, `defer`s and `errdefer`s run ([§6](#6-expressions-and-statements)).
-- **No branch is cancelled.** Every other branch runs to completion.
+- **The branches after it are cancelled** at their next suspension point (from the services track, [core-semantics.md §11.9](core-semantics.md#11-concurrency-c9)); the branches before it run to completion.
 - **When every branch is done**, the enclosing function returns the source-earliest error (for `par for`, the earliest in iteration order), whichever failed first. The block's other values, errors included, drop in reverse source order.
-- **A panic** in any branch or task ends the process with exit code 101. No drops, `defer`s or `errdefer`s run ([core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8)). A service that must survive a bad request runs under a supervisor that restarts it.
+- **A panic** in any branch or task ends the process with exit code 101. No drops, `defer`s or `errdefer`s run ([core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8)). From the services track, a task in an isolating `TaskGroup` is the exception: its panic is contained and reaches its handle ([core-semantics.md §11.12](core-semantics.md#11-concurrency-c9)).
 
 **Every result, not only the first error.** A block whose branches produce `Result` values without `?` returns all of them, in source order. This is the form for validating several fields and reporting every invalid one:
 
@@ -5815,7 +5815,7 @@ fn validate(form: Form) -> (Result[Name, FieldError], Result[Email, FieldError],
 
 **`TaskGroup` tasks.** A task that returns `Err` does not affect its siblings. The error reaches whoever joins the task's handle.
 
-**Planned for the services track (M4a):** cooperative cancellation, `TaskGroup.cancel()` and deadlines. Once a branch fails or a deadline passes, a sibling's next I/O or suspending call returns `Err(Cancelled)`, which converts into the branch's error type through `From` and propagates with `?`. Pure computation is never interrupted.
+**From the services track (M4a):** cancellation, deadlines, `select` and isolating groups, specified in [core-semantics.md §11.8–§11.12](core-semantics.md#11-concurrency-c9). A cancelled task stops at its next suspension point, as an error exit; pure computation is never interrupted.
 
 ### Determinism contract
 
@@ -5835,6 +5835,8 @@ fn validate(form: Form) -> (Result[Name, FieldError], Result[Email, FieldError],
 - the state reached through `sync` handles, `Mutex` and `Atomic`: which task takes a lock first, and the order of atomic stores;
 - the interleaving of [observability](#observability) output (`dbg`, logging) from branches that run at once, since it is not an effect;
 - which panic is reported when two branches panic, since the first ends the process;
+- how far a cancelled branch got before it stopped, and so which of its effects happened (the block's value is still deterministic);
+- which `select` arms are ready, and whether a deadline passes before the work it covers finishes;
 - values from [nondeterminism resources](#nondeterminism-resources), such as the clock and random numbers;
 - effects that an `unsafe` block or an `extern` declaration hides from the compiler. That is a bug in the declaration, and declaring the effect restores the guarantee.
 

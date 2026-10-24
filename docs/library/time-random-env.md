@@ -15,6 +15,8 @@ In `std.time`:
 | `SystemTime.now()` | `reads(Clock)` | A `SystemTime`: the current wall-clock time |
 | `sleep(d: Duration)` | `blocks suspends reads(Clock)` | Nothing; parks the calling task for `d`. In a task it suspends, so its thread runs other tasks meanwhile |
 
+From the services track (M4a), `timeout(d: Duration, f: OnceFn() -> T) -> Result[T, TimedOut]` runs `f` and cancels it once `d` has passed, returning `Err(TimedOut)` ([core-semantics.md §11.10](../core-semantics.md#11-concurrency-c9)).
+
 Never measure elapsed time with `Clock.now()`: a wall-clock reading can jump, and whole seconds are too coarse. Use `Instant.now()`.
 
 All time sources are one resource, `Clock`: wall and monotonic time differ in the API, not in conflict analysis, and two calls that both read `Clock` do not conflict.

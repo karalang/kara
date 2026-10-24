@@ -211,11 +211,13 @@ The state struct lives on the heap, allocated through the same `allocates(Heap)`
 
 **Cancellation cooperation.** A network-boundary task observes cancellation cooperatively at every yield point: the poll function checks the task's cancel flag before re-entering user code on resume and tears down the state machine (via the state-struct destructor) if cancellation has been signalled. The teardown drops captured locals in reverse construction order; see [Drop Ordering Across Yield Points](#drop-ordering-across-yield-points) for the exact rule.
 
-> **Open.** [design.md §13](design.md#failure) plans cooperative cancellation as `Err(Cancelled)` returned from the task's next I/O or suspending call, which the task propagates with `?`. Whether a parked network-boundary task is torn down at its yield point (as above) or resumes with `Err(Cancelled)` is settled when this track returns.
+> **Settled 2026-10-24.** A cancelled task is torn down at its yield point, as above, and never resumes with `Err(Cancelled)` (Gowtham's choice). The normative rules are [core-semantics.md §11.8–§11.12](core-semantics.md#11-concurrency-c9); they also supersede the network-boundary-only lowering in this section, since every body that may suspend is a coroutine, and they withdraw [RAII Across Yield Points](#raii-across-yield-points).
 
 **Layer classification.** The state struct's exact field layout, the encoding of the state tag, whether the poll function is inlined or kept as a separate symbol, and the specific IR shape used by codegen are *Implementation freedom* — the compiler may change them between releases without notice. What is *Guaranteed*: (a) network-boundary functions yield cooperatively at network-effect call boundaries; (b) yield-and-resume preserves source-level binding values; (c) cancellation is observed at every yield point and triggers reverse-construction-order drop of captured locals; (d) the user-visible call/return semantics match a function that did not yield. The state-struct field naming surfaced through `karac explain` and DWARF is *Reported behavior* — stable within a release, may evolve across releases with the same discipline as other `karac explain` output.
 
 #### RAII Across Yield Points
+
+> **Withdrawn 2026-10-24.** A cancelled task is torn down by the same drops, `defer`s and `errdefer`s an error exit runs ([core-semantics.md §11.9](core-semantics.md#11-concurrency-c9)), so there is no `CancelSafe` marker and no `E_RAII_ACROSS_YIELD`. The text below is kept as the record of the alternative.
 
 A network-boundary function (per [State-Machine Transform — Network-Boundary Functions](#state-machine-transform--network-boundary-functions)) cannot hold a non-cancel-safe resource across a suspension point. This is a **hard compile error**. The alternative — a runtime resource leak when the task is cancelled while parked — would be silent, untraceable, and would corrode the cancellation story.
 
