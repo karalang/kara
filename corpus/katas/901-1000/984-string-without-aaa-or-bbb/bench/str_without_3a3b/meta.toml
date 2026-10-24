@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/984-string-without-aaa-or-bbb/bench/str_without_3a3b.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
-bucket = "timeout"
-classified_with = "87381f75b"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 984 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "d12ce0e2d"
 extracted_src = "68860bf1"
