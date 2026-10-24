@@ -1,0 +1,58 @@
+mortgage loans: 400 rows, 25,336 bytes, fnv 5e5a2969
+mortgage payments: 383 rows, 15,473 bytes, fnv 738b3beb
+auto loans: 700 rows, 40,729 bytes, fnv 18ff6f51
+auto payments: 656 rows, 25,970 bytes, fnv ef3c0955
+student loans: 500 rows, 29,450 bytes, fnv 3f7bebb3
+student payments: 455 rows, 17,970 bytes, fnv 135d04ef
+personal loans: 600 rows, 34,848 bytes, fnv cdd714bd
+personal payments: 570 rows, 22,552 bytes, fnv d2a8ad3b
+auto_payments.bad line 91: bad amount '894.2'
+student_payments.bad line 251: date 2026-10-05 is before the line above
+personal_loans.csv line 2: loan 'P00001' is not mortgage's
+parsed files match the built ones: true
+mortgage cash: 380 payments, $2,075,483.82 (ACH 184 $482,529.49, CHK 63 $174,401.32, CARD 65 $150,564.02, WIRE 68 $1,267,988.99); 3 returned, $8,067.01; 4 unidentified, $4,612.50; 6 refunds, $7,782.66
+  applied to fees $6,296.26, interest $225,463.85, principal $461,948.08, escrow $168,860.19, curtailments $1,089,549.20; 76 loans hold $133,924.93 in suspense
+auto cash: 648 payments, $564,088.85 (ACH 347 $205,824.24, CHK 107 $73,003.10, CARD 96 $69,010.68, WIRE 98 $216,250.83); 8 returned, $4,051.91; 6 unidentified, $6,122.82; 13 refunds, $2,338.85
+  applied to fees $3,774.69, interest $66,785.61, principal $273,374.80, escrow $0.00, curtailments $161,640.33; 142 loans hold $61,743.53 in suspense
+student cash: 452 payments, $383,527.66 (ACH 219 $106,043.75, CHK 76 $42,612.85, CARD 72 $36,727.20, WIRE 85 $198,143.86); 3 returned, $2,325.45; 5 unidentified, $7,185.24; 7 refunds, $717.77
+  applied to fees $1,873.16, interest $45,496.14, principal $140,552.80, escrow $0.00, curtailments $161,087.35; 111 loans hold $33,075.68 in suspense
+personal cash: 564 payments, $396,323.60 (ACH 266 $151,744.45, CHK 100 $63,370.44, CARD 106 $53,976.14, WIRE 92 $127,232.57); 6 returned, $3,317.86; 7 unidentified, $9,906.72; 9 refunds, $2,346.07
+  applied to fees $2,801.44, interest $61,384.12, principal $198,420.96, escrow $0.00, curtailments $79,927.61; 123 loans hold $47,703.84 in suspense
+mortgage roll: 11 cured, 88 rolled worse, 295 stayed, 6 paid off
+  current: 316 -> current 277, 30 34, paid off 5
+  30: 40 -> current 6, 30 5, 60 29
+  60: 23 -> current 2, 60 2, 90 19
+  90: 8 -> current 1, 120+ 6, paid off 1
+  120+: 13 -> current 2, 120+ 11
+auto roll: 23 cured, 160 rolled worse, 491 stayed, 25 paid off
+  current: 541 -> current 447, 30 70, paid off 24
+  30: 73 -> current 9, 30 6, 60 58
+  60: 34 -> current 4, 30 1, 60 5, 90 23, paid off 1
+  90: 15 -> current 3, 90 3, 120+ 9
+  120+: 37 -> current 7, 120+ 30
+student roll: 14 cured, 132 rolled worse, 344 stayed, 10 paid off
+  current: 377 -> current 314, 30 53, paid off 10
+  30: 55 -> current 7, 30 6, 60 42
+  60: 31 -> current 3, 60 4, 90 24
+  90: 16 -> current 3, 120+ 13
+  120+: 21 -> current 1, 120+ 20
+personal roll: 18 cured, 140 rolled worse, 427 stayed, 15 paid off
+  current: 472 -> current 393, 30 66, paid off 13
+  30: 64 -> current 10, 30 7, 60 46, paid off 1
+  60: 30 -> current 5, 60 5, 90 19, paid off 1
+  90: 10 -> current 1, 120+ 9
+  120+: 24 -> current 2, 120+ 22
+mortgage book: 394 loans, $63,606,874.77, 5.09% weighted rate; 6 paid off; top states AZ $6,651,225.66 (44), TX $6,625,264.87 (40), IL $6,507,219.38 (37)
+auto book: 675 loans, $8,431,652.51, 11.05% weighted rate; 25 paid off; top states GA $844,705.00 (65), CA $828,561.25 (60), MI $772,091.98 (50)
+student book: 490 loans, $10,652,497.82, 6.41% weighted rate; 10 paid off; top states TX $1,084,113.87 (43), WA $1,032,821.99 (50), CA $1,012,394.74 (54)
+personal book: 564 loans, $4,571,062.71, 18.48% weighted rate; 15 paid off; top states IL $509,985.22 (61), CA $472,890.93 (50), PA $430,400.74 (52)
+mortgage actions: 17 referred to foreclosure ($2,037,197.74); 74 late fees, $5,510.09; 3 NSF fees; first M00045, 120 days past due, $45,615.40
+auto actions: 39 assigned for repossession ($501,817.81); 133 late fees, $3,499.93; 8 NSF fees; first A00002, 150 days past due, $21,775.74
+student actions: 10 defaulted ($197,080.95); 102 late fees, $1,946.58; 3 NSF fees; first S00023, 300 days past due, $14,345.87
+personal actions: 21 charged off ($154,436.93); 115 late fees, $2,931.93; 6 NSF fees; first P00025, 180 days past due, $4,507.04
+mortgage desk: 89 accounts, $14,934,316.84: 89 worked, 0 part-worked, 0 not reached ($0.00)
+auto desk: 166 accounts, $2,282,074.38: 166 worked, 0 part-worked, 0 not reached ($0.00)
+student desk: 152 accounts, $3,167,143.22: 152 worked, 0 part-worked, 0 not reached ($0.00)
+personal desk: 153 accounts, $1,344,635.80: 0 worked, 67 part-worked, 86 not reached ($734,122.25)
+desk: 800 of 800 calls booked; 11-02 80, 11-03 80, 11-04 80, 11-05 80, 11-06 80, 11-09 80, 11-10 80, 11-11 80, 11-12 80, 11-13 80
+collections.log: 800 entries, 24,000 bytes, fnv 74fc4f22

@@ -1,0 +1,1185 @@
+// pipeline/loan_servicing
+//
+// A lender's October 2026 servicing month over four books of loans:
+// mortgage, auto, student and personal. It builds each book's loan tape
+// (balance, rate, term and age, the scheduled payment, escrow for
+// mortgages, the due day, how many installments are past due, the late
+// fees owed and the funds held in suspense) and the month's payment file
+// (ACH, checks, cards and wires, checks returned unpaid, and payments for
+// loans the book does not hold), writes them as CSV, reads them back and
+// parses them with the servicing desk's checks, then posts every payment
+// through the servicing waterfall: fees first, then whole installments
+// oldest first (interest on the balance, principal, escrow), then a
+// curtailment or a payoff when nothing is past due, and what is left in
+// suspense. Late fees fall due after the grace period and returned checks
+// carry a fee. Four reports per book follow. Then one collections desk,
+// with a fixed number of call slots a day, takes every book's delinquent
+// accounts in turn.
+//
+// The builds, the writes, the reads, the parses, the postings and the
+// reports are each a group of statements that do not depend on each
+// other (a stmt-par app). Which accounts the desk reaches depends on how
+// many slots the books queued before them took, so the four books have
+// to be queued in order.
+
+const MASK32: i64 = 4294967295;
+// Days from 1 January to the first of each month in 2026; day 0 is
+// Thursday 1 October.
+const MONTH_START: Array[i64, 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const MONTH_DAYS: Array[i64, 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const DAY0: i64 = 273;
+const LAST_DAY: i64 = 30;
+const STATES: Array[Str, 12] = ["CA", "TX", "FL", "NY", "PA", "IL", "OH", "GA", "NC", "MI", "WA", "AZ"];
+const CHANNELS: Array[Str, 4] = ["ACH", "CHK", "CARD", "WIRE"];
+// By kind of loan: mortgage, auto, student, personal. Balances are what
+// the loan was opened at, in cents, before it amortizes.
+const BAL_LO: Array[i64, 4] = [8000000, 500000, 300000, 100000];
+const BAL_HI: Array[i64, 4] = [60000000, 4500000, 9000000, 3000000];
+const RATE_LO: Array[i64, 4] = [300, 400, 450, 800];
+const RATE_HI: Array[i64, 4] = [750, 1800, 850, 2900];
+const FEE_CAP: Array[i64, 4] = [10000, 3500, 2500, 3900];
+const MAX_K: Array[i64, 4] = [5, 4, 9, 5];
+// Installments past due at which a loan leaves the desk for the book's
+// action.
+const ACTION_K: Array[i64, 4] = [4, 4, 9, 5];
+const ACTION_NAMES: Array[Str, 4] = ["referred to foreclosure", "assigned for repossession", "defaulted", "charged off"];
+const BUCKETS: Array[Str, 6] = ["current", "30", "60", "90", "120+", "paid off"];
+// A late fee is 5% of the scheduled payment, up to the book's cap.
+const FEE_PM: i64 = 500;
+const NSF_FEE: i64 = 2500;
+const GRACE: i64 = 15;
+// The collections desk: the business days of 2 to 13 November, each with
+// the same number of call slots, and at most three calls an account.
+const DESK_DAYS: Array[i64, 10] = [32, 33, 34, 35, 36, 39, 40, 41, 42, 43];
+const DESK_N: i64 = 10;
+const DAY_CAP: i64 = 80;
+const MAX_CALLS: i64 = 3;
+
+struct Book {
+    name: Str,
+    code: Str,
+    // 0 mortgage, 1 auto, 2 student, 3 personal
+    kind: i64,
+    seed: i64,
+    count: i64,
+    // payments for loans the book does not hold
+    strangers: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Loan {
+    loan: String,
+    state: String,
+    // months on the book, and the term in months
+    age: i64,
+    term: i64,
+    // basis points a year
+    rate: i64,
+    // cents
+    balance: i64,
+    payment: i64,
+    escrow: i64,
+    // the day of the month the installment is due
+    due: i64,
+    // installments past due at the start of the month
+    past_due: i64,
+    late_fees: i64,
+    suspense: i64,
+    autopay: bool,
+}
+
+#[derive(Clone, PartialEq)]
+struct Pay {
+    pid: String,
+    day: i64,
+    loan: String,
+    amount: i64,
+    channel: String,
+    // the payment a returned check reverses, or -
+    returns: String,
+}
+
+// A payment while it is built: its day, then the order it was made in,
+// which breaks ties, and for a return the order of the check it returns.
+struct Raw {
+    day: i64,
+    order: i64,
+    loan: String,
+    amount: i64,
+    channel: String,
+    rev: i64,
+}
+
+// What posting a book's month left behind, by loan and in total.
+struct Post {
+    bal: Vec[i64],
+    owed: Vec[i64],
+    late: Vec[i64],
+    susp: Vec[i64],
+    fee_done: Vec[bool],
+    // 0 open, 1 paid off, 2 the book's action
+    status: Vec[i64],
+    ch_n: Vec[i64],
+    ch_amt: Vec[i64],
+    nsf_n: i64,
+    nsf_amt: i64,
+    unk_n: i64,
+    unk_amt: i64,
+    ref_n: i64,
+    ref_amt: i64,
+    fee_paid: i64,
+    int_paid: i64,
+    prin_paid: i64,
+    esc_paid: i64,
+    curtail: i64,
+    fees_n: i64,
+    fees_amt: i64,
+    nsf_fees: i64,
+}
+
+struct Desk {
+    left: Vec[i64],
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+// ------------------------------------------------------------ helpers
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn max2(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn ceil_div(a: i64, b: i64) -> i64 {
+    (a + b - 1) / b
+}
+
+fn sum_of(v: ref Vec[i64]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t += x;
+    }
+    t
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 7 {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 6 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+fn date_of(day: i64) -> String {
+    let n = DAY0 + day;
+    let mut m = 11;
+    while MONTH_START[m] > n {
+        m -= 1;
+    }
+    f"2026-{m + 1:02}-{n - MONTH_START[m] + 1:02}"
+}
+
+// The day of a YYYY-MM-DD date in 2026, or None.
+fn day_of(t: ref String) -> Option[i64] {
+    if t.len() != 10 or t.substring(4, 5) != "-" or t.substring(7, 8) != "-" {
+        return None;
+    }
+    let ys = t.substring(0, 4);
+    let ms = t.substring(5, 7);
+    let ds = t.substring(8, 10);
+    if not (is_digits(ys) and is_digits(ms) and is_digits(ds)) {
+        return None;
+    }
+    let y = to_int(ys);
+    let m = to_int(ms);
+    let d = to_int(ds);
+    if y != 2026 or m < 1 or m > 12 or d < 1 or d > MONTH_DAYS[m - 1] {
+        return None;
+    }
+    Some(MONTH_START[m - 1] + d - 1 - DAY0)
+}
+
+fn short_date(day: i64) -> String {
+    date_of(day).substring(5, 10)
+}
+
+// A month's interest on a balance, rounded half up.
+fn interest_of(bal: i64, rate: i64) -> i64 {
+    (bal * rate + 60000) / 120000
+}
+
+fn late_fee(payment: i64, kind: i64) -> i64 {
+    min2((payment * FEE_PM + 5000) / 10000, FEE_CAP[kind])
+}
+
+fn terms_of(kind: i64) -> Vec[i64] {
+    match kind {
+        0 => [360, 180],
+        1 => [36, 48, 60, 72],
+        2 => [120],
+        _ => [24, 36, 48, 60],
+    }
+}
+
+fn loan_id(book: ref Book, n: i64) -> String {
+    f"{book.code}{n:05}"
+}
+
+fn state_ok(t: ref String) -> bool {
+    for s in STATES {
+        if t == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn channel_index(t: ref String) -> i64 {
+    for c in 0..4 {
+        if t == CHANNELS[c] {
+            return c;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ building
+
+fn build_loans(book: ref Book) -> Vec[Loan] {
+    let s = book.seed;
+    let kind = book.kind;
+    let terms = terms_of(kind);
+    let mut out: Vec[Loan] = Vec.new();
+    for i in 0..book.count {
+        let opened = BAL_LO[kind] + mix(s, i, 1) % (BAL_HI[kind] - BAL_LO[kind]);
+        let mut rate = RATE_LO[kind] + mix(s, i, 2) % (RATE_HI[kind] - RATE_LO[kind] + 1);
+        rate -= rate % 5;
+        let term = terms[mix(s, i, 3) % terms.len() as i64];
+        let age = 1 + mix(s, i, 4) % (term - 1);
+        let bal = max2(opened * (term - age) / term, 50000);
+        let payment = interest_of(bal, rate) + ceil_div(bal, term - age);
+        let escrow = if kind == 0 { 15000 + mix(s, i, 5) % 75001 } else { 0 };
+        let due = 1 + mix(s, i, 6) % 28;
+        let state = STATES[mix(s, i, 7) % 12];
+        let r = mix(s, i, 8) % 100;
+        let k = if r < 78 {
+            0
+        } else if r < 88 {
+            1
+        } else if r < 93 {
+            2
+        } else if r < 96 {
+            3
+        } else {
+            4 + mix(s, i, 9) % (MAX_K[kind] - 3)
+        };
+        let late = if k > 0 { late_fee(payment, kind) } else { 0 };
+        let mut suspense = 0;
+        if k > 0 and mix(s, i, 10) % 3 == 0 {
+            suspense = (payment + escrow) / (2 + mix(s, i, 11) % 3);
+        }
+        let autopay = k == 0 and mix(s, i, 12) % 100 < 40;
+        out.push(Loan {
+            loan: loan_id(book, i + 1),
+            state: state.to_string(),
+            age: age,
+            term: term,
+            rate: rate,
+            balance: bal,
+            payment: payment,
+            escrow: escrow,
+            due: due,
+            past_due: k,
+            late_fees: late,
+            suspense: suspense,
+            autopay: autopay,
+        });
+    }
+    out
+}
+
+fn add_raw(raw: mut ref Vec[Raw], day: i64, loan: ref String, amount: i64, channel: ref String, rev: i64) -> i64 {
+    let order = raw.len() as i64;
+    raw.push(Raw { day: day, order: order, loan: loan.clone(), amount: amount, channel: channel.clone(), rev: rev });
+    order
+}
+
+fn build_payments(book: ref Book, loans: ref Vec[Loan]) -> Vec[Pay] {
+    let s = book.seed;
+    let mut raw: Vec[Raw] = Vec.new();
+    for i in 0..loans.len() as i64 {
+        let ln = loans[i];
+        let inst = ln.payment + ln.escrow;
+        let due = ln.due - 1;
+        let b = mix(s, i, 20) % 100;
+        let channel = CHANNELS[mix(s, i, 21) % 4].to_string();
+        let day = min2(max2(due + mix(s, i, 22) % 26 - 5, 0), LAST_DAY);
+        let mut first = -1;
+        if ln.autopay {
+            first = add_raw(mut raw, due, ln.loan, inst, "ACH", -1);
+        } else if ln.past_due == 0 {
+            if b < 72 {
+                first = add_raw(mut raw, day, ln.loan, inst, channel, -1);
+            } else if b < 78 {
+                first = add_raw(mut raw, day, ln.loan, inst + 10000 + mix(s, i, 23) % 190001, channel, -1);
+            } else if b < 81 {
+                let quote = ln.balance + interest_of(ln.balance, ln.rate) + ln.escrow + mix(s, i, 24) % 5000;
+                first = add_raw(mut raw, day, ln.loan, quote, "WIRE", -1);
+            } else if b < 88 {
+                let half = inst / 2;
+                first = add_raw(mut raw, day, ln.loan, half, channel, -1);
+                add_raw(mut raw, min2(day + 7, LAST_DAY), ln.loan, inst - half, channel, -1);
+            } else if b < 95 {
+                // missed
+            } else {
+                first = add_raw(mut raw, day, ln.loan, inst / 2, channel, -1);
+            }
+        } else {
+            let owed = ln.past_due + 1;
+            if b < 35 {
+                // nothing paid
+            } else if b < 65 {
+                first = add_raw(mut raw, day, ln.loan, inst, channel, -1);
+            } else if b < 80 {
+                first = add_raw(mut raw, day, ln.loan, ln.late_fees + owed * inst - ln.suspense, channel, -1);
+            } else {
+                first = add_raw(mut raw, day, ln.loan, inst / 2, channel, -1);
+            }
+        }
+        if first >= 0 and raw[first].channel == "CHK" and mix(s, i, 30) % 100 < 6 {
+            let back = min2(raw[first].day + 2 + mix(s, i, 31) % 5, LAST_DAY);
+            let amount = raw[first].amount;
+            add_raw(mut raw, back, ln.loan, amount, "NSF", first);
+        }
+    }
+    for j in 0..book.strangers {
+        add_raw(mut raw, mix(s, j, 40) % (LAST_DAY + 1), loan_id(book, book.count + 101 + j * 7), 5000 + mix(s, j, 41) % 200000, "CHK", -1);
+    }
+    let mut ids: Vec[String] = Vec.filled(raw.len() as i64, String.new());
+    let mut out: Vec[Pay] = Vec.new();
+    let mut np = 0;
+    let mut nr = 0;
+    for day in 0..LAST_DAY + 1 {
+        for r in raw {
+            if r.day != day {
+                continue;
+            }
+            let mut pid = String.new();
+            let mut returns = "-".to_string();
+            if r.channel == "NSF" {
+                nr += 1;
+                pid = f"{book.code}R{nr:05}";
+                returns = ids[r.rev].clone();
+            } else {
+                np += 1;
+                pid = f"{book.code}P{np:05}";
+            }
+            ids[r.order] = pid.clone();
+            out.push(Pay { pid: pid, day: day, loan: r.loan.clone(), amount: r.amount, channel: r.channel.clone(), returns: returns });
+        }
+    }
+    out
+}
+
+fn loan_header() -> String {
+    "loan,state,age,term,rate,balance,payment,escrow,due,past_due,late_fees,suspense,autopay".to_string()
+}
+
+fn pay_header() -> String {
+    "payment,day,loan,amount,channel,ref".to_string()
+}
+
+fn encode_loans(loans: ref Vec[Loan]) -> String {
+    let mut out = f"{loan_header()}\n";
+    for ln in loans {
+        let auto = if ln.autopay { "Y" } else { "N" };
+        out.push_str(f"{ln.loan},{ln.state},{ln.age},{ln.term},{ln.rate},{dollars(ln.balance)},{dollars(ln.payment)},{dollars(ln.escrow)},{ln.due},{ln.past_due},{dollars(ln.late_fees)},{dollars(ln.suspense)},{auto}\n");
+    }
+    out
+}
+
+fn encode_payments(pays: ref Vec[Pay]) -> String {
+    let mut out = f"{pay_header()}\n";
+    for p in pays {
+        out.push_str(f"{p.pid},{date_of(p.day)},{p.loan},{dollars(p.amount)},{p.channel},{p.returns}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn int_field(path: ref String, n: i64, what: Str, t: ref String, lo: i64, hi: i64) -> Result[i64, BatchError] {
+    match small_int(t, lo, hi) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn cents_field(path: ref String, n: i64, what: Str, t: ref String) -> Result[i64, BatchError] {
+    match cents_of(t) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+// The prefix, then exactly that many digits.
+fn id_ok(t: ref String, prefix: ref String, digits: i64) -> bool {
+    t.len() == prefix.len() + digits and t.starts_with(prefix) and is_digits(t.substring(prefix.len(), t.len()))
+}
+
+// A capital letter and five digits.
+fn loan_shape(t: ref String) -> bool {
+    t.len() == 6 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(t.substring(0, 1)) and is_digits(t.substring(1, 6))
+}
+
+fn parse_loans(path: ref String, book: ref Book, text: ref String) -> Result[Vec[Loan], BatchError] {
+    let body = body_lines(path, text, loan_header())?;
+    let mut out: Vec[Loan] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    let terms = terms_of(book.kind);
+    for i in 0..body.len() as i64 {
+        let n = i + 2;
+        let f = split_on(body[i], ",");
+        if f.len() != 13 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 13"));
+        }
+        if not loan_shape(f[0]) {
+            return Err(bad(f"{path} line {n}: bad loan '{f[0]}'"));
+        }
+        if f[0].substring(0, 1) != book.code {
+            return Err(bad(f"{path} line {n}: loan '{f[0]}' is not {book.name}'s"));
+        }
+        if seen.contains(f[0]) {
+            return Err(bad(f"{path} line {n}: loan '{f[0]}' twice"));
+        }
+        seen.insert(f[0].clone());
+        if not state_ok(f[1]) {
+            return Err(bad(f"{path} line {n}: bad state '{f[1]}'"));
+        }
+        let term = int_field(path, n, "term", f[3], 1, 600)?;
+        if not terms.contains(term) {
+            return Err(bad(f"{path} line {n}: no {book.name} loan has a {term}-month term"));
+        }
+        let age = int_field(path, n, "age", f[2], 1, term - 1)?;
+        let rate = int_field(path, n, "rate", f[4], RATE_LO[book.kind], RATE_HI[book.kind])?;
+        let bal = cents_field(path, n, "balance", f[5])?;
+        let payment = cents_field(path, n, "payment", f[6])?;
+        let escrow = cents_field(path, n, "escrow", f[7])?;
+        if escrow != 0 and book.kind != 0 {
+            return Err(bad(f"{path} line {n}: escrow on a {book.name} loan"));
+        }
+        let due = int_field(path, n, "due day", f[8], 1, 28)?;
+        let k = int_field(path, n, "past due", f[9], 0, 12)?;
+        let late = cents_field(path, n, "late fees", f[10])?;
+        let suspense = cents_field(path, n, "suspense", f[11])?;
+        if f[12] != "Y" and f[12] != "N" {
+            return Err(bad(f"{path} line {n}: bad autopay '{f[12]}'"));
+        }
+        out.push(Loan {
+            loan: f[0].clone(),
+            state: f[1].clone(),
+            age: age,
+            term: term,
+            rate: rate,
+            balance: bal,
+            payment: payment,
+            escrow: escrow,
+            due: due,
+            past_due: k,
+            late_fees: late,
+            suspense: suspense,
+            autopay: f[12] == "Y",
+        });
+    }
+    Ok(out)
+}
+
+fn parse_payments(path: ref String, book: ref Book, text: ref String) -> Result[Vec[Pay], BatchError] {
+    let body = body_lines(path, text, pay_header())?;
+    let mut out: Vec[Pay] = Vec.new();
+    let mut seen: Map[String, i64] = Map.new();
+    let mut last = 0;
+    let pay_prefix = f"{book.code}P";
+    let ret_prefix = f"{book.code}R";
+    for i in 0..body.len() as i64 {
+        let n = i + 2;
+        let f = split_on(body[i], ",");
+        if f.len() != 6 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 6"));
+        }
+        if not (id_ok(f[0], pay_prefix, 5) or id_ok(f[0], ret_prefix, 5)) {
+            return Err(bad(f"{path} line {n}: payment '{f[0]}' is not {book.name}'s"));
+        }
+        if seen.contains_key(f[0]) {
+            return Err(bad(f"{path} line {n}: payment '{f[0]}' twice"));
+        }
+        let day = match day_of(f[1]) {
+            Some(d) if d >= 0 and d <= LAST_DAY => d,
+            _ => return Err(bad(f"{path} line {n}: bad date '{f[1]}'")),
+        };
+        if day < last {
+            return Err(bad(f"{path} line {n}: date {f[1]} is before the line above"));
+        }
+        last = day;
+        if not id_ok(f[2], book.code, 5) {
+            return Err(bad(f"{path} line {n}: bad loan '{f[2]}'"));
+        }
+        let amount = cents_field(path, n, "amount", f[3])?;
+        if amount == 0 {
+            return Err(bad(f"{path} line {n}: zero amount"));
+        }
+        let kind = f[0].substring(1, 2);
+        if f[4] == "NSF" {
+            if kind != "R" {
+                return Err(bad(f"{path} line {n}: a return numbered as a payment"));
+            }
+            let at = *seen.get(f[5]).unwrap_or(-1);
+            if at < 0 {
+                return Err(bad(f"{path} line {n}: returns '{f[5]}', which is not above"));
+            }
+            let orig = out[at];
+            if orig.loan != f[2] or orig.amount != amount or orig.channel != "CHK" {
+                return Err(bad(f"{path} line {n}: does not match the check it returns"));
+            }
+        } else {
+            if channel_index(f[4]) < 0 {
+                return Err(bad(f"{path} line {n}: bad channel '{f[4]}'"));
+            }
+            if kind != "P" or f[5] != "-" {
+                return Err(bad(f"{path} line {n}: a payment numbered or referenced as a return"));
+            }
+        }
+        seen.insert(f[0].clone(), out.len() as i64);
+        out.push(Pay { pid: f[0].clone(), day: day, loan: f[2].clone(), amount: amount, channel: f[4].clone(), returns: f[5].clone() });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ posting
+
+fn new_post(loans: ref Vec[Loan]) -> Post {
+    let mut bal: Vec[i64] = Vec.new();
+    let mut owed: Vec[i64] = Vec.new();
+    let mut late: Vec[i64] = Vec.new();
+    let mut susp: Vec[i64] = Vec.new();
+    for ln in loans {
+        bal.push(ln.balance);
+        owed.push(ln.past_due + 1);
+        late.push(ln.late_fees);
+        susp.push(ln.suspense);
+    }
+    let n = loans.len() as i64;
+    Post {
+        bal: bal,
+        owed: owed,
+        late: late,
+        susp: susp,
+        fee_done: Vec.filled(n, false),
+        status: Vec.filled(n, 0),
+        ch_n: Vec.filled(4, 0),
+        ch_amt: Vec.filled(4, 0),
+        nsf_n: 0,
+        nsf_amt: 0,
+        unk_n: 0,
+        unk_amt: 0,
+        ref_n: 0,
+        ref_amt: 0,
+        fee_paid: 0,
+        int_paid: 0,
+        prin_paid: 0,
+        esc_paid: 0,
+        curtail: 0,
+        fees_n: 0,
+        fees_amt: 0,
+        nsf_fees: 0,
+    }
+}
+
+fn assess(post: mut ref Post, loans: ref Vec[Loan], kind: i64, j: i64) {
+    let fee = late_fee(loans[j].payment, kind);
+    post.late[j] += fee;
+    post.fee_done[j] = true;
+    post.fees_n += 1;
+    post.fees_amt += fee;
+}
+
+fn post_book(book: ref Book, loans: ref Vec[Loan], pays: ref Vec[Pay]) -> Post {
+    let mut post = new_post(loans);
+    let mut index: Map[String, i64] = Map.new();
+    for j in 0..loans.len() as i64 {
+        index.insert(loans[j].loan.clone(), j);
+    }
+    let mut returned: Set[String] = Set.new();
+    for p in pays {
+        if p.channel == "NSF" {
+            returned.insert(p.returns.clone());
+        }
+    }
+    for p in pays {
+        let j = *index.get(p.loan).unwrap_or(-1);
+        if p.channel == "NSF" {
+            if j >= 0 and post.status[j] == 0 {
+                post.late[j] += NSF_FEE;
+                post.nsf_fees += 1;
+            }
+            continue;
+        }
+        let c = channel_index(p.channel);
+        post.ch_n[c] += 1;
+        post.ch_amt[c] += p.amount;
+        if returned.contains(p.pid) {
+            post.nsf_n += 1;
+            post.nsf_amt += p.amount;
+            continue;
+        }
+        if j < 0 {
+            post.unk_n += 1;
+            post.unk_amt += p.amount;
+            continue;
+        }
+        if post.status[j] != 0 {
+            post.ref_n += 1;
+            post.ref_amt += p.amount;
+            continue;
+        }
+        let ln = loans[j];
+        if not post.fee_done[j] and post.owed[j] > 0 and p.day > ln.due - 1 + GRACE {
+            assess(mut post, loans, book.kind, j);
+        }
+        let mut funds = p.amount + post.susp[j];
+        post.susp[j] = 0;
+        let f = min2(funds, post.late[j]);
+        post.late[j] -= f;
+        post.fee_paid += f;
+        funds -= f;
+        let inst = ln.payment + ln.escrow;
+        while post.owed[j] > 0 and funds >= inst and post.bal[j] > 0 {
+            let interest = interest_of(post.bal[j], ln.rate);
+            let principal = min2(max2(ln.payment - interest, 0), post.bal[j]);
+            post.bal[j] -= principal;
+            post.int_paid += interest;
+            post.prin_paid += principal;
+            post.esc_paid += ln.escrow;
+            funds -= inst;
+            post.owed[j] -= 1;
+        }
+        if funds > 0 and post.owed[j] == 0 {
+            if funds >= post.bal[j] {
+                post.curtail += post.bal[j];
+                if funds > post.bal[j] {
+                    post.ref_n += 1;
+                    post.ref_amt += funds - post.bal[j];
+                }
+                post.bal[j] = 0;
+            } else {
+                post.curtail += funds;
+                post.bal[j] -= funds;
+            }
+            funds = 0;
+        }
+        if post.bal[j] == 0 {
+            post.status[j] = 1;
+            post.owed[j] = 0;
+            if funds > 0 {
+                post.ref_n += 1;
+                post.ref_amt += funds;
+            }
+            funds = 0;
+        }
+        post.susp[j] = funds;
+    }
+    for j in 0..loans.len() as i64 {
+        if post.status[j] != 0 {
+            continue;
+        }
+        if not post.fee_done[j] and post.owed[j] > 0 and LAST_DAY > loans[j].due - 1 + GRACE {
+            assess(mut post, loans, book.kind, j);
+        }
+        if post.owed[j] >= ACTION_K[book.kind] {
+            post.status[j] = 2;
+        }
+    }
+    post
+}
+
+// ------------------------------------------------------------ reports
+
+fn cash_report(book: ref Book, post: ref Post) -> Vec[String] {
+    let mut chans: Vec[String] = Vec.new();
+    for c in 0..4 {
+        chans.push(f"{CHANNELS[c]} {post.ch_n[c]} {money(post.ch_amt[c])}");
+    }
+    let mut held_n = 0;
+    let mut held = 0;
+    for s in post.susp {
+        if s > 0 {
+            held_n += 1;
+            held += s;
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    out.push(f"{book.name} cash: {group3(sum_of(post.ch_n))} payments, {money(sum_of(post.ch_amt))} ({chans.join(", ")}); {post.nsf_n} returned, {money(post.nsf_amt)}; {post.unk_n} unidentified, {money(post.unk_amt)}; {post.ref_n} refunds, {money(post.ref_amt)}");
+    out.push(f"  applied to fees {money(post.fee_paid)}, interest {money(post.int_paid)}, principal {money(post.prin_paid)}, escrow {money(post.esc_paid)}, curtailments {money(post.curtail)}; {held_n} loans hold {money(held)} in suspense");
+    out
+}
+
+// The bucket a loan ends the month in; 5 is paid off.
+fn end_bucket(post: ref Post, j: i64) -> i64 {
+    if post.status[j] == 1 {
+        return 5;
+    }
+    min2(post.owed[j], 4)
+}
+
+fn roll_report(book: ref Book, loans: ref Vec[Loan], post: ref Post) -> Vec[String] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..5 {
+        grid.push(Vec.filled(6, 0));
+    }
+    let mut cured = 0;
+    let mut worse = 0;
+    let mut same = 0;
+    for j in 0..loans.len() as i64 {
+        let a = min2(loans[j].past_due, 4);
+        let b = end_bucket(post, j);
+        grid[a][b] += 1;
+        if b == 5 {
+            continue;
+        }
+        if a > 0 and b == 0 {
+            cured += 1;
+        } else if b > a {
+            worse += 1;
+        } else if b == a {
+            same += 1;
+        }
+    }
+    let mut paid = 0;
+    for a in 0..5 {
+        paid += grid[a][5];
+    }
+    let mut out: Vec[String] = Vec.new();
+    out.push(f"{book.name} roll: {cured} cured, {worse} rolled worse, {same} stayed, {paid} paid off");
+    for a in 0..5 {
+        let total = sum_of(grid[a]);
+        if total == 0 {
+            continue;
+        }
+        let mut cells: Vec[String] = Vec.new();
+        for b in 0..6 {
+            if grid[a][b] > 0 {
+                cells.push(f"{BUCKETS[b]} {grid[a][b]}");
+            }
+        }
+        out.push(f"  {BUCKETS[a]}: {total} -> {cells.join(", ")}");
+    }
+    out
+}
+
+// Still on the book at month end: open, or sent to the book's action
+// other than a charge-off.
+fn on_book(book: ref Book, post: ref Post, j: i64) -> bool {
+    post.status[j] == 0 or (post.status[j] == 2 and book.kind != 3)
+}
+
+fn balance_report(book: ref Book, loans: ref Vec[Loan], post: ref Post) -> String {
+    let mut n = 0;
+    let mut tot = 0;
+    let mut weighted = 0;
+    let mut sums: Vec[i64] = Vec.filled(12, 0);
+    let mut counts: Vec[i64] = Vec.filled(12, 0);
+    for j in 0..loans.len() as i64 {
+        if not on_book(book, post, j) {
+            continue;
+        }
+        n += 1;
+        tot += post.bal[j];
+        weighted += post.bal[j] * loans[j].rate;
+        let mut s = 0;
+        while STATES[s] != loans[j].state {
+            s += 1;
+        }
+        sums[s] += post.bal[j];
+        counts[s] += 1;
+    }
+    let w = (weighted * 2 + tot) / (2 * tot);
+    let mut order: Vec[i64] = Vec.new();
+    for s in 0..12 {
+        if counts[s] > 0 {
+            order.push(s);
+        }
+    }
+    order.sort_by(|a, b| if sums[a] != sums[b] { sums[b].cmp(sums[a]) } else { STATES[a].cmp(STATES[b]) });
+    let mut top: Vec[String] = Vec.new();
+    for k in 0..3 {
+        let s = order[k];
+        top.push(f"{STATES[s]} {money(sums[s])} ({counts[s]})");
+    }
+    let mut paid = 0;
+    for s in post.status {
+        if s == 1 {
+            paid += 1;
+        }
+    }
+    f"{book.name} book: {group3(n)} loans, {money(tot)}, {w / 100}.{w % 100:02}% weighted rate; {paid} paid off; top states {top.join(", ")}"
+}
+
+fn action_report(book: ref Book, loans: ref Vec[Loan], post: ref Post) -> String {
+    let mut acts: Vec[i64] = Vec.new();
+    let mut bal = 0;
+    for j in 0..loans.len() as i64 {
+        if post.status[j] == 2 {
+            acts.push(j);
+            bal += post.bal[j];
+        }
+    }
+    let mut line = f"{book.name} actions: {acts.len()} {ACTION_NAMES[book.kind]} ({money(bal)}); {post.fees_n} late fees, {money(post.fees_amt)}; {post.nsf_fees} NSF fees";
+    if acts.len() > 0 {
+        let j = acts[0];
+        line.push_str(f"; first {loans[j].loan}, {post.owed[j] * 30} days past due, {money(post.bal[j])}");
+    }
+    line
+}
+
+// ------------------------------------------------------------ the desk
+
+fn new_desk() -> Desk {
+    Desk { left: Vec.filled(DESK_N, DAY_CAP), log: Vec.new() }
+}
+
+// Queue a book's delinquent accounts, the most installments past due and
+// then the largest balance first; each call goes in the first day after
+// the account's last call that has a slot left.
+fn queue_book(desk: mut ref Desk, book: ref Book, loans: ref Vec[Loan], post: ref Post) -> String {
+    let mut queue: Vec[i64] = Vec.new();
+    for j in 0..loans.len() as i64 {
+        if post.status[j] == 0 and post.owed[j] > 0 {
+            queue.push(j);
+        }
+    }
+    queue.sort_by(|a, b| if post.owed[a] != post.owed[b] {
+        post.owed[b].cmp(post.owed[a])
+    } else if post.bal[a] != post.bal[b] {
+        post.bal[b].cmp(post.bal[a])
+    } else {
+        loans[a].loan.cmp(loans[b].loan)
+    });
+    let mut full = 0;
+    let mut part = 0;
+    let mut none = 0;
+    let mut bal = 0;
+    let mut none_bal = 0;
+    for j in queue {
+        let need = min2(post.owed[j], MAX_CALLS);
+        bal += post.bal[j];
+        let mut placed = 0;
+        let mut d = 0;
+        while placed < need {
+            while d < DESK_N and desk.left[d] == 0 {
+                d += 1;
+            }
+            if d == DESK_N {
+                break;
+            }
+            desk.left[d] -= 1;
+            placed += 1;
+            desk.log.push(f"{date_of(DESK_DAYS[d])} {loans[j].loan} call {placed} of {need}");
+            d += 1;
+        }
+        if placed == need {
+            full += 1;
+        } else if placed > 0 {
+            part += 1;
+        } else {
+            none += 1;
+            none_bal += post.bal[j];
+        }
+    }
+    f"{book.name} desk: {queue.len()} accounts, {money(bal)}: {full} worked, {part} part-worked, {none} not reached ({money(none_bal)})"
+}
+
+fn desk_summary(desk: ref Desk) -> String {
+    let cap = DAY_CAP * DESK_N;
+    let used = cap - sum_of(desk.left);
+    let mut days: Vec[String] = Vec.new();
+    for d in 0..DESK_N {
+        days.push(f"{short_date(DESK_DAYS[d])} {DAY_CAP - desk.left[d]}");
+    }
+    f"desk: {used} of {cap} calls booked; {days.join(", ")}"
+}
+
+fn file_line(name: Str, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let mortgage = Book { name: "mortgage", code: "M", kind: 0, seed: 311, count: 400, strangers: 4 };
+    let auto = Book { name: "auto", code: "A", kind: 1, seed: 422, count: 700, strangers: 6 };
+    let student = Book { name: "student", code: "S", kind: 2, seed: 533, count: 500, strangers: 5 };
+    let personal = Book { name: "personal", code: "P", kind: 3, seed: 644, count: 600, strangers: 7 };
+
+    // Four loan tapes, then four payment files.
+    let l1 = build_loans(mortgage);
+    let l2 = build_loans(auto);
+    let l3 = build_loans(student);
+    let l4 = build_loans(personal);
+    let x1 = build_payments(mortgage, l1);
+    let x2 = build_payments(auto, l2);
+    let x3 = build_payments(student, l3);
+    let x4 = build_payments(personal, l4);
+
+    // Eight writes.
+    let w1 = fs.write("mortgage_loans.csv", encode_loans(l1));
+    let w2 = fs.write("mortgage_payments.csv", encode_payments(x1));
+    let w3 = fs.write("auto_loans.csv", encode_loans(l2));
+    let w4 = fs.write("auto_payments.csv", encode_payments(x2));
+    let w5 = fs.write("student_loans.csv", encode_loans(l3));
+    let w6 = fs.write("student_payments.csv", encode_payments(x3));
+    let w7 = fs.write("personal_loans.csv", encode_loans(l4));
+    let w8 = fs.write("personal_payments.csv", encode_payments(x4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() {
+        return Err(bad("could not write the batch files"));
+    }
+
+    // A copy of auto's payments with one amount cut short, and a copy of
+    // student's with one payment dated before the line above it.
+    let whole = read_text("auto_payments.csv")?;
+    let amount = split_on(split_on(whole, "\n")[90], ",")[3].clone();
+    if fs.write("auto_payments.bad", damage(whole, 90, 3, amount.substring(0, amount.len() - 1))).is_err() {
+        return Err(bad("could not write auto_payments.bad"));
+    }
+    let whole2 = read_text("student_payments.csv")?;
+    let earlier = split_on(split_on(whole2, "\n")[30], ",")[1].clone();
+    if fs.write("student_payments.bad", damage(whole2, 250, 1, earlier)).is_err() {
+        return Err(bad("could not write student_payments.bad"));
+    }
+
+    // Eight reads.
+    let t1 = read_text("mortgage_loans.csv")?;
+    let u1 = read_text("mortgage_payments.csv")?;
+    let t2 = read_text("auto_loans.csv")?;
+    let u2 = read_text("auto_payments.csv")?;
+    let t3 = read_text("student_loans.csv")?;
+    let u3 = read_text("student_payments.csv")?;
+    let t4 = read_text("personal_loans.csv")?;
+    let u4 = read_text("personal_payments.csv")?;
+    println(file_line("mortgage loans", t1));
+    println(file_line("mortgage payments", u1));
+    println(file_line("auto loans", t2));
+    println(file_line("auto payments", u2));
+    println(file_line("student loans", t3));
+    println(file_line("student payments", u3));
+    println(file_line("personal loans", t4));
+    println(file_line("personal payments", u4));
+
+    // Four loan tapes, then four payment files. Each can fail with `?`,
+    // so a parallel run has to report the first failure in source order.
+    let g1 = parse_loans("mortgage_loans.csv", mortgage, t1)?;
+    let g2 = parse_loans("auto_loans.csv", auto, t2)?;
+    let g3 = parse_loans("student_loans.csv", student, t3)?;
+    let g4 = parse_loans("personal_loans.csv", personal, t4)?;
+    let p1 = parse_payments("mortgage_payments.csv", mortgage, u1)?;
+    let p2 = parse_payments("auto_payments.csv", auto, u2)?;
+    let p3 = parse_payments("student_payments.csv", student, u3)?;
+    let p4 = parse_payments("personal_payments.csv", personal, u4)?;
+    match parse_payments("auto_payments.bad", auto, read_text("auto_payments.bad")?) {
+        Ok(_) => println("auto_payments.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_payments("student_payments.bad", student, read_text("student_payments.bad")?) {
+        Ok(_) => println("student_payments.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_loans("personal_loans.csv", mortgage, t4) {
+        Ok(_) => println("personal_loans.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = g1 == l1 and g2 == l2 and g3 == l3 and g4 == l4 and p1 == x1 and p2 == x2 and p3 == x3 and p4 == x4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four postings, the hot group.
+    let o1 = post_book(mortgage, g1, p1);
+    let o2 = post_book(auto, g2, p2);
+    let o3 = post_book(student, g3, p3);
+    let o4 = post_book(personal, g4, p4);
+
+    // Reports that only read what came before.
+    let c1 = cash_report(mortgage, o1);
+    let c2 = cash_report(auto, o2);
+    let c3 = cash_report(student, o3);
+    let c4 = cash_report(personal, o4);
+    let r1 = roll_report(mortgage, g1, o1);
+    let r2 = roll_report(auto, g2, o2);
+    let r3 = roll_report(student, g3, o3);
+    let r4 = roll_report(personal, g4, o4);
+    let b1 = balance_report(mortgage, g1, o1);
+    let b2 = balance_report(auto, g2, o2);
+    let b3 = balance_report(student, g3, o3);
+    let b4 = balance_report(personal, g4, o4);
+    let a1 = action_report(mortgage, g1, o1);
+    let a2 = action_report(auto, g2, o2);
+    let a3 = action_report(student, g3, o3);
+    let a4 = action_report(personal, g4, o4);
+    for lines in [c1, c2, c3, c4, r1, r2, r3, r4] {
+        for line in lines {
+            println(line);
+        }
+    }
+    for line in [b1, b2, b3, b4, a1, a2, a3, a4] {
+        println(line);
+    }
+
+    // One collections desk: which accounts get their calls depends on the
+    // slots the books queued before them took, so the books are queued in
+    // order.
+    let mut desk = new_desk();
+    println(queue_book(mut desk, mortgage, g1, o1));
+    println(queue_book(mut desk, auto, g2, o2));
+    println(queue_book(mut desk, student, g3, o3));
+    println(queue_book(mut desk, personal, g4, o4));
+    println(desk_summary(desk));
+    if fs.write("collections.log", f"{desk.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write collections.log"));
+    }
+    let back = read_text("collections.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"collections.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["mortgage_loans.csv", "mortgage_payments.csv", "auto_loans.csv", "auto_payments.csv", "student_loans.csv", "student_payments.csv", "personal_loans.csv", "personal_payments.csv", "auto_payments.bad", "student_payments.bad", "collections.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"loan_servicing failed: {e.describe()}"),
+    }
+}
