@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/964-least-operators-to-express-number/bench/least_ops_express_target.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "f2a609721"
+extracted_src = "d9abb09a"

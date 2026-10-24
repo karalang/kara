@@ -1,0 +1,41 @@
+// Benchmark: LeetCode #964 Least Operators to Express Number -- the ★
+// arm, digit DP, on every x from 2 to 100 and 2000 targets spread below
+// LeetCode's largest, 2 * 10^8, each round's targets one higher than the
+// last's. Mirrors least_ops_express_target.c, .rs, .py and go-seq/.
+fn least_ops_express_target(x: i64, target: i64) -> i64 {
+    let mut t = target;
+    let mut pos = 0;
+    let mut neg = 0;
+    let mut k = 0;
+    while t > 0 {
+        let cur = t % x;
+        t = t / x;
+        if k > 0 {
+            let p = (cur * k + pos).min((cur + 1) * k + neg);
+            let n = ((x - cur) * k + pos).min((x - cur - 1) * k + neg);
+            pos = p;
+            neg = n;
+        } else {
+            pos = cur * 2;
+            neg = (x - cur) * 2;
+        }
+        k += 1;
+    }
+    pos.min(k + neg) - 1
+}
+
+fn main() {
+    let rounds = 80;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for x in 2..101 {
+            for j in 0..2000 {
+                let n = least_ops_express_target(x, 200000000 - 99991 * j - r);
+                total += n;
+                check = (check * 31 + n) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over x from 2 to 100 and 2000 targets: {total} operators, checksum {check}");
+}

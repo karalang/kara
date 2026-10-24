@@ -1,0 +1,87 @@
+// LeetCode #964: Least Operators to Express Number -- from the top digit.
+//
+// Read target's base-x digits from the highest. Let N be the number the
+// digits read so far make, at place i. exact is the cheapest way to make
+// N * x^i and over the cheapest to make (N + 1) * x^i, each x^i costing
+// i operators (2 at place 0). One more digit d makes the next N either
+// from exact plus d copies of the next power or from over minus x - d of
+// them, and the next N + 1 from exact plus d + 1 or over minus x - d - 1.
+// Above the top digit N is 0: exact costs nothing and over is one power.
+// O(log target).
+fn least_ops_express_target(x: i64, target: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut t = target;
+    while t > 0 {
+        digits.push(t % x);
+        t = t / x;
+    }
+    let top = digits.len();
+    let mut exact = 0;
+    let mut over = top;
+    let mut i = top - 1;
+    while i >= 0 {
+        let c = if i == 0 { 2 } else { i };
+        let d = digits[i];
+        let e = (exact + d * c).min(over + (x - d) * c);
+        let o = (exact + (d + 1) * c).min(over + (x - d - 1) * c);
+        exact = e;
+        over = o;
+        i -= 1;
+    }
+    exact - 1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(i64, i64)] = vec![
+        (3, 19),
+        (5, 501),
+        (100, 100000000),
+        (2, 1),
+        (2, 2),
+        (3, 2),
+        (100, 1),
+        (100, 99),
+        (100, 50),
+        (2, 3),
+        (7, 343),
+        (7, 342),
+    ];
+    for (x, target) in cases.iter() {
+        println(f"x = {x}, target = {target}: {least_ops_express_target(*x, *target)}");
+    }
+    // every target from 1 to 300 for every x from 2 to 12
+    let mut total = 0;
+    let mut check = 0;
+    for x in 2..13 {
+        for target in 1..301 {
+            let n = least_ops_express_target(x, target);
+            total += n;
+            check = (check * 31 + n) % 1000000007;
+        }
+    }
+    println(f"targets 1 to 300 for x from 2 to 12: {total} operators, checksum {check}");
+    // 300 random cases, x from 2 to 100, target up to 2 * 10^8
+    let mut seed = 964;
+    total = 0;
+    check = 0;
+    for _ in 0..300 {
+        let x = 2 + next_random(mut seed) % 99;
+        let target = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 200000000;
+        let n = least_ops_express_target(x, target);
+        total += n;
+        check = (check * 31 + n) % 1000000007;
+    }
+    println(f"300 random cases up to 2 * 10^8: {total} operators, checksum {check}");
+    // LeetCode's largest targets, and exact powers
+    for (x, target) in [(2, 200000000), (100, 200000000), (99, 199999999), (2, 134217728), (2, 134217727), (3, 129140163), (10, 100000000), (10, 99999999)] {
+        println(f"x = {x}, target = {target}: {least_ops_express_target(x, target)}");
+    }
+}

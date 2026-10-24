@@ -1,0 +1,22 @@
+x = 3, target = 19: 5
+x = 5, target = 501: 8
+x = 100, target = 100000000: 3
+x = 2, target = 1: 1
+x = 2, target = 2: 0
+x = 3, target = 2: 2
+x = 100, target = 1: 1
+x = 100, target = 99: 2
+x = 100, target = 50: 99
+x = 2, target = 3: 2
+x = 7, target = 343: 2
+x = 7, target = 342: 4
+targets 1 to 300 for x from 2 to 12: 30197 operators, checksum 559070473
+300 random cases up to 2 * 10^8: 40821 operators, checksum 33131926
+x = 2, target = 200000000: 113
+x = 100, target = 200000000: 7
+x = 99, target = 199999999: 65
+x = 2, target = 134217728: 26
+x = 2, target = 134217727: 28
+x = 3, target = 129140163: 16
+x = 10, target = 100000000: 7
+x = 10, target = 99999999: 9

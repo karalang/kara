@@ -1,0 +1,304 @@
+// LeetCode #964: Least Operators to Express Number -- differential.
+//
+// The five arms against the statement read as a shortest path over sums
+// of powers, and against each other, with bounds the answer must keep.
+
+// ---- star ----
+
+fn star_least_ops_express_target(x: i64, target: i64) -> i64 {
+    let mut t = target;
+    let mut pos = 0;
+    let mut neg = 0;
+    let mut k = 0;
+    while t > 0 {
+        let cur = t % x;
+        t = t / x;
+        if k > 0 {
+            let p = (cur * k + pos).min((cur + 1) * k + neg);
+            let n = ((x - cur) * k + pos).min((x - cur - 1) * k + neg);
+            pos = p;
+            neg = n;
+        } else {
+            pos = cur * 2;
+            neg = (x - cur) * 2;
+        }
+        k += 1;
+    }
+    pos.min(k + neg) - 1
+}
+
+// ---- memo ----
+
+fn memo_cost(i: i64) -> i64 {
+    if i == 0 { 2 } else { i }
+}
+
+fn memo_best(x: i64, i: i64, t: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if t == 0 {
+        return 0;
+    }
+    if t == 1 {
+        return memo_cost(i);
+    }
+    if let Some(v) = memo.get((i, t)) {
+        return *v;
+    }
+    let r = t % x;
+    let mut b = r * memo_cost(i) + memo_best(x, i + 1, t / x, mut memo);
+    if r > 0 {
+        b = b.min((x - r) * memo_cost(i) + memo_best(x, i + 1, t / x + 1, mut memo));
+    }
+    memo.insert((i, t), b);
+    b
+}
+
+fn memo_least_ops_express_target(x: i64, target: i64) -> i64 {
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    memo_best(x, 0, target, mut memo) - 1
+}
+
+// ---- msd ----
+
+fn msd_least_ops_express_target(x: i64, target: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut t = target;
+    while t > 0 {
+        digits.push(t % x);
+        t = t / x;
+    }
+    let top = digits.len();
+    let mut exact = 0;
+    let mut over = top;
+    let mut i = top - 1;
+    while i >= 0 {
+        let c = if i == 0 { 2 } else { i };
+        let d = digits[i];
+        let e = (exact + d * c).min(over + (x - d) * c);
+        let o = (exact + (d + 1) * c).min(over + (x - d - 1) * c);
+        exact = e;
+        over = o;
+        i -= 1;
+    }
+    exact - 1
+}
+
+// ---- dijkstra ----
+
+fn dijkstra_least_ops_express_target(x: i64, target: i64) -> i64 {
+    let mut done: Set[i64] = Set.new();
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((0, target));
+    while let Some((d, t)) = queue.pop() {
+        if t == 0 {
+            return d - 1;
+        }
+        if done.contains(t) {
+            continue;
+        }
+        done.insert(t);
+        let mut p = 1;
+        let mut k = 0;
+        while p * x <= t {
+            p *= x;
+            k += 1;
+        }
+        let c = if k == 0 { 2 } else { k };
+        if not done.contains(t - p) {
+            queue.push((d + c, t - p));
+        }
+        if not done.contains(p * x - t) {
+            queue.push((d + k + 1, p * x - t));
+        }
+    }
+    -1
+}
+
+// ---- relax ----
+
+fn relax_least_ops_express_target(x: i64, target: i64) -> i64 {
+    let mut cost: Map[i64, i64] = Map.new();
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    cost.insert(target, 0);
+    queue.push_back(target);
+    while let Some(t) = queue.pop_front() {
+        if t == 0 {
+            continue;
+        }
+        let d = cost[t];
+        let mut p = 1;
+        let mut k = 0;
+        while p * x <= t {
+            p *= x;
+            k += 1;
+        }
+        let c = if k == 0 { 2 } else { k };
+        for (next, step) in [(t - p, c), (p * x - t, k + 1)] {
+            let better = match cost.get(next) {
+                Some(old) => d + step < *old,
+                None => true,
+            };
+            if better {
+                cost.insert(next, d + step);
+                queue.push_back(next);
+            }
+        }
+    }
+    cost[0] - 1
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read as a shortest path: an expression without
+// parentheses is a sum of signed terms, each a power of x (x^k costs k
+// operators, its k - 1 multiplications and its sign, and x / x costs 2).
+// So walk the integers from 0 to target by adding or subtracting powers,
+// cheapest first, by distance buckets, keeping every partial sum within
+// x * (target + 2) of 0. The first term needs no sign, so one comes off.
+fn literal(x: i64, target: i64) -> i64 {
+    let bound = x * (target + 2);
+    let mut powers: Vec[(i64, i64)] = Vec.new();
+    let mut p = 1;
+    let mut k = 0;
+    while p <= 2 * bound {
+        powers.push((p, if k == 0 { 2 } else { k }));
+        p *= x;
+        k += 1;
+    }
+    let size = 2 * bound + 1;
+    let mut dist: Vec[i64] = Vec.filled(size, -1);
+    let mut buckets: Vec[Vec[i64]] = vec![vec![0]];
+    let mut d = 0;
+    while d < buckets.len() {
+        let mut b = 0;
+        while b < buckets[d].len() {
+            let v = buckets[d][b];
+            b += 1;
+            if dist[v + bound] >= 0 {
+                continue;
+            }
+            dist[v + bound] = d;
+            if v == target {
+                return d - 1;
+            }
+            for (step, c) in powers.iter() {
+                for w in [v + *step, v - *step] {
+                    if w >= -bound and w <= bound and dist[w + bound] < 0 {
+                        while buckets.len() <= d + *c {
+                            buckets.push(Vec.new());
+                        }
+                        buckets[d + *c].push(w);
+                    }
+                }
+            }
+        }
+        d += 1;
+    }
+    -1
+}
+
+fn arm(a: i64, x: i64, target: i64) -> i64 {
+    if a == 0 {
+        star_least_ops_express_target(x, target)
+    } else if a == 1 {
+        memo_least_ops_express_target(x, target)
+    } else if a == 2 {
+        msd_least_ops_express_target(x, target)
+    } else if a == 3 {
+        dijkstra_least_ops_express_target(x, target)
+    } else {
+        relax_least_ops_express_target(x, target)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, x: i64, target: i64, small: bool) -> i64 {
+    let truth = if small { literal(x, target) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, x, target));
+    }
+    // a power of x up to 2 * 10^8, from x^1 up
+    let mut k = 1 + next_random(mut seed) % 27;
+    let mut power = x;
+    let mut j = 1;
+    while j < k and power * x <= 200000000 {
+        power *= x;
+        j += 1;
+    }
+    k = j;
+    let more = 1 + next_random(mut seed) % 1000;
+    for a in 0..5 {
+        let n = got[a];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, n == truth);
+        }
+        // P2: one more than target costs at most 2 more or 2 fewer
+        let next = arm(a, x, target + 1);
+        check(mut t, 2, next <= n + 2 and n <= next + 2);
+        // P3: x^k alone costs its k - 1 multiplications
+        check(mut t, 3, arm(a, x, power) == k - 1);
+        // P4: target + m costs at most both costs and one more
+        check(mut t, 4, arm(a, x, target + more) <= n + arm(a, x, more) + 1);
+        // P5: x times target costs at most twice as much and one more,
+        // every term multiplied by x once
+        check(mut t, 5, arm(a, x, target * x) <= 2 * n + 1);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == n {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 964;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 cases with x from 2 to 9 and target from 1 to 100, against the
+    // statement, then 200 with x from 2 to 100 and target up to 2 * 10^8
+    for c in 0..3200 {
+        let small = c < 3000;
+        let (x, target) = if small {
+            (2 + next_random(mut seed) % 8, 1 + next_random(mut seed) % 100)
+        } else {
+            (2 + next_random(mut seed) % 99, 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 200000000)
+        };
+        let n = properties(mut t, mut seed, x, target, small);
+        total += n;
+        check_sum = (check_sum * 31 + n) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases: {total} operators, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
