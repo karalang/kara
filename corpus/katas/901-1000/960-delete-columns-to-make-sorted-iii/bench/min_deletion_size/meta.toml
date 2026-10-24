@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/960-delete-columns-to-make-sorted-iii/bench/min_deletion_size.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 960 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "ac78eb76f"
+classified_with = "540545c5e"
 extracted_src = "bc0147df"
