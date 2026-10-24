@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/985-sum-of-even-numbers-after-queries/sum_even_after_queries_blocks.kara"
+dedup_of = []
+tags = []
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "3eefb7774"
+extracted_src = "0dd18546"

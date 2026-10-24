@@ -1,0 +1,337 @@
+// LeetCode #985: Sum of Even Numbers After Queries -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random values and queries.
+
+// ---- star ----
+
+fn star_sum_even_after_queries(nums: Vec[i64], queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut a = nums.clone();
+    let mut even = 0;
+    for x in a.iter() {
+        if *x % 2 == 0 {
+            even += *x;
+        }
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    for (val, index) in queries {
+        if a[index] % 2 == 0 {
+            even -= a[index];
+        }
+        a[index] += val;
+        if a[index] % 2 == 0 {
+            even += a[index];
+        }
+        answer.push(even);
+    }
+    answer
+}
+
+// ---- fenwick ----
+
+fn fenwick_add(tree: mut ref Vec[i64], i: i64, delta: i64) {
+    let mut k = i + 1;
+    while k < tree.len() {
+        tree[k] += delta;
+        k += k & -k;
+    }
+}
+
+fn fenwick_total(tree: ref Vec[i64], i: i64) -> i64 {
+    let mut s = 0;
+    let mut k = i;
+    while k > 0 {
+        s += tree[k];
+        k -= k & -k;
+    }
+    s
+}
+
+fn fenwick_even_part(x: i64) -> i64 {
+    if x % 2 == 0 { x } else { 0 }
+}
+
+fn fenwick_sum_even_after_queries(nums: Vec[i64], queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let n = nums.len();
+    let mut a = nums.clone();
+    let mut tree: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        fenwick_add(mut tree, i, fenwick_even_part(a[i]));
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    for (val, index) in queries {
+        let before = fenwick_even_part(a[index]);
+        a[index] += val;
+        fenwick_add(mut tree, index, fenwick_even_part(a[index]) - before);
+        answer.push(fenwick_total(tree, n));
+    }
+    answer
+}
+
+// ---- blocks ----
+
+fn blocks_sum_even_after_queries(nums: Vec[i64], queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let n = nums.len();
+    let mut size = 1;
+    while size * size < n {
+        size += 1;
+    }
+    let count = (n + size - 1) / size;
+    let mut a = nums.clone();
+    let mut sums: Vec[i64] = Vec.filled(count, 0);
+    for i in 0..n {
+        if a[i] % 2 == 0 {
+            sums[i / size] += a[i];
+        }
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    for (val, index) in queries {
+        a[index] += val;
+        let k = index / size;
+        let mut s = 0;
+        for i in k * size..(n.min((k + 1) * size)) {
+            if a[i] % 2 == 0 {
+                s += a[i];
+            }
+        }
+        sums[k] = s;
+        let mut even = 0;
+        for b in sums.iter() {
+            even += *b;
+        }
+        answer.push(even);
+    }
+    answer
+}
+
+// ---- parity ----
+
+fn parity_sum_even_after_queries(nums: Vec[i64], queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut a = nums.clone();
+    let mut even = a.iter().filter(|x| *x % 2 == 0).sum();
+    let mut answer: Vec[i64] = Vec.new();
+    for (val, index) in queries {
+        let old = a[index];
+        let new = old + val;
+        a[index] = new;
+        even += match (old % 2 == 0, new % 2 == 0) {
+            (true, true) => val,
+            (false, true) => new,
+            (true, false) => -old,
+            (false, false) => 0,
+        };
+        answer.push(even);
+    }
+    answer
+}
+
+// ---- reverse ----
+
+fn reverse_sum_even_after_queries(nums: Vec[i64], queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let q = queries.len();
+    let mut a = nums.clone();
+    for (val, index) in queries.iter() {
+        a[index] += val;
+    }
+    let mut even = 0;
+    for x in a.iter() {
+        if *x % 2 == 0 {
+            even += *x;
+        }
+    }
+    let mut answer: Vec[i64] = Vec.filled(q, 0);
+    let mut k = q - 1;
+    while k >= 0 {
+        answer[k] = even;
+        let (val, index) = queries[k];
+        if a[index] % 2 == 0 {
+            even -= a[index];
+        }
+        a[index] -= val;
+        if a[index] % 2 == 0 {
+            even += a[index];
+        }
+        k -= 1;
+    }
+    answer
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` values and `q` queries (value, index), the values and the amounts
+// added between -top and top.
+fn random_case(n: i64, q: i64, top: i64, seed: mut ref i64) -> (Vec[i64], Vec[(i64, i64)]) {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    let mut queries: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..q {
+        let val = next_random(mut seed) % (2 * top + 1) - top;
+        queries.push((val, next_random(mut seed) % n));
+    }
+    (nums, queries)
+}
+
+fn arm(k: i64, nums: ref Vec[i64], queries: ref Vec[(i64, i64)]) -> Vec[i64] {
+    if k == 0 {
+        star_sum_even_after_queries(nums, queries)
+    } else if k == 1 {
+        fenwick_sum_even_after_queries(nums, queries)
+    } else if k == 2 {
+        blocks_sum_even_after_queries(nums, queries)
+    } else if k == 3 {
+        parity_sum_even_after_queries(nums, queries)
+    } else {
+        reverse_sum_even_after_queries(nums, queries)
+    }
+}
+
+// The statement read literally: apply each query in turn, then add up
+// every value that is even.
+fn literal(nums: ref Vec[i64], queries: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut a = nums.clone();
+    let mut answer: Vec[i64] = Vec.new();
+    for (val, index) in queries.iter() {
+        a[index] = a[index] + val;
+        let mut s = 0;
+        for i in 0..a.len() {
+            if a[i] % 2 == 0 {
+                s += a[i];
+            }
+        }
+        answer.push(s);
+    }
+    answer
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, nums: Vec[i64], queries: Vec[(i64, i64)], small: bool, seed: mut ref i64) -> Vec[i64] {
+    let q = queries.len();
+    let truth = if small { literal(nums, queries) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, nums, queries));
+    }
+    // a query that adds nothing, put in after a random query
+    let at = 1 + next_random(mut seed) % q;
+    let place = next_random(mut seed) % nums.len();
+    let mut idle: Vec[(i64, i64)] = Vec.new();
+    for i in 0..q {
+        idle.push(queries[i]);
+        if i + 1 == at {
+            idle.push((0, place));
+        }
+    }
+    // every value and amount doubled, and the running totals of all the
+    // values
+    let doubled_nums: Vec[i64] = nums.iter().map(|x| 2 * x).collect();
+    let doubled: Vec[(i64, i64)] = queries.iter().map(|(v, i)| (2 * v, i)).collect();
+    let mut running: Vec[i64] = Vec.new();
+    let mut all = 0;
+    for x in nums.iter() {
+        all += x;
+    }
+    for (v, _) in queries.iter() {
+        all += v;
+        running.push(all);
+    }
+    // the last query undone, and the queries backwards
+    let (last_val, last_index) = queries[q - 1];
+    let mut undone = queries.clone();
+    undone.push((-last_val, last_index));
+    let mut backwards = queries.clone();
+    backwards.reverse();
+    for k in 0..5 {
+        let a = got[k].clone();
+        // P1: the statement's answers, on the first 3000 cases
+        if small {
+            check(mut tally, 1, a == truth);
+        }
+        // P2: a query that adds nothing repeats the answer before it
+        let mut want = a.clone();
+        want.insert(at, a[at - 1]);
+        check(mut tally, 2, arm(k, nums, idle) == want);
+        // P3: with every value even, each answer is the sum of all
+        let twice = arm(k, doubled_nums, doubled);
+        let mut all_even = twice.len() == q;
+        for i in 0..twice.len().min(q) {
+            if twice[i] != 2 * running[i] {
+                all_even = false;
+            }
+        }
+        check(mut tally, 3, all_even);
+        // P4: undoing the last query gives back the sum before it, the
+        // even sum of the values as given when there is one query
+        let before = if q >= 2 { a[q - 2] } else { arm(k, nums, vec![(0, 0)])[0] };
+        let back = arm(k, nums, undone);
+        check(mut tally, 4, back.len() == q + 1 and back[q] == before);
+        // P5: the queries in reverse order end at the same sum
+        let rev = arm(k, nums, backwards);
+        check(mut tally, 5, rev.len() == q and rev[q - 1] == a[q - 1]);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == a {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 985;
+    let mut values = 0;
+    let mut asked = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 cases of up to 8 values and 8 queries between -10 and 10
+    // against the statement, then 200 of up to 300 values and 300
+    // queries up to LeetCode's 10000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most = if small { 8 } else { 300 };
+        let top = if small { 10 } else { 10000 };
+        let n = 1 + next_random(mut seed) % most;
+        let q = 1 + next_random(mut seed) % most;
+        let (nums, queries) = random_case(n, q, top, mut seed);
+        let got = properties(mut tally, nums, queries, small, mut seed);
+        values += n;
+        asked += q;
+        for x in got {
+            total += x;
+            check_sum = (check_sum * 31 + (x % 1000000007 + 1000000007) % 1000000007) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {values} values and {asked} queries: sum {total}, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,137 @@
+// LeetCode #985: Sum of Even Numbers After Queries -- sums by block.
+//
+// The values are cut into blocks of about the square root of n, and each
+// block keeps the sum of its even values. A query sums its block again
+// from scratch, and the answer adds up the block sums. O(q * sqrt(n)).
+fn sum_even_after_queries(nums: Vec[i64], queries: Vec[(i64, i64)]) -> Vec[i64] {
+    let n = nums.len();
+    let mut size = 1;
+    while size * size < n {
+        size += 1;
+    }
+    let count = (n + size - 1) / size;
+    let mut a = nums.clone();
+    let mut sums: Vec[i64] = Vec.filled(count, 0);
+    for i in 0..n {
+        if a[i] % 2 == 0 {
+            sums[i / size] += a[i];
+        }
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    for (val, index) in queries {
+        a[index] += val;
+        let k = index / size;
+        let mut s = 0;
+        for i in k * size..(n.min((k + 1) * size)) {
+            if a[i] % 2 == 0 {
+                s += a[i];
+            }
+        }
+        sums[k] = s;
+        let mut even = 0;
+        for b in sums.iter() {
+            even += *b;
+        }
+        answer.push(even);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn listed(xs: Vec[String]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..xs.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(xs[i]);
+    }
+    s.push(']');
+    s
+}
+
+fn show(nums: Vec[i64], queries: Vec[(i64, i64)]) {
+    let got = sum_even_after_queries(nums, queries);
+    let n = got.len();
+    let shown = if n > 10 {
+        f"first {got[0]}, {got[1]}, {got[2]}, last {got[n - 1]} ({n} answers)"
+    } else {
+        listed(got.iter().map(|x| f"{x}").collect())
+    };
+    let ns = if nums.len() <= 8 { listed(nums.iter().map(|x| f"{x}").collect()) } else { f"{nums.len()} values" };
+    let qs = if queries.len() <= 8 {
+        listed(queries.iter().map(|(v, i)| f"({v}, {i})").collect())
+    } else {
+        f"{queries.len()} queries"
+    };
+    println(f"nums {ns}, queries {qs} -> {shown}");
+}
+
+// `n` values and `q` queries (value, index), the values and the amounts
+// added between -top and top.
+fn random_case(n: i64, q: i64, top: i64, seed: mut ref i64) -> (Vec[i64], Vec[(i64, i64)]) {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    let mut queries: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..q {
+        let val = next_random(mut seed) % (2 * top + 1) - top;
+        queries.push((val, next_random(mut seed) % n));
+    }
+    (nums, queries)
+}
+
+fn main() {
+    // LeetCode's examples
+    show(vec![1, 2, 3, 4], vec![(1, 0), (-3, 1), (-4, 0), (2, 3)]);
+    show(vec![1], vec![(4, 0)]);
+    // a few more: adding nothing, odd values turned even, negative
+    // values, one value back and forth, LeetCode's extremes, zeros
+    show(vec![2], vec![(0, 0)]);
+    show(vec![1, 3, 5], vec![(1, 0), (1, 1), (1, 2)]);
+    show(vec![-2, -3, 4], vec![(1, 1), (-5, 0), (3, 2)]);
+    show(vec![7, 7], vec![(1, 0), (1, 0), (1, 0), (1, 0)]);
+    show(vec![10000, -10000], vec![(-10000, 0), (10000, 1), (1, 0), (-1, 1)]);
+    show(vec![0, 0, 0], vec![(2, 0), (-2, 0), (3, 2)]);
+    // LeetCode's largest: 10000 values and 10000 queries
+    let mut nums: Vec[i64] = Vec.new();
+    let mut queries: Vec[(i64, i64)] = Vec.new();
+    for i in 0..10000 {
+        nums.push(i % 7 - 3);
+        queries.push(((i * 37) % 201 - 100, (i * 7919) % 10000));
+    }
+    show(nums, queries);
+    let mut nums: Vec[i64] = Vec.new();
+    let mut queries: Vec[(i64, i64)] = Vec.new();
+    for i in 0..10000 {
+        nums.push(10000);
+        queries.push((if i % 2 == 0 { -10000 } else { 10000 }, i % 10000));
+    }
+    show(nums, queries);
+    // random cases: 300 small, 3000 middling, then 3 of LeetCode's
+    // largest, 10000 values and 10000 queries
+    let mut seed = 985;
+    for (count, n, q, top) in vec![(300, 8, 8, 10), (3000, 40, 40, 1000), (3, 10000, 10000, 10000)] {
+        let mut total = 0;
+        let mut check = 0;
+        let mut answers = 0;
+        for _ in 0..count {
+            let nn = if count == 3 { n } else { 1 + next_random(mut seed) % n };
+            let qq = if count == 3 { q } else { 1 + next_random(mut seed) % q };
+            let (nums, queries) = random_case(nn, qq, top, mut seed);
+            for x in sum_even_after_queries(nums, queries) {
+                total += x;
+                check = (check * 31 + (x % 1000000007 + 1000000007) % 1000000007) % 1000000007;
+                answers += 1;
+            }
+        }
+        println(f"{count} random cases of up to {n} values and {q} queries: {answers} answers, sum {total}, checksum {check}");
+    }
+}
