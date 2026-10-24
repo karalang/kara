@@ -33,7 +33,7 @@
 //! `writes` conflict on overlapping keys, and so do two `sends` or two
 //! `receives`, which keeps two sends on one connection in source order;
 //! `sends` with `receives` never conflicts (full duplex), and neither do the
-//! capability verbs (`allocates`, `panics`, `blocks`).
+//! capability verbs (`allocates`, `panics`, `blocks`, `suspends`).
 //!
 //! **Which values a key can name.** Two keys on distinct roots overlap when
 //! [`Origins`] finds a value both may hold: a clone of a `Sender` names the
@@ -61,7 +61,7 @@ use super::ty::{AdtId, Ty, TyCtxt, TyInterner};
 use crate::ids::DefId;
 use crate::ty::TyKind as SK;
 
-/// The effect verbs MIR can produce. `suspends` returns with coroutines (M4).
+/// The effect verbs MIR can produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Verb {
     Reads,
@@ -71,6 +71,12 @@ pub enum Verb {
     Allocates,
     Panics,
     Blocks,
+    /// The body can suspend its task: it calls a native the executor parks
+    /// on ([`super::coroutine::suspends_native`]), declares `suspends`, or calls a
+    /// body that suspends. The bodies with it are the coroutines (M4 item
+    /// 3). A spawn does not suspend the spawner: the task it starts is a
+    /// root of its own.
+    Suspends,
 }
 
 impl Verb {
@@ -83,6 +89,7 @@ impl Verb {
             Verb::Allocates => "allocates",
             Verb::Panics => "panics",
             Verb::Blocks => "blocks",
+            Verb::Suspends => "suspends",
         }
     }
 }
@@ -334,6 +341,11 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
                 let body = &program.bodies[names[i]];
                 let sites = a.body_sites(body, &report.summaries);
                 let mut summary = EffectSet::default();
+                // A declared `suspends` stands even with no suspending
+                // call below it.
+                if body.suspends {
+                    summary.add(Effect::new(Verb::Suspends, "", Key::Any));
+                }
                 for s in &sites {
                     let mut e = s.effects.clone();
                     e.effects = e
@@ -752,6 +764,19 @@ fn place_conflict(
 }
 
 impl EffectReport {
+    /// The instances that can suspend their task: the coroutines, before the
+    /// transform makes every spawned closure's task body one too. A body
+    /// whose summary is `unknown` (a call through a value, a native the
+    /// table lacks) is not in it unless something known suspends; its
+    /// summary's `why` says what could not be seen.
+    pub fn suspending(&self) -> BTreeSet<String> {
+        self.summaries
+            .iter()
+            .filter(|(_, s)| s.effects.iter().any(|e| e.verb == Verb::Suspends))
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
     /// `{"functions": [{"instance", "effects", "unknown_because", "sites":
     /// [{"block", "effects"}], "par_conflicts": [{"region", "line",
     /// "branches", "first": {"block", "effect"}, "second"}]}]}`, instances
@@ -1800,12 +1825,20 @@ impl<'p> Analysis<'p> {
         }
         // A `par` branch runs as a task (B-2026-10-21-68): the spawn has the
         // effects of the closure it starts.
+        // The task suspends, not the spawner.
         if inst.name == "TaskGroup.spawn" {
             eff.add(Effect::new(Verb::Allocates, "Heap", Key::Any));
-            eff.union(self.task_effects(body, defs, args.get(1), summaries));
+            let mut task = self.task_effects(body, defs, args.get(1), summaries);
+            task.effects.retain(|e| e.verb != Verb::Suspends);
+            eff.union(task);
             return;
         }
         let native = inst.def == DefId(u32::MAX);
+        // Whether or not the table below knows the native: the list of the
+        // natives the executor parks on is the coroutine transform's.
+        if native && super::coroutine::suspends_native(&inst.name) {
+            eff.add(Effect::new(Verb::Suspends, "", Key::Any));
+        }
         let (base, method) = split_native(&inst.name);
         match native_effects(base, method).filter(|_| native) {
             Some(table) => {
@@ -2648,12 +2681,22 @@ fn main() -> () {
         let r = analyze(&p, &tys);
         assert_eq!(
             effects(&r, "pipe"),
-            ["sends(Channel @ p1)", "receives(Channel @ p2)", "blocks"],
+            [
+                "sends(Channel @ p1)",
+                "receives(Channel @ p2)",
+                "blocks",
+                "suspends"
+            ],
         );
         let site = r.sites["main"].iter().find(|s| s.block.0 == 2).unwrap();
         assert_eq!(
             site.effects.display(),
-            ["sends(Channel @ l1)", "receives(Channel @ l2)", "blocks"],
+            [
+                "sends(Channel @ l1)",
+                "receives(Channel @ l2)",
+                "blocks",
+                "suspends"
+            ],
         );
         // The summary cannot name `main`'s locals, which no caller can
         // reach: they are fresh.
@@ -3399,5 +3442,116 @@ fn main() -> () {
         let r2 = analyze(&p, &tys);
         assert!(r2.no_provider.is_empty(), "{:?}", r2.no_provider);
         assert_eq!(r2.providers, r.providers);
+    }
+
+    /// M4 item 3: the bodies with `suspends` are the ones the coroutine
+    /// detection finds over direct calls: a suspending native, every body
+    /// that reaches it, and not a body that does not.
+    #[test]
+    fn effects_suspends_follows_direct_calls_like_the_coroutine_set() {
+        let src = "
+fn wait() {
+    sleep_ms(1);
+}
+
+fn mid(x: i64) -> i64 {
+    wait();
+    x + 1
+}
+
+fn plain(x: i64) -> i64 {
+    x
+}
+
+fn main() {
+    let a = plain(2);
+    println(mid(a));
+}
+";
+        let l = crate::mir::lower::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let r = analyze(&l.program, &l.tys);
+        let set = r.suspending();
+        let names: Vec<&str> = set.iter().map(|s| s.as_str()).collect();
+        assert_eq!(names, ["main", "mid", "wait"]);
+        assert_eq!(
+            r.suspending(),
+            super::super::coroutine::coroutines(l.program.bodies.values())
+        );
+        assert!(!effects(&r, "plain").contains(&"suspends".to_string()));
+    }
+
+    /// A function passed to a higher-order function is monomorphised into
+    /// the callee's instance, so the instance suspends when the function
+    /// does, and its caller with it, as the coroutine detection also finds.
+    #[test]
+    fn effects_suspends_through_a_higher_order_instance() {
+        let src = "
+fn wait(x: i64) -> i64 {
+    sleep_ms(1);
+    x
+}
+
+fn apply(f: Fn(i64) -> i64, x: i64) -> i64 {
+    f(x)
+}
+
+fn main() {
+    println(apply(wait, 3));
+}
+";
+        let l = crate::mir::lower::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let r = analyze(&l.program, &l.tys);
+        let set = r.suspending();
+        assert_eq!(set.len(), 3, "{set:?}");
+        assert!(set.contains("main") && set.contains("wait"));
+        assert!(set.iter().any(|n| n.starts_with("apply{")), "{set:?}");
+        assert_eq!(
+            set,
+            super::super::coroutine::coroutines(l.program.bodies.values())
+        );
+    }
+
+    /// A spawn does not suspend the spawner: the closure's `suspends` stays
+    /// with the task. Waiting for the tasks at the end of the `par` does.
+    #[test]
+    fn effects_spawn_leaves_suspends_with_the_task() {
+        let src = "
+fn wait(x: i64) -> i64 {
+    sleep_ms(1);
+    x
+}
+
+fn main() {
+    let (a, b) = par { wait(1), wait(2) };
+    println(a + b);
+}
+";
+        let l = crate::mir::lower::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let r = analyze(&l.program, &l.tys);
+        let main = l.program.bodies.get("main").unwrap();
+        let mut spawns = 0;
+        for s in &r.sites["main"] {
+            let TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
+                ..
+            } = &main.blocks[s.block.0 as usize].terminator.kind
+            else {
+                continue;
+            };
+            if inst.name == "TaskGroup.spawn" {
+                spawns += 1;
+                assert!(
+                    !s.effects.display().contains(&"suspends".to_string()),
+                    "{:?}",
+                    s.effects.display()
+                );
+            }
+        }
+        assert_eq!(spawns, 2);
+        assert!(r.suspending().contains("main"));
     }
 }
