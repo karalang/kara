@@ -1,0 +1,70 @@
+// Benchmark: LeetCode #961 N-Repeated Element in Size 2N Array -- the ★
+// arm, near neighbours, on 10000 numbers, LeetCode's largest, with the
+// repeated value at every other place, so the first pass reads the whole
+// array before the second finds two copies two apart. Each call swaps two
+// of the other values first, so no two calls see the same array.
+// Mirrors repeated_n_times.c, .rs, .py and go-seq/.
+fn repeated_n_times(nums: ref Vec[i64]) -> i64 {
+    let len = nums.len();
+    for k in 1..4 {
+        for i in 0..len - k {
+            if nums[i] == nums[i + k] {
+                return nums[i];
+            }
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 2n numbers: r at every other place, from the first when `first`, and n
+// other values from 0 to 10000 at the rest.
+fn alternating(seed: mut ref i64, n: i64, first: bool) -> Vec[i64] {
+    let mut used: Vec[bool] = Vec.filled(10001, false);
+    let r = next_random(mut seed) % 10001;
+    used[r] = true;
+    let mut out: Vec[i64] = Vec.new();
+    while out.len() < 2 * n {
+        let v = next_random(mut seed) % 10001;
+        if not used[v] {
+            used[v] = true;
+            if first {
+                out.push(r);
+                out.push(v);
+            } else {
+                out.push(v);
+                out.push(r);
+            }
+        }
+    }
+    out
+}
+
+fn main() {
+    let rounds = 1000;
+    // 50 cases of 10000 numbers, made once
+    let mut seed = 961;
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    for i in 0..50 {
+        cases.push(alternating(mut seed, 5000, i % 2 == 0));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..50 {
+            let c = (r + i) % 50;
+            // two of the other values swapped: they sit at the odd places
+            // when the repeated one starts first, at the even ones if not
+            let p = 2 * (next_random(mut seed) % 4999) + 1 - c % 2;
+            cases[c].swap(p, p + 2);
+            let a = repeated_n_times(cases[c]);
+            total += a;
+            check = (check * 31 + a + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 50 cases of 10000 numbers: the repeated ones sum to {total}, checksum {check}");
+}

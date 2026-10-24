@@ -1,0 +1,267 @@
+// LeetCode #961: N-Repeated Element in Size 2N Array -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random arrays over narrow and wide ranges of values.
+
+// ---- star ----
+
+fn star_repeated_n_times(nums: ref Vec[i64]) -> i64 {
+    let len = nums.len();
+    for k in 1..4 {
+        for i in 0..len - k {
+            if nums[i] == nums[i + k] {
+                return nums[i];
+            }
+        }
+    }
+    -1
+}
+
+// ---- seen ----
+
+fn seen_repeated_n_times(nums: ref Vec[i64]) -> i64 {
+    let mut seen: Set[i64] = Set.new();
+    for x in nums.iter() {
+        if seen.contains(*x) {
+            return *x;
+        }
+        seen.insert(*x);
+    }
+    -1
+}
+
+// ---- tally ----
+
+fn tally_repeated_n_times(nums: ref Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(10001, 0);
+    for x in nums.iter() {
+        count[*x] += 1;
+    }
+    let n = nums.len() / 2;
+    for v in 0..10001 {
+        if count[v] == n {
+            return v;
+        }
+    }
+    -1
+}
+
+// ---- middle ----
+
+fn middle_repeated_n_times(nums: ref Vec[i64]) -> i64 {
+    let mut s = nums.clone();
+    s.sort();
+    let n = s.len() / 2;
+    if s[n - 1] == s[n - 2] or s[n - 1] == s[n] {
+        s[n - 1]
+    } else {
+        s[n]
+    }
+}
+
+// ---- pick ----
+
+fn pick_repeated_n_times(nums: ref Vec[i64]) -> i64 {
+    let len = nums.len();
+    let mut state = 961;
+    loop {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let i = (state / 65536) % len;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let j = (state / 65536) % len;
+        if i != j and nums[i] == nums[j] {
+            return nums[i];
+        }
+    }
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 2n numbers from 0 to top: r n times and n others once each, in a random
+// order.
+fn random_nums(seed: mut ref i64, n: i64, r: i64, top: i64) -> Vec[i64] {
+    let mut used: Vec[bool] = Vec.filled(top + 1, false);
+    used[r] = true;
+    let mut out: Vec[i64] = Vec.new();
+    while out.len() < n {
+        let v = next_random(mut seed) % (top + 1);
+        if not used[v] {
+            used[v] = true;
+            out.push(v);
+        }
+    }
+    for _ in 0..n {
+        out.push(r);
+    }
+    shuffle(mut out, mut seed);
+    out
+}
+
+fn shuffle(xs: mut ref Vec[i64], seed: mut ref i64) {
+    for i in 0..xs.len() {
+        let j = i + next_random(mut seed) % (xs.len() - i);
+        xs.swap(i, j);
+    }
+}
+
+// The statement read literally: the value that appears n times among the
+// 2n, found by counting each number's copies.
+fn literal(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len() / 2;
+    for x in nums.iter() {
+        let mut copies = 0;
+        for y in nums.iter() {
+            if *y == *x {
+                copies += 1;
+            }
+        }
+        if copies == n {
+            return *x;
+        }
+    }
+    -1
+}
+
+fn arm(x: i64, nums: ref Vec[i64]) -> i64 {
+    if x == 0 {
+        star_repeated_n_times(nums)
+    } else if x == 1 {
+        seen_repeated_n_times(nums)
+    } else if x == 2 {
+        tally_repeated_n_times(nums)
+    } else if x == 3 {
+        middle_repeated_n_times(nums)
+    } else {
+        pick_repeated_n_times(nums)
+    }
+}
+
+// The numbers in another random order.
+fn shuffled(nums: ref Vec[i64], seed: mut ref i64) -> Vec[i64] {
+    let mut out = nums.clone();
+    shuffle(mut out, mut seed);
+    out
+}
+
+// Each number x turned into 10000 - x.
+fn turned(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        out.push(10000 - *x);
+    }
+    out
+}
+
+// The numbers back to front.
+fn reversed(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out = nums.clone();
+    out.reverse();
+    out
+}
+
+// One more copy of r and the smallest value not there yet, each swapped
+// to a random place.
+fn extended(nums: ref Vec[i64], r: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut present: Set[i64] = Set.new();
+    for x in nums.iter() {
+        present.insert(*x);
+    }
+    let mut fresh = 0;
+    while present.contains(fresh) {
+        fresh += 1;
+    }
+    let mut out = nums.clone();
+    out.push(r);
+    out.push(fresh);
+    for k in out.len() - 2..out.len() {
+        let j = next_random(mut seed) % out.len();
+        out.swap(k, j);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, nums: Vec[i64], r: i64, small: bool) -> i64 {
+    let truth = if small { literal(nums) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, nums));
+    }
+    let mixed = shuffled(nums, mut seed);
+    let flipped = turned(nums);
+    let back = reversed(nums);
+    let longer = extended(nums, r, mut seed);
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: the numbers in another order, the same
+        check(mut t, 2, arm(x, mixed) == a);
+        // P3: each number x turned into 10000 - x, the answer turned too
+        check(mut t, 3, arm(x, flipped) == 10000 - a);
+        // P4: the numbers back to front, the same
+        check(mut t, 4, arm(x, back) == a);
+        // P5: one more copy and one more value, the same
+        check(mut t, 5, arm(x, longer) == a);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 961;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 cases of 2n numbers, n from 2 to 6, from 0 to at most n + 12,
+    // against the statement, then 200 with n up to 5000 from 0 to 10000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 2 + next_random(mut seed) % 5 } else { 2 + next_random(mut seed) % 4999 };
+        let top = if small { n + next_random(mut seed) % 13 } else { 10000 };
+        let r = next_random(mut seed) % (top + 1);
+        let nums = random_nums(mut seed, n, r, top);
+        count += 2 * n;
+        let a = properties(mut t, mut seed, nums, r, small);
+        total += a;
+        check_sum = (check_sum * 31 + a) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {count} numbers: the repeated ones sum to {total}, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

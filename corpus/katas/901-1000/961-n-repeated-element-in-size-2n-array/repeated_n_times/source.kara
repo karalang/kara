@@ -1,0 +1,125 @@
+// LeetCode #961: N-Repeated Element in Size 2N Array -- near neighbours.
+//
+// Half the 2n numbers are copies of one value. If no two copies were
+// within two places of each other, n copies would need 3(n - 1) + 1
+// places, more than 2n once n > 2; with n = 2 the two copies can sit three
+// apart, at the two ends of four numbers. So two copies are never more
+// than three places apart: compare each number with the next one, then
+// the one after, then the one three on; the first equal pair is the
+// answer. O(n), no extra space.
+fn repeated_n_times(nums: ref Vec[i64]) -> i64 {
+    let len = nums.len();
+    for k in 1..4 {
+        for i in 0..len - k {
+            if nums[i] == nums[i + k] {
+                return nums[i];
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 2n numbers from 0 to top: one value n times and n others once each, in
+// a random order.
+fn random_nums(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut used: Vec[bool] = Vec.filled(top + 1, false);
+    let r = next_random(mut seed) % (top + 1);
+    used[r] = true;
+    let mut out: Vec[i64] = Vec.new();
+    while out.len() < n {
+        let v = next_random(mut seed) % (top + 1);
+        if not used[v] {
+            used[v] = true;
+            out.push(v);
+        }
+    }
+    for _ in 0..n {
+        out.push(r);
+    }
+    for i in 0..out.len() {
+        let j = i + next_random(mut seed) % (out.len() - i);
+        out.swap(i, j);
+    }
+    out
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{nums[i]}";
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![1, 2, 3, 3],
+        vec![2, 1, 2, 5, 3, 2],
+        vec![5, 1, 5, 2, 5, 3, 5, 4],
+        vec![9, 9, 1, 2],
+        vec![9, 1, 2, 9],
+        vec![1, 9, 2, 9],
+        vec![0, 10000, 0, 1],
+        vec![10000, 1, 2, 10000],
+        vec![4, 7, 7, 5, 7, 1],
+        vec![3, 1, 2, 4, 3, 3],
+    ];
+    for nums in cases.iter() {
+        println(f"{show(nums)}: {repeated_n_times(nums)}");
+    }
+    // 300 random cases of 2n numbers, n from 2 to 10, from 0 to 10000
+    let mut seed = 961;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 9;
+        let nums = random_nums(mut seed, n, 10000);
+        let r = repeated_n_times(nums);
+        count += 2 * n;
+        total += r;
+        check = (check * 31 + r) % 1000000007;
+    }
+    println(f"300 random cases of {count} numbers: the repeated ones sum to {total}, checksum {check}");
+    // LeetCode's largest: 10000 numbers
+    let big = random_nums(mut seed, 5000, 10000);
+    println(f"10000 random numbers: {repeated_n_times(big)}");
+    // the repeated value at every other place, from the first and from
+    // the second
+    let mut odd: Vec[i64] = Vec.new();
+    let mut even: Vec[i64] = Vec.new();
+    for i in 0..5000 {
+        odd.push(i + 1);
+        odd.push(0);
+        even.push(10000);
+        even.push(i);
+    }
+    println(f"0 at every other place, from the second: {repeated_n_times(odd)}");
+    println(f"10000 at every other place, from the first: {repeated_n_times(even)}");
+    // all the copies in the first half, then all in the second
+    let mut front: Vec[i64] = Vec.new();
+    let mut back: Vec[i64] = Vec.new();
+    for i in 0..5000 {
+        front.push(7777);
+        back.push(i + 5001);
+    }
+    for i in 0..5000 {
+        front.push(i);
+        back.push(4242);
+    }
+    println(f"7777 in the first half: {repeated_n_times(front)}");
+    println(f"4242 in the second half: {repeated_n_times(back)}");
+    // two copies at the two ends of four
+    println(f"[6,0,10000,6]: {repeated_n_times(vec![6, 0, 10000, 6])}");
+}

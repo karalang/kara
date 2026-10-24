@@ -1,0 +1,17 @@
+[1,2,3,3]: 3
+[2,1,2,5,3,2]: 2
+[5,1,5,2,5,3,5,4]: 5
+[9,9,1,2]: 9
+[9,1,2,9]: 9
+[1,9,2,9]: 9
+[0,10000,0,1]: 0
+[10000,1,2,10000]: 10000
+[4,7,7,5,7,1]: 7
+[3,1,2,4,3,3]: 3
+300 random cases of 3698 numbers: the repeated ones sum to 1375513, checksum 459239436
+10000 random numbers: 1165
+0 at every other place, from the second: 0
+10000 at every other place, from the first: 10000
+7777 in the first half: 7777
+4242 in the second half: 4242
+[6,0,10000,6]: 6
