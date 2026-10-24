@@ -1102,6 +1102,22 @@ pub(super) struct PackageCheck {
 }
 
 impl PackageCheck {
+    /// `src/main.kara`, when it is the package's only module: `karac build`
+    /// then builds it as a lone file, against the v2 library it appends, so
+    /// `karac check` checks it the same way (B-2026-10-24-39).
+    pub(super) fn lone_entry(&self, root: &std::path::Path) -> Option<std::path::PathBuf> {
+        if !self.parse_errors.is_empty() {
+            return None;
+        }
+        let mut modules = self.tree.modules.iter().filter(|m| !m.is_synthetic);
+        let only = modules.next()?;
+        if modules.next().is_some() {
+            return None;
+        }
+        let entry = std::fs::canonicalize(root.join("src").join("main.kara")).ok()?;
+        (std::fs::canonicalize(&only.file).ok()? == entry).then(|| only.file.clone())
+    }
+
     /// Any error-severity diagnostic, in any module. Warnings are excluded —
     /// they do not gate an exit status.
     pub(super) fn has_errors(&self) -> bool {

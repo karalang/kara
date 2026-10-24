@@ -716,6 +716,19 @@ pub(super) fn cmd_check_project(
             process::exit(1);
         }
     };
+    if let Some(entry) = pc.lone_entry(&root) {
+        cmd_check(
+            &entry.display().to_string(),
+            output,
+            None,
+            None,
+            platforms.map(<[_]>::to_vec),
+            concurrency_report,
+            simd_report,
+            lints,
+        );
+        return;
+    }
     let errors = pc.error_count();
     match output {
         OutputMode::Json => {
@@ -1037,6 +1050,11 @@ fn cmd_check_package_member(
             return false;
         }
     };
+    // A lone `src/main.kara` is built as a file, so it is checked as one
+    // (B-2026-10-24-39).
+    if pc.lone_entry(root).is_some() {
+        return false;
+    }
     let had_errors = pc.has_errors();
     let elsewhere = pc.restrict_to_file(std::path::Path::new(filename));
 

@@ -13144,3 +13144,40 @@ fn find_on_a_const_str_borrows_its_argument() {
         "R 1\n2 1 false me\n",
     );
 }
+
+#[test]
+fn a_lone_file_package_is_checked_against_the_v2_library() {
+    // B-2026-10-24-39: `karac build` builds a package whose only module is
+    // `src/main.kara` as a lone file, against the v2 library it appends, so
+    // `karac check` in the package (and on its `src/main.kara`) checks it
+    // the same way: a v2-only library item such as `WsMessage` resolves.
+    let (dir, _) = fixture("lone-file-v2-library", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "fn main() {\n    let m: Option[WsMessage] = None;\n    println(f\"{m.is_none()}\");\n}\n",
+    )
+    .unwrap();
+    for args in [vec!["check"], vec!["check", "src/main.kara"]] {
+        let out = karac().args(&args).current_dir(&dir).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{args:?} must pass: {err}");
+    }
+    let out = karac()
+        .args(["run", "src/main.kara"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "true\n",
+        "run: {:?}",
+        out
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
