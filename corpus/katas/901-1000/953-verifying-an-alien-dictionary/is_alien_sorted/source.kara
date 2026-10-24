@@ -1,0 +1,170 @@
+// LeetCode #953: Verifying an Alien Dictionary -- a rank per letter.
+//
+// Number the letters by their place in the order, then compare each word
+// with the next: at the first place they differ, the earlier word's
+// letter must rank lower, and when one word runs out first it must be the
+// earlier one. Sorted pairs side by side make a sorted list, since the
+// order on words is transitive. O(total letters).
+
+fn is_alien_sorted(words: Vec[String], order: String) -> bool {
+    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let letters = order.bytes();
+    for i in 0..26 {
+        rank[(letters[i] - b'a') as i64] = i;
+    }
+    for w in 1..words.len() {
+        let a = words[w - 1].bytes();
+        let b = words[w].bytes();
+        let mut k = 0;
+        while k < a.len() and k < b.len() and a[k] == b[k] {
+            k += 1;
+        }
+        if k == b.len() {
+            if k < a.len() {
+                return false;
+            }
+        } else if k < a.len() and rank[(a[k] - b'a') as i64] > rank[(b[k] - b'a') as i64] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The 26 letters in a random order.
+fn random_order(seed: mut ref i64) -> String {
+    let mut letters: Vec[u8] = Vec.new();
+    for i in 0..26 {
+        letters.push(b'a' + i as u8);
+    }
+    for i in 0..26 {
+        let j = i + next_random(mut seed) % (26 - i);
+        letters.swap(i, j);
+    }
+    let mut s = String.new();
+    for c in letters.iter() {
+        s.push(*c as char);
+    }
+    s
+}
+
+// n words of 1 to len letters, each from the first `letters` of `order`.
+fn random_words(seed: mut ref i64, n: i64, len: i64, letters: i64, order: ref String) -> Vec[String] {
+    let pool = order.bytes();
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let m = 1 + next_random(mut seed) % len;
+        let mut s = String.new();
+        for _ in 0..m {
+            s.push(pool[next_random(mut seed) % letters] as char);
+        }
+        words.push(s);
+    }
+    words
+}
+
+// The words sorted by the alien order.
+fn alien_sorted(words: ref Vec[String], order: ref String) -> Vec[String] {
+    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let mut i = 0;
+    for c in order.bytes() {
+        rank[(c - b'a') as i64] = i;
+        i += 1;
+    }
+    let mut out = words.clone();
+    out.sort_by_key(|w| {
+        let mut key: Vec[i64] = Vec.new();
+        for c in w.bytes() {
+            key.push(rank[(c - b'a') as i64]);
+        }
+        key
+    });
+    out
+}
+
+fn show(words: ref Vec[String]) -> String {
+    let mut s = String.new();
+    for i in 0..words.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + words[i];
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    let english = "abcdefghijklmnopqrstuvwxyz".to_string();
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(Vec[String], String)] = vec![
+        (vec!["hello".to_string(), "leetcode".to_string()], "hlabcdefgijkmnopqrstuvwxyz".to_string()),
+        (vec!["word".to_string(), "world".to_string(), "row".to_string()], "worldabcefghijkmnpqstuvxyz".to_string()),
+        (vec!["apple".to_string(), "app".to_string()], english.clone()),
+        (vec!["a".to_string()], english.clone()),
+        (vec!["app".to_string(), "apple".to_string()], english.clone()),
+        (vec!["kuvp".to_string(), "q".to_string()], "ngxlkthsjuoqcpavbfdermiywz".to_string()),
+        (vec!["ab".to_string(), "ab".to_string()], english.clone()),
+        (vec!["ba".to_string(), "ab".to_string()], "bacdefghijklmnopqrstuvwxyz".to_string()),
+        (vec!["z".to_string(), "x".to_string(), "z".to_string()], english.clone()),
+    ];
+    for (words, order) in cases.iter() {
+        println(f"{show(words)} in {order}: {is_alien_sorted(words.clone(), order.clone())}");
+    }
+    // 300 random cases of 1 to 10 words of 1 to 5 letters, from 1 to 4
+    // letters of a random order, every second one sorted first
+    let mut seed = 953;
+    let mut count = 0;
+    let mut sorted = 0;
+    let mut check = 0;
+    for c in 0..300 {
+        let order = random_order(mut seed);
+        let n = 1 + next_random(mut seed) % 10;
+        let letters = 1 + next_random(mut seed) % 4;
+        let mut words = random_words(mut seed, n, 5, letters, order);
+        if c % 2 == 0 {
+            words = alien_sorted(words, order);
+        }
+        let ok = is_alien_sorted(words, order);
+        count += n;
+        if ok {
+            sorted += 1;
+        }
+        check = (check * 31 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"300 random cases of {count} words: {sorted} sorted, checksum {check}");
+    // LeetCode's largest: 100 words of up to 20 letters
+    let order = random_order(mut seed);
+    let words = alien_sorted(random_words(mut seed, 100, 20, 26, order), order);
+    println(f"100 words, sorted: {is_alien_sorted(words.clone(), order.clone())}");
+    let mut swapped = words.clone();
+    swapped.swap(49, 50);
+    println(f"100 words, two in the middle swapped: {is_alien_sorted(swapped, order.clone())}");
+    let mut reversed: Vec[String] = Vec.new();
+    for i in 0..100 {
+        reversed.push(words[99 - i].clone());
+    }
+    println(f"100 words, reversed: {is_alien_sorted(reversed, order.clone())}");
+    let mut same: Vec[String] = Vec.new();
+    let mut chain: Vec[String] = Vec.new();
+    let mut s = String.new();
+    for i in 0..100 {
+        same.push(words[0].clone());
+        if i < 20 {
+            s.push('q');
+        }
+        chain.push(s.clone());
+    }
+    println(f"100 copies of one word: {is_alien_sorted(same, order.clone())}");
+    println(f"q to 20 q's, then 80 more of them: {is_alien_sorted(chain.clone(), order.clone())}");
+    let mut back: Vec[String] = Vec.new();
+    for i in 0..100 {
+        back.push(chain[99 - i].clone());
+    }
+    println(f"the same, longest first: {is_alien_sorted(back, order.clone())}");
+}

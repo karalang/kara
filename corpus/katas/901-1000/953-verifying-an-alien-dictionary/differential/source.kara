@@ -1,0 +1,398 @@
+// LeetCode #953: Verifying an Alien Dictionary -- differential test of
+// the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: in an alien language, surprisingly, they also use
+// English lowercase letters, but possibly in a different order. The order
+// of the alphabet is some permutation of lowercase letters. Given a
+// sequence of words written in the alien language, and the order of the
+// alphabet, return true if and only if the given words are sorted
+// lexicographically in this alien language.
+
+// ---- the ★ arm: a rank per letter -----------------------------------------
+fn star_is_alien_sorted(words: Vec[String], order: String) -> bool {
+    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let letters = order.bytes();
+    for i in 0..26 {
+        rank[(letters[i] - b'a') as i64] = i;
+    }
+    for w in 1..words.len() {
+        let a = words[w - 1].bytes();
+        let b = words[w].bytes();
+        let mut k = 0;
+        while k < a.len() and k < b.len() and a[k] == b[k] {
+            k += 1;
+        }
+        if k == b.len() {
+            if k < a.len() {
+                return false;
+            }
+        } else if k < a.len() and rank[(a[k] - b'a') as i64] > rank[(b[k] - b'a') as i64] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the translate arm: translated to English -----------------------------
+fn translate_is_alien_sorted(words: Vec[String], order: String) -> bool {
+    let mut to_english: Vec[u8] = Vec.filled(26, b'a');
+    let letters = order.bytes();
+    for i in 0..26 {
+        to_english[(letters[i] - b'a') as i64] = b'a' + i as u8;
+    }
+    let mut prev = String.new();
+    for w in 0..words.len() {
+        let mut s = String.new();
+        for c in words[w].bytes() {
+            s.push(to_english[(c - b'a') as i64] as char);
+        }
+        if w > 0 and prev > s {
+            return false;
+        }
+        prev = s;
+    }
+    true
+}
+
+// ---- the keys arm: words as rank vectors ----------------------------------
+fn keys_is_alien_sorted(words: Vec[String], order: String) -> bool {
+    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let mut i = 0;
+    for c in order.bytes() {
+        rank[(c - b'a') as i64] = i;
+        i += 1;
+    }
+    let mut keys: Vec[Vec[i64]] = Vec.new();
+    for w in words.iter() {
+        let mut key: Vec[i64] = Vec.new();
+        for c in w.bytes() {
+            key.push(rank[(c - b'a') as i64]);
+        }
+        keys.push(key);
+    }
+    for k in 1..keys.len() {
+        if keys[k - 1] > keys[k] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the sorted arm: sorted and compared ----------------------------------
+fn sorted_is_alien_sorted(words: Vec[String], order: String) -> bool {
+    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let letters = order.bytes();
+    for i in 0..26 {
+        rank[(letters[i] - b'a') as i64] = i;
+    }
+    let mut copy = words.clone();
+    copy.sort_by_key(|w| {
+        let mut key: Vec[i64] = Vec.new();
+        for c in w.bytes() {
+            key.push(rank[(c - b'a') as i64]);
+        }
+        key
+    });
+    copy == words
+}
+
+// ---- the columns arm: column by column ------------------------------------
+fn columns_sorted_from(words: ref Vec[Vec[i64]], lo: i64, hi: i64, depth: i64) -> bool {
+    let mut start = lo;
+    while start < hi and words[start].len() == depth {
+        start += 1;
+    }
+    while start < hi {
+        if words[start].len() == depth {
+            return false;
+        }
+        let letter = words[start][depth];
+        let mut end = start + 1;
+        while end < hi and words[end].len() > depth and words[end][depth] == letter {
+            end += 1;
+        }
+        if end < hi and words[end].len() > depth and words[end][depth] < letter {
+            return false;
+        }
+        if not columns_sorted_from(words, start, end, depth + 1) {
+            return false;
+        }
+        start = end;
+    }
+    true
+}
+
+fn columns_is_alien_sorted(words: Vec[String], order: String) -> bool {
+    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let letters = order.bytes();
+    for i in 0..26 {
+        rank[(letters[i] - b'a') as i64] = i;
+    }
+    let mut ranked: Vec[Vec[i64]] = Vec.new();
+    for w in words.iter() {
+        let mut v: Vec[i64] = Vec.new();
+        for c in w.bytes() {
+            v.push(rank[(c - b'a') as i64]);
+        }
+        ranked.push(v);
+    }
+    columns_sorted_from(ranked, 0, ranked.len(), 0)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, words: Vec[String], order: String) -> bool {
+    if x == 0 {
+        star_is_alien_sorted(words, order)
+    } else if x == 1 {
+        translate_is_alien_sorted(words, order)
+    } else if x == 2 {
+        keys_is_alien_sorted(words, order)
+    } else if x == 3 {
+        sorted_is_alien_sorted(words, order)
+    } else {
+        columns_is_alien_sorted(words, order)
+    }
+}
+
+// Lexicographic order read literally, as LeetCode explains it: both words
+// padded to one length with a blank that comes before every letter, then
+// compared letter by letter, the first difference deciding.
+fn at_most(a: ref String, b: ref String, order: ref String) -> bool {
+    let x = a.bytes();
+    let y = b.bytes();
+    let alphabet = order.bytes();
+    let place = |c: u8| {
+        let mut p = 0;
+        while alphabet[p] != c {
+            p += 1;
+        }
+        p
+    };
+    let n = if x.len() > y.len() { x.len() } else { y.len() };
+    for i in 0..n {
+        let p = if i < x.len() { place(x[i]) } else { -1 };
+        let q = if i < y.len() { place(y[i]) } else { -1 };
+        if p != q {
+            return p < q;
+        }
+    }
+    true
+}
+
+// Sorted read literally: every word at most every word after it.
+fn statement(words: ref Vec[String], order: ref String) -> bool {
+    for i in 0..words.len() {
+        for j in (i + 1)..words.len() {
+            if not at_most(words[i], words[j], order) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The 26 letters in a random order.
+fn random_order(seed: mut ref i64) -> String {
+    let mut letters: Vec[u8] = Vec.new();
+    for i in 0..26 {
+        letters.push(b'a' + i as u8);
+    }
+    for i in 0..26 {
+        let j = i + next_random(mut seed) % (26 - i);
+        letters.swap(i, j);
+    }
+    let mut s = String.new();
+    for c in letters.iter() {
+        s.push(*c as char);
+    }
+    s
+}
+
+// n words of 1 to len letters, each from the first `letters` of `order`.
+fn random_words(seed: mut ref i64, n: i64, len: i64, letters: i64, order: ref String) -> Vec[String] {
+    let pool = order.bytes();
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let m = 1 + next_random(mut seed) % len;
+        let mut s = String.new();
+        for _ in 0..m {
+            s.push(pool[next_random(mut seed) % letters] as char);
+        }
+        words.push(s);
+    }
+    words
+}
+
+// The words sorted by the alien order.
+fn alien_sorted(words: ref Vec[String], order: ref String) -> Vec[String] {
+    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let mut i = 0;
+    for c in order.bytes() {
+        rank[(c - b'a') as i64] = i;
+        i += 1;
+    }
+    let mut out = words.clone();
+    out.sort_by_key(|w| {
+        let mut key: Vec[i64] = Vec.new();
+        for c in w.bytes() {
+            key.push(rank[(c - b'a') as i64]);
+        }
+        key
+    });
+    out
+}
+
+// Every letter of `s` replaced by its image under `to`, a permutation of
+// the letters given as the image of a, b, ... z.
+fn renamed(s: ref String, to: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for c in s.bytes() {
+        out.push(to[(c - b'a') as i64] as char);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, words: Vec[String], order: String, small: bool) -> bool {
+    let n = words.len();
+    let want = if small { statement(words, order) } else { false };
+    let mut got: Vec[bool] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, words.clone(), order.clone()));
+    }
+    // the inputs P2 to P5 share: every letter renamed, one word written
+    // twice, a second case in the same order, and a common prefix
+    let mut to: Vec[u8] = Vec.new();
+    for i in 0..26 {
+        to.push(b'a' + i as u8);
+    }
+    for i in 0..26 {
+        let j = i + next_random(mut seed) % (26 - i);
+        to.swap(i, j);
+    }
+    let mut renamed_words: Vec[String] = Vec.new();
+    for w in words.iter() {
+        renamed_words.push(renamed(w, to));
+    }
+    let renamed_order = renamed(order, to);
+    let twice = next_random(mut seed) % n;
+    let mut doubled: Vec[String] = Vec.new();
+    for i in 0..n {
+        doubled.push(words[i].clone());
+        if i == twice {
+            doubled.push(words[i].clone());
+        }
+    }
+    let m = 1 + next_random(mut seed) % 6;
+    let mut other = random_words(mut seed, m, 4, 1 + next_random(mut seed) % 4, order);
+    if next_random(mut seed) % 2 == 0 {
+        other = alien_sorted(other, order);
+    }
+    let mut both = words.clone();
+    for w in other.iter() {
+        both.push(w.clone());
+    }
+    let mut longest = 0;
+    for w in words.iter() {
+        if w.len() > longest {
+            longest = w.len();
+        }
+    }
+    let prefix_len = if longest >= 20 { 0 } else { 1 + next_random(mut seed) % (20 - longest) };
+    let pool = order.bytes();
+    let mut prefix = String.new();
+    for _ in 0..prefix_len {
+        prefix.push(pool[next_random(mut seed) % 26] as char);
+    }
+    let mut prefixed: Vec[String] = Vec.new();
+    for w in words.iter() {
+        prefixed.push(prefix.clone() + w);
+    }
+    for x in 0..5 {
+        let r = got[x];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, r == want);
+        }
+        // P2: every letter renamed, in the words and the order alike, the
+        // same answer
+        check(mut t, 2, arm(x, renamed_words.clone(), renamed_order.clone()) == r);
+        // P3: one word written twice in a row, the same answer
+        check(mut t, 3, arm(x, doubled.clone(), order.clone()) == r);
+        // P4: followed by a second case, sorted exactly when both are and
+        // the last word of the first is at most the first of the second
+        let second = arm(x, other.clone(), order.clone());
+        let joined = r and second and at_most(words[n - 1], other[0], order);
+        check(mut t, 4, arm(x, both.clone(), order.clone()) == joined);
+        // P5: one prefix before every word, the same answer
+        check(mut t, 5, arm(x, prefixed.clone(), order.clone()) == r);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == r {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 953;
+    let mut count = 0;
+    let mut sorted = 0;
+    let mut check_sum = 0;
+    // 3000 cases of 1 to 6 words of 1 to 4 letters from 1 to 3 letters of
+    // a random order, against the statement, then 200 of up to 100 words
+    // of up to 16 letters from 1 to 26 letters, which leaves P5 room for a
+    // prefix within LeetCode's 20; every second case sorted first
+    for c in 0..3200 {
+        let small = c < 3000;
+        let order = random_order(mut seed);
+        let n = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 100 };
+        let len = if small { 4 } else { 16 };
+        let letters = if small { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 26 };
+        let mut words = random_words(mut seed, n, len, letters, order);
+        if c % 2 == 0 {
+            words = alien_sorted(words, order);
+        }
+        count += n;
+        let ok = properties(mut t, mut seed, words, order, small);
+        if ok {
+            sorted += 1;
+        }
+        check_sum = (check_sum * 31 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {count} words, {sorted} sorted, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

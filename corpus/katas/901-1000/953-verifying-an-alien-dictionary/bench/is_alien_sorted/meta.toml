@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/953-verifying-an-alien-dictionary/bench/is_alien_sorted.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "eb23c834e"
+extracted_src = "052c4762"

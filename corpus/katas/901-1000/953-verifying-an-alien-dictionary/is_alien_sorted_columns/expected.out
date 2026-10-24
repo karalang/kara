@@ -1,0 +1,16 @@
+[hello,leetcode] in hlabcdefgijkmnopqrstuvwxyz: true
+[word,world,row] in worldabcefghijkmnpqstuvxyz: false
+[apple,app] in abcdefghijklmnopqrstuvwxyz: false
+[a] in abcdefghijklmnopqrstuvwxyz: true
+[app,apple] in abcdefghijklmnopqrstuvwxyz: true
+[kuvp,q] in ngxlkthsjuoqcpavbfdermiywz: true
+[ab,ab] in abcdefghijklmnopqrstuvwxyz: true
+[ba,ab] in bacdefghijklmnopqrstuvwxyz: true
+[z,x,z] in abcdefghijklmnopqrstuvwxyz: false
+300 random cases of 1671 words: 167 sorted, checksum 655300206
+100 words, sorted: true
+100 words, two in the middle swapped: false
+100 words, reversed: false
+100 copies of one word: true
+q to 20 q's, then 80 more of them: true
+the same, longest first: false

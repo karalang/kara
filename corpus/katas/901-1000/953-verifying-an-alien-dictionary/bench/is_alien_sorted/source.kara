@@ -1,0 +1,115 @@
+// LeetCode #953: Verifying an Alien Dictionary -- a rank per letter.
+//
+// Number the letters by their place in the order, then compare each word
+// with the next: at the first place they differ, the earlier word's
+// letter must rank lower, and when one word runs out first it must be the
+// earlier one. Sorted pairs side by side make a sorted list, since the
+// order on words is transitive. O(total letters).
+
+fn is_alien_sorted(words: Vec[String], order: String) -> bool {
+    let mut rank: Vec[i64] = Vec.filled(26, 0);
+    let letters = order.bytes();
+    for i in 0..26 {
+        rank[(letters[i] - b'a') as i64] = i;
+    }
+    for w in 1..words.len() {
+        let a = words[w - 1].bytes();
+        let b = words[w].bytes();
+        let mut k = 0;
+        while k < a.len() and k < b.len() and a[k] == b[k] {
+            k += 1;
+        }
+        if k == b.len() {
+            if k < a.len() {
+                return false;
+            }
+        } else if k < a.len() and rank[(a[k] - b'a') as i64] > rank[(b[k] - b'a') as i64] {
+            return false;
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether word a comes strictly before word b under the ranks.
+fn before(a: ref String, b: ref String, rank: ref Vec[i64]) -> bool {
+    let x = a.bytes();
+    let y = b.bytes();
+    let mut k = 0;
+    while k < x.len() and k < y.len() and x[k] == y[k] {
+        k += 1;
+    }
+    if k == y.len() {
+        false
+    } else if k == x.len() {
+        true
+    } else {
+        rank[(x[k] - b'a') as i64] < rank[(y[k] - b'a') as i64]
+    }
+}
+
+fn main() {
+    let rounds = 2000;
+    let count = 200;
+    let n = 100;
+    let mut seed = 953;
+    // 200 orders, each with 100 words of 1 to 20 letters from the order's
+    // first three letters, sorted by an insertion sort; every third set
+    // has its last two words swapped
+    let mut orders: Vec[String] = Vec.new();
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    for s in 0..count {
+        let mut letters: Vec[u8] = Vec.new();
+        for i in 0..26 {
+            letters.push(b'a' + i as u8);
+        }
+        for i in 0..26 {
+            let j = i + next_random(mut seed) % (26 - i);
+            letters.swap(i, j);
+        }
+        let mut rank: Vec[i64] = Vec.filled(26, 0);
+        let mut order = String.new();
+        for i in 0..26 {
+            rank[(letters[i] - b'a') as i64] = i;
+            order.push(letters[i] as char);
+        }
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let m = 1 + next_random(mut seed) % 20;
+            let mut w = String.new();
+            for _ in 0..m {
+                w.push(letters[next_random(mut seed) % 3] as char);
+            }
+            words.push(w);
+        }
+        for i in 1..n {
+            let mut j = i;
+            while j > 0 and before(words[j], words[j - 1], rank) {
+                words.swap(j, j - 1);
+                j -= 1;
+            }
+        }
+        if s % 3 == 2 {
+            words.swap(n - 2, n - 1);
+        }
+        orders.push(order);
+        sets.push(words);
+    }
+    let mut sorted = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let k = (r + i) % count;
+            let ok = is_alien_sorted(sets[k], orders[k]);
+            if ok {
+                sorted += 1;
+            }
+            check = (check * 31 + if ok { 1 } else { 2 }) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} sets of {n} words: {sorted} sorted, checksum {check}");
+}
