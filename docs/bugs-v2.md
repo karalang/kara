@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 22 |
+| diagnostics | 23 |
 | false-positive | 19 |
 | missing-feature | 17 |
 | perf | 10 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen | 22 |
 | interp | 15 |
 | mir | 15 |
+| cli | 9 |
 | runtime | 8 |
-| cli | 8 |
 | ownership | 6 |
 | parser | 4 |
 | mir-llvm | 3 |
@@ -134,6 +134,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-33 | 2026-10-24 | typecheck | low | A string literal bound with no type (`let mut how = "";`) is a `String`, as design.md §3 says, but using the binding where a `Str` is expected (a `Str` field, a `Str` return, a tuple with a `Str`) reports a bare `expected 'Str', found 'String'` at the use, with no note naming the binding and no fix-it | — |
 | B-2026-10-24-36 | 2026-10-24 | typecheck+mir | low | A `Copy` binding destructured from a borrowed value takes `*` inconsistently: `karac check` refuses `*w` after `let (_, w) = q.front().unwrap()` or `let (v, i) = it.next().unwrap()` (right, per core-semantics §4.6/§5.10) but accepts `*s` after `while let Some((s, _)) = q.front()`, `*a` after `if let Some((a, _)) = q.front()` and `*index` after `for (val, index) in queries.iter()`, and every MIR front end accepts all of them | — |
 | B-2026-10-24-37 | 2026-10-24 | typecheck | low | E0517's fix-it for a write through a BARE parameter (`fn f(items: Vec[String]) { items.sort() }`, or through a local bound from it, `let mut s = items; s.sort()`) inserts `mut ` before the parameter's type, giving `items: mut Vec[String]`, which does not parse, so `karac fix` refuses; the message also calls the local `s` "a `ref` parameter". Correct only when the parameter is spelled `ref T` | — |
+| B-2026-10-24-38 | 2026-10-24 | cli | low | `karac fix` still answers E_INDEX_MOVE_NON_COPY on a DESTRUCTURING `let (a, b) = cases[i];` (both parts only read) with `.clone()`, a deep copy of the element, instead of the `ref cases[i]` borrow the message lists first; B-2026-10-24-18's borrow fix covers only a plain `let t = v[i];` | — |
 
 ### Fixed
 
