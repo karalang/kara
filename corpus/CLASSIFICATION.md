@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9885 / 10065 = 98.2%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8044 / 8185 = 98.3%.
-- Every classified non-deferred program (context): 16433 / 17543 = 93.7%.
-- Bench variants (outside the gate): 246 / 929 = 26.5%; timeouts 605.
+- Every classified non-deferred program (context): 16434 / 17543 = 93.7%.
+- Bench variants (outside the gate): 247 / 929 = 26.6%; timeouts 604.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5394 / 5411 = 99.7%; failing mir-gap 17.
 - Deferred (class d): 751; outside the slice (`post-m1:*`): 1138.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -63,7 +63,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (4142): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4143): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -4168,6 +4168,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/901-1000/945-minimum-increment-to-make-array-unique/min_increment_for_unique`
 - `katas/901-1000/945-minimum-increment-to-make-array-unique/min_increment_for_unique_count`
 - `katas/901-1000/945-minimum-increment-to-make-array-unique/min_increment_for_unique_slots`
+- `katas/901-1000/946-validate-stack-sequences/bench/validate_stack_sequences`
 - `katas/901-1000/946-validate-stack-sequences/differential`
 - `katas/901-1000/946-validate-stack-sequences/validate_stack_sequences`
 - `katas/901-1000/946-validate-stack-sequences/validate_stack_sequences_drive`

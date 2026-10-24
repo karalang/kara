@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/946-validate-stack-sequences/bench/validate_stack_sequences.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
-bucket = "timeout"
-classified_with = "4540c9238"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 946 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "50fadafc5"
 extracted_src = "c7c41b2a"
