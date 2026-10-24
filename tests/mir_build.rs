@@ -8795,3 +8795,25 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&run.stderr), want, "at -O{opt}");
     }
 }
+
+/// A program's own `debug_string` is its function, not the native a failed
+/// assertion uses for its operands' text (B-2026-10-22-44).
+#[test]
+fn mir_a_user_fn_named_debug_string_is_its_own() {
+    let src = r#"fn debug_string(x: i64) -> String { f"mine {x}" }
+fn main() {
+    println(debug_string(3));
+    assert_eq(debug_string(4), "mine 4");
+    assert_eq(debug_string(5), "theirs");
+}
+"#;
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, "mine 3\n", "__mir-run");
+    assert!(
+        interp
+            .stderr
+            .starts_with("runtime error: assertion failed: left != right\n  left:  \"mine 5\"\n  right: \"theirs\"\n"),
+        "{}",
+        interp.stderr
+    );
+}
