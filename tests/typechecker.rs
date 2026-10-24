@@ -35289,8 +35289,7 @@ fn seeded_slot_rejects_a_narrowing_non_constant_argument() {
         .iter()
         .any(|e| e.message.contains("would narrow or change sign")));
     // Deliberately narrower than the general rule, so two existing behaviours
-    // survive. SAME-WIDTH reinterpretation stays permissive (`i64` -> `u64` is
-    // the same eight bytes) — see
+    // survive. A payload checked against its slot stays permissive — see
     // `generic_numeric_arg_same_layout_and_literals_still_accepted`.
     typecheck_ok(
         "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
@@ -42137,9 +42136,10 @@ fn enum_constructor_constant_expression_payload_adopts_expected_type() {
 
 #[test]
 fn generic_numeric_arg_same_layout_and_literals_still_accepted() {
-    // i64 -> u64: same eight bytes, only the interpretation differs. This is
-    // the ordinary integer coercion the language allows, and `return Some(i)`
-    // with `i: i64` into an `Option[u64]` is a tested shape.
+    // A payload is checked against its slot, so `return Some(i)` with
+    // `i: i64` into an `Option[u64]` builds an `Option[u64]`. A whole
+    // `Option[i64]` VALUE does not stand for an `Option[u64]`
+    // (B-2026-10-23-12, a_numeric_type_inside_a_compound_keeps_its_sign).
     typecheck_ok(
         "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
              for i in 0..items.len() { if items[i] == target { return Some(i); } } \

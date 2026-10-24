@@ -4181,6 +4181,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else if matches!(
                     &arg.value.kind,
                     ExprKind::ArrayLiteral(_)
+                        | ExprKind::PrefixCollectionLiteral { .. }
                         | ExprKind::RepeatLiteral {
                             type_name: None,
                             ..
@@ -4214,8 +4215,12 @@ impl<'a> super::TypeChecker<'a> {
                         &const_id_to_name,
                     );
                     let resolved = self.resolve_assoc_projections(&resolved);
-                    (matches!(resolved, Type::Array { .. }) && expectation_is_concrete(&resolved))
-                        .then_some(resolved)
+                    // B-2026-10-19-32 — any concrete answer, not only an
+                    // `Array`: a literal's element type is minted by literal
+                    // defaulting, so `nv.push([3])` on a `Vec[Vec[u64]]` (a
+                    // receiver that fixed `T` already) builds a `Vec[u64]`, as
+                    // `take([3])` does for a `Vec[u64]` parameter.
+                    expectation_is_concrete(&resolved).then_some(resolved)
                 } else {
                     None
                 };

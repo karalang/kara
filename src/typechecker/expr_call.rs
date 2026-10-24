@@ -1143,7 +1143,10 @@ impl<'a> super::TypeChecker<'a> {
             // require `shared` args and yield `bool`, rather than resolving the
             // `#[compiler_builtin]` stub's generic `[T](ref T, ref T)` signature
             // (which would accept any type and then miscompile a non-shared arg).
-            if name == "ref_eq" && self.local_scope.lookup("ref_eq").is_none() {
+            if name == "ref_eq"
+                && self.local_scope.lookup("ref_eq").is_none()
+                && !self.program_defines_fn("ref_eq")
+            {
                 return self.infer_ref_eq_intrinsic(args, span);
             }
         }
@@ -1721,6 +1724,7 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Identifier(name) = &callee.kind {
             if (name == "todo" || name == "unreachable" || name == "panic")
                 && self.local_scope.lookup(name).is_none()
+                && !self.program_defines_fn(name)
             {
                 match args.len() {
                     0 => {}
@@ -2892,6 +2896,17 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     // ── Call-Site Mutation Marker (design.md Part 1½) ────────────
+
+    /// Whether the program itself (not the appended library) declares a
+    /// top-level `fn name`. A program's own function shadows a prelude name
+    /// (design.md § The prelude), the builtin intercepts included
+    /// (B-2026-10-23-10).
+    pub(super) fn program_defines_fn(&self, name: &str) -> bool {
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        self.program.items.iter().any(
+            |item| matches!(item, Item::Function(f) if f.name == name && f.span.offset < library),
+        )
+    }
 
     /// Enforces the 1A call-site rule:
     ///   - Fresh binding to `mut ref T` / `mut Slice[T]` param → marker required.

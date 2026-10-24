@@ -1109,7 +1109,7 @@ let z: f64 = a;       // OK: a binding widens i32 to f64
 | `f64` | `f32` | **`as` required.** IEEE 754 round-to-nearest-even; overflow gives `±Infinity`. (`f32` to `f64` is implicit.) |
 | `f32` / `f64` | `iN` / `uN` | **`as` required. Saturates**; see [Float to integer conversion](#float-to-integer-conversion). |
 | `bool` | `iN` / `uN` | **`as` required.** `false` is `0`, `true` is `1`. The reverse (`iN as bool`) is rejected; write `n != 0`. |
-| `char` | `u32` / `i32` | **`as` required.** The Unicode scalar value (at most `0x10FFFF`, which fits either target). |
+| `char` | `u32` / `i32` and wider (`i64`, `u64`, `i128`, `u128`, `usize`) | **`as` required.** The Unicode scalar value (at most `0x10FFFF`, which fits any of these targets). |
 | `char` | `u8` / `u16` / `i8` / `i16` | **Rejected**: `error[E_CHAR_AS_NARROW_INT]: 'char as uN/iN' for N < 32 is rejected because it truncates the Unicode scalar value's low bits, which is not a meaningful operation; write 'c as u32 as uN' for explicit two-step truncation, or 'c.encode_utf8(buf)' for proper UTF-8 encoding`. The fix offers both. |
 | `iN` / `uN` | `char` | **Rejected**: `error[E_INT_AS_CHAR]: cannot cast integer to char via 'as': not every integer is a Unicode scalar value (range '0..=0xD7FF \| 0xE000..=0x10FFFF'); use 'char.try_from(n) -> Result[char, CharError]'`. |
 | `f32` / `f64` | `bool` | **Rejected**: meaningless. |

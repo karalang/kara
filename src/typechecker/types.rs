@@ -1006,32 +1006,11 @@ pub(super) fn is_integer(ty: &Type) -> bool {
     matches!(ty, Type::Int(_) | Type::UInt(_))
 }
 
-/// Width of an integer type in bits, for the char→int narrowing check.
-/// `usize` / `isize` are conservatively treated as 32-bit so a 32-bit
-/// target rejects `char as usize`; on 64-bit targets the cast is still
-/// allowed via the wider-int path. The actual address-width of `usize`
-/// is platform-dependent and folded in at codegen.
-pub(super) fn integer_width_bits(ty: &Type) -> Option<u32> {
-    match ty {
-        Type::Int(IntSize::I8) => Some(8),
-        Type::Int(IntSize::I16) => Some(16),
-        Type::Int(IntSize::I32) => Some(32),
-        Type::Int(IntSize::I64) => Some(64),
-        Type::UInt(UIntSize::U8) => Some(8),
-        Type::UInt(UIntSize::U16) => Some(16),
-        Type::UInt(UIntSize::U32) => Some(32),
-        Type::UInt(UIntSize::U64) => Some(64),
-        Type::UInt(UIntSize::Usize) => Some(64),
-        _ => None,
-    }
-}
-
 /// Width (in bits) and signedness of an integer scalar type, covering the
 /// full 8/16/32/64/128 range plus `usize` (modeled at 64, matching the
 /// codegen target). `None` for anything that is not a concrete integer.
-/// Used by the B-2026-07-09-7 implicit-widening gate — unlike
-/// `integer_width_bits` it does not drop `i128`/`u128` and it reports the
-/// sign, both of which the widening predicate needs.
+/// Used by the B-2026-07-09-7 implicit-widening gate, which needs the sign,
+/// and by the `char as` cast rule.
 pub(super) fn int_signed_width(ty: &Type) -> Option<(u32, bool)> {
     match ty {
         Type::Int(IntSize::I8) => Some((8, true)),
@@ -1450,36 +1429,33 @@ pub(super) fn projection_unresolvable_with(a: &Type, b: &Type) -> bool {
     }
 }
 
-/// The physical storage identity of a numeric type: `(is_float, bit width)`.
-/// `None` for anything non-numeric.
+/// The identity of a numeric type inside a compound: `(kind, bit width)`,
+/// where kind is 0 for a signed integer, 1 for an unsigned one and 2 for a
+/// float. `None` for anything non-numeric.
 ///
-/// Signedness is deliberately NOT part of the key. `i64` and `u64` occupy the
-/// same eight bytes and a container of one can be read as a container of the
-/// other without reinterpreting the buffer — only the value's interpretation
-/// changes, which is the ordinary integer coercion the language already allows
-/// at scalar positions (`fn find[T](..) -> Option[u64] { .. return Some(i); }`
-/// with `i: i64` is an accepted, tested shape). What must be invariant is the
-/// LAYOUT: `Vec[i64]` vs `Vec[u16]` differ in stride, and `Vec[i64]` vs
-/// `Vec[f64]` share a width but not a representation, so both reinterpret the
-/// buffer. B-2026-08-05-19.
-fn numeric_layout_key(t: &Type) -> Option<(bool, u16)> {
+/// Two concrete numeric types nested in a generic argument or a tuple element
+/// must be the SAME type. A width difference reinterprets the buffer
+/// (`Vec[i64]` vs `Vec[u16]` differ in stride, B-2026-08-05-19), and a sign
+/// difference is a conversion that can lose information, which design.md §1
+/// (Type safety) allows only through `as`; the scalar narrowing gate already
+/// refuses `let y: u64 = x` for `x: i64`, and the MIR builder takes
+/// `Option[i64]` and `Option[u64]` for distinct types (B-2026-10-23-12).
+fn numeric_layout_key(t: &Type) -> Option<(u8, u16)> {
     match t {
         Type::Int(s) => Some((
-            false,
+            0,
             match s {
                 IntSize::I8 => 8,
                 IntSize::I16 => 16,
                 IntSize::I32 => 32,
                 IntSize::I64 => 64,
                 IntSize::I128 => 128,
-                // Pointer-width, sharing `Usize`'s sentinel below: the two are
-                // the same width on every target, exactly as `i64` and `u64`
-                // already share `64` here (signedness is not part of the key).
+                // Pointer-width, a width of its own (see `Usize` below).
                 IntSize::Isize => 1,
             },
         )),
         Type::UInt(s) => Some((
-            false,
+            1,
             match s {
                 UIntSize::U8 => 8,
                 UIntSize::U16 => 16,
@@ -1494,7 +1470,7 @@ fn numeric_layout_key(t: &Type) -> Option<(bool, u16)> {
             },
         )),
         Type::Float(s) => Some((
-            true,
+            2,
             match s {
                 FloatSize::F16 => 16,
                 FloatSize::BF16 => 17, // distinct key: same width as f16, different layout
@@ -1503,6 +1479,15 @@ fn numeric_layout_key(t: &Type) -> Option<(bool, u16)> {
             },
         )),
         _ => None,
+    }
+}
+
+/// False when `a` and `b` are both concrete numeric types and not the same
+/// one: the rule for a generic argument or a tuple element.
+pub(super) fn numeric_args_agree(a: &Type, b: &Type) -> bool {
+    match (numeric_layout_key(a), numeric_layout_key(b)) {
+        (Some(ka), Some(kb)) => ka == kb,
+        _ => true,
     }
 }
 
@@ -1530,10 +1515,8 @@ fn generic_arg_compatible(variance: crate::ast::Variance, a: &Type, b: &Type) ->
     // through either. Uninstantiated type parameters are NOT numeric, so the
     // permissive `TypeParam` arm this function relies on for generic library
     // code (`fn last[T](v: Vec[T]) -> Option[T]`) keeps working unchanged.
-    if let (Some(ka), Some(kb)) = (numeric_layout_key(a), numeric_layout_key(b)) {
-        if ka != kb {
-            return false;
-        }
+    if !numeric_args_agree(a, b) {
+        return false;
     }
     match variance {
         crate::ast::Variance::Covariant => types_compatible(a, b),

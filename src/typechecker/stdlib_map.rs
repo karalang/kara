@@ -664,7 +664,7 @@ impl<'a> super::TypeChecker<'a> {
             // design.md gives both `val: ref T` — so they are split out below.
             "insert" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    let at = self.infer_element_arg(&arg.value, &elem);
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
@@ -1113,7 +1113,7 @@ impl<'a> super::TypeChecker<'a> {
             // design.md gives both `val: ref T` — so they are split out below.
             "insert" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    let at = self.infer_element_arg(&arg.value, &elem);
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);

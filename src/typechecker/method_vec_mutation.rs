@@ -175,7 +175,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_expr(&args[0].value, &elem);
                     elem.clone()
                 } else {
-                    self.infer_expr(&args[0].value)
+                    self.infer_element_arg(&args[0].value, &elem)
                 };
                 // B-2026-08-08-2 — a `frozen` parameter reads as `ref T`; the
                 // ownership pass decides whether this store is legal.
@@ -327,7 +327,7 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(elem) = element_ty {
                 let idx_ty = self.infer_expr(&args[0].value);
                 self.check_assignable(&Type::Int(IntSize::I64), &idx_ty, args[0].value.span);
-                let val_ty = self.infer_expr(&args[1].value);
+                let val_ty = self.infer_element_arg(&args[1].value, &elem);
                 unify_types(
                     &elem,
                     &val_ty,
@@ -616,7 +616,7 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(elem) = element_ty {
-                let arg_ty = self.infer_expr(&args[0].value);
+                let arg_ty = self.infer_element_arg(&args[0].value, &elem);
                 // Mirror the unification in the `Vec.push` arm above so an
                 // unsolved receiver-element typevar gets pinned to the first
                 // pushed value type.
@@ -651,6 +651,27 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         None
+    }
+
+    /// An argument for a container's element slot. A list literal follows
+    /// the element type, as at a `let` annotation (B-2026-10-19-32): `[3]`
+    /// into a `Vec[u64]` element builds a `Vec[u64]`, and `[0, 1]` into an
+    /// `Array[i64, 2]` element builds the array. Anything else is inferred,
+    /// and the caller checks it against the slot.
+    pub(super) fn infer_element_arg(&mut self, arg: &Expr, elem: &Type) -> Type {
+        let literal = matches!(
+            &arg.kind,
+            ExprKind::ArrayLiteral(es) if !es.is_empty()
+        ) || matches!(
+            &arg.kind,
+            ExprKind::PrefixCollectionLiteral { .. } | ExprKind::RepeatLiteral { .. }
+        );
+        let slot = resolve_type_var_top(elem, &self.env.substitutions);
+        if literal && super::exprs::expectation_is_concrete(&slot) {
+            self.check_expr(arg, &slot)
+        } else {
+            self.infer_expr(arg)
+        }
     }
 
     /// The item type of an owned `extend` source that is not slice-shaped:

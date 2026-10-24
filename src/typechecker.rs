@@ -116,7 +116,7 @@ pub use types::{
 #[cfg(test)]
 use types::{contains_type_param, receiver_for_method_lookup};
 use types::{
-    integer_width_bits, is_integer, is_numeric, is_subtype, projection_unresolvable_with,
+    int_signed_width, is_integer, is_numeric, is_subtype, projection_unresolvable_with,
     strip_refinement, types_compatible,
 };
 
@@ -718,6 +718,54 @@ impl LocalTypeScope {
 }
 
 // ── Errors ──────────────────────────────────────────────────────
+
+/// The message for two types that agree except for a numeric type nested
+/// in them (`Map[i64, i64]` for a `Map[i64, u64]`, `(i64, i64)` for an
+/// `(i64, i8)`), or `None` when they differ otherwise (B-2026-10-23-12).
+fn nested_numeric_mismatch_message(expected: &Type, found: &Type) -> Option<String> {
+    fn numeric(t: &Type) -> bool {
+        matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+    }
+    // Same shape: `Err(())` where the shapes part, else the first nested
+    // pair of distinct numbers (its wanted type), if any.
+    fn first_number_diff(a: &Type, b: &Type, depth: usize) -> Result<Option<Type>, ()> {
+        let all = |xs: &[Type], ys: &[Type]| {
+            let mut first = None;
+            for (x, y) in xs.iter().zip(ys) {
+                let d = first_number_diff(x, y, depth + 1)?;
+                first = first.or(d);
+            }
+            Ok(first)
+        };
+        match (a, b) {
+            _ if a == b => Ok(None),
+            (x, y) if numeric(x) && numeric(y) && depth > 0 => Ok(Some(x.clone())),
+            (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => all(xs, ys),
+            (Type::Named { name: n1, args: xs }, Type::Named { name: n2, args: ys })
+                if n1 == n2 && xs.len() == ys.len() =>
+            {
+                all(xs, ys)
+            }
+            _ => Err(()),
+        }
+    }
+    let peel = |t: &Type| match t {
+        Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref().clone(),
+        t => t.clone(),
+    };
+    let (want, have) = (peel(expected), peel(found));
+    let number = first_number_diff(&want, &have, 0).ok()??;
+    Some(format!(
+        "expected '{}', found '{}': a number held inside a collection, an \
+         `Option` or a tuple keeps its type, and nothing converts it in \
+         place. Give the value its type where it is made: annotate the \
+         binding (`let x: {} = ...`) or suffix the literal (`1{}`)",
+        type_display(expected),
+        type_display(found),
+        type_display(&want),
+        type_display(&number),
+    ))
+}
 
 /// `text` with each whole-word `StringSlice` written `Str`, the name the
 /// language gives the string view (design.md § Strings).
@@ -5242,9 +5290,10 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
-        // Char → wide integer (>= 32 bits): Unicode scalar value fits.
+        // Char → wide integer (>= 32 bits, `i128`/`u128` included): the
+        // Unicode scalar value fits (B-2026-10-24-7).
         if matches!(from_ty, Type::Char) {
-            if let Some(width) = integer_width_bits(to_ty) {
+            if let Some((width, _)) = int_signed_width(to_ty) {
                 if width >= 32 {
                     return;
                 }
@@ -6635,6 +6684,38 @@ impl<'a> TypeChecker<'a> {
             );
             return false;
         }
+        // B-2026-10-23-12 — a tuple VALUE holds each element in place, so a
+        // numeric element keeps its exact type, as a generic argument does
+        // (`numeric_args_agree`): `let b: (i64, i8) = a` over an `(i64, i64)`
+        // converts nothing, and the MIR builder refuses it as invalid MIR. A
+        // tuple LITERAL is exempt: its elements were each checked against
+        // their slots (the widening and narrowing gates), and an unsuffixed
+        // literal takes its slot's type.
+        if let (Type::Tuple(es), Type::Tuple(fs)) = (expected, found) {
+            let read = |t: &Type| match t {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref().clone(),
+                t => t.clone(),
+            };
+            if es.len() == fs.len()
+                && !self
+                    .tuple_literal_spans
+                    .contains_key(&SpanKey::from_span(&span))
+                && es
+                    .iter()
+                    .zip(fs)
+                    .any(|(e, f)| !types::numeric_args_agree(e, &read(f)))
+            {
+                let msg = nested_numeric_mismatch_message(expected, found).unwrap_or_else(|| {
+                    format!(
+                        "expected '{}', found '{}'",
+                        type_display(expected),
+                        type_display(found),
+                    )
+                });
+                self.type_error_with_types(msg, span, TypeErrorKind::TypeMismatch, expected, found);
+                return false;
+            }
+        }
         // B-2026-07-15-3: a `ref` / `mut ref` SCALAR reads as its value type
         // in any value position (annotated let, argument passing, …) — the
         // same auto-deref arithmetic already performs
@@ -7111,6 +7192,12 @@ impl<'a> TypeChecker<'a> {
                 expected,
                 found,
             );
+            return false;
+        }
+        // B-2026-10-23-12 — the two types differ only in a number nested in
+        // them, which nothing converts: say where the type has to be given.
+        if let Some(msg) = nested_numeric_mismatch_message(expected, found) {
+            self.type_error_with_types(msg, span, TypeErrorKind::TypeMismatch, expected, found);
             return false;
         }
         // Canonical assignment-mismatch site. Use the typed-fields

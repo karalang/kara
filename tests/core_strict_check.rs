@@ -12533,3 +12533,93 @@ fn into_on_a_unit_variant_literal_converts() {
         "no `impl From[A] for i64` is in scope; cannot `.into()`",
     );
 }
+
+#[test]
+fn a_char_casts_to_every_integer_of_32_bits_or_more() {
+    // B-2026-10-24-7: the Unicode scalar value fits `i128` and `u128` as it
+    // fits `i64`; a narrow target is still refused with its own error.
+    accepted_and_runs(
+        "char-as-wide-ints",
+        "fn main() {\n    let c = 'A';\n    let a = c as i64;\n    let b = c as u64;\n    \
+         let d = c as i128;\n    let e = '\\u{10FFFF}' as u128;\n    \
+         println(f\"{a} {b} {d} {e}\");\n}\n",
+        "65 65 65 1114111\n",
+    );
+    rejected(
+        "char-as-u16",
+        "fn main() {\n    let n = 'A' as u16;\n    println(f\"{n}\");\n}\n",
+        "E_CHAR_AS_NARROW_INT",
+    );
+}
+
+#[test]
+fn a_program_function_shadows_a_builtin_of_the_same_name() {
+    // B-2026-10-23-10: the program's own `todo`, `panic` and `ref_eq` are
+    // called, not the prelude builtins they shadow.
+    accepted_and_runs(
+        "own-todo-panic-ref-eq",
+        "fn todo(a: i64, b: i64) -> i64 {\n    a + b\n}\n\
+         fn panic(s: Str) -> i64 {\n    7\n}\n\
+         fn ref_eq(a: i64, b: i64, c: i64) -> bool {\n    a == b and b == c\n}\n\
+         fn main() {\n    println(f\"{todo(1, 2)} {panic(\"x\")} {ref_eq(1, 1, 1)}\");\n}\n",
+        "3 7 true\n",
+    );
+    rejected(
+        "builtin-todo-still-checked",
+        "fn main() {\n    let x: i64 = todo(1, 2);\n    println(f\"{x}\");\n}\n",
+        "todo() takes 0 or 1 argument(s), found 2",
+    );
+}
+
+#[test]
+fn a_numeric_type_inside_a_compound_keeps_its_sign() {
+    // B-2026-10-23-12: a generic argument or a tuple element holds its value
+    // in place, so `Map[i64, i64]`, `Option[i64]` and `(i64, i64)` do not
+    // stand for their `u64` / `i8` versions; literals still take the slot's
+    // type.
+    rejected(
+        "defaulted-map-into-a-u64-field",
+        "struct S { m: Map[i64, u64] }\nfn main() {\n    let mut m2 = Map.new();\n    \
+         let _ = m2.insert(5, 9);\n    let s = S { m: m2 };\n    println(s.m.len());\n}\n",
+        "expected 'Map[i64, u64]', found 'Map[i64, i64]'",
+    );
+    rejected(
+        "option-i64-into-option-u64",
+        "fn g(x: own Option[i64]) -> Option[u64] {\n    x\n}\nfn main() {\n    \
+         println(g(Some(1)).is_some());\n}\n",
+        "expected 'Option[u64]', found 'Option[i64]'",
+    );
+    rejected(
+        "tuple-value-into-a-narrower-tuple",
+        "fn main() {\n    let a = (1, 2);\n    let b: (i64, i8) = a;\n    println(f\"{b.1}\");\n}\n",
+        "expected '(i64, i8)', found '(i64, i64)'",
+    );
+    accepted_and_runs(
+        "literals-take-the-slot-type",
+        "fn main() {\n    let o: Option[u64] = Some(5);\n    let t: (i64, u8) = (1, 2);\n    \
+         let v: Vec[(u8, i64)] = [(1, 2), (3, 4)];\n    let mut m: Map[i64, u64] = Map.new();\n    \
+         m.insert(5, 9);\n    println(f\"{o.unwrap()} {t.1} {v.len()} {m.len()}\");\n}\n",
+        "5 2 2 1\n",
+    );
+}
+
+#[test]
+fn a_list_literal_into_a_container_element_follows_the_element_type() {
+    // B-2026-10-19-32: `push`, `push_back`, `insert` and a set's `insert`
+    // check a list literal against the element type, as a `let` annotation
+    // does.
+    accepted_and_runs(
+        "list-literal-element-args",
+        "fn main() {\n    let mut best: Vec[Array[i64, 2]] = Vec.new();\n    best.push([0, 1]);\n    \
+         let mut d: VecDeque[Array[i64, 2]] = VecDeque.new();\n    d.push_back([2, 3]);\n    \
+         let mut nv: Vec[Vec[u64]] = Vec.new();\n    nv.push([18446744073709551615]);\n    \
+         nv.insert(0, vec![3]);\n    let mut s: Set[Vec[u8]] = Set.new();\n    s.insert([250, 1]);\n    \
+         println(f\"{best[0][1]} {d[0][1]} {nv} {s.len()}\");\n}\n",
+        "1 3 [[3], [18446744073709551615]] 1\n",
+    );
+    rejected(
+        "list-literal-element-out-of-range",
+        "fn main() {\n    let mut v: Vec[Vec[u8]] = Vec.new();\n    v.push([300]);\n    println(v.len());\n}\n",
+        "integer literal 300 out of range for 'u8'",
+    );
+}
