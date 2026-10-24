@@ -1990,6 +1990,28 @@ impl<'a> super::TypeChecker<'a> {
         self.check_pattern_against(pattern, ty, mode);
         self.current_scrutinee_ok_fix = prev_ok;
         self.scrutinee_tuple_parts_borrowed = prev_parts;
+        // On the MIR pipeline a pattern over a view (a bare `for` element,
+        // or a part of one) binds views too, so `*f` reads one as `karac
+        // check` reads the `ref` it binds (B-2026-10-23-8).
+        if self.library_methods_from_source && !self.cli_lint_overrides.strict_core {
+            let mut root = scrutinee;
+            while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+                &root.kind
+            {
+                root = object;
+            }
+            if matches!(&root.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n)) {
+                for n in pattern.binding_names() {
+                    let value = self
+                        .local_scope
+                        .lookup(&n)
+                        .is_some_and(|t| !matches!(t, Type::Ref(_) | Type::MutRef(_)));
+                    if value {
+                        self.local_scope.mark_view(&n);
+                    }
+                }
+            }
+        }
         // §4.6: a binding into a `for` element that `.into_iter()` would make
         // owned is fixed by the same `.into_iter()`.
         if self.cli_lint_overrides.strict_core {

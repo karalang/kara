@@ -9701,10 +9701,11 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
-                // On the MIR pipeline a bare `for` over a collection binds a
-                // `Copy` item (or part of one) by value; it is still a view
-                // of the borrowed collection, so `*v` reads it, as the
-                // builder does (B-2026-10-12-9).
+                // On the MIR pipeline a bare `for` over a collection binds
+                // its item (or a part of one) at its value type; it is still
+                // a view of the borrowed collection, so `*v` reads it, as the
+                // builder does and as `karac check` reads the `ref` it binds
+                // (B-2026-10-12-9, B-2026-10-23-8).
                 if self.library_methods_from_source
                     && !self.cli_lint_overrides.strict_core
                     && Self::for_iterable_is_core_collection(&iter_ty)
@@ -9713,10 +9714,9 @@ impl<'a> super::TypeChecker<'a> {
                         .binding_names()
                         .into_iter()
                         .filter(|n| {
-                            self.local_scope.lookup(n).is_some_and(|t| {
-                                !matches!(t, Type::Ref(_) | Type::MutRef(_))
-                                    && self.is_copy_type_during_check(t)
-                            })
+                            self.local_scope
+                                .lookup(n)
+                                .is_some_and(|t| !matches!(t, Type::Ref(_) | Type::MutRef(_)))
                         })
                         .collect();
                     for n in views {
