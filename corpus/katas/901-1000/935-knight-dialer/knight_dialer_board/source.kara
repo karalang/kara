@@ -1,0 +1,87 @@
+// LeetCode #935: Knight Dialer -- the keypad as a board.
+//
+// Lay the keypad out as 4 rows of 3 cells, the two cells beside the 0
+// missing, and keep a count for each cell. A knight's jumps are worked
+// out from the board itself: two rows and one column, or one row and two
+// columns, in any direction, onto a cell that exists. Each step a cell's
+// new count is the sum of the old counts on the cells a jump away; after
+// n - 1 steps, add up every cell. O(n).
+
+fn knight_dialer(n: i64) -> i64 {
+    let modulus = 1000000007;
+    let dr = [-2, -2, -1, -1, 1, 1, 2, 2];
+    let dc = [-1, 1, -2, 2, -2, 2, -1, 1];
+    // a key at every cell but the two beside the 0
+    let mut key: Vec[Vec[bool]] = Vec.new();
+    for r in 0..4 {
+        let mut row: Vec[bool] = Vec.new();
+        for c in 0..3 {
+            row.push(r < 3 or c == 1);
+        }
+        key.push(row);
+    }
+    let mut counts: Vec[Vec[i64]] = Vec.new();
+    for r in 0..4 {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..3 {
+            row.push(if key[r][c] { 1 } else { 0 });
+        }
+        counts.push(row);
+    }
+    for _ in 1..n {
+        let mut next: Vec[Vec[i64]] = Vec.new();
+        for r in 0..4 {
+            let mut row: Vec[i64] = Vec.filled(3, 0);
+            for c in 0..3 {
+                if key[r][c] {
+                    for k in 0..8 {
+                        let rr = r + dr[k];
+                        let cc = c + dc[k];
+                        if rr >= 0 and rr < 4 and cc >= 0 and cc < 3 and key[rr][cc] {
+                            row[c] = (row[c] + counts[rr][cc]) % modulus;
+                        }
+                    }
+                }
+            }
+            next.push(row);
+        }
+        counts = next;
+    }
+    let mut total = 0;
+    for row in counts.iter() {
+        for v in row.iter() {
+            total = (total + *v) % modulus;
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's three examples, then the first ten lengths
+    println(f"n = 1: {knight_dialer(1)}");
+    println(f"n = 2: {knight_dialer(2)}");
+    println(f"n = 3131: {knight_dialer(3131)}");
+    let mut first = String.new();
+    for n in 1..11 {
+        if n > 1 {
+            first = first + ", ";
+        }
+        first = first + f"{knight_dialer(n)}";
+    }
+    println(f"n from 1 to 10: {first}");
+    // the first length past 10^9 + 7, and every length up to 300 folded
+    // into a checksum
+    println(f"n = 23: {knight_dialer(23)}, n = 24: {knight_dialer(24)}");
+    let mut sum = 0;
+    let mut check = 0;
+    for n in 1..301 {
+        let a = knight_dialer(n);
+        sum += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"n from 1 to 300: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest and a few beside it
+    println(f"n = 4999: {knight_dialer(4999)}, n = 5000: {knight_dialer(5000)}, n = 2048: {knight_dialer(2048)}");
+}

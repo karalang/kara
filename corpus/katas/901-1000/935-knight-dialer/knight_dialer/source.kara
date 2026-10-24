@@ -1,0 +1,57 @@
+// LeetCode #935: Knight Dialer -- counts by last digit, one jump at a time.
+//
+// Keep, for each digit, how many numbers of the current length end on
+// it; one digit long, one each. A number one longer ending on d extends a
+// number ending on a digit a knight's jump from d, so the new count for d
+// is the sum of the old counts over d's jumps. After n - 1 jumps the
+// answer is the sum of the counts, modulo 10^9 + 7. O(n).
+
+fn knight_dialer(n: i64) -> i64 {
+    let modulus = 1000000007;
+    let jumps: Vec[Vec[i64]] = vec![vec![4, 6], vec![6, 8], vec![7, 9], vec![4, 8], vec![0, 3, 9], Vec.new(), vec![0, 1, 7], vec![2, 6], vec![1, 3], vec![2, 4]];
+    let mut counts: Vec[i64] = Vec.filled(10, 1);
+    for _ in 1..n {
+        let mut next: Vec[i64] = Vec.filled(10, 0);
+        for d in 0..10 {
+            for from in jumps[d].iter() {
+                next[d] = (next[d] + counts[*from]) % modulus;
+            }
+        }
+        counts = next;
+    }
+    let mut total = 0;
+    for c in counts.iter() {
+        total = (total + *c) % modulus;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's three examples, then the first ten lengths
+    println(f"n = 1: {knight_dialer(1)}");
+    println(f"n = 2: {knight_dialer(2)}");
+    println(f"n = 3131: {knight_dialer(3131)}");
+    let mut first = String.new();
+    for n in 1..11 {
+        if n > 1 {
+            first = first + ", ";
+        }
+        first = first + f"{knight_dialer(n)}";
+    }
+    println(f"n from 1 to 10: {first}");
+    // the first length past 10^9 + 7, and every length up to 300 folded
+    // into a checksum
+    println(f"n = 23: {knight_dialer(23)}, n = 24: {knight_dialer(24)}");
+    let mut sum = 0;
+    let mut check = 0;
+    for n in 1..301 {
+        let a = knight_dialer(n);
+        sum += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"n from 1 to 300: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest and a few beside it
+    println(f"n = 4999: {knight_dialer(4999)}, n = 5000: {knight_dialer(5000)}, n = 2048: {knight_dialer(2048)}");
+}
