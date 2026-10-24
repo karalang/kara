@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/938-range-sum-of-bst/range_sum_bst_split.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "lib:vecdeque"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "4ff1efab7"
+extracted_src = "49992854"
+model_rev = "aafbe785"
+model_src = "49992854"

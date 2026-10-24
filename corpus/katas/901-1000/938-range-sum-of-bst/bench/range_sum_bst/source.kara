@@ -1,0 +1,96 @@
+// LeetCode #938: Range Sum of BST -- bench: recursion that skips
+// subtrees. Mirrors range_sum_bst.c, .rs, .py and go-seq/.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn range_sum_bst(root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    match root {
+        None => 0,
+        Some(node) => {
+            if node.val < low {
+                range_sum_bst(node.right, low, high)
+            } else if node.val > high {
+                range_sum_bst(node.left, low, high)
+            } else {
+                node.val + range_sum_bst(node.left, low, high) + range_sum_bst(node.right, low, high)
+            }
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 20;
+    let count = 20;
+    let queries = 50;
+    let mut seed = 938;
+    // each tree holds 20000 distinct values from 1 to 10^5, LeetCode's
+    // most, put in in random order; each has 50 random ranges
+    let mut trees: Vec[TreeNode] = Vec.new();
+    let mut lows: Vec[i64] = Vec.new();
+    let mut highs: Vec[i64] = Vec.new();
+    let mut pool: Vec[i64] = Vec.new();
+    for v in 1..100001 {
+        pool.push(v);
+    }
+    for _ in 0..count {
+        for i in 0..20000 {
+            let j = i + next_random(mut seed) % (100000 - i);
+            pool.swap(i, j);
+        }
+        let root = TreeNode { val: pool[0], left: None, right: None };
+        for i in 1..20000 {
+            let v = pool[i];
+            let mut cur = root;
+            loop {
+                if v < cur.val {
+                    match cur.left {
+                        Some(l) => cur = l,
+                        None => {
+                            cur.left = Some(TreeNode { val: v, left: None, right: None });
+                            break;
+                        }
+                    }
+                } else {
+                    match cur.right {
+                        Some(r) => cur = r,
+                        None => {
+                            cur.right = Some(TreeNode { val: v, left: None, right: None });
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        trees.push(root);
+        for _ in 0..queries {
+            let a = 1 + next_random(mut seed) % 100000;
+            let b = 1 + next_random(mut seed) % 100000;
+            lows.push(if a < b { a } else { b });
+            highs.push(if a < b { b } else { a });
+        }
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        // each round answers every range of every tree, starting from a
+        // different tree
+        for i in 0..count {
+            let c = (r + i) % count;
+            for q in 0..queries {
+                let s = range_sum_bst(Some(trees[c]), lows[c * queries + q], highs[c * queries + q]);
+                total += s;
+                check = (check * 1000003 + s) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over {count} trees of 20000 nodes, {queries} ranges each: sums adding to {total}, checksum {check}");
+}

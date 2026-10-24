@@ -1,0 +1,12 @@
+[10,5,15,3,7,null,18], 7 to 15: 32
+[10,5,15,3,7,13,18,1,null,6], 6 to 10: 23
+[5], 5 to 5: 5
+[5], 6 to 9: 0
+[10,5,15,3,7,null,18], 1 to 100000: 58
+[10,5,15,3,7,null,18], 11 to 14: 0
+[10,5,15,3,7,13,18,1,null,6], 1 to 1: 1
+300 random trees of 30417 values: sums adding to 168383128, checksum 260398888
+20000 values put in at random, 25000 to 75000: 303138520
+a chain of 20000 to the right, 5000 to 15000: 100010000
+a chain of 20000 to the left, 1 to 20000: 200010000
+a balanced tree of 20000, 9999 to 10001: 30000

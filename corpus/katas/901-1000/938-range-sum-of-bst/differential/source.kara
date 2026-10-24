@@ -1,0 +1,365 @@
+// LeetCode #938: Range Sum of BST -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: given the root node of a binary search tree and two
+// integers low and high, return the sum of values of all nodes with a
+// value in the inclusive range [low, high].
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- the ★ arm: recursion that skips subtrees -----------------------------
+fn star_range_sum_bst(root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    match root {
+        None => 0,
+        Some(node) => {
+            if node.val < low {
+                star_range_sum_bst(node.right, low, high)
+            } else if node.val > high {
+                star_range_sum_bst(node.left, low, high)
+            } else {
+                node.val + star_range_sum_bst(node.left, low, high) + star_range_sum_bst(node.right, low, high)
+            }
+        }
+    }
+}
+
+// ---- the stack arm: a stack of its own ------------------------------------
+fn stack_range_sum_bst(root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    let mut total = 0;
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while stack.len() > 0 {
+        let node = stack.pop().unwrap();
+        if node.val >= low {
+            if let Some(l) = node.left {
+                stack.push(l);
+            }
+        }
+        if node.val <= high {
+            if let Some(r) = node.right {
+                stack.push(r);
+            }
+        }
+        if node.val >= low and node.val <= high {
+            total += node.val;
+        }
+    }
+    total
+}
+
+// ---- the inorder arm: every value in order --------------------------------
+fn inorder_collect(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        inorder_collect(n.left, mut out);
+        out.push(n.val);
+        inorder_collect(n.right, mut out);
+    }
+}
+
+fn inorder_range_sum_bst(root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    let mut vals: Vec[i64] = Vec.new();
+    inorder_collect(root, mut vals);
+    let mut total = 0;
+    for v in vals.iter() {
+        if *v > high {
+            break;
+        }
+        if *v >= low {
+            total += *v;
+        }
+    }
+    total
+}
+
+// ---- the morris arm: a Morris walk ----------------------------------------
+fn morris_range_sum_bst(root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    let mut total = 0;
+    let mut cur = root;
+    while let Some(node) = cur {
+        match node.left {
+            None => {
+                if node.val >= low and node.val <= high {
+                    total += node.val;
+                }
+                cur = node.right;
+            }
+            Some(left) => {
+                // the last node of the left subtree, short of a link back
+                let mut last = left;
+                loop {
+                    match last.right {
+                        Some(r) => {
+                            if r.ref_eq(node) {
+                                break;
+                            }
+                            last = r;
+                        }
+                        None => break,
+                    }
+                }
+                match last.right {
+                    None => {
+                        last.right = Some(node);
+                        cur = node.left;
+                    }
+                    Some(_) => {
+                        last.right = None;
+                        if node.val >= low and node.val <= high {
+                            total += node.val;
+                        }
+                        cur = node.right;
+                    }
+                }
+            }
+        }
+    }
+    total
+}
+
+// ---- the split arm: the split node and two paths --------------------------
+fn split_subtree_sum(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => n.val + split_subtree_sum(n.left) + split_subtree_sum(n.right),
+    }
+}
+
+fn split_range_sum_bst(root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    // the split node
+    let mut cur = root;
+    let mut split: Option[TreeNode] = None;
+    while let Some(node) = cur {
+        if node.val < low {
+            cur = node.right;
+        } else if node.val > high {
+            cur = node.left;
+        } else {
+            split = Some(node);
+            cur = None;
+        }
+    }
+    let top = match split {
+        None => return 0,
+        Some(s) => s,
+    };
+    let mut total = top.val;
+    // towards low, inside the split node's left subtree
+    let mut walk = top.left;
+    while let Some(node) = walk {
+        if node.val >= low {
+            total += node.val + split_subtree_sum(node.right);
+            walk = node.left;
+        } else {
+            walk = node.right;
+        }
+    }
+    // towards high, inside its right subtree
+    let mut walk = top.right;
+    while let Some(node) = walk {
+        if node.val <= high {
+            total += node.val + split_subtree_sum(node.left);
+            walk = node.right;
+        } else {
+            walk = node.left;
+        }
+    }
+    total
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    if x == 0 {
+        star_range_sum_bst(root, low, high)
+    } else if x == 1 {
+        stack_range_sum_bst(root, low, high)
+    } else if x == 2 {
+        inorder_range_sum_bst(root, low, high)
+    } else if x == 3 {
+        morris_range_sum_bst(root, low, high)
+    } else {
+        split_range_sum_bst(root, low, high)
+    }
+}
+
+// Every value in the tree, level by level.
+fn values(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    if let Some(r) = root {
+        queue.push_back(r);
+    }
+    while let Some(node) = queue.pop_front() {
+        out.push(node.val);
+        if let Some(l) = node.left {
+            queue.push_back(l);
+        }
+        if let Some(r) = node.right {
+            queue.push_back(r);
+        }
+    }
+    out
+}
+
+// The statement read literally: visit every node, whatever its place,
+// and add the values from low to high.
+fn literal(root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    let mut total = 0;
+    for v in values(root).iter() {
+        if *v >= low and *v <= high {
+            total += *v;
+        }
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A search tree of the values put in in the order given; a value already
+// there is left out.
+fn insert_all(vals: ref Vec[i64]) -> Option[TreeNode] {
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for i in 1..vals.len() {
+        let v = vals[i];
+        let mut cur = root;
+        loop {
+            if v == cur.val {
+                break;
+            }
+            if v < cur.val {
+                match cur.left {
+                    Some(l) => cur = l,
+                    None => {
+                        cur.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match cur.right {
+                    Some(r) => cur = r,
+                    None => {
+                        cur.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, root: Option[TreeNode], low: i64, high: i64, small: bool) -> i64 {
+    let truth = if small { literal(root, low, high) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, root, low, high));
+    }
+    // the inputs P2 to P5 share: the sum of every value; a place to cut
+    // the range; and the same values put in in a new order
+    let mut vals = values(root);
+    let mut whole = 0;
+    for v in vals.iter() {
+        whole += *v;
+    }
+    let cut = low + next_random(mut seed) % (high - low + 1);
+    let mut i = vals.len() - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+        i -= 1;
+    }
+    let reshaped = insert_all(vals);
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's sum, on the small trees
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: from 0 to the sum of every value, which a range from 1 to
+        // 10^5 gives
+        check(mut t, 2, a >= 0 and a <= whole and arm(x, root, 1, 100000) == whole);
+        // P3: the range cut in two adds up
+        let parts = if cut < high { arm(x, root, low, cut) + arm(x, root, cut + 1, high) } else { arm(x, root, low, cut) };
+        check(mut t, 3, a == parts);
+        // P4: everything up to high, less everything below low
+        let below = if low > 1 { arm(x, root, 1, low - 1) } else { 0 };
+        check(mut t, 4, a == arm(x, root, 1, high) - below);
+        // P5: the same values in a tree of another shape
+        check(mut t, 5, a == arm(x, reshaped, low, high));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 938;
+    let mut cases = 0;
+    let mut nodes = 0;
+    let mut check_sum = 0;
+    // trees of up to 12 values from 1 to 30 against the statement, then up
+    // to 2000 values from 1 to 10^5, every fourth put in in increasing
+    // order to make a chain
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 2000 };
+        let top = if small { 30 } else { 100000 };
+        let mut vals: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            vals.push(1 + next_random(mut seed) % top);
+        }
+        if not small and c % 4 == 0 {
+            vals.sort();
+            vals.truncate(300);
+        }
+        let a = 1 + next_random(mut seed) % top;
+        let b = 1 + next_random(mut seed) % top;
+        let low = if a < b { a } else { b };
+        let high = if a < b { b } else { a };
+        let root = insert_all(vals);
+        cases += 1;
+        nodes += values(root).len();
+        let s = properties(mut t, mut seed, root, low, high, small);
+        check_sum = (check_sum * 1000003 + s) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} trees of {nodes} nodes, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

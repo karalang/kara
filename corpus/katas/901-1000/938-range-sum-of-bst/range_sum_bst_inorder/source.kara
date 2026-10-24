@@ -1,0 +1,183 @@
+// LeetCode #938: Range Sum of BST -- every value in order.
+//
+// Ignore the ordering while searching: read every value in order into a
+// list, which for a search tree comes out sorted, and add the ones from
+// low to high, stopping at the first above high. O(n) time and space.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn collect(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        collect(n.left, mut out);
+        out.push(n.val);
+        collect(n.right, mut out);
+    }
+}
+
+fn range_sum_bst(root: Option[TreeNode], low: i64, high: i64) -> i64 {
+    let mut vals: Vec[i64] = Vec.new();
+    collect(root, mut vals);
+    let mut total = 0;
+    for v in vals.iter() {
+        if *v > high {
+            break;
+        }
+        if *v >= low {
+            total += *v;
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A search tree of the values put in in the order given; a value already
+// there is left out.
+fn insert_all(vals: ref Vec[i64]) -> Option[TreeNode] {
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for i in 1..vals.len() {
+        let v = vals[i];
+        let mut cur = root;
+        loop {
+            if v == cur.val {
+                break;
+            }
+            if v < cur.val {
+                match cur.left {
+                    Some(l) => cur = l,
+                    None => {
+                        cur.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match cur.right {
+                    Some(r) => cur = r,
+                    None => {
+                        cur.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// The values from 1 to n, each the right child of the one before, or
+// each the left child of the one after.
+fn chain(n: i64, rightward: bool) -> Option[TreeNode] {
+    let first = if rightward { n } else { 1 };
+    let mut top = TreeNode { val: first, left: None, right: None };
+    for k in 1..n {
+        let v = if rightward { n - k } else { 1 + k };
+        let node = TreeNode { val: v, left: None, right: None };
+        if rightward {
+            node.right = Some(top);
+        } else {
+            node.left = Some(top);
+        }
+        top = node;
+    }
+    Some(top)
+}
+
+// A balanced tree of the values from `from` to `to`.
+fn balanced(from: i64, to: i64) -> Option[TreeNode] {
+    if from > to {
+        return None;
+    }
+    let mid = (from + to) / 2;
+    Some(TreeNode { val: mid, left: balanced(from, mid - 1), right: balanced(mid + 1, to) })
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let first: Vec[Option[i64]] = vec![Some(10), Some(5), Some(15), Some(3), Some(7), None, Some(18)];
+    let second: Vec[Option[i64]] = vec![Some(10), Some(5), Some(15), Some(3), Some(7), Some(13), Some(18), Some(1), None, Some(6)];
+    println(f"[10,5,15,3,7,null,18], 7 to 15: {range_sum_bst(from_level_order(first.clone()), 7, 15)}");
+    println(f"[10,5,15,3,7,13,18,1,null,6], 6 to 10: {range_sum_bst(from_level_order(second.clone()), 6, 10)}");
+    println(f"[5], 5 to 5: {range_sum_bst(from_level_order(vec![Some(5)]), 5, 5)}");
+    println(f"[5], 6 to 9: {range_sum_bst(from_level_order(vec![Some(5)]), 6, 9)}");
+    println(f"[10,5,15,3,7,null,18], 1 to 100000: {range_sum_bst(from_level_order(first.clone()), 1, 100000)}");
+    println(f"[10,5,15,3,7,null,18], 11 to 14: {range_sum_bst(from_level_order(first.clone()), 11, 14)}");
+    println(f"[10,5,15,3,7,13,18,1,null,6], 1 to 1: {range_sum_bst(from_level_order(second.clone()), 1, 1)}");
+    // 300 random trees of 1 to 200 values from 1 to 100000 put in at
+    // random, each with a random range
+    let mut seed = 938;
+    let mut nodes = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 200;
+        let mut vals: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            vals.push(1 + next_random(mut seed) % 100000);
+        }
+        let a = 1 + next_random(mut seed) % 100000;
+        let b = 1 + next_random(mut seed) % 100000;
+        let low = if a < b { a } else { b };
+        let high = if a < b { b } else { a };
+        let s = range_sum_bst(insert_all(vals), low, high);
+        nodes += n;
+        total += s;
+        check = (check * 1000003 + s) % 1000000007;
+    }
+    println(f"300 random trees of {nodes} values: sums adding to {total}, checksum {check}");
+    // LeetCode's largest: 20000 nodes, as a tree of distinct values put in
+    // at random, two chains and a balanced tree
+    let mut pool: Vec[i64] = Vec.new();
+    for v in 1..100001 {
+        pool.push(v);
+    }
+    for i in 0..20000 {
+        let j = i + next_random(mut seed) % (100000 - i);
+        pool.swap(i, j);
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    for i in 0..20000 {
+        vals.push(pool[i]);
+    }
+    println(f"20000 values put in at random, 25000 to 75000: {range_sum_bst(insert_all(vals), 25000, 75000)}");
+    println(f"a chain of 20000 to the right, 5000 to 15000: {range_sum_bst(chain(20000, true), 5000, 15000)}");
+    println(f"a chain of 20000 to the left, 1 to 20000: {range_sum_bst(chain(20000, false), 1, 20000)}");
+    println(f"a balanced tree of 20000, 9999 to 10001: {range_sum_bst(balanced(1, 20000), 9999, 10001)}");
+}
