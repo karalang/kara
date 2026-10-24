@@ -17,12 +17,12 @@ enum Option[ref R] { None, Some(ref R) }
 
 fn main() -> () {
     let mut _0: ();
-    let _1: Map[i64, R]; // m
-    let _2: mut ref Map[i64, R];
+    let _1: SortedMap[i64, R]; // m
+    let _2: mut ref SortedMap[i64, R];
     let _3: R;
     let _4: Option[R];
     let _5: ();
-    let _6: ref Map[i64, R];
+    let _6: ref SortedMap[i64, R];
     let _7: i64;
     let _8: Option[ref R];
     let _9: i64;
@@ -34,22 +34,22 @@ fn main() -> () {
     let _15: R; // old
     let _16: ref i64;
     bb0: {
-        _1 = Map[i64, R].new() -> bb1;
+        _1 = SortedMap[i64, R].new() -> bb1;
     }
     bb1: {
         _3 = R { const 1_i64 };
         _2 = &mut _1;
-        _4 = Map[i64, R].insert(move _2, const 1_i64, move _3) -> bb2;
+        _4 = SortedMap[i64, R].insert(move _2, const 1_i64, move _3) -> bb2;
     }
     bb2: {
         _3 = R { const 2_i64 };
         _2 = &mut _1;
-        _4 = Map[i64, R].insert(move _2, const 2_i64, move _3) -> bb3;
+        _4 = SortedMap[i64, R].insert(move _2, const 2_i64, move _3) -> bb3;
     }
     bb3: {
         _3 = R { const 3_i64 };
         _2 = &mut _1;
-        _4 = Map[i64, R].insert(move _2, const 1_i64, move _3) -> bb4;
+        _4 = SortedMap[i64, R].insert(move _2, const 1_i64, move _3) -> bb4;
     }
     bb4: {
         _9 = discriminant(_4);
@@ -63,7 +63,7 @@ fn main() -> () {
         _7 = const 2_i64;
         _16 = &_7;
         _6 = &_1;
-        _8 = Map[i64, R].get(move _6, move _16) -> bb7;
+        _8 = SortedMap[i64, R].get(move _6, move _16) -> bb7;
     }
     bb7: {
         _9 = discriminant(_8);
@@ -75,14 +75,14 @@ fn main() -> () {
     }
     bb9: {
         _6 = &_1;
-        _10 = Map[i64, R].index(move _6, const 1_i64) -> bb10;
+        _10 = SortedMap[i64, R].index(move _6, const 1_i64) -> bb10;
     }
     bb10: {
         _5 = println(const "idx", copy (*_10).0) -> bb11;
     }
     bb11: {
         _6 = &_1;
-        _11 = Map[i64, R].len(move _6) -> bb12;
+        _11 = SortedMap[i64, R].len(move _6) -> bb12;
     }
     bb12: {
         _12 = format(const "n=", copy _11, const " ok") -> bb13;

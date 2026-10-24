@@ -1039,11 +1039,14 @@ fn mir_table_lookups_agree_through_holes() {
         }
         best = best.max(right - left + 1);
     }
-    let mut order = String.new();
+    // The walk order is seeded per process: print it sorted.
+    let mut parts: Vec[String] = Vec.new();
     for (c, n) in counts.iter() {
-        order.push(c);
-        order.push_str(n.to_string().as_str());
+        parts.push(f"{c}{n}");
     }
+    parts.sort();
+    let mut order = String.new();
+    for p in parts { order.push_str(p.as_str()); }
     println(order);
     best
 }
@@ -1060,8 +1063,8 @@ fn main() {
     let mut t = 0;
     let mut first = -1;
     for (k, v) in m.iter() {
-        if first < 0 { first = k; }
-        t = t * 31 % 1000003 + k * v;
+        if first < 0 or k < first { first = k; }
+        t = t + k * v;
     }
     println(f"{m.len()} {t} {first} {m[5]} {m.get(36)} {m.contains_key(0)} {m.get_or(1000, 7)}");
     let mut flags: Map[bool, i64] = Map.new();
@@ -1096,7 +1099,7 @@ fn main() {
     let want = karac::mir::lower::run_source(SRC)
         .expect("MIR interpreter")
         .output;
-    assert_eq!(want, "e1g2\na2b2c2\n6 10\n32 91955 12 264 Some(295) true 7\nSome(3) Some(2) 2\nSome(3) 8\n31 7 12 true true\nSome(3) None 2\nSome(9) None 3 true\n");
+    assert_eq!(want, "e1g2\na2b2c2\n6 10\n32 169916 0 264 Some(295) true 7\nSome(3) Some(2) 2\nSome(3) 8\n31 7 12 true true\nSome(3) None 2\nSome(9) None 3 true\n");
     for opt in [0, 2] {
         if let Some(out) = build_and_run(SRC, opt) {
             assert_eq!(out, want, "at -O{opt}");

@@ -406,6 +406,85 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(phi.as_basic_value().into_pointer_value())
     }
 
+    /// The `i`th entry of a walk over the table `h`, which has more than
+    /// `i`: in key order for a sorted table, else in the seeded walk order
+    /// the interpreter walks too (`karac_hash::walk_perm`, collections.md
+    /// § Map, B-2026-10-23-19). The entry at index `(a * i + c) mod n`
+    /// while the header's walk words are current for `n` entries (and the
+    /// product fits a word), else the runtime brings them up to date.
+    pub(super) fn walk_at(
+        &self,
+        h: PointerValue<'ctx>,
+        i: IntValue<'ctx>,
+        t: Table,
+    ) -> R<PointerValue<'ctx>> {
+        if t.sorted {
+            return self.entry_at(h, i);
+        }
+        let f = self.cur_fn()?;
+        let (fast, slow, done) = (
+            self.llcx.append_basic_block(f, "walk.current"),
+            self.llcx.append_basic_block(f, "walk.stale"),
+            self.llcx.append_basic_block(f, "walk.at"),
+        );
+        let n = self.table_len(h)?;
+        let (w, it) = self.map_word_ty();
+        // `perm_len` is stored last, with release: once it reads current,
+        // so do the multiplier and offset stored before it.
+        let word = |k: u64, order| -> R<IntValue<'ctx>> {
+            let v = self
+                .builder
+                .build_load(it, self.offset(h, k * w)?, "")
+                .map_err(e)?;
+            let v = v.into_int_value();
+            let inst = v.as_instruction().ok_or("a load")?;
+            inst.set_alignment(w as u32).map_err(e)?;
+            inst.set_atomic_ordering(order).map_err(e)?;
+            self.builder
+                .build_int_z_extend_or_bit_cast(v, self.llcx.i64_type(), "")
+                .map_err(e)
+        };
+        let plen = word(6, inkwell::AtomicOrdering::Acquire)?;
+        let current = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, plen, n, "")
+            .map_err(e)?;
+        let small = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, n, self.i64(1 << 32), "")
+            .map_err(e)?;
+        let ok = self.builder.build_and(current, small, "").map_err(e)?;
+        self.builder
+            .build_conditional_branch(ok, fast, slow)
+            .map_err(e)?;
+        self.builder.position_at_end(fast);
+        let a = word(7, inkwell::AtomicOrdering::Monotonic)?;
+        let c = word(8, inkwell::AtomicOrdering::Monotonic)?;
+        // `a`, `c` and `i` are below `n` < 2^32, so `a * i + c` fits.
+        let ai = self.builder.build_int_mul(a, i, "").map_err(e)?;
+        let ai = self.builder.build_int_add(ai, c, "").map_err(e)?;
+        let j = self.builder.build_int_unsigned_rem(ai, n, "").map_err(e)?;
+        let near = self.entry_at(h, j)?;
+        let near_bb = self.builder.get_insert_block().ok_or("no block")?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(slow);
+        let args: [BasicMetadataValueEnum<'ctx>; 2] = [h.into(), i.into()];
+        let tys = self.arg_tys(&args);
+        let rf = self.extern_fn("karac_mir_map_walk_at", self.ptr_ty().fn_type(&tys, false));
+        let far = self
+            .builder
+            .build_call(rf, &args, "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        let phi = self.builder.build_phi(self.ptr_ty(), "").map_err(e)?;
+        phi.add_incoming(&[(&near, near_bb), (&far, slow)]);
+        Ok(phi.as_basic_value().into_pointer_value())
+    }
+
     /// Marks a call into the runtime that only reads memory, so loads
     /// around it are not repeated.
     fn read_only(&self, call: CallSiteValue<'ctx>) {
@@ -483,7 +562,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let voff = self.val_off(t)?;
         let n = self.table_len(h)?;
         self.count_loop(n, |cx, i| {
-            let at = cx.entry_at(h, i)?;
+            let at = cx.walk_at(h, i, t)?;
             if kd {
                 cx.call_glue(at, t.key)?;
             }
@@ -603,7 +682,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .build_int_compare(IntPredicate::ULT, i, n, "")
                     .map_err(e)?;
                 self.abort_unless(ok, "index out of bounds")?;
-                let at = self.entry_at(h, i)?;
+                let at = self.walk_at(h, i, t)?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, at.into())?;
             }
@@ -616,7 +695,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
                 self.count_loop(n, |cx, i| {
-                    let at = cx.entry_at(h, i)?;
+                    let at = cx.walk_at(h, i, t)?;
                     let out = cx.elem_ptr(buf, i, size)?;
                     cx.clone_into(out, at, t.entry)
                 })?;
@@ -721,7 +800,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
                 self.count_loop(n, |cx, i| {
-                    let at = cx.entry_at(h, i)?;
+                    let at = cx.walk_at(h, i, t)?;
                     let out = cx.elem_ptr(buf, i, size)?;
                     cx.copy(out, at, t.entry)
                 })?;
@@ -786,7 +865,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
                 self.count_loop(n, |cx, i| {
-                    let at = cx.entry_at(h, i)?;
+                    let at = cx.walk_at(h, i, t)?;
                     let src = cx.offset(at, off)?;
                     let out = cx.elem_ptr(buf, i, size)?;
                     if by_ref {

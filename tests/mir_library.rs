@@ -529,11 +529,33 @@ fn main() {
     );
 }
 
-/// B-2026-10-12-4: a removed entry leaves a hole in an insertion-ordered
-/// table instead of moving every later entry down. Every read (iteration,
-/// `keys`, `values`, display, `clone`, set operations, re-insertion, `clear`)
-/// sees the entries in the order it saw before the change, with the holes
-/// still open (a third removed) and after they close (two thirds removed).
+/// The lines of `out`, each as its sorted words, sorted: what a program
+/// that walks hashed tables prints, whatever the seeded walk order
+/// (B-2026-10-23-19).
+fn unordered(out: &str) -> Vec<Vec<String>> {
+    let mut lines: Vec<Vec<String>> = out
+        .lines()
+        .map(|l| {
+            let mut w: Vec<String> = l
+                .split(|c: char| c == ' ' || c == ',' || "{}[]".contains(c))
+                .filter(|w| !w.is_empty())
+                .map(str::to_string)
+                .collect();
+            w.sort();
+            w
+        })
+        .collect();
+    lines.sort();
+    lines
+}
+
+/// B-2026-10-12-4: a removed entry leaves a hole in a table instead of
+/// moving every later entry down. Every read (iteration, `keys`, `values`,
+/// display, `clone`, set operations, re-insertion, `clear`) sees the same
+/// entries with the holes still open (a third removed) and after they close
+/// (two thirds removed), and a table with a hole walks as the same table
+/// built without it does. The walk order itself is seeded per process, so
+/// the output is compared [`unordered`].
 #[test]
 fn a_table_reads_the_same_after_removes_leave_holes() {
     let src = r#"
@@ -601,7 +623,7 @@ fn more() {
     i = 0;
     while i < 10 { if i != 4 { b.insert(i, i * i); } i = i + 1; }
     a.remove(4);
-    println(f"{a} {b} {a.len()}");
+    println(f"{a} {b} {a.len()} {f"{a}" == f"{b}"}");
     let mut s: Set[i64] = Set.new();
     i = 0;
     while i < 10 { s.insert(i); i = i + 1; }
@@ -613,9 +635,7 @@ fn more() {
     println(f"{a}");
 }
 "#;
-    assert_runs(
-        src,
-        r#"{0: 0, 1: 1, 2: 4, 3: 9, 5: 25, 6: 36, 7: 49, 8: 64, 9: 81} {0: 0, 1: 1, 2: 4, 3: 9, 5: 25, 6: 36, 7: 49, 8: 64, 9: 81} 9
+    let want = r#"{0: 0, 1: 1, 2: 4, 3: 9, 5: 25, 6: 36, 7: 49, 8: 64, 9: 81} {0: 0, 1: 1, 2: 4, 3: 9, 5: 25, 6: 36, 7: 49, 8: 64, 9: 81} 9 true
 {1, 2, 3, 4, 6, 7, 8, 9} 8 false false true
 {} 0
 {3: 3}
@@ -657,8 +677,11 @@ s28
 b:12
 c:3
 a:9
-"#,
-    );
+"#;
+    match run(src) {
+        Ok((out, 0)) if unordered(&out) == unordered(want) => {}
+        other => panic!("want exit 0 and, in any walk order,\n{want}--- got {other:?}"),
+    }
 }
 
 /// B-2026-10-12-8: the copies `String.bytes` hands out a view of are freed

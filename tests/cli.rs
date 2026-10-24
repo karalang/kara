@@ -26748,10 +26748,9 @@ fn test_singular_target_and_profiles_keep_their_project_mode_behaviour() {
 /// 2. `KARAC_HASH_SEED` pins it, which is what lets the compiler's own suites
 ///    and the kata A/B harness compare output at all.
 ///
-/// Runs under `--interp`; the compiled backends get the same property from
-/// `karac_map_*`'s bucket walk and are covered by the codegen suite.
+/// Runs under `--interp`; compiled code walks in the same seeded order
+/// (`tests/mir_map_walk_order.rs`).
 #[test]
-#[ignore = "v2 gap after M3: `karac run --interp` map order does not vary per process or per pinned seed"]
 fn map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces() {
     let dir = std::env::temp_dir().join(format!("kara_hashseed_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);

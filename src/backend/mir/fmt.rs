@@ -257,7 +257,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     let first = cx.is_zero(i)?;
                     let not_first = cx.builder.build_not(first, "").map_err(e)?;
                     cx.if_then(not_first, |cx| cx.lit(", "))?;
-                    let at = cx.mrt_ptr("map_at", &[h.into(), i.into()])?;
+                    let at = cx.walk_at(h, i, t)?;
                     cx.fmt_call(at, t.key)?;
                     if let (Some(v), Some(off)) = (t.val, voff) {
                         cx.lit(": ")?;
