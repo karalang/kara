@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/987-vertical-order-traversal-of-a-binary-tree/bench/vertical_traversal.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
-bucket = "e-differs:stdout"
-classified_with = "44db797f1"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 987 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "52a1502f3"
 extracted_src = "c352d4eb"
