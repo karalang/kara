@@ -1,0 +1,166 @@
+// LeetCode #952: Largest Component Size by Common Factor -- walking the
+// multiples of each prime.
+//
+// No number is factored. The numbers are marked in an array up to the
+// largest, and for each prime p, found by a sieve on the way, the marked
+// multiples of p are all joined to the first of them. Every shared prime
+// is walked, so every edge is joined. O(m log log m).
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut y = x;
+    while parent[y] != root {
+        let next = parent[y];
+        parent[y] = root;
+        y = next;
+    }
+    root
+}
+
+fn largest_component_size(nums: Vec[i64]) -> i64 {
+    let mut top = 1;
+    for v in nums.iter() {
+        if *v > top {
+            top = *v;
+        }
+    }
+    let mut present: Vec[bool] = Vec.filled(top + 1, false);
+    for v in nums.iter() {
+        present[*v] = true;
+    }
+    let mut parent: Vec[i64] = Vec.new();
+    for v in 0..(top + 1) {
+        parent.push(v);
+    }
+    let mut composite: Vec[bool] = Vec.filled(top + 1, false);
+    for p in 2..(top + 1) {
+        if composite[p] {
+            continue;
+        }
+        let mut anchor = -1;
+        let mut k = p;
+        while k <= top {
+            composite[k] = k != p;
+            if present[k] {
+                if anchor < 0 {
+                    anchor = find(mut parent, k);
+                } else {
+                    let r = find(mut parent, k);
+                    if r != anchor {
+                        parent[r] = anchor;
+                    }
+                }
+            }
+            k += p;
+        }
+    }
+    let mut count: Vec[i64] = Vec.filled(top + 1, 0);
+    let mut best = 0;
+    for v in nums.iter() {
+        let r = find(mut parent, *v);
+        count[r] += 1;
+        if count[r] > best {
+            best = count[r];
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n distinct numbers from 1 to top, in a random order.
+fn random_numbers(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut taken: Set[i64] = Set.new();
+    let mut out: Vec[i64] = Vec.new();
+    while out.len() < n {
+        let v = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        if not taken.contains(v) {
+            taken.insert(v);
+            out.push(v);
+        }
+    }
+    out
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{nums[i]}";
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![4, 6, 15, 35],
+        vec![20, 50, 9, 63],
+        vec![2, 3, 6, 7, 4, 12, 21, 39],
+        vec![1],
+        vec![1, 2, 3, 5, 7],
+        vec![6, 10, 15],
+        vec![2, 9, 77, 35],
+        vec![99991, 99989, 2],
+    ];
+    for e in examples.iter() {
+        println(f"{show(e)}: {largest_component_size(e)}");
+    }
+    // 300 random cases of 1 to 12 numbers up to 60
+    let mut seed = 952;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let nums = random_numbers(mut seed, n, 60);
+        let r = largest_component_size(nums);
+        count += n;
+        total += r;
+        check = (check * 31 + r) % 1000000007;
+    }
+    println(f"300 random cases of {count} numbers up to 60: largest components adding to {total}, checksum {check}");
+    // LeetCode's largest, 20000 numbers up to 100000
+    let mixed = random_numbers(mut seed, 20000, 100000);
+    println(f"20000 random numbers: {largest_component_size(mixed)}");
+    let mut odd: Vec[i64] = Vec.new();
+    let mut v = 1;
+    while odd.len() < 20000 {
+        odd.push(v);
+        v += 2;
+    }
+    println(f"the odd numbers 1 to 39999: {largest_component_size(odd)}");
+    let mut primes: Vec[i64] = Vec.new();
+    let mut c = 2;
+    while primes.len() < 9592 {
+        let mut prime = true;
+        let mut d = 2;
+        while d * d <= c {
+            if c % d == 0 {
+                prime = false;
+                break;
+            }
+            d += 1;
+        }
+        if prime {
+            primes.push(c);
+        }
+        c += 1;
+    }
+    println(f"the 9592 primes below 100000: {largest_component_size(primes)}");
+    let mut evens: Vec[i64] = Vec.new();
+    for k in 1..20001 {
+        evens.push(2 * k);
+    }
+    println(f"the even numbers 2 to 40000: {largest_component_size(evens)}");
+}

@@ -1,0 +1,113 @@
+// LeetCode #952: Largest Component Size by Common Factor -- union by prime.
+//
+// Two numbers are joined when they share a factor above 1, and so when
+// they share a prime. Factor each number by trial division and join it to
+// the first number seen with each of its primes, in a disjoint-set forest
+// over the numbers' places; the largest set is the answer. Joining through
+// primes never joins two numbers without a common chain of shared primes,
+// and every shared prime joins. O(n sqrt(m)) time for numbers up to m.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut y = x;
+    while parent[y] != root {
+        let next = parent[y];
+        parent[y] = root;
+        y = next;
+    }
+    root
+}
+
+fn largest_component_size(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = Vec.new();
+    for i in 0..n {
+        parent.push(i);
+        size.push(1);
+    }
+    // first[p]: the first place whose number has the prime p, -1 for none
+    let mut first: Map[i64, i64] = Map.new();
+    for i in 0..n {
+        let mut x = nums[i];
+        let mut p = 2;
+        while x > 1 {
+            if p * p > x {
+                p = x;
+            }
+            if x % p == 0 {
+                while x % p == 0 {
+                    x = x / p;
+                }
+                match first.get(p) {
+                    Some(j) => {
+                        let a = find(mut parent, i);
+                        let b = find(mut parent, *j);
+                        if a != b {
+                            if size[a] < size[b] {
+                                parent[a] = b;
+                                size[b] += size[a];
+                            } else {
+                                parent[b] = a;
+                                size[a] += size[b];
+                            }
+                        }
+                    }
+                    None => {
+                        first.insert(p, i);
+                    }
+                }
+            }
+            p += 1;
+        }
+    }
+    let mut best = 0;
+    for i in 0..n {
+        if parent[i] == i and size[i] > best {
+            best = size[i];
+        }
+    }
+    best
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 40;
+    let count = 20;
+    let n = 2000;
+    let mut seed = 952;
+    // 20 sets of 2000 distinct numbers from 1 to 100000
+    let mut sets: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut taken: Set[i64] = Set.new();
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < n {
+            let v = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000;
+            if not taken.contains(v) {
+                taken.insert(v);
+                nums.push(v);
+            }
+        }
+        sets.push(nums);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let k = (r + i) % count;
+            let size = largest_component_size(sets[k]);
+            total += size;
+            check = (check * 31 + size) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} sets of {n} numbers up to 100000: largest components adding to {total}, checksum {check}");
+}

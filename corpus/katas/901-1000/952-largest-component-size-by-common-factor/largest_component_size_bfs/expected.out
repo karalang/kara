@@ -1,0 +1,13 @@
+[4,6,15,35]: 4
+[20,50,9,63]: 2
+[2,3,6,7,4,12,21,39]: 8
+[1]: 1
+[1,2,3,5,7]: 1
+[6,10,15]: 3
+[2,9,77,35]: 2
+[99991,99989,2]: 1
+300 random cases of 1924 numbers up to 60: largest components adding to 1421, checksum 237466405
+20000 random numbers: 18596
+the odd numbers 1 to 39999: 17379
+the 9592 primes below 100000: 1
+the even numbers 2 to 40000: 20000
