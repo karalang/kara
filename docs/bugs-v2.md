@@ -59,8 +59,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 16 |
-| missing-feature | 15 |
-| diagnostics | 14 |
+| missing-feature | 16 |
+| diagnostics | 15 |
 | perf | 10 |
 | miscompile | 5 |
 | soundness | 4 |
@@ -72,7 +72,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 31 |
+| typecheck | 33 |
 | codegen | 22 |
 | interp | 15 |
 | mir | 11 |
@@ -129,8 +129,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-13 | 2026-10-24 | parser | low | The turbofish fix deletes `::<T>` / `::[T]` from `let x = it.collect::[Vec[char]]();` and leaves `let x = it.collect();`, which then fails E0238 "cannot infer type parameter 'C'": in a `let` with no annotation the fix should move the type onto the binding, as its own message tells the author to | — |
 | B-2026-10-24-18 | 2026-10-24 | cli | low | `karac fix` answers E_INDEX_MOVE_NON_COPY on `let t = v[i];` (a non-Copy element, only read afterwards) by adding `#[derive(Clone)]` to the element type and then `.clone()`, a deep copy, instead of the `ref v[i]` borrow the message lists first; the first message also says no `.clone()` is offered while its fix adds the derive | — |
 | B-2026-10-24-19 | 2026-10-24 | typecheck | low | A bare parameter, or a binding out of one, handed to `Vec.push` gets the generic borrow mismatch (no fix for a non-Clone type, `.clone()` for a Clone one) instead of the "cannot give away parameter" message and `own` fix that `return e` gets in the same function | — |
-| B-2026-10-24-21 | 2026-10-24 | typecheck | medium | `karac check` accepts passing a binding out of a place reached through a shared `ref` as a `mut` argument: `fn put(c: ref C) { match c.s { S.B(buf) => add(mut buf, 7), S.N => {} } }` with `fn add(out: mut ref Vec[u8], x: u8)` passes check, while `buf.push(7)` in the same arm is refused (E0517) and the MIR pipeline refuses the call | — |
 | B-2026-10-24-22 | 2026-10-24 | resolver | low | A primitive type name bound as a value (`let i64 = 3;`, `let u8 = ...`, a parameter `u8: i64`, `for char in ...`, `let bool = ...`) passes `karac check` and runs, though design.md §3 says primitive type names "cannot be declared or bound as names: `let i64 = 3;` is an error". The one place it fails is a method call on the binding, `u8.len()`, which reports `no associated function 'len' on type 'u8'` at the use and never names the binding | — |
+| B-2026-10-24-23 | 2026-10-24 | typecheck | medium | `contains`, `get`, `first` and `last` on an `Array[T, N]` whose element is not a scalar (`Str`, `String`) fail with `no method 'contains' on type 'Array'`, though library/collections.md says an `Array[T, N]` has every `Slice[T]` method. The same calls on `Array[i64, N]` work, and so does `.as_slice().contains(..)` on the Str array | src/typechecker/method_sequence_mutation.rs (fixed-array read-only arm) |
+| B-2026-10-24-24 | 2026-10-24 | typecheck | low | `s + t` with `s: String` and `t: Str` (a `Str` constant, an element of a `const` `Array[Str, N]`, a `Str` binding) reports `'+' on 'String' requires a 'String' right operand, found 'Str'` with no fix, while the matching mismatch at a call (`Str` passed to `ref String`) carries a machine-applicable `.to_string()` that `karac fix` applies. The error's class is also `INVALID_UNARY_OP` for a binary operator | — |
 
 ### Fixed
 
@@ -170,6 +171,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-16 | typecheck | medium | `karac check` rejects `.collect()` after an item-preserving adaptor on a generic iterator: under `I: Iterator[Item = i64]`, `it.filter(\|x\| x % 2 == 0… | 311a15fb9b |
 | B-2026-10-24-17 | typecheck+interp | medium | An integer literal in a tuple literal gets no range check against its slot: `let t: (i64, u8) = (1, 300);` passes `karac check` and the MIR run print… | 311a15fb9b |
 | B-2026-10-24-20 | mir+mir-llvm | medium | Under `KARAC_AUTO_PAR=1` a signed `+` reduction (and a checked `*`) split into tasks overflows in a run where the sequential loop never does: `acc =… | fe8fa4918f |
+| B-2026-10-24-21 | typecheck | medium | `karac check` accepts passing a binding out of a place reached through a shared `ref` as a `mut` argument: `fn put(c: ref C) { match c.s { S.B(buf) =… | afb5b6c585 |
 
 </details>
 
