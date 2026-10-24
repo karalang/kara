@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 10123 / 10293 = 98.3%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8178 / 8309 = 98.4%.
-- Every classified non-deferred program (context): 16702 / 17809 = 93.8%.
-- Bench variants (outside the gate): 274 / 967 = 28.3%; timeouts 615.
+- Every classified non-deferred program (context): 16703 / 17809 = 93.8%.
+- Bench variants (outside the gate): 275 / 967 = 28.4%; timeouts 614.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5395 / 5411 = 99.7%; failing mir-gap 16.
 - Deferred (class d): 751; outside the slice (`post-m1:*`): 1138.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -63,7 +63,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (4393): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4394): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -4454,6 +4454,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/901-1000/989-add-to-array-form-of-integer/add_to_array_form_digits`
 - `katas/901-1000/989-add-to-array-form-of-integer/add_to_array_form_limbs`
 - `katas/901-1000/989-add-to-array-form-of-integer/add_to_array_form_recursive`
+- `katas/901-1000/989-add-to-array-form-of-integer/bench/add_to_array_form`
 - `katas/901-1000/989-add-to-array-form-of-integer/differential`
 - `katas/backend/todo-api/main`
 - `katas/oracle/fstring-arg-borrow-divergence/borrows`
