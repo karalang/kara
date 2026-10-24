@@ -262,7 +262,8 @@ fn repl_v2_does_not_run_an_earlier_cell_again() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("once.txt");
     let _ = std::fs::remove_file(&path);
-    let p = path.display();
+    // `/` separators: a Windows `\` would read as a Kāra string escape.
+    let p = path.display().to_string().replace('\\', "/");
     let mut s = session();
     let r = s.evaluate_cell_captured(&format!(
         "let mut n: i64 = {{ File.append(\"{p}\").unwrap().write(\"x\".bytes()).unwrap(); 5 }};"
@@ -303,7 +304,7 @@ fn repl_v2_carries_each_kind_of_value() {
     let mut out = String::new();
     let first = format!(
         "let mut s = {{ File.append(\"{}\").unwrap().write(\"x\".bytes()).unwrap(); \"a\\\"b\\n\\u{{301}}\".to_string() }};",
-        path.display()
+        path.display().to_string().replace('\\', "/")
     );
     for cell in [
         "struct P { name: String, xs: Vec[u8] }",
