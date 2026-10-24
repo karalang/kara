@@ -1,0 +1,4573 @@
+// mini_pymodbus: pymodbus 3.6.9, the Modbus library for Python, ported to
+// Kara and run over a bus where a client and a server talk to each other.
+//
+// The port covers what both ends of a Modbus link do with bytes: the
+// request and response PDUs of every function code pymodbus implements
+// (reads and writes of coils and registers, mask writes, diagnostics, the
+// comm event counter and log, exception status, report slave id, file
+// records, the FIFO queue and read device information), the server and
+// client decoders, the three framers (Modbus/TCP's MBAP header, RTU with
+// its CRC-16 and ASCII with its LRC), the datastore (sequential and sparse
+// blocks, a slave context with the +1 address offset, a server context of
+// several slaves), the control block every diagnostic reads (counters, the
+// event log, the diagnostic register, device identity and Modbus Plus
+// statistics) and the payload builder and decoder.
+//
+// data/jobs.txt holds the jobs. Each job sets up a server on one framer
+// and plays requests and raw bytes through it: the client builds a
+// packet, the server's framer cuts it into requests, the server runs each
+// one against its datastore the way pymodbus's async server does, and the
+// client's framer decodes the reply. The oracle, oracle.py, drives the
+// vendored library through the same steps and wrote expected.out.
+
+// ------------------------------------------------------------ errors
+
+// A Python exception: its type's name as pymodbus's callers print it, and
+// its message.
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn unpack_err(n: i64) -> Exc {
+    exc("struct.error", f"unpack requires a buffer of {n} bytes")
+}
+
+fn pack_err() -> Exc {
+    exc("struct.error", "argument out of range".to_string())
+}
+
+fn overflow() -> Exc {
+    exc("OverflowError", "int too big to convert".to_string())
+}
+
+fn index_err() -> Exc {
+    exc("IndexError", "index out of range".to_string())
+}
+
+fn io_err(what: Str) -> Exc {
+    exc("ModbusIOException", f"Modbus Error: [Input/Output] {what}")
+}
+
+// ------------------------------------------------------------ bytes
+
+fn hex_n(n: i64, width: i64) -> String {
+    let mut digits: Vec[char] = Vec.new();
+    let mut v = n;
+    while v > 0 {
+        let d = v % 16;
+        let code = if d < 10 { 48 + d } else { 87 + d };
+        digits.push(char.try_from(code as u32).unwrap_or('0'));
+        v = v / 16;
+    }
+    while (digits.len() as i64) < width {
+        digits.push('0');
+    }
+    let mut out = String.new();
+    let mut i = digits.len() as i64 - 1;
+    while i >= 0 {
+        out.push(digits[i]);
+        i -= 1;
+    }
+    out
+}
+
+// format(n, '#0Nx'): a 0x prefix counted in the width.
+fn alt_hex(n: i64, width: i64) -> String {
+    f"0x{hex_n(n, width - 2)}"
+}
+
+// hex(n)
+fn py_hex(n: i64) -> String {
+    if n == 0 { "0x0".to_string() } else { f"0x{hex_n(n, 1)}" }
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        out.push_str(hex_n(*x as i64, 2));
+    }
+    out
+}
+
+fn hex_val(c: u8) -> i64 {
+    let n = c as i64;
+    if n >= 48 and n <= 57 {
+        return n - 48;
+    }
+    if n >= 97 and n <= 102 {
+        return n - 87;
+    }
+    if n >= 65 and n <= 70 {
+        return n - 55;
+    }
+    -1
+}
+
+// bytes.fromhex on the job files' tokens, which are always whole pairs.
+fn from_hex(s: Str) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() as i64 {
+        out.push((hex_val(b[i]) * 16 + hex_val(b[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+// A job token with ~XX escapes, as bytes.
+fn text(token: Str) -> Vec[u8] {
+    let raw = token.bytes();
+    let n = raw.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        if raw[i] == 0x7E and i + 2 < n {
+            out.push((hex_val(raw[i + 1]) * 16 + hex_val(raw[i + 2])) as u8);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// bytes.decode('latin-1')
+fn latin1(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        out.push(char.try_from(*x as u32).unwrap_or('?'));
+    }
+    out
+}
+
+// str.encode(), UTF-8.
+fn utf8(s: ref String) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in s.bytes() {
+        out.push(x);
+    }
+    out
+}
+
+fn char_len(s: ref String) -> i64 {
+    s.chars().count() as i64
+}
+
+// b[a:e] with Python's slice rules.
+fn py_slice(b: ref Vec[u8], a: i64, e: i64) -> Vec[u8] {
+    let n = b.len() as i64;
+    let mut s = a;
+    let mut t = e;
+    if s < 0 {
+        s += n;
+        if s < 0 {
+            s = 0;
+        }
+    }
+    if t < 0 {
+        t += n;
+        if t < 0 {
+            t = 0;
+        }
+    }
+    if s > n {
+        s = n;
+    }
+    if t > n {
+        t = n;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = s;
+    while i < t {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn tail(b: ref Vec[u8], a: i64) -> Vec[u8] {
+    py_slice(b, a, b.len() as i64)
+}
+
+fn concat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = a.clone();
+    for x in b {
+        out.push(*x);
+    }
+    out
+}
+
+// b[i] for a Python bytes object.
+fn byte_at(b: ref Vec[u8], i: i64) -> Result[i64, Exc] {
+    if i < 0 or i >= b.len() as i64 {
+        return Err(index_err());
+    }
+    Ok(b[i] as i64)
+}
+
+// The big-endian unsigned number in b[at:at+n].
+fn be(b: ref Vec[u8], at: i64, n: i64) -> i64 {
+    let mut v: i64 = 0;
+    for k in 0..n {
+        v = v * 256 + b[at + k] as i64;
+    }
+    v
+}
+
+// The bytes struct.unpack is given: data[a:e], which must be `size` long.
+fn need(data: ref Vec[u8], a: i64, e: i64, size: i64) -> Result[Vec[u8], Exc] {
+    let s = py_slice(data, a, e);
+    if s.len() as i64 != size {
+        return Err(unpack_err(size));
+    }
+    Ok(s)
+}
+
+// struct.pack('>B') and '>H'.
+fn put8(out: mut ref Vec[u8], v: i64) -> Result[(), Exc] {
+    if v < 0 or v > 0xFF {
+        return Err(pack_err());
+    }
+    out.push(v as u8);
+    Ok(())
+}
+
+fn put16(out: mut ref Vec[u8], v: i64) -> Result[(), Exc] {
+    if v < 0 or v > 0xFFFF {
+        return Err(pack_err());
+    }
+    out.push((v >> 8) as u8);
+    out.push((v & 0xFF) as u8);
+    Ok(())
+}
+
+// int.to_bytes(n, 'big')
+fn to_bytes(out: mut ref Vec[u8], v: i64, n: i64) -> Result[(), Exc] {
+    if v < 0 or (n == 1 and v > 0xFF) or (n == 2 and v > 0xFFFF) {
+        return Err(overflow());
+    }
+    let mut k = n - 1;
+    while k >= 0 {
+        out.push(((v >> (8 * k)) & 0xFF) as u8);
+        k -= 1;
+    }
+    Ok(())
+}
+
+// utilities.pack_bitstring: eight bits to a byte, the first bit lowest.
+fn pack_bitstring(bits: ref Vec[bool]) -> Vec[u8] {
+    let mut ret: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    let mut packed: i64 = 0;
+    for bit in bits {
+        if *bit {
+            packed += 128;
+        }
+        i += 1;
+        if i == 8 {
+            ret.push(packed as u8);
+            i = 0;
+            packed = 0;
+        } else {
+            packed = packed >> 1;
+        }
+    }
+    if i > 0 and i < 8 {
+        packed = packed >> (7 - i);
+        ret.push(packed as u8);
+    }
+    ret
+}
+
+fn unpack_bitstring(data: ref Vec[u8]) -> Vec[bool] {
+    let mut bits: Vec[bool] = Vec.new();
+    for x in data {
+        let mut v = *x as i64;
+        for _ in 0..8 {
+            bits.push((v & 1) == 1);
+            v = v >> 1;
+        }
+    }
+    bits
+}
+
+fn bitstr(bits: ref Vec[bool]) -> String {
+    let mut out = String.new();
+    for b in bits {
+        out.push(if *b { '1' } else { '0' });
+    }
+    out
+}
+
+// ------------------------------------------------------------ reprs
+
+fn is_printable(n: u32) -> bool {
+    if n < 0x20 or (n >= 0x7F and n <= 0xA0) or n == 0xAD {
+        return false;
+    }
+    true
+}
+
+// repr() of a str; the strings here are latin-1, so every character is
+// below 0x100.
+fn py_str_repr(s: ref String) -> String {
+    let quote = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        let n = c as u32;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if is_printable(n) {
+            out.push(c);
+        } else {
+            out.push_str(f"\\x{hex_n(n as i64, 2)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn py_bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for x in b {
+        if *x == 39 {
+            has_single = true;
+        }
+        if *x == 34 {
+            has_double = true;
+        }
+    }
+    let quote: u8 = if has_single and not has_double { 34 } else { 39 };
+    let mut out = String.new();
+    out.push('b');
+    out.push(quote as char);
+    for x in b {
+        let v = *x;
+        if v == quote or v == 92 {
+            out.push('\\');
+            out.push(v as char);
+        } else if v == 9 {
+            out.push_str("\\t");
+        } else if v == 10 {
+            out.push_str("\\n");
+        } else if v == 13 {
+            out.push_str("\\r");
+        } else if v < 32 or v >= 127 {
+            out.push_str(f"\\x{hex_n(v as i64, 2)}");
+        } else {
+            out.push(v as char);
+        }
+    }
+    out.push(quote as char);
+    out
+}
+
+fn int_list(v: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    let mut first = true;
+    for x in v {
+        if not first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(f"{*x}");
+    }
+    out.push(']');
+    out
+}
+
+fn int_tuple(v: ref Vec[i64]) -> String {
+    if v.len() == 1 {
+        return f"({v[0]},)";
+    }
+    let mut out = String.new();
+    out.push('(');
+    let mut first = true;
+    for x in v {
+        if not first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(f"{*x}");
+    }
+    out.push(')');
+    out
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// ------------------------------------------------------------ numbers
+
+// int(s, 0) on a job token: a sign, then decimal or a 0x, 0o or 0b
+// prefix. A value too big for i128 saturates, which every range check
+// here rejects anyway.
+fn py_int(s: Str) -> Result[i128, Exc] {
+    let b = s.bytes();
+    let n = b.len() as i64;
+    let bad = exc("ValueError", f"invalid literal for int() with base 0: '{s}'");
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < n and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    let mut base: i64 = 10;
+    if i + 1 < n and b[i] == b'0' {
+        let p = b[i + 1];
+        if p == b'x' or p == b'X' {
+            base = 16;
+        } else if p == b'o' or p == b'O' {
+            base = 8;
+        } else if p == b'b' or p == b'B' {
+            base = 2;
+        }
+        if base != 10 {
+            i += 2;
+        }
+    }
+    if i >= n {
+        return Err(bad);
+    }
+    let mut v: i128 = 0;
+    while i < n {
+        if b[i] == b'_' {
+            i += 1;
+            continue;
+        }
+        let d = hex_val(b[i]);
+        if d < 0 or d >= base {
+            return Err(bad);
+        }
+        if v < 1000000000000000000000000000000000000 {
+            v = v * (base as i128) + (d as i128);
+        }
+        i += 1;
+    }
+    Ok(if neg { -v } else { v })
+}
+
+fn int0(s: Str) -> i64 {
+    match py_int(s) {
+        Ok(v) => v as i64,
+        Err(_) => 0,
+    }
+}
+
+// A list of int tokens split on commas, "-" for none.
+fn ints(token: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if token == "-" {
+        return out;
+    }
+    for part in token.split(",") {
+        out.push(int0(part));
+    }
+    out
+}
+
+// ------------------------------------------------------------ PDUs
+
+// The PDU classes. Diagnostics (function 8) are one class each way; the
+// sub-function class a decoder picks is `dclass` on the PDU.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Cls {
+    ReadCoilsReq,
+    ReadDiscreteReq,
+    ReadHoldingReq,
+    ReadInputReq,
+    WriteCoilReq,
+    WriteRegReq,
+    WriteCoilsReq,
+    WriteRegsReq,
+    MaskReq,
+    ReadWriteReq,
+    DiagReq,
+    ExcStatusReq,
+    EventCounterReq,
+    EventLogReq,
+    SlaveIdReq,
+    ReadFileReq,
+    WriteFileReq,
+    FifoReq,
+    DevInfoReq,
+    IllegalReq,
+    ReadCoilsResp,
+    ReadDiscreteResp,
+    ReadHoldingResp,
+    ReadInputResp,
+    WriteCoilResp,
+    WriteRegResp,
+    WriteCoilsResp,
+    WriteRegsResp,
+    MaskResp,
+    ReadWriteResp,
+    DiagResp,
+    ExcStatusResp,
+    EventCounterResp,
+    EventLogResp,
+    SlaveIdResp,
+    ReadFileResp,
+    WriteFileResp,
+    FifoResp,
+    DevInfoResp,
+    ExcResp,
+}
+
+// A diagnostic's message, which pymodbus keeps as whatever it was given.
+#[derive(Clone)]
+enum Msg {
+    Bytes(Vec[u8]),
+    Int(i64),
+    List(Vec[i64]),
+    Tuple(Vec[i64]),
+    Nothing,
+}
+
+fn msg_repr(m: ref Msg) -> String {
+    match m {
+        Msg.Bytes(b) => py_bytes_repr(b),
+        Msg.Int(n) => f"{*n}",
+        Msg.List(v) => int_list(v),
+        Msg.Tuple(v) => int_tuple(v),
+        Msg.Nothing => "None".to_string(),
+    }
+}
+
+// file_message.FileRecord. A record built for a read has the empty str as
+// its data; one decoded from the wire has bytes.
+#[derive(Clone)]
+struct Rec {
+    file: i64,
+    record: i64,
+    length: i64,
+    data: Vec[u8],
+    data_str: bool,
+    response_length: i64,
+}
+
+fn rec_repr(r: ref Rec) -> String {
+    let data = if r.data_str { "''".to_string() } else { py_bytes_repr(r.data) };
+    f"FileRecord(file={r.file}, record={r.record}, length={r.length}) data={data}"
+}
+
+// One object of a decoded ReadDeviceInformationResponse: one value, or a
+// list when the object id came more than once.
+#[derive(Clone)]
+struct Info {
+    oid: i64,
+    vals: Vec[Vec[u8]],
+}
+
+#[derive(Clone)]
+struct Pdu {
+    cls: Cls,
+    fc: i64,
+    tid: i64,
+    slave: i64,
+    address: i64,
+    count: i64,
+    value: i64,
+    on: bool,
+    values: Vec[i64],
+    bits: Vec[bool],
+    byte_count: i64,
+    r_addr: i64,
+    r_count: i64,
+    w_addr: i64,
+    w_count: i64,
+    w_bytes: i64,
+    and_mask: i64,
+    or_mask: i64,
+    sub: i64,
+    dclass: i64,
+    msg: Msg,
+    status: i64,
+    ready: bool,
+    event_count: i64,
+    message_count: i64,
+    ident: Vec[u8],
+    records: Vec[Rec],
+    read_code: i64,
+    object_id: i64,
+    conformity: i64,
+    more: i64,
+    next_oid: i64,
+    n_objects: i64,
+    objects: Vec[(i64, String)],
+    info: Vec[Info],
+    exc_code: i64,
+    orig_code: i64,
+    respond: bool,
+}
+
+fn cls_fc(c: Cls) -> i64 {
+    match c {
+        Cls.ReadCoilsReq | Cls.ReadCoilsResp => 1,
+        Cls.ReadDiscreteReq | Cls.ReadDiscreteResp => 2,
+        Cls.ReadHoldingReq | Cls.ReadHoldingResp => 3,
+        Cls.ReadInputReq | Cls.ReadInputResp => 4,
+        Cls.WriteCoilReq | Cls.WriteCoilResp => 5,
+        Cls.WriteRegReq | Cls.WriteRegResp => 6,
+        Cls.ExcStatusReq | Cls.ExcStatusResp => 7,
+        Cls.DiagReq | Cls.DiagResp => 8,
+        Cls.EventCounterReq | Cls.EventCounterResp => 11,
+        Cls.EventLogReq | Cls.EventLogResp => 12,
+        Cls.WriteCoilsReq | Cls.WriteCoilsResp => 15,
+        Cls.WriteRegsReq | Cls.WriteRegsResp => 16,
+        Cls.SlaveIdReq | Cls.SlaveIdResp => 17,
+        Cls.ReadFileReq | Cls.ReadFileResp => 20,
+        Cls.WriteFileReq | Cls.WriteFileResp => 21,
+        Cls.MaskReq | Cls.MaskResp => 22,
+        Cls.ReadWriteReq | Cls.ReadWriteResp => 23,
+        Cls.FifoReq | Cls.FifoResp => 24,
+        Cls.DevInfoReq | Cls.DevInfoResp => 43,
+        Cls.IllegalReq => 0,
+        Cls.ExcResp => 0,
+    }
+}
+
+// A PDU as its class's constructor leaves it with no arguments.
+fn blank(c: Cls) -> Pdu {
+    Pdu {
+        cls: c,
+        fc: cls_fc(c),
+        tid: 0,
+        slave: 0,
+        address: 0,
+        count: 0,
+        value: 0,
+        on: false,
+        values: Vec.new(),
+        bits: Vec.new(),
+        byte_count: 0,
+        r_addr: 0,
+        r_count: 0,
+        w_addr: 0,
+        w_count: 0,
+        w_bytes: 0,
+        and_mask: 0xFFFF,
+        or_mask: 0,
+        sub: if c == Cls.DevInfoReq or c == Cls.DevInfoResp { 0x0E } else { 0 },
+        dclass: -1,
+        msg: Msg.Nothing,
+        status: 0,
+        ready: true,
+        event_count: 0,
+        message_count: 0,
+        ident: Vec.new(),
+        records: Vec.new(),
+        read_code: 1,
+        object_id: 0,
+        conformity: 0x83,
+        more: 0,
+        next_oid: 0,
+        n_objects: 0,
+        objects: Vec.new(),
+        info: Vec.new(),
+        exc_code: 0,
+        orig_code: 0,
+        respond: true,
+    }
+}
+
+fn exception_response(fc: i64, code: i64) -> Pdu {
+    let mut p = blank(Cls.ExcResp);
+    p.orig_code = fc;
+    p.fc = fc | 0x80;
+    p.exc_code = code;
+    p
+}
+
+const ILLEGAL_FUNCTION: i64 = 1;
+const ILLEGAL_ADDRESS: i64 = 2;
+const ILLEGAL_VALUE: i64 = 3;
+const SLAVE_FAILURE: i64 = 4;
+const GATEWAY_NO_RESPONSE: i64 = 11;
+
+fn exception_name(code: i64) -> String {
+    let name = match code {
+        1 => "IllegalFunction",
+        2 => "IllegalAddress",
+        3 => "IllegalValue",
+        4 => "SlaveFailure",
+        5 => "Acknowledge",
+        6 => "SlaveBusy",
+        7 => "NegativeAcknowledge",
+        8 => "MemoryParityError",
+        10 => "GatewayPathUnavailable",
+        11 => "GatewayNoResponse",
+        _ => "None",
+    };
+    name.to_string()
+}
+
+// The diagnostic sub-functions the decoders know a class for.
+fn diag_known(sub: i64) -> bool {
+    (sub >= 0 and sub <= 4) or (sub >= 0x0A and sub <= 0x15)
+}
+
+fn diag_name(dclass: i64) -> String {
+    let name = match dclass {
+        0x00 => "ReturnQueryData",
+        0x01 => "RestartCommunicationsOption",
+        0x02 => "ReturnDiagnosticRegister",
+        0x03 => "ChangeAsciiInputDelimiter",
+        0x04 => "ForceListenOnlyMode",
+        0x0A => "ClearCounters",
+        0x0B => "ReturnBusMessageCount",
+        0x0C => "ReturnBusCommunicationErrorCount",
+        0x0D => "ReturnBusExceptionErrorCount",
+        0x0E => "ReturnSlaveMessageCount",
+        0x0F => "ReturnSlaveNoResponseCount",
+        0x10 => "ReturnSlaveNAKCount",
+        0x11 => "ReturnSlaveBusyCount",
+        0x12 => "ReturnSlaveBusCharacterOverrunCount",
+        0x13 => "ReturnIopOverrunCount",
+        0x14 => "ClearOverrunCount",
+        0x15 => "GetClearModbusPlus",
+        _ => "DiagnosticStatus",
+    };
+    name.to_string()
+}
+
+fn class_name(p: ref Pdu) -> String {
+    let name = match p.cls {
+        Cls.ReadCoilsReq => "ReadCoilsRequest",
+        Cls.ReadDiscreteReq => "ReadDiscreteInputsRequest",
+        Cls.ReadHoldingReq => "ReadHoldingRegistersRequest",
+        Cls.ReadInputReq => "ReadInputRegistersRequest",
+        Cls.WriteCoilReq => "WriteSingleCoilRequest",
+        Cls.WriteRegReq => "WriteSingleRegisterRequest",
+        Cls.WriteCoilsReq => "WriteMultipleCoilsRequest",
+        Cls.WriteRegsReq => "WriteMultipleRegistersRequest",
+        Cls.MaskReq => "MaskWriteRegisterRequest",
+        Cls.ReadWriteReq => "ReadWriteMultipleRegistersRequest",
+        Cls.DiagReq => return f"{diag_name(p.dclass)}Request",
+        Cls.ExcStatusReq => "ReadExceptionStatusRequest",
+        Cls.EventCounterReq => "GetCommEventCounterRequest",
+        Cls.EventLogReq => "GetCommEventLogRequest",
+        Cls.SlaveIdReq => "ReportSlaveIdRequest",
+        Cls.ReadFileReq => "ReadFileRecordRequest",
+        Cls.WriteFileReq => "WriteFileRecordRequest",
+        Cls.FifoReq => "ReadFifoQueueRequest",
+        Cls.DevInfoReq => "ReadDeviceInformationRequest",
+        Cls.IllegalReq => "IllegalFunctionRequest",
+        Cls.ReadCoilsResp => "ReadCoilsResponse",
+        Cls.ReadDiscreteResp => "ReadDiscreteInputsResponse",
+        Cls.ReadHoldingResp => "ReadHoldingRegistersResponse",
+        Cls.ReadInputResp => "ReadInputRegistersResponse",
+        Cls.WriteCoilResp => "WriteSingleCoilResponse",
+        Cls.WriteRegResp => "WriteSingleRegisterResponse",
+        Cls.WriteCoilsResp => "WriteMultipleCoilsResponse",
+        Cls.WriteRegsResp => "WriteMultipleRegistersResponse",
+        Cls.MaskResp => "MaskWriteRegisterResponse",
+        Cls.ReadWriteResp => "ReadWriteMultipleRegistersResponse",
+        Cls.DiagResp => return f"{diag_name(p.dclass)}Response",
+        Cls.ExcStatusResp => "ReadExceptionStatusResponse",
+        Cls.EventCounterResp => "GetCommEventCounterResponse",
+        Cls.EventLogResp => "GetCommEventLogResponse",
+        Cls.SlaveIdResp => "ReportSlaveIdResponse",
+        Cls.ReadFileResp => "ReadFileRecordResponse",
+        Cls.WriteFileResp => "WriteFileRecordResponse",
+        Cls.FifoResp => "ReadFifoQueueResponse",
+        Cls.DevInfoResp => "ReadDeviceInformationResponse",
+        Cls.ExcResp => "ExceptionResponse",
+    };
+    name.to_string()
+}
+
+fn int_flag(b: bool) -> i64 {
+    if b { 1 } else { 0 }
+}
+
+// str(pdu), for the classes that define __str__.
+fn pdu_str(p: ref Pdu) -> Option[String] {
+    let name = class_name(p);
+    let s = match p.cls {
+        Cls.ReadCoilsReq | Cls.ReadDiscreteReq => f"ReadBitRequest({p.address},{p.count})",
+        Cls.ReadCoilsResp | Cls.ReadDiscreteResp => f"{name}({p.bits.len()})",
+        Cls.ReadHoldingReq | Cls.ReadInputReq => f"{name} ({p.address},{p.count})",
+        Cls.ReadHoldingResp | Cls.ReadInputResp => f"{name} ({p.values.len()})",
+        Cls.ReadWriteReq => f"ReadWriteNRegisterRequest R({p.r_addr},{p.r_count}) W({p.w_addr},{p.w_count})",
+        Cls.ReadWriteResp => f"ReadWriteNRegisterResponse ({p.values.len()})",
+        Cls.WriteCoilReq => f"WriteCoilRequest({p.address}, {py_bool(p.on)}) => ",
+        Cls.WriteCoilResp => f"WriteCoilResponse({p.address}) => {py_bool(p.on)}",
+        Cls.WriteCoilsReq => f"WriteNCoilRequest ({p.address}) => {p.bits.len()} ",
+        Cls.WriteCoilsResp => f"WriteNCoilResponse({p.address}, {p.count})",
+        Cls.WriteRegReq => f"WriteRegisterRequest {p.address}",
+        Cls.WriteRegResp => f"WriteRegisterResponse {p.address} => {p.value}",
+        Cls.WriteRegsReq => f"WriteMultipleRegisterRequest {p.address} => {p.count}",
+        Cls.WriteRegsResp => f"WriteMultipleRegisterResponse ({p.address},{p.count})",
+        Cls.ExcStatusReq => "ReadExceptionStatusRequest(7)".to_string(),
+        Cls.ExcStatusResp => f"ReadExceptionStatusResponse(7, {p.status})",
+        Cls.EventCounterReq => "GetCommEventCounterRequest(11)".to_string(),
+        Cls.EventCounterResp => f"GetCommEventCounterResponse(11, {p.count}, {int_flag(p.ready)})",
+        Cls.EventLogReq => "GetCommEventLogRequest(12)".to_string(),
+        Cls.EventLogResp => f"GetCommEventLogResponse(12, {int_flag(p.ready)}, {p.message_count}, {p.event_count})",
+        Cls.SlaveIdReq => "ReportSlaveIdRequest(17)".to_string(),
+        Cls.SlaveIdResp => f"ReportSlaveIdResponse(17, {py_bytes_repr(p.ident)}, {py_bool(p.ready)})",
+        Cls.DevInfoReq => f"ReadDeviceInformationRequest({p.read_code},{p.object_id})",
+        Cls.DevInfoResp => f"ReadDeviceInformationResponse({p.read_code})",
+        Cls.ExcResp => f"Exception Response({p.fc}, {p.orig_code}, {exception_name(p.exc_code)})",
+        _ => return None,
+    };
+    Some(s)
+}
+
+fn label(p: ref Pdu) -> String {
+    match pdu_str(p) {
+        Some(s) => f"{class_name(p)}: {s}",
+        None => class_name(p),
+    }
+}
+
+fn records_repr(rs: ref Vec[Rec]) -> String {
+    let mut out = "records=[".to_string();
+    let mut first = true;
+    for r in rs {
+        if not first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(rec_repr(r));
+    }
+    out.push(']');
+    out
+}
+
+fn info_repr(p: ref Pdu) -> String {
+    let mut objs = String.new();
+    let mut first = true;
+    for o in p.info.iter() {
+        if not first {
+            objs.push_str(", ");
+        }
+        first = false;
+        objs.push_str(f"{alt_hex(o.oid, 4)}=");
+        if o.vals.len() == 1 {
+            objs.push_str(py_bytes_repr(o.vals[0]));
+        } else {
+            objs.push('[');
+            let mut k: i64 = 0;
+            for v in o.vals.iter() {
+                if k > 0 {
+                    objs.push_str(", ");
+                }
+                k += 1;
+                objs.push_str(py_bytes_repr(v));
+            }
+            objs.push(']');
+        }
+    }
+    let head = f"read_code={p.read_code} conformity={alt_hex(p.conformity, 4)} more={alt_hex(p.more, 4)}";
+    f"{head} next={alt_hex(p.next_oid, 4)} objects={p.n_objects} {{{objs}}}"
+}
+
+// The fields the bus prints after a PDU's label (oracle.py's fields()).
+fn fields(p: ref Pdu) -> String {
+    match p.cls {
+        Cls.ReadCoilsReq | Cls.ReadDiscreteReq | Cls.ReadHoldingReq | Cls.ReadInputReq =>
+            f"address={p.address} count={p.count}",
+        Cls.ReadCoilsResp | Cls.ReadDiscreteResp => f"bits={bitstr(p.bits)}",
+        Cls.ReadHoldingResp | Cls.ReadInputResp | Cls.ReadWriteResp => f"registers={int_list(p.values)}",
+        Cls.WriteCoilReq | Cls.WriteCoilResp => f"address={p.address} value={py_bool(p.on)}",
+        Cls.WriteRegReq | Cls.WriteRegResp => f"address={p.address} value={p.value}",
+        Cls.WriteCoilsReq => f"address={p.address} byte_count={p.byte_count} values={bitstr(p.bits)}",
+        Cls.WriteRegsReq =>
+            f"address={p.address} count={p.count} byte_count={p.byte_count} values={int_list(p.values)}",
+        Cls.WriteCoilsResp | Cls.WriteRegsResp => f"address={p.address} count={p.count}",
+        Cls.MaskReq | Cls.MaskResp =>
+            f"address={p.address} and_mask={alt_hex(p.and_mask, 6)} or_mask={alt_hex(p.or_mask, 6)}",
+        Cls.ReadWriteReq => {
+            let head = f"read={p.r_addr}+{p.r_count} write={p.w_addr}+{p.w_count}";
+            f"{head} byte_count={p.w_bytes} values={int_list(p.values)}"
+        },
+        Cls.DiagReq | Cls.DiagResp => f"sub={alt_hex(p.sub, 6)} message={msg_repr(p.msg)}",
+        Cls.ExcStatusResp => f"status={alt_hex(p.status, 4)}",
+        Cls.EventCounterResp => f"status={py_bool(p.ready)} count={p.count}",
+        Cls.EventLogResp => {
+            let mut log = String.new();
+            log.push('[');
+            let mut k: i64 = 0;
+            for e in p.values.iter() {
+                if k > 0 {
+                    log.push_str(", ");
+                }
+                k += 1;
+                log.push_str(f"'{py_hex(*e)}'");
+            }
+            log.push(']');
+            let head = f"status={py_bool(p.ready)} events={p.event_count}";
+            f"{head} messages={p.message_count} log={log}"
+        },
+        Cls.SlaveIdResp => f"byte_count={p.byte_count}",
+        Cls.ReadFileReq | Cls.ReadFileResp | Cls.WriteFileReq | Cls.WriteFileResp => records_repr(p.records),
+        Cls.FifoReq => f"address={p.address}",
+        Cls.FifoResp => f"values={int_list(p.values)}",
+        Cls.DevInfoReq => f"read_code={p.read_code} object_id={alt_hex(p.object_id, 4)}",
+        Cls.DevInfoResp => info_repr(p),
+        Cls.ExcResp => f"exception_code={p.exc_code}",
+        Cls.IllegalReq => f"function_code={p.fc}",
+        _ => String.new(),
+    }
+}
+
+fn show(prefix: Str, p: ref Pdu) {
+    let f = fields(p);
+    if f.len() == 0 {
+        println(f"{prefix} {label(p)}");
+    } else {
+        println(f"{prefix} {label(p)} | {f}");
+    }
+}
+
+// ------------------------------------------------------------ encoding
+
+fn encode_msg(out: mut ref Vec[u8], m: ref Msg) -> Result[(), Exc] {
+    match m {
+        Msg.Bytes(b) => {
+            for x in b {
+                out.push(*x);
+            }
+        },
+        Msg.Int(n) => put16(mut out, *n)?,
+        Msg.List(v) | Msg.Tuple(v) => {
+            for x in v {
+                put16(mut out, *x)?;
+            }
+        },
+        Msg.Nothing => {},
+    }
+    Ok(())
+}
+
+fn encode_records_write(out: mut ref Vec[u8], rs: ref Vec[Rec]) -> Result[(), Exc] {
+    let mut total: i64 = 0;
+    for r in rs {
+        total += r.length * 2 + 7;
+    }
+    put8(mut out, total)?;
+    for r in rs {
+        put8(mut out, 6)?;
+        put16(mut out, r.file)?;
+        put16(mut out, r.record)?;
+        put16(mut out, r.length)?;
+        if r.data_str {
+            return Err(exc("TypeError", "can't concat str to bytes".to_string()));
+        }
+        for x in r.data.iter() {
+            out.push(*x);
+        }
+    }
+    Ok(())
+}
+
+// ReadDeviceInformationResponse.encode: objects go in while the 253-byte
+// PDU has room, and the first that does not fit is where the next read
+// starts.
+fn encode_devinfo(out: mut ref Vec[u8], p: ref Pdu) -> Result[(), Exc] {
+    put8(mut out, p.sub)?;
+    put8(mut out, p.read_code)?;
+    put8(mut out, p.conformity)?;
+    let mut space_left: i64 = 253 - 6;
+    let mut more: i64 = 0;
+    let mut next: i64 = 0;
+    let mut n: i64 = 0;
+    let mut objects: Vec[u8] = Vec.new();
+    for (oid, data) in p.objects.iter() {
+        let len = char_len(data);
+        space_left -= 2 + len;
+        if space_left <= 0 {
+            next = *oid;
+            more = 0xFF;
+            break;
+        }
+        put8(mut objects, *oid)?;
+        put8(mut objects, len)?;
+        for x in utf8(data) {
+            objects.push(x);
+        }
+        n += 1;
+    }
+    put8(mut out, more)?;
+    put8(mut out, next)?;
+    put8(mut out, n)?;
+    for x in objects {
+        out.push(x);
+    }
+    Ok(())
+}
+
+// pdu.encode(): the bytes after the function code.
+fn encode(p: ref Pdu) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    match p.cls {
+        Cls.ReadCoilsReq | Cls.ReadDiscreteReq | Cls.ReadHoldingReq | Cls.ReadInputReq => {
+            put16(mut out, p.address)?;
+            put16(mut out, p.count)?;
+        },
+        Cls.ReadCoilsResp | Cls.ReadDiscreteResp => {
+            let packed = pack_bitstring(p.bits);
+            put8(mut out, packed.len() as i64)?;
+            for x in packed {
+                out.push(x);
+            }
+        },
+        Cls.ReadHoldingResp | Cls.ReadInputResp | Cls.ReadWriteResp => {
+            put8(mut out, p.values.len() as i64 * 2)?;
+            for v in p.values.iter() {
+                put16(mut out, *v)?;
+            }
+        },
+        Cls.WriteCoilReq | Cls.WriteCoilResp => {
+            put16(mut out, p.address)?;
+            put16(mut out, if p.on { 0xFF00 } else { 0 })?;
+        },
+        Cls.WriteRegReq | Cls.WriteRegResp => {
+            put16(mut out, p.address)?;
+            put16(mut out, p.value)?;
+        },
+        Cls.WriteCoilsReq => {
+            let count = p.bits.len() as i64;
+            put16(mut out, p.address)?;
+            put16(mut out, count)?;
+            put8(mut out, (count + 7) / 8)?;
+            for x in pack_bitstring(p.bits) {
+                out.push(x);
+            }
+        },
+        Cls.WriteCoilsResp | Cls.WriteRegsResp => {
+            put16(mut out, p.address)?;
+            put16(mut out, p.count)?;
+        },
+        Cls.WriteRegsReq => {
+            put16(mut out, p.address)?;
+            put16(mut out, p.count)?;
+            put8(mut out, p.byte_count)?;
+            for v in p.values.iter() {
+                put16(mut out, *v)?;
+            }
+        },
+        Cls.MaskReq | Cls.MaskResp => {
+            put16(mut out, p.address)?;
+            put16(mut out, p.and_mask)?;
+            put16(mut out, p.or_mask)?;
+        },
+        Cls.ReadWriteReq => {
+            put16(mut out, p.r_addr)?;
+            put16(mut out, p.r_count)?;
+            put16(mut out, p.w_addr)?;
+            put16(mut out, p.w_count)?;
+            put8(mut out, p.w_bytes)?;
+            for v in p.values.iter() {
+                put16(mut out, *v)?;
+            }
+        },
+        Cls.DiagReq | Cls.DiagResp => {
+            put16(mut out, p.sub)?;
+            encode_msg(mut out, p.msg)?;
+        },
+        Cls.ExcStatusReq | Cls.EventCounterReq | Cls.EventLogReq | Cls.SlaveIdReq => {},
+        Cls.ExcStatusResp => put8(mut out, p.status)?,
+        Cls.EventCounterResp => {
+            put16(mut out, if p.ready { 0 } else { 0xFFFF })?;
+            put16(mut out, p.count)?;
+        },
+        Cls.EventLogResp => {
+            put8(mut out, 6 + p.values.len() as i64)?;
+            put16(mut out, if p.ready { 0 } else { 0xFFFF })?;
+            put16(mut out, p.event_count)?;
+            put16(mut out, p.message_count)?;
+            for e in p.values.iter() {
+                put8(mut out, *e)?;
+            }
+        },
+        Cls.SlaveIdResp => {
+            put8(mut out, p.ident.len() as i64 + 1)?;
+            for x in p.ident.iter() {
+                out.push(*x);
+            }
+            put8(mut out, if p.ready { 0xFF } else { 0 })?;
+        },
+        Cls.ReadFileReq => {
+            put8(mut out, p.records.len() as i64 * 7)?;
+            for r in p.records.iter() {
+                put8(mut out, 6)?;
+                put16(mut out, r.file)?;
+                put16(mut out, r.record)?;
+                put16(mut out, r.length)?;
+            }
+        },
+        Cls.ReadFileResp => {
+            let mut total: i64 = 0;
+            for r in p.records.iter() {
+                total += r.response_length + 1;
+            }
+            put8(mut out, total)?;
+            for r in p.records.iter() {
+                put8(mut out, r.length)?;
+                put8(mut out, 6)?;
+                if r.data_str {
+                    return Err(exc("TypeError", "can't concat str to bytes".to_string()));
+                }
+                for x in r.data.iter() {
+                    out.push(*x);
+                }
+            }
+        },
+        Cls.WriteFileReq | Cls.WriteFileResp => encode_records_write(mut out, p.records)?,
+        Cls.FifoReq => put16(mut out, p.address)?,
+        Cls.FifoResp => {
+            let length = p.values.len() as i64 * 2;
+            put16(mut out, 2 + length)?;
+            put16(mut out, length)?;
+            for v in p.values.iter() {
+                put16(mut out, *v)?;
+            }
+        },
+        Cls.DevInfoReq => {
+            put8(mut out, p.sub)?;
+            put8(mut out, p.read_code)?;
+            put8(mut out, p.object_id)?;
+        },
+        Cls.DevInfoResp => encode_devinfo(mut out, p)?,
+        Cls.ExcResp => put8(mut out, p.exc_code)?,
+        Cls.IllegalReq => return Err(exc("TypeError", "can't concat NoneType to bytes".to_string())),
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ decoding
+
+fn be_at(b: ref Vec[u8], at: i64) -> i64 {
+    be(b, at, 2)
+}
+
+fn decode_devinfo(p: mut ref Pdu, data: ref Vec[u8]) -> Result[(), Exc] {
+    let h = need(data, 0, 6, 6)?;
+    p.sub = h[0] as i64;
+    p.read_code = h[1] as i64;
+    p.conformity = h[2] as i64;
+    p.more = h[3] as i64;
+    p.next_oid = h[4] as i64;
+    p.n_objects = h[5] as i64;
+    p.info = Vec.new();
+    let n = data.len() as i64;
+    let mut count: i64 = 6;
+    while count < n {
+        let oh = need(data, count, count + 2, 2)?;
+        let oid = oh[0] as i64;
+        let olen = oh[1] as i64;
+        count += olen + 2;
+        let val = py_slice(data, count - olen, count);
+        let mut found = false;
+        for o in p.info.iter_mut() {
+            if o.oid == oid {
+                o.vals.push(val.clone());
+                found = true;
+            }
+        }
+        if not found {
+            let mut vals: Vec[Vec[u8]] = Vec.new();
+            vals.push(val);
+            p.info.push(Info { oid: oid, vals: vals });
+        }
+    }
+    Ok(())
+}
+
+fn new_rec(file: i64, record: i64, length: i64, data: own Vec[u8], data_str: bool) -> Rec {
+    let rl = data.len() as i64 + 1;
+    Rec { file: file, record: record, length: length, data: data, data_str: data_str, response_length: rl }
+}
+
+fn decode_records_write(p: mut ref Pdu, data: ref Vec[u8]) -> Result[(), Exc] {
+    let byte_count = byte_at(data, 0)?;
+    p.records = Vec.new();
+    let mut count: i64 = 1;
+    while count < byte_count {
+        let d = need(data, count, count + 7, 7)?;
+        let length = be(d, 5, 2);
+        let response_length = length * 2;
+        count += response_length + 7;
+        let body = py_slice(data, count - response_length, count);
+        if d[0] == 6 {
+            p.records.push(new_rec(be(d, 1, 2), be(d, 3, 2), length, body, false));
+        }
+    }
+    Ok(())
+}
+
+// pdu.decode(data): data is the PDU after its function code.
+fn decode(p: mut ref Pdu, data: ref Vec[u8]) -> Result[(), Exc] {
+    let n = data.len() as i64;
+    match p.cls {
+        Cls.ReadCoilsReq | Cls.ReadDiscreteReq | Cls.ReadHoldingReq | Cls.ReadInputReq
+            | Cls.WriteCoilsResp | Cls.WriteRegsResp => {
+            let d = need(data, 0, n, 4)?;
+            p.address = be(d, 0, 2);
+            p.count = be(d, 2, 2);
+        },
+        Cls.ReadCoilsResp | Cls.ReadDiscreteResp => {
+            p.byte_count = byte_at(data, 0)?;
+            p.bits = unpack_bitstring(tail(data, 1));
+        },
+        Cls.ReadHoldingResp | Cls.ReadInputResp => {
+            let byte_count = byte_at(data, 0)?;
+            p.values = Vec.new();
+            let mut i: i64 = 1;
+            while i < byte_count + 1 {
+                let d = need(data, i, i + 2, 2)?;
+                p.values.push(be(d, 0, 2));
+                i += 2;
+            }
+        },
+        Cls.ReadWriteResp => {
+            let byte_count = byte_at(data, 0)?;
+            let mut i: i64 = 1;
+            while i < byte_count {
+                let d = need(data, i, i + 2, 2)?;
+                p.values.push(be(d, 0, 2));
+                i += 2;
+            }
+        },
+        Cls.WriteCoilReq | Cls.WriteCoilResp => {
+            let d = need(data, 0, n, 4)?;
+            p.address = be(d, 0, 2);
+            p.on = be(d, 2, 2) == 0xFF00;
+        },
+        Cls.WriteRegReq | Cls.WriteRegResp => {
+            let d = need(data, 0, n, 4)?;
+            p.address = be(d, 0, 2);
+            p.value = be(d, 2, 2);
+        },
+        Cls.WriteCoilsReq => {
+            let d = need(data, 0, 5, 5)?;
+            p.address = be(d, 0, 2);
+            let count = be(d, 2, 2);
+            p.byte_count = d[4] as i64;
+            let bits = unpack_bitstring(tail(data, 5));
+            p.bits = Vec.new();
+            let mut i: i64 = 0;
+            while i < count and i < bits.len() as i64 {
+                p.bits.push(bits[i]);
+                i += 1;
+            }
+        },
+        Cls.WriteRegsReq => {
+            let d = need(data, 0, 5, 5)?;
+            p.address = be(d, 0, 2);
+            p.count = be(d, 2, 2);
+            p.byte_count = d[4] as i64;
+            p.values = Vec.new();
+            let mut idx: i64 = 5;
+            while idx < p.count * 2 + 5 {
+                let v = need(data, idx, idx + 2, 2)?;
+                p.values.push(be(v, 0, 2));
+                idx += 2;
+            }
+        },
+        Cls.MaskReq | Cls.MaskResp => {
+            let d = need(data, 0, n, 6)?;
+            p.address = be(d, 0, 2);
+            p.and_mask = be(d, 2, 2);
+            p.or_mask = be(d, 4, 2);
+        },
+        Cls.ReadWriteReq => {
+            let d = need(data, 0, 9, 9)?;
+            p.r_addr = be(d, 0, 2);
+            p.r_count = be(d, 2, 2);
+            p.w_addr = be(d, 4, 2);
+            p.w_count = be(d, 6, 2);
+            p.w_bytes = d[8] as i64;
+            p.values = Vec.new();
+            let mut i: i64 = 9;
+            while i < p.w_bytes + 9 {
+                let v = need(data, i, i + 2, 2)?;
+                p.values.push(be(v, 0, 2));
+                i += 2;
+            }
+        },
+        Cls.DiagReq => {
+            let d = need(data, 0, 2, 2)?;
+            p.sub = be(d, 0, 2);
+            if p.sub == 0 {
+                p.msg = Msg.Bytes(tail(data, 2));
+            } else {
+                let m = need(data, 2, n, 2)?;
+                p.msg = Msg.Int(be(m, 0, 2));
+            }
+        },
+        Cls.DiagResp => {
+            let d = need(data, 0, 2, 2)?;
+            p.sub = be(d, 0, 2);
+            let mut rest = tail(data, 2);
+            if p.sub == 0 {
+                p.msg = Msg.Bytes(rest);
+            } else {
+                if rest.len() % 2 == 1 {
+                    rest.push(0x30);
+                }
+                let mut words: Vec[i64] = Vec.new();
+                let mut i: i64 = 0;
+                while i < rest.len() as i64 {
+                    words.push(be(rest, i, 2));
+                    i += 2;
+                }
+                p.msg = Msg.Tuple(words);
+            }
+        },
+        Cls.ExcStatusReq | Cls.EventCounterReq | Cls.EventLogReq | Cls.SlaveIdReq | Cls.IllegalReq => {},
+        Cls.ExcStatusResp => p.status = byte_at(data, 0)?,
+        Cls.EventCounterResp => {
+            let d = need(data, 0, n, 4)?;
+            p.ready = be(d, 0, 2) == 0;
+            p.count = be(d, 2, 2);
+        },
+        Cls.EventLogResp => {
+            let length = byte_at(data, 0)?;
+            p.ready = be_at(need(data, 1, 3, 2)?, 0) == 0;
+            p.event_count = be_at(need(data, 3, 5, 2)?, 0);
+            p.message_count = be_at(need(data, 5, 7, 2)?, 0);
+            p.values = Vec.new();
+            let mut i: i64 = 7;
+            while i < length + 1 {
+                p.values.push(byte_at(data, i)?);
+                i += 1;
+            }
+        },
+        Cls.SlaveIdResp => {
+            p.byte_count = byte_at(data, 0)?;
+            p.ident = py_slice(data, 1, p.byte_count + 1);
+            p.ready = byte_at(data, n - 1)? == 0xFF;
+        },
+        Cls.ReadFileReq => {
+            p.records = Vec.new();
+            let byte_count = byte_at(data, 0)?;
+            let mut count: i64 = 1;
+            while count < byte_count {
+                let d = need(data, count, count + 7, 7)?;
+                if d[0] == 6 {
+                    p.records.push(new_rec(be(d, 1, 2), be(d, 3, 2), be(d, 5, 2), Vec.new(), true));
+                }
+                count += 7;
+            }
+        },
+        Cls.ReadFileResp => {
+            p.records = Vec.new();
+            let byte_count = byte_at(data, 0)?;
+            let mut count: i64 = 1;
+            while count < byte_count {
+                let d = need(data, count, count + 2, 2)?;
+                let response_length = d[0] as i64;
+                count += response_length + 1;
+                let body = py_slice(data, count - response_length + 1, count);
+                let length = body.len() as i64 / 2;
+                if d[1] == 6 {
+                    let mut r = new_rec(0, 0, length, body, false);
+                    r.response_length = response_length;
+                    p.records.push(r);
+                }
+            }
+        },
+        Cls.WriteFileReq | Cls.WriteFileResp => decode_records_write(mut p, data)?,
+        Cls.FifoReq => {
+            let d = need(data, 0, n, 2)?;
+            p.address = be(d, 0, 2);
+        },
+        Cls.FifoResp => {
+            let d = need(data, 0, 4, 4)?;
+            let count = be(d, 2, 2);
+            p.values = Vec.new();
+            let mut index: i64 = 0;
+            while index < count - 4 {
+                let idx = 4 + index * 2;
+                let v = need(data, idx, idx + 2, 2)?;
+                p.values.push(be(v, 0, 2));
+                index += 1;
+            }
+        },
+        Cls.DevInfoReq => {
+            let d = need(data, 0, n, 3)?;
+            p.sub = d[0] as i64;
+            p.read_code = d[1] as i64;
+            p.object_id = d[2] as i64;
+        },
+        Cls.DevInfoResp => decode_devinfo(mut p, data)?,
+        Cls.ExcResp => p.exc_code = byte_at(data, 0)?,
+    }
+    Ok(())
+}
+
+// The RTU frame size a class reads off the head of a buffer
+// (calculateRtuFrameSize). Err means the buffer is too short to tell.
+fn rtu_size(c: Cls, buf: ref Vec[u8]) -> Result[i64, Exc] {
+    let pos: i64 = match c {
+        Cls.ReadCoilsReq | Cls.ReadDiscreteReq | Cls.ReadHoldingReq | Cls.ReadInputReq
+            | Cls.WriteCoilReq | Cls.WriteCoilResp | Cls.WriteRegReq | Cls.WriteRegResp
+            | Cls.WriteCoilsResp | Cls.WriteRegsResp | Cls.DiagReq | Cls.DiagResp
+            | Cls.EventCounterResp => return Ok(8),
+        Cls.MaskReq | Cls.MaskResp => return Ok(10),
+        Cls.DevInfoReq => return Ok(7),
+        Cls.FifoReq => return Ok(6),
+        Cls.ExcResp | Cls.ExcStatusResp | Cls.IllegalReq => return Ok(5),
+        Cls.ExcStatusReq | Cls.EventCounterReq | Cls.EventLogReq | Cls.SlaveIdReq => return Ok(4),
+        Cls.WriteCoilsReq | Cls.WriteRegsReq => 6,
+        Cls.ReadWriteReq => 10,
+        Cls.FifoResp => {
+            let hi = byte_at(buf, 2)?;
+            let lo = byte_at(buf, 3)?;
+            return Ok((hi << 16) + lo + 6);
+        },
+        Cls.DevInfoResp => {
+            let mut size: i64 = 8;
+            let mut count = byte_at(buf, 7)?;
+            while count > 0 {
+                let d = need(buf, size, size + 2, 2)?;
+                size += d[1] as i64 + 2;
+                count -= 1;
+            }
+            return Ok(size + 2);
+        },
+        _ => 2,
+    };
+    Ok(byte_at(buf, pos)? + pos + 3)
+}
+
+fn server_lookup(fc: i64) -> Option[Cls] {
+    match fc {
+        1 => Some(Cls.ReadCoilsReq),
+        2 => Some(Cls.ReadDiscreteReq),
+        3 => Some(Cls.ReadHoldingReq),
+        4 => Some(Cls.ReadInputReq),
+        5 => Some(Cls.WriteCoilReq),
+        6 => Some(Cls.WriteRegReq),
+        7 => Some(Cls.ExcStatusReq),
+        8 => Some(Cls.DiagReq),
+        11 => Some(Cls.EventCounterReq),
+        12 => Some(Cls.EventLogReq),
+        15 => Some(Cls.WriteCoilsReq),
+        16 => Some(Cls.WriteRegsReq),
+        17 => Some(Cls.SlaveIdReq),
+        20 => Some(Cls.ReadFileReq),
+        21 => Some(Cls.WriteFileReq),
+        22 => Some(Cls.MaskReq),
+        23 => Some(Cls.ReadWriteReq),
+        24 => Some(Cls.FifoReq),
+        43 => Some(Cls.DevInfoReq),
+        _ => None,
+    }
+}
+
+fn client_lookup(fc: i64) -> Option[Cls] {
+    match fc {
+        1 => Some(Cls.ReadCoilsResp),
+        2 => Some(Cls.ReadDiscreteResp),
+        3 => Some(Cls.ReadHoldingResp),
+        4 => Some(Cls.ReadInputResp),
+        5 => Some(Cls.WriteCoilResp),
+        6 => Some(Cls.WriteRegResp),
+        7 => Some(Cls.ExcStatusResp),
+        8 => Some(Cls.DiagResp),
+        11 => Some(Cls.EventCounterResp),
+        12 => Some(Cls.EventLogResp),
+        15 => Some(Cls.WriteCoilsResp),
+        16 => Some(Cls.WriteRegsResp),
+        17 => Some(Cls.SlaveIdResp),
+        20 => Some(Cls.ReadFileResp),
+        21 => Some(Cls.WriteFileResp),
+        22 => Some(Cls.MaskResp),
+        23 => Some(Cls.ReadWriteResp),
+        24 => Some(Cls.FifoResp),
+        43 => Some(Cls.DevInfoResp),
+        _ => None,
+    }
+}
+
+// The class a framer sizes an RTU frame by (lookupPduClass).
+fn frame_class(server: bool, fc: i64) -> Cls {
+    let c = if server { server_lookup(fc) } else { client_lookup(fc) };
+    c.unwrap_or(Cls.ExcResp)
+}
+
+// ServerDecoder.decode. It only swallows pymodbus's own exceptions, which
+// no request's decode raises, so every error here reaches the framer.
+fn server_decode(data: ref Vec[u8]) -> Result[Pdu, Exc] {
+    let fc = byte_at(data, 0)?;
+    let mut p = match server_lookup(fc) {
+        Some(c) => blank(c),
+        None => {
+            let mut q = blank(Cls.IllegalReq);
+            q.fc = fc;
+            q
+        },
+    };
+    decode(mut p, tail(data, 1))?;
+    if p.cls == Cls.DiagReq and diag_known(p.sub) {
+        p.dclass = p.sub;
+    }
+    Ok(p)
+}
+
+// ClientDecoder.decode, which turns every error into None.
+fn client_decode(data: ref Vec[u8]) -> Option[Pdu] {
+    let fc = match byte_at(data, 0) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let mut p = match client_lookup(fc) {
+        Some(c) => blank(c),
+        None => {
+            if fc <= 0x80 {
+                return None;
+            }
+            blank(Cls.ExcResp)
+        },
+    };
+    if fc > 0x80 {
+        p = exception_response(fc & 0x7F, ILLEGAL_FUNCTION);
+    }
+    if decode(mut p, tail(data, 1)).is_err() {
+        return None;
+    }
+    if p.cls == Cls.DiagResp and diag_known(p.sub) {
+        p.dclass = p.sub;
+    }
+    Some(p)
+}
+
+// ------------------------------------------------------------ the control block
+
+const COUNTER_NAMES: Array[Str, 9] = [
+    "BusMessage", "BusCommunicationError", "BusExceptionError", "SlaveMessage",
+    "SlaveNoResponse", "SlaveNAK", "SlaveBusy", "BusCharacterOverrun", "Event",
+];
+
+const IDENTITY_NAMES: Array[Str, 7] = [
+    "VendorName", "ProductCode", "MajorMinorRevision", "VendorUrl", "ProductName",
+    "ModelName", "UserApplicationName",
+];
+
+// device.ModbusControlBlock, a singleton every diagnostic reads; its
+// counters, identity and event log outlive any one server.
+struct Mcb {
+    diag: Vec[bool],
+    listen_only: bool,
+    delimiter: Vec[u8],
+    counters: Vec[i64],
+    identity: Vec[(i64, String)],
+    events: Vec[Vec[u8]],
+}
+
+fn new_mcb() -> Mcb {
+    let mut identity: Vec[(i64, String)] = Vec.new();
+    for k in 0..9 {
+        identity.push((k, String.new()));
+    }
+    let mut delimiter: Vec[u8] = Vec.new();
+    delimiter.push(13);
+    Mcb {
+        diag: Vec.filled(16, false),
+        listen_only: false,
+        delimiter: delimiter,
+        counters: Vec.filled(9, 0),
+        identity: identity,
+        events: Vec.new(),
+    }
+}
+
+impl Mcb {
+    // identity[key], which is dict.setdefault(key, "").
+    fn ident_get(mut ref self, key: i64) -> String {
+        for (k, v) in self.identity.iter() {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        self.identity.push((key, String.new()));
+        String.new()
+    }
+
+    // A plain dict store into the identity.
+    fn ident_put(mut ref self, key: i64, value: own String) {
+        for e in self.identity.iter_mut() {
+            if e.0 == key {
+                e.1 = value;
+                return;
+            }
+        }
+        self.identity.push((key, value));
+    }
+
+    fn add_event(mut ref self, ev: own Vec[u8]) {
+        let mut events: Vec[Vec[u8]] = Vec.new();
+        events.push(ev);
+        for e in self.events.iter() {
+            if events.len() < 64 {
+                events.push(e.clone());
+            }
+        }
+        self.events = events;
+        self.counters[8] += 1;
+    }
+
+    fn get_events(ref self) -> Vec[u8] {
+        let mut out: Vec[u8] = Vec.new();
+        for e in self.events.iter() {
+            for x in e.iter() {
+                out.push(*x);
+            }
+        }
+        out
+    }
+
+    fn reset(mut ref self) {
+        self.events = Vec.new();
+        self.counters = Vec.filled(9, 0);
+        self.diag = Vec.filled(16, false);
+    }
+
+    // ModbusCountersHandler.summary: a bit per counter that is not zero.
+    fn summary(ref self) -> i64 {
+        let mut bit: i64 = 1;
+        let mut result: i64 = 0;
+        for c in self.counters.iter() {
+            if *c != 0 {
+                result = result | bit;
+            }
+            bit = bit << 1;
+        }
+        result
+    }
+
+    // DeviceInformationFactory.get
+    fn device_info(mut ref self, read_code: i64, oid: i64) -> Result[Vec[(i64, String)], Exc] {
+        let mut ids: Vec[i64] = Vec.new();
+        if read_code == 1 {
+            for x in oid..3 {
+                ids.push(x);
+            }
+        } else if read_code == 2 {
+            let start = if self.ident_get(oid).len() > 0 { oid } else { 0 };
+            for x in start..7 {
+                ids.push(x);
+            }
+        } else if read_code == 3 {
+            let start = if self.ident_get(oid).len() > 0 { oid } else { 0 };
+            for x in start..0x100 {
+                if x < 0x07 or x >= 0x80 {
+                    ids.push(x);
+                }
+            }
+        } else if read_code == 4 {
+            let mut one: Vec[(i64, String)] = Vec.new();
+            one.push((oid, self.ident_get(oid)));
+            return Ok(one);
+        } else {
+            return Err(exc("KeyError", f"{read_code}"));
+        }
+        let mut out: Vec[(i64, String)] = Vec.new();
+        for x in ids {
+            let v = self.ident_get(x);
+            if v.len() > 0 {
+                out.push((x, v));
+            }
+        }
+        Ok(out)
+    }
+
+    fn identity_summary(ref self) -> String {
+        let mut out = "identity ".to_string();
+        for i in 0..7 {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(f"{IDENTITY_NAMES[i]}={py_str_repr(self.identity[i].1)}");
+        }
+        out
+    }
+}
+
+// The events' encodings (events.py).
+fn receive_event(overrun: bool, listen: bool, broadcast: bool) -> Vec[u8] {
+    let mut bits: Vec[bool] = Vec.filled(3, false);
+    bits.push(overrun);
+    bits.push(listen);
+    bits.push(broadcast);
+    bits.push(true);
+    pack_bitstring(bits)
+}
+
+fn send_event(flags: ref Vec[bool]) -> Vec[u8] {
+    let mut bits = flags.clone();
+    bits.push(true);
+    bits.push(false);
+    pack_bitstring(bits)
+}
+
+// ------------------------------------------------------------ the datastore
+
+// A data block: sequential (a run of values from `address`) or sparse
+// (values at the addresses given, keeping the first layout for reset).
+struct Block {
+    sparse: bool,
+    address: i64,
+    values: Vec[i64],
+    default: i64,
+    map: Map[i64, i64],
+    defaults: Vec[(i64, i64)],
+    mutable: bool,
+}
+
+fn seq_block(address: i64, values: own Vec[i64]) -> Block {
+    Block { sparse: false, address: address, values: values, default: 0, map: Map.new(), defaults: Vec.new(), mutable: true }
+}
+
+fn sparse_block(pairs: ref Vec[(i64, i64)], mutable: bool) -> Block {
+    let mut map: Map[i64, i64] = Map.new();
+    let mut defaults: Vec[(i64, i64)] = Vec.new();
+    for (k, v) in pairs.iter() {
+        if map.contains_key(*k) {
+            for d in defaults.iter_mut() {
+                if d.0 == *k {
+                    d.1 = *v;
+                }
+            }
+        } else {
+            defaults.push((*k, *v));
+        }
+        map.insert(*k, *v);
+    }
+    Block { sparse: true, address: 0, values: Vec.new(), default: 0, map: map, defaults: defaults, mutable: mutable }
+}
+
+impl Block {
+    fn validate(ref self, address: i64, count: i64) -> bool {
+        if self.sparse {
+            if count == 0 {
+                return false;
+            }
+            for a in address..(address + count) {
+                if not self.map.contains_key(a) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        self.address <= address and self.address + self.values.len() as i64 >= address + count
+    }
+
+    fn get(ref self, address: i64, count: i64) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        if self.sparse {
+            for a in address..(address + count) {
+                out.push(self.map.get(a).unwrap_or(0));
+            }
+            return out;
+        }
+        let start = address - self.address;
+        let n = self.values.len() as i64;
+        let mut i = start;
+        while i < start + count and i < n {
+            out.push(self.values[i]);
+            i += 1;
+        }
+        out
+    }
+
+    fn set(mut ref self, address: i64, values: ref Vec[i64]) -> Result[(), Exc] {
+        if self.sparse {
+            let mut idx: i64 = 0;
+            for v in values {
+                if not self.map.contains_key(address + idx) and not self.mutable {
+                    return Err(exc("ParameterException", "Modbus Error: [Invalid Parameter] Offset {address+idx} not in range".to_string()));
+                }
+                self.map.insert(address + idx, *v);
+                idx += 1;
+            }
+            return Ok(());
+        }
+        let start = address - self.address;
+        let mut idx: i64 = 0;
+        for v in values {
+            self.values[start + idx] = *v;
+            idx += 1;
+        }
+        Ok(())
+    }
+
+    fn reset(mut ref self) {
+        if self.sparse {
+            let mut map: Map[i64, i64] = Map.new();
+            for (k, v) in self.defaults.iter() {
+                map.insert(*k, *v);
+            }
+            self.map = map;
+        } else {
+            self.values = Vec.filled(self.values.len(), self.default);
+        }
+    }
+
+    // str(block)
+    fn describe(ref self) -> String {
+        if not self.sparse {
+            return f"DataStore({self.values.len()}, {self.default})";
+        }
+        let mut out = String.new();
+        let mut first = true;
+        for (k, v) in self.defaults.iter() {
+            if not first {
+                out.push_str(", ");
+            }
+            first = false;
+            out.push_str(f"{*k}: {*v}");
+        }
+        f"DataStore({self.map.len()}, {{{out}}})"
+    }
+}
+
+// datastore.ModbusSlaveContext: four blocks, d, c, i and h, and the +1
+// that pymodbus adds to every address unless zero_mode is on.
+struct Slave {
+    stores: Vec[Block],
+    zero_mode: bool,
+    report: Vec[u8],
+}
+
+fn new_slave(zero_mode: bool) -> Slave {
+    let mut stores: Vec[Block] = Vec.new();
+    for _ in 0..4 {
+        stores.push(seq_block(0, Vec.filled(65536, 0)));
+    }
+    Slave { stores: stores, zero_mode: zero_mode, report: Vec.new() }
+}
+
+fn store_index(letter: Str) -> i64 {
+    if letter == "d" {
+        0
+    } else if letter == "c" {
+        1
+    } else if letter == "i" {
+        2
+    } else {
+        3
+    }
+}
+
+// ModbusSlaveContext._fx_mapper
+fn fx_store(fc: i64) -> i64 {
+    match fc {
+        2 => 0,
+        1 | 5 | 15 => 1,
+        4 => 2,
+        _ => 3,
+    }
+}
+
+fn no_such_slave(msg: own String) -> Exc {
+    exc("NoSuchSlaveException", f"Modbus Error: [No Such Slave] {msg}")
+}
+
+// datastore.ModbusServerContext. Each entry maps a slave id to a slave in
+// the world's arena, or to -1: a single context starts out holding an
+// empty dict where its slave goes.
+struct Ctx {
+    single: bool,
+    entries: Vec[(i64, i64)],
+}
+
+fn new_ctx(multi: bool) -> Ctx {
+    let mut entries: Vec[(i64, i64)] = Vec.new();
+    if not multi {
+        entries.push((0, -1));
+    }
+    Ctx { single: not multi, entries: entries }
+}
+
+impl Ctx {
+    fn put(mut ref self, slave: i64, ix: i64) -> Result[(), Exc] {
+        let id = if self.single { 0 } else { slave };
+        if id < 0 or id > 0xF7 {
+            return Err(no_such_slave(f"slave index :{id} out of range"));
+        }
+        for e in self.entries.iter_mut() {
+            if e.0 == id {
+                e.1 = ix;
+                return Ok(());
+            }
+        }
+        self.entries.push((id, ix));
+        Ok(())
+    }
+
+    fn remove(mut ref self, slave: i64) -> Result[(), Exc] {
+        if self.single or slave < 0 or slave > 0xF7 {
+            return Err(no_such_slave(f"slave index: {slave} out of range"));
+        }
+        let mut kept: Vec[(i64, i64)] = Vec.new();
+        let mut found = false;
+        for e in self.entries.iter() {
+            if e.0 == slave {
+                found = true;
+            } else {
+                kept.push(*e);
+            }
+        }
+        if not found {
+            return Err(exc("KeyError", f"{slave}"));
+        }
+        self.entries = kept;
+        Ok(())
+    }
+
+    fn lookup(ref self, slave: i64) -> Result[i64, Exc] {
+        let id = if self.single { 0 } else { slave };
+        for e in self.entries.iter() {
+            if e.0 == id {
+                return Ok(e.1);
+            }
+        }
+        Err(no_such_slave(f"slave - {id} does not exist, or is out of range"))
+    }
+
+    fn slaves(ref self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for e in self.entries.iter() {
+            out.push(e.0);
+        }
+        out
+    }
+}
+
+// ------------------------------------------------------------ framing
+
+// CRC-16/Modbus (message/rtu.py), byte-swapped the way pymodbus returns it.
+fn compute_crc(data: ref Vec[u8]) -> i64 {
+    let mut crc: i64 = 0xFFFF;
+    for x in data {
+        crc = crc ^ (*x as i64);
+        for _ in 0..8 {
+            if (crc & 1) == 1 {
+                crc = (crc >> 1) ^ 0xA001;
+            } else {
+                crc = crc >> 1;
+            }
+        }
+    }
+    ((crc << 8) & 0xFF00) | ((crc >> 8) & 0x00FF)
+}
+
+fn compute_lrc(data: ref Vec[u8]) -> i64 {
+    let mut lrc: i64 = 0;
+    for x in data {
+        lrc += *x as i64;
+    }
+    lrc = lrc & 0xFF;
+    ((lrc ^ 0xFF) + 1) & 0xFF
+}
+
+fn is_byte_space(c: u8) -> bool {
+    c == 32 or (c >= 9 and c <= 13)
+}
+
+// int(b, 16) on a bytes object: surrounding whitespace, a sign, a 0x
+// prefix and single underscores between digits.
+fn py_int16(b: ref Vec[u8]) -> Result[i64, Exc] {
+    let bad = exc("ValueError", f"invalid literal for int() with base 16: {py_bytes_repr(b)}");
+    let mut a: i64 = 0;
+    let mut e = b.len() as i64;
+    while a < e and is_byte_space(b[a]) {
+        a += 1;
+    }
+    while e > a and is_byte_space(b[e - 1]) {
+        e -= 1;
+    }
+    let mut neg = false;
+    if a < e and (b[a] == b'+' or b[a] == b'-') {
+        neg = b[a] == b'-';
+        a += 1;
+    }
+    let mut prefixed = false;
+    if a + 1 < e and b[a] == b'0' and (b[a + 1] == b'x' or b[a + 1] == b'X') {
+        a += 2;
+        prefixed = true;
+    }
+    let mut v: i64 = 0;
+    let mut digits: i64 = 0;
+    let mut last_underscore = false;
+    while a < e {
+        if b[a] == b'_' {
+            if last_underscore or (digits == 0 and not prefixed) {
+                return Err(bad);
+            }
+            last_underscore = true;
+        } else {
+            let d = hex_val(b[a]);
+            if d < 0 {
+                return Err(bad);
+            }
+            v = v * 16 + d;
+            digits += 1;
+            last_underscore = false;
+        }
+        a += 1;
+    }
+    if digits == 0 or last_underscore {
+        return Err(bad);
+    }
+    Ok(if neg { -v } else { v })
+}
+
+// binascii.a2b_hex
+fn a2b_hex(b: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    if b.len() % 2 == 1 {
+        return Err(exc("binascii.Error", "Odd-length string".to_string()));
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() as i64 {
+        let hi = hex_val(b[i]);
+        let lo = hex_val(b[i + 1]);
+        if hi < 0 or lo < 0 {
+            return Err(exc("binascii.Error", "Non-hexadecimal digit found".to_string()));
+        }
+        out.push((hi * 16 + lo) as u8);
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn find_bytes(b: ref Vec[u8], pat: ref Vec[u8]) -> i64 {
+    let n = b.len() as i64;
+    let m = pat.len() as i64;
+    let mut i: i64 = 0;
+    while i + m <= n {
+        let mut ok = true;
+        for k in 0..m {
+            if b[i + k] != pat[k] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// MessageAscii.decode: (bytes used, device id, PDU), or no PDU when the
+// frame is not whole yet or is skipped.
+fn ascii_decode(data: ref Vec[u8]) -> Result[(i64, i64, Vec[u8]), Exc] {
+    let n = data.len() as i64;
+    if n < 10 {
+        return Ok((0, 0, Vec.new()));
+    }
+    if data[0] != b':' {
+        let mut colon: Vec[u8] = Vec.new();
+        colon.push(b':');
+        let start = find_bytes(data, colon);
+        let used = if start != -1 { start } else { n };
+        return Ok((used, 0, Vec.new()));
+    }
+    let mut crlf: Vec[u8] = Vec.new();
+    crlf.push(13);
+    crlf.push(10);
+    let end = find_bytes(data, crlf);
+    if end == -1 {
+        return Ok((0, 0, Vec.new()));
+    }
+    let dev = py_int16(py_slice(data, 1, 3))?;
+    let lrc = py_int16(py_slice(data, end - 2, end))?;
+    let msg = a2b_hex(py_slice(data, 1, end - 2))?;
+    if compute_lrc(msg) != lrc {
+        return Ok((end + 2, 0, Vec.new()));
+    }
+    Ok((end + 2, dev, tail(msg, 1)))
+}
+
+const SOCKET: i64 = 0;
+const RTU: i64 = 1;
+const ASCII: i64 = 2;
+
+// A framer: the bytes it has buffered, for one end of the link.
+struct Framer {
+    kind: i64,
+    server: bool,
+    buf: Vec[u8],
+}
+
+fn new_framer(kind: i64, server: bool) -> Framer {
+    Framer { kind: kind, server: server, buf: Vec.new() }
+}
+
+fn known_code(server: bool, fc: i64) -> bool {
+    if server { server_lookup(fc).is_some() } else { client_lookup(fc).is_some() }
+}
+
+fn validate_slave(slaves: ref Vec[i64], single: bool, uid: i64) -> bool {
+    if single {
+        return true;
+    }
+    for s in slaves {
+        if *s == 0 or *s == 0xFF or *s == uid {
+            return true;
+        }
+    }
+    false
+}
+
+impl Framer {
+    // processIncomingPacket: the PDUs it decoded, and the exception that
+    // stopped it, if one did.
+    fn process(mut ref self, data: ref Vec[u8], slaves: ref Vec[i64], single: bool) -> (Vec[Pdu], Option[Exc]) {
+        for x in data {
+            self.buf.push(*x);
+        }
+        if self.kind == SOCKET {
+            self.socket_frames(slaves, single)
+        } else if self.kind == RTU {
+            self.rtu_frames(slaves)
+        } else {
+            self.ascii_frames(slaves, single)
+        }
+    }
+
+    fn decode_pdu(ref self, data: ref Vec[u8], what: Str) -> Result[Pdu, Exc] {
+        if self.server {
+            return server_decode(data);
+        }
+        match client_decode(data) {
+            Some(p) => Ok(p),
+            None => Err(io_err(what)),
+        }
+    }
+
+    fn socket_frames(mut ref self, slaves: ref Vec[i64], single: bool) -> (Vec[Pdu], Option[Exc]) {
+        let mut got: Vec[Pdu] = Vec.new();
+        loop {
+            let n = self.buf.len() as i64;
+            if n < 9 {
+                return (got, None);
+            }
+            let tid = be(self.buf, 0, 2);
+            let mut msg_len = be(self.buf, 4, 2) + 6;
+            let dev = self.buf[6] as i64;
+            if n < msg_len {
+                return (got, None);
+            }
+            if msg_len == 8 and n == 9 {
+                msg_len = 9;
+            }
+            let data = py_slice(self.buf, 7, msg_len);
+            if data.len() == 0 {
+                self.buf = tail(self.buf, msg_len);
+                continue;
+            }
+            if not validate_slave(slaves, single, dev) {
+                self.buf = Vec.new();
+                return (got, None);
+            }
+            let mut p = match self.decode_pdu(data, "Unable to decode request") {
+                Ok(p) => p,
+                Err(e) => {
+                    if not self.server {
+                        self.buf = Vec.new();
+                    }
+                    return (got, Some(e));
+                },
+            };
+            p.slave = dev;
+            p.tid = tid;
+            self.buf = tail(self.buf, msg_len);
+            got.push(p);
+        }
+    }
+
+    fn ascii_frames(mut ref self, slaves: ref Vec[i64], single: bool) -> (Vec[Pdu], Option[Exc]) {
+        let mut got: Vec[Pdu] = Vec.new();
+        while self.buf.len() > 0 {
+            let (used, dev, data) = match ascii_decode(self.buf) {
+                Ok(t) => t,
+                Err(e) => return (got, Some(e)),
+            };
+            if data.len() == 0 {
+                if used == 0 {
+                    return (got, None);
+                }
+                self.buf = tail(self.buf, used);
+                continue;
+            }
+            if not validate_slave(slaves, single, dev) {
+                self.buf = Vec.new();
+                return (got, None);
+            }
+            let mut p = match self.decode_pdu(data, "Unable to decode response") {
+                Ok(p) => p,
+                Err(e) => return (got, Some(e)),
+            };
+            p.slave = dev;
+            p.tid = 0;
+            self.buf = tail(self.buf, used);
+            got.push(p);
+        }
+        (got, None)
+    }
+
+    // get_frame_start: drop bytes until one that could start a frame from
+    // a slave asked for, with a function code this end knows.
+    fn rtu_frame_start(mut ref self, slaves: ref Vec[i64], broadcast: bool, skip: bool) -> bool {
+        let n = self.buf.len() as i64;
+        if n < 4 {
+            return false;
+        }
+        let start: i64 = if skip { 1 } else { 0 };
+        for i in start..(n - 3) {
+            let uid = self.buf[i] as i64;
+            if not broadcast {
+                let mut listed = false;
+                for s in slaves {
+                    if *s == uid {
+                        listed = true;
+                    }
+                }
+                if not listed {
+                    continue;
+                }
+            }
+            let fc = self.buf[i + 1] as i64;
+            if not known_code(self.server, fc) and not known_code(self.server, fc - 0x80) {
+                continue;
+            }
+            if i > 0 {
+                self.buf = tail(self.buf, i);
+            }
+            return true;
+        }
+        self.buf = tail(self.buf, n - 3);
+        false
+    }
+
+    fn rtu_frames(mut ref self, slaves: ref Vec[i64]) -> (Vec[Pdu], Option[Exc]) {
+        let mut got: Vec[Pdu] = Vec.new();
+        if slaves.len() == 0 {
+            return (got, Some(exc("IndexError", "list index out of range".to_string())));
+        }
+        let broadcast = slaves[0] == 0;
+        let mut skip = false;
+        while self.rtu_frame_start(slaves, broadcast, skip) {
+            if self.buf.len() <= 1 {
+                break;
+            }
+            let c = frame_class(self.server, self.buf[1] as i64);
+            let size = match rtu_size(c, self.buf) {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            if (self.buf.len() as i64) < size {
+                break;
+            }
+            let check = be(self.buf, size - 2, 2);
+            if compute_crc(py_slice(self.buf, 0, size - 2)) != check {
+                skip = true;
+                continue;
+            }
+            let end = size - 2;
+            let data = if end > 0 { py_slice(self.buf, 1, end) } else { Vec.new() };
+            let mut p = match self.decode_pdu(data, "Unable to decode request") {
+                Ok(p) => p,
+                Err(e) => return (got, Some(e)),
+            };
+            p.slave = self.buf[0] as i64;
+            p.tid = 0;
+            self.buf = tail(self.buf, size);
+            got.push(p);
+        }
+        (got, None)
+    }
+}
+
+// buildPacket: the function code, the PDU and the framer's wrapping.
+fn build_packet(kind: i64, p: ref Pdu) -> Result[Vec[u8], Exc] {
+    let mut data: Vec[u8] = Vec.new();
+    to_bytes(mut data, p.fc, 1)?;
+    for x in encode(p)? {
+        data.push(x);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if kind == SOCKET {
+        to_bytes(mut out, p.tid, 2)?;
+        out.push(0);
+        out.push(0);
+        to_bytes(mut out, data.len() as i64 + 1, 2)?;
+        to_bytes(mut out, p.slave, 1)?;
+        for x in data {
+            out.push(x);
+        }
+    } else if kind == RTU {
+        to_bytes(mut out, p.slave, 1)?;
+        for x in data {
+            out.push(x);
+        }
+        let crc = compute_crc(out);
+        out.push((crc >> 8) as u8);
+        out.push((crc & 0xFF) as u8);
+    } else {
+        let mut dev: Vec[u8] = Vec.new();
+        to_bytes(mut dev, p.slave, 1)?;
+        let checksum = compute_lrc(concat(dev, data));
+        let text = f":{hex_n(p.slave, 2)}{hex_of(data)}{hex_n(checksum, 2)}\r\n".to_uppercase();
+        for x in text.bytes() {
+            out.push(x);
+        }
+    }
+    Ok(out)
+}
+
+fn wire(kind: i64, data: ref Vec[u8]) -> String {
+    if kind == ASCII {
+        return latin1(data).replace("\r", "<CR>").replace("\n", "<LF>");
+    }
+    hex_of(data)
+}
+
+// ------------------------------------------------------------ the bus
+
+// A server and a client on one link. The server's framer cuts requests out
+// of what it receives; the client's decodes what the server sends back.
+struct Bus {
+    kind: i64,
+    broadcast: bool,
+    ignore: bool,
+    ctx: Ctx,
+    server: Framer,
+    client: Framer,
+    tid: i64,
+}
+
+fn new_bus(kind: i64, multi: bool, broadcast: bool, ignore: bool) -> Bus {
+    Bus {
+        kind: kind,
+        broadcast: broadcast,
+        ignore: ignore,
+        ctx: new_ctx(multi),
+        server: new_framer(kind, true),
+        client: new_framer(kind, false),
+        tid: 0,
+    }
+}
+
+fn attr_err(name: Str) -> Exc {
+    exc("AttributeError", f"'dict' object has no attribute '{name}'")
+}
+
+fn not_awaitable(p: ref Pdu) -> Exc {
+    exc("TypeError", f"object {class_name(p)} can't be used in 'await' expression")
+}
+
+fn diag_response(req: ref Pdu, m: own Msg) -> Pdu {
+    let mut r = blank(Cls.DiagResp);
+    r.sub = req.dclass;
+    r.dclass = req.dclass;
+    r.msg = m;
+    r
+}
+
+fn msg_int(m: ref Msg) -> i64 {
+    match m {
+        Msg.Int(n) => *n,
+        _ => 0,
+    }
+}
+
+fn msg_truthy(m: ref Msg) -> bool {
+    match m {
+        Msg.Int(n) => *n != 0,
+        Msg.Bytes(b) => b.len() > 0,
+        Msg.List(v) | Msg.Tuple(v) => v.len() > 0,
+        Msg.Nothing => false,
+    }
+}
+
+// Builder and decoder state for the `pl` steps.
+struct Builder {
+    payload: Vec[Vec[u8]],
+    little: bool,
+    wlittle: bool,
+    repack: bool,
+}
+
+struct Decoder {
+    payload: Vec[u8],
+    ptr: i64,
+    little: bool,
+    wlittle: bool,
+}
+
+struct World {
+    mcb: Mcb,
+    arena: Vec[Slave],
+    bus: Bus,
+    cur: i64,
+    builder: Builder,
+    decoder: Decoder,
+}
+
+impl World {
+    fn validate(ref self, ix: i64, fc: i64, address: i64, count: i64) -> Result[bool, Exc] {
+        if ix < 0 {
+            return Err(attr_err("validate"));
+        }
+        let a = if self.arena[ix].zero_mode { address } else { address + 1 };
+        Ok(self.arena[ix].stores[fx_store(fc)].validate(a, count))
+    }
+
+    fn get_values(ref self, ix: i64, fc: i64, address: i64, count: i64) -> Result[Vec[i64], Exc] {
+        if ix < 0 {
+            return Err(attr_err("async_getValues"));
+        }
+        let a = if self.arena[ix].zero_mode { address } else { address + 1 };
+        Ok(self.arena[ix].stores[fx_store(fc)].get(a, count))
+    }
+
+    fn set_values(mut ref self, ix: i64, fc: i64, address: i64, values: ref Vec[i64]) -> Result[(), Exc] {
+        if ix < 0 {
+            return Err(attr_err("async_setValues"));
+        }
+        let a = if self.arena[ix].zero_mode { address } else { address + 1 };
+        self.arena[ix].stores[fx_store(fc)].set(a, values)
+    }
+
+    // request.execute(context): the response, or the exception that
+    // escaped it.
+    fn execute(mut ref self, req: ref Pdu, ix: i64) -> Result[Pdu, Exc] {
+        let fc = req.fc;
+        match req.cls {
+            Cls.ReadCoilsReq | Cls.ReadDiscreteReq | Cls.ReadHoldingReq | Cls.ReadInputReq => {
+                let bits = req.cls == Cls.ReadCoilsReq or req.cls == Cls.ReadDiscreteReq;
+                let limit = if bits { 0x7D0 } else { 0x7D };
+                if req.count < 1 or req.count > limit {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if not self.validate(ix, fc, req.address, req.count)? {
+                    return Ok(exception_response(fc, ILLEGAL_ADDRESS));
+                }
+                let values = self.get_values(ix, fc, req.address, req.count)?;
+                let mut r = match req.cls {
+                    Cls.ReadCoilsReq => blank(Cls.ReadCoilsResp),
+                    Cls.ReadDiscreteReq => blank(Cls.ReadDiscreteResp),
+                    Cls.ReadHoldingReq => blank(Cls.ReadHoldingResp),
+                    _ => blank(Cls.ReadInputResp),
+                };
+                if bits {
+                    for v in values {
+                        r.bits.push(v != 0);
+                    }
+                } else {
+                    r.values = values;
+                }
+                Ok(r)
+            },
+            Cls.WriteCoilReq => {
+                if not self.validate(ix, fc, req.address, 1)? {
+                    return Ok(exception_response(fc, ILLEGAL_ADDRESS));
+                }
+                let mut one: Vec[i64] = Vec.new();
+                one.push(int_flag(req.on));
+                self.set_values(ix, fc, req.address, one)?;
+                let mut r = blank(Cls.WriteCoilResp);
+                r.address = req.address;
+                r.on = self.get_values(ix, fc, req.address, 1)?[0] != 0;
+                Ok(r)
+            },
+            Cls.WriteRegReq => {
+                if req.value < 0 or req.value > 0xFFFF {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if not self.validate(ix, fc, req.address, 1)? {
+                    return Ok(exception_response(fc, ILLEGAL_ADDRESS));
+                }
+                let mut one: Vec[i64] = Vec.new();
+                one.push(req.value);
+                self.set_values(ix, fc, req.address, one)?;
+                let mut r = blank(Cls.WriteRegResp);
+                r.address = req.address;
+                r.value = self.get_values(ix, fc, req.address, 1)?[0];
+                Ok(r)
+            },
+            Cls.WriteCoilsReq => {
+                let count = req.bits.len() as i64;
+                if count < 1 or count > 0x07B0 {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if req.byte_count != (count + 7) / 8 {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if not self.validate(ix, fc, req.address, count)? {
+                    return Ok(exception_response(fc, ILLEGAL_ADDRESS));
+                }
+                let mut values: Vec[i64] = Vec.new();
+                for b in req.bits.iter() {
+                    values.push(int_flag(*b));
+                }
+                self.set_values(ix, fc, req.address, values)?;
+                let mut r = blank(Cls.WriteCoilsResp);
+                r.address = req.address;
+                r.count = count;
+                Ok(r)
+            },
+            Cls.WriteRegsReq => {
+                if req.count < 1 or req.count > 0x07B {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if req.byte_count != req.count * 2 {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if not self.validate(ix, fc, req.address, req.count)? {
+                    return Ok(exception_response(fc, ILLEGAL_ADDRESS));
+                }
+                self.set_values(ix, fc, req.address, req.values)?;
+                let mut r = blank(Cls.WriteRegsResp);
+                r.address = req.address;
+                r.count = req.count;
+                Ok(r)
+            },
+            Cls.MaskReq => {
+                if req.and_mask < 0 or req.and_mask > 0xFFFF or req.or_mask < 0 or req.or_mask > 0xFFFF {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if not self.validate(ix, fc, req.address, 1)? {
+                    return Ok(exception_response(fc, ILLEGAL_ADDRESS));
+                }
+                let v = self.get_values(ix, fc, req.address, 1)?[0];
+                let mut one: Vec[i64] = Vec.new();
+                one.push((v & req.and_mask) | (req.or_mask & (0xFFFF ^ req.and_mask)));
+                self.set_values(ix, fc, req.address, one)?;
+                let mut r = blank(Cls.MaskResp);
+                r.address = req.address;
+                r.and_mask = req.and_mask;
+                r.or_mask = req.or_mask;
+                Ok(r)
+            },
+            Cls.ReadWriteReq => {
+                if req.r_count < 1 or req.r_count > 0x07D {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if req.w_count < 1 or req.w_count > 0x079 {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if req.w_bytes != req.w_count * 2 {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                if not self.validate(ix, fc, req.w_addr, req.w_count)? {
+                    return Ok(exception_response(fc, ILLEGAL_ADDRESS));
+                }
+                if not self.validate(ix, fc, req.r_addr, req.r_count)? {
+                    return Ok(exception_response(fc, ILLEGAL_ADDRESS));
+                }
+                self.set_values(ix, fc, req.w_addr, req.values)?;
+                let mut r = blank(Cls.ReadWriteResp);
+                r.values = self.get_values(ix, fc, req.r_addr, req.r_count)?;
+                Ok(r)
+            },
+            Cls.DiagReq => self.execute_diag(req),
+            Cls.ExcStatusReq => {
+                let mut r = blank(Cls.ExcStatusResp);
+                let status = self.mcb.summary();
+                r.status = if status < 256 { status } else { 255 };
+                Ok(r)
+            },
+            Cls.EventCounterReq => {
+                let mut r = blank(Cls.EventCounterResp);
+                r.count = self.mcb.counters[8];
+                Ok(r)
+            },
+            Cls.EventLogReq => {
+                let mut r = blank(Cls.EventLogResp);
+                r.message_count = self.mcb.counters[0];
+                r.event_count = self.mcb.counters[8];
+                for x in self.mcb.get_events() {
+                    r.values.push(x as i64);
+                }
+                Ok(r)
+            },
+            Cls.SlaveIdReq => {
+                let mut ident: Vec[u8] = Vec.new();
+                if ix >= 0 {
+                    ident = self.arena[ix].report.clone();
+                }
+                if ident.len() == 0 {
+                    let info = self.mcb.device_info(1, 0)?;
+                    let mut k: i64 = 0;
+                    for (_, v) in info.iter() {
+                        if k > 0 {
+                            ident.push(b'-');
+                        }
+                        k += 1;
+                        for x in utf8(v) {
+                            ident.push(x);
+                        }
+                    }
+                    if ident.len() == 0 {
+                        ident = utf8("Pymodbus".to_string());
+                    }
+                }
+                let mut r = blank(Cls.SlaveIdResp);
+                r.ident = ident;
+                Ok(r)
+            },
+            // These three define a plain execute, and the server awaits
+            // what it returns.
+            Cls.ReadFileReq => Err(exc("TypeError", "object ReadFileRecordResponse can't be used in 'await' expression".to_string())),
+            Cls.WriteFileReq => Err(exc("TypeError", "object WriteFileRecordResponse can't be used in 'await' expression".to_string())),
+            Cls.FifoReq => Err(exc("TypeError", "object ReadFifoQueueResponse can't be used in 'await' expression".to_string())),
+            Cls.DevInfoReq => {
+                if req.read_code < 0 or req.read_code > 4 {
+                    return Ok(exception_response(fc, ILLEGAL_VALUE));
+                }
+                let info = self.mcb.device_info(req.read_code, req.object_id)?;
+                let mut r = blank(Cls.DevInfoResp);
+                r.read_code = if req.read_code != 0 { req.read_code } else { 1 };
+                r.objects = info;
+                Ok(r)
+            },
+            Cls.IllegalReq => Ok(exception_response(fc, ILLEGAL_FUNCTION)),
+            _ => Err(not_awaitable(req)),
+        }
+    }
+
+    fn execute_diag(mut ref self, req: ref Pdu) -> Result[Pdu, Exc] {
+        let d = req.dclass;
+        if d == -1 {
+            return Err(exc("AttributeError", "'DiagnosticStatusRequest' object has no attribute 'execute'".to_string()));
+        }
+        if d == 0x00 {
+            return Ok(diag_response(req, req.msg.clone()));
+        }
+        if d == 0x01 {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(if msg_truthy(req.msg) { 0xFF00 } else { 0 });
+            return Ok(diag_response(req, Msg.List(v)));
+        }
+        if d == 0x02 {
+            return Ok(diag_response(req, Msg.Bytes(pack_bitstring(self.mcb.diag))));
+        }
+        let m = msg_int(req.msg);
+        if d == 0x03 {
+            let mut delim: Vec[u8] = Vec.new();
+            delim.push(((m & 0xFF00) >> 8) as u8);
+            self.mcb.delimiter = delim;
+            return Ok(diag_response(req, Msg.Int(m)));
+        }
+        if d == 0x04 {
+            self.mcb.listen_only = true;
+            let mut r = diag_response(req, Msg.List(Vec.new()));
+            r.respond = false;
+            return Ok(r);
+        }
+        if d == 0x0A {
+            self.mcb.reset();
+            return Ok(diag_response(req, Msg.Int(m)));
+        }
+        if d >= 0x0B and d <= 0x13 {
+            let k = if d == 0x13 { 7 } else { d - 0x0B };
+            return Ok(diag_response(req, Msg.Int(self.mcb.counters[k])));
+        }
+        if d == 0x14 {
+            self.mcb.counters[7] = 0;
+            return Ok(diag_response(req, Msg.Int(m)));
+        }
+        // 0x15, Modbus Plus: statistics are 55 words that nothing sets.
+        if m == 4 {
+            return Ok(diag_response(req, Msg.Int(m)));
+        }
+        let mut v: Vec[i64] = Vec.new();
+        v.push(m);
+        for _ in 0..55 {
+            v.push(0);
+        }
+        Ok(diag_response(req, Msg.List(v)))
+    }
+
+    // What pymodbus's async server does with one decoded request
+    // (server/async_io.py, _async_execute): the packet it sends, if any.
+    fn serve(mut ref self, req: ref Pdu) -> Option[Vec[u8]] {
+        let mut broadcast = false;
+        let mut outcome: Result[Pdu, Exc] = Err(exc("", String.new()));
+        if self.bus.broadcast and req.slave == 0 {
+            broadcast = true;
+            for sid in self.bus.ctx.slaves() {
+                outcome = match self.bus.ctx.lookup(sid) {
+                    Ok(ix) => self.execute(req, ix),
+                    Err(e) => Err(e),
+                };
+                if outcome.is_err() {
+                    break;
+                }
+            }
+        } else {
+            outcome = match self.bus.ctx.lookup(req.slave) {
+                Ok(ix) => self.execute(req, ix),
+                Err(e) => Err(e),
+            };
+        }
+        let mut response = match outcome {
+            Ok(r) => r,
+            Err(e) => {
+                if e.kind == "NoSuchSlaveException" {
+                    if self.bus.ignore {
+                        println("  (no such slave, no reply)");
+                        return None;
+                    }
+                    exception_response(req.fc, GATEWAY_NO_RESPONSE)
+                } else if e.kind.len() == 0 {
+                    blank(Cls.ExcResp)
+                } else {
+                    println(f"  ! datastore: {e.kind}");
+                    exception_response(req.fc, SLAVE_FAILURE)
+                }
+            },
+        };
+        if broadcast {
+            println("  (broadcast, no reply)");
+            return None;
+        }
+        response.tid = req.tid;
+        response.slave = req.slave;
+        if not response.respond {
+            println(f"  (no reply: {class_name(response)})");
+            return None;
+        }
+        match build_packet(self.bus.kind, response) {
+            Ok(packet) => Some(packet),
+            Err(e) => {
+                println(f"  ! reply not sent: {e.kind}");
+                None
+            },
+        }
+    }
+
+    fn bus_slaves(ref self) -> Vec[i64] {
+        let mut slaves = self.bus.ctx.slaves();
+        if self.bus.broadcast {
+            let mut has_zero = false;
+            for s in slaves.iter() {
+                if *s == 0 {
+                    has_zero = true;
+                }
+            }
+            if not has_zero {
+                slaves.push(0);
+            }
+        }
+        slaves
+    }
+
+    fn to_server(mut ref self, data: ref Vec[u8], chunk: i64) {
+        let mut pieces: Vec[Vec[u8]] = Vec.new();
+        if chunk <= 0 {
+            pieces.push(data.clone());
+        } else {
+            let mut i: i64 = 0;
+            while i < data.len() as i64 {
+                pieces.push(py_slice(data, i, i + chunk));
+                i += chunk;
+            }
+        }
+        let slaves = self.bus_slaves();
+        let single = self.bus.ctx.single;
+        let mut got: Vec[Pdu] = Vec.new();
+        let mut closed: Option[Exc] = None;
+        for piece in pieces.iter() {
+            let (frames, err) = self.bus.server.process(piece, slaves, single);
+            for f in frames.into_iter() {
+                got.push(f);
+            }
+            if err.is_some() {
+                closed = err;
+                break;
+            }
+        }
+        let mut replies: Vec[Vec[u8]] = Vec.new();
+        for request in got.iter() {
+            show("  server got", request);
+            if let Some(reply) = self.serve(request) {
+                replies.push(reply);
+            }
+        }
+        if let Some(e) = closed.clone() {
+            println(f"  ! server closed the connection: {e.kind}: {e.msg}");
+            self.bus.server = new_framer(self.bus.kind, true);
+        }
+        for reply in replies.iter() {
+            println(f"  rx {wire(self.bus.kind, reply)}");
+            self.to_client(reply);
+        }
+        if got.len() == 0 and closed.is_none() {
+            println("  (server is waiting for more)");
+        }
+    }
+
+    fn to_client(mut ref self, data: ref Vec[u8]) {
+        let mut zero: Vec[i64] = Vec.new();
+        zero.push(0);
+        let (frames, err) = self.bus.client.process(data, zero, false);
+        for f in frames.iter() {
+            show("  client got", f);
+        }
+        if let Some(e) = err {
+            println(f"  ! client: {e.kind}: {e.msg}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ payloads
+
+fn pow2(n: i64) -> f64 {
+    let mut x: f64 = 1.0;
+    if n >= 0 {
+        for _ in 0..n {
+            x = x * 2.0;
+        }
+    } else {
+        for _ in 0..(-n) {
+            x = x / 2.0;
+        }
+    }
+    x
+}
+
+fn frexp(x: f64) -> (f64, i64) {
+    let mut f = x;
+    let mut e: i64 = 0;
+    while f >= 1.0 {
+        f = f / 2.0;
+        e += 1;
+    }
+    while f < 0.5 {
+        f = f * 2.0;
+        e -= 1;
+    }
+    (f, e)
+}
+
+fn is_inf(x: f64) -> bool {
+    x == 1.0 / 0.0 or x == -1.0 / 0.0
+}
+
+fn sign_bit(x: f64) -> bool {
+    (x.to_bits() >> 63) == 1
+}
+
+fn float_overflow(code: Str) -> Exc {
+    exc("OverflowError", f"float too large to pack with {code} format")
+}
+
+// PyFloat_Pack2: an IEEE 754 half, rounding half to even.
+fn pack_half(x: f64) -> Result[i64, Exc] {
+    let mut sign: i64 = 0;
+    let mut e: i64 = 0;
+    let mut bits: i64 = 0;
+    if x == 0.0 {
+        sign = if sign_bit(x) { 1 } else { 0 };
+    } else if is_inf(x) {
+        sign = if x < 0.0 { 1 } else { 0 };
+        e = 0x1f;
+    } else if x != x {
+        sign = if sign_bit(x) { 1 } else { 0 };
+        e = 0x1f;
+        bits = 512;
+    } else {
+        let mut y = x;
+        if y < 0.0 {
+            sign = 1;
+            y = -y;
+        }
+        let (f0, e0) = frexp(y);
+        let mut f = f0 * 2.0;
+        e = e0 - 1;
+        if e >= 16 {
+            return Err(float_overflow("e"));
+        } else if e < -25 {
+            f = 0.0;
+            e = 0;
+        } else if e < -14 {
+            f = f * pow2(14 + e);
+            e = 0;
+        } else {
+            e += 15;
+            f -= 1.0;
+        }
+        f = f * 1024.0;
+        bits = f as i64;
+        let rest = f - bits as f64;
+        if rest > 0.5 or (rest == 0.5 and bits % 2 == 1) {
+            bits += 1;
+            if bits == 1024 {
+                bits = 0;
+                e += 1;
+                if e == 31 {
+                    return Err(float_overflow("e"));
+                }
+            }
+        }
+    }
+    Ok(bits | (e << 10) | (sign << 15))
+}
+
+fn unpack_half(h: i64) -> f64 {
+    let sign = (h >> 15) & 1;
+    let e = (h >> 10) & 0x1f;
+    let f = h & 0x3ff;
+    let mut x: f64 = 0.0;
+    if e == 0x1f {
+        x = if f == 0 { 1.0 / 0.0 } else { 0.0 / 0.0 };
+    } else {
+        x = f as f64 / 1024.0;
+        if e == 0 {
+            x = x * pow2(-14);
+        } else {
+            x = (x + 1.0) * pow2(e - 15);
+        }
+    }
+    if sign == 1 { -x } else { x }
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// The n big-endian bytes of v, a value already checked to fit.
+fn be_bytes(v: i128, n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = n - 1;
+    while k >= 0 {
+        out.push(((v >> (8 * k)) & 0xFF) as u8);
+        k -= 1;
+    }
+    out
+}
+
+// struct.pack's range check for an integer code of n bytes.
+fn int_bytes(v: i128, n: i64, signed: bool) -> Result[Vec[u8], Exc] {
+    let span: i128 = (1 as i128) << (8 * n);
+    let (lo, hi) = if signed { (-(span / 2), span / 2 - 1) } else { (0 as i128, span - 1) };
+    if v < lo or v > hi {
+        return Err(pack_err());
+    }
+    let u = if v < 0 { v + span } else { v };
+    Ok(be_bytes(u, n))
+}
+
+fn word(little: bool, hi: u8, lo: u8, out: mut ref Vec[u8]) {
+    if little {
+        out.push(lo);
+        out.push(hi);
+    } else {
+        out.push(hi);
+        out.push(lo);
+    }
+}
+
+impl Builder {
+    // _pack_words: a value's big-endian bytes as 16-bit words, the words
+    // in word order and each word in byte order.
+    fn pack_words(ref self, be_value: ref Vec[u8]) -> Vec[u8] {
+        let mut words: Vec[(u8, u8)] = Vec.new();
+        let mut i: i64 = 0;
+        while i + 1 < be_value.len() as i64 {
+            words.push((be_value[i], be_value[i + 1]));
+            i += 2;
+        }
+        if self.wlittle {
+            words.reverse();
+        }
+        let mut out: Vec[u8] = Vec.new();
+        for (hi, lo) in words.iter() {
+            word(self.little, *hi, *lo, mut out);
+        }
+        out
+    }
+
+    fn add(mut ref self, kind: Str, val: Str) -> Result[(), Exc] {
+        if kind == "bits" {
+            let mut bits: Vec[bool] = Vec.new();
+            for c in val.bytes() {
+                bits.push(c == b'1');
+            }
+            self.payload.push(pack_bitstring(bits));
+            return Ok(());
+        }
+        if kind == "str" {
+            let s = latin1(text(val));
+            let n = char_len(s);
+            let mut b = utf8(s);
+            while (b.len() as i64) < n {
+                b.push(0);
+            }
+            let mut out: Vec[u8] = Vec.new();
+            for k in 0..n {
+                out.push(b[k]);
+            }
+            self.payload.push(out);
+            return Ok(());
+        }
+        if kind.starts_with("f") {
+            let x = match f64.parse(val.to_string()) {
+                Ok(x) => x,
+                Err(_) => return Err(exc("ValueError", f"could not convert string to float: '{val}'")),
+            };
+            let packed = if kind == "f16" {
+                be_bytes(pack_half(x)? as i128, 2)
+            } else if kind == "f32" {
+                let bits = x.to_bits32();
+                if not is_inf(x) and x == x and (bits & 0x7fffffff) == 0x7f800000 {
+                    return Err(float_overflow("f"));
+                }
+                be_bytes(bits as i128, 4)
+            } else {
+                be_bytes(x.to_bits() as i128, 8)
+            };
+            let p = self.pack_words(packed);
+            self.payload.push(p);
+            return Ok(());
+        }
+        let v = py_int(val)?;
+        let signed = kind.starts_with("i");
+        let kb = kind.bytes();
+        let n = match kb[1] {
+            b'8' => 1,
+            b'1' => 2,
+            b'3' => 4,
+            _ => 8,
+        };
+        let raw = int_bytes(v, n, signed)?;
+        if n == 1 {
+            self.payload.push(raw);
+        } else if n == 2 {
+            let mut out: Vec[u8] = Vec.new();
+            word(self.little, raw[0], raw[1], mut out);
+            self.payload.push(out);
+        } else {
+            let p = self.pack_words(raw);
+            self.payload.push(p);
+        }
+        Ok(())
+    }
+
+    fn encode(ref self) -> Vec[u8] {
+        let mut out: Vec[u8] = Vec.new();
+        for p in self.payload.iter() {
+            for x in p.iter() {
+                out.push(*x);
+            }
+        }
+        out
+    }
+
+    fn to_registers(ref self) -> Vec[i64] {
+        let mut buffer = self.encode();
+        let length = buffer.len() as i64;
+        if length % 2 == 1 {
+            buffer.push(0);
+        }
+        let mut regs: Vec[i64] = Vec.new();
+        let mut i: i64 = 0;
+        while i < length {
+            let hi = buffer[i] as i64;
+            let lo = buffer[i + 1] as i64;
+            if self.repack and self.little {
+                regs.push(lo * 256 + hi);
+            } else {
+                regs.push(hi * 256 + lo);
+            }
+            i += 2;
+        }
+        regs
+    }
+
+    fn to_coils(ref self) -> Vec[bool] {
+        let mut coils: Vec[bool] = Vec.new();
+        for r in self.to_registers() {
+            let mut k: i64 = 15;
+            while k >= 0 {
+                coils.push(((r >> k) & 1) == 1);
+                k -= 1;
+            }
+        }
+        coils
+    }
+}
+
+impl Decoder {
+    // The next n bytes, advancing the pointer whether or not they exist.
+    fn next(mut ref self, n: i64) -> Vec[u8] {
+        self.ptr += n;
+        py_slice(self.payload, self.ptr - n, self.ptr)
+    }
+
+    // _unpack_words, then the big-endian value's bytes.
+    fn words(ref self, handle: ref Vec[u8], n: i64) -> Result[Vec[u8], Exc] {
+        if handle.len() as i64 != n {
+            return Err(unpack_err(n));
+        }
+        let mut ws: Vec[(u8, u8)] = Vec.new();
+        let mut i: i64 = 0;
+        while i < n {
+            ws.push((handle[i], handle[i + 1]));
+            i += 2;
+        }
+        if self.wlittle {
+            ws.reverse();
+        }
+        let mut out: Vec[u8] = Vec.new();
+        for (hi, lo) in ws.iter() {
+            word(self.little, *hi, *lo, mut out);
+        }
+        Ok(out)
+    }
+
+    fn get(mut ref self, kind: Str, arg: Str) -> Result[String, Exc] {
+        if kind == "bits" {
+            let h = self.next(1);
+            return Ok(bitstr(unpack_bitstring(h)));
+        }
+        if kind == "str" {
+            let h = self.next(int0(arg));
+            return Ok(py_bytes_repr(h));
+        }
+        if kind == "skip" {
+            self.ptr += int0(arg);
+            return Ok("skipped".to_string());
+        }
+        let kb = kind.bytes();
+        let n = match kb[1] {
+            b'8' => 1,
+            b'1' => 2,
+            b'3' => 4,
+            _ => 8,
+        };
+        let h = self.next(n);
+        let b = if n <= 2 {
+            if h.len() as i64 != n {
+                return Err(unpack_err(n));
+            }
+            if n == 2 and self.little {
+                let mut sw: Vec[u8] = Vec.new();
+                sw.push(h[1]);
+                sw.push(h[0]);
+                sw
+            } else {
+                h
+            }
+        } else {
+            self.words(h, n)?
+        };
+        if kind.starts_with("f") {
+            let bits = be(b, 0, n);
+            let x = if n == 2 {
+                unpack_half(bits)
+            } else if n == 4 {
+                (bits as u32).bits_as_f32()
+            } else {
+                let mut u: u64 = 0;
+                for x in b.iter() {
+                    u = u * 256 + *x as u64;
+                }
+                u.bits_as_f64()
+            };
+            return Ok(float_repr(x));
+        }
+        let mut u: u64 = 0;
+        for x in b.iter() {
+            u = u * 256 + *x as u64;
+        }
+        if kind.starts_with("u") {
+            return Ok(f"{u}");
+        }
+        let v: i128 = if n == 8 {
+            u as i64 as i128
+        } else {
+            let span: i128 = (1 as i128) << (8 * n);
+            let w = u as i128;
+            if w >= span / 2 { w - span } else { w }
+        };
+        Ok(f"{v}")
+    }
+}
+
+fn has_word(words: ref Vec[Str], name: Str) -> bool {
+    for w in words.iter() {
+        if *w == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn join_from(words: ref Vec[Str], start: i64) -> String {
+    let mut out = String.new();
+    let mut i = start;
+    while i < words.len() as i64 {
+        if i > start {
+            out.push(' ');
+        }
+        out.push_str(words[i]);
+        i += 1;
+    }
+    out
+}
+
+fn order_little(w: Str) -> bool {
+    w == "little"
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn split_eq(w: Str) -> (String, String) {
+    match w.find("=") {
+        Some(k) => (w[..k].to_string(), w[k + 1..].to_string()),
+        None => (w.to_string(), String.new()),
+    }
+}
+
+fn make_block(kind: Str, spec: Str, frozen: bool) -> Block {
+    if kind == "seq" {
+        let (addr, vals) = split_eq(spec);
+        let mut values: Vec[i64] = Vec.new();
+        for part in vals.split(",") {
+            match part.find("*") {
+                Some(k) => {
+                    let n = int0(part[..k]);
+                    let v = int0(part[k + 1..]);
+                    for _ in 0..n {
+                        values.push(v);
+                    }
+                },
+                None => values.push(int0(part)),
+            }
+        }
+        return seq_block(int0(addr), values);
+    }
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    if kind == "sparselist" {
+        let mut k: i64 = 0;
+        for v in ints(spec) {
+            pairs.push((k, v));
+            k += 1;
+        }
+    } else {
+        for part in spec.split(";") {
+            let (addr, vals) = split_eq(part);
+            let a = int0(addr);
+            let mut k: i64 = 0;
+            for v in ints(vals) {
+                pairs.push((a + k, v));
+                k += 1;
+            }
+        }
+    }
+    sparse_block(pairs, not frozen)
+}
+
+fn records(token: Str) -> Vec[Rec] {
+    let mut out: Vec[Rec] = Vec.new();
+    for part in token.split(";") {
+        let f: Vec[Str] = part.split(":").collect();
+        if f[2].starts_with("h") {
+            let data = from_hex(f[2][1..]);
+            let length = data.len() as i64 / 2;
+            out.push(new_rec(int0(f[0]), int0(f[1]), length, data, false));
+        } else {
+            out.push(new_rec(int0(f[0]), int0(f[1]), int0(f[2]), Vec.new(), true));
+        }
+    }
+    out
+}
+
+fn arg(args: ref Vec[String], i: i64) -> i64 {
+    int0(args[i])
+}
+
+// The request a `req` step names, built the way oracle.py's
+// make_request builds it.
+fn make_request(op: Str, args: ref Vec[String]) -> Result[Pdu, Exc] {
+    let mut p = if op == "rc" {
+        blank(Cls.ReadCoilsReq)
+    } else if op == "rdi" {
+        blank(Cls.ReadDiscreteReq)
+    } else if op == "rhr" {
+        blank(Cls.ReadHoldingReq)
+    } else if op == "rir" {
+        blank(Cls.ReadInputReq)
+    } else if op == "wc" {
+        blank(Cls.WriteCoilReq)
+    } else if op == "wr" {
+        blank(Cls.WriteRegReq)
+    } else if op == "wcs" {
+        blank(Cls.WriteCoilsReq)
+    } else if op == "wrs" {
+        blank(Cls.WriteRegsReq)
+    } else if op == "mask" {
+        blank(Cls.MaskReq)
+    } else if op == "rw" {
+        blank(Cls.ReadWriteReq)
+    } else if op == "diag" {
+        blank(Cls.DiagReq)
+    } else if op == "exc" {
+        blank(Cls.ExcStatusReq)
+    } else if op == "evc" {
+        blank(Cls.EventCounterReq)
+    } else if op == "evl" {
+        blank(Cls.EventLogReq)
+    } else if op == "sid" {
+        blank(Cls.SlaveIdReq)
+    } else if op == "fifo" {
+        blank(Cls.FifoReq)
+    } else if op == "rfr" {
+        blank(Cls.ReadFileReq)
+    } else if op == "wfr" {
+        blank(Cls.WriteFileReq)
+    } else if op == "mei" {
+        blank(Cls.DevInfoReq)
+    } else {
+        return Err(exc("ValueError", op.to_string()));
+    };
+    match p.cls {
+        Cls.ReadCoilsReq | Cls.ReadDiscreteReq | Cls.ReadHoldingReq | Cls.ReadInputReq => {
+            p.address = arg(args, 0);
+            p.count = arg(args, 1);
+        },
+        Cls.WriteCoilReq => {
+            p.address = arg(args, 0);
+            p.on = arg(args, 1) != 0;
+        },
+        Cls.WriteRegReq => {
+            p.address = arg(args, 0);
+            p.value = arg(args, 1);
+        },
+        Cls.WriteCoilsReq => {
+            p.address = arg(args, 0);
+            for c in args[1].bytes() {
+                p.bits.push(c == b'1');
+            }
+            p.byte_count = (p.bits.len() as i64 + 7) / 8;
+        },
+        Cls.WriteRegsReq => {
+            p.address = arg(args, 0);
+            p.values = ints(args[1]);
+            p.count = p.values.len() as i64;
+            p.byte_count = p.count * 2;
+        },
+        Cls.MaskReq => {
+            p.address = arg(args, 0);
+            p.and_mask = arg(args, 1);
+            p.or_mask = arg(args, 2);
+        },
+        Cls.ReadWriteReq => {
+            p.r_addr = arg(args, 0);
+            p.r_count = arg(args, 1);
+            p.w_addr = arg(args, 2);
+            p.values = ints(args[3]);
+            p.w_count = p.values.len() as i64;
+            p.w_bytes = p.w_count * 2;
+        },
+        Cls.DiagReq => {
+            let sub = arg(args, 0);
+            if not diag_known(sub) {
+                return Err(exc("KeyError", f"{sub}"));
+            }
+            p.sub = sub;
+            p.dclass = sub;
+            if sub == 0 {
+                let mut zero: Vec[u8] = Vec.new();
+                zero.push(0);
+                zero.push(0);
+                p.msg = Msg.Bytes(if args.len() > 1 { text(args[1]) } else { zero });
+            } else if sub == 1 {
+                let mut v: Vec[i64] = Vec.new();
+                v.push(if arg(args, 1) != 0 { 0xFF00 } else { 0 });
+                p.msg = Msg.List(v);
+            } else {
+                p.msg = Msg.Int(if args.len() > 1 { arg(args, 1) } else { 0 });
+            }
+        },
+        Cls.FifoReq => p.address = arg(args, 0),
+        Cls.ReadFileReq | Cls.WriteFileReq => p.records = records(args[0]),
+        Cls.DevInfoReq => {
+            let rc = arg(args, 0);
+            p.read_code = if rc != 0 { rc } else { 1 };
+            p.object_id = arg(args, 1);
+        },
+        _ => {},
+    }
+    Ok(p)
+}
+
+fn diag_bit(diag: ref Vec[bool], bit: i64) -> String {
+    if bit != 0 and bit >= 0 and bit < diag.len() as i64 {
+        return py_bool(diag[bit]);
+    }
+    "None".to_string()
+}
+
+impl World {
+    fn step(mut ref self, line: Str) {
+        let words: Vec[Str] = line.split(" ").collect();
+        let cmd = words[0];
+        let nw = words.len() as i64;
+        if cmd == "job" {
+            println(f"== {join_from(words, 1)}");
+        } else if cmd == "server" {
+            let mut multi = false;
+            let mut broadcast = false;
+            let mut ignore = false;
+            let mut flags = String.new();
+            for w in words[2..].iter() {
+                multi = multi or *w == "multi";
+                broadcast = broadcast or *w == "broadcast";
+                ignore = ignore or *w == "ignore";
+                flags.push_str(f" {*w}");
+            }
+            let kind = if words[1] == "socket" { SOCKET } else if words[1] == "rtu" { RTU } else { ASCII };
+            self.bus = new_bus(kind, multi, broadcast, ignore);
+            println(f"server {words[1]}{flags}");
+        } else if cmd == "slave" {
+            let sid = int0(words[1]);
+            let zero = nw > 2 and words[2] == "zero";
+            let zero_tag = if zero { " zero" } else { "" };
+            self.arena.push(new_slave(zero));
+            self.cur = self.arena.len() as i64 - 1;
+            match self.bus.ctx.put(sid, self.cur) {
+                Ok(_) => println(f"slave {sid}{zero_tag}"),
+                Err(e) => println(f"slave {sid}: {e.msg}"),
+            }
+        } else if cmd == "block" {
+            let b = make_block(words[2], words[3], nw > 4 and words[4] == "frozen");
+            let d = b.describe();
+            let cur = self.cur;
+            self.arena[cur].stores[store_index(words[1])] = b;
+            println(f"block {words[1]} {words[2]} {d}");
+        } else if cmd == "drop" {
+            match self.bus.ctx.remove(int0(words[1])) {
+                Ok(_) => println(f"dropped slave {words[1]}"),
+                Err(e) => println(f"drop {words[1]}: {e.kind}: {e.msg}"),
+            }
+        } else if cmd == "ident" {
+            let how = words[1];
+            for w in words[2..].iter() {
+                let (k, v) = split_eq(*w);
+                let value = latin1(text(v));
+                if how == "names" {
+                    for i in 0..7 {
+                        if IDENTITY_NAMES[i] == k {
+                            self.mcb.ident_put(i as i64, value.clone());
+                        }
+                    }
+                } else {
+                    let key = int0(k);
+                    if how == "info" {
+                        if (key >= 0 and key <= 6) or (key >= 0x80 and key <= 0xFF) {
+                            self.mcb.ident_put(key, value);
+                        }
+                    } else if how == "set" {
+                        if key != 7 and key != 8 {
+                            self.mcb.ident_put(key, value);
+                        }
+                    } else {
+                        self.mcb.ident_put(key, value);
+                    }
+                }
+            }
+            println(self.mcb.identity_summary());
+        } else if cmd == "counters" {
+            for w in words[1..].iter() {
+                let (k, v) = split_eq(*w);
+                for i in 0..9 {
+                    if COUNTER_NAMES[i] == k {
+                        self.mcb.counters[i] += int0(v);
+                    }
+                }
+            }
+            let mut out = "counters".to_string();
+            for i in 0..9 {
+                out.push_str(f" {COUNTER_NAMES[i]}={self.mcb.counters[i]}");
+            }
+            println(f"{out} summary={py_hex(self.mcb.summary())}");
+        } else if cmd == "event" {
+            let kind = words[1];
+            let ev = if kind == "recv" {
+                receive_event(has_word(words, "overrun"), has_word(words, "listen"), has_word(words, "broadcast"))
+            } else if kind == "send" {
+                let mut flags: Vec[bool] = Vec.new();
+                flags.push(has_word(words, "read"));
+                flags.push(has_word(words, "slave_abort"));
+                flags.push(has_word(words, "slave_busy"));
+                flags.push(has_word(words, "slave_nak"));
+                flags.push(has_word(words, "write_timeout"));
+                flags.push(has_word(words, "listen"));
+                send_event(flags)
+            } else {
+                let mut one: Vec[u8] = Vec.new();
+                one.push(if kind == "listen" { 0x04 } else { 0x00 });
+                one
+            };
+            let h = hex_of(ev);
+            self.mcb.add_event(ev);
+            println(f"event {kind} {h}: {self.mcb.events.len()} logged, counter {self.mcb.counters[8]}");
+        } else if cmd == "diagbits" {
+            for w in words[1..].iter() {
+                let (k, v) = split_eq(*w);
+                let bit = int0(k);
+                if bit >= 0 and bit < 16 {
+                    self.mcb.diag[bit] = v == "1";
+                }
+            }
+            let d = self.mcb.diag.clone();
+            println(f"diagnostic {bitstr(d)} bit0={diag_bit(d, 0)} bit1={diag_bit(d, 1)} bit16={diag_bit(d, 16)}");
+        } else if cmd == "control" {
+            let head = f"control mode=ASCII listen_only={py_bool(self.mcb.listen_only)} delimiter={py_bytes_repr(self.mcb.delimiter)}";
+            println(f"{head} events={self.mcb.events.len()} log={hex_of(self.mcb.get_events())} diag={bitstr(self.mcb.diag)}");
+        } else if cmd == "slaveid" {
+            let data = text(words[2]);
+            let r = py_bytes_repr(data);
+            if let Ok(ix) = self.bus.ctx.lookup(int0(words[1])) {
+                if ix >= 0 {
+                    self.arena[ix].report = data;
+                }
+            }
+            println(f"slave {words[1]} reports {r}");
+        } else if cmd == "req" {
+            self.request(words);
+        } else if cmd == "raw" {
+            let data = if self.bus.kind == ASCII { text(words[1]) } else { from_hex(words[1]) };
+            println(f"> raw {data.len()} bytes");
+            let chunk = if nw > 2 { int0(words[2]) } else { 0 };
+            self.to_server(data, chunk);
+        } else if cmd == "devraw" {
+            let data = if self.bus.kind == ASCII { text(words[1]) } else { from_hex(words[1]) };
+            println(f"< device {data.len()} bytes");
+            self.to_client(data);
+        } else if cmd == "peek" {
+            let ix = self.bus.ctx.lookup(int0(words[1])).unwrap_or(-1);
+            let addr = int0(words[3]);
+            let count = int0(words[4]);
+            let head = f"peek {words[1]} {words[2]} {addr}+{count}";
+            let si = store_index(words[2]);
+            if self.arena[ix].stores[si].validate(addr, count) {
+                println(f"{head}: {int_list(self.arena[ix].stores[si].get(addr, count))}");
+            } else {
+                println(f"{head}: out of range");
+            }
+        } else if cmd == "reset" {
+            let ix = self.bus.ctx.lookup(int0(words[1])).unwrap_or(-1);
+            for b in self.arena[ix].stores.iter_mut() {
+                b.reset();
+            }
+            println(f"slave {words[1]} reset");
+        } else if cmd == "crc" {
+            println(f"crc {words[1]} = {hex_n(compute_crc(from_hex(words[1])), 4)}");
+        } else if cmd == "lrc" {
+            println(f"lrc {words[1]} = {hex_n(compute_lrc(from_hex(words[1])), 2)}");
+        } else if cmd == "pl" {
+            println(f"pl {join_from(words, 1)}");
+            self.payload_step(words);
+        }
+    }
+
+    fn request(mut ref self, words: ref Vec[Str]) {
+        let op = words[1];
+        let mut args: Vec[String] = Vec.new();
+        let mut slave: i64 = 1;
+        let mut tid: i64 = -1;
+        let mut chunk: i64 = 0;
+        for w in words[2..].iter() {
+            if w.starts_with("slave=") {
+                slave = int0(w[6..]);
+            } else if w.starts_with("tid=") {
+                tid = int0(w[4..]);
+            } else if w.starts_with("split=") {
+                chunk = int0(w[6..]);
+            } else {
+                args.push(w.to_string());
+            }
+        }
+        if tid == -1 {
+            self.bus.tid += 1;
+            tid = self.bus.tid;
+        }
+        let mut request = match make_request(op, args) {
+            Ok(p) => p,
+            Err(e) => {
+                println(f"> {op}: ! {e.kind}: {e.msg}");
+                return;
+            },
+        };
+        request.slave = slave;
+        request.tid = tid;
+        match build_packet(self.bus.kind, request) {
+            Ok(packet) => {
+                println(f"> {label(request)}");
+                println(f"  tx {wire(self.bus.kind, packet)}");
+                self.to_server(packet, chunk);
+            },
+            Err(e) => println(f"> {label(request)}: ! {e.kind}"),
+        }
+    }
+
+    fn payload_step(mut ref self, words: ref Vec[Str]) {
+        let cmd = words[1];
+        let nw = words.len() as i64;
+        if cmd == "build" {
+            self.builder = Builder {
+                payload: Vec.new(),
+                little: order_little(words[2]),
+                wlittle: order_little(words[3]),
+                repack: nw > 4 and words[4] == "repack",
+            };
+        } else if cmd == "add" {
+            if let Err(e) = self.builder.add(words[2], words[3]) {
+                println(f"  ! add {words[2]} {words[3]}: {e.kind}");
+            }
+        } else if cmd == "regs" {
+            println(f"  registers {int_list(self.builder.to_registers())}");
+        } else if cmd == "coils" {
+            println(f"  coils {bitstr(self.builder.to_coils())}");
+        } else if cmd == "bytes" {
+            println(f"  bytes {hex_of(self.builder.encode())}");
+        } else if cmd == "decode" {
+            let mut payload: Vec[u8] = Vec.new();
+            for r in ints(words[4]) {
+                payload.push((r >> 8) as u8);
+                payload.push((r & 0xFF) as u8);
+            }
+            self.decoder = Decoder { payload: payload, ptr: 0, little: order_little(words[2]), wlittle: order_little(words[3]) };
+        } else if cmd == "decodecoils" {
+            let mut coils: Vec[bool] = Vec.new();
+            let padding = words[3].len() as i64 % 8;
+            for _ in 0..padding {
+                coils.push(false);
+            }
+            for c in words[3].bytes() {
+                coils.push(c == b'1');
+            }
+            let mut payload: Vec[u8] = Vec.new();
+            let mut i: i64 = 0;
+            while i < coils.len() as i64 {
+                let mut chunk: Vec[bool] = Vec.new();
+                let mut k = i + 7;
+                if k >= coils.len() as i64 {
+                    k = coils.len() as i64 - 1;
+                }
+                while k >= i {
+                    chunk.push(coils[k]);
+                    k -= 1;
+                }
+                for x in pack_bitstring(chunk) {
+                    payload.push(x);
+                }
+                i += 8;
+            }
+            self.decoder = Decoder { payload: payload, ptr: 0, little: order_little(words[2]), wlittle: false };
+        } else if cmd == "get" {
+            let kind = words[2];
+            let a = if nw > 3 { words[3] } else { "" };
+            match self.decoder.get(kind, a) {
+                Ok(v) => println(f"  {kind} {v}"),
+                Err(e) => println(f"  ! get {kind}: {e.kind}"),
+            }
+        } else if cmd == "reset" {
+            self.decoder.ptr = 0;
+        }
+    }
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.txt".to_string(), jobs_text()) {
+        eprintln(f"cannot write data/jobs.txt: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/jobs.txt: {e}");
+            return;
+        },
+    };
+    let mut world = World {
+        mcb: new_mcb(),
+        arena: Vec.new(),
+        bus: new_bus(SOCKET, false, false, false),
+        cur: -1,
+        builder: Builder { payload: Vec.new(), little: true, wlittle: false, repack: false },
+        decoder: Decoder { payload: Vec.new(), ptr: 0, little: true, wlittle: false },
+    };
+    for line in jobs.split("\n") {
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        world.step(line);
+    }
+}
+
+// ------------------------------------------------------------ data
+// data/jobs.txt, which main() writes out and reads back.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("job A PLC on Modbus/TCP: every read and write function code\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("block c seq 0=0,0,0,1,0,0,0,0,0,0,1,1,0,0,0,0,1,1,1,0,0,0,0,1,1,0,0,0,1,1,0,0,0,0,0,1,1,1,1,0\n");
+    s.push_str("block d seq 0=0,0,0,0,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n");
+    s.push_str("block h seq 0=0,29351,24480,47935,56583,12143,16803,9397,52672,24415,5761,52578,55112,60483,37395,20978,5852,37033,51704,28112,16760,9179,37258,10025,24536,42470,38375,47849,19064,2966,14824,18620,58771,51831,12844,16142,7462,9428,57613,34570,41196,13754,29352,28829,24675,48373,47321,24178,50885,43792,51004,12791,46863,27993,20268,30550,18429,63962,48070,20860,16394\n");
+    s.push_str("block i seq 0=0,2912,3558,1556,372,3446,2088,2444,1589,2153,2791,2830,3081,3397,64,135,110,470,2063,675,3230,3240,1008,2253,406,262,830,1330,1042,2813,3862,190,2189,2905,1620,1821,3908,933,2452,698,51\n");
+    s.push_str("req rc 0 10\n");
+    s.push_str("req rc 3 19\n");
+    s.push_str("req rdi 0 8\n");
+    s.push_str("req rdi 5 13\n");
+    s.push_str("req rhr 0 5\n");
+    s.push_str("req rhr 10 12\n");
+    s.push_str("req rir 0 6\n");
+    s.push_str("req wc 3 1\n");
+    s.push_str("req wc 4 0\n");
+    s.push_str("req wc 5 7\n");
+    s.push_str("req rc 0 10\n");
+    s.push_str("req wr 4 1234\n");
+    s.push_str("req wr 5 65535\n");
+    s.push_str("req rhr 3 4\n");
+    s.push_str("req wcs 0 1010101010101\n");
+    s.push_str("req rc 0 16\n");
+    s.push_str("req wrs 10 1,2,3,4\n");
+    s.push_str("req rhr 9 6\n");
+    s.push_str("req mask 2 0xf2 0x25\n");
+    s.push_str("req rhr 2 1\n");
+    s.push_str("req rw 0 3 10 9,8,7\n");
+    s.push_str("req rw 20 2 20 500,600\n");
+    s.push_str("peek 0 h 0 25\n");
+    s.push_str("peek 0 c 0 20\n");
+    s.push_str("\n");
+    s.push_str("job Address mapping: zero_mode against the default +1 offset\n");
+    s.push_str("server socket multi\n");
+    s.push_str("slave 1\n");
+    s.push_str("block h seq 0=100,101,102,103,104,105,106,107\n");
+    s.push_str("slave 2 zero\n");
+    s.push_str("block h seq 0=100,101,102,103,104,105,106,107\n");
+    s.push_str("req rhr 0 4 slave=1\n");
+    s.push_str("req rhr 0 4 slave=2\n");
+    s.push_str("req rhr 6 1 slave=1\n");
+    s.push_str("req rhr 6 2 slave=1\n");
+    s.push_str("req rhr 6 2 slave=2\n");
+    s.push_str("req rhr 7 1 slave=2\n");
+    s.push_str("req wr 0 9 slave=1\n");
+    s.push_str("req wr 0 9 slave=2\n");
+    s.push_str("peek 1 h 0 8\n");
+    s.push_str("peek 2 h 0 8\n");
+    s.push_str("slave 3\n");
+    s.push_str("block h seq 1000=7,7,7,7\n");
+    s.push_str("req rhr 998 2 slave=3\n");
+    s.push_str("req rhr 999 4 slave=3\n");
+    s.push_str("req rhr 999 5 slave=3\n");
+    s.push_str("req rhr 1000 3 slave=3\n");
+    s.push_str("\n");
+    s.push_str("job Range checks: counts, byte counts and the end of the address space\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("req rhr 0 0\n");
+    s.push_str("req rhr 0 125\n");
+    s.push_str("req rhr 0 126\n");
+    s.push_str("req rir 65530 5\n");
+    s.push_str("req rir 65534 1\n");
+    s.push_str("req rir 65535 1\n");
+    s.push_str("req rc 0 2000\n");
+    s.push_str("req rc 0 2001\n");
+    s.push_str("req rdi 65000 536\n");
+    s.push_str("req rdi 65000 535\n");
+    s.push_str("req wcs 0 -\n");
+    s.push_str("req wrs 0 -\n");
+    s.push_str("req wrs 0 33327,50993,59586,1814,60929,63304,5409,24425,37608,18357,42627,4199,52591,51220,51795,22797,14051,58816,6335,27671,45392,34774,32945,60416,13186,60210,62421,9989,21765,15984,53913,4898,39460,65003,6183,2579,32748,4032,18028,17748,18473,40907,4627,6688,34151,48040,52874,62836,26353,44722,39419,6156,50388,7686,18771,4707,60380,58496,5182,182,10644,44732,295,34561,6217,22293,4411,36096,43784,424,11366,47662,63898,63569,52564,45513,52366,18091,28016,3787,59694,5652,45287,8176,7559,51622,21157,25526,3173,55870,53334,50263,47444,29303,54885,37840,54431,51887,27648,18397,51027,17664,57104,62969,32572,18759,28740,36706,64229,57631,48903,56594,38300,5094,62852,15301,4971,694,46248,6137,27934,50284,49182\n");
+    s.push_str("req wrs 0 10728,23619,419,27220,29071,42788,20665,49268,62122,11470,20936,30315,12468,45325,35501,37605,27370,26733,771,56141,38984,17465,41000,65488,9098,65150,16694,34650,26412,58888,39690,31639,59753,27234,54335,54514,22590,26586,57650,42648,17767,13178,40960,2677,41567,26382,46210,52533,64611,27940,9303,55875,30831,52486,45785,26572,36671,14017,64806,58044,35151,20257,22039,39615,47834,15282,25163,11841,32733,61119,29724,46701,63507,13141,42919,45872,33530,31040,48840,46901,64460,24843,48411,54250,46470,2052,17403,50553,14052,5173,44677,57039,46689,32875,60821,46487,22075,10289,9159,36415,8300,5076,374,34801,49840,33888,57535,34970,2693,49057,41342,59622,8485,39971,17743,57408,34701,52529,19341,45269,53881,61144,52565,37777\n");
+    s.push_str("req rw 0 125 0 9828,20964,22915,25632,29579,34784,37043,3309,29162,44826,33088,45861,23869,32412,49991,41652,28928,4659,21668,64070,9326,30314,13555,5958,9860,62606,49551,49634,6654,7851,53653,6404,4439,39821,37345,15960,51916,45760,8463,49740,44121,39055,60282,53258,32698,31239,51007,6527,61035,18676,53306,33622,48551,18402,1031,37117,51819,22044,40449,37022,50547,64431,13125,34598,44858,13671,36527,56385,5117,207,19675,50778,1976,43060,14372,30366,57895,52899,25767,1273,47813,15333,3136,7191,42192,26761,10890,25955,43842,51673,55523,46346,36055,56802,27237,62968,14349,63344,18413,54745,1822,51727,35862,12568,48135,46602,24382,16099,15492,54382,4991,32035,3600,49927,182,23687,37353,12384,8318,44154,265\n");
+    s.push_str("req rw 0 126 0 10183,27189\n");
+    s.push_str("req rw 0 1 0 50983,10284,7494,61173,32123,58320,47529,46491,49953,23599,26238,22210,6791,326,39439,22728,49367,18129,58217,19399,39422,8267,46680,42396,56488,15601,63336,24034,32320,959,18404,18935,24307,20337,4569,14581,13741,60035,21523,53177,15386,52016,11805,9438,39589,3957,11333,7361,38011,47374,21397,34175,29576,10614,60889,62193,13432,24042,5535,23222,62134,60262,561,28712,5231,47782,5020,49253,13967,33830,40620,36422,55490,3105,30957,28266,51572,7828,17578,41771,20944,19258,31984,14502,8643,24977,16779,57527,64504,44243,58118,36602,8669,61437,11951,54474,32668,8651,31376,64836,38946,59576,29046,59716,12570,55042,40684,43878,48882,26275,47935,58373,37076,46423,46971,56638,48301,156,35180,26349,52009,57772\n");
+    s.push_str("req rw 65534 2 0 1\n");
+    s.push_str("req rw 0 2 65535 1,2\n");
+    s.push_str("req wr 65535 1\n");
+    s.push_str("req wc 65535 1\n");
+    s.push_str("req mask 65535 0 0\n");
+    s.push_str("raw 01010000000b0110000000020300010002\n");
+    s.push_str("raw 010200000009011000000002040001\n");
+    s.push_str("raw 010300000008010f0000000a010f\n");
+    s.push_str("raw 01040000000f011700000001000000010301020304\n");
+    s.push_str("\n");
+    s.push_str("job Sparse blocks: holes, frozen layouts and growth\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("block h sparse 10=1,2,3,4;20=7;30=0,0,0 frozen\n");
+    s.push_str("block c sparselist 1,0,1,1,0,0,1\n");
+    s.push_str("block i sparse 0=5;1=6;2=7;3=8\n");
+    s.push_str("req rhr 9 4\n");
+    s.push_str("req rhr 9 5\n");
+    s.push_str("req rhr 19 1\n");
+    s.push_str("req rhr 19 2\n");
+    s.push_str("req rhr 29 3\n");
+    s.push_str("req wrs 9 9,9,9\n");
+    s.push_str("req wrs 9 9,9,9,9,9\n");
+    s.push_str("req wr 21 5\n");
+    s.push_str("req rc 0 6\n");
+    s.push_str("req rc 0 7\n");
+    s.push_str("req wc 1 1\n");
+    s.push_str("req wcs 0 101\n");
+    s.push_str("req rir 0 3\n");
+    s.push_str("req rir 0 4\n");
+    s.push_str("peek 0 h 10 4\n");
+    s.push_str("reset 0\n");
+    s.push_str("peek 0 h 10 4\n");
+    s.push_str("req rhr 9 4\n");
+    s.push_str("slave 0\n");
+    s.push_str("block h sparse 0=1,2,3\n");
+    s.push_str("req wrs 2 4,5,6\n");
+    s.push_str("req rhr 0 5\n");
+    s.push_str("req rhr 0 6\n");
+    s.push_str("\n");
+    s.push_str("job A gateway with several slaves, a missing one and broadcast\n");
+    s.push_str("server socket multi broadcast\n");
+    s.push_str("slave 1\n");
+    s.push_str("block h seq 0=0,6,638,371,876,228,564,832,728,651,652\n");
+    s.push_str("slave 2\n");
+    s.push_str("block h seq 0=0,596,91,207,522,595,842,195,258,600,649\n");
+    s.push_str("slave 5\n");
+    s.push_str("block h seq 0=0,341,511,560,908,351,766,903,87,190,683\n");
+    s.push_str("slave 247\n");
+    s.push_str("slave 248\n");
+    s.push_str("req rhr 0 3 slave=1\n");
+    s.push_str("req rhr 0 3 slave=2\n");
+    s.push_str("req rhr 0 3 slave=5\n");
+    s.push_str("req rhr 0 3 slave=3\n");
+    s.push_str("req rhr 0 3 slave=247\n");
+    s.push_str("req wr 1 4242 slave=0\n");
+    s.push_str("req wrs 5 1,2 slave=0\n");
+    s.push_str("peek 1 h 0 8\n");
+    s.push_str("peek 5 h 0 8\n");
+    s.push_str("peek 247 h 0 8\n");
+    s.push_str("req rhr 0 3 slave=0\n");
+    s.push_str("drop 2\n");
+    s.push_str("drop 2\n");
+    s.push_str("req rhr 0 3 slave=2\n");
+    s.push_str("server socket multi ignore\n");
+    s.push_str("slave 9\n");
+    s.push_str("req rhr 0 2 slave=9\n");
+    s.push_str("req rhr 0 2 slave=8\n");
+    s.push_str("req rhr 0 2 slave=0\n");
+    s.push_str("\n");
+    s.push_str("job RTU on a serial line: CRC, split reads, noise and other slaves\n");
+    s.push_str("server rtu multi\n");
+    s.push_str("slave 1\n");
+    s.push_str("block h seq 0=0,14857,46197,60261,32210,4153,12283,15929,14686,55045,50149,55302,30548,56663,62126,3992,21648,29915,60051,56443,57262,24063,33168,8954,29961,62445,61793,49186,55998,6290,21378\n");
+    s.push_str("block c seq 0=0,0,1,1,1,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,1,0,1,0,1,1,0,0,0,0,0\n");
+    s.push_str("slave 7\n");
+    s.push_str("block h seq 0=0,2444,30556,35376,15407,22234,5079,53380,60009,2390,33721\n");
+    s.push_str("crc 01030000000a\n");
+    s.push_str("req rhr 0 10\n");
+    s.push_str("req rhr 4 2 slave=7\n");
+    s.push_str("req rc 0 20\n");
+    s.push_str("req wr 3 777\n");
+    s.push_str("req wcs 2 11110000111\n");
+    s.push_str("req wrs 20 10,20,30\n");
+    s.push_str("req rhr 0 3 split=1\n");
+    s.push_str("req rhr 0 3 split=3\n");
+    s.push_str("req rhr 0 3 split=5\n");
+    s.push_str("raw 010300000002c40b\n");
+    s.push_str("raw ff00010300000002c40b\n");
+    s.push_str("raw 0103000000020000010300000001840a\n");
+    s.push_str("raw 010300000001840a070300000001846c\n");
+    s.push_str("raw 0903000000018542\n");
+    s.push_str("raw 010600050063d9e2010300050001940b\n");
+    s.push_str("raw 01410000000dfc\n");
+    s.push_str("raw 01030000001984\n");
+    s.push_str("raw 0103\n");
+    s.push_str("raw 000000\n");
+    s.push_str("raw 010300000001840a\n");
+    s.push_str("req rhr 0 125\n");
+    s.push_str("req rc 0 2000\n");
+    s.push_str("peek 1 h 0 6\n");
+    s.push_str("\n");
+    s.push_str("job ASCII on a serial line: LRC, garbage and case\n");
+    s.push_str("server ascii\n");
+    s.push_str("slave 0\n");
+    s.push_str("block h seq 0=0,13956,14258,9517,62910,59965,26404,50507,51300,61051,53660,51036,50661,42698,33205,14283,8254,9077,36813,32198,11563\n");
+    s.push_str("lrc 0103000a0002\n");
+    s.push_str("req rhr 0 4\n");
+    s.push_str("req wr 2 4660\n");
+    s.push_str("req wrs 5 1,2,3\n");
+    s.push_str("req rhr 0 8 slave=17\n");
+    s.push_str("req rc 0 12\n");
+    s.push_str("req rhr 1 2 split=4\n");
+    s.push_str("raw :010300000002FA~0D~0A\n");
+    s.push_str("raw xyz:010300000002FA~0D~0A\n");
+    s.push_str("raw :01030000000200~0D~0A\n");
+    s.push_str("raw :010300000001FB~0D~0A:010300010001FA~0D~0A\n");
+    s.push_str("raw :010300000001fb~0D~0A\n");
+    s.push_str("raw :0103\n");
+    s.push_str("raw ~0D~0A\n");
+    s.push_str("raw :01030000ZZ01FB~0D~0A\n");
+    s.push_str("req rhr 0 1\n");
+    s.push_str("\n");
+    s.push_str("job Modbus/TCP framing: split segments, pipelining and MBAP lengths\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("block h seq 0=0,11657,15870,18230,57895,4818,54309,13514,4208,12763,15325,17901,24832,17906,23684,1226,4243,29473,14132,29262,27559\n");
+    s.push_str("req rhr 0 2 split=1\n");
+    s.push_str("req rhr 0 2 split=7\n");
+    s.push_str("req rhr 0 2 tid=65535\n");
+    s.push_str("req rhr 0 2 tid=0\n");
+    s.push_str("raw 0007000000060103000000010008000000060103000100010009000000060103000200\n");
+    s.push_str("raw 01\n");
+    s.push_str("raw 001012340006010300000001\n");
+    s.push_str("raw 0011000000020107\n");
+    s.push_str("raw 0012000000020107\n");
+    s.push_str("raw 001300000006010300030001\n");
+    s.push_str("raw 001400000003010300001500000006010300000001\n");
+    s.push_str("raw 001600000006010300040001\n");
+    s.push_str("raw 001700000004010300000001001800000006010300010001\n");
+    s.push_str("raw 001900000006010300050001\n");
+    s.push_str("raw 001a0000000a010300000001\n");
+    s.push_str("raw 001b00000006010300060001\n");
+    s.push_str("req rhr 3 2 slave=200\n");
+    s.push_str("\n");
+    s.push_str("job Diagnostics (function 8): echo, counters, listen-only and Modbus Plus\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("diagbits 0=1 1=1 3=1 15=1 16=1\n");
+    s.push_str("counters BusMessage=12 BusCommunicationError=3 SlaveMessage=9 BusCharacterOverrun=2\n");
+    s.push_str("req diag 0 ~12~34ping\n");
+    s.push_str("req diag 0\n");
+    s.push_str("req diag 0 ~00\n");
+    s.push_str("req diag 1 1\n");
+    s.push_str("req diag 1 0\n");
+    s.push_str("req diag 2\n");
+    s.push_str("req diag 3 0x0a00\n");
+    s.push_str("control\n");
+    s.push_str("req diag 0x0b\n");
+    s.push_str("req diag 0x0c\n");
+    s.push_str("req diag 0x0d\n");
+    s.push_str("req diag 0x0e\n");
+    s.push_str("req diag 0x0f\n");
+    s.push_str("req diag 0x10\n");
+    s.push_str("req diag 0x11\n");
+    s.push_str("req diag 0x12\n");
+    s.push_str("req diag 0x13\n");
+    s.push_str("req diag 0x14\n");
+    s.push_str("req diag 0x12\n");
+    s.push_str("req exc\n");
+    s.push_str("req diag 0x15 3\n");
+    s.push_str("req diag 0x15 4\n");
+    s.push_str("req diag 0x0a\n");
+    s.push_str("req diag 0x0b\n");
+    s.push_str("req diag 2\n");
+    s.push_str("control\n");
+    s.push_str("raw 00210000000601080000abcd\n");
+    s.push_str("raw 0022000000060108000b0001\n");
+    s.push_str("raw 002300000006010800010000\n");
+    s.push_str("raw 002400000006010800ff0000\n");
+    s.push_str("raw 0025000000050108000bff\n");
+    s.push_str("req diag 4\n");
+    s.push_str("control\n");
+    s.push_str("req rhr 0 1\n");
+    s.push_str("server rtu\n");
+    s.push_str("slave 0\n");
+    s.push_str("req diag 0 ~01~02\n");
+    s.push_str("req diag 0 ~01~02~03~04~05~06~07~08\n");
+    s.push_str("req diag 0x0b\n");
+    s.push_str("\n");
+    s.push_str("job The comm event log and exception status\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("req evc\n");
+    s.push_str("req evl\n");
+    s.push_str("req exc\n");
+    s.push_str("event recv\n");
+    s.push_str("event recv overrun broadcast\n");
+    s.push_str("event send read slave_busy\n");
+    s.push_str("event listen\n");
+    s.push_str("event restart\n");
+    s.push_str("event send listen slave_nak write_timeout\n");
+    s.push_str("req evc\n");
+    s.push_str("req evl\n");
+    s.push_str("counters BusMessage=40 SlaveBusy=1\n");
+    s.push_str("req evl\n");
+    s.push_str("req exc\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("event recv listen\n");
+    s.push_str("req evc\n");
+    s.push_str("req evl\n");
+    s.push_str("control\n");
+    s.push_str("req diag 0x0a\n");
+    s.push_str("req evc\n");
+    s.push_str("req evl\n");
+    s.push_str("req exc\n");
+    s.push_str("\n");
+    s.push_str("job Device identity: Read Device Information and Report Slave ID\n");
+    s.push_str("server socket multi\n");
+    s.push_str("slave 1\n");
+    s.push_str("slave 2\n");
+    s.push_str("req sid slave=1\n");
+    s.push_str("req mei 1 0 slave=1\n");
+    s.push_str("ident names VendorName=Acme~20Controls ProductCode=AC-300 MajorMinorRevision=2.4.1\n");
+    s.push_str("req mei 1 0 slave=1\n");
+    s.push_str("req sid slave=1\n");
+    s.push_str("ident names VendorUrl=http://acme.example/plc ProductName=Line~20Controller ModelName=AC300-X UserApplicationName=bottling\n");
+    s.push_str("req mei 2 0 slave=1\n");
+    s.push_str("req mei 2 4 slave=1\n");
+    s.push_str("req mei 1 2 slave=1\n");
+    s.push_str("req mei 4 5 slave=1\n");
+    s.push_str("req mei 4 7 slave=1\n");
+    s.push_str("req mei 4 0x81 slave=1\n");
+    s.push_str("ident info 0x80=site~20north 0x81=line~207 0x07=reserved 0x10=nope\n");
+    s.push_str("ident set 7=still~20reserved 0x82=rack~203\n");
+    s.push_str("ident update 8=forced\n");
+    s.push_str("req mei 3 0 slave=1\n");
+    s.push_str("req mei 3 0x81 slave=1\n");
+    s.push_str("req mei 3 0x90 slave=1\n");
+    s.push_str("req mei 4 8 slave=1\n");
+    s.push_str("req mei 5 0 slave=1\n");
+    s.push_str("slaveid 2 PLC-2~20rev~20C~ff\n");
+    s.push_str("req sid slave=2\n");
+    s.push_str("req sid slave=1\n");
+    s.push_str("raw 003100000005012b0d0100\n");
+    s.push_str("raw 003200000005012b0e0700\n");
+    s.push_str("ident info 0x83=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0x84=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0x85=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0x86=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0x87=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0x88=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0x89=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0x8a=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0x8b=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
+    s.push_str("req mei 3 0 slave=1\n");
+    s.push_str("req mei 3 0x83 slave=1\n");
+    s.push_str("ident names VendorName=VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV ProductCode=PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP MajorMinorRevision=RRRRRRRRRRRRRRRRRRRR\n");
+    s.push_str("req sid slave=1\n");
+    s.push_str("req mei 1 0 slave=1\n");
+    s.push_str("server rtu\n");
+    s.push_str("slave 0\n");
+    s.push_str("req mei 1 0\n");
+    s.push_str("req sid\n");
+    s.push_str("\n");
+    s.push_str("job File records and FIFO queues\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("req rfr 4:1:2;3:9:4\n");
+    s.push_str("req wfr 4:7:h0102030405060708;5:1:habcd\n");
+    s.push_str("req fifo 0x04de\n");
+    s.push_str("devraw 000a0000000f01140c05060d0e0f1005060a0b0c0d\n");
+    s.push_str("devraw 000b0000001001150e0600040007000306af04be100d\n");
+    s.push_str("devraw 000c0000000a011800060004000101b8\n");
+    s.push_str("devraw 000d0000000c01180008000602fe01b80284\n");
+    s.push_str("devraw 000e00000006011800020000\n");
+    s.push_str("devraw 000f00000008011800040002ffff\n");
+    s.push_str("devraw 0010000000060114050710aa\n");
+    s.push_str("devraw 00110000000b0114080506010203040106\n");
+    s.push_str("server rtu\n");
+    s.push_str("slave 0\n");
+    s.push_str("req rfr 1:2:3\n");
+    s.push_str("req fifo 1\n");
+    s.push_str("devraw 011800060004000101b84c20\n");
+    s.push_str("\n");
+    s.push_str("job Decoding a device's replies: exceptions, short frames and odd lengths\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("devraw 000100000003018302000200000003019004\n");
+    s.push_str("devraw 000300000003\n");
+    s.push_str("devraw 01810b\n");
+    s.push_str("devraw 00050000000401030201\n");
+    s.push_str("devraw 000600000005010302ffff\n");
+    s.push_str("devraw 000700000006010303ffffff\n");
+    s.push_str("devraw 0008000000060106000a0001\n");
+    s.push_str("devraw 000900000004010603e8\n");
+    s.push_str("devraw 000a000000040102010f\n");
+    s.push_str("devraw 000b0000000401010300\n");
+    s.push_str("devraw 000c000000030141ff\n");
+    s.push_str("devraw 000d000000060105000aff00\n");
+    s.push_str("devraw 000e000000060105000a1234\n");
+    s.push_str("devraw 000f00000004010b0000\n");
+    s.push_str("devraw 001000000006010bffff0005\n");
+    s.push_str("devraw 0011000000080111050102030405\n");
+    s.push_str("devraw 0012000000020111\n");
+    s.push_str("devraw 0013000000060111036162ff\n");
+    s.push_str("devraw 00140000000b010c080000000100020304\n");
+    s.push_str("devraw 001500000008012b0e0183000000\n");
+    s.push_str("devraw 001600000012012b0e018300000200034142430103786978\n");
+    s.push_str("devraw 00170000000e012b0e0183ff0502000141000142\n");
+    s.push_str("devraw 00180000000b012b0e0283000001050941\n");
+    s.push_str("devraw 001900000006010800000102\n");
+    s.push_str("devraw 001a0000000701080002010203\n");
+    s.push_str("devraw 001b000000070108000b000102\n");
+    s.push_str("devraw 001c0000000701080015000300\n");
+    s.push_str("devraw 001d0000000401080002\n");
+    s.push_str("devraw 001e0000000a01180006000400010002\n");
+    s.push_str("devraw 001f000000080116000100ffff00\n");
+    s.push_str("devraw 00200000000701170400010002\n");
+    s.push_str("devraw 002100000006010f00000010\n");
+    s.push_str("devraw 00220000000401100000\n");
+    s.push_str("devraw 00230000000201810024000000050103020001\n");
+    s.push_str("devraw 0025000000050103020002\n");
+    s.push_str("server rtu\n");
+    s.push_str("slave 0\n");
+    s.push_str("devraw 018302c0f1\n");
+    s.push_str("devraw 010304000100022a32\n");
+    s.push_str("devraw 010304000100022a3201060001000a580d\n");
+    s.push_str("devraw 0103020005780001030200063846\n");
+    s.push_str("devraw 11030200073845\n");
+    s.push_str("devraw 0103020008b982\n");
+    s.push_str("devraw 01030400019985\n");
+    s.push_str("devraw 01030200097842\n");
+    s.push_str("devraw 01450000000ccc\n");
+    s.push_str("server ascii\n");
+    s.push_str("slave 0\n");
+    s.push_str("devraw :0103020005F5~0D~0A\n");
+    s.push_str("devraw :0183027A~0D~0A\n");
+    s.push_str("devraw :01030200FA~0D~0A\n");
+    s.push_str("\n");
+    s.push_str("job Function codes the server does not implement\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("raw 000100000002012a\n");
+    s.push_str("raw 0002000000040141abcd\n");
+    s.push_str("raw 00030000000201ff\n");
+    s.push_str("raw 00040000000201ae\n");
+    s.push_str("raw 0005000000020100\n");
+    s.push_str("raw 0006000000050109000102\n");
+    s.push_str("raw 0007000000040113abcd\n");
+    s.push_str("server rtu\n");
+    s.push_str("slave 0\n");
+    s.push_str("raw 012a0001e1d0\n");
+    s.push_str("raw 0141c010\n");
+    s.push_str("server ascii\n");
+    s.push_str("slave 0\n");
+    s.push_str("raw :0141BE~0D~0A\n");
+    s.push_str("raw :0109000102F3~0D~0A\n");
+    s.push_str("\n");
+    s.push_str("job Requests the client cannot encode\n");
+    s.push_str("server socket\n");
+    s.push_str("slave 0\n");
+    s.push_str("req wr 3 70000\n");
+    s.push_str("req wr 3 -1\n");
+    s.push_str("req rhr 70000 1\n");
+    s.push_str("req rhr 0 65536\n");
+    s.push_str("req wrs 0 1,70000\n");
+    s.push_str("req wcs 0 1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\n");
+    s.push_str("req wcs 0 11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\n");
+    s.push_str("req rw 0 1 0 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1\n");
+    s.push_str("req mask 0 0x10000 0\n");
+    s.push_str("req mei 1 256\n");
+    s.push_str("req rhr 0 1 tid=65536\n");
+    s.push_str("req rhr 0 1 slave=256\n");
+    s.push_str("req diag 0x0b 65536\n");
+    s.push_str("req diag 0x0b -1\n");
+    s.push_str("req fifo 70000\n");
+    s.push_str("req rfr 70000:1:1\n");
+    s.push_str("req rhr 0 1 tid=70000\n");
+    s.push_str("server rtu\n");
+    s.push_str("slave 0\n");
+    s.push_str("req rhr 0 1 tid=70000\n");
+    s.push_str("req rhr 0 1 slave=300\n");
+    s.push_str("\n");
+    s.push_str("job BinaryPayloadBuilder and BinaryPayloadDecoder: byte and word order\n");
+    s.push_str("pl build big big\n");
+    s.push_str("pl add u8 18\n");
+    s.push_str("pl add u8 52\n");
+    s.push_str("pl add u16 4660\n");
+    s.push_str("pl add i16 -2\n");
+    s.push_str("pl add u32 305419896\n");
+    s.push_str("pl add i32 -305419896\n");
+    s.push_str("pl add f32 3.14\n");
+    s.push_str("pl add u64 1311768467294899695\n");
+    s.push_str("pl add i64 -1311768467294899695\n");
+    s.push_str("pl add f64 -2.718281828459045\n");
+    s.push_str("pl add f16 1.5\n");
+    s.push_str("pl add str abc\n");
+    s.push_str("pl add bits 10110001\n");
+    s.push_str("pl bytes\n");
+    s.push_str("pl regs\n");
+    s.push_str("pl build little big\n");
+    s.push_str("pl add u8 18\n");
+    s.push_str("pl add u8 52\n");
+    s.push_str("pl add u16 4660\n");
+    s.push_str("pl add i16 -2\n");
+    s.push_str("pl add u32 305419896\n");
+    s.push_str("pl add i32 -305419896\n");
+    s.push_str("pl add f32 3.14\n");
+    s.push_str("pl add u64 1311768467294899695\n");
+    s.push_str("pl add i64 -1311768467294899695\n");
+    s.push_str("pl add f64 -2.718281828459045\n");
+    s.push_str("pl add f16 1.5\n");
+    s.push_str("pl add str abc\n");
+    s.push_str("pl add bits 10110001\n");
+    s.push_str("pl bytes\n");
+    s.push_str("pl regs\n");
+    s.push_str("pl build big little\n");
+    s.push_str("pl add u8 18\n");
+    s.push_str("pl add u8 52\n");
+    s.push_str("pl add u16 4660\n");
+    s.push_str("pl add i16 -2\n");
+    s.push_str("pl add u32 305419896\n");
+    s.push_str("pl add i32 -305419896\n");
+    s.push_str("pl add f32 3.14\n");
+    s.push_str("pl add u64 1311768467294899695\n");
+    s.push_str("pl add i64 -1311768467294899695\n");
+    s.push_str("pl add f64 -2.718281828459045\n");
+    s.push_str("pl add f16 1.5\n");
+    s.push_str("pl add str abc\n");
+    s.push_str("pl add bits 10110001\n");
+    s.push_str("pl bytes\n");
+    s.push_str("pl regs\n");
+    s.push_str("pl build little little\n");
+    s.push_str("pl add u8 18\n");
+    s.push_str("pl add u8 52\n");
+    s.push_str("pl add u16 4660\n");
+    s.push_str("pl add i16 -2\n");
+    s.push_str("pl add u32 305419896\n");
+    s.push_str("pl add i32 -305419896\n");
+    s.push_str("pl add f32 3.14\n");
+    s.push_str("pl add u64 1311768467294899695\n");
+    s.push_str("pl add i64 -1311768467294899695\n");
+    s.push_str("pl add f64 -2.718281828459045\n");
+    s.push_str("pl add f16 1.5\n");
+    s.push_str("pl add str abc\n");
+    s.push_str("pl add bits 10110001\n");
+    s.push_str("pl bytes\n");
+    s.push_str("pl regs\n");
+    s.push_str("pl build big big repack\n");
+    s.push_str("pl add u16 4660\n");
+    s.push_str("pl add u32 305419896\n");
+    s.push_str("pl regs\n");
+    s.push_str("pl build little big repack\n");
+    s.push_str("pl add u16 4660\n");
+    s.push_str("pl add u32 305419896\n");
+    s.push_str("pl regs\n");
+    s.push_str("pl coils\n");
+    s.push_str("pl build big big\n");
+    s.push_str("pl add u8 300\n");
+    s.push_str("pl add i8 -129\n");
+    s.push_str("pl add u16 65536\n");
+    s.push_str("pl add i16 32768\n");
+    s.push_str("pl add u32 -1\n");
+    s.push_str("pl add i32 2147483648\n");
+    s.push_str("pl add u64 18446744073709551616\n");
+    s.push_str("pl add f32 1e39\n");
+    s.push_str("pl add f16 65520\n");
+    s.push_str("pl add f16 65504\n");
+    s.push_str("pl add f16 0.1\n");
+    s.push_str("pl add f16 6e-8\n");
+    s.push_str("pl add f16 -0.0\n");
+    s.push_str("pl add f32 1e-46\n");
+    s.push_str("pl add f32 1e38\n");
+    s.push_str("pl bytes\n");
+    s.push_str("pl regs\n");
+    s.push_str("pl coils\n");
+    s.push_str("pl build big big\n");
+    s.push_str("pl add str odd\n");
+    s.push_str("pl regs\n");
+    s.push_str("pl coils\n");
+    s.push_str("pl decode big big 4660,22136,39612,57072,4,65535,16457,4059,16200,0,0,0,0,49144,16384\n");
+    s.push_str("pl get u16\n");
+    s.push_str("pl get i16\n");
+    s.push_str("pl get u32\n");
+    s.push_str("pl get i32\n");
+    s.push_str("pl get f32\n");
+    s.push_str("pl reset\n");
+    s.push_str("pl get f32\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get u8\n");
+    s.push_str("pl get i8\n");
+    s.push_str("pl get skip 3\n");
+    s.push_str("pl get u64\n");
+    s.push_str("pl get i64\n");
+    s.push_str("pl get f64\n");
+    s.push_str("pl get bits\n");
+    s.push_str("pl get str 4\n");
+    s.push_str("pl get u16\n");
+    s.push_str("pl get u32\n");
+    s.push_str("pl decode little big 4660,22136,39612,57072,4,65535,16457,4059,16200,0,0,0,0,49144,16384\n");
+    s.push_str("pl get u16\n");
+    s.push_str("pl get i16\n");
+    s.push_str("pl get u32\n");
+    s.push_str("pl get i32\n");
+    s.push_str("pl get f32\n");
+    s.push_str("pl reset\n");
+    s.push_str("pl get f32\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get u8\n");
+    s.push_str("pl get i8\n");
+    s.push_str("pl get skip 3\n");
+    s.push_str("pl get u64\n");
+    s.push_str("pl get i64\n");
+    s.push_str("pl get f64\n");
+    s.push_str("pl get bits\n");
+    s.push_str("pl get str 4\n");
+    s.push_str("pl get u16\n");
+    s.push_str("pl get u32\n");
+    s.push_str("pl decode big little 4660,22136,39612,57072,4,65535,16457,4059,16200,0,0,0,0,49144,16384\n");
+    s.push_str("pl get u16\n");
+    s.push_str("pl get i16\n");
+    s.push_str("pl get u32\n");
+    s.push_str("pl get i32\n");
+    s.push_str("pl get f32\n");
+    s.push_str("pl reset\n");
+    s.push_str("pl get f32\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get u8\n");
+    s.push_str("pl get i8\n");
+    s.push_str("pl get skip 3\n");
+    s.push_str("pl get u64\n");
+    s.push_str("pl get i64\n");
+    s.push_str("pl get f64\n");
+    s.push_str("pl get bits\n");
+    s.push_str("pl get str 4\n");
+    s.push_str("pl get u16\n");
+    s.push_str("pl get u32\n");
+    s.push_str("pl decode little little 4660,22136,39612,57072,4,65535,16457,4059,16200,0,0,0,0,49144,16384\n");
+    s.push_str("pl get u16\n");
+    s.push_str("pl get i16\n");
+    s.push_str("pl get u32\n");
+    s.push_str("pl get i32\n");
+    s.push_str("pl get f32\n");
+    s.push_str("pl reset\n");
+    s.push_str("pl get f32\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get u8\n");
+    s.push_str("pl get i8\n");
+    s.push_str("pl get skip 3\n");
+    s.push_str("pl get u64\n");
+    s.push_str("pl get i64\n");
+    s.push_str("pl get f64\n");
+    s.push_str("pl get bits\n");
+    s.push_str("pl get str 4\n");
+    s.push_str("pl get u16\n");
+    s.push_str("pl get u32\n");
+    s.push_str("pl decodecoils big 1011000111\n");
+    s.push_str("pl get u8\n");
+    s.push_str("pl get u8\n");
+    s.push_str("pl get u8\n");
+    s.push_str("pl decodecoils little 10110001\n");
+    s.push_str("pl get bits\n");
+    s.push_str("pl decode big big 15360,31744,64512,32256,1,1024,33792\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get f16\n");
+    s.push_str("pl get f16\n");
+    s.push_str("\n");
+    s.push_str("job CRC-16/Modbus and LRC\n");
+    s.push_str("crc \n");
+    s.push_str("crc 01\n");
+    s.push_str("crc 0103000a0002\n");
+    s.push_str("crc 11030006\n");
+    s.push_str("crc ffff\n");
+    s.push_str("crc 010300000002\n");
+    s.push_str("crc f70f0013000a0204cd01\n");
+    s.push_str("crc 34ca2476b9e1bafdfad73af804c691e2\n");
+    s.push_str("crc a38b6bf863c133368fc6165834b400da1e689df7d87d58acb0505eb5b0fe9b8da460bb711a15295d\n");
+    s.push_str("lrc \n");
+    s.push_str("lrc 01\n");
+    s.push_str("lrc 0103000a0002\n");
+    s.push_str("lrc 11030006\n");
+    s.push_str("lrc ff\n");
+    s.push_str("lrc f70f0013000a0204cd01\n");
+    s.push_str("lrc 5c77120d77a462fd3775c5682889a74b\n");
+    s.push_str("\n");
+    s.push_str("job A poll cycle: an HMI reads and writes a line of eight drives over RTU\n");
+    s.push_str("server rtu multi\n");
+    s.push_str("slave 1\n");
+    s.push_str("block h seq 0=0,2509,1610,219,921,1027,877,2926,2816,1846,78,803,2074,977,2825,2568,1884\n");
+    s.push_str("block i seq 0=0,698,473,407,626,459,851,285,655\n");
+    s.push_str("block c seq 0=0,0,1,0,0,0,0,0,0\n");
+    s.push_str("slave 2\n");
+    s.push_str("block h seq 0=0,1962,1012,463,2910,638,141,856,1419,335,332,244,147,1009,453,1678,299\n");
+    s.push_str("block i seq 0=0,63,363,803,519,686,227,695,594\n");
+    s.push_str("block c seq 0=0,0,0,0,0,0,0,0,0\n");
+    s.push_str("slave 3\n");
+    s.push_str("block h seq 0=0,904,734,2379,11,1298,277,242,518,1569,402,1468,2380,712,2865,2516,402\n");
+    s.push_str("block i seq 0=0,260,261,936,500,865,787,442,149\n");
+    s.push_str("block c seq 0=0,1,0,0,0,0,0,0,0\n");
+    s.push_str("slave 4\n");
+    s.push_str("block h seq 0=0,1509,1000,2992,544,1813,1181,1077,2537,2154,568,2300,2101,2232,1829,2819,2441\n");
+    s.push_str("block i seq 0=0,138,351,708,361,717,627,676,848\n");
+    s.push_str("block c seq 0=0,0,0,0,1,1,0,1,1\n");
+    s.push_str("slave 5\n");
+    s.push_str("block h seq 0=0,1298,1306,1084,1205,2033,1717,1239,2755,3,382,2365,1406,2751,688,1817,1344\n");
+    s.push_str("block i seq 0=0,887,481,216,53,0,635,398,507\n");
+    s.push_str("block c seq 0=0,0,0,0,0,0,1,0,0\n");
+    s.push_str("slave 6\n");
+    s.push_str("block h seq 0=0,920,500,849,202,412,405,1889,1310,1589,2924,45,943,1062,620,200,1071\n");
+    s.push_str("block i seq 0=0,613,243,317,690,300,707,713,582\n");
+    s.push_str("block c seq 0=0,1,1,0,0,1,1,1,1\n");
+    s.push_str("slave 7\n");
+    s.push_str("block h seq 0=0,1757,1486,2237,335,663,2517,252,1977,2686,370,2742,2303,606,1808,758,2653\n");
+    s.push_str("block i seq 0=0,978,717,665,543,631,139,395,993\n");
+    s.push_str("block c seq 0=0,0,0,1,1,1,1,1,1\n");
+    s.push_str("slave 8\n");
+    s.push_str("block h seq 0=0,1715,1127,393,2348,323,981,2262,212,1023,423,398,2064,2861,2836,2956,2980\n");
+    s.push_str("block i seq 0=0,735,686,285,828,442,843,109,516\n");
+    s.push_str("block c seq 0=0,0,1,0,0,0,0,0,0\n");
+    s.push_str("req rir 0 4 slave=1\n");
+    s.push_str("req rc 0 4 slave=1\n");
+    s.push_str("req rir 0 4 slave=2\n");
+    s.push_str("req rc 0 4 slave=2\n");
+    s.push_str("req rir 0 4 slave=3\n");
+    s.push_str("req rc 0 4 slave=3\n");
+    s.push_str("req wr 1 648 slave=3\n");
+    s.push_str("req rir 0 4 slave=4\n");
+    s.push_str("req rc 0 4 slave=4\n");
+    s.push_str("req rir 0 4 slave=5\n");
+    s.push_str("req rc 0 4 slave=5\n");
+    s.push_str("req wc 2 1 slave=5\n");
+    s.push_str("req rir 0 4 slave=6\n");
+    s.push_str("req rc 0 4 slave=6\n");
+    s.push_str("req wr 1 1830 slave=6\n");
+    s.push_str("req rir 0 4 slave=7\n");
+    s.push_str("req rc 0 4 slave=7\n");
+    s.push_str("req rir 0 4 slave=8\n");
+    s.push_str("req rc 0 4 slave=8\n");
+    s.push_str("req rhr 0 8 slave=1\n");
+    s.push_str("req rhr 0 2 slave=9\n");
+    s.push_str("req rir 0 4 slave=1\n");
+    s.push_str("req rc 0 4 slave=1\n");
+    s.push_str("req rir 0 4 slave=2\n");
+    s.push_str("req rc 0 4 slave=2\n");
+    s.push_str("req wr 1 358 slave=2\n");
+    s.push_str("req wc 2 0 slave=2\n");
+    s.push_str("req rir 0 4 slave=3\n");
+    s.push_str("req rc 0 4 slave=3\n");
+    s.push_str("req rir 0 4 slave=4\n");
+    s.push_str("req rc 0 4 slave=4\n");
+    s.push_str("req rir 0 4 slave=5\n");
+    s.push_str("req rc 0 4 slave=5\n");
+    s.push_str("req wr 1 2705 slave=5\n");
+    s.push_str("req rir 0 4 slave=6\n");
+    s.push_str("req rc 0 4 slave=6\n");
+    s.push_str("req rir 0 4 slave=7\n");
+    s.push_str("req rc 0 4 slave=7\n");
+    s.push_str("req wc 2 1 slave=7\n");
+    s.push_str("req rir 0 4 slave=8\n");
+    s.push_str("req rc 0 4 slave=8\n");
+    s.push_str("req wr 1 2849 slave=8\n");
+    s.push_str("req rhr 0 8 slave=6\n");
+    s.push_str("req rhr 0 2 slave=9\n");
+    s.push_str("req rir 0 4 slave=1\n");
+    s.push_str("req rc 0 4 slave=1\n");
+    s.push_str("req wr 1 2758 slave=1\n");
+    s.push_str("req rir 0 4 slave=2\n");
+    s.push_str("req rc 0 4 slave=2\n");
+    s.push_str("req rir 0 4 slave=3\n");
+    s.push_str("req rc 0 4 slave=3\n");
+    s.push_str("req rir 0 4 slave=4\n");
+    s.push_str("req rc 0 4 slave=4\n");
+    s.push_str("req wr 1 1921 slave=4\n");
+    s.push_str("req wc 2 0 slave=4\n");
+    s.push_str("req rir 0 4 slave=5\n");
+    s.push_str("req rc 0 4 slave=5\n");
+    s.push_str("req rir 0 4 slave=6\n");
+    s.push_str("req rc 0 4 slave=6\n");
+    s.push_str("req rir 0 4 slave=7\n");
+    s.push_str("req rc 0 4 slave=7\n");
+    s.push_str("req wr 1 80 slave=7\n");
+    s.push_str("req rir 0 4 slave=8\n");
+    s.push_str("req rc 0 4 slave=8\n");
+    s.push_str("req rhr 0 8 slave=4\n");
+    s.push_str("req rhr 0 2 slave=9\n");
+    s.push_str("peek 1 h 0 4\n");
+    s.push_str("peek 2 h 0 4\n");
+    s.push_str("peek 3 h 0 4\n");
+    s.push_str("peek 4 h 0 4\n");
+    s.push_str("peek 5 h 0 4\n");
+    s.push_str("peek 6 h 0 4\n");
+    s.push_str("peek 7 h 0 4\n");
+    s.push_str("peek 8 h 0 4\n");
+    s
+}

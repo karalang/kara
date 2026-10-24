@@ -1,0 +1,2085 @@
+== A PLC on Modbus/TCP: every read and write function code
+server socket
+slave 0
+block c seq DataStore(40, 0)
+block d seq DataStore(24, 0)
+block h seq DataStore(61, 0)
+block i seq DataStore(41, 0)
+> ReadCoilsRequest: ReadBitRequest(0,10)
+  tx 00010000000601010000000a
+  server got ReadCoilsRequest: ReadBitRequest(0,10) | address=0 count=10
+  rx 0001000000050101020402
+  client got ReadCoilsResponse: ReadCoilsResponse(16) | bits=0010000001000000
+> ReadCoilsRequest: ReadBitRequest(3,19)
+  tx 000200000006010100030013
+  server got ReadCoilsRequest: ReadBitRequest(3,19) | address=3 count=19
+  rx 000200000006010103c07000
+  client got ReadCoilsResponse: ReadCoilsResponse(24) | bits=000000110000111000000000
+> ReadDiscreteInputsRequest: ReadBitRequest(0,8)
+  tx 000300000006010200000008
+  server got ReadDiscreteInputsRequest: ReadBitRequest(0,8) | address=0 count=8
+  rx 00030000000401020168
+  client got ReadDiscreteInputsResponse: ReadDiscreteInputsResponse(8) | bits=00010110
+> ReadDiscreteInputsRequest: ReadBitRequest(5,13)
+  tx 00040000000601020005000d
+  server got ReadDiscreteInputsRequest: ReadBitRequest(5,13) | address=5 count=13
+  rx 0004000000050102020300
+  client got ReadDiscreteInputsResponse: ReadDiscreteInputsResponse(16) | bits=1100000000000000
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,5)
+  tx 000500000006010300000005
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,5) | address=0 count=5
+  rx 00050000000d01030a72a75fa0bb3fdd072f6f
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (5) | registers=[29351, 24480, 47935, 56583, 12143]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (10,12)
+  tx 0006000000060103000a000c
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (10,12) | address=10 count=12
+  rx 00060000001b010318cd62d748ec43921351f216dc90a9c9f86dd0417823db918a
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (12) | registers=[52578, 55112, 60483, 37395, 20978, 5852, 37033, 51704, 28112, 16760, 9179, 37258]
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,6)
+  tx 000700000006010400000006
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,6) | address=0 count=6
+  rx 00070000000f01040c0b600de6061401740d760828
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (6) | registers=[2912, 3558, 1556, 372, 3446, 2088]
+> WriteSingleCoilRequest: WriteCoilRequest(3, True) => 
+  tx 00080000000601050003ff00
+  server got WriteSingleCoilRequest: WriteCoilRequest(3, True) =>  | address=3 value=True
+  rx 00080000000601050003ff00
+  client got WriteSingleCoilResponse: WriteCoilResponse(3) => True | address=3 value=True
+> WriteSingleCoilRequest: WriteCoilRequest(4, False) => 
+  tx 000900000006010500040000
+  server got WriteSingleCoilRequest: WriteCoilRequest(4, False) =>  | address=4 value=False
+  rx 000900000006010500040000
+  client got WriteSingleCoilResponse: WriteCoilResponse(4) => False | address=4 value=False
+> WriteSingleCoilRequest: WriteCoilRequest(5, True) => 
+  tx 000a0000000601050005ff00
+  server got WriteSingleCoilRequest: WriteCoilRequest(5, True) =>  | address=5 value=True
+  rx 000a0000000601050005ff00
+  client got WriteSingleCoilResponse: WriteCoilResponse(5) => True | address=5 value=True
+> ReadCoilsRequest: ReadBitRequest(0,10)
+  tx 000b0000000601010000000a
+  server got ReadCoilsRequest: ReadBitRequest(0,10) | address=0 count=10
+  rx 000b000000050101022c02
+  client got ReadCoilsResponse: ReadCoilsResponse(16) | bits=0011010001000000
+> WriteSingleRegisterRequest: WriteRegisterRequest 4
+  tx 000c000000060106000404d2
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 4 | address=4 value=1234
+  rx 000c000000060106000404d2
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 4 => 1234 | address=4 value=1234
+> WriteSingleRegisterRequest: WriteRegisterRequest 5
+  tx 000d0000000601060005ffff
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 5 | address=5 value=65535
+  rx 000d0000000601060005ffff
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 5 => 65535 | address=5 value=65535
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (3,4)
+  tx 000e00000006010300030004
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (3,4) | address=3 count=4
+  rx 000e0000000b010308dd0704d2ffff24b5
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (4) | registers=[56583, 1234, 65535, 9397]
+> WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 13 
+  tx 000f00000009010f0000000d025515
+  server got WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 13  | address=0 byte_count=2 values=1010101010101
+  rx 000f00000006010f0000000d
+  client got WriteMultipleCoilsResponse: WriteNCoilResponse(0, 13) | address=0 count=13
+> ReadCoilsRequest: ReadBitRequest(0,16)
+  tx 001000000006010100000010
+  server got ReadCoilsRequest: ReadBitRequest(0,16) | address=0 count=16
+  rx 0010000000050101025595
+  client got ReadCoilsResponse: ReadCoilsResponse(16) | bits=1010101010101001
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 10 => 4
+  tx 00110000000f0110000a0004080001000200030004
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 10 => 4 | address=10 count=4 byte_count=8 values=[1, 2, 3, 4]
+  rx 0011000000060110000a0004
+  client got WriteMultipleRegistersResponse: WriteMultipleRegisterResponse (10,4) | address=10 count=4
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (9,6)
+  tx 001200000006010300090006
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (9,6) | address=9 count=6
+  rx 00120000000f01030c1681000100020003000451f2
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (6) | registers=[5761, 1, 2, 3, 4, 20978]
+> MaskWriteRegisterRequest
+  tx 0013000000080116000200f20025
+  server got MaskWriteRegisterRequest | address=2 and_mask=0x00f2 or_mask=0x0025
+  rx 0013000000080116000200f20025
+  client got MaskWriteRegisterResponse | address=2 and_mask=0x00f2 or_mask=0x0025
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (2,1)
+  tx 001400000006010300020001
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (2,1) | address=2 count=1
+  rx 0014000000050103020037
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[55]
+> ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,3) W(10,3)
+  tx 001500000011011700000003000a000306000900080007
+  server got ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,3) W(10,3) | read=0+3 write=10+3 byte_count=6 values=[9, 8, 7]
+  rx 00150000000901170672a75fa00037
+  client got ReadWriteMultipleRegistersResponse: ReadWriteNRegisterResponse (3) | registers=[29351, 24480, 55]
+> ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(20,2) W(20,2)
+  tx 00160000000f011700140002001400020401f40258
+  server got ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(20,2) W(20,2) | read=20+2 write=20+2 byte_count=4 values=[500, 600]
+  rx 00160000000701170401f40258
+  client got ReadWriteMultipleRegistersResponse: ReadWriteNRegisterResponse (2) | registers=[500, 600]
+peek 0 h 0+25: [0, 29351, 24480, 55, 56583, 1234, 65535, 9397, 52672, 24415, 5761, 9, 8, 7, 4, 20978, 5852, 37033, 51704, 28112, 16760, 500, 600, 10025, 24536]
+peek 0 c 0+20: [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0]
+== Address mapping: zero_mode against the default +1 offset
+server socket multi
+slave 1
+block h seq DataStore(8, 0)
+slave 2 zero
+block h seq DataStore(8, 0)
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,4)
+  tx 000100000006010300000004
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,4) | address=0 count=4
+  rx 00010000000b0103080065006600670068
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (4) | registers=[101, 102, 103, 104]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,4)
+  tx 000200000006020300000004
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,4) | address=0 count=4
+  rx 00020000000b0203080064006500660067
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (4) | registers=[100, 101, 102, 103]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (6,1)
+  tx 000300000006010300060001
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (6,1) | address=6 count=1
+  rx 000300000005010302006b
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[107]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (6,2)
+  tx 000400000006010300060002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (6,2) | address=6 count=2
+  rx 000400000003018302
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (6,2)
+  tx 000500000006020300060002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (6,2) | address=6 count=2
+  rx 000500000007020304006a006b
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[106, 107]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (7,1)
+  tx 000600000006020300070001
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (7,1) | address=7 count=1
+  rx 000600000005020302006b
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[107]
+> WriteSingleRegisterRequest: WriteRegisterRequest 0
+  tx 000700000006010600000009
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 0 | address=0 value=9
+  rx 000700000006010600000009
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 0 => 9 | address=0 value=9
+> WriteSingleRegisterRequest: WriteRegisterRequest 0
+  tx 000800000006020600000009
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 0 | address=0 value=9
+  rx 000800000006020600000009
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 0 => 9 | address=0 value=9
+peek 1 h 0+8: [100, 9, 102, 103, 104, 105, 106, 107]
+peek 2 h 0+8: [9, 101, 102, 103, 104, 105, 106, 107]
+slave 3
+block h seq DataStore(4, 0)
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (998,2)
+  tx 000900000006030303e60002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (998,2) | address=998 count=2
+  rx 000900000003038302
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (999,4)
+  tx 000a00000006030303e70004
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (999,4) | address=999 count=4
+  rx 000a0000000b0303080007000700070007
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (4) | registers=[7, 7, 7, 7]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (999,5)
+  tx 000b00000006030303e70005
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (999,5) | address=999 count=5
+  rx 000b00000003038302
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (1000,3)
+  tx 000c00000006030303e80003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (1000,3) | address=1000 count=3
+  rx 000c00000009030306000700070007
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[7, 7, 7]
+== Range checks: counts, byte counts and the end of the address space
+server socket
+slave 0
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,0)
+  tx 000100000006010300000000
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,0) | address=0 count=0
+  rx 000100000003018303
+  client got ExceptionResponse: Exception Response(131, 3, IllegalValue) | exception_code=3
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,125)
+  tx 00020000000601030000007d
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,125) | address=0 count=125
+  rx 0002000000fd0103fa00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (125) | registers=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,126)
+  tx 00030000000601030000007e
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,126) | address=0 count=126
+  rx 000300000003018303
+  client got ExceptionResponse: Exception Response(131, 3, IllegalValue) | exception_code=3
+> ReadInputRegistersRequest: ReadInputRegistersRequest (65530,5)
+  tx 0004000000060104fffa0005
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (65530,5) | address=65530 count=5
+  rx 00040000000d01040a00000000000000000000
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (5) | registers=[0, 0, 0, 0, 0]
+> ReadInputRegistersRequest: ReadInputRegistersRequest (65534,1)
+  tx 0005000000060104fffe0001
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (65534,1) | address=65534 count=1
+  rx 0005000000050104020000
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (1) | registers=[0]
+> ReadInputRegistersRequest: ReadInputRegistersRequest (65535,1)
+  tx 0006000000060104ffff0001
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (65535,1) | address=65535 count=1
+  rx 000600000003018402
+  client got ExceptionResponse: Exception Response(132, 4, IllegalAddress) | exception_code=2
+> ReadCoilsRequest: ReadBitRequest(0,2000)
+  tx 0007000000060101000007d0
+  server got ReadCoilsRequest: ReadBitRequest(0,2000) | address=0 count=2000
+  rx 0007000000fd0101fa00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  client got ReadCoilsResponse: ReadCoilsResponse(2000) | bits=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+> ReadCoilsRequest: ReadBitRequest(0,2001)
+  tx 0008000000060101000007d1
+  server got ReadCoilsRequest: ReadBitRequest(0,2001) | address=0 count=2001
+  rx 000800000003018103
+  client got ExceptionResponse: Exception Response(129, 1, IllegalValue) | exception_code=3
+> ReadDiscreteInputsRequest: ReadBitRequest(65000,536)
+  tx 0009000000060102fde80218
+  server got ReadDiscreteInputsRequest: ReadBitRequest(65000,536) | address=65000 count=536
+  rx 000900000003018202
+  client got ExceptionResponse: Exception Response(130, 2, IllegalAddress) | exception_code=2
+> ReadDiscreteInputsRequest: ReadBitRequest(65000,535)
+  tx 000a000000060102fde80217
+  server got ReadDiscreteInputsRequest: ReadBitRequest(65000,535) | address=65000 count=535
+  rx 000a0000004601024300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  client got ReadDiscreteInputsResponse: ReadDiscreteInputsResponse(536) | bits=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+> WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 1 
+  tx 000b00000008010f000000010100
+  server got WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 1  | address=0 byte_count=1 values=0
+  rx 000b00000006010f00000001
+  client got WriteMultipleCoilsResponse: WriteNCoilResponse(0, 1) | address=0 count=1
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 0 => 0
+  tx 000c0000000701100000000000
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 0 => 0 | address=0 count=0 byte_count=0 values=[]
+  rx 000c00000003019003
+  client got ExceptionResponse: Exception Response(144, 16, IllegalValue) | exception_code=3
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 0 => 123
+  tx 000d000000fd01100000007bf6822fc731e8c20716ee01f74815215f6992e847b5a6831067cd6fc814ca53590d36e3e5c018bf6c17b15087d680b1ec003382eb32f3d5270555053e70d29913229a24fdeb18270a137fec0fc0466c455448299fcb12131a208567bba8ce8af57466f1aeb299fb180cc4d41e0649531263ebdce480143e00b62994aebc0127870118495715113b8d00ab0801a82c66ba2ef99af851cd54b1c9cc8e46ab6d700ecbe92e1614b0e71ff01d87c9a652a563b60c65da3ed056c457b9547277d66593d0d49fcaaf6c0047ddc7534500df10f5f97f3c494770448f62fae5e11fbf07dd12959c13e6f5843bc5136b02b6b4a817f96d1ec46cc01e
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 0 => 123 | address=0 count=123 byte_count=246 values=[33327, 50993, 59586, 1814, 60929, 63304, 5409, 24425, 37608, 18357, 42627, 4199, 52591, 51220, 51795, 22797, 14051, 58816, 6335, 27671, 45392, 34774, 32945, 60416, 13186, 60210, 62421, 9989, 21765, 15984, 53913, 4898, 39460, 65003, 6183, 2579, 32748, 4032, 18028, 17748, 18473, 40907, 4627, 6688, 34151, 48040, 52874, 62836, 26353, 44722, 39419, 6156, 50388, 7686, 18771, 4707, 60380, 58496, 5182, 182, 10644, 44732, 295, 34561, 6217, 22293, 4411, 36096, 43784, 424, 11366, 47662, 63898, 63569, 52564, 45513, 52366, 18091, 28016, 3787, 59694, 5652, 45287, 8176, 7559, 51622, 21157, 25526, 3173, 55870, 53334, 50263, 47444, 29303, 54885, 37840, 54431, 51887, 27648, 18397, 51027, 17664, 57104, 62969, 32572, 18759, 28740, 36706, 64229, 57631, 48903, 56594, 38300, 5094, 62852, 15301, 4971, 694, 46248, 6137, 27934, 50284, 49182]
+  rx 000d0000000601100000007b
+  client got WriteMultipleRegistersResponse: WriteMultipleRegisterResponse (0,123) | address=0 count=123
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 0 => 124
+  tx 000e000000ff01100000007cf829e85c4301a36a54718fa72450b9c074f2aa2cce51c8766b30b4b10d8aad92e56aea686d0303db4d98484439a028ffd0238afe7e4136875a672ce6089b0a7b97e9696a62d43fd4f2583e67dae132a6984567337aa0000a75a25f670eb482cd35fc636d242457da43786fcd06b2d967cc8f3f36c1fd26e2bc894f4f2156179abfbada3bb2624b2e417fddeebf741cb66df8133355a7a7b33082fa7940bec8b735fbcc610bbd1bd3eab586080443fbc57936e41435ae85decfb661806bed95b597563b283123c78e3f206c13d4017687f1c2b08460e0bf889a0a85bfa1a17ee8e621259c23454fe040878dcd314b8db0d5d279eed8cd559391
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 0 => 124 | address=0 count=124 byte_count=248 values=[10728, 23619, 419, 27220, 29071, 42788, 20665, 49268, 62122, 11470, 20936, 30315, 12468, 45325, 35501, 37605, 27370, 26733, 771, 56141, 38984, 17465, 41000, 65488, 9098, 65150, 16694, 34650, 26412, 58888, 39690, 31639, 59753, 27234, 54335, 54514, 22590, 26586, 57650, 42648, 17767, 13178, 40960, 2677, 41567, 26382, 46210, 52533, 64611, 27940, 9303, 55875, 30831, 52486, 45785, 26572, 36671, 14017, 64806, 58044, 35151, 20257, 22039, 39615, 47834, 15282, 25163, 11841, 32733, 61119, 29724, 46701, 63507, 13141, 42919, 45872, 33530, 31040, 48840, 46901, 64460, 24843, 48411, 54250, 46470, 2052, 17403, 50553, 14052, 5173, 44677, 57039, 46689, 32875, 60821, 46487, 22075, 10289, 9159, 36415, 8300, 5076, 374, 34801, 49840, 33888, 57535, 34970, 2693, 49057, 41342, 59622, 8485, 39971, 17743, 57408, 34701, 52529, 19341, 45269, 53881, 61144, 52565, 37777]
+  rx 000e00000003019003
+  client got ExceptionResponse: Exception Response(144, 16, IllegalValue) | exception_code=3
+> ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,125) W(0,121)
+  tx 000f000000fd01170000007d00000079f2266451e459836420738b87e090b30ced71eaaf1a8140b3255d3d7e9cc347a2b47100123354a4fa46246e766a34f317462684f48ec18fc1e219fe1eabd195190411579b8d91e13e58caccb2c0210fc24cac59988feb7ad00a7fba7a07c73f197fee6b48f4d03a8356bda747e2040790fdca6b561c9e01909ec573fbaf33458726af3a35678eafdc4113fd00cf4cdbc65a07b8a8343824769ee227cea364a704f9bac53be50c401c17a4d068892a8a6563ab42c9d9d8e3b50a8cd7dde26a65f5f8380df77047edd5d9071eca0f8c163118bc07b60a5f3e3ee33c84d46e137f7d230e10c30700b65c8791e93060207eac7a0109
+  server got ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,125) W(0,121) | read=0+125 write=0+121 byte_count=242 values=[9828, 20964, 22915, 25632, 29579, 34784, 37043, 3309, 29162, 44826, 33088, 45861, 23869, 32412, 49991, 41652, 28928, 4659, 21668, 64070, 9326, 30314, 13555, 5958, 9860, 62606, 49551, 49634, 6654, 7851, 53653, 6404, 4439, 39821, 37345, 15960, 51916, 45760, 8463, 49740, 44121, 39055, 60282, 53258, 32698, 31239, 51007, 6527, 61035, 18676, 53306, 33622, 48551, 18402, 1031, 37117, 51819, 22044, 40449, 37022, 50547, 64431, 13125, 34598, 44858, 13671, 36527, 56385, 5117, 207, 19675, 50778, 1976, 43060, 14372, 30366, 57895, 52899, 25767, 1273, 47813, 15333, 3136, 7191, 42192, 26761, 10890, 25955, 43842, 51673, 55523, 46346, 36055, 56802, 27237, 62968, 14349, 63344, 18413, 54745, 1822, 51727, 35862, 12568, 48135, 46602, 24382, 16099, 15492, 54382, 4991, 32035, 3600, 49927, 182, 23687, 37353, 12384, 8318, 44154, 265]
+  rx 000f000000fd0117fa266451e459836420738b87e090b30ced71eaaf1a8140b3255d3d7e9cc347a2b47100123354a4fa46246e766a34f317462684f48ec18fc1e219fe1eabd195190411579b8d91e13e58caccb2c0210fc24cac59988feb7ad00a7fba7a07c73f197fee6b48f4d03a8356bda747e2040790fdca6b561c9e01909ec573fbaf33458726af3a35678eafdc4113fd00cf4cdbc65a07b8a8343824769ee227cea364a704f9bac53be50c401c17a4d068892a8a6563ab42c9d9d8e3b50a8cd7dde26a65f5f8380df77047edd5d9071eca0f8c163118bc07b60a5f3e3ee33c84d46e137f7d230e10c30700b65c8791e93060207eac7a0109c46cc01e00000000
+  client got ReadWriteMultipleRegistersResponse: ReadWriteNRegisterResponse (125) | registers=[9828, 20964, 22915, 25632, 29579, 34784, 37043, 3309, 29162, 44826, 33088, 45861, 23869, 32412, 49991, 41652, 28928, 4659, 21668, 64070, 9326, 30314, 13555, 5958, 9860, 62606, 49551, 49634, 6654, 7851, 53653, 6404, 4439, 39821, 37345, 15960, 51916, 45760, 8463, 49740, 44121, 39055, 60282, 53258, 32698, 31239, 51007, 6527, 61035, 18676, 53306, 33622, 48551, 18402, 1031, 37117, 51819, 22044, 40449, 37022, 50547, 64431, 13125, 34598, 44858, 13671, 36527, 56385, 5117, 207, 19675, 50778, 1976, 43060, 14372, 30366, 57895, 52899, 25767, 1273, 47813, 15333, 3136, 7191, 42192, 26761, 10890, 25955, 43842, 51673, 55523, 46346, 36055, 56802, 27237, 62968, 14349, 63344, 18413, 54745, 1822, 51727, 35862, 12568, 48135, 46602, 24382, 16099, 15492, 54382, 4991, 32035, 3600, 49927, 182, 23687, 37353, 12384, 8318, 44154, 265, 50284, 49182, 0, 0]
+> ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,126) W(0,2)
+  tx 00100000000f01170000007e000000020427c76a35
+  server got ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,126) W(0,2) | read=0+126 write=0+2 byte_count=4 values=[10183, 27189]
+  rx 001000000003019703
+  client got ExceptionResponse: Exception Response(151, 23, IllegalValue) | exception_code=3
+> ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,1) W(0,122)
+  tx 0011000000ff0117000000010000007af4c727282c1d46eef57d7be3d0b9a9b59bc3215c2f667e56c21a8701469a0f58c8c0d746d1e3694bc799fe204bb658a59cdca83cf1f7685de27e4003bf47e449f75ef34f7111d938f535adea835413cfb93c1acb302e1d24de9aa50f752c451cc1947bb90e5395857f73882976edd9f2f134785dea159f5ab6f2b6eb6602317028146fbaa6139cc065368f84269eac8e46d8c20c2178ed6e6ac9741e9444aaa32b51d04b3a7cf038a621c36191418be0b7fbf8acd3e3068efa21ddeffd2eafd4ca7f9c21cb7a90fd449822e8b87176e944311ad7029eecab66bef266a3bb3fe40590d4b557b77bdd3ebcad009c896c66edcb29e1ac
+  server got ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,1) W(0,122) | read=0+1 write=0+122 byte_count=244 values=[50983, 10284, 7494, 61173, 32123, 58320, 47529, 46491, 49953, 23599, 26238, 22210, 6791, 326, 39439, 22728, 49367, 18129, 58217, 19399, 39422, 8267, 46680, 42396, 56488, 15601, 63336, 24034, 32320, 959, 18404, 18935, 24307, 20337, 4569, 14581, 13741, 60035, 21523, 53177, 15386, 52016, 11805, 9438, 39589, 3957, 11333, 7361, 38011, 47374, 21397, 34175, 29576, 10614, 60889, 62193, 13432, 24042, 5535, 23222, 62134, 60262, 561, 28712, 5231, 47782, 5020, 49253, 13967, 33830, 40620, 36422, 55490, 3105, 30957, 28266, 51572, 7828, 17578, 41771, 20944, 19258, 31984, 14502, 8643, 24977, 16779, 57527, 64504, 44243, 58118, 36602, 8669, 61437, 11951, 54474, 32668, 8651, 31376, 64836, 38946, 59576, 29046, 59716, 12570, 55042, 40684, 43878, 48882, 26275, 47935, 58373, 37076, 46423, 46971, 56638, 48301, 156, 35180, 26349, 52009, 57772]
+  rx 001100000003019703
+  client got ExceptionResponse: Exception Response(151, 23, IllegalValue) | exception_code=3
+> ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(65534,2) W(0,1)
+  tx 00120000000d0117fffe000200000001020001
+  server got ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(65534,2) W(0,1) | read=65534+2 write=0+1 byte_count=2 values=[1]
+  rx 001200000003019702
+  client got ExceptionResponse: Exception Response(151, 23, IllegalAddress) | exception_code=2
+> ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,2) W(65535,2)
+  tx 00130000000f011700000002ffff00020400010002
+  server got ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,2) W(65535,2) | read=0+2 write=65535+2 byte_count=4 values=[1, 2]
+  rx 001300000003019702
+  client got ExceptionResponse: Exception Response(151, 23, IllegalAddress) | exception_code=2
+> WriteSingleRegisterRequest: WriteRegisterRequest 65535
+  tx 0014000000060106ffff0001
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 65535 | address=65535 value=1
+  rx 001400000003018602
+  client got ExceptionResponse: Exception Response(134, 6, IllegalAddress) | exception_code=2
+> WriteSingleCoilRequest: WriteCoilRequest(65535, True) => 
+  tx 0015000000060105ffffff00
+  server got WriteSingleCoilRequest: WriteCoilRequest(65535, True) =>  | address=65535 value=True
+  rx 001500000003018502
+  client got ExceptionResponse: Exception Response(133, 5, IllegalAddress) | exception_code=2
+> MaskWriteRegisterRequest
+  tx 0016000000080116ffff00000000
+  server got MaskWriteRegisterRequest | address=65535 and_mask=0x0000 or_mask=0x0000
+  rx 001600000003019602
+  client got ExceptionResponse: Exception Response(150, 22, IllegalAddress) | exception_code=2
+> raw 17 bytes
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 0 => 2 | address=0 count=2 byte_count=3 values=[1, 2]
+  rx 010100000003019003
+  client got ExceptionResponse: Exception Response(144, 16, IllegalValue) | exception_code=3
+> raw 15 bytes
+  ! server closed the connection: struct.error: unpack requires a buffer of 2 bytes
+> raw 14 bytes
+  server got WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 8  | address=0 byte_count=1 values=11110000
+  rx 010300000006010f00000008
+  client got WriteMultipleCoilsResponse: WriteNCoilResponse(0, 8) | address=0 count=8
+> raw 21 bytes
+  server got ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,1) W(0,1) | read=0+1 write=0+1 byte_count=3 values=[258, 772]
+  rx 010400000003019703
+  client got ExceptionResponse: Exception Response(151, 23, IllegalValue) | exception_code=3
+== Sparse blocks: holes, frozen layouts and growth
+server socket
+slave 0
+block h sparse DataStore(8, {10: 1, 11: 2, 12: 3, 13: 4, 20: 7, 30: 0, 31: 0, 32: 0})
+block c sparselist DataStore(7, {0: 1, 1: 0, 2: 1, 3: 1, 4: 0, 5: 0, 6: 1})
+block i sparse DataStore(4, {0: 5, 1: 6, 2: 7, 3: 8})
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (9,4)
+  tx 000100000006010300090004
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (9,4) | address=9 count=4
+  rx 00010000000b0103080001000200030004
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (4) | registers=[1, 2, 3, 4]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (9,5)
+  tx 000200000006010300090005
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (9,5) | address=9 count=5
+  rx 000200000003018302
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (19,1)
+  tx 000300000006010300130001
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (19,1) | address=19 count=1
+  rx 0003000000050103020007
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[7]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (19,2)
+  tx 000400000006010300130002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (19,2) | address=19 count=2
+  rx 000400000003018302
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (29,3)
+  tx 0005000000060103001d0003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (29,3) | address=29 count=3
+  rx 000500000009010306000000000000
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[0, 0, 0]
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 9 => 3
+  tx 00060000000d01100009000306000900090009
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 9 => 3 | address=9 count=3 byte_count=6 values=[9, 9, 9]
+  rx 000600000006011000090003
+  client got WriteMultipleRegistersResponse: WriteMultipleRegisterResponse (9,3) | address=9 count=3
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 9 => 5
+  tx 0007000000110110000900050a00090009000900090009
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 9 => 5 | address=9 count=5 byte_count=10 values=[9, 9, 9, 9, 9]
+  rx 000700000003019002
+  client got ExceptionResponse: Exception Response(144, 16, IllegalAddress) | exception_code=2
+> WriteSingleRegisterRequest: WriteRegisterRequest 21
+  tx 000800000006010600150005
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 21 | address=21 value=5
+  rx 000800000003018602
+  client got ExceptionResponse: Exception Response(134, 6, IllegalAddress) | exception_code=2
+> ReadCoilsRequest: ReadBitRequest(0,6)
+  tx 000900000006010100000006
+  server got ReadCoilsRequest: ReadBitRequest(0,6) | address=0 count=6
+  rx 00090000000401010126
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=01100100
+> ReadCoilsRequest: ReadBitRequest(0,7)
+  tx 000a00000006010100000007
+  server got ReadCoilsRequest: ReadBitRequest(0,7) | address=0 count=7
+  rx 000a00000003018102
+  client got ExceptionResponse: Exception Response(129, 1, IllegalAddress) | exception_code=2
+> WriteSingleCoilRequest: WriteCoilRequest(1, True) => 
+  tx 000b0000000601050001ff00
+  server got WriteSingleCoilRequest: WriteCoilRequest(1, True) =>  | address=1 value=True
+  rx 000b0000000601050001ff00
+  client got WriteSingleCoilResponse: WriteCoilResponse(1) => True | address=1 value=True
+> WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 3 
+  tx 000c00000008010f000000030105
+  server got WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 3  | address=0 byte_count=1 values=101
+  rx 000c00000006010f00000003
+  client got WriteMultipleCoilsResponse: WriteNCoilResponse(0, 3) | address=0 count=3
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,3)
+  tx 000d00000006010400000003
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,3) | address=0 count=3
+  rx 000d00000009010406000600070008
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (3) | registers=[6, 7, 8]
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 000e00000006010400000004
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 000e00000003018402
+  client got ExceptionResponse: Exception Response(132, 4, IllegalAddress) | exception_code=2
+peek 0 h 10+4: [9, 9, 9, 4]
+slave 0 reset
+peek 0 h 10+4: [1, 2, 3, 4]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (9,4)
+  tx 000f00000006010300090004
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (9,4) | address=9 count=4
+  rx 000f0000000b0103080001000200030004
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (4) | registers=[1, 2, 3, 4]
+slave 0
+block h sparse DataStore(3, {0: 1, 1: 2, 2: 3})
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 2 => 3
+  tx 00100000000d01100002000306000400050006
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 2 => 3 | address=2 count=3 byte_count=6 values=[4, 5, 6]
+  rx 001000000003019002
+  client got ExceptionResponse: Exception Response(144, 16, IllegalAddress) | exception_code=2
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,5)
+  tx 001100000006010300000005
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,5) | address=0 count=5
+  rx 001100000003018302
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,6)
+  tx 001200000006010300000006
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,6) | address=0 count=6
+  rx 001200000003018302
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+== A gateway with several slaves, a missing one and broadcast
+server socket multi broadcast
+slave 1
+block h seq DataStore(11, 0)
+slave 2
+block h seq DataStore(11, 0)
+slave 5
+block h seq DataStore(11, 0)
+slave 247
+slave 248: Modbus Error: [No Such Slave] slave index :248 out of range
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 000100000006010300000003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 0001000000090103060006027e0173
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[6, 638, 371]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 000200000006020300000003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 0002000000090203060254005b00cf
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[596, 91, 207]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 000300000006050300000003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 000300000009050306015501ff0230
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[341, 511, 560]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 000400000006030300000003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 00040000000303830b
+  client got ExceptionResponse: Exception Response(131, 3, GatewayNoResponse) | exception_code=11
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 000500000006f70300000003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 000500000009f70306000000000000
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[0, 0, 0]
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 000600000006000600011092
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=4242
+  (broadcast, no reply)
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 5 => 2
+  tx 00070000000b0010000500020400010002
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 5 => 2 | address=5 count=2 byte_count=4 values=[1, 2]
+  (broadcast, no reply)
+peek 1 h 0+8: [0, 6, 4242, 371, 876, 228, 1, 2]
+peek 5 h 0+8: [0, 341, 4242, 560, 908, 351, 1, 2]
+peek 247 h 0+8: [0, 0, 4242, 0, 0, 0, 1, 2]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 000800000006000300000003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  (broadcast, no reply)
+dropped slave 2
+drop 2: KeyError: 2
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 000900000006020300000003
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 00090000000302830b
+  client got ExceptionResponse: Exception Response(131, 3, GatewayNoResponse) | exception_code=11
+server socket multi ignore
+slave 9
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 000100000006090300000002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx 00010000000709030400000000
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[0, 0]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 000200000006080300000002
+  (server is waiting for more)
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 000300000006000300000002
+  (server is waiting for more)
+== RTU on a serial line: CRC, split reads, noise and other slaves
+server rtu multi
+slave 1
+block h seq DataStore(31, 0)
+block c seq DataStore(31, 0)
+slave 7
+block h seq DataStore(11, 0)
+crc 01030000000a = c5cd
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,10)
+  tx 01030000000ac5cd
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,10) | address=0 count=10
+  rx 0103143a09b475eb657dd210392ffb3e39395ed705c3e5773f
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (10) | registers=[14857, 46197, 60261, 32210, 4153, 12283, 15929, 14686, 55045, 50149]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (4,2)
+  tx 07030004000285ac
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (4,2) | address=4 count=2
+  rx 07030456da13d7e12e
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[22234, 5079]
+> ReadCoilsRequest: ReadBitRequest(0,20)
+  tx 0101000000143c05
+  server got ReadCoilsRequest: ReadBitRequest(0,20) | address=0 count=20
+  rx 0101030e03085cbb
+  client got ReadCoilsResponse: ReadCoilsResponse(24) | bits=011100001100000000010000
+> WriteSingleRegisterRequest: WriteRegisterRequest 3
+  tx 010600030309b93c
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 3 | address=3 value=777
+  rx 010600030309b93c
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 3 => 777 | address=3 value=777
+> WriteMultipleCoilsRequest: WriteNCoilRequest (2) => 11 
+  tx 010f0002000b020f07a114
+  server got WriteMultipleCoilsRequest: WriteNCoilRequest (2) => 11  | address=2 byte_count=2 values=11110000111
+  rx 010f0002000bb5cc
+  client got WriteMultipleCoilsResponse: WriteNCoilResponse(2, 11) | address=2 count=11
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 20 => 3
+  tx 01100014000306000a0014001efecd
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 20 => 3 | address=20 count=3 byte_count=6 values=[10, 20, 30]
+  rx 011000140003c00c
+  client got WriteMultipleRegistersResponse: WriteMultipleRegisterResponse (20,3) | address=20 count=3
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 01030000000305cb
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 0103063a09b475eb6540df
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[14857, 46197, 60261]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 01030000000305cb
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 0103063a09b475eb6540df
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[14857, 46197, 60261]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3)
+  tx 01030000000305cb
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,3) | address=0 count=3
+  rx 0103063a09b475eb6540df
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (3) | registers=[14857, 46197, 60261]
+> raw 8 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx 0103043a09b475900e
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[14857, 46197]
+> raw 10 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx 0103043a09b475900e
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[14857, 46197]
+> raw 16 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  rx 0103023a096ae2
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[14857]
+> raw 16 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  rx 0103023a096ae2
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[14857]
+  rx 070302098c37b1
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[2444]
+> raw 8 bytes
+  (server is waiting for more)
+> raw 16 bytes
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 5 | address=5 value=99
+  rx 010600050063d9e2
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 5 => 99 | address=5 value=99
+> raw 7 bytes
+  (server is waiting for more)
+> raw 7 bytes
+  (server is waiting for more)
+> raw 2 bytes
+  (server is waiting for more)
+> raw 3 bytes
+  (server is waiting for more)
+> raw 8 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  rx 0103023a096ae2
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[14857]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,125)
+  tx 01030000007d85eb
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,125) | address=0 count=125
+  rx 018302c0f1
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+> ReadCoilsRequest: ReadBitRequest(0,2000)
+  tx 0101000007d03fa6
+  server got ReadCoilsRequest: ReadBitRequest(0,2000) | address=0 count=2000
+  rx 018102c191
+  client got ExceptionResponse: Exception Response(129, 1, IllegalAddress) | exception_code=2
+peek 1 h 0+6: [0, 14857, 46197, 60261, 777, 4153]
+== ASCII on a serial line: LRC, garbage and case
+server ascii
+slave 0
+block h seq DataStore(21, 0)
+lrc 0103000a0002 = f0
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,4)
+  tx :010300000004F8<CR><LF>
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,4) | address=0 count=4
+  rx :010308368437B2252DF5BE4C<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (4) | registers=[13956, 14258, 9517, 62910]
+> WriteSingleRegisterRequest: WriteRegisterRequest 2
+  tx :010600021234B1<CR><LF>
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 2 | address=2 value=4660
+  rx :010600021234B1<CR><LF>
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 2 => 4660 | address=2 value=4660
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 5 => 3
+  tx :01100005000306000100020003DB<CR><LF>
+  server got WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 5 => 3 | address=5 count=3 byte_count=6 values=[1, 2, 3]
+  rx :011000050003E7<CR><LF>
+  client got WriteMultipleRegistersResponse: WriteMultipleRegisterResponse (5,3) | address=5 count=3
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,8)
+  tx :110300000008E4<CR><LF>
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,8) | address=0 count=8
+  rx :110310368437B21234F5BEEA3D00010002000313<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (8) | registers=[13956, 14258, 4660, 62910, 59965, 1, 2, 3]
+> ReadCoilsRequest: ReadBitRequest(0,12)
+  tx :01010000000CF2<CR><LF>
+  server got ReadCoilsRequest: ReadBitRequest(0,12) | address=0 count=12
+  rx :0101020000FC<CR><LF>
+  client got ReadCoilsResponse: ReadCoilsResponse(16) | bits=0000000000000000
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (1,2)
+  tx :010300010002F9<CR><LF>
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (1,2) | address=1 count=2
+  rx :01030437B21234C9<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[14258, 4660]
+> raw 17 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx :010304368437B255<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[13956, 14258]
+> raw 20 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx :010304368437B255<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[13956, 14258]
+> raw 17 bytes
+  (server is waiting for more)
+> raw 34 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (1,1) | address=1 count=1
+  rx :010302368440<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[13956]
+  rx :01030237B211<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[14258]
+> raw 17 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  rx :010302368440<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[13956]
+> raw 5 bytes
+  (server is waiting for more)
+> raw 2 bytes
+  (server is waiting for more)
+> raw 17 bytes
+  ! server closed the connection: binascii.Error: Non-hexadecimal digit found
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1)
+  tx :010300000001FB<CR><LF>
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  rx :010302368440<CR><LF>
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[13956]
+== Modbus/TCP framing: split segments, pipelining and MBAP lengths
+server socket
+slave 0
+block h seq DataStore(21, 0)
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 000100000006010300000002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx 0001000000070103042d893dfe
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[11657, 15870]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 000200000006010300000002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx 0002000000070103042d893dfe
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[11657, 15870]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx ffff00000006010300000002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx ffff000000070103042d893dfe
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[11657, 15870]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 000000000006010300000002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2) | address=0 count=2
+  rx 0000000000070103042d893dfe
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[11657, 15870]
+> raw 35 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (1,1) | address=1 count=1
+  rx 0007000000050103022d89
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[11657]
+  rx 0008000000050103023dfe
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[15870]
+> raw 1 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (2,1) | address=2 count=1
+  rx 0009000000050103024736
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[18230]
+> raw 12 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  rx 0010000000050103022d89
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[11657]
+> raw 8 bytes
+  (server is waiting for more)
+> raw 8 bytes
+  server got ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  rx 001100000003010700
+  client got ReadExceptionStatusResponse: ReadExceptionStatusResponse(7, 0) | status=0x00
+> raw 12 bytes
+  server got ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (3,1) | address=3 count=1
+  rx 001200000003010700
+  client got ReadExceptionStatusResponse: ReadExceptionStatusResponse(7, 0) | status=0x00
+  rx 001300000005010302e227
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[57895]
+> raw 21 bytes
+  ! server closed the connection: struct.error: unpack requires a buffer of 4 bytes
+> raw 12 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (4,1) | address=4 count=1
+  rx 00160000000501030212d2
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[4818]
+> raw 24 bytes
+  ! server closed the connection: struct.error: unpack requires a buffer of 4 bytes
+> raw 12 bytes
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (5,1) | address=5 count=1
+  rx 001900000005010302d425
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[54309]
+> raw 12 bytes
+  (server is waiting for more)
+> raw 12 bytes
+  ! server closed the connection: struct.error: unpack requires a buffer of 4 bytes
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (3,2)
+  tx 000300000006c80300030002
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (3,2) | address=3 count=2
+  rx 000300000007c80304e22712d2
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[57895, 4818]
+== Diagnostics (function 8): echo, counters, listen-only and Modbus Plus
+server socket
+slave 0
+diagnostic 1101000000000001 bit0=None bit1=True bit16=None
+counters BusMessage=12 BusCommunicationError=3 BusExceptionError=0 SlaveMessage=9 SlaveNoResponse=0 SlaveNAK=0 SlaveBusy=0 BusCharacterOverrun=2 Event=0 summary=0x8b
+> ReturnQueryDataRequest
+  tx 00010000000a01080000123470696e67
+  server got ReturnQueryDataRequest | sub=0x0000 message=b'\x124ping'
+  rx 00010000000a01080000123470696e67
+  client got ReturnQueryDataResponse | sub=0x0000 message=b'\x124ping'
+> ReturnQueryDataRequest
+  tx 000200000006010800000000
+  server got ReturnQueryDataRequest | sub=0x0000 message=b'\x00\x00'
+  rx 000200000006010800000000
+  client got ReturnQueryDataResponse | sub=0x0000 message=b'\x00\x00'
+> ReturnQueryDataRequest
+  tx 0003000000050108000000
+  server got ReturnQueryDataRequest | sub=0x0000 message=b'\x00'
+  rx 0003000000050108000000
+  client got ReturnQueryDataResponse | sub=0x0000 message=b'\x00'
+> RestartCommunicationsOptionRequest
+  tx 00040000000601080001ff00
+  server got RestartCommunicationsOptionRequest | sub=0x0001 message=65280
+  rx 00040000000601080001ff00
+  client got RestartCommunicationsOptionResponse | sub=0x0001 message=(65280,)
+> RestartCommunicationsOptionRequest
+  tx 000500000006010800010000
+  server got RestartCommunicationsOptionRequest | sub=0x0001 message=0
+  rx 000500000006010800010000
+  client got RestartCommunicationsOptionResponse | sub=0x0001 message=(0,)
+> ReturnDiagnosticRegisterRequest
+  tx 000600000006010800020000
+  server got ReturnDiagnosticRegisterRequest | sub=0x0002 message=0
+  rx 000600000006010800020b80
+  client got ReturnDiagnosticRegisterResponse | sub=0x0002 message=(2944,)
+> ChangeAsciiInputDelimiterRequest
+  tx 000700000006010800030a00
+  server got ChangeAsciiInputDelimiterRequest | sub=0x0003 message=2560
+  rx 000700000006010800030a00
+  client got ChangeAsciiInputDelimiterResponse | sub=0x0003 message=(2560,)
+control mode=ASCII listen_only=False delimiter=b'\n' events=0 log= diag=1101000000000001
+> ReturnBusMessageCountRequest
+  tx 0008000000060108000b0000
+  server got ReturnBusMessageCountRequest | sub=0x000b message=0
+  rx 0008000000060108000b000c
+  client got ReturnBusMessageCountResponse | sub=0x000b message=(12,)
+> ReturnBusCommunicationErrorCountRequest
+  tx 0009000000060108000c0000
+  server got ReturnBusCommunicationErrorCountRequest | sub=0x000c message=0
+  rx 0009000000060108000c0003
+  client got ReturnBusCommunicationErrorCountResponse | sub=0x000c message=(3,)
+> ReturnBusExceptionErrorCountRequest
+  tx 000a000000060108000d0000
+  server got ReturnBusExceptionErrorCountRequest | sub=0x000d message=0
+  rx 000a000000060108000d0000
+  client got ReturnBusExceptionErrorCountResponse | sub=0x000d message=(0,)
+> ReturnSlaveMessageCountRequest
+  tx 000b000000060108000e0000
+  server got ReturnSlaveMessageCountRequest | sub=0x000e message=0
+  rx 000b000000060108000e0009
+  client got ReturnSlaveMessageCountResponse | sub=0x000e message=(9,)
+> ReturnSlaveNoResponseCountRequest
+  tx 000c000000060108000f0000
+  server got ReturnSlaveNoResponseCountRequest | sub=0x000f message=0
+  rx 000c000000060108000f0000
+  client got ReturnSlaveNoResponseCountResponse | sub=0x000f message=(0,)
+> ReturnSlaveNAKCountRequest
+  tx 000d00000006010800100000
+  server got ReturnSlaveNAKCountRequest | sub=0x0010 message=0
+  rx 000d00000006010800100000
+  client got ReturnSlaveNAKCountResponse | sub=0x0010 message=(0,)
+> ReturnSlaveBusyCountRequest
+  tx 000e00000006010800110000
+  server got ReturnSlaveBusyCountRequest | sub=0x0011 message=0
+  rx 000e00000006010800110000
+  client got ReturnSlaveBusyCountResponse | sub=0x0011 message=(0,)
+> ReturnSlaveBusCharacterOverrunCountRequest
+  tx 000f00000006010800120000
+  server got ReturnSlaveBusCharacterOverrunCountRequest | sub=0x0012 message=0
+  rx 000f00000006010800120002
+  client got ReturnSlaveBusCharacterOverrunCountResponse | sub=0x0012 message=(2,)
+> ReturnIopOverrunCountRequest
+  tx 001000000006010800130000
+  server got ReturnIopOverrunCountRequest | sub=0x0013 message=0
+  rx 001000000006010800130002
+  client got ReturnIopOverrunCountResponse | sub=0x0013 message=(2,)
+> ClearOverrunCountRequest
+  tx 001100000006010800140000
+  server got ClearOverrunCountRequest | sub=0x0014 message=0
+  rx 001100000006010800140000
+  client got ClearOverrunCountResponse | sub=0x0014 message=(0,)
+> ReturnSlaveBusCharacterOverrunCountRequest
+  tx 001200000006010800120000
+  server got ReturnSlaveBusCharacterOverrunCountRequest | sub=0x0012 message=0
+  rx 001200000006010800120000
+  client got ReturnSlaveBusCharacterOverrunCountResponse | sub=0x0012 message=(0,)
+> ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  tx 0013000000020107
+  (server is waiting for more)
+> GetClearModbusPlusRequest
+  tx 001400000006010800150003
+  server got ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  server got GetClearModbusPlusRequest | sub=0x0015 message=3
+  rx 00130000000301070b
+  client got ReadExceptionStatusResponse: ReadExceptionStatusResponse(7, 11) | status=0x0b
+  rx 0014000000740108001500030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  client got GetClearModbusPlusResponse | sub=0x0015 message=(3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+> GetClearModbusPlusRequest
+  tx 001500000006010800150004
+  server got GetClearModbusPlusRequest | sub=0x0015 message=4
+  rx 001500000006010800150004
+  client got GetClearModbusPlusResponse | sub=0x0015 message=(4,)
+> ClearCountersRequest
+  tx 0016000000060108000a0000
+  server got ClearCountersRequest | sub=0x000a message=0
+  rx 0016000000060108000a0000
+  client got ClearCountersResponse | sub=0x000a message=(0,)
+> ReturnBusMessageCountRequest
+  tx 0017000000060108000b0000
+  server got ReturnBusMessageCountRequest | sub=0x000b message=0
+  rx 0017000000060108000b0000
+  client got ReturnBusMessageCountResponse | sub=0x000b message=(0,)
+> ReturnDiagnosticRegisterRequest
+  tx 001800000006010800020000
+  server got ReturnDiagnosticRegisterRequest | sub=0x0002 message=0
+  rx 001800000006010800020000
+  client got ReturnDiagnosticRegisterResponse | sub=0x0002 message=(0,)
+control mode=ASCII listen_only=False delimiter=b'\n' events=0 log= diag=0000000000000000
+> raw 12 bytes
+  server got ReturnQueryDataRequest | sub=0x0000 message=b'\xab\xcd'
+  rx 00210000000601080000abcd
+  client got ReturnQueryDataResponse | sub=0x0000 message=b'\xab\xcd'
+> raw 12 bytes
+  server got ReturnBusMessageCountRequest | sub=0x000b message=1
+  rx 0022000000060108000b0000
+  client got ReturnBusMessageCountResponse | sub=0x000b message=(0,)
+> raw 12 bytes
+  server got RestartCommunicationsOptionRequest | sub=0x0001 message=0
+  rx 002300000006010800010000
+  client got RestartCommunicationsOptionResponse | sub=0x0001 message=(0,)
+> raw 12 bytes
+  server got DiagnosticStatusRequest | sub=0x00ff message=0
+  ! datastore: AttributeError
+  rx 002400000003018804
+  client got ExceptionResponse: Exception Response(136, 8, SlaveFailure) | exception_code=4
+> raw 11 bytes
+  ! server closed the connection: struct.error: unpack requires a buffer of 2 bytes
+> ForceListenOnlyModeRequest
+  tx 001900000006010800040000
+  server got ForceListenOnlyModeRequest | sub=0x0004 message=0
+  (no reply: ForceListenOnlyModeResponse)
+control mode=ASCII listen_only=True delimiter=b'\n' events=0 log= diag=0000000000000000
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1)
+  tx 001a00000006010300000001
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  rx 001a000000050103020000
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[0]
+server rtu
+slave 0
+> ReturnQueryDataRequest
+  tx 010800000102605a
+  server got ReturnQueryDataRequest | sub=0x0000 message=b'\x01\x02'
+  rx 010800000102605a
+  client got ReturnQueryDataResponse | sub=0x0000 message=b'\x01\x02'
+> ReturnQueryDataRequest
+  tx 0108000001020304050607084365
+  (server is waiting for more)
+> ReturnBusMessageCountRequest
+  tx 0108000b000091c9
+  server got ReturnBusMessageCountRequest | sub=0x000b message=0
+  rx 0108000b000091c9
+  client got ReturnBusMessageCountResponse | sub=0x000b message=(0,)
+== The comm event log and exception status
+server socket
+slave 0
+> GetCommEventCounterRequest: GetCommEventCounterRequest(11)
+  tx 000100000002010b
+  (server is waiting for more)
+> GetCommEventLogRequest: GetCommEventLogRequest(12)
+  tx 000200000002010c
+  server got GetCommEventCounterRequest: GetCommEventCounterRequest(11)
+  rx 000100000006010b00000000
+  client got GetCommEventCounterResponse: GetCommEventCounterResponse(11, 0, 1) | status=True count=0
+> ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  tx 0003000000020107
+  server got GetCommEventLogRequest: GetCommEventLogRequest(12)
+  rx 000200000009010c06000000000000
+  client got GetCommEventLogResponse: GetCommEventLogResponse(12, 1, 0, 0) | status=True events=0 messages=0 log=[]
+event recv 40: 1 logged, counter 1
+event recv 68: 2 logged, counter 2
+event send 45: 3 logged, counter 3
+event listen 04: 4 logged, counter 4
+event restart 00: 5 logged, counter 5
+event send 78: 6 logged, counter 6
+> GetCommEventCounterRequest: GetCommEventCounterRequest(11)
+  tx 000400000002010b
+  server got ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  rx 0003000000030107ff
+  client got ReadExceptionStatusResponse: ReadExceptionStatusResponse(7, 255) | status=0xff
+> GetCommEventLogRequest: GetCommEventLogRequest(12)
+  tx 000500000002010c
+  server got GetCommEventCounterRequest: GetCommEventCounterRequest(11)
+  rx 000400000006010b00000006
+  client got GetCommEventCounterResponse: GetCommEventCounterResponse(11, 6, 1) | status=True count=6
+counters BusMessage=40 BusCommunicationError=0 BusExceptionError=0 SlaveMessage=0 SlaveNoResponse=0 SlaveNAK=0 SlaveBusy=1 BusCharacterOverrun=0 Event=6 summary=0x141
+> GetCommEventLogRequest: GetCommEventLogRequest(12)
+  tx 000600000002010c
+  server got GetCommEventLogRequest: GetCommEventLogRequest(12)
+  rx 00050000000f010c0c000000060028780004456840
+  client got GetCommEventLogResponse: GetCommEventLogResponse(12, 1, 40, 6) | status=True events=6 messages=40 log=['0x78', '0x0', '0x4', '0x45', '0x68', '0x40']
+> ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  tx 0007000000020107
+  server got GetCommEventLogRequest: GetCommEventLogRequest(12)
+  rx 00060000000f010c0c000000060028780004456840
+  client got GetCommEventLogResponse: GetCommEventLogResponse(12, 1, 40, 6) | status=True events=6 messages=40 log=['0x78', '0x0', '0x4', '0x45', '0x68', '0x40']
+event recv 50: 7 logged, counter 7
+event recv 50: 8 logged, counter 8
+event recv 50: 9 logged, counter 9
+event recv 50: 10 logged, counter 10
+event recv 50: 11 logged, counter 11
+event recv 50: 12 logged, counter 12
+event recv 50: 13 logged, counter 13
+event recv 50: 14 logged, counter 14
+event recv 50: 15 logged, counter 15
+event recv 50: 16 logged, counter 16
+event recv 50: 17 logged, counter 17
+event recv 50: 18 logged, counter 18
+event recv 50: 19 logged, counter 19
+event recv 50: 20 logged, counter 20
+event recv 50: 21 logged, counter 21
+event recv 50: 22 logged, counter 22
+event recv 50: 23 logged, counter 23
+event recv 50: 24 logged, counter 24
+event recv 50: 25 logged, counter 25
+event recv 50: 26 logged, counter 26
+event recv 50: 27 logged, counter 27
+event recv 50: 28 logged, counter 28
+event recv 50: 29 logged, counter 29
+event recv 50: 30 logged, counter 30
+event recv 50: 31 logged, counter 31
+event recv 50: 32 logged, counter 32
+event recv 50: 33 logged, counter 33
+event recv 50: 34 logged, counter 34
+event recv 50: 35 logged, counter 35
+event recv 50: 36 logged, counter 36
+event recv 50: 37 logged, counter 37
+event recv 50: 38 logged, counter 38
+event recv 50: 39 logged, counter 39
+event recv 50: 40 logged, counter 40
+event recv 50: 41 logged, counter 41
+event recv 50: 42 logged, counter 42
+event recv 50: 43 logged, counter 43
+event recv 50: 44 logged, counter 44
+event recv 50: 45 logged, counter 45
+event recv 50: 46 logged, counter 46
+event recv 50: 47 logged, counter 47
+event recv 50: 48 logged, counter 48
+event recv 50: 49 logged, counter 49
+event recv 50: 50 logged, counter 50
+event recv 50: 51 logged, counter 51
+event recv 50: 52 logged, counter 52
+event recv 50: 53 logged, counter 53
+event recv 50: 54 logged, counter 54
+event recv 50: 55 logged, counter 55
+event recv 50: 56 logged, counter 56
+event recv 50: 57 logged, counter 57
+event recv 50: 58 logged, counter 58
+event recv 50: 59 logged, counter 59
+event recv 50: 60 logged, counter 60
+event recv 50: 61 logged, counter 61
+event recv 50: 62 logged, counter 62
+event recv 50: 63 logged, counter 63
+event recv 50: 64 logged, counter 64
+event recv 50: 64 logged, counter 65
+event recv 50: 64 logged, counter 66
+event recv 50: 64 logged, counter 67
+event recv 50: 64 logged, counter 68
+event recv 50: 64 logged, counter 69
+event recv 50: 64 logged, counter 70
+> GetCommEventCounterRequest: GetCommEventCounterRequest(11)
+  tx 000800000002010b
+  server got ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  rx 0007000000030107ff
+  client got ReadExceptionStatusResponse: ReadExceptionStatusResponse(7, 255) | status=0xff
+> GetCommEventLogRequest: GetCommEventLogRequest(12)
+  tx 000900000002010c
+  server got GetCommEventCounterRequest: GetCommEventCounterRequest(11)
+  rx 000800000006010b00000046
+  client got GetCommEventCounterResponse: GetCommEventCounterResponse(11, 70, 1) | status=True count=70
+control mode=ASCII listen_only=True delimiter=b'\n' events=64 log=50505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050 diag=0000000000000000
+> ClearCountersRequest
+  tx 000a000000060108000a0000
+  server got GetCommEventLogRequest: GetCommEventLogRequest(12)
+  server got ClearCountersRequest | sub=0x000a message=0
+  rx 000900000049010c4600000046002850505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050
+  client got GetCommEventLogResponse: GetCommEventLogResponse(12, 1, 40, 70) | status=True events=70 messages=40 log=['0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50', '0x50']
+  rx 000a000000060108000a0000
+  client got ClearCountersResponse | sub=0x000a message=(0,)
+> GetCommEventCounterRequest: GetCommEventCounterRequest(11)
+  tx 000b00000002010b
+  (server is waiting for more)
+> GetCommEventLogRequest: GetCommEventLogRequest(12)
+  tx 000c00000002010c
+  server got GetCommEventCounterRequest: GetCommEventCounterRequest(11)
+  rx 000b00000006010b00000000
+  client got GetCommEventCounterResponse: GetCommEventCounterResponse(11, 0, 1) | status=True count=0
+> ReadExceptionStatusRequest: ReadExceptionStatusRequest(7)
+  tx 000d000000020107
+  server got GetCommEventLogRequest: GetCommEventLogRequest(12)
+  rx 000c00000009010c06000000000000
+  client got GetCommEventLogResponse: GetCommEventLogResponse(12, 1, 0, 0) | status=True events=0 messages=0 log=[]
+== Device identity: Read Device Information and Report Slave ID
+server socket multi
+slave 1
+slave 2
+> ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  tx 0001000000020111
+  (server is waiting for more)
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0)
+  tx 000200000005012b0e0100
+  server got ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0) | read_code=1 object_id=0x00
+  rx 00010000000c01110950796d6f64627573ff
+  client got ReportSlaveIdResponse: ReportSlaveIdResponse(17, b'Pymodbus\xff', True) | byte_count=9
+  rx 000200000008012b0e0183000000
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0x00 next=0x00 objects=0 {}
+identity VendorName='Acme Controls', ProductCode='AC-300', MajorMinorRevision='2.4.1', VendorUrl='', ProductName='', ModelName='', UserApplicationName=''
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0)
+  tx 000300000005012b0e0100
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0) | read_code=1 object_id=0x00
+  rx 000300000026012b0e0183000003000d41636d6520436f6e74726f6c73010641432d3330300205322e342e31
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0x00 next=0x00 objects=3 {0x00=b'Acme Controls', 0x01=b'AC-300', 0x02=b'2.4.1'}
+> ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  tx 0004000000020111
+  (server is waiting for more)
+identity VendorName='Acme Controls', ProductCode='AC-300', MajorMinorRevision='2.4.1', VendorUrl='http://acme.example/plc', ProductName='Line Controller', ModelName='AC300-X', UserApplicationName='bottling'
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(2,0)
+  tx 000500000005012b0e0200
+  server got ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(2,0) | read_code=2 object_id=0x00
+  rx 00040000001e01111b41636d6520436f6e74726f6c732d41432d3330302d322e342e31ff
+  client got ReportSlaveIdResponse: ReportSlaveIdResponse(17, b'Acme Controls-AC-300-2.4.1\xff', True) | byte_count=27
+  rx 000500000063012b0e0283000007000d41636d6520436f6e74726f6c73010641432d3330300205322e342e310317687474703a2f2f61636d652e6578616d706c652f706c63040f4c696e6520436f6e74726f6c6c6572050741433330302d580608626f74746c696e67
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(2) | read_code=2 conformity=0x83 more=0x00 next=0x00 objects=7 {0x00=b'Acme Controls', 0x01=b'AC-300', 0x02=b'2.4.1', 0x03=b'http://acme.example/plc', 0x04=b'Line Controller', 0x05=b'AC300-X', 0x06=b'bottling'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(2,4)
+  tx 000600000005012b0e0204
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(2,4) | read_code=2 object_id=0x04
+  rx 00060000002c012b0e0283000003040f4c696e6520436f6e74726f6c6c6572050741433330302d580608626f74746c696e67
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(2) | read_code=2 conformity=0x83 more=0x00 next=0x00 objects=3 {0x04=b'Line Controller', 0x05=b'AC300-X', 0x06=b'bottling'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,2)
+  tx 000700000005012b0e0102
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,2) | read_code=1 object_id=0x02
+  rx 00070000000f012b0e01830000010205322e342e31
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0x00 next=0x00 objects=1 {0x02=b'2.4.1'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(4,5)
+  tx 000800000005012b0e0405
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(4,5) | read_code=4 object_id=0x05
+  rx 000800000011012b0e0483000001050741433330302d58
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(4) | read_code=4 conformity=0x83 more=0x00 next=0x00 objects=1 {0x05=b'AC300-X'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(4,7)
+  tx 000900000005012b0e0407
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(4,7) | read_code=4 object_id=0x07
+  rx 00090000000a012b0e04830000010700
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(4) | read_code=4 conformity=0x83 more=0x00 next=0x00 objects=1 {0x07=b''}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(4,129)
+  tx 000a00000005012b0e0481
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(4,129) | read_code=4 object_id=0x81
+  rx 000a0000000a012b0e04830000018100
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(4) | read_code=4 conformity=0x83 more=0x00 next=0x00 objects=1 {0x81=b''}
+identity VendorName='Acme Controls', ProductCode='AC-300', MajorMinorRevision='2.4.1', VendorUrl='http://acme.example/plc', ProductName='Line Controller', ModelName='AC300-X', UserApplicationName='bottling'
+identity VendorName='Acme Controls', ProductCode='AC-300', MajorMinorRevision='2.4.1', VendorUrl='http://acme.example/plc', ProductName='Line Controller', ModelName='AC300-X', UserApplicationName='bottling'
+identity VendorName='Acme Controls', ProductCode='AC-300', MajorMinorRevision='2.4.1', VendorUrl='http://acme.example/plc', ProductName='Line Controller', ModelName='AC300-X', UserApplicationName='bottling'
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,0)
+  tx 000b00000005012b0e0300
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,0) | read_code=3 object_id=0x00
+  rx 000b0000007f012b0e038300000a000d41636d6520436f6e74726f6c73010641432d3330300205322e342e310317687474703a2f2f61636d652e6578616d706c652f706c63040f4c696e6520436f6e74726f6c6c6572050741433330302d580608626f74746c696e67800a73697465206e6f72746881066c696e65203782067261636b2033
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(3) | read_code=3 conformity=0x83 more=0x00 next=0x00 objects=10 {0x00=b'Acme Controls', 0x01=b'AC-300', 0x02=b'2.4.1', 0x03=b'http://acme.example/plc', 0x04=b'Line Controller', 0x05=b'AC300-X', 0x06=b'bottling', 0x80=b'site north', 0x81=b'line 7', 0x82=b'rack 3'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,129)
+  tx 000c00000005012b0e0381
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,129) | read_code=3 object_id=0x81
+  rx 000c00000018012b0e038300000281066c696e65203782067261636b2033
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(3) | read_code=3 conformity=0x83 more=0x00 next=0x00 objects=2 {0x81=b'line 7', 0x82=b'rack 3'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,144)
+  tx 000d00000005012b0e0390
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,144) | read_code=3 object_id=0x90
+  rx 000d0000007f012b0e038300000a000d41636d6520436f6e74726f6c73010641432d3330300205322e342e310317687474703a2f2f61636d652e6578616d706c652f706c63040f4c696e6520436f6e74726f6c6c6572050741433330302d580608626f74746c696e67800a73697465206e6f72746881066c696e65203782067261636b2033
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(3) | read_code=3 conformity=0x83 more=0x00 next=0x00 objects=10 {0x00=b'Acme Controls', 0x01=b'AC-300', 0x02=b'2.4.1', 0x03=b'http://acme.example/plc', 0x04=b'Line Controller', 0x05=b'AC300-X', 0x06=b'bottling', 0x80=b'site north', 0x81=b'line 7', 0x82=b'rack 3'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(4,8)
+  tx 000e00000005012b0e0408
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(4,8) | read_code=4 object_id=0x08
+  rx 000e00000010012b0e04830000010806666f72636564
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(4) | read_code=4 conformity=0x83 more=0x00 next=0x00 objects=1 {0x08=b'forced'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(5,0)
+  tx 000f00000005012b0e0500
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(5,0) | read_code=5 object_id=0x00
+  rx 000f0000000301ab03
+  client got ExceptionResponse: Exception Response(171, 43, IllegalValue) | exception_code=3
+slave 2 reports b'PLC-2 rev C\xff'
+> ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  tx 0010000000020211
+  (server is waiting for more)
+> ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  tx 0011000000020111
+  server got ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  rx 00100000001002110d504c432d32207265762043ffff
+  client got ReportSlaveIdResponse: ReportSlaveIdResponse(17, b'PLC-2 rev C\xff\xff', True) | byte_count=13
+> raw 11 bytes
+  server got ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0) | read_code=1 object_id=0x00
+  rx 00110000001e01111b41636d6520436f6e74726f6c732d41432d3330302d322e342e31ff
+  client got ReportSlaveIdResponse: ReportSlaveIdResponse(17, b'Acme Controls-AC-300-2.4.1\xff', True) | byte_count=27
+  rx 003100000026012b0e0183000003000d41636d6520436f6e74726f6c73010641432d3330300205322e342e31
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0x00 next=0x00 objects=3 {0x00=b'Acme Controls', 0x01=b'AC-300', 0x02=b'2.4.1'}
+> raw 11 bytes
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(7,0) | read_code=7 object_id=0x00
+  rx 00320000000301ab03
+  client got ExceptionResponse: Exception Response(171, 43, IllegalValue) | exception_code=3
+identity VendorName='Acme Controls', ProductCode='AC-300', MajorMinorRevision='2.4.1', VendorUrl='http://acme.example/plc', ProductName='Line Controller', ModelName='AC300-X', UserApplicationName='bottling'
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,0)
+  tx 001200000005012b0e0300
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,0) | read_code=3 object_id=0x00
+  rx 0012000000df012b0e0383ff860d000d41636d6520436f6e74726f6c73010641432d3330300205322e342e310317687474703a2f2f61636d652e6578616d706c652f706c63040f4c696e6520436f6e74726f6c6c6572050741433330302d580608626f74746c696e67800a73697465206e6f72746881066c696e65203782067261636b2033831e787878787878787878787878787878787878787878787878787878787878841e787878787878787878787878787878787878787878787878787878787878851e787878787878787878787878787878787878787878787878787878787878
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(3) | read_code=3 conformity=0x83 more=0xff next=0x86 objects=13 {0x00=b'Acme Controls', 0x01=b'AC-300', 0x02=b'2.4.1', 0x03=b'http://acme.example/plc', 0x04=b'Line Controller', 0x05=b'AC300-X', 0x06=b'bottling', 0x80=b'site north', 0x81=b'line 7', 0x82=b'rack 3', 0x83=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 0x84=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 0x85=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'}
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,131)
+  tx 001300000005012b0e0383
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(3,131) | read_code=3 object_id=0x83
+  rx 0013000000e8012b0e0383ff8a07831e787878787878787878787878787878787878787878787878787878787878841e787878787878787878787878787878787878787878787878787878787878851e787878787878787878787878787878787878787878787878787878787878861e787878787878787878787878787878787878787878787878787878787878871e787878787878787878787878787878787878787878787878787878787878881e787878787878787878787878787878787878787878787878787878787878891e787878787878787878787878787878787878787878787878787878787878
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(3) | read_code=3 conformity=0x83 more=0xff next=0x8a objects=7 {0x83=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 0x84=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 0x85=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 0x86=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 0x87=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 0x88=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 0x89=b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'}
+identity VendorName='VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV', ProductCode='PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP', MajorMinorRevision='RRRRRRRRRRRRRRRRRRRR', VendorUrl='http://acme.example/plc', ProductName='Line Controller', ModelName='AC300-X', UserApplicationName='bottling'
+> ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  tx 0014000000020111
+  (server is waiting for more)
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0)
+  tx 001500000005012b0e0100
+  server got ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  ! reply not sent: struct.error
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0) | read_code=1 object_id=0x00
+  rx 0015000000fc012b0e0183ff020200785656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656560178505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0xff next=0x02 objects=2 {0x00=b'VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV', 0x01=b'PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP'}
+server rtu
+slave 0
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0)
+  tx 012b0e01007077
+  server got ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,0) | read_code=1 object_id=0x00
+  rx 012b0e0183ff020200785656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656560178505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050f5ad
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0xff next=0x02 objects=2 {0x00=b'VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV', 0x01=b'PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP'}
+> ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  tx 0111c02c
+  server got ReportSlaveIdRequest: ReportSlaveIdRequest(17)
+  ! reply not sent: struct.error
+== File records and FIFO queues
+server socket
+slave 0
+> ReadFileRecordRequest
+  tx 00010000001101140e0600040001000206000300090004
+  server got ReadFileRecordRequest | records=[FileRecord(file=4, record=1, length=2) data='', FileRecord(file=3, record=9, length=4) data='']
+  ! datastore: TypeError
+  rx 000100000003019404
+  client got ExceptionResponse: Exception Response(148, 20, SlaveFailure) | exception_code=4
+> WriteFileRecordRequest
+  tx 00020000001b01151806000400070004010203040506070806000500010001abcd
+  server got WriteFileRecordRequest | records=[FileRecord(file=4, record=7, length=4) data=b'\x01\x02\x03\x04\x05\x06\x07\x08', FileRecord(file=5, record=1, length=1) data=b'\xab\xcd']
+  ! datastore: TypeError
+  rx 000200000003019504
+  client got ExceptionResponse: Exception Response(149, 21, SlaveFailure) | exception_code=4
+> ReadFifoQueueRequest
+  tx 000300000004011804de
+  server got ReadFifoQueueRequest | address=1246
+  ! datastore: TypeError
+  rx 000300000003019804
+  client got ExceptionResponse: Exception Response(152, 24, SlaveFailure) | exception_code=4
+< device 21 bytes
+  client got ReadFileRecordResponse | records=[FileRecord(file=0, record=0, length=2) data=b'\r\x0e\x0f\x10', FileRecord(file=0, record=0, length=2) data=b'\n\x0b\x0c\r']
+< device 22 bytes
+  client got WriteFileRecordResponse | records=[FileRecord(file=4, record=7, length=3) data=b'\x06\xaf\x04\xbe\x10\r']
+< device 16 bytes
+  client got ReadFifoQueueResponse | values=[]
+< device 18 bytes
+  client got ReadFifoQueueResponse | values=[766, 440]
+< device 12 bytes
+  client got ReadFifoQueueResponse | values=[]
+< device 14 bytes
+  client got ReadFifoQueueResponse | values=[]
+< device 12 bytes
+  client got ReadFileRecordResponse | records=[]
+< device 17 bytes
+  client got ReadFileRecordResponse | records=[FileRecord(file=0, record=0, length=2) data=b'\x01\x02\x03\x04', FileRecord(file=0, record=0, length=0) data=b'']
+server rtu
+slave 0
+> ReadFileRecordRequest
+  tx 011407060001000200032525
+  server got ReadFileRecordRequest | records=[FileRecord(file=1, record=2, length=3) data='']
+  ! datastore: TypeError
+  rx 0194044f03
+  client got ExceptionResponse: Exception Response(148, 20, SlaveFailure) | exception_code=4
+> ReadFifoQueueRequest
+  tx 01180001401f
+  server got ReadFifoQueueRequest | address=1
+  ! datastore: TypeError
+  rx 0198044a03
+  client got ExceptionResponse: Exception Response(152, 24, SlaveFailure) | exception_code=4
+< device 12 bytes
+  client got ReadFifoQueueResponse | values=[]
+== Decoding a device's replies: exceptions, short frames and odd lengths
+server socket
+slave 0
+< device 18 bytes
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+  client got ExceptionResponse: Exception Response(144, 16, SlaveFailure) | exception_code=4
+< device 6 bytes
+< device 3 bytes
+  client got ExceptionResponse: Exception Response(129, 1, GatewayNoResponse) | exception_code=11
+< device 10 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+< device 11 bytes
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[65535]
+< device 12 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+< device 12 bytes
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 10 => 1 | address=10 value=1
+< device 10 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+< device 10 bytes
+  client got ReadDiscreteInputsResponse: ReadDiscreteInputsResponse(8) | bits=11110000
+< device 10 bytes
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00000000
+< device 9 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+< device 12 bytes
+  client got WriteSingleCoilResponse: WriteCoilResponse(10) => True | address=10 value=True
+< device 12 bytes
+  client got WriteSingleCoilResponse: WriteCoilResponse(10) => False | address=10 value=False
+< device 10 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+< device 12 bytes
+  client got GetCommEventCounterResponse: GetCommEventCounterResponse(11, 5, 0) | status=False count=5
+< device 14 bytes
+  client got ReportSlaveIdResponse: ReportSlaveIdResponse(17, b'\x01\x02\x03\x04\x05', False) | byte_count=5
+< device 8 bytes
+< device 12 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+< device 17 bytes
+  client got GetCommEventLogResponse: GetCommEventLogResponse(12, 1, 2, 1) | status=True events=1 messages=2 log=['0x3', '0x4']
+< device 14 bytes
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0x00 next=0x00 objects=0 {}
+< device 24 bytes
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0x00 next=0x00 objects=2 {0x00=b'ABC', 0x01=b'xix'}
+< device 20 bytes
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(1) | read_code=1 conformity=0x83 more=0xff next=0x05 objects=2 {0x00=[b'A', b'B']}
+< device 17 bytes
+  client got ReadDeviceInformationResponse: ReadDeviceInformationResponse(2) | read_code=2 conformity=0x83 more=0x00 next=0x00 objects=1 {0x05=b'A'}
+< device 12 bytes
+  client got ReturnQueryDataResponse | sub=0x0000 message=b'\x01\x02'
+< device 13 bytes
+  client got ReturnDiagnosticRegisterResponse | sub=0x0002 message=(258, 816)
+< device 13 bytes
+  client got ReturnBusMessageCountResponse | sub=0x000b message=(1, 560)
+< device 13 bytes
+  client got GetClearModbusPlusResponse | sub=0x0015 message=(3, 48)
+< device 10 bytes
+  client got ReturnDiagnosticRegisterResponse | sub=0x0002 message=()
+< device 16 bytes
+  client got ReadFifoQueueResponse | values=[]
+< device 14 bytes
+  client got MaskWriteRegisterResponse | address=1 and_mask=0x00ff or_mask=0xff00
+< device 13 bytes
+  client got ReadWriteMultipleRegistersResponse: ReadWriteNRegisterResponse (2) | registers=[1, 2]
+< device 12 bytes
+  client got WriteMultipleCoilsResponse: WriteNCoilResponse(0, 16) | address=0 count=16
+< device 10 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+< device 19 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+< device 11 bytes
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[2]
+server rtu
+slave 0
+< device 5 bytes
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+< device 9 bytes
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[1, 2]
+< device 17 bytes
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (2) | registers=[1, 2]
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 10 | address=1 value=10
+< device 14 bytes
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[6]
+< device 7 bytes
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[7]
+< device 7 bytes
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[8]
+< device 7 bytes
+< device 7 bytes
+< device 7 bytes
+server ascii
+slave 0
+< device 15 bytes
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[5]
+< device 11 bytes
+  client got ExceptionResponse: Exception Response(131, 3, IllegalAddress) | exception_code=2
+< device 13 bytes
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode response
+== Function codes the server does not implement
+server socket
+slave 0
+> raw 8 bytes
+  (server is waiting for more)
+> raw 10 bytes
+  server got IllegalFunctionRequest | function_code=42
+  server got IllegalFunctionRequest | function_code=65
+  rx 00010000000301aa01
+  client got ExceptionResponse: Exception Response(170, 42, IllegalFunction) | exception_code=1
+  rx 00020000000301c101
+  client got ExceptionResponse: Exception Response(193, 65, IllegalFunction) | exception_code=1
+> raw 8 bytes
+  (server is waiting for more)
+> raw 8 bytes
+  server got IllegalFunctionRequest | function_code=255
+  rx 00030000000301ff01
+  client got ExceptionResponse: Exception Response(255, 127, IllegalFunction) | exception_code=1
+> raw 8 bytes
+  server got IllegalFunctionRequest | function_code=174
+  rx 00040000000301ae01
+  client got ExceptionResponse: Exception Response(174, 46, IllegalFunction) | exception_code=1
+> raw 11 bytes
+  server got IllegalFunctionRequest | function_code=0
+  server got IllegalFunctionRequest | function_code=9
+  rx 000500000003018001
+  ! client: ModbusIOException: Modbus Error: [Input/Output] Unable to decode request
+  rx 000600000003018901
+  client got ExceptionResponse: Exception Response(137, 9, IllegalFunction) | exception_code=1
+> raw 10 bytes
+  server got IllegalFunctionRequest | function_code=19
+  rx 000700000003019301
+  client got ExceptionResponse: Exception Response(147, 19, IllegalFunction) | exception_code=1
+server rtu
+slave 0
+> raw 6 bytes
+  (server is waiting for more)
+> raw 4 bytes
+  (server is waiting for more)
+server ascii
+slave 0
+> raw 9 bytes
+  (server is waiting for more)
+> raw 15 bytes
+  server got IllegalFunctionRequest | function_code=65
+  server got IllegalFunctionRequest | function_code=9
+  rx :01C1013D<CR><LF>
+  client got ExceptionResponse: Exception Response(193, 65, IllegalFunction) | exception_code=1
+  rx :01890175<CR><LF>
+  client got ExceptionResponse: Exception Response(137, 9, IllegalFunction) | exception_code=1
+== Requests the client cannot encode
+server socket
+slave 0
+> WriteSingleRegisterRequest: WriteRegisterRequest 3: ! struct.error
+> WriteSingleRegisterRequest: WriteRegisterRequest 3: ! struct.error
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (70000,1): ! struct.error
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,65536): ! struct.error
+> WriteMultipleRegistersRequest: WriteMultipleRegisterRequest 0 => 2: ! struct.error
+> WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 2041 : ! struct.error
+> WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 2039 
+  tx 000700000106010f000007f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f
+  server got WriteMultipleCoilsRequest: WriteNCoilRequest (0) => 2039  | address=0 byte_count=255 values=11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
+  rx 000700000003018f03
+  client got ExceptionResponse: Exception Response(143, 15, IllegalValue) | exception_code=3
+> ReadWriteMultipleRegistersRequest: ReadWriteNRegisterRequest R(0,1) W(0,128): ! struct.error
+> MaskWriteRegisterRequest: ! struct.error
+> ReadDeviceInformationRequest: ReadDeviceInformationRequest(1,256): ! struct.error
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1): ! OverflowError
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1): ! OverflowError
+> ReturnBusMessageCountRequest: ! struct.error
+> ReturnBusMessageCountRequest: ! struct.error
+> ReadFifoQueueRequest: ! struct.error
+> ReadFileRecordRequest: ! struct.error
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1): ! OverflowError
+server rtu
+slave 0
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1)
+  tx 010300000001840a
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1) | address=0 count=1
+  rx 0103020000b844
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (1) | registers=[0]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,1): ! OverflowError
+== BinaryPayloadBuilder and BinaryPayloadDecoder: byte and word order
+pl build big big
+pl add u8 18
+pl add u8 52
+pl add u16 4660
+pl add i16 -2
+pl add u32 305419896
+pl add i32 -305419896
+pl add f32 3.14
+pl add u64 1311768467294899695
+pl add i64 -1311768467294899695
+pl add f64 -2.718281828459045
+pl add f16 1.5
+pl add str abc
+pl add bits 10110001
+pl bytes
+  bytes 12341234fffe12345678edcba9884048f5c31234567890abcdefedcba9876f543211c005bf0a8b1457693e006162638d
+pl regs
+  registers [4660, 4660, 65534, 4660, 22136, 60875, 43400, 16456, 62915, 4660, 22136, 37035, 52719, 60875, 43399, 28500, 12817, 49157, 48906, 35604, 22377, 15872, 24930, 25485]
+pl build little big
+pl add u8 18
+pl add u8 52
+pl add u16 4660
+pl add i16 -2
+pl add u32 305419896
+pl add i32 -305419896
+pl add f32 3.14
+pl add u64 1311768467294899695
+pl add i64 -1311768467294899695
+pl add f64 -2.718281828459045
+pl add f16 1.5
+pl add str abc
+pl add bits 10110001
+pl bytes
+  bytes 12343412feff34127856cbed88a94840c3f534127856ab90efcdcbed87a9546f113205c00abf148b6957003e6162638d
+pl regs
+  registers [4660, 13330, 65279, 13330, 30806, 52205, 34985, 18496, 50165, 13330, 30806, 43920, 61389, 52205, 34729, 21615, 4402, 1472, 2751, 5259, 26967, 62, 24930, 25485]
+pl build big little
+pl add u8 18
+pl add u8 52
+pl add u16 4660
+pl add i16 -2
+pl add u32 305419896
+pl add i32 -305419896
+pl add f32 3.14
+pl add u64 1311768467294899695
+pl add i64 -1311768467294899695
+pl add f64 -2.718281828459045
+pl add f16 1.5
+pl add str abc
+pl add bits 10110001
+pl bytes
+  bytes 12341234fffe56781234a988edcbf5c34048cdef90ab5678123432116f54a987edcb57698b14bf0ac0053e006162638d
+pl regs
+  registers [4660, 4660, 65534, 22136, 4660, 43400, 60875, 62915, 16456, 52719, 37035, 22136, 4660, 12817, 28500, 43399, 60875, 22377, 35604, 48906, 49157, 15872, 24930, 25485]
+pl build little little
+pl add u8 18
+pl add u8 52
+pl add u16 4660
+pl add i16 -2
+pl add u32 305419896
+pl add i32 -305419896
+pl add f32 3.14
+pl add u64 1311768467294899695
+pl add i64 -1311768467294899695
+pl add f64 -2.718281828459045
+pl add f16 1.5
+pl add str abc
+pl add bits 10110001
+pl bytes
+  bytes 12343412feff7856341288a9cbedc3f54840efcdab90785634121132546f87a9cbed6957148b0abf05c0003e6162638d
+pl regs
+  registers [4660, 13330, 65279, 30806, 13330, 34985, 52205, 50165, 18496, 61389, 43920, 30806, 13330, 4402, 21615, 34729, 52205, 26967, 5259, 2751, 1472, 62, 24930, 25485]
+pl build big big repack
+pl add u16 4660
+pl add u32 305419896
+pl regs
+  registers [4660, 4660, 22136]
+pl build little big repack
+pl add u16 4660
+pl add u32 305419896
+pl regs
+  registers [4660, 4660, 22136]
+pl coils
+  coils 000100100011010000010010001101000101011001111000
+pl build big big
+pl add u8 300
+  ! add u8 300: struct.error
+pl add i8 -129
+  ! add i8 -129: struct.error
+pl add u16 65536
+  ! add u16 65536: struct.error
+pl add i16 32768
+  ! add i16 32768: struct.error
+pl add u32 -1
+  ! add u32 -1: struct.error
+pl add i32 2147483648
+  ! add i32 2147483648: struct.error
+pl add u64 18446744073709551616
+  ! add u64 18446744073709551616: struct.error
+pl add f32 1e39
+  ! add f32 1e39: OverflowError
+pl add f16 65520
+  ! add f16 65520: OverflowError
+pl add f16 65504
+pl add f16 0.1
+pl add f16 6e-8
+pl add f16 -0.0
+pl add f32 1e-46
+pl add f32 1e38
+pl bytes
+  bytes 7bff2e6600018000000000007e967699
+pl regs
+  registers [31743, 11878, 1, 32768, 0, 0, 32406, 30361]
+pl coils
+  coils 01111011111111110010111001100110000000000000000110000000000000000000000000000000000000000000000001111110100101100111011010011001
+pl build big big
+pl add str odd
+pl regs
+  registers [28516, 25600]
+pl coils
+  coils 01101111011001000110010000000000
+pl decode big big 4660,22136,39612,57072,4,65535,16457,4059,16200,0,0,0,0,49144,16384
+pl get u16
+  u16 4660
+pl get i16
+  i16 22136
+pl get u32
+  u32 2596069104
+pl get i32
+  i32 327679
+pl get f32
+  f32 3.1415927410125732
+pl reset
+pl get f32
+  f32 5.690456613903524e-28
+pl get f16
+  f16 -0.00328826904296875
+pl get u8
+  u8 222
+pl get i8
+  i8 -16
+pl get skip 3
+  skip skipped
+pl get u64
+  u64 18392781210632800256
+pl get i64
+  i64 191
+pl get f64
+  ! get f64: struct.error
+pl get bits
+  bits 
+pl get str 4
+  str b''
+pl get u16
+  ! get u16: struct.error
+pl get u32
+  ! get u32: struct.error
+pl decode little big 4660,22136,39612,57072,4,65535,16457,4059,16200,0,0,0,0,49144,16384
+pl get u16
+  u16 13330
+pl get i16
+  i16 30806
+pl get u32
+  u32 3164270814
+pl get i32
+  i32 67174399
+pl get f32
+  f32 789936.9375
+pl reset
+pl get f32
+  f32 1.3641087548421638e-07
+pl get f16
+  f16 -1.150390625
+pl get u8
+  u8 222
+pl get i8
+  i8 -16
+pl get skip 3
+  skip skipped
+pl get u64
+  u64 4683478944766951496
+pl get i64
+  i64 48896
+pl get f64
+  ! get f64: struct.error
+pl get bits
+  bits 
+pl get str 4
+  str b''
+pl get u16
+  ! get u16: struct.error
+pl get u32
+  ! get u32: struct.error
+pl decode big little 4660,22136,39612,57072,4,65535,16457,4059,16200,0,0,0,0,49144,16384
+pl get u16
+  u16 4660
+pl get i16
+  i16 22136
+pl get u32
+  u32 3740310204
+pl get i32
+  i32 -65532
+pl get f32
+  f32 2.1619829021905496e-29
+pl reset
+pl get f32
+  f32 68189266378752.0
+pl get f16
+  f16 -0.00328826904296875
+pl get u8
+  u8 222
+pl get i8
+  i8 -16
+pl get skip 3
+  skip skipped
+pl get u64
+  u64 5188387835586019136
+pl get i64
+  i64 53761720551735296
+pl get f64
+  ! get f64: struct.error
+pl get bits
+  bits 
+pl get str 4
+  str b''
+pl get u16
+  ! get u16: struct.error
+pl get u32
+  ! get u32: struct.error
+pl decode little little 4660,22136,39612,57072,4,65535,16457,4059,16200,0,0,0,0,49144,16384
+pl get u16
+  u16 13330
+pl get i16
+  i16 30806
+pl get u32
+  u32 4041129114
+pl get i32
+  i32 -64512
+pl get f32
+  f32 -4.03314608963584e+16
+pl reset
+pl get f32
+  f32 1.7378244361449504e+34
+pl get f16
+  f16 -1.150390625
+pl get u8
+  u8 222
+pl get i8
+  i8 -16
+pl get skip 3
+  skip skipped
+pl get u64
+  u64 20336408410013951
+pl get i64
+  i64 -4683743612465315840
+pl get f64
+  ! get f64: struct.error
+pl get bits
+  bits 
+pl get str 4
+  str b''
+pl get u16
+  ! get u16: struct.error
+pl get u32
+  ! get u32: struct.error
+pl decodecoils big 1011000111
+pl get u8
+  u8 44
+pl get u8
+  u8 7
+pl get u8
+  ! get u8: struct.error
+pl decodecoils little 10110001
+pl get bits
+  bits 10001101
+pl decode big big 15360,31744,64512,32256,1,1024,33792
+pl get f16
+  f16 1.0
+pl get f16
+  f16 inf
+pl get f16
+  f16 -inf
+pl get f16
+  f16 nan
+pl get f16
+  f16 5.960464477539063e-08
+pl get f16
+  f16 6.103515625e-05
+pl get f16
+  f16 -6.103515625e-05
+== CRC-16/Modbus and LRC
+crc  = ffff
+crc 01 = 7e80
+crc 0103000a0002 = e409
+crc 11030006 = 751a
+crc ffff = 0000
+crc 010300000002 = c40b
+crc f70f0013000a0204cd01 = ea07
+crc 34ca2476b9e1bafdfad73af804c691e2 = 8670
+crc a38b6bf863c133368fc6165834b400da1e689df7d87d58acb0505eb5b0fe9b8da460bb711a15295d = d7f1
+lrc  = 00
+lrc 01 = ff
+lrc 0103000a0002 = f0
+lrc 11030006 = e6
+lrc ff = 01
+lrc f70f0013000a0204cd01 = 09
+lrc 5c77120d77a462fd3775c5682889a74b = 18
+== A poll cycle: an HMI reads and writes a line of eight drives over RTU
+server rtu multi
+slave 1
+block h seq DataStore(17, 0)
+block i seq DataStore(9, 0)
+block c seq DataStore(9, 0)
+slave 2
+block h seq DataStore(17, 0)
+block i seq DataStore(9, 0)
+block c seq DataStore(9, 0)
+slave 3
+block h seq DataStore(17, 0)
+block i seq DataStore(9, 0)
+block c seq DataStore(9, 0)
+slave 4
+block h seq DataStore(17, 0)
+block i seq DataStore(9, 0)
+block c seq DataStore(9, 0)
+slave 5
+block h seq DataStore(17, 0)
+block i seq DataStore(9, 0)
+block c seq DataStore(9, 0)
+slave 6
+block h seq DataStore(17, 0)
+block i seq DataStore(9, 0)
+block c seq DataStore(9, 0)
+slave 7
+block h seq DataStore(17, 0)
+block i seq DataStore(9, 0)
+block c seq DataStore(9, 0)
+slave 8
+block h seq DataStore(17, 0)
+block i seq DataStore(9, 0)
+block c seq DataStore(9, 0)
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 010400000004f1c9
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 01040802ba01d9019702729348
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[698, 473, 407, 626]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0101000000043dc9
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 01010102d049
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=01000000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 020400000004f1fa
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 020408003f016b03230207717e
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[63, 363, 803, 519]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0201000000043dfa
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0201010051cc
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00000000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 030400000004f02b
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 0304080104010503a801f4e7db
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[260, 261, 936, 500]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0301000000043c2b
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0301010191f0
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=10000000
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 030600010288d8ee
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=648
+  rx 030600010288d8ee
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 648 | address=1 value=648
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 040400000004f19c
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 040408008a015f02c401690a2e
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[138, 351, 708, 361]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0401000000043d9c
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 040101085082
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00010000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 050400000004f04d
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 050408037701e100d800358bc4
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[887, 481, 216, 53]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0501000000043c4d
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0501010050b8
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00000000
+> WriteSingleCoilRequest: WriteCoilRequest(2, True) => 
+  tx 05050002ff002c7e
+  server got WriteSingleCoilRequest: WriteCoilRequest(2, True) =>  | address=2 value=True
+  rx 05050002ff002c7e
+  client got WriteSingleCoilResponse: WriteCoilResponse(2) => True | address=2 value=True
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 060400000004f07e
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 060408026500f3013d02b29f96
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[613, 243, 317, 690]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0601000000043c7e
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0601010310fd
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=11000000
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 0606000107265a57
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=1830
+  rx 0606000107265a57
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 1830 | address=1 value=1830
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 070400000004f1af
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 07040803d202cd0299021f3590
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[978, 717, 665, 543]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0701000000043daf
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0701010c5105
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00110000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 080400000004f150
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 08040802df02ae011d033cdca4
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[735, 686, 285, 828]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0801000000043d50
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 08010102d3d5
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=01000000
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,8)
+  tx 010300000008440c
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,8) | address=0 count=8
+  rx 01031009cd064a00db03990403036d0b6e0b008fe8
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (8) | registers=[2509, 1610, 219, 921, 1027, 877, 2926, 2816]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 090300000002c543
+  (server is waiting for more)
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 010400000004f1c9
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 01040802ba01d9019702729348
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[698, 473, 407, 626]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0101000000043dc9
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 01010102d049
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=01000000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 020400000004f1fa
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 020408003f016b03230207717e
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[63, 363, 803, 519]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0201000000043dfa
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0201010051cc
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00000000
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 0206000101665983
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=358
+  rx 0206000101665983
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 358 | address=1 value=358
+> WriteSingleCoilRequest: WriteCoilRequest(2, False) => 
+  tx 0205000200006c39
+  server got WriteSingleCoilRequest: WriteCoilRequest(2, False) =>  | address=2 value=False
+  rx 0205000200006c39
+  client got WriteSingleCoilResponse: WriteCoilResponse(2) => False | address=2 value=False
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 030400000004f02b
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 0304080104010503a801f4e7db
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[260, 261, 936, 500]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0301000000043c2b
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0301010191f0
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=10000000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 040400000004f19c
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 040408008a015f02c401690a2e
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[138, 351, 708, 361]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0401000000043d9c
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 040101085082
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00010000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 050400000004f04d
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 050408037701e100d800358bc4
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[887, 481, 216, 53]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0501000000043c4d
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 05010104517b
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00100000
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 050600010a911e82
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=2705
+  rx 050600010a911e82
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 2705 | address=1 value=2705
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 060400000004f07e
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 060408026500f3013d02b29f96
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[613, 243, 317, 690]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0601000000043c7e
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0601010310fd
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=11000000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 070400000004f1af
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 07040803d202cd0299021f3590
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[978, 717, 665, 543]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0701000000043daf
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0701010c5105
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00110000
+> WriteSingleCoilRequest: WriteCoilRequest(2, True) => 
+  tx 07050002ff002d9c
+  server got WriteSingleCoilRequest: WriteCoilRequest(2, True) =>  | address=2 value=True
+  rx 07050002ff002d9c
+  client got WriteSingleCoilResponse: WriteCoilResponse(2) => True | address=2 value=True
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 080400000004f150
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 08040802df02ae011d033cdca4
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[735, 686, 285, 828]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0801000000043d50
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 08010102d3d5
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=01000000
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 080600010b211fbb
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=2849
+  rx 080600010b211fbb
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 2849 | address=1 value=2849
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,8)
+  tx 06030000000845bb
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,8) | address=0 count=8
+  rx 06031003980726035100ca019c01950761051e9570
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (8) | registers=[920, 1830, 849, 202, 412, 405, 1889, 1310]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 090300000002c543
+  (server is waiting for more)
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 010400000004f1c9
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 01040802ba01d9019702729348
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[698, 473, 407, 626]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0101000000043dc9
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 01010102d049
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=01000000
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 010600010ac65ef8
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=2758
+  rx 010600010ac65ef8
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 2758 | address=1 value=2758
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 020400000004f1fa
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 020408003f016b03230207717e
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[63, 363, 803, 519]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0201000000043dfa
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0201010051cc
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00000000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 030400000004f02b
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 0304080104010503a801f4e7db
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[260, 261, 936, 500]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0301000000043c2b
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0301010191f0
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=10000000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 040400000004f19c
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 040408008a015f02c401690a2e
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[138, 351, 708, 361]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0401000000043d9c
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 040101085082
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00010000
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 0406000107811a0f
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=1921
+  rx 0406000107811a0f
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 1921 | address=1 value=1921
+> WriteSingleCoilRequest: WriteCoilRequest(2, False) => 
+  tx 0405000200006c5f
+  server got WriteSingleCoilRequest: WriteCoilRequest(2, False) =>  | address=2 value=False
+  rx 0405000200006c5f
+  client got WriteSingleCoilResponse: WriteCoilResponse(2) => False | address=2 value=False
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 050400000004f04d
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 050408037701e100d800358bc4
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[887, 481, 216, 53]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0501000000043c4d
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 05010104517b
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00100000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 060400000004f07e
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 060408026500f3013d02b29f96
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[613, 243, 317, 690]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0601000000043c7e
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0601010310fd
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=11000000
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 070400000004f1af
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 07040803d202cd0299021f3590
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[978, 717, 665, 543]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0701000000043daf
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 0701010c5105
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=00110000
+> WriteSingleRegisterRequest: WriteRegisterRequest 1
+  tx 070600010050d850
+  server got WriteSingleRegisterRequest: WriteRegisterRequest 1 | address=1 value=80
+  rx 070600010050d850
+  client got WriteSingleRegisterResponse: WriteRegisterResponse 1 => 80 | address=1 value=80
+> ReadInputRegistersRequest: ReadInputRegistersRequest (0,4)
+  tx 080400000004f150
+  server got ReadInputRegistersRequest: ReadInputRegistersRequest (0,4) | address=0 count=4
+  rx 08040802df02ae011d033cdca4
+  client got ReadInputRegistersResponse: ReadInputRegistersResponse (4) | registers=[735, 686, 285, 828]
+> ReadCoilsRequest: ReadBitRequest(0,4)
+  tx 0801000000043d50
+  server got ReadCoilsRequest: ReadBitRequest(0,4) | address=0 count=4
+  rx 08010102d3d5
+  client got ReadCoilsResponse: ReadCoilsResponse(8) | bits=01000000
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,8)
+  tx 0403000000084459
+  server got ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,8) | address=0 count=8
+  rx 04031005e507810bb002200715049d043509e98187
+  client got ReadHoldingRegistersResponse: ReadHoldingRegistersResponse (8) | registers=[1509, 1921, 2992, 544, 1813, 1181, 1077, 2537]
+> ReadHoldingRegistersRequest: ReadHoldingRegistersRequest (0,2)
+  tx 090300000002c543
+  (server is waiting for more)
+peek 1 h 0+4: [0, 2509, 2758, 219]
+peek 2 h 0+4: [0, 1962, 358, 463]
+peek 3 h 0+4: [0, 904, 648, 2379]
+peek 4 h 0+4: [0, 1509, 1921, 2992]
+peek 5 h 0+4: [0, 1298, 2705, 1084]
+peek 6 h 0+4: [0, 920, 1830, 849]
+peek 7 h 0+4: [0, 1757, 80, 2237]
+peek 8 h 0+4: [0, 1715, 2849, 393]
