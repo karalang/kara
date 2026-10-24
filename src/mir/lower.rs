@@ -17464,6 +17464,33 @@ impl<'l, 'a> Bx<'l, 'a> {
                             }
                         }
                     }
+                    // A `ref` to a `Copy` value or handle that a call
+                    // returns (`v.push(m.get(k).unwrap())`), stored into a
+                    // container of owned elements, is read through: the
+                    // element is the value, not its address (§5.10;
+                    // B-2026-10-24-3).
+                    if stores && !self.is_place(&a.value) {
+                        if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(at) {
+                            let holds_refs = match self.tys().tcx().kind(base) {
+                                HK::Intrinsic { args, .. } => {
+                                    self.tys().tcx().list(args).into_iter().any(|t| {
+                                        matches!(
+                                            self.tys().tcx().kind(t),
+                                            HK::Ref(_) | HK::MutRef(_)
+                                        )
+                                    })
+                                }
+                                _ => true,
+                            };
+                            let readable = self.is_copy(inner)
+                                || self.is_handle(inner)
+                                || self.is_handle_aggregate(inner);
+                            if !holds_refs && readable {
+                                rest.push(self.owned_operand(&a.value, inner)?);
+                                continue;
+                            }
+                        }
+                    }
                     // A borrowed value stored into a container of owned
                     // elements is a move out of the borrow, which the move
                     // check refuses (a container of references stores it).

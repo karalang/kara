@@ -8817,3 +8817,43 @@ fn main() {
         interp.stderr
     );
 }
+
+/// `v.push(m.get(k).unwrap())` into a `Vec[i64]` stores the value the
+/// reference points at, not its address, as does any library method that
+/// stores a `ref` to a `Copy` value or handle a call returns
+/// (B-2026-10-24-3).
+#[test]
+fn mir_a_stored_ref_a_call_returns_is_read_through() {
+    let src = r#"shared struct N { mut v: i64 }
+fn main() {
+    let mut place: Map[i64, i64] = Map.new();
+    place.insert(5, 1);
+    place.insert(6, 0);
+    let mut p: Vec[i64] = Vec.new();
+    p.push(place.get(5).unwrap());
+    p.push(place.get(6).unwrap());
+    println(f"{p[0]} {p[1]}");
+    if p[1] < p[0] { println("less"); } else { println("not less"); }
+    let a = vec![4, 9];
+    p.push(a.get(1).unwrap());
+    let mut st: Set[i64] = Set.new();
+    st.insert(a.get(0).unwrap());
+    let mut m2: Map[i64, i64] = Map.new();
+    m2.insert(a.get(0).unwrap(), place.get(5).unwrap());
+    println(f"{p[2]} {st.contains(4)} {m2.get(4).unwrap()}");
+    let ns = vec![N { v: 7 }];
+    let mut hs: Vec[N] = Vec.new();
+    hs.push(ns.get(0).unwrap());
+    hs[0].v = 8;
+    println(f"{ns[0].v} {hs.len()}");
+}
+"#;
+    let want = "1 0\nless\n9 true 1\n8 1\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    for opt in 0..=3 {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
