@@ -1,0 +1,863 @@
+> show ct_explicit.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 176
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: CT Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.1.1.1
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0005) Specific Character Set              CS: 'ISO_IR 100'
+(0008,0008) Image Type                          CS: ['ORIGINAL', 'PRIMARY', 'AXIAL']
+(0008,0016) SOP Class UID                       UI: CT Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.1.1.1
+(0008,0020) Study Date                          DA: '20240311'
+(0008,0030) Study Time                          TM: '101500.25'
+(0008,0050) Accession Number                    SH: 'ACC0042'
+(0008,0060) Modality                            CS: 'CT'
+(0008,0070) Manufacturer                        LO: 'Acme Imaging'
+(0008,0080) Institution Name                    LO: "St. Mary's Clinic"
+(0008,0090) Referring Physician's Name          PN: 'House^Gregory^^Dr.'
+(0008,1030) Study Description                   LO: 'Head "routine"'
+(0008,103E) Series Description                  LO: 'HEAD W/O CONTRAST'
+(0008,1140)  Referenced Image Sequence  2 item(s) ---- 
+   (0008,1150) Referenced SOP Class UID            UI: CT Image Storage
+   (0008,1155) Referenced SOP Instance UID         UI: 1.2.826.0.1.3680043.10.1138.1.1.0
+   ---------
+   (0008,1150) Referenced SOP Class UID            UI: CT Image Storage
+   (0008,1155) Referenced SOP Instance UID         UI: 1.2.826.0.1.3680043.10.1138.1.1.2
+   ---------
+(0008,2218)  Anatomic Region Sequence  1 item(s) ---- 
+   (0008,0100) Code Value                          SH: 'T-A0100'
+   (0008,0102) Coding Scheme Designator            SH: 'SRT'
+   (0008,0104) Code Meaning                        LO: 'Brain'
+   ---------
+(0009,0010) Private Creator                     LO: 'GEMS_IDEN_01'
+(0009,1001) [Full fidelity]                     LO: 'full'
+(0009,1002) [Suite id]                          SH: 'CT01'
+(0009,101A) [Unknown]                           US: 77
+(0010,0010) Patient's Name                      PN: 'Doe^Jane^Q^^'
+(0010,0020) Patient ID                          LO: 'PAT-0001'
+(0010,0030) Patient's Birth Date                DA: '19800214'
+(0010,0040) Patient's Sex                       CS: 'F'
+(0010,1010) Patient's Age                       AS: '044Y'
+(0010,1020) Patient's Size                      DS: '1.65'
+(0010,1030) Patient's Weight                    DS: '61.5'
+(0010,4000) Patient Comments                    LT: Array of 47 elements
+(0018,0050) Slice Thickness                     DS: '2.50'
+(0018,0060) KVP                                 DS: '120'
+(0018,1020) Software Versions                   LO: ['v1.2', 'build7']
+(0018,1150) Exposure Time                       IS: '750'
+(0018,1151) X-Ray Tube Current                  IS: '200'
+(0018,1152) Exposure                            IS: '9'
+(0018,5100) Patient Position                    CS: 'HFS'
+(0018,9306) Single Collimation Width            FL: 0.30000001192092896
+(0018,9307) Total Collimation Width             FD: [0.3333333333333333, 2.5]
+(0018,9328) Exposure Time in ms                 UL: 3000000000
+(0018,9329) CT Image Frame Type Sequence        SS: [-12, 7]
+(0018,9330) X-Ray Tube Current in mA            SL: -3
+(0018,9345) CTDIvol                             FD: 12.5
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.1
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.1.1
+(0020,0010) Study ID                            SH: 'STUDY1'
+(0020,0011) Series Number                       IS: '1'
+(0020,0013) Instance Number                     IS: '1'
+(0020,0032) Image Position (Patient)            DS: [-125.0, -125.0, 45.5]
+(0020,0037) Image Orientation (Patient)         DS: [1, 0, 0, 0, 1, 0]
+(0020,0052) Frame of Reference UID              UI: 1.2.826.0.1.3680043.10.1138.1.9
+(0020,1041) Slice Location                      DS: '45.5'
+(0020,4000) Image Comments                      LT: 'short note'
+(0020,9165) Dimension Index Pointer             AT: [(0020,0032), (0020,1041)]
+(0028,0002) Samples per Pixel                   US: 1
+(0028,0004) Photometric Interpretation          CS: 'MONOCHROME2'
+(0028,0010) Rows                                US: 4
+(0028,0011) Columns                             US: 4
+(0028,0030) Pixel Spacing                       DS: [0.488281, 0.488281]
+(0028,0100) Bits Allocated                      US: 16
+(0028,0101) Bits Stored                         US: 12
+(0028,0102) High Bit                            US: 11
+(0028,0103) Pixel Representation                US: 0
+(0028,0106) Smallest Image Pixel Value          US: 3
+(0028,0107) Largest Image Pixel Value           US: 4000
+(0028,1050) Window Center                       DS: [40, 400]
+(0028,1051) Window Width                        DS: [80, 2000]
+(0028,1052) Rescale Intercept                   DS: '-1024'
+(0028,1053) Rescale Slope                       DS: '1'
+(0029,0010) Private Creator                     LO: 'SIEMENS CSA HEADER'
+(0029,1008) [CSA Image Header Type]             CS: 'IMAGE NUM 4'
+(0029,1010) [CSA Image Header Info]             OB: Array of 40 elements
+(7FE0,0010) Pixel Data                          OW: Array of 32 elements
+> show mr_implicit.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: MR Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.2.1.1
+(0002,0010) Transfer Syntax UID                 UI: Implicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0008) Image Type                          CS: ['DERIVED', 'SECONDARY']
+(0008,0016) SOP Class UID                       UI: MR Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.2.1.1
+(0008,0020) Study Date                          DA: '20240312'
+(0008,0060) Modality                            CS: 'MR'
+(0008,0080) Institution Name                    LO: 'Northside Imaging'
+(0009,0010) Private Creator                     LO: 'GEMS_IDEN_01'
+(0009,1004) [Product id]                        SH: 'SIGNA'
+(0009,1017) [Series Description]                LT: Array of 45 elements
+(0009,1027) [Image actual date]                 SL: 1234567
+(0009,1030) [Service id]                        SH: 'svc9'
+(0009,1099) Private tag data                    UN: Array of 32 elements
+(0010,0010) Patient's Name                      PN: 'Smith^John'
+(0010,0020) Patient ID                          LO: 'PAT-0002'
+(0010,0030) Patient's Birth Date                DA: '19621103'
+(0010,0040) Patient's Sex                       CS: 'M'
+(0011,1001) Private tag data                    UN: b'\x05\x00'
+(0018,0020) Scanning Sequence                   CS: 'SE'
+(0018,0080) Repetition Time                     DS: '500'
+(0018,0081) Echo Time                           DS: '15.00'
+(0018,0087) Magnetic Field Strength             DS: '1.5'
+(0018,1030) Protocol Name                       LO: 'T1_SAG'
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.2
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.2.1
+(0020,0011) Series Number                       IS: '3'
+(0020,0013) Instance Number                     IS: '12'
+(0028,0002) Samples per Pixel                   US: 1
+(0028,0004) Photometric Interpretation          CS: 'MONOCHROME2'
+(0028,0010) Rows                                US: 2
+(0028,0011) Columns                             US: 4
+(0028,0100) Bits Allocated                      US: 16
+(0028,0101) Bits Stored                         US: 16
+(0028,0102) High Bit                            US: 15
+(0028,0103) Pixel Representation                US: 1
+(0028,0106) Smallest Image Pixel Value          SS: -20
+(0028,0107) Largest Image Pixel Value           SS: 900
+(0040,0275)  Request Attributes Sequence  2 item(s) ---- 
+   (0040,0253) Performed Procedure Step ID         SH: 'PPS-7'
+   (0040,0260)  Performed Protocol Code Sequence  1 item(s) ---- 
+      (0008,0100) Code Value                          SH: '113619'
+      (0008,0102) Coding Scheme Designator            SH: 'DCM'
+      (0008,0104) Code Meaning                        LO: 'Image Processing'
+      ---------
+   (0040,1001) Requested Procedure ID              SH: 'RP-11'
+   ---------
+
+   ---------
+(7FE0,0010) Pixel Data                          OW: b'M\x01X\x01c\x01n\x01~\x01\x89\x01\x94\x01\x9f\x01'
+> show us_big.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 178
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Ultrasound Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.3.1.1
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Big Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0005) Specific Character Set              CS: 'ISO_IR 192'
+(0008,0016) SOP Class UID                       UI: Ultrasound Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.3.1.1
+(0008,0020) Study Date                          DA: '20240313'
+(0008,0060) Modality                            CS: 'US'
+(0008,0080) Institution Name                    LO: 'Κέντρο Υγείας'
+(0010,0010) Patient's Name                      PN: 'Παπαδόπουλος^Νίκος=Παπαδόπουλος^Νίκος'
+(0010,0020) Patient ID                          LO: 'PAT-0003'
+(0010,0030) Patient's Birth Date                DA: '19900505'
+(0010,0040) Patient's Sex                       CS: 'M'
+(0018,6011)  Sequence of Ultrasound Regions  1 item(s) ---- 
+   (0018,6012) Region Spatial Format               US: 1
+   (0018,6014) Region Data Type                    US: 2
+   (0018,6018) Region Location Min X0              UL: 0
+   (0018,601A) Region Location Min Y0              UL: 0
+   (0018,602C) Physical Delta X                    FD: 0.0125
+   (0018,602E) Physical Delta Y                    FD: 0.0125
+   ---------
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.3
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.3.1
+(0020,0011) Series Number                       IS: '1'
+(0020,0013) Instance Number                     IS: '1'
+(0028,0002) Samples per Pixel                   US: 3
+(0028,0004) Photometric Interpretation          CS: 'RGB'
+(0028,0006) Planar Configuration                US: 0
+(0028,0010) Rows                                US: 2
+(0028,0011) Columns                             US: 2
+(0028,0100) Bits Allocated                      US: 8
+(0028,0101) Bits Stored                         US: 8
+(0028,0102) High Bit                            US: 7
+(0028,0103) Pixel Representation                US: 0
+(7FE0,0010) Pixel Data                          OB: b'\n\x14\x1e(2<FPZdnx'
+> show sr_deflated.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 182
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Basic Text SR Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.4.1.1
+(0002,0010) Transfer Syntax UID                 UI: Deflated Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Basic Text SR Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.4.1.1
+(0008,0020) Study Date                          DA: '20240311'
+(0008,0060) Modality                            CS: 'SR'
+(0010,0010) Patient's Name                      PN: 'Doe^Jane^Q'
+(0010,0020) Patient ID                          LO: 'PAT-0001'
+(0010,0030) Patient's Birth Date                DA: '19800214'
+(0010,0040) Patient's Sex                       CS: 'F'
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.1
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.1.5
+(0020,0011) Series Number                       IS: '5'
+(0020,0013) Instance Number                     IS: '1'
+(0040,A040) Value Type                          CS: 'CONTAINER'
+(0040,A050) Continuity Of Content               CS: 'SEPARATE'
+(0040,A491) Completion Flag                     CS: 'COMPLETE'
+(0040,A493) Verification Flag                   CS: 'UNVERIFIED'
+(0040,A730)  Content Sequence  1 item(s) ---- 
+   (0040,A010) Relationship Type                   CS: 'CONTAINS'
+   (0040,A040) Value Type                          CS: 'TEXT'
+   (0040,A043)  Concept Name Code Sequence  1 item(s) ---- 
+      (0008,0100) Code Value                          SH: '121071'
+      (0008,0102) Coding Scheme Designator            SH: 'DCM'
+      (0008,0104) Code Meaning                        LO: 'Finding'
+      ---------
+   (0040,A160) Text Value                          UT: Array of 34 elements
+   ---------
+> show sc_0.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 176
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.7.2.3
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.7.2.3
+(0008,0020) Study Date                          DA: '20240301'
+(0008,0060) Modality                            CS: 'OT'
+(0008,1030) Study Description                   LO: 'CHEST'
+(0008,103E) Series Description                  LO: 'Lateral'
+(0010,0010) Patient's Name                      PN: 'Brown^Alice'
+(0010,0020) Patient ID                          LO: 'PAT-0007'
+(0010,0030) Patient's Birth Date                DA: '19700101'
+(0010,0040) Patient's Sex                       CS: 'O'
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.7
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.7.2
+(0020,0011) Series Number                       IS: '2'
+(0020,0013) Instance Number                     IS: '3'
+> show sc_1.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.7.1.1
+(0002,0010) Transfer Syntax UID                 UI: Implicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.7.1.1
+(0008,0020) Study Date                          DA: '20240301'
+(0008,0060) Modality                            CS: 'OT'
+(0008,1030) Study Description                   LO: 'CHEST'
+(0008,103E) Series Description                  LO: 'Frontal'
+(0010,0010) Patient's Name                      PN: 'Brown^Alice'
+(0010,0020) Patient ID                          LO: 'PAT-0007'
+(0010,0030) Patient's Birth Date                DA: '19700101'
+(0010,0040) Patient's Sex                       CS: 'O'
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.7
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.7.1
+(0020,0011) Series Number                       IS: '1'
+(0020,0013) Instance Number                     IS: '1'
+> show no_ts.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 146
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.2
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.6.2
+(0008,0060) Modality                            CS: 'OT'
+(0010,0010) Patient's Name                      PN: 'Nots^Ynt'
+(0010,0020) Patient ID                          LO: 'PAT-0008'
+(0010,0030) Patient's Birth Date                DA: '19700101'
+(0010,0040) Patient's Sex                       CS: 'O'
+(0028,0010) Rows                                US: 300
+> show ts_mismatch.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 172
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.3
+(0002,0010) Transfer Syntax UID                 UI: Implicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.6.3
+(0008,0060) Modality                            CS: 'OT'
+(0010,0010) Patient's Name                      PN: 'Mis^Match'
+(0010,0020) Patient ID                          LO: 'PAT-0009'
+(0010,0030) Patient's Birth Date                DA: '19700101'
+(0010,0040) Patient's Sex                       CS: 'O'
+(0028,0010) Rows                                US: 64
+> show jpeg_encaps.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 176
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.4
+(0002,0010) Transfer Syntax UID                 UI: JPEG Baseline (Process 1)
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.6.4
+(0008,0060) Modality                            CS: 'OT'
+(0010,0010) Patient's Name                      PN: 'Jay^Peg'
+(0010,0020) Patient ID                          LO: 'PAT-0010'
+(0010,0030) Patient's Birth Date                DA: '19700101'
+(0010,0040) Patient's Sex                       CS: 'O'
+(0028,0010) Rows                                US: 8
+(0028,0011) Columns                             US: 8
+(0028,0100) Bits Allocated                      US: 8
+(7FE0,0010) Pixel Data                          OB: Array of 36 elements
+> show bad_us.dcm
+error: BytesLengthException: Expected total bytes to be an even multiple of bytes per value. Instead received b'\x05\x00\x07' with length 3 and struct format 'H' which corresponds to bytes per value of 2. This occurred while trying to parse (0028,0011) according to VR 'US'. To replace this error with a warning set pydicom.config.convert_wrong_length_to_UN = True.
+> show bad_nested.dcm
+error: BytesLengthException: With tag (0018,6011) got exception: Expected total bytes to be an even multiple of bytes per value. Instead received b'\x01\x00\x02' with length 3 and struct format 'H' which corresponds to bytes per value of 2. This occurred while trying to parse (0018,6012) according to VR 'US'. To replace this error with a warning set pydicom.config.convert_wrong_length_to_UN = True.
+> show text_corners.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.7
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0005) Specific Character Set              CS: 'ISO IR 100'
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.6.7
+(0008,0054) Retrieve AE Title                   AE: ['PACS1', 'STORE2']
+(0008,0080) Institution Name                    LO: 'Café « Müller »'
+(0008,1030) Study Description                   LO: 'both \'single\' and "double"'
+(0008,103E) Series Description                  LO: '  lead and trail'
+(0008,1155) Referenced SOP Instance UID         UI: 1.2.826.0.1.3680043.10.1138.6.0
+(0008,1190) Retrieve URL                        UR: 'http://example.invalid/wado?x=1'
+(0010,0010) Patient's Name                      PN: 'Müller^Jürgen=^'
+(0010,1000) Other Patient IDs                   LO: ['ALIAS1', 'ALIAS2', '', 'ALIAS4']
+(0010,1020) Patient's Size                      DS: '1.7x'
+(0010,1030) Patient's Weight                    DS: [70, 71.5]
+(0018,1150) Exposure Time                       IS: 'abc'
+(0018,1151) X-Ray Tube Current                  IS: 2.5
+(0018,1152) Exposure                            IS: '8'
+(0018,1153) Exposure in uAs                     IS: '3'
+(0020,4000) Image Comments                      LT: Array of 32 elements
+(0032,1060) Requested Procedure Description     LO: 'tab\there'
+(0040,0254) Performed Procedure Step Descriptio LO: 'ctl\x01\x7f'
+(0040,0280) Comments on the Performed Procedure ST: 'nul\x00pad'
+> show empty_long.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.8
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.6.8
+(0008,0020) Study Date                          DA: ''
+(0008,0050) Accession Number                    SH: ''
+(0008,0090) Referring Physician's Name          PN: ''
+(0008,1110)  Referenced Study Sequence  0 item(s) ---- 
+(0008,1155) Referenced SOP Instance UID         UI: ''
+(0010,0030) Patient's Birth Date                DA: ''
+(0010,1020) Patient's Size                      DS: None
+(0018,1150) Exposure Time                       IS: None
+(0018,1310) Acquisition Matrix                  US: Array of 17 elements
+(0020,4000) Image Comments                      LT: 'exactly sixteen!'
+(0020,9165) Dimension Index Pointer             AT: None
+(0028,0010) Rows                                US: None
+(0028,0012) Planes                              US: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+(0028,0030) Pixel Spacing                       DS: Array of 18 elements
+(0029,1010) Private tag data                    OB: None
+(0032,1066) Reason for Visit                    UT: Array of 17 elements
+(0050,0004) Calibration Image                   CS: ''
+(7FE0,0010) Pixel Data                          OB: b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f'
+> show open_sq.dcm
+error: OSError: No tag to read at file position 188
+> show open_ob.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.10
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+> show cut_value.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.11
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0060) Modality                            CS: 'OT'
+(0008,1030) Study Description                   LO: 'Cut off he'
+> show cut_item.dcm
+error: OSError: No tag to read at file position 172
+> show un_vr.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.13
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0060) Modality                            CS: 'OT'
+(0028,0010) Rows                                US: 512
+(0029,0010) Private Creator                     LO: 'SIEMENS CSA HEADER'
+(0029,1008) [CSA Image Header Type]             CS: 'MR'
+(0029,1009) [CSA Image Header Version]          LO: '20100114'
+(0033,1010) Private tag data                    UN: b'\x01\x02'
+(0033,1011) Private tag data                    LO: 'orphan private'
+> show vr_switch.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.14
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0060) Modality                            CS: 'OT'
+(0010,0010) Patient's Name                      PN: 'Switched^Midway'
+(0010,0020) Patient ID                          LO: 'PAT-0011'
+> show group_len.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.15
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0000) Group Length                        UL: 999
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0060) Modality                            CS: 'CR'
+(0010,0000) Group Length                        UL: 4
+(0010,0010) Patient's Name                      PN: 'Group^Length'
+(0010,0020) Patient ID                          LO: 'PAT-0012'
+(0010,0030) Patient's Birth Date                DA: '19700101'
+(0010,0040) Patient's Sex                       CS: 'O'
+> show notes.txt
+error: InvalidDicomError: File is missing DICOM File Meta Information header or the 'DICM' prefix is missing from the header. Use force=True to force reading.
+> show tiny.dcm
+error: InvalidDicomError: File is missing DICOM File Meta Information header or the 'DICM' prefix is missing from the header. Use force=True to force reading.
+> show bare_implicit.dcm
+error: InvalidDicomError: File is missing DICOM File Meta Information header or the 'DICM' prefix is missing from the header. Use force=True to force reading.
+> show bare_implicit.dcm force
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.6.1
+(0008,0060) Modality                            CS: 'OT'
+(0010,0010) Patient's Name                      PN: 'Bare^Dataset'
+(0010,0020) Patient ID                          LO: 'PAT-0006'
+(0010,0030) Patient's Birth Date                DA: '19700101'
+(0010,0040) Patient's Sex                       CS: 'O'
+(0020,0013) Instance Number                     IS: '4'
+> show notes.txt force
+(6854,7369)                                     UN: Array of 188 elements
+> get ct_explicit.dcm PatientName
+PatientName: Doe^Jane^Q^^
+> get ct_explicit.dcm PixelSpacing
+PixelSpacing: [0.488281, 0.488281]
+> get ct_explicit.dcm ImagePositionPatient
+ImagePositionPatient: [-125.0, -125.0, 45.5]
+> get ct_explicit.dcm InstanceNumber
+InstanceNumber: 1
+> get ct_explicit.dcm ExposureTime
+ExposureTime: 750
+> get ct_explicit.dcm SliceThickness
+SliceThickness: 2.50
+> get ct_explicit.dcm ImageType
+ImageType: ['ORIGINAL', 'PRIMARY', 'AXIAL']
+> get ct_explicit.dcm Rows
+Rows: 4
+> get ct_explicit.dcm WindowCenter
+WindowCenter: [40, 400]
+> get ct_explicit.dcm FrameOfReferenceUID
+FrameOfReferenceUID: 1.2.826.0.1.3680043.10.1138.1.9
+> get ct_explicit.dcm SOPClassUID
+SOPClassUID: 1.2.840.10008.5.1.4.1.1.2
+> get ct_explicit.dcm PixelData
+PixelData: b'o\x00z\x00\x85\x00\x90\x00\xa0\x00\xab\x00\xb6\x00\xc1\x00\xd1\x00\xdc\x00\xe7\x00\xf2\x00\x02\x01\r\x01\x18\x01#\x01'
+> get ct_explicit.dcm PatientWeight
+PatientWeight: 61.5
+> get ct_explicit.dcm StudyComments
+StudyComments: missing
+> get ct_explicit.dcm SmallestImagePixelValue
+SmallestImagePixelValue: 3
+> get text_corners.dcm PatientWeight
+PatientWeight: [70, 71.5]
+> get text_corners.dcm ExposureTime
+ExposureTime: abc
+> get text_corners.dcm XRayTubeCurrent
+XRayTubeCurrent: 2.5
+> get text_corners.dcm Exposure
+Exposure: +08
+> get text_corners.dcm ExposureInuAs
+ExposureInuAs: 3.0
+> get text_corners.dcm OtherPatientIDs
+OtherPatientIDs: ['ALIAS1', 'ALIAS2', '', 'ALIAS4']
+> get text_corners.dcm RetrieveAETitle
+RetrieveAETitle: ['PACS1', 'STORE2']
+> get text_corners.dcm InstitutionName
+InstitutionName: Café « Müller »
+> get text_corners.dcm SeriesDescription
+SeriesDescription:   lead and trail
+> get text_corners.dcm RetrieveURL
+RetrieveURL: http://example.invalid/wado?x=1
+> get text_corners.dcm ReferencedSOPInstanceUID
+ReferencedSOPInstanceUID: 1.2.826.0.1.3680043.10.1138.6.0
+> get text_corners.dcm StudyDescription
+StudyDescription: both 'single' and "double"
+> get mr_implicit.dcm SmallestImagePixelValue
+SmallestImagePixelValue: -20
+> get mr_implicit.dcm PixelData
+PixelData: b'M\x01X\x01c\x01n\x01~\x01\x89\x01\x94\x01\x9f\x01'
+> get mr_implicit.dcm PatientName
+PatientName: Smith^John
+> get empty_long.dcm PatientWeight
+PatientWeight: missing
+> get empty_long.dcm AcquisitionDate
+AcquisitionDate: missing
+> get empty_long.dcm Rows
+Rows: missing
+> get empty_long.dcm PixelSpacing
+PixelSpacing: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+> get empty_long.dcm ReferencedSOPInstanceUID
+ReferencedSOPInstanceUID: 
+> pn ct_explicit.dcm
+name 'Doe^Jane^Q^^': family 'Doe' given 'Jane' middle 'Q' prefix '' suffix ''
+  ideographic '' phonetic ''
+> pn us_big.dcm
+name 'Παπαδόπουλος^Νίκος=Παπαδόπουλος^Νίκος': family 'Παπαδόπουλος' given 'Νίκος' middle '' prefix '' suffix ''
+  ideographic 'Παπαδόπουλος^Νίκος' phonetic ''
+> pn text_corners.dcm
+name 'Müller^Jürgen=^': family 'Müller' given 'Jürgen' middle '' prefix '' suffix ''
+  ideographic '^' phonetic ''
+> pn empty_long.dcm
+no PatientName
+> pn sc_4.dcm
+name 'Green^Bob': family 'Green' given 'Bob' middle '' prefix '' suffix ''
+  ideographic '' phonetic ''
+> resave ct_explicit.dcm out/re_ct_explicit.dcm
+resave ct_explicit.dcm: 1834 bytes, crc32 eaf989eb, differs
+> resave mr_implicit.dcm out/re_mr_implicit.dcm
+resave mr_implicit.dcm: 1146 bytes, crc32 ab2bf153, differs
+> resave us_big.dcm out/re_us_big.dcm
+resave us_big.dcm: 910 bytes, crc32 68d6bb76, identical
+> resave jpeg_encaps.dcm out/re_jpeg_encaps.dcm
+resave jpeg_encaps.dcm: 548 bytes, crc32 44a81ad8, identical
+> resave text_corners.dcm out/re_text_corners.dcm
+resave text_corners.dcm: 820 bytes, crc32 7328b965, differs
+> resave bare_implicit.dcm out/re_bare_implicit.dcm
+resave bare_implicit.dcm: 156 bytes, crc32 49932715, identical
+> resave group_len.dcm out/re_group_len.dcm
+resave group_len.dcm: 424 bytes, crc32 211a213e, differs
+> resave un_vr.dcm out/re_un_vr.dcm
+resave un_vr.dcm: 477 bytes, crc32 d7fc8ad2, identical
+> anon ct_explicit.dcm out/anon_ct_explicit.dcm
+anon ct_explicit.dcm: 1646 bytes, crc32 1f751a54
+> anon mr_implicit.dcm out/anon_mr_implicit.dcm
+anon mr_implicit.dcm: 964 bytes, crc32 6dfc969d
+> anon us_big.dcm out/anon_us_big.dcm
+anon us_big.dcm: 828 bytes, crc32 5bce6e41
+> anon text_corners.dcm out/anon_text_corners.dcm
+anon text_corners.dcm: 788 bytes, crc32 24665cd2
+> show out/anon_mr_implicit.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: MR Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.2.1.1
+(0002,0010) Transfer Syntax UID                 UI: Implicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0008) Image Type                          CS: ['DERIVED', 'SECONDARY']
+(0008,0016) SOP Class UID                       UI: MR Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.2.1.1
+(0008,0020) Study Date                          DA: '20240312'
+(0008,0060) Modality                            CS: 'MR'
+(0008,0080) Institution Name                    LO: 'Northside Imaging'
+(0010,0010) Patient's Name                      PN: 'Anonymous'
+(0010,0020) Patient ID                          LO: 'ANON'
+(0010,0040) Patient's Sex                       CS: 'M'
+(0018,0020) Scanning Sequence                   CS: 'SE'
+(0018,0080) Repetition Time                     DS: '500'
+(0018,0081) Echo Time                           DS: '15.00'
+(0018,0087) Magnetic Field Strength             DS: '1.5'
+(0018,1030) Protocol Name                       LO: 'T1_SAG'
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.2
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.2.1
+(0020,0011) Series Number                       IS: '3'
+(0020,0013) Instance Number                     IS: '12'
+(0028,0002) Samples per Pixel                   US: 1
+(0028,0004) Photometric Interpretation          CS: 'MONOCHROME2'
+(0028,0010) Rows                                US: 2
+(0028,0011) Columns                             US: 4
+(0028,0100) Bits Allocated                      US: 16
+(0028,0101) Bits Stored                         US: 16
+(0028,0102) High Bit                            US: 15
+(0028,0103) Pixel Representation                US: 1
+(0028,0106) Smallest Image Pixel Value          SS: -20
+(0028,0107) Largest Image Pixel Value           SS: 900
+(0040,0275)  Request Attributes Sequence  2 item(s) ---- 
+   (0040,0253) Performed Procedure Step ID         SH: 'PPS-7'
+   (0040,0260)  Performed Protocol Code Sequence  1 item(s) ---- 
+      (0008,0100) Code Value                          SH: '113619'
+      (0008,0102) Coding Scheme Designator            SH: 'DCM'
+      (0008,0104) Code Meaning                        LO: 'Image Processing'
+      ---------
+   (0040,1001) Requested Procedure ID              SH: 'RP-11'
+   ---------
+
+   ---------
+(7FE0,0010) Pixel Data                          OW: b'M\x01X\x01c\x01n\x01~\x01\x89\x01\x94\x01\x9f\x01'
+> show out/anon_text_corners.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 174
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Secondary Capture Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.6.7
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0005) Specific Character Set              CS: 'ISO IR 100'
+(0008,0016) SOP Class UID                       UI: Secondary Capture Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.6.7
+(0008,0054) Retrieve AE Title                   AE: ['PACS1', 'STORE2']
+(0008,0080) Institution Name                    LO: 'Café « Müller »'
+(0008,1030) Study Description                   LO: 'both \'single\' and "double"'
+(0008,103E) Series Description                  LO: '  lead and trail'
+(0008,1155) Referenced SOP Instance UID         UI: 1.2.826.0.1.3680043.10.1138.6.0
+(0008,1190) Retrieve URL                        UR: 'http://example.invalid/wado?x=1'
+(0010,0010) Patient's Name                      PN: 'Anonymous'
+(0010,0020) Patient ID                          LO: 'ANON'
+(0010,1020) Patient's Size                      DS: '1.7x'
+(0010,1030) Patient's Weight                    DS: [70, 71.5]
+(0018,1150) Exposure Time                       IS: 'abc'
+(0018,1151) X-Ray Tube Current                  IS: 2.5
+(0018,1152) Exposure                            IS: '8'
+(0018,1153) Exposure in uAs                     IS: '3'
+(0020,4000) Image Comments                      LT: Array of 32 elements
+(0032,1060) Requested Procedure Description     LO: 'tab\there'
+(0040,0254) Performed Procedure Step Descriptio LO: 'ctl\x01\x7f'
+(0040,0280) Comments on the Performed Procedure ST: 'nul\x00pad'
+> convert ct_explicit.dcm big out/big_ct_explicit.dcm
+convert ct_explicit.dcm to big: 1828 bytes, crc32 cdc144f4
+> convert ct_explicit.dcm implicit out/implicit_ct_explicit.dcm
+convert ct_explicit.dcm to implicit: 1810 bytes, crc32 1eed4a25
+> convert mr_implicit.dcm explicit out/explicit_mr_implicit.dcm
+convert mr_implicit.dcm to explicit: 1168 bytes, crc32 39c7d3c2
+> convert mr_implicit.dcm big out/big_mr_implicit.dcm
+convert mr_implicit.dcm to big: 1168 bytes, crc32 0f6b050c
+> convert us_big.dcm explicit out/explicit_us_big.dcm
+convert us_big.dcm to explicit: 910 bytes, crc32 c8b1d76c
+> convert us_big.dcm implicit out/implicit_us_big.dcm
+convert us_big.dcm to implicit: 900 bytes, crc32 b93ec46d
+> convert sr_deflated.dcm explicit out/explicit_sr_deflated.dcm
+convert sr_deflated.dcm to explicit: 812 bytes, crc32 e6245ca7
+> convert jpeg_encaps.dcm explicit out/explicit_jpeg_encaps.dcm
+convert jpeg_encaps.dcm to explicit: 538 bytes, crc32 4c945d23
+> convert sc_1.dcm jpeg out/jpeg_sc_1.dcm
+convert sc_1.dcm to jpeg: 614 bytes, crc32 edb6ff67
+> convert group_len.dcm implicit out/implicit_group_len.dcm
+convert group_len.dcm to implicit: 422 bytes, crc32 bd5d0de4
+> show out/big_mr_implicit.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 176
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: MR Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.2.1.1
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Big Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0008) Image Type                          CS: ['DERIVED', 'SECONDARY']
+(0008,0016) SOP Class UID                       UI: MR Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.2.1.1
+(0008,0020) Study Date                          DA: '20240312'
+(0008,0060) Modality                            CS: 'MR'
+(0008,0080) Institution Name                    LO: 'Northside Imaging'
+(0009,0010) Private Creator                     LO: 'GEMS_IDEN_01'
+(0009,1004) [Product id]                        SH: 'SIGNA'
+(0009,1017) [Series Description]                LT: Array of 45 elements
+(0009,1027) [Image actual date]                 SL: 1234567
+(0009,1030) [Service id]                        SH: 'svc9'
+(0009,1099) Private tag data                    UN: Array of 32 elements
+(0010,0010) Patient's Name                      PN: 'Smith^John'
+(0010,0020) Patient ID                          LO: 'PAT-0002'
+(0010,0030) Patient's Birth Date                DA: '19621103'
+(0010,0040) Patient's Sex                       CS: 'M'
+(0011,1001) Private tag data                    UN: b'\x05\x00'
+(0018,0020) Scanning Sequence                   CS: 'SE'
+(0018,0080) Repetition Time                     DS: '500'
+(0018,0081) Echo Time                           DS: '15.00'
+(0018,0087) Magnetic Field Strength             DS: '1.5'
+(0018,1030) Protocol Name                       LO: 'T1_SAG'
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.2
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.2.1
+(0020,0011) Series Number                       IS: '3'
+(0020,0013) Instance Number                     IS: '12'
+(0028,0002) Samples per Pixel                   US: 1
+(0028,0004) Photometric Interpretation          CS: 'MONOCHROME2'
+(0028,0010) Rows                                US: 2
+(0028,0011) Columns                             US: 4
+(0028,0100) Bits Allocated                      US: 16
+(0028,0101) Bits Stored                         US: 16
+(0028,0102) High Bit                            US: 15
+(0028,0103) Pixel Representation                US: 1
+(0028,0106) Smallest Image Pixel Value          SS: -20
+(0028,0107) Largest Image Pixel Value           SS: 900
+(0040,0275)  Request Attributes Sequence  2 item(s) ---- 
+   (0040,0253) Performed Procedure Step ID         SH: 'PPS-7'
+   (0040,0260)  Performed Protocol Code Sequence  1 item(s) ---- 
+      (0008,0100) Code Value                          SH: '113619'
+      (0008,0102) Coding Scheme Designator            SH: 'DCM'
+      (0008,0104) Code Meaning                        LO: 'Image Processing'
+      ---------
+   (0040,1001) Requested Procedure ID              SH: 'RP-11'
+   ---------
+
+   ---------
+(7FE0,0010) Pixel Data                          OW: b'M\x01X\x01c\x01n\x01~\x01\x89\x01\x94\x01\x9f\x01'
+> show out/explicit_us_big.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 178
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Ultrasound Image Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.3.1.1
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0005) Specific Character Set              CS: 'ISO_IR 192'
+(0008,0016) SOP Class UID                       UI: Ultrasound Image Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.3.1.1
+(0008,0020) Study Date                          DA: '20240313'
+(0008,0060) Modality                            CS: 'US'
+(0008,0080) Institution Name                    LO: 'Κέντρο Υγείας'
+(0010,0010) Patient's Name                      PN: 'Παπαδόπουλος^Νίκος=Παπαδόπουλος^Νίκος'
+(0010,0020) Patient ID                          LO: 'PAT-0003'
+(0010,0030) Patient's Birth Date                DA: '19900505'
+(0010,0040) Patient's Sex                       CS: 'M'
+(0018,6011)  Sequence of Ultrasound Regions  1 item(s) ---- 
+   (0018,6012) Region Spatial Format               US: 1
+   (0018,6014) Region Data Type                    US: 2
+   (0018,6018) Region Location Min X0              UL: 0
+   (0018,601A) Region Location Min Y0              UL: 0
+   (0018,602C) Physical Delta X                    FD: 0.0125
+   (0018,602E) Physical Delta Y                    FD: 0.0125
+   ---------
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.3
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.3.1
+(0020,0011) Series Number                       IS: '1'
+(0020,0013) Instance Number                     IS: '1'
+(0028,0002) Samples per Pixel                   US: 3
+(0028,0004) Photometric Interpretation          CS: 'RGB'
+(0028,0006) Planar Configuration                US: 0
+(0028,0010) Rows                                US: 2
+(0028,0011) Columns                             US: 2
+(0028,0100) Bits Allocated                      US: 8
+(0028,0101) Bits Stored                         US: 8
+(0028,0102) High Bit                            US: 7
+(0028,0103) Pixel Representation                US: 0
+(7FE0,0010) Pixel Data                          OB: b'\n\x14\x1e(2<FPZdnx'
+> show out/explicit_sr_deflated.dcm
+Dataset.file_meta -------------------------------
+(0002,0000) File Meta Information Group Length  UL: 180
+(0002,0001) File Meta Information Version       OB: b'\x00\x01'
+(0002,0002) Media Storage SOP Class UID         UI: Basic Text SR Storage
+(0002,0003) Media Storage SOP Instance UID      UI: 1.2.826.0.1.3680043.10.1138.4.1.1
+(0002,0010) Transfer Syntax UID                 UI: Explicit VR Little Endian
+(0002,0012) Implementation Class UID            UI: 1.2.826.0.1.3680043.10.1138.0.1
+(0002,0013) Implementation Version Name         SH: 'KARA_DCM_1'
+-------------------------------------------------
+(0008,0016) SOP Class UID                       UI: Basic Text SR Storage
+(0008,0018) SOP Instance UID                    UI: 1.2.826.0.1.3680043.10.1138.4.1.1
+(0008,0020) Study Date                          DA: '20240311'
+(0008,0060) Modality                            CS: 'SR'
+(0010,0010) Patient's Name                      PN: 'Doe^Jane^Q'
+(0010,0020) Patient ID                          LO: 'PAT-0001'
+(0010,0030) Patient's Birth Date                DA: '19800214'
+(0010,0040) Patient's Sex                       CS: 'F'
+(0020,000D) Study Instance UID                  UI: 1.2.826.0.1.3680043.10.1138.1
+(0020,000E) Series Instance UID                 UI: 1.2.826.0.1.3680043.10.1138.1.5
+(0020,0011) Series Number                       IS: '5'
+(0020,0013) Instance Number                     IS: '1'
+(0040,A040) Value Type                          CS: 'CONTAINER'
+(0040,A050) Continuity Of Content               CS: 'SEPARATE'
+(0040,A491) Completion Flag                     CS: 'COMPLETE'
+(0040,A493) Verification Flag                   CS: 'UNVERIFIED'
+(0040,A730)  Content Sequence  1 item(s) ---- 
+   (0040,A010) Relationship Type                   CS: 'CONTAINS'
+   (0040,A040) Value Type                          CS: 'TEXT'
+   (0040,A043)  Concept Name Code Sequence  1 item(s) ---- 
+      (0008,0100) Code Value                          SH: '121071'
+      (0008,0102) Coding Scheme Designator            SH: 'DCM'
+      (0008,0104) Code Meaning                        LO: 'Finding'
+      ---------
+   (0040,A160) Text Value                          UT: Array of 34 elements
+   ---------
+> index sc_0.dcm sc_1.dcm sc_2.dcm sc_3.dcm sc_4.dcm sc_5.dcm ct_explicit.dcm mr_implicit.dcm sr_deflated.dcm us_big.dcm
+Study 1.2.826.0.1.3680043.10.1138.1 20240311 'Head "routine"', patient Doe^Jane^Q^^ (PAT-0001)
+  Series 1 CT 'HEAD W/O CONTRAST': 1 instance(s)
+    #1 ct_explicit.dcm
+  Series 5 SR '': 1 instance(s)
+    #1 sr_deflated.dcm
+Study 1.2.826.0.1.3680043.10.1138.2 20240312 '', patient Smith^John (PAT-0002)
+  Series 3 MR '': 1 instance(s)
+    #12 mr_implicit.dcm
+Study 1.2.826.0.1.3680043.10.1138.3 20240313 '', patient Παπαδόπουλος^Νίκος=Παπαδόπουλος^Νίκος (PAT-0003)
+  Series 1 US '': 1 instance(s)
+    #1 us_big.dcm
+Study 1.2.826.0.1.3680043.10.1138.5 20231225 'KNEE', patient Green^Bob (PAT-0005)
+  Series 10 OT 'Knee AP': 1 instance(s)
+    #1 sc_4.dcm
+Study 1.2.826.0.1.3680043.10.1138.7 20240301 'CHEST', patient Brown^Alice (PAT-0007)
+  Series 1 OT 'Frontal': 3 instance(s)
+    #1 sc_1.dcm
+    #2 sc_2.dcm
+    #10 sc_5.dcm
+  Series 2 OT 'Lateral': 2 instance(s)
+    #1 sc_3.dcm
+    #3 sc_0.dcm
+> index sc_2.dcm notes.txt sc_5.dcm
+Study 1.2.826.0.1.3680043.10.1138.7 20240301 'CHEST', patient Brown^Alice (PAT-0007)
+  Series 1 OT 'Frontal': 2 instance(s)
+    #2 sc_2.dcm
+    #10 sc_5.dcm
+  skipped notes.txt: InvalidDicomError

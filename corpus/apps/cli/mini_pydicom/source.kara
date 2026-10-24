@@ -1,0 +1,3546 @@
+// mini_pydicom: pydicom 3.0.1 (MIT, Darcy Mason and pydicom contributors;
+// the private dictionary is generated from GDCM's, BSD), the pure-Python
+// DICOM library behind most Python medical-imaging tools, ported for its
+// file layer: dcmread (filereader.py: the preamble, the file meta, implicit
+// and explicit VR in either byte order, deflated datasets, sequences and
+// items of defined and undefined length, encapsulated pixel data, the
+// guesses it makes about files that disagree with their own transfer
+// syntax), the lazy raw-element conversion of dataset.py, dataelem.py,
+// hooks.py and values.py with valuerep.py's DS, IS, UID and PersonName,
+// the character sets of charset.py, Dataset.__str__, walk and
+// remove_private_tags, and dcmwrite (filewriter.py).
+//
+// The jobs (data/jobs.txt) and the DICOM files mk.py writes are embedded by
+// gen_kara.py as jobs_text() and inputs_text(), with the parts of pydicom's
+// three dictionaries that the inputs reach as dict_text(), uid_text() and
+// private_text(). Each job prints "> " and its words, then what the
+// matching function of oracle.py prints; an exception pydicom lets escape
+// prints as "error: <Class>: <first line of the message>".
+
+// ------------------------------------------------------------ errors
+
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: ref String, msg: ref String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+// tag_in_exception: the same class, the message prefixed with the tag.
+fn with_tag(tag: i64, e: own Exc) -> Exc {
+    let t = tag_str(tag);
+    Exc { kind: e.kind, msg: f"With tag {t} got exception: {e.msg}" }
+}
+
+// ------------------------------------------------------------ values
+
+// A Python value as pydicom holds it in DataElement.value. Ds is DSfloat
+// and Is IS, each keeping its original string; IsF is ISfloat, which keeps
+// one too but prints as a float. Multi is a MultiValue (or the list
+// convert_numbers returns, which prints the same way), Seq a Sequence.
+#[derive(Clone)]
+enum Val {
+    Nil,
+    Str(String),
+    Uid(String),
+    Ds(String),
+    Is(i64, String),
+    IsF(f64, String),
+    Int(i64),
+    Float(f64),
+    Tag(i64),
+    Pn(Vec[String]),
+    Bytes(Vec[u8]),
+    Multi(Vec[Val]),
+    Seq(Vec[Dataset]),
+}
+
+// A RawDataElement: the element as read, before any conversion. vr is ""
+// when the encoding was implicit (pydicom's None); has_value is false when
+// a zero-length value was kept as None rather than b""; tell is where the
+// value starts (value_tell).
+#[derive(Clone)]
+struct Raw {
+    tag: i64,
+    vr: String,
+    length: i64,
+    value: Vec[u8],
+    has_value: bool,
+    tell: i64,
+    implicit: bool,
+    little: bool,
+}
+
+#[derive(Clone)]
+struct Elem {
+    tag: i64,
+    vr: String,
+    val: Val,
+    undef: bool,
+    creator: String,
+    has_creator: bool,
+}
+
+#[derive(Clone)]
+enum Node {
+    R(Raw),
+    E(Elem),
+}
+
+// A Dataset: its entries sorted by tag (iteration order), the encoding it
+// was read with (original_encoding, original_character_set) and the parent
+// encoding a nested item inherits.
+#[derive(Clone)]
+struct Dataset {
+    items: Vec[Node],
+    parent_enc: Vec[String],
+    has_enc: bool,
+    read_implicit: bool,
+    read_little: bool,
+    read_charset: Vec[String],
+    undef_item: bool,
+}
+
+const UNDEF: i64 = 0xFFFFFFFF;
+const ITEM_TAG: i64 = 0xFFFEE000;
+const ITEM_DELIM: i64 = 0xFFFEE00D;
+const SEQ_DELIM: i64 = 0xFFFEE0DD;
+const PIXEL_DATA: i64 = 0x7FE00010;
+const CHARSET_TAG: i64 = 0x00080005;
+
+fn new_dataset(parent: ref Vec[String]) -> Dataset {
+    Dataset {
+        items: Vec.new(),
+        parent_enc: parent.clone(),
+        has_enc: false,
+        read_implicit: false,
+        read_little: false,
+        read_charset: Vec.new(),
+        undef_item: false,
+    }
+}
+
+fn default_enc() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("iso8859".to_string());
+    v
+}
+
+fn entry_tag(e: ref Node) -> i64 {
+    match e {
+        Node.R(r) => r.tag,
+        Node.E(el) => el.tag,
+    }
+}
+
+// The index of tag, or of where it would go, and whether it is there.
+fn find_slot(ds: ref Dataset, tag: i64) -> (i64, bool) {
+    let mut lo: i64 = 0;
+    let mut hi: i64 = ds.items.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let t = entry_tag(ds.items[mid]);
+        if t == tag {
+            return (mid, true);
+        }
+        if t < tag {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo, false)
+}
+
+fn has_tag(ds: ref Dataset, tag: i64) -> bool {
+    let (_, found) = find_slot(ds, tag);
+    found
+}
+
+// dict assignment: replaces an existing entry in place.
+fn put_entry(ds: mut ref Dataset, e: own Node) {
+    let (i, found) = find_slot(ds, entry_tag(e));
+    if found {
+        ds.items[i] = e;
+    } else {
+        ds.items.insert(i, e);
+    }
+}
+
+fn del_entry(ds: mut ref Dataset, tag: i64) {
+    let (i, found) = find_slot(ds, tag);
+    if found {
+        ds.items.remove(i);
+    }
+}
+
+fn sorted_tags(ds: ref Dataset) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for e in ds.items.iter() {
+        out.push(entry_tag(e));
+    }
+    out
+}
+
+// ------------------------------------------------------------ bytes
+
+fn hex_digit(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'a' + n - 10 }
+}
+
+fn hex_upper(v: i64, width: i64) -> String {
+    let digits = "0123456789ABCDEF".bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut x = v;
+    while x > 0 {
+        out.insert(0, digits[x % 16]);
+        x = x / 16;
+    }
+    if out.len() == 0 {
+        out.push(b'0');
+    }
+    while out.len() < width {
+        out.insert(0, b'0');
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn tag_str(tag: i64) -> String {
+    let g = hex_upper(tag >> 16, 4);
+    let e = hex_upper(tag & 0xFFFF, 4);
+    f"({g},{e})"
+}
+
+fn slice(b: ref Vec[u8], start: i64, end: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    let stop = if end > b.len() { b.len() } else { end };
+    while i < stop {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn u16_at(b: ref Vec[u8], i: i64, little: bool) -> i64 {
+    if little {
+        (b[i] as i64) | ((b[i + 1] as i64) << 8)
+    } else {
+        ((b[i] as i64) << 8) | (b[i + 1] as i64)
+    }
+}
+
+fn u32_at(b: ref Vec[u8], i: i64, little: bool) -> i64 {
+    if little {
+        u16_at(b, i, true) | (u16_at(b, i + 2, true) << 16)
+    } else {
+        (u16_at(b, i, false) << 16) | u16_at(b, i + 2, false)
+    }
+}
+
+fn u64_at(b: ref Vec[u8], i: i64, little: bool) -> u64 {
+    let lo = u32_at(b, if little { i } else { i + 4 }, little) as u64;
+    let hi = u32_at(b, if little { i + 4 } else { i }, little) as u64;
+    (hi << 32) | lo
+}
+
+fn push_uint(out: mut ref Vec[u8], v: u64, n: i64, little: bool) {
+    let mut k: i64 = 0;
+    while k < n {
+        let shift = if little { k * 8 } else { (n - 1 - k) * 8 };
+        out.push(((v >> (shift as u64)) & 0xFF) as u8);
+        k += 1;
+    }
+}
+
+fn push_all(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for x in b.iter() {
+        out.push(*x);
+    }
+}
+
+fn find_bytes(hay: ref Vec[u8], needle: ref Vec[u8], from: i64) -> i64 {
+    let n = needle.len();
+    let mut i = from;
+    while i + n <= hay.len() {
+        let mut k: i64 = 0;
+        while k < n and hay[i + k] == needle[k] {
+            k += 1;
+        }
+        if k == n {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn tag_bytes(tag: i64, little: bool) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    push_uint(mut out, (tag >> 16) as u64, 2, little);
+    push_uint(mut out, (tag & 0xFFFF) as u64, 2, little);
+    out
+}
+
+fn crc32(d: ref Vec[u8]) -> i64 {
+    let mut c: i64 = 0xFFFFFFFF;
+    for b in d.iter() {
+        c = c ^ (*b as i64);
+        let mut k = 0;
+        while k < 8 {
+            if (c & 1) == 1 {
+                c = (c >> 1) ^ 0xEDB88320;
+            } else {
+                c = c >> 1;
+            }
+            k += 1;
+        }
+    }
+    c ^ 0xFFFFFFFF
+}
+
+// ------------------------------------------------------------ text
+
+// bytes.decode for the Python codecs pydicom's charsets map to: Latin-1
+// under any of its names, and UTF-8, which pydicom decodes with
+// errors="replace" once a strict decode fails.
+fn decode(b: ref Vec[u8], enc: ref String) -> String {
+    if enc == "UTF8" {
+        return decode_utf8(b);
+    }
+    let mut out = String.new();
+    for c in b.iter() {
+        out.push(cp_char(*c as u32));
+    }
+    out
+}
+
+fn decode_utf8(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    let n = b.len();
+    while i < n {
+        let c = b[i] as u32;
+        let (need, min, lead) = if c < 0x80 {
+            (0, 0u32, c)
+        } else if c >= 0xC2 and c < 0xE0 {
+            (1, 0x80u32, c & 0x1F)
+        } else if c >= 0xE0 and c < 0xF0 {
+            (2, 0x800u32, c & 0x0F)
+        } else if c >= 0xF0 and c < 0xF5 {
+            (3, 0x10000u32, c & 0x07)
+        } else {
+            (-1, 0u32, 0u32)
+        };
+        if need < 0 {
+            out.push(cp_char(0xFFFDu32));
+            i += 1;
+            continue;
+        }
+        let mut cp = lead;
+        let mut k: i64 = 1;
+        let mut ok = true;
+        while k <= need {
+            if i + k >= n or (b[i + k] & 0xC0) != 0x80 {
+                ok = false;
+                break;
+            }
+            cp = (cp << 6) | ((b[i + k] & 0x3F) as u32);
+            k += 1;
+        }
+        if not ok or cp < min or (cp >= 0xD800 and cp < 0xE000) or cp > 0x10FFFF {
+            out.push(cp_char(0xFFFDu32));
+            i += if k > 1 { k } else { 1 };
+            continue;
+        }
+        out.push(cp_char(cp));
+        i += need + 1;
+    }
+    out
+}
+
+fn encode(s: ref String, enc: ref String) -> Vec[u8] {
+    if enc == "UTF8" {
+        return s.bytes().to_vec();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for c in s.chars() {
+        let cp = c as u32;
+        out.push(if cp < 256 { cp as u8 } else { b'?' });
+    }
+    out
+}
+
+fn cp_char(cp: u32) -> char {
+    match char.try_from(cp) {
+        Ok(c) => c,
+        Err(_) => '\u{FFFD}',
+    }
+}
+
+fn char_len(s: ref String) -> i64 {
+    let mut n: i64 = 0;
+    for c in s.bytes() {
+        if (c & 0xC0) != 0x80 {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn take_chars(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let mut k: i64 = 0;
+    for c in s.chars() {
+        if k == n {
+            break;
+        }
+        out.push(c);
+        k += 1;
+    }
+    out
+}
+
+fn pad_right(s: ref String, width: i64, fill: char) -> String {
+    let mut out = s.to_string();
+    let mut n = char_len(s);
+    while n < width {
+        out.push(fill);
+        n += 1;
+    }
+    out
+}
+
+fn push_esc(out: mut ref String, c: u32) {
+    out.push('\\');
+    out.push('x');
+    out.push(cp_char(hex_digit((c / 16) as u8) as u32));
+    out.push(cp_char(hex_digit((c % 16) as u8) as u32));
+}
+
+// Python's str repr. Of the non-ASCII characters only those of Latin-1
+// that Python does not print are escaped; the rest are taken as printable.
+fn str_repr(s: ref String) -> String {
+    let quote = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        let cp = c as u32;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if cp == 9 {
+            out.push_str("\\t");
+        } else if cp == 10 {
+            out.push_str("\\n");
+        } else if cp == 13 {
+            out.push_str("\\r");
+        } else if cp < 32 or (cp >= 127 and cp <= 160) or cp == 173 {
+            push_esc(mut out, cp);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let quote = if b.contains(b'\'') and not b.contains(b'"') { b'"' } else { b'\'' };
+    let mut out = String.new();
+    out.push('b');
+    out.push(cp_char(quote as u32));
+    for x in b.iter() {
+        let c = *x;
+        if c == quote or c == b'\\' {
+            out.push('\\');
+            out.push(cp_char(c as u32));
+        } else if c == b'\t' {
+            out.push_str("\\t");
+        } else if c == b'\n' {
+            out.push_str("\\n");
+        } else if c == b'\r' {
+            out.push_str("\\r");
+        } else if c < 32 or c >= 127 {
+            push_esc(mut out, c as u32);
+        } else {
+            out.push(cp_char(c as u32));
+        }
+    }
+    out.push(cp_char(quote as u32));
+    out
+}
+
+fn is_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}'
+}
+
+// str.strip() / rstrip(chars) / split.
+fn strip(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a: i64 = 0;
+    let mut b: i64 = cs.len();
+    while a < b and is_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out = String.new();
+    let mut i = a;
+    while i < b {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+fn rstrip_set(s: ref String, set: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let drop: Vec[char] = set.chars().collect();
+    let mut b: i64 = cs.len();
+    while b > 0 and drop.contains(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+fn rstrip_ws(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut b: i64 = cs.len();
+    while b > 0 and is_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn join(parts: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for p in parts.iter() {
+        if not first {
+            out.push_str(sep);
+        }
+        first = false;
+        out.push_str(p);
+    }
+    out
+}
+
+// The ~ escapes gen_kara.py's esc() writes.
+fn unesc(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < cs.len() {
+        if cs[i] == '~' and i + 1 < cs.len() {
+            let c = cs[i + 1];
+            out.push(if c == 't' { '~' } else if c == 'b' { '\\' } else if c == 'q' { '"' } else if c == 'o' { '{' } else { '}' });
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ numbers
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// int(s) for a str: surrounding whitespace, an optional sign, digits.
+fn py_int(s: ref String) -> Option[i64] {
+    let cs: Vec[char] = strip(s).chars().collect();
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    if i >= cs.len() {
+        return None;
+    }
+    let mut v: i64 = 0;
+    while i < cs.len() {
+        if not is_digit(cs[i]) {
+            return None;
+        }
+        v = v * 10 + ((cs[i] as u32) - 48) as i64;
+        i += 1;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// float(s) for a str: whitespace, a sign, digits with an optional point
+// and exponent, or inf / infinity / nan.
+fn py_float(s: ref String) -> Option[f64] {
+    let t = strip(s);
+    let cs: Vec[char] = t.chars().collect();
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    let mut rest = String.new();
+    let mut k = i;
+    while k < cs.len() {
+        rest.push(cs[k].to_ascii_lowercase());
+        k += 1;
+    }
+    if rest == "inf" or rest == "infinity" {
+        return Some(if neg { -f64.INFINITY } else { f64.INFINITY });
+    }
+    if rest == "nan" {
+        return Some(f64.NAN);
+    }
+    let n = cs.len();
+    let mut j = i;
+    let mut digits: i64 = 0;
+    while j < n and is_digit(cs[j]) {
+        j += 1;
+        digits += 1;
+    }
+    if j < n and cs[j] == '.' {
+        j += 1;
+        while j < n and is_digit(cs[j]) {
+            j += 1;
+            digits += 1;
+        }
+    }
+    if digits == 0 {
+        return None;
+    }
+    if j < n and (cs[j] == 'e' or cs[j] == 'E') {
+        j += 1;
+        if j < n and (cs[j] == '+' or cs[j] == '-') {
+            j += 1;
+        }
+        let e0 = j;
+        while j < n and is_digit(cs[j]) {
+            j += 1;
+        }
+        if j == e0 {
+            return None;
+        }
+    }
+    if j != n {
+        return None;
+    }
+    let mut lit = String.new();
+    let mut q = i;
+    if neg {
+        lit.push('-');
+    }
+    if cs[i] == '.' {
+        lit.push('0');
+    }
+    while q < n {
+        lit.push(cs[q]);
+        if cs[q] == '.' and (q + 1 == n or not is_digit(cs[q + 1])) {
+            lit.push('0');
+        }
+        q += 1;
+    }
+    match f64.parse(lit) {
+        Ok(x) => Some(x),
+        Err(_) => None,
+    }
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == f64.INFINITY {
+        return "inf".to_string();
+    }
+    if x == -f64.INFINITY {
+        return "-inf".to_string();
+    }
+    f"{x}"
+}
+
+fn f32_bits_to_f64(bits: i64) -> f64 {
+    let sign = (bits >> 31) & 1;
+    let exp = (bits >> 23) & 0xFF;
+    let man = bits & 0x7FFFFF;
+    let mut d: u64 = (sign as u64) << 63;
+    if exp == 0xFF {
+        d = d | (0x7FFu64 << 52) | ((man as u64) << 29);
+    } else if exp == 0 {
+        if man != 0 {
+            // subnormal float32: normalise into a double
+            let mut m = man;
+            let mut e: i64 = -126;
+            while (m & 0x800000) == 0 {
+                m = m << 1;
+                e -= 1;
+            }
+            m = m & 0x7FFFFF;
+            d = d | (((e + 1023) as u64) << 52) | ((m as u64) << 29);
+        }
+    } else {
+        d = d | (((exp - 127 + 1023) as u64) << 52) | ((man as u64) << 29);
+    }
+    d.bits_as_f64()
+}
+
+// struct.pack('f', x): round to nearest even float32.
+fn f64_to_f32_bits(x: f64) -> i64 {
+    let bits = x.to_bits();
+    let sign = ((bits >> 63) & 1) as i64;
+    let exp = ((bits >> 52) & 0x7FF) as i64;
+    let man = (bits & 0xFFFFFFFFFFFFF) as i64;
+    if exp == 0x7FF {
+        let m = if man != 0 { 0x400000 | (man >> 29) } else { 0 };
+        return (sign << 31) | (0xFF << 23) | m;
+    }
+    let e = exp - 1023 + 127;
+    if e >= 0xFF {
+        return (sign << 31) | (0xFF << 23);
+    }
+    if e <= 0 {
+        if e < -24 {
+            return sign << 31;
+        }
+        let full = man | (1 << 52);
+        let shift = 29 + 1 - e;
+        let mut m = full >> shift;
+        let rem = full & ((1 << shift) - 1);
+        let half = 1 << (shift - 1);
+        if rem > half or (rem == half and (m & 1) == 1) {
+            m += 1;
+        }
+        return (sign << 31) | m;
+    }
+    let mut m = man >> 29;
+    let rem = man & 0x1FFFFFFF;
+    let mut ee = e;
+    if rem > 0x10000000 or (rem == 0x10000000 and (m & 1) == 1) {
+        m += 1;
+        if m == 0x800000 {
+            m = 0;
+            ee += 1;
+        }
+    }
+    (sign << 31) | (ee << 23) | m
+}
+
+// ------------------------------------------------------------ dictionaries
+
+#[derive(Clone)]
+struct DictEntry {
+    vr: String,
+    name: String,
+    keyword: String,
+}
+
+#[derive(Clone)]
+struct UidEntry {
+    name: String,
+    kind: String,
+}
+
+#[derive(Clone)]
+struct PrivEntry {
+    vr: String,
+    desc: String,
+}
+
+// The three dictionaries, built once from the generated tables.
+struct Ctx {
+    tags: Map[i64, DictEntry],
+    keywords: Map[String, i64],
+    uids: Map[String, UidEntry],
+    privs: Map[String, Map[String, PrivEntry]],
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a' + 10) as i64
+    } else {
+        (c - b'A' + 10) as i64
+    }
+}
+
+fn parse_hex(s: ref String) -> i64 {
+    let mut v: i64 = 0;
+    for c in s.bytes() {
+        v = v * 16 + hex_val(c);
+    }
+    v
+}
+
+fn lines_of(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for ln in split_on(text, '\n').into_iter() {
+        if ln.len() > 0 {
+            out.push(ln);
+        }
+    }
+    out
+}
+
+fn make_ctx() -> Ctx {
+    let mut tags: Map[i64, DictEntry] = Map.new();
+    let mut keywords: Map[String, i64] = Map.new();
+    for ln in lines_of(dict_text()) {
+        let f = split_on(ln, '|');
+        let tag = parse_hex(f[0]);
+        tags.insert(tag, DictEntry { vr: f[1].clone(), name: unesc(f[3]), keyword: f[4].clone() });
+        if f[4].len() > 0 {
+            keywords.insert(f[4].clone(), tag);
+        }
+    }
+    let mut uids: Map[String, UidEntry] = Map.new();
+    for ln in lines_of(uid_text()) {
+        let f = split_on(ln, '|');
+        uids.insert(f[0].clone(), UidEntry { name: unesc(f[1]), kind: f[2].clone() });
+    }
+    let mut privs: Map[String, Map[String, PrivEntry]] = Map.new();
+    for ln in lines_of(private_text()) {
+        let f = split_on(ln, '|');
+        let creator = unesc(f[0]);
+        if not privs.contains_key(creator.clone()) {
+            privs.insert(creator.clone(), Map.new());
+        }
+        let mut table = privs.get(creator.clone()).unwrap().clone();
+        table.insert(f[1].clone(), PrivEntry { vr: f[2].clone(), desc: unesc(f[3]) });
+        privs.insert(creator, table);
+    }
+    Ctx { tags: tags, keywords: keywords, uids: uids, privs: privs }
+}
+
+fn dict_vr(c: ref Ctx, tag: i64) -> Option[String] {
+    match c.tags.get(tag) {
+        Some(e) => Some(e.vr.clone()),
+        None => None,
+    }
+}
+
+fn keyword_tag(c: ref Ctx, kw: ref String) -> Option[i64] {
+    match c.keywords.get(kw.to_string()) {
+        Some(t) => Some(*t),
+        None => None,
+    }
+}
+
+// datadict.get_private_entry: the exact key, then "ggggxxee", then
+// "ggxxxxee".
+fn private_entry(c: ref Ctx, tag: i64, creator: ref String) -> Option[PrivEntry] {
+    let table = match c.privs.get(creator.to_string()) {
+        Some(t) => t,
+        None => return None,
+    };
+    let g = hex_upper(tag >> 16, 4);
+    let e = hex_upper(tag & 0xFFFF, 4);
+    let e_lo = take_last(e, 2);
+    let g_hi = take_chars(g, 2);
+    let keys = [f"{g}{e}", f"{g}xx{e_lo}", f"{g_hi}xxxx{e_lo}"];
+    for k in keys.iter() {
+        match table.get(k.clone()) {
+            Some(p) => return Some(p.clone()),
+            None => {}
+        }
+    }
+    None
+}
+
+fn take_last(s: ref String, n: i64) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i = if cs.len() > n { cs.len() - n } else { 0 };
+    while i < cs.len() {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+fn uid_name(c: ref Ctx, uid: ref String) -> String {
+    match c.uids.get(uid.to_string()) {
+        Some(u) => u.name.clone(),
+        None => uid.to_string(),
+    }
+}
+
+fn is_private_uid(uid: ref String) -> bool {
+    take_chars(uid, 14) != "1.2.840.10008."
+}
+
+fn is_transfer_syntax(c: ref Ctx, uid: ref String) -> bool {
+    if is_private_uid(uid) {
+        return false;
+    }
+    match c.uids.get(uid.to_string()) {
+        Some(u) => u.kind == "Transfer Syntax",
+        None => false,
+    }
+}
+
+// (is_implicit_VR, is_little_endian) of a transfer syntax.
+fn ts_encoding(uid: ref String) -> (bool, bool) {
+    (uid == "1.2.840.10008.1.2", uid != "1.2.840.10008.1.2.2")
+}
+
+fn ts_compressed(uid: ref String) -> bool {
+    not (uid == "1.2.840.10008.1.2" or uid == "1.2.840.10008.1.2.1" or uid == "1.2.840.10008.1.2.2" or uid == "1.2.840.10008.1.2.1.99")
+}
+
+// ------------------------------------------------------------ VR sets
+
+fn is_std_vr(vr: ref String) -> bool {
+    let all = ["AE", "AS", "AT", "CS", "DA", "DS", "DT", "FD", "FL", "IS", "LO", "LT", "OB", "OD", "OF", "OL", "OW", "OV", "PN", "SH", "SL", "SQ", "SS", "ST", "SV", "TM", "UC", "UI", "UL", "UN", "UR", "US", "UT", "UV"];
+    for v in all.iter() {
+        if vr == *v {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_ambiguous(vr: ref String) -> bool {
+    vr == "US or SS or OW" or vr == "US or SS" or vr == "US or OW" or vr == "OB or OW"
+}
+
+fn is_known_vr(vr: ref String) -> bool {
+    is_std_vr(vr) or is_ambiguous(vr)
+}
+
+fn is_len16(vr: ref String) -> bool {
+    let all = ["AE", "AS", "AT", "CS", "DA", "DS", "DT", "FL", "FD", "IS", "LO", "LT", "PN", "SH", "SL", "SS", "ST", "TM", "UI", "UL", "US"];
+    for v in all.iter() {
+        if vr == *v {
+            return true;
+        }
+    }
+    false
+}
+
+// EXPLICIT_VR_LENGTH_32: the standard VRs with a 4-byte length.
+fn is_len32(vr: ref String) -> bool {
+    is_std_vr(vr) and not is_len16(vr)
+}
+
+fn is_bytes_vr(vr: ref String) -> bool {
+    vr == "OB" or vr == "OD" or vr == "OF" or vr == "OL" or vr == "OV" or vr == "OW" or vr == "UN"
+}
+
+fn is_long_value_vr(vr: ref String) -> bool {
+    vr == "LT" or vr == "UC" or vr == "UT" or is_bytes_vr(vr) or is_ambiguous(vr)
+}
+
+fn is_custom_charset_vr(vr: ref String) -> bool {
+    vr == "LO" or vr == "LT" or vr == "PN" or vr == "SH" or vr == "ST" or vr == "UC" or vr == "UT"
+}
+
+fn is_default_charset_vr(vr: ref String) -> bool {
+    vr == "AE" or vr == "AS" or vr == "CS" or vr == "DA" or vr == "DS" or vr == "DT" or vr == "IS" or vr == "TM" or vr == "UI" or vr == "UR"
+}
+
+fn is_allow_backslash(vr: ref String) -> bool {
+    vr == "LT" or vr == "ST" or vr == "UT" or vr == "US or SS or OW" or vr == "US or OW" or vr == "OB or OW" or is_bytes_vr(vr)
+}
+
+const AMBIGUOUS_US_SS_TAGS: Array[i64, 20] = [0x00189810, 0x00221452, 0x00280104, 0x00280105, 0x00280106, 0x00280107, 0x00280108, 0x00280109, 0x00280110, 0x00280111, 0x00280120, 0x00280121, 0x00281101, 0x00281102, 0x00281103, 0x00283002, 0x00409211, 0x00409216, 0x00603004, 0x00603006];
+
+fn is_us_ss_tag(tag: i64) -> bool {
+    for t in AMBIGUOUS_US_SS_TAGS.iter() {
+        if *t == tag {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ charsets
+
+// charset.convert_encodings for one Specific Character Set term: the
+// Python codec it maps to. Only the Latin-1 and UTF-8 codecs decode
+// differently in this port; the other codecs keep their names.
+fn python_encoding(term: ref String) -> Option[String] {
+    let table = [
+        ("", "iso8859"), ("ISO_IR 6", "iso8859"), ("ISO_IR 13", "shift_jis"),
+        ("ISO_IR 100", "latin_1"), ("ISO_IR 101", "iso8859_2"), ("ISO_IR 109", "iso8859_3"),
+        ("ISO_IR 110", "iso8859_4"), ("ISO_IR 126", "iso_ir_126"), ("ISO_IR 127", "iso_ir_127"),
+        ("ISO_IR 138", "iso_ir_138"), ("ISO_IR 144", "iso_ir_144"), ("ISO_IR 148", "iso_ir_148"),
+        ("ISO_IR 166", "iso_ir_166"), ("ISO 2022 IR 6", "iso8859"), ("ISO 2022 IR 13", "shift_jis"),
+        ("ISO 2022 IR 87", "iso2022_jp"), ("ISO 2022 IR 100", "latin_1"), ("ISO 2022 IR 101", "iso8859_2"),
+        ("ISO 2022 IR 109", "iso8859_3"), ("ISO 2022 IR 110", "iso8859_4"), ("ISO 2022 IR 126", "iso_ir_126"),
+        ("ISO 2022 IR 127", "iso_ir_127"), ("ISO 2022 IR 138", "iso_ir_138"), ("ISO 2022 IR 144", "iso_ir_144"),
+        ("ISO 2022 IR 148", "iso_ir_148"), ("ISO 2022 IR 149", "euc_kr"), ("ISO 2022 IR 159", "iso2022_jp_2"),
+        ("ISO 2022 IR 166", "iso_ir_166"), ("ISO 2022 IR 58", "iso_ir_58"), ("ISO_IR 192", "UTF8"),
+        ("GB18030", "GB18030"), ("ISO 2022 GBK", "GBK"), ("ISO 2022 58", "GB2312"), ("GBK", "GBK"),
+    ];
+    for (k, v) in table.iter() {
+        if term == *k {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+// The codec names codecs.lookup accepts among those this port knows.
+fn is_codec_name(s: ref String) -> bool {
+    let names = ["iso8859", "latin_1", "latin1", "latin-1", "UTF8", "utf8", "utf-8", "shift_jis", "iso8859_2", "iso8859_3", "iso8859_4", "iso_ir_126", "iso_ir_127", "iso_ir_138", "iso_ir_144", "iso_ir_148", "iso_ir_166", "iso2022_jp", "euc_kr", "iso2022_jp_2", "iso_ir_58", "GB18030", "GBK", "GB2312"];
+    for n in names.iter() {
+        if s == *n {
+            return true;
+        }
+    }
+    false
+}
+
+fn corrected_encoding(term: ref String) -> String {
+    let cs: Vec[char] = term.chars().collect();
+    let mut patched = String.new();
+    if cs.len() >= 6 and take_chars(term, 3) == "ISO" and cs[3] != '_' and cs[4] == 'I' and cs[5] == 'R' {
+        patched = f"ISO_IR{drop_chars(term, 6)}";
+    } else if cs.len() >= 12 and take_chars(term, 3) == "ISO" and take_chars(drop_chars(term, 4), 4) == "2022" and cs[9] == 'I' and cs[10] == 'R' and take_chars(term, 12) != "ISO 2022 IR " {
+        patched = f"ISO 2022 IR {drop_chars(term, 12)}";
+    }
+    if patched.len() > 0 {
+        return match python_encoding(patched) {
+            Some(e) => e,
+            None => "iso8859".to_string(),
+        };
+    }
+    if is_codec_name(term) {
+        return term.to_string();
+    }
+    "iso8859".to_string()
+}
+
+fn drop_chars(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let mut k: i64 = 0;
+    for c in s.chars() {
+        if k >= n {
+            out.push(c);
+        }
+        k += 1;
+    }
+    out
+}
+
+fn convert_encodings(terms: ref Vec[String]) -> Vec[String] {
+    let mut ts = terms.clone();
+    if ts.len() == 0 {
+        ts.push(String.new());
+    }
+    if ts[0].len() == 0 {
+        ts[0] = "ISO_IR 6".to_string();
+    }
+    let mut out: Vec[String] = Vec.new();
+    for t in ts.iter() {
+        out.push(match python_encoding(t) {
+            Some(e) => e,
+            None => corrected_encoding(t),
+        });
+    }
+    out
+}
+
+// The Specific Character Set value as convert_encodings sees it.
+fn charset_terms(v: ref Val) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    match v {
+        Val.Str(s) => out.push(s.clone()),
+        Val.Multi(xs) => {
+            for x in xs.iter() {
+                match x {
+                    Val.Str(s) => out.push(s.clone()),
+                    _ => out.push(String.new()),
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+// ------------------------------------------------------------ inflate
+
+// The raw-deflate decoder of the mini_png port, for the deflated transfer
+// syntax (zlib.decompress(data, -15)).
+const LEN_BASE: Array[i64, 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+const LEN_EXTRA: Array[i64, 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+const DIST_BASE: Array[i64, 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+const DIST_EXTRA: Array[i64, 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+const CL_ORDER: Array[i64, 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+fn zeros(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+
+fn truncated() -> String {
+    "incomplete or truncated stream".to_string()
+}
+
+// A canonical Huffman code: how many codes of each length, and the
+// symbols in code order.
+struct Huff {
+    count: Vec[i64],
+    symbol: Vec[i64],
+    max: i64,
+}
+
+fn make_huff(lens: ref Vec[i64], start: i64, n: i64) -> Huff {
+    let mut count = zeros(16);
+    for i in 0..n {
+        count[lens[start + i]] += 1;
+    }
+    let mut offs = zeros(16);
+    for len in 1..15 {
+        offs[len + 1] = offs[len] + count[len];
+    }
+    let mut symbol = zeros(n);
+    for sym in 0..n {
+        let l = lens[start + sym];
+        if l != 0 {
+            symbol[offs[l]] = sym;
+            offs[l] += 1;
+        }
+    }
+    let mut max = 0;
+    for len in 1..16 {
+        if count[len] > 0 {
+            max = len;
+        }
+    }
+    Huff { count, symbol, max }
+}
+
+// zlib's inflate_table refuses an over-subscribed code, and an incomplete
+// one unless it is a single code of one bit for literals or distances.
+fn huff_ok(h: ref Huff, code_lengths: bool) -> bool {
+    let mut left = 1;
+    for len in 1..16 {
+        left = left << 1;
+        left -= h.count[len];
+        if left < 0 {
+            return false;
+        }
+    }
+    if left > 0 and h.max > 0 and (code_lengths or h.max != 1) {
+        return false;
+    }
+    true
+}
+
+struct Inflater {
+    pos: i64,
+    buf: i64,
+    cnt: i64,
+    out: Vec[i64],
+}
+
+impl Inflater {
+    fn bits(mut ref self, src: ref Vec[i64], need: i64) -> Result[i64, String] {
+        while self.cnt < need {
+            if self.pos >= src.len() {
+                return Err(truncated());
+            }
+            self.buf = self.buf | (src[self.pos] << self.cnt);
+            self.pos += 1;
+            self.cnt += 8;
+        }
+        let v = self.buf & ((1 << need) - 1);
+        self.buf = self.buf >> need;
+        self.cnt -= need;
+        Ok(v)
+    }
+
+    // The next symbol, or -1 for a code the table does not have.
+    fn symbol(mut ref self, src: ref Vec[i64], h: ref Huff) -> Result[i64, String] {
+        let mut code = 0;
+        let mut first = 0;
+        let mut index = 0;
+        let mut len = 1;
+        while len <= h.max {
+            code = code | self.bits(src, 1)?;
+            let count = h.count[len];
+            if code - count < first {
+                return Ok(h.symbol[index + code - first]);
+            }
+            index += count;
+            first += count;
+            first = first << 1;
+            code = code << 1;
+            len += 1;
+        }
+        Ok(-1)
+    }
+
+    fn stored(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        self.buf = 0;
+        self.cnt = 0;
+        let len = self.bits(src, 16)?;
+        let nlen = self.bits(src, 16)?;
+        if len != (nlen ^ 0xFFFF) {
+            return Err("invalid stored block lengths".to_string());
+        }
+        for k in 0..len {
+            if self.pos >= src.len() {
+                return Err(truncated());
+            }
+            self.out.push(src[self.pos]);
+            self.pos += 1;
+        }
+        Ok(())
+    }
+
+    fn codes(mut ref self, src: ref Vec[i64], lit: ref Huff, dist: ref Huff) -> Result[(), String] {
+        loop {
+            let sym = self.symbol(src, lit)?;
+            if sym < 0 {
+                return Err("invalid literal/length code".to_string());
+            }
+            if sym < 256 {
+                self.out.push(sym);
+            } else if sym == 256 {
+                return Ok(());
+            } else {
+                let k = sym - 257;
+                if k >= 29 {
+                    return Err("invalid literal/length code".to_string());
+                }
+                let len = LEN_BASE[k] + self.bits(src, LEN_EXTRA[k])?;
+                let ds = self.symbol(src, dist)?;
+                if ds < 0 or ds >= 30 {
+                    return Err("invalid distance code".to_string());
+                }
+                let d = DIST_BASE[ds] + self.bits(src, DIST_EXTRA[ds])?;
+                if d > self.out.len() {
+                    return Err("invalid distance too far back".to_string());
+                }
+                for m in 0..len {
+                    let v = self.out[self.out.len() - d];
+                    self.out.push(v);
+                }
+            }
+        }
+    }
+
+    fn fixed(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        let mut lens: Vec[i64] = Vec.new();
+        for i in 0..288 {
+            lens.push(if i < 144 { 8 } else if i < 256 { 9 } else if i < 280 { 7 } else { 8 });
+        }
+        let lit = make_huff(lens, 0, 288);
+        let mut dl: Vec[i64] = Vec.new();
+        for i in 0..30 {
+            dl.push(5);
+        }
+        let dist = make_huff(dl, 0, 30);
+        self.codes(src, lit, dist)
+    }
+
+    fn dynamic(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        let nlen = self.bits(src, 5)? + 257;
+        let ndist = self.bits(src, 5)? + 1;
+        let ncode = self.bits(src, 4)? + 4;
+        if nlen > 286 or ndist > 30 {
+            return Err("too many length or distance symbols".to_string());
+        }
+        let mut cl = zeros(19);
+        for i in 0..ncode {
+            cl[CL_ORDER[i]] = self.bits(src, 3)?;
+        }
+        let clh = make_huff(cl, 0, 19);
+        if not huff_ok(clh, true) {
+            return Err("invalid code lengths set".to_string());
+        }
+        let total = nlen + ndist;
+        let mut lens = zeros(total);
+        let mut idx = 0;
+        while idx < total {
+            let sym = self.symbol(src, clh)?;
+            if sym < 0 {
+                return Err("invalid code lengths set".to_string());
+            }
+            if sym < 16 {
+                lens[idx] = sym;
+                idx += 1;
+            } else {
+                let mut v = 0;
+                let mut rep = 0;
+                if sym == 16 {
+                    if idx == 0 {
+                        return Err("invalid bit length repeat".to_string());
+                    }
+                    v = lens[idx - 1];
+                    rep = 3 + self.bits(src, 2)?;
+                } else if sym == 17 {
+                    rep = 3 + self.bits(src, 3)?;
+                } else {
+                    rep = 11 + self.bits(src, 7)?;
+                }
+                if idx + rep > total {
+                    return Err("invalid bit length repeat".to_string());
+                }
+                for k in 0..rep {
+                    lens[idx] = v;
+                    idx += 1;
+                }
+            }
+        }
+        if lens[256] == 0 {
+            return Err("invalid code -- missing end-of-block".to_string());
+        }
+        let lit = make_huff(lens, 0, nlen);
+        if not huff_ok(lit, false) {
+            return Err("invalid literal/lengths set".to_string());
+        }
+        let dist = make_huff(lens, nlen, ndist);
+        if not huff_ok(dist, false) {
+            return Err("invalid distances set".to_string());
+        }
+        self.codes(src, lit, dist)
+    }
+}
+
+
+// zlib.decompress(data, -15): blocks until the final one; what follows the
+// stream (the pad byte dcmwrite adds) is ignored.
+fn raw_inflate(data: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut z: Vec[i64] = Vec.new();
+    for b in data.iter() {
+        z.push(*b as i64);
+    }
+    let mut s = Inflater { pos: 0, buf: 0, cnt: 0, out: Vec.new() };
+    let r = inflate_blocks(mut s, z);
+    match r {
+        Ok(()) => {}
+        Err(m) => return Err(exc("error", f"Error -3 while decompressing data: {m}")),
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for v in s.out.iter() {
+        out.push(*v as u8);
+    }
+    Ok(out)
+}
+
+fn inflate_blocks(s: mut ref Inflater, z: ref Vec[i64]) -> Result[(), String] {
+    loop {
+        let last = s.bits(z, 1)?;
+        let kind = s.bits(z, 2)?;
+        if kind == 0 {
+            s.stored(z)?;
+        } else if kind == 1 {
+            s.fixed(z)?;
+        } else if kind == 2 {
+            s.dynamic(z)?;
+        } else {
+            return Err("invalid block type".to_string());
+        }
+        if last == 1 {
+            return Ok(());
+        }
+    }
+}
+
+// ------------------------------------------------------------ reading
+
+// A file object over bytes: read past the end returns what is left, and a
+// seek may go beyond it.
+struct Rd {
+    buf: Vec[u8],
+    pos: i64,
+}
+
+impl Rd {
+    fn read(mut ref self, n: i64) -> Vec[u8] {
+        let got = slice(self.buf, self.pos, self.pos + n);
+        self.pos = self.pos + got.len();
+        got
+    }
+}
+
+// The state data_element_generator keeps between elements. stop is the
+// stop_when callback: 2 stops at the first tag outside group 0002 (the
+// file meta), 1 outside group 0000 (the command set).
+struct Gen {
+    implicit: bool,
+    little: bool,
+    enc: Vec[String],
+    stop: i64,
+}
+
+fn stops(stop: i64, tag: i64) -> bool {
+    if stop == 2 {
+        (tag >> 16) != 2
+    } else if stop == 1 {
+        (tag >> 16) != 0
+    } else {
+        false
+    }
+}
+
+fn struct_err(n: i64) -> Exc {
+    exc("error", f"unpack requires a buffer of {n} bytes")
+}
+
+// empty_value_for_VR(vr, raw=True) is b"" rather than None.
+fn empty_raw_is_bytes(vr: ref String) -> bool {
+    vr == "SQ" or vr == "PN" or ((is_default_charset_vr(vr) or is_custom_charset_vr(vr)) and vr != "DS" and vr != "IS")
+}
+
+fn is_private_tag(tag: i64) -> bool {
+    ((tag >> 16) % 2) == 1
+}
+
+fn is_private_creator(tag: i64) -> bool {
+    let e = tag & 0xFFFF;
+    is_private_tag(tag) and e >= 0x0010 and e < 0x0100
+}
+
+// convert_string's multi_string: rstrip(" \0"), then split on backslashes.
+fn multi_split(s: ref String) -> Vec[String] {
+    split_on(rstrip_set(s, " \u{0}"), '\\')
+}
+
+#[allow(mutual_recursion_note)]
+fn gen_next(c: ref Ctx, r: mut ref Rd, g: mut ref Gen) -> Result[Option[Node], Exc] {
+    let head = r.read(8);
+    if head.len() < 8 {
+        return Ok(None);
+    }
+    let little = g.little;
+    let group = u16_at(head, 0, little);
+    let elem = u16_at(head, 2, little);
+    let mut vr = String.new();
+    let mut length: i64 = 0;
+    if g.implicit {
+        length = u32_at(head, 4, little);
+    } else {
+        let key = ((head[4] as i64) << 8) | (head[5] as i64);
+        let vrs = decode(slice(head, 4, 6), "iso8859");
+        if is_std_vr(vrs) {
+            vr = vrs;
+            length = u16_at(head, 6, little);
+            if is_len32(vr) {
+                let ext = r.read(4);
+                if ext.len() < 4 {
+                    return Err(struct_err(4));
+                }
+                length = u32_at(ext, 0, little);
+            }
+        } else if key < 0x4141 or key > 0x5A5A {
+            length = u32_at(head, 4, little);
+        } else {
+            vr = vrs;
+            length = u16_at(head, 6, little);
+        }
+    }
+    let value_tell = r.pos;
+    let tag = (group << 16) | elem;
+    if tag == ITEM_DELIM {
+        return Ok(None);
+    }
+    if stops(g.stop, tag) {
+        let mut rewind: i64 = 8;
+        if not g.implicit and is_len32(vr) {
+            rewind += 4;
+        }
+        r.pos = value_tell - rewind;
+        return Ok(None);
+    }
+    if length != UNDEF {
+        let mut has = true;
+        let mut value: Vec[u8] = Vec.new();
+        if length > 0 {
+            value = r.read(length);
+        } else {
+            has = empty_raw_is_bytes(vr);
+        }
+        if tag == CHARSET_TAG {
+            g.enc = convert_encodings(multi_split(decode(value, "iso8859")));
+        }
+        return Ok(Some(Node.R(Raw { tag: tag, vr: vr, length: length, value: value, has_value: has, tell: value_tell, implicit: g.implicit, little: little })));
+    }
+    if vr == "UN" {
+        vr = "SQ".to_string();
+    }
+    if vr.len() == 0 {
+        match dict_vr(c, tag) {
+            Some(v) => vr = v,
+            None => {
+                let nb = r.read(4);
+                if nb.len() < 4 {
+                    return Err(struct_err(4));
+                }
+                r.pos = r.pos - 4;
+                let next = (u16_at(nb, 0, little) << 16) | u16_at(nb, 2, little);
+                if next == ITEM_TAG {
+                    vr = "SQ".to_string();
+                }
+            }
+        }
+    }
+    if vr == "SQ" {
+        let enc = g.enc.clone();
+        let items = read_sequence(c, mut r, g.implicit, little, UNDEF, enc, 0)?;
+        return Ok(Some(Node.E(Elem { tag: tag, vr: vr, val: Val.Seq(items), undef: true, creator: String.new(), has_creator: false })));
+    }
+    let value = read_undefined_length_value(mut r, little)?;
+    Ok(Some(Node.R(Raw { tag: tag, vr: vr, length: UNDEF, value: value, has_value: true, tell: value_tell, implicit: g.implicit, little: little })))
+}
+
+// fileutil._try_read_encapsulated_pixel_data: items up to a sequence
+// delimiter, or None (and the position restored) if what follows is not
+// that.
+fn try_encapsulated(r: mut ref Rd, little: bool) -> Option[Vec[u8]] {
+    let start = r.pos;
+    let delim = tag_bytes(SEQ_DELIM, little);
+    let item = tag_bytes(ITEM_TAG, little);
+    let mut count: i64 = 0;
+    loop {
+        let tb = r.read(4);
+        if tb.len() < 4 {
+            r.pos = start;
+            return None;
+        }
+        count += 4;
+        if tb == delim {
+            break;
+        }
+        if tb == item {
+            let lb = r.read(4);
+            if lb.len() < 4 {
+                r.pos = start;
+                return None;
+            }
+            count += 4;
+            let len = u32_at(lb, 0, little);
+            r.pos = r.pos + len;
+            count += len;
+        } else {
+            r.pos = start;
+            return None;
+        }
+    }
+    r.pos = start;
+    let value = r.read(count - 4);
+    r.pos = start + count + 4;
+    Some(value)
+}
+
+fn read_undefined_length_value(r: mut ref Rd, little: bool) -> Result[Vec[u8], Exc] {
+    let start = r.pos;
+    match try_encapsulated(mut r, little) {
+        Some(v) => return Ok(v),
+        None => {}
+    }
+    let delim = tag_bytes(SEQ_DELIM, little);
+    let idx = if start > r.buf.len() { -1 } else { find_bytes(r.buf, delim, start) };
+    if idx < 0 {
+        r.pos = start;
+        return Err(exc("EOFError", "End of file reached before delimiter (FFFE,E0DD) found"));
+    }
+    let value = slice(r.buf, start, idx);
+    r.pos = idx + 4;
+    let _ = r.read(4);
+    Ok(value)
+}
+
+fn read_sequence(c: ref Ctx, r: mut ref Rd, implicit: bool, little: bool, bytelength: i64, enc: ref Vec[String], offset: i64) -> Result[Vec[Dataset], Exc] {
+    let mut seq: Vec[Dataset] = Vec.new();
+    if bytelength != 0 {
+        let bl = if bytelength == UNDEF { 0 } else { bytelength };
+        let start = r.pos;
+        while bl == 0 or r.pos - start < bl {
+            match read_sequence_item(c, mut r, implicit, little, enc, offset)? {
+                Some(ds) => seq.push(ds),
+                None => break,
+            }
+        }
+    }
+    Ok(seq)
+}
+
+fn read_sequence_item(c: ref Ctx, r: mut ref Rd, implicit: bool, little: bool, enc: ref Vec[String], offset: i64) -> Result[Option[Dataset], Exc] {
+    let b = r.read(8);
+    if b.len() < 8 {
+        let at = hex_upper(r.pos + offset, 0);
+        return Err(exc("OSError", f"No tag to read at file position {at}"));
+    }
+    let tag = (u16_at(b, 0, little) << 16) | u16_at(b, 2, little);
+    if tag == SEQ_DELIM {
+        return Ok(None);
+    }
+    let length = u32_at(b, 4, little);
+    if length == UNDEF {
+        let mut ds = read_dataset(c, mut r, implicit, little, -1, 0, enc, false)?;
+        ds.undef_item = true;
+        return Ok(Some(ds));
+    }
+    let mut ds = read_dataset(c, mut r, implicit, little, length, 0, enc, false)?;
+    ds.undef_item = false;
+    Ok(Some(ds))
+}
+
+// filereader._is_implicit_vr: peek at the first element's VR bytes.
+fn peek_implicit(r: mut ref Rd, assumed: bool, little: bool, stop: i64, is_seq: bool) -> bool {
+    if is_seq and assumed {
+        return true;
+    }
+    let tb = r.read(4);
+    let rv = r.read(2);
+    if rv.len() < 2 {
+        return assumed;
+    }
+    let found = not (rv[0] > 0x40 and rv[0] < 0x5B and rv[1] > 0x40 and rv[1] < 0x5B);
+    if found != assumed {
+        let tag = (u16_at(tb, 0, little) << 16) | u16_at(tb, 2, little);
+        if stop != 0 and stops(stop, tag) {
+            return found;
+        }
+        if found and is_seq {
+            return true;
+        }
+    }
+    found
+}
+
+// read_dataset. bytelength -1 is None: read to the end (or a delimiter),
+// and an EOFError then loses every element, as the dict comprehension
+// pydicom builds them in does; with a byte length the elements read
+// before it are kept.
+fn read_dataset(c: ref Ctx, r: mut ref Rd, implicit: bool, little: bool, bytelength: i64, stop: i64, parent: ref Vec[String], at_top: bool) -> Result[Dataset, Exc] {
+    let start = r.pos;
+    let imp = peek_implicit(mut r, implicit, little, stop, not at_top);
+    r.pos = start;
+    let mut g = Gen { implicit: imp, little: little, enc: parent.clone(), stop: stop };
+    let mut ds = new_dataset(parent);
+    if bytelength < 0 {
+        let mut tmp: Vec[Node] = Vec.new();
+        loop {
+            match gen_next(c, mut r, mut g) {
+                Ok(Some(n)) => tmp.push(n),
+                Ok(None) => break,
+                Err(e) => {
+                    if e.kind == "EOFError" {
+                        tmp = Vec.new();
+                        break;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        for n in tmp.into_iter() {
+            put_entry(mut ds, n);
+        }
+    } else {
+        while r.pos - start < bytelength {
+            match gen_next(c, mut r, mut g) {
+                Ok(Some(n)) => put_entry(mut ds, n),
+                Ok(None) => break,
+                Err(e) => {
+                    if e.kind == "EOFError" {
+                        break;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+    let mut enc = parent.clone();
+    let (i, found) = find_slot(ds, CHARSET_TAG);
+    if found {
+        match ds.items[i] {
+            Node.R(raw) => enc = convert_encodings(multi_split(decode(raw.value, "iso8859"))),
+            Node.E(_) => {}
+        }
+    }
+    ds.has_enc = true;
+    ds.read_implicit = imp;
+    ds.read_little = little;
+    ds.read_charset = enc;
+    Ok(ds)
+}
+
+// A FileDataset: the dataset, its file meta and preamble, and the encoding
+// the transfer syntax gave (is_implicit_VR, is_little_endian).
+#[derive(Clone)]
+struct FileDs {
+    ds: Dataset,
+    meta: Dataset,
+    preamble: Vec[u8],
+    has_preamble: bool,
+    implicit: bool,
+    little: bool,
+}
+
+fn read_file_meta(c: ref Ctx, r: mut ref Rd) -> Result[Dataset, Exc] {
+    let start = r.pos;
+    let mut m = read_dataset(c, mut r, false, true, -1, 2, default_enc(), true)?;
+    m.read_implicit = false;
+    m.read_little = true;
+    m.read_charset = default_enc();
+    if m.items.len() == 0 {
+        return Ok(m);
+    }
+    match conv_at(c, mut m, 0) {
+        Ok(()) => {}
+        Err(e) => {
+            if e.kind != "NotImplementedError" {
+                return Err(e);
+            }
+            r.pos = start;
+            m = read_dataset(c, mut r, true, true, -1, 2, default_enc(), true)?;
+            m.read_implicit = true;
+            m.read_little = true;
+            m.read_charset = default_enc();
+        }
+    }
+    Ok(m)
+}
+
+fn text_of(v: ref Val) -> String {
+    match v {
+        Val.Uid(s) => s.clone(),
+        Val.Str(s) => s.clone(),
+        _ => "\u{0}".to_string(),
+    }
+}
+
+fn dcmread(c: ref Ctx, data: ref Vec[u8], force: bool) -> Result[FileDs, Exc] {
+    let mut r = Rd { buf: data.clone(), pos: 0 };
+    let preamble = r.read(128);
+    let magic = r.read(4);
+    let mut has_pre = true;
+    if magic != "DICM".bytes().to_vec() {
+        if not force {
+            return Err(exc("InvalidDicomError", "File is missing DICOM File Meta Information header or the 'DICM' prefix is missing from the header. Use force=True to force reading."));
+        }
+        r.pos = 0;
+        has_pre = false;
+    }
+    let mut meta = read_file_meta(c, mut r)?;
+    let cmd = read_dataset(c, mut r, true, true, -1, 1, default_enc(), true)?;
+    let peek = r.read(1);
+    if peek.len() > 0 {
+        r.pos = r.pos - 1;
+    }
+    let mut implicit = true;
+    let mut little = true;
+    let ts = getattr(c, mut meta, "TransferSyntaxUID")?;
+    if peek.len() == 0 {
+    } else if ts.is_none() {
+        let b = r.read(6);
+        if b.len() < 6 {
+            return Err(struct_err(6));
+        }
+        r.pos = r.pos - 6;
+        let group = u16_at(b, 0, true);
+        if is_known_vr(decode(slice(b, 4, 6), "iso8859")) {
+            implicit = false;
+            if group >= 1024 {
+                little = false;
+            }
+        }
+    } else {
+        let t = text_of(ts.unwrap());
+        if t == "1.2.840.10008.1.2" {
+        } else if t == "1.2.840.10008.1.2.1" {
+            implicit = false;
+        } else if t == "1.2.840.10008.1.2.2" {
+            implicit = false;
+            little = false;
+        } else if t == "1.2.840.10008.1.2.1.99" {
+            let zipped = r.read(r.buf.len());
+            let unzipped = raw_inflate(zipped)?;
+            r = Rd { buf: unzipped, pos: 0 };
+            implicit = false;
+        } else {
+            implicit = false;
+        }
+    }
+    let mut ds = read_dataset(c, mut r, implicit, little, -1, 0, default_enc(), true)?;
+    for n in cmd.items.iter() {
+        put_entry(mut ds, n.clone());
+    }
+    ds.read_implicit = implicit;
+    ds.read_little = little;
+    ds.read_charset = character_set(c, mut ds)?;
+    Ok(FileDs { ds: ds, meta: meta, preamble: preamble, has_preamble: has_pre, implicit: implicit, little: little })
+}
+
+// ------------------------------------------------------------ conversion
+
+// Dataset._character_set.
+#[allow(mutual_recursion_note)]
+fn character_set(c: ref Ctx, ds: mut ref Dataset) -> Result[Vec[String], Exc] {
+    match getitem(c, mut ds, CHARSET_TAG)? {
+        Some(el) => Ok(convert_encodings(charset_terms(el.val))),
+        None => Ok(ds.parent_enc.clone()),
+    }
+}
+
+// Dataset.__getitem__: the element, converted (and stored converted) if
+// it was still raw.
+fn getitem(c: ref Ctx, ds: mut ref Dataset, tag: i64) -> Result[Option[Elem], Exc] {
+    let (i, found) = find_slot(ds, tag);
+    if not found {
+        return Ok(None);
+    }
+    conv_at(c, mut ds, i)?;
+    let (j, _) = find_slot(ds, tag);
+    match ds.items[j] {
+        Node.E(el) => Ok(Some(el.clone())),
+        Node.R(_) => Ok(None),
+    }
+}
+
+// Dataset.__getattr__ for an element keyword: its value, or None when the
+// dataset has no such element.
+fn getattr(c: ref Ctx, ds: mut ref Dataset, kw: ref String) -> Result[Option[Val], Exc] {
+    let tag = match keyword_tag(c, kw) {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+    match getitem(c, mut ds, tag)? {
+        Some(el) => Ok(Some(el.val)),
+        None => Ok(None),
+    }
+}
+
+fn conv_at(c: ref Ctx, ds: mut ref Dataset, i: i64) -> Result[(), Exc] {
+    let raw = match ds.items[i] {
+        Node.R(r) => r.clone(),
+        Node.E(_) => return Ok(()),
+    };
+    let tag = raw.tag;
+    let enc = if tag == CHARSET_TAG {
+        default_enc()
+    } else if ds.read_charset.len() > 0 {
+        ds.read_charset.clone()
+    } else {
+        character_set(c, mut ds)?
+    };
+    let el = convert_raw(c, mut ds, raw, enc)?;
+    let vr = el.vr.clone();
+    set_item(c, mut ds, el)?;
+    if is_ambiguous(vr) {
+        correct_ambiguous(c, mut ds, tag, raw.little)?;
+    }
+    Ok(())
+}
+
+// Dataset.__setitem__: a private element learns its private creator.
+fn set_item(c: ref Ctx, ds: mut ref Dataset, el: own Elem) -> Result[(), Exc] {
+    let mut e = el;
+    if is_private_tag(e.tag) {
+        let ctag = (e.tag & 0xFFFF0000) | ((e.tag & 0xFFFF) >> 8);
+        if has_tag(ds, ctag) and e.tag != ctag {
+            let cr = getitem(c, mut ds, ctag)?;
+            match cr {
+                Some(ce) => {
+                    match ce.val {
+                        Val.Str(s) => {
+                            e.has_creator = s.len() > 0;
+                            e.creator = s;
+                        }
+                        Val.Multi(xs) => {
+                            e.has_creator = xs.len() > 0;
+                            e.creator = "\u{0}".to_string();
+                        }
+                        _ => {}
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    put_entry(mut ds, Node.E(e));
+    Ok(())
+}
+
+fn convert_raw(c: ref Ctx, ds: mut ref Dataset, raw: ref Raw, enc: ref Vec[String]) -> Result[Elem, Exc] {
+    let vr = raw_vr(c, mut ds, raw)?;
+    let val = raw_value(c, raw, vr, enc)?;
+    Ok(Elem { tag: raw.tag, vr: vr, val: val, undef: raw.length == UNDEF, creator: String.new(), has_creator: false })
+}
+
+// hooks._private_vr_for_tag.
+fn private_vr_for_tag(c: ref Ctx, ds: mut ref Dataset, tag: i64) -> Result[String, Exc] {
+    if is_private_creator(tag) {
+        return Ok("LO".to_string());
+    }
+    if (tag & 0xFF00) != 0 {
+        let ctag = (tag & 0xFFFF0000) | ((tag & 0xFFFF) >> 8);
+        match getitem(c, mut ds, ctag)? {
+            Some(ce) => {
+                match ce.val {
+                    Val.Str(s) => {
+                        match private_entry(c, tag, s) {
+                            Some(p) => return Ok(p.vr),
+                            None => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None => {}
+        }
+    }
+    Ok("UN".to_string())
+}
+
+// hooks.raw_element_vr.
+fn raw_vr(c: ref Ctx, ds: mut ref Dataset, raw: ref Raw) -> Result[String, Exc] {
+    let tag = raw.tag;
+    if raw.vr.len() == 0 {
+        return match dict_vr(c, tag) {
+            Some(v) => Ok(v),
+            None => {
+                if is_private_tag(tag) {
+                    private_vr_for_tag(c, mut ds, tag)
+                } else if (tag & 0xFFFF) == 0 {
+                    Ok("UL".to_string())
+                } else {
+                    Ok("UN".to_string())
+                }
+            }
+        };
+    }
+    if raw.vr == "UN" {
+        if is_private_tag(tag) {
+            return private_vr_for_tag(c, mut ds, tag);
+        }
+        if not raw.has_value or raw.value.len() < 65535 {
+            match dict_vr(c, tag) {
+                Some(v) => return Ok(v),
+                None => {}
+            }
+        }
+    }
+    Ok(raw.vr.clone())
+}
+
+const LUT_DESCRIPTOR_TAGS: Array[i64, 4] = [0x00281101, 0x00281102, 0x00281103, 0x00283002];
+
+// hooks.raw_element_value.
+fn raw_value(c: ref Ctx, raw: ref Raw, vr: ref String, enc: ref Vec[String]) -> Result[Val, Exc] {
+    let mut v = match convert_value(c, vr, raw, enc) {
+        Ok(v) => v,
+        Err(e) => {
+            let t = tag_str(raw.tag);
+            if e.kind == "NotImplementedError" {
+                return Err(exc("NotImplementedError", f"{e.msg} in tag {t}"));
+            }
+            if e.kind == "BytesLengthException" {
+                let shown = if raw.vr.len() == 0 { "None".to_string() } else { raw.vr.clone() };
+                return Err(exc("BytesLengthException", f"{e.msg} This occurred while trying to parse {t} according to VR '{shown}'. To replace this error with a warning set pydicom.config.convert_wrong_length_to_UN = True."));
+            }
+            return Err(e);
+        }
+    };
+    let mut lut = false;
+    for t in LUT_DESCRIPTOR_TAGS.iter() {
+        if *t == raw.tag {
+            lut = true;
+        }
+    }
+    if lut {
+        match v {
+            Val.Multi(xs) => {
+                let mut ys = xs.clone();
+                if ys.len() > 0 {
+                    match ys[0] {
+                        Val.Int(n) => {
+                            if n < 0 {
+                                ys[0] = Val.Int(n + 65536);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                v = Val.Multi(ys);
+            }
+            _ => {}
+        }
+    }
+    Ok(v)
+}
+
+fn value_error(msg: ref String) -> Exc {
+    exc("ValueError", msg)
+}
+
+const RETRY_ORDER: Array[Str, 22] = ["SH", "UL", "SL", "US", "SS", "FL", "FD", "OF", "OB", "UI", "DA", "TM", "PN", "IS", "DS", "LT", "SQ", "UN", "AT", "OW", "DT", "UT"];
+
+fn empty_value(vr: ref String) -> Val {
+    if vr == "SQ" {
+        return Val.Seq(Vec.new());
+    }
+    if vr == "PN" {
+        return Val.Pn(Vec.new());
+    }
+    if (is_default_charset_vr(vr) or is_custom_charset_vr(vr)) and vr != "DS" and vr != "IS" {
+        return Val.Str(String.new());
+    }
+    Val.Nil
+}
+
+fn shown_vr(vr: ref String) -> String {
+    let mut letters = true;
+    for c in vr.chars() {
+        if not ((c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')) {
+            letters = false;
+        }
+    }
+    if letters {
+        return vr.to_string();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for c in vr.chars() {
+        let h = hex_upper(c as u32 as i64, 2).to_lowercase();
+        parts.push(f"0x{h}");
+    }
+    join(parts, " ")
+}
+
+// values.convert_value: an unconvertible number string is retried as each
+// VR of convert_retry_VR_order, and kept as bytes if none takes it.
+fn convert_value(c: ref Ctx, vr: ref String, raw: ref Raw, enc: ref Vec[String]) -> Result[Val, Exc] {
+    if not is_known_vr(vr) {
+        let shown = shown_vr(vr);
+        return Err(exc("NotImplementedError", f"Unknown Value Representation '{shown}'"));
+    }
+    if raw.length == 0 {
+        return Ok(empty_value(vr));
+    }
+    match convert_by(c, vr, raw, enc) {
+        Ok(v) => return Ok(v),
+        Err(e) => {
+            if e.kind != "ValueError" {
+                return Err(e);
+            }
+        }
+    }
+    for alt in RETRY_ORDER.iter() {
+        let a = alt.to_string();
+        if a == *vr {
+            continue;
+        }
+        match convert_value(c, a, raw, enc) {
+            Ok(v) => return Ok(v),
+            Err(_) => {}
+        }
+    }
+    Ok(Val.Bytes(raw.value.clone()))
+}
+
+fn one_or_multi(items: own Vec[Val]) -> Val {
+    if items.len() == 1 {
+        return items[0].clone();
+    }
+    Val.Multi(items)
+}
+
+fn ds_item(s: ref String) -> Result[Val, Exc] {
+    if strip(s).len() == 0 {
+        return Ok(Val.Str(s.to_string()));
+    }
+    match py_float(s) {
+        Some(_) => Ok(Val.Ds(strip(s))),
+        None => {
+            let t = strip(s);
+            Err(value_error(f"could not convert string to float: '{t}'"))
+        }
+    }
+}
+
+fn is_item(s: ref String) -> Result[Val, Exc] {
+    if strip(s).len() == 0 {
+        return Ok(Val.Str(s.to_string()));
+    }
+    match py_int(s) {
+        Some(n) => return Ok(Val.Is(n, strip(s))),
+        None => {}
+    }
+    let f = match py_float(s) {
+        Some(f) => f,
+        None => return Err(value_error(f"could not convert string to float: '{s}'")),
+    };
+    if f != f {
+        return Err(value_error("cannot convert float NaN to integer"));
+    }
+    if f == f64.INFINITY or f == -f64.INFINITY {
+        return Err(exc("OverflowError", "cannot convert float infinity to integer"));
+    }
+    let n = f as i64;
+    if (n as f64) != f {
+        return Ok(Val.IsF(f, strip(s)));
+    }
+    Ok(Val.Is(n, strip(s)))
+}
+
+fn number_size(fmt: char) -> i64 {
+    if fmt == 'H' or fmt == 'h' {
+        2
+    } else if fmt == 'L' or fmt == 'l' or fmt == 'f' {
+        4
+    } else {
+        8
+    }
+}
+
+// values.convert_numbers.
+fn convert_numbers(b: ref Vec[u8], little: bool, fmt: char) -> Result[Val, Exc] {
+    let size = number_size(fmt);
+    let n = b.len();
+    if n % size != 0 {
+        let shown = if n <= 256 { bytes_repr(b) } else { "bytes".to_string() };
+        return Err(exc("BytesLengthException", f"Expected total bytes to be an even multiple of bytes per value. Instead received {shown} with length {n} and struct format '{fmt}' which corresponds to bytes per value of {size}."));
+    }
+    let count = n / size;
+    if count == 0 {
+        return Ok(Val.Str(String.new()));
+    }
+    let mut vals: Vec[Val] = Vec.new();
+    let mut k: i64 = 0;
+    while k < count {
+        let at = k * size;
+        vals.push(if fmt == 'H' {
+            Val.Int(u16_at(b, at, little))
+        } else if fmt == 'h' {
+            let v = u16_at(b, at, little);
+            Val.Int(if v >= 0x8000 { v - 0x10000 } else { v })
+        } else if fmt == 'L' {
+            Val.Int(u32_at(b, at, little))
+        } else if fmt == 'l' {
+            let v = u32_at(b, at, little);
+            Val.Int(if v >= 0x80000000 { v - 0x100000000 } else { v })
+        } else if fmt == 'f' {
+            Val.Float(f32_bits_to_f64(u32_at(b, at, little)))
+        } else if fmt == 'd' {
+            Val.Float(u64_at(b, at, little).bits_as_f64())
+        } else {
+            Val.Int(u64_at(b, at, little) as i64)
+        });
+        k += 1;
+    }
+    Ok(one_or_multi(vals))
+}
+
+fn number_format(vr: ref String) -> char {
+    if vr == "FD" {
+        'd'
+    } else if vr == "FL" {
+        'f'
+    } else if vr == "SL" {
+        'l'
+    } else if vr == "SS" {
+        'h'
+    } else if vr == "SV" {
+        'q'
+    } else if vr == "UL" {
+        'L'
+    } else if vr == "US" {
+        'H'
+    } else {
+        'Q'
+    }
+}
+
+fn pn_components(s: ref String) -> Vec[String] {
+    let mut comps = split_on(s, '=');
+    while comps.len() > 0 and comps[comps.len() - 1].len() == 0 {
+        comps.pop();
+    }
+    comps
+}
+
+fn convert_by(c: ref Ctx, vr: ref String, raw: ref Raw, enc: ref Vec[String]) -> Result[Val, Exc] {
+    let b = raw.value.clone();
+    let first = if enc.len() > 0 { enc[0].clone() } else { "iso8859".to_string() };
+    if vr == "AE" {
+        let mut out: Vec[Val] = Vec.new();
+        for p in split_on(decode(b, "iso8859"), '\\').iter() {
+            out.push(Val.Str(strip(p)));
+        }
+        return Ok(one_or_multi(out));
+    }
+    if vr == "AS" or vr == "CS" or vr == "DA" or vr == "DT" or vr == "TM" {
+        let mut out: Vec[Val] = Vec.new();
+        for p in multi_split(decode(b, "iso8859")).into_iter() {
+            out.push(Val.Str(p));
+        }
+        return Ok(one_or_multi(out));
+    }
+    if vr == "AT" {
+        let n = b.len();
+        if n == 4 {
+            return Ok(Val.Tag((u16_at(b, 0, raw.little) << 16) | u16_at(b, 2, raw.little)));
+        }
+        let m = n - n % 4;
+        let mut out: Vec[Val] = Vec.new();
+        let mut k: i64 = 0;
+        while k < m {
+            out.push(Val.Tag((u16_at(b, k, raw.little) << 16) | u16_at(b, k + 2, raw.little)));
+            k += 4;
+        }
+        return Ok(Val.Multi(out));
+    }
+    if vr == "DS" {
+        let mut out: Vec[Val] = Vec.new();
+        for p in multi_split(strip(decode(b, "iso8859"))).iter() {
+            out.push(ds_item(p)?);
+        }
+        return Ok(one_or_multi(out));
+    }
+    if vr == "IS" {
+        let mut out: Vec[Val] = Vec.new();
+        for p in multi_split(decode(b, "iso8859")).iter() {
+            out.push(is_item(p)?);
+        }
+        return Ok(one_or_multi(out));
+    }
+    if vr == "FD" or vr == "FL" or vr == "SL" or vr == "SS" or vr == "SV" or vr == "UL" or vr == "US" or vr == "UV" {
+        return convert_numbers(b, raw.little, number_format(vr));
+    }
+    if vr == "LO" or vr == "SH" or vr == "UC" {
+        let mut out: Vec[Val] = Vec.new();
+        for p in split_on(decode(b, first), '\\').iter() {
+            out.push(Val.Str(rstrip_set(p, "\u{0} ")));
+        }
+        return Ok(one_or_multi(out));
+    }
+    if vr == "LT" or vr == "ST" or vr == "UT" {
+        return Ok(Val.Str(rstrip_set(decode(b, first), "\u{0} ")));
+    }
+    if vr == "PN" {
+        let mut end = b.len();
+        while end > 0 and (b[end - 1] == 0 or b[end - 1] == b' ') {
+            end -= 1;
+        }
+        let text = decode(slice(b, 0, end), first);
+        let mut out: Vec[Val] = Vec.new();
+        for p in split_on(text, '\\').iter() {
+            out.push(Val.Pn(pn_components(p)));
+        }
+        return Ok(one_or_multi(out));
+    }
+    if vr == "SQ" {
+        let mut r = Rd { buf: b, pos: 0 };
+        let n = r.buf.len();
+        let items = read_sequence(c, mut r, raw.implicit, raw.little, n, enc, raw.tell)?;
+        return Ok(Val.Seq(items));
+    }
+    if vr == "UI" {
+        let mut out: Vec[Val] = Vec.new();
+        for p in multi_split(rstrip_set(decode(b, "iso8859"), "\u{0} ")).iter() {
+            out.push(Val.Uid(strip(p)));
+        }
+        return Ok(one_or_multi(out));
+    }
+    if vr == "UR" {
+        return Ok(Val.Str(rstrip_ws(decode(b, "iso8859"))));
+    }
+    Ok(Val.Bytes(b))
+}
+
+// The VM of an element (DataElement.VM).
+fn vm(el: ref Elem) -> i64 {
+    if el.vr == "SQ" {
+        return 1;
+    }
+    match el.val {
+        Val.Nil => 0,
+        Val.Str(s) => if s.len() > 0 { 1 } else { 0 },
+        Val.Uid(s) => if s.len() > 0 { 1 } else { 0 },
+        Val.Bytes(b) => if b.len() > 0 { 1 } else { 0 },
+        Val.Pn(comps) => if join(comps, "=").len() > 0 { 1 } else { 0 },
+        Val.Multi(xs) => xs.len(),
+        Val.Seq(xs) => xs.len(),
+        _ => 1,
+    }
+}
+
+// filewriter.correct_ambiguous_vr_element, for the elements this port
+// knows: Pixel Data, the US-or-SS tags and the overlay data.
+fn correct_ambiguous(c: ref Ctx, ds: mut ref Dataset, tag: i64, little: bool) -> Result[(), Exc] {
+    let mut el = match getitem(c, mut ds, tag)? {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    let t = tag_str(tag);
+    if tag == PIXEL_DATA {
+        if el.undef {
+            el.vr = "OB".to_string();
+        } else if ds.has_enc and ds.read_implicit {
+            el.vr = "OW".to_string();
+        } else {
+            match getattr(c, mut ds, "BitsAllocated")? {
+                Some(Val.Int(n)) => el.vr = if n > 8 { "OW".to_string() } else { "OB".to_string() },
+                _ => return Err(exc("AttributeError", f"Failed to resolve ambiguous VR for tag {t}: 'Dataset' object has no attribute 'BitsAllocated'")),
+            }
+        }
+    } else if is_us_ss_tag(tag) {
+        let mut rep: i64 = -1;
+        match getattr(c, mut ds, "PixelRepresentation")? {
+            Some(Val.Int(n)) => rep = n,
+            _ => {}
+        }
+        if rep < 0 {
+            let pr_tag = keyword_tag(c, "PixelRepresentation").unwrap();
+            if not has_tag(ds, pr_tag) and not has_tag(ds, PIXEL_DATA) {
+                rep = 0;
+            } else if not has_tag(ds, pr_tag) {
+                return Err(exc("AttributeError", f"Failed to resolve ambiguous VR for tag {t}: 'Dataset' object has no attribute 'PixelRepresentation'"));
+            } else {
+                rep = 1;
+            }
+        }
+        el.vr = if rep == 0 { "US".to_string() } else { "SS".to_string() };
+        if vm(el) > 0 {
+            let first = match el.val.clone() {
+                Val.Multi(xs) => xs[0].clone(),
+                _ => el.val.clone(),
+            };
+            match first {
+                Val.Bytes(bs) => el.val = convert_numbers(bs, little, if rep == 0 { 'H' } else { 'h' })?,
+                _ => {}
+            }
+        }
+    } else if (tag & 0xFFFF) == 0x3000 and (tag >> 16) >= 0x6000 and (tag >> 16) < 0x601F and ((tag >> 16) % 2) == 0 {
+        el.vr = "OW".to_string();
+    }
+    put_entry(mut ds, Node.E(el));
+    Ok(())
+}
+
+// ------------------------------------------------------------ printing
+
+// repr() of a value, as DataElement.repval falls back to.
+fn val_repr(v: ref Val) -> String {
+    match v {
+        Val.Nil => "None".to_string(),
+        Val.Str(s) => str_repr(s),
+        Val.Uid(s) => str_repr(s),
+        Val.Ds(s) => f"'{s}'",
+        Val.Is(n, _) => f"'{n}'",
+        Val.IsF(f, _) => float_repr(*f),
+        Val.Int(n) => f"{n}",
+        Val.Float(f) => float_repr(*f),
+        Val.Tag(t) => tag_str(*t),
+        Val.Pn(comps) => str_repr(join(comps, "=")),
+        Val.Bytes(b) => bytes_repr(b),
+        Val.Multi(xs) => multi_str(xs),
+        Val.Seq(xs) => {
+            let n = xs.len();
+            f"<Sequence, length {n}>"
+        }
+    }
+}
+
+// MultiValue.__str__ (its repr too): the str and bytes items repr'd.
+#[allow(mutual_recursion_note)]
+fn multi_str(xs: ref Vec[Val]) -> String {
+    if xs.len() == 0 {
+        return String.new();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for x in xs.iter() {
+        parts.push(match x {
+            Val.Str(s) => str_repr(s),
+            Val.Uid(s) => str_repr(s),
+            Val.Bytes(b) => bytes_repr(b),
+            _ => plain_str(x),
+        });
+    }
+    let inner = join(parts, ", ");
+    f"[{inner}]"
+}
+
+// str() of a value other than a sequence.
+fn plain_str(v: ref Val) -> String {
+    match v {
+        Val.Nil => "None".to_string(),
+        Val.Str(s) => s.clone(),
+        Val.Uid(s) => s.clone(),
+        Val.Ds(s) => s.clone(),
+        Val.Is(_, s) => s.clone(),
+        Val.IsF(f, _) => float_repr(*f),
+        Val.Pn(comps) => join(comps, "="),
+        _ => val_repr(v),
+    }
+}
+
+// str() of a value: a Sequence is its items' pretty strings in brackets.
+fn val_str(c: ref Ctx, v: ref Val) -> Result[String, Exc] {
+    match v {
+        Val.Seq(items) => {
+            let mut out = "[".to_string();
+            for item in items.iter() {
+                let mut d = item.clone();
+                out.push_str(pretty_str(c, mut d, 0)?);
+            }
+            out.push(']');
+            Ok(out)
+        }
+        _ => Ok(plain_str(v)),
+    }
+}
+
+// len() of a value, where it has one.
+fn val_len(v: ref Val) -> Option[i64] {
+    match v {
+        Val.Str(s) => Some(char_len(s)),
+        Val.Uid(s) => Some(char_len(s)),
+        Val.Bytes(b) => Some(b.len()),
+        Val.Multi(xs) => Some(xs.len()),
+        Val.Seq(xs) => Some(xs.len()),
+        Val.Pn(comps) => Some(char_len(join(comps, "="))),
+        _ => None,
+    }
+}
+
+// DataElement.repval: a summary for long values, a UID's name.
+fn repval(c: ref Ctx, el: ref Elem) -> String {
+    if is_long_value_vr(el.vr) {
+        match val_len(el.val) {
+            Some(n) => {
+                if n > 16 {
+                    return f"Array of {n} elements";
+                }
+            }
+            None => {}
+        }
+    }
+    let m = vm(el);
+    if m > 16 {
+        return f"Array of {m} elements";
+    }
+    match el.val {
+        Val.Uid(s) => uid_name(c, s),
+        _ => val_repr(el.val),
+    }
+}
+
+// DataElement.name.
+fn elem_name(c: ref Ctx, el: ref Elem) -> String {
+    let tag = el.tag;
+    if is_private_tag(tag) {
+        if el.has_creator {
+            match private_entry(c, tag, el.creator) {
+                Some(p) => {
+                    let d = p.desc;
+                    return f"[{d}]";
+                }
+                None => {}
+            }
+        } else if ((tag & 0xFFFF) >> 8) == 0 {
+            return "Private Creator".to_string();
+        }
+        return "Private tag data".to_string();
+    }
+    match c.tags.get(tag) {
+        Some(e) => return e.name.clone(),
+        None => {}
+    }
+    if (tag & 0xFFFF) == 0 {
+        return "Group Length".to_string();
+    }
+    String.new()
+}
+
+// DataElement.__str__.
+fn elem_str(c: ref Ctx, el: ref Elem) -> String {
+    let t = tag_str(el.tag);
+    let name = pad_right(take_chars(elem_name(c, el), 35), 35, ' ');
+    let vr = el.vr.clone();
+    let value = repval(c, el);
+    f"{t} {name} {vr}: {value}"
+}
+
+// Dataset._pretty_str. An element that fails to convert raises from the
+// iteration itself, outside tag_in_exception, so only the failures inside
+// a sequence's items carry the sequence's tag.
+fn pretty_str(c: ref Ctx, ds: mut ref Dataset, indent: i64) -> Result[String, Exc] {
+    let mut pad = String.new();
+    let mut k: i64 = 0;
+    while k < indent {
+        pad.push_str("   ");
+        k += 1;
+    }
+    let mut lines: Vec[String] = Vec.new();
+    for tag in sorted_tags(ds).iter() {
+        let el = getitem(c, mut ds, *tag)?.unwrap();
+        if el.vr == "SQ" {
+            let t = tag_str(el.tag);
+            let name = elem_name(c, el);
+            let items = match el.val {
+                Val.Seq(xs) => xs.clone(),
+                _ => Vec.new(),
+            };
+            let n = items.len();
+            lines.push(f"{pad}{t}  {name}  {n} item(s) ---- ");
+            for item in items.iter() {
+                let mut d = item.clone();
+                match pretty_str(c, mut d, indent + 1) {
+                    Ok(s) => lines.push(s),
+                    Err(e) => return Err(with_tag(*tag, e)),
+                }
+                lines.push(f"{pad}   ---------");
+            }
+        } else {
+            lines.push(f"{pad}{elem_str(c, el)}");
+        }
+    }
+    Ok(join(lines, "\n"))
+}
+
+// str(FileDataset): the file meta in its own section, then the dataset.
+fn file_str(c: ref Ctx, f: mut ref FileDs) -> Result[String, Exc] {
+    let mut lines: Vec[String] = Vec.new();
+    if f.meta.items.len() > 0 {
+        lines.push(pad_right("Dataset.file_meta ", 49, '-'));
+        for tag in sorted_tags(f.meta).iter() {
+            let el = getitem(c, mut f.meta, *tag)?.unwrap();
+            lines.push(elem_str(c, el));
+        }
+        lines.push(pad_right("", 49, '-'));
+    }
+    let body = pretty_str(c, mut f.ds, 0)?;
+    if f.ds.items.len() > 0 {
+        lines.push(body);
+    }
+    Ok(join(lines, "\n"))
+}
+
+// ------------------------------------------------------------ writing
+
+fn push_tag(out: mut ref Vec[u8], tag: i64, little: bool) {
+    push_all(mut out, tag_bytes(tag, little));
+}
+
+fn type_error(msg: ref String) -> Exc {
+    exc("TypeError", msg)
+}
+
+// The text of a str value, or of the str items of a MultiValue joined by
+// backslashes (filewriter.multi_string).
+fn joined_text(v: ref Val) -> String {
+    match v {
+        Val.Multi(xs) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in xs.iter() {
+                parts.push(plain_str(x));
+            }
+            join(parts, "\\")
+        }
+        _ => plain_str(v),
+    }
+}
+
+// write_string: the value, padded to an even length, as Latin-1.
+fn write_string(out: mut ref Vec[u8], v: ref Val, pad: char) {
+    let mut s = joined_text(v);
+    if char_len(s) % 2 != 0 {
+        s.push(pad);
+    }
+    push_all(mut out, encode(s, "iso8859"));
+}
+
+// write_number_string: each DS or IS by its original string.
+fn write_number_string(out: mut ref Vec[u8], v: ref Val) {
+    let mut s = match v {
+        Val.Multi(xs) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in xs.iter() {
+                parts.push(number_text(x));
+            }
+            join(parts, "\\")
+        }
+        _ => number_text(v),
+    };
+    if char_len(s) % 2 != 0 {
+        s.push(' ');
+    }
+    push_all(mut out, encode(s, "iso8859"));
+}
+
+fn number_text(v: ref Val) -> String {
+    match v {
+        Val.Is(_, s) => s.clone(),
+        Val.IsF(_, s) => s.clone(),
+        _ => plain_str(v),
+    }
+}
+
+// write_text: str values in the dataset's character set.
+fn write_text(out: mut ref Vec[u8], v: ref Val, enc: ref String) {
+    let mut b: Vec[u8] = Vec.new();
+    match v {
+        Val.Multi(xs) => {
+            let mut first = true;
+            for x in xs.iter() {
+                if not first {
+                    b.push(b'\\');
+                }
+                first = false;
+                match x {
+                    Val.Bytes(bs) => push_all(mut b, bs),
+                    _ => push_all(mut b, encode(plain_str(x), enc)),
+                }
+            }
+        }
+        Val.Bytes(bs) => push_all(mut b, bs),
+        _ => push_all(mut b, encode(plain_str(v), enc)),
+    }
+    if b.len() % 2 != 0 {
+        b.push(b' ');
+    }
+    push_all(mut out, b);
+}
+
+// write_PN: each name re-encoded from its components.
+fn write_pn(out: mut ref Vec[u8], v: ref Val, enc: ref String) {
+    let mut names: Vec[Vec[String]] = Vec.new();
+    match v {
+        Val.Pn(comps) => names.push(comps.clone()),
+        Val.Multi(xs) => {
+            for x in xs.iter() {
+                match x {
+                    Val.Pn(comps) => names.push(comps.clone()),
+                    _ => names.push(split_on(plain_str(x), '=')),
+                }
+            }
+        }
+        _ => names.push(split_on(plain_str(v), '=')),
+    }
+    let mut b: Vec[u8] = Vec.new();
+    let mut first = true;
+    for comps in names.iter() {
+        if not first {
+            b.push(b'\\');
+        }
+        first = false;
+        push_all(mut b, encode(join(comps, "="), enc));
+    }
+    if b.len() % 2 != 0 {
+        b.push(b' ');
+    }
+    push_all(mut out, b);
+}
+
+fn write_bytes(out: mut ref Vec[u8], v: ref Val, pad: bool) {
+    match v {
+        Val.Bytes(b) => {
+            push_all(mut out, b);
+            if pad and b.len() % 2 != 0 {
+                out.push(0);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_number(out: mut ref Vec[u8], v: ref Val, fmt: char, little: bool) {
+    let size = number_size(fmt);
+    match v {
+        Val.Int(n) => push_uint(mut out, *n as u64, size, little),
+        Val.Float(f) => {
+            if fmt == 'f' {
+                push_uint(mut out, f64_to_f32_bits(*f) as u64, 4, little);
+            } else if fmt == 'd' {
+                push_uint(mut out, f.to_bits(), 8, little);
+            } else {
+                push_uint(mut out, *f as i64 as u64, size, little);
+            }
+        }
+        Val.Is(n, _) => push_uint(mut out, *n as u64, size, little),
+        _ => {}
+    }
+}
+
+// write_numbers.
+fn write_numbers(out: mut ref Vec[u8], v: ref Val, fmt: char, little: bool) {
+    match v {
+        Val.Multi(xs) => {
+            for x in xs.iter() {
+                push_number(mut out, x, fmt, little);
+            }
+        }
+        _ => push_number(mut out, v, fmt, little),
+    }
+}
+
+fn write_at(out: mut ref Vec[u8], v: ref Val, little: bool) {
+    match v {
+        Val.Tag(t) => push_tag(mut out, *t, little),
+        Val.Int(t) => push_tag(mut out, *t, little),
+        Val.Multi(xs) => {
+            for x in xs.iter() {
+                write_at(mut out, x, little);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn has_writer(vr: ref String) -> bool {
+    is_std_vr(vr) or vr == "US or SS" or vr == "US or OW" or vr == "US or SS or OW" or vr == "OB or OW"
+}
+
+// The value of a converted element, encoded by its VR's writer.
+fn write_value(c: ref Ctx, el: ref Elem, encs: ref Vec[String], implicit: bool, little: bool) -> Result[Vec[u8], Exc] {
+    let mut b: Vec[u8] = Vec.new();
+    let vr = el.vr.clone();
+    let enc = encs[0].clone();
+    let v = el.val.clone();
+    if vr == "AE" or vr == "AS" or vr == "CS" or vr == "DA" or vr == "DT" or vr == "TM" or vr == "UR" {
+        write_string(mut b, v, ' ');
+    } else if vr == "UI" {
+        write_string(mut b, v, '\u{0}');
+    } else if vr == "DS" or vr == "IS" {
+        write_number_string(mut b, v);
+    } else if vr == "LO" or vr == "LT" or vr == "SH" or vr == "ST" or vr == "UC" or vr == "UT" {
+        write_text(mut b, v, enc);
+    } else if vr == "PN" {
+        write_pn(mut b, v, enc);
+    } else if vr == "AT" {
+        write_at(mut b, v, little);
+    } else if vr == "SQ" {
+        match v {
+            Val.Seq(items) => {
+                for item in items.iter() {
+                    let mut d = item.clone();
+                    write_sequence_item(c, mut b, mut d, encs, implicit, little)?;
+                }
+            }
+            _ => {}
+        }
+    } else if vr == "UN" {
+        write_bytes(mut b, v, false);
+    } else if vr == "OB" or vr == "OB or OW" or is_bytes_vr(vr) or is_ambiguous(vr) {
+        write_bytes(mut b, v, true);
+    } else {
+        match v {
+            Val.Str(ref s) => {
+                if s.len() == 0 {
+                    return Ok(b);
+                }
+            }
+            _ => {}
+        }
+        write_numbers(mut b, v, number_format(vr), little);
+    }
+    Ok(b)
+}
+
+// write_data_element. A raw element is written as read; a converted one
+// through its VR's writer.
+#[allow(mutual_recursion_note)]
+fn write_data_element(c: ref Ctx, out: mut ref Vec[u8], node: ref Node, encs: ref Vec[String], implicit: bool, little: bool) -> Result[(), Exc] {
+    let tag = entry_tag(node);
+    push_tag(mut out, tag, little);
+    let mut vr = match node {
+        Node.R(r) => r.vr.clone(),
+        Node.E(e) => e.vr.clone(),
+    };
+    if not implicit and vr.len() > 0 and char_len(vr) != 2 {
+        let t = tag_str(tag);
+        return Err(value_error(f"Cannot write ambiguous VR of '{vr}' for data element with tag {t}."));
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    let mut undef = false;
+    match node {
+        Node.R(r) => {
+            if not r.has_value {
+                return Err(type_error("a bytes-like object is required, not 'NoneType'"));
+            }
+            buf = r.value.clone();
+            undef = r.length == UNDEF;
+        }
+        Node.E(e) => {
+            if not has_writer(vr) {
+                return Err(exc("NotImplementedError", f"write_data_element: unknown Value Representation '{vr}'"));
+            }
+            let mut terms = encs.clone();
+            if terms.len() == 0 {
+                terms = default_enc();
+            }
+            let enc = convert_encodings(terms);
+            undef = e.undef;
+            let empty = if vr == "SQ" {
+                match e.val {
+                    Val.Seq(xs) => xs.len() == 0,
+                    _ => true,
+                }
+            } else {
+                vm(e) == 0
+            };
+            if not empty {
+                buf = write_value(c, e, enc, implicit, little)?;
+            }
+        }
+    }
+    if undef and tag == PIXEL_DATA {
+        let item = tag_bytes(ITEM_TAG, little);
+        if slice(buf, 0, 4) != item {
+            return Err(value_error("The (7FE0,0010) 'Pixel Data' element value hasn't been encapsulated as required for a compressed transfer syntax - see pydicom.encaps.encapsulate() for more information"));
+        }
+    }
+    let n = buf.len();
+    if not implicit and not is_len32(vr) and not undef and n > 0xFFFF {
+        vr = "UN".to_string();
+    }
+    if not implicit {
+        if vr.len() == 0 {
+            return Err(type_error("encoding without a string argument"));
+        }
+        push_all(mut out, encode(vr, "iso8859"));
+        if is_len32(vr) {
+            push_uint(mut out, 0, 2, little);
+        }
+    }
+    if not implicit and not is_len32(vr) and not undef {
+        push_uint(mut out, n as u64, 2, little);
+    } else {
+        push_uint(mut out, if undef { UNDEF as u64 } else { n as u64 }, 4, little);
+    }
+    push_all(mut out, buf);
+    if undef {
+        push_tag(mut out, SEQ_DELIM, little);
+        push_uint(mut out, 0, 4, little);
+    }
+    Ok(())
+}
+
+// write_dataset. When the encoding differs from the one the dataset was
+// read with, every element is converted first (correct_ambiguous_vr and
+// __getitem__); otherwise raw elements are copied through.
+fn write_dataset(c: ref Ctx, out: mut ref Vec[u8], ds: mut ref Dataset, implicit: bool, little: bool, parent: ref Vec[String]) -> Result[(), Exc] {
+    let same_enc = ds.has_enc and ds.read_implicit == implicit and ds.read_little == little;
+    let charset = character_set(c, mut ds)?;
+    let convert = not same_enc or ds.read_charset != charset;
+    let encs = match getattr(c, mut ds, "SpecificCharacterSet")? {
+        Some(v) => {
+            let terms = charset_terms(v);
+            if terms.len() == 0 or (terms.len() == 1 and terms[0].len() == 0) {
+                default_enc()
+            } else {
+                terms
+            }
+        }
+        None => parent.clone(),
+    };
+    for tag in sorted_tags(ds).iter() {
+        let t = *tag;
+        if (t & 0xFFFF) == 0 and (t >> 16) > 6 {
+            continue;
+        }
+        let node = if convert {
+            match getitem(c, mut ds, t) {
+                Ok(Some(e)) => Node.E(e),
+                Ok(None) => continue,
+                Err(e) => return Err(with_tag(t, e)),
+            }
+        } else {
+            let (i, _) = find_slot(ds, t);
+            ds.items[i].clone()
+        };
+        match write_data_element(c, mut out, node, encs, implicit, little) {
+            Ok(()) => {}
+            Err(e) => return Err(with_tag(t, e)),
+        }
+    }
+    Ok(())
+}
+
+// write_sequence_item: an item of undefined length keeps its delimiter;
+// any other gets its length filled in after it is written.
+fn write_sequence_item(c: ref Ctx, out: mut ref Vec[u8], item: mut ref Dataset, encs: ref Vec[String], implicit: bool, little: bool) -> Result[(), Exc] {
+    push_tag(mut out, ITEM_TAG, little);
+    let at = out.len();
+    push_uint(mut out, UNDEF as u64, 4, little);
+    write_dataset(c, mut out, mut item, implicit, little, encs)?;
+    if item.undef_item {
+        push_tag(mut out, ITEM_DELIM, little);
+        push_uint(mut out, 0, 4, little);
+    } else {
+        let n = out.len() - at - 4;
+        let mut len_bytes: Vec[u8] = Vec.new();
+        push_uint(mut len_bytes, n as u64, 4, little);
+        let mut k: i64 = 0;
+        while k < 4 {
+            out[at + k] = len_bytes[k];
+            k += 1;
+        }
+    }
+    Ok(())
+}
+
+// write_file_meta_info(enforce_standard=False): the elements as they are,
+// with the group length recomputed.
+fn write_file_meta_info(c: ref Ctx, out: mut ref Vec[u8], meta: mut ref Dataset) -> Result[(), Exc] {
+    for tag in sorted_tags(meta).iter() {
+        if (*tag >> 16) != 2 {
+            return Err(value_error("Only File Meta Information group (0002,eeee) elements may be present in 'file_meta'."));
+        }
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    write_dataset(c, mut buf, mut meta, false, true, default_enc())?;
+    let gl_tag: i64 = 0x00020000;
+    if has_tag(meta, gl_tag) {
+        let mut el = getitem(c, mut meta, gl_tag)?.unwrap();
+        el.val = Val.Int(buf.len() - 12);
+        put_entry(mut meta, Node.E(el.clone()));
+        let mut head: Vec[u8] = Vec.new();
+        write_data_element(c, mut head, Node.E(el), default_enc(), false, true)?;
+        let mut k: i64 = 0;
+        while k < head.len() {
+            if k < buf.len() {
+                buf[k] = head[k];
+            } else {
+                buf.push(head[k]);
+            }
+            k += 1;
+        }
+    }
+    push_all(mut out, buf);
+    Ok(())
+}
+
+// dcmwrite(filename, ds) with its defaults: the encoding from the file
+// meta's transfer syntax, else the one the dataset was read with.
+fn dcmwrite(c: ref Ctx, f: mut ref FileDs) -> Result[Vec[u8], Exc] {
+    for tag in sorted_tags(f.ds).iter() {
+        if (*tag >> 16) == 0 {
+            return Err(value_error("Command Set elements (0000,eeee) are not allowed when using dcmwrite(), use write_dataset() instead"));
+        }
+    }
+    for tag in sorted_tags(f.ds).iter() {
+        if (*tag >> 16) == 2 {
+            return Err(value_error("File Meta Information Group elements (0002,eeee) must be in a FileMetaDataset instance in the 'FileDataset.file_meta' attribute"));
+        }
+    }
+    let mut meta = f.meta.clone();
+    let ts = match getattr(c, mut meta, "TransferSyntaxUID")? {
+        Some(Val.Nil) => None,
+        Some(v) => Some(text_of(v)),
+        None => None,
+    };
+    let mut implicit = f.implicit;
+    let mut little = f.little;
+    match ts {
+        Some(ref t) => {
+            if t.len() > 0 and not (is_private_uid(t) and not is_transfer_syntax(c, t)) {
+                if not is_transfer_syntax(c, t) {
+                    let name = uid_name(c, t);
+                    return Err(value_error(f"The Transfer Syntax UID '{name}' is not a valid transfer syntax"));
+                }
+                let (i, l) = ts_encoding(t);
+                implicit = i;
+                little = l;
+            }
+        }
+        None => {}
+    }
+    if implicit and not little {
+        return Err(value_error("Implicit VR and big endian is not a valid encoding combination"));
+    }
+    if f.has_preamble and f.preamble.len() > 0 and f.preamble.len() != 128 {
+        return Err(value_error("'FileDataset.preamble' must be 128-bytes long"));
+    }
+    match ts.clone() {
+        Some(t) => {
+            if t.len() > 0 and not is_private_uid(t) and is_transfer_syntax(c, t) and has_tag(f.ds, PIXEL_DATA) {
+                let mut el = getitem(c, mut f.ds, PIXEL_DATA)?.unwrap();
+                el.undef = ts_compressed(t);
+                put_entry(mut f.ds, Node.E(el));
+            }
+        }
+        None => {}
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if f.has_preamble and f.preamble.len() > 0 {
+        push_all(mut out, f.preamble);
+        push_all(mut out, "DICM".bytes().to_vec());
+    }
+    if meta.items.len() > 0 {
+        write_file_meta_info(c, mut out, mut meta)?;
+    }
+    match ts {
+        Some(t) => {
+            if t == "1.2.840.10008.1.2.1.99" {
+                return Err(exc("NotImplementedError", "mini_pydicom does not deflate datasets on writing"));
+            }
+        }
+        None => {}
+    }
+    write_dataset(c, mut out, mut f.ds, implicit, little, default_enc())?;
+    Ok(out)
+}
+
+// ------------------------------------------------------------ editing
+
+// Dataset.walk with oracle.py's person_names callback: every PN value
+// becomes 'Anonymous'.
+fn walk_names(c: ref Ctx, ds: mut ref Dataset) -> Result[(), Exc] {
+    for tag in sorted_tags(ds).iter() {
+        let t = *tag;
+        let mut el = match getitem(c, mut ds, t) {
+            Ok(Some(e)) => e,
+            Ok(None) => continue,
+            Err(e) => return Err(with_tag(t, e)),
+        };
+        if el.vr == "PN" {
+            let mut comps: Vec[String] = Vec.new();
+            comps.push("Anonymous".to_string());
+            el.val = Val.Pn(comps);
+            put_entry(mut ds, Node.E(el.clone()));
+        }
+        if el.vr == "SQ" {
+            match walk_items(c, mut el, 0) {
+                Ok(()) => put_entry(mut ds, Node.E(el)),
+                Err(e) => return Err(with_tag(t, e)),
+            }
+        }
+    }
+    Ok(())
+}
+
+// Dataset.remove_private_tags: a walk deleting each private element, so a
+// private sequence is dropped without being entered.
+#[allow(mutual_recursion_note)]
+fn remove_private(c: ref Ctx, ds: mut ref Dataset) -> Result[(), Exc] {
+    for tag in sorted_tags(ds).iter() {
+        let t = *tag;
+        let mut el = match getitem(c, mut ds, t) {
+            Ok(Some(e)) => e,
+            Ok(None) => continue,
+            Err(e) => return Err(with_tag(t, e)),
+        };
+        if is_private_tag(t) {
+            del_entry(mut ds, t);
+            continue;
+        }
+        if el.vr == "SQ" {
+            match walk_items(c, mut el, 1) {
+                Ok(()) => put_entry(mut ds, Node.E(el)),
+                Err(e) => return Err(with_tag(t, e)),
+            }
+        }
+    }
+    Ok(())
+}
+
+// The items of a sequence element, walked with callback 0 (names) or 1
+// (private tags).
+fn walk_items(c: ref Ctx, el: mut ref Elem, which: i64) -> Result[(), Exc] {
+    let mut items = match el.val {
+        Val.Seq(xs) => xs.clone(),
+        _ => return Ok(()),
+    };
+    let mut k: i64 = 0;
+    while k < items.len() {
+        let mut d = items[k].clone();
+        if which == 0 {
+            walk_names(c, mut d)?;
+        } else {
+            remove_private(c, mut d)?;
+        }
+        items[k] = d;
+        k += 1;
+    }
+    el.val = Val.Seq(items);
+    Ok(())
+}
+
+// Dataset.__setattr__ for an element keyword.
+fn set_keyword(c: ref Ctx, ds: mut ref Dataset, kw: ref String, v: own Val) -> Result[(), Exc] {
+    let tag = keyword_tag(c, kw).unwrap();
+    let el = match getitem(c, mut ds, tag)? {
+        Some(e) => {
+            let mut e2 = e;
+            e2.val = v;
+            e2
+        }
+        None => Elem { tag: tag, vr: dict_vr(c, tag).unwrap(), val: v, undef: false, creator: String.new(), has_creator: false },
+    };
+    set_item(c, mut ds, el)
+}
+
+// ------------------------------------------------------------ jobs
+
+fn err_line(e: ref Exc) -> String {
+    let first = split_on(e.msg, '\n')[0].clone();
+    let k = e.kind.clone();
+    f"{k}: {first}"
+}
+
+fn load(c: ref Ctx, path: ref String, force: bool) -> Result[FileDs, Exc] {
+    match fs.read_bytes(f"data/{path}") {
+        Ok(data) => dcmread(c, data, force),
+        Err(_) => Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: '{path}'")),
+    }
+}
+
+// Writes the file a job produced and returns its bytes as read back.
+fn save(path: ref String, data: ref Vec[u8]) -> Vec[u8] {
+    let full = f"data/{path}";
+    let _ = fs.write_bytes(full.clone(), data.clone());
+    fs.read_bytes(full).unwrap_or(Vec.new())
+}
+
+fn written_info(data: ref Vec[u8]) -> String {
+    let n = data.len();
+    let h = hex_upper(crc32(data), 8).to_lowercase();
+    f"{n} bytes, crc32 {h}"
+}
+
+fn job_show(c: ref Ctx, words: ref Vec[String]) {
+    let mut f = match load(c, words[1], words.len() > 2) {
+        Ok(f) => f,
+        Err(e) => {
+            println(f"error: {err_line(e)}");
+            return;
+        }
+    };
+    match file_str(c, mut f) {
+        Ok(text) => println(text),
+        Err(e) => println(f"error: {err_line(e)}"),
+    }
+}
+
+fn job_get(c: ref Ctx, words: ref Vec[String]) -> Result[(), Exc] {
+    let mut f = load(c, words[1], false)?;
+    let kw = words[2].clone();
+    let shown = match getattr(c, mut f.ds, kw)? {
+        Some(Val.Nil) => "missing".to_string(),
+        Some(v) => val_str(c, v)?,
+        None => "missing".to_string(),
+    };
+    println(f"{kw}: {shown}");
+    Ok(())
+}
+
+fn name_part(comps: ref Vec[String], i: i64) -> String {
+    if comps.len() == 0 {
+        return String.new();
+    }
+    let parts = split_on(comps[0], '^');
+    if i < parts.len() { parts[i].clone() } else { String.new() }
+}
+
+fn job_pn(c: ref Ctx, words: ref Vec[String]) -> Result[(), Exc] {
+    let mut f = load(c, words[1], false)?;
+    let comps = match getattr(c, mut f.ds, "PatientName")? {
+        Some(Val.Nil) => {
+            println("no PatientName");
+            return Ok(());
+        }
+        None => {
+            println("no PatientName");
+            return Ok(());
+        }
+        Some(Val.Pn(cs)) => cs,
+        Some(Val.Multi(_)) => return Err(exc("AttributeError", "'MultiValue' object has no attribute 'family_name'")),
+        Some(v) => split_on(plain_str(v), '='),
+    };
+    let name = str_repr(join(comps, "="));
+    let fam = str_repr(name_part(comps, 0));
+    let given = str_repr(name_part(comps, 1));
+    let mid = str_repr(name_part(comps, 2));
+    let pre = str_repr(name_part(comps, 3));
+    let suf = str_repr(name_part(comps, 4));
+    println(f"name {name}: family {fam} given {given} middle {mid} prefix {pre} suffix {suf}");
+    let ideo = str_repr(if comps.len() > 1 { comps[1].clone() } else { String.new() });
+    let phon = str_repr(if comps.len() > 2 { comps[2].clone() } else { String.new() });
+    println(f"  ideographic {ideo} phonetic {phon}");
+    Ok(())
+}
+
+fn job_resave(c: ref Ctx, words: ref Vec[String]) -> Result[(), Exc] {
+    let src = words[1].clone();
+    let mut f = load(c, src, true)?;
+    let data = match dcmwrite(c, mut f) {
+        Ok(d) => save(words[2], d),
+        Err(e) => {
+            println(f"resave {src}: error: {err_line(e)}");
+            return Ok(());
+        }
+    };
+    let orig = fs.read_bytes(f"data/{src}").unwrap_or(Vec.new());
+    let same = if orig == data { "identical" } else { "differs" };
+    println(f"resave {src}: {written_info(data)}, {same}");
+    Ok(())
+}
+
+fn job_anon(c: ref Ctx, words: ref Vec[String]) -> Result[(), Exc] {
+    let src = words[1].clone();
+    let mut f = load(c, src, false)?;
+    walk_names(c, mut f.ds)?;
+    for kw in ["PatientBirthDate", "OtherPatientIDs"].iter() {
+        let tag = keyword_tag(c, kw.to_string()).unwrap();
+        del_entry(mut f.ds, tag);
+    }
+    set_keyword(c, mut f.ds, "PatientID", Val.Str("ANON".to_string()))?;
+    remove_private(c, mut f.ds)?;
+    match dcmwrite(c, mut f) {
+        Ok(d) => {
+            let back = save(words[2], d);
+            println(f"anon {src}: {written_info(back)}");
+        }
+        Err(e) => println(f"anon {src}: error: {err_line(e)}"),
+    }
+    Ok(())
+}
+
+fn ts_named(name: ref String) -> String {
+    if name == "implicit" {
+        "1.2.840.10008.1.2".to_string()
+    } else if name == "explicit" {
+        "1.2.840.10008.1.2.1".to_string()
+    } else if name == "big" {
+        "1.2.840.10008.1.2.2".to_string()
+    } else {
+        "1.2.840.10008.1.2.4.50".to_string()
+    }
+}
+
+fn job_convert(c: ref Ctx, words: ref Vec[String]) -> Result[(), Exc] {
+    let src = words[1].clone();
+    let to = words[2].clone();
+    let mut f = load(c, src, false)?;
+    set_keyword(c, mut f.meta, "TransferSyntaxUID", Val.Uid(ts_named(to)))?;
+    match dcmwrite(c, mut f) {
+        Ok(d) => {
+            let back = save(words[3], d);
+            println(f"convert {src} to {to}: {written_info(back)}");
+        }
+        Err(e) => println(f"convert {src} to {to}: error: {err_line(e)}"),
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
+struct Series {
+    uid: String,
+    num: i64,
+    modality: String,
+    desc: String,
+    inst: Vec[(i64, String)],
+}
+
+#[derive(Clone)]
+#[derive(Clone)]
+struct Study {
+    uid: String,
+    date: String,
+    desc: String,
+    patient: String,
+    id: String,
+    series: Vec[Series],
+}
+
+// str(ds.get(kw, '')).
+fn get_str(c: ref Ctx, ds: mut ref Dataset, kw: ref String) -> Result[String, Exc] {
+    match getattr(c, mut ds, kw)? {
+        Some(v) => val_str(c, v),
+        None => Ok(String.new()),
+    }
+}
+
+// int(ds.get(kw, 0)).
+fn get_int(c: ref Ctx, ds: mut ref Dataset, kw: ref String) -> Result[i64, Exc] {
+    match getattr(c, mut ds, kw)? {
+        Some(Val.Is(n, _)) => Ok(n),
+        Some(Val.Int(n)) => Ok(n),
+        Some(Val.IsF(f, _)) => Ok(f as i64),
+        Some(Val.Nil) => Err(type_error("int() argument must be a string, a bytes-like object or a real number, not 'NoneType'")),
+        Some(v) => {
+            let s = plain_str(v);
+            match py_int(s) {
+                Some(n) => Ok(n),
+                None => Err(value_error(f"invalid literal for int() with base 10: {str_repr(s)}")),
+            }
+        }
+        None => Ok(0),
+    }
+}
+
+fn required_str(c: ref Ctx, ds: mut ref Dataset, kw: ref String) -> Result[String, Exc] {
+    match getattr(c, mut ds, kw)? {
+        Some(v) => val_str(c, v),
+        None => Err(exc("AttributeError", f"'FileDataset' object has no attribute '{kw}'")),
+    }
+}
+
+fn job_index(c: ref Ctx, words: ref Vec[String]) -> Result[(), Exc] {
+    let mut studies: Vec[Study] = Vec.new();
+    let mut skipped: Vec[String] = Vec.new();
+    let mut w: i64 = 1;
+    while w < words.len() {
+        let path = words[w].clone();
+        w += 1;
+        let mut f = match load(c, path, false) {
+            Ok(f) => f,
+            Err(e) => {
+                let k = e.kind.clone();
+                skipped.push(f"{path}: {k}");
+                continue;
+            }
+        };
+        let st_uid = required_str(c, mut f.ds, "StudyInstanceUID")?;
+        let mut si: i64 = -1;
+        let mut k: i64 = 0;
+        while k < studies.len() {
+            if studies[k].uid == st_uid {
+                si = k;
+            }
+            k += 1;
+        }
+        if si < 0 {
+            let date = get_str(c, mut f.ds, "StudyDate")?;
+            let desc = get_str(c, mut f.ds, "StudyDescription")?;
+            let patient = get_str(c, mut f.ds, "PatientName")?;
+            let id = get_str(c, mut f.ds, "PatientID")?;
+            studies.push(Study { uid: st_uid.clone(), date: date, desc: desc, patient: patient, id: id, series: Vec.new() });
+            si = studies.len() - 1;
+        }
+        let se_uid = required_str(c, mut f.ds, "SeriesInstanceUID")?;
+        let mut sj: i64 = -1;
+        k = 0;
+        while k < studies[si].series.len() {
+            if studies[si].series[k].uid == se_uid {
+                sj = k;
+            }
+            k += 1;
+        }
+        if sj < 0 {
+            let num = get_int(c, mut f.ds, "SeriesNumber")?;
+            let modality = get_str(c, mut f.ds, "Modality")?;
+            let desc = get_str(c, mut f.ds, "SeriesDescription")?;
+            studies[si].series.push(Series { uid: se_uid.clone(), num: num, modality: modality, desc: desc, inst: Vec.new() });
+            sj = studies[si].series.len() - 1;
+        }
+        let inum = get_int(c, mut f.ds, "InstanceNumber")?;
+        studies[si].series[sj].inst.push((inum, path));
+    }
+    // sorted(studies); sorted by (number, uid); sorted((number, path)).
+    let mut order: Vec[i64] = Vec.new();
+    let mut k: i64 = 0;
+    while k < studies.len() {
+        let mut at = order.len();
+        while at > 0 and studies[order[at - 1]].uid > studies[k].uid {
+            at -= 1;
+        }
+        order.insert(at, k);
+        k += 1;
+    }
+    for i in order.iter() {
+        let st = studies[*i].clone();
+        let d = str_repr(st.desc);
+        println(f"Study {st.uid} {st.date} {d}, patient {st.patient} ({st.id})");
+        let mut sorder: Vec[i64] = Vec.new();
+        let mut j: i64 = 0;
+        while j < st.series.len() {
+            let mut at = sorder.len();
+            while at > 0 and series_after(st.series[sorder[at - 1]], st.series[j]) {
+                at -= 1;
+            }
+            sorder.insert(at, j);
+            j += 1;
+        }
+        for sj in sorder.iter() {
+            let se = st.series[*sj].clone();
+            let sd = str_repr(se.desc);
+            let n = se.inst.len();
+            println(f"  Series {se.num} {se.modality} {sd}: {n} instance(s)");
+            let mut insts: Vec[(i64, String)] = Vec.new();
+            for p in se.inst.iter() {
+                let mut at = insts.len();
+                while at > 0 and (insts[at - 1].0 > p.0 or (insts[at - 1].0 == p.0 and insts[at - 1].1 > p.1)) {
+                    at -= 1;
+                }
+                insts.insert(at, p.clone());
+            }
+            for p in insts.iter() {
+                println(f"    #{p.0} {p.1}");
+            }
+        }
+    }
+    for s in skipped.iter() {
+        println(f"  skipped {s}");
+    }
+    Ok(())
+}
+
+fn series_after(a: ref Series, b: ref Series) -> bool {
+    a.num > b.num or (a.num == b.num and a.uid > b.uid)
+}
+
+// ------------------------------------------------------------ main
+
+// The inputs' hex, with z<n>. standing for n zero bytes.
+fn unrle(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'z' {
+            let mut n: i64 = 0;
+            i += 1;
+            while b[i] != b'.' {
+                n = n * 10 + ((b[i] - b'0') as i64);
+                i += 1;
+            }
+            i += 1;
+            let mut k: i64 = 0;
+            while k < n {
+                out.push(0);
+                k += 1;
+            }
+        } else {
+            out.push((hex_val(b[i]) * 16 + hex_val(b[i + 1])) as u8);
+            i += 2;
+        }
+    }
+    out
+}
+
+fn write_inputs() -> Result[(), String] {
+    for line in lines_of(inputs_text()).iter() {
+        let parts = split_on(line, ' ');
+        let name = parts[0].clone();
+        let body = if parts.len() > 1 { parts[1].clone() } else { String.new() };
+        if let Err(e) = fs.write_bytes(f"data/{name}", unrle(body)) {
+            return Err(f"cannot write {name}: {e}");
+        }
+    }
+    if let Err(e) = fs.create_dir_all("data/out") {
+        return Err(f"cannot create data/out: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    let _ = fs.create_dir_all("data");
+    match write_inputs() {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln(e);
+            return;
+        }
+    }
+    let c = make_ctx();
+    for line in lines_of(jobs_text()).iter() {
+        println(f"> {line}");
+        let words = split_on(line, ' ');
+        let kind = words[0].clone();
+        let r = if kind == "show" {
+            job_show(c, words);
+            Ok(())
+        } else if kind == "get" {
+            job_get(c, words)
+        } else if kind == "pn" {
+            job_pn(c, words)
+        } else if kind == "resave" {
+            job_resave(c, words)
+        } else if kind == "anon" {
+            job_anon(c, words)
+        } else if kind == "convert" {
+            job_convert(c, words)
+        } else {
+            job_index(c, words)
+        };
+        match r {
+            Ok(()) => {}
+            Err(e) => println(f"error: {err_line(e)}"),
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("show ct_explicit.dcm\nshow mr_implicit.dcm\nshow us_big.dcm\nshow sr_deflated.dcm\nshow sc_0.dcm\nshow sc_1.dcm\nshow no_ts.dcm\nshow ts_mismatch.dcm\nshow jpeg_encaps.dcm\nshow bad_us.dcm\nshow bad_nested.dcm\nshow text_corners.dcm\nshow empty_long.dcm\nshow open_sq.dcm\nshow open_ob.dcm\nshow cut_value.dcm\nshow cut_item.dcm\nshow un_vr.dcm\nshow vr_switch.dcm\nshow group_len.dcm\nshow notes.txt\nshow tiny.dcm\nshow bare_implicit.dcm\nshow bare_implicit.dcm force\nshow notes.txt force\nget ct_explicit.dcm PatientName\nget ct_explicit.dcm PixelSpacing\nget ct_explicit.dcm ImagePositionPatient\nget ct_explicit.dcm InstanceNumber\nget ct_explicit.dcm ExposureTime\nget ct_explicit.dcm SliceThickness\nget ct_explicit.dcm ImageType\nget ct_explicit.dcm Rows\nget ct_explicit.dcm WindowCenter\nget ct_explicit.dcm FrameOfReferenceUID\nget ct_explicit.dcm SOPClassUID\nget ct_explicit.dcm PixelData\nget ct_explicit.dcm PatientWeight\nget ct_explicit.dcm StudyComments\nget ct_explicit.dcm SmallestImagePixelValue\nget text_corners.dcm PatientWeight\nget text_corners.dcm ExposureTime\nget text_corners.dcm XRayTubeCurrent\nget text_corners.dcm Exposure\nget text_corners.dcm ExposureInuAs\nget text_corners.dcm OtherPatientIDs\nget text_corners.dcm RetrieveAETitle\nget text_corners.dcm InstitutionName\nget text_corners.dcm SeriesDescription\nget text_corners.dcm RetrieveURL\nget text_corners.dcm ReferencedSOPInstanceUID\nget text_corners.dcm StudyDescription\nget mr_implicit.dcm SmallestImagePixelValue\nget mr_implicit.dcm PixelData\nget mr_implicit.dcm PatientName\nget empty_long.dcm PatientWeight\nget empty_long.dcm AcquisitionDate\nget empty_long.dcm Rows\nget empty_long.dcm PixelSpacing\nget empty_long.dcm ReferencedSOPInstanceUID\npn ct_explicit.dcm\npn us_big.dcm\npn text_corners.dcm\npn empty_long.dcm\npn sc_4.dcm\nresave ct_explicit.dcm out/re_ct_explicit.dcm\nresave mr_implicit.dcm out/re_mr_implicit.dcm\nresave us_big.dcm out/re_us_big.dcm\nresave jpeg_encaps.dcm out/re_jpeg_encaps.dcm\n");
+    s.push_str("resave text_corners.dcm out/re_text_corners.dcm\nresave bare_implicit.dcm out/re_bare_implicit.dcm\nresave group_len.dcm out/re_group_len.dcm\nresave un_vr.dcm out/re_un_vr.dcm\nanon ct_explicit.dcm out/anon_ct_explicit.dcm\nanon mr_implicit.dcm out/anon_mr_implicit.dcm\nanon us_big.dcm out/anon_us_big.dcm\nanon text_corners.dcm out/anon_text_corners.dcm\nshow out/anon_mr_implicit.dcm\nshow out/anon_text_corners.dcm\nconvert ct_explicit.dcm big out/big_ct_explicit.dcm\nconvert ct_explicit.dcm implicit out/implicit_ct_explicit.dcm\nconvert mr_implicit.dcm explicit out/explicit_mr_implicit.dcm\nconvert mr_implicit.dcm big out/big_mr_implicit.dcm\nconvert us_big.dcm explicit out/explicit_us_big.dcm\nconvert us_big.dcm implicit out/implicit_us_big.dcm\nconvert sr_deflated.dcm explicit out/explicit_sr_deflated.dcm\nconvert jpeg_encaps.dcm explicit out/explicit_jpeg_encaps.dcm\nconvert sc_1.dcm jpeg out/jpeg_sc_1.dcm\nconvert group_len.dcm implicit out/implicit_group_len.dcm\nshow out/big_mr_implicit.dcm\nshow out/explicit_us_big.dcm\nshow out/explicit_sr_deflated.dcm\nindex sc_0.dcm sc_1.dcm sc_2.dcm sc_3.dcm sc_4.dcm sc_5.dcm ct_explicit.dcm mr_implicit.dcm sr_deflated.dcm us_big.dcm\nindex sc_2.dcm notes.txt sc_5.dcm\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("ct_explicit.dcm z128.4449434d02000000554c0400b0000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e32000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e312e312e31000200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800050043530a0049534f5f49522031303008000800435316004f524947494e414c5c5052494d4152595c415849414c0800160055491a00312e322e3834302e31303030382e352e312e342e312e312e32000800180055492200312e322e3832362e302e312e333638303034332e31302e313133382e312e312e31000800200044410800323032343033313108003000544d0a003130313530302e3235200800500053480800414343303034322008006000435302004354080070004c4f0c0041636d6520496d6167696e67080080004c4f120053742e204d617279277320436c696e69632008009000504e1200486f7573655e477265676f72795e5e44722e0800401153510000a8000000feff00e04c0000000800501155491a00312e322e3834302e31303030382e352e312e342e312e312e32000800551155492200312e322e3832362e302e312e333638303034332e31302e313133382e312e312e3000feff00e04c0000000800501155491a00312e322e3834302e31303030382e352e312e342e312e312e32000800551155492200312e322e3832362e302e312e333638303034332e31302e313133382e312e312e3200080018225351000032000000feff00e02a0000000800000153480800542d413031303020080002015348040053525420080004014c4f0600427261696e2008003e104c4f12004845414420572f4f20434f4e545241535420080030104c4f0e00486561642022726f7574696e6522090010004c4f0c0047454d535f4944454e5f3031090001104c4f040066756c6c09000210534804004354303109001a10555302004d0010001000504e0c00446f655e4a616e655e515e5e100020004c4f08005041542d3030303110003000444108003139383030323134100040004353020046201000101041530400303434591000201044530400312e3635100030104453040036312e35100000404c54300050617469656e742077617320636f6f706572617469766520616e64207374696c6c20666f7220746865207363616e2e201800500044530400322e3530180060004453040031323020180020104c4f0c0076312e325c6275696c64372018005011495306002037353020201800511149530400323030201800521149530200392018000051435304004846532020000d0055491e00312e322e3832362e302e312e333638303034332e31302e313133382e310020000e0055492000312e322e3832362e302e312e333638303034332e31302e313133382e312e31002000100053480600535455445931200011004953020031202000130049530200312020003200445312002d3132352e305c2d3132352e305c34352e352000370044530c00315c305c305c305c315c30202000520055492000312e322e3832362e302e312e333638303034332e31302e313133382e312e3900200041104453040034352e35200000404c540a0073686f7274206e6f7465280002005553020001002800040043530c004d4f4e4f4348524f4d45322028001000555302000400280011005553020004002800300044531200302e3438383238315c302e343838323831202800000155530200100028000101555302000c0028000201555302000b0028000301555302000000280006015553020003002800070155530200a00f280050104453060034305c343030280051104453080038305c323030302028005210445306002d313032342028005310445302003120290010004c4f12005349454d454e5320435341204845414445522900081043530c00494d414745204e554d203420290010104f42000028000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262718000693464c04009a99993e1800079346441000555555555555d53f00000000000004402000659141540800200032002000411018003093534c0400fdffffff1800299353530400f4ff070018002893554c0400005ed0b218004593554e000008z9.2940e07f10004f570000200000006f007a0085009000a000ab00b600c100d100dc00e700f20002010d0118012301\n");
+    s.push_str("mr_implicit.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e34000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e322e312e31000200100055491200312e322e3834302e31303030382e312e32000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800080012000000444552495645445c5345434f4e4441525920080016001a000000312e322e3834302e31303030382e352e312e342e312e312e34000800180022000000312e322e3832362e302e312e333638303034332e31302e313133382e322e312e31000800200008000000323032343033313208006000020000004d5208008000120000004e6f7274687369646520496d6167696e6720090010000c00000047454d535f4944454e5f303109000410060000005349474e4120090017102e000000536167697474616c205431207765696768746564207365726965732c206d6f74696f6e20636f7272656374656420090027100400000087d612000900301004000000737663390900991020000000756e6b6e6f776e20656c656d656e7420696e2061206b6e6f776e20626c6f636b11000110020000000500100010000a000000536d6974685e4a6f686e10002000080000005041542d303030321000300008000000313936323131303310004000020000004d2018002000020000005345180080000400000035303020180081000600000031352e3030201800870004000000312e3520180030100600000054315f53414720000d001e000000312e322e3832362e302e312e333638303034332e31302e313133382e320020000e0020000000312e322e3832362e302e312e333638303034332e31302e313133382e322e3100200011000200000033202000130002000000313240007502fffffffffeff00e0ffffffff400001100600000052502d31312040006002fffffffffeff00e0ffffffff0800000106000000313133363139080002010400000044434d200800040110000000496d6167652050726f63657373696e67feff0de000000000feffdde00000000040005302060000005050532d3720feff0de000000000feff00e0fffffffffeff0de000000000feffdde00000000028000200020000000100280004000c0000004d4f4e4f4348524f4d4532202800100002000000020028001100020000000400280000010200000010002800010102000000100028000201020000000f00280003010200000001002800060102000000ecff28000701020000008403e07f1000100000004d01580163016e017e01890194019f01\n");
+    s.push_str("us_big.dcm z128.4449434d02000000554c0400b2000000020001004f4200000200000000010200020055491c00312e322e3834302e31303030382e352e312e342e312e312e362e31000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e332e312e31000200100055491400312e322e3834302e31303030382e312e322e32000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f31000800054353000a49534f5f495220313932000800165549001c312e322e3834302e31303030382e352e312e342e312e312e362e31000008001855490022312e322e3832362e302e312e333638303034332e31302e313133382e332e312e31000008002044410008323032343033313300080060435300025553000800804c4f001ace9aceadcebdcf84cf81cebf20cea5ceb3ceb5ceafceb1cf822000100010504e0048cea0ceb1cf80ceb1ceb4cf8ccf80cebfcf85cebbcebfcf825ece9dceafcebacebfcf823dcea0ceb1cf80ceb1ceb4cf8ccf80cebfcf85cebbcebfcf825ece9dceafcebacebfcf8220001000204c4f00085041542d303030330010003044410008313939303035303500100040435300024d20001860115351000000000054fffee0000000004c001860125553000200010018601455530002000200186018554c0004000000000018601a554c0004000000000018602c464400083f8999999999999a0018602e464400083f8999999999999a0020000d5549001e312e322e3832362e302e312e333638303034332e31302e313133382e33000020000e55490020312e322e3832362e302e312e333638303034332e31302e313133382e332e3100002000114953000231200020001349530002312000280002555300020003002800044353000452474220002800065553000200000028001055530002000200280011555300020002002801005553000200080028010155530002000800280102555300020007002801035553000200007fe000104f4200000000000c0a141e28323c46505a646e78\nsr_deflated.dcm z128.4449434d02000000554c0400b6000000020001004f4200000200000000010200020055491e00312e322e3834302e31303030382e352e312e342e312e312e38382e3131000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e342e312e31000200100055491600312e322e3834302e31303030382e312e322e312e39390200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f317d90cd4ac34014854f4b91a1a044047125439782c34c92d6b84b48528cb4699aa4e2aa34d622819a42a90bdfc0a5e20b5428f85a3e897ad308ae7431dcb997ef9cfbc3708851700c25746199522829a525da4209939e1296259402c31151ad8ad23b823861742c294d8314441856c513c9e1390cbad44d6928c530819bd491c41a34446113de6236becc8ad978a811db1b30444e7a4a6d9506b9d5aa7372d695a9c1de6abb9c63f777ca3ffa2b72db238aff4f893671fb08c8b74dbe07db9fe236ecb59b34e10ec2d409423fa64a441586c48f9cd8497d1b2f9b327707fda8e797f9eba6548cc22b3f0eba81efd990efc9107806f0f9858f278a36b475a5dafa26559f0652ff3aa5edd625affff0271419504b2e76a07425cfe87a75ca1af0dc3e6768d4ca6b75f3e2362fee68bec9db28055aa40a173c9b3eac663c2f56cb6cbacc8a3c9bf3eca6582cefb379be7a14df00\n");
+    s.push_str("sc_0.dcm z128.4449434d02000000554c0400b0000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e372e322e33000200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e37000800180055492200312e322e3832362e302e312e333638303034332e31302e313133382e372e322e33000800200044410800323032343033303108006000435302004f54080030104c4f060043484553542008003e104c4f08004c61746572616c2010001000504e0c0042726f776e5e416c69636520100020004c4f08005041542d303030371000300044410800313937303031303110004000435302004f2020000d0055491e00312e322e3832362e302e312e333638303034332e31302e313133382e370020000e0055492000312e322e3832362e302e312e333638303034332e31302e313133382e372e32002000110049530200322020001300495302003320\nsc_1.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e372e312e31000200100055491200312e322e3834302e31303030382e312e32000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f31080016001a000000312e322e3834302e31303030382e352e312e342e312e312e37000800180022000000312e322e3832362e302e312e333638303034332e31302e313133382e372e312e31000800200008000000323032343033303108006000020000004f54080030100600000043484553542008003e100800000046726f6e74616c20100010000c00000042726f776e5e416c6963652010002000080000005041542d303030371000300008000000313937303031303110004000020000004f2020000d001e000000312e322e3832362e302e312e333638303034332e31302e313133382e370020000e0020000000312e322e3832362e302e312e333638303034332e31302e313133382e372e31002000110002000000312020001300020000003120\nsc_2.dcm z128.4449434d02000000554c0400b0000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e372e312e32000200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e37000800180055492200312e322e3832362e302e312e333638303034332e31302e313133382e372e312e32000800200044410800323032343033303108006000435302004f54080030104c4f060043484553542008003e104c4f080046726f6e74616c2010001000504e0c0042726f776e5e416c69636520100020004c4f08005041542d303030371000300044410800313937303031303110004000435302004f2020000d0055491e00312e322e3832362e302e312e333638303034332e31302e313133382e370020000e0055492000312e322e3832362e302e312e333638303034332e31302e313133382e372e31002000110049530200312020001300495302003220\n");
+    s.push_str("sc_3.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e372e322e31000200100055491200312e322e3834302e31303030382e312e32000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f31080016001a000000312e322e3834302e31303030382e352e312e342e312e312e37000800180022000000312e322e3832362e302e312e333638303034332e31302e313133382e372e322e31000800200008000000323032343033303108006000020000004f54080030100600000043484553542008003e10080000004c61746572616c20100010000c00000042726f776e5e416c6963652010002000080000005041542d303030371000300008000000313937303031303110004000020000004f2020000d001e000000312e322e3832362e302e312e333638303034332e31302e313133382e370020000e0020000000312e322e3832362e302e312e333638303034332e31302e313133382e372e32002000110002000000322020001300020000003120\nsc_4.dcm z128.4449434d02000000554c0400b0000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e352e31302e310200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e37000800180055492200312e322e3832362e302e312e333638303034332e31302e313133382e352e31302e310800200044410800323032333132323508006000435302004f54080030104c4f04004b4e454508003e104c4f08004b6e65652041502010001000504e0a00477265656e5e426f6220100020004c4f08005041542d303030351000300044410800313937303031303110004000435302004f2020000d0055491e00312e322e3832362e302e312e333638303034332e31302e313133382e350020000e0055492000312e322e3832362e302e312e333638303034332e31302e313133382e352e31302000110049530200313020001300495302003120\nsc_5.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492200312e322e3832362e302e312e333638303034332e31302e313133382e372e312e31300200100055491200312e322e3834302e31303030382e312e32000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f31080016001a000000312e322e3834302e31303030382e352e312e342e312e312e37000800180022000000312e322e3832362e302e312e333638303034332e31302e313133382e372e312e31300800200008000000323032343033303108006000020000004f54080030100600000043484553542008003e100800000046726f6e74616c20100010000c00000042726f776e5e416c6963652010002000080000005041542d303030371000300008000000313937303031303110004000020000004f2020000d001e000000312e322e3832362e302e312e333638303034332e31302e313133382e370020000e0020000000312e322e3832362e302e312e333638303034332e31302e313133382e372e31002000110002000000312020001300020000003130\n");
+    s.push_str("bare_implicit.dcm 080016001a000000312e322e3834302e31303030382e352e312e342e312e312e37000800180020000000312e322e3832362e302e312e333638303034332e31302e313133382e362e310008006000020000004f54100010000c000000426172655e4461746173657410002000080000005041542d303030361000300008000000313937303031303110004000020000004f2020001300020000003420\nno_ts.dcm z128.4449434d02000000554c040092000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e32000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f31000800165549001a312e322e3834302e31303030382e352e312e342e312e312e37000008001855490020312e322e3832362e302e312e333638303034332e31302e313133382e362e320000080060435300024f540028001055530002012c00100010504e00084e6f74735e596e74001000204c4f00085041542d303030380010003044410008313937303031303100100040435300024f20\nts_mismatch.dcm z128.4449434d02000000554c0400ac000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e33000200100055491200312e322e3834302e31303030382e312e32000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e37000800180055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e330008006000435302004f542800100055530200400010001000504e0a004d69735e4d6174636820100020004c4f08005041542d303030391000300044410800313937303031303110004000435302004f20\njpeg_encaps.dcm z128.4449434d02000000554c0400b0000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e34000200100055491600312e322e3834302e31303030382e312e322e342e35300200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e37000800180055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e340008006000435302004f5410001000504e08004a61795e50656720100020004c4f08005041542d303031301000300044410800313937303031303110004000435302004f20280010005553020008002800110055530200080028000001555302000800e07f10004f420000fffffffffeff00e000000000feff00e014000000ffd8ffe000104a4649460001010101010101ffd9feffdde000000000\n");
+    s.push_str("bad_us.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e35000200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e37000800180055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e35002800100055530400010203002800110055530300050007\nbad_nested.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e36000200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e3700180011605351000013000000feff00e00b0000001800126055530300010002\ntext_corners.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e37000200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800050043530a0049534f204952203130300800160055491a00312e322e3834302e31303030382e352e312e342e312e312e37000800180055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e3700080080004c4f1000436166e920ab204dfc6c6c657220bb20080030104c4f1a00626f7468202773696e676c652720616e642022646f75626c652208003e104c4f120020206c65616420616e6420747261696c202010001000504e10004dfc6c6c65725e4afc7267656e3d5e3d100000104c4f1600414c494153315c414c494153325c5c414c49415334201000201044530400312e37781000301044530c00203730205c2037312e3520201800501149530400616263201800511149530400322e352018005211495304002b3038201800531149530400332e3020200000404c5420006c696e65206f6e650d0a6c696e652074776f09746162626564205c206b657074320060104c4f08007461620968657265400054024c4f060063746c017f2040008002535408006e756c00706164000800540041450e00205041435331205c53544f524532080090115552000020000000687474703a2f2f6578616d706c652e696e76616c69642f7761646f3f783d3120080055115549200020312e322e3832362e302e312e333638303034332e31302e313133382e362e30\n");
+    s.push_str("empty_long.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e38000200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e37000800180055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e38000800200044410000080050005348000008009000504e000008001011535100000000000008005511554900001000300044410200202010002010445300001800501149530000200065914154000028001000555300002800300044534700302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e355c302e35200000404c54100065786163746c79207369787465656e21320066105554000012000000736576656e7465656e2063686172732e2e20180010135553220000000100020003000400050006000700080009000a000b000c000d000e000f001000280012005553200000000100020003000400050006000700080009000a000b000c000d000e000f00290010104f4200000000000050000400435302000000e07f10004f42000010000000000102030405060708090a0b0c0d0e0f\nopen_sq.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e39000200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e370008006000435302004f540800151153510000fffffffffeff00e0ffffffff08000001534802005831\nopen_ob.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e31300200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e370008006000435302004f5410001000504e0c004b6570745e4265666f726520420011004f420000ffffffff255044462d312e34206e6f20656e64\n");
+    s.push_str("cut_value.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e31310200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e370008006000435302004f54080030104c4f1400437574206f6666206865\ncut_item.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e31320200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e3700080040115351000006000000feff00e01000\nun_vr.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e31330200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e370008006000554e0000020000004f5428001000554e0000020000000002290010004c4f12005349454d454e53204353412048454144455229000810554e0000030000004d522029000910554e000008000000323031303031313433001010554e0000020000000102330011104c4f0e006f727068616e2070726976617465\nvr_switch.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e31340200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f310800160055491a00312e322e3834302e31303030382e352e312e342e312e312e370008006000435302004f54100010001000000053776974636865645e4d69647761792010002000080000005041542d30303131\n");
+    s.push_str("group_len.dcm z128.4449434d02000000554c0400ae000000020001004f4200000200000000010200020055491a00312e322e3834302e31303030382e352e312e342e312e312e37000200030055492000312e322e3832362e302e312e333638303034332e31302e313133382e362e31350200100055491400312e322e3834302e31303030382e312e322e31000200120055492000312e322e3832362e302e312e333638303034332e31302e313133382e302e31000200130053480a004b4152415f44434d5f3108000000554c0400e70300000800160055491a00312e322e3834302e31303030382e352e312e342e312e312e3700080060004353020058410800600043530200435210000000554c04000400000010001000504e0c0047726f75705e4c656e677468100020004c4f08005041542d303031321000300044410800313937303031303110004000435302004f20\nnotes.txt 54686973206973206e6f742061204449434f4d2066696c6520617420616c6c2c206a75737420736f6d6520746578742e0a54686973206973206e6f742061204449434f4d2066696c6520617420616c6c2c206a75737420736f6d6520746578742e0a54686973206973206e6f742061204449434f4d2066696c6520617420616c6c2c206a75737420736f6d6520746578742e0a54686973206973206e6f742061204449434f4d2066696c6520617420616c6c2c206a75737420736f6d6520746578742e0a\ntiny.dcm z64.\n");
+    s
+}
+
+fn dict_text() -> String {
+    let mut s = String.new();
+    s.push_str("00000000|UL|1|Command Group Length|CommandGroupLength\n00000001|UL|1|Command Length to End|CommandLengthToEnd\n00000002|UI|1|Affected SOP Class UID|AffectedSOPClassUID\n00000003|UI|1|Requested SOP Class UID|RequestedSOPClassUID\n00000010|SH|1|Command Recognition Code|CommandRecognitionCode\n00000100|US|1|Command Field|CommandField\n00000200|AE|1|Initiator|Initiator\n00000300|AE|1|Receiver|Receiver\n00000400|AE|1|Find Location|FindLocation\n00000600|AE|1|Move Destination|MoveDestination\n00000800|US|1|Command Data Set Type|CommandDataSetType\n00001000|UI|1|Affected SOP Instance UID|AffectedSOPInstanceUID\n00004000|LT|1|Dialog Receiver|DialogReceiver\n00020000|UL|1|File Meta Information Group Length|FileMetaInformationGroupLength\n00020001|OB|1|File Meta Information Version|FileMetaInformationVersion\n00020002|UI|1|Media Storage SOP Class UID|MediaStorageSOPClassUID\n00020003|UI|1|Media Storage SOP Instance UID|MediaStorageSOPInstanceUID\n00020010|UI|1|Transfer Syntax UID|TransferSyntaxUID\n00020012|UI|1|Implementation Class UID|ImplementationClassUID\n00020013|SH|1|Implementation Version Name|ImplementationVersionName\n00020018|AE|1|Receiving Application Entity Title|ReceivingApplicationEntityTitle\n00020028|UR|1|Receiving Presentation Address|ReceivingPresentationAddress\n00020102|OB|1|Private Information|PrivateInformation\n00080005|CS|1-n|Specific Character Set|SpecificCharacterSet\n00080008|CS|2-n|Image Type|ImageType\n00080010|SH|1|Recognition Code|RecognitionCode\n00080012|DA|1|Instance Creation Date|InstanceCreationDate\n00080016|UI|1|SOP Class UID|SOPClassUID\n00080018|UI|1|SOP Instance UID|SOPInstanceUID\n00080020|DA|1|Study Date|StudyDate\n00080022|DA|1|Acquisition Date|AcquisitionDate\n00080030|TM|1|Study Time|StudyTime\n00080040|US|1|Data Set Type|DataSetType\n00080050|SH|1|Accession Number|AccessionNumber\n00080054|AE|1-n|Retrieve AE Title|RetrieveAETitle\n00080055|AE|1|Station AE Title|StationAETitle\n00080060|CS|1|Modality|Modality\n00080070|LO|1|Manufacturer|Manufacturer\n");
+    s.push_str("00080080|LO|1|Institution Name|InstitutionName\n00080090|PN|1|Referring Physician's Name|ReferringPhysicianName\n00080100|SH|1|Code Value|CodeValue\n00080102|SH|1|Coding Scheme Designator|CodingSchemeDesignator\n00080104|LO|1|Code Meaning|CodeMeaning\n00081030|LO|1|Study Description|StudyDescription\n0008103E|LO|1|Series Description|SeriesDescription\n00081110|SQ|1|Referenced Study Sequence|ReferencedStudySequence\n00081115|SQ|1|Referenced Series Sequence|ReferencedSeriesSequence\n00081140|SQ|1|Referenced Image Sequence|ReferencedImageSequence\n00081150|UI|1|Referenced SOP Class UID|ReferencedSOPClassUID\n00081155|UI|1|Referenced SOP Instance UID|ReferencedSOPInstanceUID\n00081190|UR|1|Retrieve URL|RetrieveURL\n00082218|SQ|1|Anatomic Region Sequence|AnatomicRegionSequence\n00100010|PN|1|Patient's Name|PatientName\n00100020|LO|1|Patient ID|PatientID\n00100028|US|3|Subject Relative Position in Image|SubjectRelativePositionInImage\n00100030|DA|1|Patient's Birth Date|PatientBirthDate\n00100040|CS|1|Patient's Sex|PatientSex\n00100050|SQ|1|Patient's Insurance Plan Code Sequence|PatientInsurancePlanCodeSequence\n00101000|LO|1-n|Other Patient IDs|OtherPatientIDs\n00101010|AS|1|Patient's Age|PatientAge\n00101020|DS|1|Patient's Size|PatientSize\n00101030|DS|1|Patient's Weight|PatientWeight\n00104000|LT|1|Patient Comments|PatientComments\n00120055|LO|1|Issuer of Clinical Trial Time Point ID|IssuerOfClinicalTrialTimePointID\n0016001A|US|1|Sensitivity Type|SensitivityType\n00180012|SQ|1|Contrast/Bolus Agent Sequence|ContrastBolusAgentSequence\n00180020|CS|1-n|Scanning Sequence|ScanningSequence\n00180022|CS|1-n|Scan Options|ScanOptions\n00180028|DS|1|Intervention Drug Dose|InterventionDrugDose\n00180050|DS|1|Slice Thickness|SliceThickness\n00180060|DS|1|KVP|KVP\n00180080|DS|1|Repetition Time|RepetitionTime\n00180081|DS|1|Echo Time|EchoTime\n00180087|DS|1|Magnetic Field Strength|MagneticFieldStrength\n00181020|LO|1-n|Software Versions|SoftwareVersions\n00181030|LO|1|Protocol Name|ProtocolName\n");
+    s.push_str("00181150|IS|1|Exposure Time|ExposureTime\n00181151|IS|1|X-Ray Tube Current|XRayTubeCurrent\n00181152|IS|1|Exposure|Exposure\n00181153|IS|1|Exposure in uAs|ExposureInuAs\n00181310|US|4|Acquisition Matrix|AcquisitionMatrix\n00185100|CS|1|Patient Position|PatientPosition\n00186011|SQ|1|Sequence of Ultrasound Regions|SequenceOfUltrasoundRegions\n00186012|US|1|Region Spatial Format|RegionSpatialFormat\n00186014|US|1|Region Data Type|RegionDataType\n00186018|UL|1|Region Location Min X0|RegionLocationMinX0\n0018601A|UL|1|Region Location Min Y0|RegionLocationMinY0\n0018602C|FD|1|Physical Delta X|PhysicalDeltaX\n0018602E|FD|1|Physical Delta Y|PhysicalDeltaY\n00189306|FD|1|Single Collimation Width|SingleCollimationWidth\n00189307|FD|1|Total Collimation Width|TotalCollimationWidth\n00189328|FD|1|Exposure Time in ms|ExposureTimeInms\n00189329|SQ|1|CT Image Frame Type Sequence|CTImageFrameTypeSequence\n00189330|FD|1|X-Ray Tube Current in mA|XRayTubeCurrentInmA\n00189345|FD|1|CTDIvol|CTDIvol\n0020000D|UI|1|Study Instance UID|StudyInstanceUID\n0020000E|UI|1|Series Instance UID|SeriesInstanceUID\n00200010|SH|1|Study ID|StudyID\n00200011|IS|1|Series Number|SeriesNumber\n00200013|IS|1|Instance Number|InstanceNumber\n00200020|CS|2|Patient Orientation|PatientOrientation\n00200032|DS|3|Image Position (Patient)|ImagePositionPatient\n00200037|DS|6|Image Orientation (Patient)|ImageOrientationPatient\n00200052|UI|1|Frame of Reference UID|FrameOfReferenceUID\n00201041|DS|1|Slice Location|SliceLocation\n00204000|LT|1|Image Comments|ImageComments\n00209165|AT|1|Dimension Index Pointer|DimensionIndexPointer\n00280002|US|1|Samples per Pixel|SamplesPerPixel\n00280003|US|1|Samples per Pixel Used|SamplesPerPixelUsed\n00280004|CS|1|Photometric Interpretation|PhotometricInterpretation\n00280006|US|1|Planar Configuration|PlanarConfiguration\n00280010|US|1|Rows|Rows\n00280011|US|1|Columns|Columns\n00280012|US|1|Planes|Planes\n00280030|DS|2|Pixel Spacing|PixelSpacing\n00280100|US|1|Bits Allocated|BitsAllocated\n");
+    s.push_str("00280101|US|1|Bits Stored|BitsStored\n00280102|US|1|High Bit|HighBit\n00280103|US|1|Pixel Representation|PixelRepresentation\n00280106|US or SS|1|Smallest Image Pixel Value|SmallestImagePixelValue\n00280107|US or SS|1|Largest Image Pixel Value|LargestImagePixelValue\n00281050|DS|1-n|Window Center|WindowCenter\n00281051|DS|1-n|Window Width|WindowWidth\n00281052|DS|1|Rescale Intercept|RescaleIntercept\n00281053|DS|1|Rescale Slope|RescaleSlope\n00321060|LO|1|Requested Procedure Description|RequestedProcedureDescription\n00321066|UT|1|Reason for Visit|ReasonForVisit\n00324000|LT|1|Study Comments|StudyComments\n00340002|OB|1|Flow Identifier|FlowIdentifier\n00340008|CS|1|Includes Imaging Subject|IncludesImagingSubject\n00380008|CS|1|Visit Status ID|VisitStatusID\n00380010|LO|1|Admission ID|AdmissionID\n00400002|DA|1|Scheduled Procedure Step Start Date|ScheduledProcedureStepStartDate\n00400010|SH|1-n|Scheduled Station Name|ScheduledStationName\n00400253|SH|1|Performed Procedure Step ID|PerformedProcedureStepID\n00400254|LO|1|Performed Procedure Step Description|PerformedProcedureStepDescription\n00400260|SQ|1|Performed Protocol Code Sequence|PerformedProtocolCodeSequence\n00400275|SQ|1|Request Attributes Sequence|RequestAttributesSequence\n00400280|ST|1|Comments on the Performed Procedure Step|CommentsOnThePerformedProcedureStep\n00401001|SH|1|Requested Procedure ID|RequestedProcedureID\n0040A010|CS|1|Relationship Type|RelationshipType\n0040A040|CS|1|Value Type|ValueType\n0040A043|SQ|1|Concept Name Code Sequence|ConceptNameCodeSequence\n0040A050|CS|1|Continuity Of Content|ContinuityOfContent\n0040A160|UT|1|Text Value|TextValue\n0040A491|CS|1|Completion Flag|CompletionFlag\n0040A493|CS|1|Verification Flag|VerificationFlag\n0040A730|SQ|1|Content Sequence|ContentSequence\n00420011|OB|1|Encapsulated Document|EncapsulatedDocument\n00460101|SQ|1|Add Intermediate Sequence|AddIntermediateSequence\n00500004|CS|1|Calibration Image|CalibrationImage\n00541200|DS|1|Axial Acceptance|AxialAcceptance\n");
+    s.push_str("00640008|FD|3|Grid Resolution|GridResolution\n00800004|FD|1|Shot Duration Time|ShotDurationTime\n00800012|SQ|1|Referenced Texture Sequence|ReferencedTextureSequence\n04000500|SQ|1|Encrypted Attributes Sequence|EncryptedAttributesSequence\n20000040|CS|1|Film Destination|FilmDestination\n20100010|ST|1|Image Display Format|ImageDisplayFormat\n20200010|US|1|Image Box Position|ImageBoxPosition\n20300020|LO|1|Text String|TextString\n20400060|CS|1|Overlay Magnification Type|OverlayMagnificationType\n20400080|CS|1|Overlay Foreground Density|OverlayForegroundDensity\n20500010|SQ|1|Presentation LUT Sequence|PresentationLUTSequence\n30020010|DS|6|RT Image Orientation|RTImageOrientation\n30020012|DS|2|RT Image Position|RTImagePosition\n30080016|DS|1|Measured Dose Value|MeasuredDoseValue\n30080020|SQ|1|Treatment Session Beam Sequence|TreatmentSessionBeamSequence\n30100030|SQ|1|Patient Equipment Relationship Code Sequence|PatientEquipmentRelationshipCodeSequence\n7FE00010|OB or OW|1|Pixel Data|PixelData\nFFFEE000|NONE|1|Item|Item\nFFFEE00D|NONE|1|Item Delimitation Item|ItemDelimitationItem\nFFFEE0DD|NONE|1|Sequence Delimitation Item|SequenceDelimitationItem\n");
+    s
+}
+
+fn uid_text() -> String {
+    let mut s = String.new();
+    s.push_str("1.2.840.10008.1.2|Implicit VR Little Endian|Transfer Syntax\n1.2.840.10008.1.2.1|Explicit VR Little Endian|Transfer Syntax\n1.2.840.10008.1.2.1.99|Deflated Explicit VR Little Endian|Transfer Syntax\n1.2.840.10008.1.2.2|Explicit VR Big Endian|Transfer Syntax\n1.2.840.10008.1.2.4.50|JPEG Baseline (Process 1)|Transfer Syntax\n1.2.840.10008.5.1.4.1.1.2|CT Image Storage|SOP Class\n1.2.840.10008.5.1.4.1.1.4|MR Image Storage|SOP Class\n1.2.840.10008.5.1.4.1.1.6|Ultrasound Image Storage|SOP Class\n1.2.840.10008.5.1.4.1.1.6.1|Ultrasound Image Storage|SOP Class\n1.2.840.10008.5.1.4.1.1.7|Secondary Capture Image Storage|SOP Class\n1.2.840.10008.5.1.4.1.1.8|Standalone Overlay Storage|SOP Class\n1.2.840.10008.5.1.4.1.1.88.1|Text SR Storage - Trial|SOP Class\n1.2.840.10008.5.1.4.1.1.88.11|Basic Text SR Storage|SOP Class\n");
+    s
+}
+
+fn private_text() -> String {
+    let mut s = String.new();
+    s.push_str("GEMS_IDEN_01|000910xx|LO|Private Element Creator\nGEMS_IDEN_01|0009xx01|LO|Full fidelity\nGEMS_IDEN_01|0009xx02|SH|Suite id\nGEMS_IDEN_01|0009xx04|SH|Product id\nGEMS_IDEN_01|0009xx17|LT|Series Description\nGEMS_IDEN_01|0009xx1A|US|Unknown\nGEMS_IDEN_01|0009xx20|US|Unknown\nGEMS_IDEN_01|0009xx27|SL|Image actual date\nGEMS_IDEN_01|0009xx2F|SH|Unknown\nGEMS_IDEN_01|0009xx30|SH|Service id\nGEMS_IDEN_01|0009xx31|SH|Mobile location number\nGEMS_IDEN_01|0009xxE2|LT|Image Type (ORIGINAL~bPROSPECTIVE ...)\nGEMS_IDEN_01|0009xxE3|UI|Equipment UID\nGEMS_IDEN_01|0009xxE6|SH|Genesis Version - now\nGEMS_IDEN_01|0009xxE7|UL|Exam Record checksum\nGEMS_IDEN_01|0009xxE8|SH|Series Suite Id\nGEMS_IDEN_01|0009xxE9|SL|Actual series data time stamp\nSIEMENS CSA HEADER|0029xx08|CS|CSA Image Header Type\nSIEMENS CSA HEADER|0029xx09|LO|CSA Image Header Version\nSIEMENS CSA HEADER|0029xx10|OB|CSA Image Header Info\nSIEMENS CSA HEADER|0029xx18|CS|CSA Series Header Type\nSIEMENS CSA HEADER|0029xx19|LO|CSA Series Header Version\nSIEMENS CSA HEADER|0029xx20|OB|CSA Series Header Info\n");
+    s
+}
