@@ -1,0 +1,1949 @@
+{
+ "legacy_compiler": "kara 7568ca9d6f (2026-10-06, the last commit with auto-par on by default)",
+ "katas": "kara-katas 676e534e47",
+ "archive_compiler": "kara 741fbf08c1 (legacy-archive, KARAC_AUTO_PAR=1)",
+ "katas_now": "kara-katas aefbdf64",
+ "machine": "cloud container, 4 cores; medians of 3 interleaved runs, KARAC_HASH_SEED=1",
+ "programs": [
+  {
+   "kata": 1,
+   "program": "leetcode/1-100/1-two-sum/bench/brute_force.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 34,
+     "line_now": 34,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.653,
+   "par_s": 0.217,
+   "speedup": 3.0,
+   "par_cpu_per_wall": 3.56,
+   "output_same": true
+  },
+  {
+   "kata": 2,
+   "program": "leetcode/1-100/2-add-two-numbers/bench/iterative.kara",
+   "sites": [
+    {
+     "kind": "statement_group",
+     "fn": "main",
+     "line_10_06": 75,
+     "inside": null
+    }
+   ],
+   "seq_s": 0.777,
+   "par_s": 1.582,
+   "speedup": 0.49,
+   "par_cpu_per_wall": 1.0,
+   "output_same": true
+  },
+  {
+   "kata": 3,
+   "program": "leetcode/1-100/3-longest-substring-without-repeating-characters/bench/sliding_window.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 47,
+     "line_now": 47,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.028,
+   "par_s": 0.012,
+   "speedup": 2.37,
+   "par_cpu_per_wall": 2.69,
+   "output_same": true
+  },
+  {
+   "kata": 4,
+   "program": "leetcode/1-100/4-median-of-two-sorted-arrays/bench/binary_search_partition.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 108,
+     "line_now": 108,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.042,
+   "par_s": 0.026,
+   "speedup": 1.64,
+   "par_cpu_per_wall": 2.02,
+   "output_same": true
+  },
+  {
+   "kata": 5,
+   "program": "leetcode/1-100/5-longest-palindromic-substring/bench/expand_around_center.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 67,
+     "line_now": 67,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.618,
+   "par_s": 0.199,
+   "speedup": 3.11,
+   "par_cpu_per_wall": 3.5,
+   "output_same": true
+  },
+  {
+   "kata": 5,
+   "program": "leetcode/1-100/5-longest-palindromic-substring/bench/expand_around_center_unchecked.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 69,
+     "line_now": 69,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.623,
+   "par_s": 0.225,
+   "speedup": 2.77,
+   "par_cpu_per_wall": 3.29,
+   "output_same": true
+  },
+  {
+   "kata": 6,
+   "program": "leetcode/1-100/6-zigzag-conversion/bench/row_buffers.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 89,
+     "line_now": 89,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.233,
+   "par_s": 0.062,
+   "speedup": 3.74,
+   "par_cpu_per_wall": 3.35,
+   "output_same": true
+  },
+  {
+   "kata": 7,
+   "program": "leetcode/1-100/7-reverse-integer/bench/reverse.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 64,
+     "line_now": 64,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 1.274,
+   "par_s": 0.339,
+   "speedup": 3.75,
+   "par_cpu_per_wall": 3.91,
+   "output_same": true
+  },
+  {
+   "kata": 8,
+   "program": "leetcode/1-100/8-string-to-integer-atoi/bench/atoi.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 91,
+     "line_now": 91,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.1,
+   "par_s": 0.047,
+   "speedup": 2.1,
+   "par_cpu_per_wall": 2.91,
+   "output_same": true
+  },
+  {
+   "kata": 9,
+   "program": "leetcode/1-100/9-palindrome-number/bench/palindrome.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 84,
+     "line_now": 84,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.232,
+   "par_s": 0.067,
+   "speedup": 3.47,
+   "par_cpu_per_wall": 3.31,
+   "output_same": true
+  },
+  {
+   "kata": 10,
+   "program": "leetcode/1-100/10-regular-expression-matching/bench/regex.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 83,
+     "line_now": 83,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.309,
+   "par_s": 0.077,
+   "speedup": 4.03,
+   "par_cpu_per_wall": 3.77,
+   "output_same": true
+  },
+  {
+   "kata": 11,
+   "program": "leetcode/1-100/11-container-with-most-water/bench/container.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 71,
+     "line_now": 71,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.334,
+   "par_s": 0.073,
+   "speedup": 4.56,
+   "par_cpu_per_wall": 3.33,
+   "output_same": true
+  },
+  {
+   "kata": 12,
+   "program": "leetcode/1-100/12-integer-to-roman/bench/greedy.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 72,
+     "line_now": 72,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.491,
+   "par_s": 0.146,
+   "speedup": 3.37,
+   "par_cpu_per_wall": 3.41,
+   "output_same": true
+  },
+  {
+   "kata": 13,
+   "program": "leetcode/1-100/13-roman-to-integer/bench/greedy.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 93,
+     "line_now": 93,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 1.095,
+   "par_s": 0.331,
+   "speedup": 3.31,
+   "par_cpu_per_wall": 3.48,
+   "output_same": true
+  },
+  {
+   "kata": 14,
+   "program": "leetcode/1-100/14-longest-common-prefix/bench/vertical.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 132,
+     "line_now": 132,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.128,
+   "par_s": 0.051,
+   "speedup": 2.54,
+   "par_cpu_per_wall": 3.36,
+   "output_same": true
+  },
+  {
+   "kata": 15,
+   "program": "leetcode/1-100/15-3sum/bench/three_sum.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 110,
+     "line_now": 110,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.349,
+   "par_s": 0.143,
+   "speedup": 2.43,
+   "par_cpu_per_wall": 3.31,
+   "output_same": true
+  },
+  {
+   "kata": 16,
+   "program": "leetcode/1-100/16-3sum-closest/bench/three_sum_closest.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 115,
+     "line_now": 115,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.143,
+   "par_s": 0.059,
+   "speedup": 2.44,
+   "par_cpu_per_wall": 3.2,
+   "output_same": true
+  },
+  {
+   "kata": 17,
+   "program": "leetcode/1-100/17-letter-combinations-of-a-phone-number/bench/letter_combinations.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 103,
+     "line_now": 103,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.108,
+   "par_s": 0.049,
+   "speedup": 2.21,
+   "par_cpu_per_wall": 3.08,
+   "output_same": true
+  },
+  {
+   "kata": 18,
+   "program": "leetcode/1-100/18-4sum/bench/four_sum.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 148,
+     "line_now": 148,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.648,
+   "par_s": 0.264,
+   "speedup": 2.45,
+   "par_cpu_per_wall": 3.42,
+   "output_same": true
+  },
+  {
+   "kata": 20,
+   "program": "leetcode/1-100/20-valid-parentheses/bench/valid_parentheses.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 129,
+     "line_now": 129,
+     "accumulator": "count",
+     "op": "+"
+    }
+   ],
+   "seq_s": 1.405,
+   "par_s": 0.359,
+   "speedup": 3.91,
+   "par_cpu_per_wall": 3.43,
+   "output_same": true
+  },
+  {
+   "kata": 21,
+   "program": "leetcode/1-100/21-merge-two-sorted-lists/bench/iterative.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 92,
+     "line_now": 92,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 1.698,
+   "par_s": 0.933,
+   "speedup": 1.82,
+   "par_cpu_per_wall": 3.8,
+   "output_same": true
+  },
+  {
+   "kata": 22,
+   "program": "leetcode/1-100/22-generate-parentheses/bench/backtracking.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 43,
+     "line_now": 43,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.271,
+   "par_s": 0.117,
+   "speedup": 2.31,
+   "par_cpu_per_wall": 3.06,
+   "output_same": true
+  },
+  {
+   "kata": 23,
+   "program": "leetcode/1-100/23-merge-k-sorted-lists/bench/divide_and_conquer.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 112,
+     "line_now": 112,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 2.803,
+   "par_s": 1.231,
+   "speedup": 2.28,
+   "par_cpu_per_wall": 3.86,
+   "output_same": true
+  },
+  {
+   "kata": 24,
+   "program": "leetcode/1-100/24-swap-nodes-in-pairs/bench/iterative.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 76,
+     "line_now": 76,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.876,
+   "par_s": 0.489,
+   "speedup": 1.79,
+   "par_cpu_per_wall": 3.7,
+   "output_same": true
+  },
+  {
+   "kata": 25,
+   "program": "leetcode/1-100/25-reverse-nodes-in-k-group/bench/iterative.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 102,
+     "line_now": 102,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.972,
+   "par_s": 0.479,
+   "speedup": 2.03,
+   "par_cpu_per_wall": 3.82,
+   "output_same": true
+  },
+  {
+   "kata": 28,
+   "program": "leetcode/1-100/28-find-the-index-of-the-first-occurrence-in-a-string/bench/brute_force.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 55,
+     "line_now": 55,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.591,
+   "par_s": 0.708,
+   "speedup": 0.83,
+   "par_cpu_per_wall": 3.73,
+   "output_same": true
+  },
+  {
+   "kata": 28,
+   "program": "leetcode/1-100/28-find-the-index-of-the-first-occurrence-in-a-string/bench/kmp.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 68,
+     "line_now": 68,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.405,
+   "par_s": 0.116,
+   "speedup": 3.5,
+   "par_cpu_per_wall": 3.59,
+   "output_same": true
+  },
+  {
+   "kata": 28,
+   "program": "leetcode/1-100/28-find-the-index-of-the-first-occurrence-in-a-string/bench/kmp_unchecked.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 82,
+     "line_now": 82,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.41,
+   "par_s": 0.109,
+   "speedup": 3.76,
+   "par_cpu_per_wall": 3.72,
+   "output_same": true
+  },
+  {
+   "kata": 49,
+   "program": "leetcode/1-100/49-group-anagrams/bench/group_anagrams.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 70,
+     "line_now": 70,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.047,
+   "par_s": 0.023,
+   "speedup": 2.01,
+   "par_cpu_per_wall": 2.37,
+   "output_same": true
+  },
+  {
+   "kata": 52,
+   "program": "leetcode/1-100/52-n-queens-ii/bench/nqueens2_bench.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "search",
+     "line_10_06": 26,
+     "line_now": 26,
+     "accumulator": "acc",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.474,
+   "par_s": 0.488,
+   "speedup": 0.97,
+   "par_cpu_per_wall": 0.99,
+   "output_same": true
+  },
+  {
+   "kata": 56,
+   "program": "leetcode/1-100/56-merge-intervals/bench/merge_intervals.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 99,
+     "line_now": 99,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.122,
+   "par_s": 0.044,
+   "speedup": 2.76,
+   "par_cpu_per_wall": 3.29,
+   "output_same": true
+  },
+  {
+   "kata": 57,
+   "program": "leetcode/1-100/57-insert-interval/bench/insert_interval.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 134,
+     "line_now": 134,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.057,
+   "par_s": 0.032,
+   "speedup": 1.81,
+   "par_cpu_per_wall": 2.2,
+   "output_same": true
+  },
+  {
+   "kata": 57,
+   "program": "leetcode/1-100/57-insert-interval/bench/insert_interval_cap.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 118,
+     "line_now": 118,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.028,
+   "par_s": 0.012,
+   "speedup": 2.29,
+   "par_cpu_per_wall": 2.52,
+   "output_same": true
+  },
+  {
+   "kata": 59,
+   "program": "leetcode/1-100/59-spiral-matrix-ii/bench/spiral_matrix_ii.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 103,
+     "line_now": 103,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.183,
+   "par_s": 0.077,
+   "speedup": 2.37,
+   "par_cpu_per_wall": 3.18,
+   "output_same": true
+  },
+  {
+   "kata": 60,
+   "program": "leetcode/1-100/60-permutation-sequence/bench/permutation_sequence.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 86,
+     "line_now": 86,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.051,
+   "par_s": 0.015,
+   "speedup": 3.37,
+   "par_cpu_per_wall": 3.33,
+   "output_same": true
+  },
+  {
+   "kata": 60,
+   "program": "leetcode/1-100/60-permutation-sequence/bench/permutation_sequence_nextperm.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 84,
+     "line_now": 84,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.161,
+   "par_s": 0.037,
+   "speedup": 4.3,
+   "par_cpu_per_wall": 3.57,
+   "output_same": true
+  },
+  {
+   "kata": 65,
+   "program": "leetcode/1-100/65-valid-number/bench/valid.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 115,
+     "line_now": 115,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.129,
+   "par_s": 0.042,
+   "speedup": 3.05,
+   "par_cpu_per_wall": 3.52,
+   "output_same": true
+  },
+  {
+   "kata": 71,
+   "program": "leetcode/1-100/71-simplify-path/bench/simplify.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 106,
+     "line_now": 106,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.105,
+   "par_s": 0.032,
+   "speedup": 3.29,
+   "par_cpu_per_wall": 3.37,
+   "output_same": true
+  },
+  {
+   "kata": 75,
+   "program": "leetcode/1-100/75-sort-colors/bench/sort_colors.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 58,
+     "line_now": 58,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.772,
+   "par_s": 0.224,
+   "speedup": 3.45,
+   "par_cpu_per_wall": 3.85,
+   "output_same": true
+  },
+  {
+   "kata": 84,
+   "program": "leetcode/1-100/84-largest-rectangle-in-histogram/bench/largest_rectangle.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 61,
+     "line_now": 61,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.663,
+   "par_s": 0.216,
+   "speedup": 3.07,
+   "par_cpu_per_wall": 3.43,
+   "output_same": true
+  },
+  {
+   "kata": 86,
+   "program": "leetcode/1-100/86-partition-list/bench/partition_list.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 86,
+     "line_now": 86,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.709,
+   "par_s": 0.351,
+   "speedup": 2.02,
+   "par_cpu_per_wall": 3.86,
+   "output_same": true
+  },
+  {
+   "kata": 87,
+   "program": "leetcode/1-100/87-scramble-string/bench/scramble_string.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 120,
+     "line_now": 120,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.652,
+   "par_s": 0.169,
+   "speedup": 3.86,
+   "par_cpu_per_wall": 3.9,
+   "output_same": true
+  },
+  {
+   "kata": 125,
+   "program": "leetcode/101-200/125-valid-palindrome/bench/valid_palindrome.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 59,
+     "line_now": 59,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 1.161,
+   "par_s": 0.348,
+   "speedup": 3.33,
+   "par_cpu_per_wall": 3.68,
+   "output_same": true
+  },
+  {
+   "kata": 128,
+   "program": "leetcode/101-200/128-longest-consecutive-sequence/bench/longest_consecutive.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 71,
+     "line_now": 71,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.321,
+   "par_s": 0.09,
+   "speedup": 3.54,
+   "par_cpu_per_wall": 3.44,
+   "output_same": true
+  },
+  {
+   "kata": 137,
+   "program": "leetcode/101-200/137-single-number-ii/bench/single_number.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "single_bitcount",
+     "line_10_06": 48,
+     "line_now": 48,
+     "accumulator": "res",
+     "op": "|"
+    }
+   ],
+   "seq_s": 0.022,
+   "par_s": 0.029,
+   "speedup": 0.75,
+   "par_cpu_per_wall": 2.83,
+   "output_same": true
+  },
+  {
+   "kata": 141,
+   "program": "leetcode/101-200/141-linked-list-cycle/bench/linked_list_cycle.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 83,
+     "line_now": 83,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.343,
+   "par_s": 0.219,
+   "speedup": 1.57,
+   "par_cpu_per_wall": 2.08,
+   "output_same": true
+  },
+  {
+   "kata": 142,
+   "program": "leetcode/101-200/142-linked-list-cycle-ii/bench/linked_list_cycle_ii.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 99,
+     "line_now": 99,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.411,
+   "par_s": 0.246,
+   "speedup": 1.67,
+   "par_cpu_per_wall": 2.25,
+   "output_same": true
+  },
+  {
+   "kata": 149,
+   "program": "leetcode/101-200/149-max-points-on-a-line/bench/max_points.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 91,
+     "line_now": 91,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.311,
+   "par_s": 0.085,
+   "speedup": 3.66,
+   "par_cpu_per_wall": 3.73,
+   "output_same": true
+  },
+  {
+   "kata": 153,
+   "program": "leetcode/101-200/153-find-minimum-in-rotated-sorted-array/bench/binary_search.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 48,
+     "line_now": 48,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.043,
+   "par_s": 0.024,
+   "speedup": 1.77,
+   "par_cpu_per_wall": 2.3,
+   "output_same": true
+  },
+  {
+   "kata": 159,
+   "program": "leetcode/101-200/159-longest-substring-with-at-most-two-distinct-characters/bench/longest_two_distinct.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 62,
+     "line_now": 62,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.428,
+   "par_s": 0.145,
+   "speedup": 2.96,
+   "par_cpu_per_wall": 3.42,
+   "output_same": true
+  },
+  {
+   "kata": 160,
+   "program": "leetcode/101-200/160-intersection-of-two-linked-lists/bench/intersection.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 77,
+     "line_now": 77,
+     "accumulator": "sink",
+     "op": "+"
+    },
+    {
+     "kind": "statement_group",
+     "fn": "main",
+     "line_10_06": null,
+     "inside": null,
+     "inside_loop_line_10_06": 77,
+     "note": "in the body of the parallel reduction loop; debug info has no line for it"
+    }
+   ],
+   "seq_s": 0.386,
+   "par_s": 0.11,
+   "speedup": 3.5,
+   "par_cpu_per_wall": 3.58,
+   "output_same": true
+  },
+  {
+   "kata": 161,
+   "program": "leetcode/101-200/161-one-edit-distance/bench/one_edit.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 145,
+     "line_now": 145,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.718,
+   "par_s": 0.357,
+   "speedup": 2.01,
+   "par_cpu_per_wall": 2.27,
+   "output_same": true
+  },
+  {
+   "kata": 163,
+   "program": "leetcode/101-200/163-missing-ranges/bench/missing_ranges.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 48,
+     "line_now": 48,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 1.375,
+   "par_s": 0.376,
+   "speedup": 3.66,
+   "par_cpu_per_wall": 3.68,
+   "output_same": true
+  },
+  {
+   "kata": 165,
+   "program": "leetcode/101-200/165-compare-version-numbers/bench/compare_version.kara",
+   "sites": [
+    {
+     "kind": "statement_group",
+     "fn": "compare_version",
+     "line_10_06": 30,
+     "inside": "main"
+    }
+   ],
+   "seq_s": 0.68,
+   "par_s": 216.543,
+   "speedup": 0.0,
+   "par_cpu_per_wall": 1.34,
+   "output_same": true
+  },
+  {
+   "kata": 171,
+   "program": "leetcode/101-200/171-excel-sheet-column-number/bench/column_number.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 61,
+     "line_now": 61,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.714,
+   "par_s": 0.185,
+   "speedup": 3.85,
+   "par_cpu_per_wall": 3.46,
+   "output_same": true
+  },
+  {
+   "kata": 172,
+   "program": "leetcode/101-200/172-factorial-trailing-zeroes/bench/trailing_zeroes.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 23,
+     "line_now": 23,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.225,
+   "par_s": 0.08,
+   "speedup": 2.81,
+   "par_cpu_per_wall": 3.16,
+   "output_same": true
+  },
+  {
+   "kata": 191,
+   "program": "leetcode/101-200/191-number-of-1-bits/bench/popcount.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 39,
+     "line_now": 39,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.022,
+   "par_s": 0.019,
+   "speedup": 1.16,
+   "par_cpu_per_wall": 1.67,
+   "output_same": true
+  },
+  {
+   "kata": 202,
+   "program": "leetcode/201-300/202-happy-number/bench/happy_number.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 35,
+     "line_now": 35,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.4,
+   "par_s": 0.119,
+   "speedup": 3.35,
+   "par_cpu_per_wall": 3.34,
+   "output_same": true
+  },
+  {
+   "kata": 204,
+   "program": "leetcode/201-300/204-count-primes/bench/count.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 30,
+     "line_now": 30,
+     "accumulator": "primes",
+     "op": "collect"
+    }
+   ],
+   "seq_s": 1.718,
+   "par_s": 0.593,
+   "speedup": 2.9,
+   "par_cpu_per_wall": 2.93,
+   "output_same": true
+  },
+  {
+   "kata": 209,
+   "program": "leetcode/201-300/209-minimum-size-subarray-sum/bench/min_subarray.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 43,
+     "line_now": 43,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.439,
+   "par_s": 0.123,
+   "speedup": 3.57,
+   "par_cpu_per_wall": 3.55,
+   "output_same": true
+  },
+  {
+   "kata": 213,
+   "program": "leetcode/201-300/213-house-robber-ii/bench/house_robber_ii.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 49,
+     "line_now": 49,
+     "accumulator": "sink",
+     "op": "+"
+    },
+    {
+     "kind": "statement_group",
+     "fn": "main",
+     "line_10_06": null,
+     "inside": null,
+     "inside_loop_line_10_06": 49,
+     "note": "in the body of the parallel reduction loop; debug info has no line for it"
+    }
+   ],
+   "seq_s": 0.345,
+   "par_s": 0.161,
+   "speedup": 2.15,
+   "par_cpu_per_wall": 3.34,
+   "output_same": true
+  },
+  {
+   "kata": 217,
+   "program": "leetcode/201-300/217-contains-duplicate/bench/contains_duplicate.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 42,
+     "line_now": 42,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 11.139,
+   "par_s": 3.093,
+   "speedup": 3.6,
+   "par_cpu_per_wall": 3.79,
+   "output_same": true
+  },
+  {
+   "kata": 220,
+   "program": "leetcode/201-300/220-contains-duplicate-iii/bench/contains_duplicate_iii.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 72,
+     "line_now": 72,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 1.256,
+   "par_s": 0.333,
+   "speedup": 3.78,
+   "par_cpu_per_wall": 3.71,
+   "output_same": true
+  },
+  {
+   "kata": 222,
+   "program": "leetcode/201-300/222-count-complete-tree-nodes/bench/count_nodes.kara",
+   "sites": [
+    {
+     "kind": "statement_group",
+     "fn": "count_nodes",
+     "line_10_06": 55,
+     "inside": null
+    }
+   ],
+   "seq_s": 0.341,
+   "par_s": 51.85,
+   "speedup": 0.01,
+   "par_cpu_per_wall": 1.41,
+   "output_same": true
+  },
+  {
+   "kata": 228,
+   "program": "leetcode/201-300/228-summary-ranges/bench/summary_ranges.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 48,
+     "line_now": 48,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 1.294,
+   "par_s": 0.373,
+   "speedup": 3.46,
+   "par_cpu_per_wall": 3.78,
+   "output_same": true
+  },
+  {
+   "kata": 233,
+   "program": "leetcode/201-300/233-number-of-digit-one/bench/digit_one.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 34,
+     "line_now": 34,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.183,
+   "par_s": 0.057,
+   "speedup": 3.23,
+   "par_cpu_per_wall": 3.44,
+   "output_same": true
+  },
+  {
+   "kata": 242,
+   "program": "leetcode/201-300/242-valid-anagram/bench/valid_anagram.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 75,
+     "line_now": 75,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.154,
+   "par_s": 0.074,
+   "speedup": 2.07,
+   "par_cpu_per_wall": 3.01,
+   "output_same": true
+  },
+  {
+   "kata": 248,
+   "program": "leetcode/201-300/248-strobogrammatic-number-iii/bench/strobogrammatic_count.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "count_bounded",
+     "line_10_06": 138,
+     "line_now": 138,
+     "accumulator": "n",
+     "op": "+"
+    },
+    {
+     "kind": "reduction",
+     "fn": "count_in_range",
+     "line_10_06": 173,
+     "line_now": 173,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.281,
+   "par_s": 0.393,
+   "speedup": 0.71,
+   "par_cpu_per_wall": 1.06,
+   "output_same": true
+  },
+  {
+   "kata": 270,
+   "program": "leetcode/201-300/270-closest-binary-search-tree-value/bench/bst_close.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 120,
+     "line_now": 120,
+     "accumulator": "parts",
+     "op": "collect"
+    }
+   ],
+   "seq_s": 0.495,
+   "par_s": 0.145,
+   "speedup": 3.43,
+   "par_cpu_per_wall": 3.44,
+   "output_same": true
+  },
+  {
+   "kata": 273,
+   "program": "leetcode/201-300/273-integer-to-english-words/bench/spell.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 133,
+     "line_now": 133,
+     "accumulator": "parts",
+     "op": "collect"
+    }
+   ],
+   "seq_s": 0.792,
+   "par_s": 0.234,
+   "speedup": 3.38,
+   "par_cpu_per_wall": 3.71,
+   "output_same": true
+  },
+  {
+   "kata": 276,
+   "program": "leetcode/201-300/276-paint-fence/bench/paint_enum.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 76,
+     "line_now": 76,
+     "accumulator": "parts",
+     "op": "collect"
+    }
+   ],
+   "seq_s": 0.325,
+   "par_s": 0.121,
+   "speedup": 2.68,
+   "par_cpu_per_wall": 3.03,
+   "output_same": true
+  },
+  {
+   "kata": 277,
+   "program": "leetcode/201-300/277-find-the-celebrity/bench/celebrity.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 63,
+     "line_now": 63,
+     "accumulator": "parts",
+     "op": "collect"
+    }
+   ],
+   "seq_s": 0.309,
+   "par_s": 0.095,
+   "speedup": 3.25,
+   "par_cpu_per_wall": 3.03,
+   "output_same": true
+  },
+  {
+   "kata": 278,
+   "program": "leetcode/201-300/278-alien-dictionary/bench/alien.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 142,
+     "line_now": 142,
+     "accumulator": "parts",
+     "op": "collect"
+    },
+    {
+     "kind": "statement_group",
+     "fn": "main",
+     "line_10_06": 133,
+     "inside": null
+    }
+   ],
+   "seq_s": 0.216,
+   "par_s": 0.118,
+   "speedup": 1.83,
+   "par_cpu_per_wall": 1.83,
+   "output_same": true
+  },
+  {
+   "kata": 278,
+   "program": "leetcode/201-300/278-alien-dictionary/bench/alien_seq.kara",
+   "sites": [
+    {
+     "kind": "statement_group",
+     "fn": "main",
+     "line_10_06": 134,
+     "inside": null
+    }
+   ],
+   "seq_s": 0.184,
+   "par_s": 0.22,
+   "speedup": 0.83,
+   "par_cpu_per_wall": 0.98,
+   "output_same": true
+  },
+  {
+   "kata": 282,
+   "program": "leetcode/201-300/282-expression-add-operators/bench/exprops.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 103,
+     "line_now": 103,
+     "accumulator": "parts",
+     "op": "collect"
+    }
+   ],
+   "seq_s": 0.894,
+   "par_s": 0.256,
+   "speedup": 3.49,
+   "par_cpu_per_wall": 3.7,
+   "output_same": true
+  },
+  {
+   "kata": 282,
+   "program": "leetcode/201-300/282-expression-add-operators/bench/exprops_pushstr.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 107,
+     "line_now": 107,
+     "accumulator": "parts",
+     "op": "collect"
+    }
+   ],
+   "seq_s": 0.922,
+   "par_s": 0.279,
+   "speedup": 3.3,
+   "par_cpu_per_wall": 3.63,
+   "output_same": true
+  },
+  {
+   "kata": 286,
+   "program": "leetcode/201-300/286-walls-and-gates/bench/wallsgates.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 132,
+     "line_now": 132,
+     "accumulator": "parts",
+     "op": "collect"
+    }
+   ],
+   "seq_s": 0.597,
+   "par_s": 0.16,
+   "speedup": 3.72,
+   "par_cpu_per_wall": 3.69,
+   "output_same": true
+  },
+  {
+   "kata": 290,
+   "program": "leetcode/201-300/290-word-pattern/bench/word_pattern.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 122,
+     "line_now": 122,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.248,
+   "par_s": 0.108,
+   "speedup": 2.3,
+   "par_cpu_per_wall": 2.75,
+   "output_same": true
+  },
+  {
+   "kata": 291,
+   "program": "leetcode/201-300/291-word-pattern-ii/bench/word_pattern_ii.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 89,
+     "line_now": 89,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.366,
+   "par_s": 0.164,
+   "speedup": 2.23,
+   "par_cpu_per_wall": 3.25,
+   "output_same": true
+  },
+  {
+   "kata": 302,
+   "program": "leetcode/301-400/302-smallest-rectangle-enclosing-black-pixels/bench/blackpixels.kara",
+   "sites": [
+    {
+     "kind": "statement_group",
+     "fn": "min_area",
+     "line_10_06": 97,
+     "inside": "main"
+    }
+   ],
+   "seq_s": 0.463,
+   "par_s": 0.22,
+   "speedup": 2.11,
+   "par_cpu_per_wall": 2.04,
+   "output_same": true
+  },
+  {
+   "kata": 306,
+   "program": "leetcode/301-400/306-additive-number/bench/additive.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 129,
+     "line_now": 129,
+     "accumulator": "hits",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.176,
+   "par_s": 0.086,
+   "speedup": 2.03,
+   "par_cpu_per_wall": 3.01,
+   "output_same": true
+  },
+  {
+   "kata": 312,
+   "program": "leetcode/301-400/312-burst-balloons/bench/burst.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "solve",
+     "line_10_06": 29,
+     "line_now": 29,
+     "accumulator": "best",
+     "op": "max"
+    }
+   ],
+   "seq_s": 0.489,
+   "par_s": 0.866,
+   "speedup": 0.56,
+   "par_cpu_per_wall": 0.98,
+   "output_same": true
+  },
+  {
+   "kata": 313,
+   "program": "leetcode/301-400/313-super-ugly-number/bench/ugly.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 65,
+     "line_now": 65,
+     "accumulator": "best",
+     "op": "min"
+    }
+   ],
+   "seq_s": 0.319,
+   "par_s": 0.388,
+   "speedup": 0.82,
+   "par_cpu_per_wall": 1.0,
+   "output_same": true
+  },
+  {
+   "kata": 318,
+   "program": "leetcode/301-400/318-maximum-product-of-word-lengths/bench/max_product.kara",
+   "sites": [
+    {
+     "kind": "disjoint_write",
+     "fn": "build_masks",
+     "line_10_06": 45,
+     "line_now": 45,
+     "accumulator": null,
+     "op": null
+    }
+   ],
+   "seq_s": 1.149,
+   "par_s": 1.464,
+   "speedup": 0.79,
+   "par_cpu_per_wall": 0.99,
+   "output_same": true
+  },
+  {
+   "kata": 332,
+   "program": "leetcode/301-400/332-reconstruct-itinerary/bench/reconstruct_itinerary.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 93,
+     "line_now": 93,
+     "accumulator": "sink",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.255,
+   "par_s": 0.256,
+   "speedup": 1.0,
+   "par_cpu_per_wall": 1.0,
+   "output_same": true
+  },
+  {
+   "kata": 351,
+   "program": "leetcode/301-400/351-android-unlock-patterns/bench/unlock_patterns.kara",
+   "sites": [
+    {
+     "kind": "statement_group",
+     "fn": "number_of_patterns",
+     "line_10_06": 42,
+     "inside": "main"
+    }
+   ],
+   "seq_s": 1.456,
+   "par_s": 1.588,
+   "speedup": 0.92,
+   "par_cpu_per_wall": 1.03,
+   "output_same": true
+  },
+  {
+   "kata": 393,
+   "program": "leetcode/301-400/393-utf-8-validation/bench/validate_utf8.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 117,
+     "line_now": 117,
+     "accumulator": "count",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.258,
+   "par_s": 0.092,
+   "speedup": 2.8,
+   "par_cpu_per_wall": 2.99,
+   "output_same": true
+  },
+  {
+   "kata": 394,
+   "program": "leetcode/301-400/394-decode-string/bench/decode_string.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 70,
+     "line_now": 70,
+     "accumulator": "sum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.327,
+   "par_s": 0.104,
+   "speedup": 3.14,
+   "par_cpu_per_wall": 3.33,
+   "output_same": true
+  },
+  {
+   "kata": 722,
+   "program": "leetcode/701-800/722-remove-comments/bench/remove_comments.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 112,
+     "line_now": 112,
+     "accumulator": "sum",
+     "op": "+"
+    },
+    {
+     "kind": "reduction",
+     "fn": "pass_len",
+     "line_10_06": 77,
+     "line_now": 77,
+     "accumulator": "total",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.156,
+   "par_s": 0.065,
+   "speedup": 2.4,
+   "par_cpu_per_wall": 2.98,
+   "output_same": true
+  },
+  {
+   "kata": 726,
+   "program": "leetcode/701-800/726-number-of-atoms/bench/number_of_atoms.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 176,
+     "line_now": 176,
+     "accumulator": "checksum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.544,
+   "par_s": 0.57,
+   "speedup": 0.96,
+   "par_cpu_per_wall": 0.99,
+   "output_same": true
+  },
+  {
+   "kata": 895,
+   "program": "leetcode/801-900/895-maximum-frequency-stack/bench/freq_stack.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "run",
+     "line_10_06": 88,
+     "line_now": 88,
+     "accumulator": "checksum",
+     "op": "+"
+    }
+   ],
+   "seq_s": 0.041,
+   "par_s": 0.019,
+   "speedup": 2.14,
+   "par_cpu_per_wall": 2.85,
+   "output_same": true
+  },
+  {
+   "kata": 3629,
+   "program": "leetcode/3601-3700/3629-minimum-jumps-to-reach-end-via-prime-teleportation/bench/bfs_sieve.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_10_06": 98,
+     "line_now": 98,
+     "accumulator": "sum",
+     "op": "+"
+    },
+    {
+     "kind": "statement_group",
+     "fn": "main",
+     "line_10_06": null,
+     "inside": null,
+     "inside_loop_line_10_06": 98,
+     "note": "in the body of the parallel reduction loop; debug info has no line for it"
+    }
+   ],
+   "seq_s": 7.674,
+   "par_s": 3.789,
+   "speedup": 2.03,
+   "par_cpu_per_wall": 3.28,
+   "output_same": true
+  }
+ ],
+ "archive_only": [
+  {
+   "kata": 417,
+   "program": "leetcode/401-500/417-pacific-atlantic-water-flow/bench/pacific_atlantic.kara",
+   "sites": [
+    {
+     "kind": "statement_group",
+     "fn": "pacific_atlantic",
+     "line_now": "47"
+    }
+   ]
+  },
+  {
+   "kata": 419,
+   "program": "leetcode/401-500/419-battleships-in-a-board/bench/battleships.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "count_battleships",
+     "line_now": 11
+    }
+   ]
+  },
+  {
+   "kata": 458,
+   "program": "leetcode/401-500/458-poor-pigs/bench/poor_pigs.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_now": 39
+    },
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_now": 54
+    }
+   ]
+  },
+  {
+   "kata": 461,
+   "program": "leetcode/401-500/461-hamming-distance/bench/hamming_distance.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_now": 42
+    }
+   ]
+  },
+  {
+   "kata": 495,
+   "program": "leetcode/401-500/495-teemo-attacking/bench/teemo_attacking.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "find_poisoned_duration",
+     "line_now": 6
+    }
+   ]
+  },
+  {
+   "kata": 750,
+   "program": "leetcode/701-800/750-number-of-corner-rectangles/bench/count_corner_rectangles.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "count_corner_rectangles",
+     "line_now": 9
+    }
+   ]
+  },
+  {
+   "kata": 753,
+   "program": "leetcode/701-800/753-cracking-the-safe/bench/crack_safe.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "main",
+     "line_now": 51
+    }
+   ]
+  },
+  {
+   "kata": 788,
+   "program": "leetcode/701-800/788-rotated-digits/bench/rotated_digits.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "rotated_digits",
+     "line_now": 9
+    }
+   ]
+  },
+  {
+   "kata": 818,
+   "program": "leetcode/801-900/818-race-car/bench/racecar.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "racecar",
+     "line_now": 22
+    }
+   ]
+  },
+  {
+   "kata": 866,
+   "program": "leetcode/801-900/866-prime-palindrome/bench/prime_palindrome.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "random_n",
+     "line_now": 68
+    }
+   ]
+  },
+  {
+   "kata": 882,
+   "program": "leetcode/801-900/882-reachable-nodes-in-subdivided-graph/bench/reachable_nodes.kara",
+   "sites": [
+    {
+     "kind": "reduction",
+     "fn": "reachable_nodes",
+     "line_now": 37
+    }
+   ]
+  },
+  {
+   "kata": 907,
+   "program": "leetcode/901-1000/907-sum-of-subarray-minimums/bench/sum_subarray_mins.kara",
+   "sites": [
+    {
+     "kind": "disjoint_write",
+     "fn": "sum_subarray_mins",
+     "line_now": 12
+    }
+   ]
+  }
+ ],
+ "changed_without_parallel_entry": [
+  "bespoke/utf8-codepoints/bench/utf8_codepoints.kara",
+  "leetcode/1-100/45-jump-game-ii/bench/jump_game_ii.kara",
+  "leetcode/1-100/76-minimum-window-substring/bench/minimum_window_substring.kara",
+  "leetcode/101-200/126-word-ladder-ii/bench/word_ladder_ii.kara",
+  "leetcode/101-200/127-word-ladder/bench/word_ladder.kara",
+  "leetcode/101-200/132-palindrome-partitioning-ii/bench/min_cut.kara",
+  "leetcode/101-200/170-two-sum-iii-data-structure-design/bench/two_sum_iii.kara",
+  "leetcode/101-200/200-number-of-islands/bench/number_of_islands.kara",
+  "leetcode/201-300/205-isomorphic-strings/bench/isomorphic.kara",
+  "leetcode/201-300/208-implement-trie-prefix-tree/bench/trie.kara",
+  "leetcode/201-300/211-design-add-and-search-words-data-structure/bench/word_dictionary.kara",
+  "leetcode/201-300/231-power-of-two/bench/power_of_two.kara",
+  "leetcode/201-300/234-palindrome-linked-list/bench/palindrome_list.kara",
+  "leetcode/201-300/253-meeting-rooms-ii/bench/min_meeting_rooms.kara",
+  "leetcode/201-300/263-ugly-number/bench/ugly_sweep.kara",
+  "leetcode/201-300/283-move-zeroes/bench/movezero.kara",
+  "leetcode/201-300/286-walls-and-gates/bench/wallsgates_seq.kara"
+ ]
+}
