@@ -2117,6 +2117,23 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(t) = self.try_slice_view_method(method, args, span, &obj_ty) {
             return t;
         }
+        // An `Array[T, N]` has every `Slice[T]` method (library/collections.md).
+        // The scalar-element reads above are the array's own arm; any other
+        // element type reads through the slice surface, as `.as_slice()`
+        // would (B-2026-10-24-23).
+        if matches!(method, "get" | "first" | "last" | "contains") {
+            let array_elem = match &obj_ty {
+                Type::Array { element, .. } => Some(element.clone()),
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Array { element, .. } => Some(element.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(element) = array_elem {
+                return self.infer_slice_method(&element, false, object, method, args, span);
+            }
+        }
 
         // `Slice[T]` and `mut Slice[T]` method dispatch. These types are not
         // `Type::Named` so they fall through the generic branch below; handle

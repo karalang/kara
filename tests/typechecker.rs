@@ -52856,15 +52856,9 @@ fn array_len_and_is_empty_hold_for_every_element_type() {
              println(f\"{b.len()} {s.is_empty()} {o.len()} {count(b)}\");\n\
          }",
     );
-    let errors = typecheck_errors(
-        "fn main() { let s: Array[String, 2] = [\"a\", \"b\"]; let f = s.first(); }",
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
-        "an element-reading method on a String array stays refused: {errors:?}"
-    );
+    // B-2026-10-24-23: an element-reading method on a `String` array reads
+    // through the slice surface (library/collections.md) and is accepted.
+    typecheck_ok("fn main() { let s: Array[String, 2] = [\"a\", \"b\"]; let f = s.first(); }");
 }
 
 /// B-2026-10-06-41: a `const` with an `Array[T, N]` annotation takes

@@ -12903,3 +12903,19 @@ fn a_str_right_operand_of_string_concat_gets_the_to_string_fix() {
         );
     }
 }
+
+#[test]
+fn an_array_of_non_scalar_elements_has_the_slice_reads() {
+    // B-2026-10-24-23: an `Array[T, N]` has every `Slice[T]` method
+    // (library/collections.md), so `contains` / `get` / `first` / `last`
+    // work on an array of `Str`, `String` or tuples as on `.as_slice()`.
+    accepted_and_runs(
+        "array-non-scalar-slice-reads",
+        "const WORDS: Array[Str, 3] = [\"a\", \"b\", \"c\"];\nfn main() {\n    \
+         let ls: Array[String, 2] = [\"x\".to_string(), \"y\".to_string()];\n    \
+         let ps: Array[(i64, Str), 2] = [(1, \"p\"), (2, \"q\")];\n    \
+         println(f\"{WORDS.contains(\"b\")} {ls.contains(\"z\".to_string())} {ps.contains((2, \"q\"))}\");\n    \
+         println(f\"{WORDS.first()} {WORDS.get(1)} {ls.last()} {WORDS.get(9)} {ps.first()}\");\n}\n",
+        "true false true\nSome(a) Some(b) Some(y) None Some((1, p))\n",
+    );
+}
