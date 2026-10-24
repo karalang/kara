@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/957-prison-cells-after-n-days/bench/prison_after_n_days.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["lib:map", "bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 957 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "20636e077"
+classified_with = "65b0adb7f"
 extracted_src = "d2be031a"
