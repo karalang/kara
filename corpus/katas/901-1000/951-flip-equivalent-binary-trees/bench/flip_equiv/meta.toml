@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/951-flip-equivalent-binary-trees/bench/flip_equiv.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 951 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "8b7ea66a7"
+classified_with = "a635a85c4"
 extracted_src = "b996ae9d"
