@@ -1,0 +1,81 @@
+formulary: 48 rows, 2,127 bytes, fnv f16ea844
+members: 240 rows, 12,174 bytes, fnv 73735aa9
+ashford: 327 rows, 19,679 bytes, fnv 5ccbc0f8
+brookline: 244 rows, 14,715 bytes, fnv 219f6174
+cedar: 251 rows, 15,163 bytes, fnv 1fc8cb9b
+dalton: 370 rows, 22,277 bytes, fnv 4481933b
+ashford_claims.bad line 41: bad DEA number 'AM3942719'
+brookline_claims.csv line 2: bad rx 'B2020001' for cedar
+parsed files match the built ones: true
+ashford claims: 327 received, 240 paid, 87 rejected (26.6%); 65 7, 70 27, 75 8, 76 13, 79 21, 88 11
+  65 patient not covered: A1010119 M00093 atorzole 10-15
+  70 product not covered: A1010043 M00195 lisinpril 10-06
+  75 prior authorization required: A1010007 M00180 sertrazole 10-01
+  76 plan limits exceeded: A1010025 M00096 montezole 10-04
+  79 refill too soon: A1010071 M00150 levopril 10-09
+  88 drug utilization review: A1010087 M00201 escitastatin 10-11
+brookline claims: 244 received, 171 paid, 73 rejected (29.9%); 65 12, 70 21, 75 7, 76 11, 79 10, 88 12
+  65 patient not covered: B2020016 M00125 rosuvastatin 10-04
+  70 product not covered: B2020008 M00086 gabapril 10-03
+  75 prior authorization required: B2020036 M00086 levozole 10-08
+  76 plan limits exceeded: B2020005 M00230 atorpril 10-02
+  79 refill too soon: B2020095 M00104 escitazole 10-17
+  88 drug utilization review: B2020076 M00179 omepramide 10-14
+cedar claims: 251 received, 196 paid, 55 rejected (21.9%); 65 2, 70 20, 75 9, 76 10, 79 8, 88 6
+  65 patient not covered: C3030165 M00130 amlopril 10-25
+  70 product not covered: C3030006 M00004 gabapril 10-02
+  75 prior authorization required: C3030017 M00040 levozole 10-05
+  76 plan limits exceeded: C3030015 M00049 gabamide 10-04
+  79 refill too soon: C3030093 M00199 omepramide 10-16
+  88 drug utilization review: C3030077 M00214 montezole 10-14
+dalton claims: 370 received, 261 paid, 109 rejected (29.5%); 65 7, 70 36, 75 5, 76 18, 79 20, 88 23
+  65 patient not covered: D4040081 M00204 metforpril 10-09
+  70 product not covered: D4040004 M00129 montemide 10-01
+  75 prior authorization required: D4040019 M00228 levozole 10-02
+  76 plan limits exceeded: D4040003 M00129 amlostatin 10-01
+  79 refill too soon: D4040053 M00144 levomide 10-06
+  88 drug utilization review: D4040058 M00111 lisinmide 10-07
+ashford pricing: allowed $123,053.12 (ingredient $122,693.12, fees $360.00); awp 69, mac 171, u&c 0; generic rate 69.2%; DAW 2 penalties $1,503.29 on 5 fills
+brookline pricing: allowed $61,683.48 (ingredient $66,246.84, fees $218.75); awp 9, mac 116, u&c 46; generic rate 67.3%; DAW 2 penalties $594.55 on 1 fill
+cedar pricing: allowed $141,707.56 (ingredient $141,315.56, fees $392.00); awp 59, mac 137, u&c 0; generic rate 68.4%; DAW 2 penalties $179.10 on 3 fills
+dalton pricing: allowed $235,150.19 (ingredient $267,353.97, fees $241.25); awp 9, mac 184, u&c 68; generic rate 68.6%; DAW 2 penalties $1,188.70 on 5 fills
+ashford top drugs: levozole $97,525.35 (3), levopril $4,754.75 (7), sertrastatin $3,454.14 (8)
+brookline top drugs: levozole $31,362.00 (6), sertrazole $20,753.97 (3), sertrastatin $1,400.52 (6)
+cedar top drugs: sertrazole $98,450.94 (5), levozole $19,741.16 (1), levopril $4,257.26 (4)
+dalton top drugs: sertrazole $124,438.82 (1), levozole $90,318.38 (6), levopril $4,801.42 (8)
+ashford controlled: 9 CII and 26 CIV fills paid, 1,995 units; top prescriber AM3942718 with 6; 1 DUR override; busiest day Mon 10-26 with 13 paid
+brookline controlled: 2 CII and 19 CIV fills paid, 2,045 units; top prescriber AC4048371 with 3; 1 DUR override; busiest day Sat 10-31 with 12 paid
+cedar controlled: 6 CII and 10 CIV fills paid, 1,256 units; top prescriber FD8765779 with 3; 4 DUR overrides; busiest day Sat 10-31 with 14 paid
+dalton controlled: 8 CII and 37 CIV fills paid, 2,168 units; top prescriber AC4048371 with 6; 2 DUR overrides; busiest day Fri 10-30 with 17 paid
+ashford posted: 240 paid claims, member share $16,341.61 plus $1,503.29 in penalties, plan paid $106,711.51; 12 deductibles met, 3 out-of-pocket maximums reached
+brookline posted: 171 paid claims, member share $14,749.05 plus $594.55 in penalties, plan paid $46,934.43; 3 deductibles met, 2 out-of-pocket maximums reached
+cedar posted: 196 paid claims, member share $23,023.77 plus $179.10 in penalties, plan paid $118,683.79; 14 deductibles met, 4 out-of-pocket maximums reached
+dalton posted: 261 paid claims, member share $18,814.40 plus $1,188.70 in penalties, plan paid $216,335.79; 9 deductibles met, 4 out-of-pocket maximums reached
+M00201 met the $1,500.00 deductible at ashford on 10-01
+M00237 met the $500.00 deductible at ashford on 10-01
+M00150 met the $500.00 deductible at ashford on 10-04
+M00171 met the $500.00 deductible at ashford on 10-05
+M00171 reached the $4,000.00 out-of-pocket maximum at ashford on 10-05
+M00096 reached the $4,000.00 out-of-pocket maximum at ashford on 10-09
+M00231 met the $1,500.00 deductible at ashford on 10-09
+M00123 met the $500.00 deductible at ashford on 10-13
+M00069 met the $500.00 deductible at ashford on 10-14
+M00063 met the $500.00 deductible at ashford on 10-16
+M00147 met the $500.00 deductible at ashford on 10-17
+M00207 met the $500.00 deductible at ashford on 10-19
+M00117 met the $500.00 deductible at ashford on 10-21
+M00036 met the $500.00 deductible at ashford on 10-22
+M00189 reached the $2,500.00 out-of-pocket maximum at ashford on 10-29
+M00087 reached the $2,500.00 out-of-pocket maximum at dalton on 10-06
+M00144 met the $500.00 deductible at dalton on 10-11
+M00051 met the $1,500.00 deductible at dalton on 10-16
+M00108 met the $1,500.00 deductible at dalton on 10-16
+M00201 reached the $6,000.00 out-of-pocket maximum at dalton on 10-17
+M00213 met the $500.00 deductible at dalton on 10-21
+M00114 reached the $2,500.00 out-of-pocket maximum at dalton on 10-22
+M00165 met the $500.00 deductible at dalton on 10-26
+M00153 reached the $2,500.00 out-of-pocket maximum at dalton on 10-28
+M00183 met the $500.00 deductible at dalton on 10-28
+members: 202 with paid claims, 69 at more than one pharmacy, 38 met the deductible and 13 reached the out-of-pocket maximum this month
+month: members paid $76,394.47, the plan paid $488,665.52; most paid M00046 $4,229.05, M00199 $3,841.98, M00047 $3,628.64
+accumulators.log: 868 entries, 45,561 bytes, fnv 85151ea9

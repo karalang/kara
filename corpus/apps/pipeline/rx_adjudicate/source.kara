@@ -1,0 +1,1305 @@
+// pipeline/rx_adjudicate
+//
+// A pharmacy benefit manager's month-end claims batch for October 2026,
+// over four pharmacies (Ashford, Brookline, Cedar and Dalton): it builds
+// the formulary, the member roster and each pharmacy's prescription
+// claims, writes them as CSV, reads them back and parses them with the
+// claim system's checks (the DEA number's check digit included), then
+// adjudicates every claim: the edits that reject it (coverage, product,
+// plan limits, schedule II refills, prior authorization, refill too soon
+// and drug interactions), generic substitution and the dispense-as-written
+// codes, and the price, the lesser of the discounted AWP or the MAC plus
+// the dispensing fee and the pharmacy's usual and customary price. Four
+// reports per pharmacy follow. Then every paid claim posts to the members'
+// accumulators, which split it between member and plan.
+//
+// The builds, the writes, the reads, the parses, the adjudications and
+// the reports are each a group of statements that do not depend on each
+// other (a stmt-par app). A claim's split depends on how much of the
+// member's deductible and out-of-pocket maximum the claims posted before
+// it used, and members fill at more than one pharmacy, so the four
+// pharmacies have to post in order.
+
+const MASK32: i64 = 4294967295;
+// Day 0 is Thursday 1 October 2026; FIRST_WEEKDAY is its weekday
+// counting Monday as 0.
+const FIRST_WEEKDAY: i64 = 3;
+const WEEKDAYS: Array[Str, 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// Days from 1 January to the first of each month in 2026.
+const MONTH_START: Array[i64, 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const MONTH_DAYS: Array[i64, 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const DAY0: i64 = 273;
+const MONTH_LEN: i64 = 31;
+const SURNAMES: Array[Str, 26] = ["Abara", "Brandt", "Castillo", "Dubois", "Eriksen", "Fontaine", "Garcia", "Haddad", "Ivanova", "Jensen",
+    "Kowalski", "Laurent", "Moreau", "Nakamura", "Okafor", "Petrov", "Quinn", "Rossi", "Sato", "Tanaka",
+    "Ueda", "Varga", "Weber", "Xu", "Yilmaz", "Zhang"];
+const PREFIXES: Array[Str, 12] = ["ator", "lisin", "metfor", "amlo", "sertra", "omepra", "levo", "gaba", "losar", "rosuva", "escita", "monte"];
+const SUFFIXES: Array[Str, 4] = ["statin", "pril", "mide", "zole"];
+const LABELERS: Array[i64, 6] = [93, 378, 591, 781, 50090, 68180];
+const DRUGS: i64 = 48;
+const MEMBERS: i64 = 240;
+const PRESCRIBERS: i64 = 40;
+const DAYS_CHOICES: Array[i64, 8] = [30, 30, 30, 30, 90, 90, 7, 14];
+// The class each therapeutic class interacts with, or -1: a fill of one
+// while a fill of the other is still active is a DUR reject.
+const INTERACTS: Array[i64, 8] = [3, -1, 5, 0, 7, 2, -1, 4];
+const REJECTS: Array[Str, 6] = ["65", "70", "75", "76", "79", "88"];
+const REJECT_NAMES: Array[Str, 6] = ["patient not covered", "product not covered", "prior authorization required",
+    "plan limits exceeded", "refill too soon", "drug utilization review"];
+const UNITS_A_DAY: i64 = 4;
+const DUR_CODES: Array[Str, 3] = ["", "M0", "R0"];
+// The plans: the annual deductible, the copays of tiers 1 to 3, the
+// coinsurance percent of tier 4 (specialty) and the out-of-pocket maximum,
+// all in cents.
+const PLAN_NAMES: Array[Str, 3] = ["bronze", "silver", "gold"];
+const PLAN_DED: Array[i64, 3] = [150000, 50000, 0];
+const PLAN_COPAY: Array[i64, 9] = [1000, 4000, 8000, 500, 3000, 6000, 300, 2000, 4500];
+const PLAN_COINS: Array[i64, 3] = [30, 25, 20];
+const PLAN_OOP: Array[i64, 3] = [600000, 400000, 250000];
+
+#[derive(Clone, PartialEq)]
+struct Drug {
+    ndc: String,
+    name: String,
+    // 1 generic, 2 preferred brand, 3 non-preferred brand, 4 specialty
+    tier: i64,
+    // prices per unit in cents; mac and the generic's prices are 0 when
+    // there is none
+    awp: i64,
+    mac: i64,
+    gen_awp: i64,
+    gen_mac: i64,
+    // the DEA schedule, 0 for none
+    schedule: i64,
+    class: i64,
+    covered: bool,
+}
+
+#[derive(Clone, PartialEq)]
+struct Member {
+    id: String,
+    name: String,
+    plan: i64,
+    ytd_ded: i64,
+    ytd_oop: i64,
+    // the last day of coverage
+    term: Option[i64],
+    // the specialty drugs with a prior authorization, space-separated
+    pa: String,
+}
+
+#[derive(Clone, PartialEq)]
+struct Claim {
+    rx: String,
+    member: String,
+    ndc: String,
+    day: i64,
+    qty: i64,
+    days: i64,
+    refill: i64,
+    dea: String,
+    daw: i64,
+    dur: String,
+}
+
+struct Pharmacy {
+    name: String,
+    code: String,
+    seed: i64,
+    // the dispensing fee in cents, the discount off AWP in basis points,
+    // and the usual and customary price as a percent of AWP
+    fee: i64,
+    disc_bp: i64,
+    uc_pct: i64,
+    scripts: i64,
+}
+
+// What adjudication made of one claim.
+struct Outcome {
+    // the index into REJECTS, or -1 for a paid claim
+    reject: i64,
+    ingredient: i64,
+    fee: i64,
+    allowed: i64,
+    penalty: i64,
+    basis: String,
+    generic: bool,
+    override_dur: bool,
+}
+
+struct Accumulators {
+    plan: Map[String, i64],
+    ded: Map[String, i64],
+    oop: Map[String, i64],
+    share: Map[String, i64],
+    log: Vec[String],
+    // (member, what happened), and the pharmacies each member filled at
+    events: Vec[(String, String)],
+    at: Map[String, Vec[String]],
+    met: i64,
+    maxed: i64,
+    member_total: i64,
+    plan_total: i64,
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+// A percentage with one decimal, rounded half up.
+fn pct1(num: i64, den: i64) -> String {
+    if den == 0 {
+        return "0.0%".to_string();
+    }
+    let t = (num * 2000 + den) / (2 * den);
+    f"{t / 10}.{t % 10}%"
+}
+
+fn plural(n: i64, word: Str) -> String {
+    if n == 1 { f"{n} {word}" } else { f"{n} {word}s" }
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn max2(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_upper(c: char) -> bool {
+    c >= 'A' and c <= 'Z'
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 7 {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 6 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+fn date_of(day: i64) -> String {
+    let n = DAY0 + day;
+    let mut m = 11;
+    while MONTH_START[m] > n {
+        m -= 1;
+    }
+    f"2026-{m + 1:02}-{n - MONTH_START[m] + 1:02}"
+}
+
+fn month_day(day: i64) -> String {
+    date_of(day).substring(5, 10)
+}
+
+// The day of a YYYY-MM-DD date in 2026, or None.
+fn day_of(t: ref String) -> Option[i64] {
+    if t.len() != 10 or t.substring(4, 5) != "-" or t.substring(7, 8) != "-" {
+        return None;
+    }
+    let ys = t.substring(0, 4);
+    let ms = t.substring(5, 7);
+    let ds = t.substring(8, 10);
+    if not (is_digits(ys) and is_digits(ms) and is_digits(ds)) {
+        return None;
+    }
+    let y = to_int(ys);
+    let m = to_int(ms);
+    let d = to_int(ds);
+    if y != 2026 or m < 1 or m > 12 or d < 1 or d > MONTH_DAYS[m - 1] {
+        return None;
+    }
+    Some(MONTH_START[m - 1] + d - 1 - DAY0)
+}
+
+fn day_name(day: i64) -> String {
+    f"{WEEKDAYS[(FIRST_WEEKDAY + day) % 7]} {month_day(day)}"
+}
+
+// The DEA check digit: the first, third and fifth digits, plus twice the
+// second, fourth and sixth, modulo 10.
+fn dea_check(six: ref String) -> i64 {
+    let d: Vec[i64] = six.chars().map(|c| c as i64 - 48).collect();
+    (d[0] + d[2] + d[4] + 2 * (d[1] + d[3] + d[5])) % 10
+}
+
+fn dea_ok(t: ref String) -> bool {
+    let cs: Vec[char] = t.chars().collect();
+    if cs.len() != 9 or not is_upper(cs[0]) or not is_upper(cs[1]) or not is_digits(t.substring(2, 9)) {
+        return false;
+    }
+    dea_check(t.substring(2, 8)) == cs[8] as i64 - 48
+}
+
+// ------------------------------------------------------------ building
+
+fn build_formulary() -> Vec[Drug] {
+    let mut out: Vec[Drug] = Vec.new();
+    for i in 0..DRUGS {
+        let h = mix(7, i, 1) % 100;
+        let tier = if h < 45 { 1 } else if h < 75 { 2 } else if h < 92 { 3 } else { 4 };
+        let h2 = mix(7, i, 2);
+        let awp = if tier == 1 {
+            8 + h2 % 60
+        } else if tier == 2 {
+            150 + h2 % 600
+        } else if tier == 3 {
+            300 + h2 % 1200
+        } else {
+            20000 + h2 % 60000
+        };
+        let h3 = mix(7, i, 3);
+        let mac = if tier == 1 { awp * (30 + h3 % 30) / 100 } else { 0 };
+        let mut gen_awp = 0;
+        let mut gen_mac = 0;
+        if (tier == 2 or tier == 3) and h3 % 3 == 0 {
+            gen_awp = awp * 30 / 100;
+            gen_mac = gen_awp * 60 / 100;
+        }
+        let h4 = mix(7, i, 4);
+        let schedule = if tier < 4 and h4 % 10 == 0 { 2 } else if tier < 4 and h4 % 10 == 1 { 4 } else { 0 };
+        out.push(Drug {
+            ndc: f"{LABELERS[i % 6]:05}{1000 + i * 7:04}{1 + i % 3:02}",
+            name: f"{PREFIXES[i % 12]}{SUFFIXES[i / 12]}",
+            tier: tier,
+            awp: awp,
+            mac: mac,
+            gen_awp: gen_awp,
+            gen_mac: gen_mac,
+            schedule: schedule,
+            class: (h4 / 10) % 8,
+            covered: mix(7, i, 5) % 17 != 0,
+        });
+    }
+    out
+}
+
+fn build_members(drugs: ref Vec[Drug]) -> Vec[Member] {
+    let mut specialty: Vec[String] = Vec.new();
+    for d in drugs {
+        if d.tier == 4 {
+            specialty.push(d.ndc.clone());
+        }
+    }
+    let mut out: Vec[Member] = Vec.new();
+    for j in 0..MEMBERS {
+        let initial = char.try_from((65 + mix(11, j, 2) % 26) as u32).unwrap_or('A');
+        let plan = mix(11, j, 3) % 3;
+        let ded = PLAN_DED[plan];
+        let ytd_ded = if ded > 0 { min2(ded, mix(11, j, 4) % (ded * 3 / 2 + 1)) } else { 0 };
+        let ytd_oop = min2(PLAN_OOP[plan], ytd_ded + mix(11, j, 5) % (PLAN_OOP[plan] / 2));
+        let term = if mix(11, j, 6) % 25 == 0 { Some(mix(11, j, 7) % 40 - 9) } else { None };
+        let mut pa: Vec[String] = Vec.new();
+        for k in 0..specialty.len() as i64 {
+            if mix(13, j * DRUGS + k, 8) % 2 == 0 {
+                pa.push(specialty[k].clone());
+            }
+        }
+        out.push(Member {
+            id: f"M{j + 1:05}",
+            name: f"{SURNAMES[mix(11, j, 1) % 26]} {initial}.",
+            plan: plan,
+            ytd_ded: ytd_ded,
+            ytd_oop: ytd_oop,
+            term: term,
+            pa: pa.join(" "),
+        });
+    }
+    out
+}
+
+fn build_prescribers() -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..PRESCRIBERS {
+        let surname = SURNAMES[mix(17, k, 1) % 26];
+        let six = f"{mix(17, k, 2) % 1000000:06}";
+        let first = "ABFM".substring(mix(17, k, 3) % 4, mix(17, k, 3) % 4 + 1);
+        out.push(f"{first}{surname.substring(0, 1)}{six}{dea_check(six)}");
+    }
+    out
+}
+
+fn cmp_claim(a: ref Claim, b: ref Claim) -> Ordering {
+    if a.day != b.day {
+        return a.day.cmp(b.day);
+    }
+    if a.member != b.member {
+        return a.member.cmp(b.member);
+    }
+    if a.ndc != b.ndc {
+        return a.ndc.cmp(b.ndc);
+    }
+    if a.refill != b.refill {
+        return a.refill.cmp(b.refill);
+    }
+    if a.qty != b.qty {
+        return a.qty.cmp(b.qty);
+    }
+    if a.days != b.days {
+        return a.days.cmp(b.days);
+    }
+    if a.dea != b.dea {
+        return a.dea.cmp(b.dea);
+    }
+    if a.daw != b.daw {
+        return a.daw.cmp(b.daw);
+    }
+    a.dur.cmp(b.dur)
+}
+
+// A month of claims: each prescription the pharmacy's members bring in is
+// filled on a day of the month and refilled as its supply runs out, one
+// refill in twelve too early; a schedule II drug is never refilled.
+fn build_claims(ph: ref Pharmacy, drugs: ref Vec[Drug], members: ref Vec[Member], prescribers: ref Vec[String]) -> Vec[Claim] {
+    let mut out: Vec[Claim] = Vec.new();
+    for s in 0..ph.scripts {
+        let mj = (ph.seed * 7 + (mix(ph.seed, s, 1) % 80) * 3) % MEMBERS;
+        let d = ref drugs[mix(ph.seed, s, 2) % DRUGS];
+        let mut days = DAYS_CHOICES[mix(ph.seed, s, 3) % 8];
+        if d.schedule == 2 {
+            days = if mix(ph.seed, s, 9) % 15 == 0 { 60 } else { 30 };
+        }
+        if mix(ph.seed, s, 9) % 40 == 1 {
+            days = 120;
+        }
+        let per_day = 1 + mix(ph.seed, s, 4) % 3;
+        let qty = if mix(ph.seed, s, 4) % 50 == 7 { days * 5 } else { days * per_day };
+        let mut day = mix(ph.seed, s, 5) % MONTH_LEN;
+        let mut refill = mix(ph.seed, s, 6) % 4;
+        if d.schedule == 2 {
+            refill = if mix(ph.seed, s, 6) % 10 == 0 { 1 } else { 0 };
+        }
+        let dea = prescribers[mix(ph.seed, s, 7) % PRESCRIBERS].clone();
+        let k = mix(ph.seed, s, 8) % 10;
+        let daw = if d.gen_awp > 0 {
+            if k == 7 or k == 8 { 1 } else if k == 9 { 2 } else { 0 }
+        } else if k == 0 {
+            1
+        } else {
+            0
+        };
+        let hd = mix(ph.seed, s, 20);
+        let dur = if hd % 12 < 2 { DUR_CODES[1 + hd % 2] } else { "" };
+        while day < MONTH_LEN and refill <= 11 {
+            out.push(Claim {
+                rx: String.new(),
+                member: members[mj].id.clone(),
+                ndc: d.ndc.clone(),
+                day: day,
+                qty: qty,
+                days: days,
+                refill: refill,
+                dea: dea.clone(),
+                daw: daw,
+                dur: dur.to_string(),
+            });
+            if d.schedule == 2 {
+                break;
+            }
+            let h = mix(ph.seed, s, 10 + refill);
+            let step = if h % 12 == 0 { days * 55 / 100 } else { days * (85 + h % 20) / 100 };
+            day += max2(1, step);
+            refill += 1;
+        }
+    }
+    out.sort_by(|a, b| cmp_claim(a, b));
+    for n in 0..out.len() as i64 {
+        out[n].rx = f"{ph.code}{ph.seed * 10000 + n + 1:07}";
+    }
+    out
+}
+
+fn formulary_header() -> String {
+    "ndc,name,tier,awp,mac,generic_awp,generic_mac,schedule,class,covered".to_string()
+}
+
+fn members_header() -> String {
+    "member,name,plan,ytd_deductible,ytd_oop,terminated,prior_auth".to_string()
+}
+
+fn claims_header() -> String {
+    "rx,member,ndc,fill_date,qty,days,refill,dea,daw,dur".to_string()
+}
+
+fn opt_dollars(c: i64) -> String {
+    if c > 0 { dollars(c) } else { String.new() }
+}
+
+fn encode_formulary(drugs: ref Vec[Drug]) -> String {
+    let mut out = f"{formulary_header()}\n";
+    for d in drugs {
+        let covered = if d.covered { "Y" } else { "N" };
+        out.push_str(f"{d.ndc},{d.name},{d.tier},{dollars(d.awp)},{opt_dollars(d.mac)},{opt_dollars(d.gen_awp)},{opt_dollars(d.gen_mac)},{d.schedule},{d.class},{covered}\n");
+    }
+    out
+}
+
+fn encode_members(members: ref Vec[Member]) -> String {
+    let mut out = f"{members_header()}\n";
+    for m in members {
+        let term = match m.term {
+            Some(d) => date_of(d),
+            None => String.new(),
+        };
+        out.push_str(f"{m.id},{m.name},{PLAN_NAMES[m.plan]},{dollars(m.ytd_ded)},{dollars(m.ytd_oop)},{term},{m.pa}\n");
+    }
+    out
+}
+
+fn encode_claims(claims: ref Vec[Claim]) -> String {
+    let mut out = f"{claims_header()}\n";
+    for c in claims {
+        out.push_str(f"{c.rx},{c.member},{c.ndc},{date_of(c.day)},{c.qty},{c.days},{c.refill},{c.dea},{c.daw},{c.dur}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn money_field(path: ref String, n: i64, what: Str, t: ref String) -> Result[i64, BatchError] {
+    match cents_of(t) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn opt_money_field(path: ref String, n: i64, what: Str, t: ref String) -> Result[i64, BatchError] {
+    if t == "" {
+        return Ok(0);
+    }
+    money_field(path, n, what, t)
+}
+
+fn parse_formulary(path: ref String, text: ref String) -> Result[Vec[Drug], BatchError] {
+    let body = body_lines(path, text, formulary_header())?;
+    let mut out: Vec[Drug] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() != 10 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 10"));
+        }
+        if f[0].len() != 11 or not is_digits(f[0]) {
+            return Err(bad(f"{path} line {n}: bad ndc '{f[0]}'"));
+        }
+        if seen.contains(f[0]) {
+            return Err(bad(f"{path} line {n}: ndc {f[0]} listed twice"));
+        }
+        seen.insert(f[0].clone());
+        if f[1] == "" {
+            return Err(bad(f"{path} line {n}: no name"));
+        }
+        let tier = match small_int(f[2], 1, 4) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad tier '{f[2]}'")),
+        };
+        let awp = money_field(path, n, "awp", f[3])?;
+        let mac = opt_money_field(path, n, "mac", f[4])?;
+        let gen_awp = opt_money_field(path, n, "generic awp", f[5])?;
+        let gen_mac = opt_money_field(path, n, "generic mac", f[6])?;
+        if (f[5] == "") != (f[6] == "") {
+            return Err(bad(f"{path} line {n}: a generic needs both prices"));
+        }
+        let schedule = match small_int(f[7], 0, 5) {
+            Some(v) if v != 1 => v,
+            _ => return Err(bad(f"{path} line {n}: bad schedule '{f[7]}'")),
+        };
+        let class = match small_int(f[8], 0, 7) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad class '{f[8]}'")),
+        };
+        if f[9] != "Y" and f[9] != "N" {
+            return Err(bad(f"{path} line {n}: bad covered flag '{f[9]}'"));
+        }
+        out.push(Drug {
+            ndc: f[0].clone(),
+            name: f[1].clone(),
+            tier: tier,
+            awp: awp,
+            mac: mac,
+            gen_awp: gen_awp,
+            gen_mac: gen_mac,
+            schedule: schedule,
+            class: class,
+            covered: f[9] == "Y",
+        });
+    }
+    Ok(out)
+}
+
+fn plan_index(t: ref String) -> i64 {
+    for i in 0..3 {
+        if t == PLAN_NAMES[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn parse_members(path: ref String, text: ref String) -> Result[Vec[Member], BatchError] {
+    let body = body_lines(path, text, members_header())?;
+    let mut out: Vec[Member] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() != 7 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 7"));
+        }
+        if f[0].len() != 6 or f[0].substring(0, 1) != "M" or not is_digits(f[0].substring(1, 6)) {
+            return Err(bad(f"{path} line {n}: bad member '{f[0]}'"));
+        }
+        if seen.contains(f[0]) {
+            return Err(bad(f"{path} line {n}: member {f[0]} listed twice"));
+        }
+        seen.insert(f[0].clone());
+        if f[1] == "" {
+            return Err(bad(f"{path} line {n}: no name"));
+        }
+        let plan = plan_index(f[2]);
+        if plan < 0 {
+            return Err(bad(f"{path} line {n}: bad plan '{f[2]}'"));
+        }
+        let ded = money_field(path, n, "deductible", f[3])?;
+        let oop = money_field(path, n, "out-of-pocket", f[4])?;
+        if ded > PLAN_DED[plan] or oop > PLAN_OOP[plan] or oop < ded {
+            return Err(bad(f"{path} line {n}: accumulators out of range"));
+        }
+        let mut term: Option[i64] = None;
+        if f[5] != "" {
+            term = day_of(f[5]);
+            if term.is_none() {
+                return Err(bad(f"{path} line {n}: bad termination date '{f[5]}'"));
+            }
+        }
+        if f[6] != "" {
+            for t in split_on(f[6], " ") {
+                if t.len() != 11 or not is_digits(t) {
+                    return Err(bad(f"{path} line {n}: bad prior authorization '{t}'"));
+                }
+            }
+        }
+        out.push(Member { id: f[0].clone(), name: f[1].clone(), plan: plan, ytd_ded: ded, ytd_oop: oop, term: term, pa: f[6].clone() });
+    }
+    Ok(out)
+}
+
+fn parse_claims(path: ref String, ph: ref Pharmacy, drugs: ref Vec[Drug], members: ref Vec[Member], text: ref String) -> Result[Vec[Claim], BatchError] {
+    let mut known_drugs: Set[String] = Set.new();
+    for d in drugs {
+        known_drugs.insert(d.ndc.clone());
+    }
+    let mut known_members: Set[String] = Set.new();
+    for m in members {
+        known_members.insert(m.id.clone());
+    }
+    let body = body_lines(path, text, claims_header())?;
+    let mut out: Vec[Claim] = Vec.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() != 10 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 10"));
+        }
+        if f[0].len() != 8 or f[0].substring(0, 1) != ph.code or not is_digits(f[0].substring(1, 8)) {
+            return Err(bad(f"{path} line {n}: bad rx '{f[0]}' for {ph.name}"));
+        }
+        if not known_members.contains(f[1]) {
+            return Err(bad(f"{path} line {n}: unknown member '{f[1]}'"));
+        }
+        if not known_drugs.contains(f[2]) {
+            return Err(bad(f"{path} line {n}: unknown ndc '{f[2]}'"));
+        }
+        let day = match day_of(f[3]) {
+            Some(d) if d >= 0 and d < MONTH_LEN => d,
+            _ => return Err(bad(f"{path} line {n}: fill date '{f[3]}' is not in October 2026")),
+        };
+        let qty = match small_int(f[4], 1, 9999) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad quantity '{f[4]}'")),
+        };
+        let days = match small_int(f[5], 1, 365) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad days supply '{f[5]}'")),
+        };
+        let refill = match small_int(f[6], 0, 11) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad refill number '{f[6]}'")),
+        };
+        if not dea_ok(f[7]) {
+            return Err(bad(f"{path} line {n}: bad DEA number '{f[7]}'"));
+        }
+        let daw = match small_int(f[8], 0, 2) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad DAW code '{f[8]}'")),
+        };
+        if f[9] != DUR_CODES[0] and f[9] != DUR_CODES[1] and f[9] != DUR_CODES[2] {
+            return Err(bad(f"{path} line {n}: bad DUR code '{f[9]}'"));
+        }
+        out.push(Claim {
+            rx: f[0].clone(),
+            member: f[1].clone(),
+            ndc: f[2].clone(),
+            day: day,
+            qty: qty,
+            days: days,
+            refill: refill,
+            dea: f[7].clone(),
+            daw: daw,
+            dur: f[9].clone(),
+        });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ adjudication
+
+// The ingredient cost, the allowed amount and its basis for qty units of
+// a product: the discounted AWP or the MAC, whichever is lower, plus the
+// dispensing fee, unless the pharmacy's usual and customary price is
+// lower still.
+fn price(ph: ref Pharmacy, awp: i64, mac: i64, qty: i64) -> (i64, i64, String) {
+    let mut ing = awp * qty * (10000 - ph.disc_bp) / 10000;
+    let mut basis = "awp";
+    if mac > 0 and mac * qty < ing {
+        ing = mac * qty;
+        basis = "mac";
+    }
+    let gross = ing + ph.fee;
+    let uc = awp * qty * ph.uc_pct / 100 + 500;
+    if uc < gross {
+        return (ing, uc, "uc".to_string());
+    }
+    (ing, gross, basis.to_string())
+}
+
+fn adjudicate(ph: ref Pharmacy, drugs: ref Vec[Drug], members: ref Vec[Member], claims: ref Vec[Claim]) -> Vec[Outcome] {
+    let mut drug: Map[String, i64] = Map.new();
+    for i in 0..drugs.len() as i64 {
+        drug.insert(drugs[i].ndc.clone(), i);
+    }
+    let mut member: Map[String, i64] = Map.new();
+    for i in 0..members.len() as i64 {
+        member.insert(members[i].id.clone(), i);
+    }
+    // The last paid fill of each member and drug (its day and days
+    // supply), and every paid fill of each member (day, days, class).
+    let mut last: Map[String, (i64, i64)] = Map.new();
+    let mut active: Map[String, Vec[(i64, i64, i64)]] = Map.new();
+    let mut out: Vec[Outcome] = Vec.new();
+    for c in claims {
+        let d = ref drugs[*drug.get(c.ndc).unwrap_or(0)];
+        let m = ref members[*member.get(c.member).unwrap_or(0)];
+        let mut inter = false;
+        if let Some(fills) = active.get(c.member) {
+            for f in fills {
+                if f.0 + f.1 > c.day and INTERACTS[d.class] == f.2 {
+                    inter = true;
+                }
+            }
+        }
+        let key = f"{c.member} {c.ndc}";
+        let too_soon = match last.get(key) {
+            Some(p) => c.day - p.0 < p.1 * 75 / 100,
+            None => false,
+        };
+        let max_days = if d.schedule == 2 { 30 } else { 90 };
+        let terminated = match m.term {
+            Some(t) => c.day > t,
+            None => false,
+        };
+        let pa: Vec[String] = split_on(m.pa, " ");
+        let reject = if terminated {
+            0
+        } else if not d.covered {
+            1
+        } else if c.days > max_days or c.qty > c.days * UNITS_A_DAY {
+            3
+        } else if d.schedule == 2 and c.refill > 0 {
+            5
+        } else if d.tier == 4 and not pa.contains(c.ndc) {
+            2
+        } else if too_soon {
+            4
+        } else if inter and c.dur == "" {
+            5
+        } else {
+            -1
+        };
+        let mut r = Outcome { reject: reject, ingredient: 0, fee: 0, allowed: 0, penalty: 0, basis: String.new(), generic: false, override_dur: false };
+        if reject < 0 {
+            r.override_dur = inter;
+            let (ing, allowed, basis) = if d.tier == 1 {
+                r.generic = true;
+                price(ph, d.awp, d.mac, c.qty)
+            } else if d.gen_awp > 0 and c.daw == 0 {
+                r.generic = true;
+                price(ph, d.gen_awp, d.gen_mac, c.qty)
+            } else if d.gen_awp > 0 and c.daw == 2 {
+                // The patient chose the brand: the plan pays the generic
+                // and the patient the difference.
+                let g = price(ph, d.gen_awp, d.gen_mac, c.qty);
+                let brand = price(ph, d.awp, 0, c.qty).1;
+                r.penalty = max2(0, brand - g.1);
+                g
+            } else {
+                price(ph, d.awp, 0, c.qty)
+            };
+            r.ingredient = ing;
+            r.allowed = allowed;
+            if basis != "uc" {
+                r.fee = ph.fee;
+            }
+            r.basis = basis;
+            last.insert(key, (c.day, c.days));
+            if not active.contains_key(c.member) {
+                active.insert(c.member.clone(), Vec.new());
+            }
+            if let Some(fills) = active.get_mut(c.member) {
+                fills.push((c.day, c.days, d.class));
+            }
+        }
+        out.push(r);
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn claims_report(ph: ref Pharmacy, adj: ref Vec[Outcome]) -> String {
+    let mut counts: Vec[i64] = Vec.filled(6, 0);
+    for r in adj {
+        if r.reject >= 0 {
+            counts[r.reject] += 1;
+        }
+    }
+    let mut rej = 0;
+    let mut parts: Vec[String] = Vec.new();
+    for k in 0..6 {
+        rej += counts[k];
+        parts.push(f"{REJECTS[k]} {counts[k]}");
+    }
+    let n = adj.len() as i64;
+    f"{ph.name} claims: {n} received, {n - rej} paid, {rej} rejected ({pct1(rej, n)}); {parts.join(", ")}"
+}
+
+// The first claim rejected with each code.
+fn reject_samples(drugs: ref Vec[Drug], claims: ref Vec[Claim], adj: ref Vec[Outcome]) -> Vec[String] {
+    let mut names: Map[String, String] = Map.new();
+    for d in drugs {
+        names.insert(d.ndc.clone(), d.name.clone());
+    }
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..6 {
+        for i in 0..claims.len() as i64 {
+            if adj[i].reject == k {
+                let c = ref claims[i];
+                let name = names.get(c.ndc).unwrap_or("").clone();
+                out.push(f"  {REJECTS[k]} {REJECT_NAMES[k]}: {c.rx} {c.member} {name} {month_day(c.day)}");
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn pricing_report(ph: ref Pharmacy, adj: ref Vec[Outcome]) -> String {
+    let mut allowed = 0;
+    let mut ing = 0;
+    let mut fees = 0;
+    let mut pen = 0;
+    let mut paid = 0;
+    let mut generic = 0;
+    let mut daw2 = 0;
+    let mut by_awp = 0;
+    let mut by_mac = 0;
+    let mut by_uc = 0;
+    for r in adj {
+        if r.reject >= 0 {
+            continue;
+        }
+        paid += 1;
+        allowed += r.allowed;
+        ing += r.ingredient;
+        fees += r.fee;
+        if r.basis == "awp" {
+            by_awp += 1;
+        } else if r.basis == "mac" {
+            by_mac += 1;
+        } else {
+            by_uc += 1;
+        }
+        if r.generic {
+            generic += 1;
+        }
+        if r.penalty > 0 {
+            daw2 += 1;
+            pen += r.penalty;
+        }
+    }
+    f"{ph.name} pricing: allowed {money(allowed)} (ingredient {money(ing)}, fees {money(fees)}); awp {by_awp}, mac {by_mac}, u&c {by_uc}; generic rate {pct1(generic, paid)}; DAW 2 penalties {money(pen)} on {plural(daw2, "fill")}"
+}
+
+fn drugs_report(ph: ref Pharmacy, drugs: ref Vec[Drug], claims: ref Vec[Claim], adj: ref Vec[Outcome]) -> String {
+    let mut total: Map[String, i64] = Map.new();
+    let mut fills: Map[String, i64] = Map.new();
+    for i in 0..claims.len() as i64 {
+        if adj[i].reject < 0 {
+            let ndc = ref claims[i].ndc;
+            let t = *total.get(ndc).unwrap_or(0);
+            total.insert(ndc.clone(), t + adj[i].allowed);
+            let n = *fills.get(ndc).unwrap_or(0);
+            fills.insert(ndc.clone(), n + 1);
+        }
+    }
+    let mut ranked: Vec[(String, i64, i64)] = Vec.new();
+    for d in drugs {
+        if let Some(t) = total.get(d.ndc) {
+            ranked.push((d.name.clone(), *t, *fills.get(d.ndc).unwrap_or(0)));
+        }
+    }
+    ranked.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
+    let mut top: Vec[String] = Vec.new();
+    for k in 0..min2(3, ranked.len() as i64) {
+        top.push(f"{ranked[k].0} {money(ranked[k].1)} ({ranked[k].2})");
+    }
+    f"{ph.name} top drugs: {top.join(", ")}"
+}
+
+fn controlled_report(ph: ref Pharmacy, drugs: ref Vec[Drug], claims: ref Vec[Claim], adj: ref Vec[Outcome]) -> String {
+    let mut sched: Map[String, i64] = Map.new();
+    for d in drugs {
+        sched.insert(d.ndc.clone(), d.schedule);
+    }
+    let mut c2 = 0;
+    let mut c4 = 0;
+    let mut units = 0;
+    let mut overrides = 0;
+    let mut by_dea: Map[String, i64] = Map.new();
+    let mut by_day: Vec[i64] = Vec.filled(MONTH_LEN, 0);
+    for i in 0..claims.len() as i64 {
+        let r = ref adj[i];
+        if r.reject >= 0 {
+            continue;
+        }
+        let c = ref claims[i];
+        by_day[c.day] += 1;
+        if r.override_dur {
+            overrides += 1;
+        }
+        let s = *sched.get(c.ndc).unwrap_or(0);
+        if s == 0 {
+            continue;
+        }
+        if s == 2 {
+            c2 += 1;
+        } else {
+            c4 += 1;
+        }
+        units += c.qty;
+        let n = *by_dea.get(c.dea).unwrap_or(0);
+        by_dea.insert(c.dea.clone(), n + 1);
+    }
+    let mut ranked: Vec[(String, i64)] = Vec.new();
+    for (k, n) in by_dea {
+        ranked.push((k.clone(), *n));
+    }
+    ranked.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
+    let top = if ranked.len() > 0 { f"{ranked[0].0} with {ranked[0].1}" } else { "none".to_string() };
+    let mut busiest = 0;
+    for d in 0..MONTH_LEN {
+        if by_day[d] > by_day[busiest] {
+            busiest = d;
+        }
+    }
+    f"{ph.name} controlled: {c2} CII and {c4} CIV fills paid, {group3(units)} units; top prescriber {top}; {plural(overrides, "DUR override")}; busiest day {day_name(busiest)} with {by_day[busiest]} paid"
+}
+
+// ------------------------------------------------------------ accumulators
+
+fn new_accumulators(members: ref Vec[Member]) -> Accumulators {
+    let mut acc = Accumulators {
+        plan: Map.new(),
+        ded: Map.new(),
+        oop: Map.new(),
+        share: Map.new(),
+        log: Vec.new(),
+        events: Vec.new(),
+        at: Map.new(),
+        met: 0,
+        maxed: 0,
+        member_total: 0,
+        plan_total: 0,
+    };
+    for m in members {
+        acc.plan.insert(m.id.clone(), m.plan);
+        acc.ded.insert(m.id.clone(), m.ytd_ded);
+        acc.oop.insert(m.id.clone(), m.ytd_oop);
+    }
+    acc.log.push("rx,member,allowed,member_share,penalty,plan_paid,ytd_deductible,ytd_oop".to_string());
+    acc
+}
+
+// Post a pharmacy's paid claims in fill order. The member pays toward the
+// deductible until it is met, then the tier's copay (or the specialty
+// coinsurance), never more than what is left of the out-of-pocket
+// maximum; a DAW 2 penalty is paid on top and counts toward neither.
+fn post_claims(acc: mut ref Accumulators, ph: ref Pharmacy, drugs: ref Vec[Drug], claims: ref Vec[Claim], adj: ref Vec[Outcome]) -> String {
+    let mut tiers: Map[String, i64] = Map.new();
+    for d in drugs {
+        tiers.insert(d.ndc.clone(), d.tier);
+    }
+    let mut n = 0;
+    let mut mem_total = 0;
+    let mut pen_total = 0;
+    let mut plan_total = 0;
+    let mut met = 0;
+    let mut maxed = 0;
+    for i in 0..claims.len() as i64 {
+        let r = ref adj[i];
+        if r.reject >= 0 {
+            continue;
+        }
+        let c = ref claims[i];
+        n += 1;
+        let p = *acc.plan.get(c.member).unwrap_or(0);
+        let ded = *acc.ded.get(c.member).unwrap_or(0);
+        let oop = *acc.oop.get(c.member).unwrap_or(0);
+        let ded_left = PLAN_DED[p] - ded;
+        let oop_left = PLAN_OOP[p] - oop;
+        let dpart = if ded_left > 0 { min2(r.allowed, ded_left) } else { 0 };
+        let rest = r.allowed - dpart;
+        let tier = *tiers.get(c.ndc).unwrap_or(1);
+        let cs = if tier < 4 { min2(PLAN_COPAY[p * 3 + tier - 1], rest) } else { rest * PLAN_COINS[p] / 100 };
+        let mem = min2(dpart + cs, oop_left);
+        let new_ded = ded + min2(dpart, mem);
+        let new_oop = oop + mem;
+        acc.ded.insert(c.member.clone(), new_ded);
+        acc.oop.insert(c.member.clone(), new_oop);
+        let plan_paid = r.allowed - mem;
+        if ded_left > 0 and new_ded == PLAN_DED[p] {
+            met += 1;
+            acc.events.push((c.member.clone(), f"{c.member} met the {money(PLAN_DED[p])} deductible at {ph.name} on {month_day(c.day)}"));
+        }
+        if oop_left > 0 and new_oop == PLAN_OOP[p] {
+            maxed += 1;
+            acc.events.push((c.member.clone(), f"{c.member} reached the {money(PLAN_OOP[p])} out-of-pocket maximum at {ph.name} on {month_day(c.day)}"));
+        }
+        let paid = *acc.share.get(c.member).unwrap_or(0);
+        acc.share.insert(c.member.clone(), paid + mem + r.penalty);
+        if not acc.at.contains_key(c.member) {
+            acc.at.insert(c.member.clone(), Vec.new());
+        }
+        if let Some(at) = acc.at.get_mut(c.member) {
+            if not at.contains(ph.name) {
+                at.push(ph.name.clone());
+            }
+        }
+        mem_total += mem;
+        pen_total += r.penalty;
+        plan_total += plan_paid;
+        acc.log.push(f"{c.rx},{c.member},{dollars(r.allowed)},{dollars(mem)},{dollars(r.penalty)},{dollars(plan_paid)},{dollars(new_ded)},{dollars(new_oop)}");
+    }
+    acc.met += met;
+    acc.maxed += maxed;
+    acc.member_total += mem_total + pen_total;
+    acc.plan_total += plan_total;
+    f"{ph.name} posted: {n} paid claims, member share {money(mem_total)} plus {money(pen_total)} in penalties, plan paid {money(plan_total)}; {plural(met, "deductible")} met, {plural(maxed, "out-of-pocket maximum")} reached"
+}
+
+fn pharmacies_of(acc: ref Accumulators, member: ref String) -> i64 {
+    match acc.at.get(member) {
+        Some(at) => at.len() as i64,
+        None => 0,
+    }
+}
+
+fn accumulator_summary(acc: ref Accumulators) -> Vec[String] {
+    // Only the members who filled at more than one pharmacy: the order the
+    // pharmacies post in decides where their thresholds fall.
+    let mut out: Vec[String] = Vec.new();
+    for e in acc.events {
+        if pharmacies_of(acc, e.0) > 1 {
+            out.push(e.1.clone());
+        }
+    }
+    let mut shared = 0;
+    for (_, at) in acc.at {
+        if at.len() > 1 {
+            shared += 1;
+        }
+    }
+    let mut ranked: Vec[(String, i64)] = Vec.new();
+    for (k, v) in acc.share {
+        ranked.push((k.clone(), *v));
+    }
+    ranked.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
+    let mut top: Vec[String] = Vec.new();
+    for k in 0..min2(3, ranked.len() as i64) {
+        top.push(f"{ranked[k].0} {money(ranked[k].1)}");
+    }
+    out.push(f"members: {acc.share.len()} with paid claims, {shared} at more than one pharmacy, {acc.met} met the deductible and {acc.maxed} reached the out-of-pocket maximum this month");
+    out.push(f"month: members paid {money(acc.member_total)}, the plan paid {money(acc.plan_total)}; most paid {top.join(", ")}");
+    out
+}
+
+fn file_line(name: Str, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let ashford = Pharmacy { name: "ashford", code: "A", seed: 101, fee: 150, disc_bp: 1700, uc_pct: 85, scripts: 220 };
+    let brookline = Pharmacy { name: "brookline", code: "B", seed: 202, fee: 175, disc_bp: 1850, uc_pct: 75, scripts: 170 };
+    let cedar = Pharmacy { name: "cedar", code: "C", seed: 303, fee: 200, disc_bp: 1600, uc_pct: 90, scripts: 190 };
+    let dalton = Pharmacy { name: "dalton", code: "D", seed: 404, fee: 125, disc_bp: 2000, uc_pct: 70, scripts: 260 };
+
+    let drugs = build_formulary();
+    let members = build_members(drugs);
+    let prescribers = build_prescribers();
+
+    // Four months of claims.
+    let c1 = build_claims(ashford, drugs, members, prescribers);
+    let c2 = build_claims(brookline, drugs, members, prescribers);
+    let c3 = build_claims(cedar, drugs, members, prescribers);
+    let c4 = build_claims(dalton, drugs, members, prescribers);
+
+    // Six writes.
+    let w1 = fs.write("formulary.csv", encode_formulary(drugs));
+    let w2 = fs.write("members.csv", encode_members(members));
+    let w3 = fs.write("ashford_claims.csv", encode_claims(c1));
+    let w4 = fs.write("brookline_claims.csv", encode_claims(c2));
+    let w5 = fs.write("cedar_claims.csv", encode_claims(c3));
+    let w6 = fs.write("dalton_claims.csv", encode_claims(c4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() {
+        return Err(bad("could not write the batch files"));
+    }
+
+    // A copy of Ashford's claims with one DEA check digit off by one.
+    let whole = read_text("ashford_claims.csv")?;
+    let dea = split_on(split_on(whole, "\n")[40], ",")[7].clone();
+    let last = (to_int(dea.substring(8, 9)) + 1) % 10;
+    if fs.write("ashford_claims.bad", damage(whole, 40, 7, f"{dea.substring(0, 8)}{last}")).is_err() {
+        return Err(bad("could not write ashford_claims.bad"));
+    }
+
+    // Six reads.
+    let tf = read_text("formulary.csv")?;
+    let tm = read_text("members.csv")?;
+    let t1 = read_text("ashford_claims.csv")?;
+    let t2 = read_text("brookline_claims.csv")?;
+    let t3 = read_text("cedar_claims.csv")?;
+    let t4 = read_text("dalton_claims.csv")?;
+    println(file_line("formulary", tf));
+    println(file_line("members", tm));
+    println(file_line("ashford", t1));
+    println(file_line("brookline", t2));
+    println(file_line("cedar", t3));
+    println(file_line("dalton", t4));
+
+    // The formulary and the roster, then the four claim files checked
+    // against them. Each can fail with `?`, so a parallel run has to
+    // report the first failure in source order.
+    let gd = parse_formulary("formulary.csv", tf)?;
+    let gm = parse_members("members.csv", tm)?;
+    let g1 = parse_claims("ashford_claims.csv", ashford, gd, gm, t1)?;
+    let g2 = parse_claims("brookline_claims.csv", brookline, gd, gm, t2)?;
+    let g3 = parse_claims("cedar_claims.csv", cedar, gd, gm, t3)?;
+    let g4 = parse_claims("dalton_claims.csv", dalton, gd, gm, t4)?;
+    match parse_claims("ashford_claims.bad", ashford, gd, gm, read_text("ashford_claims.bad")?) {
+        Ok(_) => println("ashford_claims.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_claims("brookline_claims.csv", cedar, gd, gm, t2) {
+        Ok(_) => println("brookline_claims.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = gd == drugs and gm == members and g1 == c1 and g2 == c2 and g3 == c3 and g4 == c4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four adjudications, the hot group.
+    let a1 = adjudicate(ashford, gd, gm, g1);
+    let a2 = adjudicate(brookline, gd, gm, g2);
+    let a3 = adjudicate(cedar, gd, gm, g3);
+    let a4 = adjudicate(dalton, gd, gm, g4);
+
+    // Reports that only read what came before.
+    let r1 = claims_report(ashford, a1);
+    let r2 = claims_report(brookline, a2);
+    let r3 = claims_report(cedar, a3);
+    let r4 = claims_report(dalton, a4);
+    let s1 = reject_samples(gd, g1, a1);
+    let s2 = reject_samples(gd, g2, a2);
+    let s3 = reject_samples(gd, g3, a3);
+    let s4 = reject_samples(gd, g4, a4);
+    let p1 = pricing_report(ashford, a1);
+    let p2 = pricing_report(brookline, a2);
+    let p3 = pricing_report(cedar, a3);
+    let p4 = pricing_report(dalton, a4);
+    let d1 = drugs_report(ashford, gd, g1, a1);
+    let d2 = drugs_report(brookline, gd, g2, a2);
+    let d3 = drugs_report(cedar, gd, g3, a3);
+    let d4 = drugs_report(dalton, gd, g4, a4);
+    let k1 = controlled_report(ashford, gd, g1, a1);
+    let k2 = controlled_report(brookline, gd, g2, a2);
+    let k3 = controlled_report(cedar, gd, g3, a3);
+    let k4 = controlled_report(dalton, gd, g4, a4);
+    for (head, samples) in [(r1, s1), (r2, s2), (r3, s3), (r4, s4)] {
+        println(head);
+        for line in samples {
+            println(line);
+        }
+    }
+    for line in [p1, p2, p3, p4, d1, d2, d3, d4, k1, k2, k3, k4] {
+        println(line);
+    }
+
+    // One set of accumulators: what a member pays for a claim depends on
+    // the claims posted before it, so the pharmacies post in order.
+    let mut acc = new_accumulators(gm);
+    println(post_claims(mut acc, ashford, gd, g1, a1));
+    println(post_claims(mut acc, brookline, gd, g2, a2));
+    println(post_claims(mut acc, cedar, gd, g3, a3));
+    println(post_claims(mut acc, dalton, gd, g4, a4));
+    for line in accumulator_summary(acc) {
+        println(line);
+    }
+    if fs.write("accumulators.log", f"{acc.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write accumulators.log"));
+    }
+    let back = read_text("accumulators.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 2;
+    println(f"accumulators.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["formulary.csv", "members.csv", "ashford_claims.csv", "brookline_claims.csv", "cedar_claims.csv", "dalton_claims.csv", "ashford_claims.bad", "accumulators.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"rx_adjudicate failed: {e.describe()}"),
+    }
+}
