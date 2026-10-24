@@ -1767,9 +1767,7 @@ impl Session {
     /// a span landing inside the replayed slice back to the originating
     /// cell.
     fn capture_new_lets(&mut self, cell_src: &str) {
-        if self.v2 {
-            self.v2_values = self.v2_pending.take();
-        }
+        self.v2_values = self.v2_pending.take();
         // Cell index = `cell_history.len()` because the caller pushed the
         // current cell's source before invoking the wrapper pipeline.
         let cell_idx = self.cell_history.len();
