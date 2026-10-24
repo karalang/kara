@@ -1,0 +1,108 @@
+// LeetCode #957: Prison Cells After N Days -- the days as a list.
+//
+// Keep every row so far in a list, the start row first. When the next
+// row is already in the list, at day f, the rows from f on repeat, and
+// day n is read off the list: directly when it was reached, otherwise at
+// f plus its distance past f modulo the cycle. O(2^8 * 2^8) at worst.
+
+fn step(cells: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.filled(8, 0);
+    for i in 1..7 {
+        out[i] = if cells[i - 1] == cells[i + 1] { 1 } else { 0 };
+    }
+    out
+}
+
+fn prison_after_n_days(cells: own Vec[i64], n: i64) -> Vec[i64] {
+    let mut days: Vec[Vec[i64]] = vec![cells];
+    loop {
+        if n < days.len() {
+            return days[n].clone();
+        }
+        let next = step(days[days.len() - 1]);
+        let mut f = 0;
+        while f < days.len() and days[f] != next {
+            f += 1;
+        }
+        if f < days.len() {
+            let cycle = days.len() - f;
+            return days[f + (n - f) % cycle].clone();
+        }
+        days.push(next);
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(cells: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..cells.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{cells[i]}";
+    }
+    f"[{s}]"
+}
+
+fn byte_of(cells: ref Vec[i64]) -> i64 {
+    let mut c = 0;
+    for v in cells.iter() {
+        c = c * 2 + *v;
+    }
+    c
+}
+
+fn row_of(b: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..8 {
+        out.push((b >> (7 - i)) & 1);
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[(Vec[i64], i64)] = vec![
+        (vec![0, 1, 0, 1, 1, 0, 0, 1], 7),
+        (vec![1, 0, 0, 1, 0, 0, 1, 0], 1000000000),
+        (vec![0, 1, 0, 1, 1, 0, 0, 1], 0),
+        (vec![0, 1, 0, 1, 1, 0, 0, 1], 1),
+        (vec![0, 0, 0, 0, 0, 0, 0, 0], 1),
+        (vec![1, 1, 1, 1, 1, 1, 1, 1], 1000000000),
+        (vec![1, 0, 1, 0, 1, 0, 1, 0], 14),
+        (vec![1, 0, 1, 0, 1, 0, 1, 0], 15),
+        (vec![0, 0, 1, 0, 0, 1, 0, 0], 999999999),
+    ];
+    for (cells, n) in cases.iter() {
+        println(f"{show(cells)} after {n}: {show(prison_after_n_days(cells.clone(), *n))}");
+    }
+    // 300 random cases of a random row after 0 to 99 days
+    let mut seed = 957;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let cells = row_of(next_random(mut seed) % 256);
+        let n = next_random(mut seed) % 100;
+        let b = byte_of(prison_after_n_days(cells, n));
+        total += b;
+        check = (check * 31 + b) % 1000000007;
+    }
+    println(f"300 random cases after 0 to 99 days: rows adding to {total}, checksum {check}");
+    // every row after LeetCode's largest n, and a few around it
+    for n in [1000000000, 999999999, 999999986, 536870912] {
+        let mut total = 0;
+        let mut check = 0;
+        for b in 0..256 {
+            let r = byte_of(prison_after_n_days(row_of(b), n));
+            total += r;
+            check = (check * 31 + r) % 1000000007;
+        }
+        println(f"all 256 rows after {n}: rows adding to {total}, checksum {check}");
+    }
+}

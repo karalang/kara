@@ -1,0 +1,72 @@
+// LeetCode #957: Prison Cells After N Days -- a day per state seen.
+//
+// There are only 2^8 rows of cells, so the days must repeat. Step day by
+// day, writing each row's first day in a `Map` keyed by the row read as
+// a number; the first row seen twice closes a cycle, and the days left
+// shrink to their remainder modulo its length. O(2^8) steps whatever n.
+
+fn next_day(cells: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.filled(8, 0);
+    for i in 1..7 {
+        if cells[i - 1] == cells[i + 1] {
+            out[i] = 1;
+        }
+    }
+    out
+}
+
+fn code(cells: ref Vec[i64]) -> i64 {
+    let mut c = 0;
+    for v in cells.iter() {
+        c = c * 2 + *v;
+    }
+    c
+}
+
+fn prison_after_n_days(cells: own Vec[i64], n: i64) -> Vec[i64] {
+    let mut seen: Map[i64, i64] = Map.new();
+    let mut row = cells;
+    let mut day = 0;
+    let mut left = n;
+    while left > 0 {
+        match seen.get(code(row)) {
+            Some(first) => {
+                left = left % (day - *first);
+                seen.clear();
+                if left == 0 {
+                    break;
+                }
+            }
+            None => {}
+        }
+        seen.insert(code(row), day);
+        row = next_day(row);
+        day += 1;
+        left -= 1;
+    }
+    row
+}
+
+fn main() {
+    let rounds = 2000;
+    // every row of 8 cells, after 10^9 - r days in round r
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    for b in 0..256 {
+        let mut cells: Vec[i64] = Vec.new();
+        for i in 0..8 {
+            cells.push((b >> (7 - i)) & 1);
+        }
+        rows.push(cells);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for b in 0..256 {
+            let out = prison_after_n_days(rows[b].clone(), 1000000000 - r);
+            let c = code(out);
+            total += c;
+            check = (check * 31 + c) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over all 256 rows: rows adding to {total}, checksum {check}");
+}

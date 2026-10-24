@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/957-prison-cells-after-n-days/bench/prison_after_n_days.kara"
+dedup_of = []
+tags = ["lib:map", "bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "20636e077"
+extracted_src = "d2be031a"

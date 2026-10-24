@@ -1,0 +1,330 @@
+// LeetCode #957: Prison Cells After N Days -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: there are 8 prison cells in a row and each cell is either
+// occupied or vacant. Each day, whether the cell is occupied or vacant
+// changes according to the following rules: if a cell has two adjacent
+// neighbors that are both occupied or both vacant, then the cell becomes
+// occupied; otherwise, it becomes vacant. Note that because the prison is
+// a row, the first and the last cells in the row can't have two adjacent
+// neighbors. Return the state of the prison after n days.
+
+// ---- the ★ arm: a day per state seen --------------------------------------
+fn star_next_day(cells: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.filled(8, 0);
+    for i in 1..7 {
+        if cells[i - 1] == cells[i + 1] {
+            out[i] = 1;
+        }
+    }
+    out
+}
+
+fn star_code(cells: ref Vec[i64]) -> i64 {
+    let mut c = 0;
+    for v in cells.iter() {
+        c = c * 2 + *v;
+    }
+    c
+}
+
+fn star_prison_after_n_days(cells: own Vec[i64], n: i64) -> Vec[i64] {
+    let mut seen: Map[i64, i64] = Map.new();
+    let mut row = cells;
+    let mut day = 0;
+    let mut left = n;
+    while left > 0 {
+        match seen.get(star_code(row)) {
+            Some(first) => {
+                left = left % (day - *first);
+                seen.clear();
+                if left == 0 {
+                    break;
+                }
+            }
+            None => {}
+        }
+        seen.insert(star_code(row), day);
+        row = star_next_day(row);
+        day += 1;
+        left -= 1;
+    }
+    row
+}
+
+// ---- the period arm: a period of 14 ---------------------------------------
+fn period_next_day(cells: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.filled(8, 0);
+    for i in 1..7 {
+        if cells[i - 1] == cells[i + 1] {
+            out[i] = 1;
+        }
+    }
+    out
+}
+
+fn period_prison_after_n_days(cells: own Vec[i64], n: i64) -> Vec[i64] {
+    if n == 0 {
+        return cells;
+    }
+    let mut row = period_next_day(cells);
+    for _ in 0..(n - 1) % 14 {
+        row = period_next_day(row);
+    }
+    row
+}
+
+// ---- the bits arm: a byte and a table -------------------------------------
+fn bits_prison_after_n_days(cells: Vec[i64], n: i64) -> Vec[i64] {
+    let mut s = 0;
+    for v in cells.iter() {
+        s = s * 2 + *v;
+    }
+    let mut first: Vec[i64] = Vec.filled(256, -1);
+    let mut day = 0;
+    while day < n {
+        if first[s] >= 0 {
+            let cycle = day - first[s];
+            let rest = (n - day) % cycle;
+            for _ in 0..rest {
+                s = ~((s << 1) ^ (s >> 1)) & 0x7e;
+            }
+            day = n;
+        } else {
+            first[s] = day;
+            s = ~((s << 1) ^ (s >> 1)) & 0x7e;
+            day += 1;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..8 {
+        out.push((s >> (7 - i)) & 1);
+    }
+    out
+}
+
+// ---- the doubling arm: jumps by powers of two -----------------------------
+fn doubling_prison_after_n_days(cells: Vec[i64], n: i64) -> Vec[i64] {
+    // jump[k][s]: the row 2^k days after row s, rows read as bytes
+    let mut jump: Vec[Vec[i64]] = Vec.new();
+    let mut one: Vec[i64] = Vec.new();
+    for s in 0..256 {
+        let mut t = 0;
+        for i in 1..7 {
+            let left = (s >> (8 - i)) & 1;
+            let right = (s >> (6 - i)) & 1;
+            if left == right {
+                t = t | (1 << (7 - i));
+            }
+        }
+        one.push(t);
+    }
+    jump.push(one);
+    let mut s = 0;
+    for v in cells.iter() {
+        s = s * 2 + *v;
+    }
+    let mut k = 0;
+    let mut m = n;
+    while m > 0 {
+        if k == jump.len() {
+            let mut twice: Vec[i64] = Vec.new();
+            for x in 0..256 {
+                twice.push(jump[k - 1][jump[k - 1][x]]);
+            }
+            jump.push(twice);
+        }
+        if m % 2 == 1 {
+            s = jump[k][s];
+        }
+        m = m / 2;
+        k += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..8 {
+        out.push((s >> (7 - i)) & 1);
+    }
+    out
+}
+
+// ---- the history arm: the days as a list ----------------------------------
+fn history_step(cells: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.filled(8, 0);
+    for i in 1..7 {
+        out[i] = if cells[i - 1] == cells[i + 1] { 1 } else { 0 };
+    }
+    out
+}
+
+fn history_prison_after_n_days(cells: own Vec[i64], n: i64) -> Vec[i64] {
+    let mut days: Vec[Vec[i64]] = vec![cells];
+    loop {
+        if n < days.len() {
+            return days[n].clone();
+        }
+        let next = history_step(days[days.len() - 1]);
+        let mut f = 0;
+        while f < days.len() and days[f] != next {
+            f += 1;
+        }
+        if f < days.len() {
+            let cycle = days.len() - f;
+            return days[f + (n - f) % cycle].clone();
+        }
+        days.push(next);
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, cells: ref Vec[i64], n: i64) -> Vec[i64] {
+    if x == 0 {
+        star_prison_after_n_days(cells.clone(), n)
+    } else if x == 1 {
+        period_prison_after_n_days(cells.clone(), n)
+    } else if x == 2 {
+        bits_prison_after_n_days(cells.clone(), n)
+    } else if x == 3 {
+        doubling_prison_after_n_days(cells.clone(), n)
+    } else {
+        history_prison_after_n_days(cells.clone(), n)
+    }
+}
+
+// The statement read literally, one day at a time: a cell with two
+// neighbours both occupied or both vacant becomes occupied, any other
+// cell vacant, and the first and last cells have only one neighbour.
+fn statement(cells: ref Vec[i64], n: i64) -> Vec[i64] {
+    let mut row = cells.clone();
+    for _ in 0..n {
+        let mut next: Vec[i64] = Vec.new();
+        for i in 0..8 {
+            let two_neighbours = i > 0 and i < 7;
+            if two_neighbours and row[i - 1] == row[i + 1] {
+                next.push(1);
+            } else {
+                next.push(0);
+            }
+        }
+        row = next;
+    }
+    row
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn reversed(cells: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..cells.len() {
+        out.push(cells[cells.len() - 1 - i]);
+    }
+    out
+}
+
+fn complement(cells: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in cells.iter() {
+        out.push(1 - *v);
+    }
+    out
+}
+
+fn code(cells: ref Vec[i64]) -> i64 {
+    let mut c = 0;
+    for v in cells.iter() {
+        c = c * 2 + *v;
+    }
+    c
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, cells: Vec[i64], n: i64, small: bool) -> i64 {
+    let want = if small { statement(cells, n) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, cells, n));
+    }
+    // the inputs P2 to P5 share: the row backwards, a split of the days
+    // into two runs, and the row complemented
+    let back = reversed(cells);
+    let first = (next_random(mut seed) * 32768 + next_random(mut seed)) % (n + 1);
+    let flipped = complement(cells);
+    for x in 0..5 {
+        let r = got[x].clone();
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, r == want);
+        }
+        // P2: the rule is symmetric, so the row backwards ends backwards
+        check(mut t, 2, arm(x, back, n) == reversed(r));
+        // P3: from day 1 on the rows repeat every 14 days
+        check(mut t, 3, n == 0 or arm(x, cells, n + 14) == r);
+        // P4: n days are `first` days and then the rest
+        let middle = arm(x, cells, first);
+        check(mut t, 4, arm(x, middle, n - first) == r);
+        // P5: two neighbours agree exactly when their complements do, so
+        // the complemented row is the same from day 1 on
+        let other = arm(x, flipped, n);
+        check(mut t, 5, if n == 0 { other == complement(r) } else { other == r });
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == r {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    code(got[0])
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 957;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 random rows after 0 to 99 days, against the statement, then
+    // 200 after up to LeetCode's 10^9
+    for c in 0..3200 {
+        let small = c < 3000;
+        let cells_code = next_random(mut seed) % 256;
+        let mut cells: Vec[i64] = Vec.new();
+        for i in 0..8 {
+            cells.push((cells_code >> (7 - i)) & 1);
+        }
+        let n = if small {
+            next_random(mut seed) % 100
+        } else {
+            (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001
+        };
+        let b = properties(mut t, mut seed, cells, n, small);
+        total += b;
+        check_sum = (check_sum * 31 + b) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases: rows adding to {total}, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
