@@ -79,6 +79,14 @@ SYNTAX_TAGS = [
 MOVE_FROM_BORROW = ("borrow_projection_copy", "for_element_drop_copy")
 
 
+def code_only(src: str) -> str:
+    """The source with string literals emptied and line comments removed,
+    so that a word in a title or a message ("Same Row or Column") does not
+    read as a use of the feature it names."""
+    src = re.sub(r'"(\\.|[^"\\])*"', '""', src)
+    return re.sub(r"//[^\n]*", "", src)
+
+
 def tags_for(src: str, diags: list[dict], legacy_exit) -> list[str]:
     tags = [name for name, rx in SYNTAX_TAGS if rx.search(src)]
     codes = {d.get("code") for d in diags}
@@ -89,7 +97,8 @@ def tags_for(src: str, diags: list[dict], legacy_exit) -> list[str]:
     blob = json.dumps(diags)
     if any(l in blob for l in MOVE_FROM_BORROW):
         tags.append("move-from-borrow")
-    tags += [f"deferred:{name}" for name, rx in DEFERRED if rx.search(src)]
+    code = code_only(src)
+    tags += [f"deferred:{name}" for name, rx in DEFERRED if rx.search(code)]
     return tags
 
 
