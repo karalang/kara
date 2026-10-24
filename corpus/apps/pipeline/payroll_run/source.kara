@@ -1,0 +1,925 @@
+// pipeline/payroll_run
+//
+// A biweekly payroll run, the shape of a payroll service's batch for one
+// company with four sites. It builds each site's roster and timesheets,
+// writes them as CSV, reads the files back and parses them (with the
+// checks a payroll import makes), turns punches into regular, overtime
+// and double-time hours (California's daily rules at one site, the
+// weekly 40-hour rule everywhere), computes gross pay, the 401(k) and
+// health deductions, federal and state withholding, Social Security up
+// to the wage base and Medicare with its additional tax, runs five
+// reports per site, and posts the payments against one bank account.
+//
+// The rosters, the timesheets, the writes, the reads, the parses, the
+// hours, the pay and the reports are each a group of statements that do
+// not depend on each other (a stmt-par app). The account's balance runs
+// down as each site posts, a payment that no longer fits is held, and
+// check numbers go out in posting order, so the postings run in order.
+
+const MASK32: i64 = 4294967295;
+const EMPLOYEES: i64 = 1200;
+const DAYS: i64 = 14;
+const WEEK_LIMIT: i64 = 2400;
+const SS_BASE: i64 = 16860000;
+const ADDL_MEDICARE_AT: i64 = 20000000;
+const START_BALANCE: i64 = 1150000000;
+const FIRST_CHECK: i64 = 100001;
+const ROSTER_HEADER: Str = "id,name,kind,rate,filing,k401,plan,ytd_ss";
+const TIMES_HEADER: Str = "id,day,in,out,break";
+
+struct Employee {
+    eid: String,
+    name: String,
+    kind: String,
+    rate: i64,
+    filing: String,
+    k401: i64,
+    plan: String,
+    ytd_ss: i64,
+}
+
+struct Punch {
+    eid: String,
+    day: i64,
+    t_in: i64,
+    t_out: i64,
+    brk: i64,
+}
+
+struct Site {
+    name: String,
+    state: String,
+    seed: i64,
+    code: String,
+}
+
+struct Hours {
+    eid: String,
+    reg: i64,
+    ot: i64,
+    dt: i64,
+    days: i64,
+}
+
+struct Anomaly {
+    eid: String,
+    day: i64,
+    what: String,
+}
+
+struct Timecard {
+    hours: Vec[Hours],
+    anomalies: Vec[Anomaly],
+}
+
+struct Pay {
+    eid: String,
+    gross: i64,
+    k401: i64,
+    health: i64,
+    taxable: i64,
+    fed: i64,
+    ss: i64,
+    medicare: i64,
+    state: i64,
+    net: i64,
+    capped: bool,
+    employer: i64,
+}
+
+struct Ledger {
+    balance: i64,
+    next_check: i64,
+    trace: i64,
+    held: i64,
+    held_amount: i64,
+    ach: String,
+}
+
+enum PayError {
+    Bad(String),
+}
+
+impl PayError {
+    fn describe(ref self) -> String {
+        match self {
+            PayError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn imin(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn imax(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn syllables() -> Vec[String] {
+    ["ka", "ri", "to", "men", "sa", "lo", "vi", "dan", "el", "mor", "ra", "ne", "jo", "lin", "ta", "bo"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn plans() -> Vec[String] {
+    ["none", "basic", "family"].iter().map(|s| s.to_string()).collect()
+}
+
+fn premiums() -> Vec[i64] {
+    [0, 4850, 13200]
+}
+
+fn k401_rates() -> Vec[i64] {
+    [0, 0, 3, 4, 5, 6, 8, 10]
+}
+
+fn fed_single() -> Vec[(i64, i64)] {
+    [(0, 0), (600000, 1000), (1760000, 1200), (5315000, 2200), (10652500, 2400),
+        (19795000, 3200), (24972500, 3500), (61535000, 3700)]
+}
+
+fn fed_married() -> Vec[(i64, i64)] {
+    [(0, 0), (1630000, 1000), (3950000, 1200), (11060000, 2200), (21735000, 2400),
+        (40020000, 3200), (50375000, 3500), (74750000, 3700)]
+}
+
+fn ca_brackets() -> Vec[(i64, i64)] {
+    [(0, 100), (1075600, 200), (2549900, 400), (4024500, 600), (5586600, 800),
+        (7060600, 930), (36065900, 1030)]
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn money(cents: i64) -> String {
+    let whole = f"{cents / 100}";
+    let mut out = String.new();
+    let n = whole.len() as i64;
+    for i in 0..n {
+        if i > 0 and (n - i) % 3 == 0 {
+            out.push_str(",");
+        }
+        out.push_str(whole.substring(i, i + 1));
+    }
+    f"${out}.{cents % 100:02}"
+}
+
+fn hours(minutes: i64) -> String {
+    f"{minutes / 60}.{(minutes % 60) * 10 / 60}h"
+}
+
+fn clock(m: i64) -> String {
+    if m < 0 {
+        return "--:--".to_string();
+    }
+    f"{m / 60:02}:{m % 60:02}"
+}
+
+fn cap(s: ref String) -> String {
+    s.substring(0, 1).to_uppercase() + s.substring(1)
+}
+
+fn new_site(name: ref String, state: ref String, seed: i64) -> Site {
+    Site { name: name.clone(), state: state.clone(), seed: seed, code: name.substring(0, 3).to_uppercase() }
+}
+
+// ------------------------------------------------------------ the data
+
+fn build_roster(site: ref Site) -> Vec[Employee] {
+    let s = site.seed;
+    let syl = syllables();
+    let pl = plans();
+    let rates = k401_rates();
+    let mut out: Vec[Employee] = Vec.new();
+    for i in 0..EMPLOYEES {
+        let eid = f"{site.code}{i + 1:04}";
+        let first = cap(syl[mix(s, i, 1) % 16] + syl[mix(s, i, 2) % 16]);
+        let last = cap(syl[mix(s, i, 3) % 16] + syl[mix(s, i, 4) % 16] + syl[mix(s, i, 5) % 16]);
+        let salaried = mix(s, i, 6) % 10 < 3;
+        let rate = if salaried {
+            (52000 + (mix(s, i, 7) % 1881) * 100) * 100
+        } else {
+            1800 + mix(s, i, 7) % 4701
+        };
+        let filing = if mix(s, i, 8) % 5 < 2 { "M" } else { "S" };
+        let k401 = rates[mix(s, i, 9) % 8];
+        let plan = pl[mix(s, i, 10) % 3].clone();
+        let h = mix(s, i, 11);
+        let ytd = if h % 10 == 0 { 16000000 + h % 4000000 } else { h % 9000000 };
+        let kind = if salaried { "salaried" } else { "hourly" };
+        out.push(Employee {
+            eid: eid,
+            name: f"{first} {last}",
+            kind: kind.to_string(),
+            rate: rate,
+            filing: filing.to_string(),
+            k401: k401,
+            plan: plan,
+            ytd_ss: ytd,
+        });
+    }
+    out
+}
+
+fn build_times(site: ref Site, roster: ref Vec[Employee]) -> Vec[Punch] {
+    let s = site.seed;
+    let mut out: Vec[Punch] = Vec.new();
+    for i in 0..roster.len() as i64 {
+        let e = ref roster[i];
+        if e.kind != "hourly" {
+            continue;
+        }
+        for d in 0..DAYS {
+            let h = mix(s, i * 16 + d, 12);
+            if h % 7 >= 5 {
+                continue;
+            }
+            let t_in = 360 + (h >> 4) % 240;
+            let mut length = 240 + (h >> 12) % 421;
+            if (h >> 22) % 40 == 0 {
+                length += 180;
+            }
+            let t_out = t_in + length;
+            let brk = if length > 360 { 30 } else { 0 };
+            let k = mix(s, i * 16 + d, 13) % 200;
+            if k == 0 {
+                out.push(Punch { eid: e.eid.clone(), day: d, t_in: t_in, t_out: -1, brk: brk });
+            } else {
+                out.push(Punch { eid: e.eid.clone(), day: d, t_in: t_in, t_out: t_out, brk: brk });
+                if k == 1 {
+                    out.push(Punch { eid: e.eid.clone(), day: d, t_in: t_in + 60, t_out: t_out, brk: 0 });
+                }
+            }
+        }
+    }
+    if s % 3 == 2 {
+        out.push(Punch { eid: f"{site.code}9999", day: 3, t_in: 480, t_out: 960, brk: 30 });
+    }
+    out
+}
+
+fn encode_roster(roster: ref Vec[Employee]) -> String {
+    let mut out = String.new();
+    out.push_str(ROSTER_HEADER);
+    out.push_str("\n");
+    for e in roster {
+        out.push_str(f"{e.eid},{e.name},{e.kind},{e.rate},{e.filing},{e.k401},{e.plan},{e.ytd_ss}\n");
+    }
+    out
+}
+
+fn encode_times(punches: ref Vec[Punch]) -> String {
+    let mut out = String.new();
+    out.push_str(TIMES_HEADER);
+    out.push_str("\n");
+    for p in punches {
+        out.push_str(f"{p.eid},{p.day},{clock(p.t_in)},{clock(p.t_out)},{p.brk}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, PayError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(PayError.Bad(f"could not read {path}")),
+    }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+// Put an impossible punch-in time on the n-th punch.
+fn damage(text: ref String, n: i64) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut fields = split_on(lines[n + 1], ",");
+    fields[2] = "25:61".to_string();
+    lines[n + 1] = fields.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ the parsers
+
+fn is_digits(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for b in s.bytes() {
+        if b < 48 or b > 57 {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_upper(b: u8) -> bool {
+    b >= 65 and b <= 90
+}
+
+fn to_int(s: ref String) -> i64 {
+    let mut v = 0;
+    for b in s.bytes() {
+        v = v * 10 + (b as i64 - 48);
+    }
+    v
+}
+
+// Minutes since midnight, -1 for a missing punch, -2 for a bad time.
+fn parse_clock(s: ref String) -> i64 {
+    if s == "--:--" {
+        return -1;
+    }
+    if s.len() != 5 or s.bytes()[2] != 58 or not is_digits(s.substring(0, 2)) or not is_digits(s.substring(3, 5)) {
+        return -2;
+    }
+    let h = to_int(s.substring(0, 2));
+    let m = to_int(s.substring(3, 5));
+    if h > 23 or m > 59 {
+        return -2;
+    }
+    h * 60 + m
+}
+
+fn check_header(path: ref String, lines: ref Vec[String], header: ref String) -> Result[(), PayError] {
+    if lines.len() == 0 or lines[0] != header {
+        return Err(PayError.Bad(f"{path} line 1: bad header"));
+    }
+    Ok(())
+}
+
+fn parse_roster(path: ref String, text: ref String) -> Result[Vec[Employee], PayError] {
+    let lines = split_on(text, "\n");
+    check_header(path, lines, ROSTER_HEADER.to_string())?;
+    let pl = plans();
+    let mut out: Vec[Employee] = Vec.new();
+    for n in 1..lines.len() as i64 {
+        let line = ref lines[n];
+        if line == "" {
+            continue;
+        }
+        let where_ = f"{path} line {n + 1}: ";
+        let f = split_on(line, ",");
+        if f.len() != 8 {
+            return Err(PayError.Bad(f"{where_}{f.len()} fields"));
+        }
+        let eid = ref f[0];
+        let eb = eid.bytes();
+        if eid.len() != 7 or not (is_upper(eb[0]) and is_upper(eb[1]) and is_upper(eb[2])) or not is_digits(eid.substring(3, 7)) {
+            return Err(PayError.Bad(f"{where_}bad id '{eid}'"));
+        }
+        if f[2] != "hourly" and f[2] != "salaried" {
+            return Err(PayError.Bad(f"{where_}bad kind '{f[2]}'"));
+        }
+        if not is_digits(f[3]) or not is_digits(f[5]) or not is_digits(f[7]) {
+            return Err(PayError.Bad(f"{where_}bad number"));
+        }
+        if f[4] != "S" and f[4] != "M" {
+            return Err(PayError.Bad(f"{where_}bad filing status '{f[4]}'"));
+        }
+        let k401 = to_int(f[5]);
+        if k401 > 15 {
+            return Err(PayError.Bad(f"{where_}401(k) rate {k401}% over 15%"));
+        }
+        if not pl.contains(f[6]) {
+            return Err(PayError.Bad(f"{where_}bad plan '{f[6]}'"));
+        }
+        out.push(Employee {
+            eid: eid.clone(),
+            name: f[1].clone(),
+            kind: f[2].clone(),
+            rate: to_int(f[3]),
+            filing: f[4].clone(),
+            k401: k401,
+            plan: f[6].clone(),
+            ytd_ss: to_int(f[7]),
+        });
+    }
+    Ok(out)
+}
+
+fn parse_times(path: ref String, text: ref String) -> Result[Vec[Punch], PayError] {
+    let lines = split_on(text, "\n");
+    check_header(path, lines, TIMES_HEADER.to_string())?;
+    let mut out: Vec[Punch] = Vec.new();
+    for n in 1..lines.len() as i64 {
+        let line = ref lines[n];
+        if line == "" {
+            continue;
+        }
+        let where_ = f"{path} line {n + 1}: ";
+        let f = split_on(line, ",");
+        if f.len() != 5 {
+            return Err(PayError.Bad(f"{where_}{f.len()} fields"));
+        }
+        if not is_digits(f[1]) or not is_digits(f[4]) {
+            return Err(PayError.Bad(f"{where_}bad number"));
+        }
+        let day = to_int(f[1]);
+        if day >= DAYS {
+            return Err(PayError.Bad(f"{where_}day {day} outside the period"));
+        }
+        let t_in = parse_clock(f[2]);
+        if t_in < 0 {
+            return Err(PayError.Bad(f"{where_}bad time '{f[2]}'"));
+        }
+        let t_out = parse_clock(f[3]);
+        if t_out == -2 {
+            return Err(PayError.Bad(f"{where_}bad time '{f[3]}'"));
+        }
+        if t_out >= 0 and t_out <= t_in {
+            return Err(PayError.Bad(f"{where_}punch-out before punch-in"));
+        }
+        out.push(Punch { eid: f[0].clone(), day: day, t_in: t_in, t_out: t_out, brk: to_int(f[4]) });
+    }
+    Ok(out)
+}
+
+fn same_roster(a: ref Vec[Employee], b: ref Vec[Employee]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.eid != y.eid or x.name != y.name or x.kind != y.kind or x.rate != y.rate or x.filing != y.filing
+            or x.k401 != y.k401 or x.plan != y.plan or x.ytd_ss != y.ytd_ss {
+            return false;
+        }
+    }
+    true
+}
+
+fn same_times(a: ref Vec[Punch], b: ref Vec[Punch]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.eid != y.eid or x.day != y.day or x.t_in != y.t_in or x.t_out != y.t_out or x.brk != y.brk {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ hours
+
+fn find_employee(roster: ref Vec[Employee], eid: ref String) -> i64 {
+    let mut lo = 0;
+    let mut hi = roster.len() as i64;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if roster[mid].eid < eid {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < roster.len() as i64 and roster[lo].eid == eid {
+        return lo;
+    }
+    -1
+}
+
+fn compute_hours(site: ref Site, roster: ref Vec[Employee], punches: ref Vec[Punch]) -> Timecard {
+    let mut card = Timecard { hours: Vec.new(), anomalies: Vec.new() };
+    let n = roster.len() as i64;
+    let mut minutes = Vec.filled(n * DAYS, 0);
+    let mut last_out = Vec.filled(n * DAYS, -1);
+    for p in punches {
+        let k = find_employee(roster, p.eid);
+        if k < 0 {
+            card.anomalies.push(Anomaly { eid: p.eid.clone(), day: p.day, what: "unknown employee".to_string() });
+            continue;
+        }
+        if p.t_out < 0 {
+            card.anomalies.push(Anomaly { eid: p.eid.clone(), day: p.day, what: "missing punch-out".to_string() });
+            continue;
+        }
+        let at = k * DAYS + p.day;
+        if last_out[at] > p.t_in {
+            card.anomalies.push(Anomaly { eid: p.eid.clone(), day: p.day, what: "overlapping punches".to_string() });
+            continue;
+        }
+        last_out[at] = p.t_out;
+        minutes[at] += p.t_out - p.t_in - p.brk;
+    }
+    let daily = site.state == "CA";
+    for k in 0..n {
+        let e = ref roster[k];
+        let mut h = Hours { eid: e.eid.clone(), reg: 0, ot: 0, dt: 0, days: 0 };
+        if e.kind == "hourly" {
+            for week in 0..2 {
+                let mut week_reg = 0;
+                for d in week * 7..week * 7 + 7 {
+                    let m = minutes[k * DAYS + d];
+                    if m > 0 {
+                        h.days += 1;
+                    }
+                    if daily {
+                        week_reg += imin(m, 480);
+                        h.ot += imin(imax(m - 480, 0), 240);
+                        h.dt += imax(m - 720, 0);
+                    } else {
+                        week_reg += m;
+                    }
+                }
+                if week_reg > WEEK_LIMIT {
+                    h.ot += week_reg - WEEK_LIMIT;
+                    week_reg = WEEK_LIMIT;
+                }
+                h.reg += week_reg;
+            }
+        }
+        card.hours.push(h);
+    }
+    card
+}
+
+// ------------------------------------------------------------ pay
+
+fn bracket_tax(annual: i64, table: ref Vec[(i64, i64)]) -> i64 {
+    let mut total = 0;
+    let n = table.len() as i64;
+    for j in 0..n {
+        let (lo, bp) = table[j];
+        if annual <= lo {
+            break;
+        }
+        let hi = if j + 1 < n { table[j + 1].0 } else { annual };
+        let top = imin(annual, hi);
+        total += (top - lo) * bp;
+    }
+    (total + 5000) / 10000
+}
+
+fn per_period(annual_tax: i64) -> i64 {
+    (annual_tax + 13) / 26
+}
+
+fn state_tax(state: ref String, taxable: i64) -> i64 {
+    match state.as_str() {
+        "CA" => per_period(bracket_tax(taxable * 26, ca_brackets())),
+        "CO" => (taxable * 440 + 5000) / 10000,
+        "MA" => (taxable * 500 + 5000) / 10000,
+        _ => 0,
+    }
+}
+
+fn plan_premium(plan: ref String) -> i64 {
+    let pl = plans();
+    let prem = premiums();
+    for i in 0..pl.len() as i64 {
+        if pl[i] == plan {
+            return prem[i];
+        }
+    }
+    0
+}
+
+fn run_pay(site: ref Site, roster: ref Vec[Employee], card: ref Timecard) -> Vec[Pay] {
+    let single = fed_single();
+    let married = fed_married();
+    let mut out: Vec[Pay] = Vec.new();
+    for k in 0..roster.len() as i64 {
+        let e = ref roster[k];
+        let h = ref card.hours[k];
+        let gross = if e.kind == "hourly" {
+            (h.reg * e.rate * 2 + h.ot * e.rate * 3 + h.dt * e.rate * 4 + 60) / 120
+        } else {
+            e.rate / 26
+        };
+        let k401 = (gross * e.k401 + 50) / 100;
+        let health = imin(plan_premium(e.plan), gross - k401);
+        let taxable = gross - k401 - health;
+        let table = if e.filing == "M" { ref married } else { ref single };
+        let fed = per_period(bracket_tax(taxable * 26, table));
+        let wages = gross - health;
+        let room = imax(SS_BASE - e.ytd_ss, 0);
+        let taxed = imin(wages, room);
+        let ss = (taxed * 62 + 500) / 1000;
+        let over = imax(e.ytd_ss + wages - imax(ADDL_MEDICARE_AT, e.ytd_ss), 0);
+        let base_medicare = (wages * 145 + 5000) / 10000;
+        let medicare = base_medicare + (over * 90 + 5000) / 10000;
+        let state = state_tax(site.state, taxable);
+        out.push(Pay {
+            eid: e.eid.clone(),
+            gross: gross,
+            k401: k401,
+            health: health,
+            taxable: taxable,
+            fed: fed,
+            ss: ss,
+            medicare: medicare,
+            state: state,
+            net: gross - k401 - health - fed - ss - medicare - state,
+            capped: taxed < wages,
+            employer: gross + ss + base_medicare,
+        });
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn totals_report(site: ref Site, roster: ref Vec[Employee], pays: ref Vec[Pay]) -> String {
+    let hourly = roster.iter().filter(|e| e.kind == "hourly").count() as i64;
+    let mut gross = 0;
+    let mut net = 0;
+    let mut taxes = 0;
+    let mut cost = 0;
+    for p in pays {
+        gross += p.gross;
+        net += p.net;
+        taxes += p.fed + p.ss + p.medicare + p.state;
+        cost += p.employer;
+    }
+    let n = roster.len() as i64;
+    let mut out = f"{site.name} totals: {n} employees ({hourly} hourly, {n - hourly} salaried), ";
+    out.push_str(f"gross {money(gross)}, net {money(net)}, taxes {money(taxes)}, employer cost {money(cost)}");
+    for k in [0, 1, pays.len() as i64 - 1] {
+        let e = ref roster[k];
+        let p = ref pays[k];
+        out.push_str(f"\n  {e.eid} {e.name} ({e.kind}, {e.filing}): gross {money(p.gross)}");
+        out.push_str(f" - 401k {money(p.k401)} - health {money(p.health)} - fed {money(p.fed)}");
+        out.push_str(f" - ss {money(p.ss)} - medicare {money(p.medicare)} - state {money(p.state)} = {money(p.net)}");
+    }
+    out
+}
+
+fn overtime_report(site: ref Site, roster: ref Vec[Employee], card: ref Timecard) -> String {
+    let mut ot = 0;
+    let mut dt = 0;
+    for h in card.hours {
+        ot += h.ot;
+        dt += h.dt;
+    }
+    let mut ranked: Vec[i64] = (0..roster.len() as i64).collect();
+    ranked.sort_by(|a, b| {
+        let xa = card.hours[a].ot + card.hours[a].dt;
+        let xb = card.hours[b].ot + card.hours[b].dt;
+        if xa != xb { xb.cmp(xa) } else { roster[a].eid.cmp(roster[b].eid) }
+    });
+    let mut tops: Vec[String] = Vec.new();
+    for k in ranked.iter().take(3) {
+        let h = ref card.hours[k];
+        tops.push(f"{roster[k].eid} {hours(h.ot + h.dt)} over {h.days} days");
+    }
+    f"{site.name} overtime: {hours(ot)} at 1.5x, {hours(dt)} at 2x; most: {tops.join("; ")}"
+}
+
+fn anomaly_report(site: ref Site, card: ref Timecard) -> String {
+    let mut missing = 0;
+    let mut overlap = 0;
+    let mut unknown = 0;
+    for a in card.anomalies {
+        match a.what.as_str() {
+            "missing punch-out" => missing += 1,
+            "overlapping punches" => overlap += 1,
+            "unknown employee" => unknown += 1,
+            _ => {}
+        }
+    }
+    let mut first: Vec[String] = Vec.new();
+    for a in card.anomalies.iter().take(3) {
+        first.push(f"{a.eid} day {a.day} {a.what}");
+    }
+    let total = card.anomalies.len() as i64;
+    let mut out = f"{site.name} anomalies: {total} ({missing} missing punch-outs, {overlap} overlapping, ";
+    out.push_str(f"{unknown} with an unknown id); first: {first.join("; ")}");
+    out
+}
+
+fn tax_report(site: ref Site, pays: ref Vec[Pay]) -> String {
+    let mut fed = 0;
+    let mut ss = 0;
+    let mut med = 0;
+    let mut st = 0;
+    let mut taxable = 0;
+    let mut capped = 0;
+    for p in pays {
+        fed += p.fed;
+        ss += p.ss;
+        med += p.medicare;
+        st += p.state;
+        taxable += p.taxable;
+        if p.capped {
+            capped += 1;
+        }
+    }
+    let bp = fed * 10000 / taxable;
+    let mut out = f"{site.name} taxes: federal {money(fed)}, social security {money(ss)}, medicare {money(med)}, ";
+    out.push_str(f"state ({site.state}) {money(st)}; {capped} past the wage base; ");
+    out.push_str(f"federal {bp / 100}.{bp % 100:02}% of taxable");
+    out
+}
+
+fn net_report(site: ref Site, pays: ref Vec[Pay]) -> String {
+    let mut nets: Vec[i64] = pays.iter().map(|p| p.net).collect();
+    nets.sort();
+    let n = nets.len() as i64;
+    let median = nets[(n + 1) / 2 - 1];
+    let p90 = nets[(n * 9 + 9) / 10 - 1];
+    let mut buckets = Vec.filled(10, 0);
+    for v in nets {
+        let b = imin(v / 100000, 9);
+        buckets[b] += 1;
+    }
+    let mut out = f"{site.name} net pay: median {money(median)}, p90 {money(p90)},";
+    for b in 0..10 {
+        let label = if b < 9 { f"{b}k" } else { "9k+".to_string() };
+        out.push_str(f" {label}:{buckets[b]}");
+    }
+    out
+}
+
+// ------------------------------------------------------------ the ledger
+
+fn post(gl: mut ref Ledger, site: ref Site, roster: ref Vec[Employee], pays: ref Vec[Pay]) -> String {
+    let mut paid = 0;
+    let mut held = 0;
+    let mut held_amount = 0;
+    let first = gl.next_check;
+    for k in 0..pays.len() as i64 {
+        let p = ref pays[k];
+        if p.net > gl.balance {
+            held += 1;
+            held_amount += p.net;
+            continue;
+        }
+        gl.balance -= p.net;
+        gl.trace += 1;
+        let check = gl.next_check;
+        gl.next_check += 1;
+        paid += 1;
+        let name = f"{roster[k].name:<22}".substring(0, 22);
+        gl.ach.push_str(f"6{site.code}{check}{p.net:010}{p.eid}{name}{gl.trace:07}\n");
+    }
+    gl.held += held;
+    gl.held_amount += held_amount;
+    let last = gl.next_check - 1;
+    let checks = if paid > 0 { f"checks {first}-{last}" } else { "no checks".to_string() };
+    f"{site.name} posted: {paid} payments, {checks}, {held} held ({money(held_amount)}), balance {money(gl.balance)}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), PayError] {
+    let den = new_site("denver", "CO", 11);
+    let aus = new_site("austin", "TX", 23);
+    let oak = new_site("oakland", "CA", 37);
+    let bos = new_site("boston", "MA", 41);
+
+    // Four rosters.
+    let r1 = build_roster(den);
+    let r2 = build_roster(aus);
+    let r3 = build_roster(oak);
+    let r4 = build_roster(bos);
+
+    // Four timesheets.
+    let s1 = build_times(den, r1);
+    let s2 = build_times(aus, r2);
+    let s3 = build_times(oak, r3);
+    let s4 = build_times(bos, r4);
+
+    // Eight writes.
+    let w1 = fs.write("denver.roster", encode_roster(r1));
+    let w2 = fs.write("austin.roster", encode_roster(r2));
+    let w3 = fs.write("oakland.roster", encode_roster(r3));
+    let w4 = fs.write("boston.roster", encode_roster(r4));
+    let w5 = fs.write("denver.times", encode_times(s1));
+    let w6 = fs.write("austin.times", encode_times(s2));
+    let w7 = fs.write("oakland.times", encode_times(s3));
+    let w8 = fs.write("boston.times", encode_times(s4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() {
+        return Err(PayError.Bad("could not write the inputs".to_string()));
+    }
+
+    let whole = read_text("oakland.times")?;
+    if fs.write("oakland.bad", damage(whole, 300)).is_err() {
+        return Err(PayError.Bad("could not write oakland.bad".to_string()));
+    }
+
+    // Eight reads.
+    let txt1 = read_text("denver.roster")?;
+    let txt2 = read_text("austin.roster")?;
+    let txt3 = read_text("oakland.roster")?;
+    let txt4 = read_text("boston.roster")?;
+    let txt5 = read_text("denver.times")?;
+    let txt6 = read_text("austin.times")?;
+    let txt7 = read_text("oakland.times")?;
+    let txt8 = read_text("boston.times")?;
+    println(f"denver.roster: {txt1.len()} bytes, fnv {text_sum(txt1):08x}");
+    println(f"austin.roster: {txt2.len()} bytes, fnv {text_sum(txt2):08x}");
+    println(f"oakland.roster: {txt3.len()} bytes, fnv {text_sum(txt3):08x}");
+    println(f"boston.roster: {txt4.len()} bytes, fnv {text_sum(txt4):08x}");
+    println(f"denver.times: {txt5.len()} bytes, fnv {text_sum(txt5):08x}");
+    println(f"austin.times: {txt6.len()} bytes, fnv {text_sum(txt6):08x}");
+    println(f"oakland.times: {txt7.len()} bytes, fnv {text_sum(txt7):08x}");
+    println(f"boston.times: {txt8.len()} bytes, fnv {text_sum(txt8):08x}");
+
+    // Eight parses.
+    let g1 = parse_roster("denver.roster", txt1)?;
+    let g2 = parse_roster("austin.roster", txt2)?;
+    let g3 = parse_roster("oakland.roster", txt3)?;
+    let g4 = parse_roster("boston.roster", txt4)?;
+    let t1 = parse_times("denver.times", txt5)?;
+    let t2 = parse_times("austin.times", txt6)?;
+    let t3 = parse_times("oakland.times", txt7)?;
+    let t4 = parse_times("boston.times", txt8)?;
+    match parse_times("oakland.bad", read_text("oakland.bad")?) {
+        Ok(_) => println("oakland.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_roster("boston.times", txt8) {
+        Ok(_) => println("boston.times as a roster: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_roster(g1, r1) and same_roster(g2, r2) and same_roster(g3, r3) and same_roster(g4, r4);
+    println(f"parsed rosters match the built ones: {same}");
+    let same_t = same_times(t1, s1) and same_times(t2, s2) and same_times(t3, s3) and same_times(t4, s4);
+    println(f"parsed timesheets match the built ones: {same_t}");
+
+    // Four timecards.
+    let c1 = compute_hours(den, g1, t1);
+    let c2 = compute_hours(aus, g2, t2);
+    let c3 = compute_hours(oak, g3, t3);
+    let c4 = compute_hours(bos, g4, t4);
+
+    // Four pay runs.
+    let p1 = run_pay(den, g1, c1);
+    let p2 = run_pay(aus, g2, c2);
+    let p3 = run_pay(oak, g3, c3);
+    let p4 = run_pay(bos, g4, c4);
+
+    // Reports that only read what came before.
+    let a1 = totals_report(den, g1, p1);
+    let a2 = totals_report(aus, g2, p2);
+    let a3 = totals_report(oak, g3, p3);
+    let a4 = totals_report(bos, g4, p4);
+    let o1 = overtime_report(den, g1, c1);
+    let o2 = overtime_report(aus, g2, c2);
+    let o3 = overtime_report(oak, g3, c3);
+    let o4 = overtime_report(bos, g4, c4);
+    let n1 = anomaly_report(den, c1);
+    let n2 = anomaly_report(aus, c2);
+    let n3 = anomaly_report(oak, c3);
+    let n4 = anomaly_report(bos, c4);
+    let x1 = tax_report(den, p1);
+    let x2 = tax_report(aus, p2);
+    let x3 = tax_report(oak, p3);
+    let x4 = tax_report(bos, p4);
+    let e1 = net_report(den, p1);
+    let e2 = net_report(aus, p2);
+    let e3 = net_report(oak, p3);
+    let e4 = net_report(bos, p4);
+    for line in [a1, a2, a3, a4, o1, o2, o3, o4, n1, n2, n3, n4, x1, x2, x3, x4, e1, e2, e3, e4] {
+        println(line);
+    }
+
+    // One bank account: the balance runs down as each site posts, and
+    // check numbers go out in posting order.
+    let mut gl = Ledger { balance: START_BALANCE, next_check: FIRST_CHECK, trace: 0, held: 0, held_amount: 0, ach: String.new() };
+    println(post(mut gl, den, g1, p1));
+    println(post(mut gl, aus, g2, p2));
+    println(post(mut gl, oak, g3, p3));
+    println(post(mut gl, bos, g4, p4));
+    if fs.write("payments.ach", gl.ach).is_err() {
+        return Err(PayError.Bad("could not write payments.ach".to_string()));
+    }
+    let back = read_text("payments.ach")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"payments.ach: {rows} entries, {gl.held} held ({money(gl.held_amount)}), {back.len()} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["denver.roster", "austin.roster", "oakland.roster", "boston.roster", "denver.times", "austin.times",
+              "oakland.times", "boston.times", "oakland.bad", "payments.ach"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"payroll_run failed: {e.describe()}"),
+    }
+}

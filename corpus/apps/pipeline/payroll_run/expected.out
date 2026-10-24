@@ -1,0 +1,49 @@
+denver.roster: 63616 bytes, fnv 9324517a
+austin.roster: 63873 bytes, fnv cc66b5e5
+oakland.roster: 63685 bytes, fnv 18ab967e
+boston.roster: 63791 bytes, fnv 4f4a9d08
+denver.times: 215588 bytes, fnv 1980e775
+austin.times: 208303 bytes, fnv fd7eb5ea
+oakland.times: 212345 bytes, fnv c17a7e14
+boston.times: 203184 bytes, fnv d91fe577
+oakland.bad line 302: bad time '25:61'
+boston.times line 1: bad header
+parsed rosters match the built ones: true
+parsed timesheets match the built ones: true
+denver totals: 1200 employees (860 hourly, 340 salaried), gross $4,617,801.67, net $3,218,437.74, taxes $1,115,712.72, employer cost $4,939,374.79
+  DEN0001 Linsa Tokato (hourly, S): gross $3,959.85 - 401k $0.00 - health $48.50 - fed $619.46 - ss $0.00 - medicare $56.71 - state $172.10 = $3,063.08
+  DEN0002 Linlin Saelri (hourly, S): gross $4,167.41 - 401k $250.04 - health $48.50 - fed $610.11 - ss $255.37 - medicare $59.72 - state $170.23 = $2,773.44
+  DEN1200 Rajo Vieldan (salaried, M): gross $2,157.69 - 401k $86.31 - health $48.50 - fed $149.67 - ss $130.77 - medicare $30.58 - state $89.01 = $1,622.85
+austin totals: 1200 employees (823 hourly, 377 salaried), gross $4,643,305.22, net $3,429,477.09, taxes $927,017.31, employer cost $4,967,622.58
+  AUS0001 Vijo Mormenmor (hourly, S): gross $2,855.68 - 401k $142.78 - health $48.50 - fed $345.13 - ss $174.05 - medicare $40.70 - state $0.00 = $2,104.52
+  AUS0002 Rilo Kadanri (hourly, M): gross $2,231.98 - 401k $223.20 - health $0.00 - fed $147.98 - ss $138.38 - medicare $32.36 - state $0.00 = $1,690.06
+  AUS1200 Vito Menbota (hourly, S): gross $2,597.15 - 401k $0.00 - health $0.00 - fed $330.33 - ss $161.02 - medicare $37.66 - state $0.00 = $2,068.14
+oakland totals: 1200 employees (847 hourly, 353 salaried), gross $4,725,363.02, net $3,223,736.85, taxes $1,217,510.58, employer cost $5,056,467.26
+  OAK0001 Vimen Radanta (hourly, M): gross $2,282.10 - 401k $68.46 - health $48.50 - fed $166.74 - ss $138.48 - medicare $32.39 - state $75.53 = $1,752.00
+  OAK0002 Danjo Karimor (hourly, S): gross $1,805.65 - 401k $108.34 - health $132.00 - fed $151.22 - ss $103.77 - medicare $24.27 - state $39.21 = $1,246.84
+  OAK1200 Morsa Josalin (hourly, S): gross $3,476.26 - 401k $0.00 - health $132.00 - fed $494.70 - ss $207.34 - medicare $48.49 - state $178.03 = $2,415.70
+boston totals: 1200 employees (815 hourly, 385 salaried), gross $4,596,067.89, net $3,179,676.02, taxes $1,136,653.29, employer cost $4,920,451.26
+  BOS0001 Tota Bonevi (hourly, M): gross $3,485.72 - 401k $348.57 - health $48.50 - fed $277.56 - ss $213.11 - medicare $49.84 - state $154.43 = $2,393.71
+  BOS0002 Linvi Rineel (salaried, M): gross $3,023.07 - 401k $241.85 - health $48.50 - fed $234.85 - ss $184.42 - medicare $43.13 - state $136.64 = $2,133.68
+  BOS1200 Ribo Tamorri (hourly, S): gross $5,870.80 - 401k $234.83 - health $48.50 - fed $1,018.01 - ss $360.98 - medicare $84.42 - state $279.37 = $3,844.69
+denver overtime: 3425.5h at 1.5x, 0.0h at 2x; most: DEN0581 29.3h over 14 days; DEN0575 28.4h over 13 days; DEN0129 26.5h over 13 days
+austin overtime: 3642.6h at 1.5x, 0.0h at 2x; most: AUS0293 33.3h over 14 days; AUS0738 32.1h over 14 days; AUS0758 29.3h over 14 days
+oakland overtime: 5746.5h at 1.5x, 37.3h at 2x; most: OAK0039 25.3h over 13 days; OAK0735 22.1h over 13 days; OAK0714 22.0h over 10 days
+boston overtime: 3347.5h at 1.5x, 0.0h at 2x; most: BOS0708 33.2h over 13 days; BOS0299 31.9h over 14 days; BOS0768 31.5h over 14 days
+denver anomalies: 89 (38 missing punch-outs, 50 overlapping, 1 with an unknown id); first: DEN0008 day 4 overlapping punches; DEN0013 day 8 overlapping punches; DEN0037 day 9 overlapping punches
+austin anomalies: 90 (45 missing punch-outs, 44 overlapping, 1 with an unknown id); first: AUS0049 day 6 overlapping punches; AUS0072 day 0 missing punch-out; AUS0077 day 9 overlapping punches
+oakland anomalies: 86 (39 missing punch-outs, 47 overlapping, 0 with an unknown id); first: OAK0011 day 5 overlapping punches; OAK0028 day 5 overlapping punches; OAK0034 day 8 missing punch-out
+boston anomalies: 85 (41 missing punch-outs, 43 overlapping, 1 with an unknown id); first: BOS0006 day 3 overlapping punches; BOS0010 day 4 overlapping punches; BOS0011 day 13 overlapping punches
+denver taxes: federal $603,114.20, social security $255,662.34, medicare $66,233.69, state (CO) $190,702.49; 113 past the wage base; federal 13.91% of taxable
+austin taxes: federal $602,484.59, social security $258,059.54, medicare $66,473.18, state (TX) $0.00; 108 past the wage base; federal 13.82% of taxable
+oakland taxes: federal $625,188.90, social security $263,610.68, medicare $67,784.88, state (CA) $260,926.12; 104 past the wage base; federal 14.07% of taxable
+boston taxes: federal $596,052.05, social security $258,755.82, medicare $66,028.53, state (MA) $215,816.89; 97 past the wage base; federal 13.80% of taxable
+denver net pay: median $2,447.65, p90 $4,705.32, 0k:48 1k:363 2k:395 3k:210 4k:91 5k:82 6k:11 7k:0 8k:0 9k+:0
+austin net pay: median $2,540.33, p90 $5,140.88, 0k:24 1k:348 2k:382 3k:220 4k:94 5k:101 6k:31 7k:0 8k:0 9k+:0
+oakland net pay: median $2,418.09, p90 $4,647.37, 0k:20 1k:387 2k:405 3k:201 4k:99 5k:86 6k:2 7k:0 8k:0 9k+:0
+boston net pay: median $2,405.21, p90 $4,530.96, 0k:50 1k:392 2k:372 3k:197 4k:108 5k:72 6k:9 7k:0 8k:0 9k+:0
+denver posted: 1200 payments, checks 100001-101200, 0 held ($0.00), balance $8,281,562.26
+austin posted: 1200 payments, checks 101201-102400, 0 held ($0.00), balance $4,852,085.17
+oakland posted: 1200 payments, checks 102401-103600, 0 held ($0.00), balance $1,628,348.32
+boston posted: 611 payments, checks 103601-104211, 589 held ($1,551,330.56), balance $2.86
+payments.ach: 4211 entries, 589 held ($1,551,330.56), 240027 bytes, fnv 2653ff2b

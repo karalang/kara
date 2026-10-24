@@ -1,0 +1,11 @@
+source = "kara-katas/apps/pipeline/payroll_run/payroll_run.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+note = "stmt-par groups (source.orig.kara lines): L792-L795 four rosters; L798-L801 four timesheets; L804-L811 eight fs.write calls; L822-L829 eight reads, each with ?; L840-L847 eight parses, each with ?; L862-L865 four timecards; L868-L871 four pay runs; L874-L893 twenty read-only reports. L901-L904 four post calls take mut gl, whose balance runs down, holds what no longer fits and numbers checks in posting order, so they must stay in order"
+extracted_src = "1efbffb4"
