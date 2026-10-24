@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/954-array-of-doubled-pairs/bench/can_reorder_doubled.kara"
+dedup_of = []
+tags = ["lib:map", "bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "91582948a"
+extracted_src = "9485a79c"

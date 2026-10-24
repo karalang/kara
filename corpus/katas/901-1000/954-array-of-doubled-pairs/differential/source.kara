@@ -1,0 +1,313 @@
+// LeetCode #954: Array of Doubled Pairs -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: given an integer array of even length arr, return true
+// if it is possible to reorder arr such that arr[2 * i + 1] = 2 * arr[2 * i]
+// for every 0 <= i < len(arr) / 2, or false otherwise.
+
+// ---- the ★ arm: counts, smallest first ------------------------------------
+fn star_can_reorder_doubled(arr: Vec[i64]) -> bool {
+    let mut count: Map[i64, i64] = Map.new();
+    for x in arr.iter() {
+        count[*x] = (count.get(*x) ?? 0) + 1;
+    }
+    let mut values: Vec[i64] = Vec.new();
+    for x in count.keys() {
+        values.push(*x);
+    }
+    values.sort_by_key(|x| x.abs());
+    for x in values.iter() {
+        let c = count.get(*x) ?? 0;
+        if c == 0 {
+            continue;
+        }
+        if *x == 0 {
+            if c % 2 != 0 {
+                return false;
+            }
+            continue;
+        }
+        let d = count.get(2 * *x) ?? 0;
+        if d < c {
+            return false;
+        }
+        count[2 * *x] = d - c;
+    }
+    true
+}
+
+// ---- the queue arm: awaited doubles in a queue ----------------------------
+fn queue_can_reorder_doubled(arr: Vec[i64]) -> bool {
+    let mut sorted = arr.clone();
+    sorted.sort_by_key(|x| x.abs());
+    // waiting[0] for the zeros and positives, waiting[1] for the negatives
+    let mut waiting: Vec[VecDeque[i64]] = vec![VecDeque.new(), VecDeque.new()];
+    for x in sorted.iter() {
+        let s = if *x < 0 { 1 } else { 0 };
+        if waiting[s].front() == Some(x) {
+            waiting[s].pop_front();
+        } else {
+            waiting[s].push_back(2 * *x);
+        }
+    }
+    waiting[0].len() == 0 and waiting[1].len() == 0
+}
+
+// ---- the table arm: a table of counts -------------------------------------
+fn table_can_reorder_doubled(arr: Vec[i64]) -> bool {
+    let mut m = 0;
+    for x in arr.iter() {
+        if x.abs() > m {
+            m = x.abs();
+        }
+    }
+    let mut count: Vec[i64] = Vec.filled(2 * m + 1, 0);
+    for x in arr.iter() {
+        count[*x + m] += 1;
+    }
+    if count[m] % 2 != 0 {
+        return false;
+    }
+    for v in 1..m + 1 {
+        for x in [v, -v] {
+            let c = count[x + m];
+            if c == 0 {
+                continue;
+            }
+            if 2 * v > m or count[2 * x + m] < c {
+                return false;
+            }
+            count[2 * x + m] -= c;
+        }
+    }
+    true
+}
+
+// ---- the ordered arm: ordered counts --------------------------------------
+fn ordered_can_reorder_doubled(arr: Vec[i64]) -> bool {
+    let mut count: SortedMap[i64, i64] = SortedMap.new();
+    for x in arr.iter() {
+        count[*x] = (count.get(*x) ?? 0) + 1;
+    }
+    let mut keys: Vec[i64] = Vec.new();
+    for x in count.keys() {
+        keys.push(*x);
+    }
+    for x in keys.iter() {
+        let c = count.get(*x) ?? 0;
+        if c == 0 {
+            continue;
+        }
+        if *x == 0 {
+            if c % 2 != 0 {
+                return false;
+            }
+            continue;
+        }
+        if *x < 0 and *x % 2 != 0 {
+            return false;
+        }
+        let partner = if *x < 0 { *x / 2 } else { 2 * *x };
+        let p = count.get(partner) ?? 0;
+        if p < c {
+            return false;
+        }
+        count[partner] = p - c;
+    }
+    true
+}
+
+// ---- the halves arm: halves, largest first --------------------------------
+fn halves_can_reorder_doubled(arr: Vec[i64]) -> bool {
+    let mut count: Map[i64, i64] = Map.new();
+    for x in arr.iter() {
+        count[*x] = (count.get(*x) ?? 0) + 1;
+    }
+    let mut sorted = arr.clone();
+    sorted.sort_by_key(|x| -x.abs());
+    for x in sorted.iter() {
+        let c = count.get(*x) ?? 0;
+        if c == 0 {
+            continue;
+        }
+        count[*x] = c - 1;
+        let h = count.get(*x / 2) ?? 0;
+        if *x % 2 != 0 or h == 0 {
+            return false;
+        }
+        count[*x / 2] = h - 1;
+    }
+    true
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, arr: Vec[i64]) -> bool {
+    if x == 0 {
+        star_can_reorder_doubled(arr)
+    } else if x == 1 {
+        queue_can_reorder_doubled(arr)
+    } else if x == 2 {
+        table_can_reorder_doubled(arr)
+    } else if x == 3 {
+        ordered_can_reorder_doubled(arr)
+    } else {
+        halves_can_reorder_doubled(arr)
+    }
+}
+
+// The statement read literally: the values split into pairs, each of a
+// value and its double, which are then laid out pair after pair. The
+// first value not yet in a pair is tried with every later one.
+fn pairable(arr: ref Vec[i64], used: mut ref Vec[bool]) -> bool {
+    let mut i = 0;
+    while i < arr.len() and used[i] {
+        i += 1;
+    }
+    if i == arr.len() {
+        return true;
+    }
+    used[i] = true;
+    for j in i + 1..arr.len() {
+        if not used[j] and (arr[j] == 2 * arr[i] or arr[i] == 2 * arr[j]) {
+            used[j] = true;
+            if pairable(arr, mut used) {
+                used[i] = false;
+                used[j] = false;
+                return true;
+            }
+            used[j] = false;
+        }
+    }
+    used[i] = false;
+    false
+}
+
+fn statement(arr: ref Vec[i64]) -> bool {
+    let mut used: Vec[bool] = Vec.filled(arr.len(), false);
+    pairable(arr, mut used)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n / 2 pairs, each a value and its double three times in four and two
+// values up to top otherwise, in a random order.
+fn random_case(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..n / 2 {
+        if next_random(mut seed) % 4 != 0 {
+            let x = next_random(mut seed) % (top + 1) - top / 2;
+            out.push(x);
+            out.push(2 * x);
+        } else {
+            out.push(next_random(mut seed) % (2 * top + 1) - top);
+            out.push(next_random(mut seed) % (2 * top + 1) - top);
+        }
+    }
+    shuffled(mut seed, out)
+}
+
+// A random order of the same values.
+fn shuffled(seed: mut ref i64, arr: ref Vec[i64]) -> Vec[i64] {
+    let mut out = arr.clone();
+    for i in 0..out.len() {
+        let j = i + next_random(mut seed) % (out.len() - i);
+        out.swap(i, j);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, arr: Vec[i64], small: bool) -> bool {
+    let want = if small { statement(arr) } else { false };
+    let mut got: Vec[bool] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, arr.clone()));
+    }
+    // the inputs P2 to P5 share: a new order, every value negated, every
+    // value times k, and the values written twice
+    let order = shuffled(mut seed, arr);
+    let k = 2 + next_random(mut seed) % 4;
+    let mut negated: Vec[i64] = Vec.new();
+    let mut scaled: Vec[i64] = Vec.new();
+    let mut twice = arr.clone();
+    for v in arr.iter() {
+        negated.push(-*v);
+        scaled.push(k * *v);
+        twice.push(*v);
+    }
+    for x in 0..5 {
+        let r = got[x];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, r == want);
+        }
+        // P2: the values in another order, the same answer
+        check(mut t, 2, arm(x, order.clone()) == r);
+        // P3: every value negated, the same pairs, the same answer
+        check(mut t, 3, arm(x, negated.clone()) == r);
+        // P4: every value times k, from 2 to 5, the same pairs
+        check(mut t, 4, arm(x, scaled.clone()) == r);
+        // P5: the values written twice: every count doubles, and taking
+        // the values smallest first compares only counts, so the same
+        // answer
+        check(mut t, 5, arm(x, twice.clone()) == r);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == r {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 954;
+    let mut count = 0;
+    let mut yes = 0;
+    let mut check_sum = 0;
+    // 3000 cases of 2 to 8 values from -8 to 8, against the statement,
+    // then 200 of 2 to 400 values from -1000 to 1000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 2 + 2 * (next_random(mut seed) % 4) } else { 2 + 2 * (next_random(mut seed) % 200) };
+        let top = if small { 8 } else { 1000 };
+        let arr = random_case(mut seed, n, top);
+        count += n;
+        let ok = properties(mut t, mut seed, arr, small);
+        if ok {
+            yes += 1;
+        }
+        check_sum = (check_sum * 31 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {count} values, {yes} can be paired, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

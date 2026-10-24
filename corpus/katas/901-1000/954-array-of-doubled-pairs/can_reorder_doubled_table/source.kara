@@ -1,0 +1,146 @@
+// LeetCode #954: Array of Doubled Pairs -- a table of counts.
+//
+// Count the values in a table indexed by value, offset by the largest
+// absolute value m, then walk the sizes 1 to m: at each size the positive
+// value and the negative one each pair every remaining copy with its
+// double, if the double is in range and has copies enough. The zeros pair
+// among themselves. O(n + m).
+
+fn can_reorder_doubled(arr: Vec[i64]) -> bool {
+    let mut m = 0;
+    for x in arr.iter() {
+        if x.abs() > m {
+            m = x.abs();
+        }
+    }
+    let mut count: Vec[i64] = Vec.filled(2 * m + 1, 0);
+    for x in arr.iter() {
+        count[*x + m] += 1;
+    }
+    if count[m] % 2 != 0 {
+        return false;
+    }
+    for v in 1..m + 1 {
+        for x in [v, -v] {
+            let c = count[x + m];
+            if c == 0 {
+                continue;
+            }
+            if 2 * v > m or count[2 * x + m] < c {
+                return false;
+            }
+            count[2 * x + m] -= c;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n / 2 pairs, each a value and its double three times in four and two
+// values up to top otherwise, in a random order.
+fn random_case(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..n / 2 {
+        if next_random(mut seed) % 4 != 0 {
+            let x = next_random(mut seed) % (top + 1) - top / 2;
+            out.push(x);
+            out.push(2 * x);
+        } else {
+            out.push(next_random(mut seed) % (2 * top + 1) - top);
+            out.push(next_random(mut seed) % (2 * top + 1) - top);
+        }
+    }
+    for i in 0..out.len() {
+        let j = i + next_random(mut seed) % (out.len() - i);
+        out.swap(i, j);
+    }
+    out
+}
+
+fn show(arr: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..arr.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{arr[i]}";
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![3, 1, 3, 6],
+        vec![2, 1, 2, 6],
+        vec![4, -2, 2, -4],
+        vec![0, 0],
+        vec![0, 0, 0, 1],
+        vec![2, -4],
+        vec![-5, -10],
+        vec![1, 2, 4, 16, 8, 4],
+        vec![2, 4, 0, 0, 8, 1],
+        vec![-8, -4, -2, -1],
+        vec![1, 1, 2, 2],
+        vec![-1, -2, 2, 4],
+        vec![2, -2, -4, 4],
+    ];
+    for arr in cases.iter() {
+        println(f"{show(arr)}: {can_reorder_doubled(arr.clone())}");
+    }
+    // 300 random cases of 2 to 12 values from -40 to 40
+    let mut seed = 954;
+    let mut count = 0;
+    let mut yes = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + 2 * (next_random(mut seed) % 6);
+        let arr = random_case(mut seed, n, 40);
+        let ok = can_reorder_doubled(arr);
+        count += n;
+        if ok {
+            yes += 1;
+        }
+        check = (check * 31 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"300 random cases of {count} values: {yes} can be paired, checksum {check}");
+    // LeetCode's largest: 30000 values from -100000 to 100000
+    let mut pairs: Vec[i64] = Vec.new();
+    for _ in 0..15000 {
+        let x = next_random(mut seed) % 100001 - 50000;
+        pairs.push(x);
+        pairs.push(2 * x);
+    }
+    for i in 0..pairs.len() {
+        let j = i + next_random(mut seed) % (pairs.len() - i);
+        pairs.swap(i, j);
+    }
+    println(f"15000 random pairs: {can_reorder_doubled(pairs.clone())}");
+    let mut moved = pairs.clone();
+    moved[12345] = 99999;
+    println(f"the same with one value made 99999: {can_reorder_doubled(moved)}");
+    let zeros: Vec[i64] = Vec.filled(30000, 0);
+    println(f"30000 zeros: {can_reorder_doubled(zeros)}");
+    let mut powers: Vec[i64] = Vec.new();
+    let mut short: Vec[i64] = Vec.new();
+    for i in 0..30000 {
+        powers.push(1 << (i % 16));
+        short.push(-(1 << (i % 15)));
+    }
+    println(f"1 to 2^15, 1875 of each: {can_reorder_doubled(powers)}");
+    println(f"-1 to -2^14, 2000 of each: {can_reorder_doubled(short)}");
+    let mut both: Vec[i64] = Vec.new();
+    for x in 1..7501 {
+        both.push(x);
+        both.push(2 * x);
+        both.push(-x);
+        both.push(-2 * x);
+    }
+    println(f"x, 2x, -x and -2x for x from 1 to 7500: {can_reorder_doubled(both)}");
+}

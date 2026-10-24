@@ -1,0 +1,81 @@
+// LeetCode #954: Array of Doubled Pairs -- counts, smallest first.
+//
+// Count every value, then take the values in order of their size, the
+// smallest absolute value first. The one taken can only be the smaller of
+// its pair, since its half would have been taken already, so all its
+// copies need a double: a value's double is 2x for a positive x and for
+// a negative one alike. Zeros pair with zeros. O(n log n).
+
+fn can_reorder_doubled(arr: Vec[i64]) -> bool {
+    let mut count: Map[i64, i64] = Map.new();
+    for x in arr.iter() {
+        count[*x] = (count.get(*x) ?? 0) + 1;
+    }
+    let mut values: Vec[i64] = Vec.new();
+    for x in count.keys() {
+        values.push(*x);
+    }
+    values.sort_by_key(|x| x.abs());
+    for x in values.iter() {
+        let c = count.get(*x) ?? 0;
+        if c == 0 {
+            continue;
+        }
+        if *x == 0 {
+            if c % 2 != 0 {
+                return false;
+            }
+            continue;
+        }
+        let d = count.get(2 * *x) ?? 0;
+        if d < c {
+            return false;
+        }
+        count[2 * *x] = d - c;
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 10;
+    let count = 20;
+    let n = 30000;
+    let mut seed = 954;
+    // 20 sets of 15000 random pairs of a value from -50000 to 50000 and its
+    // double, shuffled; every fourth set has one value made odd
+    let mut sets: Vec[Vec[i64]] = Vec.new();
+    for s in 0..count {
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..n / 2 {
+            let x = (next_random(mut seed) * 32768 + next_random(mut seed)) % 100001 - 50000;
+            arr.push(x);
+            arr.push(2 * x);
+        }
+        for i in 0..n {
+            let j = i + (next_random(mut seed) * 32768 + next_random(mut seed)) % (n - i);
+            arr.swap(i, j);
+        }
+        if s % 4 == 3 {
+            arr[s * 1000] = 2 * (arr[s * 1000] / 2) + 1;
+        }
+        sets.push(arr);
+    }
+    let mut yes = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let k = (r + i) % count;
+            let ok = can_reorder_doubled(sets[k]);
+            if ok {
+                yes += 1;
+            }
+            check = (check * 31 + if ok { 1 } else { 2 }) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} sets of {n} values: {yes} can be paired, checksum {check}");
+}
