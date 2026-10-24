@@ -1,0 +1,303 @@
+// LeetCode #976: Largest Perimeter Triangle -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random lists of lengths.
+
+// ---- star ----
+
+fn star_largest_perimeter(nums: Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut i = a.len() - 1;
+    while i >= 2 {
+        if a[i - 2] + a[i - 1] > a[i] {
+            return a[i - 2] + a[i - 1] + a[i];
+        }
+        i -= 1;
+    }
+    0
+}
+
+// ---- heap ----
+
+fn heap_largest_perimeter(nums: Vec[i64]) -> i64 {
+    let mut heap: PriorityQueue[i64] = PriorityQueue.max_first();
+    for x in nums {
+        heap.push(x);
+    }
+    let mut c = heap.pop().unwrap();
+    let mut b = heap.pop().unwrap();
+    while let Some(a) = heap.pop() {
+        if a + b > c {
+            return a + b + c;
+        }
+        c = b;
+        b = a;
+    }
+    0
+}
+
+// ---- scan ----
+
+fn scan_largest_perimeter(nums: Vec[i64]) -> i64 {
+    let mut gone = Vec.filled(nums.len(), false);
+    loop {
+        // the positions of the three longest lengths still in play
+        let mut top = vec![-1, -1, -1];
+        for i in 0..nums.len() {
+            if gone[i] {
+                continue;
+            }
+            let mut j = 3;
+            while j > 0 and (top[j - 1] < 0 or nums[i] > nums[top[j - 1]]) {
+                j -= 1;
+            }
+            if j < 3 {
+                let mut k = 2;
+                while k > j {
+                    top[k] = top[k - 1];
+                    k -= 1;
+                }
+                top[j] = i;
+            }
+        }
+        if top[2] < 0 {
+            return 0;
+        }
+        let (c, b, a) = (nums[top[0]], nums[top[1]], nums[top[2]]);
+        if a + b > c {
+            return a + b + c;
+        }
+        gone[top[0]] = true;
+    }
+}
+
+// ---- multiset ----
+
+fn multiset_largest_perimeter(nums: Vec[i64]) -> i64 {
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    for x in nums {
+        let c = counts.get(x) ?? 0;
+        counts.insert(x, c + 1);
+    }
+    let mut lengths: Vec[i64] = Vec.new();
+    for (x, c) in counts {
+        for _ in 0..c {
+            lengths.push(x);
+        }
+    }
+    let mut taken: Vec[i64] = Vec.new();
+    while let Some(x) = lengths.pop() {
+        taken.push(x);
+        let t = taken.len();
+        if t >= 3 and taken[t - 1] + taken[t - 2] > taken[t - 3] {
+            return taken[t - 1] + taken[t - 2] + taken[t - 3];
+        }
+    }
+    0
+}
+
+// ---- top32 ----
+
+fn top32_largest_perimeter(nums: Vec[i64]) -> i64 {
+    let mut top: Vec[i64] = Vec.new();
+    for x in nums {
+        if top.len() < 32 or x > top[top.len() - 1] {
+            let mut at = top.len();
+            while at > 0 and top[at - 1] < x {
+                at -= 1;
+            }
+            top.insert(at, x);
+            top.truncate(32);
+        }
+    }
+    let mut best = 0;
+    let m = top.len();
+    for i in 0..m {
+        for j in i + 1..m {
+            for k in j + 1..m {
+                // top is longest first, so top[i] is the longest side
+                if top[j] + top[k] > top[i] {
+                    best = best.max(top[i] + top[j] + top[k]);
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top);
+    }
+    nums
+}
+
+// The statement read literally: every three lengths, kept when each is
+// shorter than the other two together, which is a non-zero area.
+fn literal(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                let (a, b, c) = (nums[i], nums[j], nums[k]);
+                if a < b + c and b < a + c and c < a + b {
+                    best = best.max(a + b + c);
+                }
+            }
+        }
+    }
+    best
+}
+
+fn arm(a: i64, nums: Vec[i64]) -> i64 {
+    if a == 0 {
+        star_largest_perimeter(nums)
+    } else if a == 1 {
+        heap_largest_perimeter(nums)
+    } else if a == 2 {
+        scan_largest_perimeter(nums)
+    } else if a == 3 {
+        multiset_largest_perimeter(nums)
+    } else {
+        top32_largest_perimeter(nums)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, nums: Vec[i64], small: bool, seed: mut ref i64) -> i64 {
+    let n = nums.len();
+    let truth = if small { literal(nums) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, nums));
+    }
+    // the lengths rotated by a random amount
+    let turn = next_random(mut seed) % n;
+    let mut rotated: Vec[i64] = Vec.new();
+    for i in 0..n {
+        rotated.push(nums[(i + turn) % n]);
+    }
+    // every length doubled, when the longest leaves room
+    let mut longest = 0;
+    let mut second = 0;
+    let mut doubled: Vec[i64] = Vec.new();
+    for x in nums {
+        if x > longest {
+            second = longest;
+            longest = x;
+        } else if x > second {
+            second = x;
+        }
+        doubled.push(2 * x);
+    }
+    // three more copies of the longest, and one more random length
+    let mut three = nums.clone();
+    three.extend(vec![longest, longest, longest]);
+    let mut one_more = nums.clone();
+    one_more.push(1 + next_random(mut seed) % longest);
+    // a length no shorter than the two longest together
+    let mut too_long = nums.clone();
+    too_long.push(longest + second);
+    for a in 0..5 {
+        let p = got[a];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut tally, 1, p == truth);
+        }
+        // P2: the order of the lengths does not matter
+        check(mut tally, 2, arm(a, rotated) == p);
+        // P3: doubling every length doubles the perimeter, when the
+        // doubled lengths stay within 10^6
+        check(mut tally, 3, longest > 500000 or arm(a, doubled) == 2 * p);
+        // P4: three more copies of the longest make the best triangle,
+        // and one more length never shortens the best perimeter
+        check(mut tally, 4, arm(a, three) == 3 * longest and arm(a, one_more) >= p);
+        // P5: a length at least the two longest together is never in a
+        // triangle, so it changes nothing, when it is within 10^6
+        check(mut tally, 5, longest + second > 1000000 or arm(a, too_long) == p);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == p {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 976;
+    let mut total = 0;
+    let mut perimeters = 0;
+    let mut check_sum = 0;
+    // 3000 small cases against the statement, with short and long
+    // lengths and every fifth a Fibonacci-like chain that fails to the end,
+    // then 200 of 300 lengths over LeetCode's whole range
+    for c in 0..3200 {
+        let small = c < 3000;
+        let nums = if small and c % 5 == 4 {
+            // a chain where each length is at least the sum of the two
+            // before, so no three of it make a triangle, stopping below
+            // LeetCode's 10^6, then up to three short lengths that may
+            let n = 3 + next_random(mut seed) % 28;
+            let mut chain: Vec[i64] = vec![1 + next_random(mut seed) % 3, 1 + next_random(mut seed) % 3];
+            while chain.len() < n {
+                let m = chain.len();
+                let next = chain[m - 1] + chain[m - 2] + next_random(mut seed) % 2;
+                if next > 1000000 {
+                    break;
+                }
+                chain.push(next);
+            }
+            for _ in 0..next_random(mut seed) % 4 {
+                chain.push(1 + next_random(mut seed) % 10);
+            }
+            chain
+        } else if small {
+            let n = 3 + next_random(mut seed) % 28;
+            random_nums(n, vec![5, 30, 1000, 1000000][c % 4], mut seed)
+        } else {
+            random_nums(300, 1000000, mut seed)
+        };
+        let got = properties(mut tally, nums, small, mut seed);
+        total += nums.len();
+        perimeters += got;
+        check_sum = (check_sum * 31 + got) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {total} lengths: perimeters total {perimeters}, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

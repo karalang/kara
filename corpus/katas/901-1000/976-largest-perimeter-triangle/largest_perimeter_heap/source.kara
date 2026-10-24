@@ -1,0 +1,80 @@
+// LeetCode #976: Largest Perimeter Triangle -- a heap of lengths.
+//
+// The same walk from the longest length down, taking the lengths from a
+// largest-first `PriorityQueue` one at a time instead of sorting them
+// all: hold the longest three, and while they fail drop the longest and
+// take the next. Since a failing chain grows at least like Fibonacci
+// numbers, at most about 30 lengths are ever taken. O(n + 30 log n).
+
+fn largest_perimeter(nums: Vec[i64]) -> i64 {
+    let mut heap: PriorityQueue[i64] = PriorityQueue.max_first();
+    for x in nums {
+        heap.push(x);
+    }
+    let mut c = heap.pop().unwrap();
+    let mut b = heap.pop().unwrap();
+    while let Some(a) = heap.pop() {
+        if a + b > c {
+            return a + b + c;
+        }
+        c = b;
+        b = a;
+    }
+    0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        // two draws, since one reaches only 32767
+        nums.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top);
+    }
+    nums
+}
+
+fn main() {
+    // the Fibonacci numbers up to 832040: no three of them make a triangle
+    let mut fib: Vec[i64] = vec![1, 1];
+    while fib.len() < 30 {
+        let n = fib.len();
+        fib.push(fib[n - 1] + fib[n - 2]);
+    }
+    let mut fib_and_three = fib.clone();
+    fib_and_three.extend(vec![2, 2, 3]);
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![2, 1, 2],
+        vec![1, 2, 1, 10],
+        vec![3, 2, 3, 4],
+        vec![3, 6, 2, 3],
+        vec![1, 1, 1],
+        vec![1, 2, 3],
+        vec![1000000, 1000000, 1000000],
+        vec![1000000, 1, 1, 999999, 2],
+        fib.clone(),
+        fib_and_three,
+    ];
+    for nums in cases {
+        println(f"{nums.len()} lengths from {nums[0]}: {largest_perimeter(nums)}");
+    }
+    // random lengths: 300 small, 3000 longer, then 4 of 10^4 lengths
+    let mut seed = 976;
+    for (count, most, top) in vec![(300, 12, 10), (3000, 60, 1000), (4, 10000, 1000000)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if most == 10000 { most } else { 3 + next_random(mut seed) % (most - 2) };
+            let p = largest_perimeter(random_nums(n, top, mut seed));
+            total += p;
+            check = (check * 31 + p) % 1000000007;
+        }
+        println(f"{count} random cases of up to {most} lengths: perimeters total {total}, checksum {check}");
+    }
+}

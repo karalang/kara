@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/976-largest-perimeter-triangle/bench/largest_perimeter.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "fc1232e55"
+extracted_src = "3b4fecaf"
