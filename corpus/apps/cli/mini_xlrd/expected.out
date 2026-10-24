@@ -1,0 +1,2183 @@
+# xlwt workbooks: every cell, as open_workbook reads it
+> dump books/basic.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Stock': 10 rows x 6 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Item'
+    B1 text 'Qty'
+    C1 text 'Price'
+    D1 text 'Added'
+    E1 text 'In stock'
+    F1 text 'Note'
+    A2 text 'Bolt M6'
+    B2 number 120.0
+    C2 number 0.15
+    D2 xldate 45352.0 (2024, 3, 1, 0, 0, 0)
+    E2 bool 1
+    A3 text 'Nut M6'
+    B3 number 0.0
+    C3 number 0.05
+    D3 xldate 45353.0 (2024, 3, 2, 0, 0, 0)
+    E3 bool 0
+    F3 text 'reorder'
+    A4 text 'Washer'
+    B4 number -3.0
+    C4 number 0.02
+    D4 xldate 45291.0 (2023, 12, 31, 0, 0, 0)
+    E4 bool 1
+    F4 text 'count again'
+    A5 text 'Hinge'
+    B5 number 15.0
+    C5 number 3.99
+    D5 xldate 45351.57326388889 (2024, 2, 29, 13, 45, 30)
+    E5 bool 1
+    A6 text 'Bracket "L"'
+    B6 number 7.0
+    C6 number 12.5
+    D6 text '2024-04-01'
+    E6 bool 1
+    F6 text 'date typed as text'
+    A7 text 'Spring, long'
+    B7 number 2500.0
+    C7 number 0.004
+    D7 xldate 61.0 (1900, 3, 1, 0, 0, 0)
+    E7 bool 0
+    F7 text 'tab\there'
+    A8 text 'Totals'
+    B8 error 7 #DIV/0!
+    C8 error 42 #N/A
+    D8 error 36 #NUM!
+    A10 number 0.3333333333333333
+    B10 number 2147483648.0
+    C10 number -0.5
+    E10 bool 0
+> dump books/sales.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 4 sheet(s)
+  sheet 0 'Q1': 10 rows x 5 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Date'
+    B1 text 'Region'
+    C1 text 'Product'
+    D1 text 'Units'
+    E1 text 'Unit price'
+    A2 xldate 45296.0 (2024, 1, 5, 0, 0, 0)
+    B2 text 'North'
+    C2 text 'Widget'
+    D2 number 12.0
+    E2 number 2.5
+    A3 xldate 45300.0 (2024, 1, 9, 0, 0, 0)
+    B3 text 'South'
+    C3 text 'Gadget'
+    D3 number 3.0
+    E3 number 19.99
+    A4 xldate 45308.0 (2024, 1, 17, 0, 0, 0)
+    B4 text 'North'
+    C4 text 'Gadget'
+    D4 number 1.0
+    E4 number 19.99
+    A5 xldate 45324.0 (2024, 2, 2, 0, 0, 0)
+    B5 text 'East'
+    C5 text 'Widget'
+    D5 number 40.0
+    E5 number 2.25
+    A6 xldate 45336.0 (2024, 2, 14, 0, 0, 0)
+    B6 text 'West'
+    C6 text 'Gizmo'
+    D6 number 5.0
+    E6 number 7.0
+    A7 xldate 45351.0 (2024, 2, 29, 0, 0, 0)
+    B7 text 'South'
+    C7 text 'Widget'
+    D7 text 'n/a'
+    E7 number 2.5
+    A8 xldate 45354.0 (2024, 3, 3, 0, 0, 0)
+    B8 text 'East'
+    C8 text 'Gizmo'
+    D8 number 8.0
+    E8 number 7.0
+    A9 xldate 45372.0 (2024, 3, 21, 0, 0, 0)
+    B9 text 'North'
+    C9 text 'Widget'
+    D9 number 20.0
+    E9 number 2.4
+    A10 xldate 45381.0 (2024, 3, 30, 0, 0, 0)
+    B10 text 'Ost'
+    C10 text 'Gizmo'
+    D10 number 2.0
+    E10 number 7.0
+  sheet 1 'Q2': 9 rows x 5 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Date'
+    B1 text 'Region'
+    C1 text 'Product'
+    D1 text 'Units'
+    E1 text 'Unit price'
+    A2 xldate 45384.395833333336 (2024, 4, 2, 9, 30, 0)
+    B2 text 'West'
+    C2 text 'Widget'
+    D2 number 15.0
+    E2 number 2.5
+    A3 xldate 45393.0 (2024, 4, 11, 0, 0, 0)
+    B3 text 'South'
+    C3 text 'Gizmo'
+    E3 number 7.0
+    A4 xldate 45410.0 (2024, 4, 28, 0, 0, 0)
+    B4 text 'North'
+    C4 text 'Gadget'
+    D4 number 6.0
+    E4 number 18.5
+    A5 xldate 45418.0 (2024, 5, 6, 0, 0, 0)
+    B5 text 'East'
+    C5 text 'Widget'
+    D5 number 33.0
+    E5 number 2.25
+    A6 xldate 45431.0 (2024, 5, 19, 0, 0, 0)
+    B6 text 'West'
+    C6 text 'Gadget'
+    D6 error 42 #N/A
+    E6 number 18.5
+    A7 xldate 45444.0 (2024, 6, 1, 0, 0, 0)
+    B7 text 'North'
+    C7 text 'Gizmo'
+    D7 number 9.0
+    E7 number 6.75
+    A8 xldate 45458.0 (2024, 6, 15, 0, 0, 0)
+    B8 text 'South'
+    C8 text 'Widget'
+    D8 number 11.0
+    E8 number 2.5
+    A9 xldate 45473.0 (2024, 6, 30, 0, 0, 0)
+    B9 text 'East'
+    C9 text 'Gadget'
+    D9 number 2.0
+    E9 number 18.5
+  sheet 2 'Lookup': 3 rows x 2 cols, visibility 1
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Ost'
+    B1 text 'East'
+    A2 text 'Nord'
+    B2 text 'North'
+    A3 text 'Sud'
+    B3 text 'South'
+  sheet 3 'Notes': 4 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Sales notes'
+    A3 text 'Units of n/a mean the count was lost.'
+    A4 text 'Prices are per unit, before tax.'
+> dump books/numbers.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Column': 30 rows x 1 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 0.0
+    A2 number 1.0
+    A3 number -1.0
+    A4 number 7.0
+    A5 number 536870911.0
+    A6 number -536870912.0
+    A7 number 536870912.0
+    A8 number 2147483648.0
+    A9 number 9007199254740992.0
+    A10 number -1099511627776.0
+    A11 number 12.34
+    A12 number -0.01
+    A13 number 1234567.89
+    A14 number 0.5
+    A15 number 1.5
+    A16 number -2.5
+    A17 number 100.25
+    A18 number 0.1
+    A19 number 0.3333333333333333
+    A20 number 3.14159
+    A21 number 1e+300
+    A22 number -1e-300
+    A23 number 5e-324
+    A24 number 1e+16
+    A25 number 1.2345678901234568e+17
+    A26 number 2.5e-07
+    A27 number 65536.0
+    A28 number inf
+    A29 number -inf
+    A30 number 0.0
+  sheet 1 'Rows': 6 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 0.0
+    B1 number 1.0
+    C1 number 2.0
+    D1 number 3.0
+    E1 number 4.0
+    F1 number 5.0
+    A2 number 1.5
+    B2 number 1.75
+    C2 number 2.0
+    D2 number 2.25
+    E2 number 2.5
+    F2 number 2.75
+    A3 number 1206.0
+    B3 number 1306.5
+    C3 number 1407.0
+    D3 number 1507.5
+    E3 number 1608.0
+    F3 number 1708.5
+    A4 number 18000000000.0
+    B4 number 19000000000.0
+    C4 number 20000000000.0
+    D4 number 21000000000.0
+    E4 number 22000000000.0
+    F4 number 23000000000.0
+    A6 number 10.0
+    B6 number 0.1
+    C6 number 20.0
+    D6 number 30.0
+> dump books/text.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Unicode': 20 rows x 3 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'plain ascii'
+    B1 number 11.0
+    C1 text 'plain ascii'
+    A2 text 'caf\xe9 cr\xe8me'
+    B2 number 10.0
+    A3 text 'Gr\xf6\xdfe'
+    B3 number 5.0
+    A4 text 'na\xefve fa\xe7ade'
+    B4 number 12.0
+    A5 text '\u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac'
+    B5 number 8.0
+    A6 text '\u0420\u0443\u0441\u0441\u043a\u0438\u0439 \u0442\u0435\u043a\u0441\u0442'
+    B6 number 13.0
+    A7 text '\u65e5\u672c\u8a9e\u306e\u30c6\u30ad\u30b9\u30c8'
+    B7 number 8.0
+    A8 text '\ud55c\uad6d\uc5b4'
+    B8 number 3.0
+    A9 text '\u05e2\u05d1\u05e8\u05d9\u05ea'
+    B9 number 5.0
+    A10 text '\u0627\u0644\u0639\u0631\u0628\u064a\u0629'
+    B10 number 7.0
+    A11 text 'emoji \U0001f4e6 box'
+    B11 number 11.0
+    A12 text 'math \U0001d400\U0001d401'
+    B12 number 7.0
+    A13 text 'tab\tand\nnewline'
+    B13 number 15.0
+    A14 text 'quote \' and "'
+    B14 number 13.0
+    A15 text 'back\\slash'
+    B15 number 10.0
+    B16 number 0.0
+    A17 text ' leading'
+    B17 number 8.0
+    A18 text 'trailing '
+    B18 number 9.0
+    A19 text '\u20ac 9.99'
+    B19 number 6.0
+    A20 text '\xff'
+    B20 number 1.0
+  sheet 1 'Long': 52 rows x 8 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text len=10240 fnv=c09559b5 'line 0000: the quick brown fox; line 000'...
+    A2 text len=14490 fnv=75f4e1ad 'w0 \u03a91 \u03a92 w3 \u03a94 \u03a95 w6 \u03a97 \u03a98 w9 \u03a910 \u03a911 w1'...
+    A3 text 's000 \xe4\xf6\xfc'
+    B3 text 's001 x'
+    C3 text 's002 x'
+    D3 text 's003 x'
+    E3 text 's004 x'
+    F3 text 's005 \xe4\xf6\xfc'
+    G3 text 's006 x'
+    H3 text 's007 x'
+    A4 text 's008 x'
+    B4 text 's009 x'
+    C4 text 's010 \xe4\xf6\xfc'
+    D4 text 's011 x'
+    E4 text 's012 x'
+    F4 text 's013 x'
+    G4 text 's014 x'
+    H4 text 's015 \xe4\xf6\xfc'
+    A5 text 's016 x'
+    B5 text 's017 x'
+    C5 text 's018 x'
+    D5 text 's019 x'
+    E5 text 's020 \xe4\xf6\xfc'
+    F5 text 's021 x'
+    G5 text 's022 x'
+    H5 text 's023 x'
+    A6 text 's024 x'
+    B6 text 's025 \xe4\xf6\xfc'
+    C6 text 's026 x'
+    D6 text 's027 x'
+    E6 text 's028 x'
+    F6 text 's029 x'
+    G6 text 's030 \xe4\xf6\xfc'
+    H6 text 's031 x'
+    A7 text 's032 x'
+    B7 text 's033 x'
+    C7 text 's034 x'
+    D7 text 's035 \xe4\xf6\xfc'
+    E7 text 's036 x'
+    F7 text 's037 x'
+    G7 text 's038 x'
+    H7 text 's039 x'
+    A8 text 's040 \xe4\xf6\xfc'
+    B8 text 's041 x'
+    C8 text 's042 x'
+    D8 text 's043 x'
+    E8 text 's044 x'
+    F8 text 's045 \xe4\xf6\xfc'
+    G8 text 's046 x'
+    H8 text 's047 x'
+    A9 text 's048 x'
+    B9 text 's049 x'
+    C9 text 's050 \xe4\xf6\xfc'
+    D9 text 's051 x'
+    E9 text 's052 x'
+    F9 text 's053 x'
+    G9 text 's054 x'
+    H9 text 's055 \xe4\xf6\xfc'
+    A10 text 's056 x'
+    B10 text 's057 x'
+    C10 text 's058 x'
+    D10 text 's059 x'
+    E10 text 's060 \xe4\xf6\xfc'
+    F10 text 's061 x'
+    G10 text 's062 x'
+    H10 text 's063 x'
+    A11 text 's064 x'
+    B11 text 's065 \xe4\xf6\xfc'
+    C11 text 's066 x'
+    D11 text 's067 x'
+    E11 text 's068 x'
+    F11 text 's069 x'
+    G11 text 's070 \xe4\xf6\xfc'
+    H11 text 's071 x'
+    A12 text 's072 x'
+    B12 text 's073 x'
+    C12 text 's074 x'
+    D12 text 's075 \xe4\xf6\xfc'
+    E12 text 's076 x'
+    F12 text 's077 x'
+    G12 text 's078 x'
+    H12 text 's079 x'
+    A13 text 's080 \xe4\xf6\xfc'
+    B13 text 's081 x'
+    C13 text 's082 x'
+    D13 text 's083 x'
+    E13 text 's084 x'
+    F13 text 's085 \xe4\xf6\xfc'
+    G13 text 's086 x'
+    H13 text 's087 x'
+    A14 text 's088 x'
+    B14 text 's089 x'
+    C14 text 's090 \xe4\xf6\xfc'
+    D14 text 's091 x'
+    E14 text 's092 x'
+    F14 text 's093 x'
+    G14 text 's094 x'
+    H14 text 's095 \xe4\xf6\xfc'
+    A15 text 's096 x'
+    B15 text 's097 x'
+    C15 text 's098 x'
+    D15 text 's099 x'
+    E15 text 's100 \xe4\xf6\xfc'
+    F15 text 's101 x'
+    G15 text 's102 x'
+    H15 text 's103 x'
+    A16 text 's104 x'
+    B16 text 's105 \xe4\xf6\xfc'
+    C16 text 's106 x'
+    D16 text 's107 x'
+    E16 text 's108 x'
+    F16 text 's109 x'
+    G16 text 's110 \xe4\xf6\xfc'
+    H16 text 's111 x'
+    A17 text 's112 x'
+    B17 text 's113 x'
+    C17 text 's114 x'
+    D17 text 's115 \xe4\xf6\xfc'
+    E17 text 's116 x'
+    F17 text 's117 x'
+    G17 text 's118 x'
+    H17 text 's119 x'
+    A18 text 's120 \xe4\xf6\xfc'
+    B18 text 's121 x'
+    C18 text 's122 x'
+    D18 text 's123 x'
+    E18 text 's124 x'
+    F18 text 's125 \xe4\xf6\xfc'
+    G18 text 's126 x'
+    H18 text 's127 x'
+    A19 text 's128 x'
+    B19 text 's129 x'
+    C19 text 's130 \xe4\xf6\xfc'
+    D19 text 's131 x'
+    E19 text 's132 x'
+    F19 text 's133 x'
+    G19 text 's134 x'
+    H19 text 's135 \xe4\xf6\xfc'
+    A20 text 's136 x'
+    B20 text 's137 x'
+    C20 text 's138 x'
+    D20 text 's139 x'
+    E20 text 's140 \xe4\xf6\xfc'
+    F20 text 's141 x'
+    G20 text 's142 x'
+    H20 text 's143 x'
+    A21 text 's144 x'
+    B21 text 's145 \xe4\xf6\xfc'
+    C21 text 's146 x'
+    D21 text 's147 x'
+    E21 text 's148 x'
+    F21 text 's149 x'
+    G21 text 's150 \xe4\xf6\xfc'
+    H21 text 's151 x'
+    A22 text 's152 x'
+    B22 text 's153 x'
+    C22 text 's154 x'
+    D22 text 's155 \xe4\xf6\xfc'
+    E22 text 's156 x'
+    F22 text 's157 x'
+    G22 text 's158 x'
+    H22 text 's159 x'
+    A23 text 's160 \xe4\xf6\xfc'
+    B23 text 's161 x'
+    C23 text 's162 x'
+    D23 text 's163 x'
+    E23 text 's164 x'
+    F23 text 's165 \xe4\xf6\xfc'
+    G23 text 's166 x'
+    H23 text 's167 x'
+    A24 text 's168 x'
+    B24 text 's169 x'
+    C24 text 's170 \xe4\xf6\xfc'
+    D24 text 's171 x'
+    E24 text 's172 x'
+    F24 text 's173 x'
+    G24 text 's174 x'
+    H24 text 's175 \xe4\xf6\xfc'
+    A25 text 's176 x'
+    B25 text 's177 x'
+    C25 text 's178 x'
+    D25 text 's179 x'
+    E25 text 's180 \xe4\xf6\xfc'
+    F25 text 's181 x'
+    G25 text 's182 x'
+    H25 text 's183 x'
+    A26 text 's184 x'
+    B26 text 's185 \xe4\xf6\xfc'
+    C26 text 's186 x'
+    D26 text 's187 x'
+    E26 text 's188 x'
+    F26 text 's189 x'
+    G26 text 's190 \xe4\xf6\xfc'
+    H26 text 's191 x'
+    A27 text 's192 x'
+    B27 text 's193 x'
+    C27 text 's194 x'
+    D27 text 's195 \xe4\xf6\xfc'
+    E27 text 's196 x'
+    F27 text 's197 x'
+    G27 text 's198 x'
+    H27 text 's199 x'
+    A28 text 's200 \xe4\xf6\xfc'
+    B28 text 's201 x'
+    C28 text 's202 x'
+    D28 text 's203 x'
+    E28 text 's204 x'
+    F28 text 's205 \xe4\xf6\xfc'
+    G28 text 's206 x'
+    H28 text 's207 x'
+    A29 text 's208 x'
+    B29 text 's209 x'
+    C29 text 's210 \xe4\xf6\xfc'
+    D29 text 's211 x'
+    E29 text 's212 x'
+    F29 text 's213 x'
+    G29 text 's214 x'
+    H29 text 's215 \xe4\xf6\xfc'
+    A30 text 's216 x'
+    B30 text 's217 x'
+    C30 text 's218 x'
+    D30 text 's219 x'
+    E30 text 's220 \xe4\xf6\xfc'
+    F30 text 's221 x'
+    G30 text 's222 x'
+    H30 text 's223 x'
+    A31 text 's224 x'
+    B31 text 's225 \xe4\xf6\xfc'
+    C31 text 's226 x'
+    D31 text 's227 x'
+    E31 text 's228 x'
+    F31 text 's229 x'
+    G31 text 's230 \xe4\xf6\xfc'
+    H31 text 's231 x'
+    A32 text 's232 x'
+    B32 text 's233 x'
+    C32 text 's234 x'
+    D32 text 's235 \xe4\xf6\xfc'
+    E32 text 's236 x'
+    F32 text 's237 x'
+    G32 text 's238 x'
+    H32 text 's239 x'
+    A33 text 's240 \xe4\xf6\xfc'
+    B33 text 's241 x'
+    C33 text 's242 x'
+    D33 text 's243 x'
+    E33 text 's244 x'
+    F33 text 's245 \xe4\xf6\xfc'
+    G33 text 's246 x'
+    H33 text 's247 x'
+    A34 text 's248 x'
+    B34 text 's249 x'
+    C34 text 's250 \xe4\xf6\xfc'
+    D34 text 's251 x'
+    E34 text 's252 x'
+    F34 text 's253 x'
+    G34 text 's254 x'
+    H34 text 's255 \xe4\xf6\xfc'
+    A35 text 's256 x'
+    B35 text 's257 x'
+    C35 text 's258 x'
+    D35 text 's259 x'
+    E35 text 's260 \xe4\xf6\xfc'
+    F35 text 's261 x'
+    G35 text 's262 x'
+    H35 text 's263 x'
+    A36 text 's264 x'
+    B36 text 's265 \xe4\xf6\xfc'
+    C36 text 's266 x'
+    D36 text 's267 x'
+    E36 text 's268 x'
+    F36 text 's269 x'
+    G36 text 's270 \xe4\xf6\xfc'
+    H36 text 's271 x'
+    A37 text 's272 x'
+    B37 text 's273 x'
+    C37 text 's274 x'
+    D37 text 's275 \xe4\xf6\xfc'
+    E37 text 's276 x'
+    F37 text 's277 x'
+    G37 text 's278 x'
+    H37 text 's279 x'
+    A38 text 's280 \xe4\xf6\xfc'
+    B38 text 's281 x'
+    C38 text 's282 x'
+    D38 text 's283 x'
+    E38 text 's284 x'
+    F38 text 's285 \xe4\xf6\xfc'
+    G38 text 's286 x'
+    H38 text 's287 x'
+    A39 text 's288 x'
+    B39 text 's289 x'
+    C39 text 's290 \xe4\xf6\xfc'
+    D39 text 's291 x'
+    E39 text 's292 x'
+    F39 text 's293 x'
+    G39 text 's294 x'
+    H39 text 's295 \xe4\xf6\xfc'
+    A40 text 's296 x'
+    B40 text 's297 x'
+    C40 text 's298 x'
+    D40 text 's299 x'
+    E40 text 's300 \xe4\xf6\xfc'
+    F40 text 's301 x'
+    G40 text 's302 x'
+    H40 text 's303 x'
+    A41 text 's304 x'
+    B41 text 's305 \xe4\xf6\xfc'
+    C41 text 's306 x'
+    D41 text 's307 x'
+    E41 text 's308 x'
+    F41 text 's309 x'
+    G41 text 's310 \xe4\xf6\xfc'
+    H41 text 's311 x'
+    A42 text 's312 x'
+    B42 text 's313 x'
+    C42 text 's314 x'
+    D42 text 's315 \xe4\xf6\xfc'
+    E42 text 's316 x'
+    F42 text 's317 x'
+    G42 text 's318 x'
+    H42 text 's319 x'
+    A43 text 's320 \xe4\xf6\xfc'
+    B43 text 's321 x'
+    C43 text 's322 x'
+    D43 text 's323 x'
+    E43 text 's324 x'
+    F43 text 's325 \xe4\xf6\xfc'
+    G43 text 's326 x'
+    H43 text 's327 x'
+    A44 text 's328 x'
+    B44 text 's329 x'
+    C44 text 's330 \xe4\xf6\xfc'
+    D44 text 's331 x'
+    E44 text 's332 x'
+    F44 text 's333 x'
+    G44 text 's334 x'
+    H44 text 's335 \xe4\xf6\xfc'
+    A45 text 's336 x'
+    B45 text 's337 x'
+    C45 text 's338 x'
+    D45 text 's339 x'
+    E45 text 's340 \xe4\xf6\xfc'
+    F45 text 's341 x'
+    G45 text 's342 x'
+    H45 text 's343 x'
+    A46 text 's344 x'
+    B46 text 's345 \xe4\xf6\xfc'
+    C46 text 's346 x'
+    D46 text 's347 x'
+    E46 text 's348 x'
+    F46 text 's349 x'
+    G46 text 's350 \xe4\xf6\xfc'
+    H46 text 's351 x'
+    A47 text 's352 x'
+    B47 text 's353 x'
+    C47 text 's354 x'
+    D47 text 's355 \xe4\xf6\xfc'
+    E47 text 's356 x'
+    F47 text 's357 x'
+    G47 text 's358 x'
+    H47 text 's359 x'
+    A48 text 's360 \xe4\xf6\xfc'
+    B48 text 's361 x'
+    C48 text 's362 x'
+    D48 text 's363 x'
+    E48 text 's364 x'
+    F48 text 's365 \xe4\xf6\xfc'
+    G48 text 's366 x'
+    H48 text 's367 x'
+    A49 text 's368 x'
+    B49 text 's369 x'
+    C49 text 's370 \xe4\xf6\xfc'
+    D49 text 's371 x'
+    E49 text 's372 x'
+    F49 text 's373 x'
+    G49 text 's374 x'
+    H49 text 's375 \xe4\xf6\xfc'
+    A50 text 's376 x'
+    B50 text 's377 x'
+    C50 text 's378 x'
+    D50 text 's379 x'
+    E50 text 's380 \xe4\xf6\xfc'
+    F50 text 's381 x'
+    G50 text 's382 x'
+    H50 text 's383 x'
+    A51 text 's384 x'
+    B51 text 's385 \xe4\xf6\xfc'
+    C51 text 's386 x'
+    D51 text 's387 x'
+    E51 text 's388 x'
+    F51 text 's389 x'
+    G51 text 's390 \xe4\xf6\xfc'
+    H51 text 's391 x'
+    A52 text 's392 x'
+    B52 text 's393 x'
+    C52 text 's394 x'
+    D52 text 's395 \xe4\xf6\xfc'
+    E52 text 's396 x'
+    F52 text 's397 x'
+    G52 text 's398 x'
+    H52 text 's399 x'
+> dump books/d1900.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Dates': 14 rows x 2 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 xldate 0.0 (0, 0, 0, 0, 0, 0)
+    B1 number 0.0
+    A2 xldate 0.5 (0, 0, 0, 12, 0, 0)
+    B2 number 0.5
+    A3 xldate 1.0 XLDateAmbiguous(1.0)
+    B3 number 1.0
+    A4 xldate 59.0 XLDateAmbiguous(59.0)
+    B4 number 59.0
+    A5 xldate 60.0 XLDateAmbiguous(60.0)
+    B5 number 60.0
+    A6 xldate 61.0 (1900, 3, 1, 0, 0, 0)
+    B6 number 61.0
+    A7 xldate 61.25 (1900, 3, 1, 6, 0, 0)
+    B7 number 61.25
+    A8 xldate 366.0 (1900, 12, 31, 0, 0, 0)
+    B8 number 366.0
+    A9 xldate 45351.999988 (2024, 2, 29, 23, 59, 59)
+    B9 number 45351.999988
+    A10 xldate 45351.9999999 (2024, 3, 1, 0, 0, 0)
+    B10 number 45351.9999999
+    A11 xldate 2958465.0 (9999, 12, 31, 0, 0, 0)
+    B11 number 2958465.0
+    A12 xldate 2958466.0 XLDateTooLarge(2958466.0)
+    B12 number 2958466.0
+    A13 xldate -0.25 XLDateNegative(-0.25)
+    B13 number -0.25
+    A14 xldate 43831.000005787 (2020, 1, 1, 0, 0, 0)
+    B14 number 43831.000005787
+> dump books/d1904.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 1, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Dates': 9 rows x 6 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 xldate 0.0 (0, 0, 0, 0, 0, 0)
+    B1 xldate 0.0 (0, 0, 0, 0, 0, 0)
+    C1 xldate 0.0 (0, 0, 0, 0, 0, 0)
+    D1 xldate 0.0 (0, 0, 0, 0, 0, 0)
+    E1 xldate 0.0 (0, 0, 0, 0, 0, 0)
+    F1 number 0.0
+    A2 xldate 1.0 (1904, 1, 2, 0, 0, 0)
+    B2 xldate 1.0 (1904, 1, 2, 0, 0, 0)
+    C2 xldate 1.0 (1904, 1, 2, 0, 0, 0)
+    D2 xldate 1.0 (1904, 1, 2, 0, 0, 0)
+    E2 xldate 1.0 (1904, 1, 2, 0, 0, 0)
+    F2 number 1.0
+    A3 xldate 43889.0 (2024, 2, 29, 0, 0, 0)
+    B3 xldate 43889.0 (2024, 2, 29, 0, 0, 0)
+    C3 xldate 43889.0 (2024, 2, 29, 0, 0, 0)
+    D3 xldate 43889.0 (2024, 2, 29, 0, 0, 0)
+    E3 xldate 43889.0 (2024, 2, 29, 0, 0, 0)
+    F3 number 43889.0
+    A4 xldate 35063.99998842592 (1999, 12, 31, 23, 59, 59)
+    B4 xldate 35063.99998842592 (1999, 12, 31, 23, 59, 59)
+    C4 xldate 35063.99998842592 (1999, 12, 31, 23, 59, 59)
+    D4 xldate 35063.99998842592 (1999, 12, 31, 23, 59, 59)
+    E4 xldate 35063.99998842592 (1999, 12, 31, 23, 59, 59)
+    F4 number 35063.99998842592
+    A5 xldate 0.2708333333333333 (0, 0, 0, 6, 30, 0)
+    B5 xldate 0.2708333333333333 (0, 0, 0, 6, 30, 0)
+    C5 xldate 0.2708333333333333 (0, 0, 0, 6, 30, 0)
+    D5 xldate 0.2708333333333333 (0, 0, 0, 6, 30, 0)
+    E5 xldate 0.2708333333333333 (0, 0, 0, 6, 30, 0)
+    F5 number 0.2708333333333333
+    A6 xldate 0.999988425925926 (0, 0, 0, 23, 59, 59)
+    B6 xldate 0.999988425925926 (0, 0, 0, 23, 59, 59)
+    C6 xldate 0.999988425925926 (0, 0, 0, 23, 59, 59)
+    D6 xldate 0.999988425925926 (0, 0, 0, 23, 59, 59)
+    E6 xldate 0.999988425925926 (0, 0, 0, 23, 59, 59)
+    F6 number 0.999988425925926
+    A7 xldate 35064.5 (2000, 1, 1, 12, 0, 0)
+    B7 xldate 35064.5 (2000, 1, 1, 12, 0, 0)
+    C7 xldate 35064.5 (2000, 1, 1, 12, 0, 0)
+    D7 xldate 35064.5 (2000, 1, 1, 12, 0, 0)
+    E7 xldate 35064.5 (2000, 1, 1, 12, 0, 0)
+    F7 number 35064.5
+    A8 xldate 2957003.0 (9999, 12, 31, 0, 0, 0)
+    B8 xldate 2957003.0 (9999, 12, 31, 0, 0, 0)
+    C8 xldate 2957003.0 (9999, 12, 31, 0, 0, 0)
+    D8 xldate 2957003.0 (9999, 12, 31, 0, 0, 0)
+    E8 xldate 2957003.0 (9999, 12, 31, 0, 0, 0)
+    F8 number 2957003.0
+    A9 xldate 0.0 (0, 0, 0, 0, 0, 0)
+    B9 xldate -1.0 XLDateNegative(-1.0)
+    C9 xldate 0.99999999 (1904, 1, 2, 0, 0, 0)
+    D9 xldate 3000000.0 XLDateTooLarge(3000000.0)
+> dump books/formulas.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Calc': 7 rows x 1 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 3.0
+    A2 number 4.0
+    A3 number 5.0
+    A4 text ''
+    A5 text ''
+    A6 text ''
+    A7 text ''
+> dump books/owner.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '\u796c\u7473', countries (44, 44), 2 sheet(s)
+  sheet 0 '\xdcn\xefcode name': 1 rows x 1 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'owner test'
+  sheet 1 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 1.0
+> dump books/sparse.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Sparse': 301 rows x 256 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'origin'
+    D1 number 4.0
+    IV3 text 'last column'
+    B6 text 'row six'
+    GS301 number 301.0
+> dump books/sparse.xls ragged
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Sparse': 301 rows x 256 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    row lengths: 4 0 256 0*2 2 0*294 201
+    A1 text 'origin'
+    D1 number 4.0
+    IV3 text 'last column'
+    B6 text 'row six'
+    GS301 number 301.0
+> dump books/split_pair.xls
+  error: UnicodeDecodeError: 'utf-16-le' codec can't decode bytes in position 6-7: unexpected end of data
+# formatting_info=True: fonts, formats, XFs, merges, rows and columns
+> fmt books/layout.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  font 0 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 1 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 2 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 3 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 4 'Dummy Font': height 0, weight 400, bold 0, italic 0, underline 0, struck 0, colour 0, escapement 0, family 0, charset 0
+  font 5 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 6 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 7 'Courier New': height 320, weight 700, bold 1, italic 0, underline 0, struck 0, colour 18, escapement 0, family 0, charset 1
+  font 8 'Arial': height 200, weight 700, bold 1, italic 1, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 9 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 10 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 10, escapement 0, family 0, charset 1
+  font 11 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 12 'Arial': height 200, weight 400, bold 0, italic 0, underline 1, struck 1, colour 32767, escapement 0, family 0, charset 1
+  font 13 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 14 'Arial': height 200, weight 400, bold 0, italic 1, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 15 'Arial': height 400, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  format 164 'General': general
+  format 165 '0.0%': general
+  format 166 '"Total: "#,##0': general
+  format 167 '[Red]0.00;[Blue]-0.00': general
+  xf 0: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 1: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 2: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 3: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 4: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 5: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 6: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 7: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 8: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 9: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 10: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 11: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 12: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 13: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 14: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 15: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 16: font 6, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 17: font 7, format 164, style 0, parent 0, align 2/1 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 18: font 8, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,5 colours 0,0,0,64, fill 1 43/65, locked 1
+  xf 19: font 9, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 20: font 10, format 165, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 21: font 11, format 49, style 0, parent 0, align 0/0 wrap 1 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 22: font 12, format 166, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 23: font 13, format 167, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 1 10/65, locked 1
+  style 'Normal': built-in 1, xf 0
+  colours used: [0, 10, 18, 43, 64, 65]
+  sheet 0 'Report': 10 rows x 5 cols, visibility 0
+    view: selected 1, active 0, frozen 1, grid 1, zoom 100/60, first (0, 0), split (3, 0) at (3, 0)
+    A1 text 'Quarterly report'  [xf 17]
+    B1 blank  [xf 17]
+    C1 blank  [xf 17]
+    D1 blank  [xf 17]
+    E1 blank  [xf 17]
+    A2 blank  [xf 17]
+    B2 blank  [xf 17]
+    C2 blank  [xf 17]
+    D2 blank  [xf 17]
+    E2 blank  [xf 17]
+    A3 text 'Team'  [xf 18]
+    B3 text 'Share'  [xf 18]
+    C3 text 'Comment'  [xf 18]
+    D3 text 'Total'  [xf 18]
+    E3 text 'Delta'  [xf 18]
+    A4 text 'Ops'  [xf 19]
+    B4 number 0.25  [xf 20]
+    C4 text 'steady, no change in headcount'  [xf 21]
+    D4 number 1200.0  [xf 22]
+    E4 number 3.5  [xf 23]
+    A5 text 'Sales'  [xf 19]
+    B5 number 0.5  [xf 20]
+    C5 text 'two new hires'  [xf 21]
+    D5 number 34000.0  [xf 22]
+    E5 number -1.25  [xf 23]
+    A6 text 'R&D'  [xf 19]
+    B6 number 0.125  [xf 20]
+    C6 text 'prototype shipped'  [xf 21]
+    D6 number 98765.0  [xf 22]
+    E6 number 0.0  [xf 23]
+    A7 blank  [xf 18]
+    B7 blank  [xf 18]
+    C7 blank  [xf 18]
+    B8 blank  [xf 23]
+    A10 text 'normal italic and big'  [xf 19] runs 7:14 13:9 18:15
+    merged $A$7:$C$7
+    merged $A$1:$E$2
+    col A: width 3072, xf 15, hidden 0, outline 0, collapsed 0
+    col C: width 7680, xf 15, hidden 0, outline 0, collapsed 0
+    col E: width 2962, xf 15, hidden 1, outline 0, collapsed 0
+    row 1: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 2: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 3: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 4: height 600, default 0, hidden 0, xf -1, mismatch 1, outline 0
+    row 5: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 6: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 7: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 8: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 10: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    defaults: colwidth None, standardwidth None, rowheight 255
+  sheet 1 'Other': 1 rows x 1 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 150/60, first (0, 0)
+    A1 text 'second sheet'  [xf 19]
+    row 1: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    defaults: colwidth None, standardwidth None, rowheight 255
+> fmt books/sales.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 4 sheet(s)
+  font 0 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 1 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 2 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 3 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 4 'Dummy Font': height 0, weight 400, bold 0, italic 0, underline 0, struck 0, colour 0, escapement 0, family 0, charset 0
+  font 5 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 6 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 7 'Arial': height 200, weight 700, bold 1, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 8 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 9 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 10 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 11 'Arial': height 280, weight 700, bold 1, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 12 'Arial': height 200, weight 700, bold 1, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  format 164 'General': general
+  format 165 'dd/mm/yyyy': date
+  format 166 'dd/mm/yyyy hh:mm': date
+  xf 0: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 1: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 2: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 3: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 4: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 5: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 6: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 7: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 8: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 9: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 10: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 11: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 12: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 13: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 14: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 15: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 16: font 6, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 17: font 7, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 18: font 8, format 165, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 19: font 9, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 20: font 10, format 166, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 21: font 11, format 164, style 0, parent 0, align 2/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  style 'Normal': built-in 1, xf 0
+  colours used: [0, 64, 65]
+  sheet 0 'Q1': 10 rows x 5 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Date'  [xf 17]
+    B1 text 'Region'  [xf 17]
+    C1 text 'Product'  [xf 17]
+    D1 text 'Units'  [xf 17]
+    E1 text 'Unit price'  [xf 17]
+    A2 xldate 45296.0 (2024, 1, 5, 0, 0, 0)  [xf 18]
+    B2 text 'North'  [xf 19]
+    C2 text 'Widget'  [xf 19]
+    D2 number 12.0  [xf 19]
+    E2 number 2.5  [xf 19]
+    A3 xldate 45300.0 (2024, 1, 9, 0, 0, 0)  [xf 18]
+    B3 text 'South'  [xf 19]
+    C3 text 'Gadget'  [xf 19]
+    D3 number 3.0  [xf 19]
+    E3 number 19.99  [xf 19]
+    A4 xldate 45308.0 (2024, 1, 17, 0, 0, 0)  [xf 18]
+    B4 text 'North'  [xf 19]
+    C4 text 'Gadget'  [xf 19]
+    D4 number 1.0  [xf 19]
+    E4 number 19.99  [xf 19]
+    A5 xldate 45324.0 (2024, 2, 2, 0, 0, 0)  [xf 18]
+    B5 text 'East'  [xf 19]
+    C5 text 'Widget'  [xf 19]
+    D5 number 40.0  [xf 19]
+    E5 number 2.25  [xf 19]
+    A6 xldate 45336.0 (2024, 2, 14, 0, 0, 0)  [xf 18]
+    B6 text 'West'  [xf 19]
+    C6 text 'Gizmo'  [xf 19]
+    D6 number 5.0  [xf 19]
+    E6 number 7.0  [xf 19]
+    A7 xldate 45351.0 (2024, 2, 29, 0, 0, 0)  [xf 18]
+    B7 text 'South'  [xf 19]
+    C7 text 'Widget'  [xf 19]
+    D7 text 'n/a'  [xf 19]
+    E7 number 2.5  [xf 19]
+    A8 xldate 45354.0 (2024, 3, 3, 0, 0, 0)  [xf 18]
+    B8 text 'East'  [xf 19]
+    C8 text 'Gizmo'  [xf 19]
+    D8 number 8.0  [xf 19]
+    E8 number 7.0  [xf 19]
+    A9 xldate 45372.0 (2024, 3, 21, 0, 0, 0)  [xf 18]
+    B9 text 'North'  [xf 19]
+    C9 text 'Widget'  [xf 19]
+    D9 number 20.0  [xf 19]
+    E9 number 2.4  [xf 19]
+    A10 xldate 45381.0 (2024, 3, 30, 0, 0, 0)  [xf 18]
+    B10 text 'Ost'  [xf 19]
+    C10 text 'Gizmo'  [xf 19]
+    D10 number 2.0  [xf 19]
+    E10 number 7.0  [xf 19]
+    row 1: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 2: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 3: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 4: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 5: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 6: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 7: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 8: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 9: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 10: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    defaults: colwidth None, standardwidth None, rowheight 255
+  sheet 1 'Q2': 9 rows x 5 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Date'  [xf 17]
+    B1 text 'Region'  [xf 17]
+    C1 text 'Product'  [xf 17]
+    D1 text 'Units'  [xf 17]
+    E1 text 'Unit price'  [xf 17]
+    A2 xldate 45384.395833333336 (2024, 4, 2, 9, 30, 0)  [xf 20]
+    B2 text 'West'  [xf 19]
+    C2 text 'Widget'  [xf 19]
+    D2 number 15.0  [xf 19]
+    E2 number 2.5  [xf 19]
+    A3 xldate 45393.0 (2024, 4, 11, 0, 0, 0)  [xf 18]
+    B3 text 'South'  [xf 19]
+    C3 text 'Gizmo'  [xf 19]
+    E3 number 7.0  [xf 19]
+    A4 xldate 45410.0 (2024, 4, 28, 0, 0, 0)  [xf 18]
+    B4 text 'North'  [xf 19]
+    C4 text 'Gadget'  [xf 19]
+    D4 number 6.0  [xf 19]
+    E4 number 18.5  [xf 19]
+    A5 xldate 45418.0 (2024, 5, 6, 0, 0, 0)  [xf 18]
+    B5 text 'East'  [xf 19]
+    C5 text 'Widget'  [xf 19]
+    D5 number 33.0  [xf 19]
+    E5 number 2.25  [xf 19]
+    A6 xldate 45431.0 (2024, 5, 19, 0, 0, 0)  [xf 18]
+    B6 text 'West'  [xf 19]
+    C6 text 'Gadget'  [xf 19]
+    D6 error 42 #N/A  [xf 19]
+    E6 number 18.5  [xf 19]
+    A7 xldate 45444.0 (2024, 6, 1, 0, 0, 0)  [xf 18]
+    B7 text 'North'  [xf 19]
+    C7 text 'Gizmo'  [xf 19]
+    D7 number 9.0  [xf 19]
+    E7 number 6.75  [xf 19]
+    A8 xldate 45458.0 (2024, 6, 15, 0, 0, 0)  [xf 18]
+    B8 text 'South'  [xf 19]
+    C8 text 'Widget'  [xf 19]
+    D8 number 11.0  [xf 19]
+    E8 number 2.5  [xf 19]
+    A9 xldate 45473.0 (2024, 6, 30, 0, 0, 0)  [xf 18]
+    B9 text 'East'  [xf 19]
+    C9 text 'Gadget'  [xf 19]
+    D9 number 2.0  [xf 19]
+    E9 number 18.5  [xf 19]
+    row 1: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 2: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 3: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 4: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 5: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 6: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 7: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 8: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 9: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    defaults: colwidth None, standardwidth None, rowheight 255
+  sheet 2 'Lookup': 3 rows x 2 cols, visibility 1
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Ost'  [xf 19]
+    B1 text 'East'  [xf 19]
+    A2 text 'Nord'  [xf 19]
+    B2 text 'North'  [xf 19]
+    A3 text 'Sud'  [xf 19]
+    B3 text 'South'  [xf 19]
+    row 1: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 2: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 3: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    defaults: colwidth None, standardwidth None, rowheight 255
+  sheet 3 'Notes': 4 rows x 4 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Sales notes'  [xf 21]
+    B1 blank  [xf 21]
+    C1 blank  [xf 21]
+    D1 blank  [xf 21]
+    A3 text 'Units of n/a mean the count was lost.'  [xf 19] runs 0:12 6:9 9:12 12:9
+    A4 text 'Prices are per unit, before tax.'  [xf 19]
+    merged $A$1:$D$1
+    row 1: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 3: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 4: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    defaults: colwidth None, standardwidth None, rowheight 255
+> fmt books/sparse.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  font 0 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 1 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 2 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 3 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 4 'Dummy Font': height 0, weight 400, bold 0, italic 0, underline 0, struck 0, colour 0, escapement 0, family 0, charset 0
+  font 5 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 6 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 7 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 8 'Arial': height 200, weight 700, bold 1, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  format 164 'General': general
+  xf 0: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 1: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 2: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 3: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 4: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 5: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 6: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 7: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 8: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 9: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 10: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 11: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 12: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 13: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 14: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 15: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 16: font 6, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 17: font 7, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 18: font 8, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  style 'Normal': built-in 1, xf 0
+  colours used: [0, 64, 65]
+  sheet 0 'Sparse': 302 rows x 256 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'origin'  [xf 17]
+    D1 number 4.0  [xf 17]
+    IV3 text 'last column'  [xf 17]
+    B6 text 'row six'  [xf 17]
+    GS301 number 301.0  [xf 17]
+    A302 blank  [xf 18]
+    row 1: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 3: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 6: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 301: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 302: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    defaults: colwidth None, standardwidth None, rowheight 255
+> fmt books/basic.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  font 0 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 1 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 2 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 3 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 4 'Dummy Font': height 0, weight 400, bold 0, italic 0, underline 0, struck 0, colour 0, escapement 0, family 0, charset 0
+  font 5 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 6 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 7 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 8 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 9 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  font 10 'Arial': height 200, weight 400, bold 0, italic 0, underline 0, struck 0, colour 32767, escapement 0, family 0, charset 1
+  format 164 'General': general
+  format 165 'yyyy-mm-dd': date
+  format 166 'yyyy-mm-dd hh:mm:ss': date
+  xf 0: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 1: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 2: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 3: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 4: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 5: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 6: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 7: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 8: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 9: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 10: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 11: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 12: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 13: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 14: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 15: font 6, format 164, style 1, parent 4095, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 16: font 6, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 17: font 7, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 18: font 8, format 4, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 19: font 9, format 165, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 20: font 10, format 166, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  style 'Normal': built-in 1, xf 0
+  colours used: [0, 64, 65]
+  sheet 0 'Stock': 10 rows x 6 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'Item'  [xf 17]
+    B1 text 'Qty'  [xf 17]
+    C1 text 'Price'  [xf 17]
+    D1 text 'Added'  [xf 17]
+    E1 text 'In stock'  [xf 17]
+    F1 text 'Note'  [xf 17]
+    A2 text 'Bolt M6'  [xf 17]
+    B2 number 120.0  [xf 17]
+    C2 number 0.15  [xf 18]
+    D2 xldate 45352.0 (2024, 3, 1, 0, 0, 0)  [xf 19]
+    E2 bool 1  [xf 17]
+    F2 blank  [xf 17]
+    A3 text 'Nut M6'  [xf 17]
+    B3 number 0.0  [xf 17]
+    C3 number 0.05  [xf 18]
+    D3 xldate 45353.0 (2024, 3, 2, 0, 0, 0)  [xf 19]
+    E3 bool 0  [xf 17]
+    F3 text 'reorder'  [xf 17]
+    A4 text 'Washer'  [xf 17]
+    B4 number -3.0  [xf 17]
+    C4 number 0.02  [xf 18]
+    D4 xldate 45291.0 (2023, 12, 31, 0, 0, 0)  [xf 19]
+    E4 bool 1  [xf 17]
+    F4 text 'count again'  [xf 17]
+    A5 text 'Hinge'  [xf 17]
+    B5 number 15.0  [xf 17]
+    C5 number 3.99  [xf 18]
+    D5 xldate 45351.57326388889 (2024, 2, 29, 13, 45, 30)  [xf 20]
+    E5 bool 1  [xf 17]
+    A6 text 'Bracket "L"'  [xf 17]
+    B6 number 7.0  [xf 17]
+    C6 number 12.5  [xf 18]
+    D6 text '2024-04-01'  [xf 17]
+    E6 bool 1  [xf 17]
+    F6 text 'date typed as text'  [xf 17]
+    A7 text 'Spring, long'  [xf 17]
+    B7 number 2500.0  [xf 17]
+    C7 number 0.004  [xf 18]
+    D7 xldate 61.0 (1900, 3, 1, 0, 0, 0)  [xf 19]
+    E7 bool 0  [xf 17]
+    F7 text 'tab\there'  [xf 17]
+    A8 text 'Totals'  [xf 17]
+    B8 error 7 #DIV/0!  [xf 17]
+    C8 error 42 #N/A  [xf 17]
+    D8 error 36 #NUM!  [xf 17]
+    D9 blank  [xf 19]
+    F9 blank  [xf 17]
+    A10 number 0.3333333333333333  [xf 17]
+    B10 number 2147483648.0  [xf 17]
+    C10 number -0.5  [xf 17]
+    E10 bool 0  [xf 17]
+    row 1: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 2: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 3: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 4: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 5: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 6: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 7: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 8: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 9: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    row 10: height 255, default 0, hidden 0, xf -1, mismatch 0, outline 0
+    defaults: colwidth None, standardwidth None, rowheight 255
+> dump books/layout.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Report': 10 rows x 5 cols, visibility 0
+    view: selected 1, active 0, frozen 1, grid 1, zoom 100/60, first (0, 0), split (3, 0) at (3, 0)
+    A1 text 'Quarterly report'
+    A3 text 'Team'
+    B3 text 'Share'
+    C3 text 'Comment'
+    D3 text 'Total'
+    E3 text 'Delta'
+    A4 text 'Ops'
+    B4 number 0.25
+    C4 text 'steady, no change in headcount'
+    D4 number 1200.0
+    E4 number 3.5
+    A5 text 'Sales'
+    B5 number 0.5
+    C5 text 'two new hires'
+    D5 number 34000.0
+    E5 number -1.25
+    A6 text 'R&D'
+    B6 number 0.125
+    C6 text 'prototype shipped'
+    D6 number 98765.0
+    E6 number 0.0
+    A10 text 'normal italic and big'
+  sheet 1 'Other': 1 rows x 1 cols, visibility 0
+    view: selected 1, active 0, frozen 0, grid 1, zoom 150/60, first (0, 0)
+    A1 text 'second sheet'
+# BIFF8 streams built record by record
+> dump raw/records.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump raw/sst_split.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Split': 1 rows x 7 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'short'
+    B1 text 'compressed'
+    C1 text '\u03a9\u03b1\u03b2def'
+    D1 text 'rich'
+    E1 text 'phone'
+    F1 text '\xe9t\xe9'
+    G1 text 'last'
+> dump raw/sst_short.xls
+  error: AssertionError
+> dump raw/sst_index.xls
+  error: IndexError: list index out of range
+> dump raw/sheet_types.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 4 sheet(s)
+  sheet 0 'Data': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 1.0
+  sheet 1 'Hidden': 1 rows x 1 cols, visibility 1
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 2.0
+  sheet 2 'VeryHidden': 0 rows x 0 cols, visibility 2
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+  sheet 3 'Empty': 0 rows x 0 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+> dump raw/oddities.xls
+  log: *** Unexpected embedded BOF (0x0809) at offset 376: version=0x0600 type=0x0040
+  log: WARNING *** SCL rcd sheet 0: should have 0.1 <= num/den <= 4; got 1/20
+  log: *** WARNING: DEFAULTROWHEIGHT record len is 2, should be 4; assuming BIFF2 format
+  log: *** ERROR *** STANDARDWIDTH 4 b'\x08\x00\x00\x00'
+  log: *** WARNING: DEFAULTROWHEIGHT record len is 6, should be 4; ignoring this record
+  log: WARNING *** SCL rcd sheet 1: should have 0.1 <= num/den <= 4; got 3/0
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Odd': 2 rows x 2 cols, visibility 0
+    view: selected 1, active 1, frozen 0, grid 1, zoom 100/100, first (2, 1), split (4, 2) at (4, 2)
+    A1 number 1.0
+    B2 number 2.0
+  sheet 1 'Odd2': 0 rows x 0 cols, visibility 0
+    view: selected 1, active 1, frozen 0, grid 1, zoom 100/100, first (0, 0)
+> dump raw/datemode1.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 1, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'D': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 xldate 1.5 (1904, 1, 2, 12, 0, 0)
+    B1 xldate 0.0 (0, 0, 0, 0, 0, 0)
+> dump raw/datemode2.xls
+  error: AssertionError
+> dump raw/codepage_1252.xls
+  book: biff 80, codepage 1252 (cp1252), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'C': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'text'
+> dump raw/codepage_32768.xls
+  book: biff 80, codepage 32768 (mac_roman), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'C': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'text'
+> dump raw/codepage_10007.xls
+  book: biff 80, codepage 10007 (mac_cyrillic), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'C': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'text'
+> dump raw/codepage_9999.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'C': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'text'
+> dump raw/codepage_1999.xls
+  log: ERROR *** codepage 1999 -> encoding 'cp1999' -> LookupError: unknown encoding: cp1999
+  error: LookupError: unknown encoding: cp1999
+> dump raw/codepage_437.xls
+  book: biff 80, codepage 437 (cp437), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'C': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'text'
+> dump raw/codepage_424.xls
+  log: ERROR *** codepage 424 -> encoding 'cp424' -> UnicodeDecodeError: 'charmap' codec can't decode byte 0x72 in position 1: character maps to <undefined>
+  error: UnicodeDecodeError: 'charmap' codec can't decode byte 0x72 in position 1: character maps to <undefined>
+> dump raw/codepage_none.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'C': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'text'
+> dump raw/encrypted.xls
+  error: XLRDError: Workbook is encrypted
+> dump raw/writeaccess.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user 'Ada Lovelace', countries (1, 49), 1 sheet(s)
+  sheet 0 'W': 0 rows x 0 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+> dump raw/formats.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Formats': 4 rows x 4 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 45123.5
+    B1 xldate 45123.5 (2023, 7, 16, 12, 0, 0)
+    C1 number 45123.5
+    D1 xldate 45123.5 (2023, 7, 16, 12, 0, 0)
+    A2 number 45123.5
+    B2 number 45123.5
+    C2 xldate 45123.5 (2023, 7, 16, 12, 0, 0)
+    D2 number 45123.5
+    A3 number 45123.5
+    B3 xldate 45123.5 (2023, 7, 16, 12, 0, 0)
+    C3 number 45123.5
+    D3 number 45123.5
+    A4 xldate 45123.5 (2023, 7, 16, 12, 0, 0)
+    B4 number 45123.5
+    C4 number 45123.5
+    D4 number 45123.5
+> dump raw/workspace.xls
+  error: XLRDError: Unsupported format, or corrupt file: Workspace file -- no spreadsheet data
+> dump raw/chart_bof.xls
+  error: XLRDError: Unsupported format, or corrupt file: BOF not workbook/worksheet: op=0x0809 vers=0x0600 strm=0x0020 build=3515 year=1996 -> BIFF80
+> dump raw/biff_unknown.xls
+  error: XLRDError: Can't determine file's BIFF version
+> dump raw/biff5_old.xls
+  error: struct.error: unpack requires a buffer of 4 bytes
+> dump raw/bof_len.xls
+  error: XLRDError: Unsupported format, or corrupt file: Invalid length (2) for BOF record type 0x0809
+> dump raw/bof_short.xls
+  error: XLRDError: Unsupported format, or corrupt file: Incomplete BOF record[2]; met end of file
+> dump raw/bof_cut.xls
+  error: XLRDError: Unsupported format, or corrupt file: Incomplete BOF record[1]; met end of file
+> dump raw/no_sheet_bof.xls
+  error: XLRDError: Unsupported format, or corrupt file: Expected BOF record; found b'\x03\x02\x0e\x00\x00\x00\x00\x00'
+> dump raw/sheet_no_eof.xls
+  error: struct.error: unpack requires a buffer of 4 bytes
+> dump raw/globals_no_eof.xls
+  error: struct.error: unpack requires a buffer of 4 bytes
+> dump raw/formula_kind.xls
+  error: XLRDError: unexpected special case (0x04) in FORMULA
+> dump raw/formula_nostring.xls
+  error: XLRDError: Expected SHRFMLA, ARRAY, TABLEOP* or STRING record; found 0x0203
+> dump raw/formula_shr_nostring.xls
+  error: XLRDError: Expected STRING record; found 0x0203
+> dump raw/string_long.xls
+  error: XLRDError: STRING/CONTINUE: expected 2 chars, found 3
+> dump raw/string_cont.xls
+  error: XLRDError: Expected CONTINUE record; found record-type 0x0203
+> dump raw/xf_missing.xls
+  error: KeyError: 40
+> dump raw/biff_stream.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Data': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'raw stream, no OLE2'
+> dump raw/sheet_types.xls ondemand
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 4 sheet(s)
+  loaded: 0 0 0 0
+  sheet 0 'Data': 1 rows x 1 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 1.0
+  sheet 1 'Hidden': 1 rows x 1 cols, visibility 1
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 number 2.0
+  sheet 2 'VeryHidden': 0 rows x 0 cols, visibility 2
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+  sheet 3 'Empty': 0 rows x 0 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+  loaded: 1 1 1 1
+  after unload: 0 1 1 1
+  error: XLRDError: Can't load sheets after releasing resources.
+> fmt raw/records.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  format 164 'yyyy-mm-dd hh:mm': date
+  format 165 '0.00 "kg"': general
+  xf 0: font 0, format 0, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 1: font 0, format 14, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 2: font 0, format 22, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 3: font 0, format 49, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 4: font 0, format 164, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 5: font 0, format 165, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  xf 6: font 0, format 0, style 0, parent 0, align 0/2 wrap 0 rot 0 indent 0, border 0,0,0,0 colours 0,0,0,0, fill 0 64/65, locked 1
+  colours used: [0, 64, 65]
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'  [xf 0]
+    B1 text 'Gr\xf6\xdfe'  [xf 0]
+    C1 text '\u03a9mega'  [xf 0]
+    A2 number 2.75  [xf 0]
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)  [xf 1]
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)  [xf 4]
+    D2 number 12.5  [xf 5]
+    E2 number 7.0  [xf 6]
+    F2 number 8.0  [xf 3]
+    A3 number 1234.0  [xf 0]
+    B3 number 12.34  [xf 0]
+    C3 number 1.5  [xf 0]
+    D3 number 0.015  [xf 0]
+    E3 xldate -5.0 XLDateNegative(-5.0)  [xf 1]
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)  [xf 2]
+    B4 number 1.0  [xf 0]
+    C4 number -2.5  [xf 0]
+    D4 number 0.75  [xf 0]
+    E4 number 3.0  [xf 0]
+    A5 bool 1  [xf 0]
+    B5 bool 0  [xf 0]
+    C5 error 7 #DIV/0!  [xf 0]
+    D5 error 42 #N/A  [xf 0]
+    E5 error 153 ?  [xf 0]
+    A6 number 42.5  [xf 0]
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)  [xf 1]
+    C6 bool 1  [xf 0]
+    D6 error 15 #VALUE!  [xf 0]
+    E6 text ''  [xf 0]
+    F6 text 'formula text'  [xf 0]
+    A7 text 'split \xf6ver ok'  [xf 0]
+    B7 text 'after SHRFMLA'  [xf 0]
+    A8 text 'rich string'  [xf 0] runs 0:1 5:2
+    B8 blank  [xf 0]
+    C8 blank  [xf 0]
+    D8 blank  [xf 0]
+    defaults: colwidth None, standardwidth None, rowheight None
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'  [xf 0]
+    B1 text 'one'  [xf 0]
+    defaults: colwidth None, standardwidth None, rowheight None
+# compound documents built sector by sector
+> dump ole/plain.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump ole/split.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump ole/mini.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 1 sheet(s)
+  sheet 0 'Mini': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'from the short-stream container'
+    B1 number 99.0
+> dump ole/book.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump ole/upper.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump ole/both.xls
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump ole/no_workbook.xls
+  error: XLRDError: Can't find workbook in OLE2 compound document
+> dump ole/storage.xls
+  error: CompDocError: Requested component is a 'storage'
+> dump ole/odd_entry.xls
+  log: DID=2 name='Workbook' etype=3 DIDs(left=-1 right=-1 root=-1 parent=0 kids=[]) first_SID=-2 tot_size=0
+  error: CompDocError: Requested stream is not a 'user stream'
+> dump ole/sector_shift.xls
+  log: WARNING: sector size (2**21) is preposterous; assuming 512 and continuing ...
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump ole/short_shift.xls
+  log: WARNING: short stream sector size (2**10) is preposterous; assuming 64 and continuing ...
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump ole/big_endian.xls
+  error: CompDocError: Expected "little-endian" marker, found b'\xff\xfe'
+> dump ole/sat_loop.xls
+  log: _locate_stream(Workbook): seen
+  log:     0  2 3 7 7 7 7 7 7 7 7 7 
+  error: CompDocError: Workbook corruption: seen[3] == 7
+> dump ole/chain_short.xls
+  error: AssertionError
+> dump ole/chain_oob.xls
+  error: IndexError: array index out of range
+> dump ole/size_large.xls
+  error: CompDocError: 'Workbook' stream length (999999 bytes) > file data size (5632 bytes)
+> dump ole/size_small.xls
+  error: CompDocError: Workbook: size exceeds expected 4096 bytes; corrupt?
+> dump ole/size_short_stream.xls
+  error: CompDocError: OLE2 stream 'Workbook (from SSCS)': sector allocation table invalid entry (2)
+> dump ole/neg_first.xls
+  error: CompDocError: _locate_stream: start_sid (-1) is -ve
+> dump ole/tail.xls
+  log: WARNING *** file size (6244) not 512 + multiple of sector size (512)
+  book: biff 80, codepage 1200 (utf_16_le), datemode 0, user '', countries (0, 0), 2 sheet(s)
+  sheet 0 'Records': 8 rows x 6 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'label record'
+    B1 text 'Gr\xf6\xdfe'
+    C1 text '\u03a9mega'
+    A2 number 2.75
+    B2 xldate 45000.5 (2023, 3, 15, 12, 0, 0)
+    C2 xldate 45000.25 (2023, 3, 15, 6, 0, 0)
+    D2 number 12.5
+    E2 number 7.0
+    F2 number 8.0
+    A3 number 1234.0
+    B3 number 12.34
+    C3 number 1.5
+    D3 number 0.015
+    E3 xldate -5.0 XLDateNegative(-5.0)
+    F3 xldate 45000.0 (2023, 3, 15, 0, 0, 0)
+    B4 number 1.0
+    C4 number -2.5
+    D4 number 0.75
+    E4 number 3.0
+    A5 bool 1
+    B5 bool 0
+    C5 error 7 #DIV/0!
+    D5 error 42 #N/A
+    E5 error 153 ?
+    A6 number 42.5
+    B6 xldate 45000.75 (2023, 3, 15, 18, 0, 0)
+    C6 bool 1
+    D6 error 15 #VALUE!
+    E6 text ''
+    F6 text 'formula text'
+    A7 text 'split \xf6ver ok'
+    B7 text 'after SHRFMLA'
+    A8 text 'rich string'
+  sheet 1 'SST': 1 rows x 2 cols, visibility 0
+    view: selected 0, active 0, frozen 0, grid 1, zoom 100/60, first (0, 0)
+    A1 text 'two'
+    B1 text 'one'
+> dump ole/ssat_loop.xls
+  error: AssertionError
+# damaged files
+> dump bad/cut_7.xls
+  error: XLRDError: Unsupported format, or corrupt file: Expected BOF record; found b'\xd0\xcf\x11\xe0\xa1\xb1\x1a'
+> dump bad/cut_40.xls
+  error: struct.error: unpack requires a buffer of 32 bytes
+> dump bad/cut_600.xls
+  log: WARNING *** file size (600) not 512 + multiple of sector size (512)
+  log: WARNING *** File is truncated, or OLE2 MSAT is corrupt!!
+  log: INFO: Trying to access sector 8 but only 1 available
+  error: IndexError: array index out of range
+> dump bad/cut_3000.xls
+  log: WARNING *** file size (3000) not 512 + multiple of sector size (512)
+  log: WARNING *** File is truncated, or OLE2 MSAT is corrupt!!
+  log: INFO: Trying to access sector 8 but only 5 available
+  error: IndexError: array index out of range
+> dump bad/cut_5000.xls
+  log: WARNING *** file size (5000) not 512 + multiple of sector size (512)
+  error: struct.error: unpack requires a buffer of 512 bytes
+> dump bad/empty.xls
+  error: XLRDError: File size is 0 bytes
+> dump bad/one_byte.xls
+  error: XLRDError: Unsupported format, or corrupt file: Expected BOF record; met end of file
+> dump bad/text.xls
+  error: XLRDError: Unsupported format, or corrupt file: Expected BOF record; found b'name,qty'
+> dump bad/html.xls
+  error: XLRDError: Unsupported format, or corrupt file: Expected BOF record; found b'<html><b'
+> dump bad/signature_only.xls
+  error: CompDocError: Expected "little-endian" marker, found b''
+> dump bad/flipped.xls
+  error: XLRDError: Unsupported format, or corrupt file: Expected BOF record; found b'/\xcf\x11\xe0\xa1\xb1\x1a\xe1'
+# file format sniffing
+> dump zip/report.xlsx
+  error: XLRDError: Excel xlsx file; not supported
+> dump zip/report.xlsb
+  error: XLRDError: Excel 2007 xlsb file; not supported
+> dump zip/sheet.ods
+  error: XLRDError: Openoffice.org ODS file; not supported
+> dump zip/archive.zip
+  error: XLRDError: Unknown ZIP file; not supported
+> dump zip/windows.xlsx
+  error: XLRDError: Excel xlsx file; not supported
+> dump zip/commented.xlsx
+  error: XLRDError: Excel xlsx file; not supported
+> dump zip/truncated.xlsx
+  error: BadZipFile: File is not a zip file
+> dump zip/empty.zip
+  error: XLRDError: Unsupported format, or corrupt file: Expected BOF record; found b'PK\x05\x06\x00\x00\x00\x00'
+> !inspect books/basic.xls zip/report.xlsx zip/report.xlsb zip/sheet.ods zip/archive.zip zip/truncated.xlsx raw/records.xls bad/text.xls bad/empty.xls
+  books/basic.xls: xls
+  zip/report.xlsx: xlsx
+  zip/report.xlsb: xlsb
+  zip/sheet.ods: ods
+  zip/archive.zip: zip
+  zip/truncated.xlsx: <BadZipFile: File is not a zip file>
+  raw/records.xls: None
+  bad/text.xls: None
+  bad/empty.xls: None
+# xldate conversions
+> xldate 0.0 0
+  tuple (0, 0, 0, 0, 0, 0)
+  datetime 1899-12-31 00:00:00
+> xldate 0.5 0
+  tuple (0, 0, 0, 12, 0, 0)
+  datetime 1899-12-31 12:00:00
+> xldate 1.0 0
+  tuple XLDateAmbiguous: 1.0
+  datetime 1900-01-01 00:00:00
+> xldate 60.0 0
+  tuple XLDateAmbiguous: 60.0
+  datetime 1900-02-28 00:00:00
+> xldate 61.0 0
+  tuple (1900, 3, 1, 0, 0, 0)
+  datetime 1900-03-01 00:00:00
+> xldate 61.5 0
+  tuple (1900, 3, 1, 12, 0, 0)
+  datetime 1900-03-01 12:00:00
+> xldate 43831.75 0
+  tuple (2020, 1, 1, 18, 0, 0)
+  datetime 2020-01-01 18:00:00
+> xldate 43831.999994 0
+  tuple (2020, 1, 1, 23, 59, 59)
+  datetime 2020-01-01 23:59:59.482000
+> xldate 43831.9999999 0
+  tuple (2020, 1, 2, 0, 0, 0)
+  datetime 2020-01-01 23:59:59.991000
+> xldate 2958465.5 0
+  tuple (9999, 12, 31, 12, 0, 0)
+  datetime 9999-12-31 12:00:00
+> xldate 2958466.0 0
+  tuple XLDateTooLarge: 2958466.0
+  datetime OverflowError: date value out of range
+> xldate 1.0 1
+  tuple (1904, 1, 2, 0, 0, 0)
+  datetime 1904-01-02 00:00:00
+> xldate 1461.0 1
+  tuple (1908, 1, 1, 0, 0, 0)
+  datetime 1908-01-01 00:00:00
+> xldate 2957003.0 1
+  tuple (9999, 12, 31, 0, 0, 0)
+  datetime 9999-12-31 00:00:00
+> xldate -1.0 0
+  tuple XLDateNegative: -1.0
+  datetime 1899-12-30 00:00:00
+> xldate 1.5 2
+  tuple XLDateBadDatemode: 2
+  datetime 1904-01-02 12:00:00
+> xldate 45351.123456789 0
+  tuple (2024, 2, 29, 2, 57, 47)
+  datetime 2024-02-29 02:57:46.667000
+> xldate 0.000005787 0
+  tuple (0, 0, 0, 0, 0, 0)
+  datetime 1899-12-31 00:00:00.500000
+> xldate 100000000.0 1
+  tuple XLDateTooLarge: 100000000.0
+  datetime OverflowError: date value out of range
+> xldate 59.99 0
+  tuple XLDateAmbiguous: 59.99
+  datetime 1900-02-28 23:45:36
+> fromdate 2024 2 29 0
+  45351.0
+> fromdate 2023 2 29 0
+  XLDateBadTuple: Invalid day: (2023, 2, 29)
+> fromdate 1900 3 1 0
+  61.0
+> fromdate 1900 2 28 0
+  XLDateAmbiguous: Before 1900-03-01: (1900, 2, 28)
+> fromdate 1904 1 1 1
+  XLDateBadTuple: Invalid (year, month, day): (1904, 1, 1)
+> fromdate 1904 1 2 1
+  1.0
+> fromdate 0 0 0 0
+  0.0
+> fromdate 1899 12 31 0
+  XLDateBadTuple: Invalid year: (1899, 12, 31)
+> fromdate 10000 1 1 0
+  XLDateBadTuple: Invalid year: (10000, 1, 1)
+> fromdate 2024 13 1 0
+  XLDateBadTuple: Invalid month: (2024, 13, 1)
+> fromdate 2024 4 31 1
+  XLDateBadTuple: Invalid day: (2024, 4, 31)
+> fromdate 2000 2 29 1
+  35123.0
+> fromdate 2024 1 1 3
+  XLDateBadDatemode: 3
+> fromtime 0 0 0
+  0.0
+> fromtime 12 0 0
+  0.5
+> fromtime 23 59 59
+  0.9999884259259259
+> fromtime 6 30 15
+  0.27100694444444445
+> fromtime 24 0 0
+  XLDateBadTuple: Invalid (hour, minute, second): (24, 0, 0)
+> fromtime 1 60 0
+  XLDateBadTuple: Invalid (hour, minute, second): (1, 60, 0)
+# cell and column names
+> names 0 1 25 26 27 51 52 255 701 702
+  0=A 1=B 25=Z 26=AA 27=AB 51=AZ 52=BA 255=IV 701=ZZ 702=<IndexError: string index out of range>
+> cells 0,0 9,2 65535,255 99,26
+  0,0: A1 $A$1
+  9,2: C10 $C$10
+  65535,255: IV65536 $IV$65536
+  99,26: AA100 $AA$100
+> ranges 0,1,0,1 0,3,0,2 4,5,26,28 0,65536,0,256
+  0,1,0,1: $A$1
+  0,3,0,2: $A$1:$B$3
+  4,5,26,28: $AA$5:$AB$5
+  0,65536,0,256: $A$1:$IV$65536
+# programs on top of xlrd
+> !csv books/sales.xls Q1
+  wrote out/sales_Q1.csv: 10 rows, 303 bytes
+  | Date,Region,Product,Units,Unit price
+  | 2024-01-05,North,Widget,12,2.5
+  | 2024-01-09,South,Gadget,3,19.99
+  | 2024-01-17,North,Gadget,1,19.99
+  | 2024-02-02,East,Widget,40,2.25
+  | 2024-02-14,West,Gizmo,5,7
+  | 2024-02-29,South,Widget,n/a,2.5
+  | 2024-03-03,East,Gizmo,8,7
+  | 2024-03-21,North,Widget,20,2.4
+  | 2024-03-30,Ost,Gizmo,2,7
+> !csv books/sales.xls Q2
+  wrote out/sales_Q2.csv: 9 rows, 288 bytes
+  | Date,Region,Product,Units,Unit price
+  | 2024-04-02 09:30:00,West,Widget,15,2.5
+  | 2024-04-11,South,Gizmo,,7
+  | 2024-04-28,North,Gadget,6,18.5
+  | 2024-05-06,East,Widget,33,2.25
+  | 2024-05-19,West,Gadget,#N/A,18.5
+  | 2024-06-01,North,Gizmo,9,6.75
+  | 2024-06-15,South,Widget,11,2.5
+  | 2024-06-30,East,Gadget,2,18.5
+> !csv books/basic.xls Stock
+  wrote out/basic_Stock.csv: 10 rows, 368 bytes
+  | Item,Qty,Price,Added,In stock,Note
+  | Bolt M6,120,0.15,2024-03-01,TRUE
+  | Nut M6,0,0.05,2024-03-02,FALSE,reorder
+  | Washer,-3,0.02,2023-12-31,TRUE,count again
+  | Hinge,15,3.99,2024-02-29 13:45:30,TRUE
+  | "Bracket ""L""",7,12.5,2024-04-01,TRUE,date typed as text
+  | "Spring, long",2500,0.004,1900-03-01,FALSE,tab	here
+  | Totals,#DIV/0!,#N/A,#NUM!
+  | 
+  | 0.3333333333333333,2147483648,-0.5,,FALSE
+> !csv books/text.xls Unicode
+  wrote out/text_Unicode.csv: 20 rows, 319 bytes
+  | plain ascii,11,plain ascii
+  | café crème,10
+  | Größe,5
+  | naïve façade,12
+  | Ελληνικά,8
+  | Русский текст,13
+  | 日本語のテキスト,8
+  | 한국어,3
+  | עברית,5
+  | العربية,7
+  | emoji 📦 box,11
+  | math 𝐀𝐁,7
+  | "tab	and
+  | newline",15
+  | "quote ' and """,13
+  | back\slash,10
+  | ,0
+  |  leading,8
+  | trailing ,9
+  | € 9.99,6
+  | ÿ,1
+> !csv books/sales.xls Missing
+  error: XLRDError: No sheet named <'Missing'>
+> !report books/sales.xls
+  Lookup (hidden): 3 alias(es)
+  Q1!D7: units 'n/a' is text, row skipped
+  Q1!B10: region 'Ost' read as 'East'
+  Q1: 8 sale(s)
+  Q2!D3: units missing, row skipped
+  Q2!D6: units #N/A, row skipped
+  Q2: 6 sale(s)
+  Notes: no sales table
+  region East   units    85  revenue    271.25
+  region North  units    48  revenue    269.74
+  region South  units    14  revenue     87.47
+  region West   units    20  revenue     72.50
+  month 2024-01 revenue    109.96
+  month 2024-02 revenue    125.00
+  month 2024-03 revenue    118.00
+  month 2024-04 revenue    148.50
+  month 2024-05 revenue     74.25
+  month 2024-06 revenue    125.25
+  product Widget  revenue    307.25  share  43.8%
+  product Gadget  revenue    227.96  share  32.5%
+  product Gizmo   revenue    165.75  share  23.6%
+  total revenue 700.96 over 14 sale(s)
+> !report books/basic.xls
+  Stock: no sales table
+  nothing to report
+> !find books/sales.xls Widget
+  'Q1'!C2 'Widget'
+  'Q1'!C5 'Widget'
+  'Q1'!C7 'Widget'
+  'Q1'!C9 'Widget'
+  'Q2'!C2 'Widget'
+  'Q2'!C5 'Widget'
+  'Q2'!C8 'Widget'
+  7 match(es)
+> !find books/text.xls äöü
+  'Long'!A3 's000 \xe4\xf6\xfc'
+  'Long'!F3 's005 \xe4\xf6\xfc'
+  'Long'!C4 's010 \xe4\xf6\xfc'
+  'Long'!H4 's015 \xe4\xf6\xfc'
+  'Long'!E5 's020 \xe4\xf6\xfc'
+  'Long'!B6 's025 \xe4\xf6\xfc'
+  'Long'!G6 's030 \xe4\xf6\xfc'
+  'Long'!D7 's035 \xe4\xf6\xfc'
+  'Long'!A8 's040 \xe4\xf6\xfc'
+  'Long'!F8 's045 \xe4\xf6\xfc'
+  'Long'!C9 's050 \xe4\xf6\xfc'
+  'Long'!H9 's055 \xe4\xf6\xfc'
+  80 match(es)
