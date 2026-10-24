@@ -79,6 +79,10 @@ enum Wait {
     Until(Instant),
     /// A socket to become readable (`events` is `POLLIN`) or writable.
     Fd(i32, i16),
+    /// A socket to become readable, or its read timeout's deadline to pass
+    /// (core-semantics §11.10). Unix only, as socket deadlines are.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    FdBy(i32, i16, Instant),
     /// A join or a channel, which only another task can make ready.
     Task,
 }
@@ -286,14 +290,14 @@ fn block(waits: &[Wait]) {
     let until = waits
         .iter()
         .filter_map(|w| match w {
-            Wait::Until(t) => Some(*t),
+            Wait::Until(t) | Wait::FdBy(_, _, t) => Some(*t),
             _ => None,
         })
         .min();
     let fds: Vec<(i32, i16)> = waits
         .iter()
         .filter_map(|w| match w {
-            Wait::Fd(fd, ev) => Some((*fd, *ev)),
+            Wait::Fd(fd, ev) | Wait::FdBy(fd, ev, _) => Some((*fd, *ev)),
             _ => None,
         })
         .collect();
@@ -504,9 +508,9 @@ pub(crate) fn take_slept() -> bool {
 }
 
 /// `__ready` of a socket call: whether `fd` is readable now (`write` 0)
-/// or writable, asked without blocking. A socket with a read timeout is
-/// ready at once: its blocking read keeps the timeout itself, where
-/// waiting on readiness alone would never time out.
+/// or writable, asked without blocking. A read on a socket with a read
+/// timeout also ends at the deadline its first ask sets (§11.10), and the
+/// read that follows then fails `TimedOut` ([`take_timed_out`]).
 #[no_mangle]
 pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     let events: i16 = if write != 0 { 4 } else { 1 }; // POLLOUT, POLLIN
@@ -514,8 +518,10 @@ pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
         return 1;
     }
     #[cfg(unix)]
-    if write == 0 && read_timeout_set(fd as i32) {
-        return 1;
+    if write == 0 {
+        if let Some(t) = read_timeout(fd as i32) {
+            return ready_read_by(fd as i32, t);
+        }
     }
     #[cfg(unix)]
     let ready = {
@@ -595,14 +601,67 @@ pub extern "C" fn karac_mir_mutex_release(cell: *mut u8) {
     bump();
 }
 
-/// Whether the socket `fd` has a read timeout (`SO_RCVTIMEO`).
+/// The socket `fd`'s read timeout (`SO_RCVTIMEO`), if it has one.
 #[cfg(unix)]
-fn read_timeout_set(fd: i32) -> bool {
+fn read_timeout(fd: i32) -> Option<Duration> {
     use std::os::fd::FromRawFd;
     // SAFETY: `fd` is an open socket the program owns; the stream made
-    // over it is never dropped, so the descriptor stays open.
+    // over it is never dropped, so the descriptor stays open. `SO_RCVTIMEO`
+    // reads the same on a UDP socket.
     let s = std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_fd(fd) });
-    matches!(s.read_timeout(), Ok(Some(_)))
+    s.read_timeout().ok().flatten()
+}
+
+/// [`karac_mir_ready_fd`] of a read on `fd`, whose read timeout is `t`:
+/// readable now, or the running task waits until it is or the deadline
+/// passes. A passed deadline leaves `fd` for [`take_timed_out`].
+#[cfg(unix)]
+fn ready_read_by(fd: i32, t: Duration) -> u8 {
+    let mut p = PollFd {
+        fd,
+        events: 1,
+        revents: 0,
+    };
+    // SAFETY: one initialized entry.
+    let readable = unsafe { poll(&mut p, 1, 0) } != 0;
+    let now = Instant::now();
+    let at = EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let cur = e.cur.as_mut().expect("asked inside the executor");
+        let at = *cur.0.get_or_insert(now + t);
+        if readable || now >= at {
+            cur.0 = None;
+        }
+        at
+    });
+    if readable {
+        note(true, Wait::None)
+    } else if now >= at {
+        TIMED_OUT.with(|c| c.set(fd));
+        note(true, Wait::None)
+    } else {
+        note(false, Wait::FdBy(fd, 1, at))
+    }
+}
+
+#[cfg(unix)]
+thread_local! {
+    /// The socket whose suspended read reached its deadline with nothing
+    /// to read, or -1.
+    static TIMED_OUT: std::cell::Cell<i32> = const { std::cell::Cell::new(-1) };
+}
+
+/// Whether the read about to run on `fd` follows a wait that reached the
+/// read timeout's deadline, and so fails `TimedOut` (`mir_sock::drive`).
+#[cfg(all(feature = "net", unix))]
+pub(crate) fn take_timed_out(fd: i32) -> bool {
+    TIMED_OUT.with(|c| {
+        let hit = c.get() == fd;
+        if hit {
+            c.set(-1);
+        }
+        hit
+    })
 }
 
 #[cfg(test)]

@@ -223,14 +223,18 @@ fn read_timeout_ms(fd: RawFd) -> i64 {
 
 /// Runs `call` on `fd` until it completes. One that would block answers
 /// [`Got::NotReady`] when `armed`; otherwise, and always for a read with a
-/// timeout (until task deadlines, item 5), it waits for `fd` and calls
-/// again. A read whose timeout passes fails with `TimedOut`.
+/// timeout, it waits for `fd` and calls again. A read whose timeout
+/// passes fails with `TimedOut`, as does one whose task's suspended wait
+/// reached the timeout's deadline (`mir_task::karac_mir_ready_fd`).
 pub(crate) fn drive(
     fd: RawFd,
     write: bool,
     armed: bool,
     call: impl FnMut() -> std::io::Result<i64>,
 ) -> Got {
+    if !write && crate::mir_task::take_timed_out(fd) {
+        return Got::Fail(Error::from(ErrorKind::TimedOut));
+    }
     let timeout = if write { -1 } else { read_timeout_ms(fd) };
     drive_for(fd, write, armed, timeout, call)
 }

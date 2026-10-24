@@ -5666,6 +5666,7 @@ impl<'a> Interp<'a> {
                         let (at, lo, len) = self.view_of(buf)?;
                         let mut bytes = vec![0u8; len as usize];
                         let got = match self.sockets.udp.get(&fd) {
+                            _ if self.sockets.timed_out.remove(&fd) => Err(("TimedOut", None)),
                             None => Err(not_open()),
                             Some(u) if method == "recv" => {
                                 u.recv(&mut bytes).map(|n| (n, None)).map_err(|e| cause(&e))
@@ -5739,6 +5740,7 @@ impl<'a> Interp<'a> {
                         let (at, lo, len) = self.view_of(buf)?;
                         let mut bytes = vec![0u8; len as usize];
                         let got = match self.sockets.streams.get_mut(&fd) {
+                            _ if self.sockets.timed_out.remove(&fd) => Err(("TimedOut", None)),
                             Some(s) if len > 0 => s.read(&mut bytes).map_err(|e| syscall(&e)),
                             Some(_) => Ok(0),
                             None => Err(not_open()),
@@ -12353,10 +12355,14 @@ impl<'a> Interp<'a> {
                     let at = instant_at(*until);
                     nearest = Some(nearest.map_or(at, |n| n.min(at)))
                 }
+                Wait::Read(_, Some(at)) | Wait::Datagram(_, Some(at)) => {
+                    nearest = Some(nearest.map_or(*at, |n| n.min(*at)));
+                    io = true;
+                }
                 Wait::Accept(_)
-                | Wait::Read(_)
+                | Wait::Read(..)
                 | Wait::Write(..)
-                | Wait::Datagram(_)
+                | Wait::Datagram(..)
                 | Wait::Child(_) => io = true,
                 Wait::Recv(_)
                 | Wait::Send(_)
@@ -12440,7 +12446,15 @@ impl<'a> Interp<'a> {
                 }
             }
             ("TcpListener", "accept", [l, ..]) => Some(Wait::Accept(self.socket_of(l, &callee)?)),
-            ("TcpStream", "read", [st, ..]) => Some(Wait::Read(self.socket_of(st, &callee)?)),
+            ("TcpStream", "read", [st, ..]) => {
+                let fd = self.socket_of(st, &callee)?;
+                let timeout = self
+                    .sockets
+                    .streams
+                    .get(&fd)
+                    .and_then(|s| s.read_timeout().ok());
+                Some(Wait::Read(fd, self.read_deadline(timeout.flatten())))
+            }
             ("TcpStream", "connect", _) => None,
             ("TcpStream", "write", [st, buf, ..]) => {
                 let fd = self.socket_of(st, &callee)?;
@@ -12448,7 +12462,13 @@ impl<'a> Interp<'a> {
                 Some(Wait::Write(fd, bytes))
             }
             ("UdpSocket", "recv" | "recv_from", [u, ..]) => {
-                Some(Wait::Datagram(self.socket_of(u, &callee)?))
+                let fd = self.socket_of(u, &callee)?;
+                let timeout = self
+                    .sockets
+                    .udp
+                    .get(&fd)
+                    .and_then(|u| u.read_timeout().ok());
+                Some(Wait::Datagram(fd, self.read_deadline(timeout.flatten())))
             }
             // A datagram goes out whole or fails; it does not wait.
             ("UdpSocket", "send" | "send_to", _) => None,
@@ -12477,8 +12497,24 @@ impl<'a> Interp<'a> {
             let t = &mut self.tasks[self.cur_task];
             t.deadline = None;
             t.slept = true;
+        } else if let Some(Wait::Read(..) | Wait::Datagram(..)) = wait {
+            self.tasks[self.cur_task].deadline = None;
         }
         Ok(Value::Bool(ready))
+    }
+
+    /// When a suspended read on a socket with read timeout `timeout` ends
+    /// (§11.10): counted from the first time the task waits on it.
+    fn read_deadline(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+    ) -> Option<std::time::Instant> {
+        let d = timeout?;
+        let t = &mut self.tasks[self.cur_task];
+        Some(
+            *t.deadline
+                .get_or_insert_with(|| std::time::Instant::now() + d),
+        )
     }
 
     /// `__ready` of a `Pool.acquire` (B-2026-10-21-44): ready when the pool
@@ -12589,19 +12625,14 @@ impl<'a> Interp<'a> {
                     Err(e) => e.kind() != WouldBlock,
                 }
             }
-            Wait::Read(fd) => {
+            Wait::Read(fd, at) => {
                 let Some(s) = self.sockets.streams.get(fd) else {
                     return Ok(true);
                 };
-                // A read with a timeout keeps the timeout itself; waiting on
-                // readiness alone would never time out.
-                if matches!(s.read_timeout(), Ok(Some(_))) {
-                    return Ok(true);
-                }
                 let _ = s.set_nonblocking(true);
                 let got = s.peek(&mut [0u8; 1]);
                 let _ = s.set_nonblocking(false);
-                !matches!(got, Err(e) if e.kind() == WouldBlock)
+                !matches!(got, Err(e) if e.kind() == WouldBlock) || self.sockets.past(*fd, *at)
             }
             // A write is tried without blocking, and what it came to kept
             // for the `write` that follows, as an accepted connection is.
@@ -12627,17 +12658,14 @@ impl<'a> Interp<'a> {
                     }
                 }
             }
-            Wait::Datagram(fd) => {
+            Wait::Datagram(fd, at) => {
                 let Some(u) = self.sockets.udp.get(fd) else {
                     return Ok(true);
                 };
-                if matches!(u.read_timeout(), Ok(Some(_))) {
-                    return Ok(true);
-                }
                 let _ = u.set_nonblocking(true);
                 let got = u.peek_from(&mut [0u8; 1]);
                 let _ = u.set_nonblocking(false);
-                !matches!(got, Err(e) if e.kind() == WouldBlock)
+                !matches!(got, Err(e) if e.kind() == WouldBlock) || self.sockets.past(*fd, *at)
             }
             Wait::Pool(id, at) => {
                 std::time::Instant::now() >= *at || self.pool(*id).is_none_or(|p| pool_free(p))
@@ -14181,13 +14209,14 @@ enum Wait {
     /// Room in the channel, or no receiver left.
     Send(i128),
     Until(std::time::Instant),
-    /// A connection to accept, or bytes (or the end) to read.
+    /// A connection to accept, or bytes (or the end) to read. A read on a
+    /// socket with a read timeout also ends at its deadline (§11.10).
     Accept(i64),
-    Read(i64),
+    Read(i64, Option<std::time::Instant>),
     /// Room to write some of the bytes, which `__ready` then writes.
     Write(i64, Vec<u8>),
-    /// A datagram to receive.
-    Datagram(i64),
+    /// A datagram to receive, or the read timeout's deadline to pass.
+    Datagram(i64, Option<std::time::Instant>),
     /// A child, by its `ChildProcess` id, to exit.
     Child(i128),
     /// A pool, by id, to have a value to lend, or the deadline to pass.
@@ -14215,9 +14244,22 @@ struct Sockets {
     /// What a write `__ready` made for a stream came to, which its `write`
     /// reports next.
     written: rustc_hash::FxHashMap<i64, std::io::Result<usize>>,
+    /// Sockets whose suspended read reached its read timeout's deadline
+    /// with nothing to read, so the read that follows fails `TimedOut`.
+    timed_out: rustc_hash::FxHashSet<i64>,
 }
 
 impl Sockets {
+    /// Whether a suspended read on `fd` has reached deadline `at`, which
+    /// its read then reports.
+    fn past(&mut self, fd: i64, at: Option<std::time::Instant>) -> bool {
+        let past = at.is_some_and(|at| std::time::Instant::now() >= at);
+        if past {
+            self.timed_out.insert(fd);
+        }
+        past
+    }
+
     /// Keeps `s`, and the `TcpStream` value that names it.
     fn stream(&mut self, s: std::net::TcpStream) -> Value {
         let fd = socket_fd(&s);
