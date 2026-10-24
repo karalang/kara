@@ -109,17 +109,14 @@ unpaid ($193,348.68) instead of 38 ($197,831.71).
 
 ## Edits from freight_audit.orig.kara to freight_audit.kara
 
-- `ACC_CODES.find(ch)` in `acc_field` and `CARRIER_CODES.find(f[6])` in
-  `parse_shipments` gained a `.clone()` on the argument. `karac check`
-  says `find` moves its String argument when the receiver is a `const`
-  Str, so the later `allowed.contains(ch)` is a use after a move and
-  `f[6]` cannot be moved out of the Vec. It does not say so for `find` on
-  a local `Str` or a literal, nor for `rfind`, `contains`, `starts_with`,
-  `ends_with`, `split` or `replace` on the const, and the run is right
-  either way. That is kara ledger row B-2026-10-24-40; the clones come
-  out when it is fixed.
+None any more. `ACC_CODES.find(ch)` in `acc_field` and
+`CARRIER_CODES.find(f[6])` in `parse_shipments` had to gain a `.clone()`
+on the argument, because `karac check` said `find` moved its String
+argument when the receiver was a `const` Str (kara ledger row
+B-2026-10-24-40). Thread A fixed that in kara be69aae3e9, so the clones
+are out and `freight_audit.kara` is the program as first written again.
 
-After that edit it matched the mirror on the first run under the MIR
+Both forms matched the mirror on the first run under the MIR
 interpreter, the LLVM backend, the ASan build and the native binary, with
 nothing on stderr.
 

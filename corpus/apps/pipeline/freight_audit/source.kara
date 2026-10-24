@@ -677,7 +677,7 @@ fn acc_field(path: ref String, n: i64, t: ref String, allowed: Str) -> Result[St
     let mut k = 0;
     for i in 0..t.len() as i64 {
         let ch = t.substring(i, i + 1);
-        let at = match ACC_CODES.find(ch.clone()) {
+        let at = match ACC_CODES.find(ch) {
             Some(p) => p,
             None => -1,
         };
@@ -726,7 +726,7 @@ fn parse_shipments(path: ref String, text: ref String) -> Result[Vec[Shipment], 
         if f[5] != "Y" and f[5] != "N" {
             return Err(bad(f"{path} line {n}: bad residential flag '{f[5]}'"));
         }
-        let kind = match CARRIER_CODES.find(f[6].clone()) {
+        let kind = match CARRIER_CODES.find(f[6]) {
             Some(p) if f[6].len() == 1 => p,
             _ => return Err(bad(f"{path} line {n}: bad carrier '{f[6]}'")),
         };
