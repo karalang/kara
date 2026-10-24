@@ -1,0 +1,32 @@
+stem_voice.wav: 64044 bytes, crc32 077e4eab
+stem_music.wav: 64044 bytes, crc32 e4443796
+stem_drums.wav: 64044 bytes, crc32 be443b02
+stem_room.wav: 64044 bytes, crc32 7c0c561e
+cut: data chunk claims 64000 bytes, file has 956
+voice levels: peak 24000, rms 11324, crest 2.1
+music levels: peak 24000, rms 10921, crest 2.1
+drums levels: peak 24000, rms 6297, crest 3.8
+room levels: peak 24000, rms 6962, crest 3.4
+voice zero crossings: 351, 175 per second
+music zero crossings: 1114, 557 per second
+drums zero crossings: 537, 268 per second
+room zero crossings: 1967, 983 per second
+voice spectrum: 60:124 140:994 220:88 330:56 500:24 1000:314 2000:85 4000:13
+music spectrum: 60:199 140:183 220:6694 330:6621 500:96 1000:31 2000:3 4000:4
+drums spectrum: 60:4148 140:1576 220:165 330:64 500:38 1000:18 2000:3 4000:8
+room spectrum: 60:1809 140:718 220:608 330:406 500:48 1000:34 2000:62 4000:33
+voice silences: 1180-1500 ms
+music silences: none
+drums silences: 260-360 ms, 400-500 ms, 760-860 ms, 900-1000 ms, 1260-1360 ms, 1400-1500 ms, 1760-1860 ms, 1900-2000 ms
+room silences: none
+voice waveform: |####* ####* *#### -####= ####*       *#### -####= |
+music waveform: |******++*###*++*******++*###*******##**++*##****+*|
+drums waveform: |#+==.    :  #*+-.    :   #+==.    :  #*+-.    .   |
+room waveform: |+=++=+++=#++++*=*+=+=*++*=#*===+++++**=#*+**+*=*=+|
+mix: voice clipped 0, music 277, drums 974, room 760
+master rms per 250 ms: 15266 13616 15403 13802 15601 6990 15675 13546
+master levels: peak 32767, rms 13998, crest 2.3
+master waveform: |@@@@#=#@@@#=@@@@%+#@@@@+=@@@@#==+=+++@@@@@*+@@@@==|
+master.wav: 64044 bytes, crc32 61f3ec4d
+  32000 samples, match
+  damaged master: unsupported format 3

@@ -1,0 +1,605 @@
+// pipeline/stem_mixdown
+//
+// An audio pipeline, the shape of a podcast mastering job. It synthesizes
+// four stems (a voice, a music bed, drums and room tone), writes each as a
+// 16-bit PCM WAV file, reads the files back and decodes them, cleans each
+// stem up (a DC-blocking filter, a compressor and peak normalization), runs
+// five reports over the cleaned stems, and mixes them onto a master bus
+// that it writes as a WAV file and checks by decoding it again.
+//
+// The syntheses, the writes, the reads, the decodes, the clean-ups and the
+// reports are each a group of statements that do not depend on each other
+// (a stmt-par app). The four mixes onto the master bus saturate, so they
+// have to run in order.
+
+const RATE: i64 = 16000;
+const LEN: i64 = 32000;
+const TAB: i64 = 1024;
+const PEAK: i64 = 32767;
+
+struct Stem {
+    name: String,
+    s: Vec[i64],
+}
+
+enum WavError {
+    Bad(String),
+}
+
+impl WavError {
+    fn describe(ref self) -> String {
+        match self {
+            WavError.Bad(m) => m.clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------- oscillators
+
+// A Q15 sine over 1024 steps per cycle, from Bhaskara I's approximation, so
+// every backend and the mirror agree on it exactly.
+fn sine_table() -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    let h: i64 = TAB / 2;
+    for i in 0..TAB {
+        let a = i % h;
+        let v = PEAK * 16 * a * (h - a) / (5 * h * h - 4 * a * (h - a));
+        t.push(if i < h { v } else { -v });
+    }
+    t
+}
+
+// The phase step, in 1/65536ths of a table step, of a frequency in mHz.
+fn step_of(mhz: i64) -> i64 {
+    mhz * TAB * 65536 / (RATE * 1000)
+}
+
+fn at(tab: ref Vec[i64], phase: i64) -> i64 {
+    tab[(phase >> 16) % TAB]
+}
+
+fn clamp16(v: i64) -> i64 {
+    if v > PEAK {
+        PEAK
+    } else if v < -PEAK {
+        -PEAK
+    } else {
+        v
+    }
+}
+
+// A 31-bit linear congruential generator, as the C library's rand() was.
+fn lcg(state: i64) -> i64 {
+    (state * 1103515245 + 12345) % 2147483648
+}
+
+// ---------------------------------------------------------------- the stems
+
+// A voice: a sawtooth buzz at 140 Hz with a 5 Hz vibrato, softened by a
+// one-pole low-pass and gated into syllables, with a pause from 1.2 s to
+// 1.5 s.
+fn synth_voice(tab: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut phase: i64 = 0;
+    let mut vib: i64 = 0;
+    let mut lp: i64 = 0;
+    let vstep = step_of(5000);
+    for n in 0..LEN {
+        let f = 140000 + 4000 * at(tab, vib) / PEAK;
+        vib += vstep;
+        phase += step_of(f);
+        let saw = ((phase >> 16) % TAB) * 64 - 32768;
+        lp += (saw - lp) * 3 / 16;
+        let t = n % 4000;
+        let mut env: i64 = 0;
+        if t < 2880 and (n < 19200 or n >= 24000) {
+            let edge = if t < 2880 - t { t } else { 2880 - t };
+            env = if edge >= 400 { PEAK } else { edge * PEAK / 400 };
+        }
+        out.push(clamp16(lp * env >> 15));
+    }
+    out
+}
+
+// A music bed: an A major chord with a 3 Hz tremolo.
+fn synth_music(tab: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let (s1, s2, s3, st) = (step_of(220000), step_of(277183), step_of(329628), step_of(3000));
+    let mut (p1, p2, p3, pt) = (0, 0, 0, 0);
+    for _ in 0..LEN {
+        let chord = at(tab, p1) + at(tab, p2) + at(tab, p3);
+        let amp = 24000 + 6000 * at(tab, pt) / PEAK;
+        out.push(clamp16(chord / 3 * amp / PEAK));
+        p1 += s1;
+        p2 += s2;
+        p3 += s3;
+        pt += st;
+    }
+    out
+}
+
+// Drums: a kick every half second whose pitch falls from 150 Hz to 50 Hz,
+// and a hi-hat of high-passed noise between the kicks.
+fn synth_drums(tab: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut phase: i64 = 0;
+    let mut sweep: i64 = 0;
+    let mut kamp: i64 = 0;
+    let mut hamp: i64 = 0;
+    let mut seed: i64 = 20241024;
+    let mut prev: i64 = 0;
+    for n in 0..LEN {
+        if n % 8000 == 0 {
+            sweep = PEAK;
+            kamp = PEAK;
+            phase = 0;
+        }
+        if n % 4000 == 2000 {
+            hamp = 20000;
+        }
+        phase += step_of(50000 + (100000 * sweep >> 15));
+        let kick = at(tab, phase) * kamp >> 15;
+        sweep = sweep * 32700 >> 15;
+        kamp = kamp * 32740 >> 15;
+        seed = lcg(seed);
+        let noise = ((seed >> 15) % 65536) - 32768;
+        let hat = (noise - prev) / 2 * hamp >> 15;
+        prev = noise;
+        hamp = hamp * 32000 >> 15;
+        out.push(clamp16(kick + hat / 3));
+    }
+    out
+}
+
+// Room tone: heavily low-passed noise and a quiet 60 Hz hum.
+fn synth_room(tab: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut seed: i64 = 7;
+    let mut lp: i64 = 0;
+    let mut hum: i64 = 0;
+    let hstep = step_of(60000);
+    for _ in 0..LEN {
+        seed = lcg(seed);
+        let noise = ((seed >> 15) % 65536) - 32768;
+        lp += (noise - lp) / 32;
+        out.push(clamp16(lp / 4 + at(tab, hum) * 800 / PEAK));
+        hum += hstep;
+    }
+    out
+}
+
+// ---------------------------------------------------------------- WAV files
+
+fn put_u16(out: mut ref Vec[u8], v: i64) {
+    out.push((v % 256) as u8);
+    out.push((v / 256 % 256) as u8);
+}
+
+fn put_u32(out: mut ref Vec[u8], v: i64) {
+    put_u16(mut out, v % 65536);
+    put_u16(mut out, v / 65536);
+}
+
+fn put_tag(out: mut ref Vec[u8], tag: ref String) {
+    for b in tag.bytes() {
+        out.push(b);
+    }
+}
+
+// A mono 16-bit PCM WAV file.
+fn encode_wav(s: ref Vec[i64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let data = s.len() * 2;
+    put_tag(mut out, "RIFF");
+    put_u32(mut out, 36 + data);
+    put_tag(mut out, "WAVE");
+    put_tag(mut out, "fmt ");
+    put_u32(mut out, 16);
+    put_u16(mut out, 1);
+    put_u16(mut out, 1);
+    put_u32(mut out, RATE);
+    put_u32(mut out, RATE * 2);
+    put_u16(mut out, 2);
+    put_u16(mut out, 16);
+    put_tag(mut out, "data");
+    put_u32(mut out, data);
+    for v in s.iter() {
+        put_u16(mut out, if *v < 0 { *v + 65536 } else { *v });
+    }
+    out
+}
+
+fn get_u16(b: ref Vec[u8], i: i64) -> i64 {
+    (b[i] as i64) + (b[i + 1] as i64) * 256
+}
+
+fn get_u32(b: ref Vec[u8], i: i64) -> i64 {
+    get_u16(b, i) + get_u16(b, i + 2) * 65536
+}
+
+fn tag_at(b: ref Vec[u8], i: i64) -> String {
+    String.from_utf8(b[i..i + 4].to_vec()).unwrap_or("????".to_string())
+}
+
+// Reads the chunks of a WAV file and returns its samples, checking that
+// the format is mono 16-bit PCM and that the data chunk fits in the file.
+fn decode_wav(name: ref String, b: ref Vec[u8]) -> Result[Vec[i64], WavError] {
+    let n = b.len();
+    if n < 12 {
+        return Err(WavError.Bad(f"{name}: short header ({n} bytes)"));
+    }
+    if tag_at(b, 0) != "RIFF" or tag_at(b, 8) != "WAVE" {
+        return Err(WavError.Bad(f"{name}: not a RIFF WAVE file"));
+    }
+    let mut off: i64 = 12;
+    let mut have_fmt = false;
+    while off + 8 <= n {
+        let id = tag_at(b, off);
+        let size = get_u32(b, off + 4);
+        if id == "fmt " {
+            let format = get_u16(b, off + 8);
+            let channels = get_u16(b, off + 10);
+            let rate = get_u32(b, off + 12);
+            let bits = get_u16(b, off + 22);
+            if format != 1 {
+                return Err(WavError.Bad(f"{name}: unsupported format {format}"));
+            }
+            if channels != 1 or bits != 16 or rate != RATE {
+                return Err(WavError.Bad(f"{name}: expected mono 16-bit at {RATE} Hz, got {channels} channel(s), {bits}-bit at {rate} Hz"));
+            }
+            have_fmt = true;
+        } else if id == "data" {
+            if not have_fmt {
+                return Err(WavError.Bad(f"{name}: data chunk before fmt chunk"));
+            }
+            let avail = n - off - 8;
+            if size > avail {
+                return Err(WavError.Bad(f"{name}: data chunk claims {size} bytes, file has {avail}"));
+            }
+            let mut s: Vec[i64] = Vec.new();
+            let mut i = off + 8;
+            while i + 1 < off + 8 + size {
+                let v = get_u16(b, i);
+                s.push(if v >= 32768 { v - 65536 } else { v });
+                i += 2;
+            }
+            return Ok(s);
+        }
+        off += 8 + size + size % 2;
+    }
+    Err(WavError.Bad(f"{name}: no data chunk"))
+}
+
+fn crc_table() -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    for n in 0..256 {
+        let mut c = n;
+        for _ in 0..8 {
+            c = if c % 2 == 1 { 3988292384 ^ (c / 2) } else { c / 2 };
+        }
+        t.push(c);
+    }
+    t
+}
+
+fn crc32(t: ref Vec[i64], d: ref Vec[u8]) -> i64 {
+    let mut c: i64 = 4294967295;
+    for b in d.iter() {
+        c = t[(c ^ (*b as i64)) % 256] ^ (c / 256);
+    }
+    c ^ 4294967295
+}
+
+fn file_line(name: ref String, t: ref Vec[i64], d: ref Vec[u8]) -> String {
+    f"{name}: {d.len()} bytes, crc32 {crc32(t, d):08x}"
+}
+
+// ---------------------------------------------------------------- clean-up
+
+fn abs(v: i64) -> i64 {
+    if v < 0 { -v } else { v }
+}
+
+// A DC-blocking high-pass, a 4:1 compressor above 12000 with a peak
+// envelope, then normalization to a peak of 24000.
+fn clean(name: ref String, x: ref Vec[i64]) -> Stem {
+    let mut y: Vec[i64] = Vec.new();
+    let mut (xp, yp, env) = (0, 0, 0);
+    for v in x.iter() {
+        let h = *v - xp + (32604 * yp >> 15);
+        xp = *v;
+        yp = h;
+        let a = abs(h);
+        let decayed = env * 32680 >> 15;
+        env = if a > decayed { a } else { decayed };
+        let g = if env > 12000 { (12000 + (env - 12000) / 4) * 32768 / env } else { 32768 };
+        y.push(h * g >> 15);
+    }
+    let mut peak: i64 = 0;
+    for v in y.iter() {
+        if abs(*v) > peak {
+            peak = abs(*v);
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in y.iter() {
+        out.push(if peak > 0 { *v * 24000 / peak } else { 0 });
+    }
+    Stem { name: name.to_string(), s: out }
+}
+
+// ---------------------------------------------------------------- reports
+
+fn isqrt(n: i64) -> i64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+fn levels(st: ref Stem) -> String {
+    let mut peak: i64 = 0;
+    let mut sq: i64 = 0;
+    for v in st.s.iter() {
+        if abs(*v) > peak {
+            peak = abs(*v);
+        }
+        sq += *v * *v;
+    }
+    let rms = isqrt(sq / st.s.len());
+    let crest = if rms > 0 { peak * 10 / rms } else { 0 };
+    f"{st.name} levels: peak {peak}, rms {rms}, crest {crest / 10}.{crest % 10}"
+}
+
+fn crossings(st: ref Stem) -> String {
+    let mut count: i64 = 0;
+    let mut i: i64 = 1;
+    while i < st.s.len() {
+        if (st.s[i - 1] < 0) != (st.s[i] < 0) {
+            count += 1;
+        }
+        i += 1;
+    }
+    f"{st.name} zero crossings: {count}, {count * RATE / st.s.len()} per second"
+}
+
+// Goertzel magnitudes at eight frequencies over the first 4096 samples.
+fn spectrum(st: ref Stem, tab: ref Vec[i64]) -> String {
+    let n: i64 = 4096;
+    let mut parts: Vec[String] = Vec.new();
+    for f in [60, 140, 220, 330, 500, 1000, 2000, 4000] {
+        let k = f * TAB / RATE;
+        let coeff = tab[(k + TAB / 4) % TAB];
+        let mut (s1, s2) = (0, 0);
+        for i in 0..n {
+            let s = st.s[i] + (coeff * s1 >> 14) - s2;
+            s2 = s1;
+            s1 = s;
+        }
+        let power = s1 * s1 + s2 * s2 - (coeff * s1 >> 14) * s2;
+        let mag = if power > 0 { isqrt(power) * 2 / n } else { 0 };
+        parts.push(f"{f}:{mag}");
+    }
+    let joined = parts.join(" ");
+    f"{st.name} spectrum: {joined}"
+}
+
+// Runs of at least five 20 ms windows whose peak is under 800.
+fn silences(st: ref Stem) -> String {
+    let w: i64 = 320;
+    let windows = st.s.len() / w;
+    let mut runs: Vec[String] = Vec.new();
+    let mut start: i64 = -1;
+    for k in 0..windows + 1 {
+        let mut quiet = false;
+        if k < windows {
+            let mut m: i64 = 0;
+            for i in k * w..(k + 1) * w {
+                if abs(st.s[i]) > m {
+                    m = abs(st.s[i]);
+                }
+            }
+            quiet = m < 800;
+        }
+        if quiet and start < 0 {
+            start = k;
+        } else if not quiet and start >= 0 {
+            if k - start >= 5 {
+                runs.push(f"{start * 20}-{k * 20} ms");
+            }
+            start = -1;
+        }
+    }
+    if runs.len() == 0 {
+        return f"{st.name} silences: none";
+    }
+    let joined = runs.join(", ");
+    f"{st.name} silences: {joined}"
+}
+
+fn waveform(st: ref Stem) -> String {
+    let ramp = " .:-=+*#%@".bytes().to_vec();
+    let cols: i64 = 50;
+    let per = st.s.len() / cols;
+    let mut line: Vec[u8] = Vec.new();
+    for c in 0..cols {
+        let mut m: i64 = 0;
+        for i in c * per..(c + 1) * per {
+            if abs(st.s[i]) > m {
+                m = abs(st.s[i]);
+            }
+        }
+        line.push(ramp[m * 10 / 32768]);
+    }
+    let text = String.from_utf8(line).unwrap_or(String.new());
+    f"{st.name} waveform: |{text}|"
+}
+
+// ---------------------------------------------------------------- mixdown
+
+// Adds a stem onto the bus at a Q15 gain, saturating at full scale, and
+// returns how many samples clipped. Saturation does not commute, so the
+// order of the mixes shows in the master.
+fn mix_into(bus: mut ref Vec[i64], st: ref Stem, gain: i64) -> i64 {
+    let mut clipped: i64 = 0;
+    for i in 0..bus.len() {
+        let v = bus[i] + (st.s[i] * gain >> 15);
+        if v > PEAK or v < -PEAK {
+            clipped += 1;
+        }
+        bus[i] = clamp16(v);
+    }
+    clipped
+}
+
+fn loudness(bus: ref Vec[i64]) -> String {
+    let w: i64 = 4000;
+    let mut parts: Vec[String] = Vec.new();
+    for k in 0..bus.len() / w {
+        let mut sq: i64 = 0;
+        for i in k * w..(k + 1) * w {
+            sq += bus[i] * bus[i];
+        }
+        parts.push(f"{isqrt(sq / w)}");
+    }
+    let joined = parts.join(" ");
+    f"master rms per 250 ms: {joined}"
+}
+
+fn read_file(path: ref String) -> Result[Vec[u8], WavError] {
+    match fs.read_bytes(path) {
+        Ok(b) => Ok(b),
+        Err(_) => Err(WavError.Bad(f"could not read {path}")),
+    }
+}
+
+fn run() -> Result[(), WavError] {
+    let tab = sine_table();
+    let tc = crc_table();
+
+    // Four syntheses, each from nothing but the sine table (the hot group).
+    let voice = synth_voice(tab);
+    let music = synth_music(tab);
+    let drums = synth_drums(tab);
+    let room = synth_room(tab);
+
+    // Four writes, one file per stem.
+    let w1 = fs.write_bytes("stem_voice.wav", encode_wav(voice));
+    let w2 = fs.write_bytes("stem_music.wav", encode_wav(music));
+    let w3 = fs.write_bytes("stem_drums.wav", encode_wav(drums));
+    let w4 = fs.write_bytes("stem_room.wav", encode_wav(room));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() {
+        return Err(WavError.Bad("could not write the stems".to_string()));
+    }
+
+    // A cut-off copy, to show the decoder's error.
+    let whole = read_file("stem_voice.wav")?;
+    if fs.write_bytes("stem_cut.wav", whole[0..1000].to_vec()).is_err() {
+        return Err(WavError.Bad("could not write stem_cut.wav".to_string()));
+    }
+
+    // Four reads, then four decodes.
+    let r1 = fs.read_bytes("stem_voice.wav");
+    let r2 = fs.read_bytes("stem_music.wav");
+    let r3 = fs.read_bytes("stem_drums.wav");
+    let r4 = fs.read_bytes("stem_room.wav");
+    let (d1, d2, d3, d4) = match (r1, r2, r3, r4) {
+        (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
+        _ => return Err(WavError.Bad("could not read the stems".to_string())),
+    };
+    println(file_line("stem_voice.wav", tc, d1));
+    println(file_line("stem_music.wav", tc, d2));
+    println(file_line("stem_drums.wav", tc, d3));
+    println(file_line("stem_room.wav", tc, d4));
+    let v = decode_wav("voice", d1)?;
+    let m = decode_wav("music", d2)?;
+    let d = decode_wav("drums", d3)?;
+    let r = decode_wav("room", d4)?;
+    match decode_wav("cut", read_file("stem_cut.wav")?) {
+        Ok(s) => println(f"cut: decoded {s.len()} samples"),
+        Err(e) => println(e.describe()),
+    }
+
+    // Four clean-ups.
+    let cv = clean("voice", v);
+    let cm = clean("music", m);
+    let cd = clean("drums", d);
+    let cr = clean("room", r);
+
+    // Reports that only read the cleaned stems.
+    let l1 = levels(cv);
+    let l2 = levels(cm);
+    let l3 = levels(cd);
+    let l4 = levels(cr);
+    let z1 = crossings(cv);
+    let z2 = crossings(cm);
+    let z3 = crossings(cd);
+    let z4 = crossings(cr);
+    let f1 = spectrum(cv, tab);
+    let f2 = spectrum(cm, tab);
+    let f3 = spectrum(cd, tab);
+    let f4 = spectrum(cr, tab);
+    let q1 = silences(cv);
+    let q2 = silences(cm);
+    let q3 = silences(cd);
+    let q4 = silences(cr);
+    let g1 = waveform(cv);
+    let g2 = waveform(cm);
+    let g3 = waveform(cd);
+    let g4 = waveform(cr);
+    for line in [l1, l2, l3, l4, z1, z2, z3, z4, f1, f2, f3, f4, q1, q2, q3, q4, g1, g2, g3, g4] {
+        println(line);
+    }
+
+    // The mixdown: each mix saturates, so they run in order.
+    let mut bus: Vec[i64] = Vec.new();
+    for _ in 0..LEN {
+        bus.push(0);
+    }
+    let k1 = mix_into(mut bus, cv, 32767);
+    let k2 = mix_into(mut bus, cm, 19660);
+    let k3 = mix_into(mut bus, cd, 29490);
+    let k4 = mix_into(mut bus, cr, 9830);
+    println(f"mix: voice clipped {k1}, music {k2}, drums {k3}, room {k4}");
+    println(loudness(bus));
+    let master = Stem { name: "master".to_string(), s: bus };
+    println(levels(master));
+    println(waveform(master));
+
+    if fs.write_bytes("master.wav", encode_wav(master.s)).is_err() {
+        return Err(WavError.Bad("could not write master.wav".to_string()));
+    }
+    let back = read_file("master.wav")?;
+    println(file_line("master.wav", tc, back));
+    match decode_wav("master", back) {
+        Ok(s) => {
+            let verdict = if s == master.s { "match" } else { "differ" };
+            println(f"  {s.len()} samples, {verdict}");
+        }
+        Err(e) => println(f"  {e.describe()}"),
+    }
+    let mut bad = back.clone();
+    bad[20] = 3;
+    match decode_wav("damaged master", bad) {
+        Ok(_) => println("  damaged copy: decoded"),
+        Err(e) => println(f"  {e.describe()}"),
+    }
+
+    for path in ["stem_voice.wav", "stem_music.wav", "stem_drums.wav", "stem_room.wav", "stem_cut.wav", "master.wav"] {
+        let _ = fs.remove_file(path);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"stem_mixdown failed: {e.describe()}"),
+    }
+}

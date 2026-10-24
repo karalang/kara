@@ -1,0 +1,11 @@
+source = "kara-katas/apps/pipeline/stem_mixdown/stem_mixdown.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "79ad8222"
+note = "stmt-par groups (source.orig.kara lines): L487-L490 four syntheses, the hot group; L493-L496 four fs.write_bytes calls; L508-L511 four fs.read_bytes calls; L520-L523 four decode_wav calls, each with ?; L530-L533 four clean calls; L536-L555 twenty read-only reports. L565-L568 four mix_into calls take mut ref bus and saturate, so they must stay in order"
