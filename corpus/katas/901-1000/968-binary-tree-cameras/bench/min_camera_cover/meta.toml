@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/968-binary-tree-cameras/bench/min_camera_cover.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
-bucket = "timeout"
-classified_with = "d4c0b5b12"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 968 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "2e1b62874"
 extracted_src = "21b90d9f"
