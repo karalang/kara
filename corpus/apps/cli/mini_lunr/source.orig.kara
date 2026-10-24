@@ -1,0 +1,1798 @@
+// mini_lunr: a port of lunr.py 0.8.0 (MIT, Yeray Díaz Díaz), the
+// Python port of lunr.js that static documentation sites use for search.
+//
+// It builds a search index over a documentation site's pages the way
+// `lunr(ref, fields, documents)` does: the tokenizer, the trimmer, stop
+// word filter and Porter stemmer pipeline, BM25 field vectors and the
+// minimized token set of every term. Then it runs the readers' searches
+// through lunr's query lexer and parser (fields, wildcards, edit
+// distances, boosts, + and -), expands each term against the token set,
+// and scores the pages by the cosine of query and field vectors, with
+// the match positions of the best page. It serializes the index to the
+// JSON lunr.js reads, loads it back and runs the searches again.
+
+const K1: f64 = 1.2;
+const B: f64 = 0.75;
+const STAR: i64 = 42;
+
+// ------------------------------------------------------------ helpers
+
+fn byte_at(s: ref String, i: i64) -> i64 {
+    s.as_bytes()[i] as i64
+}
+
+fn from_bytes(b: ref Vec[u8]) -> String {
+    match String.from_utf8(b.clone()) {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+
+fn ch(c: i64) -> String {
+    let b: Vec[u8] = [c as u8];
+    from_bytes(b)
+}
+
+fn is_word(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+}
+
+// The separators of lunr's tokenizer: whitespace, no-break space, hyphen.
+fn is_sep(c: i64) -> bool {
+    c == 32 or (c >= 9 and c <= 13) or c == 160 or c == 45
+}
+
+// Python's repr of a float that round(x, 3) made.
+fn repr3(x: f64) -> String {
+    let mut s = f"{x:.3}";
+    while s.ends_with("0") and not s.ends_with(".0") {
+        s = s.substring(0, s.len() - 1);
+    }
+    s
+}
+
+fn round3(x: f64) -> f64 {
+    match f64.parse(f"{x:.3}") {
+        Ok(v) => v,
+        Err(_) => x,
+    }
+}
+
+fn json_str(s: ref String) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push_str("\"");
+    out
+}
+
+fn unpct(s: ref String) -> String {
+    let b = s.as_bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() as i64 {
+        if b[i] == 37 {
+            let h = from_bytes(b[i + 1..i + 3].to_vec());
+            match i64.from_str_radix(h, 16) {
+                Ok(v) => out.push(v as u8),
+                Err(_) => out.push(63),
+            }
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+fn crc_table() -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    for n in 0..256 {
+        let mut c = n;
+        for _ in 0..8 {
+            c = if c & 1 == 1 { 3988292384 ^ (c >> 1) } else { c >> 1 };
+        }
+        t.push(c);
+    }
+    t
+}
+
+fn crc32(s: ref String) -> i64 {
+    let t = crc_table();
+    let mut c = 4294967295;
+    for b in s.bytes() {
+        c = t[(c ^ (b as i64)) & 255] ^ (c >> 8);
+    }
+    c ^ 4294967295
+}
+
+// ------------------------------------------------------------ the pipeline
+
+struct Tok {
+    text: String,
+    start: i64,
+    len: i64,
+}
+
+fn tokenize(text: ref String) -> Vec[Tok] {
+    let s = text.to_lowercase();
+    let b = s.as_bytes();
+    let n = b.len() as i64;
+    let mut out: Vec[Tok] = Vec.new();
+    let mut start = 0;
+    for end in 0..n + 1 {
+        if end == n or is_sep(b[end] as i64) {
+            if end - start > 0 {
+                out.push(Tok { text: s.substring(start, end), start: start, len: end - start });
+            }
+            start = end + 1;
+        }
+    }
+    out
+}
+
+// trimmer: ^\W*?([^\W]+)\W*?$, or the token unchanged.
+fn trim(s: ref String) -> String {
+    let b = s.as_bytes();
+    let n = b.len() as i64;
+    let mut i = 0;
+    while i < n and not is_word(b[i] as i64) {
+        i += 1;
+    }
+    let mut j = i;
+    while j < n and is_word(b[j] as i64) {
+        j += 1;
+    }
+    if j == i {
+        return s.clone();
+    }
+    for k in j..n {
+        if is_word(b[k] as i64) {
+            return s.clone();
+        }
+    }
+    s.substring(i, j)
+}
+
+// The Porter stemmer as lunr.py has it, Python's negative indexes and all.
+struct Porter {
+    b: Vec[u8],
+    k: i64,
+    k0: i64,
+    j: i64,
+}
+
+impl Porter {
+    fn at(ref self, i: i64) -> i64 {
+        let n = self.b.len() as i64;
+        if i < 0 { self.b[n + i] as i64 } else { self.b[i] as i64 }
+    }
+
+    fn cons(ref self, i: i64) -> bool {
+        let c = self.at(i);
+        if c == 97 or c == 101 or c == 105 or c == 111 or c == 117 {
+            return false;
+        }
+        if c == 121 {
+            if i == self.k0 {
+                return true;
+            }
+            return not self.cons(i - 1);
+        }
+        true
+    }
+
+    fn m(ref self) -> i64 {
+        let mut n = 0;
+        let mut i = self.k0;
+        loop {
+            if i > self.j {
+                return n;
+            }
+            if not self.cons(i) {
+                break;
+            }
+            i += 1;
+        }
+        i += 1;
+        loop {
+            loop {
+                if i > self.j {
+                    return n;
+                }
+                if self.cons(i) {
+                    break;
+                }
+                i += 1;
+            }
+            i += 1;
+            n += 1;
+            loop {
+                if i > self.j {
+                    return n;
+                }
+                if not self.cons(i) {
+                    break;
+                }
+                i += 1;
+            }
+            i += 1;
+        }
+    }
+
+    fn vowelinstem(ref self) -> bool {
+        for i in self.k0..self.j + 1 {
+            if not self.cons(i) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn doublec(ref self, j: i64) -> bool {
+        if j < self.k0 + 1 {
+            return false;
+        }
+        if self.at(j) != self.at(j - 1) {
+            return false;
+        }
+        self.cons(j)
+    }
+
+    fn cvc(ref self, i: i64) -> bool {
+        if i < self.k0 + 2 or not self.cons(i) or self.cons(i - 1) or not self.cons(i - 2) {
+            return false;
+        }
+        let c = self.at(i);
+        not (c == 119 or c == 120 or c == 121)
+    }
+
+    fn ends(mut ref self, s: Str) -> bool {
+        let sb = s.as_bytes();
+        let length = sb.len() as i64;
+        if sb[length - 1] as i64 != self.at(self.k) {
+            return false;
+        }
+        if length > self.k - self.k0 + 1 {
+            return false;
+        }
+        for t in 0..length {
+            if self.b[self.k - length + 1 + t] != sb[t] {
+                return false;
+            }
+        }
+        self.j = self.k - length;
+        true
+    }
+
+    fn setto(mut ref self, s: Str) {
+        let sb = s.as_bytes();
+        let length = sb.len() as i64;
+        let mut nb: Vec[u8] = Vec.new();
+        for t in 0..self.j + 1 {
+            nb.push(self.b[t]);
+        }
+        for c in sb {
+            nb.push(c);
+        }
+        for t in self.j + length + 1..self.b.len() as i64 {
+            nb.push(self.b[t]);
+        }
+        self.b = nb;
+        self.k = self.j + length;
+    }
+
+    fn r(mut ref self, s: Str) {
+        if self.m() > 0 {
+            self.setto(s);
+        }
+    }
+
+    fn step1ab(mut ref self) {
+        if self.at(self.k) == 115 {
+            if self.ends("sses") {
+                self.k -= 2;
+            } else if self.ends("ies") {
+                self.setto("i");
+            } else if self.at(self.k - 1) != 115 {
+                self.k -= 1;
+            }
+        }
+        if self.ends("eed") {
+            if self.m() > 0 {
+                self.k -= 1;
+            }
+        } else if (self.ends("ed") or self.ends("ing")) and self.vowelinstem() {
+            self.k = self.j;
+            if self.ends("at") {
+                self.setto("ate");
+            } else if self.ends("bl") {
+                self.setto("ble");
+            } else if self.ends("iz") {
+                self.setto("ize");
+            } else if self.doublec(self.k) {
+                self.k -= 1;
+                let c = self.at(self.k);
+                if c == 108 or c == 115 or c == 122 {
+                    self.k += 1;
+                }
+            } else if self.m() == 1 and self.cvc(self.k) {
+                self.setto("e");
+            }
+        }
+    }
+
+    fn step1c(mut ref self) {
+        if self.ends("y") and self.vowelinstem() {
+            let k = self.k;
+            self.b[k] = 105;
+        }
+    }
+
+    fn step2(mut ref self) {
+        let c = self.at(self.k - 1);
+        if c == 97 {
+            if self.ends("ational") { self.r("ate"); } else if self.ends("tional") { self.r("tion"); }
+        } else if c == 99 {
+            if self.ends("enci") { self.r("ence"); } else if self.ends("anci") { self.r("ance"); }
+        } else if c == 101 {
+            if self.ends("izer") { self.r("ize"); }
+        } else if c == 108 {
+            if self.ends("bli") {
+                self.r("ble");
+            } else if self.ends("alli") {
+                self.r("al");
+            } else if self.ends("entli") {
+                self.r("ent");
+            } else if self.ends("eli") {
+                self.r("e");
+            } else if self.ends("ousli") {
+                self.r("ous");
+            }
+        } else if c == 111 {
+            if self.ends("ization") {
+                self.r("ize");
+            } else if self.ends("ation") {
+                self.r("ate");
+            } else if self.ends("ator") {
+                self.r("ate");
+            }
+        } else if c == 115 {
+            if self.ends("alism") {
+                self.r("al");
+            } else if self.ends("iveness") {
+                self.r("ive");
+            } else if self.ends("fulness") {
+                self.r("ful");
+            } else if self.ends("ousness") {
+                self.r("ous");
+            }
+        } else if c == 116 {
+            if self.ends("aliti") {
+                self.r("al");
+            } else if self.ends("iviti") {
+                self.r("ive");
+            } else if self.ends("biliti") {
+                self.r("ble");
+            }
+        } else if c == 103 {
+            if self.ends("logi") { self.r("log"); }
+        }
+    }
+
+    fn step3(mut ref self) {
+        let c = self.at(self.k);
+        if c == 101 {
+            if self.ends("icate") {
+                self.r("ic");
+            } else if self.ends("ative") {
+                self.r("");
+            } else if self.ends("alize") {
+                self.r("al");
+            }
+        } else if c == 105 {
+            if self.ends("iciti") { self.r("ic"); }
+        } else if c == 108 {
+            if self.ends("ical") { self.r("ic"); } else if self.ends("ful") { self.r(""); }
+        } else if c == 115 {
+            if self.ends("ness") { self.r(""); }
+        }
+    }
+
+    fn step4(mut ref self) {
+        let c = self.at(self.k - 1);
+        let hit = if c == 97 {
+            self.ends("al")
+        } else if c == 99 {
+            self.ends("ance") or self.ends("ence")
+        } else if c == 101 {
+            self.ends("er")
+        } else if c == 105 {
+            self.ends("ic")
+        } else if c == 108 {
+            self.ends("able") or self.ends("ible")
+        } else if c == 110 {
+            self.ends("ant") or self.ends("ement") or self.ends("ment") or self.ends("ent")
+        } else if c == 111 {
+            (self.ends("ion") and (self.at(self.j) == 115 or self.at(self.j) == 116)) or self.ends("ou")
+        } else if c == 115 {
+            self.ends("ism")
+        } else if c == 116 {
+            self.ends("ate") or self.ends("iti")
+        } else if c == 117 {
+            self.ends("ous")
+        } else if c == 118 {
+            self.ends("ive")
+        } else if c == 122 {
+            self.ends("ize")
+        } else {
+            false
+        };
+        if hit and self.m() > 1 {
+            self.k = self.j;
+        }
+    }
+
+    fn step5(mut ref self) {
+        self.j = self.k;
+        if self.at(self.k) == 101 {
+            let a = self.m();
+            if a > 1 or (a == 1 and not self.cvc(self.k - 1)) {
+                self.k -= 1;
+            }
+        }
+        if self.at(self.k) == 108 and self.doublec(self.k) and self.m() > 1 {
+            self.k -= 1;
+        }
+    }
+}
+
+fn stem(p: ref String) -> String {
+    let mut st = Porter { b: p.as_bytes().to_vec(), k: p.len() as i64 - 1, k0: 0, j: 0 };
+    if st.k <= st.k0 + 1 {
+        return p.clone();
+    }
+    st.step1ab();
+    st.step1c();
+    st.step2();
+    st.step3();
+    st.step4();
+    st.step5();
+    from_bytes(st.b[0..st.k + 1].to_vec())
+}
+
+struct Term {
+    text: String,
+    start: i64,
+    len: i64,
+}
+
+// trimmer, stop word filter, stemmer.
+fn run_pipeline(toks: ref Vec[Tok], stops: ref Set[String]) -> Vec[Term] {
+    let mut out: Vec[Term] = Vec.new();
+    for t in toks {
+        let s = trim(t.text);
+        if stops.contains(s) {
+            continue;
+        }
+        out.push(Term { text: stem(s), start: t.start, len: t.len });
+    }
+    out
+}
+
+// ------------------------------------------------------------ token sets
+
+// TokenSet nodes in an arena; a node's id is its slot plus one, the
+// order lunr numbers them in while one builder makes them all.
+struct Ts {
+    fin: Vec[bool],
+    labs: Vec[Vec[i64]],
+    kids: Vec[Vec[i64]],
+}
+
+fn ts_new() -> Ts {
+    Ts { fin: Vec.new(), labs: Vec.new(), kids: Vec.new() }
+}
+
+fn ts_node(t: mut ref Ts) -> i64 {
+    t.fin.push(false);
+    t.labs.push(Vec.new());
+    t.kids.push(Vec.new());
+    t.fin.len() as i64 - 1
+}
+
+fn ts_get(t: ref Ts, n: i64, lab: i64) -> i64 {
+    let labs = ref t.labs[n];
+    for i in 0..labs.len() as i64 {
+        if labs[i] == lab {
+            return t.kids[n][i];
+        }
+    }
+    -1
+}
+
+// Set an edge; an existing label keeps its place, as a dict key does.
+fn ts_set(t: mut ref Ts, n: i64, lab: i64, kid: i64) {
+    for i in 0..t.labs[n].len() as i64 {
+        if t.labs[n][i] == lab {
+            t.kids[n][i] = kid;
+            return;
+        }
+    }
+    t.labs[n].push(lab);
+    t.kids[n].push(kid);
+}
+
+// str(TokenSet) with the label and the child's id kept apart, which
+// lunr's key does not do (it never collides on these pages).
+fn ts_key(t: ref Ts, n: i64) -> String {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..t.labs[n].len() as i64 {
+        order.push(i);
+    }
+    order.sort_by(|a, b| t.labs[n][a].cmp(t.labs[n][b]));
+    let mut s = if t.fin[n] { "1".to_string() } else { "0".to_string() };
+    for i in order {
+        s.push_str(f"{t.labs[n][i]}:{t.kids[n][i] + 1},");
+    }
+    s
+}
+
+struct Unchecked {
+    parent: i64,
+    lab: i64,
+    child: i64,
+}
+
+struct TsBuilder {
+    ts: Ts,
+    prev: String,
+    unchecked: Vec[Unchecked],
+    minimized: Map[String, i64],
+}
+
+fn new_ts_builder() -> TsBuilder {
+    let mut ts = ts_new();
+    ts_node(mut ts);
+    TsBuilder { ts: ts, prev: String.new(), unchecked: Vec.new(), minimized: Map.new() }
+}
+
+fn tsb_minimize(tb: mut ref TsBuilder, down_to: i64) {
+    let mut i = tb.unchecked.len() as i64 - 1;
+    while i >= down_to {
+        let parent = tb.unchecked[i].parent;
+        let lab = tb.unchecked[i].lab;
+        let child = tb.unchecked[i].child;
+        let key = ts_key(tb.ts, child);
+        let found = *tb.minimized.get(key).unwrap_or(-1);
+        if found >= 0 {
+            ts_set(mut tb.ts, parent, lab, found);
+        } else {
+            tb.minimized.insert(key, child);
+        }
+        tb.unchecked.pop();
+        i -= 1;
+    }
+}
+
+fn tsb_insert(tb: mut ref TsBuilder, word: ref String) {
+    let w = word.as_bytes();
+    let p = tb.prev.as_bytes().to_vec();
+    let mut common = 0;
+    let lim = if w.len() < p.len() { w.len() as i64 } else { p.len() as i64 };
+    for i in 0..lim {
+        if w[i] != p[i] {
+            break;
+        }
+        common += 1;
+    }
+    tsb_minimize(mut tb, common);
+    let mut node = if tb.unchecked.len() == 0 { 0 } else { tb.unchecked[tb.unchecked.len() as i64 - 1].child };
+    for i in common..w.len() as i64 {
+        let next = ts_node(mut tb.ts);
+        ts_set(mut tb.ts, node, w[i] as i64, next);
+        tb.unchecked.push(Unchecked { parent: node, lab: w[i] as i64, child: next });
+        node = next;
+    }
+    tb.ts.fin[node] = true;
+    tb.prev = word.clone();
+}
+
+fn ts_from_string(s: ref String) -> Ts {
+    let mut t = ts_new();
+    let mut node = ts_node(mut t);
+    let b = s.as_bytes();
+    let n = b.len() as i64;
+    for i in 0..n {
+        let fin = i == n - 1;
+        let c = b[i] as i64;
+        if c == STAR {
+            ts_set(mut t, node, c, node);
+            t.fin[node] = fin;
+        } else {
+            let next = ts_node(mut t);
+            t.fin[next] = fin;
+            ts_set(mut t, node, c, next);
+            node = next;
+        }
+    }
+    t
+}
+
+struct Frame {
+    node: i64,
+    edits: i64,
+    s: Vec[u8],
+}
+
+// From the top of the stack down to an existing edge, or a new node.
+fn edge_or_new(t: mut ref Ts, n: i64, lab: i64) -> i64 {
+    let e = ts_get(t, n, lab);
+    if e >= 0 {
+        return e;
+    }
+    let k = ts_node(mut t);
+    ts_set(mut t, n, lab, k);
+    k
+}
+
+fn ts_from_fuzzy(s: ref String, edit_distance: i64) -> Ts {
+    let mut t = ts_new();
+    let root = ts_node(mut t);
+    let mut stack: Vec[Frame] = Vec.new();
+    stack.push(Frame { node: root, edits: edit_distance, s: s.as_bytes().to_vec() });
+    while stack.len() > 0 {
+        let fr = stack.pop().unwrap();
+        let n = fr.s.len() as i64;
+        if n > 0 {
+            let no_edit = edge_or_new(mut t, fr.node, fr.s[0] as i64);
+            if n == 1 {
+                t.fin[no_edit] = true;
+            }
+            stack.push(Frame { node: no_edit, edits: fr.edits, s: fr.s[1..].to_vec() });
+        }
+        if fr.edits == 0 {
+            continue;
+        }
+        let insertion = edge_or_new(mut t, fr.node, STAR);
+        if n == 0 {
+            t.fin[insertion] = true;
+        }
+        stack.push(Frame { node: insertion, edits: fr.edits - 1, s: fr.s.clone() });
+        if n > 1 {
+            stack.push(Frame { node: fr.node, edits: fr.edits - 1, s: fr.s[1..].to_vec() });
+        }
+        if n == 1 {
+            t.fin[fr.node] = true;
+        }
+        if n >= 1 {
+            let substitution = edge_or_new(mut t, fr.node, STAR);
+            if n == 1 {
+                t.fin[substitution] = true;
+            }
+            stack.push(Frame { node: substitution, edits: fr.edits - 1, s: fr.s[1..].to_vec() });
+        }
+        if fr.edits > 0 and n > 1 {
+            let transpose = edge_or_new(mut t, fr.node, fr.s[1] as i64);
+            let mut rest: Vec[u8] = Vec.new();
+            rest.push(fr.s[0]);
+            for c in fr.s[2..].to_vec() {
+                rest.push(c);
+            }
+            stack.push(Frame { node: transpose, edits: fr.edits - 1, s: rest });
+        }
+    }
+    t
+}
+
+struct IFrame {
+    node: i64,
+    q: i64,
+    out: i64,
+}
+
+fn ts_intersect(a: ref Ts, q: ref Ts) -> Ts {
+    let mut o = ts_new();
+    let root = ts_node(mut o);
+    let mut stack: Vec[IFrame] = Vec.new();
+    stack.push(IFrame { node: 0, q: 0, out: root });
+    while stack.len() > 0 {
+        let fr = stack.pop().unwrap();
+        for qi in 0..q.labs[fr.q].len() as i64 {
+            let q_edge = q.labs[fr.q][qi];
+            for ni in 0..a.labs[fr.node].len() as i64 {
+                let n_edge = a.labs[fr.node][ni];
+                if n_edge == q_edge or q_edge == STAR {
+                    let node = a.kids[fr.node][ni];
+                    let q_node = q.kids[fr.q][qi];
+                    let fin = a.fin[node] and q.fin[q_node];
+                    let mut next = ts_get(o, fr.out, n_edge);
+                    if next >= 0 {
+                        o.fin[next] = o.fin[next] or fin;
+                    } else {
+                        next = ts_node(mut o);
+                        o.fin[next] = fin;
+                        ts_set(mut o, fr.out, n_edge, next);
+                    }
+                    stack.push(IFrame { node: node, q: q_node, out: next });
+                }
+            }
+        }
+    }
+    o
+}
+
+struct LFrame {
+    prefix: Vec[u8],
+    node: i64,
+}
+
+fn ts_to_list(t: ref Ts) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    let mut stack: Vec[LFrame] = Vec.new();
+    stack.push(LFrame { prefix: Vec.new(), node: 0 });
+    while stack.len() > 0 {
+        let fr = stack.pop().unwrap();
+        if t.fin[fr.node] {
+            words.push(from_bytes(fr.prefix));
+        }
+        for i in 0..t.labs[fr.node].len() as i64 {
+            let mut p = fr.prefix.clone();
+            p.push(t.labs[fr.node][i] as u8);
+            stack.push(LFrame { prefix: p, node: t.kids[fr.node][i] });
+        }
+    }
+    words
+}
+
+// ------------------------------------------------------------ the index
+
+struct Vector {
+    idx: Vec[i64],
+    val: Vec[f64],
+}
+
+fn new_vector() -> Vector {
+    Vector { idx: Vec.new(), val: Vec.new() }
+}
+
+fn position_for(v: ref Vector, index: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = v.idx.len() as i64;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if v.idx[mid] < index { lo = mid + 1; } else { hi = mid; }
+    }
+    lo
+}
+
+// upsert with a + b; insert never meets an index twice.
+fn upsert(v: mut ref Vector, index: i64, val: f64) {
+    let p = position_for(v, index);
+    if p < v.idx.len() as i64 and v.idx[p] == index {
+        v.val[p] = v.val[p] + val;
+    } else {
+        v.idx.insert(p, index);
+        v.val.insert(p, val);
+    }
+}
+
+fn magnitude(v: ref Vector) -> f64 {
+    let mut sum = 0.0;
+    for x in v.val {
+        sum += x * x;
+    }
+    sum.sqrt()
+}
+
+fn similarity(q: ref Vector, f: ref Vector) -> f64 {
+    let m = magnitude(q);
+    if m == 0.0 or magnitude(f) == 0.0 {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut i = 0;
+    let mut j = 0;
+    while i < q.idx.len() as i64 and j < f.idx.len() as i64 {
+        if q.idx[i] < f.idx[j] {
+            i += 1;
+        } else if q.idx[i] > f.idx[j] {
+            j += 1;
+        } else {
+            dot += q.val[i] * f.val[j];
+            i += 1;
+            j += 1;
+        }
+    }
+    dot / m
+}
+
+// A term's posting: per field, the documents in the order they came and
+// each one's token positions as start, length pairs.
+struct Posting {
+    index: i64,
+    docs: Vec[Vec[String]],
+    pos: Vec[Vec[Vec[i64]]],
+    slot: Vec[Map[String, i64]],
+}
+
+fn new_posting(index: i64, nf: i64) -> Posting {
+    let mut p = Posting { index: index, docs: Vec.new(), pos: Vec.new(), slot: Vec.new() };
+    for _ in 0..nf {
+        p.docs.push(Vec.new());
+        p.pos.push(Vec.new());
+        p.slot.push(Map.new());
+    }
+    p
+}
+
+struct Index {
+    fields: Vec[String],
+    boosts: Vec[i64],
+    terms: Vec[String],
+    term_slot: Map[String, i64],
+    posts: Vec[Posting],
+    fv_refs: Vec[String],
+    fv: Vec[Vector],
+    fv_slot: Map[String, i64],
+    ts: Ts,
+}
+
+struct Doc {
+    reference: String,
+    boost: i64,
+    values: Vec[String],
+}
+
+fn field_of(field_ref: ref String) -> String {
+    match field_ref.split_once("/") {
+        Some((f, _)) => f.to_string(),
+        None => String.new(),
+    }
+}
+
+fn doc_of(field_ref: ref String) -> String {
+    match field_ref.split_once("/") {
+        Some((_, d)) => d.to_string(),
+        None => String.new(),
+    }
+}
+
+fn field_index(fields: ref Vec[String], name: ref String) -> i64 {
+    for i in 0..fields.len() as i64 {
+        if fields[i] == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn idf(p: ref Posting, n_docs: i64) -> f64 {
+    let mut with_term = 0;
+    for d in p.docs {
+        with_term += d.len() as i64;
+    }
+    let x = ((n_docs - with_term) as f64 + 0.5) / (with_term as f64 + 0.5);
+    (1.0 + x.abs()).ln()
+}
+
+fn build_index(fields: ref Vec[String], boosts: ref Vec[i64], docs: ref Vec[Doc], stops: ref Set[String]) -> Index {
+    let nf = fields.len() as i64;
+    let mut idx = Index { fields: fields.clone(), boosts: boosts.clone(), terms: Vec.new(), term_slot: Map.new(), posts: Vec.new(), fv_refs: Vec.new(), fv: Vec.new(), fv_slot: Map.new(), ts: ts_new() };
+    // field ref -> its terms in order, their counts, and its length
+    let mut fr_terms: Vec[Vec[String]] = Vec.new();
+    let mut fr_counts: Vec[Vec[i64]] = Vec.new();
+    let mut fr_len: Vec[i64] = Vec.new();
+    let mut fr_doc_boost: Vec[i64] = Vec.new();
+    for d in docs {
+        for f in 0..nf {
+            let terms = run_pipeline(tokenize(d.values[f]), stops);
+            let fref = f"{fields[f]}/{d.reference}";
+            idx.fv_slot.insert(fref.clone(), idx.fv_refs.len() as i64);
+            idx.fv_refs.push(fref);
+            let mut tl: Vec[String] = Vec.new();
+            let mut tc: Vec[i64] = Vec.new();
+            let mut seen: Map[String, i64] = Map.new();
+            for t in terms {
+                let s = *seen.get(t.text).unwrap_or(-1);
+                if s >= 0 {
+                    tc[s] += 1;
+                } else {
+                    seen.insert(t.text.clone(), tl.len() as i64);
+                    tl.push(t.text.clone());
+                    tc.push(1);
+                }
+                let mut ti = *idx.term_slot.get(t.text).unwrap_or(-1);
+                if ti < 0 {
+                    ti = idx.terms.len() as i64;
+                    idx.term_slot.insert(t.text.clone(), ti);
+                    idx.terms.push(t.text.clone());
+                    idx.posts.push(new_posting(ti, nf));
+                }
+                let mut ds = *idx.posts[ti].slot[f].get(d.reference).unwrap_or(-1);
+                if ds < 0 {
+                    ds = idx.posts[ti].docs[f].len() as i64;
+                    idx.posts[ti].slot[f].insert(d.reference.clone(), ds);
+                    idx.posts[ti].docs[f].push(d.reference.clone());
+                    idx.posts[ti].pos[f].push(Vec.new());
+                }
+                idx.posts[ti].pos[f][ds].push(t.start);
+                idx.posts[ti].pos[f][ds].push(t.len);
+            }
+            fr_len.push(terms.len() as i64);
+            fr_terms.push(tl);
+            fr_counts.push(tc);
+            fr_doc_boost.push(d.boost);
+        }
+    }
+    let mut sums: Vec[i64] = Vec.filled(nf, 0);
+    let mut counts: Vec[i64] = Vec.filled(nf, 0);
+    for r in 0..idx.fv_refs.len() as i64 {
+        let f = r % nf;
+        counts[f] += 1;
+        sums[f] += fr_len[r];
+    }
+    let mut avg: Vec[f64] = Vec.new();
+    for f in 0..nf {
+        avg.push(sums[f] as f64 / counts[f] as f64);
+    }
+    let n_docs = docs.len() as i64;
+    for r in 0..idx.fv_refs.len() as i64 {
+        let f = r % nf;
+        let mut v = new_vector();
+        for k in 0..fr_terms[r].len() as i64 {
+            let ti = *idx.term_slot.get(fr_terms[r][k]).unwrap_or(-1);
+            let tf = fr_counts[r][k] as f64;
+            let w = idf(idx.posts[ti], n_docs);
+            let mut score = w * ((K1 + 1.0) * tf) / (K1 * (1.0 - B + B * (fr_len[r] as f64 / avg[f])) + tf);
+            score *= boosts[f] as f64;
+            score *= fr_doc_boost[r] as f64;
+            upsert(mut v, idx.posts[ti].index, round3(score));
+        }
+        idx.fv.push(v);
+    }
+    let mut sorted = idx.terms.clone();
+    sorted.sort();
+    let mut tb = new_ts_builder();
+    for t in sorted {
+        tsb_insert(mut tb, t);
+    }
+    tsb_minimize(mut tb, 0);
+    idx.ts = tb.ts;
+    idx
+}
+
+// ------------------------------------------------------------ queries
+
+const L_FIELD: i64 = 1;
+const L_TERM: i64 = 2;
+const L_EDIT: i64 = 3;
+const L_BOOST: i64 = 4;
+const L_PRESENCE: i64 = 5;
+const LEX_NAMES: Array[Str, 6] = ["EOS", "FIELD", "TERM", "EDIT_DISTANCE", "BOOST", "PRESENCE"];
+const OPTIONAL: i64 = 1;
+const REQUIRED: i64 = 2;
+const PROHIBITED: i64 = 3;
+
+struct Lexeme {
+    kind: i64,
+    s: String,
+}
+
+struct Lexer {
+    b: Vec[u8],
+    pos: i64,
+    start: i64,
+    escapes: Vec[i64],
+    out: Vec[Lexeme],
+}
+
+// Python's s[a:b], clamped.
+fn py_slice(b: ref Vec[u8], a: i64, e: i64) -> Vec[u8] {
+    let n = b.len() as i64;
+    let lo = if a < 0 { 0 } else if a > n { n } else { a };
+    let hi = if e < 0 { 0 } else if e > n { n } else { e };
+    if lo >= hi {
+        return Vec.new();
+    }
+    b[lo..hi].to_vec()
+}
+
+impl Lexer {
+    fn next(mut ref self) -> i64 {
+        if self.pos >= self.b.len() as i64 {
+            return -1;
+        }
+        let c = self.b[self.pos] as i64;
+        self.pos += 1;
+        c
+    }
+
+    fn ignore(mut ref self) {
+        if self.start == self.pos {
+            self.pos += 1;
+        }
+        self.start = self.pos;
+    }
+
+    fn emit(mut ref self, kind: i64) {
+        let mut s: Vec[u8] = Vec.new();
+        let mut from = self.start;
+        for e in self.escapes.clone() {
+            for c in py_slice(self.b, from, e) {
+                s.push(c);
+            }
+            from = e + 1;
+        }
+        for c in py_slice(self.b, from, self.pos) {
+            s.push(c);
+        }
+        self.escapes = Vec.new();
+        self.out.push(Lexeme { kind: kind, s: from_bytes(s) });
+        self.start = self.pos;
+    }
+
+    fn digits(mut ref self) {
+        let mut c = self.next();
+        while c != -1 and c > 47 and c < 58 {
+            c = self.next();
+        }
+        if c != -1 {
+            self.pos -= 1;
+        }
+    }
+}
+
+fn lex(q: ref String) -> Vec[Lexeme] {
+    let mut lx = Lexer { b: q.as_bytes().to_vec(), pos: 0, start: 0, escapes: Vec.new(), out: Vec.new() };
+    // 0 text, 1 field, 2 term, 3 edit distance, 4 boost, 5 end
+    let mut state = 0;
+    while state >= 0 {
+        if state == 0 {
+            loop {
+                let c = lx.next();
+                if c == -1 {
+                    state = 5;
+                    break;
+                }
+                if c == 92 {
+                    lx.escapes.push(lx.pos - 1);
+                    lx.pos += 1;
+                    continue;
+                }
+                if c == 58 {
+                    state = 1;
+                    break;
+                }
+                if c == 126 or c == 94 {
+                    lx.pos -= 1;
+                    if lx.pos - lx.start > 0 {
+                        lx.emit(L_TERM);
+                    }
+                    state = if c == 126 { 3 } else { 4 };
+                    break;
+                }
+                if (c == 43 or c == 45) and lx.pos - lx.start == 1 {
+                    lx.emit(L_PRESENCE);
+                    continue;
+                }
+                if is_sep(c) {
+                    state = 2;
+                    break;
+                }
+            }
+        } else if state == 1 {
+            lx.pos -= 1;
+            lx.emit(L_FIELD);
+            lx.ignore();
+            state = 0;
+        } else if state == 2 {
+            if lx.pos - lx.start > 1 {
+                lx.pos -= 1;
+                lx.emit(L_TERM);
+            }
+            lx.ignore();
+            state = 0;
+        } else if state == 3 or state == 4 {
+            lx.ignore();
+            lx.digits();
+            lx.emit(if state == 3 { L_EDIT } else { L_BOOST });
+            state = 0;
+        } else {
+            if lx.pos - lx.start > 0 {
+                lx.emit(L_TERM);
+            }
+            state = -1;
+        }
+    }
+    lx.out
+}
+
+#[derive(Clone)]
+struct Clause {
+    term: String,
+    fields: Vec[String],
+    edit: i64,
+    use_pipeline: bool,
+    boost: i64,
+    presence: i64,
+}
+
+fn new_clause() -> Clause {
+    Clause { term: String.new(), fields: Vec.new(), edit: 0, use_pipeline: true, boost: 1, presence: OPTIONAL }
+}
+
+fn small_number(s: ref String) -> Option[i64] {
+    if s.len() == 0 or s.len() > 15 {
+        return None;
+    }
+    match i64.parse(s) {
+        Ok(v) => Some(v),
+        Err(_) => None,
+    }
+}
+
+fn parse_query(q: ref String, all: ref Vec[String]) -> Result[Vec[Clause], String] {
+    let lx = lex(q);
+    let n = lx.len() as i64;
+    let mut out: Vec[Clause] = Vec.new();
+    let mut cur = new_clause();
+    let mut i = 0;
+    // 0 clause, 1 field, 2 term, 3 presence, 4 edit, 5 boost, 6 after a term
+    let mut state = 0;
+    loop {
+        if state == 0 {
+            if i >= n {
+                break;
+            }
+            let k = lx[i].kind;
+            if k == L_FIELD {
+                state = 1;
+            } else if k == L_TERM {
+                state = 2;
+            } else if k == L_PRESENCE {
+                state = 3;
+            } else {
+                let with = if lx[i].s.len() > 0 { f"with value \"{lx[i].s}\"" } else { String.new() };
+                return Err(f"Expected either a field or a term, found {LEX_NAMES[k]}{with}");
+            }
+        } else if state == 1 {
+            let s = lx[i].s.clone();
+            i += 1;
+            if field_index(all, s) < 0 {
+                return Err(f"Unrecognized field \"{s}\", possible fields {all.join(", ")}");
+            }
+            cur.fields = [s];
+            if i >= n {
+                return Err("Expected term, found nothing".to_string());
+            }
+            if lx[i].kind != L_TERM {
+                return Err(f"Expected term, found {LEX_NAMES[lx[i].kind]}");
+            }
+            state = 2;
+        } else if state == 2 {
+            cur.term = lx[i].s.to_lowercase();
+            if lx[i].s.contains("*") {
+                cur.use_pipeline = false;
+            }
+            i += 1;
+            state = 6;
+        } else if state == 3 {
+            let s = lx[i].s.clone();
+            i += 1;
+            cur.presence = if s == "-" { PROHIBITED } else { REQUIRED };
+            if i >= n {
+                return Err("Expected either a field or a term, found nothing".to_string());
+            }
+            let k = lx[i].kind;
+            if k == L_FIELD {
+                state = 1;
+            } else if k == L_TERM {
+                state = 2;
+            } else {
+                return Err("Expected either a field or a term, found PRESENCE".to_string());
+            }
+        } else if state == 4 or state == 5 {
+            match small_number(lx[i].s) {
+                Some(v) => {
+                    if state == 4 { cur.edit = v; } else { cur.boost = v; }
+                }
+                None => {
+                    return Err(if state == 4 { "Edit distance must be numeric".to_string() } else { "Boost must be numeric".to_string() });
+                }
+            }
+            i += 1;
+            state = 6;
+        } else {
+            if i >= n {
+                if cur.fields.len() == 0 { cur.fields = all.clone(); }
+                out.push(cur.clone());
+                break;
+            }
+            let k = lx[i].kind;
+            if k == L_EDIT {
+                state = 4;
+            } else if k == L_BOOST {
+                state = 5;
+            } else {
+                if cur.fields.len() == 0 { cur.fields = all.clone(); }
+                out.push(cur.clone());
+                cur = new_clause();
+                state = if k == L_TERM { 2 } else if k == L_FIELD { 1 } else { 3 };
+            }
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ searching
+
+// One field ref's match data: term, field and positions, in the order
+// lunr's nested dicts would hold them.
+struct Md {
+    terms: Vec[String],
+    fields: Vec[String],
+    pos: Vec[Vec[i64]],
+}
+
+fn md_add(md: mut ref Md, term: ref String, field: ref String, pos: ref Vec[i64]) {
+    for i in 0..md.terms.len() as i64 {
+        if md.terms[i] == term and md.fields[i] == field {
+            for p in pos {
+                md.pos[i].push(p);
+            }
+            return;
+        }
+    }
+    md.terms.push(term.clone());
+    md.fields.push(field.clone());
+    md.pos.push(pos.clone());
+}
+
+struct Hit {
+    reference: String,
+    score: f64,
+    md: Md,
+    order: i64,
+}
+
+fn search(idx: ref Index, clauses: ref Vec[Clause]) -> Vec[Hit] {
+    let mut hits: Vec[Hit] = Vec.new();
+    if clauses.len() == 0 {
+        return hits;
+    }
+    let nf = idx.fields.len() as i64;
+    let mut qv: Vec[Vector] = Vec.new();
+    let mut req_has: Vec[bool] = Vec.filled(nf, false);
+    let mut req_all: Vec[bool] = Vec.filled(nf, false);
+    let mut req: Vec[Set[String]] = Vec.new();
+    let mut proh: Vec[Set[String]] = Vec.new();
+    for _ in 0..nf {
+        qv.push(new_vector());
+        req.push(Set.new());
+        proh.push(Set.new());
+    }
+    let mut mf_refs: Vec[String] = Vec.new();
+    let mut mf: Vec[Md] = Vec.new();
+    let mut mf_slot: Map[String, i64] = Map.new();
+    let mut cache: Set[String] = Set.new();
+    for c in clauses {
+        let term = if c.use_pipeline { stem(c.term) } else { c.term.clone() };
+        let mut clause_matches: Set[String] = Set.new();
+        let qts = if c.edit != 0 { ts_from_fuzzy(term, c.edit) } else { ts_from_string(term) };
+        let expanded = ts_to_list(ts_intersect(idx.ts, qts));
+        if expanded.len() == 0 and c.presence == REQUIRED {
+            for f in c.fields {
+                let fi = field_index(idx.fields, f);
+                req_has[fi] = true;
+                req_all[fi] = true;
+            }
+        } else {
+            for e in expanded {
+                let ti = *idx.term_slot.get(e).unwrap_or(-1);
+                let p = ref idx.posts[ti];
+                for f in c.fields {
+                    let fi = field_index(idx.fields, f);
+                    if c.presence == REQUIRED {
+                        for d in p.docs[fi] {
+                            clause_matches.insert(d.clone());
+                        }
+                        if not req_has[fi] {
+                            req_has[fi] = true;
+                            req_all[fi] = true;
+                        }
+                    } else if c.presence == PROHIBITED {
+                        for d in p.docs[fi] {
+                            proh[fi].insert(d.clone());
+                        }
+                        continue;
+                    }
+                    upsert(mut qv[fi], p.index, c.boost as f64);
+                    let tf = f"{e}/{f}";
+                    if cache.contains(tf) {
+                        continue;
+                    }
+                    for k in 0..p.docs[fi].len() as i64 {
+                        let fref = f"{f}/{p.docs[fi][k]}";
+                        let s = *mf_slot.get(fref).unwrap_or(-1);
+                        if s < 0 {
+                            mf_slot.insert(fref.clone(), mf.len() as i64);
+                            mf_refs.push(fref);
+                            mf.push(Md { terms: [e.clone()], fields: [f.clone()], pos: [p.pos[fi][k].clone()] });
+                        } else {
+                            md_add(mut mf[s], e, f, p.pos[fi][k]);
+                        }
+                    }
+                    cache.insert(tf);
+                }
+            }
+        }
+        if c.presence == REQUIRED {
+            for f in c.fields {
+                let fi = field_index(idx.fields, f);
+                if req_all[fi] {
+                    req[fi] = clause_matches.clone();
+                    req_all[fi] = false;
+                } else {
+                    let mut keep: Set[String] = Set.new();
+                    for d in req[fi] {
+                        if clause_matches.contains(d) {
+                            keep.insert(d.clone());
+                        }
+                    }
+                    req[fi] = keep;
+                }
+            }
+        }
+    }
+    let mut all_complete = true;
+    let mut all_req: Set[String] = Set.new();
+    let mut all_proh: Set[String] = Set.new();
+    for fi in 0..nf {
+        if req_has[fi] {
+            if all_complete {
+                all_req = req[fi].clone();
+                all_complete = false;
+            } else {
+                let mut keep: Set[String] = Set.new();
+                for d in all_req {
+                    if req[fi].contains(d) {
+                        keep.insert(d.clone());
+                    }
+                }
+                all_req = keep;
+            }
+        }
+        for d in proh[fi] {
+            all_proh.insert(d.clone());
+        }
+    }
+    let mut negated = true;
+    for c in clauses {
+        if c.presence != PROHIBITED {
+            negated = false;
+        }
+    }
+    if negated {
+        mf_refs = idx.fv_refs.clone();
+        mf = Vec.new();
+        for _ in mf_refs {
+            mf.push(Md { terms: Vec.new(), fields: Vec.new(), pos: Vec.new() });
+        }
+    }
+    let mut hit_slot: Map[String, i64] = Map.new();
+    for r in 0..mf_refs.len() as i64 {
+        let fref = mf_refs[r].clone();
+        let d = doc_of(fref);
+        if (not all_complete and not all_req.contains(d)) or all_proh.contains(d) {
+            continue;
+        }
+        let fi = field_index(idx.fields, field_of(fref));
+        let v = *idx.fv_slot.get(fref).unwrap_or(-1);
+        let score = similarity(qv[fi], idx.fv[v]);
+        let h = *hit_slot.get(d).unwrap_or(-1);
+        if h >= 0 {
+            hits[h].score += score;
+            for k in 0..mf[r].terms.len() as i64 {
+                md_add(mut hits[h].md, mf[r].terms[k], mf[r].fields[k], mf[r].pos[k]);
+            }
+        } else {
+            hit_slot.insert(d.clone(), hits.len() as i64);
+            let order = hits.len() as i64;
+            hits.push(Hit { reference: d, score: score, md: Md { terms: mf[r].terms.clone(), fields: mf[r].fields.clone(), pos: mf[r].pos.clone() }, order: order });
+        }
+    }
+    hits.sort_by(|a, b| if a.score > b.score {
+        Ordering.Less
+    } else if a.score < b.score {
+        Ordering.Greater
+    } else {
+        a.order.cmp(b.order)
+    });
+    hits
+}
+
+fn show(n: i64, q: ref String, idx: ref Index, out: mut ref Vec[String]) {
+    let clauses = match parse_query(q, idx.fields) {
+        Ok(c) => c,
+        Err(e) => {
+            out.push(f"q{n} {json_str(q)}: error: {e}");
+            return;
+        }
+    };
+    let hits = search(idx, clauses);
+    out.push(f"q{n} {json_str(q)}: {hits.len()} results");
+    let top = if hits.len() < 5 { hits.len() as i64 } else { 5 };
+    for i in 0..top {
+        let mut terms: Vec[String] = Vec.new();
+        for t in hits[i].md.terms {
+            if not terms.contains(t) {
+                terms.push(t.clone());
+            }
+        }
+        terms.sort();
+        out.push(f"  {hits[i].reference} {hits[i].score:.6} {terms.join(",")}");
+    }
+    if hits.len() > 0 {
+        let md = ref hits[0].md;
+        let mut terms: Vec[String] = Vec.new();
+        for t in md.terms {
+            if not terms.contains(t) {
+                terms.push(t.clone());
+            }
+        }
+        terms.sort();
+        for t in terms {
+            for k in 0..md.terms.len() as i64 {
+                if md.terms[k] == t {
+                    let mut ps: Vec[String] = Vec.new();
+                    let mut j = 0;
+                    while j + 1 < md.pos[k].len() as i64 {
+                        ps.push(f"{md.pos[k][j]}+{md.pos[k][j + 1]}");
+                        j += 2;
+                    }
+                    out.push(f"    {t} {md.fields[k]} {ps.join(" ")}");
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ JSON
+
+fn serialize(idx: ref Index) -> String {
+    let mut s = "{\"version\": \"2.3.9\", \"fields\": [".to_string();
+    let mut fs: Vec[String] = Vec.new();
+    for f in idx.fields {
+        fs.push(json_str(f));
+    }
+    s.push_str(fs.join(", "));
+    s.push_str("], \"fieldVectors\": [");
+    let mut vs: Vec[String] = Vec.new();
+    for r in 0..idx.fv_refs.len() as i64 {
+        let v = ref idx.fv[r];
+        let mut el: Vec[String] = Vec.new();
+        for k in 0..v.idx.len() as i64 {
+            el.push(f"{v.idx[k]}");
+            el.push(repr3(round3(v.val[k])));
+        }
+        vs.push(f"[{json_str(idx.fv_refs[r])}, [{el.join(", ")}]]");
+    }
+    s.push_str(vs.join(", "));
+    s.push_str("], \"invertedIndex\": [");
+    let mut sorted = idx.terms.clone();
+    sorted.sort();
+    let mut ts: Vec[String] = Vec.new();
+    for t in sorted {
+        let p = ref idx.posts[*idx.term_slot.get(t).unwrap_or(-1)];
+        let mut parts: Vec[String] = Vec.new();
+        for f in 0..idx.fields.len() as i64 {
+            let mut ds: Vec[String] = Vec.new();
+            for k in 0..p.docs[f].len() as i64 {
+                let mut ps: Vec[String] = Vec.new();
+                let mut j = 0;
+                while j + 1 < p.pos[f][k].len() as i64 {
+                    ps.push(f"[{p.pos[f][k][j]}, {p.pos[f][k][j + 1]}]");
+                    j += 2;
+                }
+                ds.push(f"{json_str(p.docs[f][k])}: {{\"position\": [{ps.join(", ")}]}}");
+            }
+            parts.push(f"{json_str(idx.fields[f])}: {{{ds.join(", ")}}}");
+        }
+        parts.push(f"\"_index\": {p.index}");
+        ts.push(f"[{json_str(t)}, {{{parts.join(", ")}}}]");
+    }
+    s.push_str(ts.join(", "));
+    s.push_str("], \"pipeline\": [\"stemmer\"]}");
+    s
+}
+
+enum Json {
+    Num(String),
+    Str(String),
+    Arr(Vec[Json]),
+    Obj(Vec[String], Vec[Json]),
+}
+
+struct JsonReader {
+    b: Vec[u8],
+    i: i64,
+}
+
+impl JsonReader {
+    fn skip(mut ref self) {
+        while self.i < self.b.len() as i64 and (self.b[self.i] == 32 or self.b[self.i] == 10) {
+            self.i += 1;
+        }
+    }
+
+    fn string(mut ref self) -> String {
+        self.i += 1;
+        let mut out: Vec[u8] = Vec.new();
+        while self.b[self.i] != 34 {
+            if self.b[self.i] == 92 {
+                self.i += 1;
+            }
+            out.push(self.b[self.i]);
+            self.i += 1;
+        }
+        self.i += 1;
+        from_bytes(out)
+    }
+
+    fn value(mut ref self) -> Json {
+        self.skip();
+        let c = self.b[self.i];
+        if c == 34 {
+            return Json.Str(self.string());
+        }
+        if c == 91 {
+            self.i += 1;
+            let mut items: Vec[Json] = Vec.new();
+            self.skip();
+            if self.b[self.i] == 93 {
+                self.i += 1;
+                return Json.Arr(items);
+            }
+            loop {
+                items.push(self.value());
+                self.skip();
+                let d = self.b[self.i];
+                self.i += 1;
+                if d == 93 {
+                    break;
+                }
+            }
+            return Json.Arr(items);
+        }
+        if c == 123 {
+            self.i += 1;
+            let mut keys: Vec[String] = Vec.new();
+            let mut vals: Vec[Json] = Vec.new();
+            self.skip();
+            if self.b[self.i] == 125 {
+                self.i += 1;
+                return Json.Obj(keys, vals);
+            }
+            loop {
+                self.skip();
+                keys.push(self.string());
+                self.skip();
+                self.i += 1;
+                vals.push(self.value());
+                self.skip();
+                let d = self.b[self.i];
+                self.i += 1;
+                if d == 125 {
+                    break;
+                }
+            }
+            return Json.Obj(keys, vals);
+        }
+        let start = self.i;
+        while self.i < self.b.len() as i64 and self.b[self.i] != 44 and self.b[self.i] != 93 and self.b[self.i] != 125 {
+            self.i += 1;
+        }
+        Json.Num(from_bytes(self.b[start..self.i].to_vec()))
+    }
+}
+
+fn items(j: ref Json) -> Vec[Json] {
+    match j {
+        Json.Arr(v) => v.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn text(j: ref Json) -> String {
+    match j {
+        Json.Str(s) => s.clone(),
+        Json.Num(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn get(j: ref Json, key: Str) -> Json {
+    match j {
+        Json.Obj(ks, vs) => {
+            for i in 0..ks.len() as i64 {
+                if ks[i] == key {
+                    return vs[i].clone();
+                }
+            }
+            Json.Arr(Vec.new())
+        }
+        _ => Json.Arr(Vec.new()),
+    }
+}
+
+fn int_of(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+fn load_index(text_in: ref String) -> Index {
+    let mut rd = JsonReader { b: text_in.as_bytes().to_vec(), i: 0 };
+    let root = rd.value();
+    let mut fields: Vec[String] = Vec.new();
+    for f in items(get(root, "fields")) {
+        fields.push(text(f));
+    }
+    let nf = fields.len() as i64;
+    let mut idx = Index { fields: fields.clone(), boosts: Vec.filled(nf, 1), terms: Vec.new(), term_slot: Map.new(), posts: Vec.new(), fv_refs: Vec.new(), fv: Vec.new(), fv_slot: Map.new(), ts: ts_new() };
+    for pair in items(get(root, "fieldVectors")) {
+        let pv = items(pair);
+        let r = text(pv[0]);
+        let el = items(pv[1]);
+        let mut v = new_vector();
+        let mut k = 0;
+        while k + 1 < el.len() as i64 {
+            v.idx.push(int_of(text(el[k])));
+            let x = match f64.parse(text(el[k + 1])) {
+                Ok(x) => x,
+                Err(_) => 0.0,
+            };
+            v.val.push(x);
+            k += 2;
+        }
+        idx.fv_slot.insert(r.clone(), idx.fv_refs.len() as i64);
+        idx.fv_refs.push(r);
+        idx.fv.push(v);
+    }
+    let mut tb = new_ts_builder();
+    for pair in items(get(root, "invertedIndex")) {
+        let pv = items(pair);
+        let t = text(pv[0]);
+        let mut p = new_posting(int_of(text(get(pv[1], "_index"))), nf);
+        for f in 0..nf {
+            match get(pv[1], fields[f].as_str()) {
+                Json.Obj(ds, ms) => {
+                    for k in 0..ds.len() as i64 {
+                        p.slot[f].insert(ds[k].clone(), k);
+                        p.docs[f].push(ds[k].clone());
+                        let mut flat: Vec[i64] = Vec.new();
+                        for pp in items(get(ms[k], "position")) {
+                            for x in items(pp) {
+                                flat.push(int_of(text(x)));
+                            }
+                        }
+                        p.pos[f].push(flat);
+                    }
+                }
+                _ => {}
+            }
+        }
+        tsb_insert(mut tb, t);
+        idx.term_slot.insert(t.clone(), idx.terms.len() as i64);
+        idx.terms.push(t);
+        idx.posts.push(p);
+    }
+    tsb_minimize(mut tb, 0);
+    idx.ts = tb.ts;
+    idx
+}
+
+// ------------------------------------------------------------ the job
+
+fn main() {
+    let mut stops: Set[String] = Set.new();
+    for w in stop_word_spec().split(" ") {
+        stops.insert(w.to_string());
+    }
+    let mut docs: Vec[Doc] = Vec.new();
+    for line in docs_text().lines() {
+        let f: Vec[String] = line.split("|").map(|x| x.to_string()).collect();
+        docs.push(Doc { reference: f[0].clone(), boost: int_of(f[1]), values: [f[2].clone(), f[3].clone(), f[4].clone()] });
+    }
+    let mut queries: Vec[String] = Vec.new();
+    for line in queries_text().lines() {
+        queries.push(unpct(line.to_string()));
+    }
+    let fields = ["title".to_string(), "tags".to_string(), "body".to_string()];
+    let boosts = [10, 1, 1];
+    let idx = build_index(fields, boosts, docs, stops);
+    println(f"index: {docs.len()} pages, {idx.terms.len()} terms, {idx.fv_refs.len()} field vectors");
+    let mut out: Vec[String] = Vec.new();
+    for n in 0..queries.len() as i64 {
+        show(n + 1, queries[n], idx, mut out);
+    }
+    for line in out {
+        println(line);
+    }
+    let js = serialize(idx);
+    println(f"serialized: {js.len()} bytes, crc32 {crc32(js):08x}");
+    let path = "mini_lunr_index.json";
+    if fs.write(path, js).is_err() {
+        println("cannot write the index");
+        return;
+    }
+    let back = match fs.read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    };
+    let _ = fs.remove_file(path);
+    let loaded = load_index(back);
+    let mut again: Vec[String] = Vec.new();
+    for n in 0..queries.len() as i64 {
+        show(n + 1, queries[n], loaded, mut again);
+    }
+    let mut same = 0;
+    for i in 0..out.len() as i64 {
+        if i < again.len() as i64 and out[i] == again[i] {
+            same += 1;
+        }
+    }
+    println(f"loaded index: {same} of {out.len()} lines agree");
+}
+
+// Generated by gen_kara.py from data/ and the vendored lunr.
+
+fn docs_text() -> String {
+    let mut s = String.new();
+    s.push_str("guide/install|2|Installing harbor|install setup|This page covers installing harbor. The self-signed can must garbage e.g. architecture also for don't keys sign settings command not environment each. Flag responses of pipelines you when should command registries can setting more before installing slow of before. From you for manifests platforms option of connections your runs! Not setting defaults x509:, before any. Are credentials, retrying before by you error requests rates when requests from upgrade. --insecure will is report is scanner tokens headers report before forbidden most quotas your files replication: Pipelines with quickly ci/cd registry it variables when if the vulnerability an commands, that by before? Rate-limited delete rates if, keys manifests push mirror a build all pushes tags any of. Be an more this project server from delete policies when report should registries it after? Files --force retention only when you tags registry responses?\nguide/quickstart|2|Quickstart: push your first image|start tutorial|This page covers quickstart push your first image. All pulls repository for denied garbage to then. Flag scan be by v2.5 for only can OCI TLS blobs proxy not: Upgrade by headers image an vulnerability. Manifests, build token flags can every connection most to after? Logout, of credential config manifests a token from image. Repository tagged, key requests of your self-signed can quickly. A to tag pages you are. 443 signature scan any to connections missing. Is on most also, mirror install builds disk then install package upgraded rate most server with: Signed to this this retention flag upgrading after scanning to a below) configuration. Package after macos replicate e.g. the any verify pruned user! If configuring if errors you ...?\nguide/configure|1|Configuring the client|config setup|This page covers configuring the client. Installed of responses, scanner sha256:3f2a configurations files must of replicated of error. Configurations event all not");
+    s.push_str(" verifying platforms before, not architecture push can. Every manifest, vulnerabilities with more format S3? Collection retention digests options each this deleted more retry signing will. Be your that must scan pages, option output setting project signed it signed. That connection to more if to linux before v2.4 replicate command must to of setting S3 variable. Should sha256:3f2a proxy a quiet config. With you releases can then upgrade the, proxy this faster? It table flag when, it's is? Can prune linux cached per-project your then verify you when. E.g. of manifests with collection architecture tag by storage every your slow linux. Your the not manifest errors --force. In, replication option can any option all can for before max_retries.\nguide/auth|1|Authentication and tokens|auth security|This page covers authentication and tokens. With you key replication be configuration tag each tagged, are all commands a rates most. Are, slow installed upgrade deleted variable verbose builds releases policies headers. Only notification not windows should rates, webhook reports! Configurations for installed in timeout this push signing all. Replicated quota release the the from 8443 storage tags config platform webhook it on response. Deletion when proxies of proxies users! Credential limit responses in your deleting, repository not error option installing rate. Credentials keys, missing most most every from table in mirror. Also to if variables proxies mirrors rates should denied re-run. Configuring platform blobs push also can. Deleting v2.4 if are can any should request your projects can it are after packages is if? Signature, from timeout responses cached install per-project this architecture windows will runs? Package config configurations architectures this more install.\nguide/proxy|1|Running behind a proxy|network config|This page covers running behind a proxy. Ci/cd be if unauthorized table .... Binary command pruned if pruning running unauthorized will! An configure ");
+    s.push_str("config if should will be. Proxy registries before the an key that vulnerabilities more scanning this be denied table unauthorized. Verification before registry most on more missing flags signed? Every by environment prune environment timeouts blob files you: Build policy denied on are a upgraded v2.4 sign configure. Your the retrying ci/cd option cache file timeout binary headers your! Garbage then of verified not limits an limit v2.5 flags it pages verification ci/cd on by each. Any after by, proxy can't layer logout re-run all file policy must architecture of all digests. Every quotas that can reports login config that re-run pulls keys!\nguide/mirrors|1|Registry mirrors and caching|network cache|This page covers registry mirrors and caching. Verifying macos replicating, replication of linux. Only, flag password are automation kubernetes configuring. Slow every token table your can't package deleting, logout. It's file don't can most layer in for quickly installing that vulnerability more after. Disk tagged can a command by retry caching all requests logout mirror. Pushing after releases user configured only not collection? Then response pruned any responses signing can't: With requests all that credentials login then each config most. Each scanned defaults your request environment can also timeouts configurations token a running the. Each install images pruned replicated will! Every files only rates should logout this policy events events be faster --all-tags: On package server faster for this any pipeline prune in after for. The vulnerability manifest command runs is windows. Sha256:3f2a binary pushes binary policy pushing defaults binaries keys.\nguide/signing|1|Signing and verifying images|security signing|This page covers signing and verifying images. Push most every proxy linux is then should! Slow verbose with retention with any if pipelines errors timeouts projects notification! Disk on scanning most also windows automated with digest, signed? Self-signed ");
+    s.push_str("linux more options then also timeout, command requests for also command. Caching option you project each an response unknown. Will must then quota timeout can manifest signing setting pulls! Image below) be must the that mirrors windows package deleting notifications flags should most manifests replication: Notification header a tag slow, repositories flag is each version settings architecture. Releases pipeline signatures cache each, ... manifest with every deleting flags a is limits should. Rates request should verification, key retrying! Only pruned pipelines only tag slow from pushed deleting deletion replicating all for then. Binary verify timeouts deleted will pushed will before below) version errors with. Proxies not error are proxies be the project by TLS before. Key users responses S3 pull releases webhooks each push? Configured the kubernetes if an most manifests events users users user variables verified client.\nguide/retention|1|Retention policies|storage policy|This page covers retention policies. X509: every when the an verifying delete from in default only, be notification it. Push verifying variables only by architecture to an more from tags is is report? Denied replication proxy, this requests policy package signatures. Missing configurations of signing, headers builds event repositories with. This are vulnerability limits only scan images v2.4 limit mirror default can per-project by every each slow. Request all pipeline must version vulnerability only don't on password: Webhook options policy commands keys policy password can don't on v2.4, are after when when architectures: Repositories are by most from be not be every be, on flag each connections. When quotas sha256:3f2a can linux binaries binaries image quiet logout notifications: The (see registries linux reports rates replicated max_retries setting your a you each windows.\nguide/replication|1|Replicating between registries|network replication|This page covers replicating between registries. ");
+    s.push_str("Any should signature forbidden in tag platforms windows. For before after, images should binaries header quotas replicating. Connections scanning build you command versions. Json can unauthorized be a most! This after verify policy you delete to vulnerability by image you? Config digests all login pulling for files: Users this, collection collection any every every headers a key default: All notifications an signing are S3 443 any policy limit it when headers for a ... config. Binaries errors pruned can can that configure unknown after command. Request notifications packages if on page the verbose most key proxy by v2.4 webhooks image you. Config layers with if to it e.g. all you environment push a are table limits users!\nguide/webhooks|1|Webhooks and notifications|events integration|This page covers webhooks and notifications. ... users after layer on on by registries must is must then it's any binary for pruning. Not key cache most key on every! Unknown when upgrading is that upgrading windows quotas scanned by unauthorized after manifests config repositories storage verification. By --insecure each signing setting when limit blob network configuration releases not configuration prune! Most a can only if rate before your deleted kubernetes should variable quota connections a variable. Tagging connection users only headers any tagging by must 8443 this your platform! Releases scanned verified from then automated each not image binary each image only. Every limit when pulls sign that limit only layers every every? Automated platform installing proxies for of headers be? Most it's repository the your you, will then scan. More on 443 replicated it running by quota denied then key of:\nguide/quotas|1|Project quotas|storage policy|This page covers project quotas. Version connection configuration manifest from logout not binary each slow is cached! Each page not projects notification from projects files can't policies if? Collection pulled verified disk rate mirror that");
+    s.push_str(" notification should users v2.4 on your retry signatures. Installing any report not are pruned each before cached should: Scanning fast harbor.example.com requests connection of logout of should projects from binary users timeouts run. Notification pruning when quotas before should: Verifying then reports your before for variable collection reports forbidden: S3 also on not retry every binaries should, can forbidden self-signed can pulls this a. From every registry if environment login an should can max_retries slow should layers! Header quiet, of will max_retries denied webhooks deletion! Notification replicating, proxies signature table notifications timeout mirrors not be that only before? Quiet each by settings before install connections!\nguide/scanning|1|Vulnerability scanning|security scan|This page covers vulnerability scanning. All most when kubernetes the collection this in tokens table, pushing this max_retries is to flags? Logout digest only version on command server slow manifests. Report runs binary limit verified command re-run file cache every when scan if be after. Repository webhook format is responses versions commands unknown fast should below) of in that digest? Linux manifest windows then (see unknown collection below) are install it are. Flag deletion headers retrying pushes be can more upgraded scanned options before of any forbidden must. Replicate package before of requests builds, quiet. UTF-8 retention automated replicate repository then. Releases a windows is running if OCI of most: Before releases verified rate-limited runs upgrade ... most for should any not manifest environment is all not! Can environment for upgraded your more login.\nguide/ci|1|Using harbor in CI pipelines|integration automation|This page covers using harbor in ci pipelines. Of will rates a every after this when. A releases when most be report it also platforms each deletion mirror? Project push all more versions are by be most e.g. fast manifests manifest layer run");
+    s.push_str(" when with. S3 pushing for most package file, you not linux self-signed? Tagging slow json webhooks if should from project it v2.4 be scanning retrying pushed can must!\nguide/troubleshooting|1|Troubleshooting connection errors|network errors|This page covers troubleshooting connection errors. Retention each repositories all that should, e.g. only format verbose! Credentials be S3 policy retention to then when is configuring. Credential retrying scanner is only proxies unauthorized. Package that should project table rate release slow delete upgrading then binary your configure 443 retention that! You must before after 443 install by only on configuration installed configuring can binaries rates unknown response? Should an, caching forbidden versions platform proxies a all any replicate quickly upgrading? Are storage credentials you most tags: Of, repositories that login quota your notifications a after pull pages limit v2.4 reports! Ci/cd registries can v2.5 are by must pipeline an binaries errors response after is verified credential then?\nguide/upgrading|1|Upgrading from version 1|install upgrade|This page covers upgrading from version 1. With install the quiet harbor.example.com if will when signature. Headers only self-signed tagged after notification any self-signed manifest. Signatures on configured setting will verified webhook in every install: Client connection more must tagged binaries storage rates files layer on for is signature event pages 8443. Storage not if each, projects password rate-limited. By then replicate windows headers your by repository commands binary pull that after errors. Proxies run is to most kubernetes before only, this blob that header unauthorized report pruned! Responses it all requests notification quota flag prune on binaries v2.5 manifest denied linux upgraded sign: Most pruning keys pushed versions report pruned the connection users UTF-8 in, limits most with self-signed headers. Format prune requests pruning for pushes delet");
+    s.push_str("ed an json pages binaries page? Then builds digest deleting page will every your release policy credentials harbor.example.com mirror. Pruned --all-tags your pushed not build that --all-tags each after? Forbidden OCI deleting self-signed responses be any after timeouts scanned in by pruning S3 more: Fast an every for should release disk projects garbage, run:\nguide/garbage|1|Garbage collection|storage cleanup|This page covers garbage collection. Rate-limited slow only you of when that pruned an digests if to before most not it? By that self-signed after tag if tagged credential each it's tagging packages. Pushing not cached credentials must retention projects it automation rate-limited in. Unauthorized will user is the platform settings your quotas missing pruning a deletion. Automation pipeline denied verbose will verify environment requests your, pulling. Option rate on the, rates only denied server can't report connection. Versions configure be a more before manifest more you storage running disk quiet platform 'latest' collection this.\nref/cli/push|1|harbor push|cli command|This page covers harbor push. Config it's is be rate upgrade with storage slow policies by by scanned that automated signatures a: Before pulling running cache after server each are, setting can't signing. Are vulnerability 8443 from tags for cache every request when then only digest: Collection more pulls will pull every mirror x509: after proxy to. An replicate blob of in, rates signature must before verify when each. Release default format this of event layers all proxy vulnerability must! Signing after your by don't your replication quotas this --force is automated scanner linux rates client: Are a to most json forbidden for replicate to variable manifests limit pages all of be architecture. A when tokens by scanning request verified each then before: Be after config quiet storage headers signed binary also not per-project: Output --force pushing, command in keys signatures push key pag");
+    s.push_str("e should after only most tokens platform. Disk most not, the connections retries! Usage: harbor push [flags] image.\nref/cli/pull|1|harbor pull|cli command|This page covers harbor pull. Rate-limited pushed upgraded, errors quickly after you in install run verifying in. Quota each 8443 after a the --all-tags any to connections network variable: Layer package, defaults signature fast storage are file? Don't manifest projects not x509: on TLS installing. Scan every from if when before all versions delete timeouts repository events then every your? On login, signing not events must any to defaults key logout limit registry scanner file! When vulnerability scan should verified configuration before config default automation it TLS commands build digest on! Not it any responses windows for replicating can binaries in when OCI on quiet. X509: that connection only retry an you harbor.example.com more webhooks will defaults you! Are more max_retries must in this files by tagged proxies: Your on automated running every config are all package by to when by? Event quiet should be limits projects after when each. Scanned linux table run before when that, should your verbose: A OCI pushed the variables by also more of user retrying must this! Usage: harbor pull [flags] image.\nref/cli/login|1|harbor login|cli command auth|This page covers harbor login. That, reports connection platform also missing blobs connections ci/cd registries. To package before binaries is each timeouts then verifying table will unknown vulnerabilities packages scanning pipeline delete. Cached not package requests 443 pulled notification notification! 8443 sha256:3f2a an are verified, key reports by. E.g. binary by token this before default configured is unauthorized defaults each with! A more pushing with it's running only from --force install fast. It file if options quotas signed digest digest tagging: Usage: harbor login [flags] image.\nref/cli/logout|1|harbor logout|cli command auth|This page covers ha");
+    s.push_str("rbor logout. Faster delete variable connections if table install of release a request? Push upgrade configuration you to vulnerabilities every this tag is can can. On disk variable, that timeouts layer must build error if. Your architecture deleting, package you that of a cache! Packages repositories any HARBOR_TOKEN limits report webhooks OCI. All layers only files, delete is all a of can't login version UTF-8! Build all also this rate push after in will more scanner more quickly scanner? Most collection tagged an self-signed verification option all in. Deleted you of will in will tagging after json denied signing 443 should if upgraded! Requests vulnerability pipeline will e.g., this quiet tagging retry when! Client tagged build max_retries an max_retries only can in in flag not event the. Usage: harbor logout [flags] image.\nref/cli/tag|1|harbor tag|cli command|This page covers harbor tag. Digest build blob for windows repositories be, be any is architecture harbor.example.com responses. More will of in to timeout. Headers any default then release notification more! Below) requests rate-limited more files option of limits connections: Should reports all signatures by if, versions can. Can self-signed --force each e.g. deletion flag will you most HARBOR_TOKEN timeouts missing variables logout on configuring. Usage: harbor tag [flags] image.\nref/cli/inspect|1|harbor inspect|cli command|This page covers harbor inspect. Should releases header release scanned environment report: Replicate automation variable users registry upgrade. Harbor.example.com deleted on below) each verification releases! Errors will only the pushes not! Password events errors by a, repositories layer reports limits is. Repositories that that UTF-8 harbor.example.com layers unauthorized by will verify timeouts will signing? All, policies replicating will automation configuring retrying the in: Option, pushing the each more output will credential missing: Usage: harbor inspect [flags] image.\nr");
+    s.push_str("ef/cli/copy|1|harbor copy|cli command replication|This page covers harbor copy. Every settings run can automated be. Verified e.g. reports quickly will it's variable key? S3 requests tokens timeouts pruning only each on. Each digest pulled packages limits quickly webhooks repository server format it's disk commands that any (see? Usage: harbor copy [flags] image.\nref/cli/delete|1|harbor delete|cli command storage|This page covers harbor delete. Ci/cd quotas slow all proxy scanner pulled blobs to registries TLS when for prune? Layers user every the pushed more release each by credential also login when format: Are flag responses be should for deleting each for before before any you options ... then. Rate most faster binaries for on, when every pages! Most pulls reports not when max_retries with reports automated when? Retries when version verified with platforms scan from timeout any replicating more pulled OCI to should? Replicating pruning page key also replicate command retrying the kubernetes keys version. Scanning can, digest push any on config are. Before not HARBOR_TOKEN all client harbor.example.com every event on quotas users must. Replicating versions events options, verifying limit logout. Windows every header responses before signature you format on vulnerability configuration by an must. (see tagged build logout on disk pull linux ... this denied delete that windows replicate. The OCI connections delete the can client windows scanner configuring flag. V2.4 platform binaries users be forbidden on when pulled: Fast blob report disk ..., scan delete is deleting pipelines page logout proxy each! Usage: harbor delete [flags] image.\nref/cli/list|1|harbor list|cli command|This page covers harbor list. Should login only variables automation should your a, every? Client your credential after retries this cached more when faster files not installed tagged any webhook response: Architecture every setting an installing errors can't with configure fast, can it befo");
+    s.push_str("re most don't (see password. An delete --insecure self-signed configuration project. Password digests then users signatures can connections build not manifests not keys connections, users binary. X509: flag pruning this deleting then release scanning 443 are limits connection that if it more an! Usage: harbor list [flags] image.\nref/cli/sign|1|harbor sign|cli command signing|This page covers harbor sign. Verifying is digests errors are project after max_retries an timeouts with response verbose tags most when. Must scanner disk will server to delete most configurations don't should version --insecure HARBOR_TOKEN storage! Replicate for can't TLS faster when! Network key builds events on verbose your run will then configuring to re-run of below) pipeline. Releases it's, project to replicate 8443 blobs repository replication don't verifying it before limit config: You not HARBOR_TOKEN 'latest' in credentials pushed. Tags scan digest be verbose page when header pruned pruned release. Don't an if configuration header are, signature every? Retry scanner mirrors policies is pushed images requests be. The this for S3 can't connection for pipeline platforms signed not 443 not scanner setting. Can retrying version signed forbidden ... will also each pushed every can should. To replicating replicating client packages should --insecure, replicate it every by signing commands verify. Deletion 443 to notification must architecture only on after by vulnerabilities. You layer prune installed more most by quota build repositories defaults. Usage: harbor sign [flags] image.\nref/cli/verify|1|harbor verify|cli command signing|This page covers harbor verify. Verification scanning key if not connection limits of is version an don't options? Any repository are, not configuration header builds? Be on credentials this, more forbidden your upgraded OCI 443 this of. For delete timeouts setting before configuring events! Should an caching when before self-signed quiet files: The after also ");
+    s.push_str("token automation json network credentials quiet digest pushes manifest storage. From output in run can quota replicating the format are storage only can should. For each this --force signature repository commands. It policy each pages token sign a header pushes versions! This by json of will after configured setting is requests deletion notifications be this. That also by, this are on user are proxies vulnerability before from! Configuration slow install upgrading pushing you a quota cache tagged not verification. Each replicate event, you your if e.g.. Be build it verification UTF-8 HARBOR_TOKEN, rates on. Usage: harbor verify [flags] image.\nref/cli/scan|1|harbor scan|cli command scan|This page covers harbor scan. Setting pruning the an from layers pages pushing after with file? Running self-signed of scanner an before any if. An per-project in is notification defaults is from, will event vulnerabilities rate-limited tag all pulling only. Before for x509: scan should disk collection can't 'latest' binaries credentials limits environment on be automated. Binary error login you each version proxies the? When signed is signed sha256:3f2a can pushed all of timeouts for responses flag project flag. Be a to when build every of format must verification installing. Can by should response it each for automation release? On replicate v2.4 notifications quickly manifest running also to install any --force manifest registries after! Usage: harbor scan [flags] image.\nref/cli/prune|1|harbor prune|cli command cleanup|This page covers harbor prune. Versions all you tag can if caching after every pages versions below) unknown, configuration tagged then more. The request version notifications after json scanned limit, all quotas x509: every should timeouts connections only in? Pipelines that is installed error signed vulnerabilities rate of if unauthorized digest: Must upgraded pushing logout quickly storage installed before configuration registry not each tokens fast image that c");
+    s.push_str("an. Webhooks --force platforms packages unknown options pulled if not be to it each from unauthorized. Repository an you each more this! Fast most macos you replicated connections for flags version. From retry more v2.5 after on it pages policies in: Also, then pruned defaults configuration event slow each caching self-signed. S3 ci/cd proxy by configure header page tagged each pushes for should cached. Usage: harbor prune [flags] image.\nref/cli/config|1|harbor config|cli command config|This page covers harbor config. Before with policy --all-tags must, tagging files a it also package proxies most from report configuration. Installed every runs to not signed HARBOR_TOKEN! Verification architectures slow upgraded it don't environment most it notification digests when each? Retry on you tagging tokens signed each the key you by all should! Digest will can credential of tokens on delete also timeouts connections unknown, tokens if more to? Pipeline not missing can't json only version: Usage: harbor config [flags] image.\nref/config/file|1|The configuration file|config reference|This page covers the configuration file. Report UTF-8 policy deletion this password more you by macos when. Cache configurations from every in blobs verbose after verify quickly are that login then sha256:3f2a it: Installing if on an you this x509: tags connection build tagging automated notification from not pushed. Quotas, version tags slow blob before don't max_retries most more token. Before digests an replicating quickly proxies pushes layers?\nref/config/env|1|Environment variables|config reference|This page covers environment variables. Also pulled notification automation it automation denied your commands in: Will should signed you policies all pipeline by. Commands windows after pruning, policy it automated verifying this verified: Also, quota by output of network variables repositories signed with signatures proxies! In credentials upgrading project run all scanner verbose responses v");
+    s.push_str("ersions variables max_retries most, in! S3 proxies be will ci/cd by before in garbage for layer variable delete on! That registries on by, also macos. Notification all fast also when fast quota webhook is more missing manifests ... upgrading must? To this table linux unauthorized when should: Login user should linux disk layer then before pulled are event forbidden you that? On tokens table in, build each?\nref/config/credentials|1|Credential helpers|config auth|This page covers credential helpers. X509: quickly will garbage --insecure commands should. Webhooks every don't on will, platform option. With, by of only a scanning of on manifests: Proxy, key configuring request more with. Automation will of when rate after pulled key. TLS for, replicate verification webhooks manifests? To denied repository flags forbidden of of vulnerability most variables a options that requests: Blob digests environment commands of for that all layers must the connections user configuration can before. Runs when platforms UTF-8 release after. More pruned images the should output only the configured retry. Cached be only you cached file then, credential tag disk! Password be pull blob connections to every? Are, logout should by then repositories.\nref/config/retries|1|Retries and timeouts|config network|This page covers retries and timeouts. Releases upgrading TLS keys pruned upgraded can't timeouts limit install this, deleting pull. To then more is replication not is mirror config slow HARBOR_TOKEN will from for mirrors: Digest layers for is upgrade layers your timeouts configurations retry delete running it? All layer cached output v2.5 default json login. You signature only notification running architecture? Deletion manifests error signatures then linux of is be verifying: Proxy it when, can 'latest' verifying! Quota digests command scanned when credential output is then collection. Storage your every architectures any configure run from release your vulnerabilities this linux for y");
+    s.push_str("ou to! Releases most packages also x509:, network package binary: Will for before webhooks variables default you file vulnerabilities forbidden pushes: Deletion this the releases policies manifests it projects connection to every reports connection configured is forbidden: Can be from also collection json password versions self-signed slow if password? Errors if replication errors, with not pulled after with tags? Rates of harbor.example.com projects each be login each every json before it TLS installed pushes:\nref/api/repositories|1|Repositories API|api reference|This page covers repositories api. Pushing (see response vulnerabilities, verifying your in connections --force configurations are. Run header configurations configuration server if page! Of by network option can garbage a pull delete upgrade! That, binary version cache registries binaries slow users images below): Automation each upgrade layers must is in, of more is releases caching layer retrying then! Pull push, will not retention garbage scanning with to variable slow will when S3 should. Manifest pulls to an it that max_retries password most package policy sign running caching? If default self-signed on users default --force can --force file: Package it that before quotas for it releases with. All connection each your that users, tag for most. Digest tokens binaries more then disk: Retention each can't digest your configured. Forbidden when self-signed webhooks commands each v2.4 to delete replicated! Is pulling only should tokens windows timeouts repositories server, most response from you error that more pipeline!\nref/api/artifacts|1|Artifacts API|api reference|This page covers artifacts api. By with policies project flag harbor.example.com any quickly! Caching vulnerabilities signature this forbidden environment of webhooks architectures? Manifest tags garbage if users for binaries retries after setting policy. Can signed the are storage your pulls unknown more when upgraded connection pushing! ");
+    s.push_str("Will project unknown proxy from page more windows proxy also command errors each. Defaults every server, layer faster running! --insecure every unknown settings replicating not keys it fast when upgraded. After architecture quiet configuration webhook is OCI response is? All all runs vulnerability every (see this your!\nref/api/projects|1|Projects API|api reference|This page covers projects api. The slow is architectures this macos environment pipeline cache an. When for versions it only every proxy verify every windows timeouts delete signed an: Only, must a pruned to automated rates pushed. Replicate, tag in 443 will it headers a: Forbidden quiet with setting, caching any all variable self-signed. Every v2.4 images retrying kubernetes connections ... credential your. From collection in after run digest should signatures credential that the mirror signature an if, your in: Be must to pull every verification page when signed with page cache slow if collection registries? Most command this only repositories macos commands any. Are tags on you binaries from by missing json layer running when images that! Is it's the deletion pruning package configure runs commands versions install most pulls webhooks: Missing most command requests key cache will also are each HARBOR_TOKEN tokens are unauthorized. Is, a pruning on for should notifications of it with the the mirror most be pruned any. When signature your if all must, key every more sign all collection scanner network:\nref/api/users|1|Users API|api reference auth|This page covers users api. Are variables most collection replication runs error will OCI. Blob quickly of delete registries in! Most upgrade then network environment images most packages harbor.example.com version configured notification, can. Ci/cd report pages variable token you not by key max_retries most. Event commands a packages unknown replicated pushing of file. Caching in 'latest' can when before also vulnerabilities all not replicated be are tokens q");
+    s.push_str("uiet: Policy by before, errors of also this.\nref/api/errors|1|Error codes|api errors|This page covers error codes. Deleting must upgrading then page commands macos after each signing install should? Must the of the configurations by verbose deleted verify before proxies sign layers you runs that: Of repository each after sha256:3f2a will more: From each running scan only variable on v2.4: Policies should rate blob if build should manifests releases. Only to for replicating reports be table of. Limit not verification per-project when options config macos when pipeline in pull report headers upgraded events, before. This run rates images scan release on most? Packages if layers when configuration, unauthorized a timeout faster will scan flag: V2.5 version you 'latest' deleting error denied self-signed event slow tagged? Package error must your cache all any, binary be then digest your the S3 automated webhooks setting! Linux a push responses user be not:\nref/api/pagination|1|Pagination|api reference|This page covers pagination. Only of digest to in, environment limit by notification layers v2.5 are OCI 443 webhook. Version every rate, settings proxies pushing will manifest replicate it architectures before not most from! With for kubernetes error will v2.5 should TLS pulls. Fast on rate from can, page: Max_retries tagged, architectures images signed in releases signed if vulnerability will pushed this pruned projects signing. E.g. releases option config it's to also config kubernetes also pushing password it will. Any is proxy notification keys 8443 then mirror verifying policy files image that! With defaults on it scan more configurations scanned running vulnerabilities? From variable releases, vulnerabilities tokens keys.\nref/api/rate-limits|1|Rate limits|api network|This page covers rate limits. It webhooks command automated when configuring rates any. Configured must scanned are can setting only run, must an from a: Vulnerabilities digest upgraded option if any");
+    s.push_str(" verifying --insecure quota be will every page every most: Slow fast then notifications pushed signatures. Unknown deleting builds binaries notifications fast collection be settings unknown all also vulnerability a vulnerability timeouts policies? A signatures should by settings json macos if! Most all harbor.example.com also --all-tags windows delete vulnerability should to. Proxy every should x509: a don't (see user releases if that. The can't caching verbose windows user run your replicated push? Version re-run manifest are if must packages should pushed don't must blob. This when an also by in versions must client should a will client version it. Default pulls project any policy cache to by pipelines harbor.example.com flags. Be requests more keys by event release quota windows be timeout any pulling.\nfaq/slow-pulls|1|Why are my pulls slow?|faq network|This page covers why are my pulls slow. Tagged repository verify only that tag errors it quotas error only. Deletion run variable before scanning forbidden this ... for network with before. Webhook faster scanning of client to build must push by also when json variables most it! Architectures if for proxies for defaults self-signed.\nfaq/denied|2|Why is my push denied?|faq auth errors|This page covers why is my push denied. Not platform 443 output network config can build tagging each the install this quota then. Users on most after registries platform verify if: Tagged key scanner must 'latest' connection not you also to you signatures you scanning retries! More architectures binaries proxy pushing repositories json after of option TLS of password. That by request repositories each in blob for pull not after is! Cache any the for are forbidden packages output an kubernetes a storage policy is this before the. Configuring delete should registries connection report forbidden on replicating pulls by. Verified table can before deleting if before key when file can sign? It a disk proxy the timeouts json be scanner di");
+    s.push_str("sk it scanned. That, layer every self-signed users headers delete retries each?\nfaq/disk|1|The registry disk is full|faq storage|This page covers the registry disk is full. For any vulnerability by windows should retention, by linux. Projects --force it can response is? Windows by not for be layer after forbidden of logout should webhook connections pruned file should report? Header OCI user all to that not digest replicating it's. An image upgrade, configuration not deleted replication! Any deletion binaries file table verify setting replicating it timeout run --all-tags registry settings after. Error from running this releases headers must configurations missing verify. In in retrying if every each manifest kubernetes more only mirror any verbose most! Each flag v2.5 manifest you can't every it's config, environment pull when be proxy with are? When it disk tags upgrade each version must options client by 443. Defaults storage variables when configuring images can for policies image be replicating notifications configurations upgraded. Project in retrying run replicating don't. You must it retry, installing if only UTF-8. Event network pulling builds before also your also:\nfaq/manifest|1|Manifest unknown errors|faq errors|This page covers manifest unknown errors. Manifest, cached are can rate will by an manifest after quota can images. That --insecure projects --insecure tagged defaults flags, slow connection you images is. 443 registry push package default, on layer must! Header --all-tags then error tags you must is timeout variable your rate-limited format are: Configured upgraded variable --force proxy replicate header requests mirrors every more should? Server before key any the configuring. Is configuration packages this tagging policy TLS then caching connection most, run every with builds before:\nfaq/tags|1|Can a tag point at two images?|faq|This page covers can a tag point at two images. Pruned this signature header to request harbor.example.com config");
+    s.push_str("ured be in requests mirrors it's unknown. Upgraded be upgrade blobs in pushing. By files layer before it your are timeout before after can package platform mirror connections then pulled. With binary login can most pipeline you settings settings keys upgrading all image. Quiet collection policies to in setting variables policies --force timeout manifest. Retention builds only delete replicated for token proxy you configuring UTF-8 in most?\nblog/2026-05-release|1|Release notes: harbor 2.4|release|This page covers release notes harbor 2.4. Of if user webhooks retention must by configuration not policy pulling! Every re-run more fast upgraded to flag header configure of each. Automation binary quickly upgrading project then replicated. Reports header the cached pulls that for pruned files repositories packages signing, v2.4 webhook per-project. That setting limits be digests unauthorized is rates be that retry harbor.example.com windows platforms all. Logout before blob defaults responses, event rate UTF-8 builds below) token? Every then timeout packages mirror a are is this forbidden rates environment x509: default retry! Your an if with more upgrading pushes platform, each an a pushes that: Releases variables mirrors the with be automation by can't reports to settings registries pull repositories? Forbidden user then events any pull quickly digests: Verbose on should an should each scan every vulnerability it. Can it an will installed max_retries HARBOR_TOKEN v2.4 of, signature of. Should --force, any storage push retries? To ci/cd that to proxies environment, pipelines storage! From be images not all build deleted kubernetes repositories defaults.\nblog/2026-08-release|1|Release notes: harbor 2.5|release|This page covers release notes harbor 2.5. Json policies pushing default any request an push tagged upgrading setting: X509:, scanned UTF-8 every upgrade client to. Should response every then denied all mirrors password on table pushing in any configurations a this");
+    s.push_str(" every! Page on to --insecure replicating releases be automation from replicating?\nblog/zero-downtime|1|Zero-downtime registry upgrades|upgrade operations|This page covers zero-downtime registry upgrades. Tag verification any option before most for replicating only! V2.5 builds on option must versions flags output versions can connection e.g. it every event retrying. Tagged that settings all mirror every project blob? Pulls self-signed linux an verified on request packages you 8443 if versions it command: Notifications the timeouts pulled to variable limits users json --force timeouts pulling retrying kubernetes flag binaries. --insecure that notifications you storage registry linux it architectures sign should logout client automation can. Verifying before --all-tags only also x509: rate-limited --force connections keys retry? Digest commands login retrying can quota every vulnerabilities should any push.\nblog/sbom|1|Shipping SBOMs with every image|security|This page covers shipping sboms with every image. Signatures credentials policies then that denied request your upgraded. With json output tags that verbose your. Then digest fast before are any linux? Scanner a when that e.g. replicate then versions platform replicating options! You request blobs page package, deletion a the settings requests signing is of quota. Response most tagged any your manifests more default most kubernetes also the scanned? Projects of most command flags unknown not? Re-run signature verify blob request not package: Is report must to then the can an must verified below) for any. Package proxy to tokens to tags packages OCI option release are credentials event. An errors should manifest pruned that all package in format environment. Denied scanner when by build each releases be before platform! Settings registry this quickly quiet most before is table on after connections to images this should registry? Proxies signatures output are vulnerability pipelines will image every each also it");
+    s.push_str(" only response verbose on? Quickly manifests, blobs cached table windows any an with binary are.\n");
+    s
+}
+
+fn queries_text() -> String {
+    let mut s = String.new();
+    s.push_str("push\npushing images\nharbor push\nimage\nimages registry\nthe\ntitle:push\nbody:retention\ntags:security\ntitle:harbor body:denied\n+push +denied\n+signing -verify\n-scan\n-scan -sign\n+mirror cache\npush^10 pull\npull^0\ntoken^2 credential\nconfig*\n*tion\nre*ion\nsign*\n*\nharb*\nconf*~1\nregstry~1\nrepositry~2\npushd~1\ntken~1\nimgaes~2\nreplcation~1\nslow pulls\nwhy are my pulls slow\ndisk full\nmanifest unknown\nx509\ntls\nmax_retries\nharbor_token\ne.g.\ndon't\nv2.4\n8443\noci\ns3\nkubernetes\nupgrade\nupgrading\nupgraded\nupgrades\nzero downtime\nrelease notes\nsbom\nsboms\nrate limits\nrate-limited\nper-project\nself-signed\nci/cd\n--force\nforce\ninsecure\nall tags\nlatest\ngarbage collection\nprune\nquota\nquotas policy\nretention policies\nwebhook event\nnotifications\nusers api\npagination\nerror codes\nunauthorized\nforbidden\ncredential helpers\nenvironment variables\nconfiguration file\ntitle:configuring\ntitle:config*\nbody:conf*\ntags:cli +title:harbor\n+tags:faq\n-tags:cli\ntags:api -body:error\n+body:verify +body:signature\n+zzzz\n+zzzz push\nzzzz\n-zzzz\npush -zzzz\na\nan image\ntitle:\nnosuchfield:push\npush~\npush^\npush^x\npush~a\n+\n-\n:push\ntitle:+push\npush title:\nfoo%5C:bar\nfoo%5C%5Cbar\npush%5C\n%5C-scan\npush  pull\n  push  \nPUSH\nPush Pull\npu*sh\np*\n*s\n~1\n^2\npush~1^5\npush^5~1\ntitle:push~1^3\n+title:pull -body:push\nsign verify signature signing\nverification\nverified\nscanning scanner\nvulnerabilities\nvulnerability report\nlinux macos windows\narchitecture\njson output\nverbose quiet\ninstall package binary\nproxy connection timeout\nretry retries retrying\nmirror~1\ncaching~2\ncach*\n*ing\n*ed\nreplicat*\nweb*\npage*\nheader headers\nrequest response\n");
+    s
+}
+
+fn stop_word_spec() -> String {
+    let mut s = String.new();
+    s.push_str("a able about across after all almost also am among an and any are as at be because been but by can cannot could dear did do does either else ever every for from get got had has have he her hers him his how however i if in into is it its just least let like likely may me might most must my neither no nor not of off often on only or other our own rather said say says she should since so some than that the their them then there these they this tis to too twas us wants was we were what when where which while who whom why will with would yet you your");
+    s
+}
