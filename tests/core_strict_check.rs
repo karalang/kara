@@ -12968,3 +12968,19 @@ fn a_bare_parameter_in_a_tuple_or_entry_key_gets_the_own_fix() {
         rejected_then_fixed_by(tag, &src, "cannot give away parameter `key`", edit);
     }
 }
+
+#[test]
+fn copied_on_an_option_names_cloned_and_fixes_to_it() {
+    // B-2026-10-24-26: `.copied()` is the Rust spelling of `Option[ref T]`'s
+    // `.cloned()`; the error names it and the fix writes it.
+    let src = "fn main() {\n    let mut m: SortedMap[String, i64] = SortedMap.new();\n    \
+               m.insert(\"a\".to_string(), 1);\n    let v: Vec[i64] = [4, 5].to_vec();\n    \
+               let x = m.get(\"a\").copied().unwrap_or(0);\n    \
+               let y = v.get(0).copied().unwrap_or(0);\n    println(f\"{x} {y}\");\n}\n";
+    rejected_then_fixed_by(
+        "option-copied",
+        src,
+        "copies its item out with `.cloned()`",
+        "v.get(0).cloned().unwrap_or(0)",
+    );
+}

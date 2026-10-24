@@ -2561,6 +2561,42 @@ impl<'a> super::TypeChecker<'a> {
         {
             return t;
         }
+        // B-2026-10-24-26: `.copied()` is the Rust spelling of
+        // `Option[ref T]`'s `.cloned()` (library/core-types.md), which no
+        // edit distance reaches from `copied`.
+        if method == "copied"
+            && args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Named { name, .. } if name == "Option")
+            && self
+                .env
+                .find_methods_with_args("Option", &[], "copied")
+                .is_empty()
+        {
+            // `copied()`: the name ends at the `(` before the `)`.
+            if let Some(offset) = args_close_span
+                .offset
+                .checked_sub(1 + method.len())
+                .filter(|&o| o > object.span.offset)
+            {
+                self.type_error_with_fix_it(
+                    "no method 'copied' on type 'Option': an `Option[ref T]` copies its \
+                     item out with `.cloned()` (library/core-types.md), and for a `Copy` \
+                     item `opt ?? d` reads it or a default"
+                        .to_string(),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                    super::FixIt {
+                        span: Span {
+                            offset,
+                            length: method.len(),
+                            ..*args_close_span
+                        },
+                        replacement: "cloned".to_string(),
+                    },
+                );
+                return Type::Error;
+            }
+        }
         // Terminal arm: dispatch to a user `impl` block (candidate
         // collection, bound gating, specialization, and the `no method`
         // diagnostics). Extracted to `method_user_impl.rs`; reaching it is
