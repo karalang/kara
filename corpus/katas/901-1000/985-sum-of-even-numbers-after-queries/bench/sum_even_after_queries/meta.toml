@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/985-sum-of-even-numbers-after-queries/bench/sum_even_after_queries.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 985 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "3eefb7774"
+classified_with = "642b3e8cb"
 extracted_src = "fb1f03c0"
