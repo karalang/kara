@@ -1,0 +1,11 @@
+source = "kara-katas/apps/pipeline/click_train/click_train.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "6d3e9b9e"
+note = "stmt-par groups (source.orig.kara lines): L512-L515 four gen_day calls, a hot group; L518-L521 four fs.write_bytes calls; L533-L536 four fs.read_bytes calls; L545-L548 four parse_day calls, each with ?; L555-L558 four featurize calls, the other hot group; L561-L580 twenty read-only reports. L591-L594 four train_day calls take mut ref w and each day starts from the last one's weights, so they must stay in order"

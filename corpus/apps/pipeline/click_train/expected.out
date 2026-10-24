@@ -1,0 +1,44 @@
+day1.csv: 132384 bytes, crc32 e9b2224f
+day2.csv: 132236 bytes, crc32 a060f5ed
+day3.csv: 132343 bytes, crc32 920ee466
+day4.csv: 132303 bytes, crc32 3d76d1dc
+day4_cut line 155: expected 7 fields, got 1
+day1 by device: desktop 4.05% of 1430 mobile 4.11% of 2189 tablet 3.93% of 381
+day2 by device: desktop 3.44% of 1336 mobile 4.72% of 2264 tablet 3.00% of 400
+day3 by device: desktop 3.79% of 1423 mobile 4.03% of 2183 tablet 4.06% of 394
+day4 by device: desktop 3.00% of 1396 mobile 4.76% of 2205 tablet 3.50% of 399
+day1 by hour: [=:++**+:*- -+#*+:+#++++*]
+day2 by hour: [++*+:+#:+:**:=**-=++=++-]
+day3 by hour: [+#*.==#-:==*::#==-*-#++-]
+day4 by hour: [+**=+++--::*===#.#-+#=#:]
+day1 top ads: ad1=11 ad0=10 ad7=10 ad5=9 ad2=8
+day2 top ads: ad2=21 ad0=16 ad1=14 ad7=10 ad4=9
+day3 top ads: ad0=15 ad10=11 ad1=10 ad2=9 ad5=8
+day4 top ads: ad0=24 ad1=15 ad2=11 ad5=10 ad4=8
+day1 markets: US 19.45% IN 20.42% DE 20.20% BR 19.92% JP 20.00%
+day2 markets: US 20.45% IN 19.50% DE 19.80% BR 19.85% JP 20.40%
+day3 markets: US 19.87% IN 19.17% DE 20.35% BR 20.30% JP 20.30%
+day4 markets: US 20.57% IN 20.22% DE 19.75% BR 18.90% JP 20.55%
+day1 features: 32000 hashed into 2292 of 4096 buckets, fullest 3959 with 2191
+day2 features: 32000 hashed into 2317 of 4096 buckets, fullest 3959 with 2266
+day3 features: 32000 hashed into 2313 of 4096 buckets, fullest 3959 with 2184
+day4 features: 32000 hashed into 2300 of 4096 buckets, fullest 3959 with 2206
+train day1: 4000 impressions, 163 clicks, mean prediction 5.60%, progressive brier 0.0412
+train day2: 4000 impressions, 165 clicks, mean prediction 4.22%, progressive brier 0.0395
+train day3: 4000 impressions, 158 clicks, mean prediction 4.02%, progressive brier 0.0380
+train day4: 4000 impressions, 161 clicks, mean prediction 4.05%, progressive brier 0.0386
+bias -135062, strongest buckets: 134=12747 3692=11893 2401=11331 1837=11162 1021=10905
+holdout day5: brier 0.0406, auc 0.5733
+  band 0: 681 impressions, predicted 1.90%, actual 3.23%
+  band 1: 1549 impressions, predicted 3.22%, actual 3.35%
+  band 2: 1199 impressions, predicted 4.58%, actual 5.33%
+  band 3: 520 impressions, predicted 6.15%, actual 5.76%
+  band 4: 51 impressions, predicted 7.84%, actual 3.92%
+model.bin: 16388 bytes, crc32 5c69c4aa
+reloaded 4097 weights, identical: true
+holdout day5: brier 0.0406, auc 0.5733
+  band 0: 681 impressions, predicted 1.90%, actual 3.23%
+  band 1: 1549 impressions, predicted 3.22%, actual 3.35%
+  band 2: 1199 impressions, predicted 4.58%, actual 5.33%
+  band 3: 520 impressions, predicted 6.15%, actual 5.76%
+  band 4: 51 impressions, predicted 7.84%, actual 3.92%
