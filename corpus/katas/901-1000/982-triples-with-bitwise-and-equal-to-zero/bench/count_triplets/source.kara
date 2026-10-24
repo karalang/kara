@@ -1,0 +1,62 @@
+// Benchmark: LeetCode #982 Triples with Bitwise AND Equal To Zero -- the
+// ★ arm, pair counts and the free bits' submasks, on lists of LeetCode's
+// largest size. Mirrors count_triplets.rs, .c, .py and go-seq/.
+
+fn count_triplets(nums: Vec[i64]) -> i64 {
+    let mut all = 0;
+    for x in nums {
+        all = all | x;
+    }
+    let mut size = 1;
+    while size <= all {
+        size *= 2;
+    }
+    let full = size - 1;
+    let mut pairs: Vec[i64] = Vec.filled(size, 0);
+    for a in nums {
+        for b in nums {
+            pairs[a & b] += 1;
+        }
+    }
+    let mut triples = 0;
+    for x in nums {
+        let free = full ^ x;
+        let mut s = free;
+        loop {
+            triples += pairs[s];
+            if s == 0 {
+                break;
+            }
+            s = (s - 1) & free;
+        }
+    }
+    triples
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 15;
+    let mut seed = 982;
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..20 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..1000 {
+            nums.push(next_random(mut seed) % 65536);
+        }
+        lists.push(nums);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let t = count_triplets(lists[(r + i) % 20]);
+            total += t;
+            check = (check * 31 + t) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 20 lists of 1000 values: triples {total}, checksum {check}");
+}

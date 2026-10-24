@@ -1,0 +1,92 @@
+// LeetCode #982: Triples with Bitwise AND Equal To Zero -- pair counts,
+// then the free bits' submasks.
+//
+// Every ordered pair (i, j) is counted by the AND of its two values, in
+// a table as wide as the bits the values use. A third value x closes a
+// triple with a pair exactly when the pair's AND has none of x's bits,
+// that is when the AND is a submask of x's complement, so each x adds
+// the counts of every submask of its complement. O(n^2 + n * 2^(w - b))
+// for w bits in use and b set in x.
+
+fn count_triplets(nums: Vec[i64]) -> i64 {
+    let mut all = 0;
+    for x in nums {
+        all = all | x;
+    }
+    let mut size = 1;
+    while size <= all {
+        size *= 2;
+    }
+    let full = size - 1;
+    let mut pairs: Vec[i64] = Vec.filled(size, 0);
+    for a in nums {
+        for b in nums {
+            pairs[a & b] += 1;
+        }
+    }
+    let mut triples = 0;
+    for x in nums {
+        let free = full ^ x;
+        let mut s = free;
+        loop {
+            triples += pairs[s];
+            if s == 0 {
+                break;
+            }
+            s = (s - 1) & free;
+        }
+    }
+    triples
+}
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut text = String.new();
+    for x in nums {
+        if text.len() > 0 {
+            text = text + ", ";
+        }
+        text = text + f"{x}";
+    }
+    println(f"[{text}] -> {count_triplets(nums)}");
+}
+
+fn main() {
+    // LeetCode's examples
+    show(vec![2, 1, 3]);
+    show(vec![0, 0, 0]);
+    // a few more: one value, no zero AND at all, distinct bits, three
+    // values whose AND needs all three, LeetCode's largest value
+    show(vec![0]);
+    show(vec![1]);
+    show(vec![1, 2]);
+    show(vec![1, 2, 4]);
+    show(vec![3, 5, 6]);
+    show(vec![65535, 0]);
+    show(vec![65535, 65535, 65535]);
+    show(vec![32768, 32767]);
+    // random lists: 300 of up to 12 values below 8, 3000 of up to 30
+    // values below 256, then 2 of 1000 values below 65536
+    let mut seed = 982;
+    for (count, longest, below) in vec![(300, 12, 8), (3000, 30, 256), (2, 1000, 65536)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if count == 2 { longest } else { 1 + next_random(mut seed) % longest };
+            let mut nums: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                nums.push(next_random(mut seed) % below);
+            }
+            let t = count_triplets(nums);
+            total += t;
+            check = (check * 31 + t) % 1000000007;
+        }
+        let size = if count == 2 { f"{longest}" } else { f"up to {longest}" };
+        println(f"{count} random lists of {size} values below {below}: triples {total}, checksum {check}");
+    }
+}

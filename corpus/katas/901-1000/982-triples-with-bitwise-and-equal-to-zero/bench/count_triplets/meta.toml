@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/982-triples-with-bitwise-and-equal-to-zero/bench/count_triplets.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "f693226a3"
+extracted_src = "a3234222"
