@@ -32,8 +32,10 @@ fn karac_test(dir: &PathBuf, args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// Output as text, with a Windows path's JSON-escaped `\\` separators
+/// written as `/` so one expectation holds on every host.
 fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
+    String::from_utf8_lossy(b).replace("\\\\", "/")
 }
 
 /// The event for `name`: the one line whose `test` field is it.
