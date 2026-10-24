@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9903 / 10083 = 98.2%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8051 / 8192 = 98.3%.
-- Every classified non-deferred program (context): 16453 / 17564 = 93.7%.
-- Bench variants (outside the gate): 248 / 932 = 26.6%; timeouts 605.
+- Every classified non-deferred program (context): 16454 / 17564 = 93.7%.
+- Bench variants (outside the gate): 249 / 932 = 26.7%; timeouts 605.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5394 / 5411 = 99.7%; failing mir-gap 17.
 - Deferred (class d): 751; outside the slice (`post-m1:*`): 1138.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -63,7 +63,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (4162): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4163): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -4218,6 +4218,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/901-1000/953-verifying-an-alien-dictionary/is_alien_sorted_keys`
 - `katas/901-1000/953-verifying-an-alien-dictionary/is_alien_sorted_sorted`
 - `katas/901-1000/953-verifying-an-alien-dictionary/is_alien_sorted_translate`
+- `katas/901-1000/954-array-of-doubled-pairs/bench/can_reorder_doubled`
 - `katas/901-1000/954-array-of-doubled-pairs/can_reorder_doubled`
 - `katas/901-1000/954-array-of-doubled-pairs/can_reorder_doubled_halves`
 - `katas/901-1000/954-array-of-doubled-pairs/can_reorder_doubled_ordered`
