@@ -1,0 +1,92 @@
+// LeetCode #937: Reorder Data in Log Files -- bench: two lists and a
+// sort. Mirrors reorder_log_files.c, .rs, .py and go-seq/.
+
+struct LogEntry {
+    contents: String,
+    id: String,
+    log: String,
+}
+
+fn reorder_log_files(logs: Vec[String]) -> Vec[String] {
+    let mut letters: Vec[LogEntry] = Vec.new();
+    let mut digits: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        let cut = log.find(" ").unwrap();
+        let contents = log.substring(cut + 1);
+        let first = contents.bytes()[0];
+        if first >= b'0' and first <= b'9' {
+            digits.push(log.clone());
+        } else {
+            letters.push(LogEntry { contents: contents, id: log.substring(0, cut), log: log.clone() });
+        }
+    }
+    letters.sort_by(|a, b| if a.contents != b.contents { a.contents.cmp(b.contents) } else { a.id.cmp(b.id) });
+    let mut out: Vec[String] = Vec.new();
+    for e in letters.iter() {
+        out.push(e.log.clone());
+    }
+    for d in digits.iter() {
+        out.push(d.clone());
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 200;
+    let count = 200;
+    let mut seed = 937;
+    // each list holds 100 logs, LeetCode's most, of up to 100 characters:
+    // an identifier of a letter and the log's place, then words of 1 to 8
+    // letters from a to e, or of digits
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    for _ in 0..count {
+        let mut logs: Vec[String] = Vec.new();
+        for i in 0..100 {
+            let mut log = String.new();
+            log.push((97 + next_random(mut seed) % 26) as u8 as char);
+            log = log + f"{i}";
+            let digits = next_random(mut seed) % 2 == 1;
+            let size = 20 + next_random(mut seed) % 81;
+            while log.len() + 2 <= size {
+                let mut w = 1 + next_random(mut seed) % 8;
+                if log.len() + 1 + w > size {
+                    w = size - log.len() - 1;
+                }
+                log.push(' ');
+                for _ in 0..w {
+                    if digits {
+                        log.push((48 + next_random(mut seed) % 10) as u8 as char);
+                    } else {
+                        log.push((97 + next_random(mut seed) % 5) as u8 as char);
+                    }
+                }
+            }
+            logs.push(log);
+        }
+        lists.push(logs);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        // each round reorders every list, starting from a different one
+        for i in 0..count {
+            let out = reorder_log_files(lists[(r + i) % count]);
+            total += out.len();
+            // fold in the identifiers, which are unique within a list
+            for log in out.iter() {
+                for b in log.bytes() {
+                    if b == b' ' {
+                        break;
+                    }
+                    check = (check * 131 + b as i64) % 1000000007;
+                }
+            }
+        }
+    }
+    println(f"{rounds} rounds over {count} lists of 100 logs: {total} logs, checksum {check}");
+}

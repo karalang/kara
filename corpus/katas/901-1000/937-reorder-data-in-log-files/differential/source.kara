@@ -1,0 +1,472 @@
+// LeetCode #937: Reorder Data in Log Files -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: you are given an array of logs. Each log is a
+// space-delimited string of words, where the first word is the
+// identifier. There are two types of logs: letter-logs, where all words
+// (except the identifier) consist of lowercase English letters, and
+// digit-logs, where all words (except the identifier) consist of digits.
+// Reorder these logs so that the letter-logs come before all digit-logs;
+// the letter-logs are sorted lexicographically by their contents, and if
+// their contents are the same, then sorted lexicographically by their
+// identifiers; and the digit-logs maintain their relative ordering.
+// Return the final order of the logs.
+
+// ---- the ★ arm: two lists and a sort --------------------------------------
+struct StarLogEntry {
+    contents: String,
+    id: String,
+    log: String,
+}
+
+fn star_reorder_log_files(logs: Vec[String]) -> Vec[String] {
+    let mut letters: Vec[StarLogEntry] = Vec.new();
+    let mut digits: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        let cut = log.find(" ").unwrap();
+        let contents = log.substring(cut + 1);
+        let first = contents.bytes()[0];
+        if first >= b'0' and first <= b'9' {
+            digits.push(log.clone());
+        } else {
+            letters.push(StarLogEntry { contents: contents, id: log.substring(0, cut), log: log.clone() });
+        }
+    }
+    letters.sort_by(|a, b| if a.contents != b.contents { a.contents.cmp(b.contents) } else { a.id.cmp(b.id) });
+    let mut out: Vec[String] = Vec.new();
+    for e in letters.iter() {
+        out.push(e.log.clone());
+    }
+    for d in digits.iter() {
+        out.push(d.clone());
+    }
+    out
+}
+
+// ---- the keys arm: one stable sort by a key -------------------------------
+fn keys_reorder_log_files(logs: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = logs.clone();
+    out.sort_by_key(|log| {
+        let cut = log.find(" ").unwrap();
+        let contents = log.substring(cut + 1);
+        let first = contents.bytes()[0];
+        if first >= b'0' and first <= b'9' {
+            "1".to_string()
+        } else {
+            "0" + contents + "\u{1}" + log.substring(0, cut)
+        }
+    });
+    out
+}
+
+// ---- the insertion arm: insertion by hand ---------------------------------
+fn insertion_compare(a: ref Vec[u8], i: i64, a_end: i64, b: ref Vec[u8], j: i64, b_end: i64) -> i64 {
+    let mut x = i;
+    let mut y = j;
+    while x < a_end and y < b_end {
+        if a[x] != b[y] {
+            return if a[x] < b[y] { -1 } else { 1 };
+        }
+        x += 1;
+        y += 1;
+    }
+    if x < a_end {
+        1
+    } else if y < b_end {
+        -1
+    } else {
+        0
+    }
+}
+
+fn insertion_space(b: ref Vec[u8]) -> i64 {
+    let mut i = 0;
+    while b[i] != b' ' {
+        i += 1;
+    }
+    i
+}
+
+// whether letter-log a comes before letter-log b
+fn insertion_before(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    let sa = insertion_space(a);
+    let sb = insertion_space(b);
+    let by_contents = insertion_compare(a, sa + 1, a.len(), b, sb + 1, b.len());
+    if by_contents != 0 {
+        return by_contents < 0;
+    }
+    insertion_compare(a, 0, sa, b, 0, sb) < 0
+}
+
+fn insertion_reorder_log_files(logs: Vec[String]) -> Vec[String] {
+    let mut letters: Vec[Vec[u8]] = Vec.new();
+    let mut digits: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        let b = log.bytes().to_vec();
+        let first = b[insertion_space(b) + 1];
+        if first >= b'0' and first <= b'9' {
+            digits.push(log.clone());
+        } else {
+            letters.push(b.clone());
+            let mut k = letters.len() - 1;
+            while k > 0 and insertion_before(letters[k], letters[k - 1]) {
+                letters.swap(k, k - 1);
+                k -= 1;
+            }
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for b in letters.iter() {
+        let mut s = String.new();
+        for c in b.iter() {
+            s.push(*c as char);
+        }
+        out.push(s);
+    }
+    for d in digits.iter() {
+        out.push(d.clone());
+    }
+    out
+}
+
+// ---- the words arm: word lists and a merge sort ---------------------------
+fn words_comes_before(a: ref Vec[String], b: ref Vec[String]) -> bool {
+    let mut k = 1;
+    while k < a.len() and k < b.len() {
+        if a[k] != b[k] {
+            return a[k] < b[k];
+        }
+        k += 1;
+    }
+    if a.len() != b.len() {
+        return a.len() < b.len();
+    }
+    a[0] < b[0]
+}
+
+fn words_merge_sort(items: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    if items.len() <= 1 {
+        return items.clone();
+    }
+    let mid = items.len() / 2;
+    let mut left: Vec[Vec[String]] = Vec.new();
+    let mut right: Vec[Vec[String]] = Vec.new();
+    for i in 0..items.len() {
+        if i < mid {
+            left.push(items[i].clone());
+        } else {
+            right.push(items[i].clone());
+        }
+    }
+    let a = words_merge_sort(left);
+    let b = words_merge_sort(right);
+    let mut out: Vec[Vec[String]] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() or j < b.len() {
+        // take from the right only when it comes strictly first, so
+        // equal logs keep their order
+        if j < b.len() and (i == a.len() or words_comes_before(b[j], a[i])) {
+            out.push(b[j].clone());
+            j += 1;
+        } else {
+            out.push(a[i].clone());
+            i += 1;
+        }
+    }
+    out
+}
+
+fn words_reorder_log_files(logs: Vec[String]) -> Vec[String] {
+    let mut letters: Vec[Vec[String]] = Vec.new();
+    let mut digits: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        let words: Vec[String] = log.split(" ").map(|w| w.to_string()).collect();
+        let first = words[1].bytes()[0];
+        if first >= b'0' and first <= b'9' {
+            digits.push(log.clone());
+        } else {
+            letters.push(words);
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for words in words_merge_sort(letters).iter() {
+        out.push(words.join(" "));
+    }
+    for d in digits.iter() {
+        out.push(d.clone());
+    }
+    out
+}
+
+// ---- the passes arm: two stable passes ------------------------------------
+fn passes_is_digit_log(log: String) -> bool {
+    let cut = log.find(" ").unwrap();
+    let first = log.bytes()[cut + 1];
+    first >= b'0' and first <= b'9'
+}
+
+fn passes_reorder_log_files(logs: Vec[String]) -> Vec[String] {
+    let mut letters: Vec[String] = Vec.new();
+    let mut digits: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        if passes_is_digit_log(log) {
+            digits.push(log.clone());
+        } else {
+            letters.push(log.clone());
+        }
+    }
+    letters.sort_by_key(|log| log.substring(0, log.find(" ").unwrap()));
+    letters.sort_by_key(|log| log.substring(log.find(" ").unwrap() + 1));
+    for d in digits.iter() {
+        letters.push(d.clone());
+    }
+    letters
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, logs: ref Vec[String]) -> Vec[String] {
+    if x == 0 {
+        star_reorder_log_files(logs)
+    } else if x == 1 {
+        keys_reorder_log_files(logs)
+    } else if x == 2 {
+        insertion_reorder_log_files(logs)
+    } else if x == 3 {
+        words_reorder_log_files(logs)
+    } else {
+        passes_reorder_log_files(logs)
+    }
+}
+
+fn identifier(log: String) -> String {
+    log.substring(0, log.find(" ").unwrap())
+}
+
+fn contents(log: String) -> String {
+    log.substring(log.find(" ").unwrap() + 1)
+}
+
+fn digit_log(log: String) -> bool {
+    let first = contents(log).bytes()[0];
+    first >= b'0' and first <= b'9'
+}
+
+// whether letter-log a may come right before letter-log b
+fn in_order(a: String, b: String) -> bool {
+    let ca = contents(a);
+    let cb = contents(b);
+    ca < cb or (ca == cb and identifier(a) <= identifier(b))
+}
+
+// The statement read literally: the letter-logs first, each time the one
+// with the least contents left, and of those the least identifier; then
+// the digit-logs in the order they came.
+fn literal(logs: ref Vec[String]) -> Vec[String] {
+    let mut left: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        if not digit_log(log) {
+            left.push(log.clone());
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    while left.len() > 0 {
+        let mut best = 0;
+        for i in 1..left.len() {
+            let ci = contents(left[i]);
+            let cb = contents(left[best]);
+            if ci < cb or (ci == cb and identifier(left[i]) < identifier(left[best])) {
+                best = i;
+            }
+        }
+        out.push(left.remove(best));
+    }
+    for log in logs.iter() {
+        if digit_log(log) {
+            out.push(log.clone());
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        if letters == 0 {
+            w.push((48 + next_random(mut seed) % 10) as u8 as char);
+        } else {
+            w.push((97 + next_random(mut seed) % letters) as u8 as char);
+        }
+    }
+    w
+}
+
+// a log with an identifier of 1 to `id_len` characters from a, b, 0 and
+// 1, and 1 to `words` words of 1 to `len` letters from a, b and c, or of
+// digits
+fn random_log(seed: mut ref i64, id_len: i64, words: i64, len: i64) -> String {
+    let mut log = String.new();
+    let n = 1 + next_random(mut seed) % id_len;
+    for _ in 0..n {
+        let c = next_random(mut seed) % 4;
+        log.push((if c < 2 { 97 + c } else { 46 + c }) as u8 as char);
+    }
+    let letters = if next_random(mut seed) % 2 == 0 { 3 } else { 0 };
+    let count = 1 + next_random(mut seed) % words;
+    for _ in 0..count {
+        let size = 1 + next_random(mut seed) % len;
+        log = log + " " + random_word(mut seed, size, letters);
+    }
+    log
+}
+
+fn sorted(logs: ref Vec[String]) -> Vec[String] {
+    let mut s = logs.clone();
+    s.sort();
+    s
+}
+
+fn letter_part(logs: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        if not digit_log(log) {
+            out.push(log.clone());
+        }
+    }
+    out
+}
+
+fn digit_part(logs: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        if digit_log(log) {
+            out.push(log.clone());
+        }
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, logs: ref Vec[String], small: bool) -> i64 {
+    let truth = if small { literal(logs) } else { Vec.new() };
+    let mut got: Vec[Vec[String]] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, logs));
+    }
+    // the inputs P4 and P5 share: the logs shuffled, the letter-logs
+    // alone, and the logs with one more digit-log at the end
+    let mut shuffled = logs.clone();
+    let mut i = shuffled.len() - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        shuffled.swap(i, j);
+        i -= 1;
+    }
+    let letters = letter_part(logs);
+    let mut more = logs.clone();
+    let extra = f"zz{next_random(mut seed) % 100} {next_random(mut seed) % 1000}";
+    more.push(extra.clone());
+    let want_sorted = sorted(logs);
+    for x in 0..5 {
+        let out = got[x].clone();
+        // P1: the statement's order, on the small lists
+        if small {
+            check(mut t, 1, out == truth);
+        }
+        // P2: the same logs, the letter-logs before the digit-logs
+        let mut ok = sorted(out) == want_sorted;
+        let mut seen_digit = false;
+        for log in out.iter() {
+            if digit_log(log) {
+                seen_digit = true;
+            } else if seen_digit {
+                ok = false;
+            }
+        }
+        check(mut t, 2, ok);
+        // P3: each letter-log in order with the next, and the digit-logs
+        // in the order they came
+        let mut ordered = digit_part(out) == digit_part(logs);
+        let part = letter_part(out);
+        for k in 1..part.len() {
+            if not in_order(part[k - 1], part[k]) {
+                ordered = false;
+            }
+        }
+        check(mut t, 3, ordered);
+        // P4: the logs shuffled give the same letter-logs in the same
+        // order, then the digit-logs in their new order
+        let mut want = letter_part(out);
+        for log in digit_part(shuffled).iter() {
+            want.push(log.clone());
+        }
+        check(mut t, 4, arm(x, shuffled) == want);
+        // P5: the letter-logs alone come out as they did, and a digit-log
+        // added at the end comes out last
+        let again = arm(x, more);
+        check(mut t, 5, arm(x, letters) == letter_part(out) and again.len() == more.len() and again[again.len() - 1] == extra);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == out {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    letters.len()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 937;
+    let mut cases = 0;
+    let mut total = 0;
+    let mut letter_logs = 0;
+    // lists of up to 12 short logs against the statement, then up to 100
+    // longer ones
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 100 };
+        let mut logs: Vec[String] = Vec.new();
+        for _ in 0..n {
+            if small {
+                logs.push(random_log(mut seed, 2, 2, 2));
+            } else {
+                logs.push(random_log(mut seed, 4, 6, 4));
+            }
+        }
+        cases += 1;
+        total += n;
+        letter_logs += properties(mut t, mut seed, logs, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} lists, {total} logs, {letter_logs} letter-logs, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,202 @@
+// LeetCode #937: Reorder Data in Log Files -- word lists and a merge sort.
+//
+// Split each log into its words. A letter-log is compared with another
+// word by word after the identifiers, a list that runs out first coming
+// first, and then by identifier; since the space is below every letter,
+// this is the same order as comparing the contents as strings. The
+// letter-logs are merge sorted on that order; the digit-logs keep
+// theirs. O(n log n) comparisons.
+
+fn comes_before(a: ref Vec[String], b: ref Vec[String]) -> bool {
+    let mut k = 1;
+    while k < a.len() and k < b.len() {
+        if a[k] != b[k] {
+            return a[k] < b[k];
+        }
+        k += 1;
+    }
+    if a.len() != b.len() {
+        return a.len() < b.len();
+    }
+    a[0] < b[0]
+}
+
+fn merge_sort(items: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    if items.len() <= 1 {
+        return items.clone();
+    }
+    let mid = items.len() / 2;
+    let mut left: Vec[Vec[String]] = Vec.new();
+    let mut right: Vec[Vec[String]] = Vec.new();
+    for i in 0..items.len() {
+        if i < mid {
+            left.push(items[i].clone());
+        } else {
+            right.push(items[i].clone());
+        }
+    }
+    let a = merge_sort(left);
+    let b = merge_sort(right);
+    let mut out: Vec[Vec[String]] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() or j < b.len() {
+        // take from the right only when it comes strictly first, so
+        // equal logs keep their order
+        if j < b.len() and (i == a.len() or comes_before(b[j], a[i])) {
+            out.push(b[j].clone());
+            j += 1;
+        } else {
+            out.push(a[i].clone());
+            i += 1;
+        }
+    }
+    out
+}
+
+fn reorder_log_files(logs: Vec[String]) -> Vec[String] {
+    let mut letters: Vec[Vec[String]] = Vec.new();
+    let mut digits: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        let words: Vec[String] = log.split(" ").map(|w| w.to_string()).collect();
+        let first = words[1].bytes()[0];
+        if first >= b'0' and first <= b'9' {
+            digits.push(log.clone());
+        } else {
+            letters.push(words);
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for words in merge_sort(letters).iter() {
+        out.push(words.join(" "));
+    }
+    for d in digits.iter() {
+        out.push(d.clone());
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(logs: ref Vec[String]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..logs.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + "\"" + logs[i] + "\"";
+    }
+    s + "]"
+}
+
+fn fold(check: i64, logs: ref Vec[String]) -> i64 {
+    let mut h = check;
+    for log in logs.iter() {
+        for b in log.bytes() {
+            h = (h * 131 + b as i64) % 1000000007;
+        }
+        h = (h * 131 + 10) % 1000000007;
+    }
+    h
+}
+
+// a word of `len` characters: lowercase letters from the first `letters`
+// of the alphabet, or digits when `letters` is 0
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        if letters == 0 {
+            w.push((48 + next_random(mut seed) % 10) as u8 as char);
+        } else {
+            w.push((97 + next_random(mut seed) % letters) as u8 as char);
+        }
+    }
+    w
+}
+
+// an identifier of 1 to 4 characters from a, b, c, 0, 1 and 2
+fn random_id(seed: mut ref i64) -> String {
+    let len = 1 + next_random(mut seed) % 4;
+    let mut w = String.new();
+    for _ in 0..len {
+        let c = next_random(mut seed) % 6;
+        w.push((if c < 3 { 97 + c } else { 45 + c }) as u8 as char);
+    }
+    w
+}
+
+// a log of exactly 100 characters: a three-character identifier, then
+// words of 1 to 9 characters
+fn long_log(seed: mut ref i64, letters: i64) -> String {
+    let mut log = random_word(mut seed, 3, 3);
+    let mut left = 96;
+    while left > 0 {
+        let mut w = 1 + next_random(mut seed) % 9;
+        if w > left or left - w < 2 {
+            w = left;
+        }
+        log = log + " " + random_word(mut seed, w, letters);
+        left -= w + 1;
+    }
+    log
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[String]] = vec![
+        vec!["dig1 8 1 5 1".to_string(), "let1 art can".to_string(), "dig2 3 6".to_string(), "let2 own kit dig".to_string(), "let3 art zero".to_string()],
+        vec!["a1 9 2 3 1".to_string(), "g1 act car".to_string(), "zo4 4 7".to_string(), "ab1 off key dog".to_string(), "a8 act zoo".to_string()],
+        vec!["d3 7".to_string(), "d1 0 0".to_string(), "d2 12 3".to_string()],
+        vec!["b2 same words".to_string(), "a10 same words".to_string(), "a9 same words".to_string()],
+        vec!["x1 art can".to_string(), "x2 art".to_string(), "x3 art c".to_string(), "x4 arta".to_string()],
+        vec!["z 1".to_string(), "y a".to_string(), "x 2".to_string(), "w b".to_string()],
+        vec!["only one".to_string()],
+    ];
+    for c in cases.iter() {
+        println(f"{show(c)} -> {show(reorder_log_files(c))}");
+    }
+    // 300 random lists of 1 to 100 logs: identifiers of 1 to 4
+    // characters, contents of 1 to 4 words of 1 to 3 letters from a, b
+    // and c, or of digits
+    let mut seed = 937;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 100;
+        let mut logs: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let mut log = random_id(mut seed);
+            let letters = if next_random(mut seed) % 2 == 0 { 3 } else { 0 };
+            let words = 1 + next_random(mut seed) % 4;
+            for _ in 0..words {
+                let len = 1 + next_random(mut seed) % 3;
+                log = log + " " + random_word(mut seed, len, letters);
+            }
+            logs.push(log);
+        }
+        total += n;
+        check = fold(check, reorder_log_files(logs));
+    }
+    println(f"300 random lists: {total} logs, checksum {check}");
+    // LeetCode's largest: 100 logs of 100 characters, half of them
+    // letter-logs from a to e; then 100 letter-logs with the same
+    // contents, ordered by identifier alone
+    let mut big: Vec[String] = Vec.new();
+    for i in 0..100 {
+        big.push(long_log(mut seed, if i % 2 == 0 { 5 } else { 0 }));
+    }
+    let out = reorder_log_files(big);
+    println(f"100 logs of 100 characters: first {out[0].substring(0, 3)}, last {out[99].substring(0, 3)}, checksum {fold(0, out)}");
+    let mut same: Vec[String] = Vec.new();
+    let words = long_log(mut seed, 5).substring(3);
+    for _ in 0..100 {
+        same.push(random_word(mut seed, 3, 3) + words);
+    }
+    let out = reorder_log_files(same);
+    println(f"100 logs with the same contents: first {out[0].substring(0, 3)}, last {out[99].substring(0, 3)}, checksum {fold(0, out)}");
+}

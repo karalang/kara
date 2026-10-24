@@ -1,0 +1,10 @@
+["dig1 8 1 5 1","let1 art can","dig2 3 6","let2 own kit dig","let3 art zero"] -> ["let1 art can","let3 art zero","let2 own kit dig","dig1 8 1 5 1","dig2 3 6"]
+["a1 9 2 3 1","g1 act car","zo4 4 7","ab1 off key dog","a8 act zoo"] -> ["g1 act car","a8 act zoo","ab1 off key dog","a1 9 2 3 1","zo4 4 7"]
+["d3 7","d1 0 0","d2 12 3"] -> ["d3 7","d1 0 0","d2 12 3"]
+["b2 same words","a10 same words","a9 same words"] -> ["a10 same words","a9 same words","b2 same words"]
+["x1 art can","x2 art","x3 art c","x4 arta"] -> ["x2 art","x3 art c","x1 art can","x4 arta"]
+["z 1","y a","x 2","w b"] -> ["y a","w b","z 1","x 2"]
+["only one"] -> ["only one"]
+300 random lists: 14987 logs, checksum 427150343
+100 logs of 100 characters: first bac, last aba, checksum 804478383
+100 logs with the same contents: first aaa, last ccc, checksum 889067651
