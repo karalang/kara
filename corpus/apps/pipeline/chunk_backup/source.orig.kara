@@ -1,0 +1,414 @@
+// pipeline/chunk_backup
+//
+// A deduplicating backup. Four snapshots of a source tree are each cut into
+// content-defined chunks (a gear rolling hash picks the cut points, so an
+// edit only changes the chunks around it), the chunks go into one store that
+// keeps each distinct chunk once, and then the program reports on the store
+// and restores every file of every snapshot from it to check the bytes.
+//
+// Building the snapshots, chunking them, the reports and the four restores
+// are each a group of statements that do not depend on each other (a
+// stmt-par app).
+
+struct Lcg {
+    state: i64,
+}
+
+impl Lcg {
+    fn next(mut ref self, n: i64) -> i64 {
+        self.state = (self.state * 1103515245 + 12345) % 2147483648;
+        (self.state >> 8) % n
+    }
+}
+
+struct SrcFile {
+    name: String,
+    lines: Vec[String],
+}
+
+struct File {
+    name: String,
+    data: Vec[u8],
+}
+
+// A chunk is named by two 32-bit hashes of its bytes and its length.
+type Key = (i64, i64, i64);
+
+struct FileChunks {
+    name: String,
+    keys: Vec[Key],
+}
+
+struct Store {
+    ids: Map[Key, i64],
+    keys: Vec[Key],
+    data: Vec[Vec[u8]],
+    first: Vec[i64],
+    refs: Vec[i64],
+}
+
+fn words() -> Vec[String] {
+    let w = ["fn", "let", "mut", "return", "if", "else", "match", "for", "in", "while", "struct", "enum", "impl", "self", "value", "count", "index", "buffer", "line", "node", "parse", "write", "read", "error", "result", "option", "some", "none", "ok", "err", "push", "len", "map", "key", "item", "list", "total", "next", "state", "cache"];
+    w.iter().map(|s| s.to_string()).collect()
+}
+
+const N_FILES: i64 = 60;
+const MIN_CHUNK: i64 = 256;
+const MAX_CHUNK: i64 = 4096;
+const MASK: i64 = 1023;
+const M32: i64 = 4294967295;
+
+fn make_line(r: mut ref Lcg, vocab: ref Vec[String]) -> String {
+    let n = r.next(10) + 3;
+    let mut out = String.new();
+    for _ in 0..r.next(3) {
+        out.push_str("    ");
+    }
+    for i in 0..n {
+        if i > 0 {
+            out.push_str(" ");
+        }
+        out.push_str(vocab[r.next(vocab.len())]);
+    }
+    out
+}
+
+fn make_base(vocab: ref Vec[String]) -> Vec[SrcFile] {
+    let mut r = Lcg { state: 2024 };
+    let mut files: Vec[SrcFile] = Vec.new();
+    for f in 0..N_FILES {
+        let n = 120 + r.next(240);
+        let mut lines: Vec[String] = Vec.new();
+        for _ in 0..n {
+            lines.push(make_line(r, vocab));
+        }
+        let num = if f < 10 { f"0{f}" } else { f.to_string() };
+        files.push(SrcFile { name: f"src/mod{num}.txt", lines: lines });
+    }
+    files
+}
+
+// Snapshot k edits its own copy of the base: most files stay, some get line
+// edits, some grow, one file is new and, on even k, one is gone.
+fn make_snapshot(base: ref Vec[SrcFile], k: i64, vocab: ref Vec[String]) -> Vec[File] {
+    let mut r = Lcg { state: k * 104729 + 7 };
+    let mut files: Vec[SrcFile] = Vec.new();
+    for src in base {
+        let mut lines = src.lines.clone();
+        let roll = r.next(100);
+        if roll < 40 {
+        } else if roll < 80 {
+            for _ in 0..r.next(4) + 1 {
+                let at = r.next(lines.len());
+                let kind = r.next(3);
+                if kind == 0 {
+                    lines[at] = make_line(r, vocab);
+                } else if kind == 1 {
+                    lines.insert(at, make_line(r, vocab));
+                } else {
+                    lines.remove(at);
+                }
+            }
+        } else {
+            for _ in 0..20 {
+                lines.push(make_line(r, vocab));
+            }
+        }
+        files.push(SrcFile { name: src.name.clone(), lines: lines });
+    }
+    let mut fresh: Vec[String] = Vec.new();
+    for _ in 0..60 + r.next(60) {
+        fresh.push(make_line(r, vocab));
+    }
+    files.push(SrcFile { name: f"src/new{k}.txt", lines: fresh });
+    if k % 2 == 0 {
+        files.remove(r.next(N_FILES));
+    }
+    files.sort_by(|a, b| a.name.cmp(b.name));
+    let mut out: Vec[File] = Vec.new();
+    for f in files.into_iter() {
+        let mut text = f.lines.join("\n");
+        text.push_str("\n");
+        out.push(File { name: f.name, data: text.bytes().to_vec() });
+    }
+    out
+}
+
+fn gear_table() -> Vec[i64] {
+    let mut r = Lcg { state: 99 };
+    let mut g: Vec[i64] = Vec.new();
+    for _ in 0..256 {
+        let hi = r.next(65536);
+        let lo = r.next(65536);
+        g.push((hi << 16) ^ lo);
+    }
+    g
+}
+
+fn fnv32(data: Slice[u8]) -> i64 {
+    let mut h = 2166136261;
+    for b in data {
+        h = ((h ^ (*b as i64)) * 16777619) & M32;
+    }
+    h
+}
+
+fn djb32(data: Slice[u8]) -> i64 {
+    let mut h = 5381;
+    for b in data {
+        h = (h * 33 + (*b as i64)) & M32;
+    }
+    h
+}
+
+// The (start, size) of each chunk. A cut falls where the low bits of the
+// rolling hash are all zero, once the chunk has its minimum size.
+fn cut_points(data: Slice[u8], gear: ref Vec[i64]) -> Vec[(i64, i64)] {
+    let mut cuts: Vec[(i64, i64)] = Vec.new();
+    let mut start = 0;
+    let mut h = 0;
+    for i in 0..data.len() {
+        h = ((h << 1) + gear[data[i] as i64]) & M32;
+        let size = i + 1 - start;
+        if (size >= MIN_CHUNK and (h & MASK) == 0) or size >= MAX_CHUNK {
+            cuts.push((start, size));
+            start = i + 1;
+            h = 0;
+        }
+    }
+    if start < data.len() {
+        cuts.push((start, data.len() - start));
+    }
+    cuts
+}
+
+fn chunk_snapshot(snap: ref Vec[File], gear: ref Vec[i64]) -> Vec[FileChunks] {
+    let mut out: Vec[FileChunks] = Vec.new();
+    for f in snap {
+        let mut keys: Vec[Key] = Vec.new();
+        for (start, size) in cut_points(f.data, gear) {
+            let piece = f.data[start..start + size];
+            keys.push((fnv32(piece), djb32(piece), size));
+        }
+        out.push(FileChunks { name: f.name.clone(), keys: keys });
+    }
+    out
+}
+
+fn add_snapshot(store: mut ref Store, k: i64, snap: ref Vec[File], chunks: ref Vec[FileChunks]) {
+    for i in 0..snap.len() {
+        let data = snap[i].data;
+        let mut pos = 0;
+        for key in chunks[i].keys {
+            let size = key.2;
+            let id = match store.ids.get(key) {
+                Some(id) => *id,
+                None => {
+                    let id = store.data.len();
+                    store.ids.insert(*key, id);
+                    store.keys.push(*key);
+                    store.data.push(data[pos..pos + size].to_vec());
+                    store.first.push(k);
+                    store.refs.push(0);
+                    id
+                }
+            };
+            store.refs[id] += 1;
+            pos += size;
+        }
+    }
+}
+
+fn snapshot_report(store: ref Store, all: ref Vec[Vec[FileChunks]]) -> String {
+    let mut out = "snapshots:".to_string();
+    for k in 0..all.len() {
+        let mut nbytes = 0;
+        let mut nchunks = 0;
+        for f in all[k] {
+            for key in f.keys {
+                nbytes += key.2;
+            }
+            nchunks += f.keys.len();
+        }
+        let new = store.first.iter().filter(|f| *f == k + 1).count();
+        out.push_str(f"\n  {k + 1}: {all[k].len()} files, {nbytes} bytes, {nchunks} chunks, {new} new");
+    }
+    out
+}
+
+fn ratio_text(num: i64, den: i64) -> String {
+    let ratio = num * 100 / den;
+    let frac = ratio % 100;
+    let frac_text = if frac < 10 { f"0{frac}" } else { frac.to_string() };
+    f"{ratio / 100}.{frac_text}x"
+}
+
+fn dedupe_report(store: ref Store, all: ref Vec[Vec[FileChunks]]) -> String {
+    let mut logical = 0;
+    for chunks in all {
+        for f in chunks {
+            for key in f.keys {
+                logical += key.2;
+            }
+        }
+    }
+    let mut stored = 0;
+    for d in store.data {
+        stored += d.len();
+    }
+    f"dedupe: {logical} logical bytes, {stored} stored in {store.data.len()} chunks, ratio {ratio_text(logical, stored)}"
+}
+
+fn names_or_dash(names: ref Vec[String]) -> String {
+    if names.len() == 0 { "-".to_string() } else { names.join(",") }
+}
+
+fn changes_report(a: ref Vec[FileChunks], b: ref Vec[FileChunks], ka: i64, kb: i64) -> String {
+    let mut old: SortedMap[String, Vec[Key]] = SortedMap.new();
+    for f in a {
+        old.insert(f.name.clone(), f.keys.clone());
+    }
+    let mut new: SortedMap[String, Vec[Key]] = SortedMap.new();
+    for f in b {
+        new.insert(f.name.clone(), f.keys.clone());
+    }
+    let mut added: Vec[String] = Vec.new();
+    let mut removed: Vec[String] = Vec.new();
+    let mut same = 0;
+    let mut modified = 0;
+    let mut changed_bytes = 0;
+    for (name, keys) in new {
+        match old.get(name) {
+            None => added.push(name.clone()),
+            Some(prev) => {
+                if prev == keys {
+                    same += 1;
+                } else {
+                    modified += 1;
+                    let seen: Set[Key] = prev.iter().map(|k| *k).collect();
+                    for key in keys {
+                        if not seen.contains(*key) {
+                            changed_bytes += key.2;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (name, _) in old {
+        if not new.contains_key(name) {
+            removed.push(name.clone());
+        }
+    }
+    f"changes {ka}->{kb}: {same} same, {modified} modified ({changed_bytes} new bytes), added {names_or_dash(added)}, removed {names_or_dash(removed)}"
+}
+
+fn size_histogram(store: ref Store) -> String {
+    let mut buckets: SortedMap[i64, i64] = SortedMap.new();
+    for d in store.data {
+        *buckets.entry(d.len() / 512).or_insert(0) += 1;
+    }
+    let mut out = "chunk sizes:".to_string();
+    for (b, n) in buckets {
+        out.push_str(f"\n  {b * 512}-{b * 512 + 511}: {n}");
+    }
+    out
+}
+
+fn hex8(v: i64) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = String.new();
+    let mut shift = 28;
+    while shift >= 0 {
+        let d = (v >> shift) & 15;
+        out.push_str(digits[d..d + 1]);
+        shift -= 4;
+    }
+    out
+}
+
+fn top_shared(store: ref Store, n: i64) -> String {
+    let mut ranked: Vec[(i64, Key)] = Vec.new();
+    for i in 0..store.keys.len() {
+        ranked.push((store.refs[i], store.keys[i]));
+    }
+    ranked.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+    let mut out = "most shared chunks:".to_string();
+    for i in 0..n {
+        if i < ranked.len() {
+            let (refs, key) = ranked[i];
+            out.push_str(f"\n  {hex8(key.0)} {key.2} bytes, {refs} refs");
+        }
+    }
+    out
+}
+
+// Rebuild every file of a snapshot from the store and compare it with the
+// original bytes.
+fn verify(store: ref Store, k: i64, snap: ref Vec[File], chunks: ref Vec[FileChunks]) -> String {
+    let mut ok = 0;
+    for i in 0..snap.len() {
+        let mut out: Vec[u8] = Vec.new();
+        for key in chunks[i].keys {
+            let id = store.ids[*key];
+            out.extend_from_slice(store.data[id]);
+        }
+        if out.len() == snap[i].data.len() and fnv32(out) == fnv32(snap[i].data) {
+            ok += 1;
+        }
+    }
+    f"snapshot {k}: {ok} of {snap.len()} files restore"
+}
+
+fn main() {
+    let vocab = words();
+    let base = make_base(vocab);
+    let gear = gear_table();
+
+    // Each snapshot edits its own copy of the base.
+    let s1 = make_snapshot(base, 1, vocab);
+    let s2 = make_snapshot(base, 2, vocab);
+    let s3 = make_snapshot(base, 3, vocab);
+    let s4 = make_snapshot(base, 4, vocab);
+
+    // Chunking reads one snapshot and the gear table.
+    let c1 = chunk_snapshot(s1, gear);
+    let c2 = chunk_snapshot(s2, gear);
+    let c3 = chunk_snapshot(s3, gear);
+    let c4 = chunk_snapshot(s4, gear);
+
+    // The store is filled in snapshot order, so a chunk belongs to the first
+    // snapshot that has it.
+    let mut store = Store { ids: Map.new(), keys: Vec.new(), data: Vec.new(), first: Vec.new(), refs: Vec.new() };
+    add_snapshot(store, 1, s1, c1);
+    add_snapshot(store, 2, s2, c2);
+    add_snapshot(store, 3, s3, c3);
+    add_snapshot(store, 4, s4, c4);
+    let all = [c1, c2, c3, c4];
+
+    // The reports only read the store and the chunk lists.
+    let snapshots = snapshot_report(store, all);
+    let dedupe = dedupe_report(store, all);
+    let d12 = changes_report(all[0], all[1], 1, 2);
+    let d23 = changes_report(all[1], all[2], 2, 3);
+    let d34 = changes_report(all[2], all[3], 3, 4);
+    let sizes = size_histogram(store);
+    let shared = top_shared(store, 3);
+    println(snapshots);
+    println(dedupe);
+    println(d12);
+    println(d23);
+    println(d34);
+    println(sizes);
+    println(shared);
+
+    // Each restore reads the store and one snapshot.
+    let v1 = verify(store, 1, s1, all[0]);
+    let v2 = verify(store, 2, s2, all[1]);
+    let v3 = verify(store, 3, s3, all[2]);
+    let v4 = verify(store, 4, s4, all[3]);
+    println(v1);
+    println(v2);
+    println(v3);
+    println(v4);
+}

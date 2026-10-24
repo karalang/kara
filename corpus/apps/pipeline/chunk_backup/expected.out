@@ -1,0 +1,27 @@
+snapshots:
+  1: 61 files, 589644 bytes, 389 chunks, 389 new
+  2: 60 files, 583168 bytes, 381 chunks, 102 new
+  3: 61 files, 596885 bytes, 390 chunks, 81 new
+  4: 60 files, 581710 bytes, 380 chunks, 85 new
+dedupe: 2351407 logical bytes, 1137520 stored in 657 chunks, ratio 2.06x
+changes 1->2: 14 same, 45 modified (202265 new bytes), added src/new2.txt, removed src/mod24.txt,src/new1.txt
+changes 2->3: 11 same, 48 modified (210124 new bytes), added src/mod24.txt,src/new3.txt, removed src/new2.txt
+changes 3->4: 10 same, 49 modified (246838 new bytes), added src/new4.txt, removed src/mod28.txt,src/new3.txt
+chunk sizes:
+  0-511: 106
+  512-1023: 136
+  1024-1535: 113
+  1536-2047: 72
+  2048-2559: 69
+  2560-3071: 42
+  3072-3583: 39
+  3584-4095: 19
+  4096-4607: 61
+most shared chunks:
+  00166726 2425 bytes, 4 refs
+  009bf8c8 32 bytes, 4 refs
+  0396ee84 333 bytes, 4 refs
+snapshot 1: 61 of 61 files restore
+snapshot 2: 60 of 60 files restore
+snapshot 3: 61 of 61 files restore
+snapshot 4: 60 of 60 files restore

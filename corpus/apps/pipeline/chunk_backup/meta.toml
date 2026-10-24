@@ -1,0 +1,11 @@
+source = "kara-katas/apps/pipeline/chunk_backup/chunk_backup.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "2134c16d"
+note = "stmt-par groups (source.orig.kara lines): L369-L372 four make_snapshot calls over the shared base; L375-L378 four chunk_snapshot calls, the hot group; L390-L396 seven read-only reports over the store; L406-L409 four verify calls. L383-L386 four add_snapshot calls take mut ref store and must stay in order"
