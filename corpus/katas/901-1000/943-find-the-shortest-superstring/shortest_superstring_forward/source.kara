@@ -1,0 +1,205 @@
+// LeetCode #943: Find the Shortest Superstring -- lengths pushed forward.
+//
+// For each set of words and the word written last, the least length of a
+// string writing them in some order, each set's lengths pushed forward to
+// the sets one word larger. No record is kept of the word before; the
+// order is read back by finding, at each step, a word whose state plus
+// the cost of the step gives exactly the length reached.
+// O(2^n n^2) time.
+
+fn overlap(a: ref String, b: ref String) -> i64 {
+    let mut k = a.len().min(b.len()) - 1;
+    while k > 0 {
+        if a.substring(a.len() - k, a.len()) == b.substring(0, k) {
+            return k;
+        }
+        k -= 1;
+    }
+    0
+}
+
+fn shortest_superstring(words: Vec[String]) -> String {
+    let n = words.len();
+    let mut ov: Vec[i64] = Vec.filled(n * n, 0);
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                ov[i * n + j] = overlap(words[i], words[j]);
+            }
+        }
+    }
+    let full = (1 << n) - 1;
+    let mut len: Vec[i64] = Vec.filled((full + 1) * n, -1);
+    for i in 0..n {
+        len[(1 << i) * n + i] = words[i].len();
+    }
+    for mask in 1..(full + 1) {
+        for last in 0..n {
+            let here = len[mask * n + last];
+            if here < 0 {
+                continue;
+            }
+            for j in 0..n {
+                if (mask >> j) & 1 == 0 {
+                    let t = (mask | (1 << j)) * n + j;
+                    let c = here + words[j].len() - ov[last * n + j];
+                    if len[t] < 0 or c < len[t] {
+                        len[t] = c;
+                    }
+                }
+            }
+        }
+    }
+    let mut last = 0;
+    for w in 1..n {
+        if len[full * n + w] < len[full * n + last] {
+            last = w;
+        }
+    }
+    // walk back: the words, last first
+    let mut order: Vec[i64] = vec![last];
+    let mut mask = full;
+    while mask != (1 << last) {
+        let rest = mask ^ (1 << last);
+        let mut p = 0;
+        while not ((rest >> p) & 1 == 1 and len[rest * n + p] + words[last].len() - ov[p * n + last] == len[mask * n + last]) {
+            p += 1;
+        }
+        order.push(p);
+        mask = rest;
+        last = p;
+    }
+    let mut out = words[order[order.len() - 1]].clone();
+    let mut i = order.len() - 1;
+    while i > 0 {
+        let a = order[i];
+        let b = order[i - 1];
+        out = out + words[b].substring(ov[a * n + b], words[b].len());
+        i -= 1;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push((next_random(mut seed) % letters + 97) as u8 as char);
+    }
+    s
+}
+
+// Words kept in order, dropping any equal to, inside, or holding one kept.
+fn without_inside(words: ref Vec[String]) -> Vec[String] {
+    let mut kept: Vec[String] = Vec.new();
+    for w in words.iter() {
+        let mut ok = true;
+        for k in kept.iter() {
+            if k.contains(w) or w.contains(k) {
+                ok = false;
+            }
+        }
+        if ok {
+            kept.push(w.clone());
+        }
+    }
+    kept
+}
+
+fn verdict(words: ref Vec[String]) -> String {
+    let s = shortest_superstring(words);
+    for w in words.iter() {
+        if not s.contains(w) {
+            return "WRONG".to_string();
+        }
+    }
+    f"length {s.len()}, holding every word"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[String]] = vec![
+        vec!["alex".to_string(), "loves".to_string(), "leetcode".to_string()],
+        vec!["catg".to_string(), "ctaagt".to_string(), "gcta".to_string(), "ttca".to_string(), "atgcatc".to_string()],
+        vec!["word".to_string()],
+        vec!["abc".to_string(), "bcd".to_string(), "cde".to_string()],
+        vec!["cde".to_string(), "abc".to_string(), "bcd".to_string()],
+        vec!["ab".to_string(), "cd".to_string(), "ef".to_string()],
+        vec!["aab".to_string(), "aba".to_string(), "baa".to_string()],
+        vec!["abcab".to_string(), "bcabc".to_string(), "cabca".to_string()],
+    ];
+    for words in examples.iter() {
+        let plural = if words.len() == 1 { "" } else { "s" };
+        println(f"{words.len()} word{plural}: {verdict(words)}");
+    }
+    // 300 random sets of up to 8 words of 1 to 6 letters
+    let mut seed = 943;
+    let mut count = 0;
+    let mut letters = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 8;
+        let alphabet = 2 + next_random(mut seed) % 3;
+        let mut raw: Vec[String] = Vec.new();
+        for _ in 0..m {
+            let len = 1 + next_random(mut seed) % 6;
+            raw.push(random_word(mut seed, len, alphabet));
+        }
+        let words = without_inside(raw);
+        let s = shortest_superstring(words);
+        let mut ok = true;
+        for w in words.iter() {
+            if not s.contains(w) {
+                ok = false;
+            }
+            letters += w.len();
+        }
+        count += words.len();
+        if not ok {
+            println("WRONG");
+        }
+        check = (check * 31 + s.len()) % 1000000007;
+    }
+    println(f"300 random sets of {count} words of {letters} letters: checksum {check}");
+    // LeetCode's largest: 12 words of 20 letters
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    // random letters from a and b
+    let mut ab: Vec[String] = Vec.new();
+    while ab.len() < 12 {
+        ab.push(random_word(mut seed, 20, 2));
+        ab = without_inside(ab);
+    }
+    sets.push(ab);
+    // windows of one random string, each overlapping the next by 19, mixed up
+    let long = random_word(mut seed, 31, 26);
+    let mut windows: Vec[String] = Vec.new();
+    for k in 0..12 {
+        windows.push(long.substring((k * 5) % 12, (k * 5) % 12 + 20));
+    }
+    sets.push(windows);
+    // twelve words that overlap nothing
+    let mut apart: Vec[String] = Vec.new();
+    for k in 0..12 {
+        let mut w = String.new();
+        for _ in 0..20 {
+            w.push((97 + k) as u8 as char);
+        }
+        apart.push(w);
+    }
+    sets.push(apart);
+    // random letters from all 26
+    let mut wide: Vec[String] = Vec.new();
+    for _ in 0..12 {
+        wide.push(random_word(mut seed, 20, 26));
+    }
+    sets.push(wide);
+    for words in sets.iter() {
+        println(f"{words.len()} words of 20 letters: {verdict(words)}");
+    }
+}

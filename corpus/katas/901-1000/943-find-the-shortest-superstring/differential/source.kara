@@ -1,0 +1,599 @@
+// LeetCode #943: Find the Shortest Superstring -- differential test of
+// the five arms against the statement read literally, with six properties.
+//
+// The statement: given an array of strings words, return the smallest
+// string that contains each string in words as a substring. If there are
+// multiple valid strings of the smallest length, return any of them. You
+// may assume that no string in words is a substring of another string in
+// words.
+
+// ---- the ★ arm: the most letters saved ------------------------------------
+fn star_overlap(a: ref String, b: ref String) -> i64 {
+    let mut k = a.len().min(b.len()) - 1;
+    while k > 0 {
+        if a.substring(a.len() - k, a.len()) == b.substring(0, k) {
+            return k;
+        }
+        k -= 1;
+    }
+    0
+}
+
+fn star_shortest_superstring(words: Vec[String]) -> String {
+    let n = words.len();
+    let mut ov: Vec[i64] = Vec.filled(n * n, 0);
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                ov[i * n + j] = star_overlap(words[i], words[j]);
+            }
+        }
+    }
+    let full = (1 << n) - 1;
+    // saved[mask * n + last]: the most letters an order of mask ending
+    // with last saves; before[...]: the word before last in that order
+    let mut saved: Vec[i64] = Vec.filled((full + 1) * n, -1);
+    let mut before: Vec[i64] = Vec.filled((full + 1) * n, -1);
+    for mask in 1..(full + 1) {
+        for last in 0..n {
+            if (mask >> last) & 1 == 1 {
+                let rest = mask ^ (1 << last);
+                if rest == 0 {
+                    saved[mask * n + last] = 0;
+                } else {
+                    for p in 0..n {
+                        if (rest >> p) & 1 == 1 {
+                            let s = saved[rest * n + p] + ov[p * n + last];
+                            if s > saved[mask * n + last] {
+                                saved[mask * n + last] = s;
+                                before[mask * n + last] = p;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut last = 0;
+    for w in 1..n {
+        if saved[full * n + w] > saved[full * n + last] {
+            last = w;
+        }
+    }
+    // the order, last word first
+    let mut order: Vec[i64] = Vec.new();
+    let mut mask = full;
+    while last >= 0 {
+        order.push(last);
+        let p = before[mask * n + last];
+        mask = mask ^ (1 << last);
+        last = p;
+    }
+    let first = order[order.len() - 1];
+    let mut out = words[first].clone();
+    let mut i = order.len() - 1;
+    while i > 0 {
+        let a = order[i];
+        let b = order[i - 1];
+        out = out + words[b].substring(ov[a * n + b], words[b].len());
+        i -= 1;
+    }
+    out
+}
+
+// ---- the memo arm: the shortest strings kept ------------------------------
+fn memo_overlap(a: ref String, b: ref String) -> i64 {
+    let mut k = a.len().min(b.len()) - 1;
+    while k > 0 {
+        if a.substring(a.len() - k, a.len()) == b.substring(0, k) {
+            return k;
+        }
+        k -= 1;
+    }
+    0
+}
+
+fn memo_best(words: ref Vec[String], ov: ref Vec[i64], mask: i64, first: i64, memo: mut ref Vec[String]) -> String {
+    let n = words.len();
+    let key = mask * n + first;
+    if memo[key].len() > 0 {
+        return memo[key].clone();
+    }
+    let rest = mask ^ (1 << first);
+    let mut out = String.new();
+    if rest == 0 {
+        out = words[first].clone();
+    } else {
+        for j in 0..n {
+            if (rest >> j) & 1 == 1 {
+                let head = words[first].substring(0, words[first].len() - ov[first * n + j]);
+                let cand = head + memo_best(words, ov, rest, j, mut memo);
+                if out.len() == 0 or cand.len() < out.len() {
+                    out = cand;
+                }
+            }
+        }
+    }
+    memo[key] = out.clone();
+    out
+}
+
+fn memo_shortest_superstring(words: Vec[String]) -> String {
+    let n = words.len();
+    let mut ov: Vec[i64] = Vec.filled(n * n, 0);
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                ov[i * n + j] = memo_overlap(words[i], words[j]);
+            }
+        }
+    }
+    let full = (1 << n) - 1;
+    let mut memo: Vec[String] = Vec.filled((full + 1) * n, String.new());
+    let mut out = String.new();
+    for first in 0..n {
+        let cand = memo_best(words, ov, full, first, mut memo);
+        if out.len() == 0 or cand.len() < out.len() {
+            out = cand;
+        }
+    }
+    out
+}
+
+// ---- the paths arm: shortest paths ----------------------------------------
+fn paths_overlap(a: ref String, b: ref String) -> i64 {
+    let mut k = a.len().min(b.len()) - 1;
+    while k > 0 {
+        if a.substring(a.len() - k, a.len()) == b.substring(0, k) {
+            return k;
+        }
+        k -= 1;
+    }
+    0
+}
+
+fn paths_shortest_superstring(words: Vec[String]) -> String {
+    let n = words.len();
+    let mut ov: Vec[i64] = Vec.filled(n * n, 0);
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                ov[i * n + j] = paths_overlap(words[i], words[j]);
+            }
+        }
+    }
+    let full = (1 << n) - 1;
+    let states = (full + 1) * n;
+    let mut dist: Vec[i64] = Vec.filled(states, -1);
+    let mut from: Vec[i64] = Vec.filled(states, -1);
+    // each entry is cost * 65536 + state, so the cheapest comes first
+    let mut queue: PriorityQueue[i64] = PriorityQueue.new();
+    for i in 0..n {
+        let s = (1 << i) * n + i;
+        dist[s] = words[i].len();
+        queue.push(dist[s] * 65536 + s);
+    }
+    let mut end = -1;
+    while let Some(e) = queue.pop() {
+        let cost = e / 65536;
+        let s = e % 65536;
+        if cost > dist[s] {
+            continue;
+        }
+        let mask = s / n;
+        let last = s % n;
+        if mask == full {
+            end = s;
+            break;
+        }
+        for j in 0..n {
+            if (mask >> j) & 1 == 0 {
+                let t = (mask | (1 << j)) * n + j;
+                let c = cost + words[j].len() - ov[last * n + j];
+                if dist[t] < 0 or c < dist[t] {
+                    dist[t] = c;
+                    from[t] = s;
+                    queue.push(c * 65536 + t);
+                }
+            }
+        }
+    }
+    // the words, last first
+    let mut order: Vec[i64] = Vec.new();
+    let mut s = end;
+    while s >= 0 {
+        order.push(s % n);
+        s = from[s];
+    }
+    let mut out = words[order[order.len() - 1]].clone();
+    let mut i = order.len() - 1;
+    while i > 0 {
+        let a = order[i];
+        let b = order[i - 1];
+        out = out + words[b].substring(ov[a * n + b], words[b].len());
+        i -= 1;
+    }
+    out
+}
+
+// ---- the forward arm: lengths pushed forward ------------------------------
+fn forward_overlap(a: ref String, b: ref String) -> i64 {
+    let mut k = a.len().min(b.len()) - 1;
+    while k > 0 {
+        if a.substring(a.len() - k, a.len()) == b.substring(0, k) {
+            return k;
+        }
+        k -= 1;
+    }
+    0
+}
+
+fn forward_shortest_superstring(words: Vec[String]) -> String {
+    let n = words.len();
+    let mut ov: Vec[i64] = Vec.filled(n * n, 0);
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                ov[i * n + j] = forward_overlap(words[i], words[j]);
+            }
+        }
+    }
+    let full = (1 << n) - 1;
+    let mut len: Vec[i64] = Vec.filled((full + 1) * n, -1);
+    for i in 0..n {
+        len[(1 << i) * n + i] = words[i].len();
+    }
+    for mask in 1..(full + 1) {
+        for last in 0..n {
+            let here = len[mask * n + last];
+            if here < 0 {
+                continue;
+            }
+            for j in 0..n {
+                if (mask >> j) & 1 == 0 {
+                    let t = (mask | (1 << j)) * n + j;
+                    let c = here + words[j].len() - ov[last * n + j];
+                    if len[t] < 0 or c < len[t] {
+                        len[t] = c;
+                    }
+                }
+            }
+        }
+    }
+    let mut last = 0;
+    for w in 1..n {
+        if len[full * n + w] < len[full * n + last] {
+            last = w;
+        }
+    }
+    // walk back: the words, last first
+    let mut order: Vec[i64] = vec![last];
+    let mut mask = full;
+    while mask != (1 << last) {
+        let rest = mask ^ (1 << last);
+        let mut p = 0;
+        while not ((rest >> p) & 1 == 1 and len[rest * n + p] + words[last].len() - ov[p * n + last] == len[mask * n + last]) {
+            p += 1;
+        }
+        order.push(p);
+        mask = rest;
+        last = p;
+    }
+    let mut out = words[order[order.len() - 1]].clone();
+    let mut i = order.len() - 1;
+    while i > 0 {
+        let a = order[i];
+        let b = order[i - 1];
+        out = out + words[b].substring(ov[a * n + b], words[b].len());
+        i -= 1;
+    }
+    out
+}
+
+// ---- the search arm: a depth-first search ---------------------------------
+fn search_overlap(a: ref String, b: ref String) -> i64 {
+    let mut k = a.len().min(b.len()) - 1;
+    while k > 0 {
+        if a.substring(a.len() - k, a.len()) == b.substring(0, k) {
+            return k;
+        }
+        k -= 1;
+    }
+    0
+}
+
+struct SearchSearch {
+    best_len: i64,
+    best_order: Vec[i64],
+    seen: Vec[i64],
+}
+
+fn search_go(words: ref Vec[String], ov: ref Vec[i64], st: mut ref SearchSearch, order: mut ref Vec[i64], mask: i64, len: i64) {
+    let n = words.len();
+    let last = order[order.len() - 1];
+    let key = mask * n + last;
+    if st.seen[key] >= 0 and st.seen[key] <= len {
+        return;
+    }
+    st.seen[key] = len;
+    if st.best_len >= 0 and len >= st.best_len {
+        return;
+    }
+    if order.len() == n {
+        st.best_len = len;
+        st.best_order = order.clone();
+        return;
+    }
+    for j in 0..n {
+        if (mask >> j) & 1 == 0 {
+            order.push(j);
+            search_go(words, ov, mut st, mut order, mask | (1 << j), len + words[j].len() - ov[last * n + j]);
+            order.pop();
+        }
+    }
+}
+
+fn search_shortest_superstring(words: Vec[String]) -> String {
+    let n = words.len();
+    let mut ov: Vec[i64] = Vec.filled(n * n, 0);
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                ov[i * n + j] = search_overlap(words[i], words[j]);
+            }
+        }
+    }
+    let full = (1 << n) - 1;
+    let mut st = SearchSearch { best_len: -1, best_order: Vec.new(), seen: Vec.filled((full + 1) * n, -1) };
+    for i in 0..n {
+        let mut order: Vec[i64] = vec![i];
+        search_go(words, ov, mut st, mut order, 1 << i, words[i].len());
+    }
+    let order = st.best_order.clone();
+    let mut out = words[order[0]].clone();
+    for i in 1..order.len() {
+        let a = order[i - 1];
+        let b = order[i];
+        out = out + words[b].substring(ov[a * n + b], words[b].len());
+    }
+    out
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, words: Vec[String]) -> String {
+    if x == 0 {
+        star_shortest_superstring(words)
+    } else if x == 1 {
+        memo_shortest_superstring(words)
+    } else if x == 2 {
+        paths_shortest_superstring(words)
+    } else if x == 3 {
+        forward_shortest_superstring(words)
+    } else {
+        search_shortest_superstring(words)
+    }
+}
+
+fn holds_all(s: ref String, words: ref Vec[String]) -> bool {
+    for w in words.iter() {
+        if not s.contains(w) {
+            return false;
+        }
+    }
+    true
+}
+
+// Whether every letter of s lies in an occurrence of some word, and s is
+// no longer than the words written one after another.
+fn covered(s: ref String, words: ref Vec[String]) -> bool {
+    let mut total = 0;
+    for w in words.iter() {
+        total += w.len();
+    }
+    if s.len() > total {
+        return false;
+    }
+    let mut cover: Vec[bool] = Vec.filled(s.len(), false);
+    for w in words.iter() {
+        if w.len() <= s.len() {
+            for at in 0..(s.len() - w.len() + 1) {
+                if s.substring(at, at + w.len()) == *w {
+                    for k in at..(at + w.len()) {
+                        cover[k] = true;
+                    }
+                }
+            }
+        }
+    }
+    for c in cover.iter() {
+        if not *c {
+            return false;
+        }
+    }
+    true
+}
+
+// The statement read literally: the strings of a and b of each length in
+// turn, from the longest word up, until one holds every word; its length.
+fn literal(words: ref Vec[String]) -> i64 {
+    let mut len = 0;
+    for w in words.iter() {
+        len = len.max(w.len());
+    }
+    loop {
+        for code in 0..(1 << len) {
+            let mut s = String.new();
+            for k in 0..len {
+                s.push(if (code >> k) & 1 == 0 { 'a' } else { 'b' });
+            }
+            if holds_all(s, words) {
+                return len;
+            }
+        }
+        len += 1;
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push((next_random(mut seed) % letters + 97) as u8 as char);
+    }
+    s
+}
+
+fn without_inside(words: ref Vec[String]) -> Vec[String] {
+    let mut kept: Vec[String] = Vec.new();
+    for w in words.iter() {
+        let mut ok = true;
+        for k in kept.iter() {
+            if k.contains(w) or w.contains(k) {
+                ok = false;
+            }
+        }
+        if ok {
+            kept.push(w.clone());
+        }
+    }
+    kept
+}
+
+fn reversed(w: ref String) -> String {
+    let b = w.bytes().to_vec();
+    let mut s = String.new();
+    for i in 0..b.len() {
+        s.push(b[b.len() - 1 - i] as char);
+    }
+    s
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, words: Vec[String], small: bool) -> i64 {
+    let n = words.len();
+    let truth = if small { literal(words) } else { 0 };
+    let mut got: Vec[String] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, words));
+    }
+    // the inputs P4 and P5 share: each word reversed; the words in a
+    // random order with their letters renamed by a random shuffle of the
+    // alphabet; and one more word of letters no other word uses
+    let mut back: Vec[String] = Vec.new();
+    for w in words.iter() {
+        back.push(reversed(w));
+    }
+    let mut perm: Vec[i64] = Vec.new();
+    for c in 0..26 {
+        perm.push(c);
+    }
+    for c in 0..26 {
+        let d = c + next_random(mut seed) % (26 - c);
+        perm.swap(c, d);
+    }
+    let mut picked: Vec[bool] = Vec.filled(n, false);
+    let mut moved: Vec[String] = Vec.new();
+    while moved.len() < n {
+        let i = next_random(mut seed) % n;
+        if not picked[i] {
+            picked[i] = true;
+            let mut r = String.new();
+            for c in words[i].bytes().iter() {
+                r.push((perm[(*c - b'a') as i64] + 97) as u8 as char);
+            }
+            moved.push(r);
+        }
+    }
+    let mut more = words.clone();
+    let extra = random_word(mut seed, 1 + next_random(mut seed) % 4, 1);
+    let mut z = String.new();
+    for _ in 0..extra.len() {
+        z.push('z');
+    }
+    more.push(z.clone());
+    for x in 0..5 {
+        let s = got[x].clone();
+        // P1: holding every word, at the statement's length, on the small sets
+        if small {
+            check(mut t, 1, holds_all(s, words) and s.len() == truth);
+        }
+        // P2: holding every word
+        check(mut t, 2, holds_all(s, words));
+        // P3: every letter in some word, and no longer than all of them
+        check(mut t, 3, covered(s, words));
+        // P4: each word reversed, a string holding them of the same length
+        let r = arm(x, back);
+        check(mut t, 4, holds_all(r, back) and r.len() == s.len());
+        // P5: the words shuffled and renamed, the same length; one more
+        // word of z's, that much longer
+        let m = arm(x, moved);
+        let e = arm(x, more);
+        check(mut t, 5, holds_all(m, moved) and m.len() == s.len() and holds_all(e, more) and e.len() == s.len() + z.len());
+        // P6: agreement with at least two of the other four on the length
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y].len() == s.len() {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0].len()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 943;
+    let mut sets = 0;
+    let mut count = 0;
+    let mut letters = 0;
+    let mut check_sum = 0;
+    // up to 4 words of 1 to 3 letters of a and b against the statement,
+    // then up to 9 words of up to 20 letters from up to 25 letters
+    for c in 0..3200 {
+        let small = c < 3000;
+        let m = if small { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 9 };
+        let alphabet = if small { 2 } else { 2 + next_random(mut seed) % 24 };
+        let mut raw: Vec[String] = Vec.new();
+        for _ in 0..m {
+            let len = if small { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 20 };
+            raw.push(random_word(mut seed, len, alphabet));
+        }
+        let words = without_inside(raw);
+        sets += 1;
+        count += words.len();
+        for w in words.iter() {
+            letters += w.len();
+        }
+        let first = properties(mut t, mut seed, words, small);
+        check_sum = (check_sum * 1000003 + first) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{sets} sets of {count} words of {letters} letters, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

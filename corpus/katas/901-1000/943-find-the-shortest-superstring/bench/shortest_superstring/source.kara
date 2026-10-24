@@ -1,0 +1,113 @@
+// Benchmark: LeetCode #943 Find the Shortest Superstring -- the ★ arm,
+// the most letters saved, on sets of 12 words of 20 letters, LeetCode's
+// largest. Mirrors shortest_superstring.c, .rs, .py and go-seq/.
+
+fn overlap(a: ref String, b: ref String) -> i64 {
+    let mut k = a.len().min(b.len()) - 1;
+    while k > 0 {
+        if a.substring(a.len() - k, a.len()) == b.substring(0, k) {
+            return k;
+        }
+        k -= 1;
+    }
+    0
+}
+
+fn shortest_superstring(words: Vec[String]) -> String {
+    let n = words.len();
+    let mut ov: Vec[i64] = Vec.filled(n * n, 0);
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                ov[i * n + j] = overlap(words[i], words[j]);
+            }
+        }
+    }
+    let full = (1 << n) - 1;
+    let mut saved: Vec[i64] = Vec.filled((full + 1) * n, -1);
+    let mut before: Vec[i64] = Vec.filled((full + 1) * n, -1);
+    for mask in 1..(full + 1) {
+        for last in 0..n {
+            if (mask >> last) & 1 == 1 {
+                let rest = mask ^ (1 << last);
+                if rest == 0 {
+                    saved[mask * n + last] = 0;
+                } else {
+                    for p in 0..n {
+                        if (rest >> p) & 1 == 1 {
+                            let s = saved[rest * n + p] + ov[p * n + last];
+                            if s > saved[mask * n + last] {
+                                saved[mask * n + last] = s;
+                                before[mask * n + last] = p;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut last = 0;
+    for w in 1..n {
+        if saved[full * n + w] > saved[full * n + last] {
+            last = w;
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    let mut mask = full;
+    while last >= 0 {
+        order.push(last);
+        let p = before[mask * n + last];
+        mask = mask ^ (1 << last);
+        last = p;
+    }
+    let first = order[order.len() - 1];
+    let mut out = words[first].clone();
+    let mut i = order.len() - 1;
+    while i > 0 {
+        let a = order[i];
+        let b = order[i - 1];
+        out = out + words[b].substring(ov[a * n + b], words[b].len());
+        i -= 1;
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 10;
+    let count = 40;
+    let size = 12;
+    let length = 20;
+    let mut seed = 943;
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    for _ in 0..count {
+        let letters = 2 + next_random(mut seed) % 3;
+        let mut words: Vec[String] = Vec.new();
+        while words.len() < size {
+            let mut w = String.new();
+            for _ in 0..length {
+                w.push((next_random(mut seed) % letters + 97) as u8 as char);
+            }
+            if not words.contains(w) {
+                words.push(w);
+            }
+        }
+        sets.push(words);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let s = shortest_superstring(sets[(r + i) % count]);
+            total += s.len();
+            for c in s.bytes().iter() {
+                check = (check * 31 + *c as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over {count} sets of {size} words of {length} letters: lengths adding to {total}, checksum {check}");
+}
