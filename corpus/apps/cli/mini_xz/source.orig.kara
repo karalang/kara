@@ -988,7 +988,7 @@ fn lzma2_decode(data: ref Vec[u8], start: i64, end: i64, dict_size: i64) -> Resu
             if pos + 4 > end {
                 return fail("eof");
             }
-            let usize = ((c & 0x1F) << 16) + ((data[pos] as i64) << 8) + (data[pos + 1] as i64) + 1;
+            let usz = ((c & 0x1F) << 16) + ((data[pos] as i64) << 8) + (data[pos + 1] as i64) + 1;
             let csize = ((data[pos + 2] as i64) << 8) + (data[pos + 3] as i64) + 1;
             pos += 4;
             if c >= 0xC0 {
@@ -1008,7 +1008,7 @@ fn lzma2_decode(data: ref Vec[u8], start: i64, end: i64, dict_size: i64) -> Resu
                 lzma_reset(mut lz);
             }
             let mut rc = if pos + csize > end { rc_new(data, pos, end, "eof")? } else { rc_new(data, pos, pos + csize, "data")? };
-            let want = dic.len() + usize;
+            let want = dic.len() + usz;
             if lzma_run(mut rc, data, mut lz, mut dic, want, dict_size)? {
                 return fail("data");
             }
@@ -1196,7 +1196,7 @@ fn block_header(t: ref Crcs, data: ref Vec[u8], pos: i64, end: i64) -> Result[Bl
     }
     let mut p = pos + 2;
     let mut csize: i64 = -1;
-    let mut usize: i64 = -1;
+    let mut usz: i64 = -1;
     if fl & 0x40 != 0 {
         let (v, q) = vli(data, p, hend)?;
         if v == 0 {
@@ -1207,7 +1207,7 @@ fn block_header(t: ref Crcs, data: ref Vec[u8], pos: i64, end: i64) -> Result[Bl
     }
     if fl & 0x80 != 0 {
         let (v, q) = vli(data, p, hend)?;
-        usize = v;
+        usz = v;
         p = q;
     }
     let mut fids: Vec[i64] = Vec.new();
@@ -1238,7 +1238,7 @@ fn block_header(t: ref Crcs, data: ref Vec[u8], pos: i64, end: i64) -> Result[Bl
             return fail("options");
         }
     }
-    Ok(BlockHeader { size: hsize, csize: csize, usize: usize, fids: fids, fprops: fprops })
+    Ok(BlockHeader { size: hsize, csize: csize, usize: usz, fids: fids, fprops: fprops })
 }
 
 // Zero padding from pos up to the next multiple of four past start.
@@ -1508,11 +1508,11 @@ fn file_info(t: ref Crcs, data: ref Vec[u8]) -> Result[Vec[StreamInfo], String] 
         if hcid != cid {
             return fail("data");
         }
-        let mut usize: i64 = 0;
+        let mut usz: i64 = 0;
         for b in usizes {
-            usize += b;
+            usz += b;
         }
-        streams.push(StreamInfo { start: start, size: pos - start, check: cid, pad: pad, unpadded: unpadded, usizes: usizes, uoff: 0, usize: usize });
+        streams.push(StreamInfo { start: start, size: pos - start, check: cid, pad: pad, unpadded: unpadded, usizes: usizes, uoff: 0, usize: usz });
         pos = start;
     }
     streams.reverse();
@@ -1741,13 +1741,13 @@ fn list_one(t: ref Crcs, job: mut ref Job, tot: mut ref Totals, f: Str, k: i64, 
     }
     let nstreams = streams.len();
     let mut nblocks: i64 = 0;
-    let mut usize: i64 = 0;
+    let mut usz: i64 = 0;
     let mut pad: i64 = 0;
     let mut checks: Vec[i64] = Vec.new();
     let mut maxcheck: i64 = 0;
     for s in streams {
         nblocks += s.unpadded.len();
-        usize += s.usize;
+        usz += s.usize;
         pad += s.pad;
         add_check(mut checks, s.check);
         add_check(tot.checks, s.check);
@@ -1760,14 +1760,14 @@ fn list_one(t: ref Crcs, job: mut ref Job, tot: mut ref Totals, f: Str, k: i64, 
     tot.streams += nstreams;
     tot.blocks += nblocks;
     tot.c += csize;
-    tot.u += usize;
+    tot.u += usz;
     tot.pad += pad;
     if verbose == 0 {
         if not shown {
             job.out.push_str("Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename\n");
             shown = true;
         }
-        job.out.push_str(f"{nstreams:5}  {nblocks:6}  {rjust(nice(csize, false), 11)}  {rjust(nice(usize, false), 11)}  {rjust(ratio(csize, usize), 5)}  {ljust(check_names(checks, ","), 7)} {f}\n");
+        job.out.push_str(f"{nstreams:5}  {nblocks:6}  {rjust(nice(csize, false), 11)}  {rjust(nice(usz, false), 11)}  {rjust(ratio(csize, usz), 5)}  {ljust(check_names(checks, ","), 7)} {f}\n");
         return;
     }
     if printed > 0 {
@@ -1778,8 +1778,8 @@ fn list_one(t: ref Crcs, job: mut ref Job, tot: mut ref Totals, f: Str, k: i64, 
     s.push_str(label("Streams:", f"{nstreams}"));
     s.push_str(label("Blocks:", f"{nblocks}"));
     s.push_str(label("Compressed size:", nice(csize, true)));
-    s.push_str(label("Uncompressed size:", nice(usize, true)));
-    s.push_str(label("Ratio:", ratio(csize, usize)));
+    s.push_str(label("Uncompressed size:", nice(usz, true)));
+    s.push_str(label("Ratio:", ratio(csize, usz)));
     s.push_str(label("Check:", check_names(checks, ", ")));
     s.push_str(label("Stream Padding:", nice(pad, true)));
     s.push_str("  Streams:\n");

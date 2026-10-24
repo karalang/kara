@@ -738,7 +738,7 @@ fn gunzip(k: ref Crcs, d: ref Vec[u8]) -> Result[Vec[u8], Exc] {
             return Err(gz_eof());
         }
         let stored = (d[pos] as i64) | ((d[pos + 1] as i64) << 8) | ((d[pos + 2] as i64) << 16) | ((d[pos + 3] as i64) << 24);
-        let isize = (d[pos + 4] as i64) | ((d[pos + 5] as i64) << 8) | ((d[pos + 6] as i64) << 16) | ((d[pos + 7] as i64) << 24);
+        let isz = (d[pos + 4] as i64) | ((d[pos + 5] as i64) << 8) | ((d[pos + 6] as i64) << 16) | ((d[pos + 7] as i64) << 24);
         pos += 8;
         let crc = crc32(k, member, 0, member.len());
         if stored != crc {
@@ -746,7 +746,7 @@ fn gunzip(k: ref Crcs, d: ref Vec[u8]) -> Result[Vec[u8], Exc] {
             let b = py_hex(crc);
             return Err(exc("BadGzipFile", f"CRC check failed {a} != {b}"));
         }
-        if isize != (member.len() & 0xFFFFFFFF) {
+        if isz != (member.len() & 0xFFFFFFFF) {
             return Err(exc("BadGzipFile", "Incorrect length of data produced"));
         }
         append(mut out, member);
