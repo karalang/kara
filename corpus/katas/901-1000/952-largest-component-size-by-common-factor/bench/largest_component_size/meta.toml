@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/952-largest-component-size-by-common-factor/bench/largest_component_size.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["lib:map", "lib:set", "bench"]
 class = "e"
-bucket = "e-differs:stdout"
-classified_with = "46c2e7477"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 952 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "ce93b10a4"
 extracted_src = "b6a0fc49"
