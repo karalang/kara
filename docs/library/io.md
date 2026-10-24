@@ -1,6 +1,6 @@
 # Input and output
 
-**I/O is blocking in v1.** A read or write occupies the calling thread until it completes, so every file and network operation has `blocks`. Non-blocking networking, coroutines and the `suspends` effect come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
+**I/O blocks, and socket waits suspend.** Outside a task, a read or write occupies the calling thread until it completes, so every file and network operation has `blocks`. The socket, TLS and WebSocket waits and `Child.wait` also have `suspends`: inside a task, a call that would wait suspends its task, and the program's other tasks run until it can go on ([core semantics §11.8](../core-semantics.md)). File I/O, the HTTP client and the child's pipes still hold the thread inside a task.
 
 **Effects.** Each function lists its effects ([design.md §12](../design.md#resources)):
 - **`FileSystem` and `Network` are capabilities**, not conflict keys: `reads(FileSystem)` means "may read files" and `sends(Network)` "may use the network". Path-taking functions such as `fs.write(path, content)` carry `writes(FileSystem)` (and `blocks`, like all I/O) and do not conflict with each other, so two `par` branches that write the same path by name are not detected.
@@ -195,15 +195,15 @@ Both are prelude types. `IoError` covers the standard streams and files; `VarErr
 ```kara
 impl TcpListener {
     fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network) blocks
-    fn accept(self) -> Result[TcpStream, NetError] with receives(self) blocks
+    fn accept(self) -> Result[TcpStream, NetError] with receives(self) blocks suspends
     fn local_addr(self) -> Result[String, NetError]
 }
 
 impl TcpStream {
-    fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks
-    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks
-    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
-    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
+    fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks suspends
+    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
+    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
+    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn try_clone(self) -> Result[TcpStream, NetError]
     fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
@@ -212,10 +212,10 @@ impl TcpStream {
 impl UdpSocket {
     fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) blocks
     fn send_to(self, buf: Slice[u8], addr: Str) -> Result[i64, NetError] with sends(self) blocks
-    fn recv_from(self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(self) blocks
+    fn recv_from(self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(self) blocks suspends
     fn connect(self, addr: Str) -> Result[(), NetError] with sends(self) blocks
     fn send(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
-    fn recv(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks
+    fn recv(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
     fn local_addr(self) -> Result[String, NetError]
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
     fn try_clone(self) -> Result[UdpSocket, NetError]
@@ -258,15 +258,15 @@ type TcpError = NetError;
 
 ```kara
 impl TlsListener {
-    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError]
-    fn accept(self) -> Result[TlsStream, NetError] with receives(self) blocks
+    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] with sends(Network) receives(Network) blocks
+    fn accept(self) -> Result[TlsStream, NetError] with receives(self) blocks suspends
     fn local_addr(self) -> Result[String, NetError]
 }
 
 impl TlsStream {
-    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks
-    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
-    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
+    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
+    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
+    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
     fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
 }
@@ -282,13 +282,13 @@ A failed connection fails with `NetError.Tls`, and every later call on it fails 
 
 ```kara
 impl WebSocket {
-    fn accept(listener: TcpListener) -> Result[WebSocket, NetError] with receives(listener) blocks
-    fn accept_tls(listener: TlsListener) -> Result[WebSocket, NetError] with receives(listener) blocks
-    fn recv(mut self) -> Result[WsMessage, NetError] with receives(self) sends(self) blocks
-    fn send_text(mut self, text: Str) -> Result[(), NetError] with sends(self) blocks
-    fn send_binary(mut self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks
-    fn send_ping(mut self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks
-    fn close(mut self, code: u16) -> Result[(), NetError] with sends(self) receives(self) blocks
+    fn accept(listener: TcpListener) -> Result[WebSocket, NetError] with receives(listener) blocks suspends
+    fn accept_tls(listener: TlsListener) -> Result[WebSocket, NetError] with receives(listener) blocks suspends
+    fn recv(mut self) -> Result[WsMessage, NetError] with receives(self) sends(self) blocks suspends
+    fn send_text(mut self, text: Str) -> Result[(), NetError] with sends(self) blocks suspends
+    fn send_binary(mut self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks suspends
+    fn send_ping(mut self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks suspends
+    fn close(mut self, code: u16) -> Result[(), NetError] with sends(self) receives(self) blocks suspends
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
 }
 
@@ -409,7 +409,7 @@ impl Stdio {
 ```kara
 impl Child {
     fn id(self) -> i64
-    fn wait(self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks
+    fn wait(self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks suspends
     fn try_wait(self) -> Result[Option[ExitStatus], IoError] with sends(ProcessTable)
     fn kill(self) -> Result[(), IoError] with sends(ProcessTable)
     fn wait_with_output(own self) -> Result[Output, IoError] with sends(ProcessTable) blocks
