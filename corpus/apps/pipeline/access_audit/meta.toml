@@ -1,0 +1,11 @@
+source = "kara-katas/apps/pipeline/access_audit/access_audit.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+note = "stmt-par groups (source.orig.kara lines): L286-L289 four fs.write, one per log file, each with its generate call; L295-L298 four fs.read_to_string of those files; L303-L306 four parse calls, each with ?; L321-L325 five read-only reports over the same hits"
+extracted_src = "ba082c48"

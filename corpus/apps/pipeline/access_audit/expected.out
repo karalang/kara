@@ -1,0 +1,30 @@
+web1: 8000 requests
+web2: 8000 requests
+web3: 8000 requests
+web4: 8000 requests
+status codes:
+  200: 23949
+  201: 4215
+  301: 963
+  404: 2233
+  500: 640
+  error rate: 2.00%
+top routes:
+  /search 2715
+  /logout 2692
+  /login 2691
+  /static/app.js 2679
+  /api/users/{id} 2671
+  / 2670
+latency (ms):
+  DELETE n=1527 p50=109 p90=186 p99=1025 max=1131
+  GET n=25689 p50=111 p90=189 p99=1004 max=1133
+  POST n=4784 p50=109 p90=185 p99=1003 max=1123
+clients: 960 unique
+  10.1.3.35 602392 bytes
+  10.0.6.21 493253 bytes
+  10.2.2.9 491609 bytes
+busiest minutes:
+  web2 minute 29: 57 requests
+  web3 minute 39: 57 requests
+  web1 minute 11: 55 requests

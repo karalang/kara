@@ -1,0 +1,344 @@
+// pipeline/access_audit
+//
+// Four web servers each write an access log. This program writes the four
+// logs, reads them back, parses each one, and then runs five reports over
+// the combined requests: status codes, the busiest routes, latency
+// percentiles per method, the clients that pulled the most bytes, and the
+// busiest minutes per server.
+//
+// The writes, the reads, the parses and the five reports are each a group
+// of statements that do not depend on each other (a stmt-par app).
+
+struct Hit {
+    server: String,
+    ip: String,
+    t: i64,
+    method: String,
+    path: String,
+    status: i64,
+    size: i64,
+    lat: i64,
+}
+
+enum AuditError {
+    Io(String),
+    Parse(String),
+}
+
+impl AuditError {
+    fn describe(ref self) -> String {
+        match self {
+            AuditError.Io(what) => f"io: {what}",
+            AuditError.Parse(what) => f"parse: {what}",
+        }
+    }
+}
+
+// A linear congruential generator, the same one the Python mirror uses.
+struct Lcg {
+    state: i64,
+}
+
+impl Lcg {
+    fn next(mut ref self, n: i64) -> i64 {
+        self.state = (self.state * 1103515245 + 12345) % 2147483648;
+        (self.state >> 8) % n
+    }
+}
+
+fn paths() -> Vec[String] {
+    let names = ["/", "/login", "/logout", "/search", "/cart", "/checkout", "/api/items/{id}", "/api/users/{id}", "/api/orders/{id}", "/static/app.js", "/static/app.css", "/health"];
+    names.iter().map(|p| p.to_string()).collect()
+}
+
+fn pad6(n: i64) -> String {
+    let mut s = n.to_string();
+    while s.len() < 6 {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn generate(server_no: i64, n: i64) -> String {
+    let mut r = Lcg { state: server_no * 7919 + 17 };
+    let routes = paths();
+    let mut out = String.new();
+    let mut t = 0;
+    for _ in 0..n {
+        t += r.next(4);
+        let a = r.next(3);
+        let b = r.next(8);
+        let c = r.next(40) + 1;
+        let ip = f"10.{a}.{b}.{c}";
+        let roll = r.next(100);
+        let method = if roll < 80 { "GET" } else if roll < 95 { "POST" } else { "DELETE" };
+        let route = routes[r.next(routes.len())].clone();
+        let path = if route.contains("{id}") { route.replace("{id}", r.next(500).to_string()) } else { route };
+        let roll2 = r.next(100);
+        let status = if roll2 < 2 {
+            500
+        } else if roll2 < 9 {
+            404
+        } else if roll2 < 12 {
+            301
+        } else if method == "POST" {
+            201
+        } else {
+            200
+        };
+        let size = if status < 300 { r.next(20000) + 100 } else { r.next(400) + 50 };
+        let mut lat = r.next(120) + r.next(120) + 3;
+        if status == 500 {
+            lat += 900;
+        }
+        if path.starts_with("/static/") {
+            lat = lat / 10 + 1;
+        }
+        out.push_str(f"{ip} - - [t={pad6(t)}] \"{method} {path} HTTP/1.1\" {status} {size} {lat}\n");
+    }
+    out
+}
+
+fn number(field: Str, line: Str) -> Result[i64, AuditError] {
+    match i64.parse(field).ok() {
+        Some(v) => Ok(v),
+        None => Err(AuditError.Parse(f"not a number '{field}' in: {line}")),
+    }
+}
+
+// ip - - [t=NNNNNN] "METHOD PATH HTTP/1.1" STATUS SIZE LAT
+fn parse_line(server: Str, line: Str) -> Result[Hit, AuditError] {
+    let bad = || AuditError.Parse(f"bad line: {line}");
+    let lb = match line.find("[") {
+        Some(i) => i,
+        None => return Err(bad()),
+    };
+    let rb = match line.find("]") {
+        Some(i) => i,
+        None => return Err(bad()),
+    };
+    let q1 = match line.find("\"") {
+        Some(i) => i,
+        None => return Err(bad()),
+    };
+    let q2 = match line.rfind("\"") {
+        Some(i) => i,
+        None => return Err(bad()),
+    };
+    if rb < lb or q1 < rb or q2 <= q1 {
+        return Err(bad());
+    }
+    let ip = line.substring(0, lb).split(" ")[0].to_string();
+    let t = number(line.substring(lb + 3, rb), line)?;
+    let req = line.substring(q1 + 1, q2).split(" ");
+    if req.len() != 3 {
+        return Err(AuditError.Parse(f"bad request: {line}"));
+    }
+    let tail = line.substring(q2 + 1).trim().split(" ");
+    if tail.len() != 3 {
+        return Err(AuditError.Parse(f"bad tail: {line}"));
+    }
+    Ok(Hit {
+        server: server.to_string(),
+        ip: ip,
+        t: t,
+        method: req[0].to_string(),
+        path: req[1].to_string(),
+        status: number(tail[0], line)?,
+        size: number(tail[1], line)?,
+        lat: number(tail[2], line)?,
+    })
+}
+
+fn parse(server: Str, text: Str) -> Result[Vec[Hit], AuditError] {
+    let mut out: Vec[Hit] = Vec.new();
+    for line in text.split("\n") {
+        if line.len() == 0 {
+            continue;
+        }
+        out.push(parse_line(server, line)?);
+    }
+    Ok(out)
+}
+
+fn all_digits(s: Str) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if not c.is_ascii_digit() {
+            return false;
+        }
+    }
+    true
+}
+
+// /api/items/42 -> /api/items/{id}
+fn route_of(path: Str) -> String {
+    let parts: Vec[String] = path.split("/").iter().map(|p| if all_digits(p) { "{id}".to_string() } else { p.to_string() }).collect();
+    parts.join("/")
+}
+
+fn status_report(hits: ref Vec[Hit]) -> String {
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    let mut errors = 0;
+    for h in hits {
+        *counts.entry(h.status).or_insert(0) += 1;
+        if h.status >= 500 {
+            errors += 1;
+        }
+    }
+    let mut out = "status codes:".to_string();
+    for (code, n) in counts {
+        out.push_str(f"\n  {code}: {n}");
+    }
+    let bp = errors * 10000 / hits.len();
+    let frac = bp % 100;
+    let frac_text = if frac < 10 { f"0{frac}" } else { frac.to_string() };
+    out.push_str(f"\n  error rate: {bp / 100}.{frac_text}%");
+    out
+}
+
+// Ranked by count, most first, then by name.
+fn ranked(counts: ref SortedMap[String, i64]) -> Vec[(String, i64)] {
+    let mut v: Vec[(String, i64)] = Vec.new();
+    for (k, n) in counts {
+        v.push((k.clone(), *n));
+    }
+    v.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
+    v
+}
+
+fn top_routes(hits: ref Vec[Hit], n: i64) -> String {
+    let mut counts: SortedMap[String, i64] = SortedMap.new();
+    for h in hits {
+        *counts.entry(route_of(h.path)).or_insert(0) += 1;
+    }
+    let mut out = "top routes:".to_string();
+    let top = ranked(counts);
+    for i in 0..n {
+        if i < top.len() {
+            out.push_str(f"\n  {top[i].0} {top[i].1}");
+        }
+    }
+    out
+}
+
+// The nearest-rank percentile of sorted values.
+fn pct(sorted: ref Vec[i64], p: i64) -> i64 {
+    let i = (sorted.len() * p + 99) / 100 - 1;
+    sorted[if i < 0 { 0 } else { i }]
+}
+
+fn latency_report(hits: ref Vec[Hit]) -> String {
+    let mut by: SortedMap[String, Vec[i64]] = SortedMap.new();
+    for h in hits {
+        by.entry(h.method.clone()).or_insert(Vec.new()).push(h.lat);
+    }
+    let mut out = "latency (ms):".to_string();
+    for (m, lats) in by {
+        let mut v = lats.clone();
+        v.sort();
+        out.push_str(f"\n  {m} n={v.len()} p50={pct(v, 50)} p90={pct(v, 90)} p99={pct(v, 99)} max={v[v.len() - 1]}");
+    }
+    out
+}
+
+fn client_report(hits: ref Vec[Hit], n: i64) -> String {
+    let mut sent: SortedMap[String, i64] = SortedMap.new();
+    for h in hits {
+        *sent.entry(h.ip.clone()).or_insert(0) += h.size;
+    }
+    let mut out = f"clients: {sent.len()} unique";
+    let top = ranked(sent);
+    for i in 0..n {
+        if i < top.len() {
+            out.push_str(f"\n  {top[i].0} {top[i].1} bytes");
+        }
+    }
+    out
+}
+
+fn busiest_minutes(hits: ref Vec[Hit], n: i64) -> String {
+    let mut per: SortedMap[(String, i64), i64] = SortedMap.new();
+    for h in hits {
+        *per.entry((h.server.clone(), h.t / 60)).or_insert(0) += 1;
+    }
+    let mut v: Vec[((String, i64), i64)] = Vec.new();
+    for (k, c) in per {
+        v.push((k.clone(), *c));
+    }
+    v.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
+    let mut out = "busiest minutes:".to_string();
+    for i in 0..n {
+        if i < v.len() {
+            out.push_str(f"\n  {v[i].0.0} minute {v[i].0.1}: {v[i].1} requests");
+        }
+    }
+    out
+}
+
+fn run() -> Result[(), AuditError] {
+    let n = 8000;
+    let servers = ["web1", "web2", "web3", "web4"];
+
+    // Each server's log goes to its own file.
+    let w1 = fs.write("access_web1.log", generate(1, n));
+    let w2 = fs.write("access_web2.log", generate(2, n));
+    let w3 = fs.write("access_web3.log", generate(3, n));
+    let w4 = fs.write("access_web4.log", generate(4, n));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() {
+        return Err(AuditError.Io("could not write the logs".to_string()));
+    }
+
+    // The reads are independent of each other, and so are the parses.
+    let t1 = fs.read_to_string("access_web1.log");
+    let t2 = fs.read_to_string("access_web2.log");
+    let t3 = fs.read_to_string("access_web3.log");
+    let t4 = fs.read_to_string("access_web4.log");
+    let (text1, text2, text3, text4) = match (t1, t2, t3, t4) {
+        (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
+        _ => return Err(AuditError.Io("could not read the logs".to_string())),
+    };
+    let log1 = parse(servers[0], text1)?;
+    let log2 = parse(servers[1], text2)?;
+    let log3 = parse(servers[2], text3)?;
+    let log4 = parse(servers[3], text4)?;
+
+    println(f"web1: {log1.len()} requests");
+    println(f"web2: {log2.len()} requests");
+    println(f"web3: {log3.len()} requests");
+    println(f"web4: {log4.len()} requests");
+
+    let mut hits: Vec[Hit] = Vec.new();
+    for log in [log1, log2, log3, log4] {
+        for h in log {
+            hits.push(h);
+        }
+    }
+
+    // Five reports over the same requests; none writes anything the others read.
+    let statuses = status_report(hits);
+    let routes = top_routes(hits, 6);
+    let latency = latency_report(hits);
+    let clients = client_report(hits, 3);
+    let minutes = busiest_minutes(hits, 3);
+    println(statuses);
+    println(routes);
+    println(latency);
+    println(clients);
+    println(minutes);
+
+    let _ = fs.remove_file("access_web1.log");
+    let _ = fs.remove_file("access_web2.log");
+    let _ = fs.remove_file("access_web3.log");
+    let _ = fs.remove_file("access_web4.log");
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"audit failed: {e.describe()}"),
+    }
+}
