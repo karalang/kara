@@ -18,7 +18,7 @@ fn bump(n: mut ref i64) {
 
 fn twice(n: mut ref i64) {
     bump(mut n);
-    bump(n);
+    bump(mut n);
 }
 
 fn refresh(s: mut ref Session) {

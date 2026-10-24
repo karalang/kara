@@ -2932,8 +2932,17 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         // The v1 rule is checked where the core rules are: `karac check`
-        // and `karac fix` (strict), whose fix-it adds the marker.
-        if !arg.mut_marker && (!forwarded || self.cli_lint_overrides.strict_core) {
+        // and `karac fix` (strict), whose fix-it adds the marker. Every MIR
+        // front end checks it in the program's own code, so a program `check`
+        // refuses for it does not run on `__mir-run` (B-2026-10-21-77); the
+        // library text appended after it is not held to a rule `check` never
+        // applies to it.
+        let in_program = arg.value.span.offset < self.program.library_start.unwrap_or(usize::MAX);
+        if !arg.mut_marker
+            && (!forwarded
+                || self.cli_lint_overrides.strict_core
+                || (self.library_methods_from_source && in_program))
+        {
             let message = if forwarded {
                 format!(
                     "parameter expects `{}`; every argument to a mutating parameter \

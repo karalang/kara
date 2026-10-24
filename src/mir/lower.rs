@@ -20676,7 +20676,7 @@ b
 sync struct C { n: i64 }
 fn read(c: C) -> i64 { c.n }
 fn bump(xs: mut Slice[i64]) { xs[0] = xs[0] + 1; }
-fn twice(xs: mut Slice[i64]) { bump(xs); bump(xs); }
+fn twice(xs: mut Slice[i64]) { bump(mut xs); bump(mut xs); }
 fn main() {
     let v: Vec[String] = ["ab".to_string(), "cde".to_string()];
     let mut n = 0;
@@ -21143,8 +21143,8 @@ fn main() {
 fn add_one(out: mut ref Vec[i64], n: i64) {
     if n > 0 {
         out.push(n);
-        add_one(out, n - 1);
-        add_one(out, 0);
+        add_one(mut out, n - 1);
+        add_one(mut out, 0);
     }
 }
 
