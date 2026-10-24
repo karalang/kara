@@ -6420,6 +6420,14 @@ impl<'a> TypeChecker<'a> {
             }
             let key = SpanKey::from_span(&at);
             match (&f, &e) {
+                // core-semantics §5.10: a `ref` to a `Copy` value is read as
+                // the value in an element of a literal, so `[p]` for a
+                // `Vec[i64]` with `p: ref i64` builds a `Vec[i64]`
+                // (B-2026-10-22-6).
+                (Type::Ref(inner) | Type::MutRef(inner), value)
+                    if self.library_methods_from_source
+                        && **inner == *value
+                        && self.reads_as_value(inner) => {}
                 (Type::Str, view) if exprs::is_str_view(view) => {
                     let Some(lit) = self.string_literal_spans.get(&key).copied() else {
                         return false;

@@ -12666,3 +12666,35 @@ fn collect_after_an_item_keeping_adaptor_on_a_generic_iterator_checks() {
         "2\n2\n",
     );
 }
+
+#[test]
+fn a_list_literal_in_a_tuple_literal_follows_its_slot() {
+    // B-2026-10-23-7: `vec![1, 2]` for a `Vec[u8]` tuple element builds a
+    // `Vec[u8]`, at a `let` and in a pushed tuple.
+    accepted_and_runs(
+        "vec-literal-in-a-tuple-slot",
+        "fn main() {\n    let b: (String, Vec[u8]) = (\"x\".to_string(), vec![1, 2]);\n    \
+         let d: (Vec[u8], i64) = (vec![1], 2);\n    let mut v: Vec[(String, Vec[u8])] = Vec.new();\n    \
+         v.push((\"y\".to_string(), vec![0xef, 0xbb, 0xbf]));\n    \
+         println(f\"{b.1.len()} {d.1} {v[0].1}\");\n}\n",
+        "2 2 [239, 187, 191]\n",
+    );
+    rejected(
+        "vec-literal-in-a-tuple-slot-out-of-range",
+        "fn main() {\n    let b: (String, Vec[u8]) = (\"x\".to_string(), vec![300]);\n    println(b.1.len());\n}\n",
+        "integer literal 300 out of range for 'u8'",
+    );
+}
+
+#[test]
+fn a_list_literal_reads_a_ref_to_a_copy_element_as_the_value() {
+    // B-2026-10-22-6, core-semantics §5.10: `[p]` with `p: ref i64` builds a
+    // `Vec[i64]` where one is expected, as `[1, p]` already did.
+    accepted_and_runs(
+        "list-literal-of-a-copy-ref",
+        "fn main() {\n    let v: Vec[i64] = [3, 4];\n    for p in v.iter() {\n        \
+         let u: Vec[i64] = [p];\n        let a: Vec[i64] = [p, 1];\n        \
+         let mut st: Vec[i64] = Vec.new();\n        st = [p];\n        println(f\"{u} {a} {st}\");\n    }\n}\n",
+        "[3] [3, 1] [3]\n[4] [4, 1] [4]\n",
+    );
+}

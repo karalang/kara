@@ -666,6 +666,10 @@ impl<'a> super::TypeChecker<'a> {
         ) || matches!(
             &arg.kind,
             ExprKind::PrefixCollectionLiteral { .. } | ExprKind::RepeatLiteral { .. }
+        ) || matches!(
+            // A tuple literal holding one (B-2026-10-23-7).
+            &arg.kind,
+            ExprKind::Tuple(es) if es.iter().any(super::exprs::is_collection_literal)
         );
         let slot = resolve_type_var_top(elem, &self.env.substitutions);
         if literal && super::exprs::expectation_is_concrete(&slot) {

@@ -11238,18 +11238,15 @@ fn empty_vec_literal_in_a_tuple_slot_takes_the_slot_type() {
     );
     typecheck_ok("fn mk() -> (Vec[String], i64) { return (vec![], 3); }\nfn main() { let (a, b) = mk(); println(f\"{a.len()} {b}\"); }");
     typecheck_ok("struct P { t: (Vec[i64], i64) }\nfn main() { let p = P { t: (Vec[], 9) }; println(f\"{p.t.1}\"); }");
-    // Still refused: no slot to read the type from, and the map spellings.
+    // Still refused: no slot to read the type from.
     assert_one_typecheck_error_containing(
         "fn main() { let t = (vec![], 5); }",
         &["E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION"],
     );
-    let errors = typecheck_errors("fn main() { let t: (Map[i64, i64], i64) = (Map[], 5); }");
-    assert!(
-        errors.iter().any(|e| e
-            .message
-            .contains("E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION")),
-        "Map[] in a tuple slot should stay refused; got {errors:#?}"
-    );
+    // The map spelling takes its slot too since B-2026-10-23-7: the refusal
+    // guarded a legacy codegen gap (B-2026-10-06-76), and the MIR backends
+    // build `(Map[], 5)` (both print `1 5` after an insert).
+    typecheck_ok("fn main() { let t: (Map[i64, i64], i64) = (Map[], 5); println(f\"{t.1}\"); }");
 }
 
 #[test]

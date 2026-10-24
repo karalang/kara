@@ -112,6 +112,17 @@ fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
     }
 }
 
+/// A list literal: `[..]`, `vec![..]` / `Vec[..]`-style prefix literals and
+/// `[v; n]`.
+pub(super) fn is_collection_literal(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::ArrayLiteral(_)
+            | ExprKind::PrefixCollectionLiteral { .. }
+            | ExprKind::RepeatLiteral { .. }
+    )
+}
+
 /// A zero-argument `.collect()`: its target is whatever the context names.
 pub(super) fn is_bare_collect(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::MethodCall { method, args, .. } if method == "collect" && args.is_empty())
@@ -2345,6 +2356,14 @@ impl<'a> super::TypeChecker<'a> {
                         // B-2026-10-14-19 — the library's `collect()` is
                         // generic in its target, which only the slot names.
                         || (library && is_bare_collect(e))
+                        // B-2026-10-23-7 — a list literal follows a concrete
+                        // collection slot, as at a `let`: `vec![1, 2]` for a
+                        // `Vec[u8]` element builds a `Vec[u8]`. A collection
+                        // literal has no integer coercion to keep: its element
+                        // type is minted by literal defaulting alone.
+                        || (is_collection_literal(e)
+                            && matches!(slot, Type::Named { .. })
+                            && expectation_is_concrete(slot))
                 };
                 if elems
                     .iter()
