@@ -340,3 +340,111 @@ fn mir_auto_par_sums_overflow_only_where_the_loop_does() {
     assert_eq!(code, Some(101), "{err}");
     assert!(err.contains("overflow"), "{err}");
 }
+
+/// A reduction under an `if` or in a `match` arm folds as one at the top
+/// does, a signed sum's overflow included; two statements writing the
+/// same accumulator keep the loop in order.
+#[test]
+fn mir_auto_par_reductions_under_if_and_match() {
+    let src = r#"fn pick(i: i64) -> Option[i64] {
+    if i % 3 == 0 { Some(i * 2) } else { None }
+}
+
+fn main() {
+    let mut s = 0;
+    for i in 0..3000 {
+        match pick(i) {
+            Some(v) => { s = s + v; }
+            None => {}
+        }
+    }
+    let mut hits = 0;
+    for c in 0..500 {
+        if c % 7 == 1 { hits = hits + 1; }
+    }
+    let mut odd: u64 = 0;
+    for i in 0..400 {
+        if i % 2 == 1 {
+            odd += i as u64;
+        } else if i % 5 == 0 {
+            odd += 1;
+        }
+    }
+    println(f"{s} {hits} {odd}");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(9223372036854775807);
+    for _ in 0..500 {
+        v.push(-1);
+    }
+    let mut acc = START;
+    for i in 0..v.len() {
+        if v[i] != 0 {
+            acc += v[i];
+        }
+    }
+    println(acc);
+}
+"#;
+    let ok = src.replace("START", "-10");
+    let (out, code, err) = same_both_ways("nested", &ok, &["main@7", "main@14", "main@32"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, "2997000 72 40040\n9223372036854775297\n");
+    let over = src.replace("START", "10");
+    let (out, code, err) = same_both_ways("nested-over", &over, &["main@7", "main@14", "main@32"]);
+    assert_eq!(out, "2997000 72 40040\n");
+    assert_eq!(code, Some(101), "{err}");
+    assert!(err.contains("overflow"), "{err}");
+}
+
+/// A chain of one operator holding the accumulator once folds as a single
+/// operation does (`s + i + 1`, `i + t + 1 + i * 2`, `m | a | b`, an
+/// unsigned `u + a + 3`, a signed `v[i] + acc + 0` overflowing where the
+/// loop does); `i + (r + 1)`, whose overflow would sit inside the
+/// statement, keeps its order.
+#[test]
+fn mir_auto_par_operator_chains_fold() {
+    let src = r#"fn main() {
+    let mut s = 0;
+    for i in 0..1000 {
+        s = s + i + 1;
+    }
+    let mut t = 5;
+    for i in 0..1000 {
+        t = i + t + 1 + i * 2;
+    }
+    let mut m: u32 = 0;
+    for i in 0..30 {
+        m = m | (i as u32) | ((i as u32) * 4);
+    }
+    let mut r = 0;
+    for i in 0..100 {
+        r = i + (r + 1);
+    }
+    let mut u: u64 = 0;
+    for i in 0..300 {
+        u = u + (i as u64) + 3;
+    }
+    println(f"{s} {t} {m} {r} {u}");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(9223372036854775807);
+    for _ in 0..500 {
+        v.push(-1);
+    }
+    let mut acc = START;
+    for i in 0..v.len() {
+        acc = v[i] + acc + 0;
+    }
+    println(acc);
+}
+"#;
+    let loops = ["main@3", "main@7", "main@11", "main@19", "main@29"];
+    let ok = src.replace("START", "-10");
+    let (out, code, err) = same_both_ways("chain", &ok, &loops);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, "500500 1499505 127 5050 45750\n9223372036854775297\n");
+    let over = src.replace("START", "10");
+    let (out, code, err) = same_both_ways("chain-over", &over, &loops);
+    assert_eq!(out, "500500 1499505 127 5050 45750\n");
+    assert_eq!(code, Some(101), "{err}");
+    assert!(err.contains("overflow"), "{err}");
+}

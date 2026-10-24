@@ -89,6 +89,50 @@ fn fold_int_in(e: &Expr, bits: i128, lo: i128, hi: i128) -> Option<i128> {
     }
 }
 
+/// The statement of `b` at the reduction span `r`, inside the arms of an
+/// `if` or `match` of it too (`if c { s += x; }`), not in a nested loop or
+/// closure, whose own lowering would see it again.
+fn reduction_stmt(b: &Block, r: Span) -> Option<&Stmt> {
+    let within = |s: Span| s.offset <= r.offset && r.offset + r.length <= s.offset + s.length;
+    fn in_expr(e: &Expr, r: Span) -> Option<&Stmt> {
+        match &e.kind {
+            ExprKind::Block(b) | ExprKind::LabeledBlock { body: b, .. } => reduction_stmt(b, r),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => reduction_stmt(then_block, r)
+                .or_else(|| else_branch.as_deref().and_then(|e| in_expr(e, r))),
+            ExprKind::Match { arms, .. } => arms.iter().find_map(|a| in_expr(&a.body, r)),
+            _ => None,
+        }
+    }
+    if let Some(st) = b.stmts.iter().find(|s| within(s.span)) {
+        return match &st.kind {
+            StmtKind::Expr(e) => in_expr(e, r),
+            _ => Some(st),
+        };
+    }
+    b.final_expr.as_deref().and_then(|e| in_expr(e, r))
+}
+
+/// The operation of an auto-par reduction written as `op`.
+fn reduction_op(op: &AstBinOp) -> Option<BinOp> {
+    Some(match op {
+        AstBinOp::Add => BinOp::Add,
+        AstBinOp::Mul => BinOp::Mul,
+        AstBinOp::BitAnd => BinOp::BitAnd,
+        AstBinOp::BitOr => BinOp::BitOr,
+        AstBinOp::BitXor => BinOp::BitXor,
+        _ => return None,
+    })
+}
+
 /// The values an integer type holds; the whole `i128` range for anything
 /// else, and for `u128`, whose values past `i128::MAX` the fold carries as
 /// their `i128` bit pattern, so it cannot check them.
@@ -2368,12 +2412,15 @@ struct AutoRed<'a> {
     wide: Option<WideSum<'a>>,
 }
 
-/// A signed sum's statement in an auto-par loop's body, and the term it
-/// adds.
+/// A signed sum's statement in an auto-par loop's body, and what it adds:
+/// the term of `acc += e`, or the chain `acc = a + acc + b` that holds
+/// `acc` as one of its operands.
 #[derive(Clone, Copy)]
 struct WideSum<'a> {
     stmt: &'a Stmt,
     term: &'a Expr,
+    chain: bool,
+    acc: SymbolId,
 }
 
 /// An auto-par task's wide sum while its run is lowered: the `i128`
@@ -4041,9 +4088,35 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// An auto-par task's signed sum statement: its term added to the
     /// task's `i128` total, the least and greatest prefix kept.
     fn wide_add(&mut self, w: WideAcc<'a>) -> R<()> {
-        let t = self.expr_ty(w.sum.term)?;
+        if w.sum.chain {
+            return self.wide_chain(w, w.sum.term);
+        }
+        self.wide_term(w, w.sum.term)
+    }
+
+    /// The chain `e` of a wide sum, evaluated as the sequential statement
+    /// evaluates it: at each step the operand holding `acc` first when it
+    /// is the left one, its other operand added after it.
+    fn wide_chain(&mut self, w: WideAcc<'a>, e: &'a Expr) -> R<()> {
+        let ExprKind::Binary { left, right, .. } = &e.kind else {
+            // `acc` itself, which the task's total stands in for.
+            return Ok(());
+        };
+        if self.acc_chain(left, BinOp::Add, w.sum.acc) == Ok(None) {
+            self.wide_term(w, left)?;
+            self.wide_chain(w, right)
+        } else {
+            self.wide_chain(w, left)?;
+            self.wide_term(w, right)
+        }
+    }
+
+    /// `e`, one term of a wide sum, added to the task's total, the least
+    /// and greatest prefix kept.
+    fn wide_term(&mut self, w: WideAcc<'a>, e: &'a Expr) -> R<()> {
+        let t = self.expr_ty(e)?;
         let x = self.temp(t);
-        self.expr_into(w.sum.term, Place::local(x))?;
+        self.expr_into(e, Place::local(x))?;
         let wt = self.b.local_ty(w.total);
         let xw = self.temp(wt);
         self.assign(
@@ -9556,8 +9629,8 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// reductions its verdict names: `Some(None)` when they return
     /// nothing, `Some(Some(r))` when they fold into one reduction. `None`
     /// keeps the loop sequential: a body with a value, more than one
-    /// reduction, or one that is not a statement of the body itself (which
-    /// runs exactly once an iteration) on an integer or `bool` local.
+    /// reduction, or one that is not a statement of the body (or of its
+    /// `if` and `match` arms) on an integer or `bool` local.
     fn auto_par_plan(&mut self, body: &'a Block, reds: &[Span]) -> R<Option<Option<AutoRed<'a>>>> {
         if let Some(f) = &body.final_expr {
             let t = self.expr_ty(f)?;
@@ -9570,8 +9643,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             [r] => *r,
             _ => return Ok(None),
         };
-        let within = |s: Span| s.offset <= r.offset && r.offset + r.length <= s.offset + s.length;
-        let Some(st) = body.stmts.iter().find(|s| within(s.span)) else {
+        let Some(st) = reduction_stmt(body, r) else {
             return Ok(None);
         };
         let local = |x: &Expr| match (&x.kind, self.lcx.res.get(&x.id)) {
@@ -9579,7 +9651,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => None,
         };
         // The span the sequential loop's checked operation carries, and the
-        // term it adds.
+        // term it adds, or the chain holding `acc`.
+        let mut chain = false;
+        let mut chain_starts = true;
         let (sym, op, span, term) = match &st.kind {
             StmtKind::CompoundAssign {
                 target, op, value, ..
@@ -9595,23 +9669,26 @@ impl<'l, 'a> Bx<'l, 'a> {
                 (local(target), op, st.span, value)
             }
             StmtKind::Assign { target, value } => {
-                let ExprKind::Binary { op, left, right } = &value.kind else {
+                let ExprKind::Binary { op, .. } = &value.kind else {
                     return Ok(None);
                 };
-                let op = match op {
-                    AstBinOp::Add => BinOp::Add,
-                    AstBinOp::Mul => BinOp::Mul,
-                    AstBinOp::BitAnd => BinOp::BitAnd,
-                    AstBinOp::BitOr => BinOp::BitOr,
-                    AstBinOp::BitXor => BinOp::BitXor,
-                    _ => return Ok(None),
-                };
-                let t = local(target);
-                if t.is_none() || (local(left) != t && local(right) != t) {
+                let Some(op) = reduction_op(op) else {
                     return Ok(None);
-                }
-                let term = if local(left) == t { &**right } else { &**left };
-                (t, op, value.span, term)
+                };
+                let Some(t) = local(target) else {
+                    return Ok(None);
+                };
+                // `acc` one operand of a chain of `op` (`acc = a + acc + b`).
+                let Ok(Some(steps)) = self.acc_chain(value, op, t) else {
+                    return Ok(None);
+                };
+                // A checked operation overflows at the step it is, which the
+                // join names by the statement's start: every step on the way
+                // to `acc` starts there (`acc + a + b`, `a + acc + b`, not
+                // `a + (acc + b)`).
+                chain_starts = steps.iter().all(|&o| o == value.span.offset);
+                chain = true;
+                (Some(t), op, value.span, value)
             }
             _ => return Ok(None),
         };
@@ -9626,8 +9703,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         // has no wider type to keep it in.
         let wide = match (self.tys().tcx().kind(ty), op) {
             (HK::Int(_) | HK::UInt(_), BinOp::Mul) => return Ok(None),
+            (HK::Int(_) | HK::UInt(_), BinOp::Add) if !chain_starts => return Ok(None),
             (HK::Int(IntSize::I128), BinOp::Add) => return Ok(None),
-            (HK::Int(_), BinOp::Add) => Some(WideSum { stmt: st, term }),
+            (HK::Int(_), BinOp::Add) => Some(WideSum {
+                stmt: st,
+                term,
+                chain,
+                acc: sym,
+            }),
             (HK::Int(_) | HK::UInt(_) | HK::Bool, _) => None,
             _ => return Ok(None),
         };
@@ -9639,6 +9722,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             span,
             wide,
         })))
+    }
+
+    /// Where `e`, a chain of `op`, holds the local `sym` as one operand: the
+    /// starts of the steps on the way down to it, `Ok(None)` when it holds
+    /// none, `Err` when it holds more than one.
+    fn acc_chain(&self, e: &Expr, op: BinOp, sym: SymbolId) -> Result<Option<Vec<usize>>, ()> {
+        if let (ExprKind::Identifier(_), Some(Res::Local(s))) = (&e.kind, self.lcx.res.get(&e.id)) {
+            return Ok((*s == sym).then(Vec::new));
+        }
+        let ExprKind::Binary { op: o, left, right } = &e.kind else {
+            return Ok(None);
+        };
+        if reduction_op(o) != Some(op) {
+            return Ok(None);
+        }
+        let mut steps = match (
+            self.acc_chain(left, op, sym)?,
+            self.acc_chain(right, op, sym)?,
+        ) {
+            (Some(_), Some(_)) => return Err(()),
+            (Some(p), None) | (None, Some(p)) => p,
+            (None, None) => return Ok(None),
+        };
+        steps.push(e.span.offset);
+        Ok(Some(steps))
     }
 
     /// `op`'s identity on the integer or `bool` type `t`: `x op it` is `x`.
@@ -20222,7 +20330,7 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
             }
         };
         let Some(name) = suspends_as_value(&first, &second) else {
-            if debug {
+            if debug && !second.auto_par_tasks.is_empty() {
                 let mut at = second.auto_par_tasks.clone();
                 at.sort();
                 eprintln!("auto-par: loops as tasks: {}", at.join(", "));
