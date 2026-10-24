@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| diagnostics | 18 |
 | false-positive | 18 |
-| diagnostics | 17 |
 | missing-feature | 17 |
 | perf | 10 |
 | miscompile | 5 |
@@ -72,7 +72,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 35 |
+| typecheck | 36 |
 | codegen | 22 |
 | interp | 15 |
 | mir | 12 |
@@ -132,6 +132,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-27 | 2026-10-24 | lexer+parser | low | A lexer error reaches the user wrapped as the parser's `Expected expression, found Error("…")`, Debug-escaped (and escaped again in JSON), with no fix-it: `f"{v.join(\", \")}"` gets the lexer's good 'use plain quotes' advice inside that wrapper, and a bad string escape also cascades a spurious `Expected RightBrace, found EOF` | — |
 | B-2026-10-24-28 | 2026-10-24 | ownership | medium | `f(None, None)` with a `ref Option[T]` first parameter and an owned second one is refused by `karac check`, `karac build` and `karac run`: "cannot move `None` while a borrow into it (a returned reference still points at it) is still live". The two literal `None`s are taken for one place named `None`; `__mir-run` runs the program | — |
 | B-2026-10-24-29 | 2026-10-24 | mir | medium | `Map[K, V, H]` / `Set[T, H]` lose their hasher in MIR (IntrinsicTy::Map(K, V)), so `FxBuildHasher` and a user `BuildHasher` are ignored on both v2 backends: every table hashes and walks with the seeded default; 2 tests ignored at M3 | — |
+| B-2026-10-24-30 | 2026-10-24 | typecheck | low | A bare parameter inside a tuple literal handed to an owned slot (`v.push((t, value))`), or given as `Map.entry(key)`'s owned key, gets the generic `expected 'T', found 'ref T'` mismatch (no hint for the tuple, only `.clone()` for entry) instead of the "cannot give away parameter" message and `own` fix that a bare `v.push(key)` gets since B-2026-10-24-19 | — |
 
 ### Fixed
 
