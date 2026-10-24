@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/978-longest-turbulent-subarray/bench/max_turbulence_size.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "ccad68cb9"
+extracted_src = "3594d7eb"

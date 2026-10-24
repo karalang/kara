@@ -1,0 +1,337 @@
+// LeetCode #978: Longest Turbulent Subarray -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random arrays.
+
+// ---- star ----
+
+fn star_max_turbulence_size(arr: Vec[i64]) -> i64 {
+    let mut best = 1;
+    let mut up = 1;
+    let mut down = 1;
+    for i in 1..arr.len() {
+        if arr[i - 1] < arr[i] {
+            up = down + 1;
+            down = 1;
+        } else if arr[i - 1] > arr[i] {
+            down = up + 1;
+            up = 1;
+        } else {
+            up = 1;
+            down = 1;
+        }
+        best = best.max(up.max(down));
+    }
+    best
+}
+
+// ---- window ----
+
+fn window_compare(a: i64, b: i64) -> i64 {
+    if a < b {
+        1
+    } else if a > b {
+        -1
+    } else {
+        0
+    }
+}
+
+fn window_max_turbulence_size(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut best = 1;
+    let mut anchor = 0;
+    for i in 1..n {
+        let c = window_compare(arr[i - 1], arr[i]);
+        if c == 0 {
+            anchor = i;
+        } else if i >= 2 and c * window_compare(arr[i - 2], arr[i - 1]) != -1 {
+            anchor = i - 1;
+        }
+        best = best.max(i - anchor + 1);
+    }
+    best
+}
+
+// ---- signs ----
+
+fn signs_max_turbulence_size(arr: Vec[i64]) -> i64 {
+    let mut signs: Vec[i64] = Vec.new();
+    for i in 1..arr.len() {
+        signs.push((arr[i] - arr[i - 1]).signum());
+    }
+    let mut best = 0;
+    let mut run = 0;
+    for j in 0..signs.len() {
+        if signs[j] == 0 {
+            run = 0;
+        } else if j > 0 and run > 0 and signs[j] == -signs[j - 1] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        best = best.max(run);
+    }
+    best + 1
+}
+
+// ---- brute ----
+
+fn brute_max_turbulence_size(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut best = 1;
+    for start in 0..n {
+        let mut end = start + 1;
+        while end < n {
+            let step = arr[end] - arr[end - 1];
+            if step == 0 {
+                break;
+            }
+            if end > start + 1 {
+                let before = arr[end - 1] - arr[end - 2];
+                if (step > 0) == (before > 0) {
+                    break;
+                }
+            }
+            end += 1;
+        }
+        best = best.max(end - start);
+    }
+    best
+}
+
+// ---- split ----
+
+fn split_crossing(arr: ref Vec[i64], lo: i64, mid: i64, hi: i64) -> i64 {
+    if arr[mid - 1] == arr[mid] {
+        return 0;
+    }
+    // reach left: steps (j - 1, j) for j = mid - 1 down to lo + 1
+    let mut left = mid - 1;
+    while left > lo {
+        let a = arr[left] - arr[left - 1];
+        let b = arr[left + 1] - arr[left];
+        if a == 0 or (a > 0) == (b > 0) {
+            break;
+        }
+        left -= 1;
+    }
+    let mut right = mid;
+    while right + 1 < hi {
+        let a = arr[right] - arr[right - 1];
+        let b = arr[right + 1] - arr[right];
+        if b == 0 or (a > 0) == (b > 0) {
+            break;
+        }
+        right += 1;
+    }
+    right - left + 1
+}
+
+fn split_longest(arr: ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    if hi - lo <= 1 {
+        return hi - lo;
+    }
+    let mid = (lo + hi) / 2;
+    let halves = split_longest(arr, lo, mid).max(split_longest(arr, mid, hi));
+    halves.max(split_crossing(arr, lo, mid, hi))
+}
+
+fn split_max_turbulence_size(arr: Vec[i64]) -> i64 {
+    split_longest(arr, 0, arr.len())
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_values(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        arr.push((next_random(mut seed) * 32768 + next_random(mut seed)) % top);
+    }
+    arr
+}
+
+// a zigzag that turns at every step, except that about one step in ten
+// repeats the value or keeps the direction
+fn zigzag(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = vec![500000000 + next_random(mut seed)];
+    let mut dir = if next_random(mut seed) % 2 == 0 { 1 } else { -1 };
+    while arr.len() < n {
+        let last = arr[arr.len() - 1];
+        let r = next_random(mut seed) % 20;
+        if r == 0 {
+            arr.push(last);
+        } else {
+            if r != 1 {
+                dir = -dir;
+            }
+            arr.push(last + dir * (1 + next_random(mut seed) % 1000));
+        }
+    }
+    arr
+}
+
+// The statement read literally: arr[i..=j] is turbulent when for every
+// i <= k < j, arr[k] > arr[k + 1] for odd k and arr[k] < arr[k + 1] for
+// even k, or the other way round; the longest such subarray.
+fn literal(arr: ref Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in i..n {
+            let mut first = true;
+            let mut second = true;
+            for k in i..j {
+                let odd = k % 2 == 1;
+                if not ((odd and arr[k] > arr[k + 1]) or (not odd and arr[k] < arr[k + 1])) {
+                    first = false;
+                }
+                if not ((not odd and arr[k] > arr[k + 1]) or (odd and arr[k] < arr[k + 1])) {
+                    second = false;
+                }
+            }
+            if first or second {
+                best = best.max(j - i + 1);
+            }
+        }
+    }
+    best
+}
+
+fn arm(a: i64, arr: Vec[i64]) -> i64 {
+    if a == 0 {
+        star_max_turbulence_size(arr)
+    } else if a == 1 {
+        window_max_turbulence_size(arr)
+    } else if a == 2 {
+        signs_max_turbulence_size(arr)
+    } else if a == 3 {
+        brute_max_turbulence_size(arr)
+    } else {
+        split_max_turbulence_size(arr)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn slice(arr: ref Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in from..to {
+        out.push(arr[i]);
+    }
+    out
+}
+
+fn properties(tally: mut ref Tally, arr: Vec[i64], small: bool, seed: mut ref i64) -> i64 {
+    let n = arr.len();
+    let truth = if small { literal(arr) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, arr));
+    }
+    // reversed, stretched by 3x + 7, and flipped as 2 * 10^9 - x
+    let mut reversed: Vec[i64] = Vec.new();
+    let mut stretched: Vec[i64] = Vec.new();
+    let mut flipped: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(arr[n - 1 - i]);
+        stretched.push(3 * arr[i] + 7);
+        flipped.push(2000000000 - arr[i]);
+    }
+    // cut in two at a random place
+    let cut = next_random(mut seed) % (n + 1);
+    let head = slice(arr, 0, cut);
+    let tail = slice(arr, cut, n);
+    // one value repeated in place at a random place p
+    let p = next_random(mut seed) % n;
+    let mut doubled = slice(arr, 0, p + 1);
+    doubled.extend(slice(arr, p, n));
+    let before = slice(arr, 0, p + 1);
+    let after = slice(arr, p, n);
+    for a in 0..5 {
+        let k = got[a];
+        // P1: the statement's answer, on the first 3000 arrays
+        if small {
+            check(mut tally, 1, k == truth);
+        }
+        // P2: reversing the array keeps the answer
+        check(mut tally, 2, arm(a, reversed) == k);
+        // P3: only the comparisons between neighbours matter, so a map
+        // that keeps every one, or flips every one, keeps the answer
+        check(mut tally, 3, arm(a, stretched) == k and arm(a, flipped) == k);
+        // P4: the two pieces of a cut each have an answer no longer than
+        // the whole, which is no longer than the two together
+        let h = if cut > 0 { arm(a, head) } else { 0 };
+        let t = if cut < n { arm(a, tail) } else { 0 };
+        check(mut tally, 4, h <= k and t <= k and k <= h + t);
+        // P5: a repeated value ends every run through it, so the answer is
+        // the longer of the two sides, each holding one copy
+        check(mut tally, 5, arm(a, doubled) == arm(a, before).max(arm(a, after)));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == k {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 978;
+    let mut total = 0;
+    let mut lengths = 0;
+    let mut check_sum = 0;
+    // 3000 small arrays against the statement, random values below 2, 3,
+    // 10 or 10^9 and every fifth a zigzag with a few breaks, then 200 of
+    // 300 values, every other one a zigzag
+    for c in 0..3200 {
+        let small = c < 3000;
+        let arr = if small {
+            let n = 1 + next_random(mut seed) % 30;
+            if c % 5 == 4 {
+                zigzag(n, mut seed)
+            } else {
+                random_values(n, vec![2, 3, 10, 1000000000][c % 4], mut seed)
+            }
+        } else if c % 2 == 0 {
+            zigzag(300, mut seed)
+        } else {
+            random_values(300, 1000000001, mut seed)
+        };
+        let got = properties(mut tally, arr, small, mut seed);
+        total += arr.len();
+        lengths += got;
+        check_sum = (check_sum * 31 + got) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 arrays of {total} values: lengths total {lengths}, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

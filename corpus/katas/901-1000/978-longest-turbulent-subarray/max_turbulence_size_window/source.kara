@@ -1,0 +1,80 @@
+// LeetCode #978: Longest Turbulent Subarray -- a sliding window.
+//
+// The window [anchor, i] is turbulent so far. Comparing each pair of
+// neighbours gives -1, 0 or 1; an equal pair moves the anchor to i, and
+// a step with the same sign as the one before moves it to i - 1, since
+// only the last pair survives. Otherwise the window grows. O(n).
+
+fn compare(a: i64, b: i64) -> i64 {
+    if a < b {
+        1
+    } else if a > b {
+        -1
+    } else {
+        0
+    }
+}
+
+fn max_turbulence_size(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut best = 1;
+    let mut anchor = 0;
+    for i in 1..n {
+        let c = compare(arr[i - 1], arr[i]);
+        if c == 0 {
+            anchor = i;
+        } else if i >= 2 and c * compare(arr[i - 2], arr[i - 1]) != -1 {
+            anchor = i - 1;
+        }
+        best = best.max(i - anchor + 1);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_values(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        // two draws, since one reaches only 32767
+        arr.push((next_random(mut seed) * 32768 + next_random(mut seed)) % top);
+    }
+    arr
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![9, 4, 2, 10, 7, 8, 8, 1, 9],
+        vec![4, 8, 12, 16],
+        vec![100],
+        vec![7, 7, 7],
+        vec![1, 2],
+        vec![2, 1, 2, 1, 2, 1],
+        vec![0, 1000000000, 0, 1000000000],
+        vec![1, 2, 1, 1, 2, 1, 2],
+        vec![3, 3, 1, 2],
+        vec![5, 4, 3, 4, 3, 4, 4, 5, 4],
+    ];
+    for arr in cases {
+        println(f"{arr}: {max_turbulence_size(arr)}");
+    }
+    // random arrays: 300 small, 3000 longer, then 4 of 40000 values
+    let mut seed = 978;
+    for (count, most, top) in vec![(300, 12, 3), (3000, 60, 10), (4, 40000, 1000000001)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if most == 40000 { most } else { 1 + next_random(mut seed) % most };
+            let k = max_turbulence_size(random_values(n, top, mut seed));
+            total += k;
+            check = (check * 31 + k) % 1000000007;
+        }
+        println(f"{count} random arrays of up to {most} values: lengths total {total}, checksum {check}");
+    }
+}

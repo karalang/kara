@@ -1,0 +1,13 @@
+[9, 4, 2, 10, 7, 8, 8, 1, 9]: 5
+[4, 8, 12, 16]: 2
+[100]: 1
+[7, 7, 7]: 1
+[1, 2]: 2
+[2, 1, 2, 1, 2, 1]: 6
+[0, 1000000000, 0, 1000000000]: 4
+[1, 2, 1, 1, 2, 1, 2]: 4
+[3, 3, 1, 2]: 3
+[5, 4, 3, 4, 3, 4, 4, 5, 4]: 5
+300 random arrays of up to 12 values: lengths total 936, checksum 62694498
+3000 random arrays of up to 60 values: lengths total 20387, checksum 410538370
+4 random arrays of up to 40000 values: lengths total 96, checksum 675396
