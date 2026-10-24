@@ -461,7 +461,9 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 } else {
-                    let kt = self.infer_expr(&args[0].value);
+                    // A bare parameter as the owned key gets the D5
+                    // give-away `own` fix (B-2026-10-24-30).
+                    let kt = self.infer_element_arg(&args[0].value, &k);
                     self.check_assignable(&k, &kt, args[0].value.span);
                 }
                 Type::Named {

@@ -1342,6 +1342,15 @@ impl<'a> super::TypeChecker<'a> {
         Some(expected.clone())
     }
 
+    /// Whether `e` names a bare parameter, or a binding out of one, that
+    /// [`Self::d5_give_away`] reports when it is given away.
+    pub(super) fn names_a_d5_borrow(&self, e: &Expr) -> bool {
+        self.cli_lint_overrides.strict_core
+            && matches!(&e.kind, ExprKind::Identifier(n)
+                if self.current_fn_d5_params.contains_key(n.as_str())
+                    || self.local_scope.part_of(n).is_some())
+    }
+
     /// The bare parameter a scrutinee names: the parameter itself while it
     /// is still the borrow (not shadowed), or a binding already bound out
     /// of one.

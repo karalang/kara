@@ -682,6 +682,25 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(ty) = self.d5_give_away(arg, &slot) {
                 return ty;
             }
+            // The same inside a tuple literal: `v.push((t, value))` gives
+            // `value` away into the tuple's slot (B-2026-10-24-30).
+            if let (ExprKind::Tuple(es), Type::Tuple(slots)) = (&arg.kind, &slot) {
+                if es.len() == slots.len() && es.iter().any(|e| self.names_a_d5_borrow(e)) {
+                    let tys: Vec<Type> = es
+                        .iter()
+                        .zip(slots)
+                        .map(|(e, s)| match self.d5_give_away(e, s) {
+                            Some(t) => t,
+                            None => self.infer_expr(e),
+                        })
+                        .collect();
+                    let ty = Type::Tuple(tys);
+                    self.record_expr_type(&arg.span, &ty);
+                    self.record_node_type(arg.id, &ty);
+                    self.check_tuple_literal_element(arg, &slot, &ty);
+                    return ty;
+                }
+            }
         }
         let ty = self.infer_expr(arg);
         // A tuple literal's elements meet their slots (B-2026-10-24-17).

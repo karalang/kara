@@ -12938,3 +12938,33 @@ fn a_for_over_a_const_array_borrows_nothing_under_self() {
         "1 1\n",
     );
 }
+
+#[test]
+fn a_bare_parameter_in_a_tuple_or_entry_key_gets_the_own_fix() {
+    // B-2026-10-24-30: a bare parameter inside a tuple literal pushed into an
+    // owned slot, or as `Map.entry`'s owned key, gives away its borrow as
+    // `v.push(key)` does, with the same message and `own` fix.
+    for (tag, body, edit) in [
+        (
+            "tuple-elem-give-away",
+            "fn note(log: mut ref Vec[(String, i64)], key: String, t: i64) {\n    log.push((key, t));\n}\n",
+            "key: own String",
+        ),
+        (
+            "entry-key-give-away",
+            "fn note(m: mut ref Map[String, i64], key: String, t: i64) {\n    *m.entry(key).or_insert(0) += t;\n}\n",
+            "key: own String",
+        ),
+    ] {
+        let src = format!(
+            "{body}fn main() {{\n    let mut log: Vec[(String, i64)] = Vec.new();\n    \
+             let mut m: Map[String, i64] = Map.new();\n    let _ = m.len();\n    let _ = log.len();\n}}\n"
+        );
+        let src = if tag.starts_with("tuple") {
+            src.replace("let _ = log.len();", "note(mut log, \"a\".to_string(), 1);\n    let _ = log.len();")
+        } else {
+            src.replace("let _ = m.len();", "note(mut m, \"a\".to_string(), 1);\n    let _ = m.len();")
+        };
+        rejected_then_fixed_by(tag, &src, "cannot give away parameter `key`", edit);
+    }
+}
