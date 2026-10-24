@@ -1,0 +1,1561 @@
+== json {"a": 1}
+  repr: {'a': 1}
+  bson: 0c0000001061000100000000
+  canonical: {"a": {"$numberInt": "1"}}
+  relaxed: {"a": 1}
+  legacy: {"a": 1}
+== json {"a": -2147483648, "b": 2147483647, "c": -2147483647}
+  repr: {'a': -2147483648, 'b': 2147483647, 'c': -2147483647}
+  bson: 1a00000010610000000080106200ffffff7f1063000100008000
+  canonical: {"a": {"$numberInt": "-2147483648"}, "b": {"$numberInt": "2147483647"}, "c": {"$numberInt": "-2147483647"}}
+  relaxed: {"a": -2147483648, "b": 2147483647, "c": -2147483647}
+  legacy: {"a": -2147483648, "b": 2147483647, "c": -2147483647}
+== json {"a": 2147483648, "b": -2147483649}
+  repr: {'a': 2147483648, 'b': -2147483649}
+  bson: 1b0000001261000000008000000000126200ffffff7fffffffff00
+  canonical: {"a": {"$numberLong": "2147483648"}, "b": {"$numberLong": "-2147483649"}}
+  relaxed: {"a": 2147483648, "b": -2147483649}
+  legacy: {"a": 2147483648, "b": -2147483649}
+== json {"a": 9223372036854775807, "b": -9223372036854775808}
+  repr: {'a': 9223372036854775807, 'b': -9223372036854775808}
+  bson: 1b000000126100ffffffffffffff7f126200000000000000008000
+  canonical: {"a": {"$numberLong": "9223372036854775807"}, "b": {"$numberLong": "-9223372036854775808"}}
+  relaxed: {"a": 9223372036854775807, "b": -9223372036854775808}
+  legacy: {"a": 9223372036854775807, "b": -9223372036854775808}
+== json {"a": 9223372036854775808}
+  repr: {'a': 9223372036854775808}
+  encode: OverflowError: BSON can only handle up to 8-byte ints
+== json {"a": -9223372036854775809}
+  repr: {'a': -9223372036854775809}
+  encode: OverflowError: BSON can only handle up to 8-byte ints
+== json {"a": 0, "b": -0, "c": 10}
+  repr: {'a': 0, 'b': 0, 'c': 10}
+  bson: 1a00000010610000000000106200000000001063000a00000000
+  canonical: {"a": {"$numberInt": "0"}, "b": {"$numberInt": "0"}, "c": {"$numberInt": "10"}}
+  relaxed: {"a": 0, "b": 0, "c": 10}
+  legacy: {"a": 0, "b": 0, "c": 10}
+== json {"a": 1.5, "b": -0.0, "c": 1e300, "d": 1e-300, "e": 0.1, "f": 1E5, "g": 1.0}
+  repr: {'a': 1.5, 'b': -0.0, 'c': 1e+300, 'd': 1e-300, 'e': 0.1, 'f': 100000.0, 'g': 1.0}
+  bson: 52000000016100000000000000f83f01620000000000000000800163009c7500883ce4377e01640059f3f8c21f6ea5010165009a9999999999b93f01660000000000006af840016700000000000000f03f00
+  canonical: {"a": {"$numberDouble": "1.5"}, "b": {"$numberDouble": "-0.0"}, "c": {"$numberDouble": "1e+300"}, "d": {"$numberDouble": "1e-300"}, "e": {"$numberDouble": "0.1"}, "f": {"$numberDouble": "100000.0"}, "g": {"$numberDouble": "1.0"}}
+  relaxed: {"a": 1.5, "b": -0.0, "c": 1e+300, "d": 1e-300, "e": 0.1, "f": 100000.0, "g": 1.0}
+  legacy: {"a": 1.5, "b": -0.0, "c": 1e+300, "d": 1e-300, "e": 0.1, "f": 100000.0, "g": 1.0}
+== json {"a": NaN, "b": Infinity, "c": -Infinity}
+  repr: {'a': nan, 'b': inf, 'c': -inf}
+  bson: 26000000016100000000000000f87f016200000000000000f07f016300000000000000f0ff00
+  canonical: {"a": {"$numberDouble": "NaN"}, "b": {"$numberDouble": "Infinity"}, "c": {"$numberDouble": "-Infinity"}}
+  relaxed: {"a": {"$numberDouble": "NaN"}, "b": {"$numberDouble": "Infinity"}, "c": {"$numberDouble": "-Infinity"}}
+  legacy: {"a": NaN, "b": Infinity, "c": -Infinity}
+== json {"a": 123456789012345678901234567890.0, "b": 2.5e-7, "c": 1e16, "d": 1e15}
+  repr: {'a': 1.2345678901234568e+29, 'b': 2.5e-07, 'c': 1e+16, 'd': 1000000000000000.0}
+  bson: 310000000161003e376cff90eef8450162008dedb5a0f7c6903e0163000080e03779c3414301640000003426f56b0c4300
+  canonical: {"a": {"$numberDouble": "1.2345678901234568e+29"}, "b": {"$numberDouble": "2.5e-07"}, "c": {"$numberDouble": "1e+16"}, "d": {"$numberDouble": "1000000000000000.0"}}
+  relaxed: {"a": 1.2345678901234568e+29, "b": 2.5e-07, "c": 1e+16, "d": 1000000000000000.0}
+  legacy: {"a": 1.2345678901234568e+29, "b": 2.5e-07, "c": 1e+16, "d": 1000000000000000.0}
+== json {"a": 5e-324, "b": 1.7976931348623157e308, "c": 1e400}
+  repr: {'a': 5e-324, 'b': 1.7976931348623157e+308, 'c': inf}
+  bson: 260000000161000100000000000000016200ffffffffffffef7f016300000000000000f07f00
+  canonical: {"a": {"$numberDouble": "5e-324"}, "b": {"$numberDouble": "1.7976931348623157e+308"}, "c": {"$numberDouble": "Infinity"}}
+  relaxed: {"a": 5e-324, "b": 1.7976931348623157e+308, "c": {"$numberDouble": "Infinity"}}
+  legacy: {"a": 5e-324, "b": 1.7976931348623157e+308, "c": Infinity}
+== json {"s": "plain", "t": "", "u": "tab\there", "v": "quote\"s", "w": "it's"}
+  repr: {'s': 'plain', 't': '', 'u': 'tab\there', 'v': 'quote"s', 'w': "it's"}
+  bson: 4500000002730006000000706c61696e000274000100000000027500090000007461620968657265000276000800000071756f746522730002770005000000697427730000
+  canonical: {"s": "plain", "t": "", "u": "tab\there", "v": "quote\"s", "w": "it's"}
+  relaxed: {"s": "plain", "t": "", "u": "tab\there", "v": "quote\"s", "w": "it's"}
+  legacy: {"s": "plain", "t": "", "u": "tab\there", "v": "quote\"s", "w": "it's"}
+== json {"s": "caf\u00e9", "t": "\u65e5\u672c", "u": "\ud83d\ude00", "v": "\u0001\u001f\u007f"}
+  repr: {'s': 'café', 't': '日本', 'u': '😀', 'v': '\x01\x1f\x7f'}
+  bson: 3700000002730006000000636166c3a90002740007000000e697a5e69cac0002750005000000f09f98800002760004000000011f7f0000
+  canonical: {"s": "caf\u00e9", "t": "\u65e5\u672c", "u": "\ud83d\ude00", "v": "\u0001\u001f\u007f"}
+  relaxed: {"s": "caf\u00e9", "t": "\u65e5\u672c", "u": "\ud83d\ude00", "v": "\u0001\u001f\u007f"}
+  legacy: {"s": "caf\u00e9", "t": "\u65e5\u672c", "u": "\ud83d\ude00", "v": "\u0001\u001f\u007f"}
+== json {"s": "café 日本 😀", "t": "a\u0000b", "u": "back\\slash"}
+  repr: {'s': 'café 日本 😀', 't': 'a\x00b', 'u': 'back\\slash'}
+  bson: 3b00000002730012000000636166c3a920e697a5e69cac20f09f98800002740004000000610062000275000b0000006261636b5c736c6173680000
+  canonical: {"s": "caf\u00e9 \u65e5\u672c \ud83d\ude00", "t": "a\u0000b", "u": "back\\slash"}
+  relaxed: {"s": "caf\u00e9 \u65e5\u672c \ud83d\ude00", "t": "a\u0000b", "u": "back\\slash"}
+  legacy: {"s": "caf\u00e9 \u65e5\u672c \ud83d\ude00", "t": "a\u0000b", "u": "back\\slash"}
+== json {"s": "nb\u00a0sp", "t": "zw\u200bsp", "u": "line\u2028sep", "v": "\u0085\u00ad"}
+  repr: {'s': 'nb\xa0sp', 't': 'zw\u200bsp', 'u': 'line\u2028sep', 'v': '\x85\xad'}
+  bson: 40000000027300070000006e62c2a0737000027400080000007a77e2808b7370000275000b0000006c696e65e280a87365700002760005000000c285c2ad0000
+  canonical: {"s": "nb\u00a0sp", "t": "zw\u200bsp", "u": "line\u2028sep", "v": "\u0085\u00ad"}
+  relaxed: {"s": "nb\u00a0sp", "t": "zw\u200bsp", "u": "line\u2028sep", "v": "\u0085\u00ad"}
+  legacy: {"s": "nb\u00a0sp", "t": "zw\u200bsp", "u": "line\u2028sep", "v": "\u0085\u00ad"}
+== json {"s": "both ' and \"", "t": "\r\n\b\f"}
+  repr: {'s': 'both \' and "', 't': '\r\n\x08\x0c'}
+  bson: 250000000273000d000000626f7468202720616e64202200027400050000000d0a080c0000
+  canonical: {"s": "both ' and \"", "t": "\r\n\b\f"}
+  relaxed: {"s": "both ' and \"", "t": "\r\n\b\f"}
+  legacy: {"s": "both ' and \"", "t": "\r\n\b\f"}
+== json {"": 1, "é": 2, "a.b": 3, "$x": 4}
+  repr: {'': 1, 'é': 2, 'a.b': 3, '$x': 4}
+  bson: 2400000010000100000010c3a9000200000010612e620003000000102478000400000000
+  canonical: {"": {"$numberInt": "1"}, "\u00e9": {"$numberInt": "2"}, "a.b": {"$numberInt": "3"}, "$x": {"$numberInt": "4"}}
+  relaxed: {"": 1, "\u00e9": 2, "a.b": 3, "$x": 4}
+  legacy: {"": 1, "\u00e9": 2, "a.b": 3, "$x": 4}
+== json {"b": 1, "a": 2, "b": 3}
+  repr: {'b': 3, 'a': 2}
+  bson: 13000000106200030000001061000200000000
+  canonical: {"b": {"$numberInt": "3"}, "a": {"$numberInt": "2"}}
+  relaxed: {"b": 3, "a": 2}
+  legacy: {"b": 3, "a": 2}
+== json {"a\u0000b": 1}
+  repr: {'a\x00b': 1}
+  encode: InvalidDocument: BSON keys must not contain a NUL character
+== json {"t": true, "f": false, "n": null}
+  repr: {'t': True, 'f': False, 'n': None}
+  bson: 1000000008740001086600000a6e0000
+  canonical: {"t": true, "f": false, "n": null}
+  relaxed: {"t": true, "f": false, "n": null}
+  legacy: {"t": true, "f": false, "n": null}
+== json {"d": {}, "a": [], "n": {"x": {"y": {"z": [1, [2, [3, {}]]]}}}}
+  repr: {'d': {}, 'a': [], 'n': {'x': {'y': {'z': [1, [2, [3, {}]]]}}}}
+  bson: 6200000003640005000000000461000500000000036e004a000000037800420000000379003a000000047a00320000001030000100000004310023000000103000020000000431001400000010300003000000033100050000000000000000000000
+  canonical: {"d": {}, "a": [], "n": {"x": {"y": {"z": [{"$numberInt": "1"}, [{"$numberInt": "2"}, [{"$numberInt": "3"}, {}]]]}}}}
+  relaxed: {"d": {}, "a": [], "n": {"x": {"y": {"z": [1, [2, [3, {}]]]}}}}
+  legacy: {"d": {}, "a": [], "n": {"x": {"y": {"z": [1, [2, [3, {}]]]}}}}
+== json {"a": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]}
+  repr: {'a': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]}
+  bson: 6b0000000461006300000010300000000000103100010000001032000200000010330003000000103400040000001035000500000010360006000000103700070000001038000800000010390009000000103130000a000000103131000b000000103132000c0000000000
+  canonical: {"a": [{"$numberInt": "0"}, {"$numberInt": "1"}, {"$numberInt": "2"}, {"$numberInt": "3"}, {"$numberInt": "4"}, {"$numberInt": "5"}, {"$numberInt": "6"}, {"$numberInt": "7"}, {"$numberInt": "8"}, {"$numberInt": "9"}, {"$numberInt": "10"}, {"$numberInt": "11"}, {"$numberInt": "12"}]}
+  relaxed: {"a": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]}
+  legacy: {"a": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]}
+== json {"_id": 7, "a": 1}
+  repr: {'_id': 7, 'a': 1}
+  bson: 15000000105f696400070000001061000100000000
+  canonical: {"_id": {"$numberInt": "7"}, "a": {"$numberInt": "1"}}
+  relaxed: {"_id": 7, "a": 1}
+  legacy: {"_id": 7, "a": 1}
+== json {"a": 1, "_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  repr: {'a': 1, '_id': ObjectId('5f2b3c4d5e6f708192a3b4c5')}
+  bson: 1d000000075f6964005f2b3c4d5e6f708192a3b4c51061000100000000
+  canonical: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "a": {"$numberInt": "1"}}
+  relaxed: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "a": 1}
+  legacy: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "a": 1}
+== json {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  repr: {'_id': ObjectId('5f2b3c4d5e6f708192a3b4c5')}
+  bson: 16000000075f6964005f2b3c4d5e6f708192a3b4c500
+  canonical: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  relaxed: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  legacy: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+== json {"_id": {"$oid": "5F2B3C4D5E6F708192A3B4C5"}}
+  repr: {'_id': ObjectId('5f2b3c4d5e6f708192a3b4c5')}
+  bson: 16000000075f6964005f2b3c4d5e6f708192a3b4c500
+  canonical: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  relaxed: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  legacy: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+== json {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c"}}
+  loads: InvalidId: '5f2b3c4d5e6f708192a3b4c' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== json {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4cz"}}
+  loads: InvalidId: '5f2b3c4d5e6f708192a3b4cz' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== json {"_id": {"$oid": "5f2b 3c4d5e6f708192a3b4c5"}}
+  loads: InvalidId: '5f2b 3c4d5e6f708192a3b4c5' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== json {"_id": {"$oid": "5f2b3c4d 5e6f708192a3b4c"}}
+  loads: InvalidId: '5f2b3c4d 5e6f708192a3b4c' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== json {"_id": {"$oid": "5f2b 3c4d 5e6f708192a3b4"}, "x": 1}
+  repr: {'_id': ObjectId('5f2b3c4d5e6f708192a3b4'), 'x': 1}
+  bson: 1c000000075f6964005f2b3c4d5e6f708192a3b41078000100000000
+  decode: InvalidBSON: Detected unknown BSON type b'x' for fieldname ''. Are you using the latest driver version?
+== json {"_id": {"$oid": 12}}
+  loads: TypeError: id must be an instance of (bytes, str, ObjectId), not <class 'int'>
+== json {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5", "x": 1}}
+  loads: TypeError: Bad $oid, extra field(s): {'$oid': '5f2b3c4d5e6f708192a3b4c5', 'x': 1}
+== json {"_id": {"x": 1, "$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  loads: TypeError: Bad $oid, extra field(s): {'x': 1, '$oid': '5f2b3c4d5e6f708192a3b4c5'}
+== json {"d": {"$date": "2020-01-02T03:04:05Z"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5)}
+  bson: 1000000009640088cc35646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245000"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05Z"}}
+  legacy: {"d": {"$date": 1577934245000}}
+== json {"d": {"$date": "2020-01-02T03:04:05.678Z"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5, 678000)}
+  bson: 100000000964002ecf35646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245678"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05.678Z"}}
+  legacy: {"d": {"$date": 1577934245678}}
+== json {"d": {"$date": "2020-01-02T03:04:05.123456Z"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5, 123456)}
+  bson: 1000000009640003cd35646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245123"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05.123Z"}}
+  legacy: {"d": {"$date": 1577934245123}}
+== json {"d": {"$date": "2020-01-02T03:04:05.5"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5, 500000)}
+  bson: 100000000964007cce35646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245500"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05.500Z"}}
+  legacy: {"d": {"$date": 1577934245500}}
+== json {"d": {"$date": "2020-01-02T03:04:05+05:30"}}
+  repr: {'d': datetime.datetime(2020, 1, 1, 21, 34, 5)}
+  bson: 10000000096400c8ac07636f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577914445000"}}}
+  relaxed: {"d": {"$date": "2020-01-01T21:34:05Z"}}
+  legacy: {"d": {"$date": 1577914445000}}
+== json {"d": {"$date": "2020-01-02T03:04:05.250-0800"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 11, 4, 5, 250000)}
+  bson: 100000000964008241ed656f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577963045250"}}}
+  relaxed: {"d": {"$date": "2020-01-02T11:04:05.250Z"}}
+  legacy: {"d": {"$date": 1577963045250}}
+== json {"d": {"$date": "2020-01-02T03:04:05+01"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 2, 4, 5)}
+  bson: 1000000009640008defe636f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577930645000"}}}
+  relaxed: {"d": {"$date": "2020-01-02T02:04:05Z"}}
+  legacy: {"d": {"$date": 1577930645000}}
+== json {"d": {"$date": "1969-12-31T23:59:59.999Z"}}
+  repr: {'d': datetime.datetime(1969, 12, 31, 23, 59, 59, 999000)}
+  bson: 10000000096400ffffffffffffffff00
+  canonical: {"d": {"$date": {"$numberLong": "-1"}}}
+  relaxed: {"d": {"$date": {"$numberLong": "-1"}}}
+  legacy: {"d": {"$date": -1}}
+== json {"d": {"$date": "1900-03-01T00:00:00Z"}}
+  repr: {'d': datetime.datetime(1900, 3, 1, 0, 0)}
+  bson: 100000000964000010d9ddfefdffff00
+  canonical: {"d": {"$date": {"$numberLong": "-2203891200000"}}}
+  relaxed: {"d": {"$date": {"$numberLong": "-2203891200000"}}}
+  legacy: {"d": {"$date": -2203891200000}}
+== json {"d": {"$date": "9999-12-31T23:59:59.999Z"}}
+  repr: {'d': datetime.datetime(9999, 12, 31, 23, 59, 59, 999000)}
+  bson: 10000000096400ffdb1fd277e6000000
+  canonical: {"d": {"$date": {"$numberLong": "253402300799999"}}}
+  relaxed: {"d": {"$date": "9999-12-31T23:59:59.999Z"}}
+  legacy: {"d": {"$date": 253402300799999}}
+== json {"d": {"$date": "2020-1-2T3:4:5Z"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5)}
+  bson: 1000000009640088cc35646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245000"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05Z"}}
+  legacy: {"d": {"$date": 1577934245000}}
+== json {"d": {"$date": "2021-02-29T00:00:00Z"}}
+  loads: ValueError: day is out of range for month
+== json {"d": {"$date": "2020-13-01T00:00:00Z"}}
+  loads: ValueError: time data '2020-13-01T00:00:00' does not match format '%Y-%m-%dT%H:%M:%S'
+== json {"d": {"$date": "2020-01-02 03:04:05Z"}}
+  loads: ValueError: time data '2020-01-02 03:04:05' does not match format '%Y-%m-%dT%H:%M:%S'
+== json {"d": {"$date": "2020-01-02T03:04:05Zjunk"}}
+  loads: ValueError: unconverted data remains: Zjunk
+== json {"d": {"$date": "2020-01-02T03:04:05.Z"}}
+  loads: ValueError: could not convert string to float: '.'
+== json {"d": {"$date": "x"}}
+  loads: IndexError: string index out of range
+== json {"d": {"$date": ""}}
+  loads: IndexError: string index out of range
+== json {"d": {"$date": "2020-01-02T03:04:60Z"}}
+  loads: ValueError: second must be in 0..59
+== json {"d": {"$date": "0000-01-01T00:00:00Z"}}
+  loads: ValueError: year 0 is out of range
+== json {"d": {"$date": "0001-01-01T00:00:00+01:00"}}
+  loads: OverflowError: date value out of range
+== json {"d": {"$date": "9999-12-31T23:30:00-01:00"}}
+  loads: OverflowError: date value out of range
+== json {"d": {"$date": "2020-01-02t03:04:05z"}}
+  loads: ValueError: unconverted data remains: z
+== json {"d": {"$date": "2020-01-02t03:04:05Z"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5)}
+  bson: 1000000009640088cc35646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245000"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05Z"}}
+  legacy: {"d": {"$date": 1577934245000}}
+== json {"d": {"$date": "2020-01-02T03:04:05.5e1Z"}}
+  loads: ValueError: microsecond must be in 0..999999
+== json {"d": {"$date": "2020-01-02T03:04:05+0a:00"}}
+  loads: ValueError: invalid literal for int() with base 10: '0a'
+== json {"d": {"$date": "2020-01-02T03:04:05.9999999Z"}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5, 999999)}
+  bson: 100000000964006fd035646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245999"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05.999Z"}}
+  legacy: {"d": {"$date": 1577934245999}}
+== json {"d": {"$date": "2020-01-02T3:4Z"}}
+  loads: ValueError: time data '2020-01-02T3:4' does not match format '%Y-%m-%dT%H:%M:%S'
+== json {"d": {"$date": "2020-12-31T24:00:00Z"}}
+  loads: ValueError: time data '2020-12-31T24:00:00' does not match format '%Y-%m-%dT%H:%M:%S'
+== json {"d": {"$date": 1.5e12}}
+  repr: {'d': datetime.datetime(2017, 7, 14, 2, 40)}
+  bson: 100000000964000098f73e5d01000000
+  canonical: {"d": {"$date": {"$numberLong": "1500000000000"}}}
+  relaxed: {"d": {"$date": "2017-07-14T02:40:00Z"}}
+  legacy: {"d": {"$date": 1500000000000}}
+== json {"d": {"$date": null}}
+  loads: TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+== json {"d": {"$date": 1e300}}
+  loads: InvalidBSON: Python int too large to convert to C int (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+== json {"d": {"$date": true}}
+  repr: {'d': datetime.datetime(1970, 1, 1, 0, 0, 0, 1000)}
+  bson: 10000000096400010000000000000000
+  canonical: {"d": {"$date": {"$numberLong": "1"}}}
+  relaxed: {"d": {"$date": "1970-01-01T00:00:00.001Z"}}
+  legacy: {"d": {"$date": 1}}
+== json {"d": {"$date": {"$numberLong": "1577934245678"}}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5, 678000)}
+  bson: 100000000964002ecf35646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245678"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05.678Z"}}
+  legacy: {"d": {"$date": 1577934245678}}
+== json {"d": {"$date": {"$numberLong": "-1"}}}
+  repr: {'d': datetime.datetime(1969, 12, 31, 23, 59, 59, 999000)}
+  bson: 10000000096400ffffffffffffffff00
+  canonical: {"d": {"$date": {"$numberLong": "-1"}}}
+  relaxed: {"d": {"$date": {"$numberLong": "-1"}}}
+  legacy: {"d": {"$date": -1}}
+== json {"d": {"$date": 1577934245678}}
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5, 678000)}
+  bson: 100000000964002ecf35646f01000000
+  canonical: {"d": {"$date": {"$numberLong": "1577934245678"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05.678Z"}}
+  legacy: {"d": {"$date": 1577934245678}}
+== json {"d": {"$date": -62135596800000}}
+  repr: {'d': datetime.datetime(1, 1, 1, 0, 0)}
+  bson: 100000000964000028d3ed7cc7ffff00
+  canonical: {"d": {"$date": {"$numberLong": "-62135596800000"}}}
+  relaxed: {"d": {"$date": {"$numberLong": "-62135596800000"}}}
+  legacy: {"d": {"$date": -62135596800000}}
+== json {"d": {"$date": -62135596800001}}
+  loads: InvalidBSON: date value out of range (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+== json {"d": {"$date": 253402300800000}}
+  loads: InvalidBSON: date value out of range (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+== json {"d": {"$date": "2020-01-02T03:04:05Z", "x": 1}}
+  loads: TypeError: Bad $date, extra field(s): {'$date': '2020-01-02T03:04:05Z', 'x': 1}
+== json {"i": {"$numberInt": "42"}, "j": {"$numberInt": "-7"}, "k": {"$numberInt": " 8 "}}
+  repr: {'i': 42, 'j': -7, 'k': 8}
+  bson: 1a0000001069002a000000106a00f9ffffff106b000800000000
+  canonical: {"i": {"$numberInt": "42"}, "j": {"$numberInt": "-7"}, "k": {"$numberInt": "8"}}
+  relaxed: {"i": 42, "j": -7, "k": 8}
+  legacy: {"i": 42, "j": -7, "k": 8}
+== json {"i": {"$numberInt": "1_000"}, "j": {"$numberInt": "+5"}}
+  repr: {'i': 1000, 'j': 5}
+  bson: 13000000106900e8030000106a000500000000
+  canonical: {"i": {"$numberInt": "1000"}, "j": {"$numberInt": "5"}}
+  relaxed: {"i": 1000, "j": 5}
+  legacy: {"i": 1000, "j": 5}
+== json {"i": {"$numberInt": "abc"}}
+  loads: ValueError: invalid literal for int() with base 10: 'abc'
+== json {"i": {"$numberInt": 42}}
+  loads: TypeError: $numberInt must be string: {'$numberInt': 42}
+== json {"i": {"$numberInt": "4", "x": 1}}
+  loads: TypeError: Bad $numberInt, extra field(s): {'$numberInt': '4', 'x': 1}
+== json {"l": {"$numberLong": "123"}, "m": {"$numberLong": "-5"}, "n": {"$numberLong": "0"}}
+  repr: {'l': 123, 'm': -5, 'n': 0}
+  bson: 26000000126c007b00000000000000126d00fbffffffffffffff126e00000000000000000000
+  canonical: {"l": {"$numberLong": "123"}, "m": {"$numberLong": "-5"}, "n": {"$numberLong": "0"}}
+  relaxed: {"l": 123, "m": -5, "n": 0}
+  legacy: {"l": 123, "m": -5, "n": 0}
+== json {"l": {"$numberLong": "9223372036854775807"}}
+  repr: {'l': 9223372036854775807}
+  bson: 10000000126c00ffffffffffffff7f00
+  canonical: {"l": {"$numberLong": "9223372036854775807"}}
+  relaxed: {"l": 9223372036854775807}
+  legacy: {"l": 9223372036854775807}
+== json {"l": {"$numberLong": "9223372036854775808"}}
+  repr: {'l': 9223372036854775808}
+  encode: OverflowError: BSON can only handle up to 8-byte ints
+== json {"l": {"$numberLong": "12x"}}
+  loads: ValueError: invalid literal for int() with base 10: '12x'
+== json {"l": {"$numberLong": 77}}
+  repr: {'l': 77}
+  bson: 10000000126c004d0000000000000000
+  canonical: {"l": {"$numberLong": "77"}}
+  relaxed: {"l": 77}
+  legacy: {"l": 77}
+== json {"f": {"$numberDouble": "1.5"}, "g": {"$numberDouble": "-0.0"}, "h": {"$numberDouble": "1E3"}}
+  repr: {'f': 1.5, 'g': -0.0, 'h': 1000.0}
+  bson: 26000000016600000000000000f83f01670000000000000000800168000000000000408f4000
+  canonical: {"f": {"$numberDouble": "1.5"}, "g": {"$numberDouble": "-0.0"}, "h": {"$numberDouble": "1000.0"}}
+  relaxed: {"f": 1.5, "g": -0.0, "h": 1000.0}
+  legacy: {"f": 1.5, "g": -0.0, "h": 1000.0}
+== json {"f": {"$numberDouble": "NaN"}, "g": {"$numberDouble": "Infinity"}, "h": {"$numberDouble": "-Infinity"}}
+  repr: {'f': nan, 'g': inf, 'h': -inf}
+  bson: 26000000016600000000000000f87f016700000000000000f07f016800000000000000f0ff00
+  canonical: {"f": {"$numberDouble": "NaN"}, "g": {"$numberDouble": "Infinity"}, "h": {"$numberDouble": "-Infinity"}}
+  relaxed: {"f": {"$numberDouble": "NaN"}, "g": {"$numberDouble": "Infinity"}, "h": {"$numberDouble": "-Infinity"}}
+  legacy: {"f": NaN, "g": Infinity, "h": -Infinity}
+== json {"f": {"$numberDouble": "1e400"}, "g": {"$numberDouble": " 2.5 "}, "h": {"$numberDouble": "inf"}}
+  repr: {'f': inf, 'g': 2.5, 'h': inf}
+  bson: 26000000016600000000000000f07f0167000000000000000440016800000000000000f07f00
+  canonical: {"f": {"$numberDouble": "Infinity"}, "g": {"$numberDouble": "2.5"}, "h": {"$numberDouble": "Infinity"}}
+  relaxed: {"f": {"$numberDouble": "Infinity"}, "g": 2.5, "h": {"$numberDouble": "Infinity"}}
+  legacy: {"f": Infinity, "g": 2.5, "h": Infinity}
+== json {"f": {"$numberDouble": "abc"}}
+  loads: ValueError: could not convert string to float: 'abc'
+== json {"f": {"$numberDouble": 1.5}}
+  loads: TypeError: $numberDouble must be string: {'$numberDouble': 1.5}
+== json {"d": {"$numberDecimal": "1.50E+3"}, "e": {"$numberDecimal": "-0.0005"}, "f": {"$numberDecimal": "0"}}
+  repr: {'d': Decimal128('1.50E+3'), 'e': Decimal128('-0.0005'), 'f': Decimal128('0')}
+  bson: 3e00000013640096000000000000000000000000004230136500050000000000000000000000000038b01366000000000000000000000000000000403000
+  canonical: {"d": {"$numberDecimal": "1.50E+3"}, "e": {"$numberDecimal": "-0.0005"}, "f": {"$numberDecimal": "0"}}
+  relaxed: {"d": {"$numberDecimal": "1.50E+3"}, "e": {"$numberDecimal": "-0.0005"}, "f": {"$numberDecimal": "0"}}
+  legacy: {"d": {"$numberDecimal": "1.50E+3"}, "e": {"$numberDecimal": "-0.0005"}, "f": {"$numberDecimal": "0"}}
+== json {"d": {"$numberDecimal": "NaN"}, "e": {"$numberDecimal": "-Infinity"}, "f": {"$numberDecimal": "-0E+3"}}
+  repr: {'d': Decimal128('NaN'), 'e': Decimal128('-Infinity'), 'f': Decimal128('-0E+3')}
+  bson: 3e0000001364000000000000000000000000000000007c136500000000000000000000000000000000f8136600000000000000000000000000000046b000
+  canonical: {"d": {"$numberDecimal": "NaN"}, "e": {"$numberDecimal": "-Infinity"}, "f": {"$numberDecimal": "-0E+3"}}
+  relaxed: {"d": {"$numberDecimal": "NaN"}, "e": {"$numberDecimal": "-Infinity"}, "f": {"$numberDecimal": "-0E+3"}}
+  legacy: {"d": {"$numberDecimal": "NaN"}, "e": {"$numberDecimal": "-Infinity"}, "f": {"$numberDecimal": "-0E+3"}}
+== json {"d": {"$numberDecimal": "12.3.4"}}
+  loads: InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+== json {"d": {"$numberDecimal": 5}}
+  loads: TypeError: $numberDecimal must be string: {'$numberDecimal': 5}
+== json {"b": {"$binary": {"base64": "AAEC", "subType": "00"}}}
+  repr: {'b': b'\x00\x01\x02'}
+  bson: 10000000056200030000000000010200
+  canonical: {"b": {"$binary": {"base64": "AAEC", "subType": "00"}}}
+  relaxed: {"b": {"$binary": {"base64": "AAEC", "subType": "00"}}}
+  legacy: {"b": {"$binary": "AAEC", "$type": "00"}}
+== json {"b": {"$binary": {"base64": "c3VyZS4=", "subType": "05"}}, "c": {"$binary": {"base64": "", "subType": "80"}}}
+  repr: {'b': Binary(b'sure.', 5), 'c': Binary(b'', 128)}
+  bson: 1a0000000562000500000005737572652e056300000000008000
+  canonical: {"b": {"$binary": {"base64": "c3VyZS4=", "subType": "05"}}, "c": {"$binary": {"base64": "", "subType": "80"}}}
+  relaxed: {"b": {"$binary": {"base64": "c3VyZS4=", "subType": "05"}}, "c": {"$binary": {"base64": "", "subType": "80"}}}
+  legacy: {"b": {"$binary": "c3VyZS4=", "$type": "05"}, "c": {"$binary": "", "$type": "80"}}
+== json {"b": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  repr: {'b': Binary(b'\x01#Eg\x89\xab\xcd\xef\x01#Eg\x89\xab\xcd\xef', 4)}
+  bson: 1d00000005620010000000040123456789abcdef0123456789abcdef00
+  canonical: {"b": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  relaxed: {"b": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  legacy: {"b": {"$binary": "ASNFZ4mrze8BI0VniavN7w==", "$type": "04"}}
+== json {"b": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "03"}}}
+  repr: {'b': Binary(b'\x01#Eg\x89\xab\xcd\xef\x01#Eg\x89\xab\xcd\xef', 3)}
+  bson: 1d00000005620010000000030123456789abcdef0123456789abcdef00
+  canonical: {"b": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "03"}}}
+  relaxed: {"b": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "03"}}}
+  legacy: {"b": {"$binary": "ASNFZ4mrze8BI0VniavN7w==", "$type": "03"}}
+== json {"b": {"$binary": {"base64": "AAEC", "subType": "2"}}, "c": {"$binary": {"base64": "AAEC", "subType": "8"}}}
+  repr: {'b': Binary(b'\x00\x01\x02', 2), 'c': <Binary(REDACTED, 8)>}
+  bson: 1f000000056200070000000203000000000102056300030000000800010200
+  canonical: {"b": {"$binary": {"base64": "AAEC", "subType": "02"}}, "c": {"$binary": {"base64": "AAEC", "subType": "08"}}}
+  relaxed: {"b": {"$binary": {"base64": "AAEC", "subType": "02"}}, "c": {"$binary": {"base64": "AAEC", "subType": "08"}}}
+  legacy: {"b": {"$binary": "AAEC", "$type": "02"}, "c": {"$binary": "AAEC", "$type": "08"}}
+== json {"b": {"$binary": {"base64": "AAEC", "subType": "100"}}}
+  loads: TypeError: $binary subType must be a string at most 2 characters: {'$binary': {'base64': 'AAEC', 'subType': '100'}}
+== json {"b": {"$binary": {"base64": "AAEC", "subType": 5}}}
+  loads: TypeError: $binary subType must be a string at most 2 characters: {'$binary': {'base64': 'AAEC', 'subType': 5}}
+== json {"b": {"$binary": {"base64": 12, "subType": "00"}}}
+  loads: TypeError: $binary base64 must be a string: {'$binary': {'base64': 12, 'subType': '00'}}
+== json {"b": {"$binary": {"base64": "AAEC", "subType": "00", "x": 1}}}
+  loads: TypeError: $binary must include only "base64" and "subType" components: {'$binary': {'base64': 'AAEC', 'subType': '00', 'x': 1}}
+== json {"b": {"$binary": {"base64": "AAE", "subType": "00"}}}
+  loads: Error: Incorrect padding
+== json {"b": {"$binary": {"base64": "AAECA", "subType": "00"}}}
+  loads: Error: Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4
+== json {"b": {"$binary": {"base64": "AA!E Cé", "subType": "00"}}}
+  repr: {'b': b'\x00\x01\x02'}
+  bson: 10000000056200030000000000010200
+  canonical: {"b": {"$binary": {"base64": "AAEC", "subType": "00"}}}
+  relaxed: {"b": {"$binary": {"base64": "AAEC", "subType": "00"}}}
+  legacy: {"b": {"$binary": "AAEC", "$type": "00"}}
+== json {"b": {"$binary": {"base64": "AA==AAEC", "subType": "00"}}}
+  loads: Error: Incorrect padding
+== json {"b": {"$binary": "AAEC", "$type": "05"}}
+  repr: {'b': Binary(b'\x00\x01\x02', 5)}
+  bson: 10000000056200030000000500010200
+  canonical: {"b": {"$binary": {"base64": "AAEC", "subType": "05"}}}
+  relaxed: {"b": {"$binary": {"base64": "AAEC", "subType": "05"}}}
+  legacy: {"b": {"$binary": "AAEC", "$type": "05"}}
+== json {"b": {"$binary": "AAEC", "$type": 128}}
+  repr: {'b': Binary(b'\x00\x01\x02', 128)}
+  bson: 10000000056200030000008000010200
+  canonical: {"b": {"$binary": {"base64": "AAEC", "subType": "80"}}}
+  relaxed: {"b": {"$binary": {"base64": "AAEC", "subType": "80"}}}
+  legacy: {"b": {"$binary": "AAEC", "$type": "80"}}
+== json {"b": {"$binary": "AAEC", "$type": "ffffff80"}}
+  repr: {'b': Binary(b'\x00\x01\x02', 128)}
+  bson: 10000000056200030000008000010200
+  canonical: {"b": {"$binary": {"base64": "AAEC", "subType": "80"}}}
+  relaxed: {"b": {"$binary": {"base64": "AAEC", "subType": "80"}}}
+  legacy: {"b": {"$binary": "AAEC", "$type": "80"}}
+== json {"b": {"$binary": "AAEC", "$type": "zz"}}
+  loads: ValueError: invalid literal for int() with base 16: 'zz'
+== json {"b": {"$binary": "AAEC", "$type": "0x05"}}
+  repr: {'b': Binary(b'\x00\x01\x02', 5)}
+  bson: 10000000056200030000000500010200
+  canonical: {"b": {"$binary": {"base64": "AAEC", "subType": "05"}}}
+  relaxed: {"b": {"$binary": {"base64": "AAEC", "subType": "05"}}}
+  legacy: {"b": {"$binary": "AAEC", "$type": "05"}}
+== json {"b": {"$binary": 5, "$type": "00"}}
+  loads: AttributeError: 'int' object has no attribute 'encode'
+== json {"b": {"$binary": {"subType": "00"}}}
+  loads: KeyError: 'base64'
+== json {"b": {"$binary": "AAEC"}}
+  loads: TypeError: string indices must be integers, not 'str'
+== json {"b": {"$binary": {"base64": "AAEC", "subType": "-1"}}}
+  loads: ValueError: subtype must be contained in [0, 256)
+== json {"b": {"$binary": {"base64": "AAEC", "subType": " 7"}}}
+  repr: {'b': Binary(b'\x00\x01\x02', 7)}
+  bson: 10000000056200030000000700010200
+  canonical: {"b": {"$binary": {"base64": "AAEC", "subType": "07"}}}
+  relaxed: {"b": {"$binary": {"base64": "AAEC", "subType": "07"}}}
+  legacy: {"b": {"$binary": "AAEC", "$type": "07"}}
+== json {"u": {"$uuid": "01234567-89ab-cdef-0123-456789abcdef"}}
+  repr: {'u': Binary(b'\x01#Eg\x89\xab\xcd\xef\x01#Eg\x89\xab\xcd\xef', 4)}
+  bson: 1d00000005750010000000040123456789abcdef0123456789abcdef00
+  canonical: {"u": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  relaxed: {"u": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  legacy: {"u": {"$binary": "ASNFZ4mrze8BI0VniavN7w==", "$type": "04"}}
+== json {"u": {"$uuid": "{0123456789ABCDEF0123456789ABCDEF}"}}
+  repr: {'u': Binary(b'\x01#Eg\x89\xab\xcd\xef\x01#Eg\x89\xab\xcd\xef', 4)}
+  bson: 1d00000005750010000000040123456789abcdef0123456789abcdef00
+  canonical: {"u": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  relaxed: {"u": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  legacy: {"u": {"$binary": "ASNFZ4mrze8BI0VniavN7w==", "$type": "04"}}
+== json {"u": {"$uuid": "urn:uuid:01234567-89ab-cdef-0123-456789abcdef"}}
+  repr: {'u': Binary(b'\x01#Eg\x89\xab\xcd\xef\x01#Eg\x89\xab\xcd\xef', 4)}
+  bson: 1d00000005750010000000040123456789abcdef0123456789abcdef00
+  canonical: {"u": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  relaxed: {"u": {"$binary": {"base64": "ASNFZ4mrze8BI0VniavN7w==", "subType": "04"}}}
+  legacy: {"u": {"$binary": "ASNFZ4mrze8BI0VniavN7w==", "$type": "04"}}
+== json {"u": {"$uuid": "0123"}}
+  loads: ValueError: badly formed hexadecimal UUID string
+== json {"u": {"$uuid": 5}}
+  loads: TypeError: $uuid must be a string: {'$uuid': 5}
+== json {"u": {"$uuid": "01234567-89ab-cdef-0123-456789abcdef", "x": 1}}
+  loads: TypeError: Bad $uuid, extra field(s): {'$uuid': '01234567-89ab-cdef-0123-456789abcdef', 'x': 1}
+== json {"c": {"$code": "function() { return 1; }"}}
+  repr: {'c': Code('function() { return 1; }', None)}
+  bson: 250000000d63001900000066756e6374696f6e2829207b2072657475726e20313b207d0000
+  canonical: {"c": {"$code": "function() { return 1; }"}}
+  relaxed: {"c": {"$code": "function() { return 1; }"}}
+  legacy: {"c": {"$code": "function() { return 1; }"}}
+== json {"c": {"$code": "f(x)", "$scope": {"x": 1, "y": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}}
+  repr: {'c': Code('f(x)', {'x': 1, 'y': ObjectId('5f2b3c4d5e6f708192a3b4c5')})}
+  bson: 300000000f6300280000000500000066287829001b000000107800010000000779005f2b3c4d5e6f708192a3b4c50000
+  canonical: {"c": {"$code": "f(x)", "$scope": {"x": {"$numberInt": "1"}, "y": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}}
+  relaxed: {"c": {"$code": "f(x)", "$scope": {"x": 1, "y": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}}
+  legacy: {"c": {"$code": "f(x)", "$scope": {"x": 1, "y": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}}
+== json {"c": {"$code": "f", "$scope": {}}}
+  repr: {'c': Code('f', {})}
+  bson: 170000000f63000f000000020000006600050000000000
+  canonical: {"c": {"$code": "f", "$scope": {}}}
+  relaxed: {"c": {"$code": "f", "$scope": {}}}
+  legacy: {"c": {"$code": "f", "$scope": {}}}
+== json {"c": {"$code": "f", "x": 1}}
+  loads: TypeError: Bad $code, extra field(s): {'$code': 'f', 'x': 1}
+== json {"c": {"$code": 5}}
+  loads: TypeError: code must be an instance of str
+== json {"c": {"$code": "f", "$scope": 5}}
+  loads: TypeError: scope must be an instance of dict
+== json {"c": {"$scope": {"a": 1}, "$code": "g"}}
+  repr: {'c': Code('g', {'a': 1})}
+  bson: 1e0000000f6300160000000200000067000c000000106100010000000000
+  canonical: {"c": {"$code": "g", "$scope": {"a": {"$numberInt": "1"}}}}
+  relaxed: {"c": {"$code": "g", "$scope": {"a": 1}}}
+  legacy: {"c": {"$code": "g", "$scope": {"a": 1}}}
+== json {"r": {"$regularExpression": {"pattern": "^a.b$", "options": "imx"}}}
+  repr: {'r': Regex('^a.b$', re.IGNORECASE|re.MULTILINE|re.VERBOSE)}
+  bson: 120000000b72005e612e622400696d780000
+  canonical: {"r": {"$regularExpression": {"pattern": "^a.b$", "options": "imx"}}}
+  relaxed: {"r": {"$regularExpression": {"pattern": "^a.b$", "options": "imx"}}}
+  legacy: {"r": {"$regex": "^a.b$", "$options": "imx"}}
+== json {"r": {"$regularExpression": {"pattern": "x", "options": ""}}, "s": {"$regularExpression": {"pattern": "y", "options": "u"}}}
+  repr: {'r': Regex('x', 0), 's': Regex('y', re.UNICODE)}
+  bson: 120000000b72007800000b73007900750000
+  canonical: {"r": {"$regularExpression": {"pattern": "x", "options": ""}}, "s": {"$regularExpression": {"pattern": "y", "options": "u"}}}
+  relaxed: {"r": {"$regularExpression": {"pattern": "x", "options": ""}}, "s": {"$regularExpression": {"pattern": "y", "options": "u"}}}
+  legacy: {"r": {"$regex": "x", "$options": ""}, "s": {"$regex": "y", "$options": "u"}}
+== json {"r": {"$regularExpression": {"pattern": "x", "options": "xsmuli"}}}
+  repr: {'r': Regex('x', re.IGNORECASE|re.LOCALE|re.UNICODE|re.MULTILINE|re.DOTALL|re.VERBOSE)}
+  bson: 110000000b72007800696c6d7375780000
+  canonical: {"r": {"$regularExpression": {"pattern": "x", "options": "ilmsux"}}}
+  relaxed: {"r": {"$regularExpression": {"pattern": "x", "options": "ilmsux"}}}
+  legacy: {"r": {"$regex": "x", "$options": "ilmsux"}}
+== json {"r": {"$regularExpression": {"pattern": "x", "options": "zq"}}}
+  repr: {'r': Regex('x', 0)}
+  bson: 0b0000000b720078000000
+  canonical: {"r": {"$regularExpression": {"pattern": "x", "options": ""}}}
+  relaxed: {"r": {"$regularExpression": {"pattern": "x", "options": ""}}}
+  legacy: {"r": {"$regex": "x", "$options": ""}}
+== json {"r": {"$regularExpression": {"pattern": "x", "options": 3}}}
+  loads: TypeError: Bad $regularExpression options, options must be string, was type <class 'int'>
+== json {"r": {"$regularExpression": {"pattern": "x"}}}
+  loads: TypeError: Bad $regularExpression must include only "pattern and "options" components: {'$regularExpression': {'pattern': 'x'}}
+== json {"r": {"$regularExpression": {"pattern": 5, "options": "i"}}}
+  loads: TypeError: pattern must be a string, not <class 'int'>
+== json {"r": {"$regularExpression": {"pattern": "x", "flags": "i"}}}
+  loads: KeyError: 'options'
+== json {"r": {"$regex": "a", "x": 1}}
+  repr: {'r': Regex('a', 0)}
+  bson: 0b0000000b720061000000
+  canonical: {"r": {"$regularExpression": {"pattern": "a", "options": ""}}}
+  relaxed: {"r": {"$regularExpression": {"pattern": "a", "options": ""}}}
+  legacy: {"r": {"$regex": "a", "$options": ""}}
+== json {"r": {"$regex": "ab+c", "$options": "si"}}
+  repr: {'r': Regex('ab+c', re.IGNORECASE|re.DOTALL)}
+  bson: 100000000b720061622b630069730000
+  canonical: {"r": {"$regularExpression": {"pattern": "ab+c", "options": "is"}}}
+  relaxed: {"r": {"$regularExpression": {"pattern": "ab+c", "options": "is"}}}
+  legacy: {"r": {"$regex": "ab+c", "$options": "is"}}
+== json {"r": {"$regex": "ab+c"}}
+  repr: {'r': Regex('ab+c', 0)}
+  bson: 0e0000000b720061622b63000000
+  canonical: {"r": {"$regularExpression": {"pattern": "ab+c", "options": ""}}}
+  relaxed: {"r": {"$regularExpression": {"pattern": "ab+c", "options": ""}}}
+  legacy: {"r": {"$regex": "ab+c", "$options": ""}}
+== json {"r": {"$regex": {"$numberInt": "1"}, "$options": "i"}}
+  repr: {'r': {'$regex': 1, '$options': 'i'}}
+  bson: 290000000372002100000010247265676578000100000002246f7074696f6e73000200000069000000
+  canonical: {"r": {"$regex": {"$numberInt": "1"}, "$options": "i"}}
+  relaxed: {"r": {"$regex": 1, "$options": "i"}}
+  legacy: {"r": {"$regex": 1, "$options": "i"}}
+== json {"r": {"$regex": "a\u0000b"}}
+  repr: {'r': Regex('a\x00b', 0)}
+  encode: InvalidDocument: BSON keys / regex patterns must not contain a NUL character
+== json {"t": {"$timestamp": {"t": 1577934245, "i": 7}}}
+  repr: {'t': Timestamp(1577934245, 7)}
+  bson: 1000000011740007000000a55d0d5e00
+  canonical: {"t": {"$timestamp": {"t": 1577934245, "i": 7}}}
+  relaxed: {"t": {"$timestamp": {"t": 1577934245, "i": 7}}}
+  legacy: {"t": {"$timestamp": {"t": 1577934245, "i": 7}}}
+== json {"t": {"$timestamp": {"t": 4294967295, "i": 4294967295}}}
+  repr: {'t': Timestamp(4294967295, 4294967295)}
+  bson: 10000000117400ffffffffffffffff00
+  canonical: {"t": {"$timestamp": {"t": 4294967295, "i": 4294967295}}}
+  relaxed: {"t": {"$timestamp": {"t": 4294967295, "i": 4294967295}}}
+  legacy: {"t": {"$timestamp": {"t": 4294967295, "i": 4294967295}}}
+== json {"t": {"$timestamp": {"t": 4294967296, "i": 0}}}
+  loads: ValueError: time must be contained in [0, 2**32)
+== json {"t": {"$timestamp": {"t": "5", "i": 0}}}
+  loads: TypeError: time must be an instance of int
+== json {"t": {"$timestamp": {"t": 1, "i": -1}}}
+  loads: ValueError: inc must be contained in [0, 2**32)
+== json {"t": {"$timestamp": {"t": 1, "i": 1.5}}}
+  loads: TypeError: inc must be an instance of int
+== json {"hi": {"$maxKey": 2}}
+  loads: TypeError: ('$maxKey value must be 1: %s', ({'$maxKey': 2},))
+== json {"lo": {"$minKey": 1}, "hi": {"$maxKey": 1}}
+  repr: {'lo': MinKey(), 'hi': MaxKey()}
+  bson: 0d000000ff6c6f007f68690000
+  canonical: {"lo": {"$minKey": 1}, "hi": {"$maxKey": 1}}
+  relaxed: {"lo": {"$minKey": 1}, "hi": {"$maxKey": 1}}
+  legacy: {"lo": {"$minKey": 1}, "hi": {"$maxKey": 1}}
+== json {"lo": {"$minKey": 2}}
+  loads: TypeError: $minKey value must be 1: {'$minKey': 2}
+== json {"lo": {"$minKey": true}}
+  loads: TypeError: $minKey value must be 1: {'$minKey': True}
+== json {"hi": {"$maxKey": 1, "x": 2}}
+  loads: TypeError: Bad $minKey, extra field(s): {'$maxKey': 1, 'x': 2}
+== json {"u": {"$undefined": true}, "s": {"$symbol": "sym"}}
+  repr: {'u': None, 's': 'sym'}
+  bson: 130000000a75000273000400000073796d0000
+  canonical: {"u": null, "s": "sym"}
+  relaxed: {"u": null, "s": "sym"}
+  legacy: {"u": null, "s": "sym"}
+== json {"s": {"$symbol": "sym", "x": 1}}
+  loads: TypeError: Bad $symbol, extra field(s): {'$symbol': 'sym', 'x': 1}
+== json {"s": {"$symbol": 5}, "t": {"$symbol": 1.5}, "u": {"$symbol": null}, "v": {"$symbol": true}}
+  repr: {'s': '5', 't': '1.5', 'u': 'None', 'v': 'True'}
+  bson: 3100000002730002000000350002740004000000312e3500027500050000004e6f6e650002760005000000547275650000
+  canonical: {"s": "5", "t": "1.5", "u": "None", "v": "True"}
+  relaxed: {"s": "5", "t": "1.5", "u": "None", "v": "True"}
+  legacy: {"s": "5", "t": "1.5", "u": "None", "v": "True"}
+== json {"r": {"$ref": "users", "$id": 7}}
+  repr: {'r': DBRef('users', 7)}
+  bson: 260000000372001e000000022472656600060000007573657273001024696400070000000000
+  canonical: {"r": {"$ref": "users", "$id": {"$numberInt": "7"}}}
+  relaxed: {"r": {"$ref": "users", "$id": 7}}
+  legacy: {"r": {"$ref": "users", "$id": 7}}
+== json {"r": {"$ref": "users", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "$db": "app", "note": "x"}}
+  repr: {'r': DBRef('users', ObjectId('5f2b3c4d5e6f708192a3b4c5'), 'app', note='x')}
+  bson: 470000000372003f0000000224726566000600000075736572730007246964005f2b3c4d5e6f708192a3b4c502246462000400000061707000026e6f7465000200000078000000
+  canonical: {"r": {"$ref": "users", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "$db": "app", "note": "x"}}
+  relaxed: {"r": {"$ref": "users", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "$db": "app", "note": "x"}}
+  legacy: {"r": {"$ref": "users", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "$db": "app", "note": "x"}}
+== json {"r": {"$ref": "users", "$id": 1, "$db": null}}
+  repr: {'r': DBRef('users', 1)}
+  bson: 260000000372001e000000022472656600060000007573657273001024696400010000000000
+  canonical: {"r": {"$ref": "users", "$id": {"$numberInt": "1"}}}
+  relaxed: {"r": {"$ref": "users", "$id": 1}}
+  legacy: {"r": {"$ref": "users", "$id": 1}}
+== json {"r": {"$ref": 5, "$id": 1}}
+  repr: {'r': {'$ref': 5, '$id': 1}}
+  bson: 2000000003720018000000102472656600050000001024696400010000000000
+  canonical: {"r": {"$ref": {"$numberInt": "5"}, "$id": {"$numberInt": "1"}}}
+  relaxed: {"r": {"$ref": 5, "$id": 1}}
+  legacy: {"r": {"$ref": 5, "$id": 1}}
+== json {"r": {"$ref": "users"}}
+  repr: {'r': {'$ref': 'users'}}
+  bson: 1d00000003720015000000022472656600060000007573657273000000
+  canonical: {"r": {"$ref": "users"}}
+  relaxed: {"r": {"$ref": "users"}}
+  legacy: {"r": {"$ref": "users"}}
+== json {"r": {"$ref": "users", "$id": 1, "$db": 3}}
+  repr: {'r': {'$ref': 'users', '$id': 1, '$db': 3}}
+  bson: 2f00000003720027000000022472656600060000007573657273001024696400010000001024646200030000000000
+  canonical: {"r": {"$ref": "users", "$id": {"$numberInt": "1"}, "$db": {"$numberInt": "3"}}}
+  relaxed: {"r": {"$ref": "users", "$id": 1, "$db": 3}}
+  legacy: {"r": {"$ref": "users", "$id": 1, "$db": 3}}
+== json {"p": {"$dbPointer": {"$ref": "c", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}}
+  repr: {'p': DBRef('c', ObjectId('5f2b3c4d5e6f708192a3b4c5'))}
+  bson: 2a0000000370002200000002247265660002000000630007246964005f2b3c4d5e6f708192a3b4c50000
+  canonical: {"p": {"$ref": "c", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}
+  relaxed: {"p": {"$ref": "c", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}
+  legacy: {"p": {"$ref": "c", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}
+== json {"p": {"$dbPointer": {"$ref": "c", "$id": 1}}}
+  loads: TypeError: Bad $dbPointer, $id must be an ObjectId: SON([('$ref', 'c'), ('$id', 1)])
+== json {"p": {"$dbPointer": {"$ref": "c", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "$db": "d"}}}
+  loads: TypeError: Bad $dbPointer, extra field $db: SON([('$ref', 'c'), ('$id', ObjectId('5f2b3c4d5e6f708192a3b4c5')), ('$db', 'd')])
+== json {"p": {"$dbPointer": {"$ref": "c", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "z": 1}}}
+  loads: TypeError: Bad $dbPointer, extra field(s) in DBRef: SON([('$ref', 'c'), ('$id', ObjectId('5f2b3c4d5e6f708192a3b4c5')), ('z', 1)])
+== json {"p": {"$dbPointer": 5}}
+  loads: TypeError: Bad $dbPointer, expected a DBRef: {'$dbPointer': 5}
+== json [1, 2]
+  repr: [1, 2]
+  encode: TypeError: encoder expected a mapping type but got: [1, 2]
+== json "abc"
+  repr: 'abc'
+  encode: TypeError: encoder expected a mapping type but got: 'abc'
+== json 5
+  repr: 5
+  encode: TypeError: argument of type 'int' is not iterable
+== json {"$date": 0}
+  repr: datetime.datetime(1970, 1, 1, 0, 0)
+  encode: TypeError: argument of type 'datetime.datetime' is not iterable
+== json {"$oid": "5f2b3c4d5e6f708192a3b4c5"}
+  repr: ObjectId('5f2b3c4d5e6f708192a3b4c5')
+  encode: TypeError: argument of type 'ObjectId' is not iterable
+== json {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "name": "Ada", "age": 36, "score": 97.5, "tags": ["math", "engines"], "joined": {"$date": "1843-09-01T00:00:00Z"}, "balance": {"$numberDecimal": "1234.50"}, "active": true, "manager": null}
+  repr: {'_id': ObjectId('5f2b3c4d5e6f708192a3b4c5'), 'name': 'Ada', 'age': 36, 'score': 97.5, 'tags': ['math', 'engines'], 'joined': datetime.datetime(1843, 9, 1, 0, 0), 'balance': Decimal128('1234.50'), 'active': True, 'manager': None}
+  bson: 9d000000075f6964005f2b3c4d5e6f708192a3b4c5026e616d650004000000416461001061676500240000000173636f726500000000000060584004746167730020000000023000050000006d6174680002310008000000656e67696e65730000096a6f696e656400005cdfc25ffcffff1362616c616e6365003ae20100000000000000000000003c300861637469766500010a6d616e616765720000
+  canonical: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "name": "Ada", "age": {"$numberInt": "36"}, "score": {"$numberDouble": "97.5"}, "tags": ["math", "engines"], "joined": {"$date": {"$numberLong": "-3986755200000"}}, "balance": {"$numberDecimal": "1234.50"}, "active": true, "manager": null}
+  relaxed: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "name": "Ada", "age": 36, "score": 97.5, "tags": ["math", "engines"], "joined": {"$date": {"$numberLong": "-3986755200000"}}, "balance": {"$numberDecimal": "1234.50"}, "active": true, "manager": null}
+  legacy: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "name": "Ada", "age": 36, "score": 97.5, "tags": ["math", "engines"], "joined": {"$date": -3986755200000}, "balance": {"$numberDecimal": "1234.50"}, "active": true, "manager": null}
+== keys {"a": 1}
+  repr: {'a': 1}
+  bson: 0c0000001061000100000000
+== keys {"$set": {"a": 1}}
+  repr: {'$set': {'a': 1}}
+  encode: InvalidDocument: key '$set' must not start with '$'
+== keys {"a.b": 1}
+  repr: {'a.b': 1}
+  encode: InvalidDocument: key 'a.b' must not contain '.'
+== keys {"x": {"a.b": 1}}
+  repr: {'x': {'a.b': 1}}
+  encode: InvalidDocument: key 'a.b' must not contain '.'
+== keys {"x": [{"$y": 1}]}
+  repr: {'x': [{'$y': 1}]}
+  encode: InvalidDocument: key '$y' must not start with '$'
+== hex 10000000016400000000000000044000
+  repr: {'d': 2.5}
+  canonical: {"d": {"$numberDouble": "2.5"}}
+  relaxed: {"d": 2.5}
+  legacy: {"d": 2.5}
+  valid: True
+== hex 1700000002730003000000686900026500010000000000
+  repr: {'s': 'hi', 'e': ''}
+  canonical: {"s": "hi", "e": ""}
+  relaxed: {"s": "hi", "e": ""}
+  legacy: {"s": "hi", "e": ""}
+  valid: True
+== hex 14000000036f000c000000107800010000000000
+  repr: {'o': {'x': 1}}
+  canonical: {"o": {"x": {"$numberInt": "1"}}}
+  relaxed: {"o": {"x": 1}}
+  legacy: {"o": {"x": 1}}
+  valid: True
+== hex 1b0000000461001300000010300001000000103100020000000000
+  repr: {'a': [1, 2]}
+  canonical: {"a": [{"$numberInt": "1"}, {"$numberInt": "2"}]}
+  relaxed: {"a": [1, 2]}
+  legacy: {"a": [1, 2]}
+  valid: True
+== hex 1b0000000461001300000010780001000000107900020000000000
+  repr: {'a': [1, 2]}
+  canonical: {"a": [{"$numberInt": "1"}, {"$numberInt": "2"}]}
+  relaxed: {"a": [1, 2]}
+  legacy: {"a": [1, 2]}
+  valid: True
+== hex 1a00000005620003000000006162630563000200000080ff0100
+  repr: {'b': b'abc', 'c': Binary(b'\xff\x01', 128)}
+  canonical: {"b": {"$binary": {"base64": "YWJj", "subType": "00"}}, "c": {"$binary": {"base64": "/wE=", "subType": "80"}}}
+  relaxed: {"b": {"$binary": {"base64": "YWJj", "subType": "00"}}, "c": {"$binary": {"base64": "/wE=", "subType": "80"}}}
+  legacy: {"b": {"$binary": "YWJj", "$type": "00"}, "c": {"$binary": "/wE=", "$type": "80"}}
+  valid: True
+== hex 350000000575001000000004000102030405060708090a0b0c0d0e0f0576001000000003000102030405060708090a0b0c0d0e0f00
+  repr: {'u': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 4), 'v': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 3)}
+  canonical: {"u": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "04"}}, "v": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "03"}}}
+  relaxed: {"u": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "04"}}, "v": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "03"}}}
+  legacy: {"u": {"$binary": "AAECAwQFBgcICQoLDA0ODw==", "$type": "04"}, "v": {"$binary": "AAECAwQFBgcICQoLDA0ODw==", "$type": "03"}}
+  valid: True
+== hex 1400000005700007000000020300000078797a00
+  repr: {'p': Binary(b'xyz', 2)}
+  canonical: {"p": {"$binary": {"base64": "eHl6", "subType": "02"}}}
+  relaxed: {"p": {"$binary": {"base64": "eHl6", "subType": "02"}}}
+  legacy: {"p": {"$binary": "eHl6", "$type": "02"}}
+  valid: True
+== hex 1b000000056d000400000005deadbeef056b000200000008707700
+  repr: {'m': Binary(b'\xde\xad\xbe\xef', 5), 'k': <Binary(REDACTED, 8)>}
+  canonical: {"m": {"$binary": {"base64": "3q2+7w==", "subType": "05"}}, "k": {"$binary": {"base64": "cHc=", "subType": "08"}}}
+  relaxed: {"m": {"$binary": {"base64": "3q2+7w==", "subType": "05"}}, "k": {"$binary": {"base64": "cHc=", "subType": "08"}}}
+  legacy: {"m": {"$binary": "3q2+7w==", "$type": "05"}, "k": {"$binary": "cHc=", "$type": "08"}}
+  valid: True
+== hex 0b0000000675000a6e0000
+  repr: {'u': None, 'n': None}
+  canonical: {"u": null, "n": null}
+  relaxed: {"u": null, "n": null}
+  legacy: {"u": null, "n": null}
+  valid: True
+== hex 16000000075f6964005f2b3c4d5e6f708192a3b4c500
+  repr: {'_id': ObjectId('5f2b3c4d5e6f708192a3b4c5')}
+  canonical: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  relaxed: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  legacy: {"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}
+  valid: True
+== hex 0d000000087400010866000000
+  repr: {'t': True, 'f': False}
+  canonical: {"t": true, "f": false}
+  relaxed: {"t": true, "f": false}
+  legacy: {"t": true, "f": false}
+  valid: True
+== hex 260000000964002ecf35646f010000096500ffffffffffffffff097a00000000000000000000
+  repr: {'d': datetime.datetime(2020, 1, 2, 3, 4, 5, 678000), 'e': datetime.datetime(1969, 12, 31, 23, 59, 59, 999000), 'z': datetime.datetime(1970, 1, 1, 0, 0)}
+  canonical: {"d": {"$date": {"$numberLong": "1577934245678"}}, "e": {"$date": {"$numberLong": "-1"}}, "z": {"$date": {"$numberLong": "0"}}}
+  relaxed: {"d": {"$date": "2020-01-02T03:04:05.678Z"}, "e": {"$date": {"$numberLong": "-1"}}, "z": {"$date": "1970-01-01T00:00:00Z"}}
+  legacy: {"d": {"$date": 1577934245678}, "e": {"$date": -1}, "z": {"$date": 0}}
+  valid: True
+== hex 1b000000096400ffdb1fd277e600000965000028d3ed7cc7ffff00
+  repr: {'d': datetime.datetime(9999, 12, 31, 23, 59, 59, 999000), 'e': datetime.datetime(1, 1, 1, 0, 0)}
+  canonical: {"d": {"$date": {"$numberLong": "253402300799999"}}, "e": {"$date": {"$numberLong": "-62135596800000"}}}
+  relaxed: {"d": {"$date": "9999-12-31T23:59:59.999Z"}, "e": {"$date": {"$numberLong": "-62135596800000"}}}
+  legacy: {"d": {"$date": 253402300799999}, "e": {"$date": -62135596800000}}
+  valid: True
+== hex 1c0000000b7200612e63006d69000b730000000b710078007a750000
+  repr: {'r': Regex('a.c', re.IGNORECASE|re.MULTILINE), 's': Regex('', 0), 'q': Regex('x', re.UNICODE)}
+  canonical: {"r": {"$regularExpression": {"pattern": "a.c", "options": "im"}}, "s": {"$regularExpression": {"pattern": "", "options": ""}}, "q": {"$regularExpression": {"pattern": "x", "options": "u"}}}
+  relaxed: {"r": {"$regularExpression": {"pattern": "a.c", "options": "im"}}, "s": {"$regularExpression": {"pattern": "", "options": ""}}, "q": {"$regularExpression": {"pattern": "x", "options": "u"}}}
+  legacy: {"r": {"$regex": "a.c", "$options": "im"}, "s": {"$regex": "", "$options": ""}, "q": {"$regex": "x", "$options": "u"}}
+  valid: True
+== hex 1d0000000c700005000000636f6c6c005f2b3c4d5e6f708192a3b4c500
+  repr: {'p': DBRef('coll', ObjectId('5f2b3c4d5e6f708192a3b4c5'))}
+  canonical: {"p": {"$ref": "coll", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}
+  relaxed: {"p": {"$ref": "coll", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}
+  legacy: {"p": {"$ref": "coll", "$id": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}}}
+  valid: True
+== hex 150000000d63000900000072657475726e20310000
+  repr: {'c': Code('return 1', None)}
+  canonical: {"c": {"$code": "return 1"}}
+  relaxed: {"c": {"$code": "return 1"}}
+  legacy: {"c": {"$code": "return 1"}}
+  valid: True
+== hex 100000000e73000400000073796d0000
+  repr: {'s': 'sym'}
+  canonical: {"s": "sym"}
+  relaxed: {"s": "sym"}
+  legacy: {"s": "sym"}
+  valid: True
+== hex 1e0000000f7700160000000200000066000c000000107800010000000000
+  repr: {'w': Code('f', {'x': 1})}
+  canonical: {"w": {"$code": "f", "$scope": {"x": {"$numberInt": "1"}}}}
+  relaxed: {"w": {"$code": "f", "$scope": {"x": 1}}}
+  legacy: {"w": {"$code": "f", "$scope": {"x": 1}}}
+  valid: True
+== hex 22000000106900fbffffff126c000500000000000000126d00000000000000008000
+  repr: {'i': -5, 'l': 5, 'm': -9223372036854775808}
+  canonical: {"i": {"$numberInt": "-5"}, "l": {"$numberLong": "5"}, "m": {"$numberLong": "-9223372036854775808"}}
+  relaxed: {"i": -5, "l": 5, "m": -9223372036854775808}
+  legacy: {"i": -5, "l": 5, "m": -9223372036854775808}
+  valid: True
+== hex 1000000011740007000000a55d0d5e00
+  repr: {'t': Timestamp(1577934245, 7)}
+  canonical: {"t": {"$timestamp": {"t": 1577934245, "i": 7}}}
+  relaxed: {"t": {"$timestamp": {"t": 1577934245, "i": 7}}}
+  legacy: {"t": {"$timestamp": {"t": 1577934245, "i": 7}}}
+  valid: True
+== hex 180000001364009600000000000000000000000000423000
+  repr: {'d': Decimal128('1.50E+3')}
+  canonical: {"d": {"$numberDecimal": "1.50E+3"}}
+  relaxed: {"d": {"$numberDecimal": "1.50E+3"}}
+  legacy: {"d": {"$numberDecimal": "1.50E+3"}}
+  valid: True
+== hex 2b000000136e00000000000000000000000000000000fc136900000000000000000000000000000000f800
+  repr: {'n': Decimal128('NaN'), 'i': Decimal128('-Infinity')}
+  canonical: {"n": {"$numberDecimal": "NaN"}, "i": {"$numberDecimal": "-Infinity"}}
+  relaxed: {"n": {"$numberDecimal": "NaN"}, "i": {"$numberDecimal": "-Infinity"}}
+  legacy: {"n": {"$numberDecimal": "NaN"}, "i": {"$numberDecimal": "-Infinity"}}
+  valid: True
+== hex 2b000000137a000000000000000000000000000000403a1371000100000000000000000000000000243200
+  repr: {'z': Decimal128('0E+1280'), 'q': Decimal128('1E+242')}
+  canonical: {"z": {"$numberDecimal": "0E+1280"}, "q": {"$numberDecimal": "1E+242"}}
+  relaxed: {"z": {"$numberDecimal": "0E+1280"}, "q": {"$numberDecimal": "1E+242"}}
+  legacy: {"z": {"$numberDecimal": "0E+1280"}, "q": {"$numberDecimal": "1E+242"}}
+  valid: True
+== hex 19000000136e6300ffffffffffffffffffffffffffff013000
+  repr: Inexact: [<class 'decimal.Inexact'>]
+  canonical: Inexact: [<class 'decimal.Inexact'>]
+  relaxed: Inexact: [<class 'decimal.Inexact'>]
+  legacy: Inexact: [<class 'decimal.Inexact'>]
+  valid: True
+== hex 180000001378000000000000000000000000000000006c00
+  repr: {'x': Decimal128('0E-32')}
+  canonical: {"x": {"$numberDecimal": "0E-32"}}
+  relaxed: {"x": {"$numberDecimal": "0E-32"}}
+  legacy: {"x": {"$numberDecimal": "0E-32"}}
+  valid: True
+== hex 0d0000007f686900ff6c6f0000
+  repr: {'hi': MaxKey(), 'lo': MinKey()}
+  canonical: {"hi": {"$maxKey": 1}, "lo": {"$minKey": 1}}
+  relaxed: {"hi": {"$maxKey": 1}, "lo": {"$minKey": 1}}
+  legacy: {"hi": {"$maxKey": 1}, "lo": {"$minKey": 1}}
+  valid: True
+== hex 330000000372002b00000002247265660006000000757365727300102469640009000000026578747261000200000065000000
+  repr: {'r': DBRef('users', 9, extra='e')}
+  canonical: {"r": {"$ref": "users", "$id": {"$numberInt": "9"}, "extra": "e"}}
+  relaxed: {"r": {"$ref": "users", "$id": 9, "extra": "e"}}
+  legacy: {"r": {"$ref": "users", "$id": 9, "extra": "e"}}
+  valid: True
+== hex 330000000372002b00000002247265660006000000757365727300102469640009000000022464620004000000617070000000
+  repr: {'r': DBRef('users', 9, 'app')}
+  canonical: {"r": {"$ref": "users", "$id": {"$numberInt": "9"}, "$db": "app"}}
+  relaxed: {"r": {"$ref": "users", "$id": 9, "$db": "app"}}
+  legacy: {"r": {"$ref": "users", "$id": 9, "$db": "app"}}
+  valid: True
+== hex 1d00000003720015000000022472656600060000007573657273000000
+  repr: {'r': {'$ref': 'users'}}
+  canonical: {"r": {"$ref": "users"}}
+  relaxed: {"r": {"$ref": "users"}}
+  legacy: {"r": {"$ref": "users"}}
+  valid: True
+== hex 2000000003720018000000102472656600010000001024696400090000000000
+  repr: {'r': {'$ref': 1, '$id': 9}}
+  canonical: {"r": {"$ref": {"$numberInt": "1"}, "$id": {"$numberInt": "9"}}}
+  relaxed: {"r": {"$ref": 1, "$id": 9}}
+  legacy: {"r": {"$ref": 1, "$id": 9}}
+  valid: True
+== hex 17000000026bc3a9000900000076c3a920f09f98800000
+  repr: {'ké': 'vé 😀'}
+  canonical: {"k\u00e9": "v\u00e9 \ud83d\ude00"}
+  relaxed: {"k\u00e9": "v\u00e9 \ud83d\ude00"}
+  legacy: {"k\u00e9": "v\u00e9 \ud83d\ude00"}
+  valid: True
+== hex 10000000027300040000006100620000
+  repr: {'s': 'a\x00b'}
+  canonical: {"s": "a\u0000b"}
+  relaxed: {"s": "a\u0000b"}
+  legacy: {"s": "a\u0000b"}
+  valid: True
+== hex 0500000000
+  repr: {}
+  canonical: {}
+  relaxed: {}
+  legacy: {}
+  valid: True
+== hex 
+  decode: InvalidBSON: unpack_from requires a buffer of at least 4 bytes for unpacking 4 bytes at offset 0 (actual buffer size is 0)
+  valid: False
+== hex 050000
+  decode: InvalidBSON: unpack_from requires a buffer of at least 4 bytes for unpacking 4 bytes at offset 0 (actual buffer size is 3)
+  valid: False
+== hex 05000000
+  decode: InvalidBSON: invalid object length
+  valid: False
+== hex 0500000001
+  decode: InvalidBSON: bad eoo
+  valid: False
+== hex 060000000000
+  decode: InvalidBSON: bad object or element length
+  valid: False
+== hex 1500000010610001000000026200020000007800
+  decode: InvalidBSON: invalid object length
+  valid: False
+== hex 15000000106100010000000262000200000078000000
+  decode: InvalidBSON: invalid object length
+  valid: False
+== hex 150000001061000100000002620002000000780001
+  decode: InvalidBSON: bad eoo
+  valid: False
+== hex fbffffff00
+  decode: InvalidBSON: index out of range
+  valid: False
+== hex 640000001061000100000002620002000000780000
+  decode: InvalidBSON: invalid object length
+  valid: False
+== hex 0a0000001061000100000000
+  decode: InvalidBSON: invalid object length
+  valid: False
+== hex 0f0000001061000100000000
+  decode: InvalidBSON: invalid object length
+  valid: False
+== hex 0c0000001461000100000000
+  decode: InvalidBSON: Detected unknown BSON type b'\x14' for fieldname 'a'. Are you using the latest driver version?
+  valid: False
+== hex 080000002a7a0000
+  decode: InvalidBSON: Detected unknown BSON type b'*' for fieldname 'z'. Are you using the latest driver version?
+  valid: False
+== hex 090000000862000200
+  decode: InvalidBSON: invalid boolean value: b'\x02'
+  valid: False
+== hex 0d000000027300000000000000
+  decode: InvalidBSON: invalid string length
+  valid: False
+== hex 0f0000000273006400000061620000
+  decode: InvalidBSON: invalid string length
+  valid: False
+== hex 0f0000000273000300000061626300
+  decode: InvalidBSON: invalid end of string
+  valid: False
+== hex 0e00000002730002000000ff0000
+  decode: InvalidBSON: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  valid: False
+== hex 0f0000000273000300000061c30000
+  decode: InvalidBSON: 'utf-8' codec can't decode byte 0xc3 in position 1: unexpected end of data
+  valid: False
+== hex 0f00000002730003000000e2820000
+  decode: InvalidBSON: 'utf-8' codec can't decode bytes in position 0-1: unexpected end of data
+  valid: False
+== hex 0f00000002730003000000c3280000
+  decode: InvalidBSON: 'utf-8' codec can't decode byte 0xc3 in position 0: invalid continuation byte
+  valid: False
+== hex 1000000002730004000000eda0800000
+  decode: InvalidBSON: 'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte
+  valid: False
+== hex 1000000002730004000000f09f980000
+  decode: InvalidBSON: 'utf-8' codec can't decode bytes in position 0-2: unexpected end of data
+  valid: False
+== hex 0f00000002730003000000c0af0000
+  decode: InvalidBSON: 'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte
+  valid: False
+== hex 14000000027300080000006f6bf8888080800000
+  decode: InvalidBSON: 'utf-8' codec can't decode byte 0xf8 in position 2: invalid start byte
+  valid: False
+== hex 0e00000002ff0002000000760000
+  decode: InvalidBSON: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  valid: False
+== hex 0c000000026b000200000000
+  decode: InvalidBSON: invalid string length
+  valid: False
+== hex 10000000056200640000000061626300
+  decode: InvalidBSON: bad binary object length
+  valid: False
+== hex 0d000000056200ffffffff0000
+  decode: InvalidBSON: bad binary object length
+  valid: False
+== hex 1400000005700007000000020400000078797a00
+  decode: InvalidBSON: invalid binary (st 2) - lengths don't match!
+  valid: False
+== hex 10000000057500030000000461626300
+  repr: {'u': Binary(b'abc', 4)}
+  canonical: {"u": {"$binary": {"base64": "YWJj", "subType": "04"}}}
+  relaxed: {"u": {"$binary": {"base64": "YWJj", "subType": "04"}}}
+  legacy: {"u": {"$binary": "YWJj", "$type": "04"}}
+  valid: True
+== hex 14000000036f0014000000107800010000000000
+  decode: InvalidBSON: invalid object length
+  valid: False
+== hex 14000000036f000c000000107800010000000100
+  decode: InvalidBSON: bad eoo
+  valid: False
+== hex 14000000036f0009000000107800010000000000
+  decode: InvalidBSON: bad object or element length
+  valid: False
+== hex 140000000461000c000000103000010000000100
+  decode: InvalidBSON: bad eoo
+  valid: False
+== hex 1700000004610009000000103000010000000000000000
+  decode: InvalidBSON: bad array length
+  valid: False
+== hex 1e0000000f77001e0000000200000066000c000000107800010000000000
+  decode: InvalidBSON: scope outside of javascript code boundaries
+  valid: False
+== hex 210000000f7700190000000200000066000c000000107800010000000000000000
+  decode: InvalidBSON: scope outside of javascript code boundaries
+  valid: False
+== hex 1000000009640000dc1fd277e6000000
+  decode: InvalidBSON: date value out of range (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+  valid: False
+== hex 10000000096400ff27d3ed7cc7ffff00
+  decode: InvalidBSON: date value out of range (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+  valid: False
+== hex 10000000096400ffffffffffffff7f00
+  decode: InvalidBSON: Python int too large to convert to C int (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+  valid: False
+== hex 10000000096400000000000000008000
+  decode: InvalidBSON: Python int too large to convert to C int (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+  valid: False
+== hex 100000000964000000e46a836ecc0100
+  decode: InvalidBSON: days=1500000000; must have magnitude <= 999999999 (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+  valid: False
+== hex 1000000009640000001c957c9133fe00
+  decode: InvalidBSON: days=-1500000000; must have magnitude <= 999999999 (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+  valid: False
+== hex 0d000000056200020000000000
+  decode: InvalidBSON: bad binary object length
+  valid: False
+== hex 0800000080710000
+  decode: InvalidBSON: Detected unknown BSON type b'\xc2\x80' for fieldname 'q'. Are you using the latest driver version?
+  valid: False
+== hex 10000000046100080000009930000000
+  decode: InvalidBSON: Detected unknown BSON type b'\xc2\x99' for fieldname 'a'. Are you using the latest driver version?
+  valid: False
+== hex 0d000000046100e80300000000
+  decode: InvalidBSON: index out of range
+  valid: False
+== hex 0a000000106900010200
+  decode: InvalidBSON: unpack_from requires a buffer of at least 11 bytes for unpacking 4 bytes at offset 7 (actual buffer size is 10)
+  valid: False
+== hex 0a000000016400000000
+  decode: InvalidBSON: unpack_from requires a buffer of at least 15 bytes for unpacking 8 bytes at offset 7 (actual buffer size is 10)
+  valid: False
+== hex 0b000000076f0001020300
+  decode: InvalidBSON: id must be an instance of (bytes, str, ObjectId), not <class 'bytes'>
+  valid: False
+== hex 090000001174000100
+  decode: InvalidBSON: unpack_from requires a buffer of at least 15 bytes for unpacking 8 bytes at offset 7 (actual buffer size is 9)
+  valid: False
+== hex 0a000000136400010200
+  decode: InvalidBSON: value must be exactly 16 bytes
+  valid: False
+== hex 0b0000000b720061626300
+  decode: InvalidBSON: subsection not found
+  valid: False
+== hex 130000000c700005000000636f6c6c00010200
+  decode: InvalidBSON: id must be an instance of (bytes, str, ObjectId), not <class 'bytes'>
+  valid: False
+== opts datetime=auto 2600000009640000dc1fd277e60000096500ff27d3ed7cc7ffff0966002ecf35646f01000000
+  repr: {'d': DatetimeMS(253402300800000), 'e': DatetimeMS(-62135596800001), 'f': datetime.datetime(2020, 1, 2, 3, 4, 5, 678000)}
+  relaxed: {"d": {"$date": {"$numberLong": "253402300800000"}}, "e": {"$date": {"$numberLong": "-62135596800001"}}, "f": {"$date": "2020-01-02T03:04:05.678Z"}}
+== opts datetime=auto 350000000575001000000004000102030405060708090a0b0c0d0e0f0576001000000003000102030405060708090a0b0c0d0e0f00
+  repr: {'u': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 4), 'v': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 3)}
+  relaxed: {"u": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "04"}}, "v": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "03"}}}
+== opts datetime=clamp 2600000009640000dc1fd277e60000096500ff27d3ed7cc7ffff0966002ecf35646f01000000
+  repr: {'d': datetime.datetime(9999, 12, 31, 23, 59, 59, 999000), 'e': datetime.datetime(1, 1, 1, 0, 0), 'f': datetime.datetime(2020, 1, 2, 3, 4, 5, 678000)}
+  relaxed: {"d": {"$date": "9999-12-31T23:59:59.999Z"}, "e": {"$date": {"$numberLong": "-62135596800000"}}, "f": {"$date": "2020-01-02T03:04:05.678Z"}}
+== opts datetime=clamp 350000000575001000000004000102030405060708090a0b0c0d0e0f0576001000000003000102030405060708090a0b0c0d0e0f00
+  repr: {'u': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 4), 'v': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 3)}
+  relaxed: {"u": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "04"}}, "v": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "03"}}}
+== opts datetime=ms 2600000009640000dc1fd277e60000096500ff27d3ed7cc7ffff0966002ecf35646f01000000
+  repr: {'d': DatetimeMS(253402300800000), 'e': DatetimeMS(-62135596800001), 'f': DatetimeMS(1577934245678)}
+  relaxed: {"d": {"$date": {"$numberLong": "253402300800000"}}, "e": {"$date": {"$numberLong": "-62135596800001"}}, "f": {"$date": "2020-01-02T03:04:05.678Z"}}
+== opts datetime=ms 350000000575001000000004000102030405060708090a0b0c0d0e0f0576001000000003000102030405060708090a0b0c0d0e0f00
+  repr: {'u': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 4), 'v': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 3)}
+  relaxed: {"u": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "04"}}, "v": {"$binary": {"base64": "AAECAwQFBgcICQoLDA0ODw==", "subType": "03"}}}
+== opts uuid=standard 2600000009640000dc1fd277e60000096500ff27d3ed7cc7ffff0966002ecf35646f01000000
+  decode: InvalidBSON: date value out of range (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+== opts uuid=standard 350000000575001000000004000102030405060708090a0b0c0d0e0f0576001000000003000102030405060708090a0b0c0d0e0f00
+  repr: {'u': UUID('00010203-0405-0607-0809-0a0b0c0d0e0f'), 'v': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 3)}
+  relaxed: ValueError: cannot encode native uuid.UUID with UuidRepresentation.UNSPECIFIED. UUIDs can be manually converted to bson.Binary instances using bson.Binary.from_uuid() or a different UuidRepresentation can be configured. See the documentation for UuidRepresentation for more information.
+== opts uuid=pythonLegacy 2600000009640000dc1fd277e60000096500ff27d3ed7cc7ffff0966002ecf35646f01000000
+  decode: InvalidBSON: date value out of range (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+== opts uuid=pythonLegacy 350000000575001000000004000102030405060708090a0b0c0d0e0f0576001000000003000102030405060708090a0b0c0d0e0f00
+  repr: {'u': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 4), 'v': UUID('00010203-0405-0607-0809-0a0b0c0d0e0f')}
+  relaxed: ValueError: cannot encode native uuid.UUID with UuidRepresentation.UNSPECIFIED. UUIDs can be manually converted to bson.Binary instances using bson.Binary.from_uuid() or a different UuidRepresentation can be configured. See the documentation for UuidRepresentation for more information.
+== opts uuid=javaLegacy 2600000009640000dc1fd277e60000096500ff27d3ed7cc7ffff0966002ecf35646f01000000
+  decode: InvalidBSON: date value out of range (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+== opts uuid=javaLegacy 350000000575001000000004000102030405060708090a0b0c0d0e0f0576001000000003000102030405060708090a0b0c0d0e0f00
+  repr: {'u': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 4), 'v': UUID('07060504-0302-0100-0f0e-0d0c0b0a0908')}
+  relaxed: ValueError: cannot encode native uuid.UUID with UuidRepresentation.UNSPECIFIED. UUIDs can be manually converted to bson.Binary instances using bson.Binary.from_uuid() or a different UuidRepresentation can be configured. See the documentation for UuidRepresentation for more information.
+== opts uuid=csharpLegacy 2600000009640000dc1fd277e60000096500ff27d3ed7cc7ffff0966002ecf35646f01000000
+  decode: InvalidBSON: date value out of range (Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes
+== opts uuid=csharpLegacy 350000000575001000000004000102030405060708090a0b0c0d0e0f0576001000000003000102030405060708090a0b0c0d0e0f00
+  repr: {'u': Binary(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f', 4), 'v': UUID('03020100-0504-0706-0809-0a0b0c0d0e0f')}
+  relaxed: ValueError: cannot encode native uuid.UUID with UuidRepresentation.UNSPECIFIED. UUIDs can be manually converted to bson.Binary instances using bson.Binary.from_uuid() or a different UuidRepresentation can be configured. See the documentation for UuidRepresentation for more information.
+== all 0c000000106e000100000000100000000273000400000074776f0000090000000862000100
+  decode_all: 3
+    {"n": {"$numberInt": "1"}}
+    {"s": "two"}
+    {"b": true}
+  iter 1: {"n": 1}
+  iter 2: {"s": "two"}
+  iter 3: {"b": true}
+  decode_iter: 3
+  valid: False
+== all 
+  decode_all: 0
+  decode_iter: 0
+  valid: False
+== all 0c000000106e000100000000
+  decode_all: 1
+    {"n": {"$numberInt": "1"}}
+  iter 1: {"n": 1}
+  decode_iter: 1
+  valid: True
+== all 0c000000106e000100000000100000000273000400000074776f
+  decode_all: InvalidBSON: invalid object size
+  iter 1: {"n": 1}
+  decode_iter after 1: InvalidBSON: invalid object length
+  valid: False
+== all 0c000000106e000100000000090000000862000500090000000862000100
+  decode_all: InvalidBSON: invalid boolean value: b'\x05'
+  iter 1: {"n": 1}
+  decode_iter after 1: InvalidBSON: invalid boolean value: b'\x05'
+  valid: False
+== all 0c000000106e00010000000064000000
+  decode_all: InvalidBSON: invalid object size
+  iter 1: {"n": 1}
+  decode_iter after 1: InvalidBSON: invalid object length
+  valid: False
+== all 0c000000106e00010000000000
+  decode_all: 1
+    {"n": {"$numberInt": "1"}}
+  iter 1: {"n": 1}
+  decode_iter: 1
+  valid: False
+== all 0c000000106e000100000000000000
+  decode_all: InvalidBSON: unpack_from requires a buffer of at least 16 bytes for unpacking 4 bytes at offset 12 (actual buffer size is 15)
+  iter 1: {"n": 1}
+  decode_iter after 1: error: unpack_from requires a buffer of at least 16 bytes for unpacking 4 bytes at offset 12 (actual buffer size is 15)
+  valid: False
+== oid 5f2b3c4d5e6f708192a3b4c5
+  is_valid: True
+  str: 5f2b3c4d5e6f708192a3b4c5
+  repr: ObjectId('5f2b3c4d5e6f708192a3b4c5')
+  binary: 5f2b3c4d5e6f708192a3b4c5
+  generated: 2020-08-05T23:10:05+00:00
+== oid 5F2B3C4D5E6F708192A3B4C5
+  is_valid: True
+  str: 5f2b3c4d5e6f708192a3b4c5
+  repr: ObjectId('5f2b3c4d5e6f708192a3b4c5')
+  binary: 5f2b3c4d5e6f708192a3b4c5
+  generated: 2020-08-05T23:10:05+00:00
+== oid 000000000000000000000000
+  is_valid: True
+  str: 000000000000000000000000
+  repr: ObjectId('000000000000000000000000')
+  binary: 000000000000000000000000
+  generated: 1970-01-01T00:00:00+00:00
+== oid ffffffffffffffffffffffff
+  is_valid: True
+  str: ffffffffffffffffffffffff
+  repr: ObjectId('ffffffffffffffffffffffff')
+  binary: ffffffffffffffffffffffff
+  generated: 2106-02-07T06:28:15+00:00
+== oid 5f2b3c4d5e6f708192a3b4c
+  is_valid: False
+  InvalidId: '5f2b3c4d5e6f708192a3b4c' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== oid 5f2b3c4d5e6f708192a3b4cg
+  is_valid: False
+  InvalidId: '5f2b3c4d5e6f708192a3b4cg' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== oid 5f2b 3c4d5e6f708192a3b4c5
+  is_valid: False
+  InvalidId: '5f2b 3c4d5e6f708192a3b4c5' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== oid 5f2b3c4d5e6f 708192a3b4c
+  is_valid: False
+  InvalidId: '5f2b3c4d5e6f 708192a3b4c' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== oid 5f2b 3c4d 5e6f708192a3b4
+  is_valid: True
+  str: 5f2b3c4d5e6f708192a3b4
+  repr: ObjectId('5f2b3c4d5e6f708192a3b4')
+  binary: 5f2b3c4d5e6f708192a3b4
+  generated: 2020-08-05T23:10:05+00:00
+== oid 
+  is_valid: False
+  InvalidId: '' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== oid it's 24 chars long.....
+  is_valid: False
+  InvalidId: "it's 24 chars long....." is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== oid 5f2b3c4d5e6f708192a3b4cé
+  is_valid: False
+  InvalidId: '5f2b3c4d5e6f708192a3b4cé' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+== oidtime 2020-01-02T03:04:05Z
+  oid: 5e0d5da50000000000000000
+  generated: 2020-01-02T03:04:05+00:00
+  before: True
+== oidtime 1970-01-01T00:00:00Z
+  oid: 000000000000000000000000
+  generated: 1970-01-01T00:00:00+00:00
+  before: True
+== oidtime 2106-02-07T06:28:15Z
+  oid: ffffffff0000000000000000
+  generated: 2106-02-07T06:28:15+00:00
+  before: False
+== oidtime 2038-01-19T03:14:08.999Z
+  oid: 800000000000000000000000
+  generated: 2038-01-19T03:14:08+00:00
+  before: False
+== oidtime 2106-02-07T06:28:16Z
+  error: 'I' format requires 0 <= number <= 4294967295
+== oidtime 1969-12-31T23:59:59Z
+  error: 'I' format requires 0 <= number <= 4294967295
+== dec 1E+6120
+  bid: 00ca9a3b00000000000000000000fe5f
+  str: 1.000000000E+6120
+  repr: Decimal128('1.000000000E+6120')
+  to_decimal: 1.000000000E+6120
+== dec 0E-6200
+  bid: 00000000000000000000000000000000
+  str: 0E-6176
+  repr: Decimal128('0E-6176')
+  to_decimal: 0E-6176
+== dec 1.0E-6176
+  bid: 01000000000000000000000000000000
+  str: 1E-6176
+  repr: Decimal128('1E-6176')
+  to_decimal: 1E-6176
+== dec -1E-6177
+  Inexact: [<class 'decimal.Inexact'>]
+== dec INF
+  bid: 00000000000000000000000000000078
+  str: Infinity
+  repr: Decimal128('Infinity')
+  to_decimal: Infinity
+== dec iNfInItY
+  bid: 00000000000000000000000000000078
+  str: Infinity
+  repr: Decimal128('Infinity')
+  to_decimal: Infinity
+== dec SNAN
+  bid: 0000000000000000000000000000007e
+  str: NaN
+  repr: Decimal128('NaN')
+  to_decimal: sNaN
+== dec -sNaN
+  bid: 000000000000000000000000000000fe
+  str: NaN
+  repr: Decimal128('NaN')
+  to_decimal: -sNaN
+== dec nan
+  bid: 0000000000000000000000000000007c
+  str: NaN
+  repr: Decimal128('NaN')
+  to_decimal: NaN
+== dec 1E-6143
+  bid: 01000000000000000000000000004200
+  str: 1E-6143
+  repr: Decimal128('1E-6143')
+  to_decimal: 1E-6143
+== dec 1.5e+0
+  bid: 0f000000000000000000000000003e30
+  str: 1.5
+  repr: Decimal128('1.5')
+  to_decimal: 1.5
+== dec 0e0
+  bid: 00000000000000000000000000004030
+  str: 0
+  repr: Decimal128('0')
+  to_decimal: 0
+== dec 0
+  bid: 00000000000000000000000000004030
+  str: 0
+  repr: Decimal128('0')
+  to_decimal: 0
+== dec -0
+  bid: 000000000000000000000000000040b0
+  str: -0
+  repr: Decimal128('-0')
+  to_decimal: -0
+== dec 1
+  bid: 01000000000000000000000000004030
+  str: 1
+  repr: Decimal128('1')
+  to_decimal: 1
+== dec -1
+  bid: 010000000000000000000000000040b0
+  str: -1
+  repr: Decimal128('-1')
+  to_decimal: -1
+== dec 0.1
+  bid: 01000000000000000000000000003e30
+  str: 0.1
+  repr: Decimal128('0.1')
+  to_decimal: 0.1
+== dec 1.50E+3
+  bid: 96000000000000000000000000004230
+  str: 1.50E+3
+  repr: Decimal128('1.50E+3')
+  to_decimal: 1.50E+3
+== dec 1E+3
+  bid: 01000000000000000000000000004630
+  str: 1E+3
+  repr: Decimal128('1E+3')
+  to_decimal: 1E+3
+== dec 1e-6
+  bid: 01000000000000000000000000003430
+  str: 0.000001
+  repr: Decimal128('0.000001')
+  to_decimal: 0.000001
+== dec 0.000001
+  bid: 01000000000000000000000000003430
+  str: 0.000001
+  repr: Decimal128('0.000001')
+  to_decimal: 0.000001
+== dec 0.0000001
+  bid: 01000000000000000000000000003230
+  str: 1E-7
+  repr: Decimal128('1E-7')
+  to_decimal: 1E-7
+== dec 123.456e-10
+  bid: 40e20100000000000000000000002630
+  str: 1.23456E-8
+  repr: Decimal128('1.23456E-8')
+  to_decimal: 1.23456E-8
+== dec 1E+6144
+  bid: 000000000a5bc138938d44c64d31fe5f
+  str: 1.000000000000000000000000000000000E+6144
+  repr: Decimal128('1.000000000000000000000000000000000E+6144')
+  to_decimal: 1.000000000000000000000000000000000E+6144
+== dec 1E+6145
+  Overflow: [<class 'decimal.Overflow'>, <class 'decimal.Inexact'>]
+== dec 1E-6176
+  bid: 01000000000000000000000000000000
+  str: 1E-6176
+  repr: Decimal128('1E-6176')
+  to_decimal: 1E-6176
+== dec 1E-6177
+  Inexact: [<class 'decimal.Inexact'>]
+== dec 0E-6177
+  bid: 00000000000000000000000000000000
+  str: 0E-6176
+  repr: Decimal128('0E-6176')
+  to_decimal: 0E-6176
+== dec 0E+7000
+  bid: 0000000000000000000000000000fe5f
+  str: 0E+6111
+  repr: Decimal128('0E+6111')
+  to_decimal: 0E+6111
+== dec 1E+6112
+  bid: 0a00000000000000000000000000fe5f
+  str: 1.0E+6112
+  repr: Decimal128('1.0E+6112')
+  to_decimal: 1.0E+6112
+== dec 12345678901234567890123456789012345
+  Inexact: [<class 'decimal.Inexact'>]
+== dec 1234567890123456789012345678901234
+  bid: f2af967ed05c82de3297ff6fde3c4030
+  str: 1234567890123456789012345678901234
+  repr: Decimal128('1234567890123456789012345678901234')
+  to_decimal: 1234567890123456789012345678901234
+== dec 1234567890123456789012345678901234.0
+  bid: f2af967ed05c82de3297ff6fde3c4030
+  str: 1234567890123456789012345678901234
+  repr: Decimal128('1234567890123456789012345678901234')
+  to_decimal: 1234567890123456789012345678901234
+== dec 9.999999999999999999999999999999999E+6144
+  bid: ffffffff638e8d37c087adbe09edff5f
+  str: 9.999999999999999999999999999999999E+6144
+  repr: Decimal128('9.999999999999999999999999999999999E+6144')
+  to_decimal: 9.999999999999999999999999999999999E+6144
+== dec Infinity
+  bid: 00000000000000000000000000000078
+  str: Infinity
+  repr: Decimal128('Infinity')
+  to_decimal: Infinity
+== dec -inf
+  bid: 000000000000000000000000000000f8
+  str: -Infinity
+  repr: Decimal128('-Infinity')
+  to_decimal: -Infinity
+== dec NaN
+  bid: 0000000000000000000000000000007c
+  str: NaN
+  repr: Decimal128('NaN')
+  to_decimal: NaN
+== dec -NaN
+  bid: 000000000000000000000000000000fc
+  str: NaN
+  repr: Decimal128('NaN')
+  to_decimal: -NaN
+== dec sNaN
+  bid: 0000000000000000000000000000007e
+  str: NaN
+  repr: Decimal128('NaN')
+  to_decimal: sNaN
+== dec NaN12
+  ValueError: NaN with debug payload is not supported
+== dec  7 
+  InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+== dec 1_000
+  InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+== dec +.5
+  bid: 05000000000000000000000000003e30
+  str: 0.5
+  repr: Decimal128('0.5')
+  to_decimal: 0.5
+== dec 5.
+  bid: 05000000000000000000000000004030
+  str: 5
+  repr: Decimal128('5')
+  to_decimal: 5
+== dec .
+  InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+== dec 
+  InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+== dec abc
+  InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+== dec 1e
+  InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+== dec -0.00E-2
+  bid: 000000000000000000000000000038b0
+  str: -0.0000
+  repr: Decimal128('-0.0000')
+  to_decimal: -0.0000
+== dec 100E-2
+  bid: 64000000000000000000000000003c30
+  str: 1.00
+  repr: Decimal128('1.00')
+  to_decimal: 1.00
+== dec 0.001E+5
+  bid: 01000000000000000000000000004430
+  str: 1E+2
+  repr: Decimal128('1E+2')
+  to_decimal: 1E+2
+== bid 01000000000000000000000000004030
+  str: 1
+  to_decimal: 1
+== bid 00000000000000000000000000000000
+  str: 0E-6176
+  to_decimal: 0E-6176
+== bid ffffffffffffffffffffffffffff0130
+  str: Inexact: [<class 'decimal.Inexact'>]
+  to_decimal: Inexact: [<class 'decimal.Inexact'>]
+== bid 0000000000000000000000000000007e
+  str: NaN
+  to_decimal: sNaN
+== bid 000000000000000000000000000000fe
+  str: NaN
+  to_decimal: -sNaN
+== bid 0100000000000000000000000000607c
+  str: NaN
+  to_decimal: NaN
+== bid 00000000000000000000000000007a5f
+  str: 0E+6045
+  to_decimal: 0E+6045
+== bid 0a00000000000000000000000000fe5f
+  str: 1.0E+6112
+  to_decimal: 1.0E+6112
+== bid 00000000000000000000000000000068
+  str: 0E-2080
+  to_decimal: 0E-2080
+== bid 0000000000000000000000000000c0e8
+  str: -0E-1696
+  to_decimal: -0E-1696
+== bid 00000000648e8d37c087adbe09ed4130
+  str: 1.000000000000000000000000000000000E+34
+  to_decimal: 1.000000000000000000000000000000000E+34
+== bid 01000000648e8d37c087adbe09ed4130
+  str: Inexact: [<class 'decimal.Inexact'>]
+  to_decimal: Inexact: [<class 'decimal.Inexact'>]
+== bid 01000000000000000000000000001060
+  str: 0E-6144
+  to_decimal: 0E-6144
+== bsondump dump/people.bson (437 bytes)
+{"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c0"}, "name": "Ada", "age": 36, "tags": ["math"], "score": 97.5}
+{"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c1"}, "name": "Grace", "age": 85, "tags": ["navy", "cobol"], "score": 99.0}
+{"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c2"}, "name": "Linus", "age": 54, "tags": [], "score": 88.25}
+{"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c3"}, "name": "Margaret", "age": 87, "tags": ["apollo"], "score": 100.0}
+{"_id": {"$oid": "5f2b3c4d5e6f708192a3b4c4"}, "name": "Ken", "age": 81, "tags": ["unix", "go"], "score": 91.0}
+5 objects found
+== bsondump dump/orders.bson (738 bytes)
+{"order": 0, "items": [{"sku": "A0", "qty": 0}], "total": {"$numberDecimal": "10.00"}, "when": {"$date": "2024-05-01T12:30:00Z"}}
+{"order": 1, "items": [{"sku": "A0", "qty": 1}, {"sku": "A1", "qty": 2}], "total": {"$numberDecimal": "17.13"}, "when": {"$date": "2024-05-02T12:30:01Z"}}
+{"order": 2, "items": [{"sku": "A0", "qty": 2}, {"sku": "A1", "qty": 3}, {"sku": "A2", "qty": 4}], "total": {"$numberDecimal": "24.26"}, "when": {"$date": "2024-05-03T12:30:02Z"}}
+{"order": 3, "items": [{"sku": "A0", "qty": 3}], "total": {"$numberDecimal": "31.39"}, "when": {"$date": "2024-05-04T12:30:03Z"}}
+{"order": 4, "items": [{"sku": "A0", "qty": 4}, {"sku": "A1", "qty": 5}], "total": {"$numberDecimal": "38.52"}, "when": {"$date": "2024-05-05T12:30:04Z"}}
+{"order": 5, "items": [{"sku": "A0", "qty": 5}, {"sku": "A1", "qty": 6}, {"sku": "A2", "qty": 7}], "total": {"$numberDecimal": "45.65"}, "when": {"$date": "2024-05-06T12:30:05Z"}}
+6 objects found
+== bsondump dump/truncated.bson (25 bytes)
+{"a": 1}
+error: InvalidBSON: invalid object length
+1 objects found
+== bsondump dump/garbage.bson (19 bytes)
+{"a": 1}
+error: InvalidBSON: Detected unknown BSON type b'*' for fieldname ''. Are you using the latest driver version?
+1 objects found
+== bsondump dump/empty.bson (0 bytes)
+0 objects found
+== import import/events.jsonl
+line 5: InvalidId: 'nope' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string
+line 6: OverflowError: BSON can only handle up to 8-byte ints
+imported 4, failed 2, 207 bytes
+{"kind": "login", "user": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "at": {"$date": {"$numberLong": "1714550400000"}}}
+{"kind": "buy", "amount": {"$numberDecimal": "19.99"}, "count": {"$numberInt": "2"}, "at": {"$date": {"$numberLong": "1714550730250"}}}
+{"kind": "big", "n": {"$numberLong": "9007199254740993"}, "ratio": {"$numberDouble": "0.25"}}
+{"kind": "logout", "user": {"$oid": "5f2b3c4d5e6f708192a3b4c5"}, "ok": true}

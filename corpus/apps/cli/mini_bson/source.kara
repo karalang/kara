@@ -1,0 +1,3647 @@
+// mini_bson: pymongo 4.10.1's `bson` package (Apache-2.0) in Kara.
+//
+// The BSON encoder and decoder, Extended JSON (`json_util.loads` and
+// `dumps` in canonical, relaxed and legacy mode), ObjectId, Decimal128,
+// DBRef, Binary, Code, Regex, Timestamp and the decode options for
+// datetimes and UUIDs, as the pure-Python package does them, Python's
+// error messages included. The jobs in data/jobs.txt drive it, then a
+// bsondump over data/dump/*.bson and a mongoimport-style loader over
+// data/import/events.jsonl.
+//
+// A Python value is a `Val`. Python's `dict` keeps its insertion order,
+// so a document is a Vec of (key, value) pairs.
+
+#[derive(Clone)]
+enum Val {
+    Null,
+    Bool(bool),
+    Int(i128),
+    Int64(i128),
+    Float(f64),
+    Str(String),
+    Bytes(Vec[u8]),
+    Binary(Vec[u8], i64),
+    Uuid(Vec[u8]),
+    Oid(Vec[u8]),
+    // a naive datetime, as microseconds since the epoch
+    Dt(i64),
+    DtMs(i64),
+    Regex(String, i64),
+    Code(String, Option[Vec[(String, Val)]]),
+    Ts(i64, i64),
+    // Decimal128 as (high, low)
+    Dec(u64, u64),
+    MinKey,
+    MaxKey,
+    // DBRef(collection, [id], database, extra fields)
+    DbRef(String, Vec[Val], Option[String], Vec[(String, Val)]),
+    Dict(Vec[(String, Val)]),
+    List(Vec[Val]),
+}
+
+// A Python exception: its class name and str(exception).
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: Str) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+fn invalid_bson(msg: Str) -> Exc {
+    exc("InvalidBSON", msg)
+}
+
+fn type_error(msg: Str) -> Exc {
+    exc("TypeError", msg)
+}
+
+fn value_error(msg: Str) -> Exc {
+    exc("ValueError", msg)
+}
+
+fn key_error(key: Str) -> Exc {
+    exc("KeyError", py_str_repr(key))
+}
+
+fn show_exc(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+const RE_I: i64 = 2;
+const RE_L: i64 = 4;
+const RE_M: i64 = 8;
+const RE_S: i64 = 16;
+const RE_U: i64 = 32;
+const RE_X: i64 = 64;
+
+const UUID_UNSPECIFIED: i64 = 0;
+const UUID_PYTHON_LEGACY: i64 = 3;
+const UUID_STANDARD: i64 = 4;
+const UUID_JAVA_LEGACY: i64 = 5;
+const UUID_CSHARP_LEGACY: i64 = 6;
+
+const DT_DATETIME: i64 = 1;
+const DT_MS: i64 = 2;
+const DT_CLAMP: i64 = 3;
+const DT_AUTO: i64 = 4;
+
+// The CodecOptions fields the decoder reads.
+#[derive(Clone)]
+struct Opts {
+    datetime: i64,
+    uuid: i64,
+}
+
+fn default_opts() -> Opts {
+    Opts { datetime: DT_DATETIME, uuid: UUID_UNSPECIFIED }
+}
+
+const MODE_LEGACY: i64 = 0;
+const MODE_RELAXED: i64 = 1;
+const MODE_CANONICAL: i64 = 2;
+
+// _MIN_UTC_MS and _MAX_UTC_MS: datetime.min and datetime.max in UTC.
+const MIN_UTC_MS: i64 = -62135596800000;
+const MAX_UTC_MS: i64 = 253402300799999;
+
+fn dict_get(d: ref Vec[(String, Val)], key: Str) -> Option[Val] {
+    for p in d {
+        if p.0 == key {
+            return Some(p.1.clone());
+        }
+    }
+    None
+}
+
+fn dict_has(d: ref Vec[(String, Val)], key: Str) -> bool {
+    for p in d {
+        if p.0 == key {
+            return true;
+        }
+    }
+    false
+}
+
+// d[key] = v: a new key goes last, an existing one keeps its place.
+fn dict_set(d: mut ref Vec[(String, Val)], key: Str, v: own Val) {
+    for i in 0..d.len() {
+        if d[i].0 == key {
+            d[i].1 = v;
+            return;
+        }
+    }
+    d.push((key.to_string(), v));
+}
+
+// d.pop(key, None)
+fn dict_pop(d: mut ref Vec[(String, Val)], key: Str) -> Option[Val] {
+    for i in 0..d.len() {
+        if d[i].0 == key {
+            let (_, v) = d.remove(i);
+            return Some(v);
+        }
+    }
+    None
+}
+
+// doc[key] on a Python dict: KeyError when it is missing.
+fn index_key(v: ref Val, key: Str) -> Result[Val, Exc] {
+    match v {
+        Val.Dict(d) => match dict_get(d, key) {
+            Some(x) => Ok(x),
+            None => Err(key_error(key)),
+        },
+        Val.Str(_) => Err(type_error("string indices must be integers, not 'str'")),
+        Val.List(_) => Err(type_error("list indices must be integers or slices, not str")),
+        _ => Err(type_error(f"'{type_name(v)}' object is not subscriptable")),
+    }
+}
+
+// type(v).__name__
+fn type_name(v: ref Val) -> String {
+    let s = match v {
+        Val.Null => "NoneType",
+        Val.Bool(_) => "bool",
+        Val.Int(_) => "int",
+        Val.Int64(_) => "Int64",
+        Val.Float(_) => "float",
+        Val.Str(_) => "str",
+        Val.Bytes(_) => "bytes",
+        Val.Binary(_, _) => "Binary",
+        Val.Uuid(_) => "UUID",
+        Val.Oid(_) => "ObjectId",
+        Val.Dt(_) => "datetime.datetime",
+        Val.DtMs(_) => "DatetimeMS",
+        Val.Regex(_, _) => "Regex",
+        Val.Code(_, _) => "Code",
+        Val.Ts(_, _) => "Timestamp",
+        Val.Dec(_, _) => "Decimal128",
+        Val.MinKey => "MinKey",
+        Val.MaxKey => "MaxKey",
+        Val.DbRef(_, _, _, _) => "DBRef",
+        Val.Dict(_) => "dict",
+        Val.List(_) => "list",
+    };
+    s.to_string()
+}
+
+// The <class '...'> text of type(v), as str() of a class prints it.
+fn class_repr(v: ref Val) -> String {
+    let path = match v {
+        Val.Int64(_) => "bson.int64.Int64",
+        Val.Binary(_, _) => "bson.binary.Binary",
+        Val.Uuid(_) => "uuid.UUID",
+        Val.Oid(_) => "bson.objectid.ObjectId",
+        Val.Dt(_) => "datetime.datetime",
+        Val.DtMs(_) => "bson.datetime_ms.DatetimeMS",
+        Val.Regex(_, _) => "bson.regex.Regex",
+        Val.Code(_, _) => "bson.code.Code",
+        Val.Ts(_, _) => "bson.timestamp.Timestamp",
+        Val.Dec(_, _) => "bson.decimal128.Decimal128",
+        Val.MinKey => "bson.min_key.MinKey",
+        Val.MaxKey => "bson.max_key.MaxKey",
+        Val.DbRef(_, _, _, _) => "bson.dbref.DBRef",
+        _ => "",
+    };
+    if path.len() > 0 {
+        return f"<class '{path}'>";
+    }
+    f"<class '{type_name(v)}'>"
+}
+
+// isinstance(v, int): bool and Int64 count.
+fn is_int(v: ref Val) -> bool {
+    match v {
+        Val.Bool(_) => true,
+        Val.Int(_) => true,
+        Val.Int64(_) => true,
+        _ => false,
+    }
+}
+
+fn int_value(v: ref Val) -> i128 {
+    match v {
+        Val.Bool(b) => if *b { 1 } else { 0 },
+        Val.Int(n) => *n,
+        Val.Int64(n) => *n,
+        _ => 0,
+    }
+}
+
+fn is_str(v: ref Val) -> bool {
+    match v {
+        Val.Str(_) => true,
+        Val.Code(_, _) => true,
+        _ => false,
+    }
+}
+
+// ---- text: Python's repr of str and bytes, hex, UTF-8, JSON strings ----
+
+fn hex_n(n: i64, width: i64) -> String {
+    let mut digits: Vec[char] = Vec.new();
+    let mut v = n;
+    while v > 0 {
+        let d = v % 16;
+        let code = if d < 10 { 48 + d } else { 87 + d };
+        digits.push(char.try_from(code as u32).unwrap_or('0'));
+        v = v / 16;
+    }
+    while (digits.len() as i64) < width {
+        digits.push('0');
+    }
+    let mut out = String.new();
+    let mut i = digits.len() as i64 - 1;
+    while i >= 0 {
+        out.push(digits[i]);
+        i -= 1;
+    }
+    out
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        out.push_str(hex_n(*x as i64, 2));
+    }
+    out
+}
+
+fn hex_val(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 48 and n <= 57 {
+        return n - 48;
+    }
+    if n >= 97 and n <= 102 {
+        return n - 87;
+    }
+    if n >= 65 and n <= 70 {
+        return n - 55;
+    }
+    -1
+}
+
+// bytes.fromhex: ASCII whitespace may sit between the byte pairs.
+fn from_hex(s: Str) -> Option[Vec[u8]] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        if is_ascii_space(cs[i]) {
+            i += 1;
+            continue;
+        }
+        if i + 1 >= n {
+            return None;
+        }
+        let hi = hex_val(cs[i]);
+        let lo = hex_val(cs[i + 1]);
+        if hi < 0 or lo < 0 {
+            return None;
+        }
+        out.push((hi * 16 + lo) as u8);
+        i += 2;
+    }
+    Some(out)
+}
+
+fn is_ascii_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c as u32 == 11 or c as u32 == 12
+}
+
+// str.isspace(), which str.strip(), int() and float() use.
+fn is_py_space(c: char) -> bool {
+    let n = c as u32;
+    if n <= 32 {
+        return n == 32 or (n >= 9 and n <= 13) or (n >= 28 and n <= 31);
+    }
+    n == 0x85 or n == 0xA0 or n == 0x1680 or (n >= 0x2000 and n <= 0x200A) or n == 0x2028
+        or n == 0x2029 or n == 0x202F or n == 0x205F or n == 0x3000
+}
+
+fn py_strip(s: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a: i64 = 0;
+    let mut b = cs.len() as i64;
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out = String.new();
+    let mut i = a;
+    while i < b {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+// str.isprintable(): the Other and Separator categories are not
+// printable, the ASCII space is. Unassigned code points count as
+// printable here.
+fn is_printable(n: u32) -> bool {
+    if n < 0x20 or (n >= 0x7F and n <= 0x9F) {
+        return false;
+    }
+    if n == 0xA0 or n == 0xAD or n == 0x1680 or (n >= 0x2000 and n <= 0x200F) {
+        return false;
+    }
+    if (n >= 0x2028 and n <= 0x202F) or (n >= 0x205F and n <= 0x2064) or (n >= 0x2066 and n <= 0x206F) {
+        return false;
+    }
+    if n == 0x3000 or n == 0xFEFF or (n >= 0xFFF9 and n <= 0xFFFB) {
+        return false;
+    }
+    if (n >= 0x600 and n <= 0x605) or n == 0x61C or n == 0x6DD or n == 0x70F or n == 0x890
+        or n == 0x891 or n == 0x8E2 or n == 0x180E {
+        return false;
+    }
+    if n == 0x110BD or n == 0x110CD or (n >= 0x13430 and n <= 0x1343F) or (n >= 0x1BCA0 and n <= 0x1BCA3)
+        or (n >= 0x1D173 and n <= 0x1D17A) or n == 0xE0001 or (n >= 0xE0020 and n <= 0xE007F) {
+        return false;
+    }
+    if (n >= 0xE000 and n <= 0xF8FF) or n >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn py_str_repr(s: Str) -> String {
+    let quote = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        let n = c as u32;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if n < 0x20 or n == 0x7F {
+            out.push_str(f"\\x{hex_n(n as i64, 2)}");
+        } else if n < 0x7F or is_printable(n) {
+            out.push(c);
+        } else if n <= 0xFF {
+            out.push_str(f"\\x{hex_n(n as i64, 2)}");
+        } else if n <= 0xFFFF {
+            out.push_str(f"\\u{hex_n(n as i64, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_n(n as i64, 8)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn py_bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for x in b {
+        if *x == 39 {
+            has_single = true;
+        }
+        if *x == 34 {
+            has_double = true;
+        }
+    }
+    let quote: u8 = if has_single and not has_double { 34 } else { 39 };
+    let mut out = String.new();
+    out.push('b');
+    out.push(quote as char);
+    for x in b {
+        let v = *x;
+        if v == quote or v == 92 {
+            out.push('\\');
+            out.push(v as char);
+        } else if v == 9 {
+            out.push_str("\\t");
+        } else if v == 10 {
+            out.push_str("\\n");
+        } else if v == 13 {
+            out.push_str("\\r");
+        } else if v < 32 or v >= 127 {
+            out.push_str(f"\\x{hex_n(v as i64, 2)}");
+        } else {
+            out.push(v as char);
+        }
+    }
+    out.push(quote as char);
+    out
+}
+
+// bytes.decode('utf-8') with CPython's strict error messages.
+fn utf8_decode(b: ref Vec[u8], start: i64, end: i64) -> Result[String, Exc] {
+    let mut i = start;
+    while i < end {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            i += 1;
+            continue;
+        }
+        let need: i64 = if c >= 0xC2 and c < 0xE0 {
+            1
+        } else if c >= 0xE0 and c < 0xF0 {
+            2
+        } else if c >= 0xF0 and c < 0xF5 {
+            3
+        } else {
+            0
+        };
+        if need == 0 {
+            return Err(utf8_error(b, start, i, i + 1, "invalid start byte"));
+        }
+        let mut k: i64 = 1;
+        while k <= need {
+            if i + k >= end {
+                return Err(utf8_error(b, start, i, end, "unexpected end of data"));
+            }
+            let d = b[i + k] as i64;
+            let mut lo: i64 = 0x80;
+            let mut hi: i64 = 0xBF;
+            if k == 1 {
+                if c == 0xE0 {
+                    lo = 0xA0;
+                } else if c == 0xED {
+                    hi = 0x9F;
+                } else if c == 0xF0 {
+                    lo = 0x90;
+                } else if c == 0xF4 {
+                    hi = 0x8F;
+                }
+            }
+            if d < lo or d > hi {
+                return Err(utf8_error(b, start, i, i + k, "invalid continuation byte"));
+            }
+            k += 1;
+        }
+        i += need + 1;
+    }
+    Ok(String.from_utf8(b[start..end].to_vec()).unwrap_or(String.new()))
+}
+
+fn utf8_error(b: ref Vec[u8], base: i64, a: i64, e: i64, reason: Str) -> Exc {
+    if e - a == 1 {
+        let byte = hex_n(b[a] as i64, 2);
+        return exc("UnicodeDecodeError", f"'utf-8' codec can't decode byte 0x{byte} in position {a - base}: {reason}");
+    }
+    exc("UnicodeDecodeError", f"'utf-8' codec can't decode bytes in position {a - base}-{e - 1 - base}: {reason}")
+}
+
+// A JSON string as json.dumps writes it with ensure_ascii.
+fn json_str(s: Str) -> String {
+    let mut out = String.new();
+    out.push('"');
+    for c in s.chars() {
+        let n = c as u32;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n >= 0x20 and n <= 0x7E {
+            out.push(c);
+        } else if n > 0xFFFF {
+            let v = n as i64 - 0x10000;
+            out.push_str(f"\\u{hex_n(0xD800 + v / 1024, 4)}\\u{hex_n(0xDC00 + v % 1024, 4)}");
+        } else {
+            out.push_str(f"\\u{hex_n(n as i64, 4)}");
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn char_count(s: Str) -> i64 {
+    s.chars().count() as i64
+}
+
+// s[i] by code point, with Python's negative indexes.
+fn char_at(s: Str, i: i64) -> Result[char, Exc] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len() as i64;
+    let k = if i < 0 { i + n } else { i };
+    if k < 0 or k >= n {
+        return Err(exc("IndexError", "string index out of range"));
+    }
+    Ok(cs[k])
+}
+
+// s[a:b] by code point; a and b already clamped to the string.
+fn char_slice(cs: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut i = a;
+    while i < b {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+// ---- numbers: Python's int() and float() on str, and Decimal128 ----
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// The digits of int(s, base) for base 10 or 16, as CPython parses a str:
+// surrounding whitespace, a sign, a 0x prefix in base 16 and single
+// underscores between digits.
+fn py_int_digits(s: Str, base: i64) -> Result[(bool, Vec[i64]), Exc] {
+    let bad = value_error(f"invalid literal for int() with base {base}: {py_str_repr(s)}");
+    let cs: Vec[char] = py_strip(s).chars().collect();
+    let n = cs.len() as i64;
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < n and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    let mut prefixed = false;
+    if base == 16 and i + 1 < n and cs[i] == '0' and (cs[i + 1] == 'x' or cs[i + 1] == 'X') {
+        i += 2;
+        prefixed = true;
+    }
+    let mut digits: Vec[i64] = Vec.new();
+    let mut last_underscore = false;
+    while i < n {
+        let c = cs[i];
+        if c == '_' {
+            if last_underscore or (digits.len() == 0 and not prefixed) {
+                return Err(bad);
+            }
+            last_underscore = true;
+            i += 1;
+            continue;
+        }
+        let d = hex_val(c);
+        if d < 0 or d >= base {
+            return Err(bad);
+        }
+        digits.push(d);
+        last_underscore = false;
+        i += 1;
+    }
+    if digits.len() == 0 or last_underscore {
+        return Err(bad);
+    }
+    Ok((neg, digits))
+}
+
+// int(s, base); a value past BIG_INT saturates there.
+fn py_int(s: Str, base: i64) -> Result[i128, Exc] {
+    let (neg, digits) = py_int_digits(s, base)?;
+    let mut v: i128 = 0;
+    for d in digits {
+        if v >= BIG_INT / 16 {
+            v = BIG_INT;
+        } else {
+            v = v * (base as i128) + (d as i128);
+        }
+    }
+    Ok(if neg { -v } else { v })
+}
+
+// float(s) on a str.
+fn py_float(s: Str) -> Result[f64, Exc] {
+    let bad = value_error(f"could not convert string to float: {py_str_repr(s)}");
+    let t = py_strip(s);
+    let cs: Vec[char] = t.chars().collect();
+    let n = cs.len() as i64;
+    let mut i: i64 = 0;
+    let mut clean = String.new();
+    if i < n and (cs[i] == '+' or cs[i] == '-') {
+        clean.push(cs[i]);
+        i += 1;
+    }
+    let word = char_slice(cs, i, n).to_lowercase();
+    if word == "inf" or word == "infinity" or word == "nan" {
+        clean.push_str(word);
+        return match f64.parse(clean) {
+            Ok(x) => Ok(x),
+            Err(_) => Err(bad),
+        };
+    }
+    let mut mantissa: i64 = 0;
+    // part 0: integer digits, 1: fraction digits, 2: exponent digits
+    let mut part: i64 = 0;
+    let mut part_digits: i64 = 0;
+    let mut prev_digit = false;
+    while i < n {
+        let c = cs[i];
+        if is_digit(c) {
+            clean.push(c);
+            part_digits += 1;
+            if part < 2 {
+                mantissa += 1;
+            }
+            prev_digit = true;
+        } else if c == '_' {
+            if not prev_digit or i + 1 >= n or not is_digit(cs[i + 1]) {
+                return Err(bad);
+            }
+            prev_digit = false;
+        } else if c == '.' and part == 0 {
+            clean.push(c);
+            part = 1;
+            part_digits = 0;
+            prev_digit = false;
+        } else if (c == 'e' or c == 'E') and part < 2 and mantissa > 0 {
+            clean.push('e');
+            part = 2;
+            part_digits = 0;
+            prev_digit = false;
+            if i + 1 < n and (cs[i + 1] == '+' or cs[i + 1] == '-') {
+                clean.push(cs[i + 1]);
+                i += 1;
+            }
+        } else {
+            return Err(bad);
+        }
+        i += 1;
+    }
+    if mantissa == 0 or (part == 2 and part_digits == 0) {
+        return Err(bad);
+    }
+    match f64.parse(clean) {
+        Ok(x) => Ok(x),
+        Err(_) => Err(bad),
+    }
+}
+
+// int(x) of a float: truncation, with Python's errors for inf and nan.
+fn float_to_int(x: f64) -> Result[i128, Exc] {
+    if x != x {
+        return Err(value_error("cannot convert float NaN to integer"));
+    }
+    if x > 1.0e300 * 1.0e300 or x < -1.0e300 * 1.0e300 {
+        return Err(exc("OverflowError", "cannot convert float infinity to integer"));
+    }
+    if x >= 1.0e38 {
+        return Ok(BIG_INT);
+    }
+    if x <= -1.0e38 {
+        return Ok(-BIG_INT);
+    }
+    Ok(x as i128)
+}
+
+// Stands for any int too large to matter: every check that sees it fails.
+const BIG_INT: i128 = 100000000000000000000000000000000000000;
+
+// ---- Decimal128 ----
+
+const DEC_SIGN: u64 = 0x8000000000000000;
+const DEC_SNAN: u64 = 0x7E00000000000000;
+const DEC_NAN: u64 = 0x7C00000000000000;
+const DEC_INF: u64 = 0x7800000000000000;
+const DEC_EXP_MASK: u64 = 0x6000000000000000;
+const DEC_BIAS: i64 = 6176;
+const DEC_PREC: i64 = 34;
+const DEC_EMAX: i64 = 6144;
+const DEC_ETINY: i64 = -6176;
+const DEC_ETOP: i64 = 6111;
+
+// A decimal.Decimal: kind 0 finite, 1 infinity, 2 NaN, 3 sNaN.
+#[derive(Clone)]
+struct Decn {
+    kind: i64,
+    neg: bool,
+    digits: String,
+    exp: i64,
+}
+
+fn conversion_syntax() -> Exc {
+    exc("InvalidOperation", "[<class 'decimal.ConversionSyntax'>]")
+}
+
+fn inexact() -> Exc {
+    exc("Inexact", "[<class 'decimal.Inexact'>]")
+}
+
+fn strip_zeros(s: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i: i64 = 0;
+    while i < cs.len() as i64 and cs[i] == '0' {
+        i += 1;
+    }
+    if i == cs.len() as i64 { "0".to_string() } else { char_slice(cs, i, cs.len() as i64) }
+}
+
+// Context.create_decimal(s) in the Decimal128 context: no whitespace or
+// underscores, and the context's rounding traps.
+fn dec_parse(s: Str) -> Result[Decn, Exc] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len() as i64;
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < n and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    let rest = char_slice(cs, i, n).to_lowercase();
+    if rest == "inf" or rest == "infinity" {
+        return Ok(Decn { kind: 1, neg: neg, digits: "0".to_string(), exp: 0 });
+    }
+    if rest.starts_with("nan") or rest.starts_with("snan") {
+        let payload = if rest.starts_with("nan") { rest[3..].to_string() } else { rest[4..].to_string() };
+        for c in payload.chars() {
+            if not is_digit(c) {
+                return Err(conversion_syntax());
+            }
+        }
+        if strip_zeros(payload) != "0" {
+            return Err(value_error("NaN with debug payload is not supported"));
+        }
+        let kind = if rest.starts_with("nan") { 2 } else { 3 };
+        return Ok(Decn { kind: kind, neg: neg, digits: "0".to_string(), exp: 0 });
+    }
+    let mut int_part = String.new();
+    let mut frac_part = String.new();
+    let mut seen_dot = false;
+    while i < n and (is_digit(cs[i]) or (cs[i] == '.' and not seen_dot)) {
+        if cs[i] == '.' {
+            seen_dot = true;
+        } else if seen_dot {
+            frac_part.push(cs[i]);
+        } else {
+            int_part.push(cs[i]);
+        }
+        i += 1;
+    }
+    if int_part.len() + frac_part.len() == 0 {
+        return Err(conversion_syntax());
+    }
+    let mut exp: i128 = 0;
+    if i < n and (cs[i] == 'e' or cs[i] == 'E') {
+        i += 1;
+        let mut eneg = false;
+        if i < n and (cs[i] == '+' or cs[i] == '-') {
+            eneg = cs[i] == '-';
+            i += 1;
+        }
+        let mut ed: i64 = 0;
+        while i < n and is_digit(cs[i]) {
+            if exp < 1000000000000000000 {
+                exp = exp * 10 + (cs[i] as u32 as i128 - 48);
+            }
+            ed += 1;
+            i += 1;
+        }
+        if ed == 0 {
+            return Err(conversion_syntax());
+        }
+        if eneg {
+            exp = -exp;
+        }
+    }
+    if i != n {
+        return Err(conversion_syntax());
+    }
+    let digits = strip_zeros(f"{int_part}{frac_part}");
+    let e = exp - (frac_part.len() as i128);
+    dec_fix(neg, digits, e)
+}
+
+// The context's _fix: clamp a zero's exponent, trap overflow and any
+// rounding that drops a nonzero digit, pad a large exponent with zeros.
+fn dec_fix(neg: bool, digits: own String, exp128: i128) -> Result[Decn, Exc] {
+    let len = digits.len() as i128;
+    if digits == "0" {
+        let mut e = exp128;
+        if e < DEC_ETINY as i128 {
+            e = DEC_ETINY as i128;
+        }
+        if e > DEC_ETOP as i128 {
+            e = DEC_ETOP as i128;
+        }
+        return Ok(Decn { kind: 0, neg: neg, digits: digits, exp: e as i64 });
+    }
+    if exp128 + len - 1 > DEC_EMAX as i128 {
+        return Err(exc("Overflow", "[<class 'decimal.Overflow'>, <class 'decimal.Inexact'>]"));
+    }
+    let mut exp_min = len + exp128 - (DEC_PREC as i128);
+    if exp_min < DEC_ETINY as i128 {
+        exp_min = DEC_ETINY as i128;
+    }
+    let mut d = digits;
+    let mut e = exp128;
+    if e < exp_min {
+        let k = exp_min - e;
+        if k >= len {
+            return Err(inexact());
+        }
+        let keep = (len - k) as usize;
+        let dropped = d[keep..].to_string();
+        if strip_zeros(dropped) != "0" {
+            return Err(inexact());
+        }
+        d = d[..keep].to_string();
+        e = exp_min;
+    }
+    if e > DEC_ETOP as i128 {
+        let mut i = DEC_ETOP as i128;
+        while i < e {
+            d.push('0');
+            i += 1;
+        }
+        e = DEC_ETOP as i128;
+    }
+    Ok(Decn { kind: 0, neg: neg, digits: d, exp: e as i64 })
+}
+
+fn digits_to_u128(d: Str) -> u128 {
+    let mut v: u128 = 0;
+    for c in d.chars() {
+        v = v * 10 + (c as u32 as u128 - 48);
+    }
+    v
+}
+
+fn u128_digits(v: u128) -> String {
+    if v == 0 {
+        return "0".to_string();
+    }
+    let mut ds: Vec[char] = Vec.new();
+    let mut x = v;
+    while x > 0 {
+        ds.push(char.try_from((48 + (x % 10) as u32)).unwrap_or('0'));
+        x = x / 10;
+    }
+    let mut out = String.new();
+    let mut i = ds.len() as i64 - 1;
+    while i >= 0 {
+        out.push(ds[i]);
+        i -= 1;
+    }
+    out
+}
+
+// _decimal_to_128: (high, low)
+fn dec_to_bid(d: ref Decn) -> (u64, u64) {
+    let sign = if d.neg { DEC_SIGN } else { 0 };
+    if d.kind == 1 {
+        return (DEC_INF | sign, 0);
+    }
+    if d.kind == 2 {
+        return (DEC_NAN | sign, 0);
+    }
+    if d.kind == 3 {
+        return (DEC_SNAN | sign, 0);
+    }
+    let sig = digits_to_u128(d.digits);
+    let mut high = (sig >> 64) as u64;
+    let low = (sig & 0xFFFFFFFFFFFFFFFF) as u64;
+    let biased = (d.exp + DEC_BIAS) as u64;
+    if high >> 49 == 1 {
+        high = high & 0x7FFFFFFFFFFF;
+        high = high | DEC_EXP_MASK;
+        high = high | ((biased & 0x3FFF) << 47);
+    } else {
+        high = high | (biased << 49);
+    }
+    (high | sign, low)
+}
+
+// Decimal128.to_decimal()
+fn dec_from_bid(high: u64, low: u64) -> Result[Decn, Exc] {
+    let neg = (high & DEC_SIGN) != 0;
+    if (high & DEC_SNAN) == DEC_SNAN {
+        return Ok(Decn { kind: 3, neg: neg, digits: "0".to_string(), exp: 0 });
+    }
+    if (high & DEC_NAN) == DEC_NAN {
+        return Ok(Decn { kind: 2, neg: neg, digits: "0".to_string(), exp: 0 });
+    }
+    if (high & DEC_INF) == DEC_INF {
+        return Ok(Decn { kind: 1, neg: neg, digits: "0".to_string(), exp: 0 });
+    }
+    if (high & DEC_EXP_MASK) == DEC_EXP_MASK {
+        let e = ((high & 0x1FFFE00000000000) >> 47) as i64 - DEC_BIAS;
+        return Ok(Decn { kind: 0, neg: neg, digits: "0".to_string(), exp: e });
+    }
+    let e = ((high & 0x7FFF800000000000) >> 49) as i64 - DEC_BIAS;
+    let sig = (((high & 0x1FFFFFFFFFFFF) as u128) << 64) | (low as u128);
+    dec_fix(neg, u128_digits(sig), e as i128)
+}
+
+// str(Decimal): the to-scientific-string conversion.
+fn dec_str(d: ref Decn) -> String {
+    let sign = if d.neg { "-" } else { "" };
+    if d.kind == 1 {
+        return f"{sign}Infinity";
+    }
+    if d.kind == 2 {
+        return f"{sign}NaN";
+    }
+    if d.kind == 3 {
+        return f"{sign}sNaN";
+    }
+    let digits = d.digits.clone();
+    let n = digits.len() as i64;
+    let leftdigits = d.exp + n;
+    let dotplace = if d.exp <= 0 and leftdigits > -6 { leftdigits } else { 1 };
+    let mut intpart = String.new();
+    let mut fracpart = String.new();
+    if dotplace <= 0 {
+        intpart.push('0');
+        fracpart.push('.');
+        let mut k = dotplace;
+        while k < 0 {
+            fracpart.push('0');
+            k += 1;
+        }
+        fracpart.push_str(digits);
+    } else if dotplace >= n {
+        intpart.push_str(digits);
+        let mut k = n;
+        while k < dotplace {
+            intpart.push('0');
+            k += 1;
+        }
+    } else {
+        intpart.push_str(digits[..dotplace as usize]);
+        fracpart.push('.');
+        fracpart.push_str(digits[dotplace as usize..]);
+    }
+    let mut out = f"{sign}{intpart}{fracpart}";
+    if leftdigits != dotplace {
+        let e = leftdigits - dotplace;
+        if e >= 0 {
+            out.push_str(f"E+{e}");
+        } else {
+            out.push_str(f"E{e}");
+        }
+    }
+    out
+}
+
+// str(Decimal128): every NaN prints as NaN.
+fn dec128_str(high: u64, low: u64) -> Result[String, Exc] {
+    let d = dec_from_bid(high, low)?;
+    if d.kind >= 2 {
+        return Ok("NaN".to_string());
+    }
+    Ok(dec_str(d))
+}
+
+fn bid_bytes(high: u64, low: u64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    push_u64(mut out, low);
+    push_u64(mut out, high);
+    out
+}
+
+fn push_u64(out: mut ref Vec[u8], v: u64) {
+    let mut i: u64 = 0;
+    while i < 8 {
+        out.push(((v >> (i * 8)) & 0xFF) as u8);
+        i += 1;
+    }
+}
+
+fn read_u64(b: ref Vec[u8], at: i64) -> u64 {
+    let mut v: u64 = 0;
+    let mut i: i64 = 7;
+    while i >= 0 {
+        v = (v << 8) | (b[at + i] as u64);
+        i -= 1;
+    }
+    v
+}
+
+// ---- dates: naive datetimes as microseconds since the epoch ----
+
+const US_PER_DAY: i128 = 86400000000;
+// datetime.min and datetime.max as microseconds
+const MIN_US: i64 = -62135596800000000;
+const MAX_US: i64 = 253402300799999999;
+const INT_MAX: i128 = 2147483647;
+
+const DT_SUGGESTION: Str = "(Consider Using CodecOptions(datetime_conversion=DATETIME_AUTO) or MongoClient(datetime_conversion='DATETIME_AUTO')). See: https://www.mongodb.com/docs/languages/python/pymongo-driver/current/data-formats/dates-and-times/#handling-out-of-range-datetimes";
+
+fn floor_div(a: i128, b: i128) -> i128 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = if y >= 0 { y / 400 } else { (y - 399) / 400 };
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        return if is_leap(y) { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+// (year, month, day, hour, minute, second, microsecond)
+#[derive(Clone)]
+struct Parts {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+}
+
+fn dt_parts(t: i64) -> Parts {
+    let days = floor_div(t as i128, US_PER_DAY) as i64;
+    let rem = t - days * (US_PER_DAY as i64);
+    let (y, mo, d) = civil_from_days(days);
+    let secs = rem / 1000000;
+    Parts { y: y, mo: mo, d: d, h: secs / 3600, mi: (secs / 60) % 60, s: secs % 60, us: rem % 1000000 }
+}
+
+fn pad(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while (s.len() as i64) < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn dt_repr(t: i64) -> String {
+    let p = dt_parts(t);
+    let mut out = f"datetime.datetime({p.y}, {p.mo}, {p.d}, {p.h}, {p.mi}";
+    if p.us != 0 {
+        out.push_str(f", {p.s}, {p.us}");
+    } else if p.s != 0 {
+        out.push_str(f", {p.s}");
+    }
+    out.push(')');
+    out
+}
+
+fn dt_ymdhms(p: ref Parts) -> String {
+    f"{pad(p.y, 4)}-{pad(p.mo, 2)}-{pad(p.d, 2)}T{pad(p.h, 2)}:{pad(p.mi, 2)}:{pad(p.s, 2)}"
+}
+
+// datetime.isoformat() of an aware UTC datetime with no microseconds
+fn dt_isoformat_utc(t: i64) -> String {
+    let p = dt_parts(t);
+    f"{dt_ymdhms(p)}+00:00"
+}
+
+// json_util's ISO-8601 form: milliseconds when nonzero, then Z
+fn dt_iso_z(t: i64) -> String {
+    let p = dt_parts(t);
+    let millis = p.us / 1000;
+    let frac = if millis != 0 { f".{pad(millis, 3)}" } else { String.new() };
+    f"{dt_ymdhms(p)}{frac}Z"
+}
+
+fn dt_millis(t: i64) -> i64 {
+    floor_div(t as i128, 1000) as i64
+}
+
+// EPOCH + timedelta(microseconds=us), with timedelta's and datetime's
+// overflow errors.
+fn epoch_plus(us: i128) -> Result[i64, String] {
+    let days = floor_div(us, US_PER_DAY);
+    if days > INT_MAX or days < -INT_MAX - 1 {
+        return Err("Python int too large to convert to C int".to_string());
+    }
+    if days > 999999999 or days < -999999999 {
+        return Err(f"days={days}; must have magnitude <= 999999999");
+    }
+    if us < MIN_US as i128 or us > MAX_US as i128 {
+        return Err("date value out of range".to_string());
+    }
+    Ok(us as i64)
+}
+
+// _millis_to_datetime
+fn millis_to_datetime(millis: i128, opts: ref Opts) -> Result[Val, Exc] {
+    if opts.datetime == DT_MS {
+        return Ok(Val.DtMs(millis as i64));
+    }
+    let mut m = millis;
+    if opts.datetime == DT_CLAMP {
+        if m < MIN_UTC_MS as i128 {
+            m = MIN_UTC_MS as i128;
+        }
+        if m > MAX_UTC_MS as i128 {
+            m = MAX_UTC_MS as i128;
+        }
+    } else if opts.datetime == DT_AUTO {
+        if m < MIN_UTC_MS as i128 or m > MAX_UTC_MS as i128 {
+            return Ok(Val.DtMs(m as i64));
+        }
+    }
+    if m > BIG_INT / 100000 or m < -BIG_INT / 100000 {
+        return Err(invalid_bson(f"Python int too large to convert to C int {DT_SUGGESTION}"));
+    }
+    match epoch_plus(m * 1000) {
+        Ok(t) => Ok(Val.Dt(t)),
+        Err(e) => Err(invalid_bson(f"{e} {DT_SUGGESTION}")),
+    }
+}
+
+// ---- datetime.strptime(s, "%Y-%m-%dT%H:%M:%S") ----
+
+// _strptime's regex for the format, IGNORECASE, as a list of fields; each
+// field's alternatives are tried in order, as the regex engine does.
+// A pattern char: 'd' any digit, a digit range "lo hi" pair otherwise.
+fn field_alts(f: i64) -> Vec[Vec[(char, char)]] {
+    let dig = ('0', '9');
+    if f == 0 {
+        return [[dig, dig, dig, dig].to_vec()].to_vec();
+    }
+    if f == 1 {
+        return [[('1', '1'), ('0', '2')].to_vec(), [('0', '0'), ('1', '9')].to_vec(), [('1', '9')].to_vec()].to_vec();
+    }
+    if f == 2 {
+        return [
+            [('3', '3'), ('0', '1')].to_vec(),
+            [('1', '2'), dig].to_vec(),
+            [('0', '0'), ('1', '9')].to_vec(),
+            [('1', '9')].to_vec(),
+            [(' ', ' '), ('1', '9')].to_vec(),
+        ].to_vec();
+    }
+    if f == 3 {
+        return [[('2', '2'), ('0', '3')].to_vec(), [('0', '1'), dig].to_vec(), [dig].to_vec()].to_vec();
+    }
+    if f == 4 {
+        return [[('0', '5'), dig].to_vec(), [dig].to_vec()].to_vec();
+    }
+    [[('6', '6'), ('0', '1')].to_vec(), [('0', '5'), dig].to_vec(), [dig].to_vec()].to_vec()
+}
+
+// The literal after field f: '-' '-' 'T' ':' ':' and none after seconds.
+fn field_sep(f: i64) -> char {
+    if f == 0 or f == 1 {
+        return '-';
+    }
+    if f == 2 {
+        return 'T';
+    }
+    ':'
+}
+
+fn match_fields(cs: ref Vec[char], pos: i64, f: i64, out: mut ref Vec[i64]) -> i64 {
+    if f == 6 {
+        return pos;
+    }
+    let n = cs.len() as i64;
+    for alt in field_alts(f) {
+        let k = alt.len() as i64;
+        if pos + k > n {
+            continue;
+        }
+        let mut ok = true;
+        let mut j: i64 = 0;
+        while j < k {
+            let c = cs[pos + j];
+            if c < alt[j].0 or c > alt[j].1 {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if not ok {
+            continue;
+        }
+        let mut next = pos + k;
+        if f < 5 {
+            if next >= n {
+                continue;
+            }
+            let sep = field_sep(f);
+            let c = cs[next];
+            if not (c == sep or (sep == 'T' and c == 't')) {
+                continue;
+            }
+            next += 1;
+        }
+        let mut v: i64 = 0;
+        let mut q: i64 = 0;
+        while q < k {
+            let c = cs[pos + q];
+            if c != ' ' {
+                v = v * 10 + (c as i64 - 48);
+            }
+            q += 1;
+        }
+        out.push(v);
+        let end = match_fields(cs, next, f + 1, mut out);
+        if end >= 0 {
+            return end;
+        }
+        out.pop();
+    }
+    -1
+}
+
+// datetime.strptime(s, '%Y-%m-%dT%H:%M:%S') as microseconds
+fn strptime(s: Str) -> Result[i64, Exc] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut vals: Vec[i64] = Vec.new();
+    let end = match_fields(cs, 0, 0, mut vals);
+    if end < 0 {
+        return Err(value_error(f"time data {py_str_repr(s)} does not match format '%Y-%m-%dT%H:%M:%S'"));
+    }
+    if end != cs.len() as i64 {
+        return Err(value_error(f"unconverted data remains: {char_slice(cs, end, cs.len() as i64)}"));
+    }
+    let y = vals[0];
+    let mo = vals[1];
+    let d = vals[2];
+    if y < 1 {
+        return Err(value_error(f"year {y} is out of range"));
+    }
+    if d > days_in_month(y, mo) {
+        return Err(value_error("day is out of range for month"));
+    }
+    if vals[5] > 59 {
+        return Err(value_error("second must be in 0..59"));
+    }
+    let secs = ((vals[3] * 60 + vals[4]) * 60 + vals[5]) as i128;
+    Ok(((days_from_civil(y, mo, d) as i128) * US_PER_DAY + secs * 1000000) as i64)
+}
+
+// _parse_canonical_datetime on a str: an offset suffix, fractional
+// seconds, strptime, then the offset applied.
+fn parse_iso_date(dtm: Str) -> Result[i64, Exc] {
+    let cs: Vec[char] = dtm.chars().collect();
+    let n = cs.len() as i64;
+    let mut cut = n;
+    if char_at(dtm, -1)? == 'Z' {
+        cut = n - 1;
+    } else {
+        let c6 = char_at(dtm, -6)?;
+        if (c6 == '+' or c6 == '-') and char_at(dtm, -3)? == ':' {
+            cut = n - 6;
+        } else {
+            let c5 = char_at(dtm, -5)?;
+            if c5 == '+' or c5 == '-' {
+                cut = n - 5;
+            } else {
+                let c3 = char_at(dtm, -3)?;
+                if c3 == '+' or c3 == '-' {
+                    cut = n - 3;
+                }
+            }
+        }
+    }
+    let mut dt = char_slice(cs, 0, cut);
+    let offset = char_slice(cs, cut, n);
+    let dcs: Vec[char] = dt.chars().collect();
+    let mut dot: i64 = -1;
+    let mut i = dcs.len() as i64 - 1;
+    while i >= 0 {
+        if dcs[i] == '.' {
+            dot = i;
+            break;
+        }
+        i -= 1;
+    }
+    let mut micro: i128 = 0;
+    if dot != -1 {
+        let f = py_float(char_slice(dcs, dot, dcs.len() as i64))?;
+        micro = float_to_int(f * 1000000.0)?;
+        dt = char_slice(dcs, 0, dot);
+    }
+    let mut t = strptime(dt)?;
+    if micro < 0 or micro > 999999 {
+        return Err(value_error("microsecond must be in 0..999999"));
+    }
+    t += micro as i64;
+    if offset.len() > 0 and offset != "Z" {
+        let ocs: Vec[char] = offset.chars().collect();
+        let ol = ocs.len() as i64;
+        let mut secs: i128 = 0;
+        if ol == 6 {
+            let body = char_slice(ocs, 1, 6);
+            let halves: Vec[String] = body.split(":").map(|x| x.to_string()).collect();
+            if halves.len() != 2 {
+                return Err(value_error(f"not enough values to unpack (expected 2, got {halves.len()})"));
+            }
+            secs = py_int(halves[0], 10)? * 3600 + py_int(halves[1], 10)? * 60;
+        } else if ol == 5 {
+            secs = py_int(char_slice(ocs, 1, 3), 10)? * 3600 + py_int(char_slice(ocs, 3, 5), 10)? * 60;
+        } else if ol == 3 {
+            secs = py_int(char_slice(ocs, 1, 3), 10)? * 3600;
+        }
+        if ocs[0] == '-' {
+            secs = -secs;
+        }
+        let shifted = (t as i128) - secs * 1000000;
+        if shifted < MIN_US as i128 or shifted > MAX_US as i128 {
+            return Err(exc("OverflowError", "date value out of range"));
+        }
+        t = shifted as i64;
+    }
+    Ok(t)
+}
+
+// ---- repr() and str() of a value ----
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// repr(re.RegexFlag) as Regex's repr prints it
+fn flags_repr(flags: i64) -> String {
+    if flags == 0 {
+        return "0".to_string();
+    }
+    let names = [(RE_I, "IGNORECASE"), (RE_L, "LOCALE"), (RE_U, "UNICODE"), (RE_M, "MULTILINE"), (RE_S, "DOTALL"), (RE_X, "VERBOSE")];
+    let mut parts: Vec[String] = Vec.new();
+    for (bit, name) in names {
+        if flags & bit != 0 {
+            parts.push(f"re.{name}");
+        }
+    }
+    parts.join("|")
+}
+
+fn uuid_str(b: ref Vec[u8]) -> String {
+    let h = hex_of(b);
+    f"{h[0..8]}-{h[8..12]}-{h[12..16]}-{h[16..20]}-{h[20..32]}"
+}
+
+fn dict_repr(d: ref Vec[(String, Val)]) -> Result[String, Exc] {
+    let mut parts: Vec[String] = Vec.new();
+    for p in d {
+        parts.push(f"{py_str_repr(p.0)}: {py_repr(p.1)?}");
+    }
+    Ok(f"{{{parts.join(", ")}}}")
+}
+
+fn py_repr(v: ref Val) -> Result[String, Exc] {
+    let s = match v {
+        Val.Null => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Int64(n) => f"{n}",
+        Val.Float(x) => float_repr(*x),
+        Val.Str(s) => py_str_repr(s),
+        Val.Bytes(b) => py_bytes_repr(b),
+        Val.Binary(b, st) => if *st == 8 { "<Binary(REDACTED, 8)>".to_string() } else { f"Binary({py_bytes_repr(b)}, {st})" },
+        Val.Uuid(b) => f"UUID('{uuid_str(b)}')",
+        Val.Oid(b) => f"ObjectId('{hex_of(b)}')",
+        Val.Dt(t) => dt_repr(*t),
+        Val.DtMs(m) => f"DatetimeMS({m})",
+        Val.Regex(p, f) => f"Regex({py_str_repr(p)}, {flags_repr(*f)})",
+        Val.Code(c, scope) => match scope {
+            Some(d) => f"Code({py_str_repr(c)}, {dict_repr(d)?})",
+            None => f"Code({py_str_repr(c)}, None)",
+        },
+        Val.Ts(t, i) => f"Timestamp({t}, {i})",
+        Val.Dec(h, l) => f"Decimal128('{dec128_str(*h, *l)?}')",
+        Val.MinKey => "MinKey()".to_string(),
+        Val.MaxKey => "MaxKey()".to_string(),
+        Val.DbRef(coll, id, db, extra) => {
+            let mut out = f"DBRef({py_str_repr(coll)}, {py_repr(id[0])?}";
+            if let Some(name) = db {
+                out.push_str(f", {py_str_repr(name)}");
+            }
+            for p in extra {
+                out.push_str(f", {p.0}={py_repr(p.1)?}");
+            }
+            out.push(')');
+            out
+        },
+        Val.Dict(d) => dict_repr(d)?,
+        Val.List(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in items {
+                parts.push(py_repr(x)?);
+            }
+            f"[{parts.join(", ")}]"
+        },
+    };
+    Ok(s)
+}
+
+// str(v)
+fn py_str(v: ref Val) -> Result[String, Exc] {
+    match v {
+        Val.Str(s) => Ok(s.clone()),
+        Val.Code(c, _) => Ok(c.clone()),
+        Val.Oid(b) => Ok(hex_of(b)),
+        Val.Dec(h, l) => dec128_str(*h, *l),
+        Val.Uuid(b) => Ok(uuid_str(b)),
+        Val.Dt(t) => {
+            let p = dt_parts(*t);
+            let base = f"{pad(p.y, 4)}-{pad(p.mo, 2)}-{pad(p.d, 2)} {pad(p.h, 2)}:{pad(p.mi, 2)}:{pad(p.s, 2)}";
+            Ok(if p.us != 0 { f"{base}.{pad(p.us, 6)}" } else { base })
+        },
+        _ => py_repr(v),
+    }
+}
+
+// SON(...) repr, for the $dbPointer errors
+fn son_repr(d: ref Vec[(String, Val)]) -> Result[String, Exc] {
+    let mut parts: Vec[String] = Vec.new();
+    for p in d {
+        parts.push(f"({py_str_repr(p.0)}, {py_repr(p.1)?})");
+    }
+    Ok(f"SON([{parts.join(", ")}])")
+}
+
+// DBRef.as_doc()
+fn dbref_doc(coll: ref String, id: ref Vec[Val], db: ref Option[String], extra: ref Vec[(String, Val)]) -> Vec[(String, Val)] {
+    let mut d: Vec[(String, Val)] = Vec.new();
+    d.push(("$ref".to_string(), Val.Str(coll.clone())));
+    d.push(("$id".to_string(), id[0].clone()));
+    if let Some(name) = db {
+        d.push(("$db".to_string(), Val.Str(name.clone())));
+    }
+    for p in extra {
+        dict_set(mut d, p.0, p.1.clone());
+    }
+    d
+}
+
+// len(v)
+fn py_len(v: ref Val) -> Result[i64, Exc] {
+    match v {
+        Val.Dict(d) => Ok(d.len() as i64),
+        Val.List(x) => Ok(x.len() as i64),
+        Val.Str(s) => Ok(char_count(s)),
+        Val.Code(s, _) => Ok(char_count(s)),
+        Val.Bytes(b) => Ok(b.len() as i64),
+        Val.Binary(b, _) => Ok(b.len() as i64),
+        _ => Err(type_error(f"object of type '{type_name(v)}' has no len()")),
+    }
+}
+
+// int(v) for a value that is not a str
+fn py_int_of(v: ref Val) -> Result[i128, Exc] {
+    match v {
+        Val.Str(s) => py_int(s, 10),
+        Val.Code(s, _) => py_int(s, 10),
+        Val.Float(x) => float_to_int(*x),
+        _ => {
+            if is_int(v) {
+                return Ok(int_value(v));
+            }
+            Err(type_error(f"int() argument must be a string, a bytes-like object or a real number, not '{type_name(v)}'"))
+        },
+    }
+}
+
+// ---- json.loads with json_util's object_hook ----
+
+struct JsonParser {
+    cs: Vec[char],
+    pos: i64,
+}
+
+fn json_err(p: ref JsonParser, what: Str) -> Exc {
+    exc("JSONDecodeError", f"{what}: line 1 column {p.pos + 1} (char {p.pos})")
+}
+
+fn skip_ws(p: mut ref JsonParser) {
+    while p.pos < p.cs.len() as i64 {
+        let c = p.cs[p.pos];
+        if c == ' ' or c == '\t' or c == '\n' or c == '\r' {
+            p.pos += 1;
+        } else {
+            break;
+        }
+    }
+}
+
+fn peek(p: ref JsonParser) -> char {
+    if p.pos < p.cs.len() as i64 { p.cs[p.pos] } else { '\u{0}' }
+}
+
+fn starts_at(p: ref JsonParser, word: Str) -> bool {
+    let mut i = p.pos;
+    for c in word.chars() {
+        if i >= p.cs.len() as i64 or p.cs[i] != c {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn json_loads(s: Str) -> Result[Val, Exc] {
+    let mut p = JsonParser { cs: s.chars().collect(), pos: 0 };
+    skip_ws(mut p);
+    let v = parse_value(mut p)?;
+    skip_ws(mut p);
+    if p.pos != p.cs.len() as i64 {
+        return Err(json_err(p, "Extra data"));
+    }
+    Ok(v)
+}
+
+fn parse_value(p: mut ref JsonParser) -> Result[Val, Exc] {
+    let c = peek(p);
+    if c == '{' {
+        return parse_object(mut p);
+    }
+    if c == '[' {
+        p.pos += 1;
+        let mut items: Vec[Val] = Vec.new();
+        skip_ws(mut p);
+        if peek(p) == ']' {
+            p.pos += 1;
+            return Ok(Val.List(items));
+        }
+        loop {
+            skip_ws(mut p);
+            items.push(parse_value(mut p)?);
+            skip_ws(mut p);
+            let d = peek(p);
+            p.pos += 1;
+            if d == ']' {
+                return Ok(Val.List(items));
+            }
+            if d != ',' {
+                p.pos -= 1;
+                return Err(json_err(p, "Expecting ',' delimiter"));
+            }
+        }
+    }
+    if c == '"' {
+        return Ok(Val.Str(parse_string(mut p)?));
+    }
+    let words = [("true", 0), ("false", 1), ("null", 2), ("NaN", 3), ("Infinity", 4), ("-Infinity", 5)];
+    for (w, k) in words {
+        if starts_at(p, w) {
+            p.pos += w.len() as i64;
+            let inf = 1.0e300 * 1.0e300;
+            return Ok(match k {
+                0 => Val.Bool(true),
+                1 => Val.Bool(false),
+                2 => Val.Null,
+                3 => Val.Float(0x7FF8000000000000u64.bits_as_f64()),
+                4 => Val.Float(inf),
+                _ => Val.Float(-inf),
+            });
+        }
+    }
+    parse_number(mut p)
+}
+
+fn parse_number(p: mut ref JsonParser) -> Result[Val, Exc] {
+    let start = p.pos;
+    let n = p.cs.len() as i64;
+    if peek(p) == '-' {
+        p.pos += 1;
+    }
+    if peek(p) == '0' {
+        p.pos += 1;
+    } else if peek(p) >= '1' and peek(p) <= '9' {
+        while p.pos < n and is_digit(p.cs[p.pos]) {
+            p.pos += 1;
+        }
+    } else {
+        p.pos = start;
+        return Err(json_err(p, "Expecting value"));
+    }
+    let mut is_float = false;
+    if peek(p) == '.' and p.pos + 1 < n and is_digit(p.cs[p.pos + 1]) {
+        is_float = true;
+        p.pos += 1;
+        while p.pos < n and is_digit(p.cs[p.pos]) {
+            p.pos += 1;
+        }
+    }
+    if peek(p) == 'e' or peek(p) == 'E' {
+        let save = p.pos;
+        p.pos += 1;
+        if peek(p) == '+' or peek(p) == '-' {
+            p.pos += 1;
+        }
+        if p.pos < n and is_digit(p.cs[p.pos]) {
+            is_float = true;
+            while p.pos < n and is_digit(p.cs[p.pos]) {
+                p.pos += 1;
+            }
+        } else {
+            p.pos = save;
+        }
+    }
+    let text = char_slice(p.cs, start, p.pos);
+    if is_float {
+        return Ok(Val.Float(f64.parse(text).unwrap_or(0.0)));
+    }
+    Ok(Val.Int(py_int(text, 10)?))
+}
+
+fn parse_hex4(p: mut ref JsonParser) -> Result[i64, Exc] {
+    let mut v: i64 = 0;
+    let mut k: i64 = 0;
+    while k < 4 {
+        let d = if p.pos < p.cs.len() as i64 { hex_val(p.cs[p.pos]) } else { -1 };
+        if d < 0 {
+            return Err(json_err(p, "Invalid \\uXXXX escape"));
+        }
+        v = v * 16 + d;
+        p.pos += 1;
+        k += 1;
+    }
+    Ok(v)
+}
+
+fn parse_string(p: mut ref JsonParser) -> Result[String, Exc] {
+    p.pos += 1;
+    let mut out = String.new();
+    loop {
+        if p.pos >= p.cs.len() as i64 {
+            return Err(json_err(p, "Unterminated string starting at"));
+        }
+        let c = p.cs[p.pos];
+        p.pos += 1;
+        if c == '"' {
+            return Ok(out);
+        }
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let e = peek(p);
+        p.pos += 1;
+        if e == 'u' {
+            let mut v = parse_hex4(mut p)?;
+            if v >= 0xD800 and v < 0xDC00 and starts_at(p, "\\u") {
+                let save = p.pos;
+                p.pos += 2;
+                let lo = parse_hex4(mut p)?;
+                if lo >= 0xDC00 and lo < 0xE000 {
+                    v = 0x10000 + (v - 0xD800) * 1024 + (lo - 0xDC00);
+                } else {
+                    p.pos = save;
+                }
+            }
+            out.push(char.try_from(v as u32).unwrap_or('\u{FFFD}'));
+            continue;
+        }
+        let r = match e {
+            '"' => '"',
+            '\\' => '\\',
+            '/' => '/',
+            'b' => '\u{8}',
+            'f' => '\u{C}',
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            _ => {
+                p.pos -= 2;
+                return Err(json_err(p, "Invalid \\escape"));
+            },
+        };
+        out.push(r);
+    }
+}
+
+fn parse_object(p: mut ref JsonParser) -> Result[Val, Exc] {
+    p.pos += 1;
+    let mut d: Vec[(String, Val)] = Vec.new();
+    skip_ws(mut p);
+    if peek(p) == '}' {
+        p.pos += 1;
+        return object_hook(d);
+    }
+    loop {
+        skip_ws(mut p);
+        if peek(p) != '"' {
+            return Err(json_err(p, "Expecting property name enclosed in double quotes"));
+        }
+        let key = parse_string(mut p)?;
+        skip_ws(mut p);
+        if peek(p) != ':' {
+            return Err(json_err(p, "Expecting ':' delimiter"));
+        }
+        p.pos += 1;
+        skip_ws(mut p);
+        let v = parse_value(mut p)?;
+        dict_set(mut d, key, v);
+        skip_ws(mut p);
+        let c = peek(p);
+        p.pos += 1;
+        if c == '}' {
+            return object_hook(d);
+        }
+        if c != ',' {
+            p.pos -= 1;
+            return Err(json_err(p, "Expecting ',' delimiter"));
+        }
+    }
+}
+
+const PARSER_KEYS: Array[Str, 18] = ["$oid", "$ref", "$date", "$regex", "$minKey", "$maxKey", "$binary", "$code", "$uuid", "$undefined", "$numberLong", "$timestamp", "$numberDecimal", "$dbPointer", "$regularExpression", "$symbol", "$numberInt", "$numberDouble"];
+
+// json_util.object_hook: the first key that names a type wrapper picks
+// the parser.
+fn object_hook(d: own Vec[(String, Val)]) -> Result[Val, Exc] {
+    let mut found = String.new();
+    for p in d {
+        for k in PARSER_KEYS {
+            if p.0 == k {
+                found = k.to_string();
+                break;
+            }
+        }
+        if found.len() > 0 {
+            break;
+        }
+    }
+    if found.len() == 0 {
+        return Ok(Val.Dict(d));
+    }
+    let doc = Val.Dict(d.clone());
+    let doc_s = dict_repr(d)?;
+    let n = d.len() as i64;
+    let extra = |name: Str| type_error(f"Bad {name}, extra field(s): {doc_s}");
+    let key = found.as_str();
+    if key == "$oid" {
+        if n != 1 {
+            return Err(extra("$oid"));
+        }
+        return oid_new(dict_get(d, "$oid").unwrap());
+    }
+    if key == "$ref" {
+        let r = dict_get(d, "$ref").unwrap();
+        let db = dict_get(d, "$db").unwrap_or(Val.Null);
+        let db_ok = match db {
+            Val.Str(_) => true,
+            Val.Null => true,
+            _ => false,
+        };
+        if let Val.Str(coll) = r {
+            if dict_has(d, "$id") and db_ok {
+                let mut rest = d;
+                let _ = dict_pop(mut rest, "$ref");
+                let id = dict_pop(mut rest, "$id").unwrap();
+                let name = match dict_pop(mut rest, "$db") {
+                    Some(Val.Str(s)) => Some(s),
+                    _ => None,
+                };
+                return Ok(Val.DbRef(coll, [id].to_vec(), name, rest));
+            }
+        }
+        return Ok(doc);
+    }
+    if key == "$date" {
+        let dtm = dict_get(d, "$date").unwrap();
+        if n != 1 {
+            return Err(extra("$date"));
+        }
+        if let Val.Str(s) = dtm {
+            return Ok(Val.Dt(parse_iso_date(s)?));
+        }
+        return millis_to_datetime(py_int_of(dtm)?, default_opts());
+    }
+    if key == "$regex" {
+        let pattern = dict_get(d, "$regex").unwrap();
+        let pat = match pattern {
+            Val.Str(s) => s,
+            _ => {
+                return Ok(doc);
+            },
+        };
+        let mut flags: i64 = 0;
+        let opts = dict_get(d, "$options").unwrap_or(Val.Str(String.new()));
+        let letters: Vec[String] = match opts {
+            Val.Str(s) => s.chars().map(|c| c.to_string()).collect(),
+            Val.Dict(kv) => kv.iter().map(|q| q.0.clone()).collect(),
+            Val.List(items) => items.iter().map(|x| match x {
+                Val.Str(s) => s.clone(),
+                _ => String.new(),
+            }).collect(),
+            _ => {
+                return Err(type_error(f"'{type_name(opts)}' object is not iterable"));
+            },
+        };
+        for l in letters {
+            flags = flags | flag_bit(l);
+        }
+        return Ok(Val.Regex(pat, flags));
+    }
+    if key == "$minKey" or key == "$maxKey" {
+        let v = dict_get(d, key).unwrap();
+        let ok = match v {
+            Val.Int(x) => x == 1,
+            _ => false,
+        };
+        if not ok {
+            if key == "$minKey" {
+                return Err(type_error(f"$minKey value must be 1: {doc_s}"));
+            }
+            return Err(type_error(f"('$maxKey value must be 1: %s', ({doc_s},))"));
+        }
+        if n != 1 {
+            return Err(extra("$minKey"));
+        }
+        return Ok(if key == "$minKey" { Val.MinKey } else { Val.MaxKey });
+    }
+    if key == "$binary" {
+        if dict_has(d, "$type") {
+            return parse_legacy_binary(d);
+        }
+        return parse_canonical_binary(d, doc_s);
+    }
+    if key == "$code" {
+        for p in d {
+            if p.0 != "$code" and p.0 != "$scope" {
+                return Err(extra("$code"));
+            }
+        }
+        let code = dict_get(d, "$code").unwrap();
+        let scope = dict_get(d, "$scope").unwrap_or(Val.Null);
+        return make_code(code, scope);
+    }
+    if key == "$uuid" {
+        if n != 1 {
+            return Err(extra("$uuid"));
+        }
+        return match dict_get(d, "$uuid").unwrap() {
+            Val.Str(s) => Ok(Val.Binary(uuid_parse(s)?, 4)),
+            _ => Err(type_error(f"$uuid must be a string: {doc_s}")),
+        };
+    }
+    if key == "$undefined" {
+        return Ok(Val.Null);
+    }
+    if key == "$numberLong" {
+        let l = dict_get(d, "$numberLong").unwrap();
+        if n != 1 {
+            return Err(extra("$numberLong"));
+        }
+        return Ok(Val.Int64(py_int_of(l)?));
+    }
+    if key == "$timestamp" {
+        let tsp = dict_get(d, "$timestamp").unwrap();
+        let t = index_key(tsp, "t")?;
+        let i = index_key(tsp, "i")?;
+        return make_timestamp(t, i);
+    }
+    if key == "$numberDecimal" {
+        let v = dict_get(d, "$numberDecimal").unwrap();
+        if n != 1 {
+            return Err(extra("$numberDecimal"));
+        }
+        return match v {
+            Val.Str(s) => {
+                let dec = dec_parse(s)?;
+                let (h, l) = dec_to_bid(dec);
+                Ok(Val.Dec(h, l))
+            },
+            _ => Err(type_error(f"$numberDecimal must be string: {doc_s}")),
+        };
+    }
+    if key == "$dbPointer" {
+        let r = dict_get(d, "$dbPointer").unwrap();
+        if n != 1 {
+            return Err(extra("$dbPointer"));
+        }
+        if let Val.DbRef(coll, id, db, rest) = r {
+            let son = son_repr(dbref_doc(coll, id, db, rest))?;
+            if db.is_some() {
+                return Err(type_error(f"Bad $dbPointer, extra field $db: {son}"));
+            }
+            let is_oid = match id[0] {
+                Val.Oid(_) => true,
+                _ => false,
+            };
+            if not is_oid {
+                return Err(type_error(f"Bad $dbPointer, $id must be an ObjectId: {son}"));
+            }
+            if rest.len() > 0 {
+                return Err(type_error(f"Bad $dbPointer, extra field(s) in DBRef: {son}"));
+            }
+            return Ok(Val.DbRef(coll, id, db, rest));
+        }
+        return Err(type_error(f"Bad $dbPointer, expected a DBRef: {doc_s}"));
+    }
+    if key == "$regularExpression" {
+        let regex = dict_get(d, "$regularExpression").unwrap();
+        if n != 1 {
+            return Err(extra("$regularExpression"));
+        }
+        if py_len(regex)? != 2 {
+            return Err(type_error(f"Bad $regularExpression must include only \"pattern and \"options\" components: {doc_s}"));
+        }
+        let opts = index_key(regex, "options")?;
+        let flags = match opts {
+            Val.Str(s) => str_flags_to_int(s),
+            _ => {
+                return Err(type_error(f"Bad $regularExpression options, options must be string, was type {class_repr(opts)}"));
+            },
+        };
+        let pattern = index_key(regex, "pattern")?;
+        return match pattern {
+            Val.Str(s) => Ok(Val.Regex(s, flags)),
+            _ => Err(type_error(f"pattern must be a string, not {class_repr(pattern)}")),
+        };
+    }
+    if key == "$symbol" {
+        let v = dict_get(d, "$symbol").unwrap();
+        if n != 1 {
+            return Err(extra("$symbol"));
+        }
+        return Ok(Val.Str(py_str(v)?));
+    }
+    if key == "$numberInt" {
+        let v = dict_get(d, "$numberInt").unwrap();
+        if n != 1 {
+            return Err(extra("$numberInt"));
+        }
+        return match v {
+            Val.Str(s) => Ok(Val.Int(py_int(s, 10)?)),
+            _ => Err(type_error(f"$numberInt must be string: {doc_s}")),
+        };
+    }
+    // $numberDouble
+    let v = dict_get(d, "$numberDouble").unwrap();
+    if n != 1 {
+        return Err(extra("$numberDouble"));
+    }
+    match v {
+        Val.Str(s) => Ok(Val.Float(py_float(s)?)),
+        _ => Err(type_error(f"$numberDouble must be string: {doc_s}")),
+    }
+}
+
+fn flag_bit(l: Str) -> i64 {
+    if l == "i" {
+        return RE_I;
+    }
+    if l == "l" {
+        return RE_L;
+    }
+    if l == "m" {
+        return RE_M;
+    }
+    if l == "s" {
+        return RE_S;
+    }
+    if l == "u" {
+        return RE_U;
+    }
+    if l == "x" {
+        return RE_X;
+    }
+    0
+}
+
+// regex.str_flags_to_int
+fn str_flags_to_int(s: Str) -> i64 {
+    let mut flags: i64 = 0;
+    for c in s.chars() {
+        flags = flags | flag_bit(c.to_string());
+    }
+    flags
+}
+
+// Code(code, scope=scope)
+fn make_code(code: own Val, scope: own Val) -> Result[Val, Exc] {
+    let (text, own0) = match code {
+        Val.Str(s) => (s, None),
+        Val.Code(s, sc) => (s, sc),
+        _ => {
+            return Err(type_error("code must be an instance of str"));
+        },
+    };
+    let mut own = own0;
+    match scope {
+        Val.Null => {},
+        Val.Dict(d) => {
+            own = match own {
+                Some(mine0) => {
+                    let mut mine = mine0;
+                    for (k, v) in d.into_iter() {
+                        dict_set(mut mine, k, v);
+                    }
+                    Some(mine)
+                },
+                None => Some(d),
+            };
+        },
+        _ => {
+            return Err(type_error("scope must be an instance of dict"));
+        },
+    }
+    Ok(Val.Code(text, own))
+}
+
+// Timestamp(time, inc)
+fn make_timestamp(t: Val, i: Val) -> Result[Val, Exc] {
+    if not is_int(t) {
+        return Err(type_error("time must be an instance of int"));
+    }
+    if not is_int(i) {
+        return Err(type_error("inc must be an instance of int"));
+    }
+    let tv = int_value(t);
+    let iv = int_value(i);
+    if tv < 0 or tv >= 4294967296 {
+        return Err(value_error("time must be contained in [0, 2**32)"));
+    }
+    if iv < 0 or iv >= 4294967296 {
+        return Err(value_error("inc must be contained in [0, 2**32)"));
+    }
+    Ok(Val.Ts(tv as i64, iv as i64))
+}
+
+// Binary(data, subtype), or bytes for subtype 0
+fn make_binary(data: own Vec[u8], subtype: i128) -> Result[Val, Exc] {
+    if subtype == 0 {
+        return Ok(Val.Bytes(data));
+    }
+    if subtype >= 256 or subtype < 0 {
+        return Err(value_error("subtype must be contained in [0, 256)"));
+    }
+    Ok(Val.Binary(data, subtype as i64))
+}
+
+// "%02x" % n
+fn fmt_02x(n: i128) -> String {
+    if n < 0 {
+        return f"-{hex_n((-n) as i64, 1)}";
+    }
+    hex_n(n as i64, 2)
+}
+
+fn parse_legacy_binary(d: ref Vec[(String, Val)]) -> Result[Val, Exc] {
+    let t = dict_get(d, "$type").unwrap();
+    let ts = match t {
+        Val.Str(s) => s,
+        _ => {
+            if is_int(t) {
+                fmt_02x(int_value(t))
+            } else {
+                return Err(type_error("int() can't convert non-string with explicit base"));
+            }
+        },
+    };
+    let mut subtype = py_int(ts, 16)?;
+    if subtype >= 0xFFFFFF80 {
+        let cs: Vec[char] = ts.chars().collect();
+        let n = cs.len() as i64;
+        subtype = py_int(char_slice(cs, if n < 6 { n } else { 6 }, n), 16)?;
+    }
+    let b = dict_get(d, "$binary").unwrap();
+    let text = match b {
+        Val.Str(s) => s,
+        _ => {
+            return Err(exc("AttributeError", f"'{type_name(b)}' object has no attribute 'encode'"));
+        },
+    };
+    make_binary(b64decode(text.bytes().to_vec())?, subtype)
+}
+
+fn parse_canonical_binary(d: ref Vec[(String, Val)], doc_s: ref String) -> Result[Val, Exc] {
+    let binary = dict_get(d, "$binary").unwrap();
+    let b64 = index_key(binary, "base64")?;
+    let subtype = index_key(binary, "subType")?;
+    let text = match b64 {
+        Val.Str(s) => s,
+        _ => {
+            return Err(type_error(f"$binary base64 must be a string: {doc_s}"));
+        },
+    };
+    let (st, st_ok) = match subtype {
+        Val.Str(s) => {
+            let ok = char_count(s) <= 2;
+            (s, ok)
+        },
+        _ => (String.new(), false),
+    };
+    if not st_ok {
+        return Err(type_error(f"$binary subType must be a string at most 2 characters: {doc_s}"));
+    }
+    if py_len(binary)? != 2 {
+        return Err(type_error(f"$binary must include only \"base64\" and \"subType\" components: {doc_s}"));
+    }
+    let data = b64decode(text.bytes().to_vec())?;
+    make_binary(data, py_int(st, 16)?)
+}
+
+// ---- json_util.dumps in canonical, relaxed and legacy mode ----
+
+fn dumps(v: ref Val, mode: i64) -> Result[String, Exc] {
+    let mut out = String.new();
+    dump_val(v, mode, mut out)?;
+    Ok(out)
+}
+
+fn dump_dict(d: ref Vec[(String, Val)], mode: i64, out: mut ref String) -> Result[(), Exc] {
+    out.push('{');
+    let mut first = true;
+    for p in d {
+        if not first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(json_str(p.0));
+        out.push_str(": ");
+        dump_val(p.1, mode, mut out)?;
+    }
+    out.push('}');
+    Ok(())
+}
+
+fn dump_binary(b: ref Vec[u8], st: i64, mode: i64, out: mut ref String) {
+    let enc = b64encode(b);
+    let sub = hex_n(st, 2);
+    if mode == MODE_LEGACY {
+        out.push_str(f"{{\"$binary\": \"{enc}\", \"$type\": \"{sub}\"}}");
+    } else {
+        out.push_str(f"{{\"$binary\": {{\"base64\": \"{enc}\", \"subType\": \"{sub}\"}}}}");
+    }
+}
+
+fn dump_date(t: i64, mode: i64, out: mut ref String) {
+    if mode == MODE_RELAXED and t >= 0 {
+        out.push_str(f"{{\"$date\": \"{dt_iso_z(t)}\"}}");
+        return;
+    }
+    let millis = dt_millis(t);
+    if mode == MODE_LEGACY {
+        out.push_str(f"{{\"$date\": {millis}}}");
+    } else {
+        out.push_str(f"{{\"$date\": {{\"$numberLong\": \"{millis}\"}}}}");
+    }
+}
+
+fn dump_val(v: ref Val, mode: i64, out: mut ref String) -> Result[(), Exc] {
+    match v {
+        Val.Null => out.push_str("null"),
+        Val.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Val.Int(n) => {
+            if mode == MODE_CANONICAL {
+                if *n >= -2147483648 and *n < 2147483648 {
+                    out.push_str(f"{{\"$numberInt\": \"{n}\"}}");
+                } else {
+                    out.push_str(f"{{\"$numberLong\": \"{n}\"}}");
+                }
+            } else {
+                out.push_str(f"{n}");
+            }
+        },
+        Val.Int64(n) => {
+            if mode == MODE_CANONICAL {
+                out.push_str(f"{{\"$numberLong\": \"{n}\"}}");
+            } else {
+                out.push_str(f"{n}");
+            }
+        },
+        Val.Float(x) => {
+            let inf = 1.0e300 * 1.0e300;
+            let special = if *x != *x {
+                "NaN"
+            } else if *x == inf {
+                "Infinity"
+            } else if *x == -inf {
+                "-Infinity"
+            } else {
+                ""
+            };
+            if mode != MODE_LEGACY and special.len() > 0 {
+                out.push_str(f"{{\"$numberDouble\": \"{special}\"}}");
+            } else if mode == MODE_CANONICAL {
+                out.push_str(f"{{\"$numberDouble\": \"{float_repr(*x)}\"}}");
+            } else if special.len() > 0 {
+                out.push_str(special);
+            } else {
+                out.push_str(float_repr(*x));
+            }
+        },
+        Val.Str(s) => out.push_str(json_str(s)),
+        Val.Bytes(b) => dump_binary(b, 0, mode, mut out),
+        Val.Binary(b, st) => dump_binary(b, *st, mode, mut out),
+        Val.Uuid(b) => {
+            if mode == MODE_LEGACY {
+                out.push_str(f"{{\"$uuid\": \"{hex_of(b)}\"}}");
+            } else {
+                return Err(uuid_unspecified());
+            }
+        },
+        Val.Oid(b) => out.push_str(f"{{\"$oid\": \"{hex_of(b)}\"}}"),
+        Val.Dt(t) => dump_date(*t, mode, mut out),
+        Val.DtMs(m) => {
+            if mode == MODE_RELAXED and *m >= 0 and *m <= MAX_UTC_MS {
+                dump_date(*m * 1000, mode, mut out);
+            } else if mode == MODE_LEGACY {
+                out.push_str(f"{{\"$date\": \"{m}\"}}");
+            } else {
+                out.push_str(f"{{\"$date\": {{\"$numberLong\": \"{m}\"}}}}");
+            }
+        },
+        Val.Regex(p, f) => {
+            let mut letters = String.new();
+            for (bit, l) in [(RE_I, 'i'), (RE_L, 'l'), (RE_M, 'm'), (RE_S, 's'), (RE_U, 'u'), (RE_X, 'x')] {
+                if *f & bit != 0 {
+                    letters.push(l);
+                }
+            }
+            if mode == MODE_LEGACY {
+                out.push_str(f"{{\"$regex\": {json_str(p)}, \"$options\": \"{letters}\"}}");
+            } else {
+                out.push_str(f"{{\"$regularExpression\": {{\"pattern\": {json_str(p)}, \"options\": \"{letters}\"}}}}");
+            }
+        },
+        Val.Code(c, scope) => {
+            out.push_str(f"{{\"$code\": {json_str(c)}");
+            if let Some(d) = scope {
+                out.push_str(", \"$scope\": ");
+                dump_dict(d, mode, mut out)?;
+            }
+            out.push('}');
+        },
+        Val.Ts(t, i) => out.push_str(f"{{\"$timestamp\": {{\"t\": {t}, \"i\": {i}}}}}"),
+        Val.Dec(h, l) => out.push_str(f"{{\"$numberDecimal\": \"{dec128_str(*h, *l)?}\"}}"),
+        Val.MinKey => out.push_str("{\"$minKey\": 1}"),
+        Val.MaxKey => out.push_str("{\"$maxKey\": 1}"),
+        Val.DbRef(coll, id, db, extra) => dump_dict(dbref_doc(coll, id, db, extra), mode, mut out)?,
+        Val.Dict(d) => dump_dict(d, mode, mut out)?,
+        Val.List(items) => {
+            out.push('[');
+            let mut first = true;
+            for x in items {
+                if not first {
+                    out.push_str(", ");
+                }
+                first = false;
+                dump_val(x, mode, mut out)?;
+            }
+            out.push(']');
+        },
+    }
+    Ok(())
+}
+
+fn uuid_unspecified() -> Exc {
+    value_error("cannot encode native uuid.UUID with UuidRepresentation.UNSPECIFIED. UUIDs can be manually converted to bson.Binary instances using bson.Binary.from_uuid() or a different UuidRepresentation can be configured. See the documentation for UuidRepresentation for more information.")
+}
+
+// ---- bson.encode ----
+
+fn invalid_doc(msg: Str) -> Exc {
+    exc("InvalidDocument", msg)
+}
+
+fn push_i32(out: mut ref Vec[u8], v: i64) {
+    let u = (v as i128 & 0xFFFFFFFF) as u64;
+    let mut i: u64 = 0;
+    while i < 4 {
+        out.push(((u >> (i * 8)) & 0xFF) as u8);
+        i += 1;
+    }
+}
+
+fn push_i64(out: mut ref Vec[u8], v: i64) {
+    push_u64(mut out, v as u64);
+}
+
+fn push_cstr(out: mut ref Vec[u8], s: Str) {
+    out.extend_from_slice(s.bytes());
+    out.push(0);
+}
+
+// encode(doc): _dict_to_bson at the top level, _id first.
+fn encode_top(v: ref Val, check_keys: bool) -> Result[Vec[u8], Exc] {
+    match v {
+        Val.Dict(d) => encode_dict(d, check_keys, true),
+        Val.Str(s) => {
+            if s.contains("_id") {
+                return Err(type_error("string indices must be integers, not 'str'"));
+            }
+            Err(type_error(f"encoder expected a mapping type but got: {py_repr(v)?}"))
+        },
+        Val.Code(_, _) => Err(type_error(f"encoder expected a mapping type but got: {py_repr(v)?}")),
+        Val.List(items) => {
+            for x in items {
+                if let Val.Str(s) = x {
+                    if s == "_id" {
+                        return Err(type_error("list indices must be integers or slices, not str"));
+                    }
+                }
+            }
+            Err(type_error(f"encoder expected a mapping type but got: {py_repr(v)?}"))
+        },
+        Val.Bytes(_) => Err(type_error("a bytes-like object is required, not 'str'")),
+        Val.Binary(_, _) => Err(type_error("a bytes-like object is required, not 'str'")),
+        _ => Err(type_error(f"argument of type '{type_name(v)}' is not iterable")),
+    }
+}
+
+fn encode_dict(d: ref Vec[(String, Val)], check_keys: bool, top_level: bool) -> Result[Vec[u8], Exc] {
+    let mut body: Vec[u8] = Vec.new();
+    if top_level {
+        if let Some(id) = dict_get(d, "_id") {
+            encode_value(mut body, "_id", id, check_keys)?;
+        }
+    }
+    for p in d {
+        if not top_level or p.0 != "_id" {
+            encode_element(mut body, p.0, p.1, check_keys)?;
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    push_i32(mut out, body.len() as i64 + 5);
+    out.extend_from_slice(body[..]);
+    out.push(0);
+    Ok(out)
+}
+
+// _element_to_bson: the key checks, then the value
+fn encode_element(out: mut ref Vec[u8], key: Str, v: ref Val, check_keys: bool) -> Result[(), Exc] {
+    if check_keys {
+        if key.starts_with("$") {
+            return Err(invalid_doc(f"key {py_str_repr(key)} must not start with '$'"));
+        }
+        if key.contains(".") {
+            return Err(invalid_doc(f"key {py_str_repr(key)} must not contain '.'"));
+        }
+    }
+    if key.contains("\u{0}") {
+        return Err(invalid_doc("BSON keys must not contain a NUL character"));
+    }
+    encode_value(mut out, key, v, check_keys)
+}
+
+fn encode_list(out: mut ref Vec[u8], items: ref Vec[Val], check_keys: bool) -> Result[(), Exc] {
+    let mut body: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    for x in items {
+        encode_value(mut body, f"{i}", x, check_keys)?;
+        i += 1;
+    }
+    push_i32(mut out, body.len() as i64 + 5);
+    out.extend_from_slice(body[..]);
+    out.push(0);
+    Ok(())
+}
+
+fn encode_value(out: mut ref Vec[u8], name: Str, v: ref Val, check_keys: bool) -> Result[(), Exc] {
+    let tag: u8 = match v {
+        Val.Null => 0x0A,
+        Val.Bool(_) => 0x08,
+        Val.Int(n) => if *n >= -2147483648 and *n <= 2147483647 { 0x10 } else { 0x12 },
+        Val.Int64(_) => 0x12,
+        Val.Float(_) => 0x01,
+        Val.Str(_) => 0x02,
+        Val.Bytes(_) => 0x05,
+        Val.Binary(_, _) => 0x05,
+        Val.Uuid(_) => 0x05,
+        Val.Oid(_) => 0x07,
+        Val.Dt(_) => 0x09,
+        Val.DtMs(_) => 0x09,
+        Val.Regex(_, _) => 0x0B,
+        Val.Code(_, scope) => if scope.is_some() { 0x0F } else { 0x0D },
+        Val.Ts(_, _) => 0x11,
+        Val.Dec(_, _) => 0x13,
+        Val.MinKey => 0xFF,
+        Val.MaxKey => 0x7F,
+        Val.DbRef(_, _, _, _) => 0x03,
+        Val.Dict(_) => 0x03,
+        Val.List(_) => 0x04,
+    };
+    // the pieces that can fail come before anything is written
+    match v {
+        Val.Int(n) => {
+            if *n < -9223372036854775808 or *n > 9223372036854775807 {
+                return Err(exc("OverflowError", "BSON can only handle up to 8-byte ints"));
+            }
+        },
+        Val.Int64(n) => {
+            if *n < -9223372036854775808 or *n > 9223372036854775807 {
+                return Err(exc("OverflowError", "BSON can only handle up to 8-byte ints"));
+            }
+        },
+        Val.Uuid(_) => {
+            return Err(uuid_unspecified());
+        },
+        _ => {},
+    }
+    out.push(tag);
+    push_cstr(mut out, name);
+    match v {
+        Val.Null => {},
+        Val.Bool(b) => out.push(if *b { 1 } else { 0 }),
+        Val.Int(n) => {
+            if tag == 0x10 {
+                push_i32(mut out, *n as i64);
+            } else {
+                push_i64(mut out, *n as i64);
+            }
+        },
+        Val.Int64(n) => push_i64(mut out, *n as i64),
+        Val.Float(x) => push_u64(mut out, x.to_bits()),
+        Val.Str(s) => {
+            push_i32(mut out, s.len() as i64 + 1);
+            push_cstr(mut out, s);
+        },
+        Val.Bytes(b) => {
+            push_i32(mut out, b.len() as i64);
+            out.push(0);
+            out.extend_from_slice(b[..]);
+        },
+        Val.Binary(b, st) => {
+            if *st == 2 {
+                push_i32(mut out, b.len() as i64 + 4);
+                out.push(2);
+                push_i32(mut out, b.len() as i64);
+            } else {
+                push_i32(mut out, b.len() as i64);
+                out.push(*st as u8);
+            }
+            out.extend_from_slice(b[..]);
+        },
+        Val.Oid(b) => out.extend_from_slice(b[..]),
+        Val.Dt(t) => push_i64(mut out, dt_millis(*t)),
+        Val.DtMs(m) => push_i64(mut out, *m),
+        Val.Regex(p, f) => {
+            if p.contains("\u{0}") {
+                return Err(invalid_doc("BSON keys / regex patterns must not contain a NUL character"));
+            }
+            push_cstr(mut out, p);
+            let mut letters = String.new();
+            if *f == RE_U {
+                letters.push('u');
+            } else if *f != 0 {
+                for (bit, l) in [(RE_I, 'i'), (RE_L, 'l'), (RE_M, 'm'), (RE_S, 's'), (RE_U, 'u'), (RE_X, 'x')] {
+                    if *f & bit != 0 {
+                        letters.push(l);
+                    }
+                }
+            }
+            push_cstr(mut out, letters);
+        },
+        Val.Code(c, scope) => {
+            let clen = c.len() as i64 + 1;
+            match scope {
+                None => {
+                    push_i32(mut out, clen);
+                    push_cstr(mut out, c);
+                },
+                Some(d) => {
+                    let sb = encode_dict(d, false, false)?;
+                    push_i32(mut out, 8 + clen + sb.len() as i64);
+                    push_i32(mut out, clen);
+                    push_cstr(mut out, c);
+                    out.extend_from_slice(sb[..]);
+                },
+            }
+        },
+        Val.Ts(t, i) => {
+            push_i32(mut out, *i);
+            push_i32(mut out, *t);
+        },
+        Val.Dec(h, l) => {
+            push_u64(mut out, *l);
+            push_u64(mut out, *h);
+        },
+        Val.MinKey => {},
+        Val.MaxKey => {},
+        Val.DbRef(coll, id, db, extra) => {
+            let mut body: Vec[u8] = Vec.new();
+            encode_value(mut body, "$ref", Val.Str(coll.clone()), check_keys)?;
+            encode_value(mut body, "$id", id[0], check_keys)?;
+            if let Some(name) = db {
+                encode_value(mut body, "$db", Val.Str(name.clone()), check_keys)?;
+            }
+            for p in extra {
+                encode_element(mut body, p.0, p.1, check_keys)?;
+            }
+            push_i32(mut out, body.len() as i64 + 5);
+            out.extend_from_slice(body[..]);
+            out.push(0);
+        },
+        Val.Dict(d) => {
+            let sb = encode_dict(d, check_keys, false)?;
+            out.extend_from_slice(sb[..]);
+        },
+        Val.List(items) => encode_list(mut out, items, check_keys)?,
+        Val.Uuid(_) => {},
+    }
+    Ok(())
+}
+
+// ---- bson.decode ----
+
+fn struct_error(msg: Str) -> Exc {
+    exc("error", msg)
+}
+
+// struct.unpack_from's bounds check
+fn check_unpack(data: ref Vec[u8], offset: i64, size: i64) -> Result[i64, Exc] {
+    let len = data.len() as i64;
+    let mut off = offset;
+    if off < 0 {
+        if off + size > 0 {
+            return Err(struct_error(f"not enough data to unpack {size} bytes at offset {off}"));
+        }
+        if off + len < 0 {
+            return Err(struct_error(f"offset {off} out of range for {len}-byte buffer"));
+        }
+        off += len;
+    }
+    if len - off < size {
+        return Err(struct_error(f"unpack_from requires a buffer of at least {size + off} bytes for unpacking {size} bytes at offset {off} (actual buffer size is {len})"));
+    }
+    Ok(off)
+}
+
+fn le_at(data: ref Vec[u8], at: i64, size: i64) -> u64 {
+    let mut v: u64 = 0;
+    let mut i = size - 1;
+    while i >= 0 {
+        v = (v << 8) | (data[at + i] as u64);
+        i -= 1;
+    }
+    v
+}
+
+fn i32_from(data: ref Vec[u8], offset: i64) -> Result[i64, Exc] {
+    let at = check_unpack(data, offset, 4)?;
+    let u = le_at(data, at, 4) as i64;
+    Ok(if u >= 2147483648 { u - 4294967296 } else { u })
+}
+
+fn i64_from(data: ref Vec[u8], offset: i64) -> Result[i64, Exc] {
+    let at = check_unpack(data, offset, 8)?;
+    Ok(le_at(data, at, 8) as i64)
+}
+
+// data[i] on bytes
+fn byte_at(data: ref Vec[u8], i: i64) -> Result[i64, Exc] {
+    let n = data.len() as i64;
+    let k = if i < 0 { i + n } else { i };
+    if k < 0 or k >= n {
+        return Err(exc("IndexError", "index out of range"));
+    }
+    Ok(data[k] as i64)
+}
+
+// data[a:b] on bytes
+fn py_slice(data: ref Vec[u8], a0: i64, b0: i64) -> Vec[u8] {
+    let n = data.len() as i64;
+    let mut a = if a0 < 0 { a0 + n } else { a0 };
+    let mut b = if b0 < 0 { b0 + n } else { b0 };
+    if a < 0 {
+        a = 0;
+    }
+    if b > n {
+        b = n;
+    }
+    if a > n {
+        a = n;
+    }
+    if b <= a {
+        return Vec.new();
+    }
+    data[a..b].to_vec()
+}
+
+// data.index(b"\x00", start)
+fn find_nul(data: ref Vec[u8], start: i64) -> Result[i64, Exc] {
+    let n = data.len() as i64;
+    let mut i = if start < 0 { if start + n < 0 { 0 } else { start + n } } else { start };
+    while i < n {
+        if data[i] == 0 {
+            return Ok(i);
+        }
+        i += 1;
+    }
+    Err(value_error("subsection not found"))
+}
+
+fn get_c_string(data: ref Vec[u8], pos: i64) -> Result[(String, i64), Exc] {
+    let end = find_nul(data, pos)?;
+    let s = utf8_decode(data, pos, end)?;
+    Ok((s, end + 1))
+}
+
+fn get_string(data: ref Vec[u8], pos0: i64, obj_end: i64) -> Result[(String, i64), Exc] {
+    let length = i32_from(data, pos0)?;
+    let pos = pos0 + 4;
+    if length < 1 or obj_end - pos < length {
+        return Err(invalid_bson("invalid string length"));
+    }
+    let end = pos + length - 1;
+    if byte_at(data, end)? != 0 {
+        return Err(invalid_bson("invalid end of string"));
+    }
+    let s = utf8_decode(data, pos, end)?;
+    Ok((s, end + 1))
+}
+
+fn get_object_size(data: ref Vec[u8], pos: i64, obj_end: i64) -> Result[(i64, i64), Exc] {
+    let size = match i32_from(data, pos) {
+        Ok(x) => x,
+        Err(e) => {
+            return Err(invalid_bson(e.msg));
+        },
+    };
+    let end = pos + size - 1;
+    if end >= obj_end {
+        return Err(invalid_bson("invalid object length"));
+    }
+    if byte_at(data, end)? != 0 {
+        return Err(invalid_bson("bad eoo"));
+    }
+    if pos == 0 and size != obj_end {
+        return Err(invalid_bson("invalid object length"));
+    }
+    Ok((size, end))
+}
+
+fn get_object(data: ref Vec[u8], pos: i64, obj_end: i64, opts: ref Opts) -> Result[(Val, i64), Exc] {
+    let (size, end) = get_object_size(data, pos, obj_end)?;
+    let mut obj = elements_to_dict(data, pos + 4, end, opts)?;
+    let next = pos + size;
+    let is_ref = match dict_get(obj, "$ref") {
+        Some(Val.Str(_)) => true,
+        _ => false,
+    };
+    let db_ok = match dict_get(obj, "$db") {
+        Some(Val.Str(_)) => true,
+        Some(Val.Null) => true,
+        None => true,
+        _ => false,
+    };
+    if is_ref and dict_has(obj, "$id") and db_ok {
+        let coll = match dict_pop(mut obj, "$ref") {
+            Some(Val.Str(s)) => s,
+            _ => String.new(),
+        };
+        let id = dict_pop(mut obj, "$id").unwrap_or(Val.Null);
+        let db = match dict_pop(mut obj, "$db") {
+            Some(Val.Str(s)) => Some(s),
+            _ => None,
+        };
+        return Ok((Val.DbRef(coll, [id].to_vec(), db, obj), next));
+    }
+    Ok((Val.Dict(obj), next))
+}
+
+fn unknown_type(t: i64, name: Str) -> Exc {
+    let c = char.try_from(t as u32).unwrap_or('?');
+    let b = c.to_string().bytes().to_vec();
+    invalid_bson(f"Detected unknown BSON type {py_bytes_repr(b)} for fieldname '{name}'. Are you using the latest driver version?")
+}
+
+fn get_array(data: ref Vec[u8], pos0: i64, obj_end: i64, opts: ref Opts, name: Str) -> Result[(Val, i64), Exc] {
+    let size = i32_from(data, pos0)?;
+    let mut end = pos0 + size - 1;
+    if byte_at(data, end)? != 0 {
+        return Err(invalid_bson("bad eoo"));
+    }
+    let mut pos = pos0 + 4;
+    end -= 1;
+    let mut items: Vec[Val] = Vec.new();
+    while pos < end {
+        let t = byte_at(data, pos)?;
+        pos = find_nul(data, pos)? + 1;
+        let (v, next) = get_element(data, t, pos, obj_end, opts, name)?;
+        items.push(v);
+        pos = next;
+    }
+    if pos != end + 1 {
+        return Err(invalid_bson("bad array length"));
+    }
+    Ok((Val.List(items), pos + 1))
+}
+
+fn uuid_from_binary(b: ref Vec[u8], rep: i64) -> Result[Val, Exc] {
+    let bytes: Vec[u8] = if rep == UUID_JAVA_LEGACY {
+        let mut x: Vec[u8] = Vec.new();
+        let first = py_slice(b, 0, 8);
+        let second = py_slice(b, 8, 16);
+        let mut i = first.len() as i64 - 1;
+        while i >= 0 {
+            x.push(first[i]);
+            i -= 1;
+        }
+        i = second.len() as i64 - 1;
+        while i >= 0 {
+            x.push(second[i]);
+            i -= 1;
+        }
+        x
+    } else {
+        b.clone()
+    };
+    if bytes.len() != 16 {
+        let what = if rep == UUID_CSHARP_LEGACY { "bytes_le" } else { "bytes" };
+        return Err(value_error(f"{what} is not a 16-char string"));
+    }
+    if rep == UUID_CSHARP_LEGACY {
+        let order = [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15];
+        let mut x: Vec[u8] = Vec.new();
+        for k in order {
+            x.push(bytes[k]);
+        }
+        return Ok(Val.Uuid(x));
+    }
+    Ok(Val.Uuid(bytes))
+}
+
+fn get_binary(data: ref Vec[u8], pos0: i64, obj_end: i64, opts: ref Opts) -> Result[(Val, i64), Exc] {
+    let at = check_unpack(data, pos0, 5)?;
+    let mut length = i32_from(data, at)?;
+    let subtype = data[at + 4] as i64;
+    let mut pos = pos0 + 5;
+    if subtype == 2 {
+        let length2 = i32_from(data, pos)?;
+        pos += 4;
+        if length2 != length - 4 {
+            return Err(invalid_bson("invalid binary (st 2) - lengths don't match!"));
+        }
+        length = length2;
+    }
+    let end = pos + length;
+    if length < 0 or end > obj_end {
+        return Err(invalid_bson("bad binary object length"));
+    }
+    let bytes = py_slice(data, pos, end);
+    if subtype == 3 or subtype == 4 {
+        let rep = opts.uuid;
+        if rep == UUID_UNSPECIFIED or (subtype == 4 and rep != UUID_STANDARD) or (subtype == 3 and rep == UUID_STANDARD) {
+            return Ok((Val.Binary(bytes, subtype), end));
+        }
+        return Ok((uuid_from_binary(bytes, rep)?, end));
+    }
+    if subtype == 0 {
+        return Ok((Val.Bytes(bytes), end));
+    }
+    Ok((Val.Binary(bytes, subtype), end))
+}
+
+fn oid_bytes(b: own Vec[u8]) -> Result[Val, Exc] {
+    if b.len() != 12 {
+        return Err(type_error("id must be an instance of (bytes, str, ObjectId), not <class 'bytes'>"));
+    }
+    Ok(Val.Oid(b))
+}
+
+fn get_element(data: ref Vec[u8], t: i64, pos: i64, obj_end: i64, opts: ref Opts, name: Str) -> Result[(Val, i64), Exc] {
+    if t == 0x01 {
+        let at = check_unpack(data, pos, 8)?;
+        return Ok((Val.Float(le_at(data, at, 8).bits_as_f64()), pos + 8));
+    }
+    if t == 0x02 or t == 0x0E {
+        let (s, next) = get_string(data, pos, obj_end)?;
+        return Ok((Val.Str(s), next));
+    }
+    if t == 0x03 {
+        return get_object(data, pos, obj_end, opts);
+    }
+    if t == 0x04 {
+        return get_array(data, pos, obj_end, opts, name);
+    }
+    if t == 0x05 {
+        return get_binary(data, pos, obj_end, opts);
+    }
+    if t == 0x06 or t == 0x0A {
+        return Ok((Val.Null, pos));
+    }
+    if t == 0x07 {
+        return Ok((oid_bytes(py_slice(data, pos, pos + 12))?, pos + 12));
+    }
+    if t == 0x08 {
+        let b = py_slice(data, pos, pos + 1);
+        if b.len() == 1 and b[0] <= 1 {
+            return Ok((Val.Bool(b[0] == 1), pos + 1));
+        }
+        return Err(invalid_bson(f"invalid boolean value: {py_bytes_repr(b)}"));
+    }
+    if t == 0x09 {
+        let millis = i64_from(data, pos)?;
+        return Ok((millis_to_datetime(millis as i128, opts)?, pos + 8));
+    }
+    if t == 0x0B {
+        let (pattern, p1) = get_c_string(data, pos)?;
+        let (flags, p2) = get_c_string(data, p1)?;
+        return Ok((Val.Regex(pattern, str_flags_to_int(flags)), p2));
+    }
+    if t == 0x0C {
+        let (coll, p1) = get_string(data, pos, obj_end)?;
+        let oid = oid_bytes(py_slice(data, p1, p1 + 12))?;
+        return Ok((Val.DbRef(coll, [oid].to_vec(), None, Vec.new()), p1 + 12));
+    }
+    if t == 0x0D {
+        let (code, next) = get_string(data, pos, obj_end)?;
+        return Ok((Val.Code(code, None), next));
+    }
+    if t == 0x0F {
+        let code_end = pos + i32_from(data, pos)?;
+        let (code, p1) = get_string(data, pos + 4, code_end)?;
+        let (scope, p2) = get_object(data, p1, code_end, opts)?;
+        if p2 != code_end {
+            return Err(invalid_bson("scope outside of javascript code boundaries"));
+        }
+        return Ok((make_code(Val.Str(code), scope)?, p2));
+    }
+    if t == 0x10 {
+        return Ok((Val.Int(i32_from(data, pos)? as i128), pos + 4));
+    }
+    if t == 0x11 {
+        let at = check_unpack(data, pos, 8)?;
+        let inc = le_at(data, at, 4) as i64;
+        let time = le_at(data, at + 4, 4) as i64;
+        return Ok((Val.Ts(time, inc), pos + 8));
+    }
+    if t == 0x12 {
+        return Ok((Val.Int64(i64_from(data, pos)? as i128), pos + 8));
+    }
+    if t == 0x13 {
+        let b = py_slice(data, pos, pos + 16);
+        if b.len() != 16 {
+            return Err(value_error("value must be exactly 16 bytes"));
+        }
+        return Ok((Val.Dec(read_u64(b, 8), read_u64(b, 0)), pos + 16));
+    }
+    if t == 0xFF {
+        return Ok((Val.MinKey, pos));
+    }
+    if t == 0x7F {
+        return Ok((Val.MaxKey, pos));
+    }
+    Err(unknown_type(t, name))
+}
+
+fn elements_to_dict(data: ref Vec[u8], pos0: i64, obj_end: i64, opts: ref Opts) -> Result[Vec[(String, Val)], Exc] {
+    let mut d: Vec[(String, Val)] = Vec.new();
+    let end = obj_end - 1;
+    let mut pos = pos0;
+    while pos < end {
+        let t = byte_at(data, pos)?;
+        let (name, p1) = get_c_string(data, pos + 1)?;
+        let (v, next) = get_element(data, t, p1, obj_end, opts, name)?;
+        dict_set(mut d, name, v);
+        pos = next;
+    }
+    if pos != obj_end {
+        return Err(invalid_bson("bad object or element length"));
+    }
+    Ok(d)
+}
+
+// Every exception the decoder raises reaches the caller as InvalidBSON.
+fn as_invalid(e: own Exc) -> Exc {
+    if e.kind == "InvalidBSON" { e } else { invalid_bson(e.msg) }
+}
+
+fn bson_decode(data: ref Vec[u8], opts: ref Opts) -> Result[Val, Exc] {
+    let n = data.len() as i64;
+    let r = match get_object_size(data, 0, n) {
+        Ok((_, end)) => elements_to_dict(data, 4, end, opts),
+        Err(e) => Err(e),
+    };
+    match r {
+        Ok(d) => Ok(Val.Dict(d)),
+        Err(e) => Err(as_invalid(e)),
+    }
+}
+
+fn decode_all(data: ref Vec[u8]) -> Result[Vec[Val], Exc] {
+    let opts = default_opts();
+    let n = data.len() as i64;
+    let mut docs: Vec[Val] = Vec.new();
+    let mut pos: i64 = 0;
+    while pos < n - 1 {
+        let size = match i32_from(data, pos) {
+            Ok(x) => x,
+            Err(e) => {
+                return Err(as_invalid(e));
+            },
+        };
+        if n - pos < size {
+            return Err(invalid_bson("invalid object size"));
+        }
+        let obj_end = pos + size - 1;
+        match byte_at(data, obj_end) {
+            Ok(b) => {
+                if b != 0 {
+                    return Err(invalid_bson("bad eoo"));
+                }
+            },
+            Err(e) => {
+                return Err(as_invalid(e));
+            },
+        }
+        match elements_to_dict(data, pos + 4, obj_end, opts) {
+            Ok(d) => docs.push(Val.Dict(d)),
+            Err(e) => {
+                return Err(as_invalid(e));
+            },
+        }
+        pos += size;
+    }
+    Ok(docs)
+}
+
+// decode_iter: the documents before the first failure, then the failure.
+// The size read is outside decode's handler, so its struct.error escapes
+// unchanged.
+fn decode_iter(data: ref Vec[u8]) -> (Vec[Val], Option[Exc]) {
+    let opts = default_opts();
+    let n = data.len() as i64;
+    let mut docs: Vec[Val] = Vec.new();
+    let mut pos: i64 = 0;
+    while pos < n - 1 {
+        let size = match i32_from(data, pos) {
+            Ok(x) => x,
+            Err(e) => {
+                return (docs, Some(e));
+            },
+        };
+        let piece = py_slice(data, pos, pos + size);
+        pos += size;
+        match bson_decode(piece, opts) {
+            Ok(d) => docs.push(d),
+            Err(e) => {
+                return (docs, Some(e));
+            },
+        }
+    }
+    (docs, None)
+}
+
+fn is_valid(data: ref Vec[u8]) -> bool {
+    bson_decode(data, default_opts()).is_ok()
+}
+
+// ---- base64, ObjectId, UUID ----
+
+fn b64_char(v: i64) -> char {
+    let code = if v < 26 {
+        65 + v
+    } else if v < 52 {
+        71 + v
+    } else if v < 62 {
+        v - 4
+    } else if v == 62 {
+        43
+    } else {
+        47
+    };
+    char.try_from(code as u32).unwrap_or('A')
+}
+
+fn b64encode(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    let n = b.len() as i64;
+    let mut i: i64 = 0;
+    while i + 2 < n {
+        let v = ((b[i] as i64) << 16) | ((b[i + 1] as i64) << 8) | (b[i + 2] as i64);
+        out.push(b64_char(v >> 18));
+        out.push(b64_char((v >> 12) & 63));
+        out.push(b64_char((v >> 6) & 63));
+        out.push(b64_char(v & 63));
+        i += 3;
+    }
+    if n - i == 1 {
+        let v = (b[i] as i64) << 16;
+        out.push(b64_char(v >> 18));
+        out.push(b64_char((v >> 12) & 63));
+        out.push_str("==");
+    } else if n - i == 2 {
+        let v = ((b[i] as i64) << 16) | ((b[i + 1] as i64) << 8);
+        out.push(b64_char(v >> 18));
+        out.push(b64_char((v >> 12) & 63));
+        out.push(b64_char((v >> 6) & 63));
+        out.push('=');
+    }
+    out
+}
+
+fn b64_value(c: u8) -> i64 {
+    let n = c as i64;
+    if n >= 65 and n <= 90 {
+        return n - 65;
+    }
+    if n >= 97 and n <= 122 {
+        return n - 71;
+    }
+    if n >= 48 and n <= 57 {
+        return n + 4;
+    }
+    if n == 43 {
+        return 62;
+    }
+    if n == 47 {
+        return 63;
+    }
+    -1
+}
+
+// base64.b64decode(s) without validate: characters outside the alphabet
+// are skipped, and '=' only counts once two data characters of a quad are in.
+fn b64decode(input: Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut quad: i64 = 0;
+    let mut pads: i64 = 0;
+    let mut left: i64 = 0;
+    for c in input {
+        if c == 61 {
+            if quad >= 2 {
+                pads += 1;
+            }
+            continue;
+        }
+        let v = b64_value(c);
+        if v < 0 {
+            continue;
+        }
+        pads = 0;
+        if quad == 0 {
+            left = v;
+            quad = 1;
+        } else if quad == 1 {
+            out.push((((left << 2) | (v >> 4)) & 0xFF) as u8);
+            left = v & 15;
+            quad = 2;
+        } else if quad == 2 {
+            out.push((((left << 4) | (v >> 2)) & 0xFF) as u8);
+            left = v & 3;
+            quad = 3;
+        } else {
+            out.push((((left << 6) | v) & 0xFF) as u8);
+            quad = 0;
+        }
+    }
+    if quad != 0 and quad + pads < 4 {
+        if quad == 1 {
+            let n = out.len() as i64 / 3 * 4 + 1;
+            return Err(exc("Error", f"Invalid base64-encoded string: number of data characters ({n}) cannot be 1 more than a multiple of 4"));
+        }
+        return Err(exc("Error", "Incorrect padding"));
+    }
+    Ok(out)
+}
+
+fn invalid_id(s: Str) -> Exc {
+    exc("InvalidId", f"{py_str_repr(s)} is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string")
+}
+
+// ObjectId(oid)
+fn oid_new(v: own Val) -> Result[Val, Exc] {
+    match v {
+        Val.Oid(b) => Ok(Val.Oid(b)),
+        Val.Bytes(b) => {
+            if b.len() == 12 {
+                return Ok(Val.Oid(b));
+            }
+            Err(type_error("id must be an instance of (bytes, str, ObjectId), not <class 'bytes'>"))
+        },
+        Val.Str(s) => oid_from_str(s),
+        Val.Code(s, _) => oid_from_str(s),
+        _ => Err(type_error(f"id must be an instance of (bytes, str, ObjectId), not {class_repr(v)}")),
+    }
+}
+
+fn oid_from_str(s: Str) -> Result[Val, Exc] {
+    if char_count(s) != 24 {
+        return Err(invalid_id(s));
+    }
+    match from_hex(s) {
+        Some(b) => Ok(Val.Oid(b)),
+        None => Err(invalid_id(s)),
+    }
+}
+
+// ObjectId.is_valid(s)
+fn oid_is_valid(s: Str) -> bool {
+    s.len() > 0 and oid_from_str(s).is_ok()
+}
+
+fn be_u32(b: ref Vec[u8]) -> i64 {
+    ((b[0] as i64) << 24) | ((b[1] as i64) << 16) | ((b[2] as i64) << 8) | (b[3] as i64)
+}
+
+// ObjectId.from_datetime(dt)
+fn oid_from_datetime(t: i64) -> Result[Vec[u8], Exc] {
+    let secs = floor_div(dt_millis(t) as i128, 1000);
+    if secs < 0 or secs > 4294967295 {
+        return Err(struct_error("'I' format requires 0 <= number <= 4294967295"));
+    }
+    let s = secs as i64;
+    let mut out: Vec[u8] = [((s >> 24) & 255) as u8, ((s >> 16) & 255) as u8, ((s >> 8) & 255) as u8, (s & 255) as u8].to_vec();
+    let mut i: i64 = 0;
+    while i < 8 {
+        out.push(0);
+        i += 1;
+    }
+    Ok(out)
+}
+
+// uuid.UUID(hex).bytes
+fn uuid_parse(s: Str) -> Result[Vec[u8], Exc] {
+    let t = s.replace("urn:", "").replace("uuid:", "");
+    let tcs: Vec[char] = t.chars().collect();
+    let mut a: i64 = 0;
+    let mut b = tcs.len() as i64;
+    while a < b and (tcs[a] == '{' or tcs[a] == '}') {
+        a += 1;
+    }
+    while b > a and (tcs[b - 1] == '{' or tcs[b - 1] == '}') {
+        b -= 1;
+    }
+    let h = char_slice(tcs, a, b).replace("-", "");
+    if char_count(h) != 32 {
+        return Err(value_error("badly formed hexadecimal UUID string"));
+    }
+    let (neg, digits) = py_int_digits(h, 16)?;
+    let mut v: u128 = 0;
+    for d in digits {
+        v = (v << 4) | (d as u128);
+    }
+    if neg and v != 0 {
+        return Err(value_error("int is out of range (need a 128-bit value)"));
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 15;
+    while k >= 0 {
+        out.push(((v >> ((k * 8) as u32)) & 255) as u8);
+        k -= 1;
+    }
+    Ok(out)
+}
+
+// ---- the jobs, bsondump and the importer ----
+
+fn mode_name(mode: i64) -> String {
+    if mode == MODE_CANONICAL {
+        return "canonical".to_string();
+    }
+    if mode == MODE_RELAXED { "relaxed".to_string() } else { "legacy".to_string() }
+}
+
+fn show_dumps(v: ref Val, modes: ref Vec[i64]) {
+    for mode in modes {
+        match dumps(v, *mode) {
+            Ok(s) => println(f"  {mode_name(*mode)}: {s}"),
+            Err(e) => println(f"  {mode_name(*mode)}: {show_exc(e)}"),
+        }
+    }
+}
+
+fn show_repr(v: ref Val) {
+    match py_repr(v) {
+        Ok(s) => println(f"  repr: {s}"),
+        Err(e) => println(f"  repr: {show_exc(e)}"),
+    }
+}
+
+fn all_modes() -> Vec[i64] {
+    [MODE_CANONICAL, MODE_RELAXED, MODE_LEGACY].to_vec()
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn run_json(arg: Str, check_keys: bool) {
+    let d = match json_loads(arg) {
+        Ok(v) => v,
+        Err(e) => {
+            println(f"  loads: {show_exc(e)}");
+            return;
+        },
+    };
+    show_repr(d);
+    let b = match encode_top(d, check_keys) {
+        Ok(b) => b,
+        Err(e) => {
+            println(f"  encode: {show_exc(e)}");
+            return;
+        },
+    };
+    println(f"  bson: {hex_of(b)}");
+    if check_keys {
+        return;
+    }
+    match bson_decode(b, default_opts()) {
+        Ok(back) => show_dumps(back, all_modes()),
+        Err(e) => println(f"  decode: {show_exc(e)}"),
+    }
+}
+
+fn run_hex(arg: Str, opts: Option[Opts]) {
+    let data = from_hex(arg).unwrap_or(Vec.new());
+    let o = match opts {
+        Some(x) => x.clone(),
+        None => default_opts(),
+    };
+    match bson_decode(data, o) {
+        Ok(d) => {
+            show_repr(d);
+            if opts.is_none() {
+                show_dumps(d, all_modes());
+            } else {
+                show_dumps(d, [MODE_RELAXED].to_vec());
+            }
+        },
+        Err(e) => println(f"  decode: {show_exc(e)}"),
+    }
+    if opts.is_none() {
+        println(f"  valid: {py_bool(is_valid(data))}");
+    }
+}
+
+fn opts_named(name: Str) -> Opts {
+    let mut o = default_opts();
+    if name == "datetime=auto" {
+        o.datetime = DT_AUTO;
+    } else if name == "datetime=clamp" {
+        o.datetime = DT_CLAMP;
+    } else if name == "datetime=ms" {
+        o.datetime = DT_MS;
+    } else if name == "uuid=standard" {
+        o.uuid = UUID_STANDARD;
+    } else if name == "uuid=pythonLegacy" {
+        o.uuid = UUID_PYTHON_LEGACY;
+    } else if name == "uuid=javaLegacy" {
+        o.uuid = UUID_JAVA_LEGACY;
+    } else if name == "uuid=csharpLegacy" {
+        o.uuid = UUID_CSHARP_LEGACY;
+    }
+    o
+}
+
+fn run_all(arg: Str) {
+    let data = from_hex(arg).unwrap_or(Vec.new());
+    match decode_all(data) {
+        Ok(docs) => {
+            println(f"  decode_all: {docs.len()}");
+            let mut lines: Vec[String] = Vec.new();
+            let mut failed: Option[Exc] = None;
+            for d in docs {
+                match dumps(d, MODE_CANONICAL) {
+                    Ok(s) => lines.push(s),
+                    Err(e) => {
+                        failed = Some(e);
+                        break;
+                    },
+                }
+            }
+            for s in lines {
+                println(f"    {s}");
+            }
+            if let Some(e) = failed {
+                println(f"  decode_all: {show_exc(e)}");
+            }
+        },
+        Err(e) => println(f"  decode_all: {show_exc(e)}"),
+    }
+    let (docs, err) = decode_iter(data);
+    let mut n: i64 = 0;
+    let mut failure = err;
+    for d in docs {
+        n += 1;
+        match dumps(d, MODE_RELAXED) {
+            Ok(s) => println(f"  iter {n}: {s}"),
+            Err(e) => {
+                failure = Some(e);
+                break;
+            },
+        }
+    }
+    match failure {
+        Some(e) => println(f"  decode_iter after {n}: {show_exc(e)}"),
+        None => println(f"  decode_iter: {n}"),
+    }
+    println(f"  valid: {py_bool(is_valid(data))}");
+}
+
+fn run_oid(arg: Str) {
+    println(f"  is_valid: {py_bool(oid_is_valid(arg))}");
+    match oid_from_str(arg) {
+        Ok(Val.Oid(b)) => {
+            println(f"  str: {hex_of(b)}");
+            println(f"  repr: ObjectId('{hex_of(b)}')");
+            println(f"  binary: {hex_of(b)}");
+            println(f"  generated: {dt_isoformat_utc(be_u32(b) * 1000000)}");
+        },
+        Ok(_) => {},
+        Err(e) => println(f"  {show_exc(e)}"),
+    }
+}
+
+fn run_oidtime(arg: Str) {
+    let t = match json_loads(f"{{\"$date\": \"{arg}\"}}") {
+        Ok(Val.Dt(t)) => t,
+        Ok(_) => 0,
+        Err(e) => {
+            println(f"  {show_exc(e)}");
+            return;
+        },
+    };
+    match oid_from_datetime(t) {
+        Ok(b) => {
+            println(f"  oid: {hex_of(b)}");
+            println(f"  generated: {dt_isoformat_utc(be_u32(b) * 1000000)}");
+            let target = from_hex("5f2b3c4d5e6f708192a3b4c5").unwrap_or(Vec.new());
+            println(f"  before: {py_bool(bytes_less(b, target))}");
+        },
+        Err(e) => println(f"  {show_exc(e)}"),
+    }
+}
+
+fn bytes_less(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    let mut i: i64 = 0;
+    while i < a.len() as i64 and i < b.len() as i64 {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+        i += 1;
+    }
+    a.len() < b.len()
+}
+
+fn run_dec(arg: Str) {
+    let d = match dec_parse(arg) {
+        Ok(d) => d,
+        Err(e) => {
+            println(f"  {show_exc(e)}");
+            return;
+        },
+    };
+    let (h, l) = dec_to_bid(d);
+    println(f"  bid: {hex_of(bid_bytes(h, l))}");
+    let s = match dec128_str(h, l) {
+        Ok(s) => s,
+        Err(e) => show_exc(e),
+    };
+    println(f"  str: {s}");
+    println(f"  repr: Decimal128('{s}')");
+    match dec_from_bid(h, l) {
+        Ok(x) => println(f"  to_decimal: {dec_str(x)}"),
+        Err(e) => println(f"  to_decimal: {show_exc(e)}"),
+    }
+}
+
+fn run_bid(arg: Str) {
+    let b = from_hex(arg).unwrap_or(Vec.new());
+    let h = read_u64(b, 8);
+    let l = read_u64(b, 0);
+    match dec128_str(h, l) {
+        Ok(s) => println(f"  str: {s}"),
+        Err(e) => println(f"  str: {show_exc(e)}"),
+    }
+    match dec_from_bid(h, l) {
+        Ok(x) => println(f"  to_decimal: {dec_str(x)}"),
+        Err(e) => println(f"  to_decimal: {show_exc(e)}"),
+    }
+}
+
+// bsondump: one relaxed Extended JSON line per document
+fn dump(path: Str) {
+    let data = fs.read_bytes(f"data/{path}").unwrap_or(Vec.new());
+    println(f"== bsondump {path} ({data.len()} bytes)");
+    let (docs, err) = decode_iter(data);
+    let mut n: i64 = 0;
+    let mut failure = err;
+    for d in docs {
+        n += 1;
+        match dumps(d, MODE_RELAXED) {
+            Ok(s) => println(s),
+            Err(e) => {
+                failure = Some(e);
+                break;
+            },
+        }
+    }
+    if let Some(e) = failure {
+        println(f"error: {show_exc(e)}");
+    }
+    println(f"{n} objects found");
+}
+
+// mongoimport: each line of Extended JSON becomes a BSON document; the
+// documents that load are written out and read back
+fn import_jsonl(path: Str) {
+    let text = fs.read_to_string(f"data/{path}").unwrap_or(String.new());
+    println(f"== import {path}");
+    let mut out: Vec[u8] = Vec.new();
+    let mut good: i64 = 0;
+    let mut bad: i64 = 0;
+    let mut i: i64 = 0;
+    for line in text.split("\n") {
+        i += 1;
+        if py_strip(line).len() == 0 {
+            continue;
+        }
+        let r = match json_loads(line) {
+            Ok(v) => encode_top(v, false),
+            Err(e) => Err(e),
+        };
+        match r {
+            Ok(b) => {
+                out.extend_from_slice(b[..]);
+                good += 1;
+            },
+            Err(e) => {
+                bad += 1;
+                println(f"line {i}: {show_exc(e)}");
+            },
+        }
+    }
+    let name = "mini_bson_import.bson".to_string();
+    let _ = fs.write_bytes(name.clone(), out.clone());
+    let back = fs.read_bytes(name.clone()).unwrap_or(Vec.new());
+    let _ = fs.remove_file(name);
+    println(f"imported {good}, failed {bad}, {out.len()} bytes");
+    match decode_all(back) {
+        Ok(docs) => {
+            for d in docs {
+                match dumps(d, MODE_CANONICAL) {
+                    Ok(s) => println(s),
+                    Err(e) => println(show_exc(e)),
+                }
+            }
+        },
+        Err(e) => println(show_exc(e)),
+    }
+}
+
+fn hex_text(s: Str) -> String {
+    String.from_utf8(from_hex(s).unwrap_or(Vec.new())).unwrap_or(String.new())
+}
+
+fn dirname_of(path: Str) -> String {
+    match path.rfind("/") {
+        Some(k) => path[..k].to_string(),
+        None => String.new(),
+    }
+}
+
+fn unrle(s: Str) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 0;
+    while k < n {
+        if cs[k] == 'z' {
+            let mut j = k + 1;
+            let mut count: i64 = 0;
+            while cs[j] != '.' {
+                count = count * 10 + (cs[j] as i64 - 48);
+                j += 1;
+            }
+            let mut z: i64 = 0;
+            while z < count {
+                out.push(0);
+                z += 1;
+            }
+            k = j + 1;
+        } else {
+            out.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+            k += 2;
+        }
+    }
+    out
+}
+
+// The input files, from inputs_text(); returns their paths in order.
+fn write_inputs() -> Result[Vec[String], String] {
+    let mut paths: Vec[String] = Vec.new();
+    for line in inputs_text().split("\n") {
+        if line.len() == 0 {
+            continue;
+        }
+        let (name, body) = match line.find(" ") {
+            Some(k) => (line[..k].to_string(), line[k + 1..].to_string()),
+            None => (line.to_string(), String.new()),
+        };
+        let path = f"data/{name}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        if let Err(e) = fs.write_bytes(path, unrle(body)) {
+            return Err(f"cannot write {name}: {e}");
+        }
+        paths.push(name);
+    }
+    Ok(paths)
+}
+
+fn main() {
+    let paths = match write_inputs() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln(e);
+            return;
+        },
+    };
+    for hex_line in jobs_text().split("\n") {
+        if hex_line.len() == 0 {
+            continue;
+        }
+        let line = hex_text(hex_line);
+        let (kind, arg) = match line.find("\t") {
+            Some(k) => (line[..k].to_string(), line[k + 1..].to_string()),
+            None => (line.clone(), String.new()),
+        };
+        println(f"== {kind} {arg}");
+        if kind == "json" {
+            run_json(arg, false);
+        } else if kind == "keys" {
+            run_json(arg, true);
+        } else if kind == "hex" {
+            run_hex(arg, None);
+        } else if kind == "opts" {
+            let (name, h) = match arg.find(" ") {
+                Some(k) => (arg[..k].to_string(), arg[k + 1..].to_string()),
+                None => (arg.clone(), String.new()),
+            };
+            run_hex(h, Some(opts_named(name)));
+        } else if kind == "all" {
+            run_all(arg);
+        } else if kind == "oid" {
+            run_oid(arg);
+        } else if kind == "oidtime" {
+            run_oidtime(arg);
+        } else if kind == "dec" {
+            run_dec(arg);
+        } else if kind == "bid" {
+            run_bid(arg);
+        }
+    }
+    for path in paths {
+        if path.ends_with(".bson") {
+            dump(path);
+        } else if path.ends_with(".jsonl") {
+            import_jsonl(path);
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("6a736f6e097b2261223a20317d\n6a736f6e097b2261223a202d323134373438333634382c202262223a20323134373438333634372c202263223a202d323134373438333634377d\n6a736f6e097b2261223a20323134373438333634382c202262223a202d323134373438333634397d\n6a736f6e097b2261223a20393232333337323033363835343737353830372c202262223a202d393232333337323033363835343737353830387d\n6a736f6e097b2261223a20393232333337323033363835343737353830387d\n6a736f6e097b2261223a202d393232333337323033363835343737353830397d\n6a736f6e097b2261223a20302c202262223a202d302c202263223a2031307d\n6a736f6e097b2261223a20312e352c202262223a202d302e302c202263223a2031653330302c202264223a2031652d3330302c202265223a20302e312c202266223a203145352c202267223a20312e307d\n6a736f6e097b2261223a204e614e2c202262223a20496e66696e6974792c202263223a202d496e66696e6974797d\n6a736f6e097b2261223a203132333435363738393031323334353637383930313233343536373839302e302c202262223a20322e35652d372c202263223a20316531362c202264223a20316531357d\n6a736f6e097b2261223a2035652d3332342c202262223a20312e37393736393331333438363233313537653330382c202263223a2031653430307d\n6a736f6e097b2273223a2022706c61696e222c202274223a2022222c202275223a20227461625c7468657265222c202276223a202271756f74655c2273222c202277223a202269742773227d\n6a736f6e097b2273223a20226361665c7530306539222c202274223a20225c75363565355c7536373263222c202275223a20225c75643833645c7564653030222c202276223a20225c75303030315c75303031665c7530303766227d\n6a736f6e097b2273223a2022636166c3a920e697a5e69cac20f09f9880222c202274223a2022615c753030303062222c202275223a20226261636b5c5c736c617368227d\n6a736f6e097b2273223a20226e625c75303061307370222c202274223a20227a775c75323030627370222c202275223a20226c696e655c7532303238736570222c202276223a20225c75303038355c7530306164227d\n6a736f6e097b2273223a2022626f7468202720616e64205c22222c202274223a20225c725c6e5c625c66227d\n6a736f6e097b22223a20312c2022c3a9223a20322c2022612e62223a20332c20222478223a20347d\n6a736f6e097b2262223a20312c202261223a20322c202262223a20337d\n6a736f6e097b22615c753030303062223a20317d\n");
+    s.push_str("6a736f6e097b2274223a20747275652c202266223a2066616c73652c20226e223a206e756c6c7d\n6a736f6e097b2264223a207b7d2c202261223a205b5d2c20226e223a207b2278223a207b2279223a207b227a223a205b312c205b322c205b332c207b7d5d5d5d7d7d7d7d\n6a736f6e097b2261223a205b302c20312c20322c20332c20342c20352c20362c20372c20382c20392c2031302c2031312c2031325d7d\n6a736f6e097b225f6964223a20372c202261223a20317d\n6a736f6e097b2261223a20312c20225f6964223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d7d\n6a736f6e097b225f6964223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d7d\n6a736f6e097b225f6964223a207b22246f6964223a2022354632423343344435453646373038313932413342344335227d7d\n6a736f6e097b225f6964223a207b22246f6964223a20223566326233633464356536663730383139326133623463227d7d\n6a736f6e097b225f6964223a207b22246f6964223a202235663262336334643565366637303831393261336234637a227d7d\n6a736f6e097b225f6964223a207b22246f6964223a202235663262203363346435653666373038313932613362346335227d7d\n6a736f6e097b225f6964223a207b22246f6964223a2022356632623363346420356536663730383139326133623463227d7d\n6a736f6e097b225f6964223a207b22246f6964223a2022356632622033633464203565366637303831393261336234227d2c202278223a20317d\n6a736f6e097b225f6964223a207b22246f6964223a2031327d7d\n6a736f6e097b225f6964223a207b22246f6964223a2022356632623363346435653666373038313932613362346335222c202278223a20317d7d\n6a736f6e097b225f6964223a207b2278223a20312c2022246f6964223a2022356632623363346435653666373038313932613362346335227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30355a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352e3637385a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352e3132333435365a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352e35227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352b30353a3330227d7d\n");
+    s.push_str("6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352e3235302d30383030227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352b3031227d7d\n6a736f6e097b2264223a207b222464617465223a2022313936392d31322d33315432333a35393a35392e3939395a227d7d\n6a736f6e097b2264223a207b222464617465223a2022313930302d30332d30315430303a30303a30305a227d7d\n6a736f6e097b2264223a207b222464617465223a2022393939392d31322d33315432333a35393a35392e3939395a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d312d3254333a343a355a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032312d30322d32395430303a30303a30305a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d31332d30315430303a30303a30305a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30322030333a30343a30355a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30355a6a756e6b227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352e5a227d7d\n6a736f6e097b2264223a207b222464617465223a202278227d7d\n6a736f6e097b2264223a207b222464617465223a2022227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a36305a227d7d\n6a736f6e097b2264223a207b222464617465223a2022303030302d30312d30315430303a30303a30305a227d7d\n6a736f6e097b2264223a207b222464617465223a2022303030312d30312d30315430303a30303a30302b30313a3030227d7d\n6a736f6e097b2264223a207b222464617465223a2022393939392d31322d33315432333a33303a30302d30313a3030227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30327430333a30343a30357a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30327430333a30343a30355a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352e3565315a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352b30613a3030227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30352e393939393939395a227d7d\n");
+    s.push_str("6a736f6e097b2264223a207b222464617465223a2022323032302d30312d303254333a345a227d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d31322d33315432343a30303a30305a227d7d\n6a736f6e097b2264223a207b222464617465223a20312e356531327d7d\n6a736f6e097b2264223a207b222464617465223a206e756c6c7d7d\n6a736f6e097b2264223a207b222464617465223a2031653330307d7d\n6a736f6e097b2264223a207b222464617465223a20747275657d7d\n6a736f6e097b2264223a207b222464617465223a207b22246e756d6265724c6f6e67223a202231353737393334323435363738227d7d7d\n6a736f6e097b2264223a207b222464617465223a207b22246e756d6265724c6f6e67223a20222d31227d7d7d\n6a736f6e097b2264223a207b222464617465223a20313537373933343234353637387d7d\n6a736f6e097b2264223a207b222464617465223a202d36323133353539363830303030307d7d\n6a736f6e097b2264223a207b222464617465223a202d36323133353539363830303030317d7d\n6a736f6e097b2264223a207b222464617465223a203235333430323330303830303030307d7d\n6a736f6e097b2264223a207b222464617465223a2022323032302d30312d30325430333a30343a30355a222c202278223a20317d7d\n6a736f6e097b2269223a207b22246e756d626572496e74223a20223432227d2c20226a223a207b22246e756d626572496e74223a20222d37227d2c20226b223a207b22246e756d626572496e74223a2022203820227d7d\n6a736f6e097b2269223a207b22246e756d626572496e74223a2022315f303030227d2c20226a223a207b22246e756d626572496e74223a20222b35227d7d\n6a736f6e097b2269223a207b22246e756d626572496e74223a2022616263227d7d\n6a736f6e097b2269223a207b22246e756d626572496e74223a2034327d7d\n6a736f6e097b2269223a207b22246e756d626572496e74223a202234222c202278223a20317d7d\n6a736f6e097b226c223a207b22246e756d6265724c6f6e67223a2022313233227d2c20226d223a207b22246e756d6265724c6f6e67223a20222d35227d2c20226e223a207b22246e756d6265724c6f6e67223a202230227d7d\n6a736f6e097b226c223a207b22246e756d6265724c6f6e67223a202239323233333732303336383534373735383037227d7d\n6a736f6e097b226c223a207b22246e756d6265724c6f6e67223a202239323233333732303336383534373735383038227d7d\n6a736f6e097b226c223a207b22246e756d6265724c6f6e67223a2022313278227d7d\n6a736f6e097b226c223a207b22246e756d6265724c6f6e67223a2037377d7d\n");
+    s.push_str("6a736f6e097b2266223a207b22246e756d626572446f75626c65223a2022312e35227d2c202267223a207b22246e756d626572446f75626c65223a20222d302e30227d2c202268223a207b22246e756d626572446f75626c65223a2022314533227d7d\n6a736f6e097b2266223a207b22246e756d626572446f75626c65223a20224e614e227d2c202267223a207b22246e756d626572446f75626c65223a2022496e66696e697479227d2c202268223a207b22246e756d626572446f75626c65223a20222d496e66696e697479227d7d\n6a736f6e097b2266223a207b22246e756d626572446f75626c65223a20223165343030227d2c202267223a207b22246e756d626572446f75626c65223a202220322e3520227d2c202268223a207b22246e756d626572446f75626c65223a2022696e66227d7d\n6a736f6e097b2266223a207b22246e756d626572446f75626c65223a2022616263227d7d\n6a736f6e097b2266223a207b22246e756d626572446f75626c65223a20312e357d7d\n6a736f6e097b2264223a207b22246e756d626572446563696d616c223a2022312e3530452b33227d2c202265223a207b22246e756d626572446563696d616c223a20222d302e30303035227d2c202266223a207b22246e756d626572446563696d616c223a202230227d7d\n6a736f6e097b2264223a207b22246e756d626572446563696d616c223a20224e614e227d2c202265223a207b22246e756d626572446563696d616c223a20222d496e66696e697479227d2c202266223a207b22246e756d626572446563696d616c223a20222d30452b33227d7d\n6a736f6e097b2264223a207b22246e756d626572446563696d616c223a202231322e332e34227d7d\n6a736f6e097b2264223a207b22246e756d626572446563696d616c223a20357d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241414543222c202273756254797065223a20223030227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a2022633356795a53343d222c202273756254797065223a20223035227d7d2c202263223a207b222462696e617279223a207b22626173653634223a2022222c202273756254797065223a20223830227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241534e465a346d727a6538424930566e6961764e37773d3d222c202273756254797065223a20223034227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241534e465a346d727a6538424930566e6961764e37773d3d222c202273756254797065223a20223033227d7d7d\n");
+    s.push_str("6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241414543222c202273756254797065223a202232227d7d2c202263223a207b222462696e617279223a207b22626173653634223a202241414543222c202273756254797065223a202238227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241414543222c202273756254797065223a2022313030227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241414543222c202273756254797065223a20357d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a2031322c202273756254797065223a20223030227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241414543222c202273756254797065223a20223030222c202278223a20317d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a2022414145222c202273756254797065223a20223030227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a20224141454341222c202273756254797065223a20223030227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a2022414121452043c3a9222c202273756254797065223a20223030227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241413d3d41414543222c202273756254797065223a20223030227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a202241414543222c20222474797065223a20223035227d7d\n6a736f6e097b2262223a207b222462696e617279223a202241414543222c20222474797065223a203132387d7d\n6a736f6e097b2262223a207b222462696e617279223a202241414543222c20222474797065223a20226666666666663830227d7d\n6a736f6e097b2262223a207b222462696e617279223a202241414543222c20222474797065223a20227a7a227d7d\n6a736f6e097b2262223a207b222462696e617279223a202241414543222c20222474797065223a202230783035227d7d\n6a736f6e097b2262223a207b222462696e617279223a20352c20222474797065223a20223030227d7d\n6a736f6e097b2262223a207b222462696e617279223a207b2273756254797065223a20223030227d7d7d\n6a736f6e097b2262223a207b222462696e617279223a202241414543227d7d\n6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241414543222c202273756254797065223a20222d31227d7d7d\n");
+    s.push_str("6a736f6e097b2262223a207b222462696e617279223a207b22626173653634223a202241414543222c202273756254797065223a20222037227d7d7d\n6a736f6e097b2275223a207b222475756964223a202230313233343536372d383961622d636465662d303132332d343536373839616263646566227d7d\n6a736f6e097b2275223a207b222475756964223a20227b30313233343536373839414243444546303132333435363738394142434445467d227d7d\n6a736f6e097b2275223a207b222475756964223a202275726e3a757569643a30313233343536372d383961622d636465662d303132332d343536373839616263646566227d7d\n6a736f6e097b2275223a207b222475756964223a202230313233227d7d\n6a736f6e097b2275223a207b222475756964223a20357d7d\n6a736f6e097b2275223a207b222475756964223a202230313233343536372d383961622d636465662d303132332d343536373839616263646566222c202278223a20317d7d\n6a736f6e097b2263223a207b2224636f6465223a202266756e6374696f6e2829207b2072657475726e20313b207d227d7d\n6a736f6e097b2263223a207b2224636f6465223a202266287829222c20222473636f7065223a207b2278223a20312c202279223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d7d7d7d\n6a736f6e097b2263223a207b2224636f6465223a202266222c20222473636f7065223a207b7d7d7d\n6a736f6e097b2263223a207b2224636f6465223a202266222c202278223a20317d7d\n6a736f6e097b2263223a207b2224636f6465223a20357d7d\n6a736f6e097b2263223a207b2224636f6465223a202266222c20222473636f7065223a20357d7d\n6a736f6e097b2263223a207b222473636f7065223a207b2261223a20317d2c202224636f6465223a202267227d7d\n6a736f6e097b2272223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a20225e612e6224222c20226f7074696f6e73223a2022696d78227d7d7d\n6a736f6e097b2272223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a202278222c20226f7074696f6e73223a2022227d7d2c202273223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a202279222c20226f7074696f6e73223a202275227d7d7d\n6a736f6e097b2272223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a202278222c20226f7074696f6e73223a202278736d756c69227d7d7d\n6a736f6e097b2272223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a202278222c20226f7074696f6e73223a20227a71227d7d7d\n");
+    s.push_str("6a736f6e097b2272223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a202278222c20226f7074696f6e73223a20337d7d7d\n6a736f6e097b2272223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a202278227d7d7d\n6a736f6e097b2272223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a20352c20226f7074696f6e73223a202269227d7d7d\n6a736f6e097b2272223a207b2224726567756c617245787072657373696f6e223a207b227061747465726e223a202278222c2022666c616773223a202269227d7d7d\n6a736f6e097b2272223a207b22247265676578223a202261222c202278223a20317d7d\n6a736f6e097b2272223a207b22247265676578223a202261622b63222c2022246f7074696f6e73223a20227369227d7d\n6a736f6e097b2272223a207b22247265676578223a202261622b63227d7d\n6a736f6e097b2272223a207b22247265676578223a207b22246e756d626572496e74223a202231227d2c2022246f7074696f6e73223a202269227d7d\n6a736f6e097b2272223a207b22247265676578223a2022615c753030303062227d7d\n6a736f6e097b2274223a207b222474696d657374616d70223a207b2274223a20313537373933343234352c202269223a20377d7d7d\n6a736f6e097b2274223a207b222474696d657374616d70223a207b2274223a20343239343936373239352c202269223a20343239343936373239357d7d7d\n6a736f6e097b2274223a207b222474696d657374616d70223a207b2274223a20343239343936373239362c202269223a20307d7d7d\n6a736f6e097b2274223a207b222474696d657374616d70223a207b2274223a202235222c202269223a20307d7d7d\n6a736f6e097b2274223a207b222474696d657374616d70223a207b2274223a20312c202269223a202d317d7d7d\n6a736f6e097b2274223a207b222474696d657374616d70223a207b2274223a20312c202269223a20312e357d7d7d\n6a736f6e097b226869223a207b22246d61784b6579223a20327d7d\n6a736f6e097b226c6f223a207b22246d696e4b6579223a20317d2c20226869223a207b22246d61784b6579223a20317d7d\n6a736f6e097b226c6f223a207b22246d696e4b6579223a20327d7d\n6a736f6e097b226c6f223a207b22246d696e4b6579223a20747275657d7d\n6a736f6e097b226869223a207b22246d61784b6579223a20312c202278223a20327d7d\n6a736f6e097b2275223a207b2224756e646566696e6564223a20747275657d2c202273223a207b222473796d626f6c223a202273796d227d7d\n");
+    s.push_str("6a736f6e097b2273223a207b222473796d626f6c223a202273796d222c202278223a20317d7d\n6a736f6e097b2273223a207b222473796d626f6c223a20357d2c202274223a207b222473796d626f6c223a20312e357d2c202275223a207b222473796d626f6c223a206e756c6c7d2c202276223a207b222473796d626f6c223a20747275657d7d\n6a736f6e097b2272223a207b2224726566223a20227573657273222c2022246964223a20377d7d\n6a736f6e097b2272223a207b2224726566223a20227573657273222c2022246964223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d2c2022246462223a2022617070222c20226e6f7465223a202278227d7d\n6a736f6e097b2272223a207b2224726566223a20227573657273222c2022246964223a20312c2022246462223a206e756c6c7d7d\n6a736f6e097b2272223a207b2224726566223a20352c2022246964223a20317d7d\n6a736f6e097b2272223a207b2224726566223a20227573657273227d7d\n6a736f6e097b2272223a207b2224726566223a20227573657273222c2022246964223a20312c2022246462223a20337d7d\n6a736f6e097b2270223a207b22246462506f696e746572223a207b2224726566223a202263222c2022246964223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d7d7d7d\n6a736f6e097b2270223a207b22246462506f696e746572223a207b2224726566223a202263222c2022246964223a20317d7d7d\n6a736f6e097b2270223a207b22246462506f696e746572223a207b2224726566223a202263222c2022246964223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d2c2022246462223a202264227d7d7d\n6a736f6e097b2270223a207b22246462506f696e746572223a207b2224726566223a202263222c2022246964223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d2c20227a223a20317d7d7d\n6a736f6e097b2270223a207b22246462506f696e746572223a20357d7d\n6a736f6e095b312c20325d\n6a736f6e092261626322\n6a736f6e0935\n6a736f6e097b222464617465223a20307d\n6a736f6e097b22246f6964223a2022356632623363346435653666373038313932613362346335227d\n6a736f6e097b225f6964223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d2c20226e616d65223a2022416461222c2022616765223a2033362c202273636f7265223a2039372e352c202274616773223a205b226d617468222c2022656e67696e6573225d2c20226a6f696e6564223a207b222464617465223a2022313834332d30392d30315430303a30303a30305a227d2c202262616c616e6365223a207b22246e756d626572446563696d616c223a2022313233342e3530227d2c2022616374697665223a20747275652c20226d616e61676572223a206e756c6c7d\n");
+    s.push_str("6b657973097b2261223a20317d\n6b657973097b2224736574223a207b2261223a20317d7d\n6b657973097b22612e62223a20317d\n6b657973097b2278223a207b22612e62223a20317d7d\n6b657973097b2278223a205b7b222479223a20317d5d7d\n686578093130303030303030303136343030303030303030303030303030303434303030\n6865780931373030303030303032373330303033303030303030363836393030303236353030303130303030303030303030\n6865780931343030303030303033366630303063303030303030313037383030303130303030303030303030\n68657809316230303030303030343631303031333030303030303130333030303031303030303030313033313030303230303030303030303030\n68657809316230303030303030343631303031333030303030303130373830303031303030303030313037393030303230303030303030303030\n6865780931613030303030303035363230303033303030303030303036313632363330353633303030323030303030303830666630313030\n6865780933353030303030303035373530303130303030303030303430303031303230333034303530363037303830393061306230633064306530663035373630303130303030303030303330303031303230333034303530363037303830393061306230633064306530663030\n6865780931343030303030303035373030303037303030303030303230333030303030303738373937613030\n68657809316230303030303030353664303030343030303030303035646561646265656630353662303030323030303030303038373037373030\n6865780930623030303030303036373530303061366530303030\n686578093136303030303030303735663639363430303566326233633464356536663730383139326133623463353030\n686578093064303030303030303837343030303130383636303030303030\n6865780932363030303030303039363430303265636633353634366630313030303030393635303066666666666666666666666666666666303937613030303030303030303030303030303030303030\n68657809316230303030303030393634303066666462316664323737653630303030303936353030303032386433656437636337666666663030\n686578093163303030303030306237323030363132653633303036643639303030623733303030303030306237313030373830303761373530303030\n6865780931643030303030303063373030303035303030303030363336663663366330303566326233633464356536663730383139326133623463353030\n68657809313530303030303030643633303030393030303030303732363537343735373236653230333130303030\n");
+    s.push_str("686578093130303030303030306537333030303430303030303037333739366430303030\n68657809316530303030303030663737303031363030303030303032303030303030363630303063303030303030313037383030303130303030303030303030\n686578093232303030303030313036393030666266666666666631323663303030353030303030303030303030303030313236643030303030303030303030303030303038303030\n686578093130303030303030313137343030303730303030303061353564306435653030\n68657809313830303030303031333634303039363030303030303030303030303030303030303030303030303030343233303030\n686578093262303030303030313336653030303030303030303030303030303030303030303030303030303030303030666331333639303030303030303030303030303030303030303030303030303030303030303066383030\n686578093262303030303030313337613030303030303030303030303030303030303030303030303030303030303430336131333731303030313030303030303030303030303030303030303030303030303030323433323030\n686578093139303030303030313336653633303066666666666666666666666666666666666666666666666666666666303133303030\n68657809313830303030303031333738303030303030303030303030303030303030303030303030303030303030303036633030\n686578093064303030303030376636383639303066663663366630303030\n68657809333330303030303030333732303032623030303030303032323437323635363630303036303030303030373537333635373237333030313032343639363430303039303030303030303236353738373437323631303030323030303030303635303030303030\n68657809333330303030303030333732303032623030303030303032323437323635363630303036303030303030373537333635373237333030313032343639363430303039303030303030303232343634363230303034303030303030363137303730303030303030\n6865780931643030303030303033373230303135303030303030303232343732363536363030303630303030303037353733363537323733303030303030\n6865780932303030303030303033373230303138303030303030313032343732363536363030303130303030303031303234363936343030303930303030303030303030\n6865780931373030303030303032366263336139303030393030303030303736633361393230663039663938383030303030\n686578093130303030303030303237333030303430303030303036313030363230303030\n");
+    s.push_str("6865780930353030303030303030\n68657809\n68657809303530303030\n686578093035303030303030\n6865780930353030303030303031\n68657809303630303030303030303030\n6865780931353030303030303130363130303031303030303030303236323030303230303030303037383030\n686578093135303030303030313036313030303130303030303030323632303030323030303030303738303030303030\n68657809313530303030303031303631303030313030303030303032363230303032303030303030373830303031\n6865780966626666666666663030\n68657809363430303030303031303631303030313030303030303032363230303032303030303030373830303030\n68657809306130303030303031303631303030313030303030303030\n68657809306630303030303031303631303030313030303030303030\n68657809306330303030303031343631303030313030303030303030\n6865780930383030303030303261376130303030\n68657809303930303030303030383632303030323030\n686578093064303030303030303237333030303030303030303030303030\n68657809306630303030303030323733303036343030303030303631363230303030\n68657809306630303030303030323733303030333030303030303631363236333030\n6865780930653030303030303032373330303032303030303030666630303030\n68657809306630303030303030323733303030333030303030303631633330303030\n68657809306630303030303030323733303030333030303030306532383230303030\n68657809306630303030303030323733303030333030303030306333323830303030\n686578093130303030303030303237333030303430303030303065646130383030303030\n686578093130303030303030303237333030303430303030303066303966393830303030\n68657809306630303030303030323733303030333030303030306330616630303030\n6865780931343030303030303032373330303038303030303030366636626638383838303830383030303030\n6865780930653030303030303032666630303032303030303030373630303030\n68657809306330303030303030323662303030323030303030303030\n686578093130303030303030303536323030363430303030303030303631363236333030\n686578093064303030303030303536323030666666666666666630303030\n6865780931343030303030303035373030303037303030303030303230343030303030303738373937613030\n686578093130303030303030303537353030303330303030303030343631363236333030\n");
+    s.push_str("6865780931343030303030303033366630303134303030303030313037383030303130303030303030303030\n6865780931343030303030303033366630303063303030303030313037383030303130303030303030313030\n6865780931343030303030303033366630303039303030303030313037383030303130303030303030303030\n6865780931343030303030303034363130303063303030303030313033303030303130303030303030313030\n6865780931373030303030303034363130303039303030303030313033303030303130303030303030303030303030303030\n68657809316530303030303030663737303031653030303030303032303030303030363630303063303030303030313037383030303130303030303030303030\n68657809323130303030303030663737303031393030303030303032303030303030363630303063303030303030313037383030303130303030303030303030303030303030\n686578093130303030303030303936343030303064633166643237376536303030303030\n686578093130303030303030303936343030666632376433656437636337666666663030\n686578093130303030303030303936343030666666666666666666666666666637663030\n686578093130303030303030303936343030303030303030303030303030303038303030\n686578093130303030303030303936343030303030306534366138333665636330313030\n686578093130303030303030303936343030303030303163393537633931333366653030\n686578093064303030303030303536323030303230303030303030303030\n6865780930383030303030303830373130303030\n686578093130303030303030303436313030303830303030303039393330303030303030\n686578093064303030303030303436313030653830333030303030303030\n686578093061303030303030313036393030303130323030\n686578093061303030303030303136343030303030303030\n6865780930623030303030303037366630303031303230333030\n68657809303930303030303031313734303030313030\n686578093061303030303030313336343030303130323030\n6865780930623030303030303062373230303631363236333030\n686578093133303030303030306337303030303530303030303036333666366336633030303130323030\n6f707473096461746574696d653d6175746f2032363030303030303039363430303030646331666432373765363030303030393635303066663237643365643763633766666666303936363030326563663335363436663031303030303030\n");
+    s.push_str("6f707473096461746574696d653d6175746f2033353030303030303035373530303130303030303030303430303031303230333034303530363037303830393061306230633064306530663035373630303130303030303030303330303031303230333034303530363037303830393061306230633064306530663030\n6f707473096461746574696d653d636c616d702032363030303030303039363430303030646331666432373765363030303030393635303066663237643365643763633766666666303936363030326563663335363436663031303030303030\n6f707473096461746574696d653d636c616d702033353030303030303035373530303130303030303030303430303031303230333034303530363037303830393061306230633064306530663035373630303130303030303030303330303031303230333034303530363037303830393061306230633064306530663030\n6f707473096461746574696d653d6d732032363030303030303039363430303030646331666432373765363030303030393635303066663237643365643763633766666666303936363030326563663335363436663031303030303030\n6f707473096461746574696d653d6d732033353030303030303035373530303130303030303030303430303031303230333034303530363037303830393061306230633064306530663035373630303130303030303030303330303031303230333034303530363037303830393061306230633064306530663030\n6f70747309757569643d7374616e646172642032363030303030303039363430303030646331666432373765363030303030393635303066663237643365643763633766666666303936363030326563663335363436663031303030303030\n6f70747309757569643d7374616e646172642033353030303030303035373530303130303030303030303430303031303230333034303530363037303830393061306230633064306530663035373630303130303030303030303330303031303230333034303530363037303830393061306230633064306530663030\n6f70747309757569643d707974686f6e4c65676163792032363030303030303039363430303030646331666432373765363030303030393635303066663237643365643763633766666666303936363030326563663335363436663031303030303030\n6f70747309757569643d707974686f6e4c65676163792033353030303030303035373530303130303030303030303430303031303230333034303530363037303830393061306230633064306530663035373630303130303030303030303330303031303230333034303530363037303830393061306230633064306530663030\n");
+    s.push_str("6f70747309757569643d6a6176614c65676163792032363030303030303039363430303030646331666432373765363030303030393635303066663237643365643763633766666666303936363030326563663335363436663031303030303030\n6f70747309757569643d6a6176614c65676163792033353030303030303035373530303130303030303030303430303031303230333034303530363037303830393061306230633064306530663035373630303130303030303030303330303031303230333034303530363037303830393061306230633064306530663030\n6f70747309757569643d6373686172704c65676163792032363030303030303039363430303030646331666432373765363030303030393635303066663237643365643763633766666666303936363030326563663335363436663031303030303030\n6f70747309757569643d6373686172704c65676163792033353030303030303035373530303130303030303030303430303031303230333034303530363037303830393061306230633064306530663035373630303130303030303030303330303031303230333034303530363037303830393061306230633064306530663030\n616c6c093063303030303030313036653030303130303030303030303130303030303030303237333030303430303030303037343737366630303030303930303030303030383632303030313030\n616c6c09\n616c6c09306330303030303031303665303030313030303030303030\n616c6c0930633030303030303130366530303031303030303030303031303030303030303032373330303034303030303030373437373666\n616c6c09306330303030303031303665303030313030303030303030303930303030303030383632303030353030303930303030303030383632303030313030\n616c6c093063303030303030313036653030303130303030303030303634303030303030\n616c6c093063303030303030313036653030303130303030303030303030\n616c6c09306330303030303031303665303030313030303030303030303030303030\n6f696409356632623363346435653666373038313932613362346335\n6f696409354632423343344435453646373038313932413342344335\n6f696409303030303030303030303030303030303030303030303030\n6f696409666666666666666666666666666666666666666666666666\n6f6964093566326233633464356536663730383139326133623463\n6f696409356632623363346435653666373038313932613362346367\n6f69640935663262203363346435653666373038313932613362346335\n6f696409356632623363346435653666203730383139326133623463\n");
+    s.push_str("6f696409356632622033633464203565366637303831393261336234\n6f696409\n6f69640969742773203234206368617273206c6f6e672e2e2e2e2e\n6f6964093566326233633464356536663730383139326133623463c3a9\n6f696474696d6509323032302d30312d30325430333a30343a30355a\n6f696474696d6509313937302d30312d30315430303a30303a30305a\n6f696474696d6509323130362d30322d30375430363a32383a31355a\n6f696474696d6509323033382d30312d31395430333a31343a30382e3939395a\n6f696474696d6509323130362d30322d30375430363a32383a31365a\n6f696474696d6509313936392d31322d33315432333a35393a35395a\n6465630931452b36313230\n6465630930452d36323030\n64656309312e30452d36313736\n646563092d31452d36313737\n64656309494e46\n64656309694e66496e497459\n64656309534e414e\n646563092d734e614e\n646563096e616e\n6465630931452d36313433\n64656309312e35652b30\n64656309306530\n6465630930\n646563092d30\n6465630931\n646563092d31\n64656309302e31\n64656309312e3530452b33\n6465630931452b33\n6465630931652d36\n64656309302e303030303031\n64656309302e30303030303031\n646563093132332e343536652d3130\n6465630931452b36313434\n6465630931452b36313435\n6465630931452d36313736\n6465630931452d36313737\n6465630930452d36313737\n6465630930452b37303030\n6465630931452b36313132\n646563093132333435363738393031323334353637383930313233343536373839303132333435\n6465630931323334353637383930313233343536373839303132333435363738393031323334\n64656309313233343536373839303132333435363738393031323334353637383930313233342e30\n64656309392e393939393939393939393939393939393939393939393939393939393939393939452b36313434\n64656309496e66696e697479\n646563092d696e66\n646563094e614e\n646563092d4e614e\n64656309734e614e\n646563094e614e3132\n64656309203720\n64656309315f303030\n646563092b2e35\n64656309352e\n646563092e\n64656309\n64656309616263\n646563093165\n646563092d302e3030452d32\n64656309313030452d32\n64656309302e303031452b35\n626964093031303030303030303030303030303030303030303030303030303034303330\n626964093030303030303030303030303030303030303030303030303030303030303030\n626964096666666666666666666666666666666666666666666666666666666630313330\n");
+    s.push_str("626964093030303030303030303030303030303030303030303030303030303030303765\n626964093030303030303030303030303030303030303030303030303030303030306665\n626964093031303030303030303030303030303030303030303030303030303036303763\n626964093030303030303030303030303030303030303030303030303030303037613566\n626964093061303030303030303030303030303030303030303030303030303066653566\n626964093030303030303030303030303030303030303030303030303030303030303638\n626964093030303030303030303030303030303030303030303030303030303063306538\n626964093030303030303030363438653864333763303837616462653039656434313330\n626964093031303030303030363438653864333763303837616462653039656434313330\n626964093031303030303030303030303030303030303030303030303030303031303630\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("dump/people.bson 53000000075f6964005f2b3c4d5e6f708192a3b4c0026e616d6500040000004164610010616765002400000004746167730011000000023000050000006d61746800000173636f72650000000000006058400062000000075f6964005f2b3c4d5e6f708192a3b4c1026e616d6500060000004772616365001061676500550000000474616773001e000000023000050000006e6176790002310006000000636f626f6c00000173636f7265000000000000c058400049000000075f6964005f2b3c4d5e6f708192a3b4c2026e616d6500060000004c696e75730010616765003600000004746167730005000000000173636f7265000000000000105640005a000000075f6964005f2b3c4d5e6f708192a3b4c3026e616d6500090000004d6172676172657400106167650057000000047461677300130000000230000700000061706f6c6c6f00000173636f7265000000000000005940005d000000075f6964005f2b3c4d5e6f708192a3b4c4026e616d6500040000004b656e001061676500510000000474616773001b00000002300005000000756e69780002310003000000676f00000173636f7265000000000000c0564000\ndump/orders.bson 5e000000106f726465720000000000046974656d7300220000000330001a00000002736b750003000000413000107174790000000000000013746f74616c00e803z12.3c30097768656e00401522348f010000007b000000106f726465720001000000046974656d73003f0000000330001a00000002736b750003000000413000107174790001000000000331001a00000002736b750003000000413100107174790002000000000013746f74616c00b106z12.3c30097768656e00287548398f0100000098000000106f726465720002000000046974656d73005c0000000330001a00000002736b750003000000413000107174790002000000000331001a00000002736b750003000000413100107174790003000000000332001a00000002736b750003000000413200107174790004000000000013746f74616c007a09z12.3c30097768656e0010d56e3e8f010000005e000000106f726465720003000000046974656d7300220000000330001a00000002736b750003000000413000107174790003000000000013746f74616c00430cz12.3c30097768656e00f83495438f010000007b000000106f726465720004000000046974656d73003f0000000330001a00000002736b750003000000413000107174790004000000000331001a00000002736b750003000000413100107174790005000000000013746f74616c000c0fz12.3c30097768656e00e094bb488f0100000098000000106f726465720005000000046974656d73005c0000000330001a00000002736b750003000000413000107174790005000000000331001a00000002736b750003000000413100107174790006000000000332001a00000002736b750003000000413200107174790007000000000013746f74616c00d511z12.3c30097768656e00c8f4e14d8f01000000\n");
+    s.push_str("dump/truncated.bson 0c000000106100010000000010000000026200040000007477\ndump/garbage.bson 0c0000001061000100000000070000002a0000\ndump/empty.bson \nimport/events.jsonl 7b226b696e64223a20226c6f67696e222c202275736572223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d2c20226174223a207b222464617465223a2022323032342d30352d30315430383a30303a30305a227d7d0a7b226b696e64223a2022627579222c2022616d6f756e74223a207b22246e756d626572446563696d616c223a202231392e3939227d2c2022636f756e74223a20322c20226174223a207b222464617465223a2022323032342d30352d30315430383a30353a33302e3235305a227d7d0a0a7b226b696e64223a2022626967222c20226e223a20393030373139393235343734303939332c2022726174696f223a20302e32357d0a7b226b696e64223a2022626164222c20226964223a207b22246f6964223a20226e6f7065227d7d0a7b226b696e64223a202268756765222c20226e223a2039393939393939393939393939393939393939397d0a7b226b696e64223a20226c6f676f7574222c202275736572223a207b22246f6964223a2022356632623363346435653666373038313932613362346335227d2c20226f6b223a20747275657d0a\n");
+    s
+}
