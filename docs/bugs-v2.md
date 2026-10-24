@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 15 |
 | false-positive | 14 |
 | diagnostics | 9 |
-| perf | 8 |
+| perf | 9 |
 | soundness | 4 |
 | miscompile | 3 |
 | run-vs-build | 3 |
@@ -73,14 +73,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 26 |
-| codegen | 23 |
+| codegen | 22 |
 | interp | 14 |
-| mir | 8 |
+| mir | 9 |
 | runtime | 7 |
 | cli | 7 |
 | ownership | 4 |
 | other | 2 |
-| mir-llvm | 1 |
+| mir-llvm | 2 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-24). Do not edit this block by hand; edit the ledger and regenerate._
@@ -116,7 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-23-8 | 2026-10-23 | typecheck+interp+codegen | low | `karac check` accepts `*x` on a binding from a pattern over a bare `for` element (a destructuring `for (o, n) in v` over a `Vec[(String, i64)]`, `if let Some(f) = g` inside `for g in v` over a `Vec[Option[String]]`, or a `match` arm `Seg.Code(v)` inside `for s in p.segs` over a field of a borrowed struct, where `v` is an `i64`), typing it as a borrow, while every MIR front end (`__mir-run`, `__mir-llvm-run`, `build --mir`) types it as the value type and refuses the `*` | — |
 | B-2026-10-23-10 | 2026-10-23 | typecheck | low | A top-level `fn todo(..)` (likewise `unreachable`, `panic`, and `ref_eq`, which is checked against the prelude intrinsic) is accepted but never called: `todo(1, 2)` is checked against the builtin, "todo() takes 0 or 1 argument(s), found 2", although design.md § The prelude says any local name shadows a prelude name | — |
 | B-2026-10-23-12 | 2026-10-23 | typecheck | medium | `karac check` accepts a `Map` whose value type defaulted to `i64` (`let mut m = Map.new(); m.insert(5, 9)`) where `Map[i64, u64]` is wanted as a struct or variant field (`S { m: m }`, `Store.Full(m)`) or a call argument, so the MIR builder makes invalid MIR ("field 0 of S has the wrong type"); the same shape on `Vec` (`let w: Vec[u8] = v` after `v.push(3)`) is refused | — |
-| B-2026-10-23-13 | 2026-10-23 | codegen | low | (NOT SMALL, kata thread 2026-10-24: 3.4x on kata 951's tuple match of two Option[shared] params, 1.31 s vs 0.39 s for nested matches) A `match` on a tuple of handle locals (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`) counts each handle into a built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads: kata 558's `intersect` pays four increments and four `drop.shared` calls per Split node for it, 8 of the 8 count sites its IR has left | — |
 | B-2026-10-23-14 | 2026-10-23 | cli | medium | v2 project mode (`karac build`/`run`/`test` with no file) refuses a whole-module `import` and a renaming `import ... as`, does not combine two modules' same-named items, and does not print the dependency summary or the legacy project-build reports; 19 cli tests ignored at the M3 deletion | — |
 | B-2026-10-23-15 | 2026-10-23 | cli | medium | `karac test` on v2 does not run the provider fixtures (`#[with_provider]` variants) of 8 cli tests and does not report what 6 more pin (legacy test-runner output); ignored at the M3 deletion | — |
 | B-2026-10-23-16 | 2026-10-23 | cli | low | The v2 build ignores `--monomorphization-budget`, `--enable-hot-swap` and a cross `--target`, and its `--output=json` carries no typecheck warnings; 10 cli tests ignored at the M3 deletion | — |
@@ -129,11 +128,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
 | B-2026-10-24-4 | 2026-10-24 | mir | medium | The MIR builder refuses an adaptor called on a value of generic type `I: Iterator[Item = i64]`: `it.map(|x| x + 1).count()` checks, and `__mir-run` and `__mir-llvm-run` stop with "the method call `.map` with no resolved callee is not lowered yet" | — |
 | B-2026-10-24-5 | 2026-10-24 | mir | high | MIR borrowck lets the borrowed place change while a ref read through a borrowed struct's `mut ref` field is still live, a use-after-free that `karac check` accepts | — |
-| B-2026-10-24-6 | 2026-10-24 | codegen+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 93 per word hash, against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
+| B-2026-10-24-6 | 2026-10-24 | mir-llvm+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 93 per word hash, against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
 | B-2026-10-24-7 | 2026-10-24 | typecheck | low | `c as i128` and `c as u128` on a `char` are refused with a bare "cannot cast 'char' to 'i128'", though `c as i64` and `c as u64` are accepted: integer_width_bits has no 128-bit entries, so check_cast_pair's char-to-wide-integer rule never sees them | — |
 | B-2026-10-24-8 | 2026-10-24 | mir | low | The MIR builder refuses `.into()` called straight on a unit-variant literal: `let b: B = A.Y.into();` checks (since eb790336d3), and `__mir-run` and `__mir-llvm-run` stop with "a call with no resolved callee is not lowered yet", while `(A.Y).into()` prints `Q` | — |
 | B-2026-10-24-9 | 2026-10-24 | mir | medium | A closure returned from a closure is tied to the callee: `let make = |n: i64| |x: i64| x + n; fs.push(make(i));` is refused by check and both MIR columns (E0509 "the result borrows `make`"), though §9.3 makes a returned closure own its captures and the same shape through `fn adder(n: i64) -> Fn(i64) -> i64` passes | — |
 | B-2026-10-24-10 | 2026-10-24 | mir | low | A borrow-check refusal names a MIR temporary: `let f = make("abc".to_string());` with `fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }` reports "drop of _2 while it is borrowed (borrow at 3:13) [E0516]" on check, where the reader needs the temporary `"abc".to_string()` and the binding `f` that borrows it | — |
+| B-2026-10-24-11 | 2026-10-24 | mir | low | A `match` on a tuple of handle LOCALS that outlive it (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`, kata 558's `intersect`) still counts each handle into the built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads | — |
 
 ### Fixed
 
@@ -155,6 +155,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-21-79 | typecheck | low | A type mismatch prints the string view as `StringSlice` where the source and the pages write `Str`: `Command.new("echo").args(a)` with `a: Vec[String… | f73dcc99bb |
 | B-2026-10-21-80 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A… | eb790336d3 |
 | B-2026-10-22-44 | cli+codegen | medium | A v2 `karac test` failure from `assert_eq`/`assert_ne` carries no `left`/`right`: the MIR assertion aborts with "assertion failed: left != right" and… | 31c59a1eb5 |
+| B-2026-10-23-13 | codegen | low | (NOT SMALL, kata thread 2026-10-24: 3.4x on kata 951's tuple match of two Option[shared] params, 1.31 s vs 0.39 s for nested matches) A `match` on a… | a97412f163 |
 | B-2026-10-24-3 | interp+codegen | high | `v.push(m.get(k).unwrap())` into a `Vec[i64]` stores the ADDRESS of the map's value, not the value: on mir-llvm and `karac build --mir` the element p… | bd015b5c7c |
 
 </details>
