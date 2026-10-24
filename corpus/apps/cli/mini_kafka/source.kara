@@ -1,0 +1,3144 @@
+// mini_kafka: a port of kafka-python 2.2.15's record formats and wire
+// protocol (Apache-2.0, Dana Powers, David Arthur and contributors).
+//
+// It reads and builds record batches in all three message formats (v0 and
+// v1 message sets, v2 record batches, gzip-compressed or not), partitions
+// keys with the producer's murmur2, maps broker error codes to their
+// classes, and runs KafkaProtocol's request framing and response parsing
+// over the request and response schemas kafka-python declares. The jobs
+// come from data/jobs.txt; oracle.py runs the same jobs on the vendored
+// library and wrote expected.out.
+
+// ------------------------------------------------------------ errors
+
+// A Python exception as the jobs print it. A broker error (a subclass of
+// BrokerResponseError) prints "[Error <errno>] <name>: <msg>"; every other
+// one, Kafka's own or Python's, "<name>: <msg>".
+#[derive(Clone)]
+struct Exc {
+    name: String,
+    msg: String,
+    errno: i64,
+    broker: bool,
+}
+
+fn exc(name: ref String, msg: ref String) -> Exc {
+    Exc { name: name.clone(), msg: msg.clone(), errno: 0, broker: false }
+}
+
+fn corrupt(msg: ref String) -> Exc {
+    Exc { name: "CorruptRecordError".to_string(), msg: msg.clone(), errno: 2, broker: true }
+}
+
+fn fmt_exc(e: ref Exc) -> String {
+    if e.broker {
+        f"[Error {e.errno}] {e.name}: {e.msg}"
+    } else {
+        f"{e.name}: {e.msg}"
+    }
+}
+
+// repr() of the exception, which "Found invalid record structure" quotes.
+fn exc_repr(e: ref Exc) -> String {
+    let m = str_repr(e.msg);
+    f"{e.name}({m})"
+}
+
+fn index_error() -> Exc {
+    exc("IndexError", "bytearray index out of range")
+}
+
+fn assertion(msg: ref String) -> Exc {
+    exc("AssertionError", msg)
+}
+
+// struct.unpack_from's complaint about a buffer too short.
+fn need(len: i64, offset: i64, size: i64) -> Result[(), Exc] {
+    if offset + size > len {
+        let at_least = offset + size;
+        return Err(exc("struct.error", f"unpack_from requires a buffer of at least {at_least} bytes for unpacking {size} bytes at offset {offset} (actual buffer size is {len})"));
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ bytes
+
+fn slice(b: ref Vec[u8], start: i64, end: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = if start < 0 { 0 } else { start };
+    let stop = if end > b.len() { b.len() } else { end };
+    while i < stop {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn append(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for x in b.iter() {
+        out.push(*x);
+    }
+}
+
+fn str_bytes(s: ref String) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+// Big-endian fields, unsigned and signed.
+fn be_u(b: ref Vec[u8], pos: i64, n: i64) -> i64 {
+    let mut v: i64 = 0;
+    for i in 0..n {
+        v = (v << 8) | (b[pos + i] as i64);
+    }
+    v
+}
+
+fn be_i(b: ref Vec[u8], pos: i64, n: i64) -> i64 {
+    let v = be_u(b, pos, n);
+    if n == 8 {
+        return v;
+    }
+    let top: i64 = 1 << (n * 8 - 1);
+    if v >= top { v - (top << 1) } else { v }
+}
+
+fn push_be(out: mut ref Vec[u8], v: i64, n: i64) {
+    let mut k = n - 1;
+    while k >= 0 {
+        out.push(((v >> (k * 8)) & 0xFF) as u8);
+        k -= 1;
+    }
+}
+
+fn put_be(out: mut ref Vec[u8], pos: i64, v: i64, n: i64) {
+    for i in 0..n {
+        out[pos + i] = ((v >> ((n - 1 - i) * 8)) & 0xFF) as u8;
+    }
+}
+
+fn hex_digit(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'a' + n - 10 }
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a' + 10) as i64
+    } else {
+        (c - b'A' + 10) as i64
+    }
+}
+
+fn to_hex(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for x in b.iter() {
+        out.push(hex_digit(*x / 16));
+        out.push(hex_digit(*x % 16));
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex8(v: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..8 {
+        out.push(hex_digit(((v >> ((7 - i) * 4)) & 15) as u8));
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// Python's hex(): 0x and no padding.
+fn py_hex(v: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut x = v;
+    while x > 0 {
+        out.insert(0, hex_digit((x % 16) as u8));
+        x = x / 16;
+    }
+    if out.len() == 0 {
+        out.push(b'0');
+    }
+    let s = String.from_utf8(out).unwrap();
+    f"0x{s}"
+}
+
+fn hexdump(b: ref Vec[u8], ind: ref String) {
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let line = to_hex(slice(b, i, i + 32));
+        println(f"{ind}{line}");
+        i += 32;
+    }
+}
+
+// ------------------------------------------------------------ checksums
+
+fn crc_table(poly: i64) -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    for n in 0..256 {
+        let mut c: i64 = n;
+        for k in 0..8 {
+            if (c & 1) == 1 {
+                c = (c >> 1) ^ poly;
+            } else {
+                c = c >> 1;
+            }
+        }
+        t.push(c);
+    }
+    t
+}
+
+struct Crcs {
+    zlib: Vec[i64],
+    castagnoli: Vec[i64],
+}
+
+fn make_crcs() -> Crcs {
+    Crcs { zlib: crc_table(0xEDB88320), castagnoli: crc_table(0x82F63B78) }
+}
+
+fn crc_with(t: ref Vec[i64], d: ref Vec[u8], from: i64, to: i64) -> i64 {
+    let mut c: i64 = 0xFFFFFFFF;
+    let mut i = from;
+    while i < to {
+        c = t[((c ^ (d[i] as i64)) & 0xFF)] ^ (c >> 8);
+        i += 1;
+    }
+    c ^ 0xFFFFFFFF
+}
+
+// binascii.crc32 for the v0/v1 formats, CRC-32C (record/_crc32c.py) for v2.
+fn crc32(k: ref Crcs, d: ref Vec[u8], from: i64, to: i64) -> i64 {
+    crc_with(k.zlib, d, from, to)
+}
+
+fn crc32c(k: ref Crcs, d: ref Vec[u8], from: i64, to: i64) -> i64 {
+    crc_with(k.castagnoli, d, from, to)
+}
+
+// ------------------------------------------------------------ repr
+
+fn push_esc(out: mut ref String, c: u32) {
+    out.push('\\');
+    out.push('x');
+    out.push(cp_char(hex_digit((c / 16) as u8) as u32));
+    out.push(cp_char(hex_digit((c % 16) as u8) as u32));
+}
+
+fn cp_char(cp: u32) -> char {
+    match char.try_from(cp) {
+        Ok(c) => c,
+        Err(_) => '\u{FFFD}',
+    }
+}
+
+// Python's str repr. Of the non-ASCII characters only those of Latin-1
+// that Python does not print are escaped; the rest are taken as printable.
+fn str_repr(s: ref String) -> String {
+    let quote = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        let cp = c as u32;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if cp == 9 {
+            out.push_str("\\t");
+        } else if cp == 10 {
+            out.push_str("\\n");
+        } else if cp == 13 {
+            out.push_str("\\r");
+        } else if cp < 32 or (cp >= 127 and cp <= 160) or cp == 173 {
+            push_esc(mut out, cp);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let quote = if b.contains(b'\'') and not b.contains(b'"') { b'"' } else { b'\'' };
+    let mut out = String.new();
+    out.push('b');
+    out.push(cp_char(quote as u32));
+    for x in b.iter() {
+        let c = *x;
+        if c == quote or c == b'\\' {
+            out.push('\\');
+            out.push(cp_char(c as u32));
+        } else if c == b'\t' {
+            out.push_str("\\t");
+        } else if c == b'\n' {
+            out.push_str("\\n");
+        } else if c == b'\r' {
+            out.push_str("\\r");
+        } else if c < 32 or c >= 127 {
+            push_esc(mut out, c as u32);
+        } else {
+            out.push(cp_char(c as u32));
+        }
+    }
+    out.push(cp_char(quote as u32));
+    out
+}
+
+fn opt_bytes_repr(b: ref Option[Vec[u8]]) -> String {
+    match b {
+        Some(v) => bytes_repr(v),
+        None => "None".to_string(),
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// ------------------------------------------------------------ text
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn lines_of(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for ln in split_on(text, '\n').into_iter() {
+        if ln.len() > 0 {
+            out.push(ln);
+        }
+    }
+    out
+}
+
+fn unesc(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < cs.len() {
+        if cs[i] == '~' and i + 1 < cs.len() {
+            let c = cs[i + 1];
+            out.push(if c == 't' { '~' } else if c == 'b' { '\\' } else if c == 'q' { '"' } else if c == 'o' { '{' } else { '}' });
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn parse_int(s: ref String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == b'-' {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < b.len() {
+        v = v * 10 + ((b[i] - b'0') as i64);
+        i += 1;
+    }
+    if neg { -v } else { v }
+}
+
+// The record files' tokens: ~ is None, . the empty string, %XX a byte.
+fn untok(t: ref String) -> Option[Vec[u8]] {
+    if t == "~" {
+        return None;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if t == "." {
+        return Some(out);
+    }
+    let b = t.bytes().to_vec();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            out.push((hex_val(b[i + 1]) * 16 + hex_val(b[i + 2])) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    Some(out)
+}
+
+fn utf8(b: ref Vec[u8]) -> Result[String, Exc] {
+    match String.from_utf8(b.clone()) {
+        Ok(s) => Ok(s),
+        Err(_) => Err(exc("UnicodeDecodeError", "'utf-8' codec can't decode bytes")),
+    }
+}
+// ------------------------------------------------------------ inflate
+
+// The raw-deflate decoder of the mini_png port, for the gzip codec
+// (the zlib decompressor gzip.GzipFile reads members with).
+const LEN_BASE: Array[i64, 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+const LEN_EXTRA: Array[i64, 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+const DIST_BASE: Array[i64, 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+const DIST_EXTRA: Array[i64, 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+const CL_ORDER: Array[i64, 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+fn zeros(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+
+fn truncated() -> String {
+    "incomplete or truncated stream".to_string()
+}
+
+// A canonical Huffman code: how many codes of each length, and the
+// symbols in code order.
+struct Huff {
+    count: Vec[i64],
+    symbol: Vec[i64],
+    max: i64,
+}
+
+fn make_huff(lens: ref Vec[i64], start: i64, n: i64) -> Huff {
+    let mut count = zeros(16);
+    for i in 0..n {
+        count[lens[start + i]] += 1;
+    }
+    let mut offs = zeros(16);
+    for len in 1..15 {
+        offs[len + 1] = offs[len] + count[len];
+    }
+    let mut symbol = zeros(n);
+    for sym in 0..n {
+        let l = lens[start + sym];
+        if l != 0 {
+            symbol[offs[l]] = sym;
+            offs[l] += 1;
+        }
+    }
+    let mut max = 0;
+    for len in 1..16 {
+        if count[len] > 0 {
+            max = len;
+        }
+    }
+    Huff { count, symbol, max }
+}
+
+// zlib's inflate_table refuses an over-subscribed code, and an incomplete
+// one unless it is a single code of one bit for literals or distances.
+fn huff_ok(h: ref Huff, code_lengths: bool) -> bool {
+    let mut left = 1;
+    for len in 1..16 {
+        left = left << 1;
+        left -= h.count[len];
+        if left < 0 {
+            return false;
+        }
+    }
+    if left > 0 and h.max > 0 and (code_lengths or h.max != 1) {
+        return false;
+    }
+    true
+}
+
+struct Inflater {
+    pos: i64,
+    buf: i64,
+    cnt: i64,
+    out: Vec[i64],
+}
+
+impl Inflater {
+    fn bits(mut ref self, src: ref Vec[i64], need: i64) -> Result[i64, String] {
+        while self.cnt < need {
+            if self.pos >= src.len() {
+                return Err(truncated());
+            }
+            self.buf = self.buf | (src[self.pos] << self.cnt);
+            self.pos += 1;
+            self.cnt += 8;
+        }
+        let v = self.buf & ((1 << need) - 1);
+        self.buf = self.buf >> need;
+        self.cnt -= need;
+        Ok(v)
+    }
+
+    // The next symbol, or -1 for a code the table does not have.
+    fn symbol(mut ref self, src: ref Vec[i64], h: ref Huff) -> Result[i64, String] {
+        let mut code = 0;
+        let mut first = 0;
+        let mut index = 0;
+        let mut len = 1;
+        while len <= h.max {
+            code = code | self.bits(src, 1)?;
+            let count = h.count[len];
+            if code - count < first {
+                return Ok(h.symbol[index + code - first]);
+            }
+            index += count;
+            first += count;
+            first = first << 1;
+            code = code << 1;
+            len += 1;
+        }
+        Ok(-1)
+    }
+
+    fn stored(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        self.buf = 0;
+        self.cnt = 0;
+        let len = self.bits(src, 16)?;
+        let nlen = self.bits(src, 16)?;
+        if len != (nlen ^ 0xFFFF) {
+            return Err("invalid stored block lengths".to_string());
+        }
+        for k in 0..len {
+            if self.pos >= src.len() {
+                return Err(truncated());
+            }
+            self.out.push(src[self.pos]);
+            self.pos += 1;
+        }
+        Ok(())
+    }
+
+    fn codes(mut ref self, src: ref Vec[i64], lit: ref Huff, dist: ref Huff) -> Result[(), String] {
+        loop {
+            let sym = self.symbol(src, lit)?;
+            if sym < 0 {
+                return Err("invalid literal/length code".to_string());
+            }
+            if sym < 256 {
+                self.out.push(sym);
+            } else if sym == 256 {
+                return Ok(());
+            } else {
+                let k = sym - 257;
+                if k >= 29 {
+                    return Err("invalid literal/length code".to_string());
+                }
+                let len = LEN_BASE[k] + self.bits(src, LEN_EXTRA[k])?;
+                let ds = self.symbol(src, dist)?;
+                if ds < 0 or ds >= 30 {
+                    return Err("invalid distance code".to_string());
+                }
+                let d = DIST_BASE[ds] + self.bits(src, DIST_EXTRA[ds])?;
+                if d > self.out.len() {
+                    return Err("invalid distance too far back".to_string());
+                }
+                for m in 0..len {
+                    let v = self.out[self.out.len() - d];
+                    self.out.push(v);
+                }
+            }
+        }
+    }
+
+    fn fixed(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        let mut lens: Vec[i64] = Vec.new();
+        for i in 0..288 {
+            lens.push(if i < 144 { 8 } else if i < 256 { 9 } else if i < 280 { 7 } else { 8 });
+        }
+        let lit = make_huff(lens, 0, 288);
+        let mut dl: Vec[i64] = Vec.new();
+        for i in 0..30 {
+            dl.push(5);
+        }
+        let dist = make_huff(dl, 0, 30);
+        self.codes(src, lit, dist)
+    }
+
+    fn dynamic(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        let nlen = self.bits(src, 5)? + 257;
+        let ndist = self.bits(src, 5)? + 1;
+        let ncode = self.bits(src, 4)? + 4;
+        if nlen > 286 or ndist > 30 {
+            return Err("too many length or distance symbols".to_string());
+        }
+        let mut cl = zeros(19);
+        for i in 0..ncode {
+            cl[CL_ORDER[i]] = self.bits(src, 3)?;
+        }
+        let clh = make_huff(cl, 0, 19);
+        if not huff_ok(clh, true) {
+            return Err("invalid code lengths set".to_string());
+        }
+        let total = nlen + ndist;
+        let mut lens = zeros(total);
+        let mut idx = 0;
+        while idx < total {
+            let sym = self.symbol(src, clh)?;
+            if sym < 0 {
+                return Err("invalid code lengths set".to_string());
+            }
+            if sym < 16 {
+                lens[idx] = sym;
+                idx += 1;
+            } else {
+                let mut v = 0;
+                let mut rep = 0;
+                if sym == 16 {
+                    if idx == 0 {
+                        return Err("invalid bit length repeat".to_string());
+                    }
+                    v = lens[idx - 1];
+                    rep = 3 + self.bits(src, 2)?;
+                } else if sym == 17 {
+                    rep = 3 + self.bits(src, 3)?;
+                } else {
+                    rep = 11 + self.bits(src, 7)?;
+                }
+                if idx + rep > total {
+                    return Err("invalid bit length repeat".to_string());
+                }
+                for k in 0..rep {
+                    lens[idx] = v;
+                    idx += 1;
+                }
+            }
+        }
+        if lens[256] == 0 {
+            return Err("invalid code -- missing end-of-block".to_string());
+        }
+        let lit = make_huff(lens, 0, nlen);
+        if not huff_ok(lit, false) {
+            return Err("invalid literal/lengths set".to_string());
+        }
+        let dist = make_huff(lens, nlen, ndist);
+        if not huff_ok(dist, false) {
+            return Err("invalid distances set".to_string());
+        }
+        self.codes(src, lit, dist)
+    }
+}
+
+
+fn inflate_blocks(s: mut ref Inflater, z: ref Vec[i64]) -> Result[(), String] {
+    loop {
+        let last = s.bits(z, 1)?;
+        let kind = s.bits(z, 2)?;
+        if kind == 0 {
+            s.stored(z)?;
+        } else if kind == 1 {
+            s.fixed(z)?;
+        } else if kind == 2 {
+            s.dynamic(z)?;
+        } else {
+            return Err("invalid block type".to_string());
+        }
+        if last == 1 {
+            return Ok(());
+        }
+    }
+}
+
+
+// gzip_decode: gzip.GzipFile(fileobj=BytesIO(payload)).read() as Python
+// 3.13 reads it. Members follow one another, each a header with its
+// optional fields, a raw deflate stream, and the CRC-32 and size of what
+// it held; zero bytes between members are skipped.
+fn gz_eof() -> Exc {
+    exc("EOFError", "Compressed file ended before the end-of-stream marker was reached")
+}
+
+fn gunzip(k: ref Crcs, d: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut z: Vec[i64] = Vec.new();
+    for b in d.iter() {
+        z.push(*b as i64);
+    }
+    let n = d.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut pos: i64 = 0;
+    loop {
+        let magic = slice(d, pos, pos + 2);
+        pos += magic.len();
+        if magic.len() == 0 {
+            return Ok(out);
+        }
+        if magic.len() != 2 or magic[0] != 0x1F or magic[1] != 0x8B {
+            let m = bytes_repr(magic);
+            return Err(exc("BadGzipFile", f"Not a gzipped file ({m})"));
+        }
+        if pos + 8 > n {
+            return Err(gz_eof());
+        }
+        let method = d[pos];
+        let flag = d[pos + 1];
+        pos += 8;
+        if method != 8 {
+            return Err(exc("BadGzipFile", "Unknown compression method"));
+        }
+        if (flag & 4) != 0 {
+            if pos + 2 > n {
+                return Err(gz_eof());
+            }
+            let xlen = (d[pos] as i64) | ((d[pos + 1] as i64) << 8);
+            pos += 2;
+            if pos + xlen > n {
+                return Err(gz_eof());
+            }
+            pos += xlen;
+        }
+        for bit in [8u8, 16u8] {
+            if (flag & bit) != 0 {
+                loop {
+                    if pos >= n {
+                        break;
+                    }
+                    let c = d[pos];
+                    pos += 1;
+                    if c == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+        if (flag & 2) != 0 {
+            if pos + 2 > n {
+                return Err(gz_eof());
+            }
+            pos += 2;
+        }
+        let mut s = Inflater { pos: pos, buf: 0, cnt: 0, out: Vec.new() };
+        match inflate_blocks(mut s, z) {
+            Ok(()) => {}
+            Err(m) => {
+                if m == truncated() {
+                    return Err(gz_eof());
+                }
+                return Err(exc("zlib.error", f"Error -3 while decompressing data: {m}"));
+            }
+        }
+        pos = s.pos;
+        let mut member: Vec[u8] = Vec.new();
+        for v in s.out.iter() {
+            member.push(*v as u8);
+        }
+        if pos + 8 > n {
+            return Err(gz_eof());
+        }
+        let stored = (d[pos] as i64) | ((d[pos + 1] as i64) << 8) | ((d[pos + 2] as i64) << 16) | ((d[pos + 3] as i64) << 24);
+        let isize = (d[pos + 4] as i64) | ((d[pos + 5] as i64) << 8) | ((d[pos + 6] as i64) << 16) | ((d[pos + 7] as i64) << 24);
+        pos += 8;
+        let crc = crc32(k, member, 0, member.len());
+        if stored != crc {
+            let a = py_hex(stored);
+            let b = py_hex(crc);
+            return Err(exc("BadGzipFile", f"CRC check failed {a} != {b}"));
+        }
+        if isize != (member.len() & 0xFFFFFFFF) {
+            return Err(exc("BadGzipFile", "Incorrect length of data produced"));
+        }
+        append(mut out, member);
+        while pos < n and d[pos] == 0 {
+            pos += 1;
+        }
+    }
+}
+
+// ------------------------------------------------------------ varints
+
+// record/util.py: zigzag varints, as the v2 format writes its record
+// fields. The value goes through (v << 1) ^ (v >> 63) first.
+fn zigzag(v: i64) -> i64 {
+    (v << 1) ^ (v >> 63)
+}
+
+fn encode_varint(v: i64, out: mut ref Vec[u8]) {
+    let mut z = zigzag(v);
+    while z > 127 {
+        out.push((128 | (z & 127)) as u8);
+        z = z >> 7;
+    }
+    out.push(z as u8);
+}
+
+fn size_of_varint(v: i64) -> i64 {
+    let z = zigzag(v);
+    if z <= 127 {
+        1
+    } else if z <= 16383 {
+        2
+    } else if z <= 2097151 {
+        3
+    } else if z <= 268435455 {
+        4
+    } else if z <= 34359738367 {
+        5
+    } else if z <= 4398046511103 {
+        6
+    } else if z <= 562949953421311 {
+        7
+    } else if z <= 72057594037927935 {
+        8
+    } else {
+        9
+    }
+}
+
+// decode_varint: reading past the end is buffer[pos]'s IndexError, and a
+// tenth byte with its continuation bit set is "Out of int64 range".
+fn decode_varint(b: ref Vec[u8], at: i64) -> Result[(i64, i64), Exc] {
+    let mut pos = at;
+    if pos >= b.len() {
+        return Err(index_error());
+    }
+    let first = b[pos] as i64;
+    if (first & 129) == 0 {
+        return Ok((first >> 1, pos + 1));
+    }
+    if (first & 128) == 0 {
+        return Ok(((first >> 1) ^ -1, pos + 1));
+    }
+    let mut result: u64 = (first & 127) as u64;
+    pos += 1;
+    let mut shift: i64 = 7;
+    loop {
+        if pos >= b.len() {
+            return Err(index_error());
+        }
+        let c = b[pos];
+        if shift < 63 {
+            result = result | (((c & 127) as u64) << (shift as u64));
+        } else {
+            result = result | (((c & 1) as u64) << 63u64);
+        }
+        pos += 1;
+        if (c & 128) == 0 {
+            let half = (result >> 1u64) as i64;
+            let low = (result & 1u64) as i64;
+            return Ok((half ^ -low, pos));
+        }
+        shift += 7;
+        if shift >= 64 {
+            return Err(exc("ValueError", "Out of int64 range"));
+        }
+    }
+}
+
+// ------------------------------------------------------------ v2 batches
+
+// default_records.py: a record of a v2 batch, or of a control batch, where
+// the key holds the marker's version and type.
+#[derive(Clone)]
+struct Rec {
+    size: i64,
+    offset: i64,
+    timestamp: i64,
+    ts_type: i64,
+    key: Option[Vec[u8]],
+    value: Option[Vec[u8]],
+    headers: Vec[(String, Option[Vec[u8]])],
+    control: bool,
+    version: i64,
+    kind: i64,
+}
+
+fn headers_repr(hs: ref Vec[(String, Option[Vec[u8]])]) -> String {
+    let mut out = "[".to_string();
+    let mut first = true;
+    for h in hs.iter() {
+        if not first {
+            out.push_str(", ");
+        }
+        first = false;
+        let (k, v) = h.clone();
+        let kr = str_repr(k);
+        let vr = opt_bytes_repr(v);
+        out.push_str(f"({kr}, {vr})");
+    }
+    out.push_str("]");
+    out
+}
+
+fn rec_repr(r: ref Rec) -> String {
+    if r.control {
+        let word = if r.kind == 0 { "abort" } else { "commit" };
+        return f"ControlRecord(offset={r.offset}, timestamp={r.timestamp}, timestamp_type={r.ts_type}, version={r.version}, type={r.kind} <{word}>)";
+    }
+    let k = opt_bytes_repr(r.key);
+    let v = opt_bytes_repr(r.value);
+    let h = headers_repr(r.headers);
+    f"DefaultRecord(offset={r.offset}, timestamp={r.timestamp}, timestamp_type={r.ts_type}, key={k}, value={v}, headers={h})"
+}
+
+// HEADER_STRUCT '>qiibIhiqqqhii', 61 bytes.
+struct V2Batch {
+    buf: Vec[u8],
+    pos: i64,
+    base_offset: i64,
+    length: i64,
+    leader_epoch: i64,
+    magic: i64,
+    crc: i64,
+    attributes: i64,
+    last_offset_delta: i64,
+    first_ts: i64,
+    max_ts: i64,
+    producer_id: i64,
+    producer_epoch: i64,
+    base_sequence: i64,
+    num_records: i64,
+    next_index: i64,
+    decompressed: bool,
+}
+
+const MAX_INT: i64 = 2147483647;
+
+fn v2_batch(buf: own Vec[u8]) -> Result[V2Batch, Exc] {
+    need(buf.len(), 0, 61)?;
+    let b = V2Batch {
+        base_offset: be_i(buf, 0, 8),
+        length: be_i(buf, 8, 4),
+        leader_epoch: be_i(buf, 12, 4),
+        magic: be_i(buf, 16, 1),
+        crc: be_u(buf, 17, 4),
+        attributes: be_i(buf, 21, 2),
+        last_offset_delta: be_i(buf, 23, 4),
+        first_ts: be_i(buf, 27, 8),
+        max_ts: be_i(buf, 35, 8),
+        producer_id: be_i(buf, 43, 8),
+        producer_epoch: be_i(buf, 51, 2),
+        base_sequence: be_i(buf, 53, 4),
+        num_records: be_i(buf, 57, 4),
+        pos: 61,
+        next_index: 0,
+        decompressed: false,
+        buf: buf,
+    };
+    Ok(b)
+}
+
+// _assert_has_codec: only gzip ships with Python.
+fn v2_codec_check(codec: i64) -> Result[(), Exc] {
+    let name = if codec == 1 {
+        "gzip"
+    } else if codec == 2 {
+        "snappy"
+    } else if codec == 3 {
+        "lz4"
+    } else if codec == 4 {
+        "zstd"
+    } else {
+        return Err(exc("UnsupportedCodecError", f"Unrecognized compression type: {codec}"));
+    };
+    if codec != 1 {
+        return Err(exc("UnsupportedCodecError", f"Libraries for {name} compression codec not found"));
+    }
+    Ok(())
+}
+
+impl V2Batch {
+    fn ts_type(ref self) -> i64 {
+        if (self.attributes & 8) != 0 { 1 } else { 0 }
+    }
+
+    fn last_sequence(ref self) -> i64 {
+        if self.base_sequence == -1 {
+            return -1;
+        }
+        let inc = self.last_offset_delta;
+        if self.base_sequence > MAX_INT - inc {
+            return inc - (MAX_INT - self.base_sequence) - 1;
+        }
+        self.base_sequence + inc
+    }
+
+    fn describe(ref self) -> String {
+        let txn = py_bool((self.attributes & 16) != 0);
+        f"DefaultRecordBatch(magic={self.magic}, base_offset={self.base_offset}, last_offset_delta={self.last_offset_delta}, first_timestamp={self.first_ts}, max_timestamp={self.max_ts}, is_transactional={txn}, producer_id={self.producer_id}, producer_epoch={self.producer_epoch}, base_sequence={self.base_sequence}, records_count={self.num_records})"
+    }
+
+    fn validate_crc(ref self, k: ref Crcs) -> bool {
+        self.crc == crc32c(k, self.buf, 21, self.buf.len())
+    }
+
+    fn uncompress(mut ref self, k: ref Crcs) -> Result[(), Exc] {
+        if not self.decompressed {
+            let codec = self.attributes & 7;
+            if codec != 0 {
+                v2_codec_check(codec)?;
+                let data = slice(self.buf, self.pos, self.buf.len());
+                self.buf = gunzip(k, data)?;
+                self.pos = 0;
+            }
+        }
+        self.decompressed = true;
+        Ok(())
+    }
+
+    fn read_msg(mut ref self) -> Result[Rec, Exc] {
+        let (length, p1) = decode_varint(self.buf, self.pos)?;
+        let start = p1;
+        let (_attr, p2) = decode_varint(self.buf, p1)?;
+        let (ts_delta, p3) = decode_varint(self.buf, p2)?;
+        let timestamp = if self.ts_type() == 1 { self.max_ts } else { self.first_ts + ts_delta };
+        let (off_delta, p4) = decode_varint(self.buf, p3)?;
+        let offset = self.base_offset + off_delta;
+        let (key_len, p5) = decode_varint(self.buf, p4)?;
+        let mut pos = p5;
+        let mut key: Option[Vec[u8]] = None;
+        if key_len >= 0 {
+            key = Some(slice(self.buf, pos, pos + key_len));
+            pos += key_len;
+        }
+        let (value_len, p6) = decode_varint(self.buf, pos)?;
+        pos = p6;
+        let mut value: Option[Vec[u8]] = None;
+        if value_len >= 0 {
+            value = Some(slice(self.buf, pos, pos + value_len));
+            pos += value_len;
+        }
+        let (count, p7) = decode_varint(self.buf, pos)?;
+        pos = p7;
+        if count < 0 {
+            return Err(corrupt(f"Found invalid number of record headers {count}"));
+        }
+        let mut headers: Vec[(String, Option[Vec[u8]])] = Vec.new();
+        let mut left = count;
+        while left > 0 {
+            let (hk_len, q1) = decode_varint(self.buf, pos)?;
+            pos = q1;
+            if hk_len < 0 {
+                return Err(corrupt(f"Invalid negative header key size {hk_len}"));
+            }
+            let hk = utf8(slice(self.buf, pos, pos + hk_len))?;
+            pos += hk_len;
+            let (hv_len, q2) = decode_varint(self.buf, pos)?;
+            pos = q2;
+            let mut hv: Option[Vec[u8]] = None;
+            if hv_len >= 0 {
+                hv = Some(slice(self.buf, pos, pos + hv_len));
+                pos += hv_len;
+            }
+            headers.push((hk, hv));
+            left -= 1;
+        }
+        if pos - start != length {
+            let got = pos - start;
+            return Err(corrupt(f"Invalid record size: expected to read {length} bytes in record payload, but instead read {got}"));
+        }
+        self.pos = pos;
+        let mut r = Rec { size: length, offset, timestamp, ts_type: self.ts_type(), key: key.clone(), value, headers, control: false, version: 0, kind: 0 };
+        if (self.attributes & 32) != 0 {
+            // ControlRecord.KEY_STRUCT '>hh' unpacks the key.
+            match key {
+                Some(kb) => {
+                    if kb.len() != 4 {
+                        return Err(exc("struct.error", "unpack requires a buffer of 4 bytes"));
+                    }
+                    r.control = true;
+                    r.version = be_i(kb, 0, 2);
+                    r.kind = be_i(kb, 2, 2);
+                }
+                None => return Err(exc("TypeError", "a bytes-like object is required, not 'NoneType'")),
+            }
+        }
+        Ok(r)
+    }
+
+    // __next__: None at the end, after checking nothing is left over.
+    fn next(mut ref self) -> Result[Option[Rec], Exc] {
+        if self.next_index >= self.num_records {
+            if self.pos != self.buf.len() {
+                let left = self.buf.len() - self.pos;
+                return Err(corrupt(f"{left} unconsumed bytes after all records consumed"));
+            }
+            return Ok(None);
+        }
+        match self.read_msg() {
+            Ok(r) => {
+                self.next_index += 1;
+                Ok(Some(r))
+            }
+            Err(e) => {
+                if e.name == "ValueError" or e.name == "IndexError" or e.name == "UnicodeDecodeError" {
+                    let r = exc_repr(e);
+                    return Err(corrupt(f"Found invalid record structure: {r}"));
+                }
+                Err(e)
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ v0 / v1
+
+// legacy_records.py: '>qiIbb' (v0) and '>qiIbbq' (v1) message headers.
+#[derive(Clone)]
+struct LHeader {
+    offset: i64,
+    length: i64,
+    crc: i64,
+    magic: i64,
+    attrs: i64,
+    timestamp: Option[i64],
+}
+
+fn read_lheader(buf: ref Vec[u8], magic: i64, pos: i64) -> Result[LHeader, Exc] {
+    let size = if magic == 0 { 18 } else { 26 };
+    need(buf.len(), pos, size)?;
+    let ts = if magic == 0 { None } else { Some(be_i(buf, pos + 18, 8)) };
+    Ok(LHeader {
+        offset: be_i(buf, pos, 8),
+        length: be_i(buf, pos + 8, 4),
+        crc: be_u(buf, pos + 12, 4),
+        magic: be_i(buf, pos + 16, 1),
+        attrs: be_i(buf, pos + 17, 1),
+        timestamp: ts,
+    })
+}
+
+#[derive(Clone)]
+struct LRec {
+    magic: i64,
+    offset: i64,
+    timestamp: Option[i64],
+    ts_type: Option[i64],
+    key: Option[Vec[u8]],
+    value: Option[Vec[u8]],
+    crc: i64,
+    crc_ok: bool,
+}
+
+fn opt_int(v: ref Option[i64]) -> String {
+    match v {
+        Some(x) => f"{x}",
+        None => "None".to_string(),
+    }
+}
+
+fn lrec_repr(r: ref LRec) -> String {
+    let ts = opt_int(r.timestamp);
+    let tt = opt_int(r.ts_type);
+    let k = opt_bytes_repr(r.key);
+    let v = opt_bytes_repr(r.value);
+    f"LegacyRecord(magic={r.magic} offset={r.offset}, timestamp={ts}, timestamp_type={tt}, key={k}, value={v}, crc={r.crc})"
+}
+
+fn opt_len(b: ref Option[Vec[u8]]) -> i64 {
+    match b {
+        Some(v) => v.len(),
+        None => 0,
+    }
+}
+
+// LegacyRecord.size_in_bytes: estimate_size_in_bytes(magic, None, key, value).
+fn lrec_size(r: ref LRec) -> i64 {
+    let overhead = if r.magic == 0 { 14 } else { 22 };
+    12 + overhead + opt_len(r.key) + opt_len(r.value)
+}
+
+struct LBatch {
+    buf: Vec[u8],
+    magic: i64,
+    head: LHeader,
+}
+
+fn legacy_batch(buf: own Vec[u8], magic: i64) -> Result[LBatch, Exc] {
+    let head = read_lheader(buf, magic, 0)?;
+    if head.length != buf.len() - 12 or head.magic != magic {
+        return Err(assertion(""));
+    }
+    Ok(LBatch { buf, magic, head })
+}
+
+fn read_i32_at(buf: ref Vec[u8], pos: i64) -> Result[i64, Exc] {
+    need(buf.len(), pos, 4)?;
+    Ok(be_i(buf, pos, 4))
+}
+
+// _read_key_value: -1 is None.
+fn read_key_value(buf: ref Vec[u8], at: i64) -> Result[(Option[Vec[u8]], Option[Vec[u8]]), Exc] {
+    let mut pos = at;
+    let key_size = read_i32_at(buf, pos)?;
+    pos += 4;
+    let mut key: Option[Vec[u8]] = None;
+    if key_size != -1 {
+        key = Some(slice(buf, pos, pos + key_size));
+        pos += key_size;
+    }
+    let value_size = read_i32_at(buf, pos)?;
+    pos += 4;
+    let mut value: Option[Vec[u8]] = None;
+    if value_size != -1 {
+        value = Some(slice(buf, pos, pos + value_size));
+    }
+    Ok((key, value))
+}
+
+impl LBatch {
+    fn codec(ref self) -> i64 {
+        self.head.attrs & 7
+    }
+
+    fn ts_type(ref self) -> Option[i64] {
+        if self.magic == 0 {
+            None
+        } else if (self.head.attrs & 8) != 0 {
+            Some(1)
+        } else {
+            Some(0)
+        }
+    }
+
+    fn validate_crc(ref self, k: ref Crcs) -> bool {
+        self.head.crc == crc32(k, self.buf, 16, self.buf.len())
+    }
+
+    fn decompress(ref self, k: ref Crcs, key_offset: i64) -> Result[Vec[u8], Exc] {
+        let mut pos = key_offset;
+        let key_size = read_i32_at(self.buf, pos)?;
+        pos += 4;
+        if key_size != -1 {
+            pos += key_size;
+        }
+        let value_size = read_i32_at(self.buf, pos)?;
+        pos += 4;
+        if value_size == -1 {
+            return Err(corrupt("Value of compressed message is None"));
+        }
+        let data = slice(self.buf, pos, pos + value_size);
+        let codec = self.codec();
+        if codec == 2 {
+            return Err(exc("UnsupportedCodecError", "Libraries for snappy compression codec not found"));
+        }
+        if codec == 3 {
+            return Err(exc("UnsupportedCodecError", "Libraries for lz4 compression codec not found"));
+        }
+        if codec != 1 {
+            return Err(exc("UnboundLocalError", "cannot access local variable 'checker' where it is not associated with a value"));
+        }
+        gunzip(k, data)
+    }
+
+    // __iter__: the records it yields, and the error that stopped it.
+    fn records(ref self, k: ref Crcs) -> (Vec[LRec], Option[Exc]) {
+        let mut out: Vec[LRec] = Vec.new();
+        let key_offset = if self.magic == 1 { 26 } else { 18 };
+        let ts_type = self.ts_type();
+        if self.codec() == 0 {
+            match read_key_value(self.buf, key_offset) {
+                Ok((key, value)) => {
+                    let ok = self.head.crc == crc32(k, self.buf, 16, self.buf.len());
+                    out.push(LRec { magic: self.magic, offset: self.head.offset, timestamp: self.head.timestamp, ts_type, key, value, crc: self.head.crc, crc_ok: ok });
+                    return (out, None);
+                }
+                Err(e) => return (out, Some(e)),
+            }
+        }
+        let inner = match self.decompress(k, key_offset) {
+            Ok(b) => b,
+            Err(e) => return (out, Some(e)),
+        };
+        let mut heads: Vec[(LHeader, i64)] = Vec.new();
+        let mut pos: i64 = 0;
+        while pos < inner.len() {
+            match read_lheader(inner, self.magic, pos) {
+                Ok(h) => {
+                    let len = h.length;
+                    heads.push((h, pos));
+                    pos += 12 + len;
+                }
+                Err(e) => return (out, Some(e)),
+            }
+        }
+        let mut absolute_base: i64 = -1;
+        if self.magic > 0 and heads.len() > 0 {
+            let (last, _) = heads[heads.len() - 1].clone();
+            absolute_base = self.head.offset - last.offset;
+        }
+        for hp in heads.iter() {
+            let (h, msg_pos) = hp.clone();
+            if (h.attrs & 7) != 0 {
+                return (out, Some(assertion(f"MessageSet at offset {h.offset} appears double-compressed. This should not happen -- check your producers!")));
+            }
+            let mut timestamp = h.timestamp;
+            if ts_type == Some(1) {
+                timestamp = self.head.timestamp;
+            }
+            let mut offset = h.offset;
+            if absolute_base >= 0 {
+                offset += absolute_base;
+            }
+            match read_key_value(inner, msg_pos + key_offset) {
+                Ok((key, value)) => {
+                    let end = msg_pos + 12 + h.length;
+                    let stop = if end > inner.len() { inner.len() } else { end };
+                    let ok = h.crc == crc32(k, inner, msg_pos + 16, stop);
+                    out.push(LRec { magic: self.magic, offset, timestamp, ts_type, key, value, crc: h.crc, crc_ok: ok });
+                }
+                Err(e) => return (out, Some(e)),
+            }
+        }
+        (out, None)
+    }
+}
+
+// ------------------------------------------------------------ record sets
+
+// memory_records.py: MemoryRecords slices a buffer into batches by their
+// length fields; a batch cut short ends the walk, and valid_bytes() is
+// what came before it.
+struct MemRecs {
+    buf: Vec[u8],
+    pos: i64,
+    next_start: i64,
+    next_end: i64,
+    has_next: bool,
+    remaining: i64,
+}
+
+fn mem_records(buf: own Vec[u8]) -> MemRecs {
+    let mut m = MemRecs { buf, pos: 0, next_start: 0, next_end: 0, has_next: false, remaining: -1 };
+    m.cache_next();
+    m
+}
+
+impl MemRecs {
+    fn cache_next(mut ref self) {
+        let len = self.buf.len();
+        let remaining = len - self.pos;
+        if remaining < 12 {
+            self.remaining = remaining;
+            self.has_next = false;
+            return;
+        }
+        let length = be_i(self.buf, self.pos + 8, 4);
+        let end = self.pos + 12 + length;
+        if end > len {
+            self.remaining = remaining;
+            self.has_next = false;
+            return;
+        }
+        self.has_next = true;
+        self.next_start = self.pos;
+        self.next_end = end;
+        self.pos = end;
+    }
+
+    fn valid_bytes(mut ref self) -> i64 {
+        if self.remaining < 0 {
+            let (s, e, h, p) = (self.next_start, self.next_end, self.has_next, self.pos);
+            while self.remaining < 0 {
+                self.cache_next();
+            }
+            self.next_start = s;
+            self.next_end = e;
+            self.has_next = h;
+            self.pos = p;
+        }
+        self.buf.len() - self.remaining
+    }
+}
+
+enum Batch {
+    Legacy(LBatch),
+    V2(V2Batch),
+}
+
+fn next_batch(m: mut ref MemRecs) -> Result[Batch, Exc] {
+    let piece = slice(m.buf, m.next_start, m.next_end);
+    if piece.len() < 26 {
+        return Err(corrupt("Record size is less than the minimum record overhead (14)"));
+    }
+    m.cache_next();
+    let magic = be_i(piece, 16, 1);
+    if magic <= 1 {
+        Ok(Batch.Legacy(legacy_batch(piece, magic)?))
+    } else {
+        Ok(Batch.V2(v2_batch(piece)?))
+    }
+}
+
+fn show_v2(k: ref Crcs, b: mut ref V2Batch, ind: ref String) -> Result[(), Exc] {
+    let line = b.describe();
+    println(f"{ind}{line}");
+    let crc = hex8(b.crc);
+    let valid = py_bool(b.validate_crc(k));
+    let size = b.length + 12;
+    let codec = b.attributes & 7;
+    let tt = b.ts_type();
+    let control = py_bool((b.attributes & 32) != 0);
+    let last_offset = b.base_offset + b.last_offset_delta;
+    let next_offset = last_offset + 1;
+    let has_pid = py_bool(b.producer_id > -1);
+    let seq = b.last_sequence();
+    println(f"{ind}  crc={crc} valid={valid} size={size} codec={codec} timestamp_type={tt} control={control} leader_epoch={b.leader_epoch} last_offset={last_offset} next_offset={next_offset} has_producer_id={has_pid} last_sequence={seq}");
+    b.uncompress(k)?;
+    loop {
+        match b.next()? {
+            Some(r) => {
+                let s = rec_repr(r);
+                println(f"{ind}  {s} size={r.size}");
+            }
+            None => return Ok(()),
+        }
+    }
+}
+
+fn show_legacy(k: ref Crcs, b: ref LBatch, ind: ref String) -> Result[(), Exc] {
+    let size = b.head.length + 12;
+    let tt = opt_int(b.ts_type());
+    let valid = py_bool(b.validate_crc(k));
+    let codec = b.codec();
+    println(f"{ind}LegacyRecordBatch(magic={b.magic}, base_offset={b.head.offset}, size={size}, codec={codec}, timestamp_type={tt}) valid={valid}");
+    let (recs, err) = b.records(k);
+    for r in recs.iter() {
+        let s = lrec_repr(r);
+        let ok = py_bool(r.crc_ok);
+        let n = lrec_size(r);
+        println(f"{ind}  {s} valid={ok} size={n}");
+    }
+    match err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+fn show_records(k: ref Crcs, buf: ref Vec[u8], ind: ref String) {
+    let mut m = mem_records(buf.clone());
+    let valid = m.valid_bytes();
+    let total = m.buf.len();
+    println(f"{ind}{total} bytes, {valid} valid");
+    while m.has_next {
+        let b = match next_batch(mut m) {
+            Ok(b) => b,
+            Err(e) => {
+                let s = fmt_exc(e);
+                println(f"{ind}error: {s}");
+                return;
+            }
+        };
+        let r = match b {
+            Batch.V2(v) => {
+                let mut v2 = v;
+                show_v2(k, mut v2, ind)
+            }
+            Batch.Legacy(l) => show_legacy(k, l, ind),
+        };
+        match r {
+            Ok(()) => {}
+            Err(e) => {
+                let s = fmt_exc(e);
+                println(f"{ind}  error: {s}");
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ building
+
+// MemoryRecordsBuilder over DefaultRecordBatchBuilder (v2) or
+// LegacyRecordBatchBuilder (v0, v1).
+struct Builder {
+    magic: i64,
+    codec: i64,
+    batch_size: i64,
+    next_offset: i64,
+    closed: bool,
+    txn: bool,
+    pid: i64,
+    epoch: i64,
+    seq: i64,
+    first_ts: Option[i64],
+    max_ts: i64,
+    last_offset: i64,
+    num_records: i64,
+    buf: Vec[u8],
+}
+
+// DefaultRecordMetadata, or LegacyRecordMetadata when crc is Some.
+struct Meta {
+    offset: i64,
+    crc: Option[i64],
+    size: i64,
+    timestamp: i64,
+}
+
+fn meta_repr(m: ref Meta) -> String {
+    match m.crc {
+        Some(c) => f"LegacyRecordMetadata(offset={m.offset}, crc={c}, size={m.size}, timestamp={m.timestamp})",
+        None => f"DefaultRecordMetadata(offset={m.offset}, size={m.size}, timestamp={m.timestamp})",
+    }
+}
+
+fn new_builder(magic: i64, codec: i64, batch_size: i64, offset: i64, txn: bool, pid: i64, epoch: i64, seq: i64) -> Result[Builder, Exc] {
+    if magic < 0 or magic > 2 {
+        return Err(assertion("Not supported magic"));
+    }
+    if codec < 0 or codec > 4 {
+        return Err(assertion("Not valid compression type"));
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    if magic >= 2 {
+        if txn and pid == -1 {
+            return Err(assertion("Cannot write transactional messages without a valid producer ID"));
+        }
+        if pid != -1 and epoch == -1 {
+            return Err(assertion("Invalid negative producer epoch"));
+        }
+        if pid != -1 and seq == -1 {
+            return Err(assertion("Invalid negative sequence number used"));
+        }
+        for i in 0..61 {
+            buf.push(0);
+        }
+    } else if txn or pid != -1 {
+        return Err(assertion(f"Idempotent messages are not supported for magic {magic}"));
+    }
+    Ok(Builder { magic, codec: codec & 7, batch_size, next_offset: offset, closed: false, txn, pid, epoch, seq, first_ts: None, max_ts: 0, last_offset: 0, num_records: 0, buf })
+}
+
+fn opt_size(b: ref Option[Vec[u8]]) -> i64 {
+    match b {
+        Some(v) => size_of_varint(v.len()) + v.len(),
+        None => 1,
+    }
+}
+
+// DefaultRecordBatchBuilder.size_of.
+fn size_of(key: ref Option[Vec[u8]], value: ref Option[Vec[u8]], headers: ref Vec[(String, Option[Vec[u8]])]) -> i64 {
+    let mut size = opt_size(key) + opt_size(value);
+    size += size_of_varint(headers.len());
+    for h in headers.iter() {
+        let (hk, hv) = h.clone();
+        let n = hk.len();
+        size += size_of_varint(n) + n;
+        size += opt_size(hv);
+    }
+    size
+}
+
+fn record_size(magic: i64, key: ref Option[Vec[u8]], value: ref Option[Vec[u8]]) -> i64 {
+    let overhead = if magic == 0 { 14 } else { 22 };
+    overhead + opt_len(key) + opt_len(value)
+}
+
+fn estimate(magic: i64, codec: i64, key: ref Option[Vec[u8]], value: ref Option[Vec[u8]], headers: ref Vec[(String, Option[Vec[u8]])]) -> i64 {
+    if magic == 2 {
+        return 61 + 21 + size_of(key, value, headers);
+    }
+    let overhead = if magic == 0 { 14 } else { 22 };
+    if codec != 0 {
+        return 12 + overhead + record_size(magic, key, value);
+    }
+    12 + record_size(magic, key, value)
+}
+
+fn push_opt(out: mut ref Vec[u8], b: ref Option[Vec[u8]]) {
+    match b {
+        Some(v) => {
+            encode_varint(v.len(), mut out);
+            append(mut out, v);
+        }
+        None => out.push(1),
+    }
+}
+
+fn push_sized(out: mut ref Vec[u8], b: ref Option[Vec[u8]]) {
+    match b {
+        Some(v) => {
+            push_be(mut out, v.len(), 4);
+            append(mut out, v);
+        }
+        None => push_be(mut out, -1, 4),
+    }
+}
+
+impl Builder {
+    fn append(mut ref self, k: ref Crcs, ts: Option[i64], key: ref Option[Vec[u8]], value: ref Option[Vec[u8]], headers: ref Vec[(String, Option[Vec[u8]])]) -> Result[Option[Meta], Exc] {
+        if self.closed {
+            return Ok(None);
+        }
+        let offset = self.next_offset;
+        let md = if self.magic == 2 {
+            self.append_v2(offset, ts.unwrap_or(0), key, value, headers)
+        } else {
+            self.append_legacy(k, offset, ts, key, value, headers)?
+        };
+        if md.is_some() {
+            self.next_offset += 1;
+        }
+        Ok(md)
+    }
+
+    fn append_v2(mut ref self, offset: i64, ts: i64, key: ref Option[Vec[u8]], value: ref Option[Vec[u8]], headers: ref Vec[(String, Option[Vec[u8]])]) -> Option[Meta] {
+        let mut first_message = false;
+        let mut delta: i64 = 0;
+        match self.first_ts {
+            Some(f) => delta = ts - f,
+            None => {
+                self.first_ts = Some(ts);
+                self.max_ts = ts;
+                first_message = true;
+            }
+        }
+        let mut msg: Vec[u8] = Vec.new();
+        msg.push(0);
+        encode_varint(delta, mut msg);
+        encode_varint(offset, mut msg);
+        push_opt(mut msg, key);
+        push_opt(mut msg, value);
+        encode_varint(headers.len(), mut msg);
+        for h in headers.iter() {
+            let (hk, hv) = h.clone();
+            let kb = str_bytes(hk);
+            encode_varint(kb.len(), mut msg);
+            append(mut msg, kb);
+            push_opt(mut msg, hv);
+        }
+        let message_len = msg.len();
+        let required = message_len + size_of_varint(message_len);
+        if required + self.buf.len() > self.batch_size and not first_message {
+            return None;
+        }
+        if self.max_ts < ts {
+            self.max_ts = ts;
+        }
+        self.num_records += 1;
+        self.last_offset = offset;
+        encode_varint(message_len, mut self.buf);
+        append(mut self.buf, msg);
+        Some(Meta { offset, crc: None, size: required, timestamp: ts })
+    }
+
+    fn append_legacy(mut ref self, k: ref Crcs, offset: i64, ts: Option[i64], key: ref Option[Vec[u8]], value: ref Option[Vec[u8]], headers: ref Vec[(String, Option[Vec[u8]])]) -> Result[Option[Meta], Exc] {
+        if headers.len() > 0 {
+            return Err(assertion("Headers not supported in v0/v1"));
+        }
+        let timestamp = if self.magic == 0 { -1 } else { ts.unwrap_or(0) };
+        let pos = self.buf.len();
+        let size = 12 + record_size(self.magic, key, value);
+        if offset != 0 and pos + size >= self.batch_size {
+            return Ok(None);
+        }
+        let crc = self.encode_msg(k, offset, timestamp, key, value, 0);
+        Ok(Some(Meta { offset, crc: Some(crc), size, timestamp }))
+    }
+
+    // _encode_msg, appended at the end of the buffer.
+    fn encode_msg(mut ref self, k: ref Crcs, offset: i64, timestamp: i64, key: ref Option[Vec[u8]], value: ref Option[Vec[u8]], attrs: i64) -> i64 {
+        let start = self.buf.len();
+        let mut m: Vec[u8] = Vec.new();
+        push_be(mut m, offset, 8);
+        let length = record_size(self.magic, key, value);
+        push_be(mut m, length, 4);
+        push_be(mut m, 0, 4);
+        m.push(self.magic as u8);
+        m.push(attrs as u8);
+        if self.magic == 1 {
+            push_be(mut m, timestamp, 8);
+        }
+        push_sized(mut m, key);
+        push_sized(mut m, value);
+        append(mut self.buf, m);
+        let crc = crc32(k, self.buf, start + 16, self.buf.len());
+        put_be(mut self.buf, start + 12, crc, 4);
+        crc
+    }
+
+    fn size(ref self) -> i64 {
+        self.buf.len()
+    }
+
+    fn is_full(ref self) -> bool {
+        self.closed or self.buf.len() >= self.batch_size
+    }
+
+    fn close(mut ref self, k: ref Crcs) -> Result[(), Exc] {
+        if self.closed {
+            return Ok(());
+        }
+        if self.magic == 2 {
+            if self.codec != 0 {
+                v2_codec_check(self.codec)?;
+                return Err(exc("NotImplementedError", "gzip_encode is not ported"));
+            }
+            let len = self.buf.len();
+            let txn_bit = if self.txn { 16 } else { 0 };
+            let attrs = txn_bit | self.codec;
+            let first = self.first_ts.unwrap_or(0);
+            let mut h: Vec[u8] = Vec.new();
+            push_be(mut h, 0, 8);
+            push_be(mut h, len - 12, 4);
+            push_be(mut h, 0, 4);
+            h.push(self.magic as u8);
+            push_be(mut h, 0, 4);
+            push_be(mut h, attrs, 2);
+            push_be(mut h, self.last_offset, 4);
+            push_be(mut h, first, 8);
+            push_be(mut h, if self.first_ts.is_some() { self.max_ts } else { 0 }, 8);
+            push_be(mut h, self.pid, 8);
+            push_be(mut h, self.epoch, 2);
+            push_be(mut h, self.seq, 4);
+            push_be(mut h, self.num_records, 4);
+            for i in 0..61 {
+                self.buf[i] = h[i];
+            }
+            let crc = crc32c(k, self.buf, 21, self.buf.len());
+            put_be(mut self.buf, 17, crc, 4);
+        } else if self.codec != 0 {
+            if self.codec == 2 {
+                return Err(exc("UnsupportedCodecError", "Libraries for snappy compression codec not found"));
+            }
+            if self.codec == 3 {
+                return Err(exc("UnsupportedCodecError", "Libraries for lz4 compression codec not found"));
+            }
+            if self.codec != 1 {
+                return Err(exc("UnboundLocalError", "cannot access local variable 'checker' where it is not associated with a value"));
+            }
+            return Err(exc("NotImplementedError", "gzip_encode is not ported"));
+        }
+        self.closed = true;
+        Ok(())
+    }
+}
+
+// ------------------------------------------------------------ partitioner
+
+// partitioner/default.py's murmur2, the Java client's hash: what decides
+// the partition of a keyed record.
+fn murmur2(data: ref Vec[u8]) -> i64 {
+    let length = data.len();
+    let seed: i64 = 2538058380;
+    let m: i64 = 1540483477;
+    let mask: i64 = 0xFFFFFFFF;
+    let mut h = seed ^ length;
+    let length4 = length / 4;
+    for i in 0..length4 {
+        let i4 = i * 4;
+        let mut k = (data[i4] as i64) + ((data[i4 + 1] as i64) << 8) + ((data[i4 + 2] as i64) << 16) + ((data[i4 + 3] as i64) << 24);
+        k = k & mask;
+        k = (k * m) & mask;
+        k = k ^ (k >> 24);
+        k = (k * m) & mask;
+        h = (h * m) & mask;
+        h = (h ^ k) & mask;
+    }
+    let extra = length % 4;
+    let tail = length - extra;
+    if extra >= 3 {
+        h = (h ^ ((data[tail + 2] as i64) << 16)) & mask;
+    }
+    if extra >= 2 {
+        h = (h ^ ((data[tail + 1] as i64) << 8)) & mask;
+    }
+    if extra >= 1 {
+        h = (h ^ (data[tail] as i64)) & mask;
+        h = (h * m) & mask;
+    }
+    h = (h ^ (h >> 13)) & mask;
+    h = (h * m) & mask;
+    h = (h ^ (h >> 15)) & mask;
+    h
+}
+
+// ------------------------------------------------------------ broker errors
+
+struct ErrInfo {
+    errno: i64,
+    name: String,
+    message: String,
+    retriable: bool,
+    invalid_metadata: bool,
+}
+
+fn error_table() -> Vec[ErrInfo] {
+    let mut out: Vec[ErrInfo] = Vec.new();
+    for ln in lines_of(errors_text()).iter() {
+        let f = split_on(ln, '|');
+        out.push(ErrInfo { errno: parse_int(f[0]), name: f[1].clone(), message: f[2].clone(), retriable: f[3] == "1", invalid_metadata: f[4] == "1" });
+    }
+    out
+}
+
+// for_code(): an unknown code gets a class made on the spot, an
+// UnknownError named UnrecognizedBrokerError with that errno.
+fn for_code(t: ref Vec[ErrInfo], code: i64) -> ErrInfo {
+    for e in t.iter() {
+        if e.errno == code {
+            return ErrInfo { errno: e.errno, name: e.name.clone(), message: e.message.clone(), retriable: e.retriable, invalid_metadata: e.invalid_metadata };
+        }
+    }
+    ErrInfo { errno: code, name: "UnrecognizedBrokerError".to_string(), message: "UNKNOWN".to_string(), retriable: false, invalid_metadata: false }
+}
+
+// ------------------------------------------------------------ protocol types
+
+// protocol/types.py, as a tree of nodes. gen_kara.py writes each class's
+// SCHEMA in a small notation: S(name:type ...) a Schema, A<t> an Array,
+// C<t> a CompactArray, and the primitive names below.
+const K_I8: i64 = 0;
+const K_I16: i64 = 1;
+const K_I32: i64 = 2;
+const K_I64: i64 = 3;
+const K_BOOL: i64 = 4;
+const K_STR: i64 = 5;
+const K_CSTR: i64 = 6;
+const K_BYTES: i64 = 7;
+const K_CBYTES: i64 = 8;
+const K_TAGS: i64 = 9;
+const K_UV32: i64 = 10;
+const K_ARRAY: i64 = 11;
+const K_CARRAY: i64 = 12;
+const K_SCHEMA: i64 = 13;
+
+#[derive(Clone)]
+struct TyNode {
+    kind: i64,
+    child: i64,
+    names: Vec[String],
+    fields: Vec[i64],
+}
+
+fn prim_kind(name: ref String) -> i64 {
+    let names = ["i8", "i16", "i32", "i64", "bool", "str", "cstr", "bytes", "cbytes", "tags", "uv32"];
+    for i in 0..names.len() {
+        if names[i] == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn parse_ty(cs: ref Vec[char], pos: mut ref i64, nodes: mut ref Vec[TyNode]) -> i64 {
+    let c = cs[pos];
+    if (c == 'A' or c == 'C') and cs[pos + 1] == '<' {
+        pos += 2;
+        let child = parse_ty(cs, mut pos, mut nodes);
+        pos += 1;
+        nodes.push(TyNode { kind: if c == 'A' { K_ARRAY } else { K_CARRAY }, child, names: Vec.new(), fields: Vec.new() });
+        return nodes.len() - 1;
+    }
+    if c == 'S' and cs[pos + 1] == '(' {
+        pos += 2;
+        let mut names: Vec[String] = Vec.new();
+        let mut fields: Vec[i64] = Vec.new();
+        while cs[pos] != ')' {
+            let mut name = String.new();
+            while cs[pos] != ':' {
+                name.push(cs[pos]);
+                pos += 1;
+            }
+            pos += 1;
+            names.push(name);
+            fields.push(parse_ty(cs, mut pos, mut nodes));
+            if cs[pos] == ' ' {
+                pos += 1;
+            }
+        }
+        pos += 1;
+        nodes.push(TyNode { kind: K_SCHEMA, child: -1, names, fields });
+        return nodes.len() - 1;
+    }
+    let mut name = String.new();
+    while pos < cs.len() and cs[pos] != ' ' and cs[pos] != ')' and cs[pos] != '>' {
+        name.push(cs[pos]);
+        pos += 1;
+    }
+    nodes.push(TyNode { kind: prim_kind(name), child: -1, names: Vec.new(), fields: Vec.new() });
+    nodes.len() - 1
+}
+
+// One request or response class: its API, version, key, the class name
+// repr() prints, and for a response whether it is a
+// BaseApiVersionsResponse (for a request: FLEXIBLE_VERSION).
+#[derive(Clone)]
+struct ApiDef {
+    api: String,
+    version: i64,
+    key: i64,
+    flag: bool,
+    class: String,
+    schema: i64,
+}
+
+struct Protocol {
+    nodes: Vec[TyNode],
+    reqs: Vec[ApiDef],
+    resps: Vec[ApiDef],
+    header: i64,
+    header_v2: i64,
+    resp_header: i64,
+}
+
+fn add_schema(nodes: mut ref Vec[TyNode], text: ref String) -> i64 {
+    let cs: Vec[char] = text.chars().collect();
+    let mut pos: i64 = 0;
+    parse_ty(cs, mut pos, mut nodes)
+}
+
+fn make_protocol() -> Protocol {
+    let mut nodes: Vec[TyNode] = Vec.new();
+    let mut reqs: Vec[ApiDef] = Vec.new();
+    let mut resps: Vec[ApiDef] = Vec.new();
+    for ln in lines_of(schemas_text()).iter() {
+        let f = split_on(ln, ' ');
+        let mut text = String.new();
+        for i in 6..f.len() {
+            if i > 6 {
+                text.push(' ');
+            }
+            text.push_str(f[i]);
+        }
+        let schema = add_schema(mut nodes, text);
+        let d = ApiDef { api: f[1].clone(), version: parse_int(f[2]), key: parse_int(f[3]), flag: f[4] == "1", class: f[5].clone(), schema };
+        if f[0] == "req" {
+            reqs.push(d);
+        } else {
+            resps.push(d);
+        }
+    }
+    let header = add_schema(mut nodes, "S(api_key:i16 api_version:i16 correlation_id:i32 client_id:str)");
+    let header_v2 = add_schema(mut nodes, "S(api_key:i16 api_version:i16 correlation_id:i32 client_id:str tags:tags)");
+    let resp_header = add_schema(mut nodes, "S(correlation_id:i32)");
+    Protocol { nodes, reqs, resps, header, header_v2, resp_header }
+}
+
+// ------------------------------------------------------------ values
+
+// The Python values a Struct holds.
+#[derive(Clone)]
+enum Val {
+    Nil,
+    Int(i64),
+    Bool(bool),
+    Str(String),
+    Bytes(Vec[u8]),
+    List(Vec[Val]),
+    Tuple(Vec[Val]),
+    Dict(Vec[(i64, Val)]),
+}
+
+#[allow(mutual_recursion_note)]
+fn join_reprs(items: ref Vec[Val]) -> String {
+    let mut out = String.new();
+    for i in 0..items.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_repr(items[i]));
+    }
+    out
+}
+
+#[allow(mutual_recursion_note)]
+fn py_repr(v: ref Val) -> String {
+    match v {
+        Val.Nil => "None".to_string(),
+        Val.Int(n) => f"{n}",
+        Val.Bool(b) => py_bool(*b),
+        Val.Str(s) => str_repr(s),
+        Val.Bytes(b) => bytes_repr(b),
+        Val.List(items) => {
+            let inner = join_reprs(items);
+            f"[{inner}]"
+        }
+        Val.Tuple(items) => {
+            let inner = join_reprs(items);
+            if items.len() == 1 { f"({inner},)" } else { f"({inner})" }
+        }
+        Val.Dict(entries) => {
+            let mut out = "{".to_string();
+            for i in 0..entries.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let (k, x) = entries[i].clone();
+                let r = py_repr(x);
+                out.push_str(f"{k}: {r}");
+            }
+            out.push_str("}");
+            out
+        }
+    }
+}
+
+fn py_str(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => py_repr(v),
+    }
+}
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Nil => false,
+        Val.Int(n) => *n != 0,
+        Val.Bool(b) => *b,
+        Val.Str(s) => s.len() > 0,
+        Val.Bytes(b) => b.len() > 0,
+        Val.List(items) => items.len() > 0,
+        Val.Tuple(items) => items.len() > 0,
+        Val.Dict(entries) => entries.len() > 0,
+    }
+}
+
+fn value_error(msg: ref String) -> Exc {
+    exc("ValueError", msg)
+}
+
+// _pack's complaint names the struct's bound method; nothing prints it.
+fn pack_error() -> Exc {
+    value_error("Error encountered when attempting to convert value to struct format")
+}
+
+fn push_uv32(out: mut ref Vec[u8], value: i64) {
+    let mut v = value & 0xFFFFFFFF;
+    while (v & 0xFFFFFF80) != 0 {
+        out.push(((v & 127) | 128) as u8);
+        v = v >> 7;
+    }
+    out.push(v as u8);
+}
+
+fn int_of(v: ref Val) -> Result[i64, Exc] {
+    match v {
+        Val.Int(n) => Ok(*n),
+        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        _ => Err(pack_error()),
+    }
+}
+
+fn int_width(kind: i64) -> i64 {
+    if kind == K_I8 {
+        1
+    } else if kind == K_I16 {
+        2
+    } else if kind == K_I32 {
+        4
+    } else {
+        8
+    }
+}
+
+fn items_of(v: ref Val) -> Result[Vec[Val], Exc] {
+    match v {
+        Val.List(items) => Ok(items.clone()),
+        Val.Tuple(items) => Ok(items.clone()),
+        _ => Err(exc("TypeError", "object is not iterable")),
+    }
+}
+
+fn encode(p: ref Protocol, t: i64, v: ref Val, out: mut ref Vec[u8]) -> Result[(), Exc] {
+    let node = p.nodes[t].clone();
+    let kind = node.kind;
+    if kind <= K_I64 {
+        let n = int_of(v)?;
+        let w = int_width(kind);
+        if w < 8 {
+            let top: i64 = 1 << (w * 8 - 1);
+            if n < -top or n >= top {
+                return Err(pack_error());
+            }
+        }
+        push_be(mut out, n, w);
+        return Ok(());
+    }
+    if kind == K_BOOL {
+        out.push(if truthy(v) { 1 } else { 0 });
+        return Ok(());
+    }
+    if kind == K_STR or kind == K_CSTR {
+        match v {
+            Val.Nil => {
+                if kind == K_STR {
+                    push_be(mut out, -1, 2);
+                } else {
+                    push_uv32(mut out, 0);
+                }
+            }
+            _ => {
+                let b = str_bytes(py_str(v));
+                if kind == K_STR {
+                    push_be(mut out, b.len(), 2);
+                } else {
+                    push_uv32(mut out, b.len() + 1);
+                }
+                append(mut out, b);
+            }
+        }
+        return Ok(());
+    }
+    if kind == K_BYTES or kind == K_CBYTES {
+        match v {
+            Val.Nil => {
+                if kind == K_BYTES {
+                    push_be(mut out, -1, 4);
+                } else {
+                    push_uv32(mut out, 0);
+                }
+            }
+            Val.Bytes(b) => {
+                if kind == K_BYTES {
+                    push_be(mut out, b.len(), 4);
+                } else {
+                    push_uv32(mut out, b.len() + 1);
+                }
+                append(mut out, b);
+            }
+            _ => return Err(exc("TypeError", "can't concat to bytes")),
+        }
+        return Ok(());
+    }
+    if kind == K_TAGS {
+        // TaggedFields.encode writes each tag and its value, but not the
+        // value's size, which decode() reads.
+        match v {
+            Val.Dict(entries) => {
+                push_uv32(mut out, entries.len());
+                for e in entries.iter() {
+                    let (k, x) = e.clone();
+                    match x {
+                        Val.Bytes(b) => {
+                            if k <= 0 {
+                                return Err(assertion(f"Key {k} is not a positive integer"));
+                            }
+                            push_uv32(mut out, k);
+                            append(mut out, b);
+                        }
+                        _ => {
+                            let s = py_str(x);
+                            return Err(assertion(f"Value {s} is not a byte array"));
+                        }
+                    }
+                }
+            }
+            _ => return Err(exc("TypeError", "object has no len()")),
+        }
+        return Ok(());
+    }
+    if kind == K_UV32 {
+        push_uv32(mut out, int_of(v)?);
+        return Ok(());
+    }
+    if kind == K_ARRAY or kind == K_CARRAY {
+        match v {
+            Val.Nil => {
+                if kind == K_ARRAY {
+                    push_be(mut out, -1, 4);
+                } else {
+                    push_uv32(mut out, 0);
+                }
+            }
+            _ => {
+                let items = items_of(v)?;
+                let mut body: Vec[u8] = Vec.new();
+                for x in items.iter() {
+                    encode(p, node.child, x, mut body)?;
+                }
+                if kind == K_ARRAY {
+                    push_be(mut out, items.len(), 4);
+                } else {
+                    push_uv32(mut out, items.len() + 1);
+                }
+                append(mut out, body);
+            }
+        }
+        return Ok(());
+    }
+    let items = items_of(v)?;
+    if items.len() != node.fields.len() {
+        return Err(value_error("Item field count does not match Schema"));
+    }
+    for i in 0..items.len() {
+        encode(p, node.fields[i], items[i], mut out)?;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ decoding
+
+// protocol/frame.py's KafkaBytes: a bytearray with a cursor. read() stops
+// at the end; write() overwrites from the cursor and grows the buffer.
+#[derive(Clone)]
+struct KBuf {
+    buf: Vec[u8],
+    idx: i64,
+}
+
+fn kafka_bytes(n: i64) -> KBuf {
+    let mut buf: Vec[u8] = Vec.new();
+    for i in 0..n {
+        buf.push(0);
+    }
+    KBuf { buf, idx: 0 }
+}
+
+impl KBuf {
+    fn read(mut ref self, n: i64) -> Vec[u8] {
+        let start = self.idx;
+        self.idx += n;
+        if self.idx > self.buf.len() {
+            self.idx = self.buf.len();
+        }
+        slice(self.buf, start, self.idx)
+    }
+
+    fn write(mut ref self, data: ref Vec[u8]) {
+        let start = self.idx;
+        self.idx += data.len();
+        if self.idx <= self.buf.len() {
+            for i in 0..data.len() {
+                self.buf[start + i] = data[i];
+            }
+        } else {
+            let mut nb = slice(self.buf, 0, start);
+            append(mut nb, data);
+            self.buf = nb;
+        }
+    }
+}
+
+fn read_int(r: mut ref KBuf, w: i64) -> Result[i64, Exc] {
+    let b = r.read(w);
+    if b.len() != w {
+        return Err(pack_error());
+    }
+    Ok(be_i(b, 0, w))
+}
+
+fn read_uv32(r: mut ref KBuf) -> Result[i64, Exc] {
+    let mut value: i64 = 0;
+    let mut i: i64 = 0;
+    loop {
+        let b = r.read(1);
+        if b.len() != 1 {
+            return Err(exc("struct.error", "unpack requires a buffer of 1 bytes"));
+        }
+        let c = b[0] as i64;
+        if (c & 128) == 0 {
+            return Ok(value | (c << i));
+        }
+        value = value | ((c & 127) << i);
+        i += 7;
+        if i > 28 {
+            return Err(value_error(f"Invalid value {value}"));
+        }
+    }
+}
+
+fn read_text(r: mut ref KBuf, length: i64) -> Result[Val, Exc] {
+    if length < 0 {
+        return Ok(Val.Nil);
+    }
+    let b = r.read(length);
+    if b.len() != length {
+        return Err(value_error("Buffer underrun decoding string"));
+    }
+    Ok(Val.Str(utf8(b)?))
+}
+
+fn read_blob(r: mut ref KBuf, length: i64) -> Result[Val, Exc] {
+    if length < 0 {
+        return Ok(Val.Nil);
+    }
+    let b = r.read(length);
+    if b.len() != length {
+        return Err(value_error("Buffer underrun decoding Bytes"));
+    }
+    Ok(Val.Bytes(b))
+}
+
+fn decode(p: ref Protocol, t: i64, r: mut ref KBuf) -> Result[Val, Exc] {
+    let node = p.nodes[t].clone();
+    let kind = node.kind;
+    if kind <= K_I64 {
+        return Ok(Val.Int(read_int(mut r, int_width(kind))?));
+    }
+    if kind == K_BOOL {
+        let b = r.read(1);
+        if b.len() != 1 {
+            return Err(pack_error());
+        }
+        return Ok(Val.Bool(b[0] != 0));
+    }
+    if kind == K_STR {
+        let n = read_int(mut r, 2)?;
+        return read_text(mut r, n);
+    }
+    if kind == K_CSTR {
+        let n = read_uv32(mut r)? - 1;
+        return read_text(mut r, n);
+    }
+    if kind == K_BYTES {
+        let n = read_int(mut r, 4)?;
+        return read_blob(mut r, n);
+    }
+    if kind == K_CBYTES {
+        let n = read_uv32(mut r)? - 1;
+        return read_blob(mut r, n);
+    }
+    if kind == K_UV32 {
+        return Ok(Val.Int(read_uv32(mut r)?));
+    }
+    if kind == K_TAGS {
+        let num = read_uv32(mut r)?;
+        let mut entries: Vec[(i64, Val)] = Vec.new();
+        let mut prev: i64 = -1;
+        for i in 0..num {
+            let tag = read_uv32(mut r)?;
+            if tag <= prev {
+                return Err(value_error(f"Invalid or out-of-order tag {tag}"));
+            }
+            prev = tag;
+            let size = read_uv32(mut r)?;
+            entries.push((tag, Val.Bytes(r.read(size))));
+        }
+        return Ok(Val.Dict(entries));
+    }
+    if kind == K_ARRAY or kind == K_CARRAY {
+        let n = if kind == K_ARRAY { read_int(mut r, 4)? } else { read_uv32(mut r)? - 1 };
+        if n == -1 {
+            return Ok(Val.Nil);
+        }
+        let mut items: Vec[Val] = Vec.new();
+        for i in 0..n {
+            items.push(decode(p, node.child, mut r)?);
+        }
+        return Ok(Val.List(items));
+    }
+    let mut items: Vec[Val] = Vec.new();
+    for f in node.fields.iter() {
+        items.push(decode(p, *f, mut r)?);
+    }
+    Ok(Val.Tuple(items))
+}
+
+// Each type's repr(): Bytes cuts its value at 100 bytes, Array prints
+// NULL for None, Schema prints its names; the rest is Python's repr().
+fn field_repr(p: ref Protocol, t: i64, v: ref Val) -> String {
+    let node = p.nodes[t].clone();
+    let kind = node.kind;
+    if kind == K_BYTES {
+        match v {
+            Val.Bytes(b) => {
+                if b.len() > 100 {
+                    let mut cut = slice(b, 0, 100);
+                    append(mut cut, str_bytes("..."));
+                    return bytes_repr(cut);
+                }
+                return bytes_repr(b);
+            }
+            _ => return py_repr(v),
+        }
+    }
+    if kind == K_ARRAY or kind == K_CARRAY {
+        match v {
+            Val.Nil => return "NULL".to_string(),
+            _ => {
+                let items = items_of(v).unwrap_or(Vec.new());
+                let mut out = "[".to_string();
+                for i in 0..items.len() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(field_repr(p, node.child, items[i]));
+                }
+                out.push_str("]");
+                return out;
+            }
+        }
+    }
+    if kind == K_SCHEMA {
+        let items = items_of(v).unwrap_or(Vec.new());
+        let mut out = "(".to_string();
+        for i in 0..node.fields.len() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            let name = node.names[i].clone();
+            let r = field_repr(p, node.fields[i], items[i]);
+            out.push_str(f"{name}={r}");
+        }
+        out.push_str(")");
+        return out;
+    }
+    py_repr(v)
+}
+
+// Struct.__repr__.
+fn struct_repr(p: ref Protocol, class: ref String, t: i64, v: ref Val) -> String {
+    let inner = field_repr(p, t, v);
+    f"{class}{inner}"
+}
+
+// ------------------------------------------------------------ literals
+
+// The Python literals the jobs give request arguments as
+// (ast.literal_eval): numbers, None, True, False, str and bytes, tuples,
+// lists and dicts.
+struct Lex {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl Lex {
+    fn skip(mut ref self) {
+        while self.pos < self.cs.len() and self.cs[self.pos] == ' ' {
+            self.pos += 1;
+        }
+    }
+
+    fn quoted(mut ref self) -> Vec[u32] {
+        let q = self.cs[self.pos];
+        self.pos += 1;
+        let mut out: Vec[u32] = Vec.new();
+        while self.cs[self.pos] != q {
+            let c = self.cs[self.pos];
+            if c == '\\' {
+                let e = self.cs[self.pos + 1];
+                self.pos += 2;
+                if e == 'n' {
+                    out.push(10);
+                } else if e == 't' {
+                    out.push(9);
+                } else if e == 'r' {
+                    out.push(13);
+                } else if e == 'x' {
+                    let hi = hex_val(self.cs[self.pos] as u32 as u8);
+                    let lo = hex_val(self.cs[self.pos + 1] as u32 as u8);
+                    out.push((hi * 16 + lo) as u32);
+                    self.pos += 2;
+                } else {
+                    out.push(e as u32);
+                }
+            } else {
+                out.push(c as u32);
+                self.pos += 1;
+            }
+        }
+        self.pos += 1;
+        out
+    }
+
+    #[allow(mutual_recursion_note)]
+    fn items(mut ref self, close: char) -> Vec[Val] {
+        let mut items: Vec[Val] = Vec.new();
+        self.pos += 1;
+        loop {
+            self.skip();
+            if self.cs[self.pos] == close {
+                self.pos += 1;
+                return items;
+            }
+            items.push(self.value());
+            self.skip();
+            if self.cs[self.pos] == ',' {
+                self.pos += 1;
+            }
+        }
+    }
+
+    #[allow(mutual_recursion_note)]
+    fn value(mut ref self) -> Val {
+        self.skip();
+        let c = self.cs[self.pos];
+        if c == '(' {
+            return Val.Tuple(self.items(')'));
+        }
+        if c == '[' {
+            return Val.List(self.items(']'));
+        }
+        if c == '{' {
+            let mut entries: Vec[(i64, Val)] = Vec.new();
+            self.pos += 1;
+            loop {
+                self.skip();
+                if self.cs[self.pos] == '}' {
+                    self.pos += 1;
+                    return Val.Dict(entries);
+                }
+                let k = match self.value() {
+                    Val.Int(n) => n,
+                    _ => 0,
+                };
+                self.skip();
+                self.pos += 1;
+                let x = self.value();
+                entries.push((k, x));
+                self.skip();
+                if self.cs[self.pos] == ',' {
+                    self.pos += 1;
+                }
+            }
+        }
+        if c == '\'' or c == '"' {
+            let mut s = String.new();
+            for cp in self.quoted().iter() {
+                s.push(cp_char(*cp));
+            }
+            return Val.Str(s);
+        }
+        if c == 'b' {
+            self.pos += 1;
+            let mut b: Vec[u8] = Vec.new();
+            for cp in self.quoted().iter() {
+                b.push(*cp as u8);
+            }
+            return Val.Bytes(b);
+        }
+        let mut word = String.new();
+        while self.pos < self.cs.len() and self.cs[self.pos] != ',' and self.cs[self.pos] != ')' and self.cs[self.pos] != ']' and self.cs[self.pos] != '}' and self.cs[self.pos] != ':' and self.cs[self.pos] != ' ' {
+            word.push(self.cs[self.pos]);
+            self.pos += 1;
+        }
+        if word == "None" {
+            Val.Nil
+        } else if word == "True" {
+            Val.Bool(true)
+        } else if word == "False" {
+            Val.Bool(false)
+        } else {
+            Val.Int(parse_int(word))
+        }
+    }
+}
+
+fn literal(text: ref String) -> Val {
+    let mut l = Lex { cs: text.chars().collect(), pos: 0 };
+    l.value()
+}
+
+// b'@name' stands for the contents of data/name.
+fn files_in(v: ref Val) -> Val {
+    match v {
+        Val.Bytes(b) => {
+            if b.len() > 0 and b[0] == b'@' {
+                let name = String.from_utf8(slice(b, 1, b.len())).unwrap();
+                return Val.Bytes(fs.read_bytes(f"data/{name}").unwrap_or(Vec.new()));
+            }
+            Val.Bytes(b.clone())
+        }
+        Val.Tuple(items) => {
+            let mut out: Vec[Val] = Vec.new();
+            for x in items.iter() {
+                out.push(files_in(x));
+            }
+            Val.Tuple(out)
+        }
+        Val.List(items) => {
+            let mut out: Vec[Val] = Vec.new();
+            for x in items.iter() {
+                out.push(files_in(x));
+            }
+            Val.List(out)
+        }
+        _ => v.clone(),
+    }
+}
+
+// ------------------------------------------------------------ the client
+
+// protocol/parser.py's KafkaProtocol: send_request frames a request after
+// its header and queues it as in flight; receive_bytes reassembles
+// responses from chunks, four length bytes and then the payload, and
+// pairs each with the oldest request in flight.
+struct Proto {
+    client_id: String,
+    api_version: String,
+    corr: i64,
+    header: KBuf,
+    rbuf: KBuf,
+    receiving: bool,
+    in_flight: Vec[(i64, ApiDef)],
+    to_send: Vec[u8],
+}
+
+// A decoded response: its class name, schema and value.
+#[derive(Clone)]
+struct Resp {
+    class: String,
+    schema: i64,
+    val: Val,
+}
+
+fn new_proto(client_id: ref String, api_version: ref String) -> Proto {
+    let cid = if client_id == "~" { "kafka-python2.2.15".to_string() } else { client_id.clone() };
+    let av = if api_version == "~" { String.new() } else { api_version.clone() };
+    Proto { client_id: cid, api_version: av, corr: 0, header: kafka_bytes(4), rbuf: kafka_bytes(0), receiving: false, in_flight: Vec.new(), to_send: Vec.new() }
+}
+
+fn find_def(defs: ref Vec[ApiDef], api: ref String, version: i64) -> Option[ApiDef] {
+    for d in defs.iter() {
+        if d.api == api and d.version == version {
+            return Some(d.clone());
+        }
+    }
+    None
+}
+
+fn field_index(p: ref Protocol, t: i64, name: ref String) -> i64 {
+    let node = p.nodes[t].clone();
+    for i in 0..node.names.len() {
+        if node.names[i] == name {
+            return i;
+        }
+    }
+    -1
+}
+
+// Struct.__init__: the arguments mirror the schema, or there are none and
+// every field is None.
+fn make_request(p: ref Protocol, d: ref ApiDef, args: ref Val) -> Result[Vec[Val], Exc] {
+    let items = items_of(args)?;
+    let n = p.nodes[d.schema].fields.len();
+    if items.len() == n {
+        return Ok(items);
+    }
+    if items.len() > 0 {
+        return Err(value_error("Args must be empty or mirror schema"));
+    }
+    let mut out: Vec[Val] = Vec.new();
+    for i in 0..n {
+        out.push(Val.Nil);
+    }
+    Ok(out)
+}
+
+// ProduceRequest.expect_response: acks=0 gets no response.
+fn expect_response(p: ref Protocol, d: ref ApiDef, fields: ref Vec[Val]) -> bool {
+    if d.api != "Produce" {
+        return true;
+    }
+    let i = field_index(p, d.schema, "required_acks");
+    match fields[i] {
+        Val.Int(0) => false,
+        _ => true,
+    }
+}
+
+impl Proto {
+    fn send_request(mut ref self, p: ref Protocol, d: ref ApiDef, fields: ref Vec[Val], explicit: Option[i64]) -> Result[i64, Exc] {
+        let corr = match explicit {
+            Some(c) => c,
+            None => {
+                self.corr = (self.corr + 1) % 2147483648;
+                self.corr
+            }
+        };
+        let mut hv: Vec[Val] = Vec.new();
+        hv.push(Val.Int(d.key));
+        hv.push(Val.Int(d.version));
+        hv.push(Val.Int(corr));
+        hv.push(Val.Str(self.client_id.clone()));
+        let ht = if d.flag {
+            hv.push(Val.Dict(Vec.new()));
+            p.header_v2
+        } else {
+            p.header
+        };
+        let mut message: Vec[u8] = Vec.new();
+        encode(p, ht, Val.List(hv), mut message)?;
+        encode(p, d.schema, Val.List(fields.clone()), mut message)?;
+        push_be(mut self.to_send, message.len(), 4);
+        append(mut self.to_send, message);
+        if expect_response(p, d, fields) {
+            self.in_flight.push((corr, d.clone()));
+        }
+        Ok(corr)
+    }
+
+    fn receive_bytes(mut ref self, p: ref Protocol, data: ref Vec[u8]) -> Result[Vec[(i64, Resp)], Exc] {
+        let mut i: i64 = 0;
+        let n = data.len();
+        let mut responses: Vec[(i64, Resp)] = Vec.new();
+        while i < n {
+            if not self.receiving {
+                let want = 4 - self.header.idx;
+                let to_read = if want < n - i { want } else { n - i };
+                self.header.write(slice(data, i, i + to_read));
+                i += to_read;
+                if self.header.idx == 4 {
+                    self.header.idx = 0;
+                    let nbytes = read_int(mut self.header, 4)?;
+                    if nbytes < 0 {
+                        return Err(value_error("negative count"));
+                    }
+                    self.rbuf = kafka_bytes(nbytes);
+                    self.receiving = true;
+                } else if self.header.idx > 4 {
+                    return Err(exc("KafkaError", "this should not happen - are you threading?"));
+                }
+            }
+            if self.receiving {
+                let total = self.rbuf.buf.len();
+                let staged = self.rbuf.idx;
+                let room = total - staged;
+                let to_read = if room < n - i { room } else { n - i };
+                self.rbuf.write(slice(data, i, i + to_read));
+                i += to_read;
+                let now = self.rbuf.idx;
+                if now > total {
+                    return Err(exc("KafkaError", "Receive buffer has more bytes than expected?"));
+                }
+                if now != total {
+                    break;
+                }
+                self.receiving = false;
+                self.rbuf.idx = 0;
+                let resp = self.process_response(p)?;
+                responses.push(resp);
+                self.receiving = false;
+                self.header.idx = 0;
+            }
+        }
+        Ok(responses)
+    }
+
+    fn process_response(mut ref self, p: ref Protocol) -> Result[(i64, Resp), Exc] {
+        if self.in_flight.len() == 0 {
+            return Err(exc("CorrelationIdError", "No in-flight-request found for server response"));
+        }
+        let (corr, req) = self.in_flight.remove(0);
+        let rd = find_def(p.resps, req.api, req.version).unwrap();
+        let recv = match decode(p, p.resp_header, mut self.rbuf)? {
+            Val.Tuple(items) => match items[0] {
+                Val.Int(c) => c,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        let quirk = recv == 0 and corr != 0 and rd.class == "FindCoordinatorResponse_v0" and (self.api_version == "0.8.2" or self.api_version == "");
+        if not quirk and corr != recv {
+            return Err(exc("CorrelationIdError", f"Correlation IDs do not match: sent {corr}, recv {recv}"));
+        }
+        match self.decode_response(p, rd) {
+            Ok(r) => Ok((corr, r)),
+            Err(e) => {
+                if e.name == "ValueError" or e.name == "UnicodeDecodeError" {
+                    return Err(exc("KafkaProtocolError", "Unable to decode response"));
+                }
+                Err(e)
+            }
+        }
+    }
+
+    // BaseApiVersionsResponse.decode peeks at the error code: a broker that
+    // does not support the version answers in the v0 format.
+    fn decode_response(mut ref self, p: ref Protocol, rd: ref ApiDef) -> Result[Resp, Exc] {
+        let mut d = rd.clone();
+        if rd.flag {
+            let at = self.rbuf.idx;
+            let err = read_int(mut self.rbuf, 2)?;
+            self.rbuf.idx = at;
+            if err != 0 {
+                d = find_def(p.resps, "ApiVersions", 0).unwrap();
+            }
+        }
+        let val = decode(p, d.schema, mut self.rbuf)?;
+        Ok(Resp { class: d.class.clone(), schema: d.schema, val })
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+struct Ctx {
+    crcs: Crcs,
+    proto: Protocol,
+    errors: Vec[ErrInfo],
+    sets: Vec[(String, Vec[(Option[i64], Option[Vec[u8]], Option[Vec[u8]], Vec[(String, Option[Vec[u8]])])])],
+}
+
+fn read_data(name: ref String) -> Vec[u8] {
+    fs.read_bytes(f"data/{name}").unwrap_or(Vec.new())
+}
+
+fn job_read(c: ref Ctx, name: ref String) {
+    println(f"> read {name}");
+    show_records(c.crcs, read_data(name), "  ");
+}
+
+fn print_error(ind: ref String, e: ref Exc) {
+    let s = fmt_exc(e);
+    println(f"{ind}error: {s}");
+}
+
+fn job_build(c: ref Ctx, w: ref Vec[String]) {
+    let name = w[1].clone();
+    let magic = parse_int(w[2]);
+    let codec = parse_int(w[3]);
+    let bs = parse_int(w[4]);
+    let off = parse_int(w[5]);
+    let txn = parse_int(w[6]) != 0;
+    let pid = parse_int(w[7]);
+    let epoch = parse_int(w[8]);
+    let seq = parse_int(w[9]);
+    let t = py_bool(txn);
+    println(f"> build {name} magic={magic} codec={codec} batch_size={bs} offset={off} transactional={t} producer_id={pid} producer_epoch={epoch} base_sequence={seq}");
+    let mut b = match new_builder(magic, codec, bs, off, txn, pid, epoch, seq) {
+        Ok(b) => b,
+        Err(e) => {
+            print_error("  ", e);
+            return;
+        }
+    };
+    for s in c.sets.iter() {
+        let (sname, recs) = s.clone();
+        if sname != name {
+            continue;
+        }
+        for r in recs.iter() {
+            let (ts, key, value, headers) = r.clone();
+            match b.append(c.crcs, ts, key, value, headers) {
+                Ok(md) => {
+                    let est = estimate(magic, codec, key, value, headers);
+                    let m = match md {
+                        Some(x) => meta_repr(x),
+                        None => "None".to_string(),
+                    };
+                    println(f"  {m} estimate={est}");
+                }
+                Err(e) => print_error("  ", e),
+            }
+        }
+    }
+    let full = py_bool(b.is_full());
+    let size = b.size();
+    println(f"  size={size} full={full} next_offset={b.next_offset}");
+    match b.close(c.crcs) {
+        Ok(()) => {}
+        Err(e) => {
+            print_error("  ", e);
+            return;
+        }
+    }
+    let crc = hex8(crc32(c.crcs, b.buf, 0, b.buf.len()));
+    let n = b.buf.len();
+    println(f"  built {n} bytes, crc32 {crc}");
+    hexdump(slice(b.buf, 0, 64), "  ");
+    show_records(c.crcs, b.buf, "  ");
+}
+
+fn job_partition(w: ref Vec[String]) {
+    let n = parse_int(w[1]);
+    println(f"> partition {n}");
+    for i in 2..w.len() {
+        let k = untok(w[i]).unwrap_or(Vec.new());
+        let h = murmur2(k);
+        let part = (h & 0x7FFFFFFF) % n;
+        let r = bytes_repr(k);
+        println(f"  {r} murmur2={h} partition={part}");
+    }
+}
+
+fn job_errors(c: ref Ctx, w: ref Vec[String]) {
+    println("> errors");
+    for i in 1..w.len() {
+        let e = for_code(c.errors, parse_int(w[i]));
+        let r = py_bool(e.retriable);
+        let m = py_bool(e.invalid_metadata);
+        println(f"  {w[i]} -> {e.name} errno={e.errno} message={e.message} retriable={r} invalid_metadata={m}: [Error {e.errno}] {e.name}: details");
+    }
+}
+
+fn val_at(v: ref Val, i: i64) -> Val {
+    match v {
+        Val.Tuple(items) => items[i].clone(),
+        Val.List(items) => items[i].clone(),
+        _ => Val.Nil,
+    }
+}
+
+fn int_val(v: ref Val) -> i64 {
+    match v {
+        Val.Int(n) => *n,
+        _ => 0,
+    }
+}
+
+// The consumer's view of a fetch response: each partition's error and
+// high watermark, and the record batches its records field holds.
+fn consume(c: ref Ctx, last: ref Resp) {
+    println(f"  consume {last.class}");
+    let ti = field_index(c.proto, last.schema, "topics");
+    let topics = items_of(val_at(last.val, ti)).unwrap_or(Vec.new());
+    for t in topics.iter() {
+        let name = py_str(val_at(t, 0));
+        let parts = items_of(val_at(t, 1)).unwrap_or(Vec.new());
+        for part in parts.iter() {
+            let items = items_of(part).unwrap_or(Vec.new());
+            let pnum = int_val(items[0]);
+            let err = for_code(c.errors, int_val(items[1]));
+            let hw = int_val(items[2]);
+            println(f"    {name}-{pnum} {err.name} highwater={hw}");
+            match items[items.len() - 1].clone() {
+                Val.Bytes(b) => show_records(c.crcs, b, "      "),
+                _ => println("      no records"),
+            }
+        }
+    }
+}
+
+fn session(c: ref Ctx, head: ref Vec[String], body: ref Vec[String]) {
+    println(f"> session client_id={head[1]} api_version={head[2]}");
+    let p = ref c.proto;
+    let mut proto = new_proto(head[1], head[2]);
+    let mut explicit: Option[i64] = None;
+    let mut last: Option[Resp] = None;
+    for line in body.iter() {
+        let words = split_on(line, ' ');
+        let op = words[0].clone();
+        if op == "corr" {
+            explicit = Some(parse_int(words[1]));
+        } else if op == "send" {
+            let api = words[1].clone();
+            let ver = parse_int(words[2]);
+            let mut lit = String.new();
+            for i in 3..words.len() {
+                if i > 3 {
+                    lit.push(' ');
+                }
+                lit.push_str(words[i]);
+            }
+            let args = files_in(literal(lit));
+            let corr = explicit;
+            explicit = None;
+            let d = find_def(p.reqs, api, ver).unwrap();
+            let sent = match make_request(p, d, args) {
+                Ok(fields) => match proto.send_request(p, d, fields, corr) {
+                    Ok(got) => {
+                        let e = py_bool(expect_response(p, d, fields));
+                        println(f"  send {d.class} correlation_id={got} expect_response={e}");
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(e),
+            };
+            match sent {
+                Ok(()) => {}
+                Err(e) => {
+                    let s = fmt_exc(e);
+                    println(f"  send {api} v{ver} error: {s}");
+                }
+            }
+        } else if op == "flush" {
+            let data = proto.to_send.clone();
+            proto.to_send = Vec.new();
+            let n = data.len();
+            let crc = hex8(crc32(c.crcs, data, 0, n));
+            println(f"  flush {n} bytes, crc32 {crc}");
+            hexdump(data, "    ");
+        } else if op == "recv" {
+            let data = read_data(words[1]);
+            let size = parse_int(words[2]);
+            let mut chunks: Vec[Vec[u8]] = Vec.new();
+            if size == 0 {
+                chunks.push(data.clone());
+            } else {
+                let mut i: i64 = 0;
+                while i < data.len() {
+                    chunks.push(slice(data, i, i + size));
+                    i += size;
+                }
+            }
+            let n = data.len();
+            let count = chunks.len();
+            println(f"  recv {words[1]}: {n} bytes in {count} chunks");
+            for ch in chunks.iter() {
+                match proto.receive_bytes(p, ch) {
+                    Ok(rs) => {
+                        for r in rs.iter() {
+                            let (corr, resp) = r.clone();
+                            let s = struct_repr(p, resp.class, resp.schema, resp.val);
+                            println(f"    correlation_id={corr} {s}");
+                            last = Some(resp);
+                        }
+                    }
+                    Err(e) => print_error("    ", e),
+                }
+            }
+        } else if op == "consume" {
+            match last.clone() {
+                Some(r) => consume(c, r),
+                None => println("  consume NoneType"),
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn unrle(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'z' {
+            let mut n: i64 = 0;
+            i += 1;
+            while b[i] != b'.' {
+                n = n * 10 + ((b[i] - b'0') as i64);
+                i += 1;
+            }
+            i += 1;
+            for k in 0..n {
+                out.push(0);
+            }
+        } else {
+            out.push((hex_val(b[i]) * 16 + hex_val(b[i + 1])) as u8);
+            i += 2;
+        }
+    }
+    out
+}
+
+fn write_inputs() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data") {
+        return Err(f"cannot create data: {e}");
+    }
+    for line in lines_of(inputs_text()).iter() {
+        let parts = split_on(line, ' ');
+        let name = parts[0].clone();
+        let body = if parts.len() > 1 { parts[1].clone() } else { String.new() };
+        if let Err(e) = fs.write_bytes(f"data/{name}", unrle(body)) {
+            return Err(f"cannot write {name}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn record_sets() -> Vec[(String, Vec[(Option[i64], Option[Vec[u8]], Option[Vec[u8]], Vec[(String, Option[Vec[u8]])])])] {
+    let mut sets: Vec[(String, Vec[(Option[i64], Option[Vec[u8]], Option[Vec[u8]], Vec[(String, Option[Vec[u8]])])])] = Vec.new();
+    let mut name = String.new();
+    let mut cur: Vec[(Option[i64], Option[Vec[u8]], Option[Vec[u8]], Vec[(String, Option[Vec[u8]])])] = Vec.new();
+    for ln in lines_of(recsets_text()).iter() {
+        if ln.starts_with("set ") {
+            if name.len() > 0 {
+                sets.push((name.clone(), cur.clone()));
+            }
+            name = split_on(ln, ' ')[1].clone();
+            cur = Vec.new();
+            continue;
+        }
+        let f = split_on(ln, ' ');
+        let ts = if f[0] == "~" { None } else { Some(parse_int(f[0])) };
+        let mut hs: Vec[(String, Option[Vec[u8]])] = Vec.new();
+        if f[3] != "!" {
+            for kv in split_on(f[3], ';').iter() {
+                let pair = split_on(kv, ':');
+                let hk = String.from_utf8(untok(pair[0]).unwrap_or(Vec.new())).unwrap();
+                hs.push((hk, untok(pair[1])));
+            }
+        }
+        cur.push((ts, untok(f[1]), untok(f[2]), hs));
+    }
+    if name.len() > 0 {
+        sets.push((name, cur));
+    }
+    sets
+}
+
+fn main() {
+    match write_inputs() {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln(e);
+            return;
+        }
+    }
+    let c = Ctx { crcs: make_crcs(), proto: make_protocol(), errors: error_table(), sets: record_sets() };
+    let mut lines: Vec[String] = Vec.new();
+    for l in lines_of(jobs_text()).iter() {
+        lines.push(unesc(l));
+    }
+    let mut i: i64 = 0;
+    while i < lines.len() {
+        let w = split_on(lines[i], ' ');
+        i += 1;
+        let kind = w[0].clone();
+        if kind == "read" {
+            job_read(c, w[1]);
+        } else if kind == "build" {
+            job_build(c, w);
+        } else if kind == "partition" {
+            job_partition(w);
+        } else if kind == "errors" {
+            job_errors(c, w);
+        } else if kind == "session" {
+            let mut body: Vec[String] = Vec.new();
+            while lines[i] != "end" {
+                body.push(lines[i].trim().to_string());
+                i += 1;
+            }
+            i += 1;
+            session(c, w, body);
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/ and the vendored kafka-python.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("read v2_orders.bin\nread v2_idempotent.bin\nread v2_txn.bin\nread v2_multi.bin\nread v2_logappend.bin\nread v2_gzip.bin\nread v2_gzip_members.bin\nread v2_gzip_badmagic.bin\nread v2_gzip_badcrc.bin\nread v2_gzip_badsize.bin\nread v2_gzip_cut.bin\nread v2_gzip_junk.bin\nread v2_gzip_hdrcut.bin\nread v2_control.bin\nread v2_badcrc.bin\nread v2_extra.bin\nread v2_short_count.bin\nread v2_badlen.bin\nread v2_neg_headers.bin\nread v2_neg_hkey.bin\nread v2_varint.bin\nread v2_snappy.bin\nread v2_lz4.bin\nread v2_zstd.bin\nread v2_codec6.bin\nread v2_cut_header.bin\nread tiny.bin\nread v0_plain.bin\nread v1_plain.bin\nread v1_gzip.bin\nread v1_gzip_offsets.bin\nread v1_gzip_logappend.bin\nread v0_gzip.bin\nread v1_badcrc.bin\nread v1_nullwrap.bin\nread v1_double.bin\nread v1_inner_cut.bin\nread v1_snappy.bin\nread v0_lz4.bin\nread mixed.bin\nread trailing.bin\nbuild orders 2 0 16384 0 0 -1 -1 -1\nbuild orders 2 0 200 0 0 -1 -1 -1\nbuild events 2 0 16384 1000 0 4001 3 2147483645\nbuild events 2 0 16384 0 1 77 1 0\nbuild big 2 0 300 0 0 -1 -1 -1\nbuild far 2 0 16384 0 0 -1 -1 -1\nbuild legacy 1 0 16384 0 0 -1 -1 -1\nbuild legacy 1 0 120 5 0 -1 -1 -1\nbuild v0 0 0 16384 0 0 -1 -1 -1\nbuild bigleg 0 0 300 0 0 -1 -1 -1\nbuild hdr 1 0 16384 0 0 -1 -1 -1\nbuild events 2 2 16384 0 0 -1 -1 -1\nbuild events 2 3 16384 0 0 -1 -1 -1\nbuild legacy 1 2 16384 0 0 -1 -1 -1\nbuild events 2 0 16384 0 1 -1 -1 -1\nbuild events 2 0 16384 0 0 5 -1 -1\nbuild events 2 0 16384 0 0 5 1 -1\nbuild legacy 1 0 16384 0 0 5 1 1\nbuild legacy 3 0 16384 0 0 -1 -1 -1\nbuild legacy 1 7 16384 0 0 -1 -1 -1\npartition 12 . a ab abc abcd abcde 21 user-17 user-3 caf%C3%A9-9 order-1042 order-1043 %00 %FF%FF%FF%FF %80%81%82 the-quick-brown-fox sensor-0 sensor-1 sensor-2 tenant_42%2Finvoices\npartition 1 a b c\npartition 7 . a ab abc abcd abcde 21 user-17 user-3 caf%C3%A9-9 order-1042\nerrors 0 1 2 3 5 6 7 15 25 35 41 47 58 72 74 87 102 127 128 -1 -7\nsession ~t ~t\n  send Metadata 1 (['orders', 'payments'],)\n  send ApiVersions 0 ()\n");
+    s.push_str("  flush\n  recv resp_meta.bin 7\nend\nsession inventory-svc ~t\n  send Metadata 0 (['new-topic'],)\n  send Metadata 5 (['audit'], True)\n  send FindCoordinator 0 ('billing-workers',)\n  flush\n  recv resp_mixed.bin 0\nend\nsession cli-7 ~t\n  send ApiVersions 3 ('kafka-python', '2.2.15', ~o~c)\n  send ApiVersions 3 ('mini-kafka', None, ~o1: b'ab'~c)\n  flush\n  recv resp_api3.bin 1\nend\nsession producer-1 ~t\n  send Produce 0 (0, 1000, [('orders', [(0, b'@v2_orders.bin')])])\n  corr 4\n  send Produce 3 (None, -1, 30000, [('orders', [(0, b'@v2_idempotent.bin'), (1, b'@v1_plain.bin')])])\n  corr 5\n  send Produce 8 ('txn-1', 1, 30000, [('orders', [(0, b'@v2_txn.bin')])])\n  flush\n  recv resp_produce.bin 13\nend\nsession consumer-1 ~t\n  send Fetch 4 (-1, 500, 1, 52428800, 1, [('orders', [(0, 0, 1048576), (1, 300, 1048576), (2, 0, 1048576)])])\n  send Fetch 0 (-1, 100, 1, [('logs', [(0, 0, 65536)])])\n  flush\n  recv resp_fetch.bin 64\n  consume\nend\nsession c2 ~t\n  send Metadata 0 ([],)\n  send ApiVersions 0 ()\n  recv resp_wrong_corr.bin 0\n  recv resp_wrong_corr.bin 0\nend\nsession c3 ~t\n  send ApiVersions 0 ()\n  recv resp_unsolicited.bin 5\nend\nsession c4 ~t\n  send Metadata 1 (None,)\n  send ApiVersions 0 ()\n  recv resp_short.bin 0\n  send ApiVersions 0 ()\n  recv resp_meta.bin 0\nend\nsession c5 ~t\n  corr 6\n  send FindCoordinator 0 ('g',)\n  recv resp_fc_quirk.bin 0\nend\nsession c6 0.10.0\n  corr 6\n  send FindCoordinator 0 ('g',)\n  recv resp_fc_quirk.bin 0\nend\nsession c7 ~t\n  send Metadata 0 (['x'],)\n  recv resp_badutf8.bin 0\nend\nsession c9 ~t\n  send ApiVersions 3 ('a', 'b', ~o~c)\n  recv resp_varint.bin 0\nend\nsession c11 ~t\n  send ApiVersions 3 ('a', 'b', ~o~c)\n  recv resp_cut.bin 0\nend\nsession billing ~t\n  send FindCoordinator 1 ('billing-workers', 0)\n  flush\n  recv resp_fc1.bin 3\nend\nsession c8 ~t\n  send Metadata 1 (['a'], 5)\n  send Metadata 1 ([('a', 1)],)\n  send FindCoordinator 1 ('g', 0)\n  send ApiVersions 3 ('a', 'b', ~o0: b'x'~c)\n");
+    s.push_str("  flush\nend\n");
+    s
+}
+
+fn recsets_text() -> String {
+    let mut s = String.new();
+    s.push_str("set orders\n1761300000000 user-17 %7B%22order%22%3A1042%2C%22sku%22%3A%22A-17%22%2C%22qty%22%3A2%7D content-type:application%2Fjson;trace-id:4bf92f3577b34da6\n1761300000012 user-3 %7B%22order%22%3A1043%2C%22sku%22%3A%22B-02%22%2C%22qty%22%3A1%7D content-type:application%2Fjson\n1761300000012 ~ heartbeat !\n1761300000250 user-17 ~ reason:gdpr-erasure\n1761300000251 caf%C3%A9-9 prix%3A%204%2C50%20%E2%82%AC lang:fr;empty:~\n1761300004000 bin %00%01%02%27%22%5C%0A%09%0D%7F%80%FF !\n1761299998000 late arrived%20out%20of%20order retry:.\n\nset events\n1761300000000 sensor-0 %7B%22sensor%22%3A0%2C%22reading%22%3A200%2C%22unit%22%3A%22celsius%22%2C%22status%22%3A%22ok%22%7D !\n1761300000007 sensor-1 %7B%22sensor%22%3A1%2C%22reading%22%3A201%2C%22unit%22%3A%22celsius%22%2C%22status%22%3A%22ok%22%7D !\n1761300000014 sensor-2 %7B%22sensor%22%3A2%2C%22reading%22%3A202%2C%22unit%22%3A%22celsius%22%2C%22status%22%3A%22ok%22%7D !\n1761300000021 sensor-0 %7B%22sensor%22%3A0%2C%22reading%22%3A203%2C%22unit%22%3A%22celsius%22%2C%22status%22%3A%22ok%22%7D !\n1761300000028 sensor-1 %7B%22sensor%22%3A1%2C%22reading%22%3A204%2C%22unit%22%3A%22celsius%22%2C%22status%22%3A%22ok%22%7D !\n1761300000035 sensor-2 %7B%22sensor%22%3A2%2C%22reading%22%3A205%2C%22unit%22%3A%22celsius%22%2C%22status%22%3A%22ok%22%7D !\n1761300000042 sensor-0 %7B%22sensor%22%3A0%2C%22reading%22%3A206%2C%22unit%22%3A%22celsius%22%2C%22status%22%3A%22ok%22%7D !\n1761300000049 sensor-1 %7B%22sensor%22%3A1%2C%22reading%22%3A207%2C%22unit%22%3A%22celsius%22%2C%22status%22%3A%22ok%22%7D !\n\nset legacy\n1761300000000 k1 first !\n1761300000005 ~ second !\n1761300000009 k3 ~ !\n1761300000009 . . !\n1761300000030 k5 caf%C3%A9%20%00%FF !\n\nset v0\n~ k1 first !\n~ ~ second !\n~ k3 ~ !\n~ . . !\n~ k5 caf%C3%A9%20%00%FF !\n\nset big\n1761300000000 k0 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA n:0\n1761300000001 k1 BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB n:1\n1761300000002 k2 CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC n:2\n");
+    s.push_str("1761300000003 k3 DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD n:3\n1761300000004 k4 EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE n:4\n1761300000005 k5 FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF n:5\n1761300000006 k6 GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG n:6\n1761300000007 k7 HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH n:7\n1761300000008 k8 IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII n:8\n\nset bigleg\n1761300000000 k0 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA !\n1761300000001 k1 BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB !\n1761300000002 k2 CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC !\n1761300000003 k3 DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD !\n1761300000004 k4 EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE !\n1761300000005 k5 FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF !\n1761300000006 k6 GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG !\n1761300000007 k7 HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH !\n1761300000008 k8 IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII !\n\nset far\n1761300000000 a now !\n0 b epoch !\n1801300000000 c later !\n-1 d neg !\n\nset hdr\n1761300000000 a x h:1\n\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("v2_orders.bin z10.01870000000002f54545390000000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000007d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a726574727900\nv2_idempotent.bin 0000000000001388000000fa0000000002f5c040a80000000000020000019a15a92d000000019a15a92d0c0000000000000fa100037ffffffe00000003d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e001804011268656172746265617400\nv2_txn.bin 000000000000004d000000b30000000002e80923a90010000000020000019a15a92d0c0000019a15a92dfa0000000000000009z9.039a010000000c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0000020112686561727462656174004400dc03040e757365722d313701020c726561736f6e18676470722d65726173757265\nv2_multi.bin 0000000000000064000000ea000000000206ca77210000000000010000019a15a92d000000019a15a92d0cffffffffffffffffffffffffffff00000002d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e000000000000006600000090000000000292ba03440000000000020000019a15a92d0c0000019a15a92dfbffffffffffffffffffffffffffff000000031e0000000112686561727462656174004400dc03020e757365722d313701020c726561736f6e18676470722d657261737572655600de03040e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d7074790100000000000000690000006e000000000259347f630000000000010000019a15a93ca00000019a15a93ca0ffffffffffffffffffffffffffff000000022a0000000662696e1800010227225c0a090d7f80ff004c00df5d02086c6174652861727269766564206f7574206f66206f72646572020a726574727900\n");
+    s.push_str("v2_logappend.bin 00000000000000280000011d0000000002df68d5210008000000030000019a15a92d000000019a15aaafb8ffffffffffffffffffffffffffff00000004d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d65726173757265\nv2_gzip.bin 000000000000012c0000015a000000000286582d850001000000170000019a15a92d000000019a15a92da1ffffffffffffffffffffffffffff000000181f8b08000000000002ff8dd2cd49035114c5f1771f22222104111109412e22124699f7f2354e015660035107199489cc9bac440b10092ec50282058805881558811558810b03124856e7eceeddfce00f6722c69846c88a302a0fe3f256ff4f4de348cb6c789117979afa78f68d8bbcd254cfb3eb908f83461aaa61353b521d5de99d9988a9db39e41620b70439066aaecc21bf00f925c833507b15a775182859c3695d063a59c7693d063aade1b43e039dd571da80816e1a382d61a0fb0d9c760ca127318fb209db5ccc482fb205e39c63a457d98675ce33d2bbece0ba0e237d4a13d77519e94b5ab8aec748dfb28bebfa8cf4238aeb068cf42b7bb82e61a407bb8feba88d3fdb0358e7a98d4f6d1bd6796ae36f3682759edaf8873dc27578e37fadb32eade6060000\nv2_gzip_members.bin 00000000000003840000016000000000028b23cb440001000000090000019a15a92d000000019a15a92d3fffffffffffffffffffffffffffff0000000a1f8b080c0000000002ff06004b46020061626576656e74732e6a736f6e00eb6364606010284ecd2bce2fd23528aa56823095ac0c74948a52135332f3d295ac8c0c80bcd2bccc12252ba5e4d49ce2ccd262251da5e292c41220c34a293f5ba996a18f91818f096690219241862806191263900c0bcc202324838c500c3222c6202d36c25e3326c6200b0ec25e3321681000384939686d0100001f8b08120000000002ff7365636f6e642068616c66002b43eb636470e312284ecd2bce2fd2352aaa56823095ac8c74948a52135332f3d2816c03531da5d2bccc12252ba5e4d49ce2ccd262251da5e292c41220c34a293f5ba996a18f91218407669001924106280699116350121fcc204324830c510c3227c6a00201c25eb320c6a03a21c25eb324681000de37bd7d6d010000000000\n");
+    s.push_str("v2_gzip_badmagic.bin 000000000000012c0000015a000000000278ab6ac80001000000170000019a15a92d000000019a15a92da1ffffffffffffffffffffffffffff00000018789c08000000000002ff8dd2cd49035114c5f1771f22222104111109412e22124699f7f2354e015660035107199489cc9bac440b10092ec50282058805881558811558810b03124856e7eceeddfce00f6722c69846c88a302a0fe3f256ff4f4de348cb6c789117979afa78f68d8bbcd254cfb3eb908f83461aaa61353b521d5de99d9988a9db39e41620b70439066aaecc21bf00f925c833507b15a775182859c3695d063a59c7693d063aade1b43e039dd571da80816e1a382d61a0fb0d9c760ca127318fb209db5ccc482fb205e39c63a457d98675ce33d2bbece0ba0e237d4a13d77519e94b5ab8aec748dfb28bebfa8cf4238aeb068cf42b7bb82e61a407bb8feba88d3fdb0358e7a98d4f6d1bd6796ae36f3682759edaf8873dc27578e37fadb32eade6060000\nv2_gzip_badcrc.bin 000000000000012c0000015a0000000002cf6450a20001000000170000019a15a92d000000019a15a92da1ffffffffffffffffffffffffffff000000181f8b08000000000002ff8dd2cd49035114c5f1771f22222104111109412e22124699f7f2354e015660035107199489cc9bac440b10092ec50282058805881558811558810b03124856e7eceeddfce00f6722c69846c88a302a0fe3f256ff4f4de348cb6c789117979afa78f68d8bbcd254cfb3eb908f83461aaa61353b521d5de99d9988a9db39e41620b70439066aaecc21bf00f925c833507b15a775182859c3695d063a59c7693d063aade1b43e039dd571da80816e1a382d61a0fb0d9c760ca127318fb209db5ccc482fb205e39c63a457d98675ce33d2bbece0ba0e237d4a13d77519e94b5ab8aec748dfb28bebfa8cf4238aeb068cf42b7bb82e61a407bb8feba88d3fdb0358e7a98d4f6d1bd6796ae36f3682759edaf8873dc27578e37facb32eade6060000\nv2_gzip_badsize.bin 000000000000012c0000015a0000000002fd7a1c760001000000170000019a15a92d000000019a15a92da1ffffffffffffffffffffffffffff000000181f8b08000000000002ff8dd2cd49035114c5f1771f22222104111109412e22124699f7f2354e015660035107199489cc9bac440b10092ec50282058805881558811558810b03124856e7eceeddfce00f6722c69846c88a302a0fe3f256ff4f4de348cb6c789117979afa78f68d8bbcd254cfb3eb908f83461aaa61353b521d5de99d9988a9db39e41620b70439066aaecc21bf00f925c833507b15a775182859c3695d063a59c7693d063aade1b43e039dd571da80816e1a382d61a0fb0d9c760ca127318fb209db5ccc482fb205e39c63a457d98675ce33d2bbece0ba0e237d4a13d77519e94b5ab8aec748dfb28bebfa8cf4238aeb068cf42b7bb82e61a407bb8feba88d3fdb0358e7a98d4f6d1bd6796ae36f3682759edaf8873dc27578e37fadb32eade2060000\n");
+    s.push_str("v2_gzip_cut.bin 000000000000012c000000c50000000002c6e480430001000000170000019a15a92d000000019a15a92da1ffffffffffffffffffffffffffff000000181f8b08000000000002ff8dd2cd49035114c5f1771f22222104111109412e22124699f7f2354e015660035107199489cc9bac440b10092ec50282058805881558811558810b03124856e7eceeddfce00f6722c69846c88a302a0fe3f256ff4f4de348cb6c789117979afa78f68d8bbcd254cfb3eb908f83461aaa61353b521d5de99d9988a9db39e41620b70439066aaecc21bf00\nv2_gzip_junk.bin 000000000000012c0000015d00000000026c650f510001000000170000019a15a92d000000019a15a92da1ffffffffffffffffffffffffffff000000181f8b08000000000002ff8dd2cd49035114c5f1771f22222104111109412e22124699f7f2354e015660035107199489cc9bac440b10092ec50282058805881558811558810b03124856e7eceeddfce00f6722c69846c88a302a0fe3f256ff4f4de348cb6c789117979afa78f68d8bbcd254cfb3eb908f83461aaa61353b521d5de99d9988a9db39e41620b70439066aaecc21bf00f925c833507b15a775182859c3695d063a59c7693d063aade1b43e039dd571da80816e1a382d61a0fb0d9c760ca127318fb209db5ccc482fb205e39c63a457d98675ce33d2bbece0ba0e237d4a13d77519e94b5ab8aec748dfb28bebfa8cf4238aeb068cf42b7bb82e61a407bb8feba88d3fdb0358e7a98d4f6d1bd6796ae36f3682759edaf8873dc27578e37fadb32eade606000000004b\nv2_gzip_hdrcut.bin 000000000000012c0000003800000000025e3366730001000000170000019a15a92d000000019a15a92da1ffffffffffffffffffffffffffff000000181f8b0800000000\nv2_control.bin 0000000000000050000000530000000002208566f90030000000010000019a15a92ef40000019a15a92ef7ffffffffffffffffffffffffffff000000022000000008000000010c000000000005002000060208000000000c00000000000500\nv2_badcrc.bin z10.01870000000002f54545390000000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000007d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d54797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a726574727900\n");
+    s.push_str("v2_extra.bin z10.018700000000023a646f440000000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000006d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a726574727900\nv2_short_count.bin z10.01870000000002f61a1a660000000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000008d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a726574727900\nv2_badlen.bin z11.4f000000000297fb28e40000000000010000019a15a92d000000019a15a92d00ffffffffffffffffffffffffffff000000021c0000000261066f6e6502026b02761e00020202620674776f02026b0276\nv2_neg_headers.bin z11.3a000000000248a8b9d8z8.019a15a92d000000019a15a92d00ffffffffffffffffffffffffffff00000001100000000261027801\nv2_neg_hkey.bin z11.3d000000000226287bdaz8.019a15a92d000000019a15a92d00ffffffffffffffffffffffffffff00000001160000000261027802030276\n");
+    s.push_str("v2_varint.bin z11.430000000002eab5f3b0z8.019a15a92d000000019a15a92d00ffffffffffffffffffffffffffff000000011000ffffffffffffffffffff000261027800\nv2_snappy.bin z10.018700000000025ebeff990002000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000007d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a726574727900\nv2_lz4.bin z10.018700000000020b4322c90003000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000007d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a726574727900\nv2_zstd.bin z10.01870000000002a75e46880004000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000007d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a726574727900\n");
+    s.push_str("v2_codec6.bin z10.018700000000020ca5fc280006000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000007d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a726574727900\nv2_cut_header.bin z11.1c0000000002f54545390000000000060000019a15a92d000000019a15\ntiny.bin 000000000000000700000008z8.\nv0_plain.bin 000000000000000a00000015d58e1fa10000000000026b31000000056669727374000000000000000b00000014a6f2489d0000ffffffff000000067365636f6e64000000000000000c00000010b643ca6a0000000000026b33ffffffff000000000000000d0000000ee38a6876z17.0e00000018e3a9035b0000000000026b3500000008636166c3a92000ff\nv1_plain.bin 00000000000000140000001d0926d93001000000019a15a92d00000000026b3100000005666972737400000000000000150000001cebbea83801000000019a15a92d05ffffffff000000067365636f6e64000000000000001600000018efe5fd2501000000019a15a92d09000000026b33ffffffff00000000000000170000001633ff5d2b01000000019a15a92d09z15.1800000020ddeaa7ce01000000019a15a92d1e000000026b3500000008636166c3a92000ff\nv1_gzip.bin z10.012d62ac1a000101z8.ffffffff000001171f8b08000000000002ff636080038b7075aba58c4006e32cd195ba2011b68cfce2125d03204bc6dd3544413fb12053bfcc503fb32435b758df40c1c8c040c1d028b718aa1fa4d5726fe68f7d703318e166180259b29866181aa31bc204326446844f36dc102614876031c4c80cdd10669021cbca1716c10d6126e412634b7443584086b85464dc831bc242c825a646e886b0820c317c53f3096e082b21979899a21bc20632243ecd50086e081b2197985ba01bc20e32e4fffa882eb821ec845c6269886e0807105bdd896250811bc281e212392c516c60826e0a27c89459afa393e1a670a238059b2986e6e8a670814cb9c037a10d6e0a1741b71863245a6e9029755c8c4d7053b809bac504916a01aad858d13f030000\n");
+    s.push_str("v1_gzip_offsets.bin 000000000000022b000000c2d062d32f0101z8.ffffffff000000ac1f8b08000000000002ff636080038b7075aba58c4006e32cd195ba2011b68cfce2125d03204bc6dd3544413fb12053bfcc503fb32435b758df40c1c8c040c1d028b718aa1fa4d5726fe68f7d703318e166180259b29866181aa31bc204326446844f36dc102614876031c4c80cdd10669021cbca1716c10d6126e412634b7443584086b85464dc831bc242c825a646e886b0820c317c53f3096e082b21979899c20d01001a4962259d010000\nv1_gzip_logappend.bin 000000000000022b000000c2fb87283301090000019a15aa5cd1ffffffff000000ac1f8b08000000000002ff636080038b7075aba58c4006e32cd195ba2011b68cfce2125d03204bc6dd3544413fb12053bfcc503fb32435b758df40c1c8c040c1d028b718aa1fa4d5726fe68f7d703318e166180259b29866181aa31bc204326446844f36dc102614876031c4c80cdd10669021cbca1716c10d6126e412634b7443584086b85464dc831bc242c825a646e886b0820c317c53f3096e082b21979899c20d01001a4962259d010000\nv0_gzip.bin z11.97a697ed3d0001ffffffff000000891f8b08000000000002ff636000031b203638a7346d0a98c796915f5ca26b0064c9b8bb8628e8271664ea9719ea6796a4e616eb1b2818191828181ae51643b432d802b1e131b6a35e487a0d812c594cbd86c6e89aed409ae7fa5b5aa2598c45b39119ba667b90e64e8f374e846d36b644d7ec00d2bc777ecf01c2369b1ac1350300c072b62330010000\nv1_badcrc.bin 00000000000000140000001d0926d93001000000019a15a92d00000000026b3100000005666972737500000000000000150000001cebbea83801000000019a15a92d05ffffffff000000067365636f6e64000000000000001600000018efe5fd2501000000019a15a92d09000000026b33ffffffff\nv1_nullwrap.bin 0000000000000009000000165c9c204601010000019a15a92d00ffffffffffffffff\nv1_double.bin 000000000000000100000050ac157ef601010000019a15a92d00ffffffff0000003a1f8b08000000000002ff6360800389574fe3663032323030ce125da90b1261cc061165507946901a2f86776120069a9a72003a8d5ece48000000\nv1_inner_cut.bin 00000000000000010000004c842b5fa301010000019a15a92d00ffffffff000000361f8b08000000000002ff63608003095bf67b0718810cc659a22b7541228cd920a20c2a0f9292f0627817066200002c0a09bc38000000\nv1_snappy.bin 00000000000000030000001e471f58d101020000019a15a92d00ffffffff0000000882534e4150505900\n");
+    s.push_str("v0_lz4.bin 000000000000000300000012ffcb269e0003ffffffff0000000404224d18\nmixed.bin z11.19f1c72acf000000000001610000000a7630206d6573736167650000000000000001000000218ea490d801000000019a15a92d0000000001620000000a7631206d6573736167650000000000000002000000ea000000000206ca77210000000000010000019a15a92d000000019a15a92d0cffffffffffffffffffffffffffff00000002d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6ez11.8e1dd69c0e0101z8.ffffffff000000781f8b08000000000002ff636080038b7075aba58c4006e32cd195ba2011b68cfce2125d03204bc6dd3544413fb12053bfcc503fb32435b758df40c1c8c040c1d028b718aa1fa4d5726fe68f7d703318e166180259b29866181aa31bc204326446844f36dc102614876031c4c80c6e0800d44deb24cez10.07000000a70000000002a6d332100000000000030000019a15a92d0c0000019a15a93ca0ffff\ntrailing.bin z11.9b0000000002aa76aa78z8.019a15a92d000000019a15a92d00ffffffffffffffffffffffffffff00000001d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461360000000000\nresp_meta.bin 0000013b00000001000000030000000100106b61666b612d312e696e7465726e616c00002384000a75732d656173742d31610000000200106b61666b612d322e696e7465726e616c00002384ffff0000000300106b61666b612d332e696e7465726e616c00002385000a75732d656173742d31630000000200000003000000066f72646572730000000003z9.0100000003000000010000000200000003000000030000000100000002000000030000000000010000000200000003000000020000000300000001000000020000000200000003000900000002ffffffff0000000300000003000000010000000200000000000300087061796d656e7473z8.125f5f636f6e73756d65725f6f6666736574730100000001z9.0300000001000000030000000100000003000000220000000200000000000400000000000800010000000b00030000000c001200000003\n");
+    s.push_str("resp_mixed.bin 0000003000000001000000010000000100096c6f63616c686f73740000238400000001000500096e65772d746f706963000000000000007c0000000200000000000000010000000100106b61666b612d312e696e7465726e616c00002384ffff0016586a32516e57387954732d6b35473362397556374c7700000001000000010000000561756469740000000001z9.0100000002000000010000000200000001000000010000000100000002000000200000000300000000000200106b61666b612d322e696e7465726e616c00002384\nresp_api3.bin 00000021000000010000040000000000090000030000000c00001200000003z9.1000000002002300000001001200000002\nresp_produce.bin 00000044000000040000000100066f726465727300000002z12.0412ffffffffffffffff000000010006ffffffffffffffffffffffffffffffff0000000f00000054000000050000000100066f72646572730000000200000000000affffffffffffffffffffffffffffffffz11.01z9.390000019a15a92d7b000000000000000c00000000\nresp_fetch.bin 0000039900000001000000000000000100066f726465727300000003z13.0700000000000000070000000000000193z10.01870000000002f54545390000000000060000019a15a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000007d0010000000e757365722d3137467b226f72646572223a313034322c22736b75223a22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1074726163652d696420346266393266333537376233346461369a010018020c757365722d33467b226f72646572223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403060e757365722d313701020c726561736f6e18676470722d657261737572655600f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80ff004c009f1f0c086c6174652861727269766564206f7574206f66206f72646572020a72657472790000000001z8.012c000000000000012c000000010000000000000009000000000000004d00000184000000000000012c0000015a000000000286582d850001000000170000019a15a92d000000019a15a92da1ffffffffffffffffffffffffffff000000181f8b08000000000002ff8dd2cd49035114c5f1771f22222104111109412e22124699f7f2354e015660035107199489cc9bac440b10092ec50282058805881558811558810b03124856e7eceeddfce00f6722c69846c88a302a0fe3f256ff4f4de348cb6c789117979afa78f68d8bbcd254cfb3eb908f83461aaa61353b521d5de99d9988a9db39e41620b70439066aaecc21bf00f925c833507b15a775182859c3695d063a59c7693d063aade1b43e039dd571da80816e1a382d61a0fb0d9c760ca127318fb209db5ccc482fb205e39c63a457d98675ce33d2bbece0ba0e237d4a13d77519e94b5ab8aec748dfb28bebfa8cf4238aeb068cf42b7bb82e61a407bb8feba88d3fdb0358e7a98d4f6d1bd6796ae36f3682759edaf8873dc27578e37fadb32eade606z9.07000000a70000000002a6d33210000000000003000001000000020001ffffffffffffffffffffffffffffffffffffffff00000000000000f2000000020000000100046c6f677300000001z13.03000000cez11.3857273aa501000000019a15a92d0000000006686f73742d300000001c474554202f6170692f76312f6974656d732f30203230302031326d73000000000000000100000039bd69f8be01000000019a15a92d0100000006686f73742d310000001d474554202f6170692f76312f6974656d732f3133203230302031326d7300000000000000020000003998584c6b01000000019a15a92d0200000006686f73742d300000001d474554202f6170692f76312f6974656d732f3236203230302031326d73\n");
+    s.push_str("resp_wrong_corr.bin 0000003000000009000000010000000100096c6f63616c686f73740000238400000001000500096e65772d746f70696300000000000000220000000200000000000400000000000800010000000b00030000000c001200000003\nresp_unsolicited.bin 000000220000000100000000000400000000000800010000000b00030000000c001200000003000000220000000200000000000400000000000800010000000b00030000000c001200000003\nresp_short.bin 0000002800000001000000030000000100106b61666b612d312e696e7465726e616c00002384000a75732d65000000220000000200000000000400000000000800010000000b00030000000c001200000003\nresp_fc_quirk.bin 00000020z9.0200106b61666b612d322e696e7465726e616c00002384\nresp_fc1.bin 000000370000000100000000000f002154686520636f6f7264696e61746f72206973206e6f7420617661696c61626c652effffffff0000ffffffff\nresp_badutf8.bin 0000003000000001000000010000000100096c6f6361ff686f73740000238400000001000500096e65772d746f70696300000000\nresp_varint.bin 0000000b0000000100008080808080\nresp_cut.bin 00000009000000010000808080\n");
+    s
+}
+
+fn schemas_text() -> String {
+    let mut s = String.new();
+    s.push_str("req ApiVersions 0 18 0 ApiVersionsRequest_v0 S()\nresp ApiVersions 0 18 0 ApiVersionsResponse_v0 S(error_code:i16 api_versions:A<S(api_key:i16 min_version:i16 max_version:i16)>)\nreq ApiVersions 1 18 0 ApiVersionsRequest_v1 S()\nresp ApiVersions 1 18 1 ApiVersionsResponse_v1 S(error_code:i16 api_versions:A<S(api_key:i16 min_version:i16 max_version:i16)> throttle_time_ms:i32)\nreq ApiVersions 2 18 0 ApiVersionsRequest_v2 S()\nresp ApiVersions 2 18 1 ApiVersionsResponse_v2 S(error_code:i16 api_versions:A<S(api_key:i16 min_version:i16 max_version:i16)> throttle_time_ms:i32)\nreq ApiVersions 3 18 1 ApiVersionsRequest_v3 S(client_software_name:cstr client_software_version:cstr _tagged_fields:tags)\nresp ApiVersions 3 18 1 ApiVersionsResponse_v3 S(error_code:i16 api_versions:C<S(api_key:i16 min_version:i16 max_version:i16 _tagged_fields:tags)> throttle_time_ms:i32 _tagged_fields:tags)\nreq ApiVersions 4 18 1 ApiVersionsRequest_v4 S(client_software_name:cstr client_software_version:cstr _tagged_fields:tags)\nresp ApiVersions 4 18 1 ApiVersionsResponse_v4 S(error_code:i16 api_versions:C<S(api_key:i16 min_version:i16 max_version:i16 _tagged_fields:tags)> throttle_time_ms:i32 _tagged_fields:tags)\nreq Metadata 0 3 0 MetadataRequest_v0 S(topics:A<str>)\nresp Metadata 0 3 0 MetadataResponse_v0 S(brokers:A<S(node_id:i32 host:str port:i32)> topics:A<S(error_code:i16 topic:str partitions:A<S(error_code:i16 partition:i32 leader:i32 replicas:A<i32> isr:A<i32>)>)>)\nreq Metadata 1 3 0 MetadataRequest_v1 S(topics:A<str>)\nresp Metadata 1 3 0 MetadataResponse_v1 S(brokers:A<S(node_id:i32 host:str port:i32 rack:str)> controller_id:i32 topics:A<S(error_code:i16 topic:str is_internal:bool partitions:A<S(error_code:i16 partition:i32 leader:i32 replicas:A<i32> isr:A<i32>)>)>)\nreq Metadata 2 3 0 MetadataRequest_v2 S(topics:A<str>)\nresp Metadata 2 3 0 MetadataResponse_v2 S(brokers:A<S(node_id:i32 host:str port:i32 rack:str)> cluster_id:str controller_id:i32 topics:A<S(error_code:i16 topic:str is_internal:bool partitions:A<S(error_code:i16 partition:i32 leader:i32 replicas:A<i32> isr:A<i32>)>)>)\n");
+    s.push_str("req Metadata 3 3 0 MetadataRequest_v3 S(topics:A<str>)\nresp Metadata 3 3 0 MetadataResponse_v3 S(throttle_time_ms:i32 brokers:A<S(node_id:i32 host:str port:i32 rack:str)> cluster_id:str controller_id:i32 topics:A<S(error_code:i16 topic:str is_internal:bool partitions:A<S(error_code:i16 partition:i32 leader:i32 replicas:A<i32> isr:A<i32>)>)>)\nreq Metadata 4 3 0 MetadataRequest_v4 S(topics:A<str> allow_auto_topic_creation:bool)\nresp Metadata 4 3 0 MetadataResponse_v4 S(throttle_time_ms:i32 brokers:A<S(node_id:i32 host:str port:i32 rack:str)> cluster_id:str controller_id:i32 topics:A<S(error_code:i16 topic:str is_internal:bool partitions:A<S(error_code:i16 partition:i32 leader:i32 replicas:A<i32> isr:A<i32>)>)>)\nreq Metadata 5 3 0 MetadataRequest_v5 S(topics:A<str> allow_auto_topic_creation:bool)\nresp Metadata 5 3 0 MetadataResponse_v5 S(throttle_time_ms:i32 brokers:A<S(node_id:i32 host:str port:i32 rack:str)> cluster_id:str controller_id:i32 topics:A<S(error_code:i16 topic:str is_internal:bool partitions:A<S(error_code:i16 partition:i32 leader:i32 replicas:A<i32> isr:A<i32> offline_replicas:A<i32>)>)>)\nreq Metadata 6 3 0 MetadataRequest_v6 S(topics:A<str> allow_auto_topic_creation:bool)\nresp Metadata 6 3 0 MetadataResponse_v6 S(throttle_time_ms:i32 brokers:A<S(node_id:i32 host:str port:i32 rack:str)> cluster_id:str controller_id:i32 topics:A<S(error_code:i16 topic:str is_internal:bool partitions:A<S(error_code:i16 partition:i32 leader:i32 replicas:A<i32> isr:A<i32> offline_replicas:A<i32>)>)>)\nreq Metadata 7 3 0 MetadataRequest_v7 S(topics:A<str> allow_auto_topic_creation:bool)\nresp Metadata 7 3 0 MetadataResponse_v7 S(throttle_time_ms:i32 brokers:A<S(node_id:i32 host:str port:i32 rack:str)> cluster_id:str controller_id:i32 topics:A<S(error_code:i16 topic:str is_internal:bool partitions:A<S(error_code:i16 partition:i32 leader:i32 leader_epoch:i32 replicas:A<i32> isr:A<i32> offline_replicas:A<i32>)>)>)\nreq Produce 0 0 0 ProduceRequest_v0 S(required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\n");
+    s.push_str("resp Produce 0 0 0 ProduceResponse_v0 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64)>)>)\nreq Produce 1 0 0 ProduceRequest_v1 S(required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\nresp Produce 1 0 0 ProduceResponse_v1 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64)>)> throttle_time_ms:i32)\nreq Produce 2 0 0 ProduceRequest_v2 S(required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\nresp Produce 2 0 0 ProduceResponse_v2 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64 timestamp:i64)>)> throttle_time_ms:i32)\nreq Produce 3 0 0 ProduceRequest_v3 S(transactional_id:str required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\nresp Produce 3 0 0 ProduceResponse_v3 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64 timestamp:i64)>)> throttle_time_ms:i32)\nreq Produce 4 0 0 ProduceRequest_v4 S(transactional_id:str required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\nresp Produce 4 0 0 ProduceResponse_v4 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64 timestamp:i64)>)> throttle_time_ms:i32)\nreq Produce 5 0 0 ProduceRequest_v5 S(transactional_id:str required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\nresp Produce 5 0 0 ProduceResponse_v5 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64 timestamp:i64 log_start_offset:i64)>)> throttle_time_ms:i32)\nreq Produce 6 0 0 ProduceRequest_v6 S(transactional_id:str required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\nresp Produce 6 0 0 ProduceResponse_v6 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64 timestamp:i64 log_start_offset:i64)>)> throttle_time_ms:i32)\n");
+    s.push_str("req Produce 7 0 0 ProduceRequest_v7 S(transactional_id:str required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\nresp Produce 7 0 0 ProduceResponse_v7 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64 timestamp:i64 log_start_offset:i64)>)> throttle_time_ms:i32)\nreq Produce 8 0 0 ProduceRequest_v8 S(transactional_id:str required_acks:i16 timeout:i32 topics:A<S(topic:str partitions:A<S(partition:i32 records:bytes)>)>)\nresp Produce 8 0 0 ProduceResponse_v8 S(topics:A<S(topic:str partitions:A<S(partition:i32 error_code:i16 offset:i64 timestamp:i64 log_start_offset:i64)>)> throttle_time_ms:i32)\nreq Fetch 0 1 0 FetchRequest_v0 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 topics:A<S(topic:str partitions:A<S(partition:i32 offset:i64 max_bytes:i32)>)>)\nresp Fetch 0 1 0 FetchResponse_v0 S(topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 records:bytes)>)>)\nreq Fetch 1 1 0 FetchRequest_v1 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 topics:A<S(topic:str partitions:A<S(partition:i32 offset:i64 max_bytes:i32)>)>)\nresp Fetch 1 1 0 FetchResponse_v1 S(throttle_time_ms:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 records:bytes)>)>)\nreq Fetch 2 1 0 FetchRequest_v2 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 topics:A<S(topic:str partitions:A<S(partition:i32 offset:i64 max_bytes:i32)>)>)\nresp Fetch 2 1 0 FetchResponse_v2 S(throttle_time_ms:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 records:bytes)>)>)\nreq Fetch 3 1 0 FetchRequest_v3 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 topics:A<S(topic:str partitions:A<S(partition:i32 offset:i64 max_bytes:i32)>)>)\nresp Fetch 3 1 0 FetchResponse_v3 S(throttle_time_ms:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 records:bytes)>)>)\nreq Fetch 4 1 0 FetchRequest_v4 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 isolation_level:i8 topics:A<S(topic:str partitions:A<S(partition:i32 offset:i64 max_bytes:i32)>)>)\n");
+    s.push_str("resp Fetch 4 1 0 FetchResponse_v4 S(throttle_time_ms:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 last_stable_offset:i64 aborted_transactions:A<S(producer_id:i64 first_offset:i64)> records:bytes)>)>)\nreq Fetch 5 1 0 FetchRequest_v5 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 isolation_level:i8 topics:A<S(topic:str partitions:A<S(partition:i32 fetch_offset:i64 log_start_offset:i64 max_bytes:i32)>)>)\nresp Fetch 5 1 0 FetchResponse_v5 S(throttle_time_ms:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 last_stable_offset:i64 log_start_offset:i64 aborted_transactions:A<S(producer_id:i64 first_offset:i64)> records:bytes)>)>)\nreq Fetch 6 1 0 FetchRequest_v6 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 isolation_level:i8 topics:A<S(topic:str partitions:A<S(partition:i32 fetch_offset:i64 log_start_offset:i64 max_bytes:i32)>)>)\nresp Fetch 6 1 0 FetchResponse_v6 S(throttle_time_ms:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 last_stable_offset:i64 log_start_offset:i64 aborted_transactions:A<S(producer_id:i64 first_offset:i64)> records:bytes)>)>)\nreq Fetch 7 1 0 FetchRequest_v7 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 isolation_level:i8 session_id:i32 session_epoch:i32 topics:A<S(topic:str partitions:A<S(partition:i32 fetch_offset:i64 log_start_offset:i64 max_bytes:i32)>)> forgotten_topics_data:A<S(topic:str partitions:A<i32>)>)\nresp Fetch 7 1 0 FetchResponse_v7 S(throttle_time_ms:i32 error_code:i16 session_id:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 last_stable_offset:i64 log_start_offset:i64 aborted_transactions:A<S(producer_id:i64 first_offset:i64)> records:bytes)>)>)\nreq Fetch 8 1 0 FetchRequest_v8 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 isolation_level:i8 session_id:i32 session_epoch:i32 topics:A<S(topic:str partitions:A<S(partition:i32 fetch_offset:i64 log_start_offset:i64 max_bytes:i32)>)> forgotten_topics_data:A<S(topic:str partitions:A<i32>)>)\n");
+    s.push_str("resp Fetch 8 1 0 FetchResponse_v8 S(throttle_time_ms:i32 error_code:i16 session_id:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 last_stable_offset:i64 log_start_offset:i64 aborted_transactions:A<S(producer_id:i64 first_offset:i64)> records:bytes)>)>)\nreq Fetch 9 1 0 FetchRequest_v9 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 isolation_level:i8 session_id:i32 session_epoch:i32 topics:A<S(topic:str partitions:A<S(partition:i32 current_leader_epoch:i32 fetch_offset:i64 log_start_offset:i64 max_bytes:i32)>)> forgotten_topics_data:A<S(topic:str partitions:A<i32>)>)\nresp Fetch 9 1 0 FetchResponse_v9 S(throttle_time_ms:i32 error_code:i16 session_id:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 last_stable_offset:i64 log_start_offset:i64 aborted_transactions:A<S(producer_id:i64 first_offset:i64)> records:bytes)>)>)\nreq Fetch 10 1 0 FetchRequest_v10 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 isolation_level:i8 session_id:i32 session_epoch:i32 topics:A<S(topic:str partitions:A<S(partition:i32 current_leader_epoch:i32 fetch_offset:i64 log_start_offset:i64 max_bytes:i32)>)> forgotten_topics_data:A<S(topic:str partitions:A<i32>)>)\nresp Fetch 10 1 0 FetchResponse_v10 S(throttle_time_ms:i32 error_code:i16 session_id:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 last_stable_offset:i64 log_start_offset:i64 aborted_transactions:A<S(producer_id:i64 first_offset:i64)> records:bytes)>)>)\nreq Fetch 11 1 0 FetchRequest_v11 S(replica_id:i32 max_wait_time:i32 min_bytes:i32 max_bytes:i32 isolation_level:i8 session_id:i32 session_epoch:i32 topics:A<S(topic:str partitions:A<S(partition:i32 current_leader_epoch:i32 fetch_offset:i64 log_start_offset:i64 max_bytes:i32)>)> forgotten_topics_data:A<S(topic:str partitions:A<i32>)> rack_id:str)\nresp Fetch 11 1 0 FetchResponse_v11 S(throttle_time_ms:i32 error_code:i16 session_id:i32 topics:A<S(topics:str partitions:A<S(partition:i32 error_code:i16 highwater_offset:i64 last_stable_offset:i64 log_start_offset:i64 aborted_transactions:A<S(producer_id:i64 first_offset:i64)> preferred_read_replica:i32 records:bytes)>)>)\n");
+    s.push_str("req FindCoordinator 0 10 0 FindCoordinatorRequest_v0 S(consumer_group:str)\nresp FindCoordinator 0 10 0 FindCoordinatorResponse_v0 S(error_code:i16 coordinator_id:i32 host:str port:i32)\nreq FindCoordinator 1 10 0 FindCoordinatorRequest_v1 S(coordinator_key:str coordinator_type:i8)\nresp FindCoordinator 1 10 0 FindCoordinatorResponse_v1 S(throttle_time_ms:i32 error_code:i16 error_message:str coordinator_id:i32 host:str port:i32)\nreq FindCoordinator 2 10 0 FindCoordinatorRequest_v2 S(coordinator_key:str coordinator_type:i8)\nresp FindCoordinator 2 10 0 FindCoordinatorResponse_v2 S(throttle_time_ms:i32 error_code:i16 error_message:str coordinator_id:i32 host:str port:i32)\n");
+    s
+}
+
+fn errors_text() -> String {
+    let mut s = String.new();
+    s.push_str("-1|UnknownError|UNKNOWN|0|0\n0|NoError|NO_ERROR|0|0\n1|OffsetOutOfRangeError|OFFSET_OUT_OF_RANGE|0|0\n2|CorruptRecordError|CORRUPT_MESSAGE|0|0\n3|UnknownTopicOrPartitionError|UNKNOWN_TOPIC_OR_PARTITION|1|1\n4|InvalidFetchRequestError|INVALID_FETCH_SIZE|0|0\n5|LeaderNotAvailableError|LEADER_NOT_AVAILABLE|1|1\n6|NotLeaderForPartitionError|NOT_LEADER_FOR_PARTITION|1|1\n7|RequestTimedOutError|REQUEST_TIMED_OUT|1|0\n8|BrokerNotAvailableError|BROKER_NOT_AVAILABLE|0|0\n9|ReplicaNotAvailableError|REPLICA_NOT_AVAILABLE|1|1\n10|MessageSizeTooLargeError|MESSAGE_SIZE_TOO_LARGE|0|0\n11|StaleControllerEpochError|STALE_CONTROLLER_EPOCH|0|0\n12|OffsetMetadataTooLargeError|OFFSET_METADATA_TOO_LARGE|0|0\n13|NetworkExceptionError|NETWORK_EXCEPTION|1|1\n14|CoordinatorLoadInProgressError|COORDINATOR_LOAD_IN_PROGRESS|1|0\n15|CoordinatorNotAvailableError|COORDINATOR_NOT_AVAILABLE|1|0\n16|NotCoordinatorError|NOT_COORDINATOR|1|0\n17|InvalidTopicError|INVALID_TOPIC|0|0\n18|RecordListTooLargeError|RECORD_LIST_TOO_LARGE|0|0\n19|NotEnoughReplicasError|NOT_ENOUGH_REPLICAS|1|0\n20|NotEnoughReplicasAfterAppendError|NOT_ENOUGH_REPLICAS_AFTER_APPEND|1|0\n21|InvalidRequiredAcksError|INVALID_REQUIRED_ACKS|0|0\n22|IllegalGenerationError|ILLEGAL_GENERATION|0|0\n23|InconsistentGroupProtocolError|INCONSISTENT_GROUP_PROTOCOL|0|0\n24|InvalidGroupIdError|INVALID_GROUP_ID|0|0\n25|UnknownMemberIdError|UNKNOWN_MEMBER_ID|0|0\n26|InvalidSessionTimeoutError|INVALID_SESSION_TIMEOUT|0|0\n27|RebalanceInProgressError|REBALANCE_IN_PROGRESS|0|0\n28|InvalidCommitOffsetSizeError|INVALID_COMMIT_OFFSET_SIZE|0|0\n29|TopicAuthorizationFailedError|TOPIC_AUTHORIZATION_FAILED|0|0\n30|GroupAuthorizationFailedError|GROUP_AUTHORIZATION_FAILED|0|0\n31|ClusterAuthorizationFailedError|CLUSTER_AUTHORIZATION_FAILED|0|0\n32|InvalidTimestampError|INVALID_TIMESTAMP|0|0\n33|UnsupportedSaslMechanismError|UNSUPPORTED_SASL_MECHANISM|0|0\n34|IllegalSaslStateError|ILLEGAL_SASL_STATE|0|0\n35|UnsupportedVersionError|UNSUPPORTED_VERSION|0|0\n36|TopicAlreadyExistsError|TOPIC_ALREADY_EXISTS|0|0\n");
+    s.push_str("37|InvalidPartitionsError|INVALID_PARTITIONS|0|0\n38|InvalidReplicationFactorError|INVALID_REPLICATION_FACTOR|0|0\n39|InvalidReplicationAssignmentError|INVALID_REPLICATION_ASSIGNMENT|0|0\n40|InvalidConfigurationError|INVALID_CONFIG|0|0\n41|NotControllerError|NOT_CONTROLLER|1|0\n42|InvalidRequestError|INVALID_REQUEST|0|0\n43|UnsupportedForMessageFormatError|UNSUPPORTED_FOR_MESSAGE_FORMAT|0|0\n44|PolicyViolationError|POLICY_VIOLATION|0|0\n45|OutOfOrderSequenceNumberError|OUT_OF_ORDER_SEQUENCE_NUMBER|0|0\n46|DuplicateSequenceNumberError|DUPLICATE_SEQUENCE_NUMBER|0|0\n47|InvalidProducerEpochError|INVALID_PRODUCER_EPOCH|0|0\n48|InvalidTxnStateError|INVALID_TXN_STATE|0|0\n49|InvalidProducerIdMappingError|INVALID_PRODUCER_ID_MAPPING|0|0\n50|InvalidTransactionTimeoutError|INVALID_TRANSACTION_TIMEOUT|0|0\n51|ConcurrentTransactionsError|CONCURRENT_TRANSACTIONS|1|0\n52|TransactionCoordinatorFencedError|TRANSACTION_COORDINATOR_FENCED|0|0\n53|TransactionalIdAuthorizationFailedError|TRANSACTIONAL_ID_AUTHORIZATION_FAILED|0|0\n54|SecurityDisabledError|SECURITY_DISABLED|0|0\n55|OperationNotAttemptedError|OPERATION_NOT_ATTEMPTED|0|0\n56|KafkaStorageError|KAFKA_STORAGE_ERROR|1|1\n57|LogDirNotFoundError|LOG_DIR_NOT_FOUND|0|0\n58|SaslAuthenticationFailedError|SASL_AUTHENTICATION_FAILED|0|0\n59|UnknownProducerIdError|UNKNOWN_PRODUCER_ID|0|0\n60|ReassignmentInProgressError|REASSIGNMENT_IN_PROGRESS|0|0\n61|DelegationTokenAuthDisabledError|DELEGATION_TOKEN_AUTH_DISABLED|0|0\n62|DelegationTokenNotFoundError|DELEGATION_TOKEN_NOT_FOUND|0|0\n63|DelegationTokenOwnerMismatchError|DELEGATION_TOKEN_OWNER_MISMATCH|0|0\n64|DelegationTokenRequestNotAllowedError|DELEGATION_TOKEN_REQUEST_NOT_ALLOWED|0|0\n65|DelegationTokenAuthorizationFailedError|DELEGATION_TOKEN_AUTHORIZATION_FAILED|0|0\n66|DelegationTokenExpiredError|DELEGATION_TOKEN_EXPIRED|0|0\n67|InvalidPrincipalTypeError|INVALID_PRINCIPAL_TYPE|0|0\n68|NonEmptyGroupError|NON_EMPTY_GROUP|0|0\n69|GroupIdNotFoundError|GROUP_ID_NOT_FOUND|0|0\n70|FetchSessionIdNotFoundError|FETCH_SESSION_ID_NOT_FOUND|1|0\n");
+    s.push_str("71|InvalidFetchSessionEpochError|INVALID_FETCH_SESSION_EPOCH|1|0\n72|ListenerNotFoundError|LISTENER_NOT_FOUND|1|1\n73|TopicDeletionDisabledError|TOPIC_DELETION_DISABLED|0|0\n74|FencedLeaderEpochError|FENCED_LEADER_EPOCH|1|1\n75|UnknownLeaderEpochError|UNKNOWN_LEADER_EPOCH|1|1\n76|UnsupportedCompressionTypeError|UNSUPPORTED_COMPRESSION_TYPE|0|0\n77|StaleBrokerEpochError|STALE_BROKER_EPOCH|0|0\n78|OffsetNotAvailableError|OFFSET_NOT_AVAILABLE|1|0\n79|MemberIdRequiredError|MEMBER_ID_REQUIRED|0|0\n80|PreferredLeaderNotAvailableError|PREFERRED_LEADER_NOT_AVAILABLE|1|1\n81|GroupMaxSizeReachedError|GROUP_MAX_SIZE_REACHED|0|0\n82|FencedInstanceIdError|FENCED_INSTANCE_ID|0|0\n83|EligibleLeadersNotAvailableError|ELIGIBLE_LEADERS_NOT_AVAILABLE|1|1\n84|ElectionNotNeededError|ELECTION_NOT_NEEDED|1|1\n85|NoReassignmentInProgressError|NO_REASSIGNMENT_IN_PROGRESS|0|0\n86|GroupSubscribedToTopicError|GROUP_SUBSCRIBED_TO_TOPIC|0|0\n87|InvalidRecordError|INVALID_RECORD|0|0\n88|UnstableOffsetCommitError|UNSTABLE_OFFSET_COMMIT|1|0\n89|ThrottlingQuotaExceededError|THROTTLING_QUOTA_EXCEEDED|1|0\n90|ProducerFencedError|PRODUCER_FENCED|0|0\n91|ResourceNotFoundError|RESOURCE_NOT_FOUND|0|0\n92|DuplicateResourceError|DUPLICATE_RESOURCE|0|0\n93|UnacceptableCredentialError|UNACCEPTABLE_CREDENTIAL|0|0\n94|InconsistentVoterSetError|INCONSISTENT_VOTER_SET|0|0\n95|InvalidUpdateVersionError|INVALID_UPDATE_VERSION|0|0\n96|FeatureUpdateFailedError|FEATURE_UPDATE_FAILED|0|0\n97|PrincipalDeserializationFailureError|PRINCIPAL_DESERIALIZATION_FAILURE|0|0\n98|SnapshotNotFoundError|SNAPSHOT_NOT_FOUND|0|0\n99|PositionOutOfRangeError|POSITION_OUT_OF_RANGE|0|0\n100|UnknownTopicIdError|UNKNOWN_TOPIC_ID|1|1\n101|DuplicateBrokerRegistrationError|DUPLICATE_BROKER_REGISTRATION|0|0\n102|BrokerIdNotRegisteredError|BROKER_ID_NOT_REGISTERED|0|0\n103|InconsistentTopicIdError|INCONSISTENT_TOPIC_ID|1|1\n104|InconsistentClusterIdError|INCONSISTENT_CLUSTER_ID|0|0\n105|TransactionalIdNotFoundError|TRANSACTIONAL_ID_NOT_FOUND|0|0\n");
+    s.push_str("106|FetchSessionTopicIdError|FETCH_SESSION_TOPIC_ID_ERROR|1|0\n107|IneligibleReplicaError|INELIGIBLE_REPLICA|0|0\n108|NewLeaderElectedError|NEW_LEADER_ELECTED|0|0\n109|OffsetMovedToTieredStorageError|OFFSET_MOVED_TO_TIERED_STORAGE|0|0\n110|FencedMemberEpochError|FENCED_MEMBER_EPOCH|0|0\n111|UnreleasedInstanceIdError|UNRELEASED_INSTANCE_ID|0|0\n112|UnsupportedAssignorError|UNSUPPORTED_ASSIGNOR|0|0\n113|StaleMemberEpochError|STALE_MEMBER_EPOCH|0|0\n114|MismatchedEndpointTypeError|MISMATCHED_ENDPOINT_TYPE|0|0\n115|UnsupportedEndpointTypeError|UNSUPPORTED_ENDPOINT_TYPE|0|0\n116|UnknownControllerIdError|UNKNOWN_CONTROLLER_ID|0|0\n117|UnknownSubscriptionIdError|UNKNOWN_SUBSCRIPTION_ID|0|0\n118|TelemetryTooLargeError|TELEMETRY_TOO_LARGE|0|0\n119|InvalidRegistrationError|INVALID_REGISTRATION|0|0\n120|TransactionAbortableError|TRANSACTION_ABORTABLE|0|0\n121|InvalidRecordStateError|INVALID_RECORD_STATE|0|0\n122|ShareSessionNotFoundError|SHARE_SESSION_NOT_FOUND|1|0\n123|InvalidShareSessionEpochError|INVALID_SHARE_SESSION_EPOCH|1|0\n124|FencedStateEpochError|FENCED_STATE_EPOCH|0|0\n125|InvalidVoterKeyError|INVALID_VOTER_KEY|0|0\n126|DuplicateVoterError|DUPLICATE_VOTER|0|0\n127|VoterNotFoundError|VOTER_NOT_FOUND|0|0\n");
+    s
+}

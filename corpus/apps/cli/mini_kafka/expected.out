@@ -1,0 +1,785 @@
+> read v2_orders.bin
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=7)
+    crc=f5454539 valid=True size=403 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=1, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+    DefaultRecord(offset=2, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+    DefaultRecord(offset=3, timestamp=1761300000250, timestamp_type=0, key=b'user-17', value=None, headers=[('reason', b'gdpr-erasure')]) size=34
+    DefaultRecord(offset=4, timestamp=1761300000251, timestamp_type=0, key=b'caf\xc3\xa9-9', value=b'prix: 4,50 \xe2\x82\xac', headers=[('lang', b'fr'), ('empty', None)]) size=43
+    DefaultRecord(offset=5, timestamp=1761300004000, timestamp_type=0, key=b'bin', value=b'\x00\x01\x02\'"\\\n\t\r\x7f\x80\xff', headers=[]) size=22
+    DefaultRecord(offset=6, timestamp=1761299998000, timestamp_type=0, key=b'late', value=b'arrived out of order', headers=[('retry', b'')]) size=38
+> read v2_idempotent.bin
+  262 bytes, 262 valid
+  DefaultRecordBatch(magic=2, base_offset=5000, last_offset_delta=2, first_timestamp=1761300000000, max_timestamp=1761300000012, is_transactional=False, producer_id=4001, producer_epoch=3, base_sequence=2147483646, records_count=3)
+    crc=f5c040a8 valid=True size=262 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=5002 next_offset=5003 has_producer_id=True last_sequence=0
+    DefaultRecord(offset=5000, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=5001, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+    DefaultRecord(offset=5002, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+> read v2_txn.bin
+  191 bytes, 191 valid
+  DefaultRecordBatch(magic=2, base_offset=77, last_offset_delta=2, first_timestamp=1761300000012, max_timestamp=1761300000250, is_transactional=True, producer_id=9, producer_epoch=0, base_sequence=0, records_count=3)
+    crc=e80923a9 valid=True size=191 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=79 next_offset=80 has_producer_id=True last_sequence=2
+    DefaultRecord(offset=77, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+    DefaultRecord(offset=78, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+    DefaultRecord(offset=79, timestamp=1761300000250, timestamp_type=0, key=b'user-17', value=None, headers=[('reason', b'gdpr-erasure')]) size=34
+> read v2_multi.bin
+  524 bytes, 524 valid
+  DefaultRecordBatch(magic=2, base_offset=100, last_offset_delta=1, first_timestamp=1761300000000, max_timestamp=1761300000012, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=2)
+    crc=06ca7721 valid=True size=246 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=101 next_offset=102 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=100, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=101, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+  DefaultRecordBatch(magic=2, base_offset=102, last_offset_delta=2, first_timestamp=1761300000012, max_timestamp=1761300000251, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=3)
+    crc=92ba0344 valid=True size=156 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=104 next_offset=105 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=102, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+    DefaultRecord(offset=103, timestamp=1761300000250, timestamp_type=0, key=b'user-17', value=None, headers=[('reason', b'gdpr-erasure')]) size=34
+    DefaultRecord(offset=104, timestamp=1761300000251, timestamp_type=0, key=b'caf\xc3\xa9-9', value=b'prix: 4,50 \xe2\x82\xac', headers=[('lang', b'fr'), ('empty', None)]) size=43
+  DefaultRecordBatch(magic=2, base_offset=105, last_offset_delta=1, first_timestamp=1761300004000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=2)
+    crc=59347f63 valid=True size=122 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=106 next_offset=107 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=105, timestamp=1761300004000, timestamp_type=0, key=b'bin', value=b'\x00\x01\x02\'"\\\n\t\r\x7f\x80\xff', headers=[]) size=21
+    DefaultRecord(offset=106, timestamp=1761299998000, timestamp_type=0, key=b'late', value=b'arrived out of order', headers=[('retry', b'')]) size=38
+> read v2_logappend.bin
+  297 bytes, 297 valid
+  DefaultRecordBatch(magic=2, base_offset=40, last_offset_delta=3, first_timestamp=1761300000000, max_timestamp=1761300099000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=4)
+    crc=df68d521 valid=True size=297 codec=0 timestamp_type=1 control=False leader_epoch=0 last_offset=43 next_offset=44 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=40, timestamp=1761300099000, timestamp_type=1, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=41, timestamp=1761300099000, timestamp_type=1, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+    DefaultRecord(offset=42, timestamp=1761300099000, timestamp_type=1, key=None, value=b'heartbeat', headers=[]) size=15
+    DefaultRecord(offset=43, timestamp=1761300099000, timestamp_type=1, key=b'user-17', value=None, headers=[('reason', b'gdpr-erasure')]) size=34
+> read v2_gzip.bin
+  358 bytes, 358 valid
+  DefaultRecordBatch(magic=2, base_offset=300, last_offset_delta=23, first_timestamp=1761300000000, max_timestamp=1761300000161, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=24)
+    crc=86582d85 valid=True size=358 codec=1 timestamp_type=0 control=False leader_epoch=0 last_offset=323 next_offset=324 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=300, timestamp=1761300000000, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":200,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=301, timestamp=1761300000007, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":201,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=302, timestamp=1761300000014, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":202,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=303, timestamp=1761300000021, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":203,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=304, timestamp=1761300000028, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":204,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=305, timestamp=1761300000035, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":205,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=306, timestamp=1761300000042, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":206,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=307, timestamp=1761300000049, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":207,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=308, timestamp=1761300000056, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":208,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=309, timestamp=1761300000063, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":209,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=310, timestamp=1761300000070, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":210,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=311, timestamp=1761300000077, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":211,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=312, timestamp=1761300000084, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":212,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=313, timestamp=1761300000091, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":213,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=314, timestamp=1761300000098, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":214,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=315, timestamp=1761300000105, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":215,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=316, timestamp=1761300000112, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":216,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=317, timestamp=1761300000119, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":217,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=318, timestamp=1761300000126, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":218,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=319, timestamp=1761300000133, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":219,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=320, timestamp=1761300000140, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":220,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=321, timestamp=1761300000147, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":221,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=322, timestamp=1761300000154, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":222,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=323, timestamp=1761300000161, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":223,"unit":"celsius","status":"ok"}', headers=[]) size=72
+> read v2_gzip_members.bin
+  364 bytes, 364 valid
+  DefaultRecordBatch(magic=2, base_offset=900, last_offset_delta=9, first_timestamp=1761300000000, max_timestamp=1761300000063, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=10)
+    crc=8b23cb44 valid=True size=364 codec=1 timestamp_type=0 control=False leader_epoch=0 last_offset=909 next_offset=910 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=900, timestamp=1761300000000, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":200,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=901, timestamp=1761300000007, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":201,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=902, timestamp=1761300000014, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":202,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=903, timestamp=1761300000021, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":203,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=904, timestamp=1761300000028, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":204,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=905, timestamp=1761300000035, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":205,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=906, timestamp=1761300000042, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":206,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=907, timestamp=1761300000049, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":207,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=908, timestamp=1761300000056, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":208,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=909, timestamp=1761300000063, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":209,"unit":"celsius","status":"ok"}', headers=[]) size=71
+> read v2_gzip_badmagic.bin
+  358 bytes, 358 valid
+  DefaultRecordBatch(magic=2, base_offset=300, last_offset_delta=23, first_timestamp=1761300000000, max_timestamp=1761300000161, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=24)
+    crc=78ab6ac8 valid=True size=358 codec=1 timestamp_type=0 control=False leader_epoch=0 last_offset=323 next_offset=324 has_producer_id=False last_sequence=-1
+    error: BadGzipFile: Not a gzipped file (b'x\x9c')
+> read v2_gzip_badcrc.bin
+  358 bytes, 358 valid
+  DefaultRecordBatch(magic=2, base_offset=300, last_offset_delta=23, first_timestamp=1761300000000, max_timestamp=1761300000161, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=24)
+    crc=cf6450a2 valid=True size=358 codec=1 timestamp_type=0 control=False leader_epoch=0 last_offset=323 next_offset=324 has_producer_id=False last_sequence=-1
+    error: BadGzipFile: CRC check failed 0xad2eb3ac != 0xad2eb3ad
+> read v2_gzip_badsize.bin
+  358 bytes, 358 valid
+  DefaultRecordBatch(magic=2, base_offset=300, last_offset_delta=23, first_timestamp=1761300000000, max_timestamp=1761300000161, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=24)
+    crc=fd7a1c76 valid=True size=358 codec=1 timestamp_type=0 control=False leader_epoch=0 last_offset=323 next_offset=324 has_producer_id=False last_sequence=-1
+    error: BadGzipFile: Incorrect length of data produced
+> read v2_gzip_cut.bin
+  209 bytes, 209 valid
+  DefaultRecordBatch(magic=2, base_offset=300, last_offset_delta=23, first_timestamp=1761300000000, max_timestamp=1761300000161, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=24)
+    crc=c6e48043 valid=True size=209 codec=1 timestamp_type=0 control=False leader_epoch=0 last_offset=323 next_offset=324 has_producer_id=False last_sequence=-1
+    error: EOFError: Compressed file ended before the end-of-stream marker was reached
+> read v2_gzip_junk.bin
+  361 bytes, 361 valid
+  DefaultRecordBatch(magic=2, base_offset=300, last_offset_delta=23, first_timestamp=1761300000000, max_timestamp=1761300000161, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=24)
+    crc=6c650f51 valid=True size=361 codec=1 timestamp_type=0 control=False leader_epoch=0 last_offset=323 next_offset=324 has_producer_id=False last_sequence=-1
+    error: BadGzipFile: Not a gzipped file (b'K')
+> read v2_gzip_hdrcut.bin
+  68 bytes, 68 valid
+  DefaultRecordBatch(magic=2, base_offset=300, last_offset_delta=23, first_timestamp=1761300000000, max_timestamp=1761300000161, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=24)
+    crc=5e336673 valid=True size=68 codec=1 timestamp_type=0 control=False leader_epoch=0 last_offset=323 next_offset=324 has_producer_id=False last_sequence=-1
+    error: EOFError: Compressed file ended before the end-of-stream marker was reached
+> read v2_control.bin
+  95 bytes, 95 valid
+  DefaultRecordBatch(magic=2, base_offset=80, last_offset_delta=1, first_timestamp=1761300000500, max_timestamp=1761300000503, is_transactional=True, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=2)
+    crc=208566f9 valid=True size=95 codec=0 timestamp_type=0 control=True leader_epoch=0 last_offset=81 next_offset=82 has_producer_id=False last_sequence=-1
+    ControlRecord(offset=80, timestamp=1761300000500, timestamp_type=0, version=0, type=1 <commit>) size=16
+    ControlRecord(offset=81, timestamp=1761300000503, timestamp_type=0, version=0, type=0 <abort>) size=16
+> read v2_badcrc.bin
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=7)
+    crc=f5454539 valid=False size=403 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-Type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=1, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+    DefaultRecord(offset=2, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+    DefaultRecord(offset=3, timestamp=1761300000250, timestamp_type=0, key=b'user-17', value=None, headers=[('reason', b'gdpr-erasure')]) size=34
+    DefaultRecord(offset=4, timestamp=1761300000251, timestamp_type=0, key=b'caf\xc3\xa9-9', value=b'prix: 4,50 \xe2\x82\xac', headers=[('lang', b'fr'), ('empty', None)]) size=43
+    DefaultRecord(offset=5, timestamp=1761300004000, timestamp_type=0, key=b'bin', value=b'\x00\x01\x02\'"\\\n\t\r\x7f\x80\xff', headers=[]) size=22
+    DefaultRecord(offset=6, timestamp=1761299998000, timestamp_type=0, key=b'late', value=b'arrived out of order', headers=[('retry', b'')]) size=38
+> read v2_extra.bin
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=6)
+    crc=3a646f44 valid=True size=403 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=1, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+    DefaultRecord(offset=2, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+    DefaultRecord(offset=3, timestamp=1761300000250, timestamp_type=0, key=b'user-17', value=None, headers=[('reason', b'gdpr-erasure')]) size=34
+    DefaultRecord(offset=4, timestamp=1761300000251, timestamp_type=0, key=b'caf\xc3\xa9-9', value=b'prix: 4,50 \xe2\x82\xac', headers=[('lang', b'fr'), ('empty', None)]) size=43
+    DefaultRecord(offset=5, timestamp=1761300004000, timestamp_type=0, key=b'bin', value=b'\x00\x01\x02\'"\\\n\t\r\x7f\x80\xff', headers=[]) size=22
+    error: [Error 2] CorruptRecordError: 39 unconsumed bytes after all records consumed
+> read v2_short_count.bin
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=8)
+    crc=f61a1a66 valid=True size=403 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=1, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+    DefaultRecord(offset=2, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+    DefaultRecord(offset=3, timestamp=1761300000250, timestamp_type=0, key=b'user-17', value=None, headers=[('reason', b'gdpr-erasure')]) size=34
+    DefaultRecord(offset=4, timestamp=1761300000251, timestamp_type=0, key=b'caf\xc3\xa9-9', value=b'prix: 4,50 \xe2\x82\xac', headers=[('lang', b'fr'), ('empty', None)]) size=43
+    DefaultRecord(offset=5, timestamp=1761300004000, timestamp_type=0, key=b'bin', value=b'\x00\x01\x02\'"\\\n\t\r\x7f\x80\xff', headers=[]) size=22
+    DefaultRecord(offset=6, timestamp=1761299998000, timestamp_type=0, key=b'late', value=b'arrived out of order', headers=[('retry', b'')]) size=38
+    error: [Error 2] CorruptRecordError: Found invalid record structure: IndexError('bytearray index out of range')
+> read v2_badlen.bin
+  91 bytes, 91 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=1, first_timestamp=1761300000000, max_timestamp=1761300000000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=2)
+    crc=97fb28e4 valid=True size=91 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=1 next_offset=2 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'a', value=b'one', headers=[('k', b'v')]) size=14
+    error: [Error 2] CorruptRecordError: Invalid record size: expected to read 15 bytes in record payload, but instead read 14
+> read v2_neg_headers.bin
+  70 bytes, 70 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=0, first_timestamp=1761300000000, max_timestamp=1761300000000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=1)
+    crc=48a8b9d8 valid=True size=70 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=0 next_offset=1 has_producer_id=False last_sequence=-1
+    error: [Error 2] CorruptRecordError: Found invalid number of record headers -1
+> read v2_neg_hkey.bin
+  73 bytes, 73 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=0, first_timestamp=1761300000000, max_timestamp=1761300000000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=1)
+    crc=26287bda valid=True size=73 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=0 next_offset=1 has_producer_id=False last_sequence=-1
+    error: [Error 2] CorruptRecordError: Invalid negative header key size -2
+> read v2_varint.bin
+  79 bytes, 79 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=0, first_timestamp=1761300000000, max_timestamp=1761300000000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=1)
+    crc=eab5f3b0 valid=True size=79 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=0 next_offset=1 has_producer_id=False last_sequence=-1
+    error: [Error 2] CorruptRecordError: Found invalid record structure: ValueError('Out of int64 range')
+> read v2_snappy.bin
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=7)
+    crc=5ebeff99 valid=True size=403 codec=2 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    error: UnsupportedCodecError: Libraries for snappy compression codec not found
+> read v2_lz4.bin
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=7)
+    crc=0b4322c9 valid=True size=403 codec=3 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    error: UnsupportedCodecError: Libraries for lz4 compression codec not found
+> read v2_zstd.bin
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=7)
+    crc=a75e4688 valid=True size=403 codec=4 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    error: UnsupportedCodecError: Libraries for zstd compression codec not found
+> read v2_codec6.bin
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=7)
+    crc=0ca5fc28 valid=True size=403 codec=6 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    error: UnsupportedCodecError: Unrecognized compression type: 6
+> read v2_cut_header.bin
+  40 bytes, 40 valid
+  error: struct.error: unpack_from requires a buffer of at least 61 bytes for unpacking 61 bytes at offset 0 (actual buffer size is 40)
+> read tiny.bin
+  20 bytes, 20 valid
+  error: [Error 2] CorruptRecordError: Record size is less than the minimum record overhead (14)
+> read v0_plain.bin
+  155 bytes, 155 valid
+  LegacyRecordBatch(magic=0, base_offset=10, size=33, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=10, timestamp=None, timestamp_type=None, key=b'k1', value=b'first', crc=3582861217) valid=True size=33
+  LegacyRecordBatch(magic=0, base_offset=11, size=32, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=11, timestamp=None, timestamp_type=None, key=None, value=b'second', crc=2800896157) valid=True size=32
+  LegacyRecordBatch(magic=0, base_offset=12, size=28, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=12, timestamp=None, timestamp_type=None, key=b'k3', value=None, crc=3057896042) valid=True size=28
+  LegacyRecordBatch(magic=0, base_offset=13, size=26, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=13, timestamp=None, timestamp_type=None, key=b'', value=b'', crc=3817498742) valid=True size=26
+  LegacyRecordBatch(magic=0, base_offset=14, size=36, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=14, timestamp=None, timestamp_type=None, key=b'k5', value=b'caf\xc3\xa9 \x00\xff', crc=3819504475) valid=True size=36
+> read v1_plain.bin
+  195 bytes, 195 valid
+  LegacyRecordBatch(magic=1, base_offset=20, size=41, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=20, timestamp=1761300000000, timestamp_type=0, key=b'k1', value=b'first', crc=153540912) valid=True size=41
+  LegacyRecordBatch(magic=1, base_offset=21, size=40, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=21, timestamp=1761300000005, timestamp_type=0, key=None, value=b'second', crc=3955140664) valid=True size=40
+  LegacyRecordBatch(magic=1, base_offset=22, size=36, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=22, timestamp=1761300000009, timestamp_type=0, key=b'k3', value=None, crc=4024827173) valid=True size=36
+  LegacyRecordBatch(magic=1, base_offset=23, size=34, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=23, timestamp=1761300000009, timestamp_type=0, key=b'', value=b'', crc=872373547) valid=True size=34
+  LegacyRecordBatch(magic=1, base_offset=24, size=44, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=24, timestamp=1761300000030, timestamp_type=0, key=b'k5', value=b'caf\xc3\xa9 \x00\xff', crc=3723143118) valid=True size=44
+> read v1_gzip.bin
+  313 bytes, 313 valid
+  LegacyRecordBatch(magic=1, base_offset=0, size=313, codec=1, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=0, timestamp=1761300000000, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/0 200 12ms', crc=1462188709) valid=True size=68
+    LegacyRecord(magic=1 offset=1, timestamp=1761300000001, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/13 200 12ms', crc=3177838782) valid=True size=69
+    LegacyRecord(magic=1 offset=2, timestamp=1761300000002, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/26 200 12ms', crc=2555923563) valid=True size=69
+    LegacyRecord(magic=1 offset=3, timestamp=1761300000003, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/39 200 12ms', crc=2792857970) valid=True size=69
+    LegacyRecord(magic=1 offset=4, timestamp=1761300000004, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/52 200 12ms', crc=1148741854) valid=True size=69
+    LegacyRecord(magic=1 offset=5, timestamp=1761300000005, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/65 200 12ms', crc=837582066) valid=True size=69
+    LegacyRecord(magic=1 offset=6, timestamp=1761300000006, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/78 200 12ms', crc=1600532754) valid=True size=69
+    LegacyRecord(magic=1 offset=7, timestamp=1761300000007, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/91 200 12ms', crc=4289681546) valid=True size=69
+    LegacyRecord(magic=1 offset=8, timestamp=1761300000008, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/104 200 12ms', crc=3696885796) valid=True size=70
+    LegacyRecord(magic=1 offset=9, timestamp=1761300000009, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/117 200 12ms', crc=2599115619) valid=True size=70
+    LegacyRecord(magic=1 offset=10, timestamp=1761300000010, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/130 200 12ms', crc=3490615430) valid=True size=70
+    LegacyRecord(magic=1 offset=11, timestamp=1761300000011, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/143 200 12ms', crc=2114584962) valid=True size=70
+> read v1_gzip_offsets.bin
+  206 bytes, 206 valid
+  LegacyRecordBatch(magic=1, base_offset=555, size=206, codec=1, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=550, timestamp=1761300000000, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/0 200 12ms', crc=1462188709) valid=True size=68
+    LegacyRecord(magic=1 offset=551, timestamp=1761300000001, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/13 200 12ms', crc=3177838782) valid=True size=69
+    LegacyRecord(magic=1 offset=552, timestamp=1761300000002, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/26 200 12ms', crc=2555923563) valid=True size=69
+    LegacyRecord(magic=1 offset=553, timestamp=1761300000003, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/39 200 12ms', crc=2792857970) valid=True size=69
+    LegacyRecord(magic=1 offset=554, timestamp=1761300000004, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/52 200 12ms', crc=1148741854) valid=True size=69
+    LegacyRecord(magic=1 offset=555, timestamp=1761300000005, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/65 200 12ms', crc=837582066) valid=True size=69
+> read v1_gzip_logappend.bin
+  206 bytes, 206 valid
+  LegacyRecordBatch(magic=1, base_offset=555, size=206, codec=1, timestamp_type=1) valid=True
+    LegacyRecord(magic=1 offset=550, timestamp=1761300077777, timestamp_type=1, key=b'host-0', value=b'GET /api/v1/items/0 200 12ms', crc=1462188709) valid=True size=68
+    LegacyRecord(magic=1 offset=551, timestamp=1761300077777, timestamp_type=1, key=b'host-1', value=b'GET /api/v1/items/13 200 12ms', crc=3177838782) valid=True size=69
+    LegacyRecord(magic=1 offset=552, timestamp=1761300077777, timestamp_type=1, key=b'host-0', value=b'GET /api/v1/items/26 200 12ms', crc=2555923563) valid=True size=69
+    LegacyRecord(magic=1 offset=553, timestamp=1761300077777, timestamp_type=1, key=b'host-1', value=b'GET /api/v1/items/39 200 12ms', crc=2792857970) valid=True size=69
+    LegacyRecord(magic=1 offset=554, timestamp=1761300077777, timestamp_type=1, key=b'host-0', value=b'GET /api/v1/items/52 200 12ms', crc=1148741854) valid=True size=69
+    LegacyRecord(magic=1 offset=555, timestamp=1761300077777, timestamp_type=1, key=b'host-1', value=b'GET /api/v1/items/65 200 12ms', crc=837582066) valid=True size=69
+> read v0_gzip.bin
+  163 bytes, 163 valid
+  LegacyRecordBatch(magic=0, base_offset=0, size=163, codec=1, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=60, timestamp=None, timestamp_type=None, key=b'host-0', value=b'GET /api/v1/items/0 200 12ms', crc=3458373268) valid=True size=60
+    LegacyRecord(magic=0 offset=61, timestamp=None, timestamp_type=None, key=b'host-1', value=b'GET /api/v1/items/13 200 12ms', crc=3322332490) valid=True size=61
+    LegacyRecord(magic=0 offset=62, timestamp=None, timestamp_type=None, key=b'host-0', value=b'GET /api/v1/items/26 200 12ms', crc=2639214905) valid=True size=61
+    LegacyRecord(magic=0 offset=63, timestamp=None, timestamp_type=None, key=b'host-1', value=b'GET /api/v1/items/39 200 12ms', crc=2303257666) valid=True size=61
+    LegacyRecord(magic=0 offset=64, timestamp=None, timestamp_type=None, key=b'host-0', value=b'GET /api/v1/items/52 200 12ms', crc=3181350080) valid=True size=61
+> read v1_badcrc.bin
+  117 bytes, 117 valid
+  LegacyRecordBatch(magic=1, base_offset=20, size=41, codec=0, timestamp_type=0) valid=False
+    LegacyRecord(magic=1 offset=20, timestamp=1761300000000, timestamp_type=0, key=b'k1', value=b'firsu', crc=153540912) valid=False size=41
+  LegacyRecordBatch(magic=1, base_offset=21, size=40, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=21, timestamp=1761300000005, timestamp_type=0, key=None, value=b'second', crc=3955140664) valid=True size=40
+  LegacyRecordBatch(magic=1, base_offset=22, size=36, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=22, timestamp=1761300000009, timestamp_type=0, key=b'k3', value=None, crc=4024827173) valid=True size=36
+> read v1_nullwrap.bin
+  34 bytes, 34 valid
+  LegacyRecordBatch(magic=1, base_offset=9, size=34, codec=1, timestamp_type=0) valid=True
+    error: [Error 2] CorruptRecordError: Value of compressed message is None
+> read v1_double.bin
+  92 bytes, 92 valid
+  LegacyRecordBatch(magic=1, base_offset=1, size=92, codec=1, timestamp_type=0) valid=True
+    error: AssertionError: MessageSet at offset 0 appears double-compressed. This should not happen -- check your producers!
+> read v1_inner_cut.bin
+  88 bytes, 88 valid
+  LegacyRecordBatch(magic=1, base_offset=1, size=88, codec=1, timestamp_type=0) valid=True
+    error: struct.error: unpack_from requires a buffer of at least 62 bytes for unpacking 26 bytes at offset 36 (actual buffer size is 56)
+> read v1_snappy.bin
+  42 bytes, 42 valid
+  LegacyRecordBatch(magic=1, base_offset=3, size=42, codec=2, timestamp_type=0) valid=True
+    error: UnsupportedCodecError: Libraries for snappy compression codec not found
+> read v0_lz4.bin
+  30 bytes, 30 valid
+  LegacyRecordBatch(magic=0, base_offset=3, size=30, codec=3, timestamp_type=None) valid=True
+    error: UnsupportedCodecError: Libraries for lz4 compression codec not found
+> read mixed.bin
+  527 bytes, 482 valid
+  LegacyRecordBatch(magic=0, base_offset=0, size=37, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=0, timestamp=None, timestamp_type=None, key=b'a', value=b'v0 message', crc=4056361679) valid=True size=37
+  LegacyRecordBatch(magic=1, base_offset=1, size=45, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=1, timestamp=1761300000000, timestamp_type=0, key=b'b', value=b'v1 message', crc=2393149656) valid=True size=45
+  DefaultRecordBatch(magic=2, base_offset=2, last_offset_delta=1, first_timestamp=1761300000000, max_timestamp=1761300000012, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=2)
+    crc=06ca7721 valid=True size=246 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=3 next_offset=4 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=2, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=3, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+  LegacyRecordBatch(magic=1, base_offset=0, size=154, codec=1, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=0, timestamp=1761300000000, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/0 200 12ms', crc=1462188709) valid=True size=68
+    LegacyRecord(magic=1 offset=1, timestamp=1761300000001, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/13 200 12ms', crc=3177838782) valid=True size=69
+    LegacyRecord(magic=1 offset=2, timestamp=1761300000002, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/26 200 12ms', crc=2555923563) valid=True size=69
+> read trailing.bin
+  172 bytes, 167 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=0, first_timestamp=1761300000000, max_timestamp=1761300000000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=1)
+    crc=aa76aa78 valid=True size=167 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=0 next_offset=1 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+> build orders magic=2 codec=0 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  DefaultRecordMetadata(offset=0, size=106, timestamp=1761300000000) estimate=183
+  DefaultRecordMetadata(offset=1, size=79, timestamp=1761300000012) estimate=156
+  DefaultRecordMetadata(offset=2, size=16, timestamp=1761300000012) estimate=94
+  DefaultRecordMetadata(offset=3, size=35, timestamp=1761300000250) estimate=112
+  DefaultRecordMetadata(offset=4, size=44, timestamp=1761300000251) estimate=121
+  DefaultRecordMetadata(offset=5, size=23, timestamp=1761300004000) estimate=100
+  DefaultRecordMetadata(offset=6, size=39, timestamp=1761299998000) estimate=116
+  size=403 full=False next_offset=7
+  built 403 bytes, crc32 429da6f7
+  0000000000000000000001870000000002f54545390000000000060000019a15
+  a92d000000019a15a93ca0ffffffffffffffffffffffffffff00000007d00100
+  403 bytes, 403 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=6, first_timestamp=1761300000000, max_timestamp=1761300004000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=7)
+    crc=f5454539 valid=True size=403 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=6 next_offset=7 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=1, timestamp=1761300000012, timestamp_type=0, key=b'user-3', value=b'{"order":1043,"sku":"B-02","qty":1}', headers=[('content-type', b'application/json')]) size=77
+    DefaultRecord(offset=2, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+    DefaultRecord(offset=3, timestamp=1761300000250, timestamp_type=0, key=b'user-17', value=None, headers=[('reason', b'gdpr-erasure')]) size=34
+    DefaultRecord(offset=4, timestamp=1761300000251, timestamp_type=0, key=b'caf\xc3\xa9-9', value=b'prix: 4,50 \xe2\x82\xac', headers=[('lang', b'fr'), ('empty', None)]) size=43
+    DefaultRecord(offset=5, timestamp=1761300004000, timestamp_type=0, key=b'bin', value=b'\x00\x01\x02\'"\\\n\t\r\x7f\x80\xff', headers=[]) size=22
+    DefaultRecord(offset=6, timestamp=1761299998000, timestamp_type=0, key=b'late', value=b'arrived out of order', headers=[('retry', b'')]) size=38
+> build orders magic=2 codec=0 batch_size=200 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  DefaultRecordMetadata(offset=0, size=106, timestamp=1761300000000) estimate=183
+  None estimate=156
+  DefaultRecordMetadata(offset=1, size=16, timestamp=1761300000012) estimate=94
+  None estimate=112
+  None estimate=121
+  None estimate=100
+  None estimate=116
+  size=183 full=False next_offset=2
+  built 183 bytes, crc32 98624ddc
+  0000000000000000000000ab00000000026130fe900000000000010000019a15
+  a92d000000019a15a92d0cffffffffffffffffffffffffffff00000002d00100
+  183 bytes, 183 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=1, first_timestamp=1761300000000, max_timestamp=1761300000012, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=2)
+    crc=6130fe90 valid=True size=183 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=1 next_offset=2 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'user-17', value=b'{"order":1042,"sku":"A-17","qty":2}', headers=[('content-type', b'application/json'), ('trace-id', b'4bf92f3577b34da6')]) size=104
+    DefaultRecord(offset=1, timestamp=1761300000012, timestamp_type=0, key=None, value=b'heartbeat', headers=[]) size=15
+> build events magic=2 codec=0 batch_size=16384 offset=1000 transactional=False producer_id=4001 producer_epoch=3 base_sequence=2147483645
+  DefaultRecordMetadata(offset=1000, size=74, timestamp=1761300000000) estimate=150
+  DefaultRecordMetadata(offset=1001, size=74, timestamp=1761300000007) estimate=150
+  DefaultRecordMetadata(offset=1002, size=74, timestamp=1761300000014) estimate=150
+  DefaultRecordMetadata(offset=1003, size=74, timestamp=1761300000021) estimate=150
+  DefaultRecordMetadata(offset=1004, size=74, timestamp=1761300000028) estimate=150
+  DefaultRecordMetadata(offset=1005, size=74, timestamp=1761300000035) estimate=150
+  DefaultRecordMetadata(offset=1006, size=74, timestamp=1761300000042) estimate=150
+  DefaultRecordMetadata(offset=1007, size=74, timestamp=1761300000049) estimate=150
+  size=653 full=False next_offset=1008
+  built 653 bytes, crc32 061985df
+  00000000000000000000028100000000023dbb99a50000000003ef0000019a15
+  a92d000000019a15a92d310000000000000fa100037ffffffd00000008900100
+  653 bytes, 653 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=1007, first_timestamp=1761300000000, max_timestamp=1761300000049, is_transactional=False, producer_id=4001, producer_epoch=3, base_sequence=2147483645, records_count=8)
+    crc=3dbb99a5 valid=True size=653 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=1007 next_offset=1008 has_producer_id=True last_sequence=1004
+    DefaultRecord(offset=1000, timestamp=1761300000000, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":200,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=1001, timestamp=1761300000007, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":201,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=1002, timestamp=1761300000014, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":202,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=1003, timestamp=1761300000021, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":203,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=1004, timestamp=1761300000028, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":204,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=1005, timestamp=1761300000035, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":205,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=1006, timestamp=1761300000042, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":206,"unit":"celsius","status":"ok"}', headers=[]) size=72
+    DefaultRecord(offset=1007, timestamp=1761300000049, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":207,"unit":"celsius","status":"ok"}', headers=[]) size=72
+> build events magic=2 codec=0 batch_size=16384 offset=0 transactional=True producer_id=77 producer_epoch=1 base_sequence=0
+  DefaultRecordMetadata(offset=0, size=73, timestamp=1761300000000) estimate=150
+  DefaultRecordMetadata(offset=1, size=73, timestamp=1761300000007) estimate=150
+  DefaultRecordMetadata(offset=2, size=73, timestamp=1761300000014) estimate=150
+  DefaultRecordMetadata(offset=3, size=73, timestamp=1761300000021) estimate=150
+  DefaultRecordMetadata(offset=4, size=73, timestamp=1761300000028) estimate=150
+  DefaultRecordMetadata(offset=5, size=73, timestamp=1761300000035) estimate=150
+  DefaultRecordMetadata(offset=6, size=73, timestamp=1761300000042) estimate=150
+  DefaultRecordMetadata(offset=7, size=73, timestamp=1761300000049) estimate=150
+  size=645 full=False next_offset=8
+  built 645 bytes, crc32 adee7eb8
+  0000000000000000000002790000000002e94ae6fb0010000000070000019a15
+  a92d000000019a15a92d31000000000000004d000100000000000000088e0100
+  645 bytes, 645 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=7, first_timestamp=1761300000000, max_timestamp=1761300000049, is_transactional=True, producer_id=77, producer_epoch=1, base_sequence=0, records_count=8)
+    crc=e94ae6fb valid=True size=645 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=7 next_offset=8 has_producer_id=True last_sequence=7
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":200,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=1, timestamp=1761300000007, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":201,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=2, timestamp=1761300000014, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":202,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=3, timestamp=1761300000021, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":203,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=4, timestamp=1761300000028, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":204,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=5, timestamp=1761300000035, timestamp_type=0, key=b'sensor-2', value=b'{"sensor":2,"reading":205,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=6, timestamp=1761300000042, timestamp_type=0, key=b'sensor-0', value=b'{"sensor":0,"reading":206,"unit":"celsius","status":"ok"}', headers=[]) size=71
+    DefaultRecord(offset=7, timestamp=1761300000049, timestamp_type=0, key=b'sensor-1', value=b'{"sensor":1,"reading":207,"unit":"celsius","status":"ok"}', headers=[]) size=71
+> build big magic=2 codec=0 batch_size=300 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  DefaultRecordMetadata(offset=0, size=53, timestamp=1761300000000) estimate=131
+  DefaultRecordMetadata(offset=1, size=67, timestamp=1761300000001) estimate=144
+  DefaultRecordMetadata(offset=2, size=81, timestamp=1761300000002) estimate=158
+  None estimate=171
+  None estimate=184
+  None estimate=197
+  None estimate=210
+  None estimate=223
+  None estimate=236
+  size=262 full=False next_offset=3
+  built 262 bytes, crc32 2814d5e6
+  0000000000000000000000fa00000000029df7f7bd0000000000020000019a15
+  a92d000000019a15a92d02ffffffffffffffffffffffffffff00000003680000
+  262 bytes, 262 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=2, first_timestamp=1761300000000, max_timestamp=1761300000002, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=3)
+    crc=9df7f7bd valid=True size=262 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=2 next_offset=3 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'k0', value=b'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', headers=[('n', b'0')]) size=52
+    DefaultRecord(offset=1, timestamp=1761300000001, timestamp_type=0, key=b'k1', value=b'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', headers=[('n', b'1')]) size=65
+    DefaultRecord(offset=2, timestamp=1761300000002, timestamp_type=0, key=b'k2', value=b'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC', headers=[('n', b'2')]) size=79
+> build far magic=2 codec=0 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  DefaultRecordMetadata(offset=0, size=11, timestamp=1761300000000) estimate=89
+  DefaultRecordMetadata(offset=1, size=18, timestamp=0) estimate=91
+  DefaultRecordMetadata(offset=2, size=18, timestamp=1801300000000) estimate=91
+  DefaultRecordMetadata(offset=3, size=16, timestamp=-1) estimate=89
+  size=124 full=False next_offset=4
+  built 124 bytes, crc32 d530ac6d
+  000000000000000000000070000000000237bbd5840000000000030000019a15
+  a92d00000001a365d8bd00ffffffffffffffffffffffffffff00000004140000
+  124 bytes, 124 valid
+  DefaultRecordBatch(magic=2, base_offset=0, last_offset_delta=3, first_timestamp=1761300000000, max_timestamp=1801300000000, is_transactional=False, producer_id=-1, producer_epoch=-1, base_sequence=-1, records_count=4)
+    crc=37bbd584 valid=True size=124 codec=0 timestamp_type=0 control=False leader_epoch=0 last_offset=3 next_offset=4 has_producer_id=False last_sequence=-1
+    DefaultRecord(offset=0, timestamp=1761300000000, timestamp_type=0, key=b'a', value=b'now', headers=[]) size=10
+    DefaultRecord(offset=1, timestamp=0, timestamp_type=0, key=b'b', value=b'epoch', headers=[]) size=17
+    DefaultRecord(offset=2, timestamp=1801300000000, timestamp_type=0, key=b'c', value=b'later', headers=[]) size=17
+    DefaultRecord(offset=3, timestamp=-1, timestamp_type=0, key=b'd', value=b'neg', headers=[]) size=15
+> build legacy magic=1 codec=0 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  LegacyRecordMetadata(offset=0, crc=153540912, size=41, timestamp=1761300000000) estimate=41
+  LegacyRecordMetadata(offset=1, crc=3955140664, size=40, timestamp=1761300000005) estimate=40
+  LegacyRecordMetadata(offset=2, crc=4024827173, size=36, timestamp=1761300000009) estimate=36
+  LegacyRecordMetadata(offset=3, crc=872373547, size=34, timestamp=1761300000009) estimate=34
+  LegacyRecordMetadata(offset=4, crc=3723143118, size=44, timestamp=1761300000030) estimate=44
+  size=195 full=False next_offset=5
+  built 195 bytes, crc32 f0b2bf30
+  00000000000000000000001d0926d93001000000019a15a92d00000000026b31
+  00000005666972737400000000000000010000001cebbea83801000000019a15
+  195 bytes, 195 valid
+  LegacyRecordBatch(magic=1, base_offset=0, size=41, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=0, timestamp=1761300000000, timestamp_type=0, key=b'k1', value=b'first', crc=153540912) valid=True size=41
+  LegacyRecordBatch(magic=1, base_offset=1, size=40, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=1, timestamp=1761300000005, timestamp_type=0, key=None, value=b'second', crc=3955140664) valid=True size=40
+  LegacyRecordBatch(magic=1, base_offset=2, size=36, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=2, timestamp=1761300000009, timestamp_type=0, key=b'k3', value=None, crc=4024827173) valid=True size=36
+  LegacyRecordBatch(magic=1, base_offset=3, size=34, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=3, timestamp=1761300000009, timestamp_type=0, key=b'', value=b'', crc=872373547) valid=True size=34
+  LegacyRecordBatch(magic=1, base_offset=4, size=44, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=4, timestamp=1761300000030, timestamp_type=0, key=b'k5', value=b'caf\xc3\xa9 \x00\xff', crc=3723143118) valid=True size=44
+> build legacy magic=1 codec=0 batch_size=120 offset=5 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  LegacyRecordMetadata(offset=5, crc=153540912, size=41, timestamp=1761300000000) estimate=41
+  LegacyRecordMetadata(offset=6, crc=3955140664, size=40, timestamp=1761300000005) estimate=40
+  LegacyRecordMetadata(offset=7, crc=4024827173, size=36, timestamp=1761300000009) estimate=36
+  None estimate=34
+  None estimate=44
+  size=117 full=False next_offset=8
+  built 117 bytes, crc32 5b72160c
+  00000000000000050000001d0926d93001000000019a15a92d00000000026b31
+  00000005666972737400000000000000060000001cebbea83801000000019a15
+  117 bytes, 117 valid
+  LegacyRecordBatch(magic=1, base_offset=5, size=41, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=5, timestamp=1761300000000, timestamp_type=0, key=b'k1', value=b'first', crc=153540912) valid=True size=41
+  LegacyRecordBatch(magic=1, base_offset=6, size=40, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=6, timestamp=1761300000005, timestamp_type=0, key=None, value=b'second', crc=3955140664) valid=True size=40
+  LegacyRecordBatch(magic=1, base_offset=7, size=36, codec=0, timestamp_type=0) valid=True
+    LegacyRecord(magic=1 offset=7, timestamp=1761300000009, timestamp_type=0, key=b'k3', value=None, crc=4024827173) valid=True size=36
+> build v0 magic=0 codec=0 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  LegacyRecordMetadata(offset=0, crc=3582861217, size=33, timestamp=-1) estimate=33
+  LegacyRecordMetadata(offset=1, crc=2800896157, size=32, timestamp=-1) estimate=32
+  LegacyRecordMetadata(offset=2, crc=3057896042, size=28, timestamp=-1) estimate=28
+  LegacyRecordMetadata(offset=3, crc=3817498742, size=26, timestamp=-1) estimate=26
+  LegacyRecordMetadata(offset=4, crc=3819504475, size=36, timestamp=-1) estimate=36
+  size=155 full=False next_offset=5
+  built 155 bytes, crc32 f495724d
+  000000000000000000000015d58e1fa10000000000026b310000000566697273
+  74000000000000000100000014a6f2489d0000ffffffff000000067365636f6e
+  155 bytes, 155 valid
+  LegacyRecordBatch(magic=0, base_offset=0, size=33, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=0, timestamp=None, timestamp_type=None, key=b'k1', value=b'first', crc=3582861217) valid=True size=33
+  LegacyRecordBatch(magic=0, base_offset=1, size=32, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=1, timestamp=None, timestamp_type=None, key=None, value=b'second', crc=2800896157) valid=True size=32
+  LegacyRecordBatch(magic=0, base_offset=2, size=28, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=2, timestamp=None, timestamp_type=None, key=b'k3', value=None, crc=3057896042) valid=True size=28
+  LegacyRecordBatch(magic=0, base_offset=3, size=26, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=3, timestamp=None, timestamp_type=None, key=b'', value=b'', crc=3817498742) valid=True size=26
+  LegacyRecordBatch(magic=0, base_offset=4, size=36, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=4, timestamp=None, timestamp_type=None, key=b'k5', value=b'caf\xc3\xa9 \x00\xff', crc=3819504475) valid=True size=36
+> build bigleg magic=0 codec=0 batch_size=300 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  LegacyRecordMetadata(offset=0, crc=382210432, size=68, timestamp=-1) estimate=68
+  LegacyRecordMetadata(offset=1, crc=518399870, size=81, timestamp=-1) estimate=81
+  LegacyRecordMetadata(offset=2, crc=2146073756, size=94, timestamp=-1) estimate=94
+  None estimate=107
+  None estimate=120
+  None estimate=133
+  None estimate=146
+  None estimate=159
+  None estimate=172
+  size=243 full=False next_offset=3
+  built 243 bytes, crc32 ff4e9c62
+  00000000000000000000003816c811800000000000026b300000002841414141
+  4141414141414141414141414141414141414141414141414141414141414141
+  243 bytes, 243 valid
+  LegacyRecordBatch(magic=0, base_offset=0, size=68, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=0, timestamp=None, timestamp_type=None, key=b'k0', value=b'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', crc=382210432) valid=True size=68
+  LegacyRecordBatch(magic=0, base_offset=1, size=81, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=1, timestamp=None, timestamp_type=None, key=b'k1', value=b'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', crc=518399870) valid=True size=81
+  LegacyRecordBatch(magic=0, base_offset=2, size=94, codec=0, timestamp_type=None) valid=True
+    LegacyRecord(magic=0 offset=2, timestamp=None, timestamp_type=None, key=b'k2', value=b'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC', crc=2146073756) valid=True size=94
+> build hdr magic=1 codec=0 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  error: AssertionError: Headers not supported in v0/v1
+  size=0 full=False next_offset=0
+  built 0 bytes, crc32 00000000
+  0 bytes, 0 valid
+> build events magic=2 codec=2 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  DefaultRecordMetadata(offset=0, size=73, timestamp=1761300000000) estimate=150
+  DefaultRecordMetadata(offset=1, size=73, timestamp=1761300000007) estimate=150
+  DefaultRecordMetadata(offset=2, size=73, timestamp=1761300000014) estimate=150
+  DefaultRecordMetadata(offset=3, size=73, timestamp=1761300000021) estimate=150
+  DefaultRecordMetadata(offset=4, size=73, timestamp=1761300000028) estimate=150
+  DefaultRecordMetadata(offset=5, size=73, timestamp=1761300000035) estimate=150
+  DefaultRecordMetadata(offset=6, size=73, timestamp=1761300000042) estimate=150
+  DefaultRecordMetadata(offset=7, size=73, timestamp=1761300000049) estimate=150
+  size=645 full=False next_offset=8
+  error: UnsupportedCodecError: Libraries for snappy compression codec not found
+> build events magic=2 codec=3 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  DefaultRecordMetadata(offset=0, size=73, timestamp=1761300000000) estimate=150
+  DefaultRecordMetadata(offset=1, size=73, timestamp=1761300000007) estimate=150
+  DefaultRecordMetadata(offset=2, size=73, timestamp=1761300000014) estimate=150
+  DefaultRecordMetadata(offset=3, size=73, timestamp=1761300000021) estimate=150
+  DefaultRecordMetadata(offset=4, size=73, timestamp=1761300000028) estimate=150
+  DefaultRecordMetadata(offset=5, size=73, timestamp=1761300000035) estimate=150
+  DefaultRecordMetadata(offset=6, size=73, timestamp=1761300000042) estimate=150
+  DefaultRecordMetadata(offset=7, size=73, timestamp=1761300000049) estimate=150
+  size=645 full=False next_offset=8
+  error: UnsupportedCodecError: Libraries for lz4 compression codec not found
+> build legacy magic=1 codec=2 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  LegacyRecordMetadata(offset=0, crc=153540912, size=41, timestamp=1761300000000) estimate=63
+  LegacyRecordMetadata(offset=1, crc=3955140664, size=40, timestamp=1761300000005) estimate=62
+  LegacyRecordMetadata(offset=2, crc=4024827173, size=36, timestamp=1761300000009) estimate=58
+  LegacyRecordMetadata(offset=3, crc=872373547, size=34, timestamp=1761300000009) estimate=56
+  LegacyRecordMetadata(offset=4, crc=3723143118, size=44, timestamp=1761300000030) estimate=66
+  size=195 full=False next_offset=5
+  error: UnsupportedCodecError: Libraries for snappy compression codec not found
+> build events magic=2 codec=0 batch_size=16384 offset=0 transactional=True producer_id=-1 producer_epoch=-1 base_sequence=-1
+  error: AssertionError: Cannot write transactional messages without a valid producer ID
+> build events magic=2 codec=0 batch_size=16384 offset=0 transactional=False producer_id=5 producer_epoch=-1 base_sequence=-1
+  error: AssertionError: Invalid negative producer epoch
+> build events magic=2 codec=0 batch_size=16384 offset=0 transactional=False producer_id=5 producer_epoch=1 base_sequence=-1
+  error: AssertionError: Invalid negative sequence number used
+> build legacy magic=1 codec=0 batch_size=16384 offset=0 transactional=False producer_id=5 producer_epoch=1 base_sequence=1
+  error: AssertionError: Idempotent messages are not supported for magic 1
+> build legacy magic=3 codec=0 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  error: AssertionError: Not supported magic
+> build legacy magic=1 codec=7 batch_size=16384 offset=0 transactional=False producer_id=-1 producer_epoch=-1 base_sequence=-1
+  error: AssertionError: Not valid compression type
+> partition 12
+  b'' murmur2=275646681 partition=9
+  b'a' murmur2=2731586172 partition=4
+  b'ab' murmur2=316155434 partition=2
+  b'abc' murmur2=479470107 partition=3
+  b'abcd' murmur2=2971317748 partition=8
+  b'abcde' murmur2=461995741 partition=1
+  b'21' murmur2=3321034988 partition=0
+  b'user-17' murmur2=1149718380 partition=0
+  b'user-3' murmur2=1141442267 partition=11
+  b'caf\xc3\xa9-9' murmur2=1302838433 partition=5
+  b'order-1042' murmur2=155902638 partition=6
+  b'order-1043' murmur2=1074403906 partition=10
+  b'\x00' murmur2=375494588 partition=8
+  b'\xff\xff\xff\xff' murmur2=644171429 partition=5
+  b'\x80\x81\x82' murmur2=2319327235 partition=11
+  b'the-quick-brown-fox' murmur2=4224390621 partition=1
+  b'sensor-0' murmur2=2000812614 partition=6
+  b'sensor-1' murmur2=780060301 partition=1
+  b'sensor-2' murmur2=441981331 partition=7
+  b'tenant_42/invoices' murmur2=1587004600 partition=4
+> partition 1
+  b'a' murmur2=2731586172 partition=0
+  b'b' murmur2=2441875444 partition=0
+  b'c' murmur2=2417498442 partition=0
+> partition 7
+  b'' murmur2=275646681 partition=2
+  b'a' murmur2=2731586172 partition=5
+  b'ab' murmur2=316155434 partition=0
+  b'abc' murmur2=479470107 partition=4
+  b'abcd' murmur2=2971317748 partition=5
+  b'abcde' murmur2=461995741 partition=4
+  b'21' murmur2=3321034988 partition=3
+  b'user-17' murmur2=1149718380 partition=6
+  b'user-3' murmur2=1141442267 partition=0
+  b'caf\xc3\xa9-9' murmur2=1302838433 partition=1
+  b'order-1042' murmur2=155902638 partition=3
+> errors
+  0 -> NoError errno=0 message=NO_ERROR retriable=False invalid_metadata=False: [Error 0] NoError: details
+  1 -> OffsetOutOfRangeError errno=1 message=OFFSET_OUT_OF_RANGE retriable=False invalid_metadata=False: [Error 1] OffsetOutOfRangeError: details
+  2 -> CorruptRecordError errno=2 message=CORRUPT_MESSAGE retriable=False invalid_metadata=False: [Error 2] CorruptRecordError: details
+  3 -> UnknownTopicOrPartitionError errno=3 message=UNKNOWN_TOPIC_OR_PARTITION retriable=True invalid_metadata=True: [Error 3] UnknownTopicOrPartitionError: details
+  5 -> LeaderNotAvailableError errno=5 message=LEADER_NOT_AVAILABLE retriable=True invalid_metadata=True: [Error 5] LeaderNotAvailableError: details
+  6 -> NotLeaderForPartitionError errno=6 message=NOT_LEADER_FOR_PARTITION retriable=True invalid_metadata=True: [Error 6] NotLeaderForPartitionError: details
+  7 -> RequestTimedOutError errno=7 message=REQUEST_TIMED_OUT retriable=True invalid_metadata=False: [Error 7] RequestTimedOutError: details
+  15 -> CoordinatorNotAvailableError errno=15 message=COORDINATOR_NOT_AVAILABLE retriable=True invalid_metadata=False: [Error 15] CoordinatorNotAvailableError: details
+  25 -> UnknownMemberIdError errno=25 message=UNKNOWN_MEMBER_ID retriable=False invalid_metadata=False: [Error 25] UnknownMemberIdError: details
+  35 -> UnsupportedVersionError errno=35 message=UNSUPPORTED_VERSION retriable=False invalid_metadata=False: [Error 35] UnsupportedVersionError: details
+  41 -> NotControllerError errno=41 message=NOT_CONTROLLER retriable=True invalid_metadata=False: [Error 41] NotControllerError: details
+  47 -> InvalidProducerEpochError errno=47 message=INVALID_PRODUCER_EPOCH retriable=False invalid_metadata=False: [Error 47] InvalidProducerEpochError: details
+  58 -> SaslAuthenticationFailedError errno=58 message=SASL_AUTHENTICATION_FAILED retriable=False invalid_metadata=False: [Error 58] SaslAuthenticationFailedError: details
+  72 -> ListenerNotFoundError errno=72 message=LISTENER_NOT_FOUND retriable=True invalid_metadata=True: [Error 72] ListenerNotFoundError: details
+  74 -> FencedLeaderEpochError errno=74 message=FENCED_LEADER_EPOCH retriable=True invalid_metadata=True: [Error 74] FencedLeaderEpochError: details
+  87 -> InvalidRecordError errno=87 message=INVALID_RECORD retriable=False invalid_metadata=False: [Error 87] InvalidRecordError: details
+  102 -> BrokerIdNotRegisteredError errno=102 message=BROKER_ID_NOT_REGISTERED retriable=False invalid_metadata=False: [Error 102] BrokerIdNotRegisteredError: details
+  127 -> VoterNotFoundError errno=127 message=VOTER_NOT_FOUND retriable=False invalid_metadata=False: [Error 127] VoterNotFoundError: details
+  128 -> UnrecognizedBrokerError errno=128 message=UNKNOWN retriable=False invalid_metadata=False: [Error 128] UnrecognizedBrokerError: details
+  -1 -> UnknownError errno=-1 message=UNKNOWN retriable=False invalid_metadata=False: [Error -1] UnknownError: details
+  -7 -> UnrecognizedBrokerError errno=-7 message=UNKNOWN retriable=False invalid_metadata=False: [Error -7] UnrecognizedBrokerError: details
+> session client_id=~ api_version=~
+  send MetadataRequest_v1 correlation_id=1 expect_response=True
+  send ApiVersionsRequest_v0 correlation_id=2 expect_response=True
+  flush 86 bytes, crc32 0f42d3d5
+    00000032000300010000000100126b61666b612d707974686f6e322e322e3135
+    0000000200066f726465727300087061796d656e74730000001c001200000000
+    000200126b61666b612d707974686f6e322e322e3135
+  recv resp_meta.bin: 357 bytes in 51 chunks
+    correlation_id=1 MetadataResponse_v1(brokers=[(node_id=1, host='kafka-1.internal', port=9092, rack='us-east-1a'), (node_id=2, host='kafka-2.internal', port=9092, rack=None), (node_id=3, host='kafka-3.internal', port=9093, rack='us-east-1c')], controller_id=2, topics=[(error_code=0, topic='orders', is_internal=False, partitions=[(error_code=0, partition=0, leader=1, replicas=[1, 2, 3], isr=[1, 2, 3]), (error_code=0, partition=1, leader=2, replicas=[2, 3, 1], isr=[2, 3]), (error_code=9, partition=2, leader=-1, replicas=[3, 1, 2], isr=[])]), (error_code=3, topic='payments', is_internal=False, partitions=[]), (error_code=0, topic='__consumer_offsets', is_internal=True, partitions=[(error_code=0, partition=0, leader=3, replicas=[3], isr=[3])])])
+    correlation_id=2 ApiVersionsResponse_v0(error_code=0, api_versions=[(api_key=0, min_version=0, max_version=8), (api_key=1, min_version=0, max_version=11), (api_key=3, min_version=0, max_version=12), (api_key=18, min_version=0, max_version=3)])
+> session client_id=inventory-svc api_version=~
+  send MetadataRequest_v0 correlation_id=1 expect_response=True
+  send MetadataRequest_v5 correlation_id=2 expect_response=True
+  send FindCoordinatorRequest_v0 correlation_id=3 expect_response=True
+  flush 125 bytes, crc32 babaf707
+    000000260003000000000001000d696e76656e746f72792d7376630000000100
+    096e65772d746f706963000000230003000500000002000d696e76656e746f72
+    792d73766300000001000561756469740100000028000a000000000003000d69
+    6e76656e746f72792d737663000f62696c6c696e672d776f726b657273
+  recv resp_mixed.bin: 216 bytes in 1 chunks
+    correlation_id=1 MetadataResponse_v0(brokers=[(node_id=1, host='localhost', port=9092)], topics=[(error_code=5, topic='new-topic', partitions=[])])
+    correlation_id=2 MetadataResponse_v5(throttle_time_ms=0, brokers=[(node_id=1, host='kafka-1.internal', port=9092, rack=None)], cluster_id='Xj2QnW8yTs-k5G3b9uV7Lw', controller_id=1, topics=[(error_code=0, topic='audit', is_internal=False, partitions=[(error_code=0, partition=0, leader=1, replicas=[1, 2], isr=[1], offline_replicas=[2])])])
+    correlation_id=3 FindCoordinatorResponse_v0(error_code=0, coordinator_id=2, host='kafka-2.internal', port=9092)
+> session client_id=cli-7 api_version=~
+  send ApiVersionsRequest_v3 correlation_id=1 expect_response=True
+  send ApiVersionsRequest_v3 correlation_id=2 expect_response=True
+  flush 77 bytes, crc32 7d88caba
+    0000002500120003000000010005636c692d37000d6b61666b612d707974686f
+    6e07322e322e3135000000002000120003000000020005636c692d37000b6d69
+    6e692d6b61666b610001016162
+  recv resp_api3.bin: 57 bytes in 57 chunks
+    correlation_id=1 ApiVersionsResponse_v3(error_code=0, api_versions=[(api_key=0, min_version=0, max_version=9, _tagged_fields={}), (api_key=3, min_version=0, max_version=12, _tagged_fields={}), (api_key=18, min_version=0, max_version=3, _tagged_fields={})], throttle_time_ms=0, _tagged_fields={})
+    correlation_id=2 ApiVersionsResponse_v0(error_code=35, api_versions=[(api_key=18, min_version=0, max_version=2)])
+> session client_id=producer-1 api_version=~
+  send ProduceRequest_v0 correlation_id=1 expect_response=False
+  send ProduceRequest_v3 correlation_id=4 expect_response=True
+  send ProduceRequest_v8 correlation_id=5 expect_response=True
+  flush 1230 bytes, crc32 97b096a1
+    000001c50000000000000001000a70726f64756365722d310000000003e80000
+    000100066f726465727300000001000000000000019300000000000000000000
+    01870000000002f54545390000000000060000019a15a92d000000019a15a93c
+    a0ffffffffffffffffffffffffffff00000007d0010000000e757365722d3137
+    467b226f72646572223a313034322c22736b75223a22412d3137222c22717479
+    223a327d0418636f6e74656e742d74797065206170706c69636174696f6e2f6a
+    736f6e1074726163652d696420346266393266333537376233346461369a0100
+    18020c757365722d33467b226f72646572223a313034332c22736b75223a2242
+    2d3032222c22717479223a317d0218636f6e74656e742d74797065206170706c
+    69636174696f6e2f6a736f6e1e0018040112686561727462656174004400f403
+    060e757365722d313701020c726561736f6e18676470722d6572617375726556
+    00f603080e636166c3a92d391c707269783a20342c353020e282ac04086c616e
+    670466720a656d707479012c00c03e0a0662696e1800010227225c0a090d7f80
+    ff004c009f1f0c086c6174652861727269766564206f7574206f66206f726465
+    72020a726574727900000002050000000300000004000a70726f64756365722d
+    31ffffffff000075300000000100066f72646572730000000200000000000001
+    060000000000001388000000fa0000000002f5c040a80000000000020000019a
+    15a92d000000019a15a92d0c0000000000000fa100037ffffffe00000003d001
+    0000000e757365722d3137467b226f72646572223a313034322c22736b75223a
+    22412d3137222c22717479223a327d0418636f6e74656e742d74797065206170
+    706c69636174696f6e2f6a736f6e1074726163652d6964203462663932663335
+    37376233346461369a010018020c757365722d33467b226f72646572223a3130
+    34332c22736b75223a22422d3032222c22717479223a317d0218636f6e74656e
+    742d74797065206170706c69636174696f6e2f6a736f6e1e0018040112686561
+    7274626561740000000001000000c300000000000000140000001d0926d93001
+    000000019a15a92d00000000026b310000000566697273740000000000000015
+    0000001cebbea83801000000019a15a92d05ffffffff000000067365636f6e64
+    000000000000001600000018efe5fd2501000000019a15a92d09000000026b33
+    ffffffff00000000000000170000001633ff5d2b01000000019a15a92d090000
+    000000000000000000000000001800000020ddeaa7ce01000000019a15a92d1e
+    000000026b3500000008636166c3a92000ff000000f80000000800000005000a
+    70726f64756365722d31000574786e2d310001000075300000000100066f7264
+    6572730000000100000000000000bf000000000000004d000000b30000000002
+    e80923a90010000000020000019a15a92d0c0000019a15a92dfa000000000000
+    0009000000000000000000039a010000000c757365722d33467b226f72646572
+    223a313034332c22736b75223a22422d3032222c22717479223a317d0218636f
+    6e74656e742d74797065206170706c69636174696f6e2f6a736f6e1e00000201
+    12686561727462656174004400dc03040e757365722d313701020c726561736f
+    6e18676470722d65726173757265
+  recv resp_produce.bin: 160 bytes in 13 chunks
+    correlation_id=4 ProduceResponse_v3(topics=[(topic='orders', partitions=[(partition=0, error_code=0, offset=1042, timestamp=-1), (partition=1, error_code=6, offset=-1, timestamp=-1)])], throttle_time_ms=15)
+    correlation_id=5 ProduceResponse_v8(topics=[(topic='orders', partitions=[(partition=0, error_code=10, offset=-1, timestamp=-1, log_start_offset=0), (partition=1, error_code=0, offset=57, timestamp=1761300000123, log_start_offset=12)])], throttle_time_ms=0)
+> session client_id=consumer-1 api_version=~
+  send FetchRequest_v4 correlation_id=1 expect_response=True
+  send FetchRequest_v0 correlation_id=2 expect_response=True
+  flush 171 bytes, crc32 5d5fde93
+    000000650001000400000001000a636f6e73756d65722d31ffffffff000001f4
+    0000000103200000010000000100066f72646572730000000300000000000000
+    00000000000010000000000001000000000000012c0010000000000002000000
+    0000000000001000000000003e0001000000000002000a636f6e73756d65722d
+    31ffffffff00000064000000010000000100046c6f6773000000010000000000
+    0000000000000000010000
+  recv resp_fetch.bin: 1171 bytes in 19 chunks
+    correlation_id=1 FetchResponse_v4(throttle_time_ms=0, topics=[(topics='orders', partitions=[(partition=0, error_code=0, highwater_offset=7, last_stable_offset=7, aborted_transactions=[], records=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x87\x00\x00\x00\x00\x02\xf5EE9\x00\x00\x00\x00\x00\x06\x00\x00\x01\x9a\x15\xa9-\x00\x00\x00\x01\x9a\x15\xa9<\xa0\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x07\xd0\x01\x00\x00\x00\x0euser-17F{"order":1042,"sku":"A-17...'), (partition=1, error_code=0, highwater_offset=300, last_stable_offset=300, aborted_transactions=[(producer_id=9, first_offset=77)], records=b'\x00\x00\x00\x00\x00\x00\x01,\x00\x00\x01Z\x00\x00\x00\x00\x02\x86X-\x85\x00\x01\x00\x00\x00\x17\x00\x00\x01\x9a\x15\xa9-\x00\x00\x00\x01\x9a\x15\xa9-\xa1\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x18\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x8d\xd2\xcdI\x03Q\x14\xc5\xf1w\x1f""!\x04\x11\x11\tA."\x12F\x99\xf7\xf25N\x01...'), (partition=2, error_code=1, highwater_offset=-1, last_stable_offset=-1, aborted_transactions=NULL, records=b'')])])
+    correlation_id=2 FetchResponse_v0(topics=[(topics='logs', partitions=[(partition=0, error_code=0, highwater_offset=3, records=b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x008W':\xa5\x01\x00\x00\x00\x01\x9a\x15\xa9-\x00\x00\x00\x00\x06host-0\x00\x00\x00\x1cGET /api/v1/items/0 200 12ms\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x009\xbdi\xf8\xbe\x01\x00\x00\x00\x01\x9a\x15\xa9-\x01\x00\x00\x00\x06ho...")])])
+  consume FetchResponse_v0
+    logs-0 NoError highwater=3
+      206 bytes, 206 valid
+      LegacyRecordBatch(magic=1, base_offset=0, size=68, codec=0, timestamp_type=0) valid=True
+        LegacyRecord(magic=1 offset=0, timestamp=1761300000000, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/0 200 12ms', crc=1462188709) valid=True size=68
+      LegacyRecordBatch(magic=1, base_offset=1, size=69, codec=0, timestamp_type=0) valid=True
+        LegacyRecord(magic=1 offset=1, timestamp=1761300000001, timestamp_type=0, key=b'host-1', value=b'GET /api/v1/items/13 200 12ms', crc=3177838782) valid=True size=69
+      LegacyRecordBatch(magic=1, base_offset=2, size=69, codec=0, timestamp_type=0) valid=True
+        LegacyRecord(magic=1 offset=2, timestamp=1761300000002, timestamp_type=0, key=b'host-0', value=b'GET /api/v1/items/26 200 12ms', crc=2555923563) valid=True size=69
+> session client_id=c2 api_version=~
+  send MetadataRequest_v0 correlation_id=1 expect_response=True
+  send ApiVersionsRequest_v0 correlation_id=2 expect_response=True
+  recv resp_wrong_corr.bin: 90 bytes in 1 chunks
+    error: CorrelationIdError: Correlation IDs do not match: sent 1, recv 9
+  recv resp_wrong_corr.bin: 90 bytes in 1 chunks
+    error: CorrelationIdError: Correlation IDs do not match: sent 2, recv 48
+> session client_id=c3 api_version=~
+  send ApiVersionsRequest_v0 correlation_id=1 expect_response=True
+  recv resp_unsolicited.bin: 76 bytes in 16 chunks
+    correlation_id=1 ApiVersionsResponse_v0(error_code=0, api_versions=[(api_key=0, min_version=0, max_version=8), (api_key=1, min_version=0, max_version=11), (api_key=3, min_version=0, max_version=12), (api_key=18, min_version=0, max_version=3)])
+    error: CorrelationIdError: No in-flight-request found for server response
+> session client_id=c4 api_version=~
+  send MetadataRequest_v1 correlation_id=1 expect_response=True
+  send ApiVersionsRequest_v0 correlation_id=2 expect_response=True
+  recv resp_short.bin: 82 bytes in 1 chunks
+    error: KafkaProtocolError: Unable to decode response
+  send ApiVersionsRequest_v0 correlation_id=3 expect_response=True
+  recv resp_meta.bin: 357 bytes in 1 chunks
+    error: CorrelationIdError: Correlation IDs do not match: sent 2, recv 315
+> session client_id=c5 api_version=~
+  send FindCoordinatorRequest_v0 correlation_id=6 expect_response=True
+  recv resp_fc_quirk.bin: 36 bytes in 1 chunks
+    correlation_id=6 FindCoordinatorResponse_v0(error_code=0, coordinator_id=2, host='kafka-2.internal', port=9092)
+> session client_id=c6 api_version=0.10.0
+  send FindCoordinatorRequest_v0 correlation_id=6 expect_response=True
+  recv resp_fc_quirk.bin: 36 bytes in 1 chunks
+    error: CorrelationIdError: Correlation IDs do not match: sent 6, recv 0
+> session client_id=c7 api_version=~
+  send MetadataRequest_v0 correlation_id=1 expect_response=True
+  recv resp_badutf8.bin: 52 bytes in 1 chunks
+    error: KafkaProtocolError: Unable to decode response
+> session client_id=c9 api_version=~
+  send ApiVersionsRequest_v3 correlation_id=1 expect_response=True
+  recv resp_varint.bin: 15 bytes in 1 chunks
+    error: KafkaProtocolError: Unable to decode response
+> session client_id=c11 api_version=~
+  send ApiVersionsRequest_v3 correlation_id=1 expect_response=True
+  recv resp_cut.bin: 13 bytes in 1 chunks
+    error: struct.error: unpack requires a buffer of 1 bytes
+> session client_id=billing api_version=~
+  send FindCoordinatorRequest_v1 correlation_id=1 expect_response=True
+  flush 39 bytes, crc32 b8b50cbf
+    00000023000a000100000001000762696c6c696e67000f62696c6c696e672d77
+    6f726b65727300
+  recv resp_fc1.bin: 59 bytes in 20 chunks
+    correlation_id=1 FindCoordinatorResponse_v1(throttle_time_ms=0, error_code=15, error_message='The coordinator is not available.', coordinator_id=-1, host='', port=-1)
+> session client_id=c8 api_version=~
+  send Metadata v1 error: ValueError: Args must be empty or mirror schema
+  send MetadataRequest_v1 correlation_id=1 expect_response=True
+  send FindCoordinatorRequest_v1 correlation_id=2 expect_response=True
+  send ApiVersions v3 error: AssertionError: Key 0 is not a positive integer
+  flush 50 bytes, crc32 f208854c
+    0000001a000300010000000100026338000000010008282761272c2031290000
+    0010000a0001000000020002633800016700
