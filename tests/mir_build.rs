@@ -8712,3 +8712,29 @@ fn main() {
         }
     }
 }
+
+/// A method of a number called on a `const` takes the constant's value as
+/// its receiver, as a local's does (B-2026-10-23-3).
+#[test]
+fn mir_a_number_method_on_a_const() {
+    let src = r#"const TOL0: f64 = 2.220446049250313e-16;
+const NUM: i64 = -7;
+const SMALL: f32 = 4.0;
+const CH: char = 'a';
+fn main() {
+    let x = TOL0.sqrt();
+    println(f"{x}");
+    println(f"{NUM.abs()} {NUM.max(2)} {NUM.pow(2)}");
+    println(f"{TOL0.abs()} {SMALL.sqrt()} {CH.is_alphabetic()}");
+    println(f"{TOL0.max(1.0)} {NUM.to_string()}");
+}
+"#;
+    let want = "1.4901161193847656e-08\n7 2 49\n2.220446049250313e-16 2.0 true\n1.0 -7\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    for opt in 0..=3 {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

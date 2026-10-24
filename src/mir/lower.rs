@@ -2432,6 +2432,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.tys().is_copy(t)
     }
 
+    /// A number, `bool` or `char`: a type whose library methods take their
+    /// receiver by value.
+    fn is_number(&self, t: Ty) -> bool {
+        matches!(
+            self.tys().tcx().kind(t),
+            HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool | HK::Char
+        )
+    }
+
     fn needs_drop(&self, t: Ty) -> bool {
         self.tys().needs_drop(t)
     }
@@ -11595,7 +11604,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                             return self.def_call(e, d, f, inst_args, Some(recv), args, dest);
                         }
                     }
-                    let mut ops = vec![self.ref_to(Place::local(tmp), vt)];
+                    // A number's library methods take it by value, as a
+                    // local's do (`TOL0.sqrt()`; B-2026-10-23-3).
+                    let recv = match self.is_number(vt) {
+                        true => Operand::Move(Place::local(tmp)),
+                        false => self.ref_to(Place::local(tmp), vt),
+                    };
+                    let mut ops = vec![recv];
                     for a in args {
                         let t = self.expr_ty(&a.value)?;
                         let by_ref = !self.is_copy(t);
@@ -17208,11 +17223,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // `<receiver type>.<method>`. A number takes its receiver by
                 // value; a collection by `mut ref` when the method writes it,
                 // else by `ref`.
-                let number = matches!(
-                    self.tys().tcx().kind(base),
-                    HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool | HK::Char
-                );
-                let recv = if number {
+                let recv = if self.is_number(base) {
                     let op = self.expr_operand(object)?;
                     PendingRecv::Ready(match self.tys().tcx().kind(ot) {
                         HK::Ref(_) | HK::MutRef(_) => {
