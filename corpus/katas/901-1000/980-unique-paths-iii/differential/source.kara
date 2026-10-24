@@ -1,0 +1,557 @@
+// LeetCode #980: Unique Paths III -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random grids.
+
+// ---- star ----
+
+fn star_walk(grid: mut ref Vec[Vec[i64]], r: i64, c: i64, left: i64) -> i64 {
+    if r < 0 or c < 0 or r >= grid.len() or c >= grid[0].len() or grid[r][c] == -1 {
+        return 0;
+    }
+    if grid[r][c] == 2 {
+        return if left == 0 { 1 } else { 0 };
+    }
+    grid[r][c] = -1;
+    let paths = star_walk(mut grid, r + 1, c, left - 1) + star_walk(mut grid, r - 1, c, left - 1)
+        + star_walk(mut grid, r, c + 1, left - 1) + star_walk(mut grid, r, c - 1, left - 1);
+    grid[r][c] = 0;
+    paths
+}
+
+fn star_unique_paths_iii(grid: Vec[Vec[i64]]) -> i64 {
+    let mut g = grid.clone();
+    let mut start = (0, 0);
+    // the squares the walk must still step onto: every free one and the end
+    let mut left = 0;
+    for r in 0..g.len() {
+        for c in 0..g[0].len() {
+            if g[r][c] == 1 {
+                start = (r, c);
+            } else if g[r][c] != -1 {
+                left += 1;
+            }
+        }
+    }
+    let (r, c) = start;
+    g[r][c] = 0;
+    star_walk(mut g, r, c, left)
+}
+
+// ---- stack ----
+
+fn stack_unique_paths_iii(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut used = Vec.filled(rows * cols, false);
+    let mut start = 0;
+    let mut end = 0;
+    let mut free = 0;
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] == 1 {
+                start = r * cols + c;
+            }
+            if grid[r][c] == 2 {
+                end = r * cols + c;
+            }
+            if grid[r][c] != -1 {
+                free += 1;
+            }
+        }
+    }
+    let dr = vec![1, -1, 0, 0];
+    let dc = vec![0, 0, 1, -1];
+    let mut paths = 0;
+    // each entry: a square on the path and the next direction to try
+    let mut stack: Vec[(i64, i64)] = vec![(start, 0)];
+    used[start] = true;
+    while stack.len() > 0 {
+        let top = stack.len() - 1;
+        let (cell, d) = stack[top];
+        if cell == end or d == 4 {
+            if cell == end and stack.len() == free {
+                paths += 1;
+            }
+            used[cell] = false;
+            stack.pop();
+            continue;
+        }
+        stack[top] = (cell, d + 1);
+        let r = cell / cols + dr[d];
+        let c = cell % cols + dc[d];
+        if r >= 0 and c >= 0 and r < rows and c < cols and grid[r][c] != -1 and not used[r * cols + c] {
+            used[r * cols + c] = true;
+            stack.push((r * cols + c, 0));
+        }
+    }
+    paths
+}
+
+// ---- bits ----
+
+fn bits_count(at: i64, seen: i64, end: i64, full: i64, near: ref Vec[Vec[i64]]) -> i64 {
+    if at == end {
+        return if seen == full { 1 } else { 0 };
+    }
+    let mut paths = 0;
+    for next in near[at] {
+        if seen & (1 << next) == 0 {
+            paths += bits_count(next, seen | (1 << next), end, full, near);
+        }
+    }
+    paths
+}
+
+fn bits_unique_paths_iii(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut id = Vec.filled(rows * cols, -1);
+    let mut k = 0;
+    let mut start = 0;
+    let mut end = 0;
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] != -1 {
+                id[r * cols + c] = k;
+                if grid[r][c] == 1 {
+                    start = k;
+                }
+                if grid[r][c] == 2 {
+                    end = k;
+                }
+                k += 1;
+            }
+        }
+    }
+    let mut near: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] != -1 {
+                let mut list: Vec[i64] = Vec.new();
+                if r > 0 and id[(r - 1) * cols + c] >= 0 {
+                    list.push(id[(r - 1) * cols + c]);
+                }
+                if r + 1 < rows and id[(r + 1) * cols + c] >= 0 {
+                    list.push(id[(r + 1) * cols + c]);
+                }
+                if c > 0 and id[r * cols + c - 1] >= 0 {
+                    list.push(id[r * cols + c - 1]);
+                }
+                if c + 1 < cols and id[r * cols + c + 1] >= 0 {
+                    list.push(id[r * cols + c + 1]);
+                }
+                near.push(list);
+            }
+        }
+    }
+    bits_count(start, 1 << start, end, (1 << k) - 1, near)
+}
+
+// ---- memo ----
+
+fn memo_ways(at: i64, seen: i64, end: i64, full: i64, near: ref Vec[Vec[i64]], memo: mut ref Map[i64, i64]) -> i64 {
+    if at == end {
+        return if seen == full { 1 } else { 0 };
+    }
+    let key = seen * 32 + at;
+    if let Some(w) = memo.get(key) {
+        return w;
+    }
+    let mut total = 0;
+    for next in near[at] {
+        if seen & (1 << next) == 0 {
+            total += memo_ways(next, seen | (1 << next), end, full, near, mut memo);
+        }
+    }
+    memo.insert(key, total);
+    total
+}
+
+fn memo_unique_paths_iii(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut id = Vec.filled(rows * cols, -1);
+    let mut k = 0;
+    let mut start = 0;
+    let mut end = 0;
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] != -1 {
+                id[r * cols + c] = k;
+                if grid[r][c] == 1 {
+                    start = k;
+                }
+                if grid[r][c] == 2 {
+                    end = k;
+                }
+                k += 1;
+            }
+        }
+    }
+    let mut near: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] != -1 {
+                let mut list: Vec[i64] = Vec.new();
+                if r > 0 and id[(r - 1) * cols + c] >= 0 {
+                    list.push(id[(r - 1) * cols + c]);
+                }
+                if r + 1 < rows and id[(r + 1) * cols + c] >= 0 {
+                    list.push(id[(r + 1) * cols + c]);
+                }
+                if c > 0 and id[r * cols + c - 1] >= 0 {
+                    list.push(id[r * cols + c - 1]);
+                }
+                if c + 1 < cols and id[r * cols + c + 1] >= 0 {
+                    list.push(id[r * cols + c + 1]);
+                }
+                near.push(list);
+            }
+        }
+    }
+    let mut memo: Map[i64, i64] = Map.new();
+    memo_ways(start, 1 << start, end, (1 << k) - 1, near, mut memo)
+}
+
+// ---- layers ----
+
+fn layers_unique_paths_iii(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut id = Vec.filled(rows * cols, -1);
+    let mut k = 0;
+    let mut start = 0;
+    let mut end = 0;
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] != -1 {
+                id[r * cols + c] = k;
+                if grid[r][c] == 1 {
+                    start = k;
+                }
+                if grid[r][c] == 2 {
+                    end = k;
+                }
+                k += 1;
+            }
+        }
+    }
+    let mut near: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] != -1 {
+                let mut list: Vec[i64] = Vec.new();
+                if r > 0 and id[(r - 1) * cols + c] >= 0 {
+                    list.push(id[(r - 1) * cols + c]);
+                }
+                if r + 1 < rows and id[(r + 1) * cols + c] >= 0 {
+                    list.push(id[(r + 1) * cols + c]);
+                }
+                if c > 0 and id[r * cols + c - 1] >= 0 {
+                    list.push(id[r * cols + c - 1]);
+                }
+                if c + 1 < cols and id[r * cols + c + 1] >= 0 {
+                    list.push(id[r * cols + c + 1]);
+                }
+                near.push(list);
+            }
+        }
+    }
+    let full = (1 << k) - 1;
+    let mut walks: Map[i64, i64] = Map.new();
+    walks.insert((1 << start) * 32 + start, 1);
+    for _ in 1..k {
+        let mut next_walks: Map[i64, i64] = Map.new();
+        for (key, w) in walks {
+            let seen = key / 32;
+            let at = key % 32;
+            if at == end {
+                continue;
+            }
+            for next in near[at] {
+                if seen & (1 << next) == 0 {
+                    let to = (seen | (1 << next)) * 32 + next;
+                    let had = next_walks.get(to) ?? 0;
+                    next_walks.insert(to, had + w);
+                }
+            }
+        }
+        walks = next_walks;
+    }
+    walks.get(full * 32 + end) ?? 0
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The start and the end may be joined by a walk over every free square
+// only if the checkerboard allows it: with an even count of free squares
+// the walk alternates colours and ends on the other colour, with an odd
+// count it starts and ends on the colour that has one square more.
+fn parity_allows(grid: ref Vec[Vec[i64]]) -> bool {
+    let mut black = 0;
+    let mut white = 0;
+    let mut ends = 0;
+    for r in 0..grid.len() {
+        for c in 0..grid[0].len() {
+            if grid[r][c] != -1 {
+                let colour = (r + c) % 2;
+                if colour == 0 {
+                    black += 1;
+                } else {
+                    white += 1;
+                }
+                if grid[r][c] != 0 {
+                    ends += colour;
+                }
+            }
+        }
+    }
+    if (black + white) % 2 == 0 {
+        ends == 1
+    } else if black > white {
+        ends == 0
+    } else {
+        ends == 2
+    }
+}
+
+// A rows x cols grid with about one square in `holes` an obstacle (none
+// when `holes` is 0), and
+// the start and the end on two different free squares; when `fair`, the
+// start and the end are drawn again, up to 20 times, until the
+// checkerboard allows a walk.
+fn random_grid(rows: i64, cols: i64, holes: i64, fair: bool, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut free: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            if holes > 0 and next_random(mut seed) % holes == 0 {
+                row.push(-1);
+            } else {
+                row.push(0);
+                free.push((r, c));
+            }
+        }
+        grid.push(row);
+    }
+    while free.len() < 2 {
+        let r = next_random(mut seed) % rows;
+        let c = next_random(mut seed) % cols;
+        if grid[r][c] == -1 {
+            grid[r][c] = 0;
+            free.push((r, c));
+        }
+    }
+    let mut tries = 0;
+    loop {
+        let a = next_random(mut seed) % free.len();
+        let mut b = next_random(mut seed) % (free.len() - 1);
+        if b >= a {
+            b += 1;
+        }
+        let (ar, ac) = free[a];
+        let (br, bc) = free[b];
+        grid[ar][ac] = 1;
+        grid[br][bc] = 2;
+        tries += 1;
+        if not fair or tries == 20 or parity_allows(grid) {
+            return grid;
+        }
+        grid[ar][ac] = 0;
+        grid[br][bc] = 0;
+    }
+}
+
+// Every ordering of the squares between the start and the end, tried in
+// turn by swapping each remaining square into place k.
+fn orderings(middle: mut ref Vec[(i64, i64)], k: i64, start: (i64, i64), end: (i64, i64), count: mut ref i64) {
+    if k == middle.len() {
+        let mut path: Vec[(i64, i64)] = vec![start];
+        path.extend(middle.clone());
+        path.push(end);
+        let mut ok = true;
+        for i in 1..path.len() {
+            let (r0, c0) = path[i - 1];
+            let (r1, c1) = path[i];
+            if (r0 - r1).abs() + (c0 - c1).abs() != 1 {
+                ok = false;
+            }
+        }
+        if ok {
+            *count += 1;
+        }
+        return;
+    }
+    for i in k..middle.len() {
+        let t = middle[k];
+        middle[k] = middle[i];
+        middle[i] = t;
+        orderings(mut middle, k + 1, start, end, mut count);
+        let t = middle[k];
+        middle[k] = middle[i];
+        middle[i] = t;
+    }
+}
+
+// The statement read literally: a path walks from the start to the end
+// over every free square exactly once, each step to a square beside the
+// last, so every ordering of the free squares between the two is tried
+// and the ones whose every step is to a neighbour are counted.
+fn literal(grid: ref Vec[Vec[i64]]) -> i64 {
+    let mut start = (0, 0);
+    let mut end = (0, 0);
+    let mut middle: Vec[(i64, i64)] = Vec.new();
+    for r in 0..grid.len() {
+        for c in 0..grid[0].len() {
+            if grid[r][c] == 1 {
+                start = (r, c);
+            } else if grid[r][c] == 2 {
+                end = (r, c);
+            } else if grid[r][c] == 0 {
+                middle.push((r, c));
+            }
+        }
+    }
+    let mut count = 0;
+    orderings(mut middle, 0, start, end, mut count);
+    count
+}
+
+fn arm(a: i64, grid: ref Vec[Vec[i64]]) -> i64 {
+    if a == 0 {
+        star_unique_paths_iii(grid)
+    } else if a == 1 {
+        stack_unique_paths_iii(grid)
+    } else if a == 2 {
+        bits_unique_paths_iii(grid)
+    } else if a == 3 {
+        memo_unique_paths_iii(grid)
+    } else {
+        layers_unique_paths_iii(grid)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, grid: Vec[Vec[i64]], small: bool) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let truth = if small { literal(grid) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, grid));
+    }
+    // the grid transposed, and the grid turned left to right
+    let mut transposed: Vec[Vec[i64]] = Vec.new();
+    for c in 0..cols {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..rows {
+            row.push(grid[r][c]);
+        }
+        transposed.push(row);
+    }
+    let mut turned: Vec[Vec[i64]] = Vec.new();
+    // the start and the end swapped
+    let mut swapped: Vec[Vec[i64]] = Vec.new();
+    // a border of obstacles all round
+    let mut walled: Vec[Vec[i64]] = vec![Vec.filled(cols + 2, -1)];
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut swap_row: Vec[i64] = Vec.new();
+        let mut wall_row: Vec[i64] = vec![-1];
+        for c in 0..cols {
+            row.push(grid[r][cols - 1 - c]);
+            let v = grid[r][c];
+            swap_row.push(if v == 1 { 2 } else if v == 2 { 1 } else { v });
+            wall_row.push(v);
+        }
+        wall_row.push(-1);
+        turned.push(row);
+        swapped.push(swap_row);
+        walled.push(wall_row);
+    }
+    walled.push(Vec.filled(cols + 2, -1));
+    let allowed = parity_allows(grid);
+    for a in 0..5 {
+        let p = got[a];
+        // P1: the statement's answer, on the first 3000 grids
+        if small {
+            check(mut tally, 1, p == truth);
+        }
+        // P2: transposing or turning the grid left to right keeps the count
+        check(mut tally, 2, arm(a, transposed) == p and arm(a, turned) == p);
+        // P3: every path read backwards is a path from the end to the start
+        check(mut tally, 3, arm(a, swapped) == p);
+        // P4: no path when the checkerboard forbids one
+        check(mut tally, 4, allowed or p == 0);
+        // P5: a border of obstacles changes nothing
+        check(mut tally, 5, arm(a, walled) == p);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == p {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 980;
+    let mut squares = 0;
+    let mut paths = 0;
+    let mut some = 0;
+    let mut check_sum = 0;
+    // 3000 grids of up to 9 squares against the statement, then 200 of up
+    // to LeetCode's 20 with fewer obstacles; every third grid has none,
+    // and every other one has its start and end drawn so that the
+    // checkerboard allows a path
+    for c in 0..3200 {
+        let small = c < 3000;
+        let area = if small { 9 } else { 20 };
+        let rows = 1 + next_random(mut seed) % area;
+        let cols = 1 + next_random(mut seed) % (area / rows);
+        let cols = if rows * cols < 2 { 2 } else { cols };
+        let holes = if c % 3 == 2 { 0 } else if small { 5 } else { 8 };
+        let grid = random_grid(rows, cols, holes, c % 2 == 1, mut seed);
+        let got = properties(mut tally, grid, small);
+        squares += rows * cols;
+        paths += got;
+        if got > 0 {
+            some += 1;
+        }
+        check_sum = (check_sum * 31 + got + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 grids of {squares} squares: {paths} paths in {some} grids, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

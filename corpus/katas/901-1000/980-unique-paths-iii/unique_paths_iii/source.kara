@@ -1,0 +1,136 @@
+// LeetCode #980: Unique Paths III -- backtracking on the grid.
+//
+// A walk from the start steps to a free neighbour, marks it, and
+// recurses with one square fewer to cover, then unmarks it on the way
+// back. Reaching the end with nothing left to cover counts one path;
+// reaching it early is a dead end. O(3^k) for k free squares.
+
+fn walk(grid: mut ref Vec[Vec[i64]], r: i64, c: i64, left: i64) -> i64 {
+    if r < 0 or c < 0 or r >= grid.len() or c >= grid[0].len() or grid[r][c] == -1 {
+        return 0;
+    }
+    if grid[r][c] == 2 {
+        return if left == 0 { 1 } else { 0 };
+    }
+    grid[r][c] = -1;
+    let paths = walk(mut grid, r + 1, c, left - 1) + walk(mut grid, r - 1, c, left - 1)
+        + walk(mut grid, r, c + 1, left - 1) + walk(mut grid, r, c - 1, left - 1);
+    grid[r][c] = 0;
+    paths
+}
+
+fn unique_paths_iii(grid: Vec[Vec[i64]]) -> i64 {
+    let mut g = grid.clone();
+    let mut start = (0, 0);
+    // the squares the walk must still step onto: every free one and the end
+    let mut left = 0;
+    for r in 0..g.len() {
+        for c in 0..g[0].len() {
+            if g[r][c] == 1 {
+                start = (r, c);
+            } else if g[r][c] != -1 {
+                left += 1;
+            }
+        }
+    }
+    let (r, c) = start;
+    g[r][c] = 0;
+    walk(mut g, r, c, left)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A rows x cols grid with about one square in five an obstacle, and the
+// start and the end on two different free squares.
+fn random_grid(rows: i64, cols: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut free: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            if next_random(mut seed) % 5 == 0 {
+                row.push(-1);
+            } else {
+                row.push(0);
+                free.push((r, c));
+            }
+        }
+        grid.push(row);
+    }
+    while free.len() < 2 {
+        let r = next_random(mut seed) % rows;
+        let c = next_random(mut seed) % cols;
+        if grid[r][c] == -1 {
+            grid[r][c] = 0;
+            free.push((r, c));
+        }
+    }
+    let a = next_random(mut seed) % free.len();
+    let mut b = next_random(mut seed) % (free.len() - 1);
+    if b >= a {
+        b += 1;
+    }
+    let (ar, ac) = free[a];
+    let (br, bc) = free[b];
+    grid[ar][ac] = 1;
+    grid[br][bc] = 2;
+    grid
+}
+
+// An open rows x cols grid with the start and the end where given.
+fn open_grid(rows: i64, cols: i64, start: (i64, i64), end: (i64, i64)) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        grid.push(Vec.filled(cols, 0));
+    }
+    let (sr, sc) = start;
+    let (er, ec) = end;
+    grid[sr][sc] = 1;
+    grid[er][ec] = 2;
+    grid
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![1, 0, 0, 0], vec![0, 0, 0, 0], vec![0, 0, 2, -1]],
+        vec![vec![1, 0, 0, 0], vec![0, 0, 0, 0], vec![0, 0, 0, 2]],
+        vec![vec![0, 1], vec![2, 0]],
+        vec![vec![1, 2]],
+        vec![vec![1, -1, 2]],
+        vec![vec![2, 0, 1]],
+        vec![vec![1, 0], vec![0, 2]],
+        vec![vec![1, 0, 0], vec![0, -1, 0], vec![0, 0, 2]],
+        vec![vec![1, 0, 0], vec![0, 0, 0], vec![0, 0, 2]],
+        vec![vec![0, 0, 0], vec![0, 1, 0], vec![0, 0, 2]],
+    ];
+    for i in 0..cases.len() {
+        println(f"case {i + 1}: {unique_paths_iii(cases[i].clone())}");
+    }
+    // random grids: 300 of up to 9 squares and 3000 of up to 16
+    let mut seed = 980;
+    for (count, area) in vec![(300, 9), (3000, 16)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let rows = 1 + next_random(mut seed) % area;
+            let cols = 1 + next_random(mut seed) % (area / rows);
+            let cols = if rows * cols < 2 { 2 } else { cols };
+            let p = unique_paths_iii(random_grid(rows, cols, mut seed));
+            total += p;
+            check = (check * 31 + p + 1) % 1000000007;
+        }
+        println(f"{count} random grids of up to {area} squares: {total} paths, checksum {check}");
+    }
+    // LeetCode's largest, 20 squares, all free
+    println(f"4 x 5, corner to corner: {unique_paths_iii(open_grid(4, 5, (0, 0), (3, 4)))}");
+    println(f"4 x 5, corner to the corner below: {unique_paths_iii(open_grid(4, 5, (0, 0), (3, 0)))}");
+    println(f"4 x 5, middle to corner: {unique_paths_iii(open_grid(4, 5, (1, 2), (0, 0)))}");
+    println(f"2 x 10, corner to the far corner on its side: {unique_paths_iii(open_grid(2, 10, (0, 0), (0, 9)))}");
+    println(f"1 x 20, end to end: {unique_paths_iii(open_grid(1, 20, (0, 0), (0, 19)))}");
+}

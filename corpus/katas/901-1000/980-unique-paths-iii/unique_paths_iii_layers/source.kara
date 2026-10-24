@@ -1,0 +1,170 @@
+// LeetCode #980: Unique Paths III -- counting forward, a step at a
+// time.
+//
+// Bottom up instead of top down: a map from (covered set, place) to the
+// number of walks that got there, advanced one step at a time from the
+// start. A walk never steps off the end, and after k - 1 steps the
+// walks standing on the end with every square covered are the answer.
+
+fn unique_paths_iii(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut id = Vec.filled(rows * cols, -1);
+    let mut k = 0;
+    let mut start = 0;
+    let mut end = 0;
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] != -1 {
+                id[r * cols + c] = k;
+                if grid[r][c] == 1 {
+                    start = k;
+                }
+                if grid[r][c] == 2 {
+                    end = k;
+                }
+                k += 1;
+            }
+        }
+    }
+    let mut near: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] != -1 {
+                let mut list: Vec[i64] = Vec.new();
+                if r > 0 and id[(r - 1) * cols + c] >= 0 {
+                    list.push(id[(r - 1) * cols + c]);
+                }
+                if r + 1 < rows and id[(r + 1) * cols + c] >= 0 {
+                    list.push(id[(r + 1) * cols + c]);
+                }
+                if c > 0 and id[r * cols + c - 1] >= 0 {
+                    list.push(id[r * cols + c - 1]);
+                }
+                if c + 1 < cols and id[r * cols + c + 1] >= 0 {
+                    list.push(id[r * cols + c + 1]);
+                }
+                near.push(list);
+            }
+        }
+    }
+    let full = (1 << k) - 1;
+    let mut walks: Map[i64, i64] = Map.new();
+    walks.insert((1 << start) * 32 + start, 1);
+    for _ in 1..k {
+        let mut next_walks: Map[i64, i64] = Map.new();
+        for (key, w) in walks {
+            let seen = key / 32;
+            let at = key % 32;
+            if at == end {
+                continue;
+            }
+            for next in near[at] {
+                if seen & (1 << next) == 0 {
+                    let to = (seen | (1 << next)) * 32 + next;
+                    let had = next_walks.get(to) ?? 0;
+                    next_walks.insert(to, had + w);
+                }
+            }
+        }
+        walks = next_walks;
+    }
+    walks.get(full * 32 + end) ?? 0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A rows x cols grid with about one square in five an obstacle, and the
+// start and the end on two different free squares.
+fn random_grid(rows: i64, cols: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut free: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            if next_random(mut seed) % 5 == 0 {
+                row.push(-1);
+            } else {
+                row.push(0);
+                free.push((r, c));
+            }
+        }
+        grid.push(row);
+    }
+    while free.len() < 2 {
+        let r = next_random(mut seed) % rows;
+        let c = next_random(mut seed) % cols;
+        if grid[r][c] == -1 {
+            grid[r][c] = 0;
+            free.push((r, c));
+        }
+    }
+    let a = next_random(mut seed) % free.len();
+    let mut b = next_random(mut seed) % (free.len() - 1);
+    if b >= a {
+        b += 1;
+    }
+    let (ar, ac) = free[a];
+    let (br, bc) = free[b];
+    grid[ar][ac] = 1;
+    grid[br][bc] = 2;
+    grid
+}
+
+// An open rows x cols grid with the start and the end where given.
+fn open_grid(rows: i64, cols: i64, start: (i64, i64), end: (i64, i64)) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        grid.push(Vec.filled(cols, 0));
+    }
+    let (sr, sc) = start;
+    let (er, ec) = end;
+    grid[sr][sc] = 1;
+    grid[er][ec] = 2;
+    grid
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![1, 0, 0, 0], vec![0, 0, 0, 0], vec![0, 0, 2, -1]],
+        vec![vec![1, 0, 0, 0], vec![0, 0, 0, 0], vec![0, 0, 0, 2]],
+        vec![vec![0, 1], vec![2, 0]],
+        vec![vec![1, 2]],
+        vec![vec![1, -1, 2]],
+        vec![vec![2, 0, 1]],
+        vec![vec![1, 0], vec![0, 2]],
+        vec![vec![1, 0, 0], vec![0, -1, 0], vec![0, 0, 2]],
+        vec![vec![1, 0, 0], vec![0, 0, 0], vec![0, 0, 2]],
+        vec![vec![0, 0, 0], vec![0, 1, 0], vec![0, 0, 2]],
+    ];
+    for i in 0..cases.len() {
+        println(f"case {i + 1}: {unique_paths_iii(cases[i].clone())}");
+    }
+    // random grids: 300 of up to 9 squares and 3000 of up to 16
+    let mut seed = 980;
+    for (count, area) in vec![(300, 9), (3000, 16)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let rows = 1 + next_random(mut seed) % area;
+            let cols = 1 + next_random(mut seed) % (area / rows);
+            let cols = if rows * cols < 2 { 2 } else { cols };
+            let p = unique_paths_iii(random_grid(rows, cols, mut seed));
+            total += p;
+            check = (check * 31 + p + 1) % 1000000007;
+        }
+        println(f"{count} random grids of up to {area} squares: {total} paths, checksum {check}");
+    }
+    // LeetCode's largest, 20 squares, all free
+    println(f"4 x 5, corner to corner: {unique_paths_iii(open_grid(4, 5, (0, 0), (3, 4)))}");
+    println(f"4 x 5, corner to the corner below: {unique_paths_iii(open_grid(4, 5, (0, 0), (3, 0)))}");
+    println(f"4 x 5, middle to corner: {unique_paths_iii(open_grid(4, 5, (1, 2), (0, 0)))}");
+    println(f"2 x 10, corner to the far corner on its side: {unique_paths_iii(open_grid(2, 10, (0, 0), (0, 9)))}");
+    println(f"1 x 20, end to end: {unique_paths_iii(open_grid(1, 20, (0, 0), (0, 19)))}");
+}

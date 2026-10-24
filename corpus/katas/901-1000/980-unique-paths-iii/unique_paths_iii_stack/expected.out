@@ -1,0 +1,17 @@
+case 1: 2
+case 2: 4
+case 3: 0
+case 4: 1
+case 5: 0
+case 6: 1
+case 7: 0
+case 8: 0
+case 9: 2
+case 10: 2
+300 random grids of up to 9 squares: 59 paths, checksum 657275730
+3000 random grids of up to 16 squares: 199 paths, checksum 451804276
+4 x 5, corner to corner: 20
+4 x 5, corner to the corner below: 23
+4 x 5, middle to corner: 14
+2 x 10, corner to the far corner on its side: 1
+1 x 20, end to end: 1
