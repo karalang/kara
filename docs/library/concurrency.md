@@ -56,7 +56,7 @@ Sending returns a `Result` instead of panicking because a panic ends the whole p
 
 **Moving the ends.** `Sender[T]` and `Receiver[T]` are ordinary owned values. They can be moved into tasks, passed to functions and returned.
 
-**Deferred.** `select` across several channels, receive and send timeouts, unbounded channels and fan-out or fan-in combinators come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services). The rules for `select` and the timeouts are already fixed in [core-semantics.md §11.11](../core-semantics.md#11-concurrency-c9).
+**Deferred.** `select` across several channels, receive and send timeouts, unbounded channels and fan-out or fan-in combinators come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services). The rules for `select` and the timeouts are already fixed in [core-semantics.md §11.11](../core-semantics.md#11-concurrency-c9): `Receiver.recv_timeout(self, d: Duration) -> Result[T, RecvTimeoutError]` and `Sender.send_timeout(self, value: own T, d: Duration) -> Result[(), SendTimeoutError[T]]`, where the send error hands the value back on `Closed(T)` and `TimedOut(T)` alike.
 
 ```kara
 import std.sync.{channel, Sender, Receiver, SendError};

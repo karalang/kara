@@ -666,7 +666,7 @@ Pin: `par_error_runs_siblings`.
 - **Choosing an arm performs its operation.** The arm that runs has received or sent, and no other arm has. A send arm that is not chosen still owns its value, which drops as the `select` ends. A closed channel makes its arm ready: `recv` gives `None` and `send` gives `Err(SendError.Closed(v))`, as the plain calls do.
 - **When several arms are ready at once, the source-first ready arm wins.** That is deterministic, unlike Go's random choice. The fairness cost is accepted: order the arms to suit.
 - A `select` with no `default` is a suspension point, and so a cancellation point (§11.9).
-- `recv_timeout` and `send_timeout` arrive with it. Each is defined as a two-arm `select`.
+- `Receiver.recv_timeout(self, d: Duration) -> Result[T, RecvTimeoutError]` and `Sender.send_timeout(self, value: own T, d: Duration) -> Result[(), SendTimeoutError[T]]` arrive with it. Each behaves as a two-arm `select` of the operation and `after(d)`. `RecvTimeoutError` is `Closed` or `TimedOut`. `SendTimeoutError[T]` is `Closed(T)` or `TimedOut(T)`: `send_timeout` hands the value back either way (review-thread ruling; this replaces deferred.md's `Option[T]` and `Result[(), T]` shapes, which cannot tell a closed channel from a timeout).
 
 **11.12 Task failure: isolating groups.**
 - `TaskGroup.isolating(; limit: i64 = i64.MAX) -> IsolatingGroup` makes a group that contains its tasks' panics. It has `TaskGroup`'s methods, except that `spawn` returns `TaskHandle[Result[T, TaskFailed]]`, so `join` on its tasks returns `Result[T, TaskFailed]`.
