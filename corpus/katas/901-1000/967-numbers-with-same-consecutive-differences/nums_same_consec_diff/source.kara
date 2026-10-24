@@ -1,0 +1,72 @@
+// LeetCode #967: Numbers With Same Consecutive Differences -- level by
+// level.
+//
+// The numbers of one digit are 1 to 9; each number of the next length is
+// one of these with a digit appended, its last digit plus or minus k
+// where that is a digit (once when k is 0). Grow the whole level n - 1
+// times. O(9 * 2^(n-1)) numbers at most.
+
+fn nums_same_consec_diff(n: i64, k: i64) -> Vec[i64] {
+    let mut level: Vec[i64] = Vec.new();
+    for d in 1..10 {
+        level.push(d);
+    }
+    for _ in 1..n {
+        let mut next: Vec[i64] = Vec.new();
+        for x in level {
+            let last = x % 10;
+            if last + k <= 9 {
+                next.push(x * 10 + last + k);
+            }
+            if k > 0 and last - k >= 0 {
+                next.push(x * 10 + last - k);
+            }
+        }
+        level = next;
+    }
+    level
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(v: Vec[i64]) -> String {
+    let mut s = String.from("[");
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more, each sorted
+    let examples: Vec[(i64, i64)] = vec![(3, 7), (2, 1), (2, 0), (2, 9), (3, 0), (3, 5), (4, 8), (2, 5)];
+    for (n, k) in examples {
+        let mut got = nums_same_consec_diff(n, k);
+        got.sort();
+        println(f"n = {n}, k = {k}: {show(got)}");
+    }
+    // every n from 2 to 9 with every k from 0 to 9: how many, their sum and
+    // a checksum of the sorted list
+    let mut total = 0;
+    let mut all_sum = 0;
+    for n in 2..10 {
+        let mut line = String.new();
+        let mut check = 0;
+        for k in 0..10 {
+            let mut got = nums_same_consec_diff(n, k);
+            got.sort();
+            line.push_str(f" {got.len()}");
+            total += got.len();
+            for x in got {
+                all_sum += x;
+                check = (check * 31 + x % 1000000007) % 1000000007;
+            }
+        }
+        println(f"n = {n}, k = 0 to 9:{line}, checksum {check}");
+    }
+    println(f"{total} numbers in all, summing to {all_sum}");
+}

@@ -1,0 +1,350 @@
+// LeetCode #967: Numbers With Same Consecutive Differences -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random lengths n and differences k.
+
+// ---- star ----
+
+fn star_nums_same_consec_diff(n: i64, k: i64) -> Vec[i64] {
+    let mut level: Vec[i64] = Vec.new();
+    for d in 1..10 {
+        level.push(d);
+    }
+    for _ in 1..n {
+        let mut next: Vec[i64] = Vec.new();
+        for x in level {
+            let last = x % 10;
+            if last + k <= 9 {
+                next.push(x * 10 + last + k);
+            }
+            if k > 0 and last - k >= 0 {
+                next.push(x * 10 + last - k);
+            }
+        }
+        level = next;
+    }
+    level
+}
+
+// ---- dfs ----
+
+fn dfs_extend(x: i64, left: i64, k: i64, out: mut ref Vec[i64]) {
+    if left == 0 {
+        out.push(x);
+        return;
+    }
+    let last = x % 10;
+    for d in 0..10 {
+        if (d - last).abs() == k {
+            dfs_extend(x * 10 + d, left - 1, k, mut out);
+        }
+    }
+}
+
+fn dfs_nums_same_consec_diff(n: i64, k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for first in 1..10 {
+        dfs_extend(first, n - 1, k, mut out);
+    }
+    out
+}
+
+// ---- stack ----
+
+fn stack_nums_same_consec_diff(n: i64, k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    for first in 1..10 {
+        stack.push((first, n - 1));
+    }
+    while let Some((x, left)) = stack.pop() {
+        if left == 0 {
+            out.push(x);
+            continue;
+        }
+        let last = x % 10;
+        let mut nexts: Set[i64] = Set.new();
+        nexts.insert(last + k);
+        nexts.insert(last - k);
+        for d in nexts {
+            if d >= 0 and d <= 9 {
+                stack.push((x * 10 + d, left - 1));
+            }
+        }
+    }
+    out
+}
+
+// ---- signs ----
+
+fn signs_nums_same_consec_diff(n: i64, k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let patterns = if k == 0 { 1 } else { 1 << (n - 1) };
+    for first in 1..10 {
+        for bits in 0..patterns {
+            let mut x = first;
+            let mut d = first;
+            let mut ok = true;
+            for step in 0..n - 1 {
+                d = if (bits >> step) & 1 == 0 { d + k } else { d - k };
+                if d < 0 or d > 9 {
+                    ok = false;
+                    break;
+                }
+                x = x * 10 + d;
+            }
+            if ok {
+                out.push(x);
+            }
+        }
+    }
+    out
+}
+
+// ---- back ----
+
+fn back_nums_same_consec_diff(n: i64, k: i64) -> Vec[i64] {
+    // (the number so far, its front digit)
+    let mut level: Vec[(i64, i64)] = Vec.new();
+    for d in 0..10 {
+        level.push((d, d));
+    }
+    let mut place = 1;
+    for _ in 1..n {
+        place *= 10;
+        let mut next: Vec[(i64, i64)] = Vec.new();
+        for (x, front) in level {
+            for (i, d) in [front + k, front - k].iter().enumerate() {
+                if d >= 0 and d <= 9 and (i == 0 or k > 0) {
+                    next.push((d * place + x, d));
+                }
+            }
+        }
+        level = next;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for (x, front) in level {
+        if front != 0 {
+            out.push(x);
+        }
+    }
+    out
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digits(x: i64) -> Vec[i64] {
+    let mut ds: Vec[i64] = Vec.new();
+    let mut y = x;
+    while y > 0 {
+        ds.push(y % 10);
+        y /= 10;
+    }
+    ds.reverse();
+    ds
+}
+
+fn number(ds: ref Vec[i64]) -> i64 {
+    let mut x = 0;
+    for d in ds {
+        x = x * 10 + *d;
+    }
+    x
+}
+
+// Whether x has n digits, every two next to each other k apart.
+fn steady(x: i64, n: i64, k: i64) -> bool {
+    let ds = digits(x);
+    if ds.len() != n {
+        return false;
+    }
+    for i in 1..n {
+        if (ds[i] - ds[i - 1]).abs() != k {
+            return false;
+        }
+    }
+    true
+}
+
+// The statement read literally: every number of n digits, tested.
+fn literal(n: i64, k: i64) -> Vec[i64] {
+    let mut low = 1;
+    for _ in 1..n {
+        low *= 10;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for x in low..low * 10 {
+        if steady(x, n, k) {
+            out.push(x);
+        }
+    }
+    out
+}
+
+// How many there are: walks of n - 1 steps of k from each first digit,
+// counted by the digit they end on.
+fn count(n: i64, k: i64) -> i64 {
+    let mut ways: Vec[i64] = vec![0; 10];
+    for d in 1..10 {
+        ways[d] = 1;
+    }
+    for _ in 1..n {
+        let mut next: Vec[i64] = vec![0; 10];
+        for d in 0..10 {
+            if d + k <= 9 {
+                next[d + k] += ways[d];
+            }
+            if k > 0 and d - k >= 0 {
+                next[d - k] += ways[d];
+            }
+        }
+        ways = next;
+    }
+    let mut total = 0;
+    for w in ways {
+        total += w;
+    }
+    total
+}
+
+fn arm(x: i64, n: i64, k: i64) -> Vec[i64] {
+    let mut v = if x == 0 {
+        star_nums_same_consec_diff(n, k)
+    } else if x == 1 {
+        dfs_nums_same_consec_diff(n, k)
+    } else if x == 2 {
+        stack_nums_same_consec_diff(n, k)
+    } else if x == 3 {
+        signs_nums_same_consec_diff(n, k)
+    } else {
+        back_nums_same_consec_diff(n, k)
+    };
+    v.sort();
+    v
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, n: i64, k: i64, small: bool) -> Vec[i64] {
+    let truth = if small { literal(n, k) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, n, k));
+    }
+    let how_many = count(n, k);
+    for x in 0..5 {
+        let a = got[x].clone();
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: strictly increasing once sorted, so no number twice, and as
+        // many as there are walks
+        let mut rising = a.len() == how_many;
+        for i in 1..a.len() {
+            rising = rising and a[i - 1] < a[i];
+        }
+        check(mut t, 2, rising);
+        // P3: every number has n digits, each next one k from the last
+        let mut each = true;
+        for v in a {
+            each = each and steady(v, n, k);
+        }
+        check(mut t, 3, each);
+        // P4: the numbers of n digits are those of n - 1 digits with a
+        // digit k from their last appended
+        let mut grown: Vec[i64] = Vec.new();
+        for v in arm(x, n - 1, k) {
+            let last = v % 10;
+            for d in 0..10 {
+                if (d - last).abs() == k {
+                    grown.push(v * 10 + d);
+                }
+            }
+        }
+        grown.sort();
+        check(mut t, 4, a == grown);
+        // P5: replacing every digit d by 9 - d maps those starting 1 to 8
+        // onto themselves, and reading the digits backwards maps those
+        // not ending in 0 onto themselves
+        let mut inner: Vec[i64] = Vec.new();
+        let mut flipped: Vec[i64] = Vec.new();
+        let mut ends: Vec[i64] = Vec.new();
+        let mut backwards: Vec[i64] = Vec.new();
+        for v in a {
+            let ds = digits(v);
+            if ds.len() == n and ds[0] != 9 {
+                inner.push(v);
+                let mut c: Vec[i64] = Vec.new();
+                for d in ds {
+                    c.push(9 - d);
+                }
+                flipped.push(number(c));
+            }
+            if v % 10 != 0 {
+                ends.push(v);
+                let mut r = ds.clone();
+                r.reverse();
+                backwards.push(number(r));
+            }
+        }
+        flipped.sort();
+        backwards.sort();
+        check(mut t, 5, flipped == inner and backwards == ends);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 967;
+    let mut found = 0;
+    let mut check_sum = 0;
+    // 3000 cases of 2 or 3 digits, against the statement, then 200 of 4 to
+    // 9 digits; k from 0 to 9
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 2 + next_random(mut seed) % 2 } else { 4 + next_random(mut seed) % 6 };
+        let k = next_random(mut seed) % 10;
+        let got = properties(mut t, n, k, small);
+        found += got.len();
+        for v in got {
+            check_sum = (check_sum * 31 + v % 1000000007) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases: {found} numbers, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

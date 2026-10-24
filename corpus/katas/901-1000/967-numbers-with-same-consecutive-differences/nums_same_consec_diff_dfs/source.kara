@@ -1,0 +1,71 @@
+// LeetCode #967: Numbers With Same Consecutive Differences -- depth
+// first.
+//
+// Build each number digit by digit from its first, recursing on each
+// digit that can follow the last one, and collect it when it has n
+// digits. The same numbers as ★, found one at a time.
+
+fn extend(x: i64, left: i64, k: i64, out: mut ref Vec[i64]) {
+    if left == 0 {
+        out.push(x);
+        return;
+    }
+    let last = x % 10;
+    for d in 0..10 {
+        if (d - last).abs() == k {
+            extend(x * 10 + d, left - 1, k, mut out);
+        }
+    }
+}
+
+fn nums_same_consec_diff(n: i64, k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for first in 1..10 {
+        extend(first, n - 1, k, mut out);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(v: Vec[i64]) -> String {
+    let mut s = String.from("[");
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more, each sorted
+    let examples: Vec[(i64, i64)] = vec![(3, 7), (2, 1), (2, 0), (2, 9), (3, 0), (3, 5), (4, 8), (2, 5)];
+    for (n, k) in examples {
+        let mut got = nums_same_consec_diff(n, k);
+        got.sort();
+        println(f"n = {n}, k = {k}: {show(got)}");
+    }
+    // every n from 2 to 9 with every k from 0 to 9: how many, their sum and
+    // a checksum of the sorted list
+    let mut total = 0;
+    let mut all_sum = 0;
+    for n in 2..10 {
+        let mut line = String.new();
+        let mut check = 0;
+        for k in 0..10 {
+            let mut got = nums_same_consec_diff(n, k);
+            got.sort();
+            line.push_str(f" {got.len()}");
+            total += got.len();
+            for x in got {
+                all_sum += x;
+                check = (check * 31 + x % 1000000007) % 1000000007;
+            }
+        }
+        println(f"n = {n}, k = 0 to 9:{line}, checksum {check}");
+    }
+    println(f"{total} numbers in all, summing to {all_sum}");
+}
