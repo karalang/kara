@@ -28,7 +28,18 @@
 //!   largest prefix against the type's range in order (an `i128` sum, with
 //!   no wider type to keep the prefixes in, it keeps in order). An
 //!   unsigned sum's prefixes only grow, so a run overflows only where the
-//!   in-order sum does.
+//!   in-order sum does. An accumulator may be written at several sites
+//!   (`acc = acc + a` in one arm, `acc += b` in another), all of one `op`
+//!   and each its only other use; the verdict names every site. The join
+//!   then knows a run would overflow but not at which site, so it runs
+//!   that run again in order, where the overflow names its site; a body
+//!   that can panic does nothing others see, so the second run is not
+//!   observable.
+//! - **A loop may collect.** A `Vec` local whose only use in the body is
+//!   one `v.push(e)` (under an `if` too) is a push reduction: each task
+//!   pushes onto a `Vec` of its own, and the join appends them in
+//!   iteration order, so `v` ends as the sequential loop leaves it, with
+//!   no `#[par_order_free]` needed.
 //! - **A statement reads what an earlier one binds.** A `let` in one
 //!   statement is visible to the next, where a written `par {}` refuses it
 //!   at resolution; here the binding is a local the first statement has to
@@ -73,16 +84,29 @@ pub enum VerdictKind {
     Statements { groups: Vec<Vec<usize>> },
 }
 
-/// `local = local op e` in a loop body: the iterations may run apart and
-/// fold their `e` into `local` in iteration order.
+/// `local = local op e` in a loop body, or `local.push(e)` on a `Vec`
+/// local: the iterations may run apart and fold their `e` into `local` in
+/// iteration order. A local written at several sites (`acc = acc + a` in
+/// one arm, `acc = acc + b` in another) has a reduction for each, all of
+/// one operator.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reduction {
     pub local: Local,
-    pub op: BinOp,
-    /// The statement that writes `local`: its block and index, and its
-    /// source span.
+    pub op: ReduceOp,
+    /// The statement that writes `local` (for a push, the call's block and
+    /// the index past its statements): its block and index, and its source
+    /// span.
     pub at: (BasicBlock, usize),
     pub span: Span,
+}
+
+/// How a reduction folds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReduceOp {
+    /// `acc = acc op e`.
+    Op(BinOp),
+    /// `acc.push(e)`: each run's elements, appended in iteration order.
+    Push,
 }
 
 /// Why a candidate stays sequential.
@@ -554,7 +578,8 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
         set,
         reads: &reads,
     };
-    let mut out = Vec::new();
+    // Every `acc = acc op e` the body has, by accumulator.
+    let mut sites: BTreeMap<Local, Vec<Reduction>> = BTreeMap::new();
     for b in set {
         for (k, st) in body.blocks[b.index()].statements.iter().enumerate() {
             let StatementKind::Assign(dst, rv) = &st.kind else {
@@ -567,22 +592,35 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
             let Some(op) = chain.op(rv, acc) else {
                 continue;
             };
-            // Used nowhere else: one read, the one in the operation, and
-            // this write.
-            let uses: Vec<&PlaceAccess> = touched.iter().filter(|a| a.place.local == acc).collect();
-            let plain = |a: &&PlaceAccess| a.place.projection.is_empty();
-            if uses.len() == 2
-                && uses.iter().all(plain)
-                && uses.iter().filter(|a| a.how == Use::Read).count() == 1
-                && uses.iter().filter(|a| a.how == Use::Write).count() == 1
-            {
-                out.push(Reduction {
-                    local: acc,
-                    op,
-                    at: (*b, k),
-                    span: st.source_info.span,
-                });
+            sites.entry(acc).or_default().push(Reduction {
+                local: acc,
+                op: ReduceOp::Op(op),
+                at: (*b, k),
+                span: st.source_info.span,
+            });
+        }
+        if let Some(r) = chain.push(*b) {
+            sites.entry(r.local).or_default().push(r);
+        }
+    }
+    let mut out = Vec::new();
+    for (acc, rs) in sites {
+        // Used nowhere else: for `acc op e`, one read (the one in the
+        // operation) and one write at each site, all of one operator; for
+        // a push, its one mutable borrow, at one site.
+        let uses: Vec<&PlaceAccess> = touched.iter().filter(|a| a.place.local == acc).collect();
+        let count = |how: Use| uses.iter().filter(|a| a.how == how).count();
+        let plain = uses.iter().all(|a| a.place.projection.is_empty());
+        let one_op = rs.iter().all(|r| r.op == rs[0].op);
+        let n = rs.len();
+        let alone = match rs[0].op {
+            ReduceOp::Op(_) => {
+                uses.len() == 2 * n && count(Use::Read) == n && count(Use::Write) == n
             }
+            ReduceOp::Push => n == 1 && uses.len() == 1 && count(Use::MutBorrow) == 1,
+        };
+        if plain && one_op && alone {
+            out.extend(rs);
         }
     }
     out
@@ -642,6 +680,43 @@ impl Chain<'_> {
                 _ => return None,
             }
         }
+    }
+
+    /// `v.push(e)` at the end of block `b`, with `v` a local `Vec` the
+    /// call borrows mutably through a temporary of its own.
+    fn push(&self, b: BasicBlock) -> Option<Reduction> {
+        let t = &self.body.blocks[b.index()].terminator;
+        let TerminatorKind::Call { func, args, .. } = &t.kind else {
+            return None;
+        };
+        let Operand::Const(Const {
+            kind: ConstKind::FnDef(f),
+            ..
+        }) = func
+        else {
+            return None;
+        };
+        if !(f.name.starts_with("Vec[") && f.name.ends_with("].push")) {
+            return None;
+        }
+        let [Operand::Move(r), _] = args.as_slice() else {
+            return None;
+        };
+        if !r.projection.is_empty() || self.reads.get(&r.local) != Some(&1) {
+            return None;
+        }
+        let Rvalue::Ref(BorrowKind::Mut, v) = self.assignment(r.local)? else {
+            return None;
+        };
+        if !v.projection.is_empty() || v.local == Local::RETURN_PLACE {
+            return None;
+        }
+        Some(Reduction {
+            local: v.local,
+            op: ReduceOp::Push,
+            at: (b, self.body.blocks[b.index()].statements.len()),
+            span: t.source_info.span,
+        })
     }
 
     /// `op` when `rv`, the value assigned to `acc`, is a chain of `op`
@@ -835,7 +910,7 @@ fn main() {
         assert_eq!(sq.kind, VerdictKind::Loop);
         let r = sq.verdict.as_ref().unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(r.len(), 1, "{r:?}");
-        assert_eq!(r[0].op, BinOp::Add);
+        assert_eq!(r[0].op, ReduceOp::Op(BinOp::Add));
         assert_eq!(r[0].span.line, 4);
         let bits = only(&v, "bits")
             .verdict
@@ -843,7 +918,7 @@ fn main() {
             .unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(
             bits.iter().map(|x| x.op).collect::<Vec<_>>(),
-            [BinOp::BitXor]
+            [ReduceOp::Op(BinOp::BitXor)]
         );
         match &only(&v, "peeks").verdict {
             Err(Refusal::Conflict(c)) => assert_eq!(c.branches, (0, 0)),
@@ -892,7 +967,10 @@ fn main() {
             .verdict
             .as_ref()
             .unwrap_or_else(|e| panic!("{e:?}"));
-        assert_eq!(t.iter().map(|x| x.op).collect::<Vec<_>>(), [BinOp::Add]);
+        assert_eq!(
+            t.iter().map(|x| x.op).collect::<Vec<_>>(),
+            [ReduceOp::Op(BinOp::Add)]
+        );
     }
 
     /// A chain of one operator with the accumulator a leaf of it is a
@@ -962,7 +1040,11 @@ fn main() {
                 .verdict
                 .as_ref()
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-            assert_eq!(r.iter().map(|x| x.op).collect::<Vec<_>>(), [op], "{name}");
+            assert_eq!(
+                r.iter().map(|x| x.op).collect::<Vec<_>>(),
+                [ReduceOp::Op(op)],
+                "{name}"
+            );
         }
         for name in ["mixed", "seen"] {
             match &only(&v, name).verdict {
@@ -1132,7 +1214,7 @@ fn main() {{
         );
         let r = v.verdict.unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(r.len(), 1, "{r:?}");
-        assert_eq!(r[0].op, BinOp::Add);
+        assert_eq!(r[0].op, ReduceOp::Op(BinOp::Add));
     }
 
     /// Two statements that each loop run together; two that only do
@@ -1288,6 +1370,85 @@ fn main() {{
                 local,
             }) => assert_eq!(local, "a"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// A push onto a `Vec` local the body uses for nothing else is a push
+    /// reduction; reading it too (`parts.len()`) orders the iterations. An
+    /// accumulator written at several sites of one operator is a reduction
+    /// at each; mixing `*` and `+` on it is not.
+    #[test]
+    fn auto_par_push_and_multi_site_reductions() {
+        let v = written(
+            "fn collect() -> i64 {
+    let mut parts: Vec[i64] = Vec.new();
+    par for i in 0..10 {
+        if i % 2 == 0 {
+            parts.push(i * i);
+        }
+    }
+    parts.len()
+}
+
+fn peeks() -> i64 {
+    let mut parts: Vec[i64] = Vec.new();
+    par for i in 0..10 {
+        parts.push(i + parts.len());
+    }
+    parts.len()
+}
+
+fn arms() -> i64 {
+    let mut sink = 0;
+    par for i in 0..10 {
+        if i % 3 == 0 {
+            sink = sink + i;
+        } else {
+            sink += 1;
+        }
+    }
+    sink
+}
+
+fn mixed() -> i64 {
+    let mut m = 1;
+    par for i in 0..10 {
+        if i % 2 == 0 {
+            m = m * 2;
+        } else {
+            m = m + 1;
+        }
+    }
+    m
+}
+
+fn main() {
+    println(collect() + peeks() + arms() + mixed());
+}
+",
+        );
+        let r = only(&v, "collect")
+            .verdict
+            .as_ref()
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(r.iter().map(|x| x.op).collect::<Vec<_>>(), [ReduceOp::Push]);
+        assert_eq!(r[0].span.line, 5);
+        let r = only(&v, "arms")
+            .verdict
+            .as_ref()
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(
+            r.iter().map(|x| (x.op, x.span.line)).collect::<Vec<_>>(),
+            [
+                (ReduceOp::Op(BinOp::Add), 23),
+                (ReduceOp::Op(BinOp::Add), 25)
+            ]
+        );
+        for name in ["peeks", "mixed"] {
+            match &only(&v, name).verdict {
+                Err(Refusal::Conflict(c)) => assert_eq!(c.branches, (0, 0), "{name}"),
+                other => panic!("{name}: {other:?}"),
+            }
         }
     }
 }

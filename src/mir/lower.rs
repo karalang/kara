@@ -114,7 +114,8 @@ fn reduction_stmt(b: &Block, r: Span) -> Option<&Stmt> {
     }
     if let Some(st) = b.stmts.iter().find(|s| within(s.span)) {
         return match &st.kind {
-            StmtKind::Expr(e) => in_expr(e, r),
+            // A push (`v.push(e);`) is the statement itself.
+            StmtKind::Expr(e) => in_expr(e, r).or(Some(st)),
             _ => Some(st),
         };
     }
@@ -193,6 +194,9 @@ pub struct Lowered {
     /// The runs of statements this build ran as tasks under auto-par, as
     /// `instance@line` of each run's first statement.
     pub auto_par_groups: Vec<String>,
+    /// The reductions of the loops in [`Self::auto_par_tasks`], as
+    /// `instance@line (acc at line, ..)`, one line per site.
+    pub auto_par_reductions: Vec<String>,
 }
 
 /// What an `extern "C"` signature with a type no backend passes to C yet
@@ -376,11 +380,13 @@ fn lower_program_inner<'a>(
         par_task_exprs: FxHashMap::default(),
         par_for_task_exprs: FxHashMap::default(),
         counted_whiles: FxHashMap::default(),
+        auto_par_wides: FxHashMap::default(),
         next_synthetic_node: u32::MAX - 1,
         auto_par,
         next_synthetic_sym: usize::MAX - 1,
         auto_par_done: Vec::new(),
         auto_par_groups: Vec::new(),
+        auto_par_reduced: Vec::new(),
         closure_queue: Vec::new(),
         fn_param_tys: FxHashMap::default(),
         own_self_trait_methods: FxHashSet::default(),
@@ -493,6 +499,7 @@ fn lower_program_inner<'a>(
         effects: None,
         auto_par_tasks: lcx.auto_par_done,
         auto_par_groups: lcx.auto_par_groups,
+        auto_par_reductions: lcx.auto_par_reduced,
     }
 }
 
@@ -896,6 +903,9 @@ struct Lcx<'a> {
     /// Each `while`'s counting shape, by the loop's node, or `None` when
     /// it has none (see [`CountedWhile`]).
     counted_whiles: FxHashMap<NodeId, Option<CountedWhile<'a>>>,
+    /// Each auto-par loop body's signed-sum sites, by the body (see
+    /// [`AutoRed::wide`]).
+    auto_par_wides: FxHashMap<*const Block, &'a [WideSum<'a>]>,
     /// The next id for a node the builder makes up (counting down from
     /// the top, clear of the checker's ids).
     next_synthetic_node: u32,
@@ -908,6 +918,8 @@ struct Lcx<'a> {
     auto_par_done: Vec<String>,
     /// See [`Lowered::auto_par_groups`].
     auto_par_groups: Vec<String>,
+    /// See [`Lowered::auto_par_reductions`].
+    auto_par_reduced: Vec<String>,
     closure_queue: Vec<ClosureJob<'a>>,
     /// Instances whose function-typed parameters take a concrete closure
     /// or function type: by instance name, one entry per parameter.
@@ -2399,7 +2411,7 @@ struct ChunkJob<'a> {
     ty: Ty,
     /// The loop's reduction is a signed sum, which the task keeps wide
     /// (see [`AutoRed::wide`]).
-    wide: Option<WideSum<'a>>,
+    wide: Option<&'a [WideSum<'a>]>,
 }
 
 /// `while k < n { ..; k += 1 }` (or `k = k + 1`), with `k` an integer
@@ -2436,8 +2448,18 @@ struct AutoRed<'a> {
     /// task sums in `i128` and returns that sum with its run's least and
     /// greatest prefix, and the join checks the prefixes against `acc`'s
     /// range in order: the sequential loop overflows exactly where one of
-    /// them leaves it.
-    wide: Option<WideSum<'a>>,
+    /// them leaves it. One per site the body writes `acc` at.
+    wide: Option<&'a [WideSum<'a>]>,
+    /// `acc.push(e)`: each task pushes onto a `Vec` of its own, which the
+    /// join appends to `acc` in iteration order (`op` is unused).
+    push: bool,
+    /// A checked `+` written at several sites: the join knows a run's sum
+    /// would overflow but not at which site, so it runs that run again in
+    /// order, where the overflow names its site as the sequential loop's
+    /// does. The body can then do nothing others see (the verdict keeps a
+    /// loop that can panic and writes in order), so running it twice is
+    /// not observable.
+    replay: bool,
 }
 
 /// A signed sum's statement in an auto-par loop's body, and what it adds:
@@ -2455,18 +2477,49 @@ struct WideSum<'a> {
 /// locals the reduction's statement adds its term to in place of `acc`.
 #[derive(Clone, Copy)]
 struct WideAcc<'a> {
-    sum: WideSum<'a>,
+    sums: &'a [WideSum<'a>],
     total: Local,
     least: Local,
     most: Local,
+}
+
+/// How to run one run of an auto-par loop's iterations again, in order:
+/// the loop's binding and body, and the runs' bounds, as the spawn cut
+/// them (the first `rem` runs one longer than `q`, from `lo`).
+#[derive(Clone, Copy)]
+struct Replay<'a> {
+    pattern: &'a Pattern,
+    body: &'a Block,
+    lo: Local,
+    q: Local,
+    rem: Local,
+    ty: Ty,
+}
+
+/// One site of an auto-par loop's reduction (see [`Bx::reduction_site`]).
+#[derive(Clone, Copy)]
+struct RedSite<'a> {
+    stmt: &'a Stmt,
+    sym: SymbolId,
+    op: BinOp,
+    /// Where its checked operation is.
+    span: Span,
+    /// The term it adds, or the chain holding `acc`.
+    term: &'a Expr,
+    chain: bool,
+    /// Every step of the chain on the way to `acc` starts at the chain's
+    /// start, where the sequential loop's overflow is named.
+    chain_starts: bool,
+    push: bool,
 }
 
 /// What a join of a loop's tasks does with each task's value.
 enum JoinSink<'a> {
     /// Push it onto this `Vec` (a `par for`'s value).
     Push(Local, Ty),
-    /// Fold it into the reduction's accumulator.
-    Fold(AutoRed<'a>),
+    /// Fold it into the reduction's accumulator, or for a reduction that
+    /// replays (see [`AutoRed::replay`]), how to run a run again.
+    Fold(AutoRed<'a>, Option<Replay<'a>>),
     /// Nothing: the iterations return no value.
     Discard,
 }
@@ -2566,6 +2619,9 @@ struct Bx<'l, 'a> {
     closure_chunk: Option<ChunkJob<'a>>,
     /// An auto-par task's signed sum, while its run is lowered.
     wide_acc: Option<WideAcc<'a>>,
+    /// The source lines of the reduction sites [`Self::auto_par_plan`] last
+    /// planned, for the auto-par report.
+    red_lines: Vec<usize>,
     /// Symbols the next closure lowered captures besides those its body
     /// names (an auto-par task's bounds), and ones it does not (the loop's
     /// own binding, which the task binds).
@@ -2640,6 +2696,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             auto_par_candidate: None,
             closure_chunk: None,
             wide_acc: None,
+            red_lines: Vec::new(),
             closure_extra_caps: Vec::new(),
             closure_skip_caps: FxHashSet::default(),
             closure_ret_capture: None,
@@ -4248,9 +4305,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             span: s.span,
             ..outer
         });
-        let r = match self.wide_acc {
-            Some(w) if std::ptr::eq(w.sum.stmt, s) => self.wide_add(w),
-            _ => self.stmt_here(s),
+        let site = self
+            .wide_acc
+            .and_then(|w| Some((w, *w.sums.iter().find(|x| std::ptr::eq(x.stmt, s))?)));
+        let r = match site {
+            Some((w, sum)) => self.wide_add(w, sum),
+            None => self.stmt_here(s),
         };
         self.b.set_source_info(outer);
         r
@@ -4258,26 +4318,26 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// An auto-par task's signed sum statement: its term added to the
     /// task's `i128` total, the least and greatest prefix kept.
-    fn wide_add(&mut self, w: WideAcc<'a>) -> R<()> {
-        if w.sum.chain {
-            return self.wide_chain(w, w.sum.term);
+    fn wide_add(&mut self, w: WideAcc<'a>, sum: WideSum<'a>) -> R<()> {
+        if sum.chain {
+            return self.wide_chain(w, sum, sum.term);
         }
-        self.wide_term(w, w.sum.term)
+        self.wide_term(w, sum.term)
     }
 
     /// The chain `e` of a wide sum, evaluated as the sequential statement
     /// evaluates it: at each step the operand holding `acc` first when it
     /// is the left one, its other operand added after it.
-    fn wide_chain(&mut self, w: WideAcc<'a>, e: &'a Expr) -> R<()> {
+    fn wide_chain(&mut self, w: WideAcc<'a>, sum: WideSum<'a>, e: &'a Expr) -> R<()> {
         let ExprKind::Binary { left, right, .. } = &e.kind else {
             // `acc` itself, which the task's total stands in for.
             return Ok(());
         };
-        if self.acc_chain(left, BinOp::Add, w.sum.acc) == Ok(None) {
+        if self.acc_chain(left, BinOp::Add, sum.acc) == Ok(None) {
             self.wide_term(w, left)?;
-            self.wide_chain(w, right)
+            self.wide_chain(w, sum, right)
         } else {
-            self.wide_chain(w, left)?;
+            self.wide_chain(w, sum, left)?;
             self.wide_term(w, right)
         }
     }
@@ -9384,7 +9444,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 HK::Intrinsic { args, .. } => self.tys().tcx().list(args)[0],
                 _ => unreachable!("a `par for`'s value is a `Vec`"),
             };
-            self.par_for_join(g, gt, hs, hvt, et, JoinSink::Push(acc, vt));
+            self.par_for_join(g, gt, hs, hvt, et, JoinSink::Push(acc, vt))?;
         }
         self.assign(dest, Rvalue::Use(Operand::Move(Place::local(acc))));
         self.pop_scope()
@@ -9523,7 +9583,15 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// After a loop whose iterations ran as tasks: joins each in iteration
     /// order, handing its value (of type `et`) to `sink`, then drops the
     /// handles and the group, so what the tasks borrow is free again.
-    fn par_for_join(&mut self, g: Local, gt: Ty, hs: Local, hvt: Ty, et: Ty, sink: JoinSink<'a>) {
+    fn par_for_join(
+        &mut self,
+        g: Local,
+        gt: Ty,
+        hs: Local,
+        hvt: Ty,
+        et: Ty,
+        sink: JoinSink<'a>,
+    ) -> R<()> {
         let tcx = self.tys().tcx();
         let usize_t = tcx.intern(HK::UInt(UIntSize::Usize));
         let ht = match tcx.kind(hvt) {
@@ -9539,6 +9607,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 kind: ConstKind::Scalar(0),
             })),
         );
+        // A replaying reduction's runs, as the spawn cut them: run `j`
+        // from `from` to `to`.
+        let runs = match &sink {
+            JoinSink::Fold(_, Some(rp)) => {
+                let (from, j, to) = (self.temp(rp.ty), self.temp(rp.ty), self.temp(rp.ty));
+                self.assign(from, Rvalue::Use(Operand::Copy(Place::local(rp.lo))));
+                self.assign(
+                    j,
+                    Rvalue::Use(Operand::Const(Const {
+                        ty: rp.ty,
+                        kind: ConstKind::Scalar(0),
+                    })),
+                );
+                Some((*rp, from, j, to))
+            }
+            _ => None,
+        };
         let head = self.b.new_block();
         let body_bb = self.b.new_block();
         let exit = self.b.new_block();
@@ -9591,21 +9676,43 @@ impl<'l, 'a> Bx<'l, 'a> {
                     Place::local(u),
                 );
             }
-            JoinSink::Fold(r) if r.wide.is_some() => self.wide_fold(r, v),
-            JoinSink::Fold(r) => {
-                let outer = self.b.source_info();
-                self.b.set_source_info(SourceInfo {
-                    span: r.span,
-                    ..outer
-                });
-                self.arith(
-                    r.op,
-                    Operand::Copy(Place::local(r.acc)),
-                    Operand::Move(Place::local(v)),
-                    r.ty,
-                    Place::local(r.acc),
+            JoinSink::Fold(r, _) if r.push => {
+                let rt = self.tys().tcx().reference(r.ty, true);
+                let ar = self.temp(rt);
+                self.assign(ar, Rvalue::Ref(BorrowKind::Mut, Place::local(r.acc)));
+                let u = self.unit();
+                let u = self.temp(u);
+                let name = format!("{}.extend", self.tys().display(r.ty));
+                self.call_native(
+                    &name,
+                    vec![
+                        Operand::Move(Place::local(ar)),
+                        Operand::Move(Place::local(v)),
+                    ],
+                    Place::local(u),
                 );
-                self.b.set_source_info(outer);
+            }
+            JoinSink::Fold(r, _) => {
+                if let Some((rp, from, j, to)) = runs {
+                    let copy = |l: Local| Operand::Copy(Place::local(l));
+                    let one = Operand::Const(Const {
+                        ty: rp.ty,
+                        kind: ConstKind::Scalar(1),
+                    });
+                    self.assign(to, Rvalue::BinaryOp(BinOp::Add, copy(from), copy(rp.q)));
+                    let longer = self.temp(bool_t);
+                    self.assign(longer, Rvalue::BinaryOp(BinOp::Lt, copy(j), copy(rp.rem)));
+                    self.when(longer, |b| {
+                        b.assign(to, Rvalue::BinaryOp(BinOp::Add, copy(to), one.clone()));
+                    });
+                    self.fold_or_replay(r, v, (rp, from, to))?;
+                    self.assign(from, Rvalue::Use(copy(to)));
+                    self.assign(j, Rvalue::BinaryOp(BinOp::Add, copy(j), one));
+                } else if r.wide.is_some() {
+                    self.wide_fold(r, v);
+                } else {
+                    self.fold(r, v);
+                }
             }
             JoinSink::Discard => {}
         }
@@ -9633,6 +9740,111 @@ impl<'l, 'a> Bx<'l, 'a> {
                 next,
             );
         }
+        Ok(())
+    }
+
+    /// A task's value `v` folded into the reduction `r` by its operation,
+    /// an overflow named at the loop's operation.
+    fn fold(&mut self, r: AutoRed<'a>, v: Local) {
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: r.span,
+            ..outer
+        });
+        self.arith(
+            r.op,
+            Operand::Copy(Place::local(r.acc)),
+            Operand::Move(Place::local(v)),
+            r.ty,
+            Place::local(r.acc),
+        );
+        self.b.set_source_info(outer);
+    }
+
+    /// A replaying reduction's fold of the task value `v` of the run from
+    /// `from` to `to` (see [`AutoRed::replay`]): when it would overflow,
+    /// the run again in order, which overflows at its site.
+    fn fold_or_replay(
+        &mut self,
+        r: AutoRed<'a>,
+        v: Local,
+        run: (Replay<'a>, Local, Local),
+    ) -> R<()> {
+        let bool_t = self.tys().bool();
+        let (sum, over) = if r.wide.is_some() {
+            let (bad, sum) = self.wide_check(r, v);
+            (
+                Rvalue::Cast(CastKind::IntToInt, Operand::Move(Place::local(sum)), r.ty),
+                bad,
+            )
+        } else {
+            let pt = self.tys().tcx().tuple(&[r.ty, bool_t]);
+            let pair = self.temp(pt);
+            self.assign(
+                pair,
+                Rvalue::CheckedBinaryOp(
+                    r.op,
+                    Operand::Copy(Place::local(r.acc)),
+                    Operand::Move(Place::local(v)),
+                ),
+            );
+            let bad = self.temp(bool_t);
+            self.assign(
+                bad,
+                Rvalue::Use(Operand::Copy(Place::local(pair).field(1, bool_t))),
+            );
+            (
+                Rvalue::Use(Operand::Copy(Place::local(pair).field(0, r.ty))),
+                bad,
+            )
+        };
+        let again = self.b.new_block();
+        let ok = self.b.new_block();
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(over)),
+                targets: SwitchTargets::if_else(again, ok),
+            },
+            ok,
+        );
+        self.assign(r.acc, sum);
+        self.goto(next);
+        self.cur = again;
+        let (rp, from, to) = run;
+        let bound = match &rp.pattern.kind {
+            PatternKind::Binding(n) => self
+                .lcx
+                .binding_syms
+                .get(&(rp.pattern.id, n.clone()))
+                .copied(),
+            _ => None,
+        };
+        let saved = bound.and_then(|s| self.locals.get(&s).copied());
+        self.seq_depth += 1;
+        let ran = self.range_loop(
+            &None,
+            rp.pattern,
+            rp.body,
+            Operand::Copy(Place::local(from)),
+            Some(Operand::Copy(Place::local(to))),
+            false,
+            rp.ty,
+        );
+        self.seq_depth -= 1;
+        match (bound, saved) {
+            (Some(s), Some(l)) => {
+                self.locals.insert(s, l);
+            }
+            (Some(s), None) => {
+                self.locals.remove(&s);
+            }
+            _ => {}
+        }
+        ran?;
+        self.goto(next);
+        self.cur = next;
+        Ok(())
     }
 
     /// A task's wide sum `v` (its total, least and greatest prefix) folded
@@ -9640,6 +9852,36 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// when `acc` plus either prefix leaves `acc`'s range, which is where
     /// the sequential loop overflows; `acc` plus the total otherwise.
     fn wide_fold(&mut self, r: AutoRed<'a>, v: Local) {
+        let (bad, sum) = self.wide_check(r, v);
+        let ok = self.b.new_block();
+        let over = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(bad)),
+                targets: SwitchTargets::if_else(over, ok),
+            },
+            over,
+        );
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: r.span,
+            ..outer
+        });
+        self.diverge(TerminatorKind::Abort {
+            reason: AbortReason::Overflow,
+        });
+        self.b.set_source_info(outer);
+        self.cur = ok;
+        self.assign(
+            r.acc,
+            Rvalue::Cast(CastKind::IntToInt, Operand::Move(Place::local(sum)), r.ty),
+        );
+    }
+
+    /// Whether `acc` plus a task's wide sum `v` overflows where the
+    /// sequential loop would (either prefix leaves `acc`'s range), and the
+    /// sum in `i128`.
+    fn wide_check(&mut self, r: AutoRed<'a>, v: Local) -> (Local, Local) {
         let tcx = self.tys().tcx();
         let wt = tcx.intern(HK::Int(IntSize::I128));
         let bool_t = self.tys().bool();
@@ -9679,34 +9921,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Operand::Copy(Place::local(out[1])),
             ),
         );
-        let ok = self.b.new_block();
-        let over = self.b.new_block();
-        self.goto_with(
-            TerminatorKind::SwitchInt {
-                discr: Operand::Copy(Place::local(bad)),
-                targets: SwitchTargets::if_else(over, ok),
-            },
-            over,
-        );
-        let outer = self.b.source_info();
-        self.b.set_source_info(SourceInfo {
-            span: r.span,
-            ..outer
-        });
-        self.diverge(TerminatorKind::Abort {
-            reason: AbortReason::Overflow,
-        });
-        self.b.set_source_info(outer);
-        self.cur = ok;
         let sum = self.temp(wt);
         self.assign(
             sum,
             Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(aw)), field(0)),
         );
-        self.assign(
-            r.acc,
-            Rvalue::Cast(CastKind::IntToInt, Operand::Move(Place::local(sum)), r.ty),
-        );
+        (bad, sum)
     }
 
     /// A `par for` iteration as a task of the loop's group: its handle is
@@ -9986,10 +10206,11 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// How an auto-par loop's iterations combine, given the spans of the
     /// reductions its verdict names: `Some(None)` when they return
-    /// nothing, `Some(Some(r))` when they fold into one reduction. `None`
-    /// keeps the loop sequential: a body with a value, more than one
-    /// reduction, or one that is not a statement of the body (or of its
-    /// `if` and `match` arms) on an integer or `bool` local.
+    /// nothing, `Some(Some(r))` when they fold into one reduction, which
+    /// may be written at several sites. `None` keeps the loop sequential:
+    /// a body with a value, reductions on more than one local, or one that
+    /// is not a statement of the body (or of its `if` and `match` arms) on
+    /// an integer or `bool` local, or a push onto a `Vec` local.
     fn auto_par_plan(&mut self, body: &'a Block, reds: &[Span]) -> R<Option<Option<AutoRed<'a>>>> {
         if let Some(f) = &body.final_expr {
             let t = self.expr_ty(f)?;
@@ -9997,11 +10218,106 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(None);
             }
         }
-        let r = match reds {
-            [] => return Ok(Some(None)),
-            [r] => *r,
+        if reds.is_empty() {
+            return Ok(Some(None));
+        }
+        let mut sites = Vec::new();
+        for &r in reds {
+            match self.reduction_site(body, r)? {
+                Some(site) => sites.push(site),
+                None => return Ok(None),
+            }
+        }
+        let first = sites[0];
+        if sites
+            .iter()
+            .any(|x| x.sym != first.sym || x.op != first.op || x.push != first.push)
+        {
+            return Ok(None);
+        }
+        let (sym, op) = (first.sym, first.op);
+        let Some(&acc) = self.locals.get(&sym) else {
+            return Ok(None);
+        };
+        self.red_lines = reds.iter().map(|r| r.line).collect();
+        self.red_lines.sort_unstable();
+        let ty = self.b.local_ty(acc);
+        if first.push {
+            let vec = matches!(
+                self.tys().tcx().kind(ty),
+                HK::Intrinsic {
+                    kind: IntrinsicKind::Vec,
+                    ..
+                }
+            );
+            if !vec || sites.len() > 1 {
+                return Ok(None);
+            }
+            return Ok(Some(Some(AutoRed {
+                sym,
+                acc,
+                op,
+                ty,
+                span: first.span,
+                wide: None,
+                push: true,
+                replay: false,
+            })));
+        }
+        let starts = sites.iter().all(|x| x.chain_starts);
+        // A checked `*` stays sequential: a run's product can overflow
+        // where the sequential one never does (an earlier 0 keeps it 0),
+        // and so can a signed sum, which the tasks keep wide; an `i128`
+        // has no wider type to keep it in.
+        let (wide, checked) = match (self.tys().tcx().kind(ty), op) {
+            (HK::Int(_) | HK::UInt(_), BinOp::Mul) => return Ok(None),
+            (HK::Int(_) | HK::UInt(_), BinOp::Add) if !starts => return Ok(None),
+            (HK::Int(IntSize::I128), BinOp::Add) => return Ok(None),
+            (HK::Int(_), BinOp::Add) => (true, true),
+            (HK::UInt(_), BinOp::Add) => (false, true),
+            (HK::Int(_) | HK::UInt(_) | HK::Bool, _) => (false, false),
             _ => return Ok(None),
         };
+        let wide = if wide {
+            let key = body as *const Block;
+            let sums = match self.lcx.auto_par_wides.get(&key) {
+                Some(&sums) => sums,
+                None => {
+                    let sums: &'a [WideSum<'a>] = Box::leak(
+                        sites
+                            .iter()
+                            .map(|x| WideSum {
+                                stmt: x.stmt,
+                                term: x.term,
+                                chain: x.chain,
+                                acc: sym,
+                            })
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    );
+                    self.lcx.auto_par_wides.insert(key, sums);
+                    sums
+                }
+            };
+            Some(sums)
+        } else {
+            None
+        };
+        Ok(Some(Some(AutoRed {
+            sym,
+            acc,
+            op,
+            ty,
+            span: first.span,
+            wide,
+            push: false,
+            replay: checked && sites.len() > 1,
+        })))
+    }
+
+    /// The reduction at span `r` of an auto-par loop's `body`: `acc op= e`,
+    /// `acc = .. acc ..` (a chain of one operator), or `acc.push(e)`.
+    fn reduction_site(&mut self, body: &'a Block, r: Span) -> R<Option<RedSite<'a>>> {
         let Some(st) = reduction_stmt(body, r) else {
             return Ok(None);
         };
@@ -10009,11 +10325,17 @@ impl<'l, 'a> Bx<'l, 'a> {
             (ExprKind::Identifier(_), Some(Res::Local(sym))) => Some(*sym),
             _ => None,
         };
-        // The span the sequential loop's checked operation carries, and the
-        // term it adds, or the chain holding `acc`.
-        let mut chain = false;
-        let mut chain_starts = true;
-        let (sym, op, span, term) = match &st.kind {
+        let site = |sym, op, span, term| RedSite {
+            stmt: st,
+            sym,
+            op,
+            span,
+            term,
+            chain: false,
+            chain_starts: true,
+            push: false,
+        };
+        Ok(match &st.kind {
             StmtKind::CompoundAssign {
                 target, op, value, ..
             } => {
@@ -10025,16 +10347,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     CompoundOp::BitXor => BinOp::BitXor,
                     _ => return Ok(None),
                 };
-                (local(target), op, st.span, value)
+                local(target).map(|sym| site(sym, op, st.span, value))
             }
             StmtKind::Assign { target, value } => {
                 let ExprKind::Binary { op, .. } = &value.kind else {
                     return Ok(None);
                 };
-                let Some(op) = reduction_op(op) else {
-                    return Ok(None);
-                };
-                let Some(t) = local(target) else {
+                let (Some(op), Some(t)) = (reduction_op(op), local(target)) else {
                     return Ok(None);
                 };
                 // `acc` one operand of a chain of `op` (`acc = a + acc + b`).
@@ -10045,42 +10364,32 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // join names by the statement's start: every step on the way
                 // to `acc` starts there (`acc + a + b`, `a + acc + b`, not
                 // `a + (acc + b)`).
-                chain_starts = steps.iter().all(|&o| o == value.span.offset);
-                chain = true;
-                (Some(t), op, value.span, value)
+                Some(RedSite {
+                    chain: true,
+                    chain_starts: steps.iter().all(|&o| o == value.span.offset),
+                    ..site(t, op, value.span, value)
+                })
             }
-            _ => return Ok(None),
-        };
-        let Some(sym) = sym else { return Ok(None) };
-        let Some(&acc) = self.locals.get(&sym) else {
-            return Ok(None);
-        };
-        let ty = self.b.local_ty(acc);
-        // A checked `*` stays sequential: a run's product can overflow
-        // where the sequential one never does (an earlier 0 keeps it 0),
-        // and so can a signed sum, which the tasks keep wide; an `i128`
-        // has no wider type to keep it in.
-        let wide = match (self.tys().tcx().kind(ty), op) {
-            (HK::Int(_) | HK::UInt(_), BinOp::Mul) => return Ok(None),
-            (HK::Int(_) | HK::UInt(_), BinOp::Add) if !chain_starts => return Ok(None),
-            (HK::Int(IntSize::I128), BinOp::Add) => return Ok(None),
-            (HK::Int(_), BinOp::Add) => Some(WideSum {
-                stmt: st,
-                term,
-                chain,
-                acc: sym,
-            }),
-            (HK::Int(_) | HK::UInt(_) | HK::Bool, _) => None,
-            _ => return Ok(None),
-        };
-        Ok(Some(Some(AutoRed {
-            sym,
-            acc,
-            op,
-            ty,
-            span,
-            wide,
-        })))
+            StmtKind::Expr(e) => {
+                let ExprKind::MethodCall {
+                    object,
+                    method,
+                    args,
+                    ..
+                } = &e.kind
+                else {
+                    return Ok(None);
+                };
+                match (method.as_str(), args.as_slice(), local(object)) {
+                    ("push", [a], Some(sym)) => Some(RedSite {
+                        push: true,
+                        ..site(sym, BinOp::Add, st.span, &a.value)
+                    }),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
     }
 
     /// Where `e`, a chain of `op`, holds the local `sym` as one operand: the
@@ -10285,8 +10594,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut held = None;
         if let Some(r) = red {
             let start = self.temp(r.ty);
-            let identity = self.identity(r.op, r.ty);
-            self.assign(start, Rvalue::Use(identity));
+            if r.push {
+                let name = format!("{}.new", self.tys().display(r.ty));
+                self.call_native(&name, Vec::new(), Place::local(start));
+            } else {
+                let identity = self.identity(r.op, r.ty);
+                self.assign(start, Rvalue::Use(identity));
+            }
             held = self.locals.insert(r.sym, start);
             self.closure_by_value.insert(r.sym);
             if r.wide.is_none() {
@@ -10341,12 +10655,34 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.goto(head);
         self.cur = exit;
         let at = format!("{}@{}", self.name, e.span.line);
+        if let Some(r) = red {
+            let name = self
+                .lcx
+                .binding_syms
+                .iter()
+                .find(|(_, s)| **s == r.sym)
+                .map(|((_, n), _)| n.clone())
+                .unwrap_or_default();
+            let lines: Vec<String> = self.red_lines.iter().map(|l| l.to_string()).collect();
+            let note = format!("{at} ({name} at {})", lines.join(", "));
+            self.lcx.auto_par_reduced.push(note);
+        }
         self.lcx.auto_par_done.push(at);
         let sink = match red {
-            Some(r) => JoinSink::Fold(r),
+            Some(r) => {
+                let replay = r.replay.then_some(Replay {
+                    pattern,
+                    body,
+                    lo,
+                    q,
+                    rem,
+                    ty: t,
+                });
+                JoinSink::Fold(r, replay)
+            }
             None => JoinSink::Discard,
         };
-        self.par_for_join(group, group_ty, handles, handles_ty, et, sink);
+        self.par_for_join(group, group_ty, handles, handles_ty, et, sink)?;
         self.pop_scope()?;
         self.assign(dest, Rvalue::Use(unit_const(self.unit())));
         Ok(())
@@ -18275,7 +18611,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             let u = self.unit();
             let l = self.temp(u);
-            let wide = ch.wide.map(|sum| {
+            let wide = ch.wide.map(|sums| {
                 let wt = self.tys().tcx().intern(HK::Int(IntSize::I128));
                 let [total, least, most] = [(); 3].map(|_| {
                     let x = self.temp(wt);
@@ -18289,7 +18625,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     x
                 });
                 WideAcc {
-                    sum,
+                    sums,
                     total,
                     least,
                     most,
@@ -18319,6 +18655,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                         .map(|x| Operand::Copy(Place::local(x)))
                         .to_vec(),
                 ),
+                // A pushed-onto `Vec` moves out (`AutoRed::push`).
+                (None, Some(p)) if !self.is_copy(self.place_type(&p)) => {
+                    Rvalue::Use(Operand::Move(p))
+                }
                 (None, Some(p)) => Rvalue::Use(Operand::Copy(p)),
                 (None, None) => Rvalue::Use(unit_const(u)),
             };
@@ -20707,13 +21047,14 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
         };
         let Some(name) = suspends_as_value(&first, &second) else {
             for (what, done) in [
-                ("loops", &second.auto_par_tasks),
-                ("statements", &second.auto_par_groups),
+                ("loops as tasks", &second.auto_par_tasks),
+                ("statements as tasks", &second.auto_par_groups),
+                ("reductions", &second.auto_par_reductions),
             ] {
                 if debug && !done.is_empty() {
                     let mut at = done.clone();
                     at.sort();
-                    eprintln!("auto-par: {what} as tasks: {}", at.join(", "));
+                    eprintln!("auto-par: {what}: {}", at.join(", "));
                 }
             }
             return Ok(second);

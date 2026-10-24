@@ -330,20 +330,21 @@ fn mir_auto_par_sums_overflow_only_where_the_loop_does() {
     println(p);
 }
 "#;
-    let (out, code, err) = same_both_ways("wide", src, &["main@11"]);
+    let loops = ["main@4", "main@7", "main@11", "main@17"];
+    let (out, code, err) = same_both_ways("wide", src, &loops);
     assert_eq!(code, Some(0), "{err}");
     assert_eq!(out, "9223372036854675802\n0\n");
     // The sum overflows where the in-order sum does, not in a run.
     let over = src.replace("let mut acc = -10;", "let mut acc = 10;");
-    let (out, code, err) = same_both_ways("wide-over", &over, &["main@11"]);
+    let (out, code, err) = same_both_ways("wide-over", &over, &loops);
     assert_eq!(out, "");
     assert_eq!(code, Some(101), "{err}");
     assert!(err.contains("overflow"), "{err}");
 }
 
 /// A reduction under an `if` or in a `match` arm folds as one at the top
-/// does, a signed sum's overflow included; two statements writing the
-/// same accumulator keep the loop in order.
+/// does, a signed sum's overflow included, and so do two statements
+/// writing the same accumulator.
 #[test]
 fn mir_auto_par_reductions_under_if_and_match() {
     let src = r#"fn pick(i: i64) -> Option[i64] {
@@ -386,11 +387,12 @@ fn main() {
 }
 "#;
     let ok = src.replace("START", "-10");
-    let (out, code, err) = same_both_ways("nested", &ok, &["main@7", "main@14", "main@32"]);
+    let loops = ["main@7", "main@14", "main@18", "main@28", "main@32"];
+    let (out, code, err) = same_both_ways("nested", &ok, &loops);
     assert_eq!(code, Some(0), "{err}");
     assert_eq!(out, "2997000 72 40040\n9223372036854775297\n");
     let over = src.replace("START", "10");
-    let (out, code, err) = same_both_ways("nested-over", &over, &["main@7", "main@14", "main@32"]);
+    let (out, code, err) = same_both_ways("nested-over", &over, &loops);
     assert_eq!(out, "2997000 72 40040\n");
     assert_eq!(code, Some(101), "{err}");
     assert!(err.contains("overflow"), "{err}");
@@ -437,7 +439,9 @@ fn mir_auto_par_operator_chains_fold() {
     println(acc);
 }
 "#;
-    let loops = ["main@3", "main@7", "main@11", "main@19", "main@29"];
+    let loops = [
+        "main@3", "main@7", "main@11", "main@19", "main@25", "main@29",
+    ];
     let ok = src.replace("START", "-10");
     let (out, code, err) = same_both_ways("chain", &ok, &loops);
     assert_eq!(code, Some(0), "{err}");
@@ -564,7 +568,7 @@ fn main() {
     println(f"{t} {u}");
 }
 "#;
-    let (out, code, err) = same_both_ways("groups", src, &[]);
+    let (out, code, err) = same_both_ways("groups", src, &["pair@34"]);
     assert_eq!(code, Some(0), "{err}");
     assert_eq!(
         out,
@@ -640,8 +644,8 @@ fn main() {
 /// A counting `while` (`while k < n { ..; k += 1 }`, or `k = k + 1`) runs
 /// as a `for` over `k..n` does: a reduction over `i64`, `u64` from a `u32`
 /// counter, an `xor` bounded by `v.len()`, and the counter left at `n`, or
-/// where it was when the loop never ran. A body that pushes, breaks, or
-/// writes its bound keeps its order.
+/// where it was when the loop never ran, and a push. A body that breaks,
+/// or writes its bound, keeps its order.
 #[test]
 fn mir_auto_par_counting_whiles() {
     let src = r#"fn work(n: i64) -> i64 {
@@ -710,8 +714,11 @@ fn main() {
     println(f"{out.len()} {q} {found} {b} {seen} {c}");
 }
 "#;
-    let (out, code, err) =
-        same_both_ways("whiles", src, &["main@15", "main@23", "main@28", "main@36"]);
+    let (out, code, err) = same_both_ways(
+        "whiles",
+        src,
+        &["main@15", "main@23", "main@28", "main@36", "main@43"],
+    );
     assert_eq!(code, Some(0), "{err}");
     assert_eq!(out, "458838713 1000\n770 40 50\n78 37\n10 10 8 8 28 8\n");
 }
@@ -771,5 +778,108 @@ fn main() {
             "auto-par: in order: {at}: Cost(\"{name} is recursive or reached from a loop\")"
         );
         assert!(report.lines().any(|l| l == want), "{want} in {report}");
+    }
+}
+
+/// The reductions the auto-par build folded, from its report: each
+/// `instance@line (acc at line, ..)`.
+fn reduced(stderr: &[u8]) -> String {
+    std::str::from_utf8(stderr)
+        .unwrap()
+        .lines()
+        .find_map(|l| l.strip_prefix("auto-par: reductions: "))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A loop whose only use of a `Vec` is `v.push(e)` (under an `if` too, of
+/// owned `String`s too) runs as tasks that push onto `Vec`s of their own,
+/// appended in iteration order; an accumulator written at several sites
+/// (`u = u + 1` in one arm, `u += 1` in the other) folds, and where it
+/// overflows the run is run again in order, so the panic names the site
+/// the sequential loop's does, either arm's. A loop that also reads the
+/// `Vec` (`seen.len()`), or mixes `*` and `+` on one accumulator, keeps
+/// its order.
+#[test]
+fn mir_auto_par_pushes_and_sums_at_several_sites() {
+    let src = r#"fn label(i: i64) -> String {
+    let mut s = "";
+    for k in 0..(i % 4) {
+        s = s + "x";
+    }
+    f"{i}{s}"
+}
+
+fn main() {
+    let mut keep: Vec[i64] = Vec.new();
+    for t in 0..200 {
+        if t % 7 == 3 {
+            keep.push(t * t);
+        }
+    }
+    println(f"{keep.len()} {keep[0]} {keep[1]} {keep[keep.len() - 1]}");
+    let mut names: Vec[String] = Vec.new();
+    for t in 0..12 {
+        names.push(label(t));
+    }
+    let mut all = "";
+    for n in names.iter() {
+        all = all + n + ",";
+    }
+    println(all);
+    let mut seen: Vec[i64] = Vec.new();
+    for t in 0..10 {
+        seen.push(t + seen.len());
+    }
+    let mut mixed = 1;
+    for i in 0..10 {
+        if i % 2 == 0 {
+            mixed = mixed * 2;
+        } else {
+            mixed = mixed + 1;
+        }
+    }
+    println(f"{seen[9]} {mixed}");
+    let mut sink = 0;
+    for it in 0..100 {
+        if it % 3 == 0 {
+            sink = sink + (it + 1);
+        } else {
+            sink = sink + 1;
+        }
+    }
+    println(sink);
+    let mut u: u8 = START;
+    for i in 0..60 {
+        if i % 2 == 0 {
+            u = u + 1;
+        } else {
+            u += 1;
+        }
+    }
+    println(u);
+}
+"#;
+    let loops = ["main@11", "main@18", "main@40", "main@49"];
+    let reductions = "main@11 (keep at 13), main@18 (names at 19), \
+                      main@40 (sink at 42, 44), main@49 (u at 51, 53)";
+    let head = "29 9 100 39601\n0,1x,2xx,3xxx,4,5x,6xx,7xxx,8,9x,10xx,11xxx,\n18 63\n1783\n";
+    for (start, out_want, line) in [
+        ("100", "160\n", None),
+        ("200", "", Some("53:13")),
+        ("199", "", Some("51:17")),
+    ] {
+        let src = src.replace("START", start);
+        let (out, code, err) = same_both_ways("pushes", &src, &loops);
+        assert_eq!(out, format!("{head}{out_want}"), "{start}: {err}");
+        match line {
+            None => assert_eq!(code, Some(0), "{err}"),
+            Some(at) => {
+                assert_eq!(code, Some(101), "{err}");
+                assert!(err.contains(&format!("main.kara:{at}")), "{start}: {err}");
+            }
+        }
+        let par = interp_run("pushes-report", &src, true);
+        assert_eq!(reduced(&par.stderr), reductions);
     }
 }
