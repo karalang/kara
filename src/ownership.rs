@@ -25,6 +25,7 @@ mod elision;
 mod expr_check;
 mod frozen_escape;
 mod frozen_freeze_site;
+mod index_let;
 mod par_capture_classify;
 mod par_helpers;
 mod rc_promote;
@@ -1129,6 +1130,10 @@ pub struct OwnershipCheckResult {
     /// `+` (borrowed, §3.1). The strict commands drop any E0500 whose consume
     /// site is one of these; the legacy backends keep their defensive copy.
     pub core_non_move_sources: HashSet<SpanKey>,
+    /// The initializer of each `let t = v[i];` whose binding is only read
+    /// afterwards: the E_INDEX_MOVE_NON_COPY repair there is `ref v[i]`, not
+    /// a copy (B-2026-10-24-18). Strict commands only.
+    pub core_read_only_index_lets: HashSet<SpanKey>,
     /// Representation for each binding/parameter: "owned (stack)", "ref (borrow)",
     /// "shared (Rc)", "shared (Arc)". Key: "function_name.binding_name".
     pub representations: HashMap<String, String>,
@@ -1657,6 +1662,8 @@ pub struct OwnershipChecker<'a> {
     /// Consume sites that are not moves under the v2 core. See
     /// [`OwnershipCheckResult::core_non_move_sources`].
     pub(crate) core_non_move_sources: HashSet<SpanKey>,
+    /// See [`OwnershipCheckResult::core_read_only_index_lets`].
+    pub(crate) core_read_only_index_lets: HashSet<SpanKey>,
     /// Index projections the use classifier saw in a moving position
     /// ([`crate::cfg::Classification::core_index_moves`]), across every
     /// function; turned into `MoveOutOfPlace` errors by `core_move_errors`.
@@ -2064,6 +2071,7 @@ impl<'a> OwnershipChecker<'a> {
             suppress_rc_notes: false,
             suppressed_rc_fn_keys: HashSet::new(),
             core_non_move_sources: HashSet::new(),
+            core_read_only_index_lets: HashSet::new(),
             core_index_moves: Vec::new(),
             core_borrow_moves: Vec::new(),
             core_bare_ref_returns: Vec::new(),
@@ -2327,6 +2335,7 @@ impl<'a> OwnershipChecker<'a> {
             notes: self.notes,
             core_errors,
             core_non_move_sources: self.core_non_move_sources,
+            core_read_only_index_lets: self.core_read_only_index_lets,
             representations,
             rc_values: self.rc_values,
             arc_values: self.arc_values,
@@ -3043,6 +3052,13 @@ impl<'a> OwnershipChecker<'a> {
         );
         self.core_non_move_sources
             .extend(classification.core_borrowed_spans.iter().copied());
+        if core_rules() {
+            index_let::read_only_index_lets(
+                &f.body,
+                &classification,
+                &mut self.core_read_only_index_lets,
+            );
+        }
         // v2 core §5.4: a function that returns a reference returns a borrow
         // of the place its result names, so an element there is lent, not
         // moved out of its collection (B-2026-10-19-37).

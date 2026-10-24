@@ -1987,6 +1987,27 @@ impl Pipeline {
                 e.kind != crate::ownership::OwnershipErrorKind::MoveOutOfPlace
                     || !index_moves.contains(&crate::resolver::SpanKey::from_span(&e.span))
             });
+            // A `let t = v[i];` whose `t` is only read afterwards is repaired
+            // by borrowing the element, not by copying it (B-2026-10-24-18).
+            let read_only = &ownership.core_read_only_index_lets;
+            for e in self.typed.as_mut().unwrap().errors.iter_mut() {
+                if e.kind != crate::typechecker::TypeErrorKind::IndexMoveNonCopy
+                    || !read_only.contains(&crate::resolver::SpanKey::from_span(&e.span))
+                {
+                    continue;
+                }
+                if let Some(i) = e.message.find("`swap`") {
+                    e.message.truncate(i + "`swap`".len());
+                }
+                e.message += ". The binding is only read, so the fix borrows it";
+                e.fix_it = Some(crate::typechecker::FixIt {
+                    span: crate::token::Span {
+                        length: 0,
+                        ..e.span
+                    },
+                    replacement: "ref ".to_string(),
+                });
+            }
             // §4.6: when the move is a pattern binding taking a part out of
             // the scrutinee, the repair is `ref` on that binding.
             let pattern_moves = &self.typed.as_ref().unwrap().core_moving_scrutinees;

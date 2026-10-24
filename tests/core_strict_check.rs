@@ -12786,3 +12786,58 @@ fn a_mut_argument_through_a_binding_into_an_owned_place_is_accepted() {
         "2 5\n",
     );
 }
+
+#[test]
+fn an_index_let_that_is_only_read_is_fixed_by_a_borrow() {
+    // B-2026-10-24-18: `t` is only read, so the repair is `ref v[i]`, with no
+    // derive and no copy, whether or not `Truck` has a `.clone()`.
+    for (tag, derive) in [
+        ("index-let-read-no-clone", ""),
+        ("index-let-read-clone", "#[derive(Clone)]\n"),
+    ] {
+        let src = format!(
+            "{derive}struct Truck {{\n    minutes: i64,\n    trips: Vec[String],\n}}\n\
+             fn main() {{\n    let mut v: Vec[Truck] = Vec.new();\n    \
+             v.push(Truck {{ minutes: 3, trips: vec![\"a\".to_string()] }});\n    \
+             for i in 0..v.len() {{\n        let t = v[i];\n        \
+             println(f\"{{t.minutes}} {{t.trips.len()}}\");\n        v[i].minutes = 0;\n    }}\n}}\n"
+        );
+        rejected_then_fixed_by(tag, &src, "the fix borrows it", "let t = ref v[i];");
+        let (dir, path) = fixture(&format!("{tag}-once"), &src);
+        karac().arg("fix").arg(&path).output().unwrap();
+        let fixed = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !fixed.contains("derive(Clone)]\n#[derive"),
+            "{tag}: {fixed}"
+        );
+        assert_eq!(
+            fixed.matches("Clone").count(),
+            derive.matches("Clone").count(),
+            "{tag}: {fixed}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn an_index_let_held_across_a_write_keeps_the_copy_fix() {
+    // B-2026-10-24-18: a borrow of `v[0]` would conflict with the write to
+    // `v` while `t` is used (§5.6), and a moved `t` needs a value, so both
+    // keep the copy; the message says the fix derives the `.clone()`.
+    for (tag, body) in [
+        (
+            "index-let-held-across-push",
+            "    let t = v[0];\n    v.push(Truck { minutes: 9, name: String.new() });\n    println(f\"{t.minutes}\");\n",
+        ),
+        (
+            "index-let-moved",
+            "    let t = v[0];\n    let u = t;\n    println(f\"{u.minutes}\");\n",
+        ),
+    ] {
+        let src = format!(
+            "struct Truck {{\n    minutes: i64,\n    name: String,\n}}\nfn main() {{\n    \
+             let mut v: Vec[Truck] = Vec.new();\n    v.push(Truck {{ minutes: 3, name: String.new() }});\n{body}}}\n"
+        );
+        rejected_then_fixed_in(tag, &src, "the fix derives one", "let t = v[0].clone();", 2);
+    }
+}

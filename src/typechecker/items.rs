@@ -8670,7 +8670,15 @@ impl<'a> super::TypeChecker<'a> {
             .flatten()
         {
             // v2 core: derive the trait first; the next `karac fix` pass
-            // writes the `.clone()` (or none, for a `Copy` derive).
+            // writes the `.clone()` (or none, for a `Copy` derive). The
+            // message says so rather than that no copy is offered
+            // (B-2026-10-24-18).
+            let message = format!(
+                "error[E_INDEX_MOVE_NON_COPY]: cannot move `{text}` out of an index: it \
+                 evaluates to a `ref {shown}`, and `{shown}` is not `Copy`. Borrow it \
+                 (`ref {text}`), or exchange two elements with `swap`. (`{shown}` has no \
+                 `.clone()` yet: the fix derives one, so that a copy can be taken.)"
+            );
             self.type_error_with_fix_it(message, value.span, TypeErrorKind::IndexMoveNonCopy, fix);
         } else {
             self.type_error(message, value.span, TypeErrorKind::IndexMoveNonCopy);
