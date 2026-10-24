@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/976-largest-perimeter-triangle/bench/largest_perimeter.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
-bucket = "e-differs:stdout"
-classified_with = "fc1232e55"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 976 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "82ce95c2c"
 extracted_src = "3b4fecaf"
