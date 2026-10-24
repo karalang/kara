@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9990 / 10155 = 98.4%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8100 / 8226 = 98.5%.
-- Every classified non-deferred program (context): 16548 / 17648 = 93.8%.
-- Bench variants (outside the gate): 253 / 944 = 26.8%; timeouts 612.
+- Every classified non-deferred program (context): 16549 / 17648 = 93.8%.
+- Bench variants (outside the gate): 254 / 944 = 26.9%; timeouts 612.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5395 / 5411 = 99.7%; failing mir-gap 16.
 - Deferred (class d): 751; outside the slice (`post-m1:*`): 1138.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -63,7 +63,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (4239): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4240): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -4295,6 +4295,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/901-1000/965-univalued-binary-tree/is_unival_tree_levels`
 - `katas/901-1000/965-univalued-binary-tree/is_unival_tree_set`
 - `katas/901-1000/965-univalued-binary-tree/is_unival_tree_stack`
+- `katas/901-1000/966-vowel-spellchecker/bench/spellchecker`
 - `katas/901-1000/966-vowel-spellchecker/differential`
 - `katas/901-1000/966-vowel-spellchecker/spellchecker`
 - `katas/901-1000/966-vowel-spellchecker/spellchecker_buckets`
