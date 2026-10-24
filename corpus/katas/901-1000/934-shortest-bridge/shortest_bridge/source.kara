@@ -1,0 +1,170 @@
+// LeetCode #934: Shortest Bridge -- mark one island, then search outward.
+//
+// Walk the first island found, depth first with a stack, giving each of
+// its cells distance 0. Then search breadth first from all of them at
+// once: each water cell reached gets one more than the cell it was
+// reached from, the number of 0s flipped to get there. The first cell of
+// the other island reached ends the search, and the distance of the cell
+// it was reached from is the answer. O(n^2).
+
+fn shortest_bridge(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut dist: Vec[i64] = Vec.filled(n * n, -1);
+    let mut start = 0;
+    while grid[start / n][start % n] == 0 {
+        start += 1;
+    }
+    // the first island, every cell at distance 0
+    let mut stack: Vec[i64] = vec![start];
+    let mut frontier: Vec[i64] = Vec.new();
+    dist[start] = 0;
+    while let Some(cell) = stack.pop() {
+        frontier.push(cell);
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and grid[r][c] == 1 and dist[r * n + c] < 0 {
+                dist[r * n + c] = 0;
+                stack.push(r * n + c);
+            }
+        }
+    }
+    // outward, one ring of water at a time
+    let mut head = 0;
+    while head < frontier.len() {
+        let cell = frontier[head];
+        head += 1;
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and dist[r * n + c] < 0 {
+                if grid[r][c] == 1 {
+                    return dist[cell];
+                }
+                dist[r * n + c] = dist[cell] + 1;
+                frontier.push(r * n + c);
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: String, grid: Vec[Vec[i64]]) {
+    println(f"{name}: {shortest_bridge(grid)}");
+}
+
+// grows `cells` from a random cell of `grid` marked `mark`, one random
+// neighbour of a random cell at a time; with `avoid`, never beside a cell
+// marked `avoid`
+fn grow(seed: mut ref i64, grid: mut ref Vec[Vec[i64]], cells: mut ref Vec[i64], size: i64, mark: i64, avoid: i64) {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut tries = 0;
+    while cells.len() < size and tries < 4 * size {
+        tries += 1;
+        let cell = cells[next_random(mut seed) % cells.len()];
+        let d = next_random(mut seed) % 4;
+        let r = cell / n + dr[d];
+        let c = cell % n + dc[d];
+        if r >= 0 and r < n and c >= 0 and c < n and grid[r][c] == 0 and not beside(grid, r, c, avoid) {
+            grid[r][c] = mark;
+            cells.push(r * n + c);
+        }
+    }
+}
+
+fn beside(grid: ref Vec[Vec[i64]], r: i64, c: i64, mark: i64) -> bool {
+    let n = grid.len();
+    (r > 0 and grid[r - 1][c] == mark) or (r + 1 < n and grid[r + 1][c] == mark) or (c > 0 and grid[r][c - 1] == mark) or (c + 1 < n and grid[r][c + 1] == mark)
+}
+
+// an n x n grid with two islands of up to size_a and size_b cells, grown
+// at random, the second never touching the first
+fn random_islands(seed: mut ref i64, n: i64, size_a: i64, size_b: i64) -> Vec[Vec[i64]] {
+    loop {
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            grid.push(Vec.filled(n, 0));
+        }
+        let a = next_random(mut seed) % (n * n);
+        grid[a / n][a % n] = 2;
+        let mut cells_a: Vec[i64] = vec![a];
+        grow(mut seed, mut grid, mut cells_a, size_a, 2, -1);
+        let mut b = -1;
+        for _ in 0..100 {
+            let x = next_random(mut seed) % (n * n);
+            if b < 0 and grid[x / n][x % n] == 0 and not beside(grid, x / n, x % n, 2) {
+                b = x;
+            }
+        }
+        if b >= 0 {
+            grid[b / n][b % n] = 3;
+            let mut cells_b: Vec[i64] = vec![b];
+            grow(mut seed, mut grid, mut cells_b, size_b, 3, 2);
+            for r in 0..n {
+                for c in 0..n {
+                    if grid[r][c] > 0 {
+                        grid[r][c] = 1;
+                    }
+                }
+            }
+            return grid;
+        }
+    }
+}
+
+fn main() {
+    // LeetCode's three examples
+    show("example 1", vec![vec![0, 1], vec![1, 0]]);
+    show("example 2", vec![vec![0, 1, 0], vec![0, 0, 0], vec![0, 0, 1]]);
+    show("example 3", vec![vec![1, 1, 1, 1, 1], vec![1, 0, 0, 0, 1], vec![1, 0, 1, 0, 1], vec![1, 0, 0, 0, 1], vec![1, 1, 1, 1, 1]]);
+    // two strips three rows apart, opposite corners, and a ring with one
+    // cell at its centre
+    show("two strips", vec![vec![1, 1, 1, 1, 1], vec![0, 0, 0, 0, 0], vec![0, 0, 0, 0, 0], vec![0, 0, 0, 0, 0], vec![1, 1, 1, 1, 1]]);
+    show("opposite corners", vec![vec![1, 0, 0, 0], vec![0, 0, 0, 0], vec![0, 0, 0, 0], vec![0, 0, 0, 1]]);
+    show("centre of a ring", vec![vec![1, 1, 1, 1, 1, 1, 1], vec![1, 0, 0, 0, 0, 0, 1], vec![1, 0, 0, 0, 0, 0, 1], vec![1, 0, 0, 1, 0, 0, 1], vec![1, 0, 0, 0, 0, 0, 1], vec![1, 0, 0, 0, 0, 0, 1], vec![1, 1, 1, 1, 1, 1, 1]]);
+    // 300 random grids of 2 to 60 rows
+    let mut seed = 934;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 59;
+        let size_a = 1 + next_random(mut seed) % (n * n / 4 + 1);
+        let size_b = 1 + next_random(mut seed) % (n * n / 4 + 1);
+        let a = shortest_bridge(random_islands(mut seed, n, size_a, size_b));
+        sum += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"300 random grids: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest, 100 x 100: opposite corners, two halves split by
+    // one column of water, and two islands of up to 2000 cells
+    let mut corners: Vec[Vec[i64]] = Vec.new();
+    let mut halves: Vec[Vec[i64]] = Vec.new();
+    for r in 0..100 {
+        let mut row: Vec[i64] = Vec.filled(100, 0);
+        if r == 0 {
+            row[0] = 1;
+        }
+        if r == 99 {
+            row[99] = 1;
+        }
+        corners.push(row);
+        let mut half: Vec[i64] = Vec.filled(100, 1);
+        half[50] = 0;
+        halves.push(half);
+    }
+    let a = shortest_bridge(corners);
+    let b = shortest_bridge(halves);
+    let c = shortest_bridge(random_islands(mut seed, 100, 2000, 2000));
+    println(f"100 x 100: opposite corners {a}, two halves {b}, random islands {c}");
+}

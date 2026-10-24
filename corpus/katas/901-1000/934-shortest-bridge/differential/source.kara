@@ -1,0 +1,604 @@
+// LeetCode #934: Shortest Bridge -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: you are given an n x n binary matrix grid where 1
+// represents land and 0 represents water. An island is a 4-directionally
+// connected group of 1's not connected to any other 1's. There are
+// exactly two islands in grid. You may change 0's to 1's to connect the
+// two islands to form one island. Return the smallest number of 0's you
+// must flip to connect the two islands.
+
+// ---- the ★ arm: mark one island, then search outward ----------------------
+fn star_shortest_bridge(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut dist: Vec[i64] = Vec.filled(n * n, -1);
+    let mut start = 0;
+    while grid[start / n][start % n] == 0 {
+        start += 1;
+    }
+    // the first island, every cell at distance 0
+    let mut stack: Vec[i64] = vec![start];
+    let mut frontier: Vec[i64] = Vec.new();
+    dist[start] = 0;
+    while let Some(cell) = stack.pop() {
+        frontier.push(cell);
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and grid[r][c] == 1 and dist[r * n + c] < 0 {
+                dist[r * n + c] = 0;
+                stack.push(r * n + c);
+            }
+        }
+    }
+    // outward, one ring of water at a time
+    let mut head = 0;
+    while head < frontier.len() {
+        let cell = frontier[head];
+        head += 1;
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and dist[r * n + c] < 0 {
+                if grid[r][c] == 1 {
+                    return dist[cell];
+                }
+                dist[r * n + c] = dist[cell] + 1;
+                frontier.push(r * n + c);
+            }
+        }
+    }
+    -1
+}
+
+// ---- the pairs arm: the closest pair of shore cells -----------------------
+fn pairs_shortest_bridge(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    // the island holding the first land cell, flood filled
+    let mut first: Vec[bool] = Vec.filled(n * n, false);
+    let mut start = 0;
+    while grid[start / n][start % n] == 0 {
+        start += 1;
+    }
+    let mut stack: Vec[i64] = vec![start];
+    first[start] = true;
+    while let Some(cell) = stack.pop() {
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and grid[r][c] == 1 and not first[r * n + c] {
+                first[r * n + c] = true;
+                stack.push(r * n + c);
+            }
+        }
+    }
+    // each island's shore: land cells with water beside them
+    let mut shore_a: Vec[i64] = Vec.new();
+    let mut shore_b: Vec[i64] = Vec.new();
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 {
+                let mut wet = false;
+                for d in 0..4 {
+                    let rr = r + dr[d];
+                    let cc = c + dc[d];
+                    if rr >= 0 and rr < n and cc >= 0 and cc < n and grid[rr][cc] == 0 {
+                        wet = true;
+                    }
+                }
+                if wet {
+                    if first[r * n + c] {
+                        shore_a.push(r * n + c);
+                    } else {
+                        shore_b.push(r * n + c);
+                    }
+                }
+            }
+        }
+    }
+    let mut best = 2 * n;
+    for a in shore_a.iter() {
+        for b in shore_b.iter() {
+            let gap = (*a / n - *b / n).abs() + (*a % n - *b % n).abs();
+            if gap < best {
+                best = gap;
+            }
+        }
+    }
+    best - 1
+}
+
+// ---- the zero_one arm: a 0-1 breadth-first search -------------------------
+fn zero_one_shortest_bridge(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let far = n * n + 1;
+    let mut cost: Vec[i64] = Vec.filled(n * n, far);
+    let mut start = 0;
+    while grid[start / n][start % n] == 0 {
+        start += 1;
+    }
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    cost[start] = 0;
+    queue.push_back(start);
+    while let Some(cell) = queue.pop_front() {
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n {
+                let step = 1 - grid[r][c];
+                if cost[cell] + step < cost[r * n + c] {
+                    cost[r * n + c] = cost[cell] + step;
+                    if step == 0 {
+                        queue.push_front(r * n + c);
+                    } else {
+                        queue.push_back(r * n + c);
+                    }
+                }
+            }
+        }
+    }
+    let mut best = far;
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 and cost[r * n + c] > 0 and cost[r * n + c] < best {
+                best = cost[r * n + c];
+            }
+        }
+    }
+    best
+}
+
+// ---- the grow arm: grow one island a ring at a time -----------------------
+fn grow_shortest_bridge(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut paint = grid.clone();
+    let mut start = 0;
+    while paint[start / n][start % n] == 0 {
+        start += 1;
+    }
+    let mut stack: Vec[i64] = vec![start];
+    paint[start / n][start % n] = 2;
+    while let Some(cell) = stack.pop() {
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and paint[r][c] == 1 {
+                paint[r][c] = 2;
+                stack.push(r * n + c);
+            }
+        }
+    }
+    let mut k = 2;
+    loop {
+        for r in 0..n {
+            for c in 0..n {
+                if paint[r][c] == k {
+                    for d in 0..4 {
+                        let rr = r + dr[d];
+                        let cc = c + dc[d];
+                        if rr >= 0 and rr < n and cc >= 0 and cc < n {
+                            if paint[rr][cc] == 1 {
+                                return k - 2;
+                            }
+                            if paint[rr][cc] == 0 {
+                                paint[rr][cc] = k + 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        k += 1;
+    }
+}
+
+// ---- the both arm: both islands spread at once ----------------------------
+fn both_shortest_bridge(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut owner: Vec[i64] = Vec.filled(n * n, 0);
+    let mut dist: Vec[i64] = Vec.filled(n * n, 0);
+    let mut start = 0;
+    while grid[start / n][start % n] == 0 {
+        start += 1;
+    }
+    let mut stack: Vec[i64] = vec![start];
+    owner[start] = 1;
+    while let Some(cell) = stack.pop() {
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and grid[r][c] == 1 and owner[r * n + c] == 0 {
+                owner[r * n + c] = 1;
+                stack.push(r * n + c);
+            }
+        }
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    for cell in 0..n * n {
+        if grid[cell / n][cell % n] == 1 {
+            if owner[cell] == 0 {
+                owner[cell] = 2;
+            }
+            queue.push(cell);
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let cell = queue[head];
+        head += 1;
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and owner[r * n + c] == 0 {
+                owner[r * n + c] = owner[cell];
+                dist[r * n + c] = dist[cell] + 1;
+                queue.push(r * n + c);
+            }
+        }
+    }
+    let mut best = 2 * n;
+    for cell in 0..n * n {
+        // the neighbour below and the one to the right
+        let r = cell / n;
+        let c = cell % n;
+        if r + 1 < n and owner[cell + n] != owner[cell] {
+            best = best.min(dist[cell] + dist[cell + n]);
+        }
+        if c + 1 < n and owner[cell + 1] != owner[cell] {
+            best = best.min(dist[cell] + dist[cell + 1]);
+        }
+    }
+    best
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if x == 0 {
+        star_shortest_bridge(grid)
+    } else if x == 1 {
+        pairs_shortest_bridge(grid)
+    } else if x == 2 {
+        zero_one_shortest_bridge(grid)
+    } else if x == 3 {
+        grow_shortest_bridge(grid)
+    } else {
+        both_shortest_bridge(grid)
+    }
+}
+
+// each cell's island: 1 for the island holding the first land cell in
+// reading order, 2 for any other land, 0 for water
+fn label(grid: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut owner: Vec[i64] = Vec.filled(n * n, 0);
+    let mut first = -1;
+    for cell in 0..n * n {
+        if first < 0 and grid[cell / n][cell % n] == 1 {
+            first = cell;
+        }
+    }
+    let mut stack: Vec[i64] = vec![first];
+    owner[first] = 1;
+    while let Some(cell) = stack.pop() {
+        for d in 0..4 {
+            let r = cell / n + dr[d];
+            let c = cell % n + dc[d];
+            if r >= 0 and r < n and c >= 0 and c < n and grid[r][c] == 1 and owner[r * n + c] == 0 {
+                owner[r * n + c] = 1;
+                stack.push(r * n + c);
+            }
+        }
+    }
+    for cell in 0..n * n {
+        if grid[cell / n][cell % n] == 1 and owner[cell] == 0 {
+            owner[cell] = 2;
+        }
+    }
+    owner
+}
+
+// the number of islands, by flood fill
+fn islands(grid: ref Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut seen: Vec[bool] = Vec.filled(n * n, false);
+    let mut count = 0;
+    for cell in 0..n * n {
+        if grid[cell / n][cell % n] == 1 and not seen[cell] {
+            count += 1;
+            seen[cell] = true;
+            let mut stack: Vec[i64] = vec![cell];
+            while let Some(x) = stack.pop() {
+                for d in 0..4 {
+                    let r = x / n + dr[d];
+                    let c = x % n + dc[d];
+                    if r >= 0 and r < n and c >= 0 and c < n and grid[r][c] == 1 and not seen[r * n + c] {
+                        seen[r * n + c] = true;
+                        stack.push(r * n + c);
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+// The statement read literally: the smallest number of 0s that, changed
+// to 1s, leave one island; every set of k water cells tried for k = 0,
+// 1, 2, ...
+fn literal(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut water: Vec[i64] = Vec.new();
+    for cell in 0..n * n {
+        if grid[cell / n][cell % n] == 0 {
+            water.push(cell);
+        }
+    }
+    let m = water.len();
+    let mut g = grid.clone();
+    for k in 0..m + 1 {
+        let mut idx: Vec[i64] = Vec.new();
+        for i in 0..k {
+            idx.push(i);
+        }
+        loop {
+            for i in 0..k {
+                g[water[idx[i]] / n][water[idx[i]] % n] = 1;
+            }
+            let joined = islands(g) == 1;
+            for i in 0..k {
+                g[water[idx[i]] / n][water[idx[i]] % n] = 0;
+            }
+            if joined {
+                return k;
+            }
+            // the next set of k indices in order
+            let mut i = k - 1;
+            while i >= 0 and idx[i] == m - k + i {
+                i -= 1;
+            }
+            if i < 0 {
+                break;
+            }
+            idx[i] += 1;
+            for j in i + 1..k {
+                idx[j] = idx[j - 1] + 1;
+            }
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// grows `cells` from a random cell of `grid` marked `mark`, one random
+// neighbour of a random cell at a time; with `avoid`, never beside a cell
+// marked `avoid`
+fn grow(seed: mut ref i64, grid: mut ref Vec[Vec[i64]], cells: mut ref Vec[i64], size: i64, mark: i64, avoid: i64) {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut tries = 0;
+    while cells.len() < size and tries < 4 * size {
+        tries += 1;
+        let cell = cells[next_random(mut seed) % cells.len()];
+        let d = next_random(mut seed) % 4;
+        let r = cell / n + dr[d];
+        let c = cell % n + dc[d];
+        if r >= 0 and r < n and c >= 0 and c < n and grid[r][c] == 0 and not beside(grid, r, c, avoid) {
+            grid[r][c] = mark;
+            cells.push(r * n + c);
+        }
+    }
+}
+
+fn beside(grid: ref Vec[Vec[i64]], r: i64, c: i64, mark: i64) -> bool {
+    let n = grid.len();
+    (r > 0 and grid[r - 1][c] == mark) or (r + 1 < n and grid[r + 1][c] == mark) or (c > 0 and grid[r][c - 1] == mark) or (c + 1 < n and grid[r][c + 1] == mark)
+}
+
+// an n x n grid with two islands of up to size_a and size_b cells, grown
+// at random, the second never touching the first
+fn random_islands(seed: mut ref i64, n: i64, size_a: i64, size_b: i64) -> Vec[Vec[i64]] {
+    loop {
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            grid.push(Vec.filled(n, 0));
+        }
+        let a = next_random(mut seed) % (n * n);
+        grid[a / n][a % n] = 2;
+        let mut cells_a: Vec[i64] = vec![a];
+        grow(mut seed, mut grid, mut cells_a, size_a, 2, -1);
+        let mut b = -1;
+        for _ in 0..100 {
+            let x = next_random(mut seed) % (n * n);
+            if b < 0 and grid[x / n][x % n] == 0 and not beside(grid, x / n, x % n, 2) {
+                b = x;
+            }
+        }
+        if b >= 0 {
+            grid[b / n][b % n] = 3;
+            let mut cells_b: Vec[i64] = vec![b];
+            grow(mut seed, mut grid, mut cells_b, size_b, 3, 2);
+            for r in 0..n {
+                for c in 0..n {
+                    if grid[r][c] > 0 {
+                        grid[r][c] = 1;
+                    }
+                }
+            }
+            return grid;
+        }
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, grid: Vec[Vec[i64]], small: bool) {
+    let n = grid.len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let owner = label(grid.clone());
+    // the first cell of each island, and whether some water cell touches
+    // both
+    let mut first_a = -1;
+    let mut first_b = -1;
+    let mut touches = false;
+    for cell in 0..n * n {
+        if owner[cell] == 1 and first_a < 0 {
+            first_a = cell;
+        }
+        if owner[cell] == 2 and first_b < 0 {
+            first_b = cell;
+        }
+        if owner[cell] == 0 {
+            let mut near_a = false;
+            let mut near_b = false;
+            for d in 0..4 {
+                let r = cell / n + dr[d];
+                let c = cell % n + dc[d];
+                if r >= 0 and r < n and c >= 0 and c < n {
+                    if owner[r * n + c] == 1 {
+                        near_a = true;
+                    }
+                    if owner[r * n + c] == 2 {
+                        near_b = true;
+                    }
+                }
+            }
+            if near_a and near_b {
+                touches = true;
+            }
+        }
+    }
+    let gap = (first_a / n - first_b / n).abs() + (first_a % n - first_b % n).abs() - 1;
+    // turned a quarter turn
+    let mut turned: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(grid[n - 1 - c][r]);
+        }
+        turned.push(row);
+    }
+    // a ring of water around it
+    let mut padded: Vec[Vec[i64]] = Vec.new();
+    padded.push(Vec.filled(n + 2, 0));
+    for r in 0..n {
+        let mut row: Vec[i64] = vec![0];
+        for c in 0..n {
+            row.push(grid[r][c]);
+        }
+        row.push(0);
+        padded.push(row);
+    }
+    padded.push(Vec.filled(n + 2, 0));
+    // the first island grown by the water cells beside it
+    let mut grown = grid.clone();
+    for cell in 0..n * n {
+        if owner[cell] == 0 {
+            for d in 0..4 {
+                let r = cell / n + dr[d];
+                let c = cell % n + dc[d];
+                if r >= 0 and r < n and c >= 0 and c < n and owner[r * n + c] == 1 {
+                    grown[cell / n][cell % n] = 1;
+                }
+            }
+        }
+    }
+    let truth = if small { literal(grid.clone()) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, grid.clone()));
+    }
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the small grids
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: from 1 to the gap between the islands' first cells, and 1
+        // exactly when some water cell touches both islands
+        check(mut t, 2, a >= 1 and a <= gap and (a == 1) == touches);
+        // P3: the same answer a quarter turn round
+        check(mut t, 3, arm(x, turned.clone()) == a);
+        // P4: the same answer with a ring of water around the grid
+        check(mut t, 4, arm(x, padded.clone()) == a);
+        // P5: when no water cell touches both islands, the first island
+        // grown by one ring of water is still apart and takes one 0
+        // fewer; when one does, the ring would join them, and the answer
+        // must be 1
+        if not touches {
+            check(mut t, 5, arm(x, grown.clone()) == a - 1);
+        } else {
+            check(mut t, 5, a == 1);
+        }
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 934;
+    let mut cases = 0;
+    let mut cells = 0;
+    let mut sum = 0;
+    // 2 to 5 rows against the statement, then 2 to 32
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 2 + next_random(mut seed) % 4 } else { 2 + next_random(mut seed) % 31 };
+        let size_a = 1 + next_random(mut seed) % (n * n / 4 + 1);
+        let size_b = 1 + next_random(mut seed) % (n * n / 4 + 1);
+        let grid = random_islands(mut seed, n, size_a, size_b);
+        cases += 1;
+        cells += n * n;
+        sum += arm(0, grid.clone());
+        properties(mut t, grid, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} grids, {cells} cells, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
