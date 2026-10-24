@@ -1,0 +1,1427 @@
+// pipeline/read_align
+//
+// A sequencing alignment job, the shape of a genomics lab's nightly run.
+// It builds four chromosomes, plants variants in a donor genome for each,
+// simulates the sequencer's reads, writes the references as FASTA and the
+// reads as FASTQ, reads the files back and parses them, builds a k-mer
+// index of each reference, aligns every read (seeds from the index, then
+// a banded alignment around each candidate), calls variants from the
+// pileup, runs five reports per chromosome, and registers the calls in
+// one cohort database.
+//
+// The builds, the donors, the sequencing runs, the writes, the reads, the
+// parses, the indexes, the alignments, the calls and the reports are each
+// a group of statements that do not depend on each other (a stmt-par
+// app). The cohort hands out ids in the order calls arrive, and a call
+// seen before points at the chromosome that brought it first, so the
+// registrations have to run in order.
+
+const MASK32: i64 = 4294967295;
+const BASE_LEN: i64 = 5600;
+const ELEM_LEN: i64 = 300;
+const DUP_LEN: i64 = 120;
+const READ_LEN: i64 = 60;
+const COVERAGE: i64 = 8;
+const KMER: i64 = 12;
+const SEED_STEP: i64 = 12;
+const BAND: i64 = 8;
+const MATCH: i64 = 2;
+const MISMATCH: i64 = -3;
+const GAP: i64 = -5;
+const NEG: i64 = -1000000000;
+const MIN_SCORE: i64 = 60;
+const MIN_MAPQ: i64 = 20;
+const MIN_QUAL: i64 = 15;
+const POS_KEY: i64 = 8192;
+const SPACING: i64 = 80;
+
+struct Ref {
+    name: String,
+    seq: Vec[i64],
+    elem_at: i64,
+    dup_from: i64,
+    dup_at: i64,
+}
+
+struct Donor {
+    seq: Vec[i64],
+    origin: Vec[i64],
+    truth: Vec[String],
+}
+
+struct Read {
+    name: String,
+    seq: Vec[i64],
+    qual: Vec[i64],
+    truth: i64,
+    strand: i64,
+}
+
+struct Aln {
+    mapped: bool,
+    rev: bool,
+    pos: i64,
+    score: i64,
+    mapq: i64,
+    ops: Vec[i64],
+    lens: Vec[i64],
+    nm: i64,
+    seq: Vec[i64],
+    qual: Vec[i64],
+}
+
+struct Call {
+    pos: i64,
+    refs: String,
+    alt: String,
+    gt: String,
+    depth: i64,
+    ac: i64,
+}
+
+impl Call {
+    fn text(ref self) -> String {
+        f"{self.pos} {self.refs} {self.alt}"
+    }
+}
+
+struct Known {
+    sig: String,
+    id: i64,
+    chrom: String,
+    pos: i64,
+    samples: i64,
+}
+
+struct Cohort {
+    entries: Vec[Known],
+    vcf: String,
+}
+
+struct Plan {
+    kinds: Vec[i64],
+    poss: Vec[i64],
+    alts: Vec[Vec[i64]],
+}
+
+enum AlignError {
+    Bad(String),
+}
+
+impl AlignError {
+    fn describe(ref self) -> String {
+        match self {
+            AlignError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn iabs(a: i64) -> i64 {
+    if a < 0 { -a } else { a }
+}
+
+fn imin(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn imax(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn new_aln() -> Aln {
+    Aln {
+        mapped: false,
+        rev: false,
+        pos: 0,
+        score: 0,
+        mapq: 0,
+        ops: Vec.new(),
+        lens: Vec.new(),
+        nm: 0,
+        seq: Vec.new(),
+        qual: Vec.new(),
+    }
+}
+
+fn base_char(b: i64) -> String {
+    match b {
+        0 => "A".to_string(),
+        1 => "C".to_string(),
+        2 => "G".to_string(),
+        _ => "T".to_string(),
+    }
+}
+
+fn has(v: ref Vec[String], s: ref String) -> bool {
+    for t in v {
+        if t == s {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ the genomes
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn random_bases(seed: i64, n: i64, salt: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(mix(seed, i, salt) % 4);
+    }
+    v
+}
+
+fn bases_text(seq: ref Vec[i64], lo: i64, hi: i64) -> String {
+    let mut out = String.new();
+    for i in lo..hi {
+        out.push_str(base_char(seq[i]));
+    }
+    out
+}
+
+// A chromosome: random sequence with a mobile element shared by all four
+// chromosomes, and one segment of its own copied a second time.
+fn build_ref(name: ref String, seed: i64, element: ref Vec[i64]) -> Ref {
+    let rnd = random_bases(seed, BASE_LEN, 1);
+    let elem_at = 1200 + mix(seed, 0, 2) % 400;
+    let dup_from = 2800 + mix(seed, 0, 3) % 400;
+    let dup_at = dup_from + 900 + mix(seed, 0, 4) % 300;
+    let mut seq: Vec[i64] = Vec.new();
+    for i in 0..BASE_LEN {
+        if i == elem_at {
+            for b in element {
+                seq.push(b);
+            }
+        }
+        if i == dup_at {
+            for j in dup_from..dup_from + DUP_LEN {
+                seq.push(rnd[j]);
+            }
+        }
+        seq.push(rnd[i]);
+    }
+    Ref { name: name.clone(), seq: seq, elem_at: elem_at, dup_from: dup_from + ELEM_LEN, dup_at: dup_at + ELEM_LEN }
+}
+
+// ------------------------------------------------------------ the donors
+
+fn far_enough(taken: ref Vec[i64], p: i64) -> bool {
+    for t in taken {
+        if iabs(t - p) < SPACING {
+            return false;
+        }
+    }
+    true
+}
+
+fn in_element(r: ref Ref, p: i64) -> bool {
+    r.elem_at - 20 <= p and p < r.elem_at + ELEM_LEN + 20
+}
+
+// A deletion of seq[p..p+n) can slide left when seq[p-1] == seq[p+n-1];
+// an insertion s before p when s's last base is seq[p-1]. Planted indels
+// are moved right until they cannot, so the truth is left-aligned.
+fn settle_del(seq: ref Vec[i64], p0: i64, n: i64) -> i64 {
+    let mut p = p0;
+    while seq[p - 1] == seq[p + n - 1] {
+        p += 1;
+    }
+    p
+}
+
+fn settle_ins(seq: ref Vec[i64], p0: i64, s: ref Vec[i64]) -> i64 {
+    let mut p = p0;
+    while s[s.len() - 1] == seq[p - 1] {
+        p += 1;
+    }
+    p
+}
+
+// kind 0 = SNP (alt base), 1 = deletion (length), 2 = insertion (bases).
+fn plan_variants(r: ref Ref, seed: i64) -> Plan {
+    let seq = ref r.seq;
+    let n = seq.len() as i64;
+    let mut kinds: Vec[i64] = Vec.new();
+    let mut poss: Vec[i64] = Vec.new();
+    let mut alts: Vec[Vec[i64]] = Vec.new();
+    let mut taken: Vec[i64] = Vec.new();
+    // The two shared variants inside the element.
+    let mut p = r.elem_at + 150;
+    kinds.push(0);
+    poss.push(p);
+    alts.push(vec![(seq[p] + 2) % 4]);
+    taken.push(p);
+    p = settle_del(seq, r.elem_at + 230, 2);
+    kinds.push(1);
+    poss.push(p);
+    alts.push(vec![2]);
+    taken.push(p);
+    let mut salt = 10;
+    for want in 0..14 {
+        let mut kind = 0;
+        if want >= 10 {
+            kind = if want < 12 { 1 } else { 2 };
+        }
+        loop {
+            let h = mix(seed, want, salt);
+            salt += 1;
+            p = 100 + h % (n - 200);
+            if not far_enough(taken, p) or in_element(r, p) {
+                continue;
+            }
+            let mut alt: Vec[i64] = Vec.new();
+            if kind == 0 {
+                alt.push((seq[p] + 1 + (h / 7) % 3) % 4);
+            } else if kind == 1 {
+                let ln = 1 + (h / 7) % 3;
+                p = settle_del(seq, p, ln);
+                alt.push(ln);
+            } else {
+                let ln = 1 + (h / 7) % 3;
+                for j in 0..ln {
+                    alt.push(mix(seed, want, salt + 100 + j) % 4);
+                }
+                p = settle_ins(seq, p, alt);
+            }
+            if not far_enough(taken, p) {
+                continue;
+            }
+            kinds.push(kind);
+            poss.push(p);
+            alts.push(alt);
+            taken.push(p);
+            break;
+        }
+    }
+    // Sorted by position (an insertion sorts before p, so the order is
+    // the walk's).
+    let mut keys: Vec[i64] = Vec.new();
+    for i in 0..poss.len() {
+        keys.push((poss[i] * 4 + kinds[i]) * 64 + i as i64);
+    }
+    keys.sort();
+    let mut plan = Plan { kinds: Vec.new(), poss: Vec.new(), alts: Vec.new() };
+    for key in keys {
+        let i = key % 64;
+        plan.kinds.push(kinds[i]);
+        plan.poss.push(poss[i]);
+        plan.alts.push(alts[i].clone());
+    }
+    plan
+}
+
+fn truth_text(seq: ref Vec[i64], kind: i64, p: i64, alt: ref Vec[i64]) -> String {
+    if kind == 0 {
+        return f"{p + 1} {base_char(seq[p])} {base_char(alt[0])}";
+    }
+    if kind == 1 {
+        return f"{p} {bases_text(seq, p - 1, p + alt[0])} {base_char(seq[p - 1])}";
+    }
+    let anchor = base_char(seq[p - 1]);
+    let mut ins = String.new();
+    for b in alt {
+        ins.push_str(base_char(b));
+    }
+    f"{p} {anchor} {anchor}{ins}"
+}
+
+fn make_donor(r: ref Ref, seed: i64) -> Donor {
+    let plan = plan_variants(r, seed);
+    let seq = ref r.seq;
+    let mut out: Vec[i64] = Vec.new();
+    let mut origin: Vec[i64] = Vec.new();
+    let mut truth: Vec[String] = Vec.new();
+    let mut v = 0;
+    let mut i = 0;
+    while i < seq.len() as i64 {
+        if v < plan.poss.len() as i64 and plan.poss[v] == i {
+            truth.push(truth_text(seq, plan.kinds[v], i, plan.alts[v]));
+            let k = plan.kinds[v];
+            let a = ref plan.alts[v];
+            v += 1;
+            if k == 0 {
+                out.push(a[0]);
+                origin.push(i);
+                i += 1;
+                continue;
+            }
+            if k == 1 {
+                i += a[0];
+                continue;
+            }
+            for b in a {
+                out.push(b);
+                origin.push(i);
+            }
+        }
+        out.push(seq[i]);
+        origin.push(i);
+        i += 1;
+    }
+    Donor { seq: out, origin: origin, truth: truth }
+}
+
+// ------------------------------------------------------------ sequencing
+
+fn revcomp(seq: ref Vec[i64]) -> Vec[i64] {
+    let n = seq.len() as i64;
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        out.push(3 - seq[n - 1 - i]);
+    }
+    out
+}
+
+fn reverse(v: ref Vec[i64]) -> Vec[i64] {
+    let n = v.len() as i64;
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        out.push(v[n - 1 - i]);
+    }
+    out
+}
+
+fn sequence(name: ref String, d: ref Donor, seed: i64) -> Vec[Read] {
+    let count = d.seq.len() as i64 * COVERAGE / READ_LEN;
+    let mut reads: Vec[Read] = Vec.new();
+    for r in 0..count {
+        let h = mix(seed, r, 50);
+        let start = h % (d.seq.len() as i64 - READ_LEN + 1);
+        let strand = (h / 7919) % 2;
+        let mut seq: Vec[i64] = Vec.new();
+        let mut qual: Vec[i64] = Vec.new();
+        for j in 0..READ_LEN {
+            let b = d.seq[start + j];
+            let e = mix(seed, r * READ_LEN + j, 51);
+            if e % 1000 < 8 {
+                seq.push((b + 1 + (e / 1000) % 3) % 4);
+                qual.push(8 + (e / 3000) % 10);
+            } else {
+                seq.push(b);
+                qual.push(25 + (e / 1000) % 15);
+            }
+        }
+        if strand == 1 {
+            seq = revcomp(seq);
+            qual = reverse(qual);
+        }
+        reads.push(Read { name: f"{name}.{r + 1:04}", seq: seq, qual: qual, truth: d.origin[start], strand: strand });
+    }
+    reads
+}
+
+// ------------------------------------------------------------ files
+
+fn encode_fasta(r: ref Ref) -> String {
+    let n = r.seq.len() as i64;
+    let mut out = f">{r.name} length={n}\n";
+    let mut i = 0;
+    while i < n {
+        let hi = imin(i + 60, n);
+        out.push_str(bases_text(r.seq, i, hi));
+        out.push_str("\n");
+        i = hi;
+    }
+    out
+}
+
+fn qual_text(qual: ref Vec[i64]) -> String {
+    let mut bytes: Vec[u8] = Vec.new();
+    for q in qual {
+        bytes.push((33 + q) as u8);
+    }
+    match String.from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+
+fn encode_fastq(reads: ref Vec[Read]) -> String {
+    let mut out = String.new();
+    for rd in reads {
+        let sign = if rd.strand == 1 { "-" } else { "+" };
+        out.push_str(f"@{rd.name} pos={rd.truth + 1} strand={sign}\n");
+        out.push_str(bases_text(rd.seq, 0, rd.seq.len() as i64));
+        out.push_str("\n+\n");
+        out.push_str(qual_text(rd.qual));
+        out.push_str("\n");
+    }
+    out
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn read_text(path: ref String) -> Result[String, AlignError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(AlignError.Bad(f"could not read {path}")),
+    }
+}
+
+fn split_lines(text: ref String) -> Vec[String] {
+    text.split("\n").map(|x| x.to_string()).collect()
+}
+
+// Cut the quality line of the n-th record short by one character.
+fn damage(text: ref String, n: i64) -> String {
+    let lines = split_lines(text);
+    let q = 4 * n + 3;
+    let mut out = String.new();
+    for i in 0..lines.len() as i64 {
+        if i > 0 {
+            out.push_str("\n");
+        }
+        if i == q {
+            out.push_str(lines[i].substring(0, lines[i].len() as i64 - 1));
+        } else {
+            out.push_str(lines[i]);
+        }
+    }
+    out
+}
+
+fn base_code(c: u8) -> i64 {
+    match c {
+        65 => 0,
+        67 => 1,
+        71 => 2,
+        84 => 3,
+        _ => -1,
+    }
+}
+
+fn parse_int(field: ref String, what: ref String) -> Result[i64, AlignError] {
+    if field.len() == 0 {
+        return Err(AlignError.Bad(f"{what}: bad number {field}"));
+    }
+    let mut v = 0;
+    for b in field.bytes() {
+        if b < 48 or b > 57 {
+            return Err(AlignError.Bad(f"{what}: bad number {field}"));
+        }
+        v = v * 10 + (b as i64 - 48);
+    }
+    Ok(v)
+}
+
+fn parse_fasta(name: ref String, text: ref String) -> Result[Vec[i64], AlignError] {
+    let lines = split_lines(text);
+    if lines.len() == 0 or not lines[0].starts_with(">") {
+        return Err(AlignError.Bad(f"{name}.fa: no FASTA header"));
+    }
+    let head: Vec[String] = lines[0].substring(1).split(" ").map(|x| x.to_string()).collect();
+    if head.len() != 2 or not head[1].starts_with("length=") {
+        return Err(AlignError.Bad(f"{name}.fa: bad header {lines[0]}"));
+    }
+    if head[0] != name {
+        return Err(AlignError.Bad(f"{name}.fa: expected {name}, the file is {head[0]}"));
+    }
+    let length = parse_int(head[1].substring(7), f"{name}.fa: line 1")?;
+    let mut seq: Vec[i64] = Vec.new();
+    for i in 1..lines.len() as i64 {
+        let line = ref lines[i];
+        if line.len() == 0 {
+            continue;
+        }
+        for c in line.bytes() {
+            let b = base_code(c);
+            if b < 0 {
+                return Err(AlignError.Bad(f"{name}.fa: line {i + 1}: bad base {c}"));
+            }
+            seq.push(b);
+        }
+    }
+    if seq.len() as i64 != length {
+        return Err(AlignError.Bad(f"{name}.fa: header says {length} bases, found {seq.len()}"));
+    }
+    Ok(seq)
+}
+
+fn parse_fastq(name: ref String, text: ref String) -> Result[Vec[Read], AlignError] {
+    let mut lines = split_lines(text);
+    if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    if lines.len() % 4 != 0 {
+        return Err(AlignError.Bad(f"{name}.fq: {lines.len()} lines, not whole records"));
+    }
+    let mut reads: Vec[Read] = Vec.new();
+    for r in 0..lines.len() as i64 / 4 {
+        let head = ref lines[4 * r];
+        let bases = ref lines[4 * r + 1];
+        let plus = ref lines[4 * r + 2];
+        let quals = ref lines[4 * r + 3];
+        let rec = r + 1;
+        if not head.starts_with("@") or not plus.starts_with("+") {
+            return Err(AlignError.Bad(f"{name}.fq: record {rec}: not a FASTQ record"));
+        }
+        let f: Vec[String] = head.substring(1).split(" ").map(|x| x.to_string()).collect();
+        if f.len() != 3 or not f[1].starts_with("pos=") or not f[2].starts_with("strand=") {
+            return Err(AlignError.Bad(f"{name}.fq: record {rec}: bad header"));
+        }
+        if bases.len() != quals.len() {
+            return Err(AlignError.Bad(f"{name}.fq: record {rec}: {bases.len()} bases but {quals.len()} qualities"));
+        }
+        let mut seq: Vec[i64] = Vec.new();
+        let mut qual: Vec[i64] = Vec.new();
+        for c in bases.bytes() {
+            let b = base_code(c);
+            if b < 0 {
+                return Err(AlignError.Bad(f"{name}.fq: record {rec}: bad base {c}"));
+            }
+            seq.push(b);
+        }
+        for c in quals.bytes() {
+            let q = c as i64 - 33;
+            if q < 0 or q > 41 {
+                return Err(AlignError.Bad(f"{name}.fq: record {rec}: bad quality {c}"));
+            }
+            qual.push(q);
+        }
+        let pos = parse_int(f[1].substring(4), f"{name}.fq: record {rec}")?;
+        let strand = if f[2] == "strand=-" { 1 } else { 0 };
+        reads.push(Read { name: f[0].clone(), seq: seq, qual: qual, truth: pos - 1, strand: strand });
+    }
+    Ok(reads)
+}
+
+fn same_vec(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn same_reads(a: ref Vec[Read], b: ref Vec[Read]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.name != y.name or not same_vec(x.seq, y.seq) or not same_vec(x.qual, y.qual) or x.truth != y.truth or x.strand != y.strand {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ the index
+
+fn kmer(seq: ref Vec[i64], at: i64) -> i64 {
+    let mut c = 0;
+    for j in 0..KMER {
+        c = c * 4 + seq[at + j];
+    }
+    c
+}
+
+// Every k-mer of the reference as code * POS_KEY + position, sorted.
+fn build_index(seq: ref Vec[i64]) -> Vec[i64] {
+    let mut idx: Vec[i64] = Vec.new();
+    for p in 0..seq.len() as i64 - KMER + 1 {
+        idx.push(kmer(seq, p) * POS_KEY + p);
+    }
+    idx.sort();
+    idx
+}
+
+fn lower_bound(idx: ref Vec[i64], key: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = idx.len() as i64;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if idx[mid] < key {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ------------------------------------------------------------ alignment
+
+// The diagonals the seeds vote for, best first, at most three, each more
+// than BAND from the ones before.
+fn candidates(idx: ref Vec[i64], read: ref Vec[i64]) -> Vec[i64] {
+    let mut diags: Vec[i64] = Vec.new();
+    let mut off = 0;
+    while off + KMER <= read.len() as i64 {
+        let code = kmer(read, off);
+        let mut i = lower_bound(idx, code * POS_KEY);
+        while i < idx.len() as i64 and idx[i] / POS_KEY == code {
+            diags.push(idx[i] % POS_KEY - off);
+            i += 1;
+        }
+        off += SEED_STEP;
+    }
+    diags.sort();
+    let mut dv: Vec[i64] = Vec.new();
+    let mut cv: Vec[i64] = Vec.new();
+    for d in diags {
+        if dv.len() > 0 and dv[dv.len() - 1] == d {
+            let last = cv.len() - 1;
+            cv[last] += 1;
+        } else {
+            dv.push(d);
+            cv.push(1);
+        }
+    }
+    let mut picked: Vec[i64] = Vec.new();
+    let mut used = Vec.filled(dv.len(), false);
+    while picked.len() < 3 {
+        let mut best = -1;
+        for i in 0..dv.len() as i64 {
+            if not used[i] and (best < 0 or cv[i] > cv[best]) {
+                best = i;
+            }
+        }
+        if best < 0 {
+            break;
+        }
+        used[best] = true;
+        let mut ok = true;
+        for p in picked {
+            if iabs(p - dv[best]) <= BAND {
+                ok = false;
+            }
+        }
+        if ok {
+            picked.push(dv[best]);
+        }
+    }
+    picked
+}
+
+// Banded alignment of the whole read against the reference around diagonal
+// d, free at both ends of the reference. Cell (i, k) ends the first i read
+// bases at reference position d + i + k - BAND.
+fn align_at(reference: ref Vec[i64], read: ref Vec[i64], d: i64, out: mut ref Aln) -> i64 {
+    let n = read.len() as i64;
+    let len = reference.len() as i64;
+    let w = 2 * BAND + 1;
+    let mut h = Vec.filled((n + 1) * w, NEG);
+    let mut tb = Vec.filled((n + 1) * w, 0);
+    for k in 0..w {
+        let j = d + k - BAND;
+        if 0 <= j and j <= len {
+            h[k] = 0;
+        }
+    }
+    for i in 1..n + 1 {
+        let row = i * w;
+        let prev = (i - 1) * w;
+        for k in 0..w {
+            let j = d + i + k - BAND;
+            if j < 0 or j > len {
+                continue;
+            }
+            let mut best = NEG;
+            let mut dir = 0;
+            if h[prev + k] > NEG {
+                let s = if read[i - 1] == reference[j - 1] { MATCH } else { MISMATCH };
+                best = h[prev + k] + s;
+            }
+            if k + 1 < w and h[prev + k + 1] > NEG {
+                let v = h[prev + k + 1] + GAP;
+                if v > best {
+                    best = v;
+                    dir = 1;
+                }
+            }
+            if k >= 1 and h[row + k - 1] > NEG {
+                let v = h[row + k - 1] + GAP;
+                if v > best {
+                    best = v;
+                    dir = 2;
+                }
+            }
+            h[row + k] = best;
+            tb[row + k] = dir;
+        }
+    }
+    let mut kb = -1;
+    for k in 0..w {
+        if h[n * w + k] > NEG and (kb < 0 or h[n * w + k] > h[n * w + kb]) {
+            kb = k;
+        }
+    }
+    if kb < 0 {
+        return NEG;
+    }
+    let score = h[n * w + kb];
+    // The traceback, end to start.
+    let mut rops: Vec[i64] = Vec.new();
+    let mut i = n;
+    let mut k = kb;
+    let mut nm = 0;
+    while i > 0 {
+        let dir = tb[i * w + k];
+        if dir == 0 {
+            let j = d + i + k - BAND;
+            if read[i - 1] != reference[j - 1] {
+                nm += 1;
+            }
+            rops.push(0);
+            i -= 1;
+        } else if dir == 1 {
+            rops.push(1);
+            nm += 1;
+            i -= 1;
+            k += 1;
+        } else {
+            rops.push(2);
+            nm += 1;
+            k -= 1;
+        }
+    }
+    out.pos = d + k - BAND;
+    out.ops = Vec.new();
+    out.lens = Vec.new();
+    let mut t = rops.len() as i64 - 1;
+    while t >= 0 {
+        let op = rops[t];
+        if out.ops.len() > 0 and out.ops[out.ops.len() - 1] == op {
+            let last = out.lens.len() - 1;
+            out.lens[last] += 1;
+        } else {
+            out.ops.push(op);
+            out.lens.push(1);
+        }
+        t -= 1;
+    }
+    out.nm = nm;
+    out.score = score;
+    score
+}
+
+fn align_read(reference: ref Vec[i64], idx: ref Vec[i64], rd: ref Read) -> Aln {
+    let mut best = new_aln();
+    best.score = NEG;
+    let mut second = NEG;
+    let mut found = 0;
+    for strand in 0..2 {
+        let seq = if strand == 0 { rd.seq.clone() } else { revcomp(rd.seq) };
+        let qual = if strand == 0 { rd.qual.clone() } else { reverse(rd.qual) };
+        for d in candidates(idx, seq) {
+            if d + seq.len() as i64 < 0 or d > reference.len() as i64 {
+                continue;
+            }
+            let mut a = new_aln();
+            let s = align_at(reference, seq, d, mut a);
+            if s == NEG {
+                continue;
+            }
+            found += 1;
+            if s > best.score {
+                second = best.score;
+                a.rev = strand == 1;
+                a.seq = seq.clone();
+                a.qual = qual.clone();
+                best = a;
+            } else if s > second {
+                second = s;
+            }
+        }
+    }
+    if found == 0 or best.score < MIN_SCORE {
+        let mut out = new_aln();
+        out.score = if found > 0 { best.score } else { 0 };
+        return out;
+    }
+    best.mapped = true;
+    if second == NEG {
+        best.mapq = 60;
+    } else {
+        best.mapq = imin(60, 4 * (best.score - second));
+    }
+    best
+}
+
+fn align_all(reference: ref Vec[i64], idx: ref Vec[i64], reads: ref Vec[Read]) -> Vec[Aln] {
+    let mut out: Vec[Aln] = Vec.new();
+    for rd in reads {
+        out.push(align_read(reference, idx, rd));
+    }
+    out
+}
+
+// ------------------------------------------------------------ calling
+
+fn genotype(ac: i64, depth: i64) -> String {
+    if ac * 10 >= depth * 8 { "1/1".to_string() } else { "0/1".to_string() }
+}
+
+fn depth5(counts: ref Vec[i64], j: i64) -> i64 {
+    let mut s = 0;
+    for b in 0..5 {
+        s += counts[j * 5 + b];
+    }
+    s
+}
+
+fn call_variants(reference: ref Vec[i64], alns: ref Vec[Aln]) -> Vec[Call] {
+    let len = reference.len() as i64;
+    let mut counts = Vec.filled(len * 5, 0);
+    let mut dels: Vec[i64] = Vec.new();
+    let mut inss: Vec[i64] = Vec.new();
+    for a in alns {
+        if not a.mapped or a.mapq < MIN_MAPQ {
+            continue;
+        }
+        let mut j = a.pos;
+        let mut q = 0;
+        for t in 0..a.ops.len() {
+            let op = a.ops[t];
+            let ln = a.lens[t];
+            if op == 0 {
+                for _ in 0..ln {
+                    if a.qual[q] >= MIN_QUAL {
+                        counts[j * 5 + a.seq[q]] += 1;
+                    }
+                    j += 1;
+                    q += 1;
+                }
+            } else if op == 2 {
+                if ln <= 15 and j > 0 {
+                    dels.push(j * 16 + ln);
+                }
+                for _ in 0..ln {
+                    counts[j * 5 + 4] += 1;
+                    j += 1;
+                }
+            } else {
+                if ln <= 8 and j > 0 {
+                    let mut code = 0;
+                    for x in 0..ln {
+                        code = code * 4 + a.seq[q + x];
+                    }
+                    inss.push((j * 16 + ln) * 65536 + code);
+                }
+                q += ln;
+            }
+        }
+    }
+    dels.sort();
+    inss.sort();
+    let mut calls: Vec[Call] = Vec.new();
+    let mut di = 0;
+    let mut ii = 0;
+    let nd = dels.len() as i64;
+    let ni = inss.len() as i64;
+    for p in 1..len + 1 {
+        let j = p - 1;
+        let depth = depth5(counts, j);
+        let r = reference[j];
+        let mut alt = -1;
+        let mut ac = 0;
+        for b in 0..4 {
+            if b != r and counts[j * 5 + b] > ac {
+                alt = b;
+                ac = counts[j * 5 + b];
+            }
+        }
+        if depth >= 4 and ac >= 3 and ac * 10 >= depth * 3 {
+            calls.push(Call { pos: p, refs: base_char(r), alt: base_char(alt), gt: genotype(ac, depth), depth: depth, ac: ac });
+        }
+        while di < nd and dels[di] / 16 < p {
+            di += 1;
+        }
+        while di < nd and dels[di] / 16 == p {
+            let key = dels[di];
+            let mut c = 0;
+            while di < nd and dels[di] == key {
+                c += 1;
+                di += 1;
+            }
+            let ln = key % 16;
+            let dp = if p < len { depth5(counts, p) } else { 0 };
+            if p + ln <= len and c >= 3 and c * 10 >= dp * 3 {
+                calls.push(Call { pos: p, refs: bases_text(reference, p - 1, p + ln), alt: base_char(reference[p - 1]), gt: genotype(c, dp), depth: dp, ac: c });
+            }
+        }
+        while ii < ni and inss[ii] / 65536 / 16 < p {
+            ii += 1;
+        }
+        while ii < ni and inss[ii] / 65536 / 16 == p {
+            let key = inss[ii];
+            let mut c = 0;
+            while ii < ni and inss[ii] == key {
+                c += 1;
+                ii += 1;
+            }
+            let ln = key / 65536 % 16;
+            let mut code = key % 65536;
+            let mut s = String.new();
+            for _ in 0..ln {
+                s = f"{base_char(code % 4)}{s}";
+                code = code / 4;
+            }
+            let dp = if p < len { depth5(counts, p) } else { 0 };
+            if c >= 3 and c * 10 >= dp * 3 {
+                let anchor = base_char(reference[p - 1]);
+                calls.push(Call { pos: p, refs: anchor.clone(), alt: f"{anchor}{s}", gt: genotype(c, dp), depth: dp, ac: c });
+            }
+        }
+    }
+    calls
+}
+
+// ------------------------------------------------------------ reports
+
+fn cigar_text(a: ref Aln) -> String {
+    let mut out = String.new();
+    for t in 0..a.ops.len() {
+        let op = match a.ops[t] {
+            0 => "M",
+            1 => "I",
+            _ => "D",
+        };
+        out.push_str(f"{a.lens[t]}{op}");
+    }
+    out
+}
+
+fn depth_at(reference: ref Vec[i64], alns: ref Vec[Aln]) -> Vec[i64] {
+    let mut depth = Vec.filled(reference.len(), 0);
+    for a in alns {
+        if not a.mapped {
+            continue;
+        }
+        let mut j = a.pos;
+        for t in 0..a.ops.len() {
+            if a.ops[t] != 1 {
+                for _ in 0..a.lens[t] {
+                    depth[j] += 1;
+                    j += 1;
+                }
+            }
+        }
+    }
+    depth
+}
+
+fn coverage_report(name: ref String, reference: ref Vec[i64], alns: ref Vec[Aln]) -> String {
+    let depth = depth_at(reference, alns);
+    let mut bands = Vec.filled(6, 0);
+    let mut total = 0;
+    let mut zero = 0;
+    let mut deepest = 0;
+    for d in depth {
+        total += d;
+        if d == 0 {
+            zero += 1;
+        }
+        deepest = imax(deepest, d);
+        let b = if d == 0 { 0 } else { imin(5, 1 + d / 5) };
+        bands[b] += 1;
+    }
+    let mean = total * 100 / reference.len() as i64;
+    let mut out = f"{name} coverage: mean {mean / 100}.{mean % 100:02}x, max {deepest}, {zero} bases uncovered\n";
+    let labels = ["0", "1-4", "5-9", "10-14", "15-19", "20+"];
+    out.push_str("  depth ");
+    for i in 0..6 {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{labels[i]}: {bands[i]}");
+    }
+    out
+}
+
+fn mapping_report(name: ref String, reads: ref Vec[Read], alns: ref Vec[Aln]) -> String {
+    let mut mapped = 0;
+    let mut rev = 0;
+    let mut placed = 0;
+    let mut nm = 0;
+    let mut indel = 0;
+    let mut q = Vec.filled(4, 0);
+    for i in 0..alns.len() {
+        let a = ref alns[i];
+        if not a.mapped {
+            continue;
+        }
+        mapped += 1;
+        if a.rev {
+            rev += 1;
+        }
+        if a.mapq == 0 {
+            q[0] += 1;
+        } else if a.mapq < 30 {
+            q[1] += 1;
+        } else if a.mapq < 60 {
+            q[2] += 1;
+        } else {
+            q[3] += 1;
+        }
+        if a.mapq >= MIN_MAPQ and iabs(a.pos - reads[i].truth) <= 5 {
+            placed += 1;
+        }
+        nm += a.nm;
+        let mut gapped = false;
+        for op in a.ops {
+            if op != 0 {
+                gapped = true;
+            }
+        }
+        if gapped {
+            indel += 1;
+        }
+    }
+    let total = alns.len() as i64;
+    let mut out = f"{name} mapping: {total} reads, {mapped} mapped, {total - mapped} unmapped, {rev} reverse\n";
+    out.push_str(f"  mapq 0: {q[0]}, 1-29: {q[1]}, 30-59: {q[2]}, 60: {q[3]}; {placed} placed at their origin; ");
+    out.push_str(f"{nm} edits, {indel} reads with gaps");
+    out
+}
+
+fn variant_report(name: ref String, d: ref Donor, calls: ref Vec[Call]) -> String {
+    let truth = ref d.truth;
+    let mut tp = 0;
+    let mut fp = 0;
+    let mut lines: Vec[String] = Vec.new();
+    let mut called: Vec[String] = Vec.new();
+    for c in calls {
+        let t = c.text();
+        let mark = if has(truth, t) { "true" } else { "FALSE" };
+        if has(truth, t) {
+            tp += 1;
+        } else {
+            fp += 1;
+        }
+        lines.push(f"  {name} {t} {c.gt} depth {c.depth} alt {c.ac} {mark}");
+        called.push(t);
+    }
+    let mut missed: Vec[String] = Vec.new();
+    for t in truth {
+        if not has(called, t) {
+            missed.push(t.clone());
+        }
+    }
+    let mut out = f"{name} variants: {calls.len()} called, {tp} true, {fp} false, {missed.len()} missed of {truth.len()}";
+    for ln in lines {
+        out.push_str(f"\n{ln}");
+    }
+    for t in missed {
+        out.push_str(f"\n  {name} {t} missed");
+    }
+    out
+}
+
+// The mapped read with the most edits, drawn against the reference.
+fn worst_report(name: ref String, reference: ref Vec[i64], reads: ref Vec[Read], alns: ref Vec[Aln]) -> String {
+    let mut w = -1;
+    for i in 0..alns.len() as i64 {
+        if alns[i].mapped and (w < 0 or alns[i].nm > alns[w].nm) {
+            w = i;
+        }
+    }
+    if w < 0 {
+        return f"{name}: no mapped reads";
+    }
+    let a = ref alns[w];
+    let mut top = String.new();
+    let mut mid = String.new();
+    let mut bot = String.new();
+    let mut j = a.pos;
+    let mut q = 0;
+    for t in 0..a.ops.len() {
+        for _ in 0..a.lens[t] {
+            if a.ops[t] == 0 {
+                top.push_str(base_char(reference[j]));
+                bot.push_str(base_char(a.seq[q]));
+                mid.push_str(if reference[j] == a.seq[q] { "|" } else { "." });
+                j += 1;
+                q += 1;
+            } else if a.ops[t] == 1 {
+                top.push_str("-");
+                bot.push_str(base_char(a.seq[q]));
+                mid.push_str(" ");
+                q += 1;
+            } else {
+                top.push_str(base_char(reference[j]));
+                bot.push_str("-");
+                mid.push_str(" ");
+                j += 1;
+            }
+        }
+    }
+    let strand = if a.rev { "-" } else { "+" };
+    let mut out = f"{name} most edited: {reads[w].name} at {a.pos + 1}{strand} {cigar_text(a)} edits {a.nm} score {a.score} mapq {a.mapq}\n";
+    out.push_str(f"  ref  {top}\n");
+    out.push_str(f"       {mid}\n");
+    out.push_str(f"  read {bot}");
+    out
+}
+
+fn composition_report(name: ref String, r: ref Ref, idx: ref Vec[i64]) -> String {
+    let seq = ref r.seq;
+    let n = seq.len() as i64;
+    let mut gc: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let hi = imin(i + 1000, n);
+        let mut c = 0;
+        for j in i..hi {
+            if seq[j] == 1 or seq[j] == 2 {
+                c += 1;
+            }
+        }
+        gc.push(c * 100 / (hi - i));
+        i = hi;
+    }
+    let mut run = 1;
+    let mut longest = 1;
+    let mut at = 0;
+    for j in 1..n {
+        if seq[j] == seq[j - 1] {
+            run += 1;
+            if run > longest {
+                longest = run;
+                at = j - run + 1;
+            }
+        } else {
+            run = 1;
+        }
+    }
+    let mut distinct = 0;
+    let mut repeated = 0;
+    let mut h = 2166136261;
+    let mut x = 0;
+    let ni = idx.len() as i64;
+    while x < ni {
+        let code = idx[x] / POS_KEY;
+        let mut m = 0;
+        while x < ni and idx[x] / POS_KEY == code {
+            h = ((h ^ (idx[x] % POS_KEY)) * 16777619) & MASK32;
+            m += 1;
+            x += 1;
+        }
+        distinct += 1;
+        if m > 1 {
+            repeated += 1;
+        }
+    }
+    let mut out = f"{name} composition: {n} bases, element at {r.elem_at + 1}, ";
+    out.push_str(f"copy of {r.dup_from + 1}-{r.dup_from + DUP_LEN} at {r.dup_at + 1}\n");
+    out.push_str("  gc% per kb");
+    for g in gc {
+        out.push_str(f" {g}");
+    }
+    out.push_str(f"; longest run {longest} {base_char(seq[at])} at {at + 1}\n");
+    out.push_str(f"  {distinct} distinct {KMER}-mers, {repeated} repeated, index fnv {h:08x}");
+    out
+}
+
+// ------------------------------------------------------------ the cohort
+
+fn register(db: mut ref Cohort, name: ref String, reference: ref Vec[i64], calls: ref Vec[Call]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut fresh = 0;
+    for c in calls {
+        let lo = imax(0, c.pos - 9);
+        let sig = f"{bases_text(reference, lo, c.pos - 1)}:{c.refs}>{c.alt}";
+        let mut found = -1;
+        for i in 0..db.entries.len() as i64 {
+            if db.entries[i].sig == sig {
+                found = i;
+            }
+        }
+        let mut idn = 0;
+        if found >= 0 {
+            db.entries[found].samples += 1;
+            let e = ref db.entries[found];
+            out.push(f"{name} {c.text()} = kv{e.id} first on {e.chrom} {e.pos}, now in {e.samples} samples");
+            idn = e.id;
+        } else {
+            idn = db.entries.len() as i64 + 1;
+            db.entries.push(Known { sig: sig, id: idn, chrom: name.clone(), pos: c.pos, samples: 1 });
+            fresh += 1;
+        }
+        db.vcf.push_str(f"{name}\t{c.pos}\tkv{idn}\t{c.refs}\t{c.alt}\t{c.depth}\tGT\t{c.gt}\n");
+    }
+    let total = calls.len() as i64;
+    out.insert(0, f"{name} registered: {total} calls, {fresh} new, {total - fresh} seen before");
+    out
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), AlignError] {
+    let element = random_bases(99, ELEM_LEN, 7);
+    // Four chromosomes.
+    let r1 = build_ref("chr1", 11, element);
+    let r2 = build_ref("chr2", 23, element);
+    let r3 = build_ref("chr3", 37, element);
+    let r4 = build_ref("chr4", 41, element);
+
+    // Four donors, one per chromosome.
+    let d1 = make_donor(r1, 11);
+    let d2 = make_donor(r2, 23);
+    let d3 = make_donor(r3, 37);
+    let d4 = make_donor(r4, 41);
+
+    // Four sequencing runs.
+    let q1 = sequence("chr1", d1, 11);
+    let q2 = sequence("chr2", d2, 23);
+    let q3 = sequence("chr3", d3, 37);
+    let q4 = sequence("chr4", d4, 41);
+
+    // Eight writes.
+    let w1 = fs.write("chr1.fa", encode_fasta(r1));
+    let w2 = fs.write("chr2.fa", encode_fasta(r2));
+    let w3 = fs.write("chr3.fa", encode_fasta(r3));
+    let w4 = fs.write("chr4.fa", encode_fasta(r4));
+    let w5 = fs.write("chr1.fq", encode_fastq(q1));
+    let w6 = fs.write("chr2.fq", encode_fastq(q2));
+    let w7 = fs.write("chr3.fq", encode_fastq(q3));
+    let w8 = fs.write("chr4.fq", encode_fastq(q4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() {
+        return Err(AlignError.Bad("could not write the inputs".to_string()));
+    }
+
+    let whole = read_text("chr3.fq")?;
+    if fs.write("broken.fq", damage(whole, 16)).is_err() {
+        return Err(AlignError.Bad("could not write broken.fq".to_string()));
+    }
+
+    // Eight reads.
+    let t1 = read_text("chr1.fa")?;
+    let t2 = read_text("chr2.fa")?;
+    let t3 = read_text("chr3.fa")?;
+    let t4 = read_text("chr4.fa")?;
+    let u1 = read_text("chr1.fq")?;
+    let u2 = read_text("chr2.fq")?;
+    let u3 = read_text("chr3.fq")?;
+    let u4 = read_text("chr4.fq")?;
+    println(f"chr1.fa: {t1.len()} bytes, fnv {text_sum(t1):08x}");
+    println(f"chr2.fa: {t2.len()} bytes, fnv {text_sum(t2):08x}");
+    println(f"chr3.fa: {t3.len()} bytes, fnv {text_sum(t3):08x}");
+    println(f"chr4.fa: {t4.len()} bytes, fnv {text_sum(t4):08x}");
+    println(f"chr1.fq: {u1.len()} bytes, fnv {text_sum(u1):08x}");
+    println(f"chr2.fq: {u2.len()} bytes, fnv {text_sum(u2):08x}");
+    println(f"chr3.fq: {u3.len()} bytes, fnv {text_sum(u3):08x}");
+    println(f"chr4.fq: {u4.len()} bytes, fnv {text_sum(u4):08x}");
+
+    // Eight parses.
+    let g1 = parse_fasta("chr1", t1)?;
+    let g2 = parse_fasta("chr2", t2)?;
+    let g3 = parse_fasta("chr3", t3)?;
+    let g4 = parse_fasta("chr4", t4)?;
+    let p1 = parse_fastq("chr1", u1)?;
+    let p2 = parse_fastq("chr2", u2)?;
+    let p3 = parse_fastq("chr3", u3)?;
+    let p4 = parse_fastq("chr4", u4)?;
+    match parse_fastq("chr3", read_text("broken.fq")?) {
+        Ok(_) => println("broken.fq: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_fasta("chr4", t2) {
+        Ok(_) => println("chr2.fa as chr4: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_vec(g1, r1.seq) and same_vec(g2, r2.seq) and same_vec(g3, r3.seq) and same_vec(g4, r4.seq);
+    println(f"parsed references match the built ones: {same}");
+    let same_q = same_reads(p1, q1) and same_reads(p2, q2) and same_reads(p3, q3) and same_reads(p4, q4);
+    println(f"parsed reads match the sequenced ones: {same_q}");
+
+    // Four k-mer indexes.
+    let x1 = build_index(g1);
+    let x2 = build_index(g2);
+    let x3 = build_index(g3);
+    let x4 = build_index(g4);
+
+    // Four alignment runs (the hot group).
+    let a1 = align_all(g1, x1, p1);
+    let a2 = align_all(g2, x2, p2);
+    let a3 = align_all(g3, x3, p3);
+    let a4 = align_all(g4, x4, p4);
+
+    // Four variant calls.
+    let c1 = call_variants(g1, a1);
+    let c2 = call_variants(g2, a2);
+    let c3 = call_variants(g3, a3);
+    let c4 = call_variants(g4, a4);
+
+    // Reports that only read what came before.
+    let e1 = coverage_report("chr1", g1, a1);
+    let e2 = coverage_report("chr2", g2, a2);
+    let e3 = coverage_report("chr3", g3, a3);
+    let e4 = coverage_report("chr4", g4, a4);
+    let m1 = mapping_report("chr1", p1, a1);
+    let m2 = mapping_report("chr2", p2, a2);
+    let m3 = mapping_report("chr3", p3, a3);
+    let m4 = mapping_report("chr4", p4, a4);
+    let v1 = variant_report("chr1", d1, c1);
+    let v2 = variant_report("chr2", d2, c2);
+    let v3 = variant_report("chr3", d3, c3);
+    let v4 = variant_report("chr4", d4, c4);
+    let o1 = worst_report("chr1", g1, p1, a1);
+    let o2 = worst_report("chr2", g2, p2, a2);
+    let o3 = worst_report("chr3", g3, p3, a3);
+    let o4 = worst_report("chr4", g4, p4, a4);
+    let k1 = composition_report("chr1", r1, x1);
+    let k2 = composition_report("chr2", r2, x2);
+    let k3 = composition_report("chr3", r3, x3);
+    let k4 = composition_report("chr4", r4, x4);
+    for line in [e1, e2, e3, e4, m1, m2, m3, m4, v1, v2, v3, v4, o1, o2, o3, o4, k1, k2, k3, k4] {
+        println(line);
+    }
+
+    // One cohort database: ids go to calls in the order they arrive, and a
+    // call seen before points at the chromosome that brought it first.
+    let mut db = Cohort { entries: Vec.new(), vcf: String.new() };
+    for line in register(mut db, "chr1", g1, c1) {
+        println(line);
+    }
+    for line in register(mut db, "chr2", g2, c2) {
+        println(line);
+    }
+    for line in register(mut db, "chr3", g3, c3) {
+        println(line);
+    }
+    for line in register(mut db, "chr4", g4, c4) {
+        println(line);
+    }
+    if fs.write("cohort.vcf", db.vcf).is_err() {
+        return Err(AlignError.Bad("could not write cohort.vcf".to_string()));
+    }
+    let back = read_text("cohort.vcf")?;
+    let rows = split_lines(back).len() as i64 - 1;
+    println(f"cohort.vcf: {rows} rows, {db.entries.len()} variants, {back.len()} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["chr1.fa", "chr2.fa", "chr3.fa", "chr4.fa", "chr1.fq", "chr2.fq", "chr3.fq", "chr4.fq", "broken.fq", "cohort.vcf"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"read_align failed: {e.describe()}"),
+    }
+}

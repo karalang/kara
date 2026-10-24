@@ -1,0 +1,144 @@
+chr1.fa: 6139 bytes, fnv 2b4779c0
+chr2.fa: 6139 bytes, fnv 9a8a5fd3
+chr3.fa: 6139 bytes, fnv 93fd7192
+chr4.fa: 6139 bytes, fnv ee4227b3
+chr1.fq: 122567 bytes, fnv 98f3ac18
+chr2.fq: 122554 bytes, fnv 945fa666
+chr3.fq: 122547 bytes, fnv 433ee215
+chr4.fq: 122557 bytes, fnv 534be54f
+chr3.fq: record 17: 60 bases but 59 qualities
+chr4.fa: expected chr4, the file is chr2
+parsed references match the built ones: true
+parsed reads match the sequenced ones: true
+chr1 coverage: mean 7.99x, max 19, 22 bases uncovered
+  depth 0: 22, 1-4: 575, 5-9: 3757, 10-14: 1494, 15-19: 172, 20+: 0
+chr2 coverage: mean 7.99x, max 20, 22 bases uncovered
+  depth 0: 22, 1-4: 729, 5-9: 3484, 10-14: 1651, 15-19: 126, 20+: 8
+chr3 coverage: mean 7.99x, max 16, 35 bases uncovered
+  depth 0: 35, 1-4: 491, 5-9: 3831, 10-14: 1588, 15-19: 75, 20+: 0
+chr4 coverage: mean 7.99x, max 19, 44 bases uncovered
+  depth 0: 44, 1-4: 721, 5-9: 3288, 10-14: 1867, 15-19: 100, 20+: 0
+chr1 mapping: 802 reads, 802 mapped, 0 unmapped, 405 reverse
+  mapq 0: 17, 1-29: 2, 30-59: 1, 60: 782; 785 placed at their origin; 561 edits, 40 reads with gaps
+chr2 mapping: 802 reads, 802 mapped, 0 unmapped, 420 reverse
+  mapq 0: 20, 1-29: 0, 30-59: 1, 60: 781; 782 placed at their origin; 540 edits, 29 reads with gaps
+chr3 mapping: 802 reads, 802 mapped, 0 unmapped, 395 reverse
+  mapq 0: 12, 1-29: 1, 30-59: 0, 60: 789; 790 placed at their origin; 523 edits, 32 reads with gaps
+chr4 mapping: 802 reads, 802 mapped, 0 unmapped, 408 reverse
+  mapq 0: 13, 1-29: 0, 30-59: 2, 60: 787; 789 placed at their origin; 549 edits, 43 reads with gaps
+chr1 variants: 16 called, 16 true, 0 false, 0 missed of 16
+  chr1 422 A AGT 0/1 depth 5 alt 3 true
+  chr1 953 TC T 1/1 depth 8 alt 7 true
+  chr1 1595 C T 1/1 depth 5 alt 5 true
+  chr1 1674 CTG C 1/1 depth 8 alt 7 true
+  chr1 2070 C CGTG 1/1 depth 7 alt 7 true
+  chr1 2550 G C 1/1 depth 8 alt 8 true
+  chr1 2802 C T 1/1 depth 10 alt 10 true
+  chr1 3554 G T 1/1 depth 8 alt 8 true
+  chr1 3782 T C 1/1 depth 14 alt 14 true
+  chr1 3862 AT A 1/1 depth 16 alt 15 true
+  chr1 4003 C T 1/1 depth 9 alt 9 true
+  chr1 4370 A G 1/1 depth 8 alt 8 true
+  chr1 4502 G T 1/1 depth 9 alt 9 true
+  chr1 5256 G A 1/1 depth 5 alt 5 true
+  chr1 5562 G C 1/1 depth 4 alt 4 true
+  chr1 5707 G C 1/1 depth 17 alt 17 true
+chr2 variants: 19 called, 16 true, 3 false, 0 missed of 16
+  chr2 119 G A 1/1 depth 8 alt 8 true
+  chr2 469 G T 1/1 depth 7 alt 7 true
+  chr2 626 CAA C 0/1 depth 11 alt 8 true
+  chr2 769 G T 1/1 depth 8 alt 8 true
+  chr2 1189 T G 1/1 depth 13 alt 13 true
+  chr2 1395 C T 1/1 depth 8 alt 8 true
+  chr2 1474 CTG C 1/1 depth 6 alt 6 true
+  chr2 1609 T TC 1/1 depth 8 alt 8 true
+  chr2 2145 G C 1/1 depth 10 alt 10 true
+  chr2 2430 AGC A 1/1 depth 4 alt 4 true
+  chr2 3514 C T 1/1 depth 7 alt 7 true
+  chr2 4159 C G 0/1 depth 7 alt 3 FALSE
+  chr2 4160 T G 0/1 depth 8 alt 4 FALSE
+  chr2 4161 A T 0/1 depth 7 alt 4 FALSE
+  chr2 4161 A AGGT 0/1 depth 7 alt 3 true
+  chr2 4451 G C 1/1 depth 11 alt 11 true
+  chr2 4549 G T 1/1 depth 12 alt 12 true
+  chr2 4823 G T 1/1 depth 8 alt 8 true
+  chr2 5671 C A 1/1 depth 10 alt 10 true
+chr3 variants: 17 called, 15 true, 2 false, 1 missed of 16
+  chr3 553 C CG 0/1 depth 9 alt 7 FALSE
+  chr3 554 G GT 1/1 depth 9 alt 8 FALSE
+  chr3 1183 GA G 1/1 depth 3 alt 3 true
+  chr3 1371 TGA T 1/1 depth 7 alt 6 true
+  chr3 1642 C T 1/1 depth 6 alt 6 true
+  chr3 1721 CTG C 1/1 depth 6 alt 6 true
+  chr3 2177 G A 1/1 depth 9 alt 9 true
+  chr3 2429 A T 1/1 depth 5 alt 5 true
+  chr3 2620 T C 1/1 depth 8 alt 8 true
+  chr3 2943 C G 1/1 depth 6 alt 6 true
+  chr3 3463 T A 1/1 depth 9 alt 9 true
+  chr3 4259 T A 1/1 depth 9 alt 9 true
+  chr3 4378 C CT 1/1 depth 8 alt 8 true
+  chr3 5014 C A 1/1 depth 14 alt 14 true
+  chr3 5109 A T 1/1 depth 7 alt 7 true
+  chr3 5209 C A 1/1 depth 6 alt 6 true
+  chr3 5547 A G 1/1 depth 13 alt 13 true
+  chr3 554 G GGT missed
+chr4 variants: 18 called, 14 true, 4 false, 2 missed of 16
+  chr4 219 A T 1/1 depth 5 alt 5 true
+  chr4 1669 C T 1/1 depth 6 alt 6 true
+  chr4 1748 CTG C 0/1 depth 9 alt 6 true
+  chr4 2180 T C 1/1 depth 12 alt 12 true
+  chr4 2274 C A 1/1 depth 4 alt 4 true
+  chr4 2759 T TGCA 1/1 depth 8 alt 7 true
+  chr4 3164 G GC 0/1 depth 14 alt 10 FALSE
+  chr4 3165 C CT 0/1 depth 14 alt 10 FALSE
+  chr4 3295 T C 1/1 depth 5 alt 5 true
+  chr4 3425 C G 1/1 depth 5 alt 5 true
+  chr4 4065 CAA C 1/1 depth 11 alt 10 FALSE
+  chr4 4068 AC A 1/1 depth 11 alt 10 FALSE
+  chr4 4526 T C 1/1 depth 11 alt 11 true
+  chr4 4773 C T 1/1 depth 12 alt 12 true
+  chr4 4942 GTT G 1/1 depth 6 alt 6 true
+  chr4 5084 A T 1/1 depth 5 alt 5 true
+  chr4 5511 T C 1/1 depth 9 alt 9 true
+  chr4 5860 C T 1/1 depth 7 alt 7 true
+  chr4 3165 C CCT missed
+  chr4 4066 AAAC A missed
+chr1 most edited: chr1.0024 at 1638+ 37M2D23M edits 4 score 100 mapq 60
+  ref  CGCTTAGTCAACGATGAATGTTGATGTATAGGGAAACTGGCTTAGTGCTCTGTGGAGCCACT
+       |||||||||||||||||||||||||||||||||||||  |||||||||.||||.||||||||
+  read CGCTTAGTCAACGATGAATGTTGATGTATAGGGAAAC--GCTTAGTGCGCTGTCGAGCCACT
+chr2 most edited: chr2.0017 at 4159+ 60M edits 4 score 100 mapq 60
+  ref  CTAATAAAACGATTCTAATTGAAGTCTTGTCTCATGCCGAGAGCAAAACTCTCTAGTCAG
+       ...|||||||.|||||||||||||||||||||||||||||||||||||||||||||||||
+  read GGTATAAAACCATTCTAATTGAAGTCTTGTCTCATGCCGAGAGCAAAACTCTCTAGTCAG
+chr3 most edited: chr3.0283 at 552- 3M1I56M edits 5 score 93 mapq 60
+  ref  CCG-GAATGGTATGGCAACCGGCATGTTGGTATAACCTTGTCGAAAGAGAACCATCAAAA
+       |.| ||.|||||||||.||||||||.||||||||||||||||||||||||||||||||||
+  read CGGTGATTGGTATGGCCACCGGCATTTTGGTATAACCTTGTCGAAAGAGAACCATCAAAA
+chr4 most edited: chr4.0088 at 4058+ 8M2D1M1D51M edits 4 score 100 mapq 60
+  ref  GACGCGCCAAACTACGCTACGGTGTGCTCGTCCACGTTTATAGGTAAAACTATTGAGGCTAGC
+       ||||||||  | |||||||||||||||||||||||||||||.|||||||||||||||||||||
+  read GACGCGCC--A-TACGCTACGGTGTGCTCGTCCACGTTTATTGGTAAAACTATTGAGGCTAGC
+chr1 composition: 6020 bases, element at 1445, copy of 3263-3382 at 4343
+  gc% per kb 47 48 51 49 50 50 55; longest run 7 A at 341
+  5898 distinct 12-mers, 111 repeated, index fnv ded5906f
+chr2 composition: 6020 bases, element at 1245, copy of 3254-3373 at 4221
+  gc% per kb 48 51 50 52 49 49 55; longest run 9 T at 5172
+  5899 distinct 12-mers, 110 repeated, index fnv 57c17817
+chr3 composition: 6020 bases, element at 1492, copy of 3463-3582 at 4650
+  gc% per kb 47 51 48 49 49 48 40; longest run 7 C at 2855
+  5899 distinct 12-mers, 110 repeated, index fnv 3ec4c03f
+chr4 composition: 6020 bases, element at 1519, copy of 3340-3459 at 4347
+  gc% per kb 47 49 53 48 51 50 60; longest run 5 T at 111
+  5899 distinct 12-mers, 110 repeated, index fnv 21e88895
+chr1 registered: 16 calls, 16 new, 0 seen before
+chr2 registered: 19 calls, 17 new, 2 seen before
+chr2 1395 C T = kv3 first on chr1 1595, now in 2 samples
+chr2 1474 CTG C = kv4 first on chr1 1674, now in 2 samples
+chr3 registered: 17 calls, 15 new, 2 seen before
+chr3 1642 C T = kv3 first on chr1 1595, now in 3 samples
+chr3 1721 CTG C = kv4 first on chr1 1674, now in 3 samples
+chr4 registered: 18 calls, 16 new, 2 seen before
+chr4 1669 C T = kv3 first on chr1 1595, now in 4 samples
+chr4 1748 CTG C = kv4 first on chr1 1674, now in 4 samples
+cohort.vcf: 70 rows, 64 variants, 1994 bytes, fnv c651566c

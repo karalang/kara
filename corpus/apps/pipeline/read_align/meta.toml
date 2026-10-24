@@ -1,0 +1,11 @@
+source = "kara-katas/apps/pipeline/read_align/read_align.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "df06cf70"
+note = "stmt-par groups (source.orig.kara lines): L1276-L1279 four chromosome builds; L1282-L1285 four donors; L1288-L1291 four sequencing runs; L1294-L1301 eight fs.write calls; L1312-L1319 eight reads, each with ?; L1330-L1337 eight parses, each with ?; L1352-L1355 four k-mer indexes; L1358-L1361 four alignment runs, the hot group; L1364-L1367 four variant calls; L1370-L1389 twenty read-only reports. L1397-L1408 four register calls take mut db, which hands out ids in arrival order and names the chromosome that brought a shared variant first, so they must stay in order"
