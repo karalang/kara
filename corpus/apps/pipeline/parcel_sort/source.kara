@@ -1,0 +1,1100 @@
+// pipeline/parcel_sort
+//
+// A parcel carrier's night sort, the job a hub runs between the evening
+// pickups and the morning linehaul: for each of four depots (Akron, Boise,
+// Camden and Dayton) it builds the shippers' manifests and the night's
+// scan log, writes them as CSV, reads them back and parses them with the
+// loader's checks, joins the scans to the manifest (dropping duplicate
+// scans and finding parcels nobody manifested or that never arrived),
+// rates every parcel against the zone chart, its dimensional weight and
+// its surcharges, assigns it a chute, and runs five reports. Then it
+// loads the outbound parcels of all four depots onto the linehaul
+// trailers to the national hub.
+//
+// The builds, the writes, the reads, the parses, the joins, the ratings
+// and the reports are each a group of statements that do not depend on
+// each other (a stmt-par app). A trailer leaves when its payload or its
+// cube would be exceeded, and trailers are numbered as they leave, so the
+// four depots have to be loaded in order.
+
+const MASK32: i64 = 4294967295;
+const PARCELS: i64 = 2400;
+const UNMANIFESTED: i64 = 24;
+// The shift runs from 20:00 on 23 October to 04:00 on the 24th; a time is
+// the seconds since it began. Parcels scanned from 03:30 miss the
+// linehaul.
+const SHIFT: i64 = 28800;
+const CUTOFF: i64 = 27000;
+const BAG: i64 = 40;
+const SERVICES: Array[Str, 3] = ["G", "E", "O"];
+// Shipper accounts and their contract discounts on transport, in basis
+// points.
+const SHIPPERS: Array[Str, 10] = ["SH01", "SH02", "SH03", "SH04", "SH05", "SH06", "SH07", "SH08", "SH09", "SH10"];
+const DISCOUNT: Array[i64, 10] = [1800, 1200, 900, 1500, 600, 1000, 0, 300, 700, 0];
+// The three-digit postcode prefixes parcels go to.
+const DESTS: Array[i64, 26] = [100, 104, 112, 191, 200, 212, 303, 331, 352, 402, 441, 454, 462, 482, 532, 554, 606, 631, 750, 770, 802, 850, 900, 941, 980, 995];
+// Per service, by zone 2 to 8: the charge in cents for the first 500 g
+// and for each 500 g after it.
+const BASE: Array[Array[i64, 7], 3] = [
+    [895, 945, 1010, 1085, 1160, 1240, 1330],
+    [1450, 1590, 1760, 1940, 2130, 2330, 2540],
+    [2790, 3120, 3490, 3880, 4290, 4720, 5170],
+];
+const PER: Array[Array[i64, 7], 3] = [
+    [42, 51, 63, 77, 92, 108, 125],
+    [85, 102, 121, 143, 166, 190, 215],
+    [160, 189, 221, 255, 291, 329, 369],
+];
+const FUEL_BP: i64 = 1425;
+const OVERSIZE: i64 = 9500;
+const HAZMAT: i64 = 3500;
+const SIGNATURE: i64 = 650;
+const INSURED_FREE: i64 = 10000;
+const INSURED_STEP: i64 = 10000;
+const INSURED_RATE: i64 = 110;
+// A linehaul trailer to the hub: its payload in grams and its cube in
+// cubic centimetres.
+const TRAILER_G: i64 = 12500000;
+const TRAILER_CM3: i64 = 70000000;
+
+struct Depot {
+    name: String,
+    code: String,
+    // the depot's own three-digit postcode prefix
+    prefix: i64,
+    seed: i64,
+    // which shippers use the depot most
+    offset: i64,
+}
+
+#[derive(Clone)]
+struct Parcel {
+    pid: String,
+    shipper: String,
+    service: String,
+    grams: i64,
+    // centimetres
+    l: i64,
+    w: i64,
+    h: i64,
+    post: String,
+    // the declared value in cents
+    value: i64,
+    // H hazmat, F fragile, S signature, or -
+    flags: String,
+}
+
+#[derive(Clone)]
+struct Scan {
+    pid: String,
+    scanner: String,
+    t: i64,
+    // what the scale weighed
+    grams: i64,
+}
+
+struct Joined {
+    // the first scan of each manifested parcel, in time order, with the
+    // parcel's place in the manifest
+    idx: Vec[i64],
+    scans: Vec[Scan],
+    unmanifested: Vec[Scan],
+    dups: i64,
+    // manifest places never scanned
+    missing: Vec[i64],
+}
+
+struct Rated {
+    exception: String,
+    zone: i64,
+    units: i64,
+    transport: i64,
+    fuel: i64,
+    surcharge: i64,
+    total: i64,
+    adjust: i64,
+    reweighed: bool,
+    dim: bool,
+    oversize: bool,
+    chute: String,
+}
+
+struct Linehaul {
+    number: i64,
+    parcels: i64,
+    grams: i64,
+    cm3: i64,
+    depots: String,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn kg(g: i64) -> String {
+    f"{group3(g / 1000)}.{g % 1000 / 100} kg"
+}
+
+fn m3(cm3: i64) -> String {
+    let q = cm3 / 100000;
+    f"{q / 10}.{q % 10} m3"
+}
+
+fn ceil_div(a: i64, b: i64) -> i64 {
+    (a + b - 1) / b
+}
+
+fn max2(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+fn stamp(t: i64) -> String {
+    let mut h = 20 + t / 3600;
+    let mut day = 23;
+    if h >= 24 {
+        h -= 24;
+        day = 24;
+    }
+    f"2026-10-{day} {h:02}:{t % 3600 / 60:02}:{t % 60:02}"
+}
+
+fn clock(t: i64) -> String {
+    f"{(20 + t / 3600) % 24:02}:{t % 3600 / 60:02}"
+}
+
+// The seconds into the shift of a timestamp, or None outside it.
+fn secs_of(t: ref String) -> Option[i64] {
+    if t.len() != 19 or t.substring(4, 5) != "-" or t.substring(7, 8) != "-" or t.substring(10, 11) != " " or t.substring(13, 14) != ":" or t.substring(16, 17) != ":" {
+        return None;
+    }
+    let parts = [t.substring(0, 4), t.substring(5, 7), t.substring(8, 10), t.substring(11, 13), t.substring(14, 16), t.substring(17, 19)];
+    for p in parts {
+        if not is_digits(p) {
+            return None;
+        }
+    }
+    let y = to_int(parts[0]);
+    let m = to_int(parts[1]);
+    let d = to_int(parts[2]);
+    let hh = to_int(parts[3]);
+    let mm = to_int(parts[4]);
+    let ss = to_int(parts[5]);
+    if y != 2026 or m != 10 or mm > 59 or ss > 59 {
+        return None;
+    }
+    if d == 23 and hh >= 20 and hh <= 23 {
+        return Some((hh - 20) * 3600 + mm * 60 + ss);
+    }
+    if d == 24 and hh < 4 {
+        return Some((hh + 4) * 3600 + mm * 60 + ss);
+    }
+    None
+}
+
+fn service_index(t: ref String) -> i64 {
+    for i in 0..3 {
+        if t == SERVICES[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn shipper_index(t: ref String) -> i64 {
+    for i in 0..10 {
+        if t == SHIPPERS[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ building
+
+fn build_manifest(dp: ref Depot) -> Vec[Parcel] {
+    let mut out: Vec[Parcel] = Vec.new();
+    for i in 0..PARCELS {
+        let pid = f"{dp.code}{1000000 + i * 7:07}";
+        let sr = mix(dp.seed, i, 1) % 100;
+        let service = if sr < 68 { 0 } else if sr < 88 { 1 } else { 2 };
+        let shipper = (min2(mix(dp.seed, i, 2) % 10, mix(dp.seed, i, 3) % 10) + dp.offset) % 10;
+        let kind = mix(dp.seed, i, 4) % 10;
+        let r5 = mix(dp.seed, i, 5);
+        let r6 = mix(dp.seed, i, 6);
+        let r7 = mix(dp.seed, i, 7);
+        let (l, w, h) = if kind < 6 {
+            (15 + r5 % 30, 10 + r6 % 25, 5 + r7 % 20)
+        } else if kind < 9 {
+            (30 + r5 % 40, 25 + r6 % 30, 15 + r7 % 30)
+        } else {
+            (60 + r5 % 90, 40 + r6 % 50, 30 + r7 % 50)
+        };
+        let dens = 40 + mix(dp.seed, i, 8) % 360;
+        let grams = max2(100, min2(68000, l * w * h * dens / 1000));
+        let prefix = if mix(dp.seed, i, 9) % 150 == 0 {
+            mix(dp.seed, i, 10) % 5
+        } else {
+            DESTS[mix(dp.seed, i, 10) % 26]
+        };
+        let post = f"{prefix:03}{mix(dp.seed, i, 11) % 100:02}";
+        let value = if mix(dp.seed, i, 13) % 4 == 0 {
+            10000 + mix(dp.seed, i, 12) % 90000
+        } else {
+            500 + mix(dp.seed, i, 12) % 9500
+        };
+        let mut flags = String.new();
+        if mix(dp.seed, i, 14) % 60 == 0 {
+            flags.push_str("H");
+        }
+        if mix(dp.seed, i, 15) % 8 == 0 {
+            flags.push_str("F");
+        }
+        if value > 50000 or mix(dp.seed, i, 16) % 20 == 0 {
+            flags.push_str("S");
+        }
+        if flags == "" {
+            flags = "-".to_string();
+        }
+        out.push(Parcel {
+            pid: pid,
+            shipper: SHIPPERS[shipper].to_string(),
+            service: SERVICES[service].to_string(),
+            grams: grams,
+            l: l,
+            w: w,
+            h: h,
+            post: post,
+            value: value,
+            flags: flags,
+        });
+    }
+    out
+}
+
+fn cmp_scan(a: ref Scan, b: ref Scan) -> Ordering {
+    if a.scanner != b.scanner {
+        return a.scanner.cmp(b.scanner);
+    }
+    if a.t != b.t {
+        return a.t.cmp(b.t);
+    }
+    a.pid.cmp(b.pid)
+}
+
+// The night's scans, as the scanners upload them: one per arrived parcel,
+// a second for one in forty, and a few parcels nobody manifested.
+fn build_scans(dp: ref Depot, man: ref Vec[Parcel]) -> Vec[Scan] {
+    let mut out: Vec[Scan] = Vec.new();
+    for i in 0..man.len() as i64 {
+        let p = ref man[i];
+        if mix(dp.seed, i, 20) % 80 == 0 {
+            continue;
+        }
+        let t = (mix(dp.seed, i, 21) % SHIFT + mix(dp.seed, i, 22) % SHIFT) / 2;
+        let scanner = f"S{1 + mix(dp.seed, i, 23) % 6}";
+        let r25 = mix(dp.seed, i, 25);
+        let raw = if mix(dp.seed, i, 24) % 20 == 0 {
+            p.grams * (130 + r25 % 70) / 100
+        } else {
+            p.grams * (97 + r25 % 7) / 100
+        };
+        let g = max2(100, raw);
+        out.push(Scan { pid: p.pid.clone(), scanner: scanner, t: t, grams: g });
+        if mix(dp.seed, i, 26) % 40 == 0 {
+            let again = min2(SHIFT - 1, t + 5 + mix(dp.seed, i, 28) % 600);
+            out.push(Scan { pid: p.pid.clone(), scanner: f"S{1 + mix(dp.seed, i, 27) % 6}", t: again, grams: g });
+        }
+    }
+    for k in 0..UNMANIFESTED {
+        let pid = f"{dp.code}{9000000 + k * 37:07}";
+        out.push(Scan {
+            pid: pid,
+            scanner: f"S{1 + mix(dp.seed, k, 31) % 6}",
+            t: mix(dp.seed, k, 30) % SHIFT,
+            grams: 200 + mix(dp.seed, k, 32) % 20000,
+        });
+    }
+    out.sort_by(|a, b| cmp_scan(a, b));
+    out
+}
+
+fn manifest_header() -> String {
+    "parcel,shipper,service,grams,length,width,height,postcode,value,flags".to_string()
+}
+
+fn scan_header() -> String {
+    "parcel,scanner,time,grams".to_string()
+}
+
+fn encode_manifest(man: ref Vec[Parcel]) -> String {
+    let mut out = f"{manifest_header()}\n";
+    for p in man {
+        out.push_str(f"{p.pid},{p.shipper},{p.service},{p.grams},{p.l},{p.w},{p.h},{p.post},{dollars(p.value)},{p.flags}\n");
+    }
+    out
+}
+
+fn encode_scans(scans: ref Vec[Scan]) -> String {
+    let mut out = f"{scan_header()}\n";
+    for s in scans {
+        out.push_str(f"{s.pid},{s.scanner},{stamp(s.t)},{s.grams}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+fn pid_ok(t: ref String, code: ref String) -> bool {
+    t.len() == 8 and t.substring(0, 1) == code and is_digits(t.substring(1, 8))
+}
+
+// "-", or some of H, F and S in that order.
+fn flags_ok(t: ref String) -> bool {
+    if t == "-" {
+        return true;
+    }
+    if t == "" {
+        return false;
+    }
+    let order = "HFS";
+    let mut at = 0;
+    for c in t.chars() {
+        let mut k = at;
+        while k < 3 and order.substring(k, k + 1) != c.to_string() {
+            k += 1;
+        }
+        if k >= 3 {
+            return false;
+        }
+        at = k + 1;
+    }
+    true
+}
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn parse_manifest(path: ref String, dp: ref Depot, text: ref String) -> Result[Vec[Parcel], BatchError] {
+    let body = body_lines(path, text, manifest_header())?;
+    let mut out: Vec[Parcel] = Vec.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() as i64 != 10 {
+            return Err(bad(f"{path} line {n}: expected 10 fields, found {f.len()}"));
+        }
+        if not pid_ok(f[0], dp.code) {
+            return Err(bad(f"{path} line {n}: bad parcel id '{f[0]}'"));
+        }
+        if shipper_index(f[1]) < 0 {
+            return Err(bad(f"{path} line {n}: unknown shipper '{f[1]}'"));
+        }
+        if service_index(f[2]) < 0 {
+            return Err(bad(f"{path} line {n}: bad service '{f[2]}'"));
+        }
+        if not is_digits(f[3]) or f[3].len() > 5 or to_int(f[3]) < 1 or to_int(f[3]) > 68000 {
+            return Err(bad(f"{path} line {n}: bad weight '{f[3]}'"));
+        }
+        let mut dims: Vec[i64] = Vec.new();
+        for j in 4..7 {
+            let d = ref f[j];
+            if not is_digits(d) or d.len() > 3 or to_int(d) < 1 or to_int(d) > 274 {
+                return Err(bad(f"{path} line {n}: bad dimension '{d}'"));
+            }
+            dims.push(to_int(d));
+        }
+        if f[7].len() != 5 or not is_digits(f[7]) {
+            return Err(bad(f"{path} line {n}: bad postcode '{f[7]}'"));
+        }
+        let value = match cents_of(f[8]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad value '{f[8]}'")),
+        };
+        if not flags_ok(f[9]) {
+            return Err(bad(f"{path} line {n}: bad flags '{f[9]}'"));
+        }
+        out.push(Parcel {
+            pid: f[0].clone(),
+            shipper: f[1].clone(),
+            service: f[2].clone(),
+            grams: to_int(f[3]),
+            l: dims[0],
+            w: dims[1],
+            h: dims[2],
+            post: f[7].clone(),
+            value: value,
+            flags: f[9].clone(),
+        });
+    }
+    Ok(out)
+}
+
+fn parse_scans(path: ref String, dp: ref Depot, text: ref String) -> Result[Vec[Scan], BatchError] {
+    let body = body_lines(path, text, scan_header())?;
+    let mut out: Vec[Scan] = Vec.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() as i64 != 4 {
+            return Err(bad(f"{path} line {n}: expected 4 fields, found {f.len()}"));
+        }
+        if not pid_ok(f[0], dp.code) {
+            return Err(bad(f"{path} line {n}: bad parcel id '{f[0]}'"));
+        }
+        let sc = ref f[1];
+        if sc.len() != 2 or sc.substring(0, 1) != "S" or not "123456".contains(sc.substring(1, 2)) {
+            return Err(bad(f"{path} line {n}: bad scanner '{sc}'"));
+        }
+        let t = match secs_of(f[2]) {
+            Some(s) => s,
+            None => return Err(bad(f"{path} line {n}: bad time '{f[2]}'")),
+        };
+        if not is_digits(f[3]) or f[3].len() > 6 or to_int(f[3]) < 1 {
+            return Err(bad(f"{path} line {n}: bad weight '{f[3]}'"));
+        }
+        out.push(Scan { pid: f[0].clone(), scanner: sc.clone(), t: t, grams: to_int(f[3]) });
+    }
+    Ok(out)
+}
+
+fn same_parcels(a: ref Vec[Parcel], b: ref Vec[Parcel]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.pid != y.pid or x.shipper != y.shipper or x.service != y.service or x.grams != y.grams or x.l != y.l or x.w != y.w or x.h != y.h or x.post != y.post or x.value != y.value or x.flags != y.flags {
+            return false;
+        }
+    }
+    true
+}
+
+fn same_scans(a: ref Vec[Scan], b: ref Vec[Scan]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.pid != y.pid or x.scanner != y.scanner or x.t != y.t or x.grams != y.grams {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ the join
+
+// The scans in time order (then file order): the first scan of a parcel
+// is its arrival, any later one a duplicate, and a scan of a parcel the
+// manifest does not list is unmanifested.
+fn join(man: ref Vec[Parcel], scans: ref Vec[Scan]) -> Joined {
+    let mut index: Map[String, i64] = Map.new();
+    for i in 0..man.len() as i64 {
+        index.insert(man[i].pid.clone(), i);
+    }
+    let mut order: Vec[(i64, i64)] = Vec.new();
+    for i in 0..scans.len() as i64 {
+        order.push((scans[i].t, i));
+    }
+    order.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+    let mut seen: Map[String, bool] = Map.new();
+    let mut jn = Joined { idx: Vec.new(), scans: Vec.new(), unmanifested: Vec.new(), dups: 0, missing: Vec.new() };
+    for o in order {
+        let s = ref scans[o.1];
+        if seen.contains_key(s.pid) {
+            jn.dups += 1;
+            continue;
+        }
+        seen.insert(s.pid.clone(), true);
+        match index.get(s.pid) {
+            Some(i) => {
+                jn.idx.push(*i);
+                jn.scans.push(s.clone());
+            }
+            None => jn.unmanifested.push(s.clone()),
+        }
+    }
+    for i in 0..man.len() as i64 {
+        if not seen.contains_key(man[i].pid) {
+            jn.missing.push(i);
+        }
+    }
+    jn
+}
+
+// ------------------------------------------------------------ rating
+
+fn no_rate(exception: ref String, chute: ref String) -> Rated {
+    Rated {
+        exception: exception.clone(),
+        zone: 0,
+        units: 0,
+        transport: 0,
+        fuel: 0,
+        surcharge: 0,
+        total: 0,
+        adjust: 0,
+        reweighed: false,
+        dim: false,
+        oversize: false,
+        chute: chute.clone(),
+    }
+}
+
+// Transport on the greater of the weight and the dimensional weight
+// (5,000 cm3 to the kilogram) in 500 g units, less the shipper's
+// discount; and the units.
+fn transport_of(p: ref Parcel, weight: i64, zone: i64) -> (i64, i64) {
+    let s = service_index(p.service);
+    let dim = ceil_div(p.l * p.w * p.h, 5);
+    let units = ceil_div(max2(weight, dim), 500);
+    let mut t = BASE[s][zone - 2] + PER[s][zone - 2] * (units - 1);
+    t -= t * DISCOUNT[shipper_index(p.shipper)] / 10000;
+    (t, units)
+}
+
+fn fuel_of(t: i64) -> i64 {
+    (t * FUEL_BP + 5000) / 10000
+}
+
+fn rate_one(dp: ref Depot, p: ref Parcel, s: ref Scan) -> Rated {
+    let dest = to_int(p.post.substring(0, 3));
+    let hazmat = p.flags.contains("H");
+    if dest < 5 {
+        return no_rate("bad address", "EX");
+    }
+    if hazmat and p.service == "O" {
+        return no_rate("hazmat by air", "EX");
+    }
+    let zone = min2(8, 2 + (dest - dp.prefix).abs() / 120);
+    let weight = max2(p.grams, s.grams);
+    let (t, units) = transport_of(p, weight, zone);
+    let longest = max2(p.l, max2(p.w, p.h));
+    let girth = longest + 2 * (p.l + p.w + p.h - longest);
+    let oversize = longest > 120 or girth > 300;
+    let mut sur = 0;
+    if oversize {
+        sur += OVERSIZE;
+    }
+    if hazmat {
+        sur += HAZMAT;
+    }
+    if p.flags.contains("S") {
+        sur += SIGNATURE;
+    }
+    if p.value > INSURED_FREE {
+        sur += ceil_div(p.value - INSURED_FREE, INSURED_STEP) * INSURED_RATE;
+    }
+    let fuel = fuel_of(t);
+    let mut reweighed = false;
+    let mut adjust = 0;
+    if s.grams > p.grams * 110 / 100 + 200 {
+        reweighed = true;
+        let (t0, _) = transport_of(p, p.grams, zone);
+        adjust = (t + fuel) - (t0 + fuel_of(t0));
+    }
+    let chute = if oversize {
+        "OS".to_string()
+    } else if hazmat {
+        "HZ".to_string()
+    } else if p.service == "O" {
+        f"A{zone}"
+    } else if p.service == "E" {
+        f"X{zone}"
+    } else {
+        f"G{dest / 100}"
+    };
+    Rated {
+        exception: String.new(),
+        zone: zone,
+        units: units,
+        transport: t,
+        fuel: fuel,
+        surcharge: sur,
+        total: t + fuel + sur,
+        adjust: adjust,
+        reweighed: reweighed,
+        dim: ceil_div(p.l * p.w * p.h, 5) > weight,
+        oversize: oversize,
+        chute: chute,
+    }
+}
+
+fn rate(dp: ref Depot, man: ref Vec[Parcel], jn: ref Joined) -> Vec[Rated] {
+    let mut out: Vec[Rated] = Vec.new();
+    for k in 0..jn.idx.len() as i64 {
+        out.push(rate_one(dp, man[jn.idx[k]], jn.scans[k]));
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn volume_report(dp: ref Depot, man: ref Vec[Parcel], scans: ref Vec[Scan], jn: ref Joined) -> String {
+    let mut hours = Vec.filled(8, 0);
+    for s in jn.scans {
+        hours[s.t / 3600] += 1;
+    }
+    for s in jn.unmanifested {
+        hours[s.t / 3600] += 1;
+    }
+    let mut best = 0;
+    for h in 0..8 {
+        if hours[h] > hours[best] {
+            best = h;
+        }
+    }
+    f"{dp.name} volume: {group3(man.len() as i64)} manifested, {group3(jn.scans.len() as i64)} arrived, {jn.missing.len()} not arrived, {jn.unmanifested.len()} unmanifested, {jn.dups} duplicate scans of {group3(scans.len() as i64)}; busiest hour {clock(best * 3600)} with {group3(hours[best])} scans"
+}
+
+fn revenue_report(dp: ref Depot, man: ref Vec[Parcel], jn: ref Joined, rated: ref Vec[Rated]) -> String {
+    let mut total = 0;
+    let mut by_service = Vec.filled(3, 0);
+    let mut fuel = 0;
+    let mut sur = 0;
+    let mut n = 0;
+    let mut by_shipper = Vec.filled(10, 0);
+    for k in 0..rated.len() as i64 {
+        let rt = ref rated[k];
+        if rt.exception != "" {
+            continue;
+        }
+        let p = ref man[jn.idx[k]];
+        n += 1;
+        total += rt.total;
+        by_service[service_index(p.service)] += rt.total;
+        fuel += rt.fuel;
+        sur += rt.surcharge;
+        by_shipper[shipper_index(p.shipper)] += rt.total;
+    }
+    let mut top = 0;
+    for k in 0..10 {
+        if by_shipper[k] > by_shipper[top] {
+            top = k;
+        }
+    }
+    let avg = if n > 0 { total / n } else { 0 };
+    f"{dp.name} revenue: {money(total)} on {group3(n)} parcels (ground {money(by_service[0])}, express {money(by_service[1])}, overnight {money(by_service[2])}); fuel {money(fuel)}, surcharges {money(sur)}; average {money(avg)}; top shipper {SHIPPERS[top]} {money(by_shipper[top])}"
+}
+
+fn weight_report(dp: ref Depot, man: ref Vec[Parcel], jn: ref Joined, rated: ref Vec[Rated]) -> String {
+    let mut rew = 0;
+    let mut adj = 0;
+    let mut over = 0;
+    let mut dims = 0;
+    let mut big = 0;
+    let mut heavy = -1;
+    for k in 0..rated.len() as i64 {
+        let rt = ref rated[k];
+        if rt.exception != "" {
+            continue;
+        }
+        let p = ref man[jn.idx[k]];
+        let s = ref jn.scans[k];
+        if rt.reweighed {
+            rew += 1;
+            adj += rt.adjust;
+            over += s.grams - p.grams;
+        }
+        if rt.dim {
+            dims += 1;
+        }
+        if rt.oversize {
+            big += 1;
+        }
+        if heavy < 0 or s.grams > jn.scans[heavy].grams {
+            heavy = k;
+        }
+    }
+    let hs = ref jn.scans[heavy];
+    f"{dp.name} weights: {rew} reweighed for {money(adj)} ({kg(over)} over declared); {group3(dims)} billed on dim weight; {big} oversize; heaviest {hs.pid} {kg(hs.grams)}"
+}
+
+fn count_into(names: mut ref Vec[String], counts: mut ref Vec[i64], name: ref String, n: i64) {
+    for k in 0..names.len() as i64 {
+        if names[k] == name {
+            counts[k] += n;
+            return;
+        }
+    }
+    names.push(name.clone());
+    counts.push(n);
+}
+
+fn count_of(names: ref Vec[String], counts: ref Vec[i64], name: ref String) -> i64 {
+    for k in 0..names.len() as i64 {
+        if names[k] == name {
+            return counts[k];
+        }
+    }
+    0
+}
+
+fn sort_report(dp: ref Depot, jn: ref Joined, rated: ref Vec[Rated]) -> String {
+    let mut names: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for rt in rated {
+        count_into(mut names, mut counts, rt.chute, 1);
+    }
+    if jn.unmanifested.len() > 0 {
+        count_into(mut names, mut counts, "EX", jn.unmanifested.len() as i64);
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for k in 0..names.len() as i64 {
+        order.push(k);
+    }
+    order.sort_by(|a, b| if counts[a] != counts[b] { counts[b].cmp(counts[a]) } else { names[a].cmp(names[b]) });
+    let mut bags = 0;
+    for c in counts {
+        bags += ceil_div(*c, BAG);
+    }
+    let mut busiest: Vec[String] = Vec.new();
+    for k in 0..min2(3, order.len() as i64) {
+        busiest.push(f"{names[order[k]]} {counts[order[k]]}");
+    }
+    f"{dp.name} sort: {names.len()} chutes, {bags} bags; busiest {busiest.join(", ")}; EX {count_of(names, counts, "EX")}, OS {count_of(names, counts, "OS")}, HZ {count_of(names, counts, "HZ")}"
+}
+
+fn exception_report(dp: ref Depot, man: ref Vec[Parcel], jn: ref Joined, rated: ref Vec[Rated]) -> String {
+    let mut addr = 0;
+    let mut air = 0;
+    let mut missed = 0;
+    let mut first = -1;
+    for k in 0..rated.len() as i64 {
+        let rt = ref rated[k];
+        if rt.exception == "bad address" {
+            addr += 1;
+            if first < 0 {
+                first = jn.idx[k];
+            }
+        } else if rt.exception == "hazmat by air" {
+            air += 1;
+        } else if jn.scans[k].t >= CUTOFF {
+            missed += 1;
+        }
+    }
+    let tail = if first >= 0 { f"first bad address {man[first].pid} '{man[first].post}'" } else { "no bad address".to_string() };
+    f"{dp.name} exceptions: {addr} bad address, {air} hazmat by air, {jn.unmanifested.len()} unmanifested, {missed} missed the {clock(CUTOFF)} cutoff, {jn.missing.len()} not arrived; {tail}"
+}
+
+// ------------------------------------------------------------ the linehaul
+
+fn close_trailer(lh: mut ref Linehaul, why: ref String) {
+    lh.log.push(f"TR-{lh.number:04} {group3(lh.parcels)} parcels, {kg(lh.grams)}, {m3(lh.cm3)}, from {lh.depots}; {why}");
+    lh.parcels = 0;
+    lh.grams = 0;
+    lh.cm3 = 0;
+    lh.depots = String.new();
+}
+
+// The depot's outbound parcels in scan order go onto the open trailer;
+// one that would take it past its payload or its cube closes it and opens
+// the next. Overnight parcels go to the airport, hazmat on its own truck,
+// and what was scanned after the cutoff waits for tomorrow.
+fn load(lh: mut ref Linehaul, dp: ref Depot, man: ref Vec[Parcel], jn: ref Joined, rated: ref Vec[Rated]) -> String {
+    let mut first = 0;
+    let mut count = 0;
+    let mut air = 0;
+    let mut hz = 0;
+    let mut held = 0;
+    for k in 0..rated.len() as i64 {
+        let rt = ref rated[k];
+        let s = ref jn.scans[k];
+        if rt.exception != "" {
+            continue;
+        }
+        if s.t >= CUTOFF {
+            held += 1;
+            continue;
+        }
+        if rt.chute.starts_with("A") {
+            air += 1;
+            continue;
+        }
+        if rt.chute == "HZ" {
+            hz += 1;
+            continue;
+        }
+        let p = ref man[jn.idx[k]];
+        let v = p.l * p.w * p.h;
+        if lh.number == 0 {
+            lh.number = 1;
+        } else if lh.grams + s.grams > TRAILER_G {
+            close_trailer(mut lh, "weight full");
+            lh.number += 1;
+        } else if lh.cm3 + v > TRAILER_CM3 {
+            close_trailer(mut lh, "cube full");
+            lh.number += 1;
+        }
+        if first == 0 {
+            first = lh.number;
+        }
+        lh.parcels += 1;
+        lh.grams += s.grams;
+        lh.cm3 += v;
+        if not lh.depots.contains(dp.code) {
+            lh.depots = if lh.depots == "" { dp.code.clone() } else { f"{lh.depots}+{dp.code}" };
+        }
+        count += 1;
+    }
+    f"{dp.name} linehaul: {group3(count)} parcels onto TR-{first:04} to TR-{lh.number:04}; {air} to the airport, {hz} on the hazmat truck, {held} held for tomorrow"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let akron = Depot { name: "akron", code: "A", prefix: 443, seed: 17, offset: 0 };
+    let boise = Depot { name: "boise", code: "B", prefix: 837, seed: 31, offset: 3 };
+    let camden = Depot { name: "camden", code: "C", prefix: 81, seed: 47, offset: 6 };
+    let dayton = Depot { name: "dayton", code: "D", prefix: 454, seed: 61, offset: 8 };
+
+    // Four manifests from the shippers.
+    let m1 = build_manifest(akron);
+    let m2 = build_manifest(boise);
+    let m3s = build_manifest(camden);
+    let m4 = build_manifest(dayton);
+
+    // Four nights of scans.
+    let s1 = build_scans(akron, m1);
+    let s2 = build_scans(boise, m2);
+    let s3 = build_scans(camden, m3s);
+    let s4 = build_scans(dayton, m4);
+
+    // Eight writes.
+    let w1 = fs.write("akron_manifest.csv", encode_manifest(m1));
+    let w2 = fs.write("boise_manifest.csv", encode_manifest(m2));
+    let w3 = fs.write("camden_manifest.csv", encode_manifest(m3s));
+    let w4 = fs.write("dayton_manifest.csv", encode_manifest(m4));
+    let w5 = fs.write("akron_scans.csv", encode_scans(s1));
+    let w6 = fs.write("boise_scans.csv", encode_scans(s2));
+    let w7 = fs.write("camden_scans.csv", encode_scans(s3));
+    let w8 = fs.write("dayton_scans.csv", encode_scans(s4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() {
+        return Err(bad("could not write the depot files"));
+    }
+
+    let whole = read_text("boise_scans.csv")?;
+    if fs.write("boise_scans.bad", damage(whole, 1733, 2, "2026-10-24 04:10:00")).is_err() {
+        return Err(bad("could not write boise_scans.bad"));
+    }
+
+    // Eight reads.
+    let tm1 = read_text("akron_manifest.csv")?;
+    let tm2 = read_text("boise_manifest.csv")?;
+    let tm3 = read_text("camden_manifest.csv")?;
+    let tm4 = read_text("dayton_manifest.csv")?;
+    let ts1 = read_text("akron_scans.csv")?;
+    let ts2 = read_text("boise_scans.csv")?;
+    let ts3 = read_text("camden_scans.csv")?;
+    let ts4 = read_text("dayton_scans.csv")?;
+    println(f"akron: manifest {group3(tm1.len() as i64)} bytes, fnv {text_sum(tm1):08x}; scans {group3(ts1.len() as i64)} bytes, fnv {text_sum(ts1):08x}");
+    println(f"boise: manifest {group3(tm2.len() as i64)} bytes, fnv {text_sum(tm2):08x}; scans {group3(ts2.len() as i64)} bytes, fnv {text_sum(ts2):08x}");
+    println(f"camden: manifest {group3(tm3.len() as i64)} bytes, fnv {text_sum(tm3):08x}; scans {group3(ts3.len() as i64)} bytes, fnv {text_sum(ts3):08x}");
+    println(f"dayton: manifest {group3(tm4.len() as i64)} bytes, fnv {text_sum(tm4):08x}; scans {group3(ts4.len() as i64)} bytes, fnv {text_sum(ts4):08x}");
+
+    // Eight parses. Each can fail with `?`, so a parallel run has to
+    // report the first failure in source order.
+    let gm1 = parse_manifest("akron_manifest.csv", akron, tm1)?;
+    let gm2 = parse_manifest("boise_manifest.csv", boise, tm2)?;
+    let gm3 = parse_manifest("camden_manifest.csv", camden, tm3)?;
+    let gm4 = parse_manifest("dayton_manifest.csv", dayton, tm4)?;
+    let gs1 = parse_scans("akron_scans.csv", akron, ts1)?;
+    let gs2 = parse_scans("boise_scans.csv", boise, ts2)?;
+    let gs3 = parse_scans("camden_scans.csv", camden, ts3)?;
+    let gs4 = parse_scans("dayton_scans.csv", dayton, ts4)?;
+    match parse_scans("boise_scans.bad", boise, read_text("boise_scans.bad")?) {
+        Ok(_) => println("boise_scans.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_manifest("dayton_manifest.csv", camden, tm4) {
+        Ok(_) => println("dayton_manifest.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_parcels(gm1, m1) and same_parcels(gm2, m2) and same_parcels(gm3, m3s) and same_parcels(gm4, m4) and same_scans(gs1, s1) and same_scans(gs2, s2) and same_scans(gs3, s3) and same_scans(gs4, s4);
+    println(f"parsed files match the built ones: {same}");
+
+    // Four joins.
+    let j1 = join(gm1, gs1);
+    let j2 = join(gm2, gs2);
+    let j3 = join(gm3, gs3);
+    let j4 = join(gm4, gs4);
+
+    // Four ratings, the hot group.
+    let r1 = rate(akron, gm1, j1);
+    let r2 = rate(boise, gm2, j2);
+    let r3 = rate(camden, gm3, j3);
+    let r4 = rate(dayton, gm4, j4);
+
+    // Reports that only read what came before.
+    let v1 = volume_report(akron, gm1, gs1, j1);
+    let v2 = volume_report(boise, gm2, gs2, j2);
+    let v3 = volume_report(camden, gm3, gs3, j3);
+    let v4 = volume_report(dayton, gm4, gs4, j4);
+    let e1 = revenue_report(akron, gm1, j1, r1);
+    let e2 = revenue_report(boise, gm2, j2, r2);
+    let e3 = revenue_report(camden, gm3, j3, r3);
+    let e4 = revenue_report(dayton, gm4, j4, r4);
+    let k1 = weight_report(akron, gm1, j1, r1);
+    let k2 = weight_report(boise, gm2, j2, r2);
+    let k3 = weight_report(camden, gm3, j3, r3);
+    let k4 = weight_report(dayton, gm4, j4, r4);
+    let o1 = sort_report(akron, j1, r1);
+    let o2 = sort_report(boise, j2, r2);
+    let o3 = sort_report(camden, j3, r3);
+    let o4 = sort_report(dayton, j4, r4);
+    let x1 = exception_report(akron, gm1, j1, r1);
+    let x2 = exception_report(boise, gm2, j2, r2);
+    let x3 = exception_report(camden, gm3, j3, r3);
+    let x4 = exception_report(dayton, gm4, j4, r4);
+    for line in [v1, v2, v3, v4, e1, e2, e3, e4, k1, k2, k3, k4, o1, o2, o3, o4, x1, x2, x3, x4] {
+        println(line);
+    }
+
+    // One linehaul: each depot's parcels go onto the trailer the depots
+    // before it left open, and trailers are numbered as they leave.
+    let mut lh = Linehaul { number: 0, parcels: 0, grams: 0, cm3: 0, depots: String.new(), log: Vec.new() };
+    println(load(mut lh, akron, gm1, j1, r1));
+    println(load(mut lh, boise, gm2, j2, r2));
+    println(load(mut lh, camden, gm3, j3, r3));
+    println(load(mut lh, dayton, gm4, j4, r4));
+    close_trailer(mut lh, "last out");
+    for line in lh.log {
+        println(line);
+    }
+    if fs.write("trailers.log", f"{lh.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write trailers.log"));
+    }
+    let back = read_text("trailers.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"trailers.log: {rows} trailers, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["akron_manifest.csv", "boise_manifest.csv", "camden_manifest.csv", "dayton_manifest.csv", "akron_scans.csv", "boise_scans.csv", "camden_scans.csv", "dayton_scans.csv", "boise_scans.bad", "trailers.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"parcel_sort failed: {e.describe()}"),
+    }
+}

@@ -1,0 +1,40 @@
+akron: manifest 106,268 bytes, fnv b40700f3; scans 90,465 bytes, fnv 68a7db93
+boise: manifest 106,247 bytes, fnv bd8bef5c; scans 91,070 bytes, fnv a42f75c1
+camden: manifest 106,216 bytes, fnv 4debed76; scans 91,167 bytes, fnv 25173874
+dayton: manifest 106,111 bytes, fnv c590e055; scans 90,534 bytes, fnv 61d809a0
+boise_scans.bad line 1734: bad time '2026-10-24 04:10:00'
+dayton_manifest.csv line 2: bad parcel id 'D1000000'
+parsed files match the built ones: true
+akron volume: 2,400 manifested, 2,363 arrived, 37 not arrived, 24 unmanifested, 51 duplicate scans of 2,438; busiest hour 23:00 with 523 scans
+boise volume: 2,400 manifested, 2,366 arrived, 34 not arrived, 24 unmanifested, 64 duplicate scans of 2,454; busiest hour 23:00 with 499 scans
+camden volume: 2,400 manifested, 2,371 arrived, 29 not arrived, 24 unmanifested, 61 duplicate scans of 2,456; busiest hour 23:00 with 540 scans
+dayton volume: 2,400 manifested, 2,365 arrived, 35 not arrived, 24 unmanifested, 53 duplicate scans of 2,442; busiest hour 23:00 with 524 scans
+akron revenue: $118,558.31 on 2,346 parcels (ground $58,072.00, express $28,011.24, overnight $32,475.07); fuel $11,559.27, surcharges $25,883.10; average $50.53; top shipper SH01 $20,367.73
+boise revenue: $140,576.03 on 2,339 parcels (ground $74,224.66, express $32,194.72, overnight $34,156.65); fuel $14,193.97, surcharges $26,778.90; average $60.10; top shipper SH04 $25,884.43
+camden revenue: $153,849.82 on 2,349 parcels (ground $74,389.36, express $42,081.27, overnight $37,379.19); fuel $15,838.76, surcharges $26,861.70; average $65.49; top shipper SH08 $30,822.85
+dayton revenue: $116,087.64 on 2,347 parcels (ground $61,984.87, express $25,290.39, overnight $28,812.38); fuel $11,402.06, surcharges $24,670.90; average $49.46; top shipper SH10 $23,458.01
+akron weights: 117 reweighed for $1,038.26 (716.5 kg over declared); 1,072 billed on dim weight; 193 oversize; heaviest A1002051 127.1 kg
+boise weights: 113 reweighed for $1,233.88 (727.9 kg over declared); 1,080 billed on dim weight; 207 oversize; heaviest B1014161 129.8 kg
+camden weights: 97 reweighed for $1,157.47 (763.8 kg over declared); 1,043 billed on dim weight; 209 oversize; heaviest C1007763 135.3 kg
+dayton weights: 100 reweighed for $1,268.87 (971.7 kg over declared); 1,096 billed on dim weight; 181 oversize; heaviest D1009156 125.1 kg
+akron sort: 22 chutes, 69 bags; busiest G4 291, G9 228, G1 216; EX 41, OS 193, HZ 31
+boise sort: 26 chutes, 70 bags; busiest G4 301, G9 224, OS 207; EX 51, OS 207, HZ 25
+camden sort: 26 chutes, 73 bags; busiest G4 287, G9 228, OS 209; EX 46, OS 209, HZ 29
+dayton sort: 22 chutes, 69 bags; busiest G4 274, G1 234, G9 234; EX 42, OS 181, HZ 40
+akron exceptions: 15 bad address, 2 hazmat by air, 24 unmanifested, 17 missed the 03:30 cutoff, 37 not arrived; first bad address A1005383 '00258'
+boise exceptions: 23 bad address, 4 hazmat by air, 24 unmanifested, 19 missed the 03:30 cutoff, 34 not arrived; first bad address B1006118 '00135'
+camden exceptions: 15 bad address, 7 hazmat by air, 24 unmanifested, 19 missed the 03:30 cutoff, 29 not arrived; first bad address C1002198 '00344'
+dayton exceptions: 14 bad address, 4 hazmat by air, 24 unmanifested, 15 missed the 03:30 cutoff, 35 not arrived; first bad address D1014266 '00427'
+akron linehaul: 2,051 parcels onto TR-0001 to TR-0002; 247 to the airport, 31 on the hazmat truck, 17 held for tomorrow
+boise linehaul: 2,056 parcels onto TR-0002 to TR-0004; 240 to the airport, 24 on the hazmat truck, 19 held for tomorrow
+camden linehaul: 2,066 parcels onto TR-0004 to TR-0006; 237 to the airport, 27 on the hazmat truck, 19 held for tomorrow
+dayton linehaul: 2,057 parcels onto TR-0006 to TR-0008; 235 to the airport, 40 on the hazmat truck, 15 held for tomorrow
+TR-0001 1,062 parcels, 12,495.5 kg, 68.5 m3, from A; weight full
+TR-0002 1,066 parcels, 12,470.7 kg, 69.8 m3, from A+B; weight full
+TR-0003 1,094 parcels, 12,495.8 kg, 69.1 m3, from B; weight full
+TR-0004 978 parcels, 11,370.4 kg, 69.8 m3, from B+C; cube full
+TR-0005 1,031 parcels, 12,458.6 kg, 69.9 m3, from C; cube full
+TR-0006 999 parcels, 12,419.8 kg, 69.9 m3, from C+D; cube full
+TR-0007 1,149 parcels, 12,221.7 kg, 69.9 m3, from D; cube full
+TR-0008 851 parcels, 9,627.9 kg, 53.0 m3, from D; last out
+trailers.log: 8 trailers, 508 bytes, fnv 9dd7d663
