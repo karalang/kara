@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| diagnostics | 17 |
 | false-positive | 17 |
-| diagnostics | 16 |
 | missing-feature | 16 |
 | perf | 10 |
 | miscompile | 5 |
@@ -80,9 +80,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 8 |
 | ownership | 4 |
 | mir-llvm | 3 |
+| parser | 3 |
 | other | 2 |
-| parser | 2 |
 | resolver | 1 |
+| lexer | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-24). Do not edit this block by hand; edit the ledger and regenerate._
@@ -127,12 +128,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-11 | 2026-10-24 | mir | low | A `match` on a tuple of handle LOCALS that outlive it (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`, kata 558's `intersect`) still counts each handle into the built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads | — |
 | B-2026-10-24-12 | 2026-10-24 | parser | low | `karac fix` has no fix for `format!("..{}..", a, b)`: the error names the f-string to write but offers no edit, though a literal whose holes are all `{}` or `{:spec}` with one argument each maps one-to-one onto `f"..{a}..{b:spec}.."` | — |
 | B-2026-10-24-13 | 2026-10-24 | parser | low | The turbofish fix deletes `::<T>` / `::[T]` from `let x = it.collect::[Vec[char]]();` and leaves `let x = it.collect();`, which then fails E0238 "cannot infer type parameter 'C'": in a `let` with no annotation the fix should move the type onto the binding, as its own message tells the author to | — |
-| B-2026-10-24-19 | 2026-10-24 | typecheck | low | A bare parameter, or a binding out of one, handed to `Vec.push` gets the generic borrow mismatch (no fix for a non-Clone type, `.clone()` for a Clone one) instead of the "cannot give away parameter" message and `own` fix that `return e` gets in the same function | — |
 | B-2026-10-24-22 | 2026-10-24 | resolver | low | A primitive type name bound as a value (`let i64 = 3;`, `let u8 = ...`, a parameter `u8: i64`, `for char in ...`, `let bool = ...`) passes `karac check` and runs, though design.md §3 says primitive type names "cannot be declared or bound as names: `let i64 = 3;` is an error". The one place it fails is a method call on the binding, `u8.len()`, which reports `no associated function 'len' on type 'u8'` at the use and never names the binding | — |
 | B-2026-10-24-23 | 2026-10-24 | typecheck | medium | `contains`, `get`, `first` and `last` on an `Array[T, N]` whose element is not a scalar (`Str`, `String`) fail with `no method 'contains' on type 'Array'`, though library/collections.md says an `Array[T, N]` has every `Slice[T]` method. The same calls on `Array[i64, N]` work, and so does `.as_slice().contains(..)` on the Str array | src/typechecker/method_sequence_mutation.rs (fixed-array read-only arm) |
 | B-2026-10-24-24 | 2026-10-24 | typecheck | low | `s + t` with `s: String` and `t: Str` (a `Str` constant, an element of a `const` `Array[Str, N]`, a `Str` binding) reports `'+' on 'String' requires a 'String' right operand, found 'Str'` with no fix, while the matching mismatch at a call (`Str` passed to `ref String`) carries a machine-applicable `.to_string()` that `karac fix` applies. The error's class is also `INVALID_UNARY_OP` for a binary operator | — |
 | B-2026-10-24-25 | 2026-10-24 | typecheck | medium | Inside a `mut ref self` method, a bare `for x in CONST_ARRAY` over a global `const` is taken to borrow `self`, so any write to a field of `self` (or a call of a method that writes `self`) in the loop body is refused with E0516 "while the `for` loop over `CONST` borrows it". The same loop over `CONST.iter()`, or in a free function over a `mut ref` parameter, passes | — |
 | B-2026-10-24-26 | 2026-10-24 | typecheck | low | `.copied()` on an `Option[ref V]` (from `Map.get`, `SortedMap.get` or `Vec.get`) is `no method 'copied' on type 'Option'` with no hint and no fix, though the library has `.cloned()` for exactly this and documents `m.get(k) ?? d` as the idiom for a `Copy` value; `.copied()` is the Rust spelling an author coming from Rust writes first | — |
+| B-2026-10-24-27 | 2026-10-24 | lexer+parser | low | A lexer error reaches the user wrapped as the parser's `Expected expression, found Error("…")`, Debug-escaped (and escaped again in JSON), with no fix-it: `f"{v.join(\", \")}"` gets the lexer's good 'use plain quotes' advice inside that wrapper, and a bad string escape also cascades a spurious `Expected RightBrace, found EOF` | — |
 
 ### Fixed
 
@@ -172,6 +173,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-16 | typecheck | medium | `karac check` rejects `.collect()` after an item-preserving adaptor on a generic iterator: under `I: Iterator[Item = i64]`, `it.filter(\|x\| x % 2 == 0… | 311a15fb9b |
 | B-2026-10-24-17 | typecheck+interp | medium | An integer literal in a tuple literal gets no range check against its slot: `let t: (i64, u8) = (1, 300);` passes `karac check` and the MIR run print… | 311a15fb9b |
 | B-2026-10-24-18 | cli | low | `karac fix` answers E_INDEX_MOVE_NON_COPY on `let t = v[i];` (a non-Copy element, only read afterwards) by adding `#[derive(Clone)]` to the element t… | 21faffb7ac |
+| B-2026-10-24-19 | typecheck | low | A bare parameter, or a binding out of one, handed to `Vec.push` gets the generic borrow mismatch (no fix for a non-Clone type, `.clone()` for a Clone… | b12c3d1318 |
 | B-2026-10-24-20 | mir+mir-llvm | medium | Under `KARAC_AUTO_PAR=1` a signed `+` reduction (and a checked `*`) split into tasks overflows in a run where the sequential loop never does: `acc =… | fe8fa4918f |
 | B-2026-10-24-21 | typecheck | medium | `karac check` accepts passing a binding out of a place reached through a shared `ref` as a `mut` argument: `fn put(c: ref C) { match c.s { S.B(buf) =… | afb5b6c585 |
 
