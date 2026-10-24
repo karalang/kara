@@ -560,8 +560,8 @@ fn main() {
             Route { prefix: "/static/".to_string(), pool: 1, strip: false },
         ],
         pools: vec![
-            Cluster { name: "api".to_string(), members: vec![upstream("b1", 47738), upstream("b2", 47739), upstream("b4", 47740)], next: 0 },
-            Cluster { name: "static".to_string(), members: vec![upstream("s1", 47741)], next: 0 },
+            Cluster { name: "api".to_string(), members: vec![upstream("b1", 47738), upstream("b2", 47739), upstream("b4", 27740)], next: 0 },
+            Cluster { name: "static".to_string(), members: vec![upstream("s1", 27741)], next: 0 },
         ],
         log: Vec.new(),
     };

@@ -1,0 +1,2556 @@
+// mini_rsa: Python-RSA 4.9, the pure-Python RSA implementation, with:
+// - key generation: random odd numbers, Miller-Rabin, p and q of uneven
+//   sizes, d by the extended Euclidean algorithm, and the CRT values;
+// - PKCS#1 v1.5 encryption with random non-zero padding, and decryption
+//   with blinding and the Chinese remainder theorem;
+// - PKCS#1 v1.5 signatures over MD5, SHA-1 and SHA-2, verification that
+//   finds the hash method in the signature, and MGF1;
+// - keys in PKCS#1 DER and PEM, and OpenSSL's PUBLIC KEY form;
+// - jobs over them: signed license records checked against a tampered list,
+//   and a vault of secrets sealed for two people.
+//
+// Python's ints are big integers built on 64-bit limbs; os.urandom is the
+// seeded generator oracle.py installs, so every run draws the same numbers.
+// The inputs are data/jobs.txt and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs through
+// rsa itself.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn plural(n: i64, one: Str, many: Str) -> String {
+    if n == 1 { one.to_string() } else { many.to_string() }
+}
+
+// ------------------------------------------------------------ MD5 (RFC 1321)
+
+const MD5_S: Array[i64, 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
+const MD5_K: Array[u32, 64] = [
+    0xd76aa478u32, 0xe8c7b756u32, 0x242070dbu32, 0xc1bdceeeu32, 0xf57c0fafu32, 0x4787c62au32, 0xa8304613u32, 0xfd469501u32,
+    0x698098d8u32, 0x8b44f7afu32, 0xffff5bb1u32, 0x895cd7beu32, 0x6b901122u32, 0xfd987193u32, 0xa679438eu32, 0x49b40821u32,
+    0xf61e2562u32, 0xc040b340u32, 0x265e5a51u32, 0xe9b6c7aau32, 0xd62f105du32, 0x02441453u32, 0xd8a1e681u32, 0xe7d3fbc8u32,
+    0x21e1cde6u32, 0xc33707d6u32, 0xf4d50d87u32, 0x455a14edu32, 0xa9e3e905u32, 0xfcefa3f8u32, 0x676f02d9u32, 0x8d2a4c8au32,
+    0xfffa3942u32, 0x8771f681u32, 0x6d9d6122u32, 0xfde5380cu32, 0xa4beea44u32, 0x4bdecfa9u32, 0xf6bb4b60u32, 0xbebfbc70u32,
+    0x289b7ec6u32, 0xeaa127fau32, 0xd4ef3085u32, 0x04881d05u32, 0xd9d4d039u32, 0xe6db99e5u32, 0x1fa27cf8u32, 0xc4ac5665u32,
+    0xf4292244u32, 0x432aff97u32, 0xab9423a7u32, 0xfc93a039u32, 0x655b59c3u32, 0x8f0ccc92u32, 0xffeff47du32, 0x85845dd1u32,
+    0x6fa87e4fu32, 0xfe2ce6e0u32, 0xa3014314u32, 0x4e0811a1u32, 0xf7537e82u32, 0xbd3af235u32, 0x2ad7d2bbu32, 0xeb86d391u32,
+];
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+fn le32(b: ref Vec[u8], i: i64) -> u32 {
+    (b[i] as u32) | ((b[i + 1] as u32) << 8) | ((b[i + 2] as u32) << 16) | ((b[i + 3] as u32) << 24)
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn be64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8) | (b[i + k] as u64);
+    }
+    v
+}
+
+fn le64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    let mut k: i64 = 7;
+    while k >= 0 {
+        v = (v << 8) | (b[i + k] as u64);
+        k -= 1;
+    }
+    v
+}
+
+fn push_le32(out: mut ref Vec[u8], x: u32) {
+    for k in 0..4 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+    }
+}
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+fn md5(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, false);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32] {
+        h.push(x);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        for i in 0..64 {
+            let mut f: u32 = 0;
+            let mut g: i64 = 0;
+            if i < 16 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                g = i;
+            } else if i < 32 {
+                f = (d & b) | ((d ^ 0xFFFFFFFFu32) & c);
+                g = (5 * i + 1) % 16;
+            } else if i < 48 {
+                f = b ^ c ^ d;
+                g = (3 * i + 5) % 16;
+            } else {
+                f = c ^ (b | (d ^ 0xFFFFFFFFu32));
+                g = (7 * i) % 16;
+            }
+            let x = a.wrapping_add(f).wrapping_add(MD5_K[i]).wrapping_add(le32(m, blk + 4 * g));
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(x.rotate_left(MD5_S[i] as u32));
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_le32(mut out, x);
+    }
+    out
+}
+
+// ------------------------------------------------------------ SHA-1 and SHA-2 (FIPS 180-4)
+
+fn sha1(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..80 {
+            w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotate_left(1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for t in 0..80 {
+            let mut f: u32 = 0;
+            let mut k: u32 = 0;
+            if t < 20 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                k = 0x5A827999u32;
+            } else if t < 40 {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1u32;
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDCu32;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6u32;
+            }
+            let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[t]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+// SHA-256, or SHA-224 with its own initial values and a shorter result.
+fn sha256_family(msg: ref Vec[u8], is224: bool) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    if is224 {
+        for x in [0xc1059ed8u32, 0x367cd507u32, 0x3070dd17u32, 0xf70e5939u32, 0xffc00b31u32, 0x68581511u32, 0x64f98fa7u32, 0xbefa4fa4u32] {
+            h.push(x);
+        }
+    } else {
+        for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+            h.push(x);
+        }
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..64 {
+            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3u32);
+            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10u32);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u32] = h.clone();
+        for t in 0..64 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFu32) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA256_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is224 { 7 } else { 8 };
+    for i in 0..n {
+        push_be32(mut out, h[i]);
+    }
+    out
+}
+
+const SHA512_K: Array[u64, 80] = [
+    0x428a2f98d728ae22u64, 0x7137449123ef65cdu64, 0xb5c0fbcfec4d3b2fu64, 0xe9b5dba58189dbbcu64,
+    0x3956c25bf348b538u64, 0x59f111f1b605d019u64, 0x923f82a4af194f9bu64, 0xab1c5ed5da6d8118u64,
+    0xd807aa98a3030242u64, 0x12835b0145706fbeu64, 0x243185be4ee4b28cu64, 0x550c7dc3d5ffb4e2u64,
+    0x72be5d74f27b896fu64, 0x80deb1fe3b1696b1u64, 0x9bdc06a725c71235u64, 0xc19bf174cf692694u64,
+    0xe49b69c19ef14ad2u64, 0xefbe4786384f25e3u64, 0x0fc19dc68b8cd5b5u64, 0x240ca1cc77ac9c65u64,
+    0x2de92c6f592b0275u64, 0x4a7484aa6ea6e483u64, 0x5cb0a9dcbd41fbd4u64, 0x76f988da831153b5u64,
+    0x983e5152ee66dfabu64, 0xa831c66d2db43210u64, 0xb00327c898fb213fu64, 0xbf597fc7beef0ee4u64,
+    0xc6e00bf33da88fc2u64, 0xd5a79147930aa725u64, 0x06ca6351e003826fu64, 0x142929670a0e6e70u64,
+    0x27b70a8546d22ffcu64, 0x2e1b21385c26c926u64, 0x4d2c6dfc5ac42aedu64, 0x53380d139d95b3dfu64,
+    0x650a73548baf63deu64, 0x766a0abb3c77b2a8u64, 0x81c2c92e47edaee6u64, 0x92722c851482353bu64,
+    0xa2bfe8a14cf10364u64, 0xa81a664bbc423001u64, 0xc24b8b70d0f89791u64, 0xc76c51a30654be30u64,
+    0xd192e819d6ef5218u64, 0xd69906245565a910u64, 0xf40e35855771202au64, 0x106aa07032bbd1b8u64,
+    0x19a4c116b8d2d0c8u64, 0x1e376c085141ab53u64, 0x2748774cdf8eeb99u64, 0x34b0bcb5e19b48a8u64,
+    0x391c0cb3c5c95a63u64, 0x4ed8aa4ae3418acbu64, 0x5b9cca4f7763e373u64, 0x682e6ff3d6b2b8a3u64,
+    0x748f82ee5defb2fcu64, 0x78a5636f43172f60u64, 0x84c87814a1f0ab72u64, 0x8cc702081a6439ecu64,
+    0x90befffa23631e28u64, 0xa4506cebde82bde9u64, 0xbef9a3f7b2c67915u64, 0xc67178f2e372532bu64,
+    0xca273eceea26619cu64, 0xd186b8c721c0c207u64, 0xeada7dd6cde0eb1eu64, 0xf57d4f7fee6ed178u64,
+    0x06f067aa72176fbau64, 0x0a637dc5a2c898a6u64, 0x113f9804bef90daeu64, 0x1b710b35131c471bu64,
+    0x28db77f523047d84u64, 0x32caab7b40c72493u64, 0x3c9ebe0a15c9bebcu64, 0x431d67c49c100d4cu64,
+    0x4cc5d4becb3e42b6u64, 0x597f299cfc657e2au64, 0x5fcb6fab3ad6faecu64, 0x6c44198c4a475817u64,
+];
+
+const SHA512_IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64, 0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64, 0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+const SHA384_IV: Array[u64, 8] = [
+    0xcbbb9d5dc1059ed8u64, 0x629a292a367cd507u64, 0x9159015a3070dd17u64, 0x152fecd8f70e5939u64,
+    0x67332667ffc00b31u64, 0x8eb44a8768581511u64, 0xdb0c2e0d64f98fa7u64, 0x47b5481dbefa4fa4u64,
+];
+
+// SHA-512, or SHA-384 with its own initial values and a shorter result.
+fn sha512_family(msg: ref Vec[u8], is384: bool) -> Vec[u8] {
+    let m = md_pad(msg, 128, 16, true);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(if is384 { SHA384_IV[i] } else { SHA512_IV[i] });
+    }
+    let mut w: Vec[u64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u64);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be64(m, blk + 8 * t);
+        }
+        for t in 16..80 {
+            let s0 = w[t - 15].rotate_right(1) ^ w[t - 15].rotate_right(8) ^ (w[t - 15] >> 7u64);
+            let s1 = w[t - 2].rotate_right(19) ^ w[t - 2].rotate_right(61) ^ (w[t - 2] >> 6u64);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u64] = h.clone();
+        for t in 0..80 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFFFFFFFFFu64) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA512_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 128;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is384 { 6 } else { 8 };
+    for i in 0..n {
+        push_be64(mut out, h[i]);
+    }
+    out
+}
+
+// ------------------------------------------------------------ hex and base64
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push_str(f"{x:02x}");
+    }
+    s
+}
+
+const B64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(b: ref Vec[u8]) -> String {
+    let alpha = to_bytes(B64_ALPHABET);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let n = b.len() - i;
+        let x0 = b[i] as i64;
+        let x1 = if n > 1 { b[i + 1] as i64 } else { 0 };
+        let x2 = if n > 2 { b[i + 2] as i64 } else { 0 };
+        let v = (x0 << 16) | (x1 << 8) | x2;
+        out.push(alpha[(v >> 18) & 63]);
+        out.push(alpha[(v >> 12) & 63]);
+        out.push(if n > 1 { alpha[(v >> 6) & 63] } else { b'=' });
+        out.push(if n > 2 { alpha[v & 63] } else { b'=' });
+        i += 3;
+    }
+    from_bytes(out)
+}
+
+fn b64_value(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// A base64 digest of exactly nbytes, written canonically.
+fn b64_digest(s: Str, nbytes: i64) -> Option[Vec[u8]] {
+    let b = to_bytes(s);
+    if b.len() != (nbytes + 2) / 3 * 4 {
+        return None;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let mut v: i64 = 0;
+        let mut pads: i64 = 0;
+        for k in 0..4 {
+            let c = b[i + k];
+            if c == b'=' {
+                if i + 4 != b.len() {
+                    return None;
+                }
+                pads += 1;
+                v = v << 6;
+            } else {
+                let x = b64_value(c);
+                if x < 0 or pads > 0 {
+                    return None;
+                }
+                v = (v << 6) | x;
+            }
+        }
+        out.push(((v >> 16) & 0xFF) as u8);
+        if pads < 2 {
+            out.push(((v >> 8) & 0xFF) as u8);
+        }
+        if pads < 1 {
+            out.push((v & 0xFF) as u8);
+        }
+        i += 4;
+    }
+    if out.len() != nbytes or b64_encode(out) != s {
+        return None;
+    }
+    Some(out)
+}
+
+fn hex_decode(s: Str) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn split_c(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 0;
+    while k < n {
+        if cs[k] == 'z' {
+            let mut j = k + 1;
+            let mut count: i64 = 0;
+            while cs[j] != '.' {
+                count = count * 10 + (cs[j] as i64 - 48);
+                j += 1;
+            }
+            let mut z: i64 = 0;
+            while z < count {
+                out.push(0);
+                z += 1;
+            }
+            k = j + 1;
+        } else {
+            out.push((hex_digit(cs[k]) * 16 + hex_digit(cs[k + 1])) as u8);
+            k += 2;
+        }
+    }
+    out
+}
+
+fn hex_string(s: ref String) -> String {
+    String.from_utf8(hex_bytes(s)).unwrap_or(String.new())
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs = chars_of(path);
+    let mut cut: i64 = -1;
+    let mut k: i64 = 0;
+    while k < cs.len() as i64 {
+        if cs[k] == '/' {
+            cut = k;
+        }
+        k += 1;
+    }
+    if cut < 0 { String.new() } else { chars_str(cs, 0, cut) }
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_c(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_c(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn hex_digit(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 97 { n - 87 } else if n >= 65 { n - 55 } else { n - 48 }
+}
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+fn chars_str(cs: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut k = a;
+    while k < b {
+        out.push(cs[k]);
+        k += 1;
+    }
+    out
+}
+// ------------------------------------------------------------ big integers
+
+// Python's int, for the non-negative values RSA works with: little-endian
+// 64-bit limbs with no zero limb on top, so zero is the empty vector.
+fn mask64() -> u128 {
+    0xFFFFFFFFFFFFFFFFu128
+}
+
+fn bn_norm(a: mut ref Vec[u64]) {
+    while a.len() > 0 and a[a.len() - 1] == 0u64 {
+        let _ = a.pop();
+    }
+}
+
+fn bn(v: i64) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    if v > 0 {
+        out.push(v as u64);
+    }
+    out
+}
+
+fn bn_is_zero(a: ref Vec[u64]) -> bool {
+    a.len() == 0
+}
+
+fn bn_is_odd(a: ref Vec[u64]) -> bool {
+    a.len() > 0 and (a[0] & 1u64) == 1u64
+}
+
+fn bn_cmp(a: ref Vec[u64], b: ref Vec[u64]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+fn bn_eq_small(a: ref Vec[u64], v: i64) -> bool {
+    bn_cmp(a, bn(v)) == 0
+}
+
+fn bn_add(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    let mut out: Vec[u64] = Vec.new();
+    let mut carry = 0u128;
+    let mut i = 0;
+    while i < n {
+        let x = if i < a.len() { a[i] as u128 } else { 0u128 };
+        let y = if i < b.len() { b[i] as u128 } else { 0u128 };
+        let s = x + y + carry;
+        out.push((s & mask64()) as u64);
+        carry = s >> 64;
+        i += 1;
+    }
+    if carry > 0u128 {
+        out.push(carry as u64);
+    }
+    out
+}
+
+// a - b, for a >= b.
+fn bn_sub(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut borrow = 0u128;
+    let base = 1u128 << 64;
+    let mut i = 0;
+    while i < a.len() {
+        let y = if i < b.len() { b[i] as u128 } else { 0u128 };
+        let t = (a[i] as u128) + base - borrow - y;
+        out.push((t & mask64()) as u64);
+        borrow = if t < base { 1u128 } else { 0u128 };
+        i += 1;
+    }
+    bn_norm(mut out);
+    out
+}
+
+fn bn_mul(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    if a.len() == 0 or b.len() == 0 {
+        return Vec.new();
+    }
+    let mut out: Vec[u64] = Vec.new();
+    let mut k = 0;
+    while k < a.len() + b.len() {
+        out.push(0u64);
+        k += 1;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        let x = a[i] as u128;
+        let mut carry = 0u128;
+        let mut j = 0;
+        while j < b.len() {
+            let t = x * (b[j] as u128) + (out[i + j] as u128) + carry;
+            out[i + j] = (t & mask64()) as u64;
+            carry = t >> 64;
+            j += 1;
+        }
+        out[i + b.len()] = carry as u64;
+        i += 1;
+    }
+    bn_norm(mut out);
+    out
+}
+
+fn bn_mul_small(a: ref Vec[u64], v: u64) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut carry = 0u128;
+    for x in a {
+        let t = (x as u128) * (v as u128) + carry;
+        out.push((t & mask64()) as u64);
+        carry = t >> 64;
+    }
+    if carry > 0u128 {
+        out.push(carry as u64);
+    }
+    bn_norm(mut out);
+    out
+}
+
+fn bn_shl(a: ref Vec[u64], bits: i64) -> Vec[u64] {
+    if a.len() == 0 {
+        return Vec.new();
+    }
+    let words = bits / 64;
+    let s = bits % 64;
+    let mut out: Vec[u64] = Vec.new();
+    let mut k = 0;
+    while k < words {
+        out.push(0u64);
+        k += 1;
+    }
+    if s == 0 {
+        for x in a {
+            out.push(x);
+        }
+        return out;
+    }
+    let mut carry = 0u64;
+    for x in a {
+        out.push((x << s) | carry);
+        carry = x >> (64 - s);
+    }
+    if carry != 0u64 {
+        out.push(carry);
+    }
+    out
+}
+
+fn bn_shr(a: ref Vec[u64], bits: i64) -> Vec[u64] {
+    let words = bits / 64;
+    let s = bits % 64;
+    let mut out: Vec[u64] = Vec.new();
+    let mut i = words;
+    while i < a.len() {
+        let lo = a[i] >> s;
+        let hi = if s > 0 and i + 1 < a.len() { a[i + 1] << (64 - s) } else { 0u64 };
+        out.push(lo | hi);
+        i += 1;
+    }
+    bn_norm(mut out);
+    out
+}
+
+// int.bit_length()
+fn bn_bits(a: ref Vec[u64]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n = 0;
+    while top != 0u64 {
+        top = top >> 1;
+        n += 1;
+    }
+    (a.len() - 1) * 64 + n
+}
+
+// The quotient and remainder of a by a one-limb divisor.
+fn bn_divmod_small(a: ref Vec[u64], d: u64) -> (Vec[u64], u64) {
+    let mut q: Vec[u64] = Vec.new();
+    let mut k = 0;
+    while k < a.len() {
+        q.push(0u64);
+        k += 1;
+    }
+    let mut r = 0u128;
+    let dd = d as u128;
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        let cur = (r << 64) | (a[i] as u128);
+        q[i] = (cur / dd) as u64;
+        r = cur % dd;
+        i -= 1;
+    }
+    bn_norm(mut q);
+    (q, r as u64)
+}
+
+// divmod(a, b) for b > 0: Knuth's algorithm D on 64-bit limbs.
+fn bn_divmod(a: ref Vec[u64], b: ref Vec[u64]) -> (Vec[u64], Vec[u64]) {
+    if bn_cmp(a, b) < 0 {
+        return (Vec.new(), a.clone());
+    }
+    if b.len() == 1 {
+        let (q, r) = bn_divmod_small(a, b[0]);
+        let mut rv: Vec[u64] = Vec.new();
+        if r != 0u64 {
+            rv.push(r);
+        }
+        return (q, rv);
+    }
+    let n = b.len();
+    let mut top = b[n - 1];
+    let mut s = 0;
+    while (top & 0x8000000000000000u64) == 0u64 {
+        top = top << 1;
+        s += 1;
+    }
+    let v = bn_shl(b, s);
+    let mut u = bn_shl(a, s);
+    while u.len() <= a.len() {
+        u.push(0u64);
+    }
+    let m = u.len() - n - 1;
+    let mut q: Vec[u64] = Vec.new();
+    let mut k = 0;
+    while k <= m {
+        q.push(0u64);
+        k += 1;
+    }
+    let base = 1u128 << 64;
+    let vn1 = v[n - 1] as u128;
+    let vn2 = v[n - 2] as u128;
+    let mut j = m;
+    while j >= 0 {
+        let num = ((u[j + n] as u128) << 64) | (u[j + n - 1] as u128);
+        let mut qhat = num / vn1;
+        let mut rhat = num % vn1;
+        loop {
+            let too_big = if qhat >= base { true } else { qhat * vn2 > ((rhat << 64) | (u[j + n - 2] as u128)) };
+            if not too_big {
+                break;
+            }
+            qhat -= 1u128;
+            rhat += vn1;
+            if rhat >= base {
+                break;
+            }
+        }
+        // u[j..j+n] -= qhat * v
+        let mut borrow = 0u128;
+        let mut carry = 0u128;
+        let mut i = 0;
+        while i < n {
+            let p = qhat * (v[i] as u128) + carry;
+            carry = p >> 64;
+            let t = (u[i + j] as u128) + base - borrow - (p & mask64());
+            u[i + j] = (t & mask64()) as u64;
+            borrow = if t < base { 1u128 } else { 0u128 };
+            i += 1;
+        }
+        let t = (u[j + n] as u128) + base - borrow - carry;
+        u[j + n] = (t & mask64()) as u64;
+        if t < base {
+            // qhat was one too large: add v back
+            qhat -= 1u128;
+            let mut c = 0u128;
+            let mut i2 = 0;
+            while i2 < n {
+                let s2 = (u[i2 + j] as u128) + (v[i2] as u128) + c;
+                u[i2 + j] = (s2 & mask64()) as u64;
+                c = s2 >> 64;
+                i2 += 1;
+            }
+            u[j + n] = (((u[j + n] as u128) + c) & mask64()) as u64;
+        }
+        q[j] = qhat as u64;
+        j -= 1;
+    }
+    bn_norm(mut q);
+    let mut r: Vec[u64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        r.push(u[i]);
+        i += 1;
+    }
+    bn_norm(mut r);
+    (q, bn_shr(r, s))
+}
+
+fn bn_mod(a: ref Vec[u64], m: ref Vec[u64]) -> Vec[u64] {
+    bn_divmod(a, m).1
+}
+
+fn bn_div(a: ref Vec[u64], m: ref Vec[u64]) -> Vec[u64] {
+    bn_divmod(a, m).0
+}
+
+// pow(base, exp, m)
+fn bn_powmod(base: ref Vec[u64], exp: ref Vec[u64], m: ref Vec[u64]) -> Vec[u64] {
+    if bn_eq_small(m, 1) {
+        return Vec.new();
+    }
+    let mut result = bn(1);
+    let b = bn_mod(base, m);
+    let mut i = bn_bits(exp) - 1;
+    while i >= 0 {
+        result = bn_mod(bn_mul(result, result), m);
+        if ((exp[i / 64] >> (i % 64)) & 1u64) == 1u64 {
+            result = bn_mod(bn_mul(result, b), m);
+        }
+        i -= 1;
+    }
+    result
+}
+
+// int.from_bytes(b, 'big')
+fn bn_from_bytes(b: ref Vec[u8]) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut end = b.len();
+    while end > 0 {
+        let start = if end >= 8 { end - 8 } else { 0 };
+        let mut w = 0u64;
+        let mut k = start;
+        while k < end {
+            w = (w << 8) | (b[k] as u64);
+            k += 1;
+        }
+        out.push(w);
+        end = start;
+    }
+    bn_norm(mut out);
+    out
+}
+
+// int.to_bytes(length, 'big'), for a value that fits.
+fn bn_to_bytes(a: ref Vec[u64], length: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = length - 1;
+    while k >= 0 {
+        let limb = k / 8;
+        let byte = if limb < a.len() { ((a[limb] >> ((k % 8) * 8)) & 0xFFu64) as u8 } else { 0u8 };
+        out.push(byte);
+        k -= 1;
+    }
+    out
+}
+
+fn bn_to_i64(a: ref Vec[u64]) -> i64 {
+    if a.len() == 0 { 0 } else { a[0] as i64 }
+}
+
+// str(int)
+fn bn_str(a: ref Vec[u64]) -> String {
+    if a.len() == 0 {
+        return "0".to_string();
+    }
+    let mut chunks: Vec[u64] = Vec.new();
+    let mut cur = a.clone();
+    while cur.len() > 0 {
+        let (q, r) = bn_divmod_small(cur, 10000000000000000000u64);
+        chunks.push(r);
+        cur = q;
+    }
+    let mut s = f"{chunks[chunks.len() - 1]}";
+    let mut i = chunks.len() - 2;
+    while i >= 0 {
+        let part = f"{chunks[i]}";
+        let mut pad = 19 - part.len();
+        while pad > 0 {
+            s.push('0');
+            pad -= 1;
+        }
+        s.push_str(part);
+        i -= 1;
+    }
+    s
+}
+
+fn bn_parse(s: Str) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    for c in s.bytes() {
+        out = bn_add(bn_mul_small(out, 10u64), bn((c - 48u8) as i64));
+    }
+    out
+}
+
+// A signed value, for extended_gcd's coefficients.
+struct SBig {
+    neg: bool,
+    mag: Vec[u64],
+}
+
+fn s_of(a: ref Vec[u64]) -> SBig {
+    SBig { neg: false, mag: a.clone() }
+}
+
+// a - b
+fn s_sub(a: ref SBig, b: ref SBig) -> SBig {
+    if a.neg != b.neg {
+        return SBig { neg: a.neg, mag: bn_add(a.mag, b.mag) };
+    }
+    if bn_cmp(a.mag, b.mag) >= 0 {
+        let m = bn_sub(a.mag, b.mag);
+        SBig { neg: a.neg and m.len() > 0, mag: m }
+    } else {
+        SBig { neg: not a.neg, mag: bn_sub(b.mag, a.mag) }
+    }
+}
+
+fn s_mul(q: ref Vec[u64], x: ref SBig) -> SBig {
+    let m = bn_mul(q, x.mag);
+    SBig { neg: x.neg and m.len() > 0, mag: m }
+}
+
+// (s1 - s2) * c % p, with Python's non-negative %.
+fn bn_sub_mul_mod(s1: ref Vec[u64], s2: ref Vec[u64], c: ref Vec[u64], p: ref Vec[u64]) -> Vec[u64] {
+    if bn_cmp(s1, s2) >= 0 {
+        return bn_mod(bn_mul(bn_sub(s1, s2), c), p);
+    }
+    let r = bn_mod(bn_mul(bn_sub(s2, s1), c), p);
+    if r.len() == 0 { r } else { bn_sub(p, r) }
+}
+// ------------------------------------------------------------ the generator
+
+// os.urandom as oracle.py replaces it: splitmix64, each read taking whole
+// words and their little-endian bytes.
+struct Rng {
+    state: u64,
+}
+
+fn rng_word(r: mut ref Rng) -> u64 {
+    r.state = r.state.wrapping_add(0x9E3779B97F4A7C15u64);
+    let mut z = r.state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9u64);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EBu64);
+    z ^ (z >> 31)
+}
+
+fn urandom(r: mut ref Rng, n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    while out.len() < n {
+        let w = rng_word(mut r);
+        for k in 0..8 {
+            out.push(((w >> (k * 8)) & 0xFFu64) as u8);
+        }
+    }
+    out.truncate(n);
+    out
+}
+
+// --------------------------------------------------------------- errors
+
+// An exception: its class name and message.
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+// ------------------------------------------------------------ rsa.common
+
+fn byte_size(n: ref Vec[u64]) -> i64 {
+    if n.len() == 0 {
+        return 1;
+    }
+    ceil_div(bn_bits(n), 8)
+}
+
+fn ceil_div(num: i64, div: i64) -> i64 {
+    let mut q = num / div;
+    if num % div != 0 {
+        q += 1;
+    }
+    q
+}
+
+// extended_gcd(a, b) -> (gcd, lx, ly)
+fn extended_gcd(a0: ref Vec[u64], b0: ref Vec[u64]) -> (Vec[u64], Vec[u64], Vec[u64]) {
+    let mut a = a0.clone();
+    let mut b = b0.clone();
+    let mut x = s_of(bn(0));
+    let mut y = s_of(bn(1));
+    let mut lx = s_of(bn(1));
+    let mut ly = s_of(bn(0));
+    while b.len() > 0 {
+        let (q, r) = bn_divmod(a, b);
+        a = b;
+        b = r;
+        let nx = s_sub(lx, s_mul(q, x));
+        lx = x;
+        x = nx;
+        let ny = s_sub(ly, s_mul(q, y));
+        ly = y;
+        y = ny;
+    }
+    let lxv = if lx.neg { bn_sub(b0, lx.mag) } else { lx.mag.clone() };
+    let lyv = if ly.neg { bn_sub(a0, ly.mag) } else { ly.mag.clone() };
+    (a, lxv, lyv)
+}
+
+fn inverse(x: ref Vec[u64], n: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    let (divider, inv, _) = extended_gcd(x, n);
+    if not bn_eq_small(divider, 1) {
+        return Err(exc("NotRelativePrimeError", f"{bn_str(x)} and {bn_str(n)} are not relatively prime, divider={bn_str(divider)}"));
+    }
+    Ok(inv)
+}
+
+fn crt(a_values: ref Vec[Vec[u64]], modulo_values: ref Vec[Vec[u64]]) -> Result[Vec[u64], Exc] {
+    let mut m = bn(1);
+    let mut x = bn(0);
+    for modulo in modulo_values {
+        m = bn_mul(m, modulo);
+    }
+    let mut i = 0;
+    while i < modulo_values.len() and i < a_values.len() {
+        let m_i = modulo_values[i].clone();
+        let big_m = bn_div(m, m_i);
+        let inv = inverse(big_m, m_i)?;
+        x = bn_mod(bn_add(x, bn_mul(bn_mul(a_values[i], big_m), inv)), m);
+        i += 1;
+    }
+    Ok(x)
+}
+
+// ----------------------------------------------------------- rsa.randnum
+
+fn read_random_bits(r: mut ref Rng, nbits: i64) -> Vec[u8] {
+    let nbytes = nbits / 8;
+    let rbits = nbits % 8;
+    let mut data = urandom(mut r, nbytes);
+    if rbits > 0 {
+        let v = urandom(mut r, 1)[0] >> (8 - rbits);
+        data.insert(0, v);
+    }
+    data
+}
+
+fn read_random_int(r: mut ref Rng, nbits: i64) -> Vec[u64] {
+    let v = bn_from_bytes(read_random_bits(mut r, nbits));
+    let top = bn_shl(bn(1), nbits - 1);
+    bn_or(v, top)
+}
+
+fn bn_or(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    let mut out: Vec[u64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let x = if i < a.len() { a[i] } else { 0u64 };
+        let y = if i < b.len() { b[i] } else { 0u64 };
+        out.push(x | y);
+        i += 1;
+    }
+    bn_norm(mut out);
+    out
+}
+
+fn read_random_odd_int(r: mut ref Rng, nbits: i64) -> Vec[u64] {
+    bn_or(read_random_int(mut r, nbits), bn(1))
+}
+
+fn randint(r: mut ref Rng, maxvalue: ref Vec[u64]) -> Vec[u64] {
+    let mut bit_size = bn_bits(maxvalue);
+    let mut tries = 0;
+    loop {
+        let value = read_random_int(mut r, bit_size);
+        if bn_cmp(value, maxvalue) <= 0 {
+            return value;
+        }
+        if tries % 10 == 0 and tries > 0 {
+            bit_size -= 1;
+        }
+        tries += 1;
+    }
+}
+
+// ------------------------------------------------------------- rsa.prime
+
+fn gcd(p0: ref Vec[u64], q0: ref Vec[u64]) -> Vec[u64] {
+    let mut p = p0.clone();
+    let mut q = q0.clone();
+    while q.len() > 0 {
+        let r = bn_mod(p, q);
+        p = q;
+        q = r;
+    }
+    p
+}
+
+fn primality_rounds(n: ref Vec[u64]) -> i64 {
+    let b = bn_bits(n);
+    if b >= 1536 {
+        3
+    } else if b >= 1024 {
+        4
+    } else if b >= 512 {
+        7
+    } else {
+        10
+    }
+}
+
+fn miller_rabin(r: mut ref Rng, n: ref Vec[u64], k: i64) -> bool {
+    if bn_cmp(n, bn(2)) < 0 {
+        return false;
+    }
+    let one = bn(1);
+    let n1 = bn_sub(n, one);
+    let mut d = n1.clone();
+    let mut rr = 0;
+    while not bn_is_odd(d) {
+        rr += 1;
+        d = bn_shr(d, 1);
+    }
+    let n3 = bn_sub(n, bn(3));
+    for _ in 0..k {
+        let a = bn_add(randint(mut r, n3), one);
+        let mut x = bn_powmod(a, d, n);
+        if bn_eq_small(x, 1) or bn_cmp(x, n1) == 0 {
+            continue;
+        }
+        let mut found = false;
+        for _ in 0..(rr - 1) {
+            x = bn_powmod(x, bn(2), n);
+            if bn_eq_small(x, 1) {
+                return false;
+            }
+            if bn_cmp(x, n1) == 0 {
+                found = true;
+                break;
+            }
+        }
+        if not found {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_prime(r: mut ref Rng, n: ref Vec[u64]) -> bool {
+    if bn_cmp(n, bn(10)) < 0 {
+        let v = bn_to_i64(n);
+        return v == 2 or v == 3 or v == 5 or v == 7;
+    }
+    if not bn_is_odd(n) {
+        return false;
+    }
+    let k = primality_rounds(n);
+    miller_rabin(mut r, n, k + 1)
+}
+
+fn getprime(r: mut ref Rng, nbits: i64) -> Vec[u64] {
+    loop {
+        let v = read_random_odd_int(mut r, nbits);
+        if is_prime(mut r, v) {
+            return v;
+        }
+    }
+}
+
+// --------------------------------------------------------------- rsa.key
+
+// A PublicKey or a PrivateKey (d and the rest empty), with the blinding
+// factor the key object keeps.
+struct Key {
+    is_private: bool,
+    n: Vec[u64],
+    e: Vec[u64],
+    d: Vec[u64],
+    p: Vec[u64],
+    q: Vec[u64],
+    exp1: Vec[u64],
+    exp2: Vec[u64],
+    coef: Vec[u64],
+    blindfac: Vec[u64],
+    blindfac_inverse: Vec[u64],
+    blinded: bool,
+}
+
+fn public_key(n: own Vec[u64], e: own Vec[u64]) -> Key {
+    Key { is_private: false, n: n, e: e, d: Vec.new(), p: Vec.new(), q: Vec.new(), exp1: Vec.new(), exp2: Vec.new(), coef: Vec.new(), blindfac: Vec.new(), blindfac_inverse: Vec.new(), blinded: false }
+}
+
+fn private_key(n: own Vec[u64], e: own Vec[u64], d: own Vec[u64], p: own Vec[u64], q: own Vec[u64]) -> Result[Key, Exc] {
+    let exp1 = bn_mod(d, bn_sub(p, bn(1)));
+    let exp2 = bn_mod(d, bn_sub(q, bn(1)));
+    let coef = inverse(q, p)?;
+    Ok(Key { is_private: true, n: n, e: e, d: d, p: p, q: q, exp1: exp1, exp2: exp2, coef: coef, blindfac: Vec.new(), blindfac_inverse: Vec.new(), blinded: false })
+}
+
+fn pub_of(k: ref Key) -> Key {
+    public_key(k.n.clone(), k.e.clone())
+}
+
+fn key_repr(k: ref Key) -> String {
+    if k.is_private {
+        f"PrivateKey({bn_str(k.n)}, {bn_str(k.e)}, {bn_str(k.d)}, {bn_str(k.p)}, {bn_str(k.q)})"
+    } else {
+        f"PublicKey({bn_str(k.n)}, {bn_str(k.e)})"
+    }
+}
+
+fn update_blinding_factor(r: mut ref Rng, k: mut ref Key) -> Result[(), Exc] {
+    if not k.blinded {
+        let n1 = bn_sub(k.n, bn(1));
+        let mut found = false;
+        for _ in 0..1000 {
+            let blind_r = randint(mut r, n1);
+            if bn_eq_small(gcd(k.n, blind_r), 1) {
+                k.blindfac = blind_r;
+                found = true;
+                break;
+            }
+        }
+        if not found {
+            return Err(exc("RuntimeError", "unable to find blinding factor".to_string()));
+        }
+        k.blindfac_inverse = inverse(k.blindfac, k.n)?;
+        k.blinded = true;
+    } else {
+        k.blindfac = bn_powmod(k.blindfac, bn(2), k.n);
+        k.blindfac_inverse = bn_powmod(k.blindfac_inverse, bn(2), k.n);
+    }
+    Ok(())
+}
+
+// blind(message) -> (blinded, blindfac_inverse)
+fn blind(r: mut ref Rng, k: mut ref Key, message: ref Vec[u64]) -> Result[(Vec[u64], Vec[u64]), Exc] {
+    update_blinding_factor(mut r, mut k)?;
+    let blinded = bn_mod(bn_mul(message, bn_powmod(k.blindfac, k.e, k.n)), k.n);
+    Ok((blinded, k.blindfac_inverse.clone()))
+}
+
+fn unblind(k: ref Key, blinded: ref Vec[u64], inv: ref Vec[u64]) -> Vec[u64] {
+    bn_mod(bn_mul(inv, blinded), k.n)
+}
+
+fn blinded_decrypt(r: mut ref Rng, k: mut ref Key, encrypted: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    let (blinded, inv) = blind(mut r, mut k, encrypted)?;
+    let s1 = bn_powmod(blinded, k.exp1, k.p);
+    let s2 = bn_powmod(blinded, k.exp2, k.q);
+    let h = bn_sub_mul_mod(s1, s2, k.coef, k.p);
+    let decrypted = bn_add(s2, bn_mul(k.q, h));
+    Ok(unblind(k, decrypted, inv))
+}
+
+fn blinded_encrypt(r: mut ref Rng, k: mut ref Key, message: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    let (blinded, inv) = blind(mut r, mut k, message)?;
+    let encrypted = encrypt_int(blinded, k.d, k.n)?;
+    Ok(unblind(k, encrypted, inv))
+}
+
+fn encrypt_int(message: ref Vec[u64], ekey: ref Vec[u64], n: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    if bn_cmp(message, n) > 0 {
+        return Err(exc("OverflowError", f"The message {bn_str(message)} is too long for n={bn_str(n)}"));
+    }
+    Ok(bn_powmod(message, ekey, n))
+}
+
+fn find_p_q(r: mut ref Rng, nbits: i64) -> (Vec[u64], Vec[u64]) {
+    let total_bits = nbits * 2;
+    let shift = nbits / 16;
+    let pbits = nbits + shift;
+    let qbits = nbits - shift;
+    let mut p = getprime(mut r, pbits);
+    let mut q = getprime(mut r, qbits);
+    let mut change_p = false;
+    while bn_cmp(p, q) == 0 or bn_bits(bn_mul(p, q)) != total_bits {
+        if change_p {
+            p = getprime(mut r, pbits);
+        } else {
+            q = getprime(mut r, qbits);
+        }
+        change_p = not change_p;
+    }
+    if bn_cmp(p, q) >= 0 { (p, q) } else { (q, p) }
+}
+
+// newkeys(nbits) -> the private key (whose n and e are the public key)
+fn newkeys(r: mut ref Rng, nbits: i64) -> Result[Key, Exc] {
+    if nbits < 16 {
+        return Err(exc("ValueError", "Key too small".to_string()));
+    }
+    let e = bn(65537);
+    loop {
+        let (p, q) = find_p_q(mut r, nbits / 2);
+        let phi_n = bn_mul(bn_sub(p, bn(1)), bn_sub(q, bn(1)));
+        // calculate_keys_custom_exponent: a NotRelativePrimeError is a
+        // ValueError, and gen_keys tries again.
+        let d = match inverse(e, phi_n) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if not bn_eq_small(bn_mod(bn_mul(e, d), phi_n), 1) {
+            continue;
+        }
+        let n = bn_mul(p, q);
+        return private_key(n, e, d, p, q);
+    }
+}
+
+// ----------------------------------------------------------- DER and PEM
+
+fn der_len(out: mut ref Vec[u8], n: i64) {
+    if n < 128 {
+        out.push(n as u8);
+        return;
+    }
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut v = n;
+    while v > 0 {
+        bytes.insert(0, (v % 256) as u8);
+        v = v / 256;
+    }
+    out.push((0x80 + bytes.len()) as u8);
+    for b in bytes {
+        out.push(b);
+    }
+}
+
+fn der_tlv(tag: u8, body: ref Vec[u8]) -> Vec[u8] {
+    let mut out = [tag].to_vec();
+    der_len(mut out, body.len());
+    for b in body {
+        out.push(b);
+    }
+    out
+}
+
+// pyasn1's INTEGER: the shortest two's complement form.
+fn der_int(v: ref Vec[u64]) -> Vec[u8] {
+    let body = bn_to_bytes(v, bn_bits(v) / 8 + 1);
+    der_tlv(0x02u8, body)
+}
+
+fn der_seq_of_ints(vals: ref Vec[Vec[u64]]) -> Vec[u8] {
+    let mut body: Vec[u8] = Vec.new();
+    for v in vals {
+        for b in der_int(v) {
+            body.push(b);
+        }
+    }
+    der_tlv(0x30u8, body)
+}
+
+fn save_der(k: ref Key) -> Vec[u8] {
+    if k.is_private {
+        der_seq_of_ints([bn(0), k.n.clone(), k.e.clone(), k.d.clone(), k.p.clone(), k.q.clone(), k.exp1.clone(), k.exp2.clone(), k.coef.clone()].to_vec())
+    } else {
+        der_seq_of_ints([k.n.clone(), k.e.clone()].to_vec())
+    }
+}
+
+// One TLV at pos: its tag, and where its body starts and ends.
+fn der_read(b: ref Vec[u8], pos: i64) -> Result[(u8, i64, i64), Exc] {
+    if pos + 2 > b.len() {
+        return Err(exc("PyAsn1Error", "short substrate".to_string()));
+    }
+    let tag = b[pos];
+    let first = b[pos + 1] as i64;
+    let mut at = pos + 2;
+    let mut len = first;
+    if first >= 128 {
+        let n = first - 128;
+        len = 0;
+        for _ in 0..n {
+            len = len * 256 + (b[at] as i64);
+            at += 1;
+        }
+    }
+    if at + len > b.len() {
+        return Err(exc("PyAsn1Error", "short substrate".to_string()));
+    }
+    Ok((tag, at, at + len))
+}
+
+// A SEQUENCE of INTEGERs, as pyasn1 decodes the non-negative ones.
+fn der_ints(b: ref Vec[u8], start: i64, end: i64) -> Result[Vec[Vec[u64]], Exc] {
+    let mut out: Vec[Vec[u64]] = Vec.new();
+    let mut at = start;
+    while at < end {
+        let (tag, s, e) = der_read(b, at)?;
+        if tag != 0x02u8 {
+            return Err(exc("PyAsn1Error", "unexpected tag".to_string()));
+        }
+        let mut body: Vec[u8] = Vec.new();
+        for k in s..e {
+            body.push(b[k]);
+        }
+        out.push(bn_from_bytes(body));
+        at = e;
+    }
+    Ok(out)
+}
+
+fn load_private_der(der: ref Vec[u8]) -> Result[Key, Exc] {
+    let (_, s, e) = der_read(der, 0)?;
+    let v = der_ints(der, s, e)?;
+    if v[0].len() != 0 {
+        return Err(exc("ValueError", f"Unable to read this file, version {bn_str(v[0])} != 0"));
+    }
+    private_key(v[1].clone(), v[2].clone(), v[3].clone(), v[4].clone(), v[5].clone())
+}
+
+fn load_public_der(der: ref Vec[u8]) -> Result[Key, Exc] {
+    let (_, s, e) = der_read(der, 0)?;
+    let v = der_ints(der, s, e)?;
+    Ok(public_key(v[0].clone(), v[1].clone()))
+}
+
+// load_pkcs1_openssl_der: SubjectPublicKeyInfo around a PKCS#1 key.
+fn load_openssl_der(der: ref Vec[u8]) -> Result[Key, Exc] {
+    let (_, s, _) = der_read(der, 0)?;
+    let (_, hs, he) = der_read(der, s)?;
+    let (_, os, oe) = der_read(der, hs)?;
+    let rsa_oid: Vec[u8] = [0x2Au8, 0x86u8, 0x48u8, 0x86u8, 0xF7u8, 0x0Du8, 0x01u8, 0x01u8, 0x01u8].to_vec();
+    let mut oid: Vec[u8] = Vec.new();
+    for k in os..oe {
+        oid.push(der[k]);
+    }
+    if oid != rsa_oid {
+        return Err(exc("TypeError", "This is not a DER-encoded OpenSSL-compatible public key".to_string()));
+    }
+    let (_, ks, ke) = der_read(der, he)?;
+    let mut inner: Vec[u8] = Vec.new();
+    for k in (ks + 1)..ke {
+        inner.push(der[k]);
+    }
+    load_public_der(inner)
+}
+
+fn bytes_strip(b: ref Vec[u8]) -> Vec[u8] {
+    let mut s = 0;
+    let mut e = b.len();
+    while s < e and is_ws(b[s]) {
+        s += 1;
+    }
+    while e > s and is_ws(b[e - 1]) {
+        e -= 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for k in s..e {
+        out.push(b[k]);
+    }
+    out
+}
+
+// bytes.splitlines()
+fn bytes_lines(b: ref Vec[u8]) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == 10u8 or c == 13u8 {
+            out.push(cur);
+            cur = Vec.new();
+            if c == 13u8 and i + 1 < b.len() and b[i + 1] == 10u8 {
+                i += 1;
+            }
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn load_pem(contents: ref Vec[u8], marker: Str) -> Result[Vec[u8], Exc] {
+    let start = to_bytes(f"-----BEGIN {marker}-----");
+    let end = to_bytes(f"-----END {marker}-----");
+    let mut in_part = false;
+    let mut seen_start = false;
+    let mut b64: Vec[u8] = Vec.new();
+    for raw in bytes_lines(contents) {
+        let line = bytes_strip(raw);
+        if line.len() == 0 {
+            continue;
+        }
+        if line == start {
+            if in_part {
+                return Err(exc("ValueError", f"Seen start marker \"{bytes_repr(start)}\" twice"));
+            }
+            in_part = true;
+            seen_start = true;
+            continue;
+        }
+        if not in_part {
+            continue;
+        }
+        if line == end {
+            in_part = false;
+            break;
+        }
+        if line.contains(58u8) {
+            continue;
+        }
+        for c in line {
+            b64.push(c);
+        }
+    }
+    if not seen_start {
+        return Err(exc("ValueError", f"No PEM start marker \"{bytes_repr(start)}\" found"));
+    }
+    if in_part {
+        return Err(exc("ValueError", f"No PEM end marker \"{bytes_repr(end)}\" found"));
+    }
+    b64_decode(b64)
+}
+
+// base64.standard_b64decode: characters outside the alphabet are dropped.
+fn b64_decode(s: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut acc = 0;
+    let mut nbits = 0;
+    let mut count = 0;
+    let mut pad = 0;
+    for c in s {
+        if c == 61u8 {
+            pad += 1;
+            continue;
+        }
+        let v = b64_value(c);
+        if v < 0 {
+            continue;
+        }
+        acc = (acc << 6) | v;
+        nbits += 6;
+        count += 1;
+        if nbits >= 8 {
+            nbits -= 8;
+            out.push(((acc >> nbits) & 0xFF) as u8);
+            acc = acc & ((1 << nbits) - 1);
+        }
+    }
+    if (count + pad) % 4 != 0 {
+        return Err(exc("Error", "Incorrect padding".to_string()));
+    }
+    Ok(out)
+}
+
+fn save_pem(der: ref Vec[u8], marker: Str) -> String {
+    let b64 = b64_encode(der);
+    let mut s = f"-----BEGIN {marker}-----\n";
+    let mut i = 0;
+    while i < b64.len() {
+        let j = if i + 64 < b64.len() { i + 64 } else { b64.len() };
+        s.push_str(slice(b64, i, j));
+        s.push('\n');
+        i = j;
+    }
+    s.push_str(f"-----END {marker}-----\n");
+    s
+}
+
+fn save_pkcs1(k: ref Key) -> String {
+    save_pem(save_der(k), if k.is_private { "RSA PRIVATE KEY" } else { "RSA PUBLIC KEY" })
+}
+
+// ------------------------------------------------------------- rsa.pkcs1
+
+fn hash_names() -> Vec[String] {
+    ["MD5".to_string(), "SHA-1".to_string(), "SHA-224".to_string(), "SHA-256".to_string(), "SHA-384".to_string(), "SHA-512".to_string(), "SHA3-256".to_string(), "SHA3-384".to_string(), "SHA3-512".to_string()].to_vec()
+}
+
+// HASH_ASN1: the DigestInfo prefix of each method.
+fn hash_asn1(name: Str) -> Vec[u8] {
+    let hex = if name == "MD5" {
+        "3020300c06082a864886f70d020505000410"
+    } else if name == "SHA-1" {
+        "3021300906052b0e03021a05000414"
+    } else if name == "SHA-224" {
+        "302d300d06096086480165030402040500041c"
+    } else if name == "SHA-256" {
+        "3031300d060960864801650304020105000420"
+    } else if name == "SHA-384" {
+        "3041300d060960864801650304020205000430"
+    } else if name == "SHA-512" {
+        "3051300d060960864801650304020305000440"
+    } else if name == "SHA3-256" {
+        "3031300d060960864801650304020805000420"
+    } else if name == "SHA3-384" {
+        "3041300d060960864801650304020905000430"
+    } else {
+        "3051300d060960864801650304020a05000440"
+    };
+    hex_decode(hex)
+}
+
+fn known_hash(name: Str) -> bool {
+    for h in hash_names() {
+        if h == name {
+            return true;
+        }
+    }
+    false
+}
+
+// compute_hash; the SHA-3 methods are not ported.
+fn compute_hash(message: ref Vec[u8], name: Str) -> Result[Vec[u8], Exc] {
+    if not known_hash(name) {
+        return Err(exc("ValueError", f"Invalid hash method: {name}"));
+    }
+    if name == "MD5" {
+        Ok(md5(message))
+    } else if name == "SHA-1" {
+        Ok(sha1(message))
+    } else if name == "SHA-224" {
+        Ok(sha256_family(message, true))
+    } else if name == "SHA-256" {
+        Ok(sha256_family(message, false))
+    } else if name == "SHA-384" {
+        Ok(sha512_family(message, true))
+    } else if name == "SHA-512" {
+        Ok(sha512_family(message, false))
+    } else {
+        Err(exc("NotImplementedError", f"{name} is not ported"))
+    }
+}
+
+fn digest_size(name: Str) -> i64 {
+    if name == "MD5" {
+        16
+    } else if name == "SHA-1" {
+        20
+    } else if name == "SHA-224" {
+        28
+    } else if name == "SHA-256" or name == "SHA3-256" {
+        32
+    } else if name == "SHA-384" or name == "SHA3-384" {
+        48
+    } else {
+        64
+    }
+}
+
+fn pad_for_encryption(r: mut ref Rng, message: ref Vec[u8], target: i64) -> Result[Vec[u8], Exc] {
+    let max_len = target - 11;
+    if message.len() > max_len {
+        return Err(exc("OverflowError", f"{message.len()} bytes needed for message, but there is only space for {max_len}"));
+    }
+    let padding_length = target - message.len() - 3;
+    let mut padding: Vec[u8] = Vec.new();
+    while padding.len() < padding_length {
+        let needed = padding_length - padding.len();
+        let mut fresh: Vec[u8] = Vec.new();
+        for b in urandom(mut r, needed + 5) {
+            if b != 0u8 {
+                fresh.push(b);
+            }
+        }
+        let mut k = 0;
+        while k < fresh.len() and k < needed {
+            padding.push(fresh[k]);
+            k += 1;
+        }
+    }
+    let mut out: Vec[u8] = [0u8, 2u8].to_vec();
+    for b in padding {
+        out.push(b);
+    }
+    out.push(0u8);
+    for b in message {
+        out.push(b);
+    }
+    Ok(out)
+}
+
+fn pad_for_signing(message: ref Vec[u8], target: i64) -> Result[Vec[u8], Exc] {
+    let max_len = target - 11;
+    if message.len() > max_len {
+        return Err(exc("OverflowError", f"{message.len()} bytes needed for message, but there is only space for {max_len}"));
+    }
+    let padding_length = target - message.len() - 3;
+    let mut out: Vec[u8] = [0u8, 1u8].to_vec();
+    for _ in 0..padding_length {
+        out.push(0xFFu8);
+    }
+    out.push(0u8);
+    for b in message {
+        out.push(b);
+    }
+    Ok(out)
+}
+
+fn encrypt(r: mut ref Rng, message: ref Vec[u8], k: ref Key) -> Result[Vec[u8], Exc] {
+    let keylength = byte_size(k.n);
+    let padded = pad_for_encryption(mut r, message, keylength)?;
+    let payload = bn_from_bytes(padded);
+    let encrypted = encrypt_int(payload, k.e, k.n)?;
+    Ok(bn_to_bytes(encrypted, keylength))
+}
+
+fn decrypt(r: mut ref Rng, crypto: ref Vec[u8], k: mut ref Key) -> Result[Vec[u8], Exc] {
+    let blocksize = byte_size(k.n);
+    let encrypted = bn_from_bytes(crypto);
+    let decrypted = blinded_decrypt(mut r, mut k, encrypted)?;
+    let clear = bn_to_bytes(decrypted, blocksize);
+    if crypto.len() > blocksize {
+        return Err(exc("DecryptionError", "Decryption failed".to_string()));
+    }
+    let marker_bad = clear.len() < 2 or clear[0] != 0u8 or clear[1] != 2u8;
+    let mut sep = -1;
+    let mut i = 2;
+    while i < clear.len() {
+        if clear[i] == 0u8 {
+            sep = i;
+            break;
+        }
+        i += 1;
+    }
+    if marker_bad or sep < 10 {
+        return Err(exc("DecryptionError", "Decryption failed".to_string()));
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for k2 in (sep + 1)..clear.len() {
+        out.push(clear[k2]);
+    }
+    Ok(out)
+}
+
+fn sign(r: mut ref Rng, message: ref Vec[u8], k: mut ref Key, method: Str) -> Result[Vec[u8], Exc] {
+    let h = compute_hash(message, method)?;
+    let mut clear = hash_asn1(method);
+    for b in h {
+        clear.push(b);
+    }
+    let keylength = byte_size(k.n);
+    let padded = pad_for_signing(clear, keylength)?;
+    let payload = bn_from_bytes(padded);
+    let encrypted = blinded_encrypt(mut r, mut k, payload)?;
+    Ok(bn_to_bytes(encrypted, keylength))
+}
+
+fn bytes_find(hay: ref Vec[u8], needle: ref Vec[u8]) -> bool {
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        let mut ok = true;
+        let mut j = 0;
+        while j < needle.len() {
+            if hay[i + j] != needle[j] {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if ok {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn verify(message: ref Vec[u8], signature: ref Vec[u8], k: ref Key) -> Result[String, Exc] {
+    let keylength = byte_size(k.n);
+    let encrypted = bn_from_bytes(signature);
+    let decrypted = bn_powmod(encrypted, k.e, k.n);
+    let clearsig = bn_to_bytes(decrypted, keylength);
+    let mut method = String.new();
+    for h in hash_names() {
+        if bytes_find(clearsig, hash_asn1(h)) {
+            method = h.clone();
+            break;
+        }
+    }
+    if method.len() == 0 {
+        return Err(exc("VerificationError", "Verification failed".to_string()));
+    }
+    let mh = compute_hash(message, method)?;
+    let mut clear = hash_asn1(method);
+    for b in mh {
+        clear.push(b);
+    }
+    let expected = pad_for_signing(clear, keylength)?;
+    if signature.len() != keylength or expected != clearsig {
+        return Err(exc("VerificationError", "Verification failed".to_string()));
+    }
+    Ok(method)
+}
+
+// pkcs1_v2.mgf1
+fn mgf1(seed: ref Vec[u8], length: i64, hasher: Str) -> Result[Vec[u8], Exc] {
+    if not known_hash(hasher) {
+        let mut names = hash_names();
+        names.sort();
+        return Err(exc("ValueError", f"Invalid `hasher` specified. Please select one of: {join(names, ", ")}"));
+    }
+    let hlen = digest_size(hasher);
+    let mut out: Vec[u8] = Vec.new();
+    let mut counter = 0;
+    while counter < ceil_div(length, hlen) + 1 {
+        let mut block = seed.clone();
+        for b in bn_to_bytes(bn(counter), 4) {
+            block.push(b);
+        }
+        for b in compute_hash(block, hasher)? {
+            out.push(b);
+        }
+        counter += 1;
+    }
+    out.truncate(length);
+    Ok(out)
+}
+
+// ------------------------------------------------------------------ jobs
+
+fn read_file(path: Str) -> Vec[u8] {
+    match fs.read_bytes(f"data/{path}") {
+        Ok(b) => b,
+        Err(_) => Vec.new(),
+    }
+}
+
+fn key_index(keys: ref Vec[(String, Key)], name: Str) -> i64 {
+    let mut i = 0;
+    while i < keys.len() {
+        if keys[i].0 == name {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn put_key(keys: mut ref Vec[(String, Key)], name: Str, k: own Key) {
+    let at = key_index(keys, name);
+    if at >= 0 {
+        keys[at].1 = k;
+    } else {
+        keys.push((name.to_string(), k));
+    }
+}
+
+fn words_from(w: ref Vec[String], from: i64) -> Vec[u8] {
+    let mut parts: Vec[String] = Vec.new();
+    let mut i = from;
+    while i < w.len() {
+        parts.push(w[i].clone());
+        i += 1;
+    }
+    to_bytes(join(parts, " "))
+}
+
+fn same_pub(a: ref Key, b: ref Key) -> bool {
+    bn_cmp(a.n, b.n) == 0 and bn_cmp(a.e, b.e) == 0
+}
+
+fn print_block(s: Str) {
+    for line in split_on(s, 10u8) {
+        if line.len() > 0 {
+            println(f"  {line}");
+        }
+    }
+}
+
+fn run_job(rng: mut ref Rng, keys: mut ref Vec[(String, Key)], last: mut ref Vec[u8], sig: mut ref Vec[u8], w: ref Vec[String]) -> Result[(), Exc] {
+    let cmd = w[0].clone();
+    if cmd == "seed" {
+        rng.state = py_int(w[1]).unwrap() as u64;
+    } else if cmd == "newkeys" {
+        let k = newkeys(mut rng, py_int(w[2]).unwrap())?;
+        println(f"  n has {bn_bits(k.n)} bits, p {bn_bits(k.p)}, q {bn_bits(k.q)}, e={bn_str(k.e)}");
+        put_key(mut keys, w[1], k);
+    } else if cmd == "show" {
+        let k = ref keys[key_index(keys, w[1])].1;
+        println(f"  {key_repr(pub_of(k))}");
+        println(f"  {key_repr(k)}");
+    } else if cmd == "pem" {
+        let k = ref keys[key_index(keys, w[1])].1;
+        print_block(save_pkcs1(k));
+        print_block(save_pkcs1(pub_of(k)));
+    } else if cmd == "der" {
+        let k = ref keys[key_index(keys, w[1])].1;
+        println(f"  private {hex_of(save_der(k))}");
+        println(f"  public  {hex_of(save_der(pub_of(k)))}");
+    } else if cmd == "load" or cmd == "loadpub" or cmd == "loadssl" {
+        let data = read_file(w[2]);
+        let k = if cmd == "load" {
+            load_private_der(load_pem(data, "RSA PRIVATE KEY")?)?
+        } else if cmd == "loadpub" {
+            load_public_der(load_pem(data, "RSA PUBLIC KEY")?)?
+        } else {
+            load_openssl_der(load_pem(data, "PUBLIC KEY")?)?
+        };
+        let kind = if k.is_private { "PrivateKey" } else { "PublicKey" };
+        println(f"  {kind}, n has {bn_bits(k.n)} bits, e={bn_str(k.e)}");
+        put_key(mut keys, w[1], k);
+    } else if cmd == "same" {
+        let a = ref keys[key_index(keys, w[1])].1;
+        let b = ref keys[key_index(keys, w[2])].1;
+        println(f"  {if same_pub(a, b) { "True" } else { "False" }}");
+    } else if cmd == "resave" {
+        let k = ref keys[key_index(keys, w[1])].1;
+        let same = to_bytes(save_pkcs1(k)) == read_file(w[2]);
+        println(f"  {if same { "identical" } else { "differs" }}");
+    } else if cmd == "encrypt" {
+        let at = key_index(keys, w[1]);
+        let c = encrypt(mut rng, words_from(w, 2), keys[at].1)?;
+        println(f"  {c.len()} bytes {hex_of(c)}");
+        *last = c;
+    } else if cmd == "decrypt" {
+        let at = key_index(keys, w[1]);
+        let m = decrypt(mut rng, last, mut keys[at].1)?;
+        println(f"  {bytes_repr(m)}");
+    } else if cmd == "sign" {
+        let at = key_index(keys, w[1]);
+        let s = sign(mut rng, words_from(w, 3), mut keys[at].1, w[2])?;
+        println(f"  {s.len()} bytes {hex_of(s)}");
+        *sig = s;
+    } else if cmd == "verify" {
+        let k = ref keys[key_index(keys, w[1])].1;
+        println(f"  {verify(words_from(w, 2), sig, k)?}");
+    } else if cmd == "mgf1" {
+        println(f"  {hex_of(mgf1(hex_decode(w[1]), py_int(w[2]).unwrap(), w[3])?)}");
+    } else if cmd == "inverse" {
+        println(f"  {bn_str(inverse(bn_parse(w[1]), bn_parse(w[2]))?)}");
+    } else if cmd == "crt" {
+        let mut a: Vec[Vec[u64]] = Vec.new();
+        for x in split_on(w[1], 44u8) {
+            a.push(bn_parse(x));
+        }
+        let mut m: Vec[Vec[u64]] = Vec.new();
+        for x in split_on(w[2], 44u8) {
+            m.push(bn_parse(x));
+        }
+        println(f"  {bn_str(crt(a, m)?)}");
+    } else if cmd == "prime" {
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 1;
+        while i < w.len() {
+            let p = is_prime(mut rng, bn_parse(w[i]));
+            parts.push(f"{w[i]}:{if p { "True" } else { "False" }}");
+            i += 1;
+        }
+        println(f"  {join(parts, " ")}");
+    } else if cmd == "!licenses" {
+        let signer = key_index(keys, w[3]);
+        let checker = key_index(keys, w[4]);
+        licenses(mut rng, mut keys, read_file(w[1]), read_file(w[2]), signer, checker)?;
+    } else if cmd == "!vault" {
+        let mut people: Vec[i64] = Vec.new();
+        let mut i = 2;
+        while i < w.len() {
+            people.push(key_index(keys, w[i]));
+            i += 1;
+        }
+        vault(mut rng, mut keys, read_file(w[1]), people)?;
+    }
+    Ok(())
+}
+
+fn text_lines(b: ref Vec[u8]) -> Vec[String] {
+    split_on(from_bytes(b.clone()), 10u8)
+}
+
+fn licenses(rng: mut ref Rng, keys: mut ref Vec[(String, Key)], issued: ref Vec[u8], presented: ref Vec[u8], signer: i64, checker: i64) -> Result[(), Exc] {
+    let mut sigs: Vec[Vec[u8]] = Vec.new();
+    for line in text_lines(issued) {
+        if line.len() == 0 {
+            continue;
+        }
+        let s = sign(mut rng, to_bytes(line), mut keys[signer].1, "SHA-256")?;
+        println(f"  issued {line}");
+        println(f"    {b64_encode(s)}");
+        sigs.push(s);
+    }
+    let mut i = 0;
+    for line in text_lines(presented) {
+        if line.len() > 0 {
+            if i >= sigs.len() {
+                println(f"  {line}: no signature");
+            } else {
+                match verify(to_bytes(line), sigs[i], keys[checker].1) {
+                    Ok(how) => println(f"  {line}: valid ({how})"),
+                    Err(e) => println(f"  {line}: REJECTED ({e.msg})"),
+                }
+            }
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+fn vault(rng: mut ref Rng, keys: mut ref Vec[(String, Key)], text: ref Vec[u8], people: ref Vec[i64]) -> Result[(), Exc] {
+    for line in text_lines(text) {
+        if line.len() == 0 {
+            continue;
+        }
+        println(f"  secret {py_repr(line)}");
+        for who in people {
+            let name = keys[who].0.clone();
+            let bx = match encrypt(mut rng, to_bytes(line), keys[who].1) {
+                Ok(b) => b,
+                Err(e) => {
+                    println(f"    for {name}: {e.cls}: {e.msg}");
+                    continue;
+                }
+            };
+            let mut head: Vec[u8] = Vec.new();
+            for k in 0..6 {
+                head.push(bx[k]);
+            }
+            println(f"    for {name}: {bx.len()} bytes, starts {hex_of(head)}");
+            for other in people {
+                let oname = keys[other].0.clone();
+                match decrypt(mut rng, bx, mut keys[other].1) {
+                    Ok(got) => println(f"      {oname} opens it: {bytes_repr(got)}"),
+                    Err(e) => println(f"      {oname} cannot: {e.msg}"),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let mut rng = Rng { state: 0u64 };
+    let mut keys: Vec[(String, Key)] = Vec.new();
+    let mut last: Vec[u8] = Vec.new();
+    let mut sig: Vec[u8] = Vec.new();
+    for hex in split_c(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let job = hex_string(hex);
+        println(f"> {job}");
+        let w = split_on(job, 32u8);
+        if let Err(e) = run_job(mut rng, mut keys, mut last, mut sig, w) {
+            println(f"  {e.cls}: {e.msg}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("736565642037\n6e65776b65797320616c69636520323536\n6e65776b65797320626f6220353132\n6e65776b6579732074696e79203136\n6e65776b65797320626164203135\n73686f7720616c696365\n73686f772074696e79\n70656d20616c696365\n64657220616c696365\n6c6f61642062616e6b206b6579732f62616e6b2e70656d\n6c6f61647075622062616e6b707562206b6579732f62616e6b5f7075622e70656d\n6c6f616473736c2062616e6b73736c206b6579732f62616e6b5f73736c2e70656d\n6c6f616473736c206563206b6579732f65635f73736c2e70656d\n6c6f61647075622062696c6c696e67206b6579732f636f6d6d656e7465642e70656d\n6c6f61642077726f6e67206b6579732f62616e6b5f7075622e70656d\n6c6f616470756220637574206b6579732f6e6f5f656e642e70656d\n6c6f6164206f6c64206b6579732f76312e70656d\n73616d652062616e6b2062616e6b707562\n73616d652062616e6b7075622062616e6b73736c\n73616d652062616e6b7075622062696c6c696e67\n73616d6520616c69636520626f62\n7265736176652062616e6b206b6579732f62616e6b2e70656d\n7265736176652062616e6b707562206b6579732f62616e6b5f7075622e70656d\n656e637279707420616c6963652068656c6c6f20776f726c64\n6465637279707420616c696365\n6465637279707420616c696365\n6465637279707420626f62\n656e637279707420616c696365207477656e74792d74776f206279746573206c6f6e6721\n656e637279707420616c696365207477656e74792d6f6e65206279746573206c6f6e67\n6465637279707420616c696365\n656e63727970742062616e6b707562206d6565742061742074686520757375616c20706c616365\n646563727970742062616e6b\n7369676e2062616e6b205348412d323536207472616e736665722031303020746f206163636f756e74203432\n7665726966792062616e6b707562207472616e736665722031303020746f206163636f756e74203432\n7665726966792062616e6b707562207472616e736665722039303020746f206163636f756e74203432\n76657269667920616c696365207472616e736665722031303020746f206163636f756e74203432\n7369676e2062616e6b204d44352068656c6c6f\n7665726966792062616e6b73736c2068656c6c6f\n7369676e2062616e6b205348412d312068656c6c6f\n7665726966792062616e6b73736c2068656c6c6f\n7369676e2062616e6b205348412d3232342068656c6c6f\n7665726966792062616e6b73736c2068656c6c6f\n7369676e2062616e6b205348412d3338342068656c6c6f\n");
+    s.push_str("7665726966792062616e6b73736c2068656c6c6f\n7369676e2062616e6b205348412d3531322068656c6c6f\n7665726966792062616e6b73736c2068656c6c6f\n7369676e20626f62205348412d3235362068656c6c6f\n76657269667920626f622068656c6c6f\n7369676e20626f62205348412d3531322068656c6c6f\n7369676e2062616e6b20424c414b452068656c6c6f\n6d676631203030203230205348412d31\n6d6766312030303031303230333034203437205348412d323536\n6d676631206162636465662033204d4435\n6d676631206162636465662030205348412d353132\n6d67663120616263646566203130205348412d33\n696e76657273652033203131\n696e76657273652036353533372033313230\n696e766572736520362039\n63727420322c332c3220332c352c37\n7072696d65203120322039203135203137203536312037393139203130303030303320323134373438333634372034323934393637323937\n216c6963656e736573206c6963656e7365732e7478742074616d70657265642e7478742062616e6b2062616e6b73736c\n217661756c7420736563726574732e74787420616c69636520626f62\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("keys/bank.pem 2d2d2d2d2d424547494e205253412050524956415445204b45592d2d2d2d2d0a4d4949435941494241414b426751435a546e384e5043625154464b7235722f7251316e79766f77304e544d536d79776534454a7558634b4a5a564769594232550a4464724472634e4e4547705537356a46417279465a6a5a634e4c37354932375470526d793241624e4b31715837564a484f774736446231414430596c5a754e440a573163397359415449457654545652523775436866444d37347a485354696f536f727141394b45335552583865413654384c633874782f5371514944415141420a416f4741655847685841366d674b4f3161632b6c674f306475426f5358746b313243747354426c4442734c6e644966366e7a4b63753867743449307142555a580a74576b4945436b57786d59743865556d303532705874626c66766a4248504a7a483861476875486478776232526a4d62613672346d68696c70574642347a4b6c0a50455559396b317442442f757173354443566b58557a5131586e2b6c372b6c4e4c4b6f704f524b5a3946594f363845435251446875676173344556576f4768750a47516a544b41436f5661754f4437443076636449644f384d7642632b33706c7072554759574136544d5563317749417a546f4442546c6b7a78616a6c525077470a5a567441766b62323355352b78514939414b3365436e55323430375252736c726b34615a71516478492b6942747678785444394a7545544570494d777566526b0a717a7730664d37553547496e38484532544a4d4a782b43646a746e686e4e43436c514a4558524d476b35763647306b544a6d71654c2b7372736a31342b702f500a75477255564455624b4b595a383674336d4a4a2f484b456169576a6c5575326f4c762b737159687a305a7773457a564a7368317937685248554a31614d3330430a50514349444b452b537937664d3938694b57324d2b35784b57487679716433583934666b56666b38786d713878566f644a4e446845576c414a314a32684334660a53492f7531733579737064665971316b63326b4352485a317166466d51666d596a6d574258704a4150752b317a6279333574475459703444596f4e516c77554b0a4a32593945734c3331704c65324243435067453145354e3974464d6d554c6877473456635a67305451673669504336740a2d2d2d2d2d454e44205253412050524956415445204b45592d2d2d2d2d0a\nkeys/bank_pub.pem 2d2d2d2d2d424547494e20525341205055424c4943204b45592d2d2d2d2d0a4d49474a416f4742414a6c4f667730384a74424d5571766d762b744457664b2b6a4451314d784b624c423767516d3564776f6c6c55614a67485a514e32734f740a77303051616c54766d4d55437649566d4e6c773076766b6a62744f6c47624c594273307257706674556b633741626f4e765541505269566d34304e62567a32780a67424d6753394e4e56464875344b46384d7a766a4d644a4f4b684b69756f44306f5464524666783444705077747a793348394b7041674d424141453d0a2d2d2d2d2d454e4420525341205055424c4943204b45592d2d2d2d2d0a\n");
+    s.push_str("keys/bank_ssl.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d4947664d413047435371475349623344514542415155414134474e4144434269514b426751435a546e384e5043625154464b7235722f7251316e79766f77300a4e544d536d79776534454a7558634b4a5a564769594232554464724472634e4e4547705537356a46417279465a6a5a634e4c37354932375470526d793241624e0a4b31715837564a484f774736446231414430596c5a754e44573163397359415449457654545652523775436866444d37347a485354696f536f727141394b45330a5552583865413654384c633874782f5371514944415141420a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\nkeys/ec_ssl.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d4947644d41734742797147534d34394167454641414f426a51417767596b43675945416d55352f4454776d30457853712b612f36304e5a3872364d4e44557a0a4570737348754243626c3343695756526f6d41646c4133617736334454524271564f2b5978514b38685759325844532b2b534e753036555a737467477a5374610a6c2b3153527a734275673239514139474a57626a51317458506247414579424c30303155556537676f58777a4f2b4d78306b347145714b36675053684e3145560a2f48674f6b2f4333504c636630716b434177454141513d3d0a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\nkeys/commented.pem 4b657920666f72207468652062696c6c696e6720736572766963650d0a0d0a2d2d2d2d2d424547494e20525341205055424c4943204b45592d2d2d2d2d0d0a436f6d6d656e743a2069737375656420323032342d30332d30310d0a0d0a4d49474a416f4742414a6c4f667730384a74424d5571766d762b744457664b2b6a4451314d784b624c423767516d3564776f6c6c55614a67485a514e32734f740d0a77303051616c54766d4d55437649566d4e6c773076766b6a62744f6c47624c594273307257706674556b633741626f4e765541505269566d34304e62567a32780d0a67424d6753394e4e56464875344b46384d7a766a4d644a4f4b684b69756f44306f5464524666783444705077747a793348394b7041674d424141453d0d0a2d2d2d2d2d454e4420525341205055424c4943204b45592d2d2d2d2d0d0a\nkeys/no_end.pem 2d2d2d2d2d424547494e20525341205055424c4943204b45592d2d2d2d2d0a4d49474a416f4742414a6c4f667730384a74424d5571766d762b744457664b2b6a4451314d784b624c423767516d3564776f6c6c55614a67485a514e32734f740a77303051616c54766d4d55437649566d4e6c773076766b6a62744f6c47624c594273307257706674556b633741626f4e765541505269566d34304e62567a32780a67424d6753394e4e56464875344b46384d7a766a4d644a4f4b684b69756f44306f5464524666783444705077747a793348394b7041674d424141453d0a\n");
+    s.push_str("keys/v1.pem 2d2d2d2d2d424547494e205253412050524956415445204b45592d2d2d2d2d0a4d4949435941494241514b426751435a546e384e5043625154464b7235722f7251316e79766f77304e544d536d79776534454a7558634b4a5a564769594232550a4464724472634e4e4547705537356a46417279465a6a5a634e4c37354932375470526d793241624e4b31715837564a484f774736446231414430596c5a754e440a573163397359415449457654545652523775436866444d37347a485354696f536f727141394b45335552583865413654384c633874782f5371514944415141420a416f4741655847685841366d674b4f3161632b6c674f306475426f5358746b313243747354426c4442734c6e644966366e7a4b63753867743449307142555a580a74576b4945436b57786d59743865556d303532705874626c66766a4248504a7a483861476875486478776232526a4d62613672346d68696c70574642347a4b6c0a50455559396b317442442f757173354443566b58557a5131586e2b6c372b6c4e4c4b6f704f524b5a3946594f363845435251446875676173344556576f4768750a47516a544b41436f5661754f4437443076636449644f384d7642632b33706c7072554759574136544d5563317749417a546f4442546c6b7a78616a6c525077470a5a567441766b62323355352b78514939414b3365436e55323430375252736c726b34615a71516478492b6942747678785444394a7545544570494d777566526b0a717a7730664d37553547496e38484532544a4d4a782b43646a746e686e4e43436c514a4558524d476b35763647306b544a6d71654c2b7372736a31342b702f500a75477255564455624b4b595a383674336d4a4a2f484b456169576a6c5575326f4c762b737159687a305a7773457a564a7368317937685248554a31614d3330430a50514349444b452b537937664d3938694b57324d2b35784b57487679716433583934666b56666b38786d713878566f644a4e446845576c414a314a32684334660a53492f7531733579737064665971316b63326b4352485a317166466d51666d596a6d574258704a4150752b317a6279333574475459703444596f4e516c77554b0a4a32593945734c3331704c65324243435067453145354e3974464d6d554c6877473456635a67305451673669504336740a2d2d2d2d2d454e44205253412050524956415445204b45592d2d2d2d2d0a\nlicenses.txt 61636d652d636f72707c696e76656e746f72792d70726f7c73656174733d32357c657870697265733d323032352d31322d33310a676c6f6265787c696e76656e746f72792d70726f7c73656174733d357c657870697265733d323032342d30362d33300a696e69746563687c7265706f7274737c73656174733d3130307c657870697265733d323032362d30312d31350a756d6272656c6c617c696e76656e746f72792d6c6974657c73656174733d317c657870697265733d323032342d31322d30310a\n");
+    s.push_str("tampered.txt 61636d652d636f72707c696e76656e746f72792d70726f7c73656174733d32357c657870697265733d323032352d31322d33310a676c6f6265787c696e76656e746f72792d70726f7c73656174733d35307c657870697265733d323032342d30362d33300a696e69746563687c7265706f7274737c73656174733d3130307c657870697265733d323032372d30312d31350a756d6272656c6c617c696e76656e746f72792d6c6974657c73656174733d317c657870697265733d323032342d31322d30310a686f6f6c697c7265706f7274737c73656174733d31307c657870697265733d323032352d30312d30310a\nsecrets.txt 64623d7333637265740a6170693d6b2d31370a70696e3d343332310a61206d756368206c6f6e67657220736563726574207468616e20666974730a\n");
+    s
+}

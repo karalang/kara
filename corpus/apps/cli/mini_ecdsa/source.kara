@@ -1,0 +1,3728 @@
+// mini_ecdsa: python-ecdsa 0.19.0, the pure-Python ECDSA implementation,
+// with:
+// - the library's curves (NIST P-192 to P-521, secp256k1, Brainpool),
+//   points in raw, uncompressed, compressed and hybrid encodings, and
+//   square roots mod p to decompress them;
+// - key generation, signing with a random k, a given k, or RFC 6979's
+//   deterministic k, verification, and public key recovery;
+// - keys in SEC1 and PKCS#8 DER and PEM, with named or explicit curve
+//   parameters, and signatures as r||s strings or DER;
+// - ECDH shared secrets;
+// - jobs over them: ES256 tokens issued and checked, and a ledger whose
+//   entries are accepted only when the recovered signer owns the account.
+//
+// Python's ints are big integers built on 64-bit limbs, and points are
+// added in Jacobian coordinates; os.urandom is the seeded generator
+// oracle.py installs, so every run draws the same numbers. The inputs are
+// data/jobs.txt and the files beside it, made by mk.py. expected.out is
+// the output of oracle.py, which runs the same jobs through ecdsa itself.
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn plural(n: i64, one: Str, many: Str) -> String {
+    if n == 1 { one.to_string() } else { many.to_string() }
+}
+
+// ------------------------------------------------------------ MD5 (RFC 1321)
+
+const MD5_S: Array[i64, 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
+const MD5_K: Array[u32, 64] = [
+    0xd76aa478u32, 0xe8c7b756u32, 0x242070dbu32, 0xc1bdceeeu32, 0xf57c0fafu32, 0x4787c62au32, 0xa8304613u32, 0xfd469501u32,
+    0x698098d8u32, 0x8b44f7afu32, 0xffff5bb1u32, 0x895cd7beu32, 0x6b901122u32, 0xfd987193u32, 0xa679438eu32, 0x49b40821u32,
+    0xf61e2562u32, 0xc040b340u32, 0x265e5a51u32, 0xe9b6c7aau32, 0xd62f105du32, 0x02441453u32, 0xd8a1e681u32, 0xe7d3fbc8u32,
+    0x21e1cde6u32, 0xc33707d6u32, 0xf4d50d87u32, 0x455a14edu32, 0xa9e3e905u32, 0xfcefa3f8u32, 0x676f02d9u32, 0x8d2a4c8au32,
+    0xfffa3942u32, 0x8771f681u32, 0x6d9d6122u32, 0xfde5380cu32, 0xa4beea44u32, 0x4bdecfa9u32, 0xf6bb4b60u32, 0xbebfbc70u32,
+    0x289b7ec6u32, 0xeaa127fau32, 0xd4ef3085u32, 0x04881d05u32, 0xd9d4d039u32, 0xe6db99e5u32, 0x1fa27cf8u32, 0xc4ac5665u32,
+    0xf4292244u32, 0x432aff97u32, 0xab9423a7u32, 0xfc93a039u32, 0x655b59c3u32, 0x8f0ccc92u32, 0xffeff47du32, 0x85845dd1u32,
+    0x6fa87e4fu32, 0xfe2ce6e0u32, 0xa3014314u32, 0x4e0811a1u32, 0xf7537e82u32, 0xbd3af235u32, 0x2ad7d2bbu32, 0xeb86d391u32,
+];
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+fn le32(b: ref Vec[u8], i: i64) -> u32 {
+    (b[i] as u32) | ((b[i + 1] as u32) << 8) | ((b[i + 2] as u32) << 16) | ((b[i + 3] as u32) << 24)
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn be64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8) | (b[i + k] as u64);
+    }
+    v
+}
+
+fn le64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    let mut k: i64 = 7;
+    while k >= 0 {
+        v = (v << 8) | (b[i + k] as u64);
+        k -= 1;
+    }
+    v
+}
+
+fn push_le32(out: mut ref Vec[u8], x: u32) {
+    for k in 0..4 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+    }
+}
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+fn md5(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, false);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32] {
+        h.push(x);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        for i in 0..64 {
+            let mut f: u32 = 0;
+            let mut g: i64 = 0;
+            if i < 16 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                g = i;
+            } else if i < 32 {
+                f = (d & b) | ((d ^ 0xFFFFFFFFu32) & c);
+                g = (5 * i + 1) % 16;
+            } else if i < 48 {
+                f = b ^ c ^ d;
+                g = (3 * i + 5) % 16;
+            } else {
+                f = c ^ (b | (d ^ 0xFFFFFFFFu32));
+                g = (7 * i) % 16;
+            }
+            let x = a.wrapping_add(f).wrapping_add(MD5_K[i]).wrapping_add(le32(m, blk + 4 * g));
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(x.rotate_left(MD5_S[i] as u32));
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_le32(mut out, x);
+    }
+    out
+}
+
+// ------------------------------------------------------------ SHA-1 and SHA-2 (FIPS 180-4)
+
+fn sha1(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..80 {
+            w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotate_left(1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for t in 0..80 {
+            let mut f: u32 = 0;
+            let mut k: u32 = 0;
+            if t < 20 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                k = 0x5A827999u32;
+            } else if t < 40 {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1u32;
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDCu32;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6u32;
+            }
+            let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[t]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+// SHA-256, or SHA-224 with its own initial values and a shorter result.
+fn sha256_family(msg: ref Vec[u8], is224: bool) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    if is224 {
+        for x in [0xc1059ed8u32, 0x367cd507u32, 0x3070dd17u32, 0xf70e5939u32, 0xffc00b31u32, 0x68581511u32, 0x64f98fa7u32, 0xbefa4fa4u32] {
+            h.push(x);
+        }
+    } else {
+        for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+            h.push(x);
+        }
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..64 {
+            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3u32);
+            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10u32);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u32] = h.clone();
+        for t in 0..64 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFu32) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA256_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is224 { 7 } else { 8 };
+    for i in 0..n {
+        push_be32(mut out, h[i]);
+    }
+    out
+}
+
+const SHA512_K: Array[u64, 80] = [
+    0x428a2f98d728ae22u64, 0x7137449123ef65cdu64, 0xb5c0fbcfec4d3b2fu64, 0xe9b5dba58189dbbcu64,
+    0x3956c25bf348b538u64, 0x59f111f1b605d019u64, 0x923f82a4af194f9bu64, 0xab1c5ed5da6d8118u64,
+    0xd807aa98a3030242u64, 0x12835b0145706fbeu64, 0x243185be4ee4b28cu64, 0x550c7dc3d5ffb4e2u64,
+    0x72be5d74f27b896fu64, 0x80deb1fe3b1696b1u64, 0x9bdc06a725c71235u64, 0xc19bf174cf692694u64,
+    0xe49b69c19ef14ad2u64, 0xefbe4786384f25e3u64, 0x0fc19dc68b8cd5b5u64, 0x240ca1cc77ac9c65u64,
+    0x2de92c6f592b0275u64, 0x4a7484aa6ea6e483u64, 0x5cb0a9dcbd41fbd4u64, 0x76f988da831153b5u64,
+    0x983e5152ee66dfabu64, 0xa831c66d2db43210u64, 0xb00327c898fb213fu64, 0xbf597fc7beef0ee4u64,
+    0xc6e00bf33da88fc2u64, 0xd5a79147930aa725u64, 0x06ca6351e003826fu64, 0x142929670a0e6e70u64,
+    0x27b70a8546d22ffcu64, 0x2e1b21385c26c926u64, 0x4d2c6dfc5ac42aedu64, 0x53380d139d95b3dfu64,
+    0x650a73548baf63deu64, 0x766a0abb3c77b2a8u64, 0x81c2c92e47edaee6u64, 0x92722c851482353bu64,
+    0xa2bfe8a14cf10364u64, 0xa81a664bbc423001u64, 0xc24b8b70d0f89791u64, 0xc76c51a30654be30u64,
+    0xd192e819d6ef5218u64, 0xd69906245565a910u64, 0xf40e35855771202au64, 0x106aa07032bbd1b8u64,
+    0x19a4c116b8d2d0c8u64, 0x1e376c085141ab53u64, 0x2748774cdf8eeb99u64, 0x34b0bcb5e19b48a8u64,
+    0x391c0cb3c5c95a63u64, 0x4ed8aa4ae3418acbu64, 0x5b9cca4f7763e373u64, 0x682e6ff3d6b2b8a3u64,
+    0x748f82ee5defb2fcu64, 0x78a5636f43172f60u64, 0x84c87814a1f0ab72u64, 0x8cc702081a6439ecu64,
+    0x90befffa23631e28u64, 0xa4506cebde82bde9u64, 0xbef9a3f7b2c67915u64, 0xc67178f2e372532bu64,
+    0xca273eceea26619cu64, 0xd186b8c721c0c207u64, 0xeada7dd6cde0eb1eu64, 0xf57d4f7fee6ed178u64,
+    0x06f067aa72176fbau64, 0x0a637dc5a2c898a6u64, 0x113f9804bef90daeu64, 0x1b710b35131c471bu64,
+    0x28db77f523047d84u64, 0x32caab7b40c72493u64, 0x3c9ebe0a15c9bebcu64, 0x431d67c49c100d4cu64,
+    0x4cc5d4becb3e42b6u64, 0x597f299cfc657e2au64, 0x5fcb6fab3ad6faecu64, 0x6c44198c4a475817u64,
+];
+
+const SHA512_IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64, 0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64, 0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+const SHA384_IV: Array[u64, 8] = [
+    0xcbbb9d5dc1059ed8u64, 0x629a292a367cd507u64, 0x9159015a3070dd17u64, 0x152fecd8f70e5939u64,
+    0x67332667ffc00b31u64, 0x8eb44a8768581511u64, 0xdb0c2e0d64f98fa7u64, 0x47b5481dbefa4fa4u64,
+];
+
+// SHA-512, or SHA-384 with its own initial values and a shorter result.
+fn sha512_family(msg: ref Vec[u8], is384: bool) -> Vec[u8] {
+    let m = md_pad(msg, 128, 16, true);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(if is384 { SHA384_IV[i] } else { SHA512_IV[i] });
+    }
+    let mut w: Vec[u64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u64);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be64(m, blk + 8 * t);
+        }
+        for t in 16..80 {
+            let s0 = w[t - 15].rotate_right(1) ^ w[t - 15].rotate_right(8) ^ (w[t - 15] >> 7u64);
+            let s1 = w[t - 2].rotate_right(19) ^ w[t - 2].rotate_right(61) ^ (w[t - 2] >> 6u64);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u64] = h.clone();
+        for t in 0..80 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFFFFFFFFFu64) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA512_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 128;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is384 { 6 } else { 8 };
+    for i in 0..n {
+        push_be64(mut out, h[i]);
+    }
+    out
+}
+
+// ------------------------------------------------------------ hex and base64
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push_str(f"{x:02x}");
+    }
+    s
+}
+
+const B64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(b: ref Vec[u8]) -> String {
+    let alpha = to_bytes(B64_ALPHABET);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let n = b.len() - i;
+        let x0 = b[i] as i64;
+        let x1 = if n > 1 { b[i + 1] as i64 } else { 0 };
+        let x2 = if n > 2 { b[i + 2] as i64 } else { 0 };
+        let v = (x0 << 16) | (x1 << 8) | x2;
+        out.push(alpha[(v >> 18) & 63]);
+        out.push(alpha[(v >> 12) & 63]);
+        out.push(if n > 1 { alpha[(v >> 6) & 63] } else { b'=' });
+        out.push(if n > 2 { alpha[v & 63] } else { b'=' });
+        i += 3;
+    }
+    from_bytes(out)
+}
+
+fn b64_value(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// A base64 digest of exactly nbytes, written canonically.
+fn b64_digest(s: Str, nbytes: i64) -> Option[Vec[u8]] {
+    let b = to_bytes(s);
+    if b.len() != (nbytes + 2) / 3 * 4 {
+        return None;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let mut v: i64 = 0;
+        let mut pads: i64 = 0;
+        for k in 0..4 {
+            let c = b[i + k];
+            if c == b'=' {
+                if i + 4 != b.len() {
+                    return None;
+                }
+                pads += 1;
+                v = v << 6;
+            } else {
+                let x = b64_value(c);
+                if x < 0 or pads > 0 {
+                    return None;
+                }
+                v = (v << 6) | x;
+            }
+        }
+        out.push(((v >> 16) & 0xFF) as u8);
+        if pads < 2 {
+            out.push(((v >> 8) & 0xFF) as u8);
+        }
+        if pads < 1 {
+            out.push((v & 0xFF) as u8);
+        }
+        i += 4;
+    }
+    if out.len() != nbytes or b64_encode(out) != s {
+        return None;
+    }
+    Some(out)
+}
+
+fn hex_decode(s: Str) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn split_c(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 0;
+    while k < n {
+        if cs[k] == 'z' {
+            let mut j = k + 1;
+            let mut count: i64 = 0;
+            while cs[j] != '.' {
+                count = count * 10 + (cs[j] as i64 - 48);
+                j += 1;
+            }
+            let mut z: i64 = 0;
+            while z < count {
+                out.push(0);
+                z += 1;
+            }
+            k = j + 1;
+        } else {
+            out.push((hex_digit(cs[k]) * 16 + hex_digit(cs[k + 1])) as u8);
+            k += 2;
+        }
+    }
+    out
+}
+
+fn hex_string(s: ref String) -> String {
+    String.from_utf8(hex_bytes(s)).unwrap_or(String.new())
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs = chars_of(path);
+    let mut cut: i64 = -1;
+    let mut k: i64 = 0;
+    while k < cs.len() as i64 {
+        if cs[k] == '/' {
+            cut = k;
+        }
+        k += 1;
+    }
+    if cut < 0 { String.new() } else { chars_str(cs, 0, cut) }
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_c(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_c(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn hex_digit(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 97 { n - 87 } else if n >= 65 { n - 55 } else { n - 48 }
+}
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+fn chars_str(cs: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut k = a;
+    while k < b {
+        out.push(cs[k]);
+        k += 1;
+    }
+    out
+}
+// ------------------------------------------------------------ big integers
+
+// Python's int, for the non-negative values RSA works with: little-endian
+// 64-bit limbs with no zero limb on top, so zero is the empty vector.
+fn mask64() -> u128 {
+    0xFFFFFFFFFFFFFFFFu128
+}
+
+fn bn_norm(a: mut ref Vec[u64]) {
+    while a.len() > 0 and a[a.len() - 1] == 0u64 {
+        let _ = a.pop();
+    }
+}
+
+fn bn(v: i64) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    if v > 0 {
+        out.push(v as u64);
+    }
+    out
+}
+
+fn bn_is_zero(a: ref Vec[u64]) -> bool {
+    a.len() == 0
+}
+
+fn bn_is_odd(a: ref Vec[u64]) -> bool {
+    a.len() > 0 and (a[0] & 1u64) == 1u64
+}
+
+fn bn_cmp(a: ref Vec[u64], b: ref Vec[u64]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+fn bn_eq_small(a: ref Vec[u64], v: i64) -> bool {
+    bn_cmp(a, bn(v)) == 0
+}
+
+fn bn_add(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    let mut out: Vec[u64] = Vec.new();
+    let mut carry = 0u128;
+    let mut i = 0;
+    while i < n {
+        let x = if i < a.len() { a[i] as u128 } else { 0u128 };
+        let y = if i < b.len() { b[i] as u128 } else { 0u128 };
+        let s = x + y + carry;
+        out.push((s & mask64()) as u64);
+        carry = s >> 64;
+        i += 1;
+    }
+    if carry > 0u128 {
+        out.push(carry as u64);
+    }
+    out
+}
+
+// a - b, for a >= b.
+fn bn_sub(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut borrow = 0u128;
+    let base = 1u128 << 64;
+    let mut i = 0;
+    while i < a.len() {
+        let y = if i < b.len() { b[i] as u128 } else { 0u128 };
+        let t = (a[i] as u128) + base - borrow - y;
+        out.push((t & mask64()) as u64);
+        borrow = if t < base { 1u128 } else { 0u128 };
+        i += 1;
+    }
+    bn_norm(mut out);
+    out
+}
+
+fn bn_mul(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    if a.len() == 0 or b.len() == 0 {
+        return Vec.new();
+    }
+    let mut out: Vec[u64] = Vec.new();
+    let mut k = 0;
+    while k < a.len() + b.len() {
+        out.push(0u64);
+        k += 1;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        let x = a[i] as u128;
+        let mut carry = 0u128;
+        let mut j = 0;
+        while j < b.len() {
+            let t = x * (b[j] as u128) + (out[i + j] as u128) + carry;
+            out[i + j] = (t & mask64()) as u64;
+            carry = t >> 64;
+            j += 1;
+        }
+        out[i + b.len()] = carry as u64;
+        i += 1;
+    }
+    bn_norm(mut out);
+    out
+}
+
+fn bn_mul_small(a: ref Vec[u64], v: u64) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut carry = 0u128;
+    for x in a {
+        let t = (x as u128) * (v as u128) + carry;
+        out.push((t & mask64()) as u64);
+        carry = t >> 64;
+    }
+    if carry > 0u128 {
+        out.push(carry as u64);
+    }
+    bn_norm(mut out);
+    out
+}
+
+fn bn_shl(a: ref Vec[u64], bits: i64) -> Vec[u64] {
+    if a.len() == 0 {
+        return Vec.new();
+    }
+    let words = bits / 64;
+    let s = bits % 64;
+    let mut out: Vec[u64] = Vec.new();
+    let mut k = 0;
+    while k < words {
+        out.push(0u64);
+        k += 1;
+    }
+    if s == 0 {
+        for x in a {
+            out.push(x);
+        }
+        return out;
+    }
+    let mut carry = 0u64;
+    for x in a {
+        out.push((x << s) | carry);
+        carry = x >> (64 - s);
+    }
+    if carry != 0u64 {
+        out.push(carry);
+    }
+    out
+}
+
+fn bn_shr(a: ref Vec[u64], bits: i64) -> Vec[u64] {
+    let words = bits / 64;
+    let s = bits % 64;
+    let mut out: Vec[u64] = Vec.new();
+    let mut i = words;
+    while i < a.len() {
+        let lo = a[i] >> s;
+        let hi = if s > 0 and i + 1 < a.len() { a[i + 1] << (64 - s) } else { 0u64 };
+        out.push(lo | hi);
+        i += 1;
+    }
+    bn_norm(mut out);
+    out
+}
+
+// int.bit_length()
+fn bn_bits(a: ref Vec[u64]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n = 0;
+    while top != 0u64 {
+        top = top >> 1;
+        n += 1;
+    }
+    (a.len() - 1) * 64 + n
+}
+
+// The quotient and remainder of a by a one-limb divisor.
+fn bn_divmod_small(a: ref Vec[u64], d: u64) -> (Vec[u64], u64) {
+    let mut q: Vec[u64] = Vec.new();
+    let mut k = 0;
+    while k < a.len() {
+        q.push(0u64);
+        k += 1;
+    }
+    let mut r = 0u128;
+    let dd = d as u128;
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        let cur = (r << 64) | (a[i] as u128);
+        q[i] = (cur / dd) as u64;
+        r = cur % dd;
+        i -= 1;
+    }
+    bn_norm(mut q);
+    (q, r as u64)
+}
+
+// divmod(a, b) for b > 0: Knuth's algorithm D on 64-bit limbs.
+fn bn_divmod(a: ref Vec[u64], b: ref Vec[u64]) -> (Vec[u64], Vec[u64]) {
+    if bn_cmp(a, b) < 0 {
+        return (Vec.new(), a.clone());
+    }
+    if b.len() == 1 {
+        let (q, r) = bn_divmod_small(a, b[0]);
+        let mut rv: Vec[u64] = Vec.new();
+        if r != 0u64 {
+            rv.push(r);
+        }
+        return (q, rv);
+    }
+    let n = b.len();
+    let mut top = b[n - 1];
+    let mut s = 0;
+    while (top & 0x8000000000000000u64) == 0u64 {
+        top = top << 1;
+        s += 1;
+    }
+    let v = bn_shl(b, s);
+    let mut u = bn_shl(a, s);
+    while u.len() <= a.len() {
+        u.push(0u64);
+    }
+    let m = u.len() - n - 1;
+    let mut q: Vec[u64] = Vec.new();
+    let mut k = 0;
+    while k <= m {
+        q.push(0u64);
+        k += 1;
+    }
+    let base = 1u128 << 64;
+    let vn1 = v[n - 1] as u128;
+    let vn2 = v[n - 2] as u128;
+    let mut j = m;
+    while j >= 0 {
+        let num = ((u[j + n] as u128) << 64) | (u[j + n - 1] as u128);
+        let mut qhat = num / vn1;
+        let mut rhat = num % vn1;
+        loop {
+            let too_big = if qhat >= base { true } else { qhat * vn2 > ((rhat << 64) | (u[j + n - 2] as u128)) };
+            if not too_big {
+                break;
+            }
+            qhat -= 1u128;
+            rhat += vn1;
+            if rhat >= base {
+                break;
+            }
+        }
+        // u[j..j+n] -= qhat * v
+        let mut borrow = 0u128;
+        let mut carry = 0u128;
+        let mut i = 0;
+        while i < n {
+            let p = qhat * (v[i] as u128) + carry;
+            carry = p >> 64;
+            let t = (u[i + j] as u128) + base - borrow - (p & mask64());
+            u[i + j] = (t & mask64()) as u64;
+            borrow = if t < base { 1u128 } else { 0u128 };
+            i += 1;
+        }
+        let t = (u[j + n] as u128) + base - borrow - carry;
+        u[j + n] = (t & mask64()) as u64;
+        if t < base {
+            // qhat was one too large: add v back
+            qhat -= 1u128;
+            let mut c = 0u128;
+            let mut i2 = 0;
+            while i2 < n {
+                let s2 = (u[i2 + j] as u128) + (v[i2] as u128) + c;
+                u[i2 + j] = (s2 & mask64()) as u64;
+                c = s2 >> 64;
+                i2 += 1;
+            }
+            u[j + n] = (((u[j + n] as u128) + c) & mask64()) as u64;
+        }
+        q[j] = qhat as u64;
+        j -= 1;
+    }
+    bn_norm(mut q);
+    let mut r: Vec[u64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        r.push(u[i]);
+        i += 1;
+    }
+    bn_norm(mut r);
+    (q, bn_shr(r, s))
+}
+
+fn bn_mod(a: ref Vec[u64], m: ref Vec[u64]) -> Vec[u64] {
+    bn_divmod(a, m).1
+}
+
+fn bn_div(a: ref Vec[u64], m: ref Vec[u64]) -> Vec[u64] {
+    bn_divmod(a, m).0
+}
+
+// pow(base, exp, m)
+fn bn_powmod(base: ref Vec[u64], exp: ref Vec[u64], m: ref Vec[u64]) -> Vec[u64] {
+    if bn_eq_small(m, 1) {
+        return Vec.new();
+    }
+    let mut result = bn(1);
+    let b = bn_mod(base, m);
+    let mut i = bn_bits(exp) - 1;
+    while i >= 0 {
+        result = bn_mod(bn_mul(result, result), m);
+        if ((exp[i / 64] >> (i % 64)) & 1u64) == 1u64 {
+            result = bn_mod(bn_mul(result, b), m);
+        }
+        i -= 1;
+    }
+    result
+}
+
+// int.from_bytes(b, 'big')
+fn bn_from_bytes(b: ref Vec[u8]) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut end = b.len();
+    while end > 0 {
+        let start = if end >= 8 { end - 8 } else { 0 };
+        let mut w = 0u64;
+        let mut k = start;
+        while k < end {
+            w = (w << 8) | (b[k] as u64);
+            k += 1;
+        }
+        out.push(w);
+        end = start;
+    }
+    bn_norm(mut out);
+    out
+}
+
+// int.to_bytes(length, 'big'), for a value that fits.
+fn bn_to_bytes(a: ref Vec[u64], length: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = length - 1;
+    while k >= 0 {
+        let limb = k / 8;
+        let byte = if limb < a.len() { ((a[limb] >> ((k % 8) * 8)) & 0xFFu64) as u8 } else { 0u8 };
+        out.push(byte);
+        k -= 1;
+    }
+    out
+}
+
+fn bn_to_i64(a: ref Vec[u64]) -> i64 {
+    if a.len() == 0 { 0 } else { a[0] as i64 }
+}
+
+// str(int)
+fn bn_str(a: ref Vec[u64]) -> String {
+    if a.len() == 0 {
+        return "0".to_string();
+    }
+    let mut chunks: Vec[u64] = Vec.new();
+    let mut cur = a.clone();
+    while cur.len() > 0 {
+        let (q, r) = bn_divmod_small(cur, 10000000000000000000u64);
+        chunks.push(r);
+        cur = q;
+    }
+    let mut s = f"{chunks[chunks.len() - 1]}";
+    let mut i = chunks.len() - 2;
+    while i >= 0 {
+        let part = f"{chunks[i]}";
+        let mut pad = 19 - part.len();
+        while pad > 0 {
+            s.push('0');
+            pad -= 1;
+        }
+        s.push_str(part);
+        i -= 1;
+    }
+    s
+}
+
+fn bn_parse(s: Str) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    for c in s.bytes() {
+        out = bn_add(bn_mul_small(out, 10u64), bn((c - 48u8) as i64));
+    }
+    out
+}
+
+// A signed value, for extended_gcd's coefficients.
+struct SBig {
+    neg: bool,
+    mag: Vec[u64],
+}
+
+fn s_of(a: ref Vec[u64]) -> SBig {
+    SBig { neg: false, mag: a.clone() }
+}
+
+// a - b
+fn s_sub(a: ref SBig, b: ref SBig) -> SBig {
+    if a.neg != b.neg {
+        return SBig { neg: a.neg, mag: bn_add(a.mag, b.mag) };
+    }
+    if bn_cmp(a.mag, b.mag) >= 0 {
+        let m = bn_sub(a.mag, b.mag);
+        SBig { neg: a.neg and m.len() > 0, mag: m }
+    } else {
+        SBig { neg: not a.neg, mag: bn_sub(b.mag, a.mag) }
+    }
+}
+
+fn s_mul(q: ref Vec[u64], x: ref SBig) -> SBig {
+    let m = bn_mul(q, x.mag);
+    SBig { neg: x.neg and m.len() > 0, mag: m }
+}
+
+// (s1 - s2) * c % p, with Python's non-negative %.
+fn bn_sub_mul_mod(s1: ref Vec[u64], s2: ref Vec[u64], c: ref Vec[u64], p: ref Vec[u64]) -> Vec[u64] {
+    if bn_cmp(s1, s2) >= 0 {
+        return bn_mod(bn_mul(bn_sub(s1, s2), c), p);
+    }
+    let r = bn_mod(bn_mul(bn_sub(s2, s1), c), p);
+    if r.len() == 0 { r } else { bn_sub(p, r) }
+}
+
+// ------------------------------------------------------------ the generator
+
+// os.urandom as oracle.py replaces it: splitmix64, each read taking whole
+// words and their little-endian bytes.
+struct Rng {
+    state: u64,
+}
+
+fn rng_word(r: mut ref Rng) -> u64 {
+    r.state = r.state.wrapping_add(0x9E3779B97F4A7C15u64);
+    let mut z = r.state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9u64);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EBu64);
+    z ^ (z >> 31)
+}
+
+fn urandom(r: mut ref Rng, n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    while out.len() < n {
+        let w = rng_word(mut r);
+        for k in 0..8 {
+            out.push(((w >> (k * 8)) & 0xFFu64) as u8);
+        }
+    }
+    out.truncate(n);
+    out
+}
+
+// --------------------------------------------------------------- errors
+
+// An exception: its class name and message.
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+// repr() of an exception raised with one string argument.
+fn exc_repr(e: ref Exc) -> String {
+    f"{e.cls}({py_repr(e.msg)})"
+}
+
+// An exception raised with two arguments, the second an exception: str()
+// of it is the repr of the tuple.
+fn exc_wrap(cls: Str, msg: Str, inner: ref Exc) -> Exc {
+    exc(cls, f"({py_repr(msg)}, {exc_repr(inner)})")
+}
+
+// ------------------------------------------------------ more of Python's int
+
+// The extended Euclidean algorithm: (gcd, lx, ly), lx and ly made
+// non-negative.
+fn extended_gcd(a0: ref Vec[u64], b0: ref Vec[u64]) -> (Vec[u64], Vec[u64], Vec[u64]) {
+    let mut a = a0.clone();
+    let mut b = b0.clone();
+    let mut x = s_of(bn(0));
+    let mut y = s_of(bn(1));
+    let mut lx = s_of(bn(1));
+    let mut ly = s_of(bn(0));
+    while not bn_is_zero(b) {
+        let (q, r) = bn_divmod(a, b);
+        a = b;
+        b = r;
+        let nx = s_sub(lx, s_mul(q, x));
+        lx = x;
+        x = nx;
+        let ny = s_sub(ly, s_mul(q, y));
+        ly = y;
+        y = ny;
+    }
+    let lxv = if lx.neg { bn_sub(b0, lx.mag) } else { lx.mag.clone() };
+    let lyv = if ly.neg { bn_sub(a0, ly.mag) } else { ly.mag.clone() };
+    (a, lxv, lyv)
+}
+
+// numbertheory.inverse_mod: pow(a, -1, m), and 0 for 0.
+fn inverse_mod(a0: ref Vec[u64], m: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    let a = bn_mod(a0, m);
+    if bn_is_zero(a0) {
+        return Ok(Vec.new());
+    }
+    let (g, lx, _) = extended_gcd(a, m);
+    if not bn_eq_small(g, 1) {
+        return Err(exc("ValueError", "base is not invertible for the given modulus".to_string()));
+    }
+    Ok(bn_mod(lx, m))
+}
+
+// '%x' % n
+fn bn_hex(a: ref Vec[u64]) -> String {
+    if a.len() == 0 {
+        return "0".to_string();
+    }
+    let digits = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = a.len() * 16 - 1;
+    let mut started = false;
+    while i >= 0 {
+        let d = ((a[i / 16] >> ((i % 16) * 4)) & 15u64) as i64;
+        if d != 0 or started {
+            out.push(digits[d]);
+            started = true;
+        }
+        i -= 1;
+    }
+    from_bytes(out)
+}
+
+// int(s, 16)
+fn bn_from_hex(s: Str) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    for c in s.bytes() {
+        out = bn_add(bn_shl(out, 4), bn(hex_val(c) as i64));
+    }
+    out
+}
+
+fn bn_bit(a: ref Vec[u64], i: i64) -> bool {
+    i / 64 < a.len() and ((a[i / 64] >> (i % 64)) & 1u64) == 1u64
+}
+
+// x.bit_length() or 1
+fn bit_length(a: ref Vec[u64]) -> i64 {
+    let b = bn_bits(a);
+    if b == 0 { 1 } else { b }
+}
+
+// util.orderlen: the bytes of the order's hex digits.
+fn orderlen(order: ref Vec[u64]) -> i64 {
+    (1 + bn_hex(order).len()) / 2
+}
+
+// util.number_to_string: big-endian, orderlen(order) bytes.
+fn number_to_string(num: ref Vec[u64], order: ref Vec[u64]) -> Result[Vec[u8], Exc] {
+    let l = orderlen(order);
+    if (bn_bits(num) + 7) / 8 > l {
+        return Err(exc("AssertionError", f"({(bn_bits(num) + 7) / 8}, {l})"));
+    }
+    Ok(bn_to_bytes(num, l))
+}
+
+// --------------------------------------------------------- the prime field
+
+// a + b mod p and a - b mod p, for a, b < p, each in one buffer of p's
+// length plus a carry limb.
+fn f_add(a: ref Vec[u64], b: ref Vec[u64], p: ref Vec[u64]) -> Vec[u64] {
+    let n = p.len();
+    let mut out = Vec.filled(n + 1, 0u64);
+    let mut c = 0u128;
+    let mut i = 0;
+    while i < n {
+        let x = if i < a.len() { a[i] as u128 } else { 0u128 };
+        let y = if i < b.len() { b[i] as u128 } else { 0u128 };
+        let t = x + y + c;
+        out[i] = (t & mask64()) as u64;
+        c = t >> 64;
+        i += 1;
+    }
+    out[n] = c as u64;
+    // out >= p: compare from the top limb down.
+    let mut ge = c != 0u128;
+    if not ge {
+        ge = true;
+        let mut k = n - 1;
+        while k >= 0 {
+            if out[k] != p[k] {
+                ge = out[k] > p[k];
+                break;
+            }
+            k -= 1;
+        }
+    }
+    if ge {
+        sub_in_place(mut out, p);
+    }
+    bn_norm(mut out);
+    out
+}
+
+fn f_sub(a: ref Vec[u64], b: ref Vec[u64], p: ref Vec[u64]) -> Vec[u64] {
+    let n = p.len();
+    let mut out = Vec.filled(n + 1, 0u64);
+    let mut borrow = 0u128;
+    let base = 1u128 << 64;
+    let mut i = 0;
+    while i < n {
+        let x = if i < a.len() { a[i] as u128 } else { 0u128 };
+        let y = if i < b.len() { b[i] as u128 } else { 0u128 };
+        let t = x + base - y - borrow;
+        out[i] = (t & mask64()) as u64;
+        borrow = if t < base { 1u128 } else { 0u128 };
+        i += 1;
+    }
+    if borrow != 0u128 {
+        // a < b: add p back; the carry out cancels the borrow.
+        let mut c = 0u128;
+        let mut j = 0;
+        while j < n {
+            let t = (out[j] as u128) + (p[j] as u128) + c;
+            out[j] = (t & mask64()) as u64;
+            c = t >> 64;
+            j += 1;
+        }
+    }
+    bn_norm(mut out);
+    out
+}
+
+// a -= p over a's limbs, for a >= p.
+fn sub_in_place(a: mut ref Vec[u64], p: ref Vec[u64]) {
+    let base = 1u128 << 64;
+    let mut borrow = 0u128;
+    let mut i = 0;
+    while i < a.len() {
+        let y = if i < p.len() { p[i] as u128 } else { 0u128 };
+        let t = (a[i] as u128) + base - y - borrow;
+        a[i] = (t & mask64()) as u64;
+        borrow = if t < base { 1u128 } else { 0u128 };
+        i += 1;
+    }
+}
+
+fn f_mul(a: ref Vec[u64], b: ref Vec[u64], p: ref Vec[u64]) -> Vec[u64] {
+    bn_mod(bn_mul(a, b), p)
+}
+
+fn f_neg(a: ref Vec[u64], p: ref Vec[u64]) -> Vec[u64] {
+    if bn_is_zero(a) { Vec.new() } else { bn_sub(p, a) }
+}
+
+// --------------------------------------------------------------- base64
+
+// base64.b64decode: characters outside the alphabet are dropped.
+fn b64_decode(s: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut acc = 0;
+    let mut nbits = 0;
+    let mut count = 0;
+    let mut pad = 0;
+    for c in s {
+        if c == 61u8 {
+            pad += 1;
+            continue;
+        }
+        let v = b64_value(c);
+        if v < 0 {
+            continue;
+        }
+        acc = (acc << 6) | v;
+        nbits += 6;
+        count += 1;
+        if nbits >= 8 {
+            nbits -= 8;
+            out.push(((acc >> nbits) & 0xFF) as u8);
+            acc = acc & ((1 << nbits) - 1);
+        }
+    }
+    if (count + pad) % 4 != 0 {
+        return Err(exc("Error", "Incorrect padding".to_string()));
+    }
+    Ok(out)
+}
+
+// base64.urlsafe_b64encode, with the padding stripped.
+fn b64url_encode(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in b64_encode(b).bytes() {
+        if c == b'+' {
+            out.push(b'-');
+        } else if c == b'/' {
+            out.push(b'_');
+        } else if c != b'=' {
+            out.push(c);
+        }
+    }
+    from_bytes(out)
+}
+
+// base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
+fn b64url_decode(s: Str) -> Result[Vec[u8], Exc] {
+    let mut b: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c == b'-' {
+            b.push(b'+');
+        } else if c == b'_' {
+            b.push(b'/');
+        } else {
+            b.push(c);
+        }
+    }
+    while b.len() % 4 != 0 {
+        b.push(b'=');
+    }
+    b64_decode(b)
+}
+
+// ------------------------------------------------------------------- der.py
+
+fn sub(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = if from < 0 { 0 } else { from };
+    let end = if to > b.len() { b.len() } else { to };
+    while i < end {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn tail(b: ref Vec[u8], from: i64) -> Vec[u8] {
+    sub(b, from, b.len())
+}
+
+fn cat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = a.clone();
+    for c in b {
+        out.push(c);
+    }
+    out
+}
+
+fn unexpected(msg: own String) -> Exc {
+    exc("UnexpectedDER", msg)
+}
+
+// binascii.hexlify(b), as %s prints it.
+fn hexlify_str(b: ref Vec[u8]) -> String {
+    f"b'{hex_of(b)}'"
+}
+
+fn hex2(c: u8) -> String {
+    let digits = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(digits[(c / 16u8) as i64]);
+    out.push(digits[(c % 16u8) as i64]);
+    from_bytes(out)
+}
+
+// A tuple of ints, as %s and {!r} print it.
+fn oid_tuple(oid: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for n in oid {
+        parts.push(f"{n}");
+    }
+    if parts.len() == 1 {
+        return f"({parts[0]},)";
+    }
+    f"({join(parts, ", ")})"
+}
+
+fn encode_length(l: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    if l < 128 {
+        out.push(l as u8);
+        return out;
+    }
+    let mut body: Vec[u8] = Vec.new();
+    let mut v = l;
+    while v > 0 {
+        body.insert(0, (v & 255) as u8);
+        v = v >> 8;
+    }
+    out.push(128u8 | (body.len() as u8));
+    cat(out, body)
+}
+
+fn tlv(tag: u8, body: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    out.push(tag);
+    cat(cat(out, encode_length(body.len())), body)
+}
+
+fn encode_constructed(tag: i64, value: ref Vec[u8]) -> Vec[u8] {
+    tlv((160 + tag) as u8, value)
+}
+
+fn encode_integer(r: ref Vec[u64]) -> Vec[u8] {
+    let mut s = bn_to_bytes(r, (bn_bits(r) + 7) / 8);
+    if s.len() == 0 {
+        s.push(0u8);
+    }
+    if s[0] > 127u8 {
+        s.insert(0, 0u8);
+    }
+    tlv(2u8, s)
+}
+
+fn encode_bitstring(s: ref Vec[u8]) -> Vec[u8] {
+    let mut body: Vec[u8] = Vec.new();
+    body.push(0u8);
+    tlv(3u8, cat(body, s))
+}
+
+fn encode_octet_string(s: ref Vec[u8]) -> Vec[u8] {
+    tlv(4u8, s)
+}
+
+fn encode_number(n0: i64) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    let mut n = n0;
+    while n > 0 {
+        digits.insert(0, ((n & 127) | 128) as u8);
+        n = n >> 7;
+    }
+    if digits.len() == 0 {
+        digits.push(0u8);
+    }
+    let last = digits.len() - 1;
+    digits[last] = digits[last] & 127u8;
+    digits
+}
+
+fn encode_oid(oid: ref Vec[i64]) -> Vec[u8] {
+    let mut body = encode_number(40 * oid[0] + oid[1]);
+    let mut i = 2;
+    while i < oid.len() {
+        body = cat(body, encode_number(oid[i]));
+        i += 1;
+    }
+    tlv(6u8, body)
+}
+
+fn encode_sequence(pieces: ref Vec[Vec[u8]]) -> Vec[u8] {
+    let mut body: Vec[u8] = Vec.new();
+    for p in pieces {
+        body = cat(body, p);
+    }
+    tlv(48u8, body)
+}
+
+fn is_sequence(s: ref Vec[u8]) -> bool {
+    s.len() > 0 and s[0] == 48u8
+}
+
+fn first_of(s: ref Vec[u8]) -> Result[u8, Exc] {
+    if s.len() == 0 {
+        return Err(exc("IndexError", "index out of range".to_string()));
+    }
+    Ok(s[0])
+}
+
+// read_length(string): (length, bytes it took)
+fn read_length(s: ref Vec[u8]) -> Result[(i64, i64), Exc] {
+    if s.len() == 0 {
+        return Err(unexpected("Empty string can't encode valid length value".to_string()));
+    }
+    let num = s[0] as i64;
+    if (num & 128) == 0 {
+        return Ok((num & 127, 1));
+    }
+    let llen = num & 127;
+    if llen == 0 {
+        return Err(unexpected("Invalid length encoding, length of length is 0".to_string()));
+    }
+    if llen > s.len() - 1 {
+        return Err(unexpected("Length of length longer than provided buffer".to_string()));
+    }
+    let msb = s[1] as i64;
+    if msb == 0 or (llen == 1 and msb < 128) {
+        return Err(unexpected("Not minimal encoding of length".to_string()));
+    }
+    let mut v = 0;
+    for k in 1..(1 + llen) {
+        v = (v << 8) | (s[k] as i64);
+    }
+    Ok((v, 1 + llen))
+}
+
+fn remove_constructed(s: ref Vec[u8]) -> Result[(i64, Vec[u8], Vec[u8]), Exc] {
+    let s0 = first_of(s)?;
+    if (s0 & 224u8) != 160u8 {
+        return Err(unexpected(f"wanted type 'constructed tag' (0xa0-0xbf), got 0x{hex2(s0)}"));
+    }
+    let tag = (s0 & 31u8) as i64;
+    let (length, llen) = read_length(tail(s, 1))?;
+    Ok((tag, sub(s, 1 + llen, 1 + llen + length), tail(s, 1 + llen + length)))
+}
+
+fn remove_sequence(s: ref Vec[u8]) -> Result[(Vec[u8], Vec[u8]), Exc] {
+    if s.len() == 0 {
+        return Err(unexpected("Empty string does not encode a sequence".to_string()));
+    }
+    if s[0] != 48u8 {
+        return Err(unexpected(f"wanted type 'sequence' (0x30), got 0x{hex2(s[0])}"));
+    }
+    let (length, llen) = read_length(tail(s, 1))?;
+    if length > s.len() - 1 - llen {
+        return Err(unexpected("Length longer than the provided buffer".to_string()));
+    }
+    let endseq = 1 + llen + length;
+    Ok((sub(s, 1 + llen, endseq), tail(s, endseq)))
+}
+
+fn remove_octet_string(s: ref Vec[u8]) -> Result[(Vec[u8], Vec[u8]), Exc] {
+    if s.len() == 0 or s[0] != 4u8 {
+        let n = first_of(s)?;
+        return Err(unexpected(f"wanted type 'octetstring' (0x04), got 0x{hex2(n)}"));
+    }
+    let (length, llen) = read_length(tail(s, 1))?;
+    Ok((sub(s, 1 + llen, 1 + llen + length), tail(s, 1 + llen + length)))
+}
+
+fn read_number(s: ref Vec[u8]) -> Result[(i64, i64), Exc] {
+    if first_of(s)? == 128u8 {
+        return Err(unexpected("Non minimal encoding of OID subidentifier".to_string()));
+    }
+    let mut number = 0;
+    let mut llen = 0;
+    loop {
+        if llen >= s.len() {
+            return Err(unexpected("ran out of length bytes".to_string()));
+        }
+        number = number << 7;
+        let d = s[llen] as i64;
+        number += d & 127;
+        llen += 1;
+        if (d & 128) == 0 {
+            break;
+        }
+    }
+    Ok((number, llen))
+}
+
+fn remove_object(s: ref Vec[u8]) -> Result[(Vec[i64], Vec[u8]), Exc] {
+    if s.len() == 0 {
+        return Err(unexpected("Empty string does not encode an object identifier".to_string()));
+    }
+    if s[0] != 6u8 {
+        return Err(unexpected(f"wanted type 'object' (0x06), got 0x{hex2(s[0])}"));
+    }
+    let (length, llen) = read_length(tail(s, 1))?;
+    let mut body = sub(s, 1 + llen, 1 + llen + length);
+    let rest = tail(s, 1 + llen + length);
+    if body.len() == 0 {
+        return Err(unexpected("Empty object identifier".to_string()));
+    }
+    if body.len() != length {
+        return Err(unexpected("Length of object identifier longer than the provided buffer".to_string()));
+    }
+    let mut numbers: Vec[i64] = Vec.new();
+    while body.len() > 0 {
+        let (n, ll) = read_number(body)?;
+        numbers.push(n);
+        body = tail(body, ll);
+    }
+    let n0 = numbers[0];
+    let first = if n0 < 80 { n0 / 40 } else { 2 };
+    let mut out: Vec[i64] = Vec.new();
+    out.push(first);
+    out.push(n0 - 40 * first);
+    let mut i = 1;
+    while i < numbers.len() {
+        out.push(numbers[i]);
+        i += 1;
+    }
+    Ok((out, rest))
+}
+
+fn remove_integer(s: ref Vec[u8]) -> Result[(Vec[u64], Vec[u8]), Exc] {
+    if s.len() == 0 {
+        return Err(unexpected("Empty string is an invalid encoding of an integer".to_string()));
+    }
+    if s[0] != 2u8 {
+        return Err(unexpected(f"wanted type 'integer' (0x02), got 0x{hex2(s[0])}"));
+    }
+    let (length, llen) = read_length(tail(s, 1))?;
+    if length > s.len() - 1 - llen {
+        return Err(unexpected("Length longer than provided buffer".to_string()));
+    }
+    if length == 0 {
+        return Err(unexpected("0-byte long encoding of integer".to_string()));
+    }
+    let numberbytes = sub(s, 1 + llen, 1 + llen + length);
+    let rest = tail(s, 1 + llen + length);
+    let msb = numberbytes[0];
+    if msb >= 128u8 {
+        return Err(unexpected("Negative integers are not supported".to_string()));
+    }
+    if length > 1 and msb == 0u8 and numberbytes[1] < 128u8 {
+        return Err(unexpected("Invalid encoding of integer, unnecessary zero padding bytes".to_string()));
+    }
+    Ok((bn_from_bytes(numberbytes), rest))
+}
+
+// remove_bitstring(string, 0)
+fn remove_bitstring(s: ref Vec[u8]) -> Result[(Vec[u8], Vec[u8]), Exc] {
+    if s.len() == 0 {
+        return Err(unexpected("Empty string does not encode a bitstring".to_string()));
+    }
+    if s[0] != 3u8 {
+        return Err(unexpected(f"wanted bitstring (0x03), got 0x{hex2(s[0])}"));
+    }
+    let (length, llen) = read_length(tail(s, 1))?;
+    if length == 0 {
+        return Err(unexpected("Invalid length of bit string, can't be 0".to_string()));
+    }
+    let body = sub(s, 1 + llen, 1 + llen + length);
+    let rest = tail(s, 1 + llen + length);
+    let unused = first_of(body)?;
+    if unused > 7u8 {
+        return Err(unexpected("Invalid encoding of unused bits".to_string()));
+    }
+    if unused != 0u8 {
+        return Err(unexpected("Unexpected number of unused bits".to_string()));
+    }
+    Ok((tail(body, 1), rest))
+}
+
+fn starts_with_bytes(b: ref Vec[u8], pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if b.len() < p.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+// der.unpem: every line that is not a ----- marker, stripped, joined and
+// base64-decoded.
+fn unpem(pem: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut d: Vec[u8] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i <= pem.len() {
+        if i == pem.len() or pem[i] == 10u8 {
+            if cur.len() > 0 and not starts_with_bytes(cur, "-----") {
+                d = cat(d, bytes_strip(cur));
+            }
+            cur = Vec.new();
+        } else {
+            cur.push(pem[i]);
+        }
+        i += 1;
+    }
+    b64_decode(d)
+}
+
+fn bytes_strip(b: ref Vec[u8]) -> Vec[u8] {
+    let mut s = 0;
+    let mut e = b.len();
+    while s < e and is_ws(b[s]) {
+        s += 1;
+    }
+    while e > s and is_ws(b[e - 1]) {
+        e -= 1;
+    }
+    sub(b, s, e)
+}
+
+fn topem(der: ref Vec[u8], name: Str) -> String {
+    let b64 = b64_encode(der);
+    let mut s = f"-----BEGIN {name}-----\n";
+    let mut i = 0;
+    while i < b64.len() {
+        let j = if i + 76 < b64.len() { i + 76 } else { b64.len() };
+        s.push_str(slice(b64, i, j));
+        s.push('\n');
+        i = j;
+    }
+    s.push_str(f"-----END {name}-----\n");
+    s
+}
+
+// bytes.find
+fn bytes_find(hay: ref Vec[u8], needle: Str) -> i64 {
+    let n = to_bytes(needle);
+    let mut i = 0;
+    while i + n.len() <= hay.len() {
+        let mut ok = true;
+        for k in 0..n.len() {
+            if hay[i + k] != n[k] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// --------------------------------------------------------------- curves.py
+
+// A curve: y^2 = x^3 + ax + b over GF(p), its generator (gx, gy) of order n,
+// and the cofactor when it has one (has_h). An Edwards curve keeps only its
+// name and OID: this port knows it exists but cannot compute on it.
+#[derive(Clone)]
+struct Curve {
+    name: String,
+    openssl: String,
+    oid: Vec[i64],
+    edwards: bool,
+    p: Vec[u64],
+    a: Vec[u64],
+    b: Vec[u64],
+    gx: Vec[u64],
+    gy: Vec[u64],
+    n: Vec[u64],
+    h: Vec[u64],
+    has_h: bool,
+    baselen: i64,
+    vk_len: i64,
+    // The generator's comb table (see comb_mul), or empty.
+    comb: Vec[Pt],
+    comb_d: i64,
+}
+
+fn parse_oid(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for part in split_on(s, 46u8) {
+        out.push(py_int(part).unwrap());
+    }
+    out
+}
+
+fn make_curve(name: Str, openssl: Str, oid: own Vec[i64], p: own Vec[u64], a: own Vec[u64], b: own Vec[u64], gx: own Vec[u64], gy: own Vec[u64], n: own Vec[u64], h: own Vec[u64], has_h: bool) -> Curve {
+    let baselen = orderlen(n);
+    let vk_len = 2 * orderlen(p);
+    Curve { name: name.to_string(), openssl: openssl.to_string(), oid: oid, edwards: false, p: p, a: a, b: b, gx: gx, gy: gy, n: n, h: h, has_h: has_h, baselen: baselen, vk_len: vk_len, comb: Vec.new(), comb_d: 0 }
+}
+
+// curves.curves, from the table gen_kara.py copies out of the library.
+fn load_curves() -> Vec[Curve] {
+    let mut out: Vec[Curve] = Vec.new();
+    for line in split_c(curves_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, 32u8);
+        if f.len() == 4 {
+            out.push(Curve { name: f[0].clone(), openssl: String.new(), oid: parse_oid(f[2]), edwards: true, p: Vec.new(), a: Vec.new(), b: Vec.new(), gx: Vec.new(), gy: Vec.new(), n: Vec.new(), h: Vec.new(), has_h: false, baselen: 0, vk_len: 0, comb: Vec.new(), comb_d: 0 });
+            continue;
+        }
+        let mut c = make_curve(f[0], f[1], parse_oid(f[2]), bn_from_hex(f[3]), bn_from_hex(f[4]), bn_from_hex(f[5]), bn_from_hex(f[6]), bn_from_hex(f[7]), bn_from_hex(f[8]), bn_from_hex(f[9]), true);
+        c.comb.push(infinity());
+        let mut i = 10;
+        while i + 1 < f.len() {
+            c.comb.push(Pt { x: bn_from_hex(f[i]), y: bn_from_hex(f[i + 1]), inf: false });
+            i += 2;
+        }
+        c.comb_d = (bn_bits(c.n) + 3) / 4;
+        out.push(c);
+    }
+    out
+}
+
+fn curve_names(cs: ref Vec[Curve]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for c in cs {
+        parts.push(py_repr(c.name));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn curve_by_name(cs: ref Vec[Curve], name: Str) -> Result[Curve, Exc] {
+    for c in cs {
+        if c.name == name or (c.openssl.len() > 0 and c.openssl == name) {
+            return Ok(c.clone());
+        }
+    }
+    Err(exc("UnknownCurveError", f"Curve with name {py_repr(name)} unknown, only curves supported: {curve_names(cs)}"))
+}
+
+fn find_curve(cs: ref Vec[Curve], oid: ref Vec[i64]) -> Result[Curve, Exc] {
+    for c in cs {
+        if c.oid == *oid {
+            return Ok(c.clone());
+        }
+    }
+    Err(exc("UnknownCurveError", f"I don't know about the curve with oid {oid_tuple(oid)}.I only know about these: {curve_names(cs)}"))
+}
+
+fn not_ported(c: ref Curve) -> Result[(), Exc] {
+    if c.edwards {
+        return Err(exc("NotImplementedError", f"{c.name} keys are not ported"));
+    }
+    Ok(())
+}
+
+// Curve.__eq__: the same field and coefficients, and the same generator.
+fn curve_eq(x: ref Curve, y: ref Curve) -> bool {
+    if x.edwards or y.edwards {
+        return x.edwards and y.edwards and x.name == y.name;
+    }
+    x.p == y.p and bn_mod(x.a, x.p) == bn_mod(y.a, y.p) and bn_mod(x.b, x.p) == bn_mod(y.b, y.p) and x.gx == y.gx and x.gy == y.gy
+}
+
+fn contains_point(c: ref Curve, x: ref Vec[u64], y: ref Vec[u64]) -> bool {
+    let p = ref c.p;
+    let lhs = f_mul(bn_mod(y, p), bn_mod(y, p), p);
+    let xm = bn_mod(x, p);
+    let rhs = f_add(f_mul(f_add(f_mul(xm, xm, p), bn_mod(c.a, p), p), xm, p), bn_mod(c.b, p), p);
+    lhs == rhs
+}
+
+// ---------------------------------------------------------- numbertheory.py
+
+fn no_square_root(a: ref Vec[u64], p: ref Vec[u64]) -> Exc {
+    exc("SquareRootError", f"{bn_str(a)} has no square root modulo {bn_str(p)}")
+}
+
+// square_root_mod_prime(a, p). The library uses a polynomial method when
+// p % 8 == 1; this port uses Tonelli-Shanks there. Both find a root, and
+// every caller then picks the root by its parity, so the answers agree.
+fn square_root_mod_prime(a: ref Vec[u64], p: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    if bn_is_zero(a) {
+        return Ok(Vec.new());
+    }
+    if bn_eq_small(p, 2) {
+        return Ok(a.clone());
+    }
+    let one = bn(1);
+    let pm1 = bn_sub(p, one);
+    if f_pow(a, bn_shr(pm1, 1), p) == pm1 {
+        return Err(no_square_root(a, p));
+    }
+    let p8 = bn_divmod_small(p, 8u64).1;
+    if p8 % 4u64 == 3u64 {
+        return Ok(f_pow(a, bn_shr(bn_add(p, one), 2), p));
+    }
+    if p8 == 5u64 {
+        let d = f_pow(a, bn_shr(pm1, 2), p);
+        if bn_eq_small(d, 1) {
+            return Ok(f_pow(a, bn_shr(bn_add(p, bn(3)), 3), p));
+        }
+        let t = f_pow(bn_mul_small(a, 4u64), bn_shr(bn_sub(p, bn(5)), 3), p);
+        return Ok(bn_mod(bn_mul(bn_mul_small(a, 2u64), t), p));
+    }
+    let mut q = pm1.clone();
+    let mut s = 0;
+    while not bn_is_odd(q) {
+        q = bn_shr(q, 1);
+        s += 1;
+    }
+    let mut z = bn(2);
+    while f_pow(z, bn_shr(pm1, 1), p) != pm1 {
+        z = bn_add(z, one);
+    }
+    let mut m = s;
+    let mut c = f_pow(z, q, p);
+    let mut t = f_pow(a, q, p);
+    let mut r = f_pow(a, bn_shr(bn_add(q, one), 1), p);
+    while not bn_eq_small(t, 1) {
+        let mut i = 0;
+        let mut t2 = t.clone();
+        while not bn_eq_small(t2, 1) {
+            t2 = f_mul(t2, t2, p);
+            i += 1;
+        }
+        let mut bb = c.clone();
+        for _ in 0..(m - i - 1) {
+            bb = f_mul(bb, bb, p);
+        }
+        m = i;
+        c = f_mul(bb, bb, p);
+        t = f_mul(t, c, p);
+        r = f_mul(r, bb, p);
+    }
+    Ok(r)
+}
+
+// --------------------------------------------------------- ellipticcurve.py
+
+// An affine point; inf is the point at infinity.
+#[derive(Clone)]
+struct Pt {
+    x: Vec[u64],
+    y: Vec[u64],
+    inf: bool,
+}
+
+fn infinity() -> Pt {
+    Pt { x: Vec.new(), y: Vec.new(), inf: true }
+}
+
+fn pt(x: ref Vec[u64], y: ref Vec[u64]) -> Pt {
+    Pt { x: x.clone(), y: y.clone(), inf: false }
+}
+
+// Montgomery arithmetic mod the field prime p of n limbs: a value x is
+// held as x * R mod p, R = 2^(64 n), so a product needs no division.
+// Zero is zero in both forms, and sums and differences are unchanged.
+struct Mont {
+    p: Vec[u64],
+    n0: u64,
+    r2: Vec[u64],
+    a: Vec[u64],
+    a_is_m3: bool,
+}
+
+// -p^-1 mod 2^64, by Newton's iteration from p0 (right to 3 bits).
+fn mont_n0(p0: u64) -> u64 {
+    let x = p0 as u128;
+    let mut inv = x;
+    let mut i = 0;
+    while i < 5 {
+        let t = (x * inv) & mask64();
+        inv = (inv * (((1u128 << 64) + 2u128 - t) & mask64())) & mask64();
+        i += 1;
+    }
+    (((1u128 << 64) - inv) & mask64()) as u64
+}
+
+fn mont_of(p: ref Vec[u64]) -> Mont {
+    Mont { p: p.clone(), n0: mont_n0(p[0]), r2: bn_mod(bn_shl(bn(1), 128 * p.len()), p), a: Vec.new(), a_is_m3: false }
+}
+
+fn mont_ctx(c: ref Curve) -> Mont {
+    let mut m = mont_of(c.p);
+    let a = bn_mod(c.a, c.p);
+    m.a_is_m3 = bn_add(a, bn(3)) == c.p;
+    m.a = to_mont(a, m);
+    m
+}
+
+// pow(a, e, p) for an odd p.
+fn f_pow(a: ref Vec[u64], e: ref Vec[u64], p: ref Vec[u64]) -> Vec[u64] {
+    let m = mont_of(p);
+    let base = to_mont(bn_mod(a, p), m);
+    let mut acc = to_mont(bn(1), m);
+    let mut i = bn_bits(e) - 1;
+    while i >= 0 {
+        acc = mont_mul(acc, acc, m);
+        if bn_bit(e, i) {
+            acc = mont_mul(acc, base, m);
+        }
+        i -= 1;
+    }
+    from_mont(acc, m)
+}
+
+// a * b / R mod p, for a, b < p (CIOS).
+fn mont_mul(a: ref Vec[u64], b: ref Vec[u64], m: ref Mont) -> Vec[u64] {
+    let p = ref m.p;
+    let n = p.len();
+    let mut t = Vec.filled(n + 2, 0u64);
+    let mut i = 0;
+    while i < n {
+        if i < a.len() and a[i] != 0u64 {
+            let ai = a[i] as u128;
+            let mut c = 0u128;
+            let mut j = 0;
+            while j < b.len() {
+                let s = ai * (b[j] as u128) + (t[j] as u128) + c;
+                t[j] = (s & mask64()) as u64;
+                c = s >> 64;
+                j += 1;
+            }
+            while c != 0u128 and j < n + 2 {
+                let s = (t[j] as u128) + c;
+                t[j] = (s & mask64()) as u64;
+                c = s >> 64;
+                j += 1;
+            }
+        }
+        let q = ((t[0] as u128) * (m.n0 as u128)) & mask64();
+        let s0 = (t[0] as u128) + q * (p[0] as u128);
+        let mut c = s0 >> 64;
+        let mut j = 1;
+        while j < n {
+            let s = (t[j] as u128) + q * (p[j] as u128) + c;
+            t[j - 1] = (s & mask64()) as u64;
+            c = s >> 64;
+            j += 1;
+        }
+        let s = (t[n] as u128) + c;
+        t[n - 1] = (s & mask64()) as u64;
+        t[n] = (((t[n + 1] as u128) + (s >> 64)) & mask64()) as u64;
+        t[n + 1] = 0u64;
+        i += 1;
+    }
+    bn_norm(mut t);
+    if bn_cmp(t, p) >= 0 { bn_sub(t, p) } else { t }
+}
+
+fn to_mont(x: ref Vec[u64], m: ref Mont) -> Vec[u64] {
+    mont_mul(x, m.r2, m)
+}
+
+fn from_mont(x: ref Vec[u64], m: ref Mont) -> Vec[u64] {
+    mont_mul(x, bn(1), m)
+}
+
+// Jacobian coordinates: (X/Z^2, Y/Z^3), Z = 0 at infinity, each held in
+// Montgomery form.
+struct Jac {
+    x: Vec[u64],
+    y: Vec[u64],
+    z: Vec[u64],
+}
+
+fn jac_infinity() -> Jac {
+    Jac { x: Vec.new(), y: bn(1), z: Vec.new() }
+}
+
+fn jac_of(q: ref Pt, m: ref Mont) -> Jac {
+    if q.inf {
+        return jac_infinity();
+    }
+    let p = ref m.p;
+    Jac { x: to_mont(bn_mod(q.x, p), m), y: to_mont(bn_mod(q.y, p), m), z: to_mont(bn(1), m) }
+}
+
+fn jac_copy(j: ref Jac) -> Jac {
+    Jac { x: j.x.clone(), y: j.y.clone(), z: j.z.clone() }
+}
+
+fn jac_inf(j: ref Jac) -> bool {
+    bn_is_zero(j.z) or bn_is_zero(j.y)
+}
+
+fn jac_double(j: ref Jac, m: ref Mont) -> Jac {
+    if jac_inf(j) {
+        return jac_infinity();
+    }
+    let p = ref m.p;
+    if m.a_is_m3 {
+        return jac_double_m3(j, m);
+    }
+    let xx = mont_mul(j.x, j.x, m);
+    let yy = mont_mul(j.y, j.y, m);
+    let yyyy = mont_mul(yy, yy, m);
+    let zz = mont_mul(j.z, j.z, m);
+    let xyy = f_add(j.x, yy, p);
+    let s0 = f_sub(f_sub(mont_mul(xyy, xyy, m), xx, p), yyyy, p);
+    let s = f_add(s0, s0, p);
+    let xx3 = f_add(f_add(xx, xx, p), xx, p);
+    let mm = if bn_is_zero(m.a) { xx3 } else { f_add(xx3, mont_mul(m.a, mont_mul(zz, zz, m), m), p) };
+    let t = f_sub(mont_mul(mm, mm, m), f_add(s, s, p), p);
+    let y8 = bn_mod(bn_mul_small(yyyy, 8u64), p);
+    let y3 = f_sub(mont_mul(mm, f_sub(s, t, p), m), y8, p);
+    let yz = f_add(j.y, j.z, p);
+    let z3 = f_sub(f_sub(mont_mul(yz, yz, m), yy, p), zz, p);
+    Jac { x: t, y: y3, z: z3 }
+}
+
+// Doubling when a = -3, as on the NIST curves: 3 (X - Z^2)(X + Z^2) in
+// place of 3 X^2 + a Z^4 saves two products.
+fn jac_double_m3(j: ref Jac, m: ref Mont) -> Jac {
+    let p = ref m.p;
+    let delta = mont_mul(j.z, j.z, m);
+    let gamma = mont_mul(j.y, j.y, m);
+    let beta = mont_mul(j.x, gamma, m);
+    let al = mont_mul(f_sub(j.x, delta, p), f_add(j.x, delta, p), m);
+    let alpha = f_add(f_add(al, al, p), al, p);
+    let beta2 = f_add(beta, beta, p);
+    let beta4 = f_add(beta2, beta2, p);
+    let x3 = f_sub(mont_mul(alpha, alpha, m), f_add(beta4, beta4, p), p);
+    let yz = f_add(j.y, j.z, p);
+    let z3 = f_sub(f_sub(mont_mul(yz, yz, m), gamma, p), delta, p);
+    let g8 = bn_mod(bn_mul_small(mont_mul(gamma, gamma, m), 8u64), p);
+    let y3 = f_sub(mont_mul(alpha, f_sub(beta4, x3, p), m), g8, p);
+    Jac { x: x3, y: y3, z: z3 }
+}
+
+fn jac_add(j1: ref Jac, j2: ref Jac, m: ref Mont) -> Jac {
+    if jac_inf(j1) {
+        return jac_copy(j2);
+    }
+    if jac_inf(j2) {
+        return jac_copy(j1);
+    }
+    let p = ref m.p;
+    let z1z1 = mont_mul(j1.z, j1.z, m);
+    let z2z2 = mont_mul(j2.z, j2.z, m);
+    let u1 = mont_mul(j1.x, z2z2, m);
+    let u2 = mont_mul(j2.x, z1z1, m);
+    let s1 = mont_mul(mont_mul(j1.y, j2.z, m), z2z2, m);
+    let s2 = mont_mul(mont_mul(j2.y, j1.z, m), z1z1, m);
+    let h = f_sub(u2, u1, p);
+    let r0 = f_sub(s2, s1, p);
+    if bn_is_zero(h) {
+        if bn_is_zero(r0) {
+            return jac_double(j1, m);
+        }
+        return jac_infinity();
+    }
+    let r = f_add(r0, r0, p);
+    let h2 = f_add(h, h, p);
+    let i = mont_mul(h2, h2, m);
+    let jj = mont_mul(h, i, m);
+    let v = mont_mul(u1, i, m);
+    let x3 = f_sub(f_sub(mont_mul(r, r, m), jj, p), f_add(v, v, p), p);
+    let s1j = mont_mul(s1, jj, m);
+    let y3 = f_sub(mont_mul(r, f_sub(v, x3, p), m), f_add(s1j, s1j, p), p);
+    let zs = f_add(j1.z, j2.z, p);
+    let z3 = mont_mul(f_sub(f_sub(mont_mul(zs, zs, m), z1z1, p), z2z2, p), h, m);
+    Jac { x: x3, y: y3, z: z3 }
+}
+
+fn to_affine(j: ref Jac, m: ref Mont) -> Result[Pt, Exc] {
+    if jac_inf(j) {
+        return Ok(infinity());
+    }
+    let p = ref m.p;
+    let zi = inverse_mod(from_mont(j.z, m), p)?;
+    let zi2 = f_mul(zi, zi, p);
+    let x = from_mont(j.x, m);
+    let y = from_mont(j.y, m);
+    Ok(Pt { x: f_mul(x, zi2, p), y: f_mul(f_mul(y, zi2, p), zi, p), inf: false })
+}
+
+// k * q, four bits at a time from a table of q .. 15 q. As
+// PointJacobi.__mul__, a point with y = 0 gives infinity.
+fn jac_mul(q: ref Pt, k: ref Vec[u64], m: ref Mont) -> Jac {
+    if q.inf or bn_is_zero(q.y) or bn_is_zero(k) {
+        return jac_infinity();
+    }
+    let base = jac_of(q, m);
+    let mut table: Vec[Jac] = Vec.new();
+    table.push(jac_infinity());
+    table.push(jac_copy(base));
+    let mut i = 2;
+    while i < 16 {
+        let next = if i % 2 == 0 { jac_double(table[i / 2], m) } else { jac_add(table[i - 1], base, m) };
+        table.push(next);
+        i += 1;
+    }
+    let mut top = bn_bits(k);
+    while top % 4 != 0 {
+        top += 1;
+    }
+    let mut acc = jac_infinity();
+    let mut b = top - 4;
+    while b >= 0 {
+        acc = jac_double(jac_double(jac_double(jac_double(acc, m), m), m), m);
+        let mut idx = 0;
+        if bn_bit(k, b + 3) { idx += 8; }
+        if bn_bit(k, b + 2) { idx += 4; }
+        if bn_bit(k, b + 1) { idx += 2; }
+        if bn_bit(k, b) { idx += 1; }
+        if idx != 0 {
+            acc = jac_add(acc, table[idx], m);
+        }
+        b -= 4;
+    }
+    acc
+}
+
+// k * G by the comb: bit i of each of k's four d-bit quarters picks a
+// table entry, so the run is d doublings instead of 4 d.
+fn comb_mul(k: ref Vec[u64], c: ref Curve, m: ref Mont) -> Jac {
+    let d = c.comb_d;
+    let mut table: Vec[Jac] = Vec.new();
+    for q in c.comb {
+        table.push(jac_of(q, m));
+    }
+    let mut acc = jac_infinity();
+    let mut i = d - 1;
+    while i >= 0 {
+        acc = jac_double(acc, m);
+        let mut idx = 0;
+        if bn_bit(k, i) { idx += 1; }
+        if bn_bit(k, i + d) { idx += 2; }
+        if bn_bit(k, i + 2 * d) { idx += 4; }
+        if bn_bit(k, i + 3 * d) { idx += 8; }
+        if idx != 0 {
+            acc = jac_add(acc, table[idx], m);
+        }
+        i -= 1;
+    }
+    acc
+}
+
+// k * q, by the comb when q is the generator and k fits it.
+fn jac_mul_on(q: ref Pt, k: ref Vec[u64], c: ref Curve, m: ref Mont) -> Jac {
+    if c.comb.len() == 16 and bn_bits(k) <= 4 * c.comb_d and not q.inf and q.x == c.gx and q.y == c.gy {
+        return comb_mul(k, c, m);
+    }
+    jac_mul(q, k, m)
+}
+
+// point * k
+fn pt_mul(q: ref Pt, k: ref Vec[u64], c: ref Curve) -> Result[Pt, Exc] {
+    let m = mont_ctx(c);
+    to_affine(jac_mul_on(q, k, c, m), m)
+}
+
+// u1 * q1 + u2 * q2 by Shamir's trick: one run of doublings over both
+// scalars, two bits at a time, adding i * q1 + j * q2 from a table.
+fn pt_mul_add(q1: ref Pt, u1: ref Vec[u64], q2: ref Pt, u2: ref Vec[u64], c: ref Curve) -> Result[Pt, Exc] {
+    let m = mont_ctx(c);
+    // As PointJacobi.mul_add: a factor that is infinity or zero drops out.
+    if q1.inf or bn_is_zero(q1.y) or bn_is_zero(u1) {
+        return to_affine(jac_mul(q2, u2, m), m);
+    }
+    if q2.inf or bn_is_zero(q2.y) or bn_is_zero(u2) {
+        return to_affine(jac_mul(q1, u1, m), m);
+    }
+    let b1 = jac_of(q1, m);
+    let b2 = jac_of(q2, m);
+    let mut table: Vec[Jac] = Vec.new();
+    table.push(jac_infinity());
+    table.push(jac_copy(b2));
+    table.push(jac_double(b2, m));
+    table.push(jac_add(table[2], b2, m));
+    let mut i = 4;
+    while i < 16 {
+        let row = if i % 4 == 0 {
+            if i == 4 { jac_copy(b1) } else { jac_add(table[i - 4], b1, m) }
+        } else {
+            jac_add(table[i - i % 4], table[i % 4], m)
+        };
+        table.push(row);
+        i += 1;
+    }
+    let mut top = bit_max(bn_bits(u1), bn_bits(u2));
+    if top % 2 == 1 {
+        top += 1;
+    }
+    let mut acc = jac_infinity();
+    let mut k = top - 2;
+    while k >= 0 {
+        acc = jac_double(jac_double(acc, m), m);
+        let mut idx = 0;
+        if bn_bit(u1, k + 1) { idx += 8; }
+        if bn_bit(u1, k) { idx += 4; }
+        if bn_bit(u2, k + 1) { idx += 2; }
+        if bn_bit(u2, k) { idx += 1; }
+        if idx != 0 {
+            acc = jac_add(acc, table[idx], m);
+        }
+        k -= 2;
+    }
+    to_affine(acc, m)
+}
+
+// u1 * r + u2 * q and u1 * (-r) + u2 * q, sharing both products: the
+// two public keys a signature recovers to.
+fn pt_mul_add_pair(r: ref Pt, u1: ref Vec[u64], q: ref Pt, u2: ref Vec[u64], c: ref Curve) -> Result[(Pt, Pt), Exc] {
+    let m = mont_ctx(c);
+    let a = jac_mul(r, u1, m);
+    let b = jac_mul_on(q, u2, c, m);
+    let neg_a = if jac_inf(a) { jac_infinity() } else { Jac { x: a.x.clone(), y: f_neg(a.y, m.p), z: a.z.clone() } };
+    Ok((to_affine(jac_add(a, b, m), m)?, to_affine(jac_add(neg_a, b, m), m)?))
+}
+
+fn bit_max(x: i64, y: i64) -> i64 {
+    if x > y { x } else { y }
+}
+
+fn generator(c: ref Curve) -> Pt {
+    pt(c.gx, c.gy)
+}
+
+fn pt_eq(x: ref Pt, y: ref Pt) -> bool {
+    if x.inf or y.inf {
+        return x.inf and y.inf;
+    }
+    x.x == y.x and x.y == y.y
+}
+
+// AbstractPoint.to_bytes
+fn point_to_bytes(q: ref Pt, c: ref Curve, encoding: Str) -> Result[Vec[u8], Exc] {
+    let raw = cat(number_to_string(q.x, c.p)?, number_to_string(q.y, c.p)?);
+    let odd = bn_is_odd(q.y);
+    let mut out: Vec[u8] = Vec.new();
+    if encoding == "raw" {
+        return Ok(raw);
+    } else if encoding == "uncompressed" {
+        out.push(4u8);
+        return Ok(cat(out, raw));
+    } else if encoding == "hybrid" {
+        out.push(if odd { 7u8 } else { 6u8 });
+        return Ok(cat(out, raw));
+    }
+    out.push(if odd { 3u8 } else { 2u8 });
+    Ok(cat(out, number_to_string(q.x, c.p)?))
+}
+
+fn malformed(msg: own String) -> Exc {
+    exc("MalformedPointError", msg)
+}
+
+fn has_enc(valid: ref Vec[String], name: Str) -> bool {
+    for v in valid {
+        if v == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn from_compressed(data: ref Vec[u8], c: ref Curve) -> Result[Pt, Exc] {
+    if data[0] != 2u8 and data[0] != 3u8 {
+        return Err(malformed("Malformed compressed point encoding".to_string()));
+    }
+    let is_even = data[0] == 2u8;
+    let x = bn_from_bytes(tail(data, 1));
+    let p = ref c.p;
+    let xm = bn_mod(x, p);
+    let alpha = f_add(f_mul(f_add(f_mul(xm, xm, p), bn_mod(c.a, p), p), xm, p), bn_mod(c.b, p), p);
+    let beta = match square_root_mod_prime(alpha, p) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(exc_wrap("MalformedPointError", "Encoding does not correspond to a point on curve", e));
+        }
+    };
+    let y = if is_even == bn_is_odd(beta) { bn_sub(p, beta) } else { beta };
+    Ok(Pt { x: x, y: y, inf: false })
+}
+
+// AbstractPoint.from_bytes: the coordinates, not yet checked against the
+// curve.
+fn point_from_bytes(c: ref Curve, data: ref Vec[u8], validate_encoding: bool, valid: ref Vec[String]) -> Result[Pt, Exc] {
+    let key_len = data.len();
+    let raw_len = c.vk_len;
+    if key_len == raw_len and has_enc(valid, "raw") {
+        return Ok(Pt { x: bn_from_bytes(sub(data, 0, raw_len / 2)), y: bn_from_bytes(tail(data, raw_len / 2)), inf: false });
+    }
+    if key_len == raw_len + 1 and (has_enc(valid, "hybrid") or has_enc(valid, "uncompressed")) {
+        let x = bn_from_bytes(sub(data, 1, 1 + raw_len / 2));
+        let y = bn_from_bytes(tail(data, 1 + raw_len / 2));
+        if (data[0] == 6u8 or data[0] == 7u8) and has_enc(valid, "hybrid") {
+            let odd = bn_is_odd(y);
+            if validate_encoding and ((odd and data[0] != 7u8) or (not odd and data[0] != 6u8)) {
+                return Err(malformed("Inconsistent hybrid point encoding".to_string()));
+            }
+            return Ok(Pt { x: x, y: y, inf: false });
+        }
+        if data[0] == 4u8 and has_enc(valid, "uncompressed") {
+            return Ok(Pt { x: x, y: y, inf: false });
+        }
+        return Err(malformed("Invalid X9.62 encoding of the public point".to_string()));
+    }
+    if key_len == raw_len / 2 + 1 and has_enc(valid, "compressed") {
+        return from_compressed(data, c);
+    }
+    Err(malformed(f"Length of string does not match lengths of any of the enabled ({join(valid, ", ")}) encodings of the curve."))
+}
+
+fn encodings(names: Str) -> Vec[String] {
+    split_on(names, 44u8)
+}
+
+// Curve.to_der(encoding, point_encoding)
+fn curve_to_der(c: ref Curve, encoding0: Str, point_encoding: Str) -> Result[Vec[u8], Exc] {
+    let encoding = if encoding0.len() > 0 { encoding0.to_string() } else if c.oid.len() > 0 { "named_curve".to_string() } else { "explicit".to_string() };
+    if encoding != "named_curve" and encoding != "explicit" {
+        return Err(exc("ValueError", "Only 'named_curve' and 'explicit' encodings supported".to_string()));
+    }
+    if encoding == "named_curve" {
+        if c.oid.len() == 0 {
+            return Err(exc("UnknownCurveError", "Can't encode curve using named_curve encoding without associated curve OID".to_string()));
+        }
+        return Ok(encode_oid(c.oid));
+    }
+    not_ported(c)?;
+    let p = ref c.p;
+    let mut field: Vec[Vec[u8]] = Vec.new();
+    field.push(encode_oid([1, 2, 840, 10045, 1, 1].to_vec()));
+    field.push(encode_integer(p));
+    let mut coeffs: Vec[Vec[u8]] = Vec.new();
+    coeffs.push(encode_octet_string(number_to_string(bn_mod(c.a, p), p)?));
+    coeffs.push(encode_octet_string(number_to_string(bn_mod(c.b, p), p)?));
+    let mut seq: Vec[Vec[u8]] = Vec.new();
+    seq.push(encode_integer(bn(1)));
+    seq.push(encode_sequence(field));
+    seq.push(encode_sequence(coeffs));
+    seq.push(encode_octet_string(point_to_bytes(generator(c), c, point_encoding)?));
+    seq.push(encode_integer(c.n));
+    if c.has_h and not bn_is_zero(c.h) {
+        seq.push(encode_integer(c.h));
+    }
+    Ok(encode_sequence(seq))
+}
+
+// Curve.from_der: a named curve's OID, or explicit parameters, matched
+// against the known curves.
+fn curve_from_der(cs: ref Vec[Curve], data: ref Vec[u8]) -> Result[Curve, Exc] {
+    if not is_sequence(data) {
+        let (oid, empty) = remove_object(data)?;
+        if empty.len() > 0 {
+            return Err(unexpected("Unexpected data after OID".to_string()));
+        }
+        return find_curve(cs, oid);
+    }
+    let (seq, empty) = remove_sequence(data)?;
+    if empty.len() > 0 {
+        return Err(unexpected("Unexpected data after ECParameters structure".to_string()));
+    }
+    let (version, rest1) = remove_integer(seq)?;
+    if not bn_eq_small(version, 1) {
+        return Err(unexpected("Unknown parameter encoding format".to_string()));
+    }
+    let (field_id, rest2) = remove_sequence(rest1)?;
+    let (curve, rest3) = remove_sequence(rest2)?;
+    let (base_bytes, rest4) = remove_octet_string(rest3)?;
+    let (order, rest5) = remove_integer(rest4)?;
+    let mut cofactor: Vec[u64] = Vec.new();
+    let mut has_h = false;
+    if rest5.len() > 0 {
+        cofactor = remove_integer(rest5)?.0;
+        has_h = true;
+    }
+    let (field_type, rest6) = remove_object(field_id)?;
+    if field_type == [1, 2, 840, 10045, 1, 2].to_vec() {
+        return Err(exc("UnknownCurveError", "Characteristic 2 curves unsupported".to_string()));
+    }
+    if field_type != [1, 2, 840, 10045, 1, 1].to_vec() {
+        return Err(exc("UnknownCurveError", f"Unknown field type: {oid_tuple(field_type)}"));
+    }
+    let (prime, empty2) = remove_integer(rest6)?;
+    if empty2.len() > 0 {
+        return Err(unexpected("Unexpected data after ECParameters.fieldID.Prime-p element".to_string()));
+    }
+    let (a_bytes, rest7) = remove_octet_string(curve)?;
+    let (b_bytes, _) = remove_octet_string(rest7)?;
+    let shell = make_curve("unknown", "", Vec.new(), prime, bn_from_bytes(a_bytes), bn_from_bytes(b_bytes), Vec.new(), Vec.new(), order, cofactor, has_h);
+    let g = point_from_bytes(shell, base_bytes, true, encodings("uncompressed,compressed,hybrid"))?;
+    let tmp = make_curve("unknown", "", Vec.new(), shell.p.clone(), shell.a.clone(), shell.b.clone(), g.x.clone(), g.y.clone(), shell.n.clone(), shell.h.clone(), has_h);
+    for c in cs {
+        if curve_eq(tmp, c) {
+            return Ok(c.clone());
+        }
+    }
+    Ok(tmp)
+}
+
+// ----------------------------------------------------------- hashes, hmac
+
+fn hash_digest(name: Str, m: ref Vec[u8]) -> Vec[u8] {
+    if name == "sha1" {
+        sha1(m)
+    } else if name == "sha224" {
+        sha256_family(m, true)
+    } else if name == "sha256" {
+        sha256_family(m, false)
+    } else if name == "sha384" {
+        sha512_family(m, true)
+    } else {
+        sha512_family(m, false)
+    }
+}
+
+fn digest_size(name: Str) -> i64 {
+    if name == "sha1" {
+        20
+    } else if name == "sha224" {
+        28
+    } else if name == "sha256" {
+        32
+    } else if name == "sha384" {
+        48
+    } else {
+        64
+    }
+}
+
+fn hmac(name: Str, key: ref Vec[u8], msg: ref Vec[u8]) -> Vec[u8] {
+    let block = if name == "sha384" or name == "sha512" { 128 } else { 64 };
+    let mut k = if key.len() > block { hash_digest(name, key) } else { key.clone() };
+    while k.len() < block {
+        k.push(0u8);
+    }
+    let mut inner: Vec[u8] = Vec.new();
+    let mut outer: Vec[u8] = Vec.new();
+    for c in k {
+        inner.push(c ^ 0x36u8);
+        outer.push(c ^ 0x5Cu8);
+    }
+    let ih = hash_digest(name, cat(inner, msg));
+    hash_digest(name, cat(outer, ih))
+}
+
+// ---------------------------------------------------------------- keys.py
+
+// A VerifyingKey, or a SigningKey (is_private, with its secret d). hash is
+// the default hash function's name, empty for None.
+#[derive(Clone)]
+struct Key {
+    curve: Curve,
+    hash: String,
+    q: Pt,
+    is_private: bool,
+    d: Vec[u64],
+}
+
+fn oid_ec_public_key() -> Vec[i64] {
+    [1, 2, 840, 10045, 2, 1].to_vec()
+}
+
+fn is_eddsa_oid(oid: ref Vec[i64]) -> bool {
+    *oid == [1, 3, 101, 112].to_vec() or *oid == [1, 3, 101, 113].to_vec()
+}
+
+// VerifyingKey.from_public_point; ecdsa.Public_key's checks all come out
+// as the same MalformedPointError.
+fn vk_from_point(curve: ref Curve, q: ref Pt, hash: Str, validate: bool) -> Result[Key, Exc] {
+    not_ported(curve)?;
+    if q.inf {
+        return Err(exc("TypeError", "'<=' not supported between instances of 'int' and 'NoneType'".to_string()));
+    }
+    let bad = "Point does not lay on the curve";
+    if bn_cmp(q.x, curve.p) >= 0 or bn_cmp(q.y, curve.p) >= 0 {
+        return Err(malformed(bad.to_string()));
+    }
+    if validate and not contains_point(curve, q.x, q.y) {
+        return Err(malformed(bad.to_string()));
+    }
+    if validate and not (curve.has_h and bn_eq_small(curve.h, 1)) {
+        if not pt_mul(q, curve.n, curve)?.inf {
+            return Err(malformed(bad.to_string()));
+        }
+    }
+    Ok(Key { curve: curve.clone(), hash: hash.to_string(), q: q.clone(), is_private: false, d: Vec.new() })
+}
+
+fn vk_from_string(curve: ref Curve, s: ref Vec[u8], hash: Str, valid: ref Vec[String]) -> Result[Key, Exc] {
+    not_ported(curve)?;
+    let q = point_from_bytes(curve, s, true, valid)?;
+    vk_from_point(curve, q, hash, true)
+}
+
+fn vk_to_string(k: ref Key, encoding: Str) -> Result[Vec[u8], Exc] {
+    point_to_bytes(k.q, k.curve, encoding)
+}
+
+fn hash_label(h: Str) -> String {
+    if h.len() == 0 { "None".to_string() } else { h.to_string() }
+}
+
+fn vk_repr(k: ref Key) -> Result[String, Exc] {
+    Ok(f"VerifyingKey.from_string({bytes_repr(vk_to_string(k, "compressed")?)}, {k.curve.name}, {hash_label(k.hash)})")
+}
+
+fn vk_eq(x: ref Key, y: ref Key) -> bool {
+    curve_eq(x.curve, y.curve) and pt_eq(x.q, y.q)
+}
+
+fn vk_to_der(k: ref Key, point_encoding: Str, curve_encoding: Str) -> Result[Vec[u8], Exc] {
+    if point_encoding == "raw" {
+        return Err(exc("ValueError", "raw point_encoding not allowed in DER".to_string()));
+    }
+    let point_str = vk_to_string(k, point_encoding)?;
+    let mut alg: Vec[Vec[u8]] = Vec.new();
+    alg.push(encode_oid(oid_ec_public_key()));
+    alg.push(curve_to_der(k.curve, curve_encoding, point_encoding)?);
+    let mut seq: Vec[Vec[u8]] = Vec.new();
+    seq.push(encode_sequence(alg));
+    seq.push(encode_bitstring(point_str));
+    Ok(encode_sequence(seq))
+}
+
+fn vk_to_pem(k: ref Key, point_encoding: Str, curve_encoding: Str) -> Result[String, Exc] {
+    Ok(topem(vk_to_der(k, point_encoding, curve_encoding)?, "PUBLIC KEY"))
+}
+
+fn vk_from_der(cs: ref Vec[Curve], s: ref Vec[u8], hash: Str) -> Result[Key, Exc] {
+    let (s1, empty) = remove_sequence(s)?;
+    if empty.len() > 0 {
+        return Err(unexpected(f"trailing junk after DER pubkey: {hexlify_str(empty)}"));
+    }
+    let (s2, point_bits) = remove_sequence(s1)?;
+    let (oid_pk, rest) = remove_object(s2)?;
+    if is_eddsa_oid(oid_pk) {
+        return Err(exc("NotImplementedError", "EdDSA keys are not ported".to_string()));
+    }
+    if oid_pk != oid_ec_public_key() {
+        return Err(unexpected(f"Unexpected object identifier in DER encoding: {oid_tuple(oid_pk)}"));
+    }
+    let curve = curve_from_der(cs, rest)?;
+    let (point_str, empty2) = remove_bitstring(point_bits)?;
+    if empty2.len() > 0 {
+        return Err(unexpected(f"trailing junk after pubkey pointstring: {hexlify_str(empty2)}"));
+    }
+    if point_str.len() == curve.vk_len {
+        return Err(unexpected("Malformed encoding of public point".to_string()));
+    }
+    vk_from_string(curve, point_str, hash, encodings("uncompressed,compressed,hybrid"))
+}
+
+fn vk_from_pem(cs: ref Vec[Curve], s: ref Vec[u8], hash: Str) -> Result[Key, Exc] {
+    vk_from_der(cs, unpem(s)?, hash)
+}
+
+fn sk_from_secret(curve: ref Curve, d: ref Vec[u64], hash: Str) -> Result[Key, Exc] {
+    not_ported(curve)?;
+    if bn_is_zero(d) or bn_cmp(d, curve.n) >= 0 {
+        return Err(malformed(f"Invalid value for secexp, expected integer between 1 and {bn_str(curve.n)}"));
+    }
+    let q = pt_mul(generator(curve), d, curve)?;
+    let mut k = vk_from_point(curve, q, hash, false)?;
+    k.is_private = true;
+    k.d = d.clone();
+    Ok(k)
+}
+
+fn sk_from_string(curve: ref Curve, s: ref Vec[u8], hash: Str) -> Result[Key, Exc] {
+    if s.len() != curve.baselen {
+        return Err(malformed(f"Invalid length of private key, received {s.len()}, expected {curve.baselen}"));
+    }
+    sk_from_secret(curve, bn_from_bytes(s), hash)
+}
+
+fn sk_from_der(cs: ref Vec[Curve], s0: ref Vec[u8], hash: Str) -> Result[Key, Exc] {
+    let (s1, empty) = remove_sequence(s0)?;
+    if empty.len() > 0 {
+        return Err(unexpected(f"trailing junk after DER privkey: {hexlify_str(empty)}"));
+    }
+    let (v1, s2) = remove_integer(s1)?;
+    let mut version = v1;
+    let mut s = s2;
+    let mut curve: Option[Curve] = None;
+    if is_sequence(s) {
+        if bn_cmp(version, bn(1)) > 0 {
+            return Err(unexpected(f"expected version '0' or '1' at start of privkey, got {bn_str(version)}"));
+        }
+        let (sequence, s3) = remove_sequence(s)?;
+        let (algorithm_oid, algorithm_identifier) = remove_object(sequence)?;
+        if is_eddsa_oid(algorithm_oid) {
+            return Err(exc("NotImplementedError", "EdDSA keys are not ported".to_string()));
+        }
+        if algorithm_oid != oid_ec_public_key() and algorithm_oid != [1, 3, 132, 1, 12].to_vec() and algorithm_oid != [1, 3, 132, 1, 13].to_vec() {
+            return Err(unexpected(f"unexpected algorithm identifier '{oid_tuple(algorithm_oid)}'"));
+        }
+        curve = Some(curve_from_der(cs, algorithm_identifier)?);
+        let (s4, _) = remove_octet_string(s3)?;
+        let (s5, empty2) = remove_sequence(s4)?;
+        if empty2.len() > 0 {
+            return Err(unexpected(f"trailing junk after DER privkey: {hexlify_str(empty2)}"));
+        }
+        let (v2, s6) = remove_integer(s5)?;
+        version = v2;
+        s = s6;
+    }
+    if not bn_eq_small(version, 1) {
+        return Err(unexpected(f"expected version '1' at start of DER privkey, got {bn_str(version)}"));
+    }
+    let (privkey_str, s7) = remove_octet_string(s)?;
+    let c = match curve {
+        Some(c) => c,
+        None => {
+            let (tag, curve_oid_str, _) = remove_constructed(s7)?;
+            if tag != 0 {
+                return Err(unexpected(f"expected tag 0 in DER privkey, got {tag}"));
+            }
+            curve_from_der(cs, curve_oid_str)?
+        }
+    };
+    let mut padded: Vec[u8] = Vec.new();
+    while padded.len() + privkey_str.len() < c.baselen {
+        padded.push(0u8);
+    }
+    sk_from_string(c, cat(padded, privkey_str), hash)
+}
+
+fn sk_from_pem(cs: ref Vec[Curve], b: ref Vec[u8], hash: Str) -> Result[Key, Exc] {
+    let mut at = bytes_find(b, "-----BEGIN EC PRIVATE KEY-----");
+    if at == -1 {
+        at = bytes_find(b, "-----BEGIN PRIVATE KEY-----");
+        if at == -1 {
+            return Err(exc("ValueError", "subsection not found".to_string()));
+        }
+    }
+    sk_from_der(cs, unpem(tail(b, at))?, hash)
+}
+
+fn sk_to_string(k: ref Key) -> Result[Vec[u8], Exc] {
+    number_to_string(k.d, k.curve.n)
+}
+
+fn sk_to_der(k: ref Key, point_encoding: Str, format: Str, curve_encoding: Str) -> Result[Vec[u8], Exc] {
+    if point_encoding == "raw" {
+        return Err(exc("ValueError", "raw encoding not allowed in DER".to_string()));
+    }
+    let encoded_vk = vk_to_string(k, point_encoding)?;
+    let mut elems: Vec[Vec[u8]] = Vec.new();
+    elems.push(encode_integer(bn(1)));
+    elems.push(encode_octet_string(sk_to_string(k)?));
+    if format == "ssleay" {
+        elems.push(encode_constructed(0, curve_to_der(k.curve, curve_encoding, "uncompressed")?));
+    }
+    elems.push(encode_constructed(1, encode_bitstring(encoded_vk)));
+    let ec_private_key = encode_sequence(elems);
+    if format == "ssleay" {
+        return Ok(ec_private_key);
+    }
+    let mut alg: Vec[Vec[u8]] = Vec.new();
+    alg.push(encode_oid(oid_ec_public_key()));
+    alg.push(curve_to_der(k.curve, curve_encoding, "uncompressed")?);
+    let mut outer: Vec[Vec[u8]] = Vec.new();
+    outer.push(encode_integer(bn(1)));
+    outer.push(encode_sequence(alg));
+    outer.push(encode_octet_string(ec_private_key));
+    Ok(encode_sequence(outer))
+}
+
+fn sk_to_pem(k: ref Key, point_encoding: Str, format: Str, curve_encoding: Str) -> Result[String, Exc] {
+    let header = if format == "ssleay" { "EC PRIVATE KEY" } else { "PRIVATE KEY" };
+    Ok(topem(sk_to_der(k, point_encoding, format, curve_encoding)?, header))
+}
+
+// util.randrange(order, os.urandom)
+fn randrange(rng: mut ref Rng, order: ref Vec[u64]) -> Vec[u64] {
+    let upper_2 = bit_length(bn_sub(order, bn(2)));
+    let upper_256 = upper_2 / 8 + 1;
+    loop {
+        let ent = urandom(mut rng, upper_256);
+        let num = bn_add(bn_shr(bn_from_bytes(ent), upper_256 * 8 - upper_2), bn(1));
+        if bn_cmp(num, order) < 0 {
+            return num;
+        }
+    }
+}
+
+fn generate(rng: mut ref Rng, curve: ref Curve, hash: Str) -> Result[Key, Exc] {
+    not_ported(curve)?;
+    let d = randrange(mut rng, curve.n);
+    sk_from_secret(curve, d, hash)
+}
+
+fn truncate_and_convert_digest(digest0: ref Vec[u8], curve: ref Curve, allow_truncate: bool) -> Result[Vec[u64], Exc] {
+    let mut digest = digest0.clone();
+    if not allow_truncate {
+        if digest.len() > curve.baselen {
+            return Err(exc("BadDigestError", f"this curve ({curve.name}) is too short for the length of your digest ({8 * digest.len()})"));
+        }
+    } else {
+        digest = sub(digest, 0, curve.baselen);
+    }
+    let mut number = bn_from_bytes(digest);
+    if allow_truncate {
+        let max_length = bit_length(curve.n);
+        let length = digest.len() * 8;
+        if length > max_length {
+            number = bn_shr(number, length - max_length);
+        }
+    }
+    Ok(number)
+}
+
+// ecdsa.Private_key.sign, with k as given.
+fn sign_number(k: ref Key, number: ref Vec[u64], kk: ref Vec[u64]) -> Result[(Vec[u64], Vec[u64]), Exc] {
+    let n = ref k.curve.n;
+    if bn_is_zero(kk) or bn_cmp(kk, n) >= 0 {
+        return Err(exc("AssertionError", String.new()));
+    }
+    let p1 = pt_mul(generator(k.curve), bn_mod(kk, n), k.curve)?;
+    let r = bn_mod(p1.x, n);
+    if bn_is_zero(r) {
+        return Err(exc("RSZeroError", "amazingly unlucky random number r".to_string()));
+    }
+    let kinv = inverse_mod(kk, n)?;
+    let s = bn_mod(bn_mul(kinv, bn_add(number, bn_mod(bn_mul(k.d, r), n))), n);
+    if bn_is_zero(s) {
+        return Err(exc("RSZeroError", "amazingly unlucky random number s".to_string()));
+    }
+    Ok((r, s))
+}
+
+fn sign_digest(k: ref Key, digest: ref Vec[u8], kk: ref Vec[u64], allow_truncate: bool) -> Result[(Vec[u64], Vec[u64]), Exc] {
+    let number = truncate_and_convert_digest(digest, k.curve, allow_truncate)?;
+    sign_number(k, number, kk)
+}
+
+// --------------------------------------------------------------- rfc6979.py
+
+fn bits2int(data: ref Vec[u8], qlen: i64) -> Vec[u64] {
+    let x = bn_from_bytes(data);
+    let l = data.len() * 8;
+    if l > qlen { bn_shr(x, l - qlen) } else { x }
+}
+
+fn bits2octets(data: ref Vec[u8], order: ref Vec[u64]) -> Vec[u8] {
+    let z1 = bits2int(data, bit_length(order));
+    let z2 = if bn_cmp(z1, order) >= 0 { bn_sub(z1, order) } else { z1 };
+    bn_to_bytes(z2, orderlen(order))
+}
+
+fn byte_run(c: u8, n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        out.push(c);
+    }
+    out
+}
+
+fn generate_k(order: ref Vec[u64], secexp: ref Vec[u64], hname: Str, data: ref Vec[u8], retry0: i64) -> Result[Vec[u64], Exc] {
+    let mut retry_gen = retry0;
+    let qlen = bit_length(order);
+    let holen = digest_size(hname);
+    let rolen = (qlen + 7) / 8;
+    let bx = cat(number_to_string(secexp, order)?, bits2octets(data, order));
+    let mut v = byte_run(1u8, holen);
+    let mut k = byte_run(0u8, holen);
+    k = hmac(hname, k, cat(cat(v, byte_run(0u8, 1)), bx));
+    v = hmac(hname, k, v);
+    k = hmac(hname, k, cat(cat(v, byte_run(1u8, 1)), bx));
+    v = hmac(hname, k, v);
+    loop {
+        let mut t: Vec[u8] = Vec.new();
+        while t.len() < rolen {
+            v = hmac(hname, k, v);
+            t = cat(t, v);
+        }
+        let secret = bits2int(t, qlen);
+        if not bn_is_zero(secret) and bn_cmp(secret, order) < 0 {
+            if retry_gen <= 0 {
+                return Ok(secret);
+            }
+            retry_gen -= 1;
+        }
+        k = hmac(hname, k, cat(v, byte_run(0u8, 1)));
+        v = hmac(hname, k, v);
+    }
+}
+
+fn sign_digest_deterministic(k: ref Key, digest: ref Vec[u8], hname: Str, allow_truncate: bool) -> Result[(Vec[u64], Vec[u64]), Exc] {
+    let mut retry = 0;
+    loop {
+        let kk = generate_k(k.curve.n, k.d, hname, digest, retry)?;
+        match sign_digest(k, digest, kk, allow_truncate) {
+            Ok(rs) => {
+                return Ok(rs);
+            }
+            Err(e) => {
+                if e.cls != "RSZeroError" {
+                    return Err(e);
+                }
+                retry += 1;
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------- util.sigencode/decode
+
+fn sigencode(name: Str, r: ref Vec[u64], s0: ref Vec[u64], order: ref Vec[u64]) -> Result[Vec[u8], Exc] {
+    if name == "string" {
+        return Ok(cat(number_to_string(r, order)?, number_to_string(s0, order)?));
+    }
+    let s = if name == "canon" and bn_cmp(bn_shl(s0, 1), order) > 0 { bn_sub(order, s0) } else { s0.clone() };
+    let mut parts: Vec[Vec[u8]] = Vec.new();
+    parts.push(encode_integer(r));
+    parts.push(encode_integer(s));
+    Ok(encode_sequence(parts))
+}
+
+fn sigdecode(name: Str, sig: ref Vec[u8], order: ref Vec[u64]) -> Result[(Vec[u64], Vec[u64]), Exc] {
+    if name == "string" {
+        let l = orderlen(order);
+        if sig.len() != 2 * l {
+            return Err(exc("MalformedSignature", f"Invalid length of signature, expected {2 * l} bytes long, provided string is {sig.len()} bytes long"));
+        }
+        return Ok((bn_from_bytes(sub(sig, 0, l)), bn_from_bytes(tail(sig, l))));
+    }
+    let (rs, empty) = remove_sequence(sig)?;
+    if empty.len() > 0 {
+        return Err(unexpected(f"trailing junk after DER sig: {hexlify_str(empty)}"));
+    }
+    let (r, rest) = remove_integer(rs)?;
+    let (s, empty2) = remove_integer(rest)?;
+    if empty2.len() > 0 {
+        return Err(unexpected(f"trailing junk after DER numbers: {hexlify_str(empty2)}"));
+    }
+    Ok((r, s))
+}
+
+// ecdsa.Public_key.verifies
+fn verifies(k: ref Key, number: ref Vec[u64], r: ref Vec[u64], s: ref Vec[u64]) -> Result[bool, Exc] {
+    let n = ref k.curve.n;
+    if bn_is_zero(r) or bn_cmp(r, n) >= 0 or bn_is_zero(s) or bn_cmp(s, n) >= 0 {
+        return Ok(false);
+    }
+    let c = inverse_mod(s, n)?;
+    let u1 = bn_mod(bn_mul(number, c), n);
+    let u2 = bn_mod(bn_mul(r, c), n);
+    let xy = pt_mul_add(generator(k.curve), u1, k.q, u2, k.curve)?;
+    if xy.inf {
+        return Err(exc("TypeError", "unsupported operand type(s) for %: 'NoneType' and 'int'".to_string()));
+    }
+    Ok(bn_mod(xy.x, n) == *r)
+}
+
+fn verify_digest(k: ref Key, sig: ref Vec[u8], digest: ref Vec[u8], decoding: Str, allow_truncate: bool) -> Result[(), Exc] {
+    let number = truncate_and_convert_digest(digest, k.curve, allow_truncate)?;
+    let (r, s) = match sigdecode(decoding, sig, k.curve.n) {
+        Ok(rs) => rs,
+        Err(e) => {
+            if e.cls == "UnexpectedDER" or e.cls == "MalformedSignature" {
+                return Err(exc_wrap("BadSignatureError", "Malformed formatting of signature", e));
+            }
+            return Err(e);
+        }
+    };
+    if verifies(k, number, r, s)? {
+        return Ok(());
+    }
+    Err(exc("BadSignatureError", "Signature verification failed".to_string()))
+}
+
+fn verify(k: ref Key, sig: ref Vec[u8], data: ref Vec[u8], hname: Str, decoding: Str) -> Result[(), Exc] {
+    verify_digest(k, sig, hash_digest(hname, data), decoding, true)
+}
+
+// VerifyingKey.from_public_key_recovery: the two keys that could have made
+// the signature.
+fn recover(sig: ref Vec[u8], data: ref Vec[u8], curve: ref Curve, hname: Str) -> Result[Vec[Key], Exc] {
+    not_ported(curve)?;
+    let n = ref curve.n;
+    let p = ref curve.p;
+    let (r, s) = sigdecode("string", sig, n)?;
+    let e = truncate_and_convert_digest(hash_digest(hname, data), curve, true)?;
+    let x = bn_mod(r, p);
+    let alpha = f_add(f_mul(f_add(f_mul(x, x, p), bn_mod(curve.a, p), p), x, p), bn_mod(curve.b, p), p);
+    let beta = square_root_mod_prime(alpha, p)?;
+    let y = if bn_is_odd(beta) { bn_sub(p, beta) } else { beta };
+    let em = bn_mod(e, n);
+    let neg_e = if bn_is_zero(em) { em } else { bn_sub(n, em) };
+    let rinv = inverse_mod(r, n)?;
+    let mut out: Vec[Key] = Vec.new();
+    // r^-1 (s R - e G) for R = (x, y) and (x, -y).
+    let (q0, q1) = pt_mul_add_pair(pt(r, y), bn_mod(bn_mul(s, rinv), n), generator(curve), bn_mod(bn_mul(neg_e, rinv), n), curve)?;
+    for q in [q0, q1] {
+        if q.inf {
+            return Err(exc("TypeError", "'<=' not supported between instances of 'int' and 'NoneType'".to_string()));
+        }
+        if not contains_point(curve, q.x, q.y) {
+            return Err(exc("InvalidPointError", "Point does not lay on the curve".to_string()));
+        }
+        out.push(vk_from_point(curve, q, hname, true)?);
+    }
+    Ok(out)
+}
+
+// ECDH(private_key=a), load_received_public_key(b), then
+// generate_sharedsecret_bytes().
+fn ecdh(a: ref Key, b: ref Key) -> Result[Vec[u8], Exc] {
+    if not curve_eq(a.curve, b.curve) {
+        return Err(exc("InvalidCurveError", "Curve mismatch.".to_string()));
+    }
+    let shared = pt_mul(b.q, a.d, a.curve)?;
+    if shared.inf {
+        return Err(exc("InvalidSharedSecretError", "Invalid shared secret (INFINITY).".to_string()));
+    }
+    number_to_string(shared.x, a.curve.p)
+}
+
+// ------------------------------------------------------------------ jobs
+
+const HEADER: Str = "{\"alg\":\"ES256\",\"typ\":\"JWT\"}";
+
+fn read_file(path: Str) -> Vec[u8] {
+    match fs.read_bytes(f"data/{path}") {
+        Ok(b) => b,
+        Err(_) => Vec.new(),
+    }
+}
+
+fn key_index(keys: ref Vec[(String, Key)], name: Str) -> i64 {
+    let mut i = 0;
+    while i < keys.len() {
+        if keys[i].0 == name {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn put_key(keys: mut ref Vec[(String, Key)], name: Str, k: own Key) {
+    let at = key_index(keys, name);
+    if at >= 0 {
+        keys[at].1 = k;
+    } else {
+        keys.push((name.to_string(), k));
+    }
+}
+
+fn get_key(keys: ref Vec[(String, Key)], name: Str) -> Result[Key, Exc] {
+    let at = key_index(keys, name);
+    if at < 0 {
+        return Err(exc("KeyError", py_repr(name)));
+    }
+    Ok(keys[at].1.clone())
+}
+
+fn words_from(w: ref Vec[String], from: i64) -> Vec[u8] {
+    let mut parts: Vec[String] = Vec.new();
+    let mut i = from;
+    while i < w.len() {
+        parts.push(w[i].clone());
+        i += 1;
+    }
+    to_bytes(join(parts, " "))
+}
+
+fn print_block(s: Str) {
+    for line in split_on(s, 10u8) {
+        if line.len() > 0 {
+            println(f"  {line}");
+        }
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn all_encodings() -> Vec[String] {
+    encodings("uncompressed,compressed,hybrid,raw")
+}
+
+fn run_job(cs: ref Vec[Curve], rng: mut ref Rng, keys: mut ref Vec[(String, Key)], sig: mut ref Vec[u8], w0: ref Vec[String]) -> Result[(), Exc] {
+    let mut w = w0.clone();
+    let cmd = w[0].clone();
+    if cmd == "seed" {
+        rng.state = py_int(w[1]).unwrap() as u64;
+    } else if cmd == "curves" {
+        let mut i = 1;
+        while i < w.len() {
+            let c = curve_by_name(cs, w[i])?;
+            let mut oid: Vec[String] = Vec.new();
+            for n in c.oid {
+                oid.push(f"{n}");
+            }
+            println(f"  {c.name} ({c.openssl}): baselen {c.baselen}, public key {c.vk_len} bytes, signature {2 * c.baselen} bytes, oid {join(oid, ".")}");
+            i += 1;
+        }
+    } else if cmd == "curve" {
+        let c = curve_by_name(cs, w[1])?;
+        println(f"  {c.name}, order {bn_bits(c.n)} bits");
+    } else if cmd == "genkey" {
+        let k = generate(mut rng, curve_by_name(cs, w[2])?, w[3])?;
+        println(f"  secret {hex_of(sk_to_string(k)?)}");
+        put_key(mut keys, w[1], k);
+    } else if cmd == "secret" {
+        let k = sk_from_secret(curve_by_name(cs, w[2])?, bn_from_hex(w[3]), "sha256")?;
+        println(f"  public {hex_of(vk_to_string(k, "compressed")?)}");
+        put_key(mut keys, w[1], k);
+    } else if cmd == "show" {
+        println(f"  {vk_repr(get_key(keys, w[1])?)?}");
+    } else if cmd == "encodings" {
+        let k = get_key(keys, w[1])?;
+        for enc in ["raw", "uncompressed", "compressed", "hybrid"] {
+            println(f"  {enc} {hex_of(vk_to_string(k, enc)?)}");
+        }
+    } else if cmd == "pem" {
+        let k = get_key(keys, w[1])?;
+        print_block(sk_to_pem(k, w[3], w[2], w[4])?);
+        print_block(vk_to_pem(k, w[3], w[4])?);
+    } else if cmd == "der" {
+        let k = get_key(keys, w[1])?;
+        println(f"  private {hex_of(sk_to_der(k, "uncompressed", "ssleay", "")?)}");
+        println(f"  public  {hex_of(vk_to_der(k, "uncompressed", "")?)}");
+    } else if cmd == "load" {
+        let k = sk_from_pem(cs, read_file(w[2]), "sha1")?;
+        println(f"  {k.curve.name} key, secret {hex_of(sk_to_string(k)?)}");
+        put_key(mut keys, w[1], k);
+    } else if cmd == "loadpub" {
+        let k = vk_from_pem(cs, read_file(w[2]), "sha1")?;
+        println(f"  {k.curve.name} key {hex_of(vk_to_string(k, "compressed")?)}");
+        put_key(mut keys, w[1], k);
+    } else if cmd == "same" {
+        let a = get_key(keys, w[1])?;
+        let b = get_key(keys, w[2])?;
+        println(f"  {py_bool(vk_eq(a, b))}");
+    } else if cmd == "sign" or cmd == "signk" or cmd == "signrand" or cmd == "digest" {
+        let k = get_key(keys, w[1])?;
+        let mut given: Vec[u64] = Vec.new();
+        if cmd == "signk" {
+            given = bn_parse(w[2]);
+            let _ = w.remove(2);
+        }
+        let h = w[2].clone();
+        let msg = words_from(w, 4);
+        let digest = hash_digest(h, msg);
+        let (r, s) = if cmd == "sign" {
+            sign_digest_deterministic(k, digest, h, true)?
+        } else if cmd == "signk" {
+            sign_digest(k, digest, given, true)?
+        } else if cmd == "signrand" {
+            let number = truncate_and_convert_digest(digest, k.curve, true)?;
+            let kk = randrange(mut rng, k.curve.n);
+            sign_number(k, number, kk)?
+        } else {
+            let number = truncate_and_convert_digest(digest, k.curve, false)?;
+            let kk = randrange(mut rng, k.curve.n);
+            sign_number(k, number, kk)?
+        };
+        let out = sigencode(w[3], r, s, k.curve.n)?;
+        println(f"  {out.len()} bytes {hex_of(out)}");
+        *sig = out;
+    } else if cmd == "verify" {
+        let k = get_key(keys, w[1])?;
+        verify(k, sig, words_from(w, 4), w[2], w[3])?;
+        println("  True");
+    } else if cmd == "badsig" {
+        let k = get_key(keys, w[1])?;
+        verify(k, hex_decode(w[2]), to_bytes("hello"), k.hash, "der")?;
+        println("  True");
+    } else if cmd == "recover" {
+        let k = get_key(keys, w[1])?;
+        for vk in recover(sig, words_from(w, 3), k.curve, w[2])? {
+            let mark = if vk_eq(vk, k) { " (the signer)" } else { "" };
+            println(f"  {hex_of(vk_to_string(vk, "compressed")?)}{mark}");
+        }
+    } else if cmd == "point" {
+        let encs = if w[2] == "-" { all_encodings() } else { encodings(w[2]) };
+        let k = vk_from_string(curve_by_name(cs, w[1])?, hex_decode(w[3]), "sha1", encs)?;
+        println(f"  {hex_of(vk_to_string(k, "uncompressed")?)}");
+    } else if cmd == "ecdh" {
+        let a = get_key(keys, w[1])?;
+        let b = get_key(keys, w[2])?;
+        println(f"  {hex_of(ecdh(a, b)?)}");
+    } else if cmd == "!tokens" {
+        tokens(get_key(keys, w[1])?, read_file(w[2]), read_file(w[3]), get_key(keys, w[4])?)?;
+    } else if cmd == "!ledger" {
+        ledger(cs, read_file(w[1]), read_file(w[2]))?;
+    }
+    Ok(())
+}
+
+fn text_lines(b: ref Vec[u8]) -> Vec[String] {
+    split_on(from_bytes(b.clone()), 10u8)
+}
+
+fn decode_text(s: Str) -> Result[String, Exc] {
+    Ok(from_bytes(b64url_decode(s)?))
+}
+
+// The issuer signs each claim as an ES256 token; then each presented token
+// is checked against the issuer's public key.
+fn tokens(issuer: ref Key, claims: ref Vec[u8], presented: ref Vec[u8], vk: ref Key) -> Result[(), Exc] {
+    for cl in text_lines(claims) {
+        if cl.len() == 0 {
+            continue;
+        }
+        let head = f"{b64url_encode(to_bytes(HEADER))}.{b64url_encode(to_bytes(cl))}";
+        let h = to_bytes(head);
+        let (r, s) = sign_digest_deterministic(issuer, hash_digest("sha256", h), "sha256", true)?;
+        let sig = sigencode("string", r, s, issuer.curve.n)?;
+        println(f"  issued {cl}");
+        println(f"    {head}.{b64url_encode(sig)}");
+    }
+    for tok in text_lines(presented) {
+        if tok.len() == 0 {
+            continue;
+        }
+        let parts = split_on(tok, 46u8);
+        if parts.len() != 3 {
+            println(f"  {tok}: malformed");
+            continue;
+        }
+        let header = decode_text(parts[0])?;
+        if header != HEADER {
+            println(f"  unsupported header {header}");
+            continue;
+        }
+        let payload = decode_text(parts[1])?;
+        let signed = to_bytes(f"{parts[0]}.{parts[1]}");
+        match verify(vk, b64url_decode(parts[2])?, signed, "sha256", "string") {
+            Ok(_) => println(f"  valid {payload}"),
+            Err(e) => {
+                if e.cls != "BadSignatureError" {
+                    return Err(e);
+                }
+                println(f"  REJECTED {payload}: {e.msg}");
+            }
+        }
+    }
+    Ok(())
+}
+
+// Accounts with opening balances, and entries whose signer is recovered
+// from the signature and must be the account the money leaves.
+fn ledger(cs: ref Vec[Curve], accounts: ref Vec[u8], entries: ref Vec[u8]) -> Result[(), Exc] {
+    let curve = curve_by_name(cs, "SECP256k1")?;
+    let mut names: Vec[String] = Vec.new();
+    let mut balance: Vec[i64] = Vec.new();
+    let mut pubs: Vec[Key] = Vec.new();
+    for line in text_lines(accounts) {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, 32u8);
+        names.push(f[0].clone());
+        balance.push(py_int(f[1]).unwrap());
+        pubs.push(vk_from_string(curve, hex_decode(f[2]), "sha256", all_encodings())?);
+    }
+    for line in text_lines(entries) {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, 124u8);
+        let msg = f"{f[0]}|{f[1]}|{f[2]}";
+        let cands = match recover(hex_decode(f[3]), to_bytes(msg), curve, "sha256") {
+            Ok(c) => c,
+            Err(e) => {
+                println(f"  {msg}: {e.cls}: {e.msg}");
+                continue;
+            }
+        };
+        let mut signer = -1;
+        for i in 0..names.len() {
+            for c in cands {
+                if vk_eq(pubs[i], c) {
+                    signer = i;
+                }
+            }
+        }
+        let from = key_of(names, f[0]);
+        let to = key_of(names, f[1]);
+        let amount = py_int(f[2]).unwrap();
+        if signer < 0 {
+            println(f"  {msg}: unknown signer");
+        } else if names[signer] != f[0] {
+            println(f"  {msg}: forged, signed by {names[signer]}");
+        } else if to < 0 {
+            println(f"  {msg}: no account {f[1]}");
+        } else if balance[from] < amount {
+            println(f"  {msg}: insufficient funds ({balance[from]})");
+        } else {
+            balance[from] -= amount;
+            balance[to] += amount;
+            println(f"  {msg}: ok");
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..names.len() {
+        parts.push(f"{names[i]} {balance[i]}");
+    }
+    println(f"  balances: {join(parts, ", ")}");
+    Ok(())
+}
+
+fn key_of(names: ref Vec[String], name: Str) -> i64 {
+    for i in 0..names.len() {
+        if names[i] == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let cs = load_curves();
+    let mut rng = Rng { state: 0u64 };
+    let mut keys: Vec[(String, Key)] = Vec.new();
+    let mut sig: Vec[u8] = Vec.new();
+    for hex in split_c(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let job = hex_string(hex);
+        println(f"> {job}");
+        let w = split_on(job, 32u8);
+        if let Err(e) = run_job(cs, mut rng, mut keys, mut sig, w) {
+            println(f"  {e.cls}: {e.msg}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("73656564203131\n637572766573204e49535431393270204e49535432323470204e49535432353670204e49535433383470204e4953543532317020534543503235366b3120425241494e504f4f4c50323536723120425241494e504f4f4c503332307431\n6375727665207072696d653235367631\n637572766520736563703235366b31\n637572766520502d323536\n67656e6b65792061204e4953543235367020736861323536\n67656e6b65792062204e4953543235367020736861323536\n67656e6b6579206320534543503235366b3120736861323536\n67656e6b65792064204e495354313932702073686131\n67656e6b65792065204e4953543532317020736861353132\n67656e6b65792066204e4953543232347020736861323234\n67656e6b6579206720425241494e504f4f4c50323536723120736861323536\n67656e6b65792068204e4953543338347020736861333834\n736563726574206f6e65204e495354323536702031\n736563726574207a65726f204e495354323536702030\n73656372657420726663204e495354323536702043394146413944383435424137353136364235433231353736374231443639333445353043334442333645383942313237423841363232423132304636373231\n7365637265742074696e7920534543503235366b312033\n73686f772061\n73686f772064\n73686f77206f6e65\n656e636f64696e6773206f6e65\n656e636f64696e67732074696e79\n70656d20612073736c65617920756e636f6d70726573736564206e616d65645f6375727665\n70656d206420706b63733820636f6d70726573736564206e616d65645f6375727665\n70656d20642073736c65617920687962726964206578706c69636974\n6465722064\n6c6f616420697373756572206b6579732f6973737565722e70656d\n6c6f61642069737375657238206b6579732f6973737565725f706b6373382e70656d\n6c6f61647075622069707562206b6579732f6973737565725f7075622e70656d\n6c6f61647075622069657870206b6579732f6973737565725f6578706c696369742e70656d\n6c6f6164206b31206b6579732f6b312e70656d\n6c6f616420626164206b6579732f6973737565725f7075622e70656d\n6c6f616470756220756e6b6e6f776e206b6579732f756e6b6e6f776e5f63757276652e70656d\n6c6f616470756220727361206b6579732f7273615f6f69642e70656d\n6c6f616470756220726177206b6579732f7261775f706f696e742e70656d\n6c6f616470756220747261696c206b6579732f747261696c696e672e70656d\n6c6f6164707562206f6464206b6579732f6f64645f63757276652e70656d\n");
+    s.push_str("73616d65206973737565722069737375657238\n73616d6520697075622069657870\n73616d6520697075622061\n73686f772069657870\n7369676e207266632073686132353620737472696e672073616d706c65\n7369676e207266632073686132353620737472696e672074657374\n7369676e20726663207368613120737472696e672073616d706c65\n7369676e207266632073686135313220737472696e672073616d706c65\n7369676e2072666320736861323234206465722073616d706c65\n7665726966792072666320736861323234206465722073616d706c65\n7665726966792072666320736861323234206465722053616d706c65\n7369676e20612073686132353620646572207472616e736665722031303020746f206163636f756e74203432\n76657269667920612073686132353620646572207472616e736665722031303020746f206163636f756e74203432\n76657269667920622073686132353620646572207472616e736665722031303020746f206163636f756e74203432\n76657269667920612073686132353620737472696e67207472616e736665722031303020746f206163636f756e74203432\n7369676e2063207368613235362063616e6f6e2070617920626f622035\n766572696679206320736861323536206465722070617920626f622035\n7369676e6b20612031323334352073686132353620737472696e672068656c6c6f\n7369676e6b206120302073686132353620737472696e672068656c6c6f\n7369676e72616e6420612073686132353620737472696e672068656c6c6f\n7369676e72616e6420612073686132353620737472696e672068656c6c6f\n76657269667920612073686132353620737472696e672068656c6c6f\n7369676e20652073686135313220737472696e672061206c6f6e67206375727665\n76657269667920652073686135313220737472696e672061206c6f6e67206375727665\n7369676e206820736861333834206465722073686f7274\n766572696679206820736861333834206465722073686f7274\n7369676e20672073686132353620737472696e6720627261696e706f6f6c\n76657269667920672073686132353620737472696e6720627261696e706f6f6c\n64696765737420612073686132353620737472696e672073686f727420646967657374\n64696765737420662073686135313220737472696e67206c6f6e6720646967657374\n64696765737420642073686135313220737472696e67206c6f6e6720646967657374\n626164736967206120333034353032323130306666\n626164736967206120333030363032303130313032303130316666\n");
+    s.push_str("62616473696720612033303036303230313831303230313031\n626164736967206120333030373032303230303031303230313031\n62616473696720612033303036303230313030303230313031\n7369676e2074696e792073686132353620737472696e67207265636f766572206d65\n7265636f7665722074696e7920736861323536207265636f766572206d65\n7369676e20632073686132353620737472696e67207265636f766572206d65\n7265636f766572206320736861323536207265636f766572206d65\n706f696e74204e49535432353670202d20303336623137643166326531326334323437663862636536653536336134343066323737303337643831326465623333613066346131333934356438393863323936\n706f696e74204e49535432353670202d20303236623137643166326531326334323437663862636536653536336134343066323737303337643831326465623333613066346131333934356438393863323936\n706f696e74204e49535432353670202d20303536623137643166326531326334323437663862636536653536336134343066323737303337643831326465623333613066346131333934356438393863323936\n706f696e74204e49535432353670202d20303230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303035\n706f696e74204e49535432353670202d20303230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303031\n706f696e74204e49535432323470202d2030333030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303033\n706f696e74204e49535432323470202d2030326237306530636264366262346266376633323133393062393461303363316433353663323131323233343332383064363131356331643231\n706f696e74204e49535431393270202d203037313838646138306562303330393066363763626632306562343361313838303066346666306166643832666631303132303731393262393566666338646137383633313031316564366232346364643537336639373761313165373934383131\n706f696e74204e49535431393270202d203036313838646138306562303330393066363763626632306562343361313838303066346666306166643832666631303132303731393262393566666338646137383633313031316564366232346364643537336639373761313165373934383131\n");
+    s.push_str("706f696e7420534543503235366b31202d2030343739626536363765663964636262616335356130363239356365383730623037303239626663646232646365323864393539663238313562313666383137393834383361646137373236613363343635356461346662666330653131303861386664313762343438613638353534313939633437643038666662313064346239\n706f696e7420534543503235366b31202d2030343739626536363765663964636262616335356130363239356365383730623037303239626663646232646365323864393539663238313562313666383137393834383361646137373236613363343635356461346662666330653131303861386664313762343438613638353534313939633437643038666662313064346238\n706f696e7420534543503235366b3120636f6d707265737365642c7261772030343739626536363765663964636262616335356130363239356365383730623037303239626663646232646365323864393539663238313562313666383137393834383361646137373236613363343635356461346662666330653131303861386664313762343438613638353534313939633437643038666662313064346239\n706f696e7420534543503235366b3120636f6d707265737365642037396265363637656639646362626163353561303632393563653837306230373032396266636462326463653238643935396632383135623136663831373938\n6563646820612062\n6563646820622061\n6563646820612063\n656364682063206b31\n21746f6b656e732069737375657220636c61696d732e74787420746f6b656e732e7478742069707562\n216c6564676572206163636f756e74732e747874206c65646765722e747874\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("keys/issuer.pem 2d2d2d2d2d424547494e2045432050524956415445204b45592d2d2d2d2d0a4d48634341514545494466442b4d6b2b2b4d6348776c4a365474576b732f796b4c6b647952325331636f4450485031484c5a51756f416f4743437147534d3439417745486f555144516741450a434772514d7044492f526c516f5651515061377347626d654432516d646e67752f4151757a74794a796979472b2f4650344655456a6843503470356b6441763058785641596258416b316b500a6a59464d6c64374d7a673d3d0a2d2d2d2d2d454e442045432050524956415445204b45592d2d2d2d2d0a\nkeys/issuer_pkcs8.pem 2d2d2d2d2d424547494e2050524956415445204b45592d2d2d2d2d0a4d494748416745424d424d4742797147534d34394167454743437147534d3439417745484247307761774942415151674e3850347954373478776643556e704f3161537a2f4b517552334a480a5a4c5679674d38632f5563746c43366852414e4341415149617441796b4d6a3947564368564241397275775a755a34505a435a32654337384243374f33496e4b4c49623738552f675651534f0a45492f696e6d5230432f5266465542687463435457512b4e6755795633737a4f0a2d2d2d2d2d454e442050524956415445204b45592d2d2d2d2d0a\nkeys/issuer_pub.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a30444151634451674145434772514d7044492f526c516f5651515061377347626d654432516d646e67752f4151757a74794a0a796979472b2f4650344655456a6843503470356b6441763058785641596258416b316b506a59464d6c64374d7a673d3d0a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\nkeys/issuer_explicit.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d49487a4d49484d42676371686b6a4f505149424d494841416745424d43774742797147534d3439415145434951442f2f2f2f2f414141414151414141414141414141414141414141502f2f0a2f2f2f2f2f2f2f2f2f2f2f2f2f7a42454243442f2f2f2f2f414141414151414141414141414141414141414141502f2f2f2f2f2f2f2f2f2f2f2f2f2f2f41516757735931324b6f366b2b657a0a3637315664706947764755644272444d553744324f383438506966535945734549514e724639487934537843522f69383575566a7045447964774e39675333724d3644306f546c46324a6a430a6c67496841502f2f2f2f3841414141412f2f2f2f2f2f2f2f2f2f2b38357671747078656568504f3579734c385979565241674542417949414167687130444b517950305a554b4655454432750a37426d356e67396b4a6e5a344c7677454c73376369636f730a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\n");
+    s.push_str("keys/k1.pem 2d2d2d2d2d424547494e2045432050524956415445204b45592d2d2d2d2d0a4d4651434151454549425870496336394a35617259547639414c45797571506a74416b513831564a32786e49772b5156653961336f416347425375424241414b6f53514449674144485537630a516f44474b34563071466b6167772f4831325351486d412f736976685a6c38413533586a514c303d0a2d2d2d2d2d454e442045432050524956415445204b45592d2d2d2d2d0a\nkeys/unknown_curve.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d465977454159484b6f5a497a6a3043415159464b34454541474d4451674145434772514d7044492f526c516f5651515061377347626d654432516d646e67752f4151757a74794a796979470a2b2f4650344655456a6843503470356b6441763058785641596258416b316b506a59464d6c64374d7a673d3d0a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\nkeys/rsa_oid.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d4673774651594a4b6f5a496876634e4151454242676771686b6a4f50514d4242774e4341415149617441796b4d6a3947564368564241397275775a755a34505a435a32654337384243374f0a33496e4b4c49623738552f675651534f45492f696e6d5230432f5266465542687463435457512b4e6755795633737a4f0a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\nkeys/raw_point.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d466777457759484b6f5a497a6a3043415159494b6f5a497a6a30444151634451514149617441796b4d6a3947564368564241397275775a755a34505a435a32654337384243374f33496e4b0a4c49623738552f675651534f45492f696e6d5230432f5266465542687463435457512b4e6755795633737a4f0a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\nkeys/trailing.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a30444151634451674145434772514d7044492f526c516f5651515061377347626d654432516d646e67752f4151757a74794a0a796979472b2f4650344655456a6843503470356b6441763058785641596258416b316b506a59464d6c64374d7a67413d0a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\nkeys/odd_curve.pem 2d2d2d2d2d424547494e205055424c4943204b45592d2d2d2d2d0a4d4949424d7a4342374159484b6f5a497a6a304341544342344149424154417342676371686b6a4f50514542416945412f2f2f2f2f774141414145414141414141414141414141414141442f0a2f2f2f2f2f2f2f2f2f2f2f2f2f2f3877524151672f2f2f2f2f774141414145414141414141414141414141414141442f2f2f2f2f2f2f2f2f2f2f2f2f2f2f7745494672474e6469714f70506e0a732b7539565861596872786c485161777a464f77396a764f5044346e306d424d424545456178665238754573516b6634764f626c59365241386e634466594574367a4f67394b4535526469590a77705a5034304c692f68702f6d34376e36307038443534574b38347a563273785873374c746b426f4e3739523951496841502f2f2f2f3841414141412f2f2f2f2f2f2f2f2f2f2b38357671740a7078656568504f3579734c385979565241674542413049414241687130444b517950305a554b46554544327537426d356e67396b4a6e5a344c7677454c73376369636f7368767678542b42560a424934516a2b4b655a48514c3946385651474731774a4e5a44343242544a58657a4d343d0a2d2d2d2d2d454e44205055424c4943204b45592d2d2d2d2d0a\n");
+    s.push_str("accounts.txt 616c69636520313030203033326533306139626162333765626639363637383961663638356337343163316237653238333237373664376636366663373532623930666638386465623065660a626f62203430203032336532643238326237623734646464353935623031383364303832396465383764333066316137313632386366313636633630363438636664313633613765650a6361726f6c2030203032373436623164653163323837663561323637356461393164383764393463666263373235323630323034383861353938383934333666376165393262383531650a64617665203135203032383838643662636635376434366664386633346433616336393236613061613732623437356635353761353565623963393366383734343838393632643563360a\nledger.txt 616c6963657c626f627c32357c38333938353237376464646439373731626332343263393331656332353662623031636338323537366631643063643637323265393431316530623830353337346538393132396663623136363961303732613336396530303366353633313161336238313230613534373864356530363163316539623138396436376166640a626f627c6361726f6c7c33307c39336236633435653866633138346335663233383664383363663434306436393538643464656564346431313431323233613161323166343735303262343235373134616262346431376366316631366133313330346337626331356534653132643134666536303463313863336231303334326430373334616335626236330a646176657c616c6963657c35307c31656165633732373664656137363132323131343166666335373837626465373134346632313336333239336664633139306638316236343536343266626430366261303063356631303366393331306165326631336265386161393731383739636463653239353161396232646336643138663664633736373066323962610a616c6963657c6d616c6c6f72797c36307c65666539333063333832383539656562323566373561666431313039653632623964333235653664373938313831623234653063643234633337656334373163373631626233613031353631663663333836623638303730316630653830373962353036393264326663313132303135323066386339663930353434373963300a6361726f6c7c616c6963657c39397c33613131303330393561663536306134363463656663393335643530343030616639383763316531643736636662646265633232613332353563313437646462623839616661626266303264323661323433633337616438303735326161353130366136353363356566656138376431643766396135323237353966326538660a626f627c646176657c31327c38353730343731383537666633613137373034356166363366643732316330613264616239373633356639643836663438613432303263633664376438333735633538393961323131316530313230386633643333653330393064336430346639663532393966326132366330303061663962383433633734336533633030610a616c6963657c6361726f6c7c357c3232663162653732323830326635306264303039336564313632393332323539336232643739383131383339393733643737636530323666393832633430326135373763646230653539363632626364376330346534343961653836656239336432616161623638393864363735633964343564633138373430623862390a646176657c626f627c317c30373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730370a\n");
+    s.push_str("claims.txt 7b22737562223a22616c696365222c22726f6c65223a2261646d696e222c22657870223a313736373232353630307d0a7b22737562223a22626f62222c22726f6c65223a22766965776572222c22657870223a313733353638393630307d0a7b22737562223a226361726f6c222c22726f6c65223a22656469746f72222c22657870223a313736373232353630307d0a\ntokens.txt 65794a68624763694f694a46557a49314e694973496e523563434936496b705856434a392e65794a7a645749694f694a6862476c6a5a534973496e4a76624755694f694a685a47317062694973496d5634634349364d5463324e7a49794e5459774d48302e2d77454b534b703549644f305a736f6f47646c50544a514178375730582d37644f7949703839584c396a33384b514a5359675659724b66594a543877634f367364693677706e514668654946356d66554a50467645510a65794a68624763694f694a46557a49314e694973496e523563434936496b705856434a392e65794a7a645749694f694a69623249694c434a796232786c496a6f6959575274615734694c434a6c654841694f6a45334d7a55324f446b324d4442392e34457a5465535839656a793069417675654770493731345a5858777778564e44416d345377676d2d6375515378485078496a6a6b334f536f7249597a42473970336d5f52374f45786559716b4d4d724a55766e3941770a65794a68624763694f694a46557a49314e694973496e523563434936496b705856434a392e65794a7a645749694f694a6a59584a7662434973496e4a76624755694f694a6c5a476c30623349694c434a6c654841694f6a45334e6a63794d6a55324d4442392e506a554670484d52567466497448344d6b505f7647725a4f7a4c305842716f536c476174396e4f5a4a37626539584d324855797762474c314b4b377a48656a5867443475625050794f5977363570537a4d31556131770a65794a68624763694f694a46557a49314e694973496e523563434936496b705856434a392e65794a7a645749694f694a6c646d55694c434a796232786c496a6f6959575274615734694c434a6c654841694f6a45334e6a63794d6a55324d4442392e41535670793848524b7a66374b72735a74373244794345525361516a66374f556f7a66694e7576536e42346c31774a6b35475563725a7331482d585466744d306d58657568415f4d7733346d427357505731573058410a65794a68624763694f694a46557a49314e694973496e523563434936496b705856434a392e65794a7a645749694f694a69623249694c434a796232786c496a6f69646d6c6c64325679496977695a586877496a6f784e7a4d314e6a67354e6a417766512e34457a5465535839656a793069417675654770493731345a5858777778564e44416d345377676d2d6375515378485078496a6a6b334f536f7249597a42473970336d5f52374f45786559716b4d4d724a55766e0a65794a68624763694f694a756232356c4969776964486c77496a6f69536c6455496e302e65794a7a645749694f694a6862476c6a5a534973496e4a76624755694f694a685a47317062694973496d5634634349364d5463324e7a49794e5459774d48302e0a6e6f742d612d746f6b656e0a65794a68624763694f694a46557a49314e694973496e523563434936496b705856434a392e65794a7a645749694f694a69623249694c434a796232786c496a6f69646d6c6c64325679496977695a586877496a6f784e7a4d314e6a67354e6a417766512e34457a5465535839656a793069417675654770493731345a5858777778564e44416d345377676d2d6375515378485078496a6a6b334f536f7249597a42473970336d5f52374f45786559716b4d4d724a55766e3941770a\n");
+    s
+}
+
+fn curves_text() -> String {
+    let mut s = String.new();
+    s.push_str("NIST192p prime192v1 1.2.840.10045.3.1.1 fffffffffffffffffffffffffffffffeffffffffffffffff fffffffffffffffffffffffffffffffefffffffffffffffc 64210519e59c80e70fa7e9ab72243049feb8deecc146b9b1 188da80eb03090f67cbf20eb43a18800f4ff0afd82ff1012 7192b95ffc8da78631011ed6b24cdd573f977a11e794811 ffffffffffffffffffffffff99def836146bc9b1b4d22831 1 188da80eb03090f67cbf20eb43a18800f4ff0afd82ff1012 7192b95ffc8da78631011ed6b24cdd573f977a11e794811 67e30cbdcba671fbeb2cdfae5a927c35c39649c55d7c48d8 a93549c45810f5c3ce32d03c063015777a83cee1ecbfbe7d ce216bb8452006e0f29e6feadfc9bf1a6f5ef88966e3ead3 d98a2ee25aaec9581d0aeb4bb5b80a2046b9092d927b3779 51a581d9184ac7374730d4f480d1090bb19963d8c0a1e340 5bd81ee2e0bb9f6e7cdfcea02f683f16ecc56731e69912a5 c730691d0f8dc240757eea7f292c341e4b15a2dd4f43374 31b24c319354de3e008a9e83e9de8708df797890bbf45e00 f0f4088361d24416c94c21d9f84f41e1cb5ec043ddf63aba 27853c1ae13ea488e5de3b5b16bcd0caf37585b0406495f7 611dea39716469f749e528eee29f7a9d074232a8e8ae68f f95460528338bdc96a6546543a727de666b867dd0d8043cc 4bc1f71951f75131c245c02b904b596b6eb71930c5d8f50 150096e7fd69f8d08bec948a8c21962aa4d0916ebe34803d 9f56d96ceca3ba2a7d69a0b04322d065bd44ffe8e71aac0c a4e07fb335de73d9837d62ddc3f4575aee59f0d125a59dce e95ad210f3185c11ff549832a33d44b0ec76760c1cf46ae2 a5ea86f68f3a27c851d39136b0ab1169273e5ec538ed372e da65e86285c120c953636ee56338e9b291237ea74d2d7d5 26d65c2e3aa06272fc898ab9978391b21302f04cf13c3233 91f199f2e5bbe86d45db23aefe113c6cd50947a818c5efe6 eccd57e8ac8d8a19387343e9475daea4376881b660fec064 2298f204ce6a83f9374c0a4c192ebcd6c9fef5b95b510228 e713a40010c3c94906d58644efeb2cc046e4b820f4c574d0 d873ced76cb7be1f27af7d5eb85e1f996178cb0e2d64eedf fc599808dc41f8e2a3d7b9576004d9adefc9129c52a67f9c faa9e432154e061cad167ef0d7f93bf4bb6c6b597fdf928a d877cdddd6ae3cf36101b2bed5f7e08f0c3d0d63d52c8f3f\nNIST224p secp224r1 1.3.132.0.33 ffffffffffffffffffffffffffffffff000000000000000000000001 fffffffffffffffffffffffffffffffefffffffffffffffffffffffe b4050a850c04b3abf54132565044b0b7d7bfd8ba270b39432355ffb4 b70e0cbd6bb4bf7f321390b94a03c1d356c21122343280d6115c1d21 bd376388b5f723fb4c22dfe6cd4375a05a07476444d5819985007e34 ffffffffffffffffffffffffffff16a2e0b8f03e13dd29455c5c2a3d 1 b70e0cbd6bb4bf7f321390b94a03c1d356c21122343280d6115c1d21 bd376388b5f723fb4c22dfe6cd4375a05a07476444d5819985007e34 1f49bbb0f99bc52242df8d8a2a43bca7664d40ce5efd9675666ebbe9 9812dd4eb8d321dc858f185310d0ece8608436e66229e0b892dc9c43 eedcccd8c2a74816e9a3bbce8a3f559eed1cb362f16d3e678d5d8eb8 5cb379ba910a17313865468fafecabf2b4bf65f9dff19f90ed50266d 499aa8a5f8ebeefec27a4e13a0b91fb2991fab0a00641966cab26e3 6916f6d4338c5b81d77aae82f70684d929610d54507510407766af5d 932b56be7685a3dd323ae4d1c8b1086000905e82d4ea95ac3b1f15c6 523e80f019062afdec76dbe2a8a741665960f390f09ef93dea25dbbf c391b45c84725c363f37347c1ba4a01c83531b5d0f822fdd26732c73 1efb7890ede244c393da7e222a7fddfbcde19dfaecbbd5e1b2d6ad24 2610b39409f849ff8d33c2c98b7cd11beca79159bb4c9e90ca217da1 fe67e4e820b112966c079b753c89cdbb7b2c46b4fb44d1352ac64da0 5c73240899b4779b7619a3e7c4cc71b61d16f5c6ee28cae2df5312d 72855882b08394641fab2116fd5618615165c56bda9f7f6382c73e3a 41c98768fb0c1db89da93489a3e074a98ca8d00fb50469182f161c09 e5e03408738a71cfe2d3fbf59e63dce9ffbca6855e5ea05fb32da81 cb0c5d0dc34f24e03ab9f738beb84430137a5dd2f6dab22b2333e87f c40331df8938819281d688bcbe50185ba5c3fa2044764a7df0c8fda5 1765bf22a5a9841a0c83fb4884daade92bd26909a3b89530796f0f60 e2a215d96113694c1edba8b14e2f23bc6c67cec16f772a9ee75db09e 6c7e4be83bbde3c8ae85fada74feade88696410552571e509fb5efb3 286d2db3ee9a60a2946c53b582f4b47ce2495a6539ff9f51160f4652 215619e9cc0057bcefba6f47f6d00995183b13926c40bbd5081a44af e7e3f4b0982db98631b93cdfe8b5f11c54a3694f6f8bc94d3b0df45e c813132f4c07e91c29819435d2c6ac38f36ff8a1d8b17048ab3e1c7b 1e28ebf18562bcf5426ba5cc967408781030579fea2891425503b11f f1aef351497c58ff17036691a97306cd91d28b5e4c9f31997cc864eb eea7471f96255874a684435bd693dead073b1402dbdd1f2d600564ff\n");
+    s.push_str("NIST256p prime256v1 1.2.840.10045.3.1.7 ffffffff00000001000000000000000000000000ffffffffffffffffffffffff ffffffff00000001000000000000000000000000fffffffffffffffffffffffc 5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b 6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296 4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5 ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551 1 6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296 4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5 fa822bc2811aaa58492592e326e25de29493baaad651f7e90e75cb48e14db63 bff44ae8f5dba80d6f4ad4bcb3df188b34b1a65050fe82f5e41124545f462ee7 300a4bbc89d6726fb257c0de95e02789e96c98fd0d35f1fa93391ce2097992af 72aac7e0d09b46447f1ddb25ff1e3c6f5bb1eeada9d806a5aa54a291c08127a0 447d739beedb5e67fb982fd588c6766efc35ff7dc297eac357c84fc9d789bd85 2d4825ab834131eee12e9d953a4aaff73d349b95a7fae5000c7e33c972e25b32 ef9519328a9c72ffddc6068bb91dfc60ef7fbd2b1a0a11b713949c932a1d367f 611e9fc37dbb2c9bc1ee9807022c219c23183b0895ca1740196035a77376d8a8 550663797b51f5d87dea6482e11238bf2936df5ec6c9bc36cae2b1920b57f4bc 157164848aecb8510afa40018d9d50e59fb3d576dbdefbe144ffe216348a964c eb5d7745b21141eaa2e8f483f43e43917ccd84e70d715f26e48ecafffc5cde01 eafd72ebdbecc17b0990e6a158006cee85f22cfe2844b645cac917e2731a3479 a6d39677a78492762736ff8344315fc596439591a3c6b94a6cf20ffb313728be 674f84749b0b881666b8babd2d27ecdf824a920c2284059bf2bab833c357f5f4 4e769e7672c9ddad31855f7db8c7fedb74e02f080203a56b2df48c04677c8a3e 42b99082de8306631ec0057206947281fb9ae16f3b9122a5a4c36165b824bbb0 78878ef61c6ce04d7fdc1ca008a1c478d1f89e799c0ce1316ef95150dda868b9 b6cb3f5d7b72c321de53142c12309def6ace570ebde08d4f9c62b9121fe0d976 c88bc4d716b1287595c5220812ffcae5b82dd5bd54fb4967f991ed2c31a3573 dd5ddea3f3901dc618d1b5b39c04e6aa7c8181f4df2564f33a57bf635f48aca8 68f344af6b317466efe0a423083e49f343a0a28c42ba792fe96a79fb3e72ad0c 31b9c405f8540a20604ed93c24d67ff3668bfc2271f5c626cdfe17db3fb24d4a 4052bf4b6f461db9663c62c3edbad7a00d1a10144ec39c28d36b4789a2582e7f fecf4d5190b0fc61862be6bd71d70cc8e724f33999bfcc5b235a27c3188d25eb 1eddbae2c802e41a123202a8f62bff7aafdf5cc08526a7a474346c10a1d4cfac 43104d86560ebcfc0c45f45273db33a036e06b7e4c7019178fa0af2dd603f844 b48e26b484f7a21c0a4a46fb6aaf363a66b0de3225c4744b9615b5110d1d78e5 fac015404d4d3dab64131bcdfed6f668c004e4048b7b0f9806ebb0f621a01b2d\n");
+    s.push_str("NIST384p secp384r1 1.3.132.0.34 fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000fffffffc b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7 3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973 1 aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7 3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f f532389a060cbd1bd6e98b0d37ca7abc4360390918141b1a4b58808b3f8686a92c3e0c91558717db39c1b328d8ee21c9 b9d2852cc3b38e696f04caa2de3a82babd22cfb2a2124163bc40ce5abe64360331ea31b1085a4e9a7a7e183923d86ecd 528ef1670a5f2cabc3decd0c86f06145bbbc4fd017a31b22da9d54835faefa4ff8f4be1132cdf03c264e5246eb09a0e5 7b9b1fbe7bccf56c5803eaa11a1dcf14f8b76fdd631d058dbd60cab4c87fed22550538a809cb75248a1e9858c14f0dd6 c19e0b4c800119c440f7f9e706421279b42a31af8a3e297ddb2987894d10ddeaba065458a4f52d78a628b09aaa03bd53 16f3fdbf0356b301e5a0191d1f5b77f6577a30eae3567af9c1c7cad135f6ebf2af68aa6de639d858822d0fc5e6c88c41 aab8bb9f0fdc3088567a6233cd6ce3a39bb183b270b375ddd37de424b860fae69097dbb1c6cb001730991560aa133909 48942f81314f6d28f0af01d1282050b5f6005fc815eb04ac6d955bb3c9747bf3ebdf73f2d62faa4416c5b981600ad5a6 7334a936a9a6a0527022f802cb367444ce0fba3077c0f03f54ba4599567d63422347d2c89ef281c8202211217716605e 7ffceff7f632c9261f7c5c367cbd4ccd8e5d9b897d0e017a9e2eee8f697a92800a64d519c2bd0efab5461f68d658a01a dc916c17960e090efafce26e0381ef13bf88de7f4862b95425651d105052dd32451c707a371a2ca5300ae2e60e758344 266e8a40d69eca0ab3d92ea4701c295252d154b80ba04a3540896478cc16069795c01ff19b42441bed17cc44026b0889 b2d1055817cbaa12211905035f4972d7097da395a23096863d8b29dbd08848c2f33a450ad156f761e4bfc2c04905ca71 354cd872c3c6cbd2237c0dba3cfd056bf82be8f52e6236c09b475d744ecf1a68e87ab07c6924666fddcebb55753ee324 b19ac8fdfebfec30b0a9e8611ef638103df7855c20155847fc87faf0712210197d6958819cf0438d104d24708d4cee a72f91059ee360311418fe25e9f6edc4cdbb3cd2e754220d68810282636164c5bb7c969c2228ff5fd40e8d6fd201e03e 3f9561e08bf0b27e136df36b75203a3617e9411f685e926dc3b6ac4be86c46bd2cc0245197d53ffd64d2c273b769737a b06f006396295874b1a5a20412ab641cfced6646f52e4cbea0887478554e014c34be586f9867a60dd6ff8d527e990a7 9fd7b010df0f66d715274e5b8980f137539f94ad522c2931b83a186188e95532325c51e7785d3ef7044c0dd285651f82 321aa9a3b9260225795f6fa3c9739246929226bd149033de0a806b54be8a04e3d44eba4525d7d211e4a7b94a4064e4c0 36a543eea87a68f72caebbd316ee3e13ebd1cff84c6a99642e4c29567d49c7802901b5191d92898349bcc2f58b707b8e f277bacda50ee41cd349ab0378a6784758eaff048fbd85d191235072d4b3394d1510e7d43ef2267e75b41c29b569946d 26e0dc2e8cb7aebe2b067caa08b6a513afcbd796d01a5a8ebb31209dc7c421de92cdc5ab483283d10b056585f863bbd ae8866bad8ef24e14be256378c7461a5d68d1ffc1f3443d817ea270110781e4564c15facd8c6cf36d8c3502902dde18a b03dfa54c52afa2d14dafc3981a73dc7df459ea1c42bf748ef98fdde8fd8d8171a29f8ef6c8f83d3ac3a78d0d265a91c 2ce2885a0e6d85f2aafd1fcfce6d908af5f8a2d18accf229ef5d900678f602ddcd120b2b41fd72cacc406f6e6c0d2ce7 1264cb335766c96a59cfca7155977d234bc2fdcff983ac6ca8206169c48b5ab0c8c12e757ffcd01e89109a0ec62666de 119ebeeea1a1a376d94ad8fac53b4f69b66717a065a5f248cbf7190cffb1975831d28707e4483ec56b6913812e014b4b\n");
+    s.push_str("NIST521p secp521r1 1.3.132.0.35 1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff 1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc 51953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00 c6858e06b70404e9cd9e3ecb662395b4429c648139053fb521f828af606b4d3dbaa14b5e77efe75928fe1dc127a2ffa8de3348b3c1856a429bf97e7e31c2e5bd66 11839296a789a3bc0045c8a5fb42c7d1bd998f54449579b446817afbd17273e662c97ee72995ef42640c550b9013fad0761353c7086a272c24088be94769fd16650 1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409 1 c6858e06b70404e9cd9e3ecb662395b4429c648139053fb521f828af606b4d3dbaa14b5e77efe75928fe1dc127a2ffa8de3348b3c1856a429bf97e7e31c2e5bd66 11839296a789a3bc0045c8a5fb42c7d1bd998f54449579b446817afbd17273e662c97ee72995ef42640c550b9013fad0761353c7086a272c24088be94769fd16650 c21ccfbf17e32a93cbd0ac2f8d6daf7c23b6f992cc8ceb431338b4cfe4a4005eea889980bf73d92d11512e973ed3e0c2706ca52cc16b7fb4901036eb9b66fd07ca 14db813b03625350cfe1fda62beccb07fe9f3b73e7d4d98b5d25e6b77f9a1237f4efc1de8b8cf39fbc25d0297697512873e82d7171595a72af7bd9d6f12f508cca c114c2fff6cc1914cc528998b992e08d38ad42c78dfcb5417f55c4bd5349ac273b0b3dba85817e7a6d9e331ef492e7353874522753606854d6415a1c9b9b27bd61 11f7b968f51edf610b417f8a6d4bd43373d4b7b60a025c858d9058a74edd56bdf5d732db0650a29a69ba6e03696cc47fbb8162b512fc5e5a65935b26fb0767e9645 3999c13124479115ce7fde007761f54643554a9d1cdb699aeec305e12b71c3c5204a92d9bf09919ef9d0ac68b58a5b7c7f6cdd6bb564fd36f55f56b5a41bc0fa77 1590ff53eb11534ea4d07190a204ab3b12b1945580a305505f9a8489b5c06c4e3cd9ccd7687be378127c7b5adf6744d40111353ccd394b370ac25f890e1c271ac2d 1aee9cdb3534a8be3225bf8327e1c8b0c617c5662f3877f46f5f7b76431b02fcc037e39e7f2f670b47647603671fab18a04c43c7b25031d657a877d4edd91798548 d7bc8797bb1026f28977a4de70cd95f64c4bc30989c8e9301e01c99023c30118498a9ce16b850f45e931dd232b99b5b52e1f970352533ff3dba2d7092e9d264420 d130934c99bca825ed5bf8f01f66aa6f1621fe630571ee68b1d3c0b3fb7a0b9d1c858e87bbc73fda0ff579893dfaf83aeb6c2f3132fcb9819998ea09342be9edf8 136836e906a3438695ba10063608c02ff3c847cfd06c12ce0bb98879df8aa5cbc1c8a58b405a758d2f4b716d6898b6130effdc336c9de5b80cee4309850913022f2 1dd56873f58e81ef5d36b635c4704a14df029bbf572da3e72e6e41f07899cb90101e0d041c7a164749077b56e98f043421da506da0cdae5e0f7ac8fe351259ce02d 1f28f2146bec5e64a9b550dd50b42f73a827e6370ce8fbd3b1af9ad685c06b74002ef43e017d72113b711edf3b1cbac2fe191aab5810a1117fd77abe79e5cf9e33f 8850730ca1ff01f6a9882e9886e70ce5c4806c7003509ed794a519395fd5ed6b044c892ea6105a5effe0b239d40ce7c62d647089fb989edd8c05a704cc2934ed82 17cd02ae3d561553f86bdc8428777b2bceb47f6b9536bb770a16b10da1a67bf59cdd663f53e19b2ed76f488252cb09e525c1ab078cfd454b5090a78a16dbcc5484 63d6173e6bb40f9ebff0591c5931fbea5cec941760d7d48c2fd29a29d7d378f64010062c9349fb9f2445969dcac60f4f99574f0c233e98cd1f1e3633a01579d15a b045533092571b66e46f80c483c7caaff371eeb72864dcf3e06b96b30bdc4db601f1d6d89169a21e57f3d04c768c069a1d9a3f82ce32510f26220f4f395a984a72 1b35193a9acaf2ea4d16d78690702b5867ab5b41bf813f1a7da4393b92b7a1504742d54c4b06e00afb913f5e5eb026ea20ada73032b57e2803e49ae452187140dad 1d0b8ef02cce514276630159749c4700f4ce99434a2e913498e544f52491e373aab4c9b4581df3d6d99d7c4fc6d78fc8a1d73a70a44e28e57b62a1563f7a6b186cb 1c2720bd9e0957050463fa1889e037b493d8b1b2c505f0c02fc84e1f75fa20dc12d4b6d66cacbe842e7c8ddef315c9941bc1a357f05f74d977be99805a6b9e6ffc9 12cac2fecbf5abbb4af6866fa5d3c86080147e964d18d0650d3954d1d090c05fecff42e8fd5ab5f51152c01a52d4045f1bde05a30a2226a8f941a1f337893ab9309 1aafe29f0494d45e83eb9becb07eceafacccb40c77334bb5a3e3896c61aff4f95504948947f256af225041af6243f31e42de28e00df1f5f9f46846dc3d2e5537747 f1155296a2cc8cb1835cb356d8b1fb7e2b92cb0a62b2ba7c51da474d570e0cbeaba87ae0748465e68189ec9465f220d773017f1150a71052683fb71b36b5578db 3a867950294f179a17158e2437ce89b02644ec057303f0c7cc3a69ebb2920ccddb5480888b405aed3603c4dd67ae9be5ca765e43e9cb49c6d77f9c9d9b6ed0f604 1b81b510d0f598899bd375b2cb23f66f2c748958c58a7cba7cad1c5fb53fd87478d12b4920fc1e53aa3774171bf3642b1a5531e4068dcc158a9f78540329f193dd9 168bfb571e072655e0bc162794eb3515e7b265189f495a572f05dbdf5adb6f77cdb7701d45dd58b839de9294eedf655f6fa997140b5cd708dcdfe96299d52007e41 10fcbca551a361898a88e3c01281d7a8550a7e3fc72955392f010a9851376a392d4c01ef0affa4e6c06bab9995a700fcd7b3df5b283390a9cc7f0d2b863bda82a6b 4ec2e66fa950341cdef80974c4aa27c499782bc8006e202211da3424806b358bbf32d2ea645377b7141be20f6aabd9b426b783170dbcb9b55bc8a4cd403ab71115 1e1db046c59d588100560e889ce50858bce2b17d66c64a01186ef14ea68342f218f616f505eae1fe06384b739ce6205256bd4b80af483ad7484082cb95b24ae60c3\n");
+    s.push_str("SECP256k1 secp256k1 1.3.132.0.10 fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f 0 7 79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798 483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8 fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141 1 79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798 483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8 3322d401243c4e2582a2147c104d6ecbf774d163db0f5e5313b7e0e742d0e6bd 56e70797e9664ef5bfb019bc4ddaf9b72805f63ea2873af624f3a2e96c28b2a0 583fdfd9846dd99d9b8890856a8a9e738f17f31467e99549dca81127829d122a abc6232f2ff57d819f92d2d6572a47a6b44685a3b734b37af3c7719e63c4eac4 8f68b9d2f63b5f339239c1ad981f162ee88c5678723ea3351b7b444c9ec4c0da 662a9f2dba063986de1d90c2b6be215dbbea2cfe95510bfdf23cbf79501fff82 8b300e513eff872cdaa6d12df54a3e332f27ce937be77e3e63c5e885114cbf09 1cec30677f43c0cc446f0d466b8238ea08f6a7aa9aaf716926c6ff28b3b10a39 90922d88fe3ae2f4e1ddadfe9c510774bc26893d9b5cfe37ba16ce6a075e9070 7b1903f6742108a98d101fa7533c615d06d74475fce8f4bc653943cc5c08824a 1edd0bb1c5131b306395e20e74cf531fe400bc041c7584ba1bcfa45c6ebdc96c 31e03b2bfba373e4f75062f6ee6dd8c9e490d6f02724d11ca117161be358cf9e eaa649f21f51bdbae7be4ae34ce6e5217a58fdce7f47f9aa7f3b58fa2120e2b3 be3279ed5bbbb03ac69a80f89879aa5a01a6b965f13f7e59d47a5305ba5ad93d 160cb0f6d064c5896e0ee131766584ee6caf7d6b33524832cf291a3327bb4d71 6920c375c4ff16e1d1378b49ccf75cc2e3f2d4681aab720e9d5de55417136e8d 1702da3e208736c5462aa9b3b321d965fe4d7bf39cc37faf3eef9e961a9ee611 468c1fd8bc626c80088e897c680d92f16dbcd7667ea858f5fba57bbf3a545ceb 4cd3a93c1f8c9bf83c7b45417f33b54cc5873c1999bc3c36b40f85c7b188660a d2de0386c68ace5c576d89870ffe35b77a167dd62edd2f33f8dce38033099cb0 4d9a0f89c62c2291a048ca14f2bfb4c8e23c5f2ac589607b9a9e0a726658bb08 8cb831219b57975a95442e5685a3c00f1ea7a8b59f2c35cd427b5f310f827294 6a496013016d3e81442fda14a05a831f6d3ea47cf4f0d3cb4333f0da51f5cf67 578edf083e79c23a046ed81a61199ba85ff3a66e4a0d5ff1f647318ce52e0f48 d89460540efd22c9c4749dc96205647cc0045d337497bb15b8f996f83ea01ea7 af8a741269c3645cca281d35235de1a9cb13f3108be06e3a062dcb0912774ad5 52de253afbb83870b6fffffcddeb356b0262b204ea0dda768808ca5fbeb8b1e2 3a270d6fd36fb8db0ff834d738e421ea89686278002f03ed961f40c08f8d21ea\n");
+    s.push_str("BRAINPOOLP160r1 brainpoolP160r1 1.3.36.3.3.2.8.1.1.1 e95e4a5f737059dc60dfc7ad95b3d8139515620f 340e7be2a280eb74e2be61bada745d97e8f7c300 1e589a8595423412134faa2dbdec95c8d8675e58 bed5af16ea3f6a4f62938c4631eb5af7bdbcdbc3 1667cb477a1a8ec338f94741669c976316da6321 e95e4a5f737059dc60df5991d45029409e60fc09 1 bed5af16ea3f6a4f62938c4631eb5af7bdbcdbc3 1667cb477a1a8ec338f94741669c976316da6321 c8684980856b02ef1aa8447f428e6a0ee94a2dd abf4062e7d12249471aa80c8e2e6d30c3c61872d 819f36b0784579d06495d9c482946a4775d6563f 3feca9d95cf4ebf72618a01c40a1afc3549d5b8 8e63bd3939fc8e94bb518725d3b8210cb19bd5a1 4d1e977b17a683908e138836af1015a368de4448 8825045c214275932c7f97c13fcf85b79b16ddc5 7d1b7846b4bd34ce0fc9bcc993456797cb3df428 68970a01dcff76c83ca18b8243bee8b1bcca1263 54e7e4c9d48d17629ad6d8761744e8ee60ff09e6 912084799e102446a09a9b9cea5a656e06eb052c 649f8e37fc03a6e1410d129ed5e128c6dada8a36 2aefacb5dfe47c67592bb909e99e0c9309542668 37e1e41a0a1382c115a981f248a64f638510f621 fd2040234069ffbdf25a97e8c274b099b8455af 8b7ca6cd60a599b730e3f026113213579d69e8cb b983ef566bb7828196044da0a8cf073f42519b2a 394a63b681e509830b1b217dae12cdf02e41b34b d7980fd3916d046a559cc4d2056c08e372f28dd0 2a7f12ecbeff43268c0311d8cc13e1206c6648a2 ea5748810c1115143eac0a4ce86a54aea0aeaf5 7f5b457a9dbc41f26ad54a6301c2953de0ff3af b45503b17ec2795a906ae587a2856f824e30eebc 608ed96d566c2ce59977d74e21b429176f4e59ae 5bcd5c0c9f42c9be3388f79309e9d6fc7effcbef cdd3fdb80e33dc5fbba76519065747f52966fc78 aea4c54aa1c052d28ea53f3d05f3b7e48801f885 cd7ecbd45919ccac74ac109755d4802f053192fe\nBRAINPOOLP192r1 brainpoolP192r1 1.3.36.3.3.2.8.1.1.3 c302f41d932a36cda7a3463093d18db78fce476de1a86297 6a91174076b1e0e19c39c031fe8685c1cae040e5c69a28ef 469a28ef7c28cca3dc721d044f4496bcca7ef4146fbf25c9 c0a0647eaab6a48753b033c56cb0f0900a2f5c4853375fd6 14b690866abd5bb88b5f4828c1490002e6773fa2fa299b8f c302f41d932a36cda7a3462f9e9e916b5be8f1029ac4acc1 1 c0a0647eaab6a48753b033c56cb0f0900a2f5c4853375fd6 14b690866abd5bb88b5f4828c1490002e6773fa2fa299b8f 8967b61f205c079418f04dc4b29b23fb07e89b5414e76097 6f2183edce63a77ae302a1cc0d21617683ee457e6485adca 2271108eec078612d227dfe0e6edc790657a1e85c4bbdce5 2d8d369b35ee91ccd25c809188badbd2a1be925eeb2446d2 773d02971e972e92086b6f1db5b55527b4006cd56e55384c 807f615c01ce0488a3d9346e6634c2ce32828e3d3014234c 81c9b03e6c9461da8b72538683e69ac76891e8e11f0bb0a4 bbfe7ebae25e348d2917368c35cc72cf90baa11c3ba5e26a 6664c0341050e05eb0724563865ca6905db4372d3aa29691 3d3e077bf7707d1a42b788dd90299b891b1c4afa9b6510a7 1ad8020d2bd7d436b9016aaa231768be9d7b710452127092 e6e1b997ebe89fd5aa04fe234a309dfeb5d0367e5d95313 a5dd2af59b2a4738d9bed93501834bd3dcba967bb9029bbb 7f192536d0196a1ecc9e1942b3088de9b10e466562e4c042 3a52c76956b20b36b2c0de7f64564fe30ac16c055336ea6 afb324c2b33705bbe88ebfabcf3cfe58bf6da63f220528c0 45c81ddcecc4a36c961ffc53c694911ec62d99c4f2722a7c 2628b3d00981511083b2df0cfe3a12f386e0637290297a44 6cd43669416f371e7d5ce0e464474b9e1479aefc4b142322 2a4806763b9b8aa8b13e501612ccf4ec77aa91b90d6311 51aa079b4005ab635663986b4cf83e56e08114525055fc9d 50c1e431395ffbd9966e49b3bfa5e8a4eb0e9faf79c6d947 9c08d501369e159d65a318e5d5ba1f1e90a72a9a264a550a a6e9cffe7b31d2d66bcefe3627b617d1b04545a67b505cc9 a57040454298732e6aaa9822dcdc921301ee6be18005b82 13ffb544c0f443476bd82cbaed9fa705ba25aceaf8eb308d ad4a9d77b669f55a5e13bf0bba829fb65ba706e423fe0a9 8140c2e42a3d1a3c6c5adcd1512dc64b36e79d9d90aa84e2\n");
+    s.push_str("BRAINPOOLP224r1 brainpoolP224r1 1.3.36.3.3.2.8.1.1.5 d7c134aa264366862a18302575d1d787b09f075797da89f57ec8c0ff 68a5e62ca9ce6c1c299803a6c1530b514e182ad8b0042a59cad29f43 2580f63ccfe44138870713b1a92369e33e2135d266dbb372386c400b d9029ad2c7e5cf4340823b2a87dc68c9e4ce3174c1e6efdee12c07d 58aa56f772c0726f24c6b89e4ecdac24354b9e99caa3f6d3761402cd d7c134aa264366862a18302575d0fb98d116bc4b6ddebca3a5a7939f 1 d9029ad2c7e5cf4340823b2a87dc68c9e4ce3174c1e6efdee12c07d 58aa56f772c0726f24c6b89e4ecdac24354b9e99caa3f6d3761402cd b4fe7a802a8ae3080f943c9d4cba9ebd706ebb7c87b0b241e1eaa6c4 8514050dbfff647152a4315080bf406688ce6efd5899bcac014cb251 c4a506d1f259aabf38e68b3b05e78ad388d9ae5f2e1f136af7da2237 3a888a08009253454042827f3dc45630b26eba6b16c8d2abfd6c305e b3cda5bc0699b4a5d7c84b0eee591079619f1d35794add4818671cac bc2dc034fef32e40d6d750a13b07a68c4d88b7676e6080c1bb4a5447 2c065cb91febb9878f115905acb5fd1858fa73330469df330a2ca33 1171cc6c48ff94e49e08151769f5ed6b93e464ff99a0cdded55d6e75 5138e238d7b8fe4601df46e0bcf9a2eb0223e5e9fe5b32f411f61418 b0f5d9451ca74c2a7b5c8ae7efcb7ab04cbaee328a0b5bc8015c1a2e 4aea86b26e0c99f7cbb5230b87f127b072bdda487420dc717b80a0bf 5bbfa0eed42dfeb4eccf8018666e48106b5e4b042fd8f86908276aa0 3abf0304bb4a28ebf94b64a63c6bc122b2ac4b9b5782f5f41d73ea55 3571fd1d9c3e5390d6749cbddcfc1c442509caa5abbc231e37b6573b 376a08d25248b64544e2f3966e6568941a42980f33b2de2c4b3c1e82 50ccd79818bbfb24ab2a76227fd8d20c6aacce9b80ecd55de72967d8 d00fff79293c4fba00b3a75e6db316eaaa231517a2adb88672bb5489 838c78058e2b1ef6b2e417b79f262e268a6837e0e0c045fb719e2745 aa5f91cf3910da0791bb2f3292d17247d273d8a5948f6ca0ead4e9e1 ceefe7402bdb48edada5a939583e4294d4854f38af710c189a75c3fd 931b4d085f0055b04cd890a3c311a1c30de93d6fd01ce344f378d874 32bfc832e2b09952b620e3cc4c0e24b0158d6867af7385bfe1cc7d14 64ef3f191c2281ac737b1502cf5c527230c77c4dec0b7283a781fd19 b4fd76801a993f7b823d393f8c52bc3d8213f3f12f699f65851c7c78 537fb6e8d9594ba737c8ba3b2c2df29d3ad3fa3870ffc6fe6a9141c7 36e104a7e1f548be011bea8e12d9af5475394258db1744fd75ad7cb6 edbf0625ae8795cfe73dfa78a8d1fb34fe01a118250bff96d6f9b1b 55c080b707248ce89f2cf5836dae9ea0b0215e5729d6dfcf6ba50dd6\n");
+    s.push_str("BRAINPOOLP256r1 brainpoolP256r1 1.3.36.3.3.2.8.1.1.7 a9fb57dba1eea9bc3e660a909d838d726e3bf623d52620282013481d1f6e5377 7d5a0975fc2c3057eef67530417affe7fb8055c126dc5c6ce94a4b44f330b5d9 26dc5c6ce94a4b44f330b5d9bbd77cbf958416295cf7e1ce6bccdc18ff8c07b6 8bd2aeb9cb7e57cb2c4b482ffc81b7afb9de27e1e3bd23c23a4453bd9ace3262 547ef835c3dac4fd97f8461a14611dc9c27745132ded8e545c1d54c72f046997 a9fb57dba1eea9bc3e660a909d838d718c397aa3b561a6f7901e0e82974856a7 1 8bd2aeb9cb7e57cb2c4b482ffc81b7afb9de27e1e3bd23c23a4453bd9ace3262 547ef835c3dac4fd97f8461a14611dc9c27745132ded8e545c1d54c72f046997 136419e3a67d29685a7673434aaa1cc83b32e8ea3b8350668855184204631f60 7d0dc361277c83d3d9066c0bb112d72c6372b306ca5e1b7d70e5c8586314d01 acb74baad171e6a5b4937320fe1df297e121601e458b37dd71ccd88b0564c14 2d2698c194d69c25e4e5730b9b999ad8622145198e4d68cdabde53b5141ed9e2 4a14c0303b856c94b44385117f87ed9d1200ca9b11006590eb6b651cf58472c9 7b81e470dae2d5efe63873498b47cc5ed544a068cd732117529c5cd628f852d1 732801456dd325b3cc5a01f35c621528655356548b69665a21b3058a1e466890 84cd768790b88fc3dd4377f18b6ce46c64600aacf335b3ceb6dc74788dcb230d a5724c640598f7d1b7f2d664505482d0f52e93cc964781fd032e1c5820f7e70d 2ee7e750e536cf891cd6a0ae6c0d74a3791e716cab9c285efc6f1e47a22cd16 20742bfa372cda79bf92487c7048b19525e03e0e8cc5a8fb66cad6953aabcf3d 9f41e814601f2110450189ae304fd52d225753a3d2a60e4a913e20985fdbca32 635872217af20aaa27c02a8ad97c626dbdf752198773980cbeff68802cf3238c 4304ea6f1a626ca6b9143f09a975138a6750f15ed5ffa7fcb9f40d86d059f9f6 74da5735796669774ec62b13285d625af388db0f5a595f9ac4e29089497ca6f 58efe7e4352857ba80b1e1b97c977277e9bece1ee703351a06426abca7dd7b9b 9deb727c3c77d5f7c28ffe84fce1a62ff11ead3b0dea6d72210fd6f9b293ee9e 8e689258c612e8d4fa666c6144c23135de07088e3d692b03a7a754d92b1cae7f 3f683de6b29e9ff5aeb283ef9a8ce7877c1ce2a290b0ec728d3f68e3a1f242a0 1afb32b60dff3bcc4e887e6a83d8a50cc048234cc98130ea85622cbfe6788a3b 93f4df3a507db1b262b98c73803e35fb2f153d533c982faa1e48167bff45e7bf 818adbb309ddfc9b15f0f1f081c103ee42ed2c05949df0da73d767be2cbc02fb 58c5faacfcd47dc7ca417126657ee4eebc47521745a5b45c46faf03e7bb4be9 38f7abb3b22620673f5efee61c0051db7c4f2e1008f50c6ce7a70cf68923a3ce 451526a2ff450a63175ce68bbb67e3bb0b0f69892032f4b5e1dc213dd4644ffe 38145cde070860a87b6370e7e6eaaec11614e4a92ecd9cfe09c73fc886947736 a4b52856c983c6932e7fb5a75803674bae09ba6c975793ca2f58a4ca21eb5b3a f7396335764f7be5a880ffbf0f9d7f554f04b66bd4457158fde187dbee52c7c\n");
+    s.push_str("BRAINPOOLP320r1 brainpoolP320r1 1.3.36.3.3.2.8.1.1.9 d35e472036bc4fb7e13c785ed201e065f98fcfa6f6f40def4f92b9ec7893ec28fcd412b1f1b32e27 3ee30b568fbab0f883ccebd46d3f3bb8a2a73513f5eb79da66190eb085ffa9f492f375a97d860eb4 520883949dfdbc42d3ad198640688a6fe13f41349554b49acc31dccd884539816f5eb4ac8fb1f1a6 43bd7e9afb53d8b85289bcc48ee5bfe6f20137d10a087eb6e7871e2a10a599c710af8d0d39e20611 14fdd05545ec1cc8ab4093247f77275e0743ffed117182eaa9c77877aaac6ac7d35245d1692e8ee1 d35e472036bc4fb7e13c785ed201e065f98fcfa5b68f12a32d482ec7ee8658e98691555b44c59311 1 43bd7e9afb53d8b85289bcc48ee5bfe6f20137d10a087eb6e7871e2a10a599c710af8d0d39e20611 14fdd05545ec1cc8ab4093247f77275e0743ffed117182eaa9c77877aaac6ac7d35245d1692e8ee1 4a283f2657c516c7bbd946e59728a4de188ce1951cb569adecbf56ff63f1761dc4d76a93cd7b98b2 5d2544e217ab18ef66fb10749a98527e70ab6a03458e81a5586233d502b813c589b8c8d3536ea4ac b157c90ab3afb7682ee791b18f9418c85750060cd1231a14d6a99000b42fa6fdbe12e344b002724 942d028328a2c75c10529981c4938aad5af494c9e9af8d064a0df385532ab6abb084ddb9c5f9ef9f 3bc19cae675062d337c47c97d324b0ff41c14b62b7ed9fd820619b2a13c4a1fa7723d2d17c841cbc 8c1de9e0e7b2dc94704d6fb76b9ba3e5a45bc5182422c60968a3020a4f8ea777eb2238ee45bee1aa 8fbdad16bb6e62c4f5bc9fd8987d98b9b6ccfe0a99399bd62349fec656618467695be1806681cfe5 2e99c463e1d2cee94e3295c15144c41d7ce51ca6f1aa69dcebe6d941419cf175f39c826860cf9779 5cd3d61a93bccd9fbd74e31e388520658df27aa42347820a4aa0f87aa190bf09f257e195cc8c1faa 4226155cb376a21a6f4cf6057f46e3be963bda97758b32113d58e362a42b4aa0b63cc867d93b782 89d23fc66f5b4ac55175cc06dfc5f7e14c0850b62f58545d54803546127148bafe4e0c898c0bb771 329c6c03c41669942161831fad056406f41eebebca8dd384bd6bf0aced8755cd00623dcf03f3d52c cdce8e75d32e2424a59f486247b7a1f3f7b0786ca275a1403d361d18d18617e3392a01cf87e82009 c69aa25aa11de68e4d4f95e1bcf26f82539a720f8a43355911b378fc6e5a9ea5ea1bcf9fdf0cc6ef 9ff76ed8c7b1c73dac84d945f9b5e0ff450d882e4ab683ff0518ef293cf9f6943e5ebcef9241d283 6dd46a8e937e4a751605094d7a636e70e4dec1998420b7aa24be6d44eed59eb837cf067e107f5a08 dc9f81a308b40f3c7ffa2652418554becc0709506dee43ed50e242503ce53773e65656bd56eae3d 66d1b39466fc66f618de16cbd0344cd4d54d3e9e622e58e6d62aa5a05c71cf86fcad61ce81e98ca1 13beadb60793c70574a71d8263a5a11a20f2126ec3263997a086379ddf85c07e2202f0b1f2e86b39 d06670a01051dc1d18a87ac8964028d216717221bb45f178669a30c8b57283929d8191795383f895 610c54bde3c6346d6247522c8a036f17b31450eb9af15bb412c7349648f881ecf1f360be1ba1ed76 1e42609c0d3c0b2a16a1cbae72019fe6eed554f9c84561faa977463a73ccca176508c68ecd5b460c 48bf394ea05c9e67778c63bff42ca104612a62d3f13bc305b09eb4f32a8593320383d45ca86383ac 41fefeda1f72ee5bb8d5fe0f726c49faccc234341bec65705ee763c0d69007ff18fd60ea9f5cb887 b92991c1a68fee76a81a40799c9a8128060a093c750e9e9721e4ce1979c0e0d9a1f5a2ba86c160e9 9ad74a992bd80f0deb372142dfe8e620b1115869c7d8b51d76f91d33876bbf43ccf040fe95ad8d39 9f7f31af22234c006640e503c3264b4524b932a344b687ab1cacc8f47b8173225920f711df1e1801 5faacb0e99bb6bdda66472e8069672769c3b10f4149960d0cf821396fe5cbda38fac911e2fcea3e3\n");
+    s.push_str("BRAINPOOLP384r1 brainpoolP384r1 1.3.36.3.3.2.8.1.1.11 8cb91e82a3386d280f5d6f7e50e641df152f7109ed5456b412b1da197fb71123acd3a729901d1a71874700133107ec53 7bc382c63d8c150c3c72080ace05afa0c2bea28e4fb22787139165efba91f90f8aa5814a503ad4eb04a8c7dd22ce2826 4a8c7dd22ce28268b39b55416f0447c2fb77de107dcd2a62e880ea53eeb62d57cb4390295dbc9943ab78696fa504c11 1d1c64f068cf45ffa2a63a81b7c13f6b8847a3e77ef14fe3db7fcafe0cbd10e8e826e03436d646aaef87b2e247d4af1e 8abe1d7520f9c2a45cb1eb8e95cfd55262b70b29feec5864e19c054ff99129280e4646217791811142820341263c5315 8cb91e82a3386d280f5d6f7e50e641df152f7109ed5456b31f166e6cac0425a7cf3ab6af6b7fc3103b883202e9046565 1 1d1c64f068cf45ffa2a63a81b7c13f6b8847a3e77ef14fe3db7fcafe0cbd10e8e826e03436d646aaef87b2e247d4af1e 8abe1d7520f9c2a45cb1eb8e95cfd55262b70b29feec5864e19c054ff99129280e4646217791811142820341263c5315 6805a4e591bc5e5d736464f23410302ecb949f8557176d8bea59b702b3968c2fe49b964240963b623eabb6097b13de62 683ada314da2f247d58e253a999e3daf3dcfa9129df187b983f6b281ad438f1feb1a73ba6ee3308e74b19767a3f51e56 671f7db2c3170ce4a00256a1ab8d7f2fee9f03b75f5223d1130133826dffa9e199b5b729906a7860560141f3288a9d94 3ef5d8ebde9bd7a098dcda72a30d1d545c6eb22d827a775a76f2262ee5341644e99926c63d4f49975947d5572ce837 2369dbb6397c99f18974b5688e81af98df4ddaccbb1fdc04e18a5d2d02c7f72702a353bc5345a9466bf550b04d994b04 6f47b11daa3b124f93b08775925ff0a8127368f10742fa8fcd41cae93334ce6643f143e6500cb2c10ee188bb14504c85 7ca039720424e29b4b661582e3e118f2626441c61a0fceed9d41b2f75e305d6497d9ee5ad31cbb2be96b8c7bc4dcecf2 68ef9180090353bd7b089dc0f0bb86f02bc37a851e964f857a1a31ae87ace1dc30824ce91465d25802e1628858a2512b 6891daac2314bdc71c995ccd1e4447798109162b1fd07d0b0d3d83b305ab83eed497d81849deec2047371ab9ee9ca285 4aa1c4bebb04232aef3b906cdc8a4a0ed3540718907cd997234a3daab4d89f36886d910626489fc1a7617c23c6782204 4fe27bb985fb6a4b6a60c0e9b4bb8466e6f23ee226bdb75e67a07e78492a2d9b4726edfb3001e33e0314bbecef7332cf 4a57de6a047340f68dd0d3c8007dfe2aa3e4940d7d138b060642d7490d2144019fc0fd1e46a3cf0f4d94c51d9a5243f3 58207c45666a81e537359504199c8fb691d3a45300d2a7454f9411ba82df2bcc4f8fe27277fa6410372031b7c12fe5e5 64024c6dd08b6e18ec88c58885d84dd3e2652a05dbe0778c2cc1a19feff89e71da97004db76d268ec6c911e27fbec12a 465f6a7ff36022ad3d9accff503bec2b3a5d8026ffd1749be26bc076fbc7125beb87cd56d7e896a01a5d88d73d87dc6 4a219ad1ab2a3e4374c8df19afee84da47a9abe0c8101eca9d1629816a4c7702ab4a6ae684888fb265bb5ba84c596924 1adb21fc08b544c69b6a2ad39690c69b111589df3f361e26e415f02cba24677ecca2e03c69afd3b2f943be839d6af8f 59fe1806a42834722d605d9687a3687487a35201790726f0afddccfc51974c502ed8b0ddc88ac0c7f0ed75fc32720de4 867335f6686dc3ee4015341020b2028f8002f9c71999b204734ec1bf806d70ba6aee736a4b4d871145359691b0ec7e98 3b2673b29596ecf9b186b9dc16bca50d2f803001668dc3825886380252037dc4dd9a118cf58bb0662040dbc0c740266e a106e8e59af6f96b8ea70d9c2ad7142590c1aa7b0d2013d75c9fa54889e01439054918d2f451090ce28dfd1d39203d 6ffe5a4234a3c7d7944481127224541e0bf9c4d39ed59261a98f18489c924614299e3c2d5d4c6eb405ea7d3a8af628dc 7a9925039128af00fac97d84b8d735c0f39fa164e1ce5df27d067182ba5b2499acd720245f967f8daeba132704dabba3 41fa954c3f848d17826a155fccb537b02a2d8bd650380a26ba57472c5fe9b9bd2781cf76f887945e8f7485bfb94f129 5b9fa42bef913f70a5f77025ca9c6cc15e494356934b32868053ad66892a9e05ee22a459ce667925918f6cf12111b80 4799853bee32cfd3d54135dbeb33d1f4d5d759fd1f3e8413c8985ebef81f2990b9c5d55b8483127075f13a39ef4da8e6 5b8b71a56d6cd7ee673e466f7aaa6b2bf69f98ccfa99d76969ea1a33d45a9a4c7b70362885dc27abf3a0a04a4f468f3e 12944ab64ef0d878aee40cab4bd8e44bdf22719acd4226ca3cc2febbe04d2a0aaf142b0e7da6cde6b318cc18276b43a5\n");
+    s.push_str("BRAINPOOLP512r1 brainpoolP512r1 1.3.36.3.3.2.8.1.1.13 aadd9db8dbe9c48b3fd4e6ae33c9fc07cb308db3b3c9d20ed6639cca703308717d4d9b009bc66842aecda12ae6a380e62881ff2f2d82c68528aa6056583a48f3 7830a3318b603b89e2327145ac234cc594cbdd8d3df91610a83441caea9863bc2ded5d5aa8253aa10a2ef1c98b9ac8b57f1117a72bf2c7b9e7c1ac4d77fc94ca 3df91610a83441caea9863bc2ded5d5aa8253aa10a2ef1c98b9ac8b57f1117a72bf2c7b9e7c1ac4d77fc94cadc083e67984050b75ebae5dd2809bd638016f723 81aee4bdd82ed9645a21322e9c4c6a9385ed9f70b5d916c1b43b62eef4d0098eff3b1f78e2d0d48d50d1687b93b97d5f7c6d5047406a5e688b352209bcb9f822 7dde385d566332ecc0eabfa9cf7822fdf209f70024a57b1aa000c55b881f8111b2dcde494a5f485e5bca4bd88a2763aed1ca2b2fa8f0540678cd1e0f3ad80892 aadd9db8dbe9c48b3fd4e6ae33c9fc07cb308db3b3c9d20ed6639cca70330870553e5c414ca92619418661197fac10471db1d381085ddaddb58796829ca90069 1 81aee4bdd82ed9645a21322e9c4c6a9385ed9f70b5d916c1b43b62eef4d0098eff3b1f78e2d0d48d50d1687b93b97d5f7c6d5047406a5e688b352209bcb9f822 7dde385d566332ecc0eabfa9cf7822fdf209f70024a57b1aa000c55b881f8111b2dcde494a5f485e5bca4bd88a2763aed1ca2b2fa8f0540678cd1e0f3ad80892 99b80a160886133e049b0021cd2446e988484192d78485c8bc50f8cf0c138df7319107d81f7d7a952def679aa37398dc62264dbf8e7bf823192425b7041a9902 c1352ca170be87ad8c4839810c352b116973bf46106fca30b7e6b2be4d95cbe28f1e29f557c9caab59c828a0ba1306eadcef528380e5a0a749205aa3bcb8774 75ac19b33fa5ac7764dd7fda2bb371915311e40318911ee2001adc20d4e8038fe381202cf13b17e6cab6c9cde3ab4ec34e45448c65a359495c62d9f8b7061f33 322a263eeddfd01f119fe7237340be95a8fa28a632f03b6efda2b7ecc1dce1da49e29b9004190de0d96ecfc56c788049f0978470965d6a91e68afb673d3bc68 7b5913f766c4ed95d5262ce1b8f1b2afc056fd658f28487079a83d9b945e84601bae0f47aca3b94e97502f33730a37219d189c5408ac7da5ca448127ef66efb5 3b4d8e454ffc593a3727ea1eea20b708c21fca9161306af0e46656a75fc450a8fb4edb0dbc57887724ec6f844eb496c33e9470f8da0092c9d610453cc2f45872 6de512ef384b83ac4eaed4c2ac3eaaa38b98bb44f18cb5421d1025c44f00675d67084ccbdc9e39b94280fd915ecfb1367dddd8b25ab03cd380a0b7fcafe473b3 48c2dfc6731860fdf6514e39e1d6722ff004e64cba87015abccef52edfa78b8dd7226f30cbbd5523b9355630e714c2f1792bd371fa8137f2f2ddc8ee93117f9b 9208caaaf5d943c55156bf0c4ed5b477640327d6b98ef9aa552c53f10b10e28958f76fbcfa5a85e822e8ebecb85e2b1960bc430f03c22a671532c023785d47c4 d9ecef2260113811fb2083f5c12cfd4294d6d1fbce34f5e823c57d75589bbe45c4f56e97442d2a411087a583060a3e68ba481daf10776c1c36d3948825d95ab 2fbd5c3c069ab1e3e26e7ed30cb56422b72da5367ff81fdac17b5bbf8ca6feb5b5d3aa57da191678b2d565f8e2c6c18fa55814987e70717360c72b2d7a3ee658 1f1f723db5f8894bdb81109553a099acafb737c8c1702ad1599d98cb88505135e0dee90b51e4a1e9d64277493c4ba0bd956128a587bdb8167f0d0dd001163bbb 7255cb8fb217ef74383ba6d19590b9018414a7367b30b8676d099de289796d80d921d79066727550930e38a30cb402ec62dba3f159b5d6e521ec9f72596ba28 91693249bf545d573db18d862421a166abeeafd6d288df0217b1d801a1a4b506a80649d64372e6ac0147c01a39a5a40728b976e45dff80a6303785b7fec235e6 a820fa0a3fcdf693549c06dff192ed9c78252e84bdbfeb2302ef029853eceb6f8c37dd99f374c704390275f35d983417fbbb4b8f0cffa0aafb3120ecc0f4c946 867f659ba74ec67f073bce0b315ed56dda3a5267af28340ca00e7c141ffe1313cf2042cee58d445d7c76d1085e5f15f5937deaa170bcff56c11ece1c57a93144 8da948c1f6e5aaa20ab98cb3e2574e877558d37090005c59790395caf0c8f35cf7aa179566e88fe518fbf18caeaeac621ed2d3df6f0ee33398a96b8b2fb207e9 755b57990d0134f0e84fdd44f5af8b8814fc5956981e7139a2f29217d1e04c861398cc81ca61c5d333d095318e5cfcf2a3eb1e06eb5c3822c8b97d216fcf3ad7 8be49406925b1259325aad3397c6d688d169326d945f8e642da8ae42318e66a787bdce586024f7efe381eafeca6d4a57c6cb3673ce6fdabea68c6d495bd3655c 81105fa25f40b04066d3ce5119a6707f3e65da31bc85c403f755374f7364e5c02ed2b88413d19508f093ce86679719e3305a68eb0b7d39a57d660196e43614ac 83fe3f0a213a6348aca4620c00a03f8f16fb3217be028ae6244d0cfe19c0dbda7d22286f8f31c3c0d2f735e1c89f8f4e54c41cab8c0ea4434e536704b7c81aa6 8059d35894a35e4fdac23de73b5536b9770d31335c3bc15b34eebd6ab8be8b7e125bcbd4f87a3b2caa28e2ee71ff32ef45e3cac9168f1adf54de7000293a00fe 3ae31310cdde5e071e3265f16ce90c8423b2d2662a44a633395389bc918be55c4b4a875c956d3458b436c13f8e1e749fe3be07817f08c457eb6adb14143d1774 a2b48d8f41c8eaf0e78539a8e7b7fb032a7eef972857c07a29892d70a503395cd8110a5d01574c94bb997d6597e7ea0fb51bbf5d85b7902d2ab45bdb3cd980e5 19a5d4a26afa749f5c3a1577008ca781db612d456cceb6499aa5214ffd6085edf0e76eebae0e6dcfb2e63657be53f322368770bec985e9b1411d11eed527fa0e 9bc3707c9cecff173832b28b04f569b499ea8ad127dfd3659ecee8c5c73ed56e3e333f32abddf444da26d2b0868c4a4e1bba67273cf2a84cfd7cfe8243f71c7e b046d327d6c29d8026185faf05cc5144ffb21d49a1cad9c4f96cd0da511b948d63ae1938a087addb0e2b047d1de6f879cd0907a00d5ce7149057f95a66ad7bf 2247d12429f6ca5aa1cc42501f9b96d4cb747a812b551030b68a0fe6c9f02d28433343c956f40de6eed0012ee290ca9df5d2865dc4975110f99efc87c89c243d\n");
+    s.push_str("SECP112r1 secp112r1 1.3.132.0.6 db7c2abf62e35e668076bead208b db7c2abf62e35e668076bead2088 659ef8ba043916eede8911702b22 9487239995a5ee76b55f9c2f098 a89ce5af8724c0a23e0e0ff77500 db7c2abf62e35e7628dfac6561c5 1 9487239995a5ee76b55f9c2f098 a89ce5af8724c0a23e0e0ff77500 390b3570448bd4a179e414770c54 17621ac38a031f130abfafbd233 d9b1807ee1b14db9156e02f50b8 255d43e0b0b1d268924c550f7470 ab766cbe5f14e7c7b46781127e03 84e6b1db60935082ddaa2f641b51 8d713e9e41e7a47d98211096bf03 3c33ff1df45975d0854ef80a5d53 80d885c7bccae29088b1f206439b 4895cffb8b679a2c04cea9a5f9eb 4cac58ee7fe2c63d6bac65eb6cf4 2a10bd516e69e1b19a2ddc8e1b9b 47e80eb9c843e864d33345b578f7 cac27280d9ceb81e32da2d68db5d b3f3d4fd7f5078895c724534631c 18e32b7a165c5ce1a66895568208 9678944397c0c2d65790b1b6feb9 831469ac649d6a85aa1ac8642435 21ee938b53c2c405818eedc19640 294c9cd6f0ea8b9b25aec182fb7f 6e5a0b170f7b766085d547ad54c8 4a8d98ac5fb7b6e9ed135864583f 901e31c079c359be81742e914321 d277fb8ec0856013353ad73ca5eb 478a94df40c5b8d282de1f205726 3216aa8d21e0d74da3df68a96a85 80ff9768b3cb15cfc21726bbaa3a d3032f744c768579ff5f19e81140\nSECP112r2 secp112r2 1.3.132.0.7 db7c2abf62e35e668076bead208b 6127c24c05f38a0aaaf65c0ef02c 51def1815db5ed74fcc34c85d709 4ba30ab5e892b4e1649dd0928643 adcd46f5882e3747def36e956e97 36df0aafd8b8d7597ca10520d04b 4 4ba30ab5e892b4e1649dd0928643 adcd46f5882e3747def36e956e97 532918029b66a7088610c0698d5e b23f09beac96353fe46fb07f74af 6ee25b82401b13b006b837182e2d 17acbc2775576c2e1e2d78027cc8 a80f7cb2774b17fe66c7cdcbef27 c51d8e6c5025faa789155bbe1ff6 31797a05be09302d0a34e86018d9 d00af8f7db7e9b725140c22bea3d d1dc0b6c7e644a36bd14e6edd5fd 167c0bc3d5ba3653c2de646d4e87 cc5315511676b999aa0182a02883 93537f162df03669d74d697f3e05 6ad82f7a82e6c7bf88013ea3a34f 9140cfedb548a6ad7953d219f9da b082e0a9fe4b373c401dd76e0707 1a7df82203530126cdcb6c666bcd 644e18604685c06cf2b68fecb23f cae9986a064a9ffc3d3e47b340a9 7316d113f27caad85172c86c6456 41a12777a8b8db15df96904a6c18 2b900215197b6627b1d95183e2a9 93f5294cecbce0b6ad0ed88c42ac cbaa6c65ac5e2608dbd62a60067 82314f5c1365db65b81c80119f00 abae29bed5f19aae722695379fd8 700fd15d768064528fd32697a5ba 46d229af44cc29e92dcf7998ffea 8798137176be61ea9cf9a728b475\n");
+    s.push_str("SECP128r1 secp128r1 1.3.132.0.28 fffffffdffffffffffffffffffffffff fffffffdfffffffffffffffffffffffc e87579c11079f43dd824993c2cee5ed3 161ff7528b899b2d0c28607ca52c5b86 cf5ac8395bafeb13c02da292dded7a83 fffffffe0000000075a30d1b9038a115 1 161ff7528b899b2d0c28607ca52c5b86 cf5ac8395bafeb13c02da292dded7a83 2ad4b32b7ed4a2015c21fefb666a432c da02135b6ce90d518890ba1eca0cca6b fe79f26e631621bf1178b39c228cb88e 783113667c01a222fa99ce44ad9c77d7 8ab9907e912833fc5b10f20140a63ef0 fa2fc2337621ce724013df3b6f3dcf65 89ef2c091bc5ea4cda7131aee6df8e4f f6641065c3592f296b35598cc5f20a7e e054691809ab785476f08fc80ff62fe4 807dc0c9be331bab1e85d8d3af2ecfe8 25de2b5bdfb29bddae96b36431a65ea3 a25c2c64b491e2caa454f8965d1eca56 408fb456e7290ab2c4797f6eec1436bb 9a9e7c6f63b36da43d74bb1afc23e48b cc1979fd2ea0a25e30f506fcd5fa5401 d9b42c18c62393c6b0b2a1b2f57061df ab0e3d800104411a83f0296466fdec1 59cbefa6712c75a0aac61310cf67b32c 5a27680ea156ab30f9ef8d0a0324fae6 58c45a51056d68fb67b41b6565bb530d fd1adbd09c7ac7d65b476f739e5a5ac6 7941db6b651e9b60f13947d9cb88605 8d0c907ad01d708d60ba6909b0f26b30 3efb898cee35e4d712684835994a3b1e b0e9d4fd5cc6d70f145f4043b56999d0 5096d935e34592238a8986c409a39db2 a6e92096123a3ce3195ef99002d96d87 5f0d3a6d121e61e9e6f96ac61eb209fe\nSECP160r1 secp160r1 1.3.132.0.8 ffffffffffffffffffffffffffffffff7fffffff ffffffffffffffffffffffffffffffff7ffffffc 1c97befc54bd7a8b65acf89f81d4d4adc565fa45 4a96b5688ef573284664698968c38bb913cbfc82 23a628553168947d59dcc912042351377ac5fb32 100000000000000000001f4c8f927aed3ca752257 1 4a96b5688ef573284664698968c38bb913cbfc82 23a628553168947d59dcc912042351377ac5fb32 f4048d94ba71e1af10d9b537c99a8e7ac3cf6f48 8b3def9c03da86319b9cb10449922605f83cd79e 2f6a3817ab0ebd52470e028fa4e02ac7c2516c47 227c7c5d52b9b3510adfb528a83d6fc788c00c3c 70d9320a67c9b5fef3dd7bfb4ea5209bea5ec72a 4286746fa77731a740922bfc0ab7248d3f9b980f 427d065189166238415703e930e30c705700ee2d 3393d0c78d42551ee759dd56524a0471455a4feb 389ef791a8d3e68bb291d09638471ef6aa7cebb7 e95e4db4971348ecb8c603fd638d738e0e8a9af2 9486ec455d9dcf49457479b3e958740c2020cedb fda7f286b5996f6738a890d1cc1cc3fa1cb7ab89 564c6b9b7cb314621ee1333bd029a0a4a15bec63 aa10cc2c61e34c64a7f8a8f2df77d921bc77c92c 5410563cc5fc4197c74743b7702b5a2acdb38439 7925507fe35798b936496387d8b62256d1506d3 c04206f62b7d45c95dc288efe3e0f8a1d6fa8413 4e66369870830d0a6de83b6e897a8b8ff220beaf 58b62ed597c4d489d702e33e078e6ef6e6e00491 28746f411f9fee7be295d1ba4e2d4e54124d36e9 7edd9457f070afd2ff23dc1c68877bf76f241de 82a2751364e38da686a3609778bf9e656cf0165f ec64da15885457734eb4218a5200483d59c94408 22ad5cffeb345ada8457788adc80dd6b9911ee64 fc0ec574242f49ae4b47e142b764eab8d4bfd6d6 7e10dcf6650876facf9b755d80f64866002ec6c0 d369a563dcef16cd1f6d65a20e9382755fd84b5b b5d10718ba1d0d716a5f0c3deefd5ce0ad704c48\n");
+    s.push_str("Ed25519 - 1.3.101.112 edwards\nEd448 - 1.3.101.113 edwards\nBRAINPOOLP160t1 brainpoolP160t1 1.3.36.3.3.2.8.1.1.2 e95e4a5f737059dc60dfc7ad95b3d8139515620f e95e4a5f737059dc60dfc7ad95b3d8139515620c 7a556b6dae535b7b51ed2c4d7daa7a0b5c55f380 b199b13b9b34efc1397e64baeb05acc265ff2378 add6718b7c7c1961f0991b842443772152c9e0ad e95e4a5f737059dc60df5991d45029409e60fc09 1 b199b13b9b34efc1397e64baeb05acc265ff2378 add6718b7c7c1961f0991b842443772152c9e0ad 28e019a3d63f9056d84772f04c7d2f86f37088fb 397d8e8fe8f51cc831d129f735963b57968818ab 19f045e63bc44b6dc1e415d93b6f3fe93ea79279 744be1bd48a86d7516fc735032867764712cfada 5bc89492ef997c10ab58a622e09c1acb87ab38d8 96f1456f8317a6e420b0969e7d905a03f07dfbce d66d476797bd0d454e45fd75ca4d4628c0283096 6ce6a1adcdcf16e2bcd30e85bbd16b0248981622 cc0b00ed025708df7ce5667b41f3b22f80e3bf73 4a69fe977a16d2ba8a08f9ef64981da2a3de3e42 34b62cccf692a5a66430bc228e45de7e4dc0196 30eab706452e2920f4265a4a8ed6fb2cbfe997cc 2acf5c890fbb98bd52006e6d4c0f8cbca4069814 8ac94d1f4c56372d593579bf8e98638403456e9 a692f06232fecfb9ce4ef6c5e86496726920e4fc c1efd6e549c7eac8a22ebbec522e7fcd777c7171 5a2a8e09be260ead6a5377d8eb2d14253f1e77c6 c45cb51afc97f51d29b66a1fbb8c20896a7d92b4 85578d11df2d907ddba8836f341239f0e82aeb48 605cd7d8d131ba1f5b608e084592d27a93d583b9 7b2b8e399cd09f9effd6b3f7223896e1b2714cb7 39464aa616d5be6f2d6e09feb526ce7efafcaa79 32fad8f770f5962b47f8f00ba2a4b41788106ed 1710e450d18ab85fcfcc350ceb06729ec300a47e 87f498b08f203a73852ebf2c44311eaa3e0e8b95 34ad866f9718b7d052061b9ffa14537385bed795 e2991697278c3d50737db2cb826d9d7899587f13 226ea73b01812015b8b459301264bbc2c6d72a0f\nBRAINPOOLP192t1 brainpoolP192t1 1.3.36.3.3.2.8.1.1.4 c302f41d932a36cda7a3463093d18db78fce476de1a86297 c302f41d932a36cda7a3463093d18db78fce476de1a86294 13d56ffaec78681e68f9deb43b35bec2fb68542e27897b79 3ae9e58c82f63c30282e1fe7bbf43fa72c446af6f4618129 97e2c5667c2223a902ab5ca449d0084b7e5b3de7ccc01c9 c302f41d932a36cda7a3462f9e9e916b5be8f1029ac4acc1 1 3ae9e58c82f63c30282e1fe7bbf43fa72c446af6f4618129 97e2c5667c2223a902ab5ca449d0084b7e5b3de7ccc01c9 1360fedff51c47f91e8ddc7a653b752a988a6089573261ae a9c376b596ef8d3da245e41035d2e66ad6a0304899406a19 bf19189aaeed9407f4d62d3996734ca3e2fad8b06af89625 613300af2a2752a23a378e7eb47fa6b33cef0c14b818ebe2 afa01a77799b50cff28985e9dcd327f63b32bf88de39650b 474d08b8674ed58437709d4049f3b50d805bd5d2ba6ec00d a45c03b7388dc50233284f8f5863376c589c1ef44b0d8432 aa28d914758e6ce0e0eaf99e7fa1f9b79779312179dbcf95 2dc9d435e182ba93b3af0a85909624c20163fe367990ce83 850a456fab1da497f69fb4e58511a6127114001fac60760b 9394b8a81be9c2ffd1155b04049ad87ba7674927c3921878 9b059836f7c6135e02b95f5b26cdaa8aa7b5dc565d1c9370 42b4e7b28dba286b889b7be3478f18705d7756b14721b430 523966f08a57c0c134c53d3a771e686cc21ad3fdd7a59340 350cd17c22abaa0f9f9652cbaeaa8e62c1c97fd6e7982289 57b9776a9acb83483d3c355553ebffc2ca166cef33735397 ad4098b2d63c1a1180784b9f69a9902b715edc38ebf4a7b7 bd7ca2d0c6e880159f295df66fb9df461d462d21942c85b8 9be81a1730a67ff5b1a85c228c0c54dfba518bd801a9acf 8470a6b3c95f5c9f9e7e2a60158845c822dd59b9ab7de918 5c7482137be9caa92e8175251ea73b7a65557599ebfc9409 a00e82e32b419a8ab75049ba8f8029c034b1c0495a1100d4 a8858e2a5b04ed6fac4dcc387a7dc43c42a00bbd58b42cad 369b21d224f7b6cf7586f8403434f037008353c4364eaf0b adda593622d36918c5253fb44b5140e59b58e4b32c8c84dd 26e254155c6509119964bc0a11cb762851b0d164a98af97c 299161a09b8449549abe8946a8e3517465b4610b776fafa 80d69d73c6684b5aeac46b4d01e984f36dcd462da2ab1d50\n");
+    s.push_str("BRAINPOOLP224t1 brainpoolP224t1 1.3.36.3.3.2.8.1.1.6 d7c134aa264366862a18302575d1d787b09f075797da89f57ec8c0ff d7c134aa264366862a18302575d1d787b09f075797da89f57ec8c0fc 4b337d934104cd7bef271bf60ced1ed20da14c08b3bb64f18a60888d 6ab1e344ce25ff3896424e7ffe14762ecb49f8928ac0c76029b4d580 374e9f5143e568cd23f3f4d7c0d4b1e41c8cc0d1c6abd5f1a46db4c d7c134aa264366862a18302575d0fb98d116bc4b6ddebca3a5a7939f 1 6ab1e344ce25ff3896424e7ffe14762ecb49f8928ac0c76029b4d580 374e9f5143e568cd23f3f4d7c0d4b1e41c8cc0d1c6abd5f1a46db4c 20110e948df900c84d434c33d1074ec36d5d965bf949cb84b5952bb4 c0f9143f82e4ed10ad628cbe95b75e76a0a56d444dc995c5a61c9402 712596b27da20da258658aeb83d7b6f5276315cdd16df184c6b5adc3 53d7f1e4eb90a329c35c484e0a19ac2d9866244c3815b6e4b78301de 5d6a2b7060566fe4671e9055947e40131365a60a1f8682cc5be89ce2 1bee90f68bf62971f644d741bc3f1fe177a17040c9c9dd34f2cc605b d37673b4c1a8fec254914bc07779e35bcc115552635c8a4267adf7b4 4fc22b875de475820343dd3bd643359c70e8bd96aa1898bcef8ea036 481b17cd6d7b639c172a36d0115a1cf350938499b03fb75554adfd16 30f578b6f2bc3eeb57026266d70417e8a0fd50e4d65e51d84f78cf79 43794691303a2f5bbb8cc2616926ac4729eeecb0bc9d6493596e1a6f 8a35f17fa58fcedad73078c02d94e898af0eabe330d52bcc3950570 b0dab6f8ec9632980490de468bb527cd9fff96a2f32cbb77da7a4800 8cc0a6797520400725306f5c078c5fa3d77759226788594b1bda1d3 744c5eefeaa62c71cc30b5cea8c11b963dd2becab6c78023c00aab5e 2f5f03d9ee57b05befb38efe83605bc46ab2e8575c19624691aed23e 803a13819926df107071916977fe40c98635d97389b8639f3e2ee091 4b6a9a9be8dd2a45abd7a35b77776e731def247a7873f57aac3c8adb b3f1c23da3ea6894d4b845effc9fade466c923b3655741562a806e68 6250cb635142b62cfa55d66963764cbca4cfd60fc746321909fe3a4f b4ef214a89ec21bdacb27cf5d9af5d065ee360bc4116a4e1052a3c9b d042ccaac331e68875ca60934f75f104b19b10ba5d4a88207c3f7e3e c78e96090b5e3645b8c8eb90d5747e145d57be6c74b1dd293bd75f59 201fa5b89cd651b85b6fe6b97c495e343f9256c3aaa4209c120ab41b 5d57050a8e7dd66bbf386bf9ab26a3003aee59a4104b2e6cdc19fd1c a14a295c5bd2514972bb78a81ffea13004a58d1f48af0cfdba9b494 85c31cbfea7ef55b7b0a97c6e368b8e7accbb48348197ba023171da2 4fdb542b2212686ea0b0e0d8b17c573f039035d6738cf83854bbe01e\n");
+    s.push_str("BRAINPOOLP256t1 brainpoolP256t1 1.3.36.3.3.2.8.1.1.8 a9fb57dba1eea9bc3e660a909d838d726e3bf623d52620282013481d1f6e5377 a9fb57dba1eea9bc3e660a909d838d726e3bf623d52620282013481d1f6e5374 662c61c430d84ea4fe66a7733d0b76b7bf93ebc4af2f49256ae58101fee92b04 a3e8eb3cc1cfe7b7732213b23a656149afa142c47aafbc2b79a191562e1305f4 2d996c823439c56d7f7b22e14644417e69bcb6de39d027001dabe8f35b25c9be a9fb57dba1eea9bc3e660a909d838d718c397aa3b561a6f7901e0e82974856a7 1 a3e8eb3cc1cfe7b7732213b23a656149afa142c47aafbc2b79a191562e1305f4 2d996c823439c56d7f7b22e14644417e69bcb6de39d027001dabe8f35b25c9be 1a48c018702ba3f6239ee2c2c92e1f2138ad24164e0110cab34264d1646e4220 88f8973dc622ef69f9547d29a9e5e85bf811074a61be36fbb19280b534e1bd5e 69ec71b94081562853d447378ebd552004155d69d4a0d98ae1bda8f6d7ed29cd 3d1c3aed06181f914d583540d1cdf4551ce484f3ed8ea5057bb0b7937fddbcb 8d3285eee42ebe8808c6c385438dedd62c5095657970dfff2f8196ed9b01699d 242e491de7861bd5e555a492ff6fe4ffe4f7dc0a0075e0e50b26ffe522435610 415244aaa4b37ac281f1233a40178b5b991cbd5599a770f077f380ba3e74095a 709732aa26390d6ee7573cb23c4a9f34b1eeaccb27a6ed0dfc5abd260a404f1d f38a39e3ca3f7154f430360678a81eb096c388b01065639b539927468812dae 2f013e772d8b0b6607ee57f96c943c880c3b38a42ac2d882f43c506cb685cf3a 2619e99ca286c39c490fdffb21e2c6b206af0eba53c4fa7130fce719f24a0046 fc649eb8220ea26d6a2875fcf00c2d30baed09afcd82e8cb8e0ab9264f8e928 6adfcb4b7a9d5ca1270ee7782fdc65033623ff66a0a91c06cb4fb2a3c64705df 9bfa21ccf4a255966ee5f079542714dc7deaf316a802a4904eadb35b68e6ea85 a275b0ac5bf317fd78167d0d4a7765277503159843f543883b68fbabc8478f43 456aee40a2c251c17ceb2bbba321a4f37ca4edbc3073f30ce04419ff9b1c76f7 51c46236e5210349c08689f62fc9c50bbabaf924203f067c771e4eb17a7beb38 9a144f8fe24190fd3a5e136c521581b063095cd18e6a0459f027853496c79dcb 6d6e070b0de2803758259f0402133938339c3e44e18bd262b629fa1f13164ef1 21f0d1f0d92803ea88ec1e383bf0cf61d5c1be456d871035e33984dc97b9daf6 a975d3c43b776efa61b0d21fc44c5a0014bed6367d7064f0f4bd2856a98b2a33 36713f0fbe43a48299255ca96ee91275583fe8aaefc187593ab59073648f94e0 4cd579bc8d179efa4f66be22262366046954daf74d77344090588bdcd3d9dacf 696a98bf3042db20a39f2fdf9114d33c97cca74a3334d65c6d4c8ad726ec2fa 6889c73018b370695b0fc6bf6e2d66f8f8febed0023a543df2711f74ab234113 7e54aed2b54c7848c97cbe1c030ff1ed9e418f5128d72dcc0cc0ee032f0ba1e1 710f3cbb6e1a0065eb840ea84fd3721e4263beb81dbdca915e5c743c8cb5d516 2ad28e5142fb8ca3331ed1aa2233c6934a246667430d2fa2704ae4018409a8eb\n");
+    s.push_str("BRAINPOOLP320t1 brainpoolP320t1 1.3.36.3.3.2.8.1.1.10 d35e472036bc4fb7e13c785ed201e065f98fcfa6f6f40def4f92b9ec7893ec28fcd412b1f1b32e27 d35e472036bc4fb7e13c785ed201e065f98fcfa6f6f40def4f92b9ec7893ec28fcd412b1f1b32e24 a7f561e038eb1ed560b3d147db782013064c19f27ed27c6780aaf77fb8a547ceb5b4fef422340353 925be9fb01afc6fb4d3e7d4990010f813408ab106c4f09cb7ee07868cc136fff3357f624a21bed52 63ba3a7a27483ebf6671dbef7abb30ebee084e58a0b077ad42a5a0989d1ee71b1b9bc0455fb0d2c3 d35e472036bc4fb7e13c785ed201e065f98fcfa5b68f12a32d482ec7ee8658e98691555b44c59311 1 925be9fb01afc6fb4d3e7d4990010f813408ab106c4f09cb7ee07868cc136fff3357f624a21bed52 63ba3a7a27483ebf6671dbef7abb30ebee084e58a0b077ad42a5a0989d1ee71b1b9bc0455fb0d2c3 17dd8eea83c85cf6de7e55c18c51fb2227950d066ac4cf4004ce20deabc0fc20e94c8807b2f8a447 2463edc4fdac89d3069350b88a99fbc7b10cce8ddd44cdd16845d3ef075d4d8fbc3f7f79c1f7835c 7b5f9827da9b6176e980e0cb305d4d91d71c41669542a2b2235905b0adaf9c8a393b6fcd63666783 29e2df6df449cff2080ba9faed1a29609a506365b7cc3c310a9e3f77651756e175daad6886b60eb3 85b929aa2600c461b96b2fcc20698e46840d860868b3b37ca7bb4ecd668739ae61fcff4aa2ff7ed1 4ff0e991322d07ff5930ea5069e5860bff6fdb2b19137640d4b38519d6bf7b7fa1ca1d02fe048f8d 46be49cae1e48d847acdd82cf605cd36e0d79259014f7c932b12f470131132c85fd8a23fa122e832 9b1a45bfb0620afa6466745f31727d60ca88c05fd45def1bf0179512694282e605d96f4748a5e39c 390e8a69225985c318667d6bff2cff3c74d3ca48da2e7f832638adb52aba3414858dc814c609d0bc a7e75d522c1c9006bcd0b47a2217db9ef9bddcda73c6be8e5ef8729e9eec8f9077962a4d3313fc14 6b047d017dc1d12f1014168f0c3ab3838c48d4c5deaec0d99b6cddc8b34ac7306c2f1ebeefc6489e 93604c0b0d54306ffa719f6005749a047a186387ad51098142e0e8c119e5d3afb57b4fbbd7d2bcfb b4fba50194690a4e8e866b625d029e757f953c4f86e6202e56cc78571aabe80df752a0ba4f7888b8 239116b3591b19574e6154cbcd6d46e94324392722f6c8ca15816e0afd7d6a1506752400e721766 c50b11f3e9086cfa1500b45195ba479bc35a80a909cdf651c193fda319210a814fb5e37e1c3c6a6f 9339bdd10f00b1fc7cdb69bf305f397b064dc79ff8d79c7cb681acec7a828bc9b134b85ef478091c 89946ef0c51e20dafbe6c934c0c858405aee046307c6f44350b040c335a0787f441b35b773358372 86f62ffbee0fcd07f7bcda49122eac2981602d2fbb8b17b40fc28b1b547529eec430851dbc7ab3a5 a576546b329b8ba16ddc68cbdff71595ce350c2ca7ef189a174e1bb1fca9fd57b485c769ae1c4a36 6e53c4de5199b99a70d98a094f275e02d21e8e438ff549efd75c6f16d491799d182be4c08bb4444b c2901f00e84db96189a6ef780fc7b8d3233772e31ac3091cdf8ba39b95eb5837668fb89a0e53c707 3fb864184f3634e9fed8ff6913c5e55c9be8bdd9953171ef2f98ab41219e528d2d0f7335392ec68d 4e2dcd3883380cbba1691d27a61c47c397ec08ba8a104f8a05c73afa54de5651d885ac9d10694d5c 635ea081851c5c16a732387d888a0939665dfa3c9937bea3dc17f20d7e1e23d36f5acaa36aa7fcee 935b6f431883641db587a99217525d13d49a8e1ae2cefe5459bf663d068e23d608165843223e8ec3 5c2a2fb1f2d36dbcb43311519253910df433ca7be9d6df67403195e93163efddb6b3b91d47ae6a91 c82219d7e53ebdcd101d988ed25397f08a85763b7147f8aa72f5d29857c566101035eeebee01d066 4ca596458c768731bd5af3baa76201c678258e9f04b210fd45ac2934c4ccc755e43a2a57a236d84\n");
+    s.push_str("BRAINPOOLP384t1 brainpoolP384t1 1.3.36.3.3.2.8.1.1.12 8cb91e82a3386d280f5d6f7e50e641df152f7109ed5456b412b1da197fb71123acd3a729901d1a71874700133107ec53 8cb91e82a3386d280f5d6f7e50e641df152f7109ed5456b412b1da197fb71123acd3a729901d1a71874700133107ec50 7f519eada7bda81bd826dba647910f8c4b9346ed8ccdc64e4b1abd11756dce1d2074aa263b88805ced70355a33b471ee 18de98b02db9a306f2afcd7235f72a819b80ab12ebd653172476fecd462aabffc4ff191b946a5f54d8d0aa2f418808cc 25ab056962d30651a114afd2755ad336747f93475b7a1fca3b88f2b6a208ccfe469408584dc2b2912675bf5b9e582928 8cb91e82a3386d280f5d6f7e50e641df152f7109ed5456b31f166e6cac0425a7cf3ab6af6b7fc3103b883202e9046565 1 18de98b02db9a306f2afcd7235f72a819b80ab12ebd653172476fecd462aabffc4ff191b946a5f54d8d0aa2f418808cc 25ab056962d30651a114afd2755ad336747f93475b7a1fca3b88f2b6a208ccfe469408584dc2b2912675bf5b9e582928 230357ee24d1ae2eb0edd8ff7f4faa923a68852f4dbed34ee5e02e589c6874ff9dfb790b6dddb92aeeef392f784f5ce5 73e19d03b01fb9a1520d37fb4790adbc88d0cebbd88a91e333c81ab486ef9884d429514966e6e1cca2b9fe4915959dd0 e06fbdaf18e629e536534ea064df6ec9f98ebc081143cc216cf82c67c1eb8426a10544e06e7772adeeeb4b699167823 1c1860d518b9cba82a207a1ba27af6a60703a5aeb884573639d08884fafa242170c08523b65134ff99924606c247cd7f 29a4dda85b9410db63d95d3cd39f37dad9036fd6f8474f68422425e5d858d5311c8cd512d7dafaed011c514c55c37501 620bbb7547e1443d3971c047850c29be1b530a9715a13ed252347a58b1d6a7e3bbc0a3615055a0b5176b934ffa82bc28 5a2e3338876fcaaaaf64b0787980e0aecc0d0dca977788e7238c7aca5c7bd4a529bf8997c0b68b4e0f78dab577317bad a7bf66231261a465fd0bb93e61cb5925e0ececb8e898682fcf8ec5942ea443dd1fc428e843e6175b719f88ce3a041fc 19d65795d7d239bd202be49b3b39c330ecc1d4048a990e8c11c4d265c5228a41e881e8f3c8ffa17c15fe005fe198e600 4fbb85160f7c4e99226df3a3bf83aa511eb4d89693e3ad0bf79a7e19b334a8dede5e9c992a837f35a96ab01a4e1a2847 26aa9ee275ac47eb954bf5fa233b1aea328127ded6f83e3d662b01240b5b1b750fbd96c6a2b411b5d43df0e234a15f5e b82baa5914b7e01bc0ec3f3964644df2a5313f9445aa6608a12ce24c21ce4b141521130817a059cd098c213ddf8367c 37dccbd4adcd03af088bffb2b155451dc8b44f9cb1fe7251f004202079dd551767611cdb9bde848d4c5a84e69776ad89 7f4c0ad0777e17c5df0de2daf950929f39e26280c655723b62f0439252fa77b723f800afb4f5d9b2115822951ef1666 6ab83c6f6210f5a45f4ca71d0cd62a6a256feeaa029e23d9bcb47465a982388658290d4cdcf411fcb3c3fd9e08ab44dd 1a19c2068cbdb9457ce80d0e01978489da29aa3f40c434ea9d50e62f51a0afdda15599e3f1ae5d43c27f1a8ae64e103c 7aa0024e8fff1ac3b2dea303e5adb4580599e530eb8a40d0b718366ae2f0e7301b2f51ac7d8755b0d4d03c930fdd5af4 4c5c50045448daa5b35ca3bffb2184a4d8c3ed3b0e2a46564798361233a0f9a587f1fa14b98d527135c2ba87e7b2f2c2 57f13c1ced238db625bf342b4cdab2be6ca7e1c2460062023cdbc4e417ebb99d79152d64fc2049e6c7e55c8a710dc9b6 6cbf385dbdb19e0e270796600c0ad18f0422363f32d3718ebfcda6a4623a4eb71194b062abf645c731194167e2ec159a 6dedfebc64bdf6671b1353563170f847d53191644a8cc8514d2afba7e253f25aa707b7ff23b7da46317d0f65f69941d 3aa91a36dbdc91a549051d126f86385ed41ec7f8670e491d33f0e9eba1d7883a51e07fd58ac6c7920239d04b70d71e23 33407a777435d1c71fbe56c33c95bd85dfed47f5fcfa5bfc307c7871f311de18501a0f05c197193886e66b1709d1990b 1b07a633b7ef91a8dfe34a574996cd699612ef05e3f8c3d9f3035fcfec7b1977f6a3f0c17f230c91000a8c0303c478a0 1f8482192aad8814ecb0a1e09c6ea3cde21f22d0b55a2570a169cfa5dcc9e28ea72fc3546f4a979683801106d067b257 1a876576f378b0952193c6f0fea4114bc38391f4ec2dfee67b6cc61486fad716ee1e1aae1a6c07a00aa03675adc33cf0 2f2e57d1a8e31b9dca387581308f90ad29862341d896649deccc73e0c479fb9c15c13ac417301f80d7b2318c3ecbc7a4 5c8a38124b552f3449f474acc334a4f764a9159073d6dbce2d53927adf4b4dde6e6a310c06ae6371dcfb70039777c87e\n");
+    s.push_str("BRAINPOOLP512t1 brainpoolP512t1 1.3.36.3.3.2.8.1.1.14 aadd9db8dbe9c48b3fd4e6ae33c9fc07cb308db3b3c9d20ed6639cca703308717d4d9b009bc66842aecda12ae6a380e62881ff2f2d82c68528aa6056583a48f3 aadd9db8dbe9c48b3fd4e6ae33c9fc07cb308db3b3c9d20ed6639cca703308717d4d9b009bc66842aecda12ae6a380e62881ff2f2d82c68528aa6056583a48f0 7cbbbcf9441cfab76e1890e46884eae321f70c0bcb4981527897504bec3e36a62bcdfa2304976540f6450085f2dae145c22553b465763689180ea2571867423e 640ece5c12788717b9c1ba06cbc2a6feba85842458c56dde9db1758d39c0313d82ba51735cdb3ea499aa77a7d6943a64f7a3f25fe26f06b51baa2696fa9035da 5b534bd595f5af0fa2c892376c84ace1bb4e3019b71634c01131159cae03cee9d9932184beef216bd71df2dadf86a627306ecff96dbb8bace198b61e00f8b332 aadd9db8dbe9c48b3fd4e6ae33c9fc07cb308db3b3c9d20ed6639cca70330870553e5c414ca92619418661197fac10471db1d381085ddaddb58796829ca90069 1 640ece5c12788717b9c1ba06cbc2a6feba85842458c56dde9db1758d39c0313d82ba51735cdb3ea499aa77a7d6943a64f7a3f25fe26f06b51baa2696fa9035da 5b534bd595f5af0fa2c892376c84ace1bb4e3019b71634c01131159cae03cee9d9932184beef216bd71df2dadf86a627306ecff96dbb8bace198b61e00f8b332 977cc3146e84fcfa71dd371fc51ed0bbf7383dafc624760cbbbda065e3c631b56e57ee169f901d4eea8587a39ffe25fc648e83233560cb8ae187acc04a066ff5 f411b24e389418a2f77dbaf9c6e8698311170d1f344b0944fdc520b8a6b4ae192a83b3f620c76c85d17baeaa951d80a3833cb6ec7c1ec579b211fddb9379e7 6d0a9c0fe079c3556381baaccc64e5ec34bba48a2ebfc4a0cc046a19704c0c0d6ed72a81ffd43bf8ed2fc39a9cebe9980b1f1bd2645a1c74e4b5d8b903c279cf 7ddc4a29d5a4e6276df6a93163748b0e3adb756beb13b070d95184f36c7cf5bb76faf66399e104babb275c1265f61e2e2c28f1dbcf6538dc04a1faa992045872 c26d7c5f9a7e9cfc3092bb291ec5b5c79a6581ef89311fb3842fc4b52cef4b3d2a9253c0a8789ef5c82f91e0a53ef5e03b91a8a1457108be53595c10c79bab1 6011322420f417fa2e593a3ac169a94ee66a1227a42ee0e632de6752458e66565ead4d382169a231a9dd3f27c4b0eeadf3206540fbdcab90c1b06cc28b91e6d7 9b05ed888e73bec2514dbc2592666a500b5b8ff7feddb973e0dacdca838727bd4a27e476905ab799571ca9592f8fd82bed88ae0b9a5108d312e516ce5ffbebe4 a805af92186325b95dc801bbb3ad2eb344e68811a851932f42c9b433bbc076797d5f8c5f0f1079664e0b105be6b48dc01902a9deae53777952ac78b5f4db4cba 8776012a4df020c44e448bc5a750d2dc748a3ed8a367a2503c6f5dc914d6ad24df284610e328cb801a9defe629e67b29c5286b01dcca4c2c33c7736cddbf23da 9684d1fbca8a174164a7dbef4986965c5c5a358939e1dc95910c2c50a5204805c7a4e26394e012abd0995b43ca918e0b16d6afdbe4c0964277f1fca96459cbc5 142c8ab32fd6b879873d4f72039668cf31b18302f62e7288d7c9db05a07b1e7fa43217ba7b1c4f8b1fafd725c1f9739b1c7ffa3208e8f51b2419b8294ac2df7f 9f931a773df678ef82e357ce532f52b335d31f289ed5a8dd11acb3435c499fb543d2a53a02c13b4d0337b42e7a16825e2b986bdc026f94013dbb0adad2ea6360 a101292d14433f76fda63977914824760dc6b7bd270f673e4c245ce5b48b2d1a4b81798797b3cc8caa575a2cf475d9f03bebc63af1452e8e3606770ccb083544 705eaed26880651222849bd37d4fb10c7624b71da7bba3ebf71da34ef796fe5aed2de9a5b5f9cc834f811e8aab2ef35f230236d178e32811dec1ab80a766b506 138349ba5aa1239127f4c95527e13f3c5668ec533da47e7e22c0b695a8b0fcf42faf3c2e28c146288e0790db0b683c1c2812b08b8d87c2deb7c88bc26d883402 c4de4f4f14bbe1cb4152f5d8a5fda8a2306fe51cc7eab8dd209b8132c7ca9526332e351d6cf25089edb9bffdcd104b365db7ce3580141392a28dc460b669c0 19e810567c094f5d806f1795f11362ada4263a9d89e4c1942077cd56c5fce003e4438558f7100ded90d94c43c5a14e38cd0e8f7c927b7e61cee1439ab6979fa5 19a76f05514f38c50465f2b43af2b07d4e64776c9d986617fd25f76dd12e91e8a9815d2903d9e62618b3e2afb0ef8555f87b8ce6e0c6379f6859410c422ad327 3bb67d6347a3ba8dcd5cdbd86ec924d76dcbadff59346e8c28e6d936828c164b0922c98eaf22b4720d3d289595fa11c836c1463ccfe2b3ee744e3c31c3cf2bee 7902ddec5de39a3a58a5f2d700bdfcf3259501cb10e8849818825f12275a84d05e3c8eba13904fd2fa3b19742577bac712ff28e01409e5b68d692d9fba467af3 41290dda4ccca7b463af12a00f0c65657c8a290289128944b8583b3579133c2b3363ecc6386f323205b40d38db144e791450243a74cea3b27ac187ae70b95f1e 507060b7a66bdc8943ec16e28380ea8471656993f90688165194729934957cc2c07f25897ea47512fa15cc825d0201ce4dba17771b142bb15c8cbb47303030c9 113e3d24013d4a5e32f438bef0159170600ccd90fe90a56a721f8a17eb186cce14eeef1de8e9966227c4a4efe4a9cb31c757c9315d9c794da52844de9d95f86 5d733306f226be3b84d96d2178183d1f111fe15851758711a4d4b9b1f3207623f21a245ab2b365eca395dddea7dcc8c90eb31f403a9467dadf945ea24d7735da 2186973d83f2cfbdfc20f7d6bd5b406b8c580f18cdbc5af8942609d42165063690aa3295b4860fbf79ef35fe07990e549b1bc532ae53105abccb75e2cf655eff 31ae99557d5378979f5d03730881463e1b8ca52a28acd11a4af75f3d0d1d162c5040455c2d74c879b0fab918003592cf692ac7ac4e983e0d602cf70e2af7b8d dc19fc5e6c8dd53df4e5bb7275594bd5fb8a0a30f8c0bf9e998ee855d77a6931ae5f77c246189442f624b3cecbd7f3a84a872c32dd30b1aac39f914f9a60b18 26314805dca10c186b4f9dbe6e6afb2bd65e8f5389220b6037cd9c1e92c837a4db493f3733f14b90e18d5a09677031b1e1059d30a1717e8f68a26e33fcdaec2a\n");
+    s
+}

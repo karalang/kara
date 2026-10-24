@@ -1,0 +1,638 @@
+> rules
+  22 rules, default rules
+  rules = _ rule*
+  rule = label equals expression
+  equals = '=' _
+  literal = spaceless_literal _
+  spaceless_literal = ~'u?r?b?"[^"\\\\]*(?:\\\\.[^"\\\\]*)*"'isu / ~"u?r?b?'[^'\\\\]*(?:\\\\.[^'\\\\]*)*'"isu
+  expression = ored / sequence / term
+  or_term = '/' _ term
+  ored = term or_term+
+  sequence = term term+
+  not_term = '!' term _
+  lookahead_term = '&' term _
+  term = not_term / lookahead_term / quantified / atom
+  quantified = atom quantifier
+  atom = reference / literal / regex / parenthesized
+  regex = '~' spaceless_literal ~'[ilmsuxa]*'iu _
+  parenthesized = '(' _ expression ')' _
+  quantifier = ~'[*+?]|\\{\\d*,\\d+\\}|\\{\\d+,\\d*\\}|\\{\\d+\\}'u _
+  reference = label !equals
+  label = ~'[a-zA-Z_][a-zA-Z_0-9]*(?!["\'])'u _
+  _ = meaninglessness*
+  meaninglessness = ~'\\s+'u / comment
+  comment = ~'#[^\\r\\n]*'u
+> grammar grammars/calc.peg
+  13 rules, default line
+  line = _ expr
+  expr = term (addop term)*
+  term = factor (mulop factor)*
+  factor = number / paren / neg / call
+  neg = '-' _ factor
+  paren = '(' _ expr ')' _
+  call = name '(' _ args? ')' _
+  args = expr (',' _ expr)*
+  addop = ~'[+-]'u _
+  mulop = ~'[*/%]'u _
+  number = ~'[0-9]+'u _
+  name = ~'[a-z]+'u
+  _ = ~'[ \\t]*'u
+> grammar grammars/json.peg
+  12 rules, default value
+  value = _ (object / array / string / number / true / false / null) _
+  object = '{' _ members? '}'
+  members = pair (',' _ pair)*
+  pair = string _ ':' value
+  array = '[' _ items? ']'
+  items = value (',' value)*
+  string = ~'"(?:[^"\\\\\\x00-\\x1f]|\\\\["\\\\/bfnrt]|\\\\u[0-9a-fA-F]{4})*"'u
+  number = ~'-?(?:0|[1-9][0-9]*)'u
+  true = 'true'
+  false = 'false'
+  null = 'null'
+  _ = ~'\\s*'u
+> grammar grammars/ini.peg
+  9 rules, default file
+  file = (blank / comment / section / pair)*
+  section = '[' ~'[^\\]\\n]+'u ']' _ nl
+  pair = _ key _ ~'[:=]'u _ val nl
+  key = ~'[A-Za-z0-9_.\\-]+'u
+  val = ~'[^\\n]*'u
+  comment = _ ~'[#;][^\\n]*'u nl
+  blank = _ nl
+  nl = '\n' / !~'.'su
+  _ = ~'[ \\t]*'u
+> grammar grammars/query.peg
+  18 rules, default query
+  query = _ disj
+  disj = conj (kw_or conj)*
+  conj = neg (kw_and neg)*
+  neg = (kw_not neg) / atom
+  atom = group / cmp / flag
+  group = '(' _ disj ')' _
+  cmp = field op value
+  flag = field !op
+  op = ~'<=|>=|!=|=|<|>|~'u _
+  value = (number / string) _
+  number = ~'-?[0-9]+'u
+  string = ~'"[^"]*"'u
+  field = !keyword ~'[a-z_]+'u _
+  keyword = ~'(and|or|not)\\b'u
+  kw_or = ~'or\\b'u _
+  kw_and = ~'and\\b'u _
+  kw_not = ~'not\\b'u _
+  _ = ~'\\s*'u
+> grammar grammars/greeting.peg
+  5 rules, default greeting
+  greeting = hello _ name punct?
+  hello = ~'hello|hi'iu
+  name = ~'[A-Z][a-z]+'u
+  punct = '!' / '.'
+  _ = ' '+
+> grammar grammars/quant.peg
+  7 rules, default row
+  row = word{2,2} sep+ digit{,3} tail? &end rest
+  word = ~'[a-z]+'u ' '
+  sep = '-'
+  digit = ~'[0-9]'u
+  tail = !'x' ~'[a-z]'u
+  end = ~'.'su
+  rest = ~'.*'su
+> grammar grammars/csv.peg
+  5 rules, default file
+  file = row*
+  row = cell (',' cell)* '\n'
+  cell = quoted / bare
+  quoted = ~'"(?:[^"]|"")*"'u
+  bare = ~'[^,\n]*'u
+> grammar grammars/literals.peg
+  2 rules, default lits
+  lits = 'tab\there' "it's" 'say "hi"' 'back\\slash' 'café' 'A' '\\n'
+  flags = ~'[a-z]+' ~' a  b 'ux ~'^x$'mu ~'X'isu
+> grammar grammars/alias.peg
+  2 rules, default salutation
+  salutation = 'hi' / 'hello'
+> grammar grammars/leftrec.peg
+  2 rules, default expr
+  expr = (expr '+' num) / num
+  num = ~'[0-9]+'u
+> grammar grammars/bad_precedence.peg
+  IncompleteParseError: Rule 'rules' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with '/ num
+  num  = ~"[0-9]' (line 2, column 21).
+> grammar grammars/empty.peg
+  0 rules, default None
+> grammar grammars/bad_undefined.peg
+  UndefinedLabel: The label "value" was never defined.
+> grammar grammars/bad_circular.peg
+  VisitationError: BadGrammar: Circular Reference resolving a=b.
+  
+  Parse tree:
+  <Node called "rules" matching "
+  a = b
+  b = c
+  c = a
+  ">  <-- *** We were here. ***
+      <Node called "_" matching "
+      ">
+          <Node called "meaninglessness" matching "
+          ">
+              <RegexNode matching "
+              ">
+      <Node matching "a = b
+      b = c
+      c = a
+      ">
+          <Node called "rule" matching "a = b
+          ">
+              <Node called "label" matching "a ">
+                  <RegexNode matching "a">
+                  <Node called "_" matching " ">
+                      <Node called "meaninglessness" matching " ">
+                          <RegexNode matching " ">
+              <Node called "equals" matching "= ">
+                  <Node matching "=">
+                  <Node called "_" matching " ">
+                      <Node called "meaninglessness" matching " ">
+                          <RegexNode matching " ">
+              <Node called "expression" matching "b
+              ">
+                  <Node called "term" matching "b
+                  ">
+                      <Node called "atom" matching "b
+                      ">
+                          <Node called "reference" matching "b
+                          ">
+                              <Node called "label" matching "b
+                              ">
+                                  <RegexNode matching "b">
+                                  <Node called "_" matching "
+                                  ">
+                                      <Node called "meaninglessness" matching "
+                                      ">
+                                          <RegexNode matching "
+                                          ">
+                              <Node matching "">
+          <Node called "rule" matching "b = c
+          ">
+              <Node called "label" matching "b ">
+                  <RegexNode matching "b">
+                  <Node called "_" matching " ">
+                      <Node called "meaninglessness" matching " ">
+                          <RegexNode matching " ">
+              <Node called "equals" matching "= ">
+                  <Node matching "=">
+                  <Node called "_" matching " ">
+                      <Node called "meaninglessness" matching " ">
+                          <RegexNode matching " ">
+              <Node called "expression" matching "c
+              ">
+                  <Node called "term" matching "c
+                  ">
+                      <Node called "atom" matching "c
+                      ">
+                          <Node called "reference" matching "c
+                          ">
+                              <Node called "label" matching "c
+                              ">
+                                  <RegexNode matching "c">
+                                  <Node called "_" matching "
+                                  ">
+                                      <Node called "meaninglessness" matching "
+                                      ">
+                                          <RegexNode matching "
+                                          ">
+                              <Node matching "">
+          <Node called "rule" matching "c = a
+          ">
+              <Node called "label" matching "c ">
+                  <RegexNode matching "c">
+                  <Node called "_" matching " ">
+                      <Node called "meaninglessness" matching " ">
+                          <RegexNode matching " ">
+              <Node called "equals" matching "= ">
+                  <Node matching "=">
+                  <Node called "_" matching " ">
+                      <Node called "meaninglessness" matching " ">
+                          <RegexNode matching " ">
+              <Node called "expression" matching "a
+              ">
+                  <Node called "term" matching "a
+                  ">
+                      <Node called "atom" matching "a
+                      ">
+                          <Node called "reference" matching "a
+                          ">
+                              <Node called "label" matching "a
+                              ">
+                                  <RegexNode matching "a">
+                                  <Node called "_" matching "
+                                  ">
+                                      <Node called "meaninglessness" matching "
+                                      ">
+                                          <RegexNode matching "
+                                          ">
+                              <Node matching "">
+> grammar grammars/bad_mixed.peg
+  VisitationError: BadGrammar: Found "x" (<class 'str'>) and b"y" (<class 'bytes'>) string literals.
+  All strings in a single grammar must be of the same type.
+  
+  
+  Parse tree:
+  <Node called "spaceless_literal" matching "b"y"">  <-- *** We were here. ***
+      <RegexNode matching "b"y"">
+> grammar grammars/bad_missing_equals.peg
+  UndefinedLabel: The label "name" was never defined.
+> grammar grammars/bad_syntax.peg
+  IncompleteParseError: Rule 'rules' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with 'name = = "bob"
+  ' (line 3, column 1).
+> grammar grammars/bad_regex.peg
+  VisitationError: PatternError: unterminated character set at position 0
+  
+  Parse tree:
+  <Node called "regex" matching "~"[a-"
+  ">  <-- *** We were here. ***
+      <Node matching "~">
+      <Node called "spaceless_literal" matching ""[a-"">
+          <RegexNode matching ""[a-"">
+      <RegexNode matching "">
+      <Node called "_" matching "
+      ">
+          <Node called "meaninglessness" matching "
+          ">
+              <RegexNode matching "
+              ">
+> tree grammars/greeting.peg inputs/greet_ok.txt
+  <Node called "greeting" matching "Hello World!">
+      <RegexNode called "hello" matching "Hello">
+      <Node called "_" matching " ">
+          <Node matching " ">
+      <RegexNode called "name" matching "World">
+      <Node matching "!">
+          <Node called "punct" matching "!">
+              <Node matching "!">
+> tree grammars/greeting.peg inputs/greet_two.txt
+  <Node called "greeting" matching "hi  Ada">
+      <RegexNode called "hello" matching "hi">
+      <Node called "_" matching "  ">
+          <Node matching " ">
+          <Node matching " ">
+      <RegexNode called "name" matching "Ada">
+      <Node matching "">
+> tree grammars/greeting.peg inputs/greet_lower.txt
+  ParseError: Rule 'name' didn't match at 'world' (line 1, column 7).
+> tree grammars/greeting.peg inputs/greet_extra.txt
+  IncompleteParseError: Rule 'greeting' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with '!' (line 1, column 11).
+> tree grammars/greeting.peg inputs/empty.txt
+  ParseError: Rule 'greeting' didn't match at '' (line 1, column 1).
+> match grammars/greeting.peg inputs/greet_more.txt
+  matched 6 of 15: 'HI Ada'
+  <Node called "greeting" matching "HI Ada">
+      <RegexNode called "hello" matching "HI">
+      <Node called "_" matching " ">
+          <Node matching " ">
+      <RegexNode called "name" matching "Ada">
+      <Node matching "">
+> match grammars/greeting.peg inputs/greet_lower.txt
+  ParseError: Rule 'name' didn't match at 'world' (line 1, column 7).
+> tree grammars/quant.peg inputs/quant.txt
+  <Node called "row" matching "ab cd ---42z tail
+  end">
+      <Node matching "ab cd ">
+          <Node called "word" matching "ab ">
+              <RegexNode matching "ab">
+              <Node matching " ">
+          <Node called "word" matching "cd ">
+              <RegexNode matching "cd">
+              <Node matching " ">
+      <Node matching "---">
+          <Node called "sep" matching "-">
+          <Node called "sep" matching "-">
+          <Node called "sep" matching "-">
+      <Node matching "42">
+          <RegexNode called "digit" matching "4">
+          <RegexNode called "digit" matching "2">
+      <Node matching "z">
+          <Node called "tail" matching "z">
+              <Node matching "">
+              <RegexNode matching "z">
+      <Node matching "">
+      <RegexNode called "rest" matching " tail
+      end">
+> tree grammars/quant.peg inputs/quant_x.txt
+  <Node called "row" matching "ab cd -1234x">
+      <Node matching "ab cd ">
+          <Node called "word" matching "ab ">
+              <RegexNode matching "ab">
+              <Node matching " ">
+          <Node called "word" matching "cd ">
+              <RegexNode matching "cd">
+              <Node matching " ">
+      <Node matching "-">
+          <Node called "sep" matching "-">
+      <Node matching "123">
+          <RegexNode called "digit" matching "1">
+          <RegexNode called "digit" matching "2">
+          <RegexNode called "digit" matching "3">
+      <Node matching "">
+      <Node matching "">
+      <RegexNode called "rest" matching "4x">
+> tree grammars/csv.peg inputs/rows.csv
+  <Node called "file" matching "id,name,"note, with comma"
+  7,"say ""hi""",
+  ">
+      <Node called "row" matching "id,name,"note, with comma"
+      ">
+          <Node called "cell" matching "id">
+              <RegexNode called "bare" matching "id">
+          <Node matching ",name,"note, with comma"">
+              <Node matching ",name">
+                  <Node matching ",">
+                  <Node called "cell" matching "name">
+                      <RegexNode called "bare" matching "name">
+              <Node matching ","note, with comma"">
+                  <Node matching ",">
+                  <Node called "cell" matching ""note, with comma"">
+                      <RegexNode called "quoted" matching ""note, with comma"">
+          <Node matching "
+          ">
+      <Node called "row" matching "7,"say ""hi""",
+      ">
+          <Node called "cell" matching "7">
+              <RegexNode called "bare" matching "7">
+          <Node matching ","say ""hi""",">
+              <Node matching ","say ""hi"""">
+                  <Node matching ",">
+                  <Node called "cell" matching ""say ""hi"""">
+                      <RegexNode called "quoted" matching ""say ""hi"""">
+              <Node matching ",">
+                  <Node matching ",">
+                  <Node called "cell" matching "">
+                      <RegexNode called "bare" matching "">
+          <Node matching "
+          ">
+> tree grammars/csv.peg inputs/one_row.csv row
+  <Node called "row" matching "a,"b",c
+  ">
+      <Node called "cell" matching "a">
+          <RegexNode called "bare" matching "a">
+      <Node matching ","b",c">
+          <Node matching ","b"">
+              <Node matching ",">
+              <Node called "cell" matching ""b"">
+                  <RegexNode called "quoted" matching ""b"">
+          <Node matching ",c">
+              <Node matching ",">
+              <Node called "cell" matching "c">
+                  <RegexNode called "bare" matching "c">
+      <Node matching "
+      ">
+> tree grammars/csv.peg inputs/rows.csv cell
+  IncompleteParseError: Rule 'cell' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with ',name,"note, with co' (line 1, column 3).
+> match grammars/csv.peg inputs/rows.csv cell
+  matched 2 of 43: 'id'
+  <Node called "cell" matching "id">
+      <RegexNode called "bare" matching "id">
+> tree grammars/literals.peg inputs/lits.txt
+  <Node called "lits" matching "tab	hereit'ssay "hi"back\slashcaféA\n">
+      <Node matching "tab	here">
+      <Node matching "it's">
+      <Node matching "say "hi"">
+      <Node matching "back\slash">
+      <Node matching "café">
+      <Node matching "A">
+      <Node matching "\n">
+> tree grammars/alias.peg inputs/greet_two.txt
+  IncompleteParseError: Rule 'salutation' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with '  Ada' (line 1, column 3).
+> tree grammars/leftrec.peg inputs/sum.txt
+  LeftRecursionError: Left recursion in rule 'expr' at '3' (line 1, column 0).
+  
+  Parsimonious is a packrat parser, so it can't handle left recursion.
+  See https://en.wikipedia.org/wiki/Parsing_expression_grammar#Indirect_left_recursion
+  for how to rewrite your grammar into a rule that does not use left-recursion.
+> tree grammars/leftrec.peg inputs/sum.txt num
+  IncompleteParseError: Rule 'num' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with '+2+3' (line 1, column 2).
+> tree grammars/empty.peg inputs/sum.txt
+  RuntimeError: Can't call parse() on a Grammar that has no default rule. Choose a specific rule instead, like some_grammar['some_rule'].parse(...).
+> !calc inputs/calc.txt
+  '1 + 2 * 3' = 7
+  '(1 + 2) * 3' = 9
+  '  10 - 4 - 3' = 3
+  '-7 / 2' = -4
+  '7 % -3' = -2
+  '2 * (3 + 4) * 5 - 6 / 2' = 67
+  'max(3, 9, 4) + min(8, 2)' = 11
+  'abs(-12) * pow(2, 10)' = 12288
+  '100 / (5 - 5)'
+  VisitationError: ZeroDivisionError: integer division or modulo by zero
+  
+  Parse tree:
+  <Node called "term" matching "100 / (5 - 5)">  <-- *** We were here. ***
+      <Node called "factor" matching "100 ">
+          <Node called "number" matching "100 ">
+              <RegexNode matching "100">
+              <RegexNode called "_" matching " ">
+      <Node matching "/ (5 - 5)">
+          <Node matching "/ (5 - 5)">
+              <Node called "mulop" matching "/ ">
+                  <RegexNode matching "/">
+                  <RegexNode called "_" matching " ">
+              <Node called "factor" matching "(5 - 5)">
+                  <Node called "paren" matching "(5 - 5)">
+                      <Node matching "(">
+                      <RegexNode called "_" matching "">
+                      <Node called "expr" matching "5 - 5">
+                          <Node called "term" matching "5 ">
+                              <Node called "factor" matching "5 ">
+                                  <Node called "number" matching "5 ">
+                                      <RegexNode matching "5">
+                                      <RegexNode called "_" matching " ">
+                              <Node matching "">
+                          <Node matching "- 5">
+                              <Node matching "- 5">
+                                  <Node called "addop" matching "- ">
+                                      <RegexNode matching "-">
+                                      <RegexNode called "_" matching " ">
+                                  <Node called "term" matching "5">
+                                      <Node called "factor" matching "5">
+                                          <Node called "number" matching "5">
+                                              <RegexNode matching "5">
+                                              <RegexNode called "_" matching "">
+                                      <Node matching "">
+                      <Node matching ")">
+                      <RegexNode called "_" matching "">
+  '17 % (2 - 2)'
+  VisitationError: ZeroDivisionError: integer modulo by zero
+  
+  Parse tree:
+  <Node called "term" matching "17 % (2 - 2)">  <-- *** We were here. ***
+      <Node called "factor" matching "17 ">
+          <Node called "number" matching "17 ">
+              <RegexNode matching "17">
+              <RegexNode called "_" matching " ">
+      <Node matching "% (2 - 2)">
+          <Node matching "% (2 - 2)">
+              <Node called "mulop" matching "% ">
+                  <RegexNode matching "%">
+                  <RegexNode called "_" matching " ">
+              <Node called "factor" matching "(2 - 2)">
+                  <Node called "paren" matching "(2 - 2)">
+                      <Node matching "(">
+                      <RegexNode called "_" matching "">
+                      <Node called "expr" matching "2 - 2">
+                          <Node called "term" matching "2 ">
+                              <Node called "factor" matching "2 ">
+                                  <Node called "number" matching "2 ">
+                                      <RegexNode matching "2">
+                                      <RegexNode called "_" matching " ">
+                              <Node matching "">
+                          <Node matching "- 2">
+                              <Node matching "- 2">
+                                  <Node called "addop" matching "- ">
+                                      <RegexNode matching "-">
+                                      <RegexNode called "_" matching " ">
+                                  <Node called "term" matching "2">
+                                      <Node called "factor" matching "2">
+                                          <Node called "number" matching "2">
+                                              <RegexNode matching "2">
+                                              <RegexNode called "_" matching "">
+                                      <Node matching "">
+                      <Node matching ")">
+                      <RegexNode called "_" matching "">
+  'sqrt(16)'
+  VisitationError: NameError: unknown function 'sqrt'
+  
+  Parse tree:
+  <Node called "call" matching "sqrt(16)">  <-- *** We were here. ***
+      <RegexNode called "name" matching "sqrt">
+      <Node matching "(">
+      <RegexNode called "_" matching "">
+      <Node matching "16">
+          <Node called "args" matching "16">
+              <Node called "expr" matching "16">
+                  <Node called "term" matching "16">
+                      <Node called "factor" matching "16">
+                          <Node called "number" matching "16">
+                              <RegexNode matching "16">
+                              <RegexNode called "_" matching "">
+                      <Node matching "">
+                  <Node matching "">
+              <Node matching "">
+      <Node matching ")">
+      <RegexNode called "_" matching "">
+  'pow(2)'
+  VisitationError: TypeError: pow takes 2 arguments, got 1
+  
+  Parse tree:
+  <Node called "call" matching "pow(2)">  <-- *** We were here. ***
+      <RegexNode called "name" matching "pow">
+      <Node matching "(">
+      <RegexNode called "_" matching "">
+      <Node matching "2">
+          <Node called "args" matching "2">
+              <Node called "expr" matching "2">
+                  <Node called "term" matching "2">
+                      <Node called "factor" matching "2">
+                          <Node called "number" matching "2">
+                              <RegexNode matching "2">
+                              <RegexNode called "_" matching "">
+                      <Node matching "">
+                  <Node matching "">
+              <Node matching "">
+      <Node matching ")">
+      <RegexNode called "_" matching "">
+  '1 +'
+  IncompleteParseError: Rule 'line' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with '+' (line 1, column 3).
+  '2 3'
+  IncompleteParseError: Rule 'line' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with '3' (line 1, column 3).
+  '()'
+  ParseError: Rule 'expr' didn't match at ')' (line 1, column 2).
+  '-(-(-4))' = -4
+> !json inputs/config.json
+  {"name": "renamed", "version": 3, "debug": false, "owners": ["ana", "bo\u00e9", "chen"], "limits": {"items": 500, "per_page": -25, "nested": {"deep": [1, [2, [3, []]], {}]}}, "notes": "line one\nline \"two\"\ttab / slash \ud83d\ude00", "empty": null}
+    name = "renamed"
+    version = 3
+    debug = false
+    owners[0] = "ana"
+    owners[1] = "bo\u00e9"
+    owners[2] = "chen"
+    limits.items = 500
+    limits.per_page = -25
+    limits.nested.deep[0] = 1
+    limits.nested.deep[1][0] = 2
+    limits.nested.deep[1][1][0] = 3
+    limits.nested.deep[1][1][1] = []
+    limits.nested.deep[2] = {}
+    notes = "line one\nline \"two\"\ttab / slash \ud83d\ude00"
+    empty = null
+> !json inputs/list.json
+  [1, 2, 3, "four", true, null, [], {"k": "v"}]
+    [0] = 1
+    [1] = 2
+    [2] = 3
+    [3] = "four"
+    [4] = true
+    [5] = null
+    [6] = []
+    [7].k = "v"
+> !json inputs/trailing.json
+  ParseError: Rule 'value' didn't match at '],}
+  ' (line 1, column 21).
+> !json inputs/leading_zero.json
+  ParseError: Rule 'string' didn't match at '0800}
+  ' (line 1, column 10).
+> !json inputs/unclosed.json
+  ParseError: Rule 'string' didn't match at '2
+  ' (line 1, column 11).
+> !ini inputs/app.ini
+  [server]
+    host = '0.0.0.0'
+    port = 9090
+    workers = 4
+  [logging]
+    level = 'INFO'
+    file = '/var/log/inventory.log'
+    rotate = True
+  [database]
+    url = 'postgres://inv@db.internal:5432/inventory'
+    pool.size = 10
+    timeout = None
+> !ini inputs/broken.ini
+  IncompleteParseError: Rule 'file' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with 'this line has no sep' (line 3, column 1).
+> !ini inputs/unclosed.ini
+  IncompleteParseError: Rule 'file' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with '[main
+  a = 1
+  ' (line 1, column 1).
+> !query inputs/people.csv inputs/queries.txt
+  age > 30: Asha, Chidi, Dana, Eitan, Goran (5)
+  city = "Pune": Asha, Dana (2)
+  active: Asha, Chidi, Eitan, Farah, Hana (5)
+  not active: Bram, Dana, Goran (3)
+  age >= 30 and role = "engineer": Asha, Dana, Eitan (3)
+  role = "designer" or role = "intern": Bram, Farah, Hana (3)
+  active and (city = "Pune" or age < 25): Asha, Farah (2)
+  not (age < 30 or age > 40): Asha, Dana, Goran (3)
+  name ~ "an": Dana, Eitan, Goran, Hana (4)
+  city != "Pune" and not active: Bram, Goran (2)
+  salary > 10
+  VisitationError: ValueError: unknown field 'salary'
+  
+  Parse tree:
+  <Node called "field" matching "salary ">  <-- *** We were here. ***
+      <Node matching "">
+      <RegexNode matching "salary">
+      <RegexNode called "_" matching " ">
+  age > "old"
+  TypeError: '>' not supported between instances of 'int' and 'str'
+  age >
+  ParseError: Rule 'value' didn't match at '' (line 1, column 6).
+  ages = 3
+  VisitationError: ValueError: unknown field 'ages'
+  
+  Parse tree:
+  <Node called "field" matching "ages ">  <-- *** We were here. ***
+      <Node matching "">
+      <RegexNode matching "ages">
+      <RegexNode called "_" matching " ">
+  and = 3
+  ParseError: Rule 'query' didn't match at 'and = 3' (line 1, column 1).
+  role="manager"or age<24: Chidi, Farah, Goran (3)

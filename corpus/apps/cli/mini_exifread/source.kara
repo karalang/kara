@@ -2112,10 +2112,10 @@ fn convert_types(h: ref Hdr) -> Result[Map[String, Val], Exc] {
 
 // ------------------------------------------------------------ utils.get_gps_coords
 
-const LAT: String = "GPS GPSLatitude";
-const LAT_REF: String = "GPS GPSLatitudeRef";
-const LNG: String = "GPS GPSLongitude";
-const LNG_REF: String = "GPS GPSLongitudeRef";
+const LAT: Str = "GPS GPSLatitude";
+const LAT_REF: Str = "GPS GPSLatitudeRef";
+const LNG: Str = "GPS GPSLongitude";
+const LNG_REF: Str = "GPS GPSLongitudeRef";
 
 fn degrees_to_decimal(xs: ref Vec[f64]) -> Result[f64, Exc] {
     let n = xs.len();
@@ -2187,7 +2187,7 @@ fn finish_coords(lat_c: ref Vec[f64], lat_ref: ref Val, lng_c: ref Vec[f64], lng
 }
 
 fn gps_coords(h: ref Hdr) -> Result[String, Exc] {
-    for k in vec![LAT, LAT_REF, LNG, LNG_REF].iter() {
+    for k in vec![LAT.clone(), LAT_REF.clone(), LNG.clone(), LNG_REF.clone()].iter() {
         if not h.tags.contains_key(k.to_string()) {
             return Ok("None".to_string());
         }
@@ -2202,7 +2202,7 @@ fn gps_coords(h: ref Hdr) -> Result[String, Exc] {
 // The same on serialized tags: lists pass through, anything else is asked
 // for its .values.
 fn gps_coords_builtin(d: ref Map[String, Val]) -> Result[String, Exc] {
-    for k in vec![LAT, LAT_REF, LNG, LNG_REF].iter() {
+    for k in vec![LAT.clone(), LAT_REF.clone(), LNG.clone(), LNG_REF.clone()].iter() {
         if not d.contains_key(k.to_string()) {
             return Ok("None".to_string());
         }

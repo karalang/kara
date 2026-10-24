@@ -42,16 +42,16 @@ struct Exc {
     msg: String,
 }
 
-fn exc(kind: ref String, msg: own String) -> Exc {
+fn exc(kind: Str, msg: own String) -> Exc {
     Exc { kind: kind.to_string(), msg: msg }
 }
 
-const TYPES_PARSE: String = "osc_types.ParseError";
-const TYPES_BUILD: String = "osc_types.BuildError";
-const MSG_PARSE: String = "osc_message.ParseError";
-const BUILDER_ERR: String = "osc_message_builder.BuildError";
-const BUNDLE_PARSE: String = "osc_bundle.ParseError";
-const PACKET_PARSE: String = "osc_packet.ParseError";
+const TYPES_PARSE: Str = "osc_types.ParseError";
+const TYPES_BUILD: Str = "osc_types.BuildError";
+const MSG_PARSE: Str = "osc_message.ParseError";
+const BUILDER_ERR: Str = "osc_message_builder.BuildError";
+const BUNDLE_PARSE: Str = "osc_bundle.ParseError";
+const PACKET_PARSE: Str = "osc_packet.ParseError";
 
 fn type_name(v: ref Val) -> String {
     match v {

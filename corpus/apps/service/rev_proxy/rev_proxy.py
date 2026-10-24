@@ -378,8 +378,8 @@ def main():
     origins = [Origin("b1", 47738), Origin("b2", 47739)]
     proxy = Proxy(47737,
                   [("/api/", 0, True), ("/api/admin/", 1, False), ("/static/", 1, False)],
-                  [Cluster("api", [Upstream("b1", 47738), Upstream("b2", 47739), Upstream("b4", 47740)]),
-                   Cluster("static", [Upstream("s1", 47741)])])
+                  [Cluster("api", [Upstream("b1", 47738), Upstream("b2", 47739), Upstream("b4", 27740)]),
+                   Cluster("static", [Upstream("s1", 27741)])])
 
     send(proxy, origins, "list users", get("/api/users"))
     send(proxy, origins, "one user", get("/api/users/7"))

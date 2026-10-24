@@ -1,0 +1,4692 @@
+// mini_parsimonious: parsimonious 0.10.0, the PEG parser library for
+// Python, with:
+// - the expressions (Literal, Regex, Sequence, OneOf, Lookahead and the
+//   Quantifiers), the packrat cache, the error position the matcher keeps,
+//   and ParseError, IncompleteParseError and LeftRecursionError;
+// - the parse tree's nodes and Node.prettily;
+// - the grammar of grammars: BootstrappingGrammar builds it by hand, it reads
+//   rule_syntax, and that result reads rule_syntax again as `rule_grammar`;
+// - RuleVisitor with its lazy references, the BadGrammar, UndefinedLabel and
+//   VisitationError errors, and str(grammar);
+// - NodeVisitor, and visitors on top of it: a calculator, a JSON reader, an
+//   INI reader and a query filter over records.
+//
+// Regexes run on the engine of mini_re (a port of Python's sre). The inputs
+// are data/jobs.txt and the files beside it, made by mk.py. expected.out is
+// the output of oracle.py, which runs the same jobs through parsimonious.
+
+// ------------------------------------------------------------ errors
+
+struct ReErr {
+    kind: String,
+    msg: String,
+    pos: i64,
+}
+
+fn re_error(msg: own String, pos: i64) -> ReErr {
+    ReErr { kind: "error".to_string(), msg: msg, pos: pos }
+}
+
+fn other_error(kind: Str, msg: own String) -> ReErr {
+    ReErr { kind: kind.to_string(), msg: msg, pos: -1 }
+}
+
+fn err_text(e: ref ReErr) -> String {
+    if e.kind == "error" {
+        if e.pos >= 0 {
+            return f"error: {e.msg} at position {e.pos}";
+        }
+        return f"error: {e.msg}";
+    }
+    f"{e.kind}: {e.msg}"
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+fn is_word(c: i64, ascii: bool) -> bool {
+    if c < 0x80 {
+        return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+    }
+    if ascii {
+        return false;
+    }
+    match as_char(c) {
+        Some(ch) => ch.is_alphanumeric(),
+        None => false,
+    }
+}
+
+fn lower(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 65 and c <= 90 { c + 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_lowercase() as u32 as i64,
+        None => c,
+    }
+}
+
+fn upper(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 97 and c <= 122 { c - 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_uppercase() as u32 as i64,
+        None => c,
+    }
+}
+
+// ------------------------------------------------------- parsed form
+
+// The categories of \d \D \s \S \w \W.
+fn cat_digit() -> i64 { 0 }
+fn cat_not_digit() -> i64 { 1 }
+fn cat_space() -> i64 { 2 }
+fn cat_not_space() -> i64 { 3 }
+fn cat_word() -> i64 { 4 }
+fn cat_not_word() -> i64 { 5 }
+
+// The positions ^ $ \A \Z \b \B and the forms the compiler turns them
+// into under MULTILINE.
+fn at_beginning() -> i64 { 0 }
+fn at_beginning_line() -> i64 { 1 }
+fn at_beginning_string() -> i64 { 2 }
+fn at_end() -> i64 { 3 }
+fn at_end_line() -> i64 { 4 }
+fn at_end_string() -> i64 { 5 }
+fn at_boundary() -> i64 { 6 }
+fn at_non_boundary() -> i64 { 7 }
+
+#[derive(Clone)]
+enum Item {
+    Lit(i64),
+    Range(i64, i64),
+    Cat(i64),
+}
+
+enum Node {
+    Lit(i64),
+    NotLit(i64),
+    Any,
+    In(Vec[Item], bool),
+    At(i64),
+    Branch(Vec[Vec[Node]]),
+    // group (0: none), flags turned on, flags turned off, contents
+    Group(i64, i64, i64, Vec[Node]),
+    // 0 greedy, 1 lazy, 2 possessive; min; max; the item repeated
+    Repeat(i64, i64, i64, Vec[Node]),
+    Atomic(Vec[Node]),
+    // direction (1 ahead, -1 behind), negative, contents
+    Assert(i64, bool, Vec[Node]),
+    GroupRef(i64),
+    // group, yes branch, no branch
+    Exists(i64, Vec[Node], Vec[Node]),
+    Failure,
+}
+
+fn is_repeat(n: ref Node) -> bool {
+    match n {
+        Node.Repeat(_, _, _, _) => true,
+        _ => false,
+    }
+}
+
+fn is_at(n: ref Node) -> bool {
+    match n {
+        Node.At(_) => true,
+        _ => false,
+    }
+}
+
+fn flag_i() -> i64 { 2 }
+fn flag_l() -> i64 { 4 }
+fn flag_m() -> i64 { 8 }
+fn flag_s() -> i64 { 16 }
+fn flag_u() -> i64 { 32 }
+fn flag_x() -> i64 { 64 }
+fn flag_a() -> i64 { 256 }
+fn type_flags() -> i64 { 4 | 32 | 256 }
+fn maxrepeat() -> i64 { 4294967295 }
+fn maxgroups() -> i64 { 1073741823 }
+fn maxwidth() -> i64 { 1 << 62 }
+
+fn flag_value(c: i64) -> i64 {
+    match c {
+        105 => 2,
+        76 => 4,
+        109 => 8,
+        115 => 16,
+        120 => 64,
+        97 => 256,
+        117 => 32,
+        _ => 0,
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+// One token: nothing at the end of the pattern (n 0), a character (n 1),
+// or a backslash and the character after it (n 2).
+#[derive(Copy, Clone)]
+struct T {
+    n: i64,
+    a: i64,
+    b: i64,
+}
+
+fn tok_none() -> T {
+    T { n: 0, a: 0, b: 0 }
+}
+
+fn tok_is(t: T, c: i64) -> bool {
+    t.n == 1 and t.a == c
+}
+
+fn tok_text(t: T) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    if t.n >= 1 {
+        v.push(t.a);
+    }
+    if t.n == 2 {
+        v.push(t.b);
+    }
+    v
+}
+
+fn is_ascii_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_hex(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_oct(c: i64) -> bool {
+    c >= 48 and c <= 55
+}
+
+fn is_dec(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn digits_value(s: ref Vec[i64], start: i64, base: i64) -> i64 {
+    let mut v = 0;
+    let mut i = start;
+    while i < s.len() {
+        let c = s[i];
+        let d = if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 };
+        v = v * base + d;
+        i += 1;
+    }
+    v
+}
+
+// str.isidentifier, near enough: a letter or underscore, then letters,
+// digits and underscores.
+fn is_identifier(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < name.len() {
+        let c = name[i];
+        let ok = if c == 95 {
+            true
+        } else if i == 0 {
+            match as_char(c) {
+                Some(ch) => ch.is_alphabetic(),
+                None => false,
+            }
+        } else {
+            is_word(c, false)
+        };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_ascii_decimal(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    for c in name {
+        if not is_dec(c) {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tokenizer {
+    s: Vec[i64],
+    index: i64,
+    next: T,
+}
+
+impl Tokenizer {
+    fn advance(mut ref self) -> Result[(), ReErr] {
+        let index = self.index;
+        if index >= self.s.len() {
+            self.next = tok_none();
+            return Ok(());
+        }
+        let c = self.s[index];
+        if c == 92 {
+            if index + 1 >= self.s.len() {
+                return Err(re_error("bad escape (end of pattern)".to_string(), self.s.len() - 1));
+            }
+            self.next = T { n: 2, a: 92, b: self.s[index + 1] };
+            self.index = index + 2;
+        } else {
+            self.next = T { n: 1, a: c, b: 0 };
+            self.index = index + 1;
+        }
+        Ok(())
+    }
+
+    fn get(mut ref self) -> Result[T, ReErr] {
+        let t = self.next;
+        self.advance()?;
+        Ok(t)
+    }
+
+    fn take(mut ref self, c: i64) -> Result[bool, ReErr] {
+        if tok_is(self.next, c) {
+            self.advance()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn tell(ref self) -> i64 {
+        self.index - self.next.n
+    }
+
+    fn seek(mut ref self, index: i64) -> Result[(), ReErr] {
+        self.index = index;
+        self.advance()
+    }
+
+    fn error(ref self, msg: own String, offset: i64) -> ReErr {
+        re_error(msg, self.tell() - offset)
+    }
+
+    // getwhile: up to n characters of a kind (0 octal, 1 decimal, 2 hex).
+    fn getwhile(mut ref self, n: i64, kind: i64, out: mut ref Vec[i64]) -> Result[(), ReErr] {
+        let mut k = 0;
+        while k < n {
+            let t = self.next;
+            if t.n != 1 {
+                break;
+            }
+            let ok = if kind == 0 { is_oct(t.a) } else if kind == 1 { is_dec(t.a) } else { is_hex(t.a) };
+            if not ok {
+                break;
+            }
+            out.push(t.a);
+            self.advance()?;
+            k += 1;
+        }
+        Ok(())
+    }
+
+    fn getuntil(mut ref self, terminator: i64, name: Str) -> Result[Vec[i64], ReErr] {
+        let mut result: Vec[i64] = Vec.new();
+        loop {
+            let c = self.next;
+            self.advance()?;
+            if c.n == 0 {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 0));
+                }
+                let term = to_string(vec_of(terminator));
+                return Err(self.error(f"missing {term}, unterminated name", result.len()));
+            }
+            if tok_is(c, terminator) {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 1));
+                }
+                break;
+            }
+            push_all(mut result, tok_text(c));
+        }
+        Ok(result)
+    }
+
+    fn checkgroupname(ref self, name: ref Vec[i64], offset: i64) -> Result[(), ReErr] {
+        if not is_identifier(name) {
+            return Err(self.error(f"bad character in group name {repr_of(name)}", name.len() + offset));
+        }
+        Ok(())
+    }
+}
+
+fn vec_of(c: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(c);
+    v
+}
+
+fn new_tokenizer(s: ref Vec[i64]) -> Result[Tokenizer, ReErr] {
+    let mut t = Tokenizer { s: s.clone(), index: 0, next: tok_none() };
+    t.advance()?;
+    Ok(t)
+}
+
+// ------------------------------------------------------------ parser
+
+#[derive(Clone)]
+struct Width {
+    lo: i64,
+    hi: i64,
+}
+
+struct ParseState {
+    flags: i64,
+    names: Vec[(Vec[i64], i64)],
+    // per group: whether it is closed, and its width
+    closed: Vec[bool],
+    widths: Vec[Width],
+    lookbehind_groups: i64,
+    // conditional references by number, in order: (group, position)
+    refpos: Vec[(i64, i64)],
+}
+
+impl ParseState {
+    fn groups(ref self) -> i64 {
+        self.closed.len()
+    }
+
+    fn group_of(ref self, name: ref Vec[i64]) -> i64 {
+        for (n, g) in self.names.iter() {
+            if same(n, name) {
+                return *g;
+            }
+        }
+        -1
+    }
+
+    fn checkgroup(ref self, gid: i64) -> bool {
+        gid < self.groups() and self.closed[gid]
+    }
+
+    fn checklookbehindgroup(ref self, gid: i64, src: ref Tokenizer) -> Result[(), ReErr] {
+        if self.lookbehind_groups >= 0 {
+            if not self.checkgroup(gid) {
+                return Err(src.error("cannot refer to an open group".to_string(), 0));
+            }
+            if gid >= self.lookbehind_groups {
+                return Err(src.error("cannot refer to group defined in the same lookbehind subpattern".to_string(), 0));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn add_width(a: i64, b: i64) -> i64 {
+    if a >= maxwidth() - b { maxwidth() } else { a + b }
+}
+
+fn mul_width(a: i64, n: i64) -> i64 {
+    if a == 0 or n == 0 {
+        0
+    } else if a >= maxwidth() / n {
+        maxwidth()
+    } else {
+        a * n
+    }
+}
+
+// SubPattern.getwidth.
+fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
+    let mut lo = 0;
+    let mut hi = 0;
+    for n in p.iter() {
+        match n {
+            Node.Branch(items) => {
+                let mut i = maxwidth();
+                let mut j = 0;
+                for item in items.iter() {
+                    let w = width_of(widths, item);
+                    if w.lo < i {
+                        i = w.lo;
+                    }
+                    if w.hi > j {
+                        j = w.hi;
+                    }
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Atomic(body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Group(_, _, _, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Repeat(_, min, max, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, mul_width(w.lo, *min));
+                if *max == maxrepeat() and w.hi > 0 {
+                    hi = maxwidth();
+                } else {
+                    hi = add_width(hi, mul_width(w.hi, *max));
+                }
+            }
+            Node.GroupRef(g) => {
+                let w = ref widths[*g];
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Exists(_, yes, no) => {
+                let wy = width_of(widths, yes);
+                let mut i = wy.lo;
+                let mut j = wy.hi;
+                if no.len() > 0 {
+                    let wn = width_of(widths, no);
+                    if wn.lo < i {
+                        i = wn.lo;
+                    }
+                    if wn.hi > j {
+                        j = wn.hi;
+                    }
+                } else {
+                    i = 0;
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Lit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.NotLit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.Any => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.In(_, _) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            _ => {}
+        }
+    }
+    Width { lo: lo, hi: hi }
+}
+
+fn category_of(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        100 => 0,
+        68 => 1,
+        115 => 2,
+        83 => 3,
+        119 => 4,
+        87 => 5,
+        _ => -1,
+    }
+}
+
+fn escape_value(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        97 => 7,
+        98 => 8,
+        102 => 12,
+        110 => 10,
+        114 => 13,
+        116 => 9,
+        118 => 11,
+        92 => 92,
+        _ => -1,
+    }
+}
+
+// \x, \u and \U: the escape text so far, and the code point.
+fn hex_escape(src: mut ref Tokenizer, t: T, esc: mut ref Vec[i64]) -> Result[i64, ReErr] {
+    let n = if t.b == 120 { 2 } else if t.b == 117 { 4 } else { 8 };
+    src.getwhile(n, 2, mut esc)?;
+    if esc.len() != n + 2 {
+        return Err(src.error(f"incomplete escape {to_string(esc)}", esc.len()));
+    }
+    let c = digits_value(esc, 2, 16);
+    if c > 0x10FFFF {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(c)
+}
+
+// _class_escape: an escape inside [...], a literal or a category.
+fn class_escape(src: mut ref Tokenizer, t: T) -> Result[Item, ReErr] {
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Item.Lit(e));
+    }
+    let cat = category_of(t);
+    if cat >= 0 {
+        return Ok(Item.Cat(cat));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Item.Lit(v));
+    }
+    if is_oct(c) {
+        src.getwhile(2, 0, mut esc)?;
+        let v = digits_value(esc, 1, 8);
+        if v > 0o377 {
+            return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+        }
+        return Ok(Item.Lit(v));
+    }
+    if is_dec(c) or is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Item.Lit(c))
+}
+
+// _escape: an escape outside a set.
+fn re_escape_node(src: mut ref Tokenizer, t: T, st: ref ParseState) -> Result[Node, ReErr] {
+    let cat = category_of(t);
+    if cat >= 0 {
+        let mut items: Vec[Item] = Vec.new();
+        items.push(Item.Cat(cat));
+        return Ok(Node.In(items, false));
+    }
+    match t.b {
+        65 => return Ok(Node.At(at_beginning_string())),
+        98 => return Ok(Node.At(at_boundary())),
+        66 => return Ok(Node.At(at_non_boundary())),
+        90 => return Ok(Node.At(at_end_string())),
+        _ => {}
+    }
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Node.Lit(e));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Node.Lit(v));
+    }
+    if c == 48 {
+        src.getwhile(2, 0, mut esc)?;
+        return Ok(Node.Lit(digits_value(esc, 1, 8)));
+    }
+    if is_dec(c) {
+        // an octal escape or a group reference
+        let nt = src.next;
+        if nt.n == 1 and is_dec(nt.a) {
+            esc.push(nt.a);
+            src.advance()?;
+            let nt2 = src.next;
+            if is_oct(esc[1]) and is_oct(esc[2]) and nt2.n == 1 and is_oct(nt2.a) {
+                esc.push(nt2.a);
+                src.advance()?;
+                let v = digits_value(esc, 1, 8);
+                if v > 0o377 {
+                    return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+                }
+                return Ok(Node.Lit(v));
+            }
+        }
+        let group = digits_value(esc, 1, 10);
+        if group < st.groups() {
+            if not st.checkgroup(group) {
+                return Err(src.error("cannot refer to an open group".to_string(), esc.len()));
+            }
+            st.checklookbehindgroup(group, src)?;
+            return Ok(Node.GroupRef(group));
+        }
+        return Err(src.error(f"invalid group reference {group}", esc.len() - 1));
+    }
+    if is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Node.Lit(c))
+}
+
+fn parse_sub(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64) -> Result[Vec[Node], ReErr] {
+    let mut items: Vec[Vec[Node]] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let first = nested == 0 and items.len() == 0;
+        let item = parse_seq(mut src, mut st, verbose, nested + 1, first)?;
+        items.push(item);
+        if not src.take(124)? {
+            break;
+        }
+        if nested == 0 {
+            verbose = (st.flags & flag_x()) != 0;
+        }
+    }
+    if items.len() == 1 {
+        return Ok(items.pop().unwrap());
+    }
+    let mut out: Vec[Node] = Vec.new();
+    out.push(Node.Branch(items));
+    Ok(out)
+}
+
+// _parse_flags: None (as Err-free Ok(None)) for global flags, else the
+// flags turned on and off.
+fn parse_flags(src: mut ref Tokenizer, st: mut ref ParseState, first_char: T) -> Result[Option[(i64, i64)], ReErr] {
+    let mut ch = first_char;
+    let mut add = 0;
+    let mut del = 0;
+    if not tok_is(ch, 45) {
+        loop {
+            let flag = flag_value(ch.a);
+            if ch.a == 76 {
+                return Err(src.error("bad inline flags: cannot use 'L' flag with a str pattern".to_string(), 0));
+            }
+            add = add | flag;
+            if (flag & type_flags()) != 0 and (add & type_flags()) != flag {
+                return Err(src.error("bad inline flags: flags 'a', 'u' and 'L' are incompatible".to_string(), 0));
+            }
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing -, : or )".to_string(), 0));
+            }
+            if tok_is(ch, 41) or tok_is(ch, 45) or tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing -, : or )" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if tok_is(ch, 41) {
+        st.flags = st.flags | add;
+        return Ok(None);
+    }
+    if tok_is(ch, 45) {
+        ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("missing flag".to_string(), 0));
+        }
+        if ch.n != 1 or flag_value(ch.a) == 0 {
+            let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing flag" };
+            return Err(src.error(msg.to_string(), ch.n));
+        }
+        loop {
+            let flag = flag_value(ch.a);
+            if (flag & type_flags()) != 0 {
+                return Err(src.error("bad inline flags: cannot turn off flags 'a', 'u' and 'L'".to_string(), 0));
+            }
+            del = del | flag;
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing :".to_string(), 0));
+            }
+            if tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing :" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if (add & del) != 0 {
+        return Err(src.error("bad inline flags: flag turned on and off".to_string(), 1));
+    }
+    Ok(Some((add, del)))
+}
+
+fn is_alpha(c: i64) -> bool {
+    match as_char(c) {
+        Some(ch) => ch.is_alphabetic(),
+        None => false,
+    }
+}
+
+fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr] {
+    let here = src.tell() - 1;
+    let mut set: Vec[Item] = Vec.new();
+    let negate = src.take(94)?;
+    loop {
+        let this = src.get()?;
+        if this.n == 0 {
+            return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+        }
+        if tok_is(this, 93) and set.len() > 0 {
+            break;
+        }
+        let code1 = if this.n == 2 { class_escape(mut src, this)? } else { Item.Lit(this.a) };
+        if src.take(45)? {
+            let that = src.get()?;
+            if that.n == 0 {
+                return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+            }
+            if tok_is(that, 93) {
+                set.push(code1);
+                set.push(Item.Lit(45));
+                break;
+            }
+            let code2 = if that.n == 2 { class_escape(mut src, that)? } else { Item.Lit(that.a) };
+            let text = f"{to_string(tok_text(this))}-{to_string(tok_text(that))}";
+            let offset = this.n + 1 + that.n;
+            let lo = match code1 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            let hi = match code2 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            if lo < 0 or hi < 0 or hi < lo {
+                return Err(src.error(f"bad character range {text}", offset));
+            }
+            set.push(Item.Range(lo, hi));
+        } else {
+            set.push(code1);
+        }
+    }
+    if set.len() == 1 {
+        let only = ref set[0];
+        if let Item.Lit(c) = only {
+            if negate {
+                out.push(Node.NotLit(*c));
+            } else {
+                out.push(Node.Lit(*c));
+            }
+            return Ok(());
+        }
+    }
+    out.push(Node.In(set, negate));
+    Ok(())
+}
+
+// The quantifier just read (its first character is `this`), applied to
+// the last item. Returns false when `{` turned out to be a literal.
+fn parse_repeat(src: mut ref Tokenizer, this: T, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let here = src.tell();
+    let mut min = 0;
+    let mut max = maxrepeat();
+    if tok_is(this, 63) {
+        max = 1;
+    } else if tok_is(this, 43) {
+        min = 1;
+    } else if tok_is(this, 123) {
+        if tok_is(src.next, 125) {
+            out.push(Node.Lit(123));
+            return Ok(false);
+        }
+        let mut lo: Vec[i64] = Vec.new();
+        let mut hi: Vec[i64] = Vec.new();
+        while src.next.n == 1 and is_dec(src.next.a) {
+            lo.push(src.get()?.a);
+        }
+        if src.take(44)? {
+            while src.next.n == 1 and is_dec(src.next.a) {
+                hi.push(src.get()?.a);
+            }
+        } else {
+            hi = lo.clone();
+        }
+        if not src.take(125)? {
+            out.push(Node.Lit(123));
+            src.seek(here)?;
+            return Ok(false);
+        }
+        if lo.len() > 0 {
+            if lo.len() > 10 or digits_value(lo, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            min = digits_value(lo, 0, 10);
+        }
+        if hi.len() > 0 {
+            if hi.len() > 10 or digits_value(hi, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            max = digits_value(hi, 0, 10);
+            if max < min {
+                return Err(src.error("min repeat greater than max repeat".to_string(), src.tell() - here));
+            }
+        }
+    }
+    if out.len() == 0 or is_at(out[out.len() - 1]) {
+        return Err(src.error("nothing to repeat".to_string(), src.tell() - here + 1));
+    }
+    if is_repeat(out[out.len() - 1]) {
+        return Err(src.error("multiple repeat".to_string(), src.tell() - here + 1));
+    }
+    let last = out.pop().unwrap();
+    let mut body: Vec[Node] = Vec.new();
+    match last {
+        Node.Group(0, 0, 0, p) => body = p,
+        other => body.push(other),
+    }
+    let kind = if src.take(63)? { 1 } else if src.take(43)? { 2 } else { 0 };
+    out.push(Node.Repeat(kind, min, max, body));
+    Ok(true)
+}
+
+fn parse_seq(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64, first: bool) -> Result[Vec[Node], ReErr] {
+    let mut out: Vec[Node] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let this = src.next;
+        if this.n == 0 or tok_is(this, 124) or tok_is(this, 41) {
+            break;
+        }
+        src.advance()?;
+        if verbose {
+            if this.n == 1 and (this.a == 32 or (this.a >= 9 and this.a <= 13)) {
+                continue;
+            }
+            if tok_is(this, 35) {
+                loop {
+                    let t = src.get()?;
+                    if t.n == 0 or tok_is(t, 10) {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        if this.n == 2 {
+            let node = re_escape_node(mut src, this, st)?;
+            out.push(node);
+            continue;
+        }
+        let c = this.a;
+        if c == 91 {
+            parse_set(mut src, mut out)?;
+        } else if c == 42 or c == 43 or c == 63 or c == 123 {
+            parse_repeat(mut src, this, mut out)?;
+        } else if c == 46 {
+            out.push(Node.Any);
+        } else if c == 94 {
+            out.push(Node.At(at_beginning()));
+        } else if c == 36 {
+            out.push(Node.At(at_end()));
+        } else if c == 40 {
+            if parse_group(mut src, mut st, mut verbose, nested, first, mut out)? {
+                continue;
+            }
+        } else {
+            out.push(Node.Lit(c));
+        }
+    }
+    Ok(out)
+}
+
+// `(` and what follows. Returns true for a construct that adds nothing
+// (a comment, global flags).
+fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref bool, nested: i64, first: bool, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let start = src.tell() - 1;
+    let mut capture = true;
+    let mut atomic = false;
+    let mut name: Vec[i64] = Vec.new();
+    let mut named = false;
+    let mut add = 0;
+    let mut del = 0;
+    if src.take(63)? {
+        let ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("unexpected end of pattern".to_string(), 0));
+        }
+        if tok_is(ch, 80) {
+            if src.take(60)? {
+                name = src.getuntil(62, "group name")?;
+                src.checkgroupname(name, 1)?;
+                named = true;
+            } else if src.take(61)? {
+                let ref_name = src.getuntil(41, "group name")?;
+                src.checkgroupname(ref_name, 1)?;
+                let gid = st.group_of(ref_name);
+                if gid < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(ref_name)}", ref_name.len() + 1));
+                }
+                if not st.checkgroup(gid) {
+                    return Err(src.error("cannot refer to an open group".to_string(), ref_name.len() + 1));
+                }
+                st.checklookbehindgroup(gid, src)?;
+                out.push(Node.GroupRef(gid));
+                return Ok(true);
+            } else {
+                let c2 = src.get()?;
+                if c2.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                return Err(src.error(f"unknown extension ?P{to_string(tok_text(c2))}", c2.n + 2));
+            }
+        } else if tok_is(ch, 58) {
+            capture = false;
+        } else if tok_is(ch, 35) {
+            loop {
+                if src.next.n == 0 {
+                    return Err(src.error("missing ), unterminated comment".to_string(), src.tell() - start));
+                }
+                if tok_is(src.get()?, 41) {
+                    break;
+                }
+            }
+            return Ok(true);
+        } else if tok_is(ch, 61) or tok_is(ch, 33) or tok_is(ch, 60) {
+            let mut kind = ch;
+            let mut dir = 1;
+            let mut outer_lookbehind = 0;
+            if tok_is(ch, 60) {
+                kind = src.get()?;
+                if kind.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                if not (tok_is(kind, 61) or tok_is(kind, 33)) {
+                    return Err(src.error(f"unknown extension ?<{to_string(tok_text(kind))}", kind.n + 2));
+                }
+                dir = -1;
+                outer_lookbehind = st.lookbehind_groups;
+                if outer_lookbehind < 0 {
+                    st.lookbehind_groups = st.groups();
+                }
+            }
+            let p = parse_sub(mut src, mut st, *verbose, nested + 1)?;
+            if dir < 0 and outer_lookbehind < 0 {
+                st.lookbehind_groups = -1;
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            if tok_is(kind, 61) {
+                out.push(Node.Assert(dir, false, p));
+            } else if p.len() > 0 {
+                out.push(Node.Assert(dir, true, p));
+            } else {
+                out.push(Node.Failure);
+            }
+            return Ok(true);
+        } else if tok_is(ch, 40) {
+            let condname = src.getuntil(41, "group name")?;
+            let mut condgroup = 0;
+            if not is_ascii_decimal(condname) {
+                src.checkgroupname(condname, 1)?;
+                condgroup = st.group_of(condname);
+                if condgroup < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(condname)}", condname.len() + 1));
+                }
+            } else {
+                if condname.len() > 10 {
+                    return Err(src.error(f"invalid group reference {to_string(condname)}", condname.len() + 1));
+                }
+                condgroup = digits_value(condname, 0, 10);
+                if condgroup == 0 {
+                    return Err(src.error("bad group number".to_string(), condname.len() + 1));
+                }
+                if condgroup >= maxgroups() {
+                    return Err(src.error(f"invalid group reference {condgroup}", condname.len() + 1));
+                }
+                let mut seen = false;
+                for (g, _) in st.refpos.iter() {
+                    if *g == condgroup {
+                        seen = true;
+                    }
+                }
+                if not seen {
+                    st.refpos.push((condgroup, src.tell() - condname.len() - 1));
+                }
+            }
+            st.checklookbehindgroup(condgroup, src)?;
+            let yes = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+            let mut no: Vec[Node] = Vec.new();
+            if src.take(124)? {
+                no = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+                if tok_is(src.next, 124) {
+                    return Err(src.error("conditional backref with more than two branches".to_string(), 0));
+                }
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            out.push(Node.Exists(condgroup, yes, no));
+            return Ok(true);
+        } else if tok_is(ch, 62) {
+            capture = false;
+            atomic = true;
+        } else if (ch.n == 1 and flag_value(ch.a) != 0) or tok_is(ch, 45) {
+            match parse_flags(mut src, mut st, ch)? {
+                None => {
+                    if not first or out.len() > 0 {
+                        return Err(src.error("global flags not at the start of the expression".to_string(), src.tell() - start));
+                    }
+                    *verbose = (st.flags & flag_x()) != 0;
+                    return Ok(true);
+                }
+                Some((a, d)) => {
+                    add = a;
+                    del = d;
+                    capture = false;
+                }
+            }
+        } else {
+            return Err(src.error(f"unknown extension ?{to_string(tok_text(ch))}", ch.n + 1));
+        }
+    }
+    let mut group = 0;
+    if capture {
+        group = st.groups();
+        st.closed.push(false);
+        st.widths.push(Width { lo: 0, hi: 0 });
+        if named {
+            let was = st.group_of(name);
+            if was >= 0 {
+                return Err(src.error(f"redefinition of group name {repr_of(name)} as group {group}; was group {was}", name.len() + 1));
+            }
+            st.names.push((name.clone(), group));
+        }
+    }
+    let sub_verbose = (*verbose or (add & flag_x()) != 0) and (del & flag_x()) == 0;
+    let p = parse_sub(mut src, mut st, sub_verbose, nested + 1)?;
+    if not src.take(41)? {
+        return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+    }
+    if group > 0 {
+        let w = width_of(st.widths, p);
+        st.widths[group] = w;
+        st.closed[group] = true;
+    }
+    if atomic {
+        out.push(Node.Atomic(p));
+    } else {
+        out.push(Node.Group(group, add, del, p));
+    }
+    Ok(false)
+}
+
+struct Parsed {
+    nodes: Vec[Node],
+    flags: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+    widths: Vec[Width],
+}
+
+fn re_parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
+    let mut src = new_tokenizer(pattern)?;
+    let mut st = ParseState {
+        flags: flags,
+        names: Vec.new(),
+        closed: Vec.new(),
+        widths: Vec.new(),
+        lookbehind_groups: -1,
+        refpos: Vec.new(),
+    };
+    // group 0 is the whole match
+    st.closed.push(true);
+    st.widths.push(Width { lo: 0, hi: 0 });
+    let nodes = parse_sub(mut src, mut st, (flags & flag_x()) != 0, 0)?;
+    if (st.flags & flag_a()) != 0 and (st.flags & flag_u()) != 0 {
+        return Err(other_error("ValueError", "ASCII and UNICODE flags are incompatible".to_string()));
+    }
+    if src.next.n != 0 {
+        return Err(src.error("unbalanced parenthesis".to_string(), 0));
+    }
+    for (g, pos) in st.refpos.iter() {
+        if *g >= st.groups() {
+            return Err(re_error(f"invalid group reference {*g}", *pos));
+        }
+    }
+    let groups = st.groups() - 1;
+    Ok(Parsed { nodes: nodes, flags: st.flags, groups: groups, names: st.names, widths: st.widths })
+}
+
+// ---------------------------------------------------------- compiler
+
+enum Op {
+    // character (lowered when case-insensitive), case-insensitive, ASCII
+    Lit(i64, bool, bool),
+    NotLit(i64, bool, bool),
+    Any,
+    AnyAll,
+    // set, case-insensitive, ASCII-only categories
+    In(i64, bool, bool),
+    // anchor kind, ASCII-only word boundary
+    At(i64, bool),
+    Mark(i64),
+    Split(i64, i64),
+    Jmp(i64),
+    // repeat register, the Until it starts at
+    RepInit(i64, i64),
+    // register, min, max, greedy, body, exit
+    Until(i64, i64, i64, bool, i64, i64),
+    Ref(i64, bool, bool),
+    // lookbehind width (-1 for lookahead), negative, sub-program, next
+    Look(i64, bool, i64, i64),
+    Atomic(i64, i64),
+    Exists(i64, i64),
+    Fail,
+    Succeed,
+    Match,
+}
+
+struct Program {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+}
+
+struct CharSet {
+    items: Vec[Item],
+    negate: bool,
+}
+
+fn combine(flags: i64, add: i64, del: i64) -> i64 {
+    let mut f = flags;
+    if (add & type_flags()) != 0 {
+        f = f & (0x7FFFFFFF ^ type_flags());
+    }
+    (f | add) & (0x7FFFFFFF ^ del)
+}
+
+struct Compiler {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+}
+
+impl Compiler {
+    fn emit(mut ref self, op: own Op) -> i64 {
+        self.ops.push(op);
+        self.ops.len() - 1
+    }
+
+    fn here(ref self) -> i64 {
+        self.ops.len()
+    }
+
+    fn compile(mut ref self, p: ref Parsed, nodes: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let icase = (flags & flag_i()) != 0;
+        let ascii = (flags & flag_a()) != 0;
+        for n in nodes.iter() {
+            match n {
+                Node.Lit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.Lit(v, icase, ascii));
+                }
+                Node.NotLit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.NotLit(v, icase, ascii));
+                }
+                Node.Any => {
+                    if (flags & flag_s()) != 0 {
+                        self.emit(Op.AnyAll);
+                    } else {
+                        self.emit(Op.Any);
+                    }
+                }
+                Node.In(items, negate) => {
+                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    let idx = self.sets.len() - 1;
+                    self.emit(Op.In(idx, icase, ascii));
+                }
+                Node.At(kind) => {
+                    let mut k = *kind;
+                    if (flags & flag_m()) != 0 {
+                        if k == at_beginning() {
+                            k = at_beginning_line();
+                        } else if k == at_end() {
+                            k = at_end_line();
+                        }
+                    }
+                    self.emit(Op.At(k, ascii));
+                }
+                Node.Branch(items) => {
+                    let mut ends: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < items.len() {
+                        if i + 1 < items.len() {
+                            let split = self.emit(Op.Fail);
+                            self.compile(p, items[i], flags)?;
+                            ends.push(self.emit(Op.Fail));
+                            let next = self.here();
+                            self.ops[split] = Op.Split(split + 1, next);
+                        } else {
+                            self.compile(p, items[i], flags)?;
+                        }
+                        i += 1;
+                    }
+                    let end = self.here();
+                    for at in ends {
+                        self.ops[at] = Op.Jmp(end);
+                    }
+                }
+                Node.Group(g, add, off, body) => {
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g));
+                    }
+                    self.compile(p, body, combine(flags, *add, *off))?;
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g + 1));
+                    }
+                }
+                Node.Repeat(kind, min, max, body) => {
+                    if *kind == 2 {
+                        let at = self.emit(Op.Fail);
+                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.emit(Op.Succeed);
+                        let next = self.here();
+                        self.ops[at] = Op.Atomic(at + 1, next);
+                    } else {
+                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                    }
+                }
+                Node.Atomic(body) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Atomic(at + 1, next);
+                }
+                Node.Assert(dir, negative, body) => {
+                    let mut width = -1;
+                    if *dir < 0 {
+                        let w = width_of(p.widths, body);
+                        if w.lo != w.hi {
+                            return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
+                        }
+                        width = w.lo;
+                    }
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                }
+                Node.GroupRef(g) => {
+                    self.emit(Op.Ref(*g, icase, ascii));
+                }
+                Node.Exists(g, yes, no) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, yes, flags)?;
+                    if no.len() > 0 {
+                        let jump = self.emit(Op.Fail);
+                        let no_pc = self.here();
+                        self.compile(p, no, flags)?;
+                        let end = self.here();
+                        self.ops[jump] = Op.Jmp(end);
+                        self.ops[at] = Op.Exists(*g, no_pc);
+                    } else {
+                        let end = self.here();
+                        self.ops[at] = Op.Exists(*g, end);
+                    }
+                }
+                Node.Failure => {
+                    self.emit(Op.Fail);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_repeat(mut ref self, p: ref Parsed, min: i64, max: i64, greedy: bool, body: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let r = self.repeats;
+        self.repeats += 1;
+        let init = self.emit(Op.Fail);
+        self.compile(p, body, flags)?;
+        let until = self.emit(Op.Fail);
+        self.ops[init] = Op.RepInit(r, until);
+        self.ops[until] = Op.Until(r, min, max, greedy, init + 1, until + 1);
+        Ok(())
+    }
+}
+
+fn re_compile(pattern: ref Vec[i64], flags: i64) -> Result[Program, ReErr] {
+    let p = re_parse(pattern, flags)?;
+    let mut c = Compiler { ops: Vec.new(), sets: Vec.new(), repeats: 0 };
+    c.compile(p, p.nodes, p.flags)?;
+    c.emit(Op.Match);
+    Ok(Program { ops: c.ops, sets: c.sets, repeats: c.repeats, groups: p.groups, names: p.names })
+}
+
+// ----------------------------------------------------------- matcher
+
+struct Undo {
+    kind: i64,
+    idx: i64,
+    old: i64,
+}
+
+struct Choice {
+    pc: i64,
+    pos: i64,
+    trail: i64,
+    // 0: resume at pc; 1: a lazy repeat's Until, after its tail failed
+    mode: i64,
+}
+
+struct Matcher {
+    s: Vec[i64],
+    marks: Vec[i64],
+    counts: Vec[i64],
+    lasts: Vec[i64],
+    lastindex: i64,
+    trail: Vec[Undo],
+    start: i64,
+    must_advance: bool,
+    match_all: bool,
+}
+
+impl Matcher {
+    fn set_mark(mut ref self, slot: i64, v: i64) {
+        self.trail.push(Undo { kind: 0, idx: slot, old: self.marks[slot] });
+        self.marks[slot] = v;
+    }
+
+    fn set_count(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 1, idx: r, old: self.counts[r] });
+        self.counts[r] = v;
+    }
+
+    fn set_last(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 2, idx: r, old: self.lasts[r] });
+        self.lasts[r] = v;
+    }
+
+    fn set_lastindex(mut ref self, v: i64) {
+        self.trail.push(Undo { kind: 3, idx: 0, old: self.lastindex });
+        self.lastindex = v;
+    }
+
+    fn undo_to(mut ref self, len: i64) {
+        while self.trail.len() > len {
+            let u = self.trail.pop().unwrap();
+            if u.kind == 0 {
+                self.marks[u.idx] = u.old;
+            } else if u.kind == 1 {
+                self.counts[u.idx] = u.old;
+            } else if u.kind == 2 {
+                self.lasts[u.idx] = u.old;
+            } else {
+                self.lastindex = u.old;
+            }
+        }
+    }
+
+    // A group that has both marks, the end not before the start.
+    fn group_span(ref self, g: i64) -> (i64, i64) {
+        let a = self.marks[2 * g];
+        let b = self.marks[2 * g + 1];
+        if a < 0 or b < 0 or b < a {
+            return (-1, -1);
+        }
+        (a, b)
+    }
+
+    fn at(ref self, kind: i64, ascii: bool, pos: i64) -> bool {
+        let n = self.s.len();
+        if kind == 0 or kind == 2 {
+            return pos == 0;
+        }
+        if kind == 1 {
+            return pos == 0 or self.s[pos - 1] == 10;
+        }
+        if kind == 3 {
+            return pos == n or (pos == n - 1 and self.s[pos] == 10);
+        }
+        if kind == 4 {
+            return pos == n or self.s[pos] == 10;
+        }
+        if kind == 5 {
+            return pos == n;
+        }
+        if n == 0 {
+            return false;
+        }
+        let before = pos > 0 and is_word(self.s[pos - 1], ascii);
+        let after = pos < n and is_word(self.s[pos], ascii);
+        if kind == 6 { before != after } else { before == after }
+    }
+
+    // Runs the program from pc at pos, backtracking through its own
+    // choices only. Returns where it succeeded, or -1.
+    fn run(mut ref self, prog: ref Program, pc0: i64, pos0: i64, top: bool) -> i64 {
+        let base = self.trail.len();
+        let mut choices: Vec[Choice] = Vec.new();
+        let mut pc = pc0;
+        let mut pos = pos0;
+        let mut mode = 0;
+        loop {
+            let mut ok = true;
+            let op = ref prog.ops[pc];
+            if mode == 1 {
+                // a lazy repeat whose tail failed: try one more item
+                mode = 0;
+                ok = false;
+                if let Op.Until(r, _, max, _, body, _) = op {
+                    let count = self.counts[*r] + 1;
+                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
+                        self.set_count(*r, count);
+                        self.set_last(*r, pos);
+                        pc = *body;
+                        ok = true;
+                    }
+                }
+                if ok {
+                    continue;
+                }
+            } else {
+                match op {
+                    Op.Lit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.NotLit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Any => {
+                        if pos < self.s.len() and self.s[pos] != 10 {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.AnyAll => {
+                        if pos < self.s.len() {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.In(set, icase, ascii) => {
+                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.At(kind, ascii) => {
+                        if self.at(*kind, *ascii, pos) {
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Mark(slot) => {
+                        self.set_mark(*slot, pos);
+                        if (*slot & 1) == 1 {
+                            self.set_lastindex(*slot / 2);
+                        }
+                        pc += 1;
+                    }
+                    Op.Split(a, b) => {
+                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = *a;
+                    }
+                    Op.Jmp(a) => pc = *a,
+                    Op.RepInit(r, until) => {
+                        self.set_count(*r, -1);
+                        self.set_last(*r, -1);
+                        pc = *until;
+                    }
+                    Op.Until(r, min, max, greedy, body, exit) => {
+                        let count = self.counts[*r] + 1;
+                        if count < *min {
+                            self.set_count(*r, count);
+                            pc = *body;
+                        } else if *greedy {
+                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
+                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(*r, count);
+                                self.set_last(*r, pos);
+                                pc = *body;
+                            } else {
+                                pc = *exit;
+                            }
+                        } else {
+                            choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
+                            pc = *exit;
+                        }
+                    }
+                    Op.Ref(g, icase, ascii) => {
+                        let (a, b) = self.group_span(*g);
+                        if a < 0 {
+                            ok = false;
+                        } else {
+                            let len = b - a;
+                            if pos + len > self.s.len() {
+                                ok = false;
+                            } else {
+                                let mut k = 0;
+                                while k < len {
+                                    let x = self.s[a + k];
+                                    let y = self.s[pos + k];
+                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    if not eq {
+                                        ok = false;
+                                        break;
+                                    }
+                                    k += 1;
+                                }
+                                if ok {
+                                    pos += len;
+                                    pc += 1;
+                                }
+                            }
+                        }
+                    }
+                    Op.Look(width, negative, sub, next) => {
+                        let mark = self.trail.len();
+                        let from = if *width < 0 { pos } else { pos - *width };
+                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
+                        if *negative {
+                            self.undo_to(mark);
+                            if found {
+                                ok = false;
+                            } else {
+                                pc = *next;
+                            }
+                        } else if found {
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Atomic(sub, next) => {
+                        let end = self.run(prog, *sub, pos, false);
+                        if end >= 0 {
+                            pos = end;
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Exists(g, no) => {
+                        let (a, _) = self.group_span(*g);
+                        if a >= 0 {
+                            pc += 1;
+                        } else {
+                            pc = *no;
+                        }
+                    }
+                    Op.Fail => ok = false,
+                    Op.Succeed => return pos,
+                    Op.Match => {
+                        if top and ((self.match_all and pos != self.s.len()) or (self.must_advance and pos == self.start)) {
+                            ok = false;
+                        } else {
+                            return pos;
+                        }
+                    }
+                }
+            }
+            if not ok {
+                match choices.pop() {
+                    Some(ch) => {
+                        self.undo_to(ch.trail);
+                        pc = ch.pc;
+                        pos = ch.pos;
+                        mode = ch.mode;
+                    }
+                    None => {
+                        self.undo_to(base);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
+    for item in set.items.iter() {
+        let hit = match item {
+            Item.Lit(l) => c == *l,
+            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Cat(k) => {
+                let kind = *k;
+                if kind == 0 {
+                    if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
+                } else if kind == 1 {
+                    if ascii { not (c >= 48 and c <= 57) } else { not is_decimal(c) }
+                } else if kind == 2 {
+                    is_space(c, ascii)
+                } else if kind == 3 {
+                    not is_space(c, ascii)
+                } else if kind == 4 {
+                    is_word(c, ascii)
+                } else {
+                    not is_word(c, ascii)
+                }
+            }
+        };
+        if hit {
+            return true;
+        }
+    }
+    false
+}
+
+// re._casefix._EXTRA_CASES: the characters that sre treats as one
+// letter under IGNORECASE although neither lowercases to the other
+// (ſ and s, ı and i, the Greek symbol forms, ...).
+fn extra_cases(c: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    match c {
+        105 => {
+            out.push(305);
+        }
+        115 => {
+            out.push(383);
+        }
+        181 => {
+            out.push(956);
+        }
+        305 => {
+            out.push(105);
+        }
+        383 => {
+            out.push(115);
+        }
+        837 => {
+            out.push(953);
+            out.push(8126);
+        }
+        912 => {
+            out.push(8147);
+        }
+        944 => {
+            out.push(8163);
+        }
+        946 => {
+            out.push(976);
+        }
+        949 => {
+            out.push(1013);
+        }
+        952 => {
+            out.push(977);
+        }
+        953 => {
+            out.push(837);
+            out.push(8126);
+        }
+        954 => {
+            out.push(1008);
+        }
+        956 => {
+            out.push(181);
+        }
+        960 => {
+            out.push(982);
+        }
+        961 => {
+            out.push(1009);
+        }
+        962 => {
+            out.push(963);
+        }
+        963 => {
+            out.push(962);
+        }
+        966 => {
+            out.push(981);
+        }
+        976 => {
+            out.push(946);
+        }
+        977 => {
+            out.push(952);
+        }
+        981 => {
+            out.push(966);
+        }
+        982 => {
+            out.push(960);
+        }
+        1008 => {
+            out.push(954);
+        }
+        1009 => {
+            out.push(961);
+        }
+        1013 => {
+            out.push(949);
+        }
+        1074 => {
+            out.push(7296);
+        }
+        1076 => {
+            out.push(7297);
+        }
+        1086 => {
+            out.push(7298);
+        }
+        1089 => {
+            out.push(7299);
+        }
+        1090 => {
+            out.push(7300);
+            out.push(7301);
+        }
+        1098 => {
+            out.push(7302);
+        }
+        1123 => {
+            out.push(7303);
+        }
+        7296 => {
+            out.push(1074);
+        }
+        7297 => {
+            out.push(1076);
+        }
+        7298 => {
+            out.push(1086);
+        }
+        7299 => {
+            out.push(1089);
+        }
+        7300 => {
+            out.push(1090);
+            out.push(7301);
+        }
+        7301 => {
+            out.push(1090);
+            out.push(7300);
+        }
+        7302 => {
+            out.push(1098);
+        }
+        7303 => {
+            out.push(1123);
+        }
+        7304 => {
+            out.push(42571);
+        }
+        7777 => {
+            out.push(7835);
+        }
+        7835 => {
+            out.push(7777);
+        }
+        8126 => {
+            out.push(837);
+            out.push(953);
+        }
+        8147 => {
+            out.push(912);
+        }
+        8163 => {
+            out.push(944);
+        }
+        42571 => {
+            out.push(7304);
+        }
+        64261 => {
+            out.push(64262);
+        }
+        64262 => {
+            out.push(64261);
+        }
+        _ => {}
+    }
+    out
+}
+
+// Under IGNORECASE sre lowercases the set when it compiles it and tests
+// the lowercased character; a character is in the lowered set if it, or
+// its uppercase, is in the set and lowers to it.
+fn in_set(set: ref CharSet, c: i64, icase: bool, ascii: bool) -> bool {
+    let mut hit = false;
+    if icase {
+        let lo = lower(c, ascii);
+        if lower(lo, ascii) == lo and in_items(set, lo, ascii) {
+            hit = true;
+        }
+        let up = upper(lo, ascii);
+        if not hit and lower(up, ascii) == lo and in_items(set, up, ascii) {
+            hit = true;
+        }
+        // and the set takes in the extra cases of each letter in it
+        if not hit and not ascii {
+            for x in extra_cases(lo).iter() {
+                let xu = upper(*x, ascii);
+                if in_items(set, *x, ascii) or (lower(xu, ascii) == *x and in_items(set, xu, ascii)) {
+                    hit = true;
+                }
+            }
+        }
+    } else {
+        hit = in_items(set, c, ascii);
+    }
+    hit != set.negate
+}
+
+// ------------------------------------------------------- the module
+
+struct Found {
+    start: i64,
+    end: i64,
+    // group spans, (-1, -1) when a group did not take part
+    spans: Vec[(i64, i64)],
+    lastindex: i64,
+}
+
+fn new_matcher(prog: ref Program, s: ref Vec[i64]) -> Matcher {
+    let mut marks: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 2 * (prog.groups + 1) {
+        marks.push(-1);
+        k += 1;
+    }
+    let mut counts: Vec[i64] = Vec.new();
+    let mut lasts: Vec[i64] = Vec.new();
+    k = 0;
+    while k < prog.repeats {
+        counts.push(-1);
+        lasts.push(-1);
+        k += 1;
+    }
+    Matcher {
+        s: s.clone(),
+        marks: marks,
+        counts: counts,
+        lasts: lasts,
+        lastindex: -1,
+        trail: Vec.new(),
+        start: 0,
+        must_advance: false,
+        match_all: false,
+    }
+}
+
+// sre_search from `from` (or one attempt there for match and
+// fullmatch: mode 1 and 2).
+fn re_find(m: mut ref Matcher, prog: ref Program, from: i64, must_advance: bool, mode: i64) -> Option[Found] {
+    let mut start = from;
+    while start <= m.s.len() {
+        let mut k = 0;
+        while k < m.marks.len() {
+            m.marks[k] = -1;
+            k += 1;
+        }
+        m.lastindex = -1;
+        m.trail.clear();
+        m.start = start;
+        m.must_advance = must_advance and start == from;
+        m.match_all = mode == 2;
+        let end = m.run(prog, 0, start, true);
+        if end >= 0 {
+            let mut spans: Vec[(i64, i64)] = Vec.new();
+            let mut g = 1;
+            while g <= prog.groups {
+                spans.push(m.group_span(g));
+                g += 1;
+            }
+            return Some(Found { start: start, end: end, spans: spans, lastindex: m.lastindex });
+        }
+        if mode != 0 {
+            return None;
+        }
+        start += 1;
+    }
+    None
+}
+
+// All the matches finditer gives: each search starts where the last
+// match ended, and must move on past an empty one.
+fn all_matches(prog: ref Program, s: ref Vec[i64], limit: i64) -> Vec[Found] {
+    let mut m = new_matcher(prog, s);
+    let mut out: Vec[Found] = Vec.new();
+    let mut pos = 0;
+    let mut must_advance = false;
+    while pos <= s.len() and (limit == 0 or out.len() < limit) {
+        match re_find(mut m, prog, pos, must_advance, 0) {
+            Some(found) => {
+                must_advance = found.end == found.start;
+                pos = found.end;
+                out.push(found);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn group_text(s: ref Vec[i64], span: (i64, i64), out: mut ref Vec[i64]) {
+    let (a, b) = span;
+    if a < 0 {
+        push_ascii(mut out, "None");
+    } else {
+        str_repr(slice(s, a, b), mut out);
+    }
+}
+
+fn span_text(span: (i64, i64)) -> String {
+    let (a, b) = span;
+    f"({a}, {b})"
+}
+
+// ------------------------------------------------- re.compile's cache
+
+// Each pattern is compiled once and keeps one matcher; a search swaps
+// the subject into that matcher and back, so no call copies the text.
+struct Rx {
+    progs: Vec[Program],
+    ms: Vec[Matcher],
+    keys: Map[String, i64],
+}
+
+fn new_rx() -> Rx {
+    Rx { progs: Vec.new(), ms: Vec.new(), keys: Map.new() }
+}
+
+fn rx_id_v(rx: mut ref Rx, pat: ref Vec[i64], flags: i64) -> i64 {
+    let key = f"{flags}:{to_string(pat)}";
+    if let Some(id) = rx.keys.get(key) {
+        return *id;
+    }
+    let prog = match re_compile(pat, flags) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln(f"bad pattern {to_string(pat)}: {err_text(e)}");
+            re_compile(u("(?!)"), 0).unwrap()
+        }
+    };
+    let empty: Vec[i64] = Vec.new();
+    let m = new_matcher(prog, empty);
+    rx.progs.push(prog);
+    rx.ms.push(m);
+    let id = rx.progs.len() - 1;
+    rx.keys.insert(key, id);
+    id
+}
+
+fn rx_id(rx: mut ref Rx, pat: Str, flags: i64) -> i64 {
+    rx_id_v(mut rx, u(pat), flags)
+}
+
+// pattern.search (mode 0), match (1) or fullmatch (2) at pos.
+fn rx_run(rx: mut ref Rx, id: i64, s: mut ref Vec[i64], pos0: i64, mode: i64) -> Option[Found] {
+    // sre clamps the position into the string
+    let pos = if pos0 > s.len() { s.len() } else if pos0 < 0 { 0 } else { pos0 };
+    mem.swap(mut rx.ms[id].s, mut s);
+    let r = re_find(mut rx.ms[id], rx.progs[id], pos, false, mode);
+    mem.swap(mut rx.ms[id].s, mut s);
+    r
+}
+
+// The same with endpos: the subject ends there.
+fn rx_run_end(rx: mut ref Rx, id: i64, s: ref Vec[i64], pos: i64, endpos: i64, mode: i64) -> Option[Found] {
+    let mut t = sl(s, 0, endpos);
+    rx_run(mut rx, id, mut t, pos, mode)
+}
+
+fn rx_search(rx: mut ref Rx, id: i64, s: mut ref Vec[i64], pos: i64) -> Option[Found] {
+    rx_run(mut rx, id, mut s, pos, 0)
+}
+
+fn rx_match(rx: mut ref Rx, id: i64, s: mut ref Vec[i64], pos: i64) -> Option[Found] {
+    rx_run(mut rx, id, mut s, pos, 1)
+}
+
+// finditer.
+fn rx_all(rx: mut ref Rx, id: i64, s: mut ref Vec[i64]) -> Vec[Found] {
+    let mut out: Vec[Found] = Vec.new();
+    mem.swap(mut rx.ms[id].s, mut s);
+    let mut pos = 0;
+    let mut must_advance = false;
+    let n = rx.ms[id].s.len();
+    while pos <= n {
+        match re_find(mut rx.ms[id], rx.progs[id], pos, must_advance, 0) {
+            Some(found) => {
+                must_advance = found.end == found.start;
+                pos = found.end;
+                out.push(found);
+            }
+            None => break,
+        }
+    }
+    mem.swap(mut rx.ms[id].s, mut s);
+    out
+}
+
+fn group_index(rx: ref Rx, id: i64, name: Str) -> i64 {
+    let n = u(name);
+    for (k, g) in rx.progs[id].names.iter() {
+        if same(k, n) {
+            return *g;
+        }
+    }
+    -1
+}
+
+// m.group(g) for g >= 1, None when the group did not take part.
+fn group_n(s: ref Vec[i64], f: ref Found, g: i64) -> Option[Vec[i64]] {
+    let (a, b) = f.spans[g - 1];
+    if a < 0 {
+        return None;
+    }
+    Some(slice(s, a, b))
+}
+
+fn group_or_empty(s: ref Vec[i64], f: ref Found, g: i64) -> Vec[i64] {
+    match group_n(s, f, g) {
+        Some(t) => t,
+        None => Vec.new(),
+    }
+}
+
+fn group_named(rx: ref Rx, id: i64, s: ref Vec[i64], f: ref Found, name: Str) -> Option[Vec[i64]] {
+    group_n(s, f, group_index(rx, id, name))
+}
+
+fn gs(rx: ref Rx, id: i64, s: ref Vec[i64], f: ref Found, name: Str) -> Vec[i64] {
+    match group_named(rx, id, s, f, name) {
+        Some(t) => t,
+        None => Vec.new(),
+    }
+}
+
+fn group0(s: ref Vec[i64], f: ref Found) -> Vec[i64] {
+    slice(s, f.start, f.end)
+}
+
+// m.lastgroup.
+fn last_group(rx: ref Rx, id: i64, f: ref Found) -> String {
+    for (k, g) in rx.progs[id].names.iter() {
+        if *g == f.lastindex {
+            return to_string(k);
+        }
+    }
+    String.new()
+}
+
+// pattern.sub with a literal replacement.
+fn rx_sub(rx: mut ref Rx, id: i64, s: ref Vec[i64], repl: Str) -> Vec[i64] {
+    let mut t = s.clone();
+    let found = rx_all(mut rx, id, mut t);
+    let r = u(repl);
+    let mut out: Vec[i64] = Vec.new();
+    let mut pos = 0;
+    for f in found.iter() {
+        push_all(mut out, slice(t, pos, f.start));
+        push_all(mut out, r);
+        pos = f.end;
+    }
+    push_all(mut out, slice(t, pos, t.len()));
+    out
+}
+
+// pattern.sub(r'\1' + suffix).
+fn rx_sub_g1(rx: mut ref Rx, id: i64, s: ref Vec[i64], suffix: ref Vec[i64]) -> Vec[i64] {
+    let mut t = s.clone();
+    let found = rx_all(mut rx, id, mut t);
+    let mut out: Vec[i64] = Vec.new();
+    let mut pos = 0;
+    for f in found.iter() {
+        push_all(mut out, slice(t, pos, f.start));
+        push_all(mut out, group_or_empty(t, f, 1));
+        push_all(mut out, suffix);
+        pos = f.end;
+    }
+    push_all(mut out, slice(t, pos, t.len()));
+    out
+}
+
+// pattern.split, for a pattern without groups.
+fn rx_split(rx: mut ref Rx, id: i64, s: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut t = s.clone();
+    let found = rx_all(mut rx, id, mut t);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut pos = 0;
+    for f in found.iter() {
+        out.push(slice(t, pos, f.start));
+        pos = f.end;
+    }
+    out.push(slice(t, pos, t.len()));
+    out
+}
+// ------------------------------------------------------------ Python str
+
+// mistune's text is a Python str; here it is its code points, and these
+// are the str methods mistune calls.
+
+fn u(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn us(s: ref String) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cat(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    push_all(mut out, b);
+    out
+}
+
+fn cat3(a: ref Vec[i64], b: ref Vec[i64], c: ref Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    push_all(mut out, b);
+    push_all(mut out, c);
+    out
+}
+
+fn ucat(a: Str, b: ref Vec[i64]) -> Vec[i64] {
+    let mut out = u(a);
+    push_all(mut out, b);
+    out
+}
+
+fn catu(a: ref Vec[i64], b: Str) -> Vec[i64] {
+    let mut out = a.clone();
+    push_ascii(mut out, b);
+    out
+}
+
+fn wrap(a: Str, b: ref Vec[i64], c: Str) -> Vec[i64] {
+    let mut out = u(a);
+    push_all(mut out, b);
+    push_all(mut out, u(c));
+    out
+}
+
+fn push_str(out: mut ref Vec[i64], s: Str) {
+    push_all(mut out, u(s));
+}
+
+fn eq(a: ref Vec[i64], b: Str) -> bool {
+    same(a, u(b))
+}
+
+// s[a:b] with Python's clamping.
+fn sl(s: ref Vec[i64], a: i64, b: i64) -> Vec[i64] {
+    let n = s.len();
+    let mut lo = if a < 0 { a + n } else { a };
+    let mut hi = if b < 0 { b + n } else { b };
+    if lo < 0 {
+        lo = 0;
+    }
+    if hi > n {
+        hi = n;
+    }
+    if lo >= hi {
+        return Vec.new();
+    }
+    slice(s, lo, hi)
+}
+
+fn tail(s: ref Vec[i64], a: i64) -> Vec[i64] {
+    sl(s, a, s.len())
+}
+
+fn starts_at(s: ref Vec[i64], p: ref Vec[i64], at: i64) -> bool {
+    if at < 0 or at + p.len() > s.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < p.len() {
+        if s[at + i] != p[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn starts(s: ref Vec[i64], p: Str) -> bool {
+    starts_at(s, u(p), 0)
+}
+
+fn starts_v(s: ref Vec[i64], p: ref Vec[i64]) -> bool {
+    starts_at(s, p, 0)
+}
+
+fn ends(s: ref Vec[i64], p: Str) -> bool {
+    let q = u(p);
+    starts_at(s, q, s.len() - q.len())
+}
+
+fn find_v(s: ref Vec[i64], p: ref Vec[i64], from: i64) -> i64 {
+    let mut i = if from < 0 { 0 } else { from };
+    while i + p.len() <= s.len() {
+        if starts_at(s, p, i) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn find(s: ref Vec[i64], p: Str, from: i64) -> i64 {
+    find_v(s, u(p), from)
+}
+
+fn has_char(s: ref Vec[i64], c: i64) -> bool {
+    for x in s {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn contains(s: ref Vec[i64], p: Str) -> bool {
+    find(s, p, 0) >= 0
+}
+
+// str.replace(old, new, count), count -1 for all.
+fn replace_v(s: ref Vec[i64], old: ref Vec[i64], new: ref Vec[i64], count: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if old.len() == 0 {
+        // Python puts `new` before every character and at the end.
+        let mut n = 0;
+        let mut i = 0;
+        while i <= s.len() {
+            if count < 0 or n < count {
+                push_all(mut out, new);
+                n += 1;
+            }
+            if i < s.len() {
+                out.push(s[i]);
+            }
+            i += 1;
+        }
+        return out;
+    }
+    let mut i = 0;
+    let mut n = 0;
+    while i < s.len() {
+        if (count < 0 or n < count) and starts_at(s, old, i) {
+            push_all(mut out, new);
+            i += old.len();
+            n += 1;
+        } else {
+            out.push(s[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn replace(s: ref Vec[i64], old: Str, new: Str) -> Vec[i64] {
+    replace_v(s, u(old), u(new), -1)
+}
+
+fn replace1(s: ref Vec[i64], old: Str, new: Str) -> Vec[i64] {
+    replace_v(s, u(old), u(new), 1)
+}
+
+fn is_ws(c: i64) -> bool {
+    is_space(c, false)
+}
+
+// str.strip() and friends; `chars` empty means whitespace.
+fn in_chars(c: i64, chars: ref Vec[i64]) -> bool {
+    if chars.len() == 0 { is_ws(c) } else { has_char(chars, c) }
+}
+
+fn strip_chars(s: ref Vec[i64], chars: ref Vec[i64], left: bool, right: bool) -> Vec[i64] {
+    let mut a = 0;
+    let mut b = s.len();
+    if left {
+        while a < b and in_chars(s[a], chars) {
+            a += 1;
+        }
+    }
+    if right {
+        while b > a and in_chars(s[b - 1], chars) {
+            b -= 1;
+        }
+    }
+    slice(s, a, b)
+}
+
+fn strip(s: ref Vec[i64]) -> Vec[i64] {
+    strip_chars(s, Vec.new(), true, true)
+}
+
+fn lstrip(s: ref Vec[i64]) -> Vec[i64] {
+    strip_chars(s, Vec.new(), true, false)
+}
+
+fn rstrip(s: ref Vec[i64]) -> Vec[i64] {
+    strip_chars(s, Vec.new(), false, true)
+}
+
+fn strip_of(s: ref Vec[i64], chars: Str) -> Vec[i64] {
+    strip_chars(s, u(chars), true, true)
+}
+
+fn rstrip_of(s: ref Vec[i64], chars: Str) -> Vec[i64] {
+    strip_chars(s, u(chars), false, true)
+}
+
+fn is_blank(s: ref Vec[i64]) -> bool {
+    for c in s {
+        if not is_ws(c) {
+            return false;
+        }
+    }
+    true
+}
+
+// str.split() with no separator.
+fn split_ws(s: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < s.len() {
+        while i < s.len() and is_ws(s[i]) {
+            i += 1;
+        }
+        if i >= s.len() {
+            break;
+        }
+        let a = i;
+        while i < s.len() and not is_ws(s[i]) {
+            i += 1;
+        }
+        out.push(slice(s, a, i));
+    }
+    out
+}
+
+// str.split(sep).
+fn split_on(s: ref Vec[i64], sep: Str) -> Vec[Vec[i64]] {
+    let p = u(sep);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut a = 0;
+    let mut i = 0;
+    while i + p.len() <= s.len() {
+        if starts_at(s, p, i) {
+            out.push(slice(s, a, i));
+            i += p.len();
+            a = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push(slice(s, a, s.len()));
+    out
+}
+
+fn is_line_break(c: i64) -> bool {
+    c == 10 or c == 13 or c == 11 or c == 12 or c == 0x1C or c == 0x1D or c == 0x1E or c == 0x85 or c == 0x2028 or c == 0x2029
+}
+
+// str.splitlines(), keepends or not.
+fn split_lines(s: ref Vec[i64], keep: bool) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut a = 0;
+    let mut i = 0;
+    while i < s.len() {
+        if is_line_break(s[i]) {
+            let mut end = i + 1;
+            if s[i] == 13 and i + 1 < s.len() and s[i + 1] == 10 {
+                end = i + 2;
+            }
+            out.push(slice(s, a, if keep { end } else { i }));
+            a = end;
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    if a < s.len() {
+        out.push(slice(s, a, s.len()));
+    }
+    out
+}
+
+fn join(parts: ref Vec[Vec[i64]], sep: Str) -> Vec[i64] {
+    let p = u(sep);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < parts.len() {
+        if i > 0 {
+            push_all(mut out, p);
+        }
+        push_all(mut out, parts[i]);
+        i += 1;
+    }
+    out
+}
+
+fn spaces(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        out.push(32);
+        i += 1;
+    }
+    out
+}
+
+fn repeat(c: i64, n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+// str.lower() and str.upper(), with the full case mappings.
+fn py_lower(s: ref Vec[i64]) -> Vec[i64] {
+    us(to_string(s).to_lowercase())
+}
+
+fn py_upper(s: ref Vec[i64]) -> Vec[i64] {
+    us(to_string(s).to_uppercase())
+}
+
+fn ascii_lower(s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s {
+        out.push(if c >= 65 and c <= 90 { c + 32 } else { c });
+    }
+    out
+}
+
+fn num_text(n: i64) -> Vec[i64] {
+    u(f"{n}")
+}
+
+fn is_digit_text(s: ref Vec[i64]) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s {
+        if c < 48 or c > 57 {
+            return false;
+        }
+    }
+    true
+}
+
+// int() of a run of ASCII digits; -1 when it is not one.
+fn int_of(s: ref Vec[i64]) -> i64 {
+    let t = strip(s);
+    if not is_digit_text(t) or t.len() > 18 {
+        return -1;
+    }
+    let mut v = 0;
+    for c in t {
+        v = v * 10 + (c - 48);
+    }
+    v
+}
+
+// textwrap.indent(text, prefix): every line with something other than
+// whitespace in it gets the prefix.
+fn indent(text: ref Vec[i64], prefix: Str) -> Vec[i64] {
+    let p = u(prefix);
+    let mut out: Vec[i64] = Vec.new();
+    for line in split_lines(text, true) {
+        if not is_blank(line) {
+            push_all(mut out, p);
+        }
+        push_all(mut out, line);
+    }
+    out
+}
+fn split_c(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 0;
+    while k < n {
+        if cs[k] == 'z' {
+            let mut j = k + 1;
+            let mut count: i64 = 0;
+            while cs[j] != '.' {
+                count = count * 10 + (cs[j] as i64 - 48);
+                j += 1;
+            }
+            let mut z: i64 = 0;
+            while z < count {
+                out.push(0);
+                z += 1;
+            }
+            k = j + 1;
+        } else {
+            out.push((hex_digit(cs[k]) * 16 + hex_digit(cs[k + 1])) as u8);
+            k += 2;
+        }
+    }
+    out
+}
+
+fn hex_string(s: ref String) -> String {
+    String.from_utf8(hex_bytes(s)).unwrap_or(String.new())
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs = chars_of(path);
+    let mut cut: i64 = -1;
+    let mut k: i64 = 0;
+    while k < cs.len() as i64 {
+        if cs[k] == '/' {
+            cut = k;
+        }
+        k += 1;
+    }
+    if cut < 0 { String.new() } else { chars_str(cs, 0, cut) }
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_c(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_c(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn hex_digit(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 97 { n - 87 } else if n >= 65 { n - 55 } else { n - 48 }
+}
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+fn chars_str(cs: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut k = a;
+    while k < b {
+        out.push(cs[k]);
+        k += 1;
+    }
+    out
+}
+// ------------------------------------------------------------ expressions
+
+// The expression classes of parsimonious/expressions.py, kept in one arena
+// so a grammar's rules can point at each other the way Python objects do.
+fn k_literal() -> i64 { 0 }
+fn k_regex() -> i64 { 1 }
+fn k_sequence() -> i64 { 2 }
+fn k_oneof() -> i64 { 3 }
+fn k_lookahead() -> i64 { 4 }
+fn k_quantifier() -> i64 { 5 }
+fn k_lazy() -> i64 { 6 }
+
+struct Expr {
+    kind: i64,
+    name: Vec[i64],
+    // the literal, the regex pattern or the label a LazyReference names
+    text: Vec[i64],
+    is_bytes: bool,
+    prog: i64,
+    flags: i64,
+    members: Vec[i64],
+    negative: bool,
+    min: i64,
+    // -1 is float('inf')
+    max: i64,
+}
+
+// One parse-tree node. `tid` names the text it covers.
+struct PNode {
+    expr: i64,
+    tid: i64,
+    start: i64,
+    end: i64,
+    children: Vec[i64],
+    is_regex: bool,
+}
+
+struct Px {
+    ex: Vec[Expr],
+    nodes: Vec[PNode],
+    texts: Vec[Vec[i64]],
+    progs: Vec[Program],
+    ms: Vec[Matcher],
+}
+
+fn new_px() -> Px {
+    Px { ex: Vec.new(), nodes: Vec.new(), texts: Vec.new(), progs: Vec.new(), ms: Vec.new() }
+}
+
+fn new_expr(px: mut ref Px, kind: i64, members: own Vec[i64], name: Str) -> i64 {
+    px.ex.push(Expr { kind: kind, name: u(name), text: Vec.new(), is_bytes: false, prog: -1, flags: 0, members: members, negative: false, min: 0, max: -1 });
+    px.ex.len() - 1
+}
+
+fn lit_expr(px: mut ref Px, lit: own Vec[i64], name: Str) -> i64 {
+    let e = new_expr(mut px, k_literal(), Vec.new(), name);
+    px.ex[e].text = lit;
+    e
+}
+
+fn flag_bits(i: bool, l: bool, m: bool, s: bool, un: bool, x: bool, a: bool) -> i64 {
+    let mut f = 0;
+    if i {
+        f = f | flag_i();
+    }
+    if l {
+        f = f | flag_l();
+    }
+    if m {
+        f = f | flag_m();
+    }
+    if s {
+        f = f | flag_s();
+    }
+    if un {
+        f = f | flag_u();
+    }
+    if x {
+        f = f | flag_x();
+    }
+    if a {
+        f = f | flag_a();
+    }
+    f
+}
+
+// Regex(pattern, ...): re.compile, which reports a bad pattern as
+// re.PatternError. A str pattern's flags gain UNICODE unless ASCII is set.
+fn regex_expr(px: mut ref Px, pattern: own Vec[i64], flags: i64, name: Str) -> Result[i64, Raised] {
+    let prog = match re_compile(pattern, flags) {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = if e.pos >= 0 { f"{e.msg} at position {e.pos}" } else { e.msg.clone() };
+            return Err(Raised.Exc("PatternError".to_string(), msg));
+        }
+    };
+    let empty: Vec[i64] = Vec.new();
+    px.ms.push(new_matcher(prog, empty));
+    px.progs.push(prog);
+    let e = new_expr(mut px, k_regex(), Vec.new(), name);
+    px.ex[e].text = pattern;
+    px.ex[e].prog = px.progs.len() - 1;
+    px.ex[e].flags = if (flags & flag_a()) != 0 { flags } else { flags | flag_u() };
+    Ok(e)
+}
+
+fn quant_expr(px: mut ref Px, member: i64, min: i64, max: i64, name: Str) -> i64 {
+    let e = new_expr(mut px, k_quantifier(), [member].to_vec(), name);
+    px.ex[e].min = min;
+    px.ex[e].max = max;
+    e
+}
+
+fn not_expr(px: mut ref Px, member: i64) -> i64 {
+    let e = new_expr(mut px, k_lookahead(), [member].to_vec(), "");
+    px.ex[e].negative = true;
+    e
+}
+
+fn class_name(px: ref Px, e: i64) -> String {
+    let k = px.ex[e].kind;
+    if k == k_literal() {
+        "Literal".to_string()
+    } else if k == k_regex() {
+        "Regex".to_string()
+    } else if k == k_sequence() {
+        "Sequence".to_string()
+    } else if k == k_oneof() {
+        "OneOf".to_string()
+    } else if k == k_lookahead() {
+        "Lookahead".to_string()
+    } else if k == k_quantifier() {
+        "Quantifier".to_string()
+    } else {
+        "LazyReference".to_string()
+    }
+}
+
+// ------------------------------------------------------------- as_rule
+
+fn member_text(px: ref Px, m: i64) -> Vec[i64] {
+    if px.ex[m].name.len() > 0 { px.ex[m].name.clone() } else { as_rhs(px, m) }
+}
+
+fn regex_flag_letters(bits: i64) -> String {
+    let letters = u("ilmsuxa");
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 1;
+    while i <= letters.len() {
+        if ((1 << i) & bits) != 0 {
+            out.push(letters[i - 1]);
+        }
+        i += 1;
+    }
+    to_string(out)
+}
+
+fn as_rhs(px: ref Px, e: i64) -> Vec[i64] {
+    let x = ref px.ex[e];
+    let mut out: Vec[i64] = Vec.new();
+    if x.kind == k_literal() {
+        if x.is_bytes {
+            out.push(98);
+        }
+        str_repr(x.text, mut out);
+    } else if x.kind == k_regex() {
+        out.push(126);
+        str_repr(x.text, mut out);
+        push_ascii(mut out, regex_flag_letters(x.flags));
+    } else if x.kind == k_sequence() or x.kind == k_oneof() {
+        let sep = if x.kind == k_sequence() { " " } else { " / " };
+        out.push(40);
+        let mut first = true;
+        for m in x.members {
+            if not first {
+                push_ascii(mut out, sep);
+            }
+            first = false;
+            push_all(mut out, member_text(px, m));
+        }
+        out.push(41);
+    } else if x.kind == k_lookahead() {
+        out.push(if x.negative { 33 } else { 38 });
+        push_all(mut out, member_text(px, x.members[0]));
+    } else if x.kind == k_quantifier() {
+        push_all(mut out, member_text(px, x.members[0]));
+        let q = if x.min == 0 and x.max == 1 {
+            "?".to_string()
+        } else if x.min == 0 and x.max < 0 {
+            "*".to_string()
+        } else if x.min == 1 and x.max < 0 {
+            "+".to_string()
+        } else if x.max < 0 {
+            f"{{{x.min},}}"
+        } else if x.min == 0 {
+            f"{{,{x.max}}}"
+        } else {
+            f"{{{x.min},{x.max}}}"
+        };
+        push_ascii(mut out, q);
+    } else {
+        push_ascii(mut out, "<LazyReference to ");
+        push_all(mut out, x.text);
+        out.push(62);
+    }
+    out
+}
+
+fn as_rule(px: ref Px, e: i64) -> Vec[i64] {
+    let mut rhs = strip(as_rhs(px, e));
+    if rhs.len() > 0 and rhs[0] == 40 and rhs[rhs.len() - 1] == 41 {
+        rhs = slice(rhs, 1, rhs.len() - 1);
+    }
+    if px.ex[e].name.len() > 0 {
+        let mut out = px.ex[e].name.clone();
+        push_ascii(mut out, " = ");
+        push_all(mut out, rhs);
+        out
+    } else {
+        rhs
+    }
+}
+
+// str(expression)
+fn expr_str(px: ref Px, e: i64) -> Vec[i64] {
+    let mut out = u(f"<{class_name(px, e)} ");
+    push_all(mut out, as_rule(px, e));
+    out.push(62);
+    out
+}
+
+// -------------------------------------------------------------- matching
+
+// The ParseError that match() fills in as it goes.
+struct Track {
+    pos: i64,
+    expr: i64,
+}
+
+enum PErr {
+    // ParseError, IncompleteParseError, LeftRecursionError: the text, the
+    // position and the expression
+    Parse(i64, i64, i64),
+    Incomplete(i64, i64, i64),
+    LeftRec(i64, i64, i64),
+}
+
+fn new_node(px: mut ref Px, e: i64, tid: i64, start: i64, end: i64, children: own Vec[i64]) -> i64 {
+    px.nodes.push(PNode { expr: e, tid: tid, start: start, end: end, children: children, is_regex: false });
+    px.nodes.len() - 1
+}
+
+// The cache key of (id(expr), pos).
+fn cache_key(e: i64, pos: i64, n: i64) -> i64 {
+    e * (n + 1) + pos
+}
+
+// Expression.match_core. Ok(-1) is None; Err(e) is a LeftRecursionError
+// raised at expression e.
+fn match_core(px: mut ref Px, text: mut ref Vec[i64], tid: i64, e: i64, pos: i64, cache: mut ref Map[i64, i64], err: mut ref Track) -> Result[i64, i64] {
+    let key = cache_key(e, pos, text.len());
+    let mut node: i64 = -1;
+    match cache.get(key) {
+        Some(v) => {
+            node = *v;
+        }
+        None => {
+            cache.insert(key, -2);
+            node = uncached_match(mut px, mut text, tid, e, pos, mut cache, mut err)?;
+            cache.insert(key, node);
+        }
+    }
+    if node == -2 {
+        return Err(e);
+    }
+    if node == -1 and pos >= err.pos and (px.ex[e].name.len() > 0 or err.expr < 0) {
+        err.expr = e;
+        err.pos = pos;
+    }
+    Ok(node)
+}
+
+fn uncached_match(px: mut ref Px, text: mut ref Vec[i64], tid: i64, e: i64, pos: i64, cache: mut ref Map[i64, i64], err: mut ref Track) -> Result[i64, i64] {
+    let kind = px.ex[e].kind;
+    if kind == k_literal() {
+        if starts_at(text, px.ex[e].text, pos) {
+            let end = pos + px.ex[e].text.len();
+            return Ok(new_node(mut px, e, tid, pos, end, Vec.new()));
+        }
+        return Ok(-1);
+    }
+    if kind == k_regex() {
+        let id = px.ex[e].prog;
+        // re.match clamps pos into the string
+        let p = if pos > text.len() { text.len() } else { pos };
+        mem.swap(mut px.ms[id].s, mut text);
+        let found = re_find(mut px.ms[id], px.progs[id], p, false, 1);
+        mem.swap(mut px.ms[id].s, mut text);
+        return match found {
+            Some(f) => {
+                let n = new_node(mut px, e, tid, pos, pos + f.end - f.start, Vec.new());
+                px.nodes[n].is_regex = true;
+                Ok(n)
+            }
+            None => Ok(-1),
+        };
+    }
+    let members = px.ex[e].members.clone();
+    if kind == k_sequence() {
+        let mut new_pos = pos;
+        let mut children: Vec[i64] = Vec.new();
+        for m in members {
+            let node = match_core(mut px, mut text, tid, m, new_pos, mut cache, mut err)?;
+            if node < 0 {
+                return Ok(-1);
+            }
+            children.push(node);
+            new_pos += px.nodes[node].end - px.nodes[node].start;
+        }
+        return Ok(new_node(mut px, e, tid, pos, new_pos, children));
+    }
+    if kind == k_oneof() {
+        for m in members {
+            let node = match_core(mut px, mut text, tid, m, pos, mut cache, mut err)?;
+            if node >= 0 {
+                let end = px.nodes[node].end;
+                return Ok(new_node(mut px, e, tid, pos, end, [node].to_vec()));
+            }
+        }
+        return Ok(-1);
+    }
+    if kind == k_lookahead() {
+        let node = match_core(mut px, mut text, tid, members[0], pos, mut cache, mut err)?;
+        if (node < 0) == px.ex[e].negative {
+            return Ok(new_node(mut px, e, tid, pos, pos, Vec.new()));
+        }
+        return Ok(-1);
+    }
+    if kind == k_quantifier() {
+        let min = px.ex[e].min;
+        let max = px.ex[e].max;
+        let mut new_pos = pos;
+        let mut children: Vec[i64] = Vec.new();
+        let size = text.len();
+        while new_pos < size and (max < 0 or children.len() < max) {
+            let node = match_core(mut px, mut text, tid, members[0], new_pos, mut cache, mut err)?;
+            if node < 0 {
+                break;
+            }
+            children.push(node);
+            let length = px.nodes[node].end - px.nodes[node].start;
+            if children.len() >= min and length == 0 {
+                break;
+            }
+            new_pos += length;
+        }
+        if children.len() >= min {
+            return Ok(new_node(mut px, e, tid, pos, new_pos, children));
+        }
+        return Ok(-1);
+    }
+    Ok(-1)
+}
+
+// Expression.match / Expression.parse on a new text.
+fn expr_match(px: mut ref Px, e: i64, text: own Vec[i64], pos: i64, whole: bool) -> Result[i64, PErr] {
+    let tid = px.texts.len();
+    px.texts.push(Vec.new());
+    let mut t = text;
+    let mut cache: Map[i64, i64] = Map.new();
+    let mut err = Track { pos: -1, expr: -1 };
+    let r = match_core(mut px, mut t, tid, e, pos, mut cache, mut err);
+    let n = t.len();
+    px.texts[tid] = t;
+    let node = match r {
+        Ok(v) => v,
+        Err(at) => return Err(PErr.LeftRec(tid, -1, at)),
+    };
+    if node < 0 {
+        return Err(PErr.Parse(tid, err.pos, err.expr));
+    }
+    if whole and px.nodes[node].end < n {
+        return Err(PErr.Incomplete(tid, px.nodes[node].end, e));
+    }
+    Ok(node)
+}
+
+// ---------------------------------------------------------------- errors
+
+// str.count('\n', 0, pos) + 1
+fn err_line(t: ref Vec[i64], pos: i64) -> i64 {
+    let mut n = 1;
+    for c in sl(t, 0, pos) {
+        if c == 10 {
+            n += 1;
+        }
+    }
+    n
+}
+
+// pos - str.rindex('\n', 0, pos), or pos + 1 when there is none
+fn err_column(t: ref Vec[i64], pos: i64) -> i64 {
+    let head = sl(t, 0, pos);
+    let mut k = head.len() - 1;
+    while k >= 0 {
+        if head[k] == 10 {
+            return pos - k;
+        }
+        k -= 1;
+    }
+    pos + 1
+}
+
+fn perr_text(px: ref Px, e: ref PErr) -> String {
+    match e {
+        PErr.Parse(tid, pos, x) => {
+            let t = ref px.texts[*tid];
+            let rule = if px.ex[*x].name.len() > 0 { f"'{to_string(px.ex[*x].name)}'" } else { to_string(expr_str(px, *x)) };
+            f"ParseError: Rule {rule} didn't match at '{to_string(sl(t, *pos, *pos + 20))}' (line {err_line(t, *pos)}, column {err_column(t, *pos)})."
+        }
+        PErr.Incomplete(tid, pos, x) => {
+            let t = ref px.texts[*tid];
+            f"IncompleteParseError: Rule '{to_string(px.ex[*x].name)}' matched in its entirety, but it didn't consume all the text. The non-matching portion of the text begins with '{to_string(sl(t, *pos, *pos + 20))}' (line {err_line(t, *pos)}, column {err_column(t, *pos)})."
+        }
+        PErr.LeftRec(tid, pos, x) => {
+            let t = ref px.texts[*tid];
+            let rule = if px.ex[*x].name.len() > 0 { px.ex[*x].name.clone() } else { expr_str(px, *x) };
+            let mut r: Vec[i64] = Vec.new();
+            str_repr(rule, mut r);
+            let mut w: Vec[i64] = Vec.new();
+            str_repr(sl(t, *pos, *pos + 20), mut w);
+            let mut s = f"LeftRecursionError: Left recursion in rule {to_string(r)} at {to_string(w)} (line {err_line(t, *pos)}, column {err_column(t, *pos)}).\n\n";
+            s.push_str("Parsimonious is a packrat parser, so it can't handle left recursion.\n");
+            s.push_str("See https://en.wikipedia.org/wiki/Parsing_expression_grammar#Indirect_left_recursion\n");
+            s.push_str("for how to rewrite your grammar into a rule that does not use left-recursion.");
+            s
+        }
+    }
+}
+
+// ------------------------------------------------------------- the tree
+
+fn node_text(px: ref Px, n: i64) -> Vec[i64] {
+    let x = ref px.nodes[n];
+    slice(px.texts[x.tid], x.start, x.end)
+}
+
+fn node_str(px: ref Px, n: i64) -> String {
+    to_string(node_text(px, n))
+}
+
+fn expr_name(px: ref Px, n: i64) -> String {
+    to_string(px.ex[px.nodes[n].expr].name)
+}
+
+// Node.prettily, as lines.
+fn prettily(px: ref Px, n: i64, error: i64, indent: Str, out: mut ref Vec[String]) {
+    let cls = if px.nodes[n].is_regex { "RegexNode" } else { "Node" };
+    let name = expr_name(px, n);
+    let called = if name.len() > 0 { f" called \"{name}\"" } else { String.new() };
+    let mark = if n == error { "  <-- *** We were here. ***" } else { "" };
+    let head = f"<{cls}{called} matching \"{node_str(px, n)}\">{mark}";
+    for line in split_c(head, '\n') {
+        out.push(f"{indent}{line}");
+    }
+    let deeper = f"{indent}    ";
+    for c in px.nodes[n].children {
+        prettily(px, c, error, deeper, mut out);
+    }
+}
+
+fn pretty_text(px: ref Px, n: i64, error: i64) -> String {
+    let mut lines: Vec[String] = Vec.new();
+    prettily(px, n, error, "", mut lines);
+    let mut s = String.new();
+    let mut first = true;
+    for l in lines {
+        if not first {
+            s.push('\n');
+        }
+        first = false;
+        s.push_str(l);
+    }
+    s
+}
+
+// --------------------------------------------------------------- visiting
+
+// What a visit_* method gives back.
+#[derive(Clone)]
+enum V {
+    N(i64),
+    L(Vec[V]),
+    E(i64),
+    S(Vec[i64]),
+    I(i64),
+    B(bool),
+    Null,
+    D(Vec[(Vec[i64], V)]),
+    Q(i64),
+}
+
+// What a visit can raise: an exception NodeVisitor.visit wraps (its class
+// and message), a VisitationError (its message), or an UndefinedLabel,
+// which visit lets through.
+enum Raised {
+    Exc(String, String),
+    Visit(String),
+    Undefined(Vec[i64]),
+}
+
+fn raised_text(r: ref Raised) -> String {
+    match r {
+        Raised.Exc(c, m) => f"{c}: {m}",
+        Raised.Visit(m) => f"VisitationError: {m}",
+        Raised.Undefined(l) => f"UndefinedLabel: The label \"{to_string(l)}\" was never defined.",
+    }
+}
+
+fn exc(cls: Str, msg: own String) -> Raised {
+    Raised.Exc(cls.to_string(), msg)
+}
+
+// generic_visit: the visited children, or the node when it has none.
+fn generic(n: i64, kids: own Vec[V]) -> V {
+    if kids.len() == 0 { V.N(n) } else { V.L(kids) }
+}
+
+fn v_list(v: ref V) -> Vec[V] {
+    match v {
+        V.L(x) => x.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn v_node(v: ref V) -> i64 {
+    match v {
+        V.N(x) => *x,
+        _ => -1,
+    }
+}
+
+fn v_expr(v: ref V) -> i64 {
+    match v {
+        V.E(x) => *x,
+        _ => -1,
+    }
+}
+
+fn v_int(v: ref V) -> i64 {
+    match v {
+        V.I(x) => *x,
+        _ => 0,
+    }
+}
+
+fn v_str(v: ref V) -> Vec[i64] {
+    match v {
+        V.S(x) => x.clone(),
+        _ => Vec.new(),
+    }
+}
+
+// The visitors: which visit_* methods a node's name selects.
+fn vis_rules() -> i64 { 0 }
+fn vis_calc() -> i64 { 1 }
+fn vis_json() -> i64 { 2 }
+fn vis_ini() -> i64 { 3 }
+fn vis_query() -> i64 { 4 }
+
+// The state the visitors keep.
+struct Work {
+    last_lit: i64,
+    last_bytes: bool,
+    rule_names: Vec[Vec[i64]],
+    rule_exprs: Vec[i64],
+    default: i64,
+    queries: Vec[QNode],
+}
+
+fn new_work() -> Work {
+    Work { last_lit: -1, last_bytes: false, rule_names: Vec.new(), rule_exprs: Vec.new(), default: -1, queries: Vec.new() }
+}
+
+// NodeVisitor.visit: the children first, then the method; an exception
+// becomes a VisitationError showing the node it was raised at.
+fn visit(px: mut ref Px, w: mut ref Work, vis: i64, n: i64) -> Result[V, Raised] {
+    let mut kids: Vec[V] = Vec.new();
+    for c in px.nodes[n].children.clone() {
+        kids.push(visit(mut px, mut w, vis, c)?);
+    }
+    let name = expr_name(px, n);
+    let r = if vis == vis_rules() {
+        rule_method(mut px, mut w, name, n, kids)
+    } else if vis == vis_calc() {
+        calc_method(px, name, n, kids)
+    } else if vis == vis_json() {
+        json_method(px, name, n, kids)
+    } else if vis == vis_ini() {
+        ini_method(px, name, n, kids)
+    } else {
+        query_method(px, mut w, name, n, kids)
+    };
+    match r {
+        Err(Raised.Exc(c, m)) => Err(Raised.Visit(f"{c}: {m}\n\nParse tree:\n{pretty_text(px, n, n)}")),
+        other => other,
+    }
+}
+
+// ------------------------------------------------------------ RuleVisitor
+
+fn rule_method(px: mut ref Px, w: mut ref Work, name: Str, n: i64, kids: own Vec[V]) -> Result[V, Raised] {
+    if name == "expression" or name == "term" or name == "atom" {
+        return Ok(kids[0].clone());
+    }
+    if name == "parenthesized" {
+        return Ok(kids[2].clone());
+    }
+    if name == "quantifier" {
+        return Ok(kids[0].clone());
+    }
+    if name == "quantified" {
+        let atom = v_expr(kids[0]);
+        let q = node_str(px, v_node(kids[1]));
+        if q == "?" {
+            return Ok(V.E(quant_expr(mut px, atom, 0, 1, "")));
+        }
+        if q == "*" {
+            return Ok(V.E(quant_expr(mut px, atom, 0, -1, "")));
+        }
+        if q == "+" {
+            return Ok(V.E(quant_expr(mut px, atom, 1, -1, "")));
+        }
+        let inner = slice(u(q), 1, u(q).len() - 1);
+        let parts = split_on(inner, ",");
+        let mut min = 0;
+        let mut max = -1;
+        if parts.len() == 1 {
+            min = int_of(parts[0]);
+            max = min;
+        } else {
+            if parts[0].len() > 0 {
+                min = int_of(parts[0]);
+            }
+            if parts[1].len() > 0 {
+                max = int_of(parts[1]);
+            }
+        }
+        return Ok(V.E(quant_expr(mut px, atom, min, max, "")));
+    }
+    if name == "lookahead_term" {
+        return Ok(V.E(new_expr(mut px, k_lookahead(), [v_expr(kids[1])].to_vec(), "")));
+    }
+    if name == "not_term" {
+        return Ok(V.E(not_expr(mut px, v_expr(kids[1]))));
+    }
+    if name == "rule" {
+        let e = v_expr(kids[2]);
+        px.ex[e].name = v_str(kids[0]);
+        return Ok(V.E(e));
+    }
+    if name == "sequence" or name == "ored" {
+        let mut members = [v_expr(kids[0])].to_vec();
+        for t in v_list(kids[1]) {
+            members.push(v_expr(t));
+        }
+        let kind = if name == "sequence" { k_sequence() } else { k_oneof() };
+        return Ok(V.E(new_expr(mut px, kind, members, "")));
+    }
+    if name == "or_term" {
+        return Ok(kids[2].clone());
+    }
+    if name == "label" {
+        return Ok(V.S(node_text(px, v_node(kids[0]))));
+    }
+    if name == "reference" {
+        let e = new_expr(mut px, k_lazy(), Vec.new(), "");
+        px.ex[e].text = v_str(kids[0]);
+        return Ok(V.E(e));
+    }
+    if name == "regex" {
+        let flags = py_upper(node_text(px, v_node(kids[2])));
+        let pattern = px.ex[v_expr(kids[1])].text.clone();
+        let f = flag_bits(has_char(flags, 73), has_char(flags, 76), has_char(flags, 77), has_char(flags, 83), has_char(flags, 85), has_char(flags, 88), has_char(flags, 65));
+        return Ok(V.E(regex_expr(mut px, pattern, f, "")?));
+    }
+    if name == "spaceless_literal" {
+        let (value, is_bytes) = evaluate_string(node_text(px, n))?;
+        if w.last_lit >= 0 and w.last_bytes != is_bytes {
+            let ty = |b: bool| if b { "<class 'bytes'>" } else { "<class 'str'>" };
+            let mut msg = f"Found {node_str(px, w.last_lit)} ({ty(w.last_bytes)}) and {node_str(px, n)} ({ty(is_bytes)}) string literals.\n";
+            msg.push_str("All strings in a single grammar must be of the same type.\n");
+            return Err(exc("BadGrammar", msg));
+        }
+        w.last_lit = n;
+        w.last_bytes = is_bytes;
+        let e = lit_expr(mut px, value, "");
+        px.ex[e].is_bytes = is_bytes;
+        return Ok(V.E(e));
+    }
+    if name == "literal" {
+        return Ok(kids[0].clone());
+    }
+    if name == "rules" {
+        let rules = v_list(kids[1]);
+        w.rule_names = Vec.new();
+        w.rule_exprs = Vec.new();
+        for r in rules {
+            let e = v_expr(r);
+            let nm = px.ex[e].name.clone();
+            let at = index_of(w.rule_names, nm);
+            if at >= 0 {
+                w.rule_exprs[at] = e;
+            } else {
+                w.rule_names.push(nm);
+                w.rule_exprs.push(e);
+            }
+        }
+        let mut i = 0;
+        while i < w.rule_exprs.len() {
+            let e = w.rule_exprs[i];
+            w.rule_exprs[i] = resolve_refs(mut px, w, e)?;
+            i += 1;
+        }
+        w.default = if rules.len() > 0 {
+            let first = px.ex[v_expr(rules[0])].name.clone();
+            w.rule_exprs[index_of(w.rule_names, first)]
+        } else {
+            -1
+        };
+        return Ok(V.Null);
+    }
+    Ok(generic(n, kids))
+}
+
+fn index_of(names: ref Vec[Vec[i64]], nm: ref Vec[i64]) -> i64 {
+    let mut i = 0;
+    while i < names.len() {
+        if same(names[i], nm) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// resolve_refs: a LazyReference follows the rule map to an expression;
+// a compound resolves its members in place.
+fn resolve_refs(px: mut ref Px, w: ref Work, e: i64) -> Result[i64, Raised] {
+    let kind = px.ex[e].kind;
+    if kind == k_lazy() {
+        let mut seen: Vec[Vec[i64]] = Vec.new();
+        let mut cur = e;
+        loop {
+            let label = px.ex[cur].text.clone();
+            if index_of(seen, label) >= 0 {
+                return Err(exc("BadGrammar", f"Circular Reference resolving {to_string(px.ex[e].name)}={to_string(px.ex[e].text)}."));
+            }
+            seen.push(label.clone());
+            let at = index_of(w.rule_names, label);
+            if at < 0 {
+                return Err(Raised.Undefined(label));
+            }
+            cur = w.rule_exprs[at];
+            if px.ex[cur].kind != k_lazy() {
+                return Ok(cur);
+            }
+        }
+    }
+    if kind == k_literal() or kind == k_regex() {
+        return Ok(e);
+    }
+    let members = px.ex[e].members.clone();
+    let mut out: Vec[i64] = Vec.new();
+    for m in members {
+        out.push(resolve_refs(mut px, w, m)?);
+    }
+    px.ex[e].members = out;
+    Ok(e)
+}
+
+// utils.evaluate_string: ast.literal_eval of a string literal, which the
+// grammar's spaceless_literal has already matched. Gives the value and
+// whether it is bytes.
+fn evaluate_string(src: ref Vec[i64]) -> Result[(Vec[i64], bool), Raised] {
+    let mut i = 0;
+    let mut raw = false;
+    let mut is_bytes = false;
+    let mut is_u = false;
+    while i < src.len() and src[i] != 34 and src[i] != 39 {
+        let c = src[i] | 32;
+        if c == 114 {
+            raw = true;
+        } else if c == 98 {
+            is_bytes = true;
+        } else {
+            is_u = true;
+        }
+        i += 1;
+    }
+    if is_u and (raw or is_bytes) {
+        return Err(exc("SyntaxError", "invalid syntax (<unknown>, line 1)".to_string()));
+    }
+    let body = slice(src, i + 1, src.len() - 1);
+    if raw {
+        return Ok((body, is_bytes));
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < body.len() {
+        let c = body[k];
+        if c != 92 or k + 1 >= body.len() {
+            out.push(c);
+            k += 1;
+            continue;
+        }
+        let d = body[k + 1];
+        k += 2;
+        if d == 10 {
+            continue;
+        }
+        let simple = if d == 92 { 92 } else if d == 39 { 39 } else if d == 34 { 34 } else if d == 97 { 7 } else if d == 98 { 8 } else if d == 102 { 12 } else if d == 110 { 10 } else if d == 114 { 13 } else if d == 116 { 9 } else if d == 118 { 11 } else { -1 };
+        if simple >= 0 {
+            out.push(simple);
+        } else if d >= 48 and d <= 55 {
+            let mut v = d - 48;
+            let mut n = 1;
+            while n < 3 and k < body.len() and body[k] >= 48 and body[k] <= 55 {
+                v = v * 8 + body[k] - 48;
+                k += 1;
+                n += 1;
+            }
+            out.push(v);
+        } else if d == 120 or (not is_bytes and (d == 117 or d == 85)) {
+            let width = if d == 120 { 2 } else if d == 117 { 4 } else { 8 };
+            let mut v = 0;
+            let mut n = 0;
+            while n < width {
+                if k >= body.len() or hex_val(body[k]) < 0 {
+                    return Err(exc("SyntaxError", "(unicode error) truncated escape (<unknown>, line 1)".to_string()));
+                }
+                v = v * 16 + hex_val(body[k]);
+                k += 1;
+                n += 1;
+            }
+            out.push(v);
+        } else {
+            out.push(92);
+            out.push(d);
+        }
+    }
+    Ok((out, is_bytes))
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+// --------------------------------------------------------------- Grammar
+
+struct Gram {
+    names: Vec[Vec[i64]],
+    exprs: Vec[i64],
+    default: i64,
+}
+
+fn gram_of(w: ref Work) -> Gram {
+    Gram { names: w.rule_names.clone(), exprs: w.rule_exprs.clone(), default: w.default }
+}
+
+fn gram_get(g: ref Gram, name: Str) -> i64 {
+    g.exprs[index_of(g.names, u(name))]
+}
+
+// Grammar.__init__: the rules text parsed by rule_grammar, then visited.
+enum GErr {
+    P(PErr),
+    R(Raised),
+}
+
+fn gerr_text(px: ref Px, e: ref GErr) -> String {
+    match e {
+        GErr.P(p) => perr_text(px, p),
+        GErr.R(r) => raised_text(r),
+    }
+}
+
+fn make_grammar(px: mut ref Px, rule_grammar: ref Gram, rules: own Vec[i64]) -> Result[Gram, GErr] {
+    let tree = match expr_match(mut px, rule_grammar.default, rules, 0, true) {
+        Ok(t) => t,
+        Err(e) => return Err(GErr.P(e)),
+    };
+    let mut w = new_work();
+    if let Err(e) = visit(mut px, mut w, vis_rules(), tree) {
+        return Err(GErr.R(e));
+    }
+    Ok(gram_of(w))
+}
+
+// str(grammar)
+fn gram_str(px: ref Px, g: ref Gram) -> String {
+    let mut lines: Vec[Vec[i64]] = Vec.new();
+    if g.default >= 0 {
+        lines.push(as_rule(px, g.default));
+    }
+    for e in g.exprs {
+        if e != g.default {
+            lines.push(as_rule(px, e));
+        }
+    }
+    to_string(join(lines, "\n"))
+}
+
+// BootstrappingGrammar._expressions_from_rules: the rule grammar built by
+// hand, which then reads rule_syntax.
+fn bootstrap(px: mut ref Px) -> Gram {
+    let comment = regex_expr(mut px, u("#[^\\r\\n]*"), 0, "comment").unwrap();
+    let ws = regex_expr(mut px, u("\\s+"), 0, "").unwrap();
+    let meaninglessness = new_expr(mut px, k_oneof(), [ws, comment].to_vec(), "meaninglessness");
+    let ws_opt = quant_expr(mut px, meaninglessness, 0, -1, "_");
+    let eq = lit_expr(mut px, u("="), "");
+    let equals = new_expr(mut px, k_sequence(), [eq, ws_opt].to_vec(), "equals");
+    let ident = regex_expr(mut px, u("[a-zA-Z_][a-zA-Z_0-9]*"), 0, "").unwrap();
+    let label = new_expr(mut px, k_sequence(), [ident, ws_opt].to_vec(), "label");
+    let not_equals = not_expr(mut px, equals);
+    let reference = new_expr(mut px, k_sequence(), [label, not_equals].to_vec(), "reference");
+    let qchar = regex_expr(mut px, u("[*+?]"), 0, "").unwrap();
+    let quantifier = new_expr(mut px, k_sequence(), [qchar, ws_opt].to_vec(), "quantifier");
+    let spaceless = regex_expr(mut px, u("u?r?\"[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*\""), flag_i() | flag_s(), "spaceless_literal").unwrap();
+    let literal = new_expr(mut px, k_sequence(), [spaceless, ws_opt].to_vec(), "literal");
+    let tilde = lit_expr(mut px, u("~"), "");
+    let rflags = regex_expr(mut px, u("[ilmsuxa]*"), flag_i(), "").unwrap();
+    let regex = new_expr(mut px, k_sequence(), [tilde, literal, rflags, ws_opt].to_vec(), "regex");
+    let atom = new_expr(mut px, k_oneof(), [reference, literal, regex].to_vec(), "atom");
+    let quantified = new_expr(mut px, k_sequence(), [atom, quantifier].to_vec(), "quantified");
+    let term = new_expr(mut px, k_oneof(), [quantified, atom].to_vec(), "term");
+    let bang = lit_expr(mut px, u("!"), "");
+    let not_term = new_expr(mut px, k_sequence(), [bang, term, ws_opt].to_vec(), "not_term");
+    px.ex[term].members = [not_term, quantified, atom].to_vec();
+    let terms = quant_expr(mut px, term, 1, -1, "");
+    let sequence = new_expr(mut px, k_sequence(), [term, terms].to_vec(), "sequence");
+    let slash = lit_expr(mut px, u("/"), "");
+    let or_term = new_expr(mut px, k_sequence(), [slash, ws_opt, term].to_vec(), "or_term");
+    let or_terms = quant_expr(mut px, or_term, 1, -1, "");
+    let ored = new_expr(mut px, k_sequence(), [term, or_terms].to_vec(), "ored");
+    let expression = new_expr(mut px, k_oneof(), [ored, sequence, term].to_vec(), "expression");
+    let rule = new_expr(mut px, k_sequence(), [label, equals, expression].to_vec(), "rule");
+    let rule_list = quant_expr(mut px, rule, 1, -1, "");
+    let rules = new_expr(mut px, k_sequence(), [ws_opt, rule_list].to_vec(), "rules");
+    let syntax = codepoints(hex_bytes(rule_syntax_text().trim().to_string()));
+    let tree = expr_match(mut px, rules, syntax, 0, true).unwrap();
+    let mut w = new_work();
+    let _ = visit(mut px, mut w, vis_rules(), tree);
+    gram_of(w)
+}
+
+fn rule_grammar(px: mut ref Px) -> Gram {
+    let boot = bootstrap(mut px);
+    let syntax = codepoints(hex_bytes(rule_syntax_text().trim().to_string()));
+    match make_grammar(mut px, boot, syntax) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln(gerr_text(px, e));
+            boot
+        }
+    }
+}
+
+// ------------------------------------------------------------ the visitors
+
+// items(): an empty `*` or `?` visits to its node, as generic_visit gives it.
+fn items(v: ref V) -> Vec[V] {
+    v_list(v)
+}
+
+fn first_of(v: ref V) -> V {
+    match v {
+        V.L(x) => x[0].clone(),
+        _ => V.Null,
+    }
+}
+
+fn nth(v: ref V, i: i64) -> V {
+    match v {
+        V.L(x) => x[i].clone(),
+        _ => V.Null,
+    }
+}
+
+fn int_text(t: ref Vec[i64]) -> i64 {
+    let s = strip(t);
+    if s.len() > 0 and s[0] == 45 {
+        return -int_of(slice(s, 1, s.len()));
+    }
+    int_of(s)
+}
+
+// Python's // and % on ints.
+fn py_div(a: i64, b: i64) -> Result[i64, Raised] {
+    if b == 0 {
+        return Err(exc("ZeroDivisionError", "integer division or modulo by zero".to_string()));
+    }
+    let mut q = a / b;
+    if a % b != 0 and ((a < 0) != (b < 0)) {
+        q -= 1;
+    }
+    Ok(q)
+}
+
+fn py_mod(a: i64, b: i64) -> Result[i64, Raised] {
+    if b == 0 {
+        return Err(exc("ZeroDivisionError", "integer modulo by zero".to_string()));
+    }
+    let mut r = a % b;
+    if r != 0 and ((r < 0) != (b < 0)) {
+        r += b;
+    }
+    Ok(r)
+}
+
+fn calc_method(px: ref Px, name: Str, n: i64, kids: own Vec[V]) -> Result[V, Raised] {
+    if name == "line" {
+        return Ok(kids[1].clone());
+    }
+    if name == "expr" or name == "term" {
+        let mut v = v_int(kids[0]);
+        for it in items(kids[1]) {
+            let op = to_string(v_str(nth(it, 0)));
+            let t = v_int(nth(it, 1));
+            if op == "+" {
+                v = v + t;
+            } else if op == "-" {
+                v = v - t;
+            } else if op == "*" {
+                v = v * t;
+            } else if op == "/" {
+                v = py_div(v, t)?;
+            } else {
+                v = py_mod(v, t)?;
+            }
+        }
+        return Ok(V.I(v));
+    }
+    if name == "factor" {
+        return Ok(kids[0].clone());
+    }
+    if name == "neg" {
+        return Ok(V.I(-v_int(kids[2])));
+    }
+    if name == "paren" {
+        return Ok(kids[2].clone());
+    }
+    if name == "call" {
+        let fname = to_string(v_str(kids[0]));
+        let a = items(kids[3]);
+        let mut args: Vec[i64] = Vec.new();
+        if a.len() > 0 {
+            for x in v_list(a[0]) {
+                args.push(v_int(x));
+            }
+        }
+        if fname == "max" or fname == "min" {
+            if args.len() == 0 {
+                return Err(exc("ValueError", f"{fname}() iterable argument is empty"));
+            }
+            let mut best = args[0];
+            for x in args {
+                if (fname == "max" and x > best) or (fname == "min" and x < best) {
+                    best = x;
+                }
+            }
+            return Ok(V.I(best));
+        }
+        if fname == "abs" {
+            if args.len() != 1 {
+                return Err(exc("TypeError", f"abs takes 1 argument, got {args.len()}"));
+            }
+            return Ok(V.I(if args[0] < 0 { -args[0] } else { args[0] }));
+        }
+        if fname == "pow" {
+            if args.len() != 2 {
+                return Err(exc("TypeError", f"pow takes 2 arguments, got {args.len()}"));
+            }
+            let mut r = 1;
+            let mut k = 0;
+            while k < args[1] {
+                r = r * args[0];
+                k += 1;
+            }
+            return Ok(V.I(r));
+        }
+        let mut q: Vec[i64] = Vec.new();
+        str_repr(u(fname), mut q);
+        return Err(exc("NameError", f"unknown function {to_string(q)}"));
+    }
+    if name == "args" {
+        let mut out = [kids[0].clone()].to_vec();
+        for it in items(kids[1]) {
+            out.push(nth(it, 2));
+        }
+        return Ok(V.L(out));
+    }
+    if name == "addop" or name == "mulop" {
+        return Ok(V.S(strip(node_text(px, n))));
+    }
+    if name == "number" {
+        return Ok(V.I(int_text(node_text(px, n))));
+    }
+    if name == "name" {
+        return Ok(V.S(node_text(px, n)));
+    }
+    Ok(generic(n, kids))
+}
+
+// json.loads of a string token.
+fn json_string(t: ref Vec[i64]) -> Vec[i64] {
+    let body = slice(t, 1, t.len() - 1);
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < body.len() {
+        let c = body[k];
+        if c != 92 {
+            out.push(c);
+            k += 1;
+            continue;
+        }
+        let d = body[k + 1];
+        k += 2;
+        if d == 117 {
+            let mut v = 0;
+            for j in 0..4 {
+                v = v * 16 + hex_val(body[k + j]);
+            }
+            k += 4;
+            if v >= 0xD800 and v <= 0xDBFF and k + 1 < body.len() and body[k] == 92 and body[k + 1] == 117 {
+                let mut v2 = 0;
+                for j in 0..4 {
+                    v2 = v2 * 16 + hex_val(body[k + 2 + j]);
+                }
+                if v2 >= 0xDC00 and v2 <= 0xDFFF {
+                    v = 0x10000 + ((v - 0xD800) << 10) + (v2 - 0xDC00);
+                    k += 6;
+                }
+            }
+            out.push(v);
+        } else {
+            out.push(if d == 98 { 8 } else if d == 102 { 12 } else if d == 110 { 10 } else if d == 114 { 13 } else if d == 116 { 9 } else { d });
+        }
+    }
+    out
+}
+
+fn d_set(d: mut ref Vec[(Vec[i64], V)], k: ref Vec[i64], v: own V) {
+    let mut i = 0;
+    while i < d.len() {
+        if same(d[i].0, k) {
+            d[i].1 = v;
+            return;
+        }
+        i += 1;
+    }
+    d.push((k.clone(), v));
+}
+
+fn json_method(px: ref Px, name: Str, n: i64, kids: own Vec[V]) -> Result[V, Raised] {
+    if name == "value" {
+        return Ok(first_of(kids[1]));
+    }
+    if name == "object" {
+        let mut d: Vec[(Vec[i64], V)] = Vec.new();
+        for m in items(kids[2]) {
+            for p in v_list(m) {
+                d_set(mut d, v_str(nth(p, 0)), nth(p, 1));
+            }
+        }
+        return Ok(V.D(d));
+    }
+    if name == "members" {
+        let mut out = [kids[0].clone()].to_vec();
+        for it in items(kids[1]) {
+            out.push(nth(it, 2));
+        }
+        return Ok(V.L(out));
+    }
+    if name == "pair" {
+        return Ok(V.L([kids[0].clone(), kids[3].clone()].to_vec()));
+    }
+    if name == "array" {
+        let mut out: Vec[V] = Vec.new();
+        for m in items(kids[2]) {
+            for x in v_list(m) {
+                out.push(x.clone());
+            }
+        }
+        return Ok(V.L(out));
+    }
+    if name == "items" {
+        let mut out = [kids[0].clone()].to_vec();
+        for it in items(kids[1]) {
+            out.push(nth(it, 1));
+        }
+        return Ok(V.L(out));
+    }
+    if name == "string" {
+        return Ok(V.S(json_string(node_text(px, n))));
+    }
+    if name == "number" {
+        return Ok(V.I(int_text(node_text(px, n))));
+    }
+    if name == "true" {
+        return Ok(V.B(true));
+    }
+    if name == "false" {
+        return Ok(V.B(false));
+    }
+    if name == "null" {
+        return Ok(V.Null);
+    }
+    Ok(generic(n, kids))
+}
+
+fn dumps_str(s: ref Vec[i64], out: mut ref String) {
+    out.push('"');
+    for c in s {
+        if c == 34 {
+            out.push_str("\\\"");
+        } else if c == 92 {
+            out.push_str("\\\\");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 8 {
+            out.push_str("\\b");
+        } else if c == 12 {
+            out.push_str("\\f");
+        } else if c >= 0x20 and c <= 0x7E {
+            out.push((c as u8) as char);
+        } else if c > 0xFFFF {
+            let v = c - 0x10000;
+            out.push_str(f"\\u{hex_n(0xD800 + (v >> 10), 4)}\\u{hex_n(0xDC00 + (v & 0x3FF), 4)}");
+        } else {
+            out.push_str(f"\\u{hex_n(c, 4)}");
+        }
+    }
+    out.push('"');
+}
+
+fn dumps(v: ref V, out: mut ref String) {
+    match v {
+        V.D(d) => {
+            out.push('{');
+            let mut first = true;
+            for p in d {
+                if not first {
+                    out.push_str(", ");
+                }
+                first = false;
+                dumps_str(p.0, mut out);
+                out.push_str(": ");
+                dumps(p.1, mut out);
+            }
+            out.push('}');
+        }
+        V.L(l) => {
+            out.push('[');
+            let mut first = true;
+            for x in l {
+                if not first {
+                    out.push_str(", ");
+                }
+                first = false;
+                dumps(x, mut out);
+            }
+            out.push(']');
+        }
+        V.S(s) => dumps_str(s, mut out),
+        V.I(i) => out.push_str(f"{i}"),
+        V.B(b) => out.push_str(if *b { "true" } else { "false" }),
+        _ => out.push_str("null"),
+    }
+}
+
+fn dumps_of(v: ref V) -> String {
+    let mut s = String.new();
+    dumps(v, mut s);
+    s
+}
+
+fn leaves(v: ref V, path: Str, out: mut ref Vec[String]) {
+    match v {
+        V.D(d) => {
+            if d.len() > 0 {
+                for p in d {
+                    let k = to_string(p.0);
+                    let sub = if path.len() > 0 { f"{path}.{k}" } else { k };
+                    leaves(p.1, sub, mut out);
+                }
+                return;
+            }
+        }
+        V.L(l) => {
+            if l.len() > 0 {
+                let mut i = 0;
+                for x in l {
+                    leaves(x, f"{path}[{i}]", mut out);
+                    i += 1;
+                }
+                return;
+            }
+        }
+        _ => {}
+    }
+    let p = if path.len() > 0 { path.to_string() } else { ".".to_string() };
+    out.push(f"{p} = {dumps_of(v)}");
+}
+
+fn ini_method(px: ref Px, name: Str, n: i64, kids: own Vec[V]) -> Result[V, Raised] {
+    if name == "file" {
+        let mut sections: Vec[(Vec[i64], V)] = Vec.new();
+        let mut cur: i64 = -1;
+        for k in kids {
+            let item = first_of(k);
+            match item {
+                V.L(x) => {
+                    let what = to_string(v_str(x[0]));
+                    let key = v_str(x[1]);
+                    if what == "section" {
+                        cur = sec_index(mut sections, key);
+                    } else {
+                        if cur < 0 {
+                            cur = sec_index(mut sections, u("DEFAULT"));
+                        }
+                        let mut pairs = match sections[cur].1 { V.D(p) => p.clone(), _ => Vec.new() };
+                        d_set(mut pairs, key, x[2].clone());
+                        sections[cur].1 = V.D(pairs);
+                    }
+                }
+                _ => {}
+            }
+        }
+        return Ok(V.D(sections));
+    }
+    if name == "section" {
+        return Ok(V.L([V.S(u("section")), V.S(strip(node_text(px, v_node(kids[1]))))].to_vec()));
+    }
+    if name == "pair" {
+        let raw = strip(node_text(px, v_node(kids[5])));
+        let low = to_string(py_lower(raw));
+        let val = if raw.len() > 0 and is_digit_text(raw) {
+            V.I(int_of(raw))
+        } else if low == "yes" or low == "true" or low == "on" {
+            V.B(true)
+        } else if low == "no" or low == "false" or low == "off" {
+            V.B(false)
+        } else if raw.len() == 0 {
+            V.Null
+        } else {
+            V.S(raw)
+        };
+        return Ok(V.L([V.S(u("pair")), V.S(node_text(px, v_node(kids[1]))), val].to_vec()));
+    }
+    if name == "comment" or name == "blank" {
+        return Ok(V.Null);
+    }
+    Ok(generic(n, kids))
+}
+
+// sections.setdefault(name, {})
+fn sec_index(sections: mut ref Vec[(Vec[i64], V)], key: ref Vec[i64]) -> i64 {
+    let mut i = 0;
+    while i < sections.len() {
+        if same(sections[i].0, key) {
+            return i;
+        }
+        i += 1;
+    }
+    sections.push((key.clone(), V.D(Vec.new())));
+    sections.len() - 1
+}
+
+fn py_value_repr(v: ref V) -> String {
+    match v {
+        V.S(s) => {
+            let mut q: Vec[i64] = Vec.new();
+            str_repr(s, mut q);
+            to_string(q)
+        }
+        V.I(i) => f"{i}",
+        V.B(b) => if *b { "True".to_string() } else { "False".to_string() },
+        _ => "None".to_string(),
+    }
+}
+
+// ------------------------------------------------------------- queries
+
+// One node of a query: or, and, not, a flag or a comparison.
+struct QNode {
+    kind: i64,
+    kids: Vec[i64],
+    field: Vec[i64],
+    op: String,
+    want: V,
+}
+
+fn q_new(w: mut ref Work, kind: i64, kids: own Vec[i64], field: own Vec[i64], op: own String, want: own V) -> V {
+    w.queries.push(QNode { kind: kind, kids: kids, field: field, op: op, want: want });
+    V.Q(w.queries.len() - 1)
+}
+
+fn v_q(v: ref V) -> i64 {
+    match v {
+        V.Q(x) => *x,
+        _ => -1,
+    }
+}
+
+fn query_fields() -> Vec[String] {
+    ["name".to_string(), "age".to_string(), "city".to_string(), "active".to_string(), "role".to_string()].to_vec()
+}
+
+fn query_method(px: ref Px, w: mut ref Work, name: Str, n: i64, kids: own Vec[V]) -> Result[V, Raised] {
+    if name == "query" {
+        return Ok(kids[1].clone());
+    }
+    if name == "disj" or name == "conj" {
+        let mut all = [v_q(kids[0])].to_vec();
+        for it in items(kids[1]) {
+            all.push(v_q(nth(it, 1)));
+        }
+        if all.len() == 1 {
+            return Ok(kids[0].clone());
+        }
+        let kind = if name == "disj" { 0 } else { 1 };
+        return Ok(q_new(mut w, kind, all, Vec.new(), String.new(), V.Null));
+    }
+    if name == "neg" {
+        return match kids[0] {
+            V.L(x) => Ok(q_new(mut w, 2, [v_q(x[1])].to_vec(), Vec.new(), String.new(), V.Null)),
+            other => Ok(other.clone()),
+        };
+    }
+    if name == "atom" {
+        return Ok(kids[0].clone());
+    }
+    if name == "group" {
+        return Ok(kids[2].clone());
+    }
+    if name == "cmp" {
+        return Ok(q_new(mut w, 4, Vec.new(), v_str(kids[0]), to_string(v_str(kids[1])), kids[2].clone()));
+    }
+    if name == "flag" {
+        return Ok(q_new(mut w, 3, Vec.new(), v_str(kids[0]), String.new(), V.Null));
+    }
+    if name == "op" {
+        return Ok(V.S(strip(node_text(px, n))));
+    }
+    if name == "value" {
+        return Ok(first_of(kids[0]));
+    }
+    if name == "number" {
+        return Ok(V.I(int_text(node_text(px, n))));
+    }
+    if name == "string" {
+        let t = node_text(px, n);
+        return Ok(V.S(slice(t, 1, t.len() - 1)));
+    }
+    if name == "field" {
+        let f = node_text(px, v_node(kids[1]));
+        let fs = to_string(f);
+        let mut known = false;
+        for k in query_fields() {
+            if k == fs {
+                known = true;
+            }
+        }
+        if not known {
+            let mut q: Vec[i64] = Vec.new();
+            str_repr(f, mut q);
+            return Err(exc("ValueError", f"unknown field {to_string(q)}"));
+        }
+        return Ok(V.S(f));
+    }
+    Ok(generic(n, kids))
+}
+
+struct Rec {
+    vals: Vec[(Vec[i64], V)],
+}
+
+fn rec_get(r: ref Rec, f: ref Vec[i64]) -> V {
+    for p in r.vals {
+        if same(p.0, f) {
+            return p.1.clone();
+        }
+    }
+    V.Null
+}
+
+fn type_name(v: ref V) -> String {
+    match v {
+        V.S(_) => "str".to_string(),
+        V.I(_) => "int".to_string(),
+        V.B(_) => "bool".to_string(),
+        _ => "NoneType".to_string(),
+    }
+}
+
+fn num_of(v: ref V) -> Option[i64] {
+    match v {
+        V.I(i) => Some(*i),
+        V.B(b) => Some(if *b { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+// -1, 0 or 1, or None when Python cannot order the two.
+fn py_cmp(a: ref V, b: ref V) -> Option[i64] {
+    match (num_of(a), num_of(b)) {
+        (Some(x), Some(y)) => return Some(if x < y { -1 } else if x > y { 1 } else { 0 }),
+        _ => {}
+    }
+    match (a, b) {
+        (V.S(x), V.S(y)) => {
+            let mut i = 0;
+            while i < x.len() and i < y.len() {
+                if x[i] != y[i] {
+                    return Some(if x[i] < y[i] { -1 } else { 1 });
+                }
+                i += 1;
+            }
+            Some(if x.len() < y.len() { -1 } else if x.len() > y.len() { 1 } else { 0 })
+        }
+        _ => None,
+    }
+}
+
+fn py_text(v: ref V) -> Vec[i64] {
+    match v {
+        V.S(s) => s.clone(),
+        V.I(i) => u(f"{i}"),
+        V.B(b) => u(if *b { "True" } else { "False" }),
+        _ => u("None"),
+    }
+}
+
+fn truthy(v: ref V) -> bool {
+    match v {
+        V.S(s) => s.len() > 0,
+        V.I(i) => *i != 0,
+        V.B(b) => *b,
+        _ => false,
+    }
+}
+
+fn holds(w: ref Work, q: i64, rec: ref Rec) -> Result[bool, String] {
+    let node = ref w.queries[q];
+    if node.kind == 0 {
+        for k in node.kids {
+            if holds(w, k, rec)? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    if node.kind == 1 {
+        for k in node.kids {
+            if not holds(w, k, rec)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    if node.kind == 2 {
+        return Ok(not holds(w, node.kids[0], rec)?);
+    }
+    let have = rec_get(rec, node.field);
+    if node.kind == 3 {
+        return Ok(truthy(have));
+    }
+    let op = node.op.clone();
+    if op == "~" {
+        let hay = py_lower(py_text(have));
+        let needle = py_lower(py_text(node.want));
+        return Ok(find_v(hay, needle, 0) >= 0);
+    }
+    let c = py_cmp(have, node.want);
+    if op == "=" or op == "!=" {
+        let equal = match c { Some(x) => x == 0, None => false };
+        return Ok(if op == "=" { equal } else { not equal });
+    }
+    match c {
+        Some(x) => Ok(if op == "<" { x < 0 } else if op == ">" { x > 0 } else if op == "<=" { x <= 0 } else { x >= 0 }),
+        None => Err(f"TypeError: '{op}' not supported between instances of '{type_name(have)}' and '{type_name(node.want)}'"),
+    }
+}
+
+fn records(path: Str) -> Vec[Rec] {
+    let lines = split_on(read_text(path), "\n");
+    let head = split_on(lines[0], ",");
+    let mut out: Vec[Rec] = Vec.new();
+    let mut i = 1;
+    while i < lines.len() {
+        if lines[i].len() > 0 {
+            let cells = split_on(lines[i], ",");
+            let mut vals: Vec[(Vec[i64], V)] = Vec.new();
+            let mut j = 0;
+            while j < head.len() and j < cells.len() {
+                let h = to_string(head[j]);
+                let v = if h == "age" {
+                    V.I(int_of(cells[j]))
+                } else if h == "active" {
+                    V.B(eq(cells[j], "yes"))
+                } else {
+                    V.S(cells[j].clone())
+                };
+                vals.push((head[j].clone(), v));
+                j += 1;
+            }
+            out.push(Rec { vals: vals });
+        }
+        i += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------------ jobs
+
+fn read_text(path: Str) -> Vec[i64] {
+    match fs.read_bytes(f"data/{path}") {
+        Ok(b) => codepoints(b),
+        Err(_) => Vec.new(),
+    }
+}
+
+fn block(s: Str) {
+    if s.len() > 0 {
+        for line in split_c(s.to_string(), '\n') {
+            println(f"  {line}");
+        }
+    }
+}
+
+fn load(px: mut ref Px, rg: ref Gram, path: Str) -> Gram {
+    match make_grammar(mut px, rg, read_text(path)) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln(gerr_text(px, e));
+            Gram { names: Vec.new(), exprs: Vec.new(), default: -1 }
+        }
+    }
+}
+
+fn run_visitor(px: mut ref Px, w: mut ref Work, vis: i64, e: i64, text: own Vec[i64]) -> Result[V, String] {
+    let node = match expr_match(mut px, e, text, 0, true) {
+        Ok(n) => n,
+        Err(err) => return Err(perr_text(px, err)),
+    };
+    match visit(mut px, mut w, vis, node) {
+        Ok(v) => Ok(v),
+        Err(r) => Err(raised_text(r)),
+    }
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let mut px = new_px();
+    let rg = rule_grammar(mut px);
+    let calc = load(mut px, rg, "grammars/calc.peg");
+    let jsong = load(mut px, rg, "grammars/json.peg");
+    let ini = load(mut px, rg, "grammars/ini.peg");
+    let query = load(mut px, rg, "grammars/query.peg");
+    for hex in split_c(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let job = hex_string(hex);
+        println(f"> {job}");
+        let w = split_c(job, ' ');
+        if w[0] == "rules" {
+            println(f"  {rg.exprs.len()} rules, default {to_string(px.ex[rg.default].name)}");
+            block(gram_str(px, rg));
+        } else if w[0] == "grammar" {
+            match make_grammar(mut px, rg, read_text(w[1])) {
+                Ok(g) => {
+                    let d = if g.default >= 0 { to_string(px.ex[g.default].name) } else { "None".to_string() };
+                    println(f"  {g.exprs.len()} rules, default {d}");
+                    block(gram_str(px, g));
+                }
+                Err(e) => block(gerr_text(px, e)),
+            }
+        } else if w[0] == "tree" or w[0] == "match" {
+            let text = read_text(w[2]);
+            let n = text.len();
+            let g = match make_grammar(mut px, rg, read_text(w[1])) {
+                Ok(g) => g,
+                Err(e) => {
+                    block(gerr_text(px, e));
+                    continue;
+                }
+            };
+            let e = if w.len() > 3 { gram_get(g, w[3]) } else { g.default };
+            if e < 0 {
+                block("RuntimeError: Can't call parse() on a Grammar that has no default rule. Choose a specific rule instead, like some_grammar['some_rule'].parse(...).");
+                continue;
+            }
+            let node = match expr_match(mut px, e, text, 0, w[0] == "tree") {
+                Ok(n) => n,
+                Err(err) => {
+                    block(perr_text(px, err));
+                    continue;
+                }
+            };
+            if w[0] == "match" {
+                let mut q: Vec[i64] = Vec.new();
+                str_repr(node_text(px, node), mut q);
+                println(f"  matched {px.nodes[node].end} of {n}: {to_string(q)}");
+            }
+            block(pretty_text(px, node, -1));
+        } else if w[0] == "!calc" {
+            for line in split_on(read_text(w[1]), "\n") {
+                if line.len() == 0 {
+                    continue;
+                }
+                let mut q: Vec[i64] = Vec.new();
+                str_repr(line, mut q);
+                let mut wk = new_work();
+                match run_visitor(mut px, mut wk, vis_calc(), calc.default, line.clone()) {
+                    Ok(v) => println(f"  {to_string(q)} = {v_int(v)}"),
+                    Err(e) => {
+                        println(f"  {to_string(q)}");
+                        block(e);
+                    }
+                }
+            }
+        } else if w[0] == "!json" {
+            let mut wk = new_work();
+            match run_visitor(mut px, mut wk, vis_json(), jsong.default, read_text(w[1])) {
+                Ok(v) => {
+                    println(f"  {dumps_of(v)}");
+                    let mut out: Vec[String] = Vec.new();
+                    leaves(v, "", mut out);
+                    for l in out {
+                        println(f"    {l}");
+                    }
+                }
+                Err(e) => block(e),
+            }
+        } else if w[0] == "!ini" {
+            let mut wk = new_work();
+            match run_visitor(mut px, mut wk, vis_ini(), ini.default, read_text(w[1])) {
+                Ok(V.D(secs)) => {
+                    for s in secs {
+                        println(f"  [{to_string(s.0)}]");
+                        for p in v_dict(s.1) {
+                            println(f"    {to_string(p.0)} = {py_value_repr(p.1)}");
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => block(e),
+            }
+        } else if w[0] == "!query" {
+            let recs = records(w[1]);
+            for line in split_on(read_text(w[2]), "\n") {
+                if line.len() == 0 {
+                    continue;
+                }
+                let shown = to_string(line);
+                let mut wk = new_work();
+                let q = match run_visitor(mut px, mut wk, vis_query(), query.default, line.clone()) {
+                    Ok(v) => v_q(v),
+                    Err(e) => {
+                        println(f"  {shown}");
+                        block(e);
+                        continue;
+                    }
+                };
+                let mut names: Vec[Vec[i64]] = Vec.new();
+                let mut failed = String.new();
+                for r in recs {
+                    match holds(wk, q, r) {
+                        Ok(true) => names.push(v_str(rec_get(r, u("name")))),
+                        Ok(false) => {}
+                        Err(e) => {
+                            failed = e;
+                            break;
+                        }
+                    }
+                }
+                if failed.len() > 0 {
+                    println(f"  {shown}");
+                    block(failed);
+                    continue;
+                }
+                let joined = if names.len() > 0 { to_string(join(names, ", ")) } else { "-".to_string() };
+                println(f"  {shown}: {joined} ({names.len()})");
+            }
+        }
+    }
+}
+
+fn v_dict(v: ref V) -> Vec[(Vec[i64], V)] {
+    match v {
+        V.D(d) => d.clone(),
+        _ => Vec.new(),
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("72756c6573\n6772616d6d6172206772616d6d6172732f63616c632e706567\n6772616d6d6172206772616d6d6172732f6a736f6e2e706567\n6772616d6d6172206772616d6d6172732f696e692e706567\n6772616d6d6172206772616d6d6172732f71756572792e706567\n6772616d6d6172206772616d6d6172732f6772656574696e672e706567\n6772616d6d6172206772616d6d6172732f7175616e742e706567\n6772616d6d6172206772616d6d6172732f6373762e706567\n6772616d6d6172206772616d6d6172732f6c69746572616c732e706567\n6772616d6d6172206772616d6d6172732f616c6961732e706567\n6772616d6d6172206772616d6d6172732f6c6566747265632e706567\n6772616d6d6172206772616d6d6172732f6261645f707265636564656e63652e706567\n6772616d6d6172206772616d6d6172732f656d7074792e706567\n6772616d6d6172206772616d6d6172732f6261645f756e646566696e65642e706567\n6772616d6d6172206772616d6d6172732f6261645f63697263756c61722e706567\n6772616d6d6172206772616d6d6172732f6261645f6d697865642e706567\n6772616d6d6172206772616d6d6172732f6261645f6d697373696e675f657175616c732e706567\n6772616d6d6172206772616d6d6172732f6261645f73796e7461782e706567\n6772616d6d6172206772616d6d6172732f6261645f72656765782e706567\n74726565206772616d6d6172732f6772656574696e672e70656720696e707574732f67726565745f6f6b2e747874\n74726565206772616d6d6172732f6772656574696e672e70656720696e707574732f67726565745f74776f2e747874\n74726565206772616d6d6172732f6772656574696e672e70656720696e707574732f67726565745f6c6f7765722e747874\n74726565206772616d6d6172732f6772656574696e672e70656720696e707574732f67726565745f65787472612e747874\n74726565206772616d6d6172732f6772656574696e672e70656720696e707574732f656d7074792e747874\n6d61746368206772616d6d6172732f6772656574696e672e70656720696e707574732f67726565745f6d6f72652e747874\n6d61746368206772616d6d6172732f6772656574696e672e70656720696e707574732f67726565745f6c6f7765722e747874\n74726565206772616d6d6172732f7175616e742e70656720696e707574732f7175616e742e747874\n74726565206772616d6d6172732f7175616e742e70656720696e707574732f7175616e745f782e747874\n74726565206772616d6d6172732f6373762e70656720696e707574732f726f77732e637376\n");
+    s.push_str("74726565206772616d6d6172732f6373762e70656720696e707574732f6f6e655f726f772e63737620726f77\n74726565206772616d6d6172732f6373762e70656720696e707574732f726f77732e6373762063656c6c\n6d61746368206772616d6d6172732f6373762e70656720696e707574732f726f77732e6373762063656c6c\n74726565206772616d6d6172732f6c69746572616c732e70656720696e707574732f6c6974732e747874\n74726565206772616d6d6172732f616c6961732e70656720696e707574732f67726565745f74776f2e747874\n74726565206772616d6d6172732f6c6566747265632e70656720696e707574732f73756d2e747874\n74726565206772616d6d6172732f6c6566747265632e70656720696e707574732f73756d2e747874206e756d\n74726565206772616d6d6172732f656d7074792e70656720696e707574732f73756d2e747874\n2163616c6320696e707574732f63616c632e747874\n216a736f6e20696e707574732f636f6e6669672e6a736f6e\n216a736f6e20696e707574732f6c6973742e6a736f6e\n216a736f6e20696e707574732f747261696c696e672e6a736f6e\n216a736f6e20696e707574732f6c656164696e675f7a65726f2e6a736f6e\n216a736f6e20696e707574732f756e636c6f7365642e6a736f6e\n21696e6920696e707574732f6170702e696e69\n21696e6920696e707574732f62726f6b656e2e696e69\n21696e6920696e707574732f756e636c6f7365642e696e69\n21717565727920696e707574732f70656f706c652e63737620696e707574732f717565726965732e747874\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("grammars/calc.peg 0a2320496e74656765722061726974686d6574696320776974682074686520757375616c20707265636564656e636520616e642061206665772066756e6374696f6e732e0a6c696e65202020203d205f20657870720a65787072202020203d207465726d20286164646f70207465726d292a0a7465726d202020203d20666163746f7220286d756c6f7020666163746f72292a0a666163746f7220203d206e756d626572202f20706172656e202f206e6567202f2063616c6c0a6e656720202020203d20222d22205f20666163746f720a706172656e2020203d20222822205f206578707220222922205f0a63616c6c202020203d206e616d6520222822205f20617267733f20222922205f0a61726773202020203d20657870722028222c22205f2065787072292a0a6164646f702020203d207e72225b2b2d5d22205f0a6d756c6f702020203d207e72225b2a2f255d22205f0a6e756d62657220203d207e72225b302d395d2b22205f0a6e616d65202020203d207e72225b612d7a5d2b220a5f202020202020203d207e72225b205c745d2a220a\ngrammars/json.peg 0a76616c75652020203d205f20286f626a656374202f206172726179202f20737472696e67202f206e756d626572202f2074727565202f2066616c7365202f206e756c6c29205f0a6f626a65637420203d20227b22205f206d656d626572733f20227d220a6d656d62657273203d20706169722028222c22205f2070616972292a0a70616972202020203d20737472696e67205f20223a222076616c75650a61727261792020203d20225b22205f206974656d733f20225d220a6974656d732020203d2076616c75652028222c222076616c7565292a0a737472696e6720203d207e722722283f3a5b5e225c5c5c7830302d5c7831665d7c5c5c5b225c5c2f62666e72745d7c5c5c755b302d39612d66412d465d7b347d292a22270a6e756d62657220203d207e72222d3f283f3a307c5b312d395d5b302d395d2a29220a74727565202020203d202274727565220a66616c73652020203d202266616c7365220a6e756c6c202020203d20226e756c6c220a5f202020202020203d207e72225c732a220a\ngrammars/ini.peg 0a2320416e20494e492066696c653a2073656374696f6e732c206b6579203d2076616c75652070616972732c20636f6d6d656e747320616e6420626c616e6b206c696e65732e0a66696c652020202020203d2028626c616e6b202f20636f6d6d656e74202f2073656374696f6e202f2070616972292a0a73656374696f6e2020203d20225b22207e72225b5e5c5d5c6e5d2b2220225d22205f206e6c0a706169722020202020203d205f206b6579205f207e72225b3a3d5d22205f2076616c206e6c0a6b6579202020202020203d207e72225b412d5a612d7a302d395f2e5c2d5d2b220a76616c202020202020203d207e72225b5e5c6e5d2a220a636f6d6d656e742020203d205f207e72225b233b5d5b5e5c6e5d2a22206e6c0a626c616e6b20202020203d205f206e6c0a6e6c20202020202020203d20225c6e22202f20217e222e22730a5f2020202020202020203d207e72225b205c745d2a220a\n");
+    s.push_str("grammars/query.peg 0a232046696c74657273206f766572207265636f7264733a20636f6d70617269736f6e732c20666c6167732c20616e642c206f722c206e6f742c20706172656e7468657365732e0a717565727920202020203d205f206469736a0a6469736a2020202020203d20636f6e6a20286b775f6f7220636f6e6a292a0a636f6e6a2020202020203d206e656720286b775f616e64206e6567292a0a6e6567202020202020203d20286b775f6e6f74206e656729202f2061746f6d0a61746f6d2020202020203d2067726f7570202f20636d70202f20666c61670a67726f757020202020203d20222822205f206469736a20222922205f0a636d70202020202020203d206669656c64206f702076616c75650a666c61672020202020203d206669656c6420216f700a6f7020202020202020203d207e72223c3d7c3e3d7c213d7c3d7c3c7c3e7c7e22205f0a76616c756520202020203d20286e756d626572202f20737472696e6729205f0a6e756d626572202020203d207e72222d3f5b302d395d2b220a737472696e67202020203d207e7227225b5e225d2a22270a6669656c6420202020203d20216b6579776f7264207e72225b612d7a5f5d2b22205f0a6b6579776f72642020203d207e722228616e647c6f727c6e6f74295c62220a6b775f6f7220202020203d207e72226f725c6222205f0a6b775f616e64202020203d207e7222616e645c6222205f0a6b775f6e6f74202020203d207e72226e6f745c6222205f0a5f2020202020202020203d207e72225c732a220a\ngrammars/greeting.peg 0a6772656574696e67203d2068656c6c6f205f206e616d652070756e63743f0a68656c6c6f202020203d207e2268656c6c6f7c686922690a6e616d6520202020203d207e72225b412d5a5d5b612d7a5d2b220a70756e6374202020203d20222122202f20222e220a5f20202020202020203d202220222b0a\ngrammars/quant.peg 0a726f7720202020203d20776f72647b327d207365707b312c7d2064696769747b2c337d207461696c3f2026656e6420726573740a776f7264202020203d207e225b612d7a5d2b22202220220a73657020202020203d20222d220a64696769742020203d207e225b302d395d220a7461696c202020203d2021227822207e225b612d7a5d220a656e6420202020203d207e222e22730a72657374202020203d207e72222e2a22730a\ngrammars/csv.peg 0a66696c652020203d20726f772a0a726f77202020203d2063656c6c2028222c222063656c6c292a20225c6e220a63656c6c2020203d2071756f746564202f20626172650a71756f746564203d207e2722283f3a5b5e225d7c2222292a22270a626172652020203d207e225b5e2c5c6e5d2a220a\n");
+    s.push_str("grammars/literals.peg 0a6c6974732020203d20227461625c746865726522202769745c2773272022736179205c2268695c22222072226261636b5c736c61736822207522636166c3a92220225c783431222052225c6e220a666c61677320203d207e225b612d7a5d2b2261207e222061202062202278207e225e7824226d207e22582269730a\ngrammars/alias.peg 0a6772656574696e672020203d2073616c75746174696f6e0a73616c75746174696f6e203d2022686922202f202268656c6c6f220a\ngrammars/bad_precedence.peg 0a65787072203d206578707220222b22206e756d202f206e756d0a6e756d20203d207e225b302d395d2b220a\ngrammars/leftrec.peg 0a65787072203d20286578707220222b22206e756d29202f206e756d0a6e756d20203d207e225b302d395d2b220a\ngrammars/empty.peg 0a23206e6f7468696e6720627574206120636f6d6d656e740a\ngrammars/bad_undefined.peg 0a7061697220203d206b657920223d222076616c75650a6b65792020203d207e225b612d7a5d2b220a\ngrammars/bad_circular.peg 0a61203d20620a62203d20630a63203d20610a\ngrammars/bad_mixed.peg 0a61203d2022782220622279220a\ngrammars/bad_missing_equals.peg 0a6772656574696e67203d2022686922206e616d650a6e616d652022626f62220a\ngrammars/bad_syntax.peg 0a6772656574696e67203d2022686922206e616d650a6e616d65203d203d2022626f62220a\ngrammars/bad_regex.peg 0a776f7264203d207e225b612d220a\ninputs/calc.txt 31202b2032202a20330a2831202b203229202a20330a20203130202d2034202d20330a2d37202f20320a372025202d330a32202a202833202b203429202a2035202d2036202f20320a6d617828332c20392c203429202b206d696e28382c2032290a616273282d313229202a20706f7728322c203130290a313030202f202835202d2035290a31372025202832202d2032290a73717274283136290a706f772832290a31202b0a3220330a28290a2d282d282d3429290a\ninputs/config.json 7b0a2020226e616d65223a2022696e76656e746f7279222c0a20202276657273696f6e223a20332c0a2020226465627567223a2066616c73652c0a2020226f776e657273223a205b22616e61222c2022626f5c7530306539222c20226368656e225d2c0a2020226c696d697473223a207b226974656d73223a203530302c20227065725f70616765223a202d32352c20226e6573746564223a207b2264656570223a205b312c205b322c205b332c205b5d5d5d2c207b7d5d7d7d2c0a2020226e6f746573223a20226c696e65206f6e655c6e6c696e65205c2274776f5c225c74746162205c2f20736c617368205c75643833645c7564653030222c0a2020226e616d65223a202272656e616d6564222c0a202022656d707479223a206e756c6c0a7d0a\n");
+    s.push_str("inputs/list.json 5b312c20322c33202c2022666f7572222c20747275652c206e756c6c2c205b205d2c207b20226b22203a20227622207d5d0a\ninputs/trailing.json 7b2261223a20312c202262223a205b312c20322c5d2c7d0a\ninputs/leading_zero.json 7b22706f7274223a20303830307d0a\ninputs/unclosed.json 7b2261223a205b312c20320a\ninputs/app.ini 3b2073657474696e677320666f722074686520696e76656e746f727920736572766963650a5b7365727665725d0a686f7374203d20302e302e302e300a706f72743d383038300a2020776f726b657273203a20340a0a23206c6f6767696e670a5b6c6f6767696e675d0a6c6576656c203d20494e464f0a66696c65203d202f7661722f6c6f672f696e76656e746f72792e6c6f670a726f74617465203d207965730a0a5b64617461626173655d0a75726c203d20706f7374677265733a2f2f696e764064622e696e7465726e616c3a353433322f696e76656e746f72790a706f6f6c2e73697a65203d2031300a74696d656f7574203d0a5b7365727665725d0a706f7274203d20393039300a\ninputs/broken.ini 5b6d61696e5d0a6e616d65203d206f6b0a74686973206c696e6520686173206e6f20736570617261746f720a6f74686572203d20310a\ninputs/unclosed.ini 5b6d61696e0a61203d20310a\ninputs/people.csv 6e616d652c6167652c636974792c6163746976652c726f6c650a417368612c33342c50756e652c7965732c656e67696e6565720a4272616d2c32372c557472656368742c6e6f2c64657369676e65720a43686964692c34352c4c61676f732c7965732c6d616e616765720a44616e612c33312c50756e652c6e6f2c656e67696e6565720a456974616e2c35322c48616966612c7965732c656e67696e6565720a46617261682c32332c4c61686f72652c7965732c696e7465726e0a476f72616e2c33382c53706c69742c6e6f2c6d616e616765720a48616e612c32392c4f73616b612c7965732c64657369676e65720a\ninputs/queries.txt 616765203e2033300a63697479203d202250756e65220a6163746976650a6e6f74206163746976650a616765203e3d20333020616e6420726f6c65203d2022656e67696e656572220a726f6c65203d202264657369676e657222206f7220726f6c65203d2022696e7465726e220a61637469766520616e64202863697479203d202250756e6522206f7220616765203c203235290a6e6f742028616765203c203330206f7220616765203e203430290a6e616d65207e2022616e220a6369747920213d202250756e652220616e64206e6f74206163746976650a73616c617279203e2031300a616765203e20226f6c64220a616765203e0a61676573203d20330a616e64203d20330a726f6c653d226d616e61676572226f72206167653c32340a\n");
+    s.push_str("inputs/greet_ok.txt 48656c6c6f20576f726c6421\ninputs/greet_two.txt 68692020416461\ninputs/greet_lower.txt 68656c6c6f20776f726c64\ninputs/greet_extra.txt 68656c6c6f20426f622121\ninputs/greet_more.txt 48492041646120616e64206d6f7265\ninputs/quant.txt 6162206364202d2d2d34327a207461696c0a656e64\ninputs/quant_x.txt 6162206364202d3132333478\ninputs/sum.txt 312b322b33\ninputs/rows.csv 69642c6e616d652c226e6f74652c207769746820636f6d6d61220a372c2273617920222268692222222c0a\ninputs/one_row.csv 612c2262222c630a\ninputs/lits.txt 74616209686572656974277373617920226869226261636b5c736c617368636166c3a9415c6e\ninputs/empty.txt \n");
+    s
+}
+
+fn rule_syntax_text() -> String {
+    let mut s = String.new();
+    s.push_str("0a20202020232049676e6f726564207468696e67732028726570726573656e746564206279205f2920617265207479706963616c6c792068756e67206f66662074686520656e64206f66207468650a2020202023206c6561666d6f7374206b696e6473206f66206e6f6465732e204c69746572616c73206c696b6520222f2220636f756e74206173206c65617665732e0a0a2020202072756c6573203d205f2072756c652a0a2020202072756c65203d206c6162656c20657175616c732065787072657373696f6e0a20202020657175616c73203d20223d22205f0a202020206c69746572616c203d2073706163656c6573735f6c69746572616c205f0a0a202020202320536f20796f752063616e2774207370656c6c2061207265676578206c696b6520607e222e2e2e2220696c6d603a0a2020202073706163656c6573735f6c69746572616c203d207e22753f723f623f5c225b5e5c225c5c5c5c5d2a283f3a5c5c5c5c2e5b5e5c225c5c5c5c5d2a292a5c22226973202f0a2020202020202020202020202020202020202020202020207e22753f723f623f275b5e275c5c5c5c5d2a283f3a5c5c5c5c2e5b5e275c5c5c5c5d2a292a272269730a0a2020202065787072657373696f6e203d206f726564202f2073657175656e6365202f207465726d0a202020206f725f7465726d203d20222f22205f207465726d0a202020206f726564203d207465726d206f725f7465726d2b0a2020202073657175656e6365203d207465726d207465726d2b0a202020206e6f745f7465726d203d20222122207465726d205f0a202020206c6f6f6b61686561645f7465726d203d20222622207465726d205f0a202020207465726d203d206e6f745f7465726d202f206c6f6f6b61686561645f7465726d202f207175616e746966696564202f2061746f6d0a202020207175616e746966696564203d2061746f6d207175616e7469666965720a2020202061746f6d203d207265666572656e6365202f206c69746572616c202f207265676578202f20706172656e74686573697a65640a202020207265676578203d20227e222073706163656c6573735f6c69746572616c207e225b696c6d737578615d2a2269205f0a20202020706172656e74686573697a6564203d20222822205f2065787072657373696f6e20222922205f0a202020207175616e746966696572203d207e72225b2a2b3f5d7c5c7b5c642a2c5c642b5c7d7c5c7b5c642b2c5c642a5c7d7c5c7b5c642b5c7d22205f0a202020207265666572656e6365203d206c6162656c2021657175616c730a0a202020202320412073756273657175656e7420657175616c207369676e20697320746865206f6e6c79207468696e6720746861742064697374696e677569736865732061206c6162656c0a20202020232028776869636820626567696e732061206e65772072756c65292066726f6d2061207265666572656e636520287768696368206973206a757374206120706f696e74657220746f20610a20202020232072756c6520646566696e656420736f6d65776865726520656c7365293a0a202020206c6162656c203d207e225b612d7a412d5a5f5d5b612d7a412d5a5f302d395d2a283f215b5c22275d2922205f0a0a2020202023205f203d207e72225c732a283f3a235b5e5c725c6e5d2a293f5c732a220a202020205f203d206d65616e696e676c6573736e6573732a0a202020206d65616e696e676c6573736e657373203d207e72225c732b22202f20636f6d6d656e740a20202020636f6d6d656e74203d207e7222235b5e5c725c6e5d2a220a20202020\n");
+    s
+}

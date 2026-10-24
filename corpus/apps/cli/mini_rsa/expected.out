@@ -1,0 +1,171 @@
+> seed 7
+> newkeys alice 256
+  n has 256 bits, p 136, q 120, e=65537
+> newkeys bob 512
+  n has 512 bits, p 272, q 240, e=65537
+> newkeys tiny 16
+  n has 16 bits, p 8, q 8, e=65537
+> newkeys bad 15
+  ValueError: Key too small
+> show alice
+  PublicKey(60754198678117653971750174627706240337016403472748007050129088263848434880003, 65537)
+  PrivateKey(60754198678117653971750174627706240337016403472748007050129088263848434880003, 65537, 11113132028522429098270306749423110738206483998496642597224208058154164971553, 59251085327311228531882008056540848130861, 1025368537006588460383218047534218223)
+> show tiny
+  PublicKey(34081, 65537)
+  PrivateKey(34081, 65537, 929, 197, 173)
+> pem alice
+  -----BEGIN RSA PRIVATE KEY-----
+  MIGrAgEAAiEAhlGoaitqphBEc7NMz5WYsxq+pW+AZafYmPepRsAcTgMCAwEAAQIg
+  GJHPULxoYcAQBWoC3uXqTN7RaHX/9WgSsuKgT1hAaCECEgCuH4/yahUUSJzrLtog
+  D8cLLQIQAMV6km/Fti/pzjUvN/u77wISAIHP4AYvFjYACJTBYjcC7DalAg9U1CpD
+  STLRsiWaQwZRZJECESOxlUzQTiSyPRgrJnNQDrPk
+  -----END RSA PRIVATE KEY-----
+  -----BEGIN RSA PUBLIC KEY-----
+  MCgCIQCGUahqK2qmEERzs0zPlZizGr6lb4Blp9iY96lGwBxOAwIDAQAB
+  -----END RSA PUBLIC KEY-----
+> der alice
+  private 3081ab0201000221008651a86a2b6aa6104473b34ccf9598b31abea56f8065a7d898f7a946c01c4e03020301000102201891cf50bc6861c010056a02dee5ea4cded16875fff56812b2e2a04f58406821021200ae1f8ff26a1514489ceb2eda200fc70b2d021000c57a926fc5b62fe9ce352f37fbbbef02120081cfe0062f1636000894c1623702ec36a5020f54d42a434932d1b2259a4306516491021123b1954cd04e24b23d182b2673500eb3e4
+  public  30280221008651a86a2b6aa6104473b34ccf9598b31abea56f8065a7d898f7a946c01c4e030203010001
+> load bank keys/bank.pem
+  PrivateKey, n has 1024 bits, e=65537
+> loadpub bankpub keys/bank_pub.pem
+  PublicKey, n has 1024 bits, e=65537
+> loadssl bankssl keys/bank_ssl.pem
+  PublicKey, n has 1024 bits, e=65537
+> loadssl ec keys/ec_ssl.pem
+  TypeError: This is not a DER-encoded OpenSSL-compatible public key
+> loadpub billing keys/commented.pem
+  PublicKey, n has 1024 bits, e=65537
+> load wrong keys/bank_pub.pem
+  ValueError: No PEM start marker "b'-----BEGIN RSA PRIVATE KEY-----'" found
+> loadpub cut keys/no_end.pem
+  ValueError: No PEM end marker "b'-----END RSA PUBLIC KEY-----'" found
+> load old keys/v1.pem
+  ValueError: Unable to read this file, version 1 != 0
+> same bank bankpub
+  True
+> same bankpub bankssl
+  True
+> same bankpub billing
+  True
+> same alice bob
+  False
+> resave bank keys/bank.pem
+  identical
+> resave bankpub keys/bank_pub.pem
+  identical
+> encrypt alice hello world
+  32 bytes 80cc83afce4582bda860e724e38823e91407adb58e07c78b94bac11c73d75d01
+> decrypt alice
+  b'hello world'
+> decrypt alice
+  b'hello world'
+> decrypt bob
+  DecryptionError: Decryption failed
+> encrypt alice twenty-two bytes long!
+  OverflowError: 22 bytes needed for message, but there is only space for 21
+> encrypt alice twenty-one bytes long
+  32 bytes 58c02f387f73f23b865ac019c508a1f80525ff407e651afd6545589528b89e07
+> decrypt alice
+  b'twenty-one bytes long'
+> encrypt bankpub meet at the usual place
+  128 bytes 03c2c1d4ccf56063dc861a0cd356bba99f6d0ef0b67f2be126fb20634a40927ce749158b3d42c73b13ea28dce95176fbb3c10a2c5d4ce25d56ecb6e079659dca643418e5b72c0270e7936b2a264c0b4dea3b5161f71f69c7be0f79c560add3222038851230dabdf6c0e0e5532368446b1806e559f6b95dd08a9a5717616bf00b
+> decrypt bank
+  b'meet at the usual place'
+> sign bank SHA-256 transfer 100 to account 42
+  128 bytes 50d94a835d8c726063ad7c451724201b3060b792db5ffaa2237969c92f7db9f2f0978bac559b43a9dc96f74926a4da03f5e8fd88202e88f4233bf11fb68d09f5fb51dfb81aaba15d770d8b7b49cee728cdc29b29e69ec32c6177af0e9958dc5758f00845b3dea839aa4cde90e4780a2e595e6f2bae6bbba6fc640ab07edcd29d
+> verify bankpub transfer 100 to account 42
+  SHA-256
+> verify bankpub transfer 900 to account 42
+  VerificationError: Verification failed
+> verify alice transfer 100 to account 42
+  VerificationError: Verification failed
+> sign bank MD5 hello
+  128 bytes 48c373693d9c2652fe13e1a8c2e5d950996ef4a71aa10334cc70c84f8ec8de00795820863f3ea17e13bf8db9776eaca3b1dcb78ed0659dbc9ce801ea664dcf8737c5b8d623d7d9f99c204b650ea8fc721eb96971c1d67f0f9c2a783ab1beda406950a20400825a9a5a033870bd84b4933148213bda1c0fba4afbb630efe23adb
+> verify bankssl hello
+  MD5
+> sign bank SHA-1 hello
+  128 bytes 3b2184c0b7edb3f1f70c8c5147622bd2c6300f5a342434766a7d38245bd1dce8dd36f30a3c6b7163e6335115b58a6b68925402789bc9fb509304b49189c23dc36c97e100b1a249abd48fca9296c1ef5854b271a7b817459914ef9085e014a1bff9e58a9f6fe730c26e4cfcc7509aac2af266ab196a2deba28566b211e47bc208
+> verify bankssl hello
+  SHA-1
+> sign bank SHA-224 hello
+  128 bytes 79f9c88f80cdb5db866690bce6f55ba2096fef2898c04f3a0491a7308132856e04807345e8f27ebe92f32242fc092b19690f516ef5a3b03e7cab30b0ecc7f0c469d54b2f40303c9ca1f12134c540289750a8b616b1b8084e839531806c9823f1452e79613eed2036ef15aba80a5663f329e832c9fe3928294b8db334b76f23fc
+> verify bankssl hello
+  SHA-224
+> sign bank SHA-384 hello
+  128 bytes 199b8bbb782c1847eb4de242fd0fb89a0bb0620ef462efe8c4dc93792a4c6625dbde4e06b7a829c3c6985668d720a8e31176fb29974299c7d1c8234ec83ba2cfbc81e482ba045f6d94100aebe5bd1161025cbf38917cc7a74484466868f46d2e60c351d54ac2baf2f33cea54816bf8d498dbb8e653edf43d387bb6ed9f30d3d1
+> verify bankssl hello
+  SHA-384
+> sign bank SHA-512 hello
+  128 bytes 685be187c8a44311736384808a3a138d28f3a2c0afcb63602fae77ffa2636f82313e5ef3950a0aa7a53bcbc8e9b4bb5de4e6780869601f99091e5e073458b693d9417da05c6fed06f001f1f5ee907340f824099dd8b89337793a96d2b0ab92ab230770b804c8c8c52628f978df35ecf9bb2b37891a342ed087e06c098dc76aa7
+> verify bankssl hello
+  SHA-512
+> sign bob SHA-256 hello
+  64 bytes 6a8c59b00d91f8b27985574325164ff3b62e6c45b0880842f296b7acab582a02ba99160ea17bcfdd84c31a8d769c4a7c5a0d17c0995ed727b7ae1b3af7baa2b1
+> verify bob hello
+  SHA-256
+> sign bob SHA-512 hello
+  OverflowError: 83 bytes needed for message, but there is only space for 53
+> sign bank BLAKE hello
+  ValueError: Invalid hash method: BLAKE
+> mgf1 00 20 SHA-1
+  a10909c2cdcaf5adb7e6b092a4faba558b62bd96
+> mgf1 0001020304 47 SHA-256
+  351d5c7c50bf7a0b6cf86a309eafde91ac460bab84454a85f8b7e7833928cc59f13fc076b2717fe3affaae22e5bcc3
+> mgf1 abcdef 3 MD5
+  00470e
+> mgf1 abcdef 0 SHA-512
+  
+> mgf1 abcdef 10 SHA-3
+  ValueError: Invalid `hasher` specified. Please select one of: MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-384, SHA3-512
+> inverse 3 11
+  4
+> inverse 65537 3120
+  2753
+> inverse 6 9
+  NotRelativePrimeError: 6 and 9 are not relatively prime, divider=3
+> crt 2,3,2 3,5,7
+  23
+> prime 1 2 9 15 17 561 7919 1000003 2147483647 4294967297
+  1:False 2:True 9:False 15:False 17:True 561:False 7919:True 1000003:True 2147483647:True 4294967297:False
+> !licenses licenses.txt tampered.txt bank bankssl
+  issued acme-corp|inventory-pro|seats=25|expires=2025-12-31
+    ZHFp95a0qDDX0cg7Xmq6AvkNbbTJRwO4+zon5/JdUxSeLrmqWLgEmoO4pYog2QNXgHF6QWOzfAm1qQjBZAXyVTnnASneO39MnesXSrjAMspcFeH01PFCKbYH1DP++gqn3iovf7rnlnkui4fPjflPc+FpbR2nPbTLJ19gX+OkCYk=
+  issued globex|inventory-pro|seats=5|expires=2024-06-30
+    WT4HtMCKIpn6W+Emq6FhHkxoBDyoH2ZLCRGCp1IXPNzEPJTorJMlv4SmwHS72fpGt6+NRfjxToPc7kXCxfQhrOOSNHzsvP31e6KghYpa92RfzTr2COBjQsP7DqcTwiz9IKeLXhK3tu9yQHAZ03N6HpDLUhXzGAOqKsHFv1IMb+Q=
+  issued initech|reports|seats=100|expires=2026-01-15
+    SbufmXcOvU5uNRtmpvK7GLf9qngyYOMQJSUA+IZre+zUqIvPOKc6mYTtMEo6IDaVpT+Qw4E02aKpEDIg0q2ajr2t9Lx0H/gIIIQQuf1Y+Yqq52i3W7ZHu90Zfveh+ud3dG+LXvFPcJat1CCoyM58qSCBS9u/+hBJykCQONng6IE=
+  issued umbrella|inventory-lite|seats=1|expires=2024-12-01
+    jh4lkPkPq5Vya8SIkEVTr6L/lC1ihtvgUBctnXFNX/VWl+Ck26IZuv5LcMc7KqJ7at2YKb8ziFOcoj2jyZ3U7WrUfVaUA5dEW9YG0GcZ4otwWfIFyK5G8Kh5ErisdXMFrB5mq+RySemIJhPYJrYSYpJDxcJg+7DaJmVc3jArEXE=
+  acme-corp|inventory-pro|seats=25|expires=2025-12-31: valid (SHA-256)
+  globex|inventory-pro|seats=50|expires=2024-06-30: REJECTED (Verification failed)
+  initech|reports|seats=100|expires=2027-01-15: REJECTED (Verification failed)
+  umbrella|inventory-lite|seats=1|expires=2024-12-01: valid (SHA-256)
+  hooli|reports|seats=10|expires=2025-01-01: no signature
+> !vault secrets.txt alice bob
+  secret 'db=s3cret'
+    for alice: 32 bytes, starts 3b6bf57b801d
+      alice opens it: b'db=s3cret'
+      bob cannot: Decryption failed
+    for bob: 64 bytes, starts 8429afb2511f
+      alice cannot: Decryption failed
+      bob opens it: b'db=s3cret'
+  secret 'api=k-17'
+    for alice: 32 bytes, starts 444308530378
+      alice opens it: b'api=k-17'
+      bob cannot: Decryption failed
+    for bob: 64 bytes, starts 9282bae5ec9f
+      alice cannot: Decryption failed
+      bob opens it: b'api=k-17'
+  secret 'pin=4321'
+    for alice: 32 bytes, starts 4a4879465dd6
+      alice opens it: b'pin=4321'
+      bob cannot: Decryption failed
+    for bob: 64 bytes, starts 7d2b7537219f
+      alice cannot: Decryption failed
+      bob opens it: b'pin=4321'
+  secret 'a much longer secret than fits'
+    for alice: OverflowError: 30 bytes needed for message, but there is only space for 21
+    for bob: 64 bytes, starts 1fa95acc3520
+      alice cannot: Decryption failed
+      bob opens it: b'a much longer secret than fits'

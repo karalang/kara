@@ -1,0 +1,255 @@
+> seed 11
+> curves NIST192p NIST224p NIST256p NIST384p NIST521p SECP256k1 BRAINPOOLP256r1 BRAINPOOLP320t1
+  NIST192p (prime192v1): baselen 24, public key 48 bytes, signature 48 bytes, oid 1.2.840.10045.3.1.1
+  NIST224p (secp224r1): baselen 28, public key 56 bytes, signature 56 bytes, oid 1.3.132.0.33
+  NIST256p (prime256v1): baselen 32, public key 64 bytes, signature 64 bytes, oid 1.2.840.10045.3.1.7
+  NIST384p (secp384r1): baselen 48, public key 96 bytes, signature 96 bytes, oid 1.3.132.0.34
+  NIST521p (secp521r1): baselen 66, public key 132 bytes, signature 132 bytes, oid 1.3.132.0.35
+  SECP256k1 (secp256k1): baselen 32, public key 64 bytes, signature 64 bytes, oid 1.3.132.0.10
+  BRAINPOOLP256r1 (brainpoolP256r1): baselen 32, public key 64 bytes, signature 64 bytes, oid 1.3.36.3.3.2.8.1.1.7
+  BRAINPOOLP320t1 (brainpoolP320t1): baselen 40, public key 80 bytes, signature 80 bytes, oid 1.3.36.3.3.2.8.1.1.10
+> curve prime256v1
+  NIST256p, order 256 bits
+> curve secp256k1
+  SECP256k1, order 256 bits
+> curve P-256
+  UnknownCurveError: Curve with name 'P-256' unknown, only curves supported: ['NIST192p', 'NIST224p', 'NIST256p', 'NIST384p', 'NIST521p', 'SECP256k1', 'BRAINPOOLP160r1', 'BRAINPOOLP192r1', 'BRAINPOOLP224r1', 'BRAINPOOLP256r1', 'BRAINPOOLP320r1', 'BRAINPOOLP384r1', 'BRAINPOOLP512r1', 'SECP112r1', 'SECP112r2', 'SECP128r1', 'SECP160r1', 'Ed25519', 'Ed448', 'BRAINPOOLP160t1', 'BRAINPOOLP192t1', 'BRAINPOOLP224t1', 'BRAINPOOLP256t1', 'BRAINPOOLP320t1', 'BRAINPOOLP384t1', 'BRAINPOOLP512t1']
+> genkey a NIST256p sha256
+  secret 9d3080237d64f550a1136b7ad25c2a436d129b6e30be56a3f06d2e2799622e82
+> genkey b NIST256p sha256
+  secret 0e58b07ae1c94b8d649ff0522051bb19ea95ba6b41e7acc776c91a3b782b2958
+> genkey c SECP256k1 sha256
+  secret 60aff109ae4ef0291d0cbdead7ef14414b8a1282f63265e9433698373cc89bf9
+> genkey d NIST192p sha1
+  secret 78f96953f3dede3ef6cd00d3356a299c54324180778a25ea
+> genkey e NIST521p sha512
+  secret 008dd73a5f8ce58d92f13eb2b2eeb2dc5b3ac8a9feccc8afa1ec399b48ae38b985cb88ebb8dfcb56e87d5e6c7599ad4f4eac1ca4ad25a497dc2db537ad389233b835
+> genkey f NIST224p sha224
+  secret b593daa3dc916c632ed4429274a8cbe8f63a7d6822ab00a406a9b38f
+> genkey g BRAINPOOLP256r1 sha256
+  secret 9f82df96d999dd9000cfc2dda58e57a05ad7f7c619a40e6df751994a8dde0eed
+> genkey h NIST384p sha384
+  secret ba26b7a043c837459389937a7312ad8844a84cad2535c2173f1d8bc6d59fb4716d1a5575cad15702b73afa5b7a52b5f5
+> secret one NIST256p 1
+  public 036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296
+> secret zero NIST256p 0
+  MalformedPointError: Invalid value for secexp, expected integer between 1 and 115792089210356248762697446949407573529996955224135760342422259061068512044369
+> secret rfc NIST256p C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721
+  public 0360fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6
+> secret tiny SECP256k1 3
+  public 02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9
+> show a
+  VerifyingKey.from_string(b'\x03\xcf\xa8\x0cn\xa0\x06\xb1w9\x1c\x95CR\x97\xee\xb4\xe8M\x17v:\x93\x94\x05\x1db\x115\xecE\xb7g', NIST256p, sha256)
+> show d
+  VerifyingKey.from_string(b'\x02\xb9\xd7\x19\xe7I\xdc\xe6i\xf1:\xe6KG8;\x17\xde_\xfb\xd4\x90\x10\xea[', NIST192p, sha1)
+> show one
+  VerifyingKey.from_string(b'\x03k\x17\xd1\xf2\xe1,BG\xf8\xbc\xe6\xe5c\xa4@\xf2w\x03}\x81-\xeb3\xa0\xf4\xa19E\xd8\x98\xc2\x96', NIST256p, sha256)
+> encodings one
+  raw 6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5
+  uncompressed 046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5
+  compressed 036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296
+  hybrid 076b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5
+> encodings tiny
+  raw f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672
+  uncompressed 04f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672
+  compressed 02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9
+  hybrid 06f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672
+> pem a ssleay uncompressed named_curve
+  -----BEGIN EC PRIVATE KEY-----
+  MHcCAQEEIJ0wgCN9ZPVQoRNretJcKkNtEptuML5Wo/BtLieZYi6CoAoGCCqGSM49AwEHoUQDQgAE
+  z6gMbqAGsXc5HJVDUpfutOhNF3Y6k5QFHWIRNexFt2ePtZvWkvnl0hxo6BoAi0QLyI6s7BCMcafP
+  TmcyboCQDw==
+  -----END EC PRIVATE KEY-----
+  -----BEGIN PUBLIC KEY-----
+  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEz6gMbqAGsXc5HJVDUpfutOhNF3Y6k5QFHWIRNexF
+  t2ePtZvWkvnl0hxo6BoAi0QLyI6s7BCMcafPTmcyboCQDw==
+  -----END PUBLIC KEY-----
+> pem d pkcs8 compressed named_curve
+  -----BEGIN PRIVATE KEY-----
+  MFcCAQEwEwYHKoZIzj0CAQYIKoZIzj0DAQEEPTA7AgEBBBh4+WlT897ePvbNANM1aimcVDJBgHeK
+  JeqhHAMaAAK51xnnSdzmafE65ktHODsX3l/71JAQ6ls=
+  -----END PRIVATE KEY-----
+  -----BEGIN PUBLIC KEY-----
+  MDEwEwYHKoZIzj0CAQYIKoZIzj0DAQEDGgACudcZ50nc5mnxOuZLRzg7F95f+9SQEOpb
+  -----END PUBLIC KEY-----
+> pem d ssleay hybrid explicit
+  -----BEGIN EC PRIVATE KEY-----
+  MIIBCQIBAQQYePlpU/Pe3j72zQDTNWopnFQyQYB3iiXqoIGzMIGwAgEBMCQGByqGSM49AQECGQD/
+  ///////////////////+//////////8wNAQY/////////////////////v/////////8BBhkIQUZ
+  5ZyA5w+n6atyJDBJ/rje7MFGubEEMQQYjagOsDCQ9ny/IOtDoYgA9P8K/YL/EBIHGSuV/8jaeGMQ
+  Ee1rJM3Vc/l3oR55SBECGQD///////////////+Z3vg2FGvJsbTSKDECAQGhNAMyAAa51xnnSdzm
+  afE65ktHODsX3l/71JAQ6ltIHn+VzonA6PSmXlDi6N8E0/uh2tB0Wuo=
+  -----END EC PRIVATE KEY-----
+  -----BEGIN PUBLIC KEY-----
+  MIHzMIG8BgcqhkjOPQIBMIGwAgEBMCQGByqGSM49AQECGQD////////////////////+////////
+  //8wNAQY/////////////////////v/////////8BBhkIQUZ5ZyA5w+n6atyJDBJ/rje7MFGubEE
+  MQcYjagOsDCQ9ny/IOtDoYgA9P8K/YL/EBIHGSuV/8jaeGMQEe1rJM3Vc/l3oR55SBECGQD/////
+  //////////+Z3vg2FGvJsbTSKDECAQEDMgAGudcZ50nc5mnxOuZLRzg7F95f+9SQEOpbSB5/lc6J
+  wOj0pl5Q4ujfBNP7odrQdFrq
+  -----END PUBLIC KEY-----
+> der d
+  private 305f020101041878f96953f3dede3ef6cd00d3356a299c54324180778a25eaa00a06082a8648ce3d030101a13403320004b9d719e749dce669f13ae64b47383b17de5ffbd49010ea5b481e7f95ce89c0e8f4a65e50e2e8df04d3fba1dad0745aea
+  public  3049301306072a8648ce3d020106082a8648ce3d03010103320004b9d719e749dce669f13ae64b47383b17de5ffbd49010ea5b481e7f95ce89c0e8f4a65e50e2e8df04d3fba1dad0745aea
+> load issuer keys/issuer.pem
+  NIST256p key, secret 37c3f8c93ef8c707c2527a4ed5a4b3fca42e47724764b57280cf1cfd472d942e
+> load issuer8 keys/issuer_pkcs8.pem
+  NIST256p key, secret 37c3f8c93ef8c707c2527a4ed5a4b3fca42e47724764b57280cf1cfd472d942e
+> loadpub ipub keys/issuer_pub.pem
+  NIST256p key 02086ad03290c8fd1950a154103daeec19b99e0f642676782efc042ecedc89ca2c
+> loadpub iexp keys/issuer_explicit.pem
+  NIST256p key 02086ad03290c8fd1950a154103daeec19b99e0f642676782efc042ecedc89ca2c
+> load k1 keys/k1.pem
+  SECP256k1 key, secret 15e921cebd2796ab613bfd00b132baa3e3b40910f35549db19c8c3e4157bd6b7
+> load bad keys/issuer_pub.pem
+  ValueError: subsection not found
+> loadpub unknown keys/unknown_curve.pem
+  UnknownCurveError: I don't know about the curve with oid (1, 3, 132, 0, 99).I only know about these: ['NIST192p', 'NIST224p', 'NIST256p', 'NIST384p', 'NIST521p', 'SECP256k1', 'BRAINPOOLP160r1', 'BRAINPOOLP192r1', 'BRAINPOOLP224r1', 'BRAINPOOLP256r1', 'BRAINPOOLP320r1', 'BRAINPOOLP384r1', 'BRAINPOOLP512r1', 'SECP112r1', 'SECP112r2', 'SECP128r1', 'SECP160r1', 'Ed25519', 'Ed448', 'BRAINPOOLP160t1', 'BRAINPOOLP192t1', 'BRAINPOOLP224t1', 'BRAINPOOLP256t1', 'BRAINPOOLP320t1', 'BRAINPOOLP384t1', 'BRAINPOOLP512t1']
+> loadpub rsa keys/rsa_oid.pem
+  UnexpectedDER: Unexpected object identifier in DER encoding: (1, 2, 840, 113549, 1, 1, 1)
+> loadpub raw keys/raw_point.pem
+  UnexpectedDER: Malformed encoding of public point
+> loadpub trail keys/trailing.pem
+  UnexpectedDER: trailing junk after DER pubkey: b'00'
+> loadpub odd keys/odd_curve.pem
+  MalformedPointError: Point does not lay on the curve
+> same issuer issuer8
+  True
+> same ipub iexp
+  True
+> same ipub a
+  False
+> show iexp
+  VerifyingKey.from_string(b'\x02\x08j\xd02\x90\xc8\xfd\x19P\xa1T\x10=\xae\xec\x19\xb9\x9e\x0fd&vx.\xfc\x04.\xce\xdc\x89\xca,', NIST256p, sha1)
+> sign rfc sha256 string sample
+  64 bytes efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8
+> sign rfc sha256 string test
+  64 bytes f1abb023518351cd71d881567b1ea663ed3efcf6c5132b354f28d3b0b7d38367019f4113742a2b14bd25926b49c649155f267e60d3814b4c0cc84250e46f0083
+> sign rfc sha1 string sample
+  64 bytes 61340c88c3aaebeb4f6d667f672ca9759a6ccaa9fa8811313039ee4a35471d326d7f147dac089441bb2e2fe8f7a3fa264b9c475098fdcf6e00d7c996e1b8b7eb
+> sign rfc sha512 string sample
+  64 bytes 8496a60b5e9b47c825488827e0495b0e3fa109ec4568fd3f8d1097678eb97f002362ab1adbe2b8adf9cb9edab740ea6049c028114f2460f96554f61fae3302fe
+> sign rfc sha224 der sample
+  71 bytes 3045022053b2fff5d1752b2c689df257c04c40a587fababb3f6fc2702f1343af7ca9aa3f022100b9afb64fdc03dc1a131c7d2386d11e349f070aa432a4acc918bea988bf75c74c
+> verify rfc sha224 der sample
+  True
+> verify rfc sha224 der Sample
+  BadSignatureError: Signature verification failed
+> sign a sha256 der transfer 100 to account 42
+  71 bytes 3045022100fe1012f469bd79a1ca434aaca2a01ca8aeabe631f046a96d7fe18d1b6583376602205688dfbb934669a831915c715e952d356578c3d64c95232e876e6f7b3dbadb46
+> verify a sha256 der transfer 100 to account 42
+  True
+> verify b sha256 der transfer 100 to account 42
+  BadSignatureError: Signature verification failed
+> verify a sha256 string transfer 100 to account 42
+  BadSignatureError: ('Malformed formatting of signature', MalformedSignature('Invalid length of signature, expected 64 bytes long, provided string is 71 bytes long'))
+> sign c sha256 canon pay bob 5
+  71 bytes 3045022100d40ab9c53b7bb6e00a6f6e2b45d720514ca7a200b480cf8bddbea293619d470e02200cde6d7cd140ee5fe2639f328ba2883dbf6c4150b3874c79c5be565ce883f4e2
+> verify c sha256 der pay bob 5
+  True
+> signk a 12345 sha256 string hello
+  64 bytes 26efcebd0ee9e34a669187e18b3a9122b2f733945b649cc9f9f921e9f9dad812fc2a2c31573cb56df37e64a608ac4f44551ea8a9b5d15269d96bdb88a2231452
+> signk a 0 sha256 string hello
+  AssertionError: 
+> signrand a sha256 string hello
+  64 bytes 1bc3db45fe88c64c4bfec1a1dbf764787c63c34184ba95dea0ff1b88f15759ae478b17855ca4e3e8626ed9acb4fc4a87be9731d36edcf5c39c0f209b5f29a394
+> signrand a sha256 string hello
+  64 bytes f1d22ec9e4a3782380e676a32740670e01483f23ed6b9e826926bed8bdbd120cc89d2b90e66836f6bdff27731a00e68ae40f5c7817522e832793f198bf402cc1
+> verify a sha256 string hello
+  True
+> sign e sha512 string a long curve
+  132 bytes 00be35491391a93373d8cba26118733b5b85bf07ddc950ca20627977db4aa2b479e5e740bd12cc0b2114746e99c50e4cb64fc516a9ba441050f5b0b910291a12267a0017f98f642cf599a940f5ac3d81218f6fc326fc38ed1d2bfead72fbfa91617311705382d5331a1f00767055009e347d2ca82ce7b384422bfdc1920b9195551f3fcf
+> verify e sha512 string a long curve
+  True
+> sign h sha384 der short
+  103 bytes 3065023100d124eee1c5fac8ebc83e9426e09fc42a350e0b55b42a670986b5a756c0d191fc9840e947008bcdbdabcb8eae8cbfe637023055d856dacf126f3745abc79e8810913623da11478c129f12a0093b74721a4659ccc71911bed03b0756eafc84ef56dfd2
+> verify h sha384 der short
+  True
+> sign g sha256 string brainpool
+  64 bytes 2ac9f77dc3ba2840147cd208970b59b963cff0b7e45f5a7edc38f6ae7d132bb81cbd13c376c0f75c6829b5d17e540519c7b4d978c7a919e259f826da2e369a75
+> verify g sha256 string brainpool
+  True
+> digest a sha256 string short digest
+  64 bytes 6a93fb306124dfbb9d3d2b5e48a7a4073178193ecd4afb93695bfb4ebe32f16f5bcea439472c82f5a10e236a35dd4d820a50c4f7b1b7fd5c8a6f9fae41c80be9
+> digest f sha512 string long digest
+  BadDigestError: this curve (NIST224p) is too short for the length of your digest (512)
+> digest d sha512 string long digest
+  BadDigestError: this curve (NIST192p) is too short for the length of your digest (512)
+> badsig a 3045022100ff
+  BadSignatureError: ('Malformed formatting of signature', UnexpectedDER('Length longer than the provided buffer'))
+> badsig a 3006020101020101ff
+  BadSignatureError: ('Malformed formatting of signature', UnexpectedDER("trailing junk after DER sig: b'ff'"))
+> badsig a 3006020181020101
+  BadSignatureError: ('Malformed formatting of signature', UnexpectedDER('Negative integers are not supported'))
+> badsig a 300702020001020101
+  BadSignatureError: ('Malformed formatting of signature', UnexpectedDER('Invalid encoding of integer, unnecessary zero padding bytes'))
+> badsig a 3006020100020101
+  BadSignatureError: Signature verification failed
+> sign tiny sha256 string recover me
+  64 bytes 568bbe0691b800b6e07ba4a7d64e25731cebc68e920e428ed0d2bc6d1ad9def48dbad0e44ca52c77ae1377aed6c58081c5b50e564175678bce30672241f9b95f
+> recover tiny sha256 recover me
+  036b41877dba58523f1d08d8dbf97abc08ca5f2f5800cddbe06595dfa553b47b94
+  02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9 (the signer)
+> sign c sha256 string recover me
+  64 bytes 47291c21c6978b4077dfe6329fa961015d03f8d3393db8a2077e00e9a727c0483631f6f997d3a643611981954a6f9b7c129a2b2611dc319277336a54375578a3
+> recover c sha256 recover me
+  0284c831dff22b60a17518bc778bc2cd1504b277365097084a02eb7fae2c86c897
+  02be660e0ff83dba6822c8a1a0c555204faf2367ba88981f079f434288e7c5b194 (the signer)
+> point NIST256p - 036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296
+  046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5
+> point NIST256p - 026b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296
+  046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296b01cbd1c01e58065711814b583f061e9d431cca994cea1313449bf97c840ae0a
+> point NIST256p - 056b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296
+  MalformedPointError: Malformed compressed point encoding
+> point NIST256p - 020000000000000000000000000000000000000000000000000000000000000005
+  040000000000000000000000000000000000000000000000000000000000000005459243b9aa581806fe913bce99817ade11ca503c64d9a3c533415c083248fbcc
+> point NIST256p - 020000000000000000000000000000000000000000000000000000000000000001
+  MalformedPointError: ('Encoding does not correspond to a point on curve', SquareRootError('41058363725152142129326129780047268409114441015993725554835256314039467401289 has no square root modulo 115792089210356248762697446949407573530086143415290314195533631308867097853951'))
+> point NIST224p - 0300000000000000000000000000000000000000000000000000000003
+  04000000000000000000000000000000000000000000000000000000038353d9639842aa15eb1000b152101a17b687aeb50eb377054b913fbb
+> point NIST224p - 02b70e0cbd6bb4bf7f321390b94a03c1d356c21122343280d6115c1d21
+  04b70e0cbd6bb4bf7f321390b94a03c1d356c21122343280d6115c1d21bd376388b5f723fb4c22dfe6cd4375a05a07476444d5819985007e34
+> point NIST192p - 07188da80eb03090f67cbf20eb43a18800f4ff0afd82ff101207192b95ffc8da78631011ed6b24cdd573f977a11e794811
+  04188da80eb03090f67cbf20eb43a18800f4ff0afd82ff101207192b95ffc8da78631011ed6b24cdd573f977a11e794811
+> point NIST192p - 06188da80eb03090f67cbf20eb43a18800f4ff0afd82ff101207192b95ffc8da78631011ed6b24cdd573f977a11e794811
+  MalformedPointError: Inconsistent hybrid point encoding
+> point SECP256k1 - 0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b9
+  MalformedPointError: Point does not lay on the curve
+> point SECP256k1 - 0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8
+  0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8
+> point SECP256k1 compressed,raw 0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b9
+  MalformedPointError: Length of string does not match lengths of any of the enabled (compressed, raw) encodings of the curve.
+> point SECP256k1 compressed 79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+  MalformedPointError: Length of string does not match lengths of any of the enabled (compressed) encodings of the curve.
+> ecdh a b
+  7932ac518fca33a8b190c81b89cf5d0cf813eb35fa7c28257a696fab9a1f2519
+> ecdh b a
+  7932ac518fca33a8b190c81b89cf5d0cf813eb35fa7c28257a696fab9a1f2519
+> ecdh a c
+  InvalidCurveError: Curve mismatch.
+> ecdh c k1
+  df65958a7a6f9e39ec5eb92ad438690699dfd4f162ba656cb1cd984a208ec949
+> !tokens issuer claims.txt tokens.txt ipub
+  issued {"sub":"alice","role":"admin","exp":1767225600}
+    eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSIsInJvbGUiOiJhZG1pbiIsImV4cCI6MTc2NzIyNTYwMH0.-wEKSKp5IdO0ZsooGdlPTJQAx7W0X-7dOyIp89XL9j38KQJSYgVYrKfYJT8wcO6sdi6wpnQFheIF5mfUJPFvEQ
+  issued {"sub":"bob","role":"viewer","exp":1735689600}
+    eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IiLCJyb2xlIjoidmlld2VyIiwiZXhwIjoxNzM1Njg5NjAwfQ.4EzTeSX9ejy0iAvueGpI714ZXXwwxVNDAm4Swgm-cuQSxHPxIjjk3OSorIYzBG9p3m_R7OExeYqkMMrJUvn9Aw
+  issued {"sub":"carol","role":"editor","exp":1767225600}
+    eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCIsInJvbGUiOiJlZGl0b3IiLCJleHAiOjE3NjcyMjU2MDB9.PjUFpHMRVtfItH4MkP_vGrZOzL0XBqoSlGat9nOZJ7be9XM2HUywbGL1KK7zHejXgD4ubPPyOYw65pSzM1Ua1w
+  valid {"sub":"alice","role":"admin","exp":1767225600}
+  REJECTED {"sub":"bob","role":"admin","exp":1735689600}: Signature verification failed
+  valid {"sub":"carol","role":"editor","exp":1767225600}
+  REJECTED {"sub":"eve","role":"admin","exp":1767225600}: Signature verification failed
+  REJECTED {"sub":"bob","role":"viewer","exp":1735689600}: ('Malformed formatting of signature', MalformedSignature('Invalid length of signature, expected 64 bytes long, provided string is 62 bytes long'))
+  unsupported header {"alg":"none","typ":"JWT"}
+  not-a-token: malformed
+  valid {"sub":"bob","role":"viewer","exp":1735689600}
+> !ledger accounts.txt ledger.txt
+  alice|bob|25: ok
+  bob|carol|30: ok
+  dave|alice|50: unknown signer
+  alice|mallory|60: unknown signer
+  carol|alice|99: insufficient funds (30)
+  bob|dave|12: forged, signed by alice
+  alice|carol|5: MalformedSignature: Invalid length of signature, expected 64 bytes long, provided string is 63 bytes long
+  dave|bob|1: unknown signer
+  balances: alice 75, bob 35, carol 30, dave 15
