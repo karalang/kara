@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 759 |
+| miscompile | 760 |
 | run-vs-build | 612 |
 | leak | 606 |
 | double-free | 428 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3047 |
-| interp | 1056 |
+| codegen | 3048 |
+| interp | 1057 |
 | typecheck | 581 |
 | ownership | 133 |
 | other | 127 |
@@ -175,6 +175,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-23-13 | 2026-10-23 | codegen | low | A `match` on a tuple of handle locals (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`) counts each handle into a built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads: kata 558's `intersect` pays four increments and four `drop.shared` calls per Split node for it, 8 of the 8 count sites its IR has left | — |
 | B-2026-10-24-1 | 2026-10-24 | cli+interp | low | The v2 REPL's remaining legacy-only pieces: `%show` and `--auto-clone` / `%set auto-clone` refuse on v2, `:provide` does not check that the provider implements the resource's trait until the next cell, and the `:provide` construction program still replays every earlier cell | — |
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
+| B-2026-10-24-3 | 2026-10-24 | interp+codegen | high | `v.push(m.get(k).unwrap())` into a `Vec[i64]` stores the ADDRESS of the map's value, not the value: on mir-llvm and `karac build --mir` the element prints as a pointer (94847549067688) and compares by address, and `karac __mir-run` holds a `Ref` that a later `<` refuses ("Lt on Ref(..) and Ref(..)"); `karac check` passes | — |
 
 ### Relocated
 
