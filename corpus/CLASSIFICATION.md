@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9996 / 10161 = 98.4%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8104 / 8230 = 98.5%.
-- Every classified non-deferred program (context): 16555 / 17655 = 93.8%.
-- Bench variants (outside the gate): 254 / 945 = 26.9%; timeouts 612.
+- Every classified non-deferred program (context): 16556 / 17655 = 93.8%.
+- Bench variants (outside the gate): 255 / 945 = 27.0%; timeouts 612.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5395 / 5411 = 99.7%; failing mir-gap 16.
 - Deferred (class d): 751; outside the slice (`post-m1:*`): 1138.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -63,7 +63,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (4246): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4247): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -4302,6 +4302,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/901-1000/966-vowel-spellchecker/spellchecker_scan`
 - `katas/901-1000/966-vowel-spellchecker/spellchecker_sorted`
 - `katas/901-1000/966-vowel-spellchecker/spellchecker_trie`
+- `katas/901-1000/967-numbers-with-same-consecutive-differences/bench/nums_same_consec_diff`
 - `katas/901-1000/967-numbers-with-same-consecutive-differences/differential`
 - `katas/901-1000/967-numbers-with-same-consecutive-differences/nums_same_consec_diff`
 - `katas/901-1000/967-numbers-with-same-consecutive-differences/nums_same_consec_diff_back`
