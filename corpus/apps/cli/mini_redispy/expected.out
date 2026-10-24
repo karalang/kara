@@ -1,0 +1,1907 @@
+== strings
+client
+call set s:greeting s:hello
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*3\r\n$3\r\nSET\r\n$8\r\ngreeting\r\n$5\r\nhello\r\n'
+= True
+call get s:greeting
+send b'*2\r\n$3\r\nGET\r\n$8\r\ngreeting\r\n'
+= b'hello'
+call get s:missing
+send b'*2\r\n$3\r\nGET\r\n$7\r\nmissing\r\n'
+= None
+call set s:session s:abc ex=i:30 nx=T:
+send b'*6\r\n$3\r\nSET\r\n$7\r\nsession\r\n$3\r\nabc\r\n$2\r\nEX\r\n$2\r\n30\r\n$2\r\nNX\r\n'
+= True
+call set s:session s:abc px=i:1500 xx=T: keepttl=T:
+send b'*7\r\n$3\r\nSET\r\n$7\r\nsession\r\n$3\r\nabc\r\n$2\r\nPX\r\n$4\r\n1500\r\n$7\r\nKEEPTTL\r\n$2\r\nXX\r\n'
+= None
+call set s:session s:def get=T:
+send b'*4\r\n$3\r\nSET\r\n$7\r\nsession\r\n$3\r\ndef\r\n$3\r\nGET\r\n'
+= b'abc'
+call set s:counter i:10 ex=s:15
+send b'*5\r\n$3\r\nSET\r\n$7\r\ncounter\r\n$2\r\n10\r\n$2\r\nEX\r\n$2\r\n15\r\n'
+= True
+call set s:counter i:10 ex=f:1.5
+! DataError: ex must be datetime.timedelta or int
+call set s:counter i:10 px=s:15
+! DataError: px must be datetime.timedelta or int
+call set s:stamp s:x exat=i:1700000000 pxat=i:1700000000123
+send b'*7\r\n$3\r\nSET\r\n$5\r\nstamp\r\n$1\r\nx\r\n$4\r\nEXAT\r\n$10\r\n1700000000\r\n$4\r\nPXAT\r\n$13\r\n1700000000123\r\n'
+= True
+call incr s:counter
+send b'*3\r\n$6\r\nINCRBY\r\n$7\r\ncounter\r\n$1\r\n1\r\n'
+= 11
+call incrby s:counter i:5
+send b'*3\r\n$6\r\nINCRBY\r\n$7\r\ncounter\r\n$1\r\n5\r\n'
+= 16
+call decrby s:counter i:2
+send b'*3\r\n$6\r\nDECRBY\r\n$7\r\ncounter\r\n$1\r\n2\r\n'
+= 14
+call decr s:counter
+send b'*3\r\n$6\r\nDECRBY\r\n$7\r\ncounter\r\n$1\r\n1\r\n'
+= 13
+call incrbyfloat s:counter f:0.75
+send b'*3\r\n$11\r\nINCRBYFLOAT\r\n$7\r\ncounter\r\n$4\r\n0.75\r\n'
+= 13.75
+call append s:greeting s:%20world
+send b'*3\r\n$6\r\nAPPEND\r\n$8\r\ngreeting\r\n$6\r\n world\r\n'
+= 11
+call getrange s:greeting i:3 i:7
+send b'*4\r\n$8\r\nGETRANGE\r\n$8\r\ngreeting\r\n$1\r\n3\r\n$1\r\n7\r\n'
+= b'lo wo'
+call setrange s:greeting i:6 s:WORLD
+send b'*4\r\n$8\r\nSETRANGE\r\n$8\r\ngreeting\r\n$1\r\n6\r\n$5\r\nWORLD\r\n'
+= 11
+call strlen s:greeting
+send b'*2\r\n$6\r\nSTRLEN\r\n$8\r\ngreeting\r\n'
+= 11
+call getdel s:greeting
+send b'*2\r\n$6\r\nGETDEL\r\n$8\r\ngreeting\r\n'
+= b'hello WORLD'
+call setex s:tmp i:60 s:v
+send b'*4\r\n$5\r\nSETEX\r\n$3\r\ntmp\r\n$2\r\n60\r\n$1\r\nv\r\n'
+= True
+call psetex s:tmp i:60000 s:v
+send b'*4\r\n$6\r\nPSETEX\r\n$3\r\ntmp\r\n$5\r\n60000\r\n$1\r\nv\r\n'
+= True
+call setnx s:lock s:me
+send b'*3\r\n$5\r\nSETNX\r\n$4\r\nlock\r\n$2\r\nme\r\n'
+= True
+call setnx s:lock s:you
+send b'*3\r\n$5\r\nSETNX\r\n$4\r\nlock\r\n$3\r\nyou\r\n'
+= False
+call mset { s:a s:1 s:b s:2 s:c i:3 }
+send b'*7\r\n$4\r\nMSET\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n$1\r\nc\r\n$1\r\n3\r\n'
+= True
+call msetnx { s:a s:9 s:d s:4 }
+send b'*5\r\n$6\r\nMSETNX\r\n$1\r\na\r\n$1\r\n9\r\n$1\r\nd\r\n$1\r\n4\r\n'
+= False
+call mget [ s:a s:b s:x ] s:d
+send b'*5\r\n$4\r\nMGET\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nx\r\n$1\r\nd\r\n'
+= [b'1', b'2', None, b'4']
+call mget s:a
+send b'*2\r\n$4\r\nMGET\r\n$1\r\na\r\n'
+= [b'1']
+call mget [ ]
+send b'*1\r\n$4\r\nMGET\r\n'
+= []
+call getex s:tmp ex=i:5 px=i:5
+send b'*6\r\n$5\r\nGETEX\r\n$3\r\ntmp\r\n$2\r\nEX\r\n$1\r\n5\r\n$2\r\nPX\r\n$1\r\n5\r\n'
+= b'v'
+call getex s:tmp ex=i:5 px=i:6 exat=i:7
+! DataError: ``ex``, ``px``, ``exat``, ``pxat``, and ``persist`` are mutually exclusive.
+call getex s:tmp ex=i:5 persist=T:
+! DataError: ``ex``, ``px``, ``exat``, ``pxat``, and ``persist`` are mutually exclusive.
+call getex s:tmp persist=T:
+send b'*3\r\n$5\r\nGETEX\r\n$3\r\ntmp\r\n$7\r\nPERSIST\r\n'
+= b'v'
+call lcs s:k1 s:k2
+send b'*3\r\n$3\r\nLCS\r\n$2\r\nk1\r\n$2\r\nk2\r\n'
+= b'mytext'
+call lcs s:k1 s:k2 len=T:
+send b'*4\r\n$3\r\nLCS\r\n$2\r\nk1\r\n$2\r\nk2\r\n$3\r\nLEN\r\n'
+= 6
+close
+
+== argument encoding
+client
+call set s:i i:-42
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*3\r\n$3\r\nSET\r\n$1\r\ni\r\n$3\r\n-42\r\n'
+= True
+call set s:f f:1.5
+send b'*3\r\n$3\r\nSET\r\n$1\r\nf\r\n$3\r\n1.5\r\n'
+= True
+call set s:f f:0.1
+send b'*3\r\n$3\r\nSET\r\n$1\r\nf\r\n$3\r\n0.1\r\n'
+= True
+call set s:f f:1e-05
+send b'*3\r\n$3\r\nSET\r\n$1\r\nf\r\n$5\r\n1e-05\r\n'
+= True
+call set s:f f:1e+16
+send b'*3\r\n$3\r\nSET\r\n$1\r\nf\r\n$5\r\n1e+16\r\n'
+= True
+call set s:f f:3.0
+send b'*3\r\n$3\r\nSET\r\n$1\r\nf\r\n$3\r\n3.0\r\n'
+= True
+call set s:f f:-0.0
+send b'*3\r\n$3\r\nSET\r\n$1\r\nf\r\n$4\r\n-0.0\r\n'
+= True
+call set s:f f:123456789.125
+send b'*3\r\n$3\r\nSET\r\n$1\r\nf\r\n$13\r\n123456789.125\r\n'
+= True
+call set s:f f:inf
+send b'*3\r\n$3\r\nSET\r\n$1\r\nf\r\n$3\r\ninf\r\n'
+= True
+call set s:big i:12345678901234567
+send b'*3\r\n$3\r\nSET\r\n$3\r\nbig\r\n$17\r\n12345678901234567\r\n'
+= True
+call set s:flag T:
+! DataError: Invalid input of type: 'bool'. Convert to a bytes, string, int or float first.
+call set s:none N:
+! DataError: Invalid input of type: 'NoneType'. Convert to a bytes, string, int or float first.
+call set s:list [ s:a ]
+! DataError: Invalid input of type: 'list'. Convert to a bytes, string, int or float first.
+call set b:bin%00key b:%00%01%FF%7F
+send b'*3\r\n$3\r\nSET\r\n$7\r\nbin\x00key\r\n$4\r\n\x00\x01\xff\x7f\r\n'
+= True
+call set s:caf%C3%A9 s:na%C3%AFve%20%E2%98%95
+send b'*3\r\n$3\r\nSET\r\n$5\r\ncaf\xc3\xa9\r\n$10\r\nna\xc3\xafve \xe2\x98\x95\r\n'
+= True
+call set s:quote s:it's%20%22quoted%22
+send b'*3\r\n$3\r\nSET\r\n$5\r\nquote\r\n$13\r\nit\'s "quoted"\r\n'
+= True
+call execute_command s:SET s:raw s:v
+send b'*3\r\n$3\r\nSET\r\n$3\r\nraw\r\n$1\r\nv\r\n'
+= True
+call execute_command b:SET%20EX b:x
+send b'*3\r\n$3\r\nSET\r\n$2\r\nEX\r\n$1\r\nx\r\n'
+= b'OK'
+call execute_command s:ping
+send b'*1\r\n$4\r\nping\r\n'
+= True
+close
+
+== big values
+client
+call set s:blob r:x*7000
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*3\r\n$3\r\nSET\r\n$4\r\nblob\r\n$7000\r\n'
+send <7000 bytes, fnv f1a95925>
+send b'\r\n'
+= True
+call get s:blob
+send b'*2\r\n$3\r\nGET\r\n$4\r\nblob\r\n'
+= <6503 chars, fnv 6f113caf>
+call mset { s:a r:z*5990 s:b s:short }
+send <6024 bytes, fnv 968d4fc1>
+send b'b'
+send b'\r\n$5\r\nshort\r\n'
+= True
+close
+
+== keys
+client
+call delete s:a s:b s:c
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*4\r\n$3\r\nDEL\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n'
+= 2
+call exists s:a
+send b'*2\r\n$6\r\nEXISTS\r\n$1\r\na\r\n'
+= 1
+call expire s:a i:100
+send b'*3\r\n$6\r\nEXPIRE\r\n$1\r\na\r\n$3\r\n100\r\n'
+= True
+call expire s:a i:100 nx=T: xx=T: gt=T: lt=T:
+send b'*7\r\n$6\r\nEXPIRE\r\n$1\r\na\r\n$3\r\n100\r\n$2\r\nNX\r\n$2\r\nXX\r\n$2\r\nGT\r\n$2\r\nLT\r\n'
+= False
+call pexpire s:a i:2500 gt=T:
+send b'*4\r\n$7\r\nPEXPIRE\r\n$1\r\na\r\n$4\r\n2500\r\n$2\r\nGT\r\n'
+= True
+call ttl s:a
+send b'*2\r\n$3\r\nTTL\r\n$1\r\na\r\n'
+= 97
+call pttl s:gone
+send b'*2\r\n$4\r\nPTTL\r\n$4\r\ngone\r\n'
+= -2
+call type s:a
+send b'*2\r\n$4\r\nTYPE\r\n$1\r\na\r\n'
+= b'string'
+call type s:gone
+send b'*2\r\n$4\r\nTYPE\r\n$4\r\ngone\r\n'
+= b'none'
+call rename s:a s:a2
+send b'*3\r\n$6\r\nRENAME\r\n$1\r\na\r\n$2\r\na2\r\n'
+= True
+call rename s:gone s:x
+send b'*3\r\n$6\r\nRENAME\r\n$4\r\ngone\r\n$1\r\nx\r\n'
+! ResponseError: no such key
+call renamenx s:a2 s:b
+send b'*3\r\n$8\r\nRENAMENX\r\n$2\r\na2\r\n$1\r\nb\r\n'
+= False
+call keys s:user:*
+send b'*2\r\n$4\r\nKEYS\r\n$6\r\nuser:*\r\n'
+= [b'user:1', b'user:2', b'user:10']
+call scan
+send b'*2\r\n$4\r\nSCAN\r\n$1\r\n0\r\n'
+= (0, [b'k1', b'k2'])
+call scan i:0 match=s:user:* count=i:100 _type=s:string
+send b'*8\r\n$4\r\nSCAN\r\n$1\r\n0\r\n$5\r\nMATCH\r\n$6\r\nuser:*\r\n$5\r\nCOUNT\r\n$3\r\n100\r\n$4\r\nTYPE\r\n$6\r\nstring\r\n'
+= (17, [b'user:1'])
+call copy s:a2 s:a3 destination_db=i:2 replace=T:
+send b'*6\r\n$4\r\nCOPY\r\n$2\r\na2\r\n$2\r\na3\r\n$2\r\nDB\r\n$1\r\n2\r\n$7\r\nREPLACE\r\n'
+= True
+call persist s:a2
+send b'*2\r\n$7\r\nPERSIST\r\n$2\r\na2\r\n'
+= True
+call unlink s:x s:y s:z
+send b'*4\r\n$6\r\nUNLINK\r\n$1\r\nx\r\n$1\r\ny\r\n$1\r\nz\r\n'
+= 3
+call touch s:x s:y
+send b'*3\r\n$5\r\nTOUCH\r\n$1\r\nx\r\n$1\r\ny\r\n'
+= 2
+call randomkey
+send b'*1\r\n$9\r\nRANDOMKEY\r\n'
+= b'user:2'
+call randomkey
+send b'*1\r\n$9\r\nRANDOMKEY\r\n'
+= None
+call object s:encoding s:a2
+send b'*3\r\n$6\r\nOBJECT\r\n$8\r\nencoding\r\n$2\r\na2\r\n'
+= b'embstr'
+call object s:refcount s:a2
+send b'*3\r\n$6\r\nOBJECT\r\n$8\r\nrefcount\r\n$2\r\na2\r\n'
+= 5
+close
+
+== sort
+client
+call sort s:ids
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$4\r\nSORT\r\n$3\r\nids\r\n'
+= [b'3', b'1', b'2']
+call sort s:ids by=s:weight_* desc=T: alpha=T: start=i:0 num=i:3
+send b'*9\r\n$4\r\nSORT\r\n$3\r\nids\r\n$2\r\nBY\r\n$8\r\nweight_*\r\n$5\r\nLIMIT\r\n$1\r\n0\r\n$1\r\n3\r\n$4\r\nDESC\r\n$5\r\nALPHA\r\n'
+= [b'c', b'b', b'a']
+call sort s:ids get=[ s:name_* s:age_* ] groups=T:
+send b'*6\r\n$4\r\nSORT\r\n$3\r\nids\r\n$3\r\nGET\r\n$6\r\nname_*\r\n$3\r\nGET\r\n$5\r\nage_*\r\n'
+= [(b'alice', b'30'), (b'bob', b'25')]
+call sort s:ids get=s:name_* groups=T:
+! DataError: when using "groups" the "get" argument must be specified and contain at least two keys
+call sort s:ids start=i:2
+! DataError: ``start`` and ``num`` must both be specified
+call sort s:ids get=s:# store=s:sorted
+send b'*6\r\n$4\r\nSORT\r\n$3\r\nids\r\n$3\r\nGET\r\n$1\r\n#\r\n$5\r\nSTORE\r\n$6\r\nsorted\r\n'
+= 3
+call sort s:empty get=[ s:a s:b ] groups=T:
+send b'*6\r\n$4\r\nSORT\r\n$5\r\nempty\r\n$3\r\nGET\r\n$1\r\na\r\n$3\r\nGET\r\n$1\r\nb\r\n'
+= []
+close
+
+== hashes
+client
+call hset s:user:1 s:name s:Ada
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*4\r\n$4\r\nHSET\r\n$6\r\nuser:1\r\n$4\r\nname\r\n$3\r\nAda\r\n'
+= 1
+call hset s:user:1 mapping={ s:age i:36 s:lang s:en }
+send b'*6\r\n$4\r\nHSET\r\n$6\r\nuser:1\r\n$3\r\nage\r\n$2\r\n36\r\n$4\r\nlang\r\n$2\r\nen\r\n'
+= 2
+call hset s:user:1 s:k s:v items=[ s:x s:1 s:y s:2 ] mapping={ s:z s:3 }
+send b'*10\r\n$4\r\nHSET\r\n$6\r\nuser:1\r\n$1\r\nx\r\n$1\r\n1\r\n$1\r\ny\r\n$1\r\n2\r\n$1\r\nk\r\n$1\r\nv\r\n$1\r\nz\r\n$1\r\n3\r\n'
+= 2
+call hset s:user:1
+! DataError: 'hset' with no key value pairs
+call hget s:user:1 s:name
+send b'*3\r\n$4\r\nHGET\r\n$6\r\nuser:1\r\n$4\r\nname\r\n'
+= b'Ada'
+call hgetall s:user:1
+send b'*2\r\n$7\r\nHGETALL\r\n$6\r\nuser:1\r\n'
+= {b'name': b'Ada', b'age': b'36', b'lang': b'en'}
+call hgetall s:nobody
+send b'*2\r\n$7\r\nHGETALL\r\n$6\r\nnobody\r\n'
+= {}
+call hmget s:user:1 [ s:name s:email ]
+send b'*4\r\n$5\r\nHMGET\r\n$6\r\nuser:1\r\n$4\r\nname\r\n$5\r\nemail\r\n'
+= [b'Ada', None]
+call hmget s:user:1 s:name s:age
+send b'*4\r\n$5\r\nHMGET\r\n$6\r\nuser:1\r\n$4\r\nname\r\n$3\r\nage\r\n'
+= [b'Ada', b'36']
+call hdel s:user:1 s:lang s:none
+send b'*4\r\n$4\r\nHDEL\r\n$6\r\nuser:1\r\n$4\r\nlang\r\n$4\r\nnone\r\n'
+= 1
+call hincrby s:user:1 s:age
+send b'*4\r\n$7\r\nHINCRBY\r\n$6\r\nuser:1\r\n$3\r\nage\r\n$1\r\n1\r\n'
+= 37
+call hincrbyfloat s:user:1 s:age f:0.5
+send b'*4\r\n$12\r\nHINCRBYFLOAT\r\n$6\r\nuser:1\r\n$3\r\nage\r\n$3\r\n0.5\r\n'
+= 37.5
+call hkeys s:user:1
+send b'*2\r\n$5\r\nHKEYS\r\n$6\r\nuser:1\r\n'
+= [b'name', b'age']
+call hvals s:user:1
+send b'*2\r\n$5\r\nHVALS\r\n$6\r\nuser:1\r\n'
+= [b'Ada', b'37.5']
+call hlen s:user:1
+send b'*2\r\n$4\r\nHLEN\r\n$6\r\nuser:1\r\n'
+= 2
+call hexists s:user:1 s:name
+send b'*3\r\n$7\r\nHEXISTS\r\n$6\r\nuser:1\r\n$4\r\nname\r\n'
+= True
+call hsetnx s:user:1 s:name s:Bob
+send b'*4\r\n$6\r\nHSETNX\r\n$6\r\nuser:1\r\n$4\r\nname\r\n$3\r\nBob\r\n'
+= 0
+call hrandfield s:user:1 count=i:2 withvalues=T:
+send b'*4\r\n$10\r\nHRANDFIELD\r\n$6\r\nuser:1\r\n$1\r\n2\r\n$10\r\nWITHVALUES\r\n'
+= [b'age', b'37.5', b'name', b'Ada']
+call hstrlen s:user:1 s:name
+send b'*3\r\n$7\r\nHSTRLEN\r\n$6\r\nuser:1\r\n$4\r\nname\r\n'
+= 3
+call hscan s:user:1 match=s:* count=i:10
+send b'*7\r\n$5\r\nHSCAN\r\n$6\r\nuser:1\r\n$1\r\n0\r\n$5\r\nMATCH\r\n$1\r\n*\r\n$5\r\nCOUNT\r\n$2\r\n10\r\n'
+= (0, {b'name': b'Ada', b'age': b'37.5'})
+call hscan s:user:1 no_values=T:
+send b'*4\r\n$5\r\nHSCAN\r\n$6\r\nuser:1\r\n$1\r\n0\r\n$8\r\nNOVALUES\r\n'
+= (0, [b'name', b'age'])
+call hscan s:user:1 no_values=F:
+send b'*4\r\n$5\r\nHSCAN\r\n$6\r\nuser:1\r\n$1\r\n0\r\n$8\r\nNOVALUES\r\n'
+= (0, {b'name': b'age'})
+call hscan s:empty
+send b'*3\r\n$5\r\nHSCAN\r\n$5\r\nempty\r\n$1\r\n0\r\n'
+= (0, {})
+close
+
+== lists
+client
+call lpush s:q s:a s:b s:c
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*5\r\n$5\r\nLPUSH\r\n$1\r\nq\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n'
+= 3
+call rpush s:q i:1 f:2.5
+send b'*4\r\n$5\r\nRPUSH\r\n$1\r\nq\r\n$1\r\n1\r\n$3\r\n2.5\r\n'
+= 5
+call lpop s:q
+send b'*2\r\n$4\r\nLPOP\r\n$1\r\nq\r\n'
+= b'c'
+call lpop s:q count=i:2
+send b'*3\r\n$4\r\nLPOP\r\n$1\r\nq\r\n$1\r\n2\r\n'
+= [b'b', b'a']
+call rpop s:empty
+send b'*2\r\n$4\r\nRPOP\r\n$5\r\nempty\r\n'
+= None
+call rpop s:q i:1
+send b'*3\r\n$4\r\nRPOP\r\n$1\r\nq\r\n$1\r\n1\r\n'
+= [b'2.5']
+call lrange s:q i:0 i:-1
+send b'*4\r\n$6\r\nLRANGE\r\n$1\r\nq\r\n$1\r\n0\r\n$2\r\n-1\r\n'
+= [b'1']
+call llen s:q
+send b'*2\r\n$4\r\nLLEN\r\n$1\r\nq\r\n'
+= 1
+call lindex s:q i:0
+send b'*3\r\n$6\r\nLINDEX\r\n$1\r\nq\r\n$1\r\n0\r\n'
+= b'1'
+call lset s:q i:0 s:one
+send b'*4\r\n$4\r\nLSET\r\n$1\r\nq\r\n$1\r\n0\r\n$3\r\none\r\n'
+= True
+call lset s:q i:9 s:x
+send b'*4\r\n$4\r\nLSET\r\n$1\r\nq\r\n$1\r\n9\r\n$1\r\nx\r\n'
+! ResponseError: index out of range
+call ltrim s:q i:0 i:99
+send b'*4\r\n$5\r\nLTRIM\r\n$1\r\nq\r\n$1\r\n0\r\n$2\r\n99\r\n'
+= True
+call blpop [ s:q s:r ] timeout=i:1
+send b'*4\r\n$5\r\nBLPOP\r\n$1\r\nq\r\n$1\r\nr\r\n$1\r\n1\r\n'
+= (b'q', b'one')
+call brpop s:q timeout=N:
+send b'*3\r\n$5\r\nBRPOP\r\n$1\r\nq\r\n$1\r\n0\r\n'
+= None
+call lpos s:q s:x
+send b'*3\r\n$4\r\nLPOS\r\n$1\r\nq\r\n$1\r\nx\r\n'
+= 2
+call lpos s:q s:x rank=i:-1 count=i:2 maxlen=i:100
+send b'*9\r\n$4\r\nLPOS\r\n$1\r\nq\r\n$1\r\nx\r\n$4\r\nRANK\r\n$2\r\n-1\r\n$5\r\nCOUNT\r\n$1\r\n2\r\n$6\r\nMAXLEN\r\n$3\r\n100\r\n'
+= [2, 6]
+call lmove s:q s:r
+send b'*5\r\n$5\r\nLMOVE\r\n$1\r\nq\r\n$1\r\nr\r\n$4\r\nLEFT\r\n$5\r\nRIGHT\r\n'
+= b'one'
+call lmove s:q s:r s:RIGHT s:LEFT
+send b'*5\r\n$5\r\nLMOVE\r\n$1\r\nq\r\n$1\r\nr\r\n$5\r\nRIGHT\r\n$4\r\nLEFT\r\n'
+= b'one'
+call linsert s:q s:BEFORE s:one s:zero
+send b'*5\r\n$7\r\nLINSERT\r\n$1\r\nq\r\n$6\r\nBEFORE\r\n$3\r\none\r\n$4\r\nzero\r\n'
+= 4
+call lrem s:q i:0 s:x
+send b'*4\r\n$4\r\nLREM\r\n$1\r\nq\r\n$1\r\n0\r\n$1\r\nx\r\n'
+= 2
+close
+
+== sets
+client
+call sadd s:tags s:red s:green s:blue
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*5\r\n$4\r\nSADD\r\n$4\r\ntags\r\n$3\r\nred\r\n$5\r\ngreen\r\n$4\r\nblue\r\n'
+= 3
+call srem s:tags s:green
+send b'*3\r\n$4\r\nSREM\r\n$4\r\ntags\r\n$5\r\ngreen\r\n'
+= 1
+call smembers s:tags
+send b'*2\r\n$8\r\nSMEMBERS\r\n$4\r\ntags\r\n'
+= {b'blue', b'red'}
+call smembers s:none
+send b'*2\r\n$8\r\nSMEMBERS\r\n$4\r\nnone\r\n'
+= set()
+call sismember s:tags s:red
+send b'*3\r\n$9\r\nSISMEMBER\r\n$4\r\ntags\r\n$3\r\nred\r\n'
+= 1
+call smismember s:tags [ s:red s:pink ]
+send b'*4\r\n$10\r\nSMISMEMBER\r\n$4\r\ntags\r\n$3\r\nred\r\n$4\r\npink\r\n'
+= [1, 0]
+call scard s:tags
+send b'*2\r\n$5\r\nSCARD\r\n$4\r\ntags\r\n'
+= 2
+call sinter [ s:tags s:warm ]
+send b'*3\r\n$6\r\nSINTER\r\n$4\r\ntags\r\n$4\r\nwarm\r\n'
+= {b'red'}
+call sunion s:tags s:warm
+send b'*3\r\n$6\r\nSUNION\r\n$4\r\ntags\r\n$4\r\nwarm\r\n'
+= {b'blue', b'orange', b'red'}
+call sdiff s:tags s:warm
+send b'*3\r\n$5\r\nSDIFF\r\n$4\r\ntags\r\n$4\r\nwarm\r\n'
+= {b'blue'}
+call spop s:tags
+send b'*2\r\n$4\r\nSPOP\r\n$4\r\ntags\r\n'
+= b'blue'
+call spop s:tags count=i:0
+send b'*3\r\n$4\r\nSPOP\r\n$4\r\ntags\r\n$1\r\n0\r\n'
+= [b'red']
+call srandmember s:tags i:-2
+send b'*3\r\n$11\r\nSRANDMEMBER\r\n$4\r\ntags\r\n$2\r\n-2\r\n'
+= [b'red', b'red']
+call sscan s:tags match=s:r*
+send b'*5\r\n$5\r\nSSCAN\r\n$4\r\ntags\r\n$1\r\n0\r\n$5\r\nMATCH\r\n$2\r\nr*\r\n'
+= (0, [b'red'])
+call smove s:tags s:warm s:red
+send b'*4\r\n$5\r\nSMOVE\r\n$4\r\ntags\r\n$4\r\nwarm\r\n$3\r\nred\r\n'
+= True
+close
+
+== sorted sets
+client
+call zadd s:board { s:ada i:10 s:bob f:7.5 s:cy i:12 }
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*8\r\n$4\r\nZADD\r\n$5\r\nboard\r\n$2\r\n10\r\n$3\r\nada\r\n$3\r\n7.5\r\n$3\r\nbob\r\n$2\r\n12\r\n$2\r\ncy\r\n'
+= 3
+call zadd s:board { s:ada i:1 } nx=T: xx=T:
+! DataError: ZADD allows either 'nx' or 'xx', not both
+call zadd s:board { s:ada i:1 } gt=T: lt=T:
+! DataError: ZADD allows either 'gt' or 'lt', not both
+call zadd s:board { s:ada i:1 s:bob i:2 } incr=T:
+! DataError: ZADD option 'incr' only works when passing a single element/score pair
+call zadd s:board { s:ada i:1 } nx=T: gt=T:
+! DataError: Only one of 'nx', 'lt', or 'gr' may be defined.
+call zadd s:board { }
+! DataError: ZADD requires at least one element/score pair
+call zadd s:board { s:ada i:1 } incr=T:
+send b'*5\r\n$4\r\nZADD\r\n$5\r\nboard\r\n$4\r\nINCR\r\n$1\r\n1\r\n$3\r\nada\r\n'
+= 11.0
+call zadd s:board { s:ada i:1 } incr=T: xx=T: lt=T:
+send b'*7\r\n$4\r\nZADD\r\n$5\r\nboard\r\n$2\r\nXX\r\n$4\r\nINCR\r\n$2\r\nLT\r\n$1\r\n1\r\n$3\r\nada\r\n'
+= None
+call zadd s:board { s:dee i:3 } ch=T: xx=T: gt=T:
+send b'*7\r\n$4\r\nZADD\r\n$5\r\nboard\r\n$2\r\nXX\r\n$2\r\nCH\r\n$2\r\nGT\r\n$1\r\n3\r\n$3\r\ndee\r\n'
+= 1
+call zrange s:board i:0 i:-1
+send b'*4\r\n$6\r\nZRANGE\r\n$5\r\nboard\r\n$1\r\n0\r\n$2\r\n-1\r\n'
+= [b'bob', b'ada', b'cy']
+call zrange s:board i:0 i:-1 withscores=T:
+send b'*5\r\n$6\r\nZRANGE\r\n$5\r\nboard\r\n$1\r\n0\r\n$2\r\n-1\r\n$10\r\nWITHSCORES\r\n'
+= [(b'bob', 7.5), (b'ada', 11.0), (b'cy', 12.0)]
+call zrange s:board i:0 i:1 desc=T: withscores=T:
+send b'*5\r\n$9\r\nZREVRANGE\r\n$5\r\nboard\r\n$1\r\n0\r\n$1\r\n1\r\n$10\r\nWITHSCORES\r\n'
+= [(b'cy', 12.0), (b'ada', 11.0)]
+call zrange s:board s:(8 s:+inf byscore=T: offset=i:0 num=i:2
+send b'*8\r\n$6\r\nZRANGE\r\n$5\r\nboard\r\n$2\r\n(8\r\n$4\r\n+inf\r\n$7\r\nBYSCORE\r\n$5\r\nLIMIT\r\n$1\r\n0\r\n$1\r\n2\r\n'
+= [b'ada', b'cy']
+call zrange s:board s:+inf s:(8 byscore=T: desc=T: offset=i:0 num=i:2
+send b'*9\r\n$6\r\nZRANGE\r\n$5\r\nboard\r\n$4\r\n+inf\r\n$2\r\n(8\r\n$7\r\nBYSCORE\r\n$3\r\nREV\r\n$5\r\nLIMIT\r\n$1\r\n0\r\n$1\r\n2\r\n'
+= [b'cy', b'ada']
+call zrange s:board i:0 i:1 byscore=T: bylex=T:
+! DataError: ``byscore`` and ``bylex`` can not be specified together.
+call zrange s:board s:[a s:[z bylex=T: withscores=T:
+! DataError: ``withscores`` not supported in combination with ``bylex``.
+call zrange s:board i:0 i:1 offset=i:1
+! DataError: ``offset`` and ``num`` must both be specified.
+call zrangebyscore s:board s:-inf i:11 start=i:0 num=i:1 withscores=T:
+send b'*8\r\n$13\r\nZRANGEBYSCORE\r\n$5\r\nboard\r\n$4\r\n-inf\r\n$2\r\n11\r\n$5\r\nLIMIT\r\n$1\r\n0\r\n$1\r\n1\r\n$10\r\nWITHSCORES\r\n'
+= [(b'ada', 11.0)]
+call zrangebyscore s:board i:0 i:1 start=i:0
+! DataError: ``start`` and ``num`` must both be specified
+call zrevrange s:board i:0 i:1
+send b'*4\r\n$9\r\nZREVRANGE\r\n$5\r\nboard\r\n$1\r\n0\r\n$1\r\n1\r\n'
+= [b'cy', b'ada']
+call zscore s:board s:bob
+send b'*3\r\n$6\r\nZSCORE\r\n$5\r\nboard\r\n$3\r\nbob\r\n'
+= 7.5
+call zscore s:board s:nobody
+send b'*3\r\n$6\r\nZSCORE\r\n$5\r\nboard\r\n$6\r\nnobody\r\n'
+= None
+call zscore s:board s:infinite
+send b'*3\r\n$6\r\nZSCORE\r\n$5\r\nboard\r\n$8\r\ninfinite\r\n'
+= inf
+call zscore s:board s:neg
+send b'*3\r\n$6\r\nZSCORE\r\n$5\r\nboard\r\n$3\r\nneg\r\n'
+= -inf
+call zincrby s:board f:2.0 s:bob
+send b'*4\r\n$7\r\nZINCRBY\r\n$5\r\nboard\r\n$3\r\n2.0\r\n$3\r\nbob\r\n'
+= 9.5
+call zrank s:board s:bob
+send b'*3\r\n$5\r\nZRANK\r\n$5\r\nboard\r\n$3\r\nbob\r\n'
+= 0
+call zrank s:board s:bob withscore=T:
+send b'*4\r\n$5\r\nZRANK\r\n$5\r\nboard\r\n$3\r\nbob\r\n$9\r\nWITHSCORE\r\n'
+= [0, b'9.5']
+call zrank s:board s:nobody
+send b'*3\r\n$5\r\nZRANK\r\n$5\r\nboard\r\n$6\r\nnobody\r\n'
+= None
+call zrem s:board s:dee
+send b'*3\r\n$4\r\nZREM\r\n$5\r\nboard\r\n$3\r\ndee\r\n'
+= 1
+call zcard s:board
+send b'*2\r\n$5\r\nZCARD\r\n$5\r\nboard\r\n'
+= 3
+call zcount s:board s:(9 s:+inf
+send b'*4\r\n$6\r\nZCOUNT\r\n$5\r\nboard\r\n$2\r\n(9\r\n$4\r\n+inf\r\n'
+= 2
+call zpopmin s:board
+send b'*2\r\n$7\r\nZPOPMIN\r\n$5\r\nboard\r\n'
+= [(b'bob', 9.5)]
+call zpopmin s:board i:2
+send b'*3\r\n$7\r\nZPOPMIN\r\n$5\r\nboard\r\n$1\r\n2\r\n'
+= [(b'ada', 11.0), (b'cy', 12.0)]
+call zpopmin s:empty
+send b'*2\r\n$7\r\nZPOPMIN\r\n$5\r\nempty\r\n'
+= []
+call zmscore s:board [ s:ada s:x ]
+send b'*4\r\n$7\r\nZMSCORE\r\n$5\r\nboard\r\n$3\r\nada\r\n$1\r\nx\r\n'
+= [11.0, None]
+call zmscore s:board [ ]
+! DataError: ZMSCORE members must be a non-empty list
+call zscan s:board
+send b'*3\r\n$5\r\nZSCAN\r\n$5\r\nboard\r\n$1\r\n0\r\n'
+= (0, [(b'ada', 11.0), (b'cy', 12.0)])
+call zscan s:board score_cast_func=c:int
+send b'*3\r\n$5\r\nZSCAN\r\n$5\r\nboard\r\n$1\r\n0\r\n'
+= (0, [(b'ada', 11)])
+call zscan s:board score_cast_func=c:int
+send b'*3\r\n$5\r\nZSCAN\r\n$5\r\nboard\r\n$1\r\n0\r\n'
+! ValueError: invalid literal for int() with base 10: b'11.5'
+call zrange s:board i:0 i:0 withscores=T: score_cast_func=c:int
+send b'*5\r\n$6\r\nZRANGE\r\n$5\r\nboard\r\n$1\r\n0\r\n$1\r\n0\r\n$10\r\nWITHSCORES\r\n'
+= [(b'ada', 11)]
+call zunionstore s:out [ s:a s:b ]
+send b'*5\r\n$11\r\nZUNIONSTORE\r\n$3\r\nout\r\n$1\r\n2\r\n$1\r\na\r\n$1\r\nb\r\n'
+= 4
+call zunionstore s:out { s:a i:2 s:b f:0.5 } aggregate=s:max
+send b'*10\r\n$11\r\nZUNIONSTORE\r\n$3\r\nout\r\n$1\r\n2\r\n$1\r\na\r\n$1\r\nb\r\n$7\r\nWEIGHTS\r\n$1\r\n2\r\n$3\r\n0.5\r\n$9\r\nAGGREGATE\r\n$3\r\nmax\r\n'
+= 4
+call zunionstore s:out [ s:a ] aggregate=s:avg
+! DataError: aggregate can be sum, min or max.
+close
+
+== streams
+client
+call xadd s:events { s:type s:login s:user s:ada }
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*7\r\n$4\r\nXADD\r\n$6\r\nevents\r\n$1\r\n*\r\n$4\r\ntype\r\n$5\r\nlogin\r\n$4\r\nuser\r\n$3\r\nada\r\n'
+= b'1700000000000-0'
+call xadd s:events { s:type s:logout } maxlen=i:1000
+send b'*8\r\n$4\r\nXADD\r\n$6\r\nevents\r\n$6\r\nMAXLEN\r\n$1\r\n~\r\n$4\r\n1000\r\n$1\r\n*\r\n$4\r\ntype\r\n$6\r\nlogout\r\n'
+= b'1700000000001-0'
+call xadd s:events { s:t i:1 } maxlen=i:10 approximate=F: limit=i:5 nomkstream=T: id=s:1700000000002-0
+send b'*10\r\n$4\r\nXADD\r\n$6\r\nevents\r\n$6\r\nMAXLEN\r\n$2\r\n10\r\n$5\r\nLIMIT\r\n$1\r\n5\r\n$10\r\nNOMKSTREAM\r\n$15\r\n1700000000002-0\r\n$1\r\nt\r\n$1\r\n1\r\n'
+= b'1700000000002-0'
+call xadd s:events { s:t i:2 } minid=s:1699999999999-0 nomkstream=T:
+send b'*9\r\n$4\r\nXADD\r\n$6\r\nevents\r\n$5\r\nMINID\r\n$1\r\n~\r\n$15\r\n1699999999999-0\r\n$10\r\nNOMKSTREAM\r\n$1\r\n*\r\n$1\r\nt\r\n$1\r\n2\r\n'
+= None
+call xadd s:events { s:t i:1 } maxlen=i:10 minid=s:0
+! DataError: Only one of ```maxlen``` or ```minid``` may be specified
+call xadd s:events { }
+! DataError: XADD fields must be a non-empty dict
+call xadd s:events { s:t i:1 } maxlen=i:-1
+! DataError: XADD maxlen must be non-negative integer
+call xrange s:events
+send b'*4\r\n$6\r\nXRANGE\r\n$6\r\nevents\r\n$1\r\n-\r\n$1\r\n+\r\n'
+= [(b'1700000000000-0', {b'type': b'login', b'user': b'ada'}), (b'1700000000001-0', {b'type': b'logout'})]
+call xrange s:events min=s:- max=s:+ count=i:1
+send b'*6\r\n$6\r\nXRANGE\r\n$6\r\nevents\r\n$1\r\n-\r\n$1\r\n+\r\n$5\r\nCOUNT\r\n$1\r\n1\r\n'
+= [(b'1700000000000-0', {b'type': b'login', b'user': b'ada'})]
+call xrange s:events count=i:0
+! DataError: XRANGE count must be a positive integer
+call xrevrange s:events
+send b'*4\r\n$9\r\nXREVRANGE\r\n$6\r\nevents\r\n$1\r\n+\r\n$1\r\n-\r\n'
+= [(b'1700000000001-0', {b'type': b'logout'}), (b'1700000000000-0', {b'type': b'login', b'user': b'ada'})]
+call xread { s:events s:0 s:audit s:$ } count=i:10 block=i:100
+send b'*10\r\n$5\r\nXREAD\r\n$5\r\nBLOCK\r\n$3\r\n100\r\n$5\r\nCOUNT\r\n$2\r\n10\r\n$7\r\nSTREAMS\r\n$6\r\nevents\r\n$5\r\naudit\r\n$1\r\n0\r\n$1\r\n$\r\n'
+= [[b'events', [(b'1700000000000-0', {b'type': b'login', b'user': b'ada'}), (b'1700000000001-0', {b'type': b'logout'})]], [b'audit', [(b'5-0', {b'k': b'v'})]]]
+call xread { s:events s:$ } block=i:0
+send b'*6\r\n$5\r\nXREAD\r\n$5\r\nBLOCK\r\n$1\r\n0\r\n$7\r\nSTREAMS\r\n$6\r\nevents\r\n$1\r\n$\r\n'
+= []
+call xread { s:events s:$ } block=i:-1
+! DataError: XREAD block must be a non-negative integer
+call xread { }
+! DataError: XREAD streams must be a non empty dict
+call xgroup_create s:events s:workers id=s:0 mkstream=T: entries_read=i:2
+send b'*8\r\n$6\r\nXGROUP\r\n$6\r\nCREATE\r\n$6\r\nevents\r\n$7\r\nworkers\r\n$1\r\n0\r\n$8\r\nMKSTREAM\r\n$11\r\nENTRIESREAD\r\n$1\r\n2\r\n'
+= True
+call xgroup_create s:events s:workers
+send b'*5\r\n$6\r\nXGROUP\r\n$6\r\nCREATE\r\n$6\r\nevents\r\n$7\r\nworkers\r\n$1\r\n$\r\n'
+! ResponseError: BUSYGROUP Consumer Group name already exists
+call xreadgroup s:workers s:w1 { s:events s:> } count=i:2 noack=T:
+send b'*10\r\n$10\r\nXREADGROUP\r\n$5\r\nGROUP\r\n$7\r\nworkers\r\n$2\r\nw1\r\n$5\r\nCOUNT\r\n$1\r\n2\r\n$5\r\nNOACK\r\n$7\r\nSTREAMS\r\n$6\r\nevents\r\n$1\r\n>\r\n'
+= [[b'events', [(b'1700000000000-0', {b'type': b'login', b'user': b'ada'}), (b'1700000000001-0', {})]]]
+call xack s:events s:workers s:1700000000000-0
+send b'*4\r\n$4\r\nXACK\r\n$6\r\nevents\r\n$7\r\nworkers\r\n$15\r\n1700000000000-0\r\n'
+= 1
+call xlen s:events
+send b'*2\r\n$4\r\nXLEN\r\n$6\r\nevents\r\n'
+= 2
+call xinfo_stream s:events
+send b'*3\r\n$5\r\nXINFO\r\n$6\r\nSTREAM\r\n$6\r\nevents\r\n'
+= {'length': 2, 'radix-tree-keys': 1, 'groups': 1, 'last-generated-id': b'1700000000001-0', 'first-entry': (b'1700000000000-0', {b'type': b'login', b'user': b'ada'}), 'last-entry': (b'1700000000001-0', {b'type': b'logout'})}
+call xinfo_stream s:empty
+send b'*3\r\n$5\r\nXINFO\r\n$6\r\nSTREAM\r\n$5\r\nempty\r\n'
+= {'length': 0, 'groups': 0, 'first-entry': None, 'last-entry': None}
+call xinfo_stream s:events full=T:
+send b'*4\r\n$5\r\nXINFO\r\n$6\r\nSTREAM\r\n$6\r\nevents\r\n$4\r\nFULL\r\n'
+= {'length': 2, 'entries': {b'1700000000000-0': {b'type': b'login', b'user': b'ada'}, b'1700000000001-0': {b'type': b'logout'}}, 'groups': [{'name': b'workers', 'pel-count': 1, 'consumers': [{'name': b'w1', 'seen-time': 1700000000500, 'pel-count': 1}]}]}
+call xinfo_groups s:events
+send b'*3\r\n$5\r\nXINFO\r\n$6\r\nGROUPS\r\n$6\r\nevents\r\n'
+= [{'name': b'workers', 'consumers': 1, 'pending': 1, 'last-delivered-id': b'1700000000001-0'}]
+call xpending s:events s:workers
+send b'*3\r\n$8\r\nXPENDING\r\n$6\r\nevents\r\n$7\r\nworkers\r\n'
+= {'pending': 1, 'min': b'1700000000001-0', 'max': b'1700000000001-0', 'consumers': [{'name': b'w1', 'pending': 1}]}
+call xpending s:events s:idle
+send b'*3\r\n$8\r\nXPENDING\r\n$6\r\nevents\r\n$4\r\nidle\r\n'
+= {'pending': 0, 'min': None, 'max': None, 'consumers': []}
+call xpending_range s:events s:workers s:- s:+ i:10
+send b'*6\r\n$8\r\nXPENDING\r\n$6\r\nevents\r\n$7\r\nworkers\r\n$1\r\n-\r\n$1\r\n+\r\n$2\r\n10\r\n'
+= [{'message_id': b'1700000000001-0', 'consumer': b'w1', 'time_since_delivered': 4200, 'times_delivered': 1}]
+call xpending_range s:events s:workers s:- s:+ i:10 consumername=s:w1 idle=i:1000
+send b'*9\r\n$8\r\nXPENDING\r\n$6\r\nevents\r\n$7\r\nworkers\r\n$4\r\nIDLE\r\n$4\r\n1000\r\n$1\r\n-\r\n$1\r\n+\r\n$2\r\n10\r\n$2\r\nw1\r\n'
+= []
+call xpending_range s:events s:workers N: N: N:
+send b'*3\r\n$8\r\nXPENDING\r\n$6\r\nevents\r\n$7\r\nworkers\r\n'
+= {'pending': 1, 'min': b'1700000000001-0', 'max': b'1700000000001-0', 'consumers': [{'name': b'w1', 'pending': 1}]}
+call xpending_range s:events s:workers N: N: N: idle=i:5
+! DataError: if XPENDING is provided with idle time or consumername, it must be provided with min, max and count parameters
+call xpending_range s:events s:workers s:- N: i:10
+! DataError: XPENDING must be provided with min, max and count parameters, or none of them.
+call xpending_range s:events s:workers s:- s:+ i:-1
+! DataError: XPENDING count must be a integer >= 0
+call xtrim s:events maxlen=i:100
+send b'*5\r\n$5\r\nXTRIM\r\n$6\r\nevents\r\n$6\r\nMAXLEN\r\n$1\r\n~\r\n$3\r\n100\r\n'
+= 0
+call xtrim s:events minid=s:1700000000001-0 approximate=F: limit=i:10
+send b'*6\r\n$5\r\nXTRIM\r\n$6\r\nevents\r\n$5\r\nMINID\r\n$15\r\n1700000000001-0\r\n$5\r\nLIMIT\r\n$2\r\n10\r\n'
+= 1
+call xtrim s:events
+! DataError: One of ``maxlen`` or ``minid`` must be specified
+call xdel s:events s:1700000000000-0
+send b'*3\r\n$4\r\nXDEL\r\n$6\r\nevents\r\n$15\r\n1700000000000-0\r\n'
+= 1
+call xclaim s:events s:workers s:w2 i:1000 [ s:1700000000001-0 ] idle=i:5 time=i:1700000000999 retrycount=i:3 force=T:
+send <164 bytes, fnv 08bd986d>
+= [(b'1700000000001-0', {b'type': b'logout'})]
+call xclaim s:events s:workers s:w2 i:1000 [ s:1700000000001-0 ] justid=T:
+send b'*7\r\n$6\r\nXCLAIM\r\n$6\r\nevents\r\n$7\r\nworkers\r\n$2\r\nw2\r\n$4\r\n1000\r\n$15\r\n1700000000001-0\r\n$6\r\nJUSTID\r\n'
+= [b'1700000000001-0']
+call xclaim s:events s:workers s:w2 i:-1 [ s:1-0 ]
+! DataError: XCLAIM min_idle_time must be a non negative integer
+call xclaim s:events s:workers s:w2 i:5 [ ]
+! DataError: XCLAIM message_ids must be a non empty list or tuple of message IDs to claim
+call xautoclaim s:events s:workers s:w2 i:1000 count=i:10
+send b'*8\r\n$10\r\nXAUTOCLAIM\r\n$6\r\nevents\r\n$7\r\nworkers\r\n$2\r\nw2\r\n$4\r\n1000\r\n$3\r\n0-0\r\n$5\r\nCOUNT\r\n$2\r\n10\r\n'
+= [b'0-0', [(b'1700000000001-0', {b'type': b'logout'})], []]
+call xautoclaim s:events s:workers s:w2 i:1000 justid=T:
+send b'*7\r\n$10\r\nXAUTOCLAIM\r\n$6\r\nevents\r\n$7\r\nworkers\r\n$2\r\nw2\r\n$4\r\n1000\r\n$3\r\n0-0\r\n$6\r\nJUSTID\r\n'
+= [b'1700000000001-0']
+call xautoclaim s:events s:workers s:w2 i:1000 count=i:-1
+! DataError: XPENDING count must be a integer >= 0
+call xautoclaim s:events s:workers s:w2 i:-5
+! DataError: XAUTOCLAIM min_idle_time must be a nonnegative integer
+close
+
+== server
+client
+call info
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$4\r\nINFO\r\n'
+= <969 chars, fnv 19dd9256>
+call info s:keyspace
+send b'*2\r\n$4\r\nINFO\r\n$8\r\nkeyspace\r\n'
+= {'db0': {'keys': 1, 'expires': 0}}
+call info s:cpu s:memory
+send b'*3\r\n$4\r\nINFO\r\n$3\r\ncpu\r\n$6\r\nmemory\r\n'
+= {'x': 1}
+call config_get s:maxmemory*
+send b'*3\r\n$6\r\nCONFIG\r\n$3\r\nGET\r\n$10\r\nmaxmemory*\r\n'
+= {'maxmemory': '0', 'maxmemory-policy': 'noeviction'}
+call config_get s:nothing*
+send b'*3\r\n$6\r\nCONFIG\r\n$3\r\nGET\r\n$8\r\nnothing*\r\n'
+= {}
+call config_set s:maxmemory s:100mb
+send b'*4\r\n$6\r\nCONFIG\r\n$3\r\nSET\r\n$9\r\nmaxmemory\r\n$5\r\n100mb\r\n'
+= True
+call ping
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+call echo s:hi
+send b'*2\r\n$4\r\nECHO\r\n$2\r\nhi\r\n'
+= b'hi'
+call dbsize
+send b'*1\r\n$6\r\nDBSIZE\r\n'
+= 12
+call time
+send b'*1\r\n$4\r\nTIME\r\n'
+= (1700000000, 123456)
+call client_list
+send b'*2\r\n$6\r\nCLIENT\r\n$4\r\nLIST\r\n'
+= <763 chars, fnv 14ef37dd>
+call client_list _type=s:normal client_id=[ s:3 s:4 ]
+send b'*6\r\n$6\r\nCLIENT\r\n$4\r\nLIST\r\n$4\r\nTYPE\r\n$6\r\nnormal\r\n$2\r\nID\r\n$3\r\n3 4\r\n'
+= [{'id': '3', 'addr': '127.0.0.1:50000', 'laddr': '127.0.0.1:6379', 'fd': '8', 'name': '', 'age': '10', 'idle': '0', 'flags': 'N', 'db': '0', 'sub': '0', 'psub': '0', 'multi': '-1', 'qbuf': '26', 'qbuf-free': '20448', 'argv-mem': '10', 'obl': '0', 'oll': '0', 'omem': '0', 'tot-mem': '22298', 'events': 'r', 'cmd': 'client|list', 'user': 'default', 'lib-name': 'redis-py', 'lib-ver': '5.2.1'}]
+call client_list _type=s:bogus
+! DataError: CLIENT LIST _type must be one of ('normal', 'master', 'replica', 'pubsub')
+call client_list client_id=s:3
+! DataError: client_id must be a list
+call client_info
+send b'*2\r\n$6\r\nCLIENT\r\n$4\r\nINFO\r\n'
+= {'id': 3, 'addr': '127.0.0.1:50000', 'laddr': '127.0.0.1:6379', 'fd': '8', 'name': '', 'age': 10, 'idle': 0, 'flags': 'N', 'db': 0, 'sub': 0, 'psub': 0, 'multi': -1, 'qbuf': 26, 'qbuf-free': 20448, 'argv-mem': 10, 'obl': 0, 'oll': 0, 'omem': 0, 'tot-mem': 22298, 'events': 'r', 'cmd': 'client|list', 'user': 'default', 'lib-name': 'redis-py', 'lib-ver': '5.2.1'}
+call client_setname s:worker
+send b'*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$6\r\nworker\r\n'
+= True
+call client_getname
+send b'*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n'
+= 'worker'
+call client_getname
+send b'*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n'
+= None
+call client_kill_filter _type=s:NORMAL skipme=T: _id=i:3 addr=s:127.0.0.1:1 laddr=s:127.0.0.1:6379 user=s:bob maxage=i:60
+send <184 bytes, fnv 49539cfd>
+= 2
+call client_kill_filter skipme=F:
+send b'*4\r\n$6\r\nCLIENT\r\n$4\r\nKILL\r\n$6\r\nSKIPME\r\n$2\r\nNO\r\n'
+= True
+call client_kill_filter _type=s:replica
+! DataError: CLIENT KILL type must be one of ('normal', 'master', 'slave', 'pubsub')
+call client_kill_filter skipme=i:1
+! DataError: CLIENT KILL skipme must be a bool
+call client_kill_filter
+! DataError: CLIENT KILL <filter> <value> ... ... <filter> <value> must specify at least one filter
+call slowlog_get i:2
+send b'*3\r\n$7\r\nSLOWLOG\r\n$3\r\nGET\r\n$1\r\n2\r\n'
+= [{'id': 14, 'start_time': 1700000000, 'duration': 15000, 'command': b'KEYS *', 'client_address': b'127.0.0.1:50000', 'client_name': b'worker'}, {'id': 13, 'start_time': 1699999999, 'duration': 12000, 'complexity': 42, 'command': b'SORT big'}]
+call execute_command s:SLOWLOG%20RESET
+send b'*2\r\n$7\r\nSLOWLOG\r\n$5\r\nRESET\r\n'
+= True
+call debug_object s:k
+send b'*3\r\n$5\r\nDEBUG\r\n$6\r\nOBJECT\r\n$1\r\nk\r\n'
+= {'type': 'Value', 'at': '0x7f00', 'refcount': 1, 'encoding': 'embstr', 'serializedlength': 4, 'lru': 123, 'lru_seconds_idle': 7}
+call acl_getuser s:app
+send b'*3\r\n$3\r\nACL\r\n$7\r\nGETUSER\r\n$3\r\napp\r\n'
+= {'flags': ['on', 'allkeys'], 'passwords': ['5e88'], 'commands': ['-debug'], 'keys': ['~app:*', '~cache:*'], 'channels': ['&*'], 'selectors': [['commands', '-@all +get', 'keys', '~x', 'channels', '']], 'categories': ['+@all', '-@dangerous'], 'enabled': True}
+call acl_getuser s:off
+send b'*3\r\n$3\r\nACL\r\n$7\r\nGETUSER\r\n$3\r\noff\r\n'
+= {'flags': ['off'], 'passwords': [], 'commands': [], 'keys': [], 'channels': [], 'categories': ['-@all'], 'enabled': False}
+call acl_getuser s:nobody
+send b'*3\r\n$3\r\nACL\r\n$7\r\nGETUSER\r\n$6\r\nnobody\r\n'
+= None
+call acl_log count=i:1
+send b'*3\r\n$3\r\nACL\r\n$3\r\nLOG\r\n$1\r\n1\r\n'
+= <528 chars, fnv 31180c39>
+call acl_log
+send b'*2\r\n$3\r\nACL\r\n$3\r\nLOG\r\n'
+= True
+call acl_log count=s:1
+! DataError: ACL LOG count must be an integer
+call flushdb asynchronous=T:
+send b'*2\r\n$7\r\nFLUSHDB\r\n$5\r\nASYNC\r\n'
+= True
+call swapdb i:0 i:1
+send b'*3\r\n$6\r\nSWAPDB\r\n$1\r\n0\r\n$1\r\n1\r\n'
+= True
+call memory_stats
+send b'*2\r\n$6\r\nMEMORY\r\n$5\r\nSTATS\r\n'
+= {'peak.allocated': 1048576, 'total.allocated': 900000, 'db.0': {'overhead.hashtable.main': 72, 'overhead.hashtable.expires': 32}, 'fragmentation': '1.5', 'keys.count': 3}
+call module_list
+send b'*2\r\n$6\r\nMODULE\r\n$4\r\nLIST\r\n'
+= [{b'name': b'search', b'ver': 21005}, {b'name': b'ReJSON', b'ver': 20609}]
+call execute_command s:CLUSTER%20NODES
+send b'*2\r\n$7\r\nCLUSTER\r\n$5\r\nNODES\r\n'
+= <974 chars, fnv 3e42ca60>
+call execute_command s:CLUSTER%20INFO
+send b'*2\r\n$7\r\nCLUSTER\r\n$4\r\nINFO\r\n'
+= {'cluster_state': 'ok', 'cluster_slots_assigned': '16384', 'cluster_known_nodes': '6'}
+call execute_command s:COMMAND
+send b'*1\r\n$7\r\nCOMMAND\r\n'
+= {'get': {'name': 'get', 'arity': 2, 'flags': ['readonly', 'fast'], 'first_key_pos': 1, 'last_key_pos': 1, 'step_count': 1, 'tips': [], 'key_specifications': [], 'subcommands': []}, 'ping': {'name': 'ping', 'arity': -1, 'flags': ['fast'], 'first_key_pos': 0, 'last_key_pos': 0, 'step_count': 0}}
+call execute_command s:STRALGO s:LCS s:IDX idx=T:
+send b'*3\r\n$7\r\nSTRALGO\r\n$3\r\nLCS\r\n$3\r\nIDX\r\n'
+= {'matches': [[(4, 7), (5, 8)], [(2, 3), (0, 1)]], 'len': 6}
+call execute_command s:STRALGO s:LCS s:IDX idx=T: withmatchlen=T:
+send b'*3\r\n$7\r\nSTRALGO\r\n$3\r\nLCS\r\n$3\r\nIDX\r\n'
+= {'matches': [[4, (4, 7), (5, 8)]], 'len': 6}
+call execute_command s:STRALGO s:LCS s:LEN len=T:
+send b'*3\r\n$7\r\nSTRALGO\r\n$3\r\nLCS\r\n$3\r\nLEN\r\n'
+= 6
+call execute_command s:STRALGO s:LCS
+send b'*2\r\n$7\r\nSTRALGO\r\n$3\r\nLCS\r\n'
+= 'ab'
+call execute_command s:SENTINEL%20MASTERS
+send b'*2\r\n$8\r\nSENTINEL\r\n$7\r\nMASTERS\r\n'
+= {'mymaster': {'name': 'mymaster', 'ip': '10.0.0.1', 'port': 6379, 'flags': 'master', 'num-slaves': 2, 'quorum': 2, 'down-after-milliseconds': 'notanint', 'last-ping-reply': 120, 'is_master': True, 'is_slave': False, 'is_sdown': False, 'is_odown': False, 'is_sentinel': False, 'is_disconnected': False, 'is_master_down': False}}
+call execute_command s:SENTINEL%20MASTER s:mymaster
+send b'*3\r\n$8\r\nSENTINEL\r\n$6\r\nMASTER\r\n$8\r\nmymaster\r\n'
+= {'name': 'mymaster', 'ip': '10.0.0.1', 'port': 6379, 'flags': 's_down,master,disconnected', 'is_master': True, 'is_slave': False, 'is_sdown': True, 'is_odown': False, 'is_sentinel': False, 'is_disconnected': True, 'is_master_down': False}
+call sentinel_get_master_addr_by_name s:mymaster
+send b'*3\r\n$8\r\nSENTINEL\r\n$23\r\nGET-MASTER-ADDR-BY-NAME\r\n$8\r\nmymaster\r\n'
+= (b'10.0.0.1', 6379)
+call sentinel_get_master_addr_by_name s:none
+send b'*3\r\n$8\r\nSENTINEL\r\n$23\r\nGET-MASTER-ADDR-BY-NAME\r\n$4\r\nnone\r\n'
+= None
+call execute_command s:SENTINEL%20SLAVES s:mymaster
+send b'*3\r\n$8\r\nSENTINEL\r\n$6\r\nSLAVES\r\n$8\r\nmymaster\r\n'
+= [{'name': 'mymaster', 'ip': '10.0.0.1', 'port': 6379, 'flags': 'master', 'is_master': True, 'is_slave': False, 'is_sdown': False, 'is_odown': False, 'is_sentinel': False, 'is_disconnected': False, 'is_master_down': False}]
+call execute_command s:RESET
+send b'*1\r\n$5\r\nRESET\r\n'
+= 'RESET'
+call execute_command s:GEOHASH
+send b'*1\r\n$7\r\nGEOHASH\r\n'
+= ['127.0.0.1', '6380']
+call execute_command s:CLIENT%20UNBLOCK i:5
+send b'*3\r\n$6\r\nCLIENT\r\n$7\r\nUNBLOCK\r\n$1\r\n5\r\n'
+= True
+call execute_command s:ACL%20CAT
+send b'*2\r\n$3\r\nACL\r\n$3\r\nCAT\r\n'
+= ['read', 'write']
+call execute_command s:ACL%20GENPASS
+send b'*2\r\n$3\r\nACL\r\n$7\r\nGENPASS\r\n'
+= 'ab12'
+call execute_command s:MODULE%20UNLOAD s:x
+send b'*3\r\n$6\r\nMODULE\r\n$6\r\nUNLOAD\r\n$1\r\nx\r\n'
+= True
+call execute_command s:BGSAVE
+send b'*1\r\n$6\r\nBGSAVE\r\n'
+= True
+close
+
+== geo
+client
+call geoadd s:places [ f:13.361389 f:38.115556 s:Palermo f:15.087269 f:37.502669 s:Catania ]
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*8\r\n$6\r\nGEOADD\r\n$6\r\nplaces\r\n$9\r\n13.361389\r\n$9\r\n38.115556\r\n$7\r\nPalermo\r\n$9\r\n15.087269\r\n$9\r\n37.502669\r\n$7\r\nCatania\r\n'
+= 2
+call geoadd s:places [ f:13.361389 f:38.115556 s:Palermo ] xx=T: ch=T:
+send b'*7\r\n$6\r\nGEOADD\r\n$6\r\nplaces\r\n$2\r\nXX\r\n$2\r\nCH\r\n$9\r\n13.361389\r\n$9\r\n38.115556\r\n$7\r\nPalermo\r\n'
+= 0
+call geoadd s:places [ f:1.0 f:2.0 s:x ] nx=T: xx=T:
+! DataError: GEOADD allows either 'nx' or 'xx', not both
+call geoadd s:places [ f:1.0 f:2.0 ]
+! DataError: GEOADD requires places with lon, lat and name values
+call geopos s:places s:Palermo s:Nowhere
+send b'*4\r\n$6\r\nGEOPOS\r\n$6\r\nplaces\r\n$7\r\nPalermo\r\n$7\r\nNowhere\r\n'
+= [(13.361389338970184, 38.1155563954963), None]
+call geodist s:places s:Palermo s:Catania unit=s:km
+send b'*5\r\n$7\r\nGEODIST\r\n$6\r\nplaces\r\n$7\r\nPalermo\r\n$7\r\nCatania\r\n$2\r\nkm\r\n'
+= 166.2742
+call geodist s:places s:Palermo s:Nowhere
+send b'*4\r\n$7\r\nGEODIST\r\n$6\r\nplaces\r\n$7\r\nPalermo\r\n$7\r\nNowhere\r\n'
+= None
+call geodist s:places s:a s:b unit=s:yd
+! DataError: GEODIST invalid unit
+call geohash s:places s:Palermo s:Catania
+send b'*4\r\n$7\r\nGEOHASH\r\n$6\r\nplaces\r\n$7\r\nPalermo\r\n$7\r\nCatania\r\n'
+= ['sqc8b49rny0', 'sqdtr74hyu0']
+call geosearch s:places longitude=i:15 latitude=i:37 radius=i:200 unit=s:km withdist=T: withcoord=T: withhash=T: sort=s:asc count=i:2 any=T:
+send <175 bytes, fnv f0c8e021>
+= [[b'Palermo', 190.4424, 3479099956230698, (13.361389338970184, 38.1155563954963)], [b'Catania', 56.4413, 3479447370796909, (15.087267458438873, 37.50266842333162)]]
+call geosearch s:places member=s:Palermo radius=i:300 unit=s:KM withdist=T:
+send b'*8\r\n$9\r\nGEOSEARCH\r\n$6\r\nplaces\r\n$10\r\nFROMMEMBER\r\n$7\r\nPalermo\r\n$8\r\nBYRADIUS\r\n$3\r\n300\r\n$2\r\nKM\r\n$8\r\nWITHDIST\r\n'
+= [[b'Palermo', 190.4424], [b'Catania', 56.4413]]
+call geosearch s:places member=s:Palermo longitude=i:0 latitude=i:0 width=i:400 height=i:400 unit=s:km
+send b'*11\r\n$9\r\nGEOSEARCH\r\n$6\r\nplaces\r\n$10\r\nFROMMEMBER\r\n$7\r\nPalermo\r\n$10\r\nFROMLONLAT\r\n$1\r\n0\r\n$1\r\n0\r\n$5\r\nBYBOX\r\n$3\r\n400\r\n$3\r\n400\r\n$2\r\nkm\r\n'
+= [b'Palermo', b'Catania']
+call geosearch s:places longitude=i:15 latitude=i:37 radius=i:100 unit=s:km
+send b'*8\r\n$9\r\nGEOSEARCH\r\n$6\r\nplaces\r\n$10\r\nFROMLONLAT\r\n$2\r\n15\r\n$2\r\n37\r\n$8\r\nBYRADIUS\r\n$3\r\n100\r\n$2\r\nkm\r\n'
+= [b'Catania']
+call geosearch s:places radius=i:5
+! DataError: GEOSEARCH must have member or longitude and latitude
+call geosearch s:places member=s:Palermo longitude=i:5 latitude=i:5 radius=i:5
+! DataError: GEOSEARCH member and longitude or latitude cant be set together
+call geosearch s:places member=s:Palermo
+! DataError: GEOSEARCH must have radius or width and height
+call geosearch s:places member=s:Palermo radius=i:5 unit=s:yd
+! DataError: GEOSEARCH invalid unit
+call geosearch s:places member=s:Palermo radius=i:5 width=i:2 height=i:2
+! DataError: GEOSEARCH radius and width or height cant be set together
+call geosearch s:places member=s:Palermo radius=i:5 sort=s:up
+! DataError: GEOSEARCH invalid sort
+call geosearch s:places member=s:Palermo radius=i:5 any=T:
+! DataError: GEOSEARCH ``any`` can't be provided without count
+call georadius s:places i:15 i:37 i:200 unit=s:km withdist=T: count=i:1 sort=s:DESC
+send b'*10\r\n$9\r\nGEORADIUS\r\n$6\r\nplaces\r\n$2\r\n15\r\n$2\r\n37\r\n$3\r\n200\r\n$2\r\nkm\r\n$8\r\nWITHDIST\r\n$5\r\nCOUNT\r\n$1\r\n1\r\n$4\r\nDESC\r\n'
+= [[b'Palermo', 190.4424]]
+call georadius s:places i:15 i:37 i:200 store=s:near
+send b'*8\r\n$9\r\nGEORADIUS\r\n$6\r\nplaces\r\n$2\r\n15\r\n$2\r\n37\r\n$3\r\n200\r\n$1\r\nm\r\n$5\r\nSTORE\r\n$4\r\nnear\r\n'
+= 2
+call georadius s:places i:15 i:37 i:200 unit=s:yd
+! DataError: GEORADIUS invalid unit
+call georadius s:places i:15 i:37 i:200 any=T:
+! DataError: ``any`` can't be provided without ``count``
+call georadius s:places i:15 i:37 i:200 sort=s:asc
+! DataError: GEORADIUS invalid sort
+call georadius s:places i:15 i:37 i:200 store=s:a store_dist=s:b
+! DataError: GEORADIUS store and store_dist cant be set together
+close
+
+== scripts and pubsub
+client
+call eval s:return%20{1,2,{'nested',false}} i:0
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b"*3\r\n$4\r\nEVAL\r\n$29\r\nreturn {1,2,{'nested',false}}\r\n$1\r\n0\r\n"
+= [1, 2, [b'nested', None]]
+call eval s:return%20redis.call('get',KEYS[1]) i:1 s:k s:extra
+send b"*5\r\n$4\r\nEVAL\r\n$32\r\nreturn redis.call('get',KEYS[1])\r\n$1\r\n1\r\n$1\r\nk\r\n$5\r\nextra\r\n"
+= b'v'
+call evalsha s:e0e1f9fabfc9d4800c877a703b823ac0578ff8db i:0
+send b'*3\r\n$7\r\nEVALSHA\r\n$40\r\ne0e1f9fabfc9d4800c877a703b823ac0578ff8db\r\n$1\r\n0\r\n'
+! NoScriptError: No matching script. Please use EVAL.
+call script_load s:return%201
+send b'*3\r\n$6\r\nSCRIPT\r\n$4\r\nLOAD\r\n$8\r\nreturn 1\r\n'
+= 'e0e1f9fabfc9d4800c877a703b823ac0578ff8db'
+call script_exists s:e0e1 s:ffff
+send b'*4\r\n$6\r\nSCRIPT\r\n$6\r\nEXISTS\r\n$4\r\ne0e1\r\n$4\r\nffff\r\n'
+= [True, False]
+call publish s:news s:hello
+send b'*3\r\n$7\r\nPUBLISH\r\n$4\r\nnews\r\n$5\r\nhello\r\n'
+= 3
+call pubsub_numsub s:news s:sport
+send b'*4\r\n$6\r\nPUBSUB\r\n$6\r\nNUMSUB\r\n$4\r\nnews\r\n$5\r\nsport\r\n'
+= [(b'news', 3), (b'sport', 0)]
+call pubsub_channels
+send b'*3\r\n$6\r\nPUBSUB\r\n$8\r\nCHANNELS\r\n$1\r\n*\r\n'
+= [b'news']
+call setbit s:bits i:7 i:5
+send b'*4\r\n$6\r\nSETBIT\r\n$4\r\nbits\r\n$1\r\n7\r\n$1\r\n1\r\n'
+= 0
+call setbit s:bits i:7 s:
+send b'*4\r\n$6\r\nSETBIT\r\n$4\r\nbits\r\n$1\r\n7\r\n$1\r\n0\r\n'
+= 1
+call getbit s:bits i:7
+send b'*3\r\n$6\r\nGETBIT\r\n$4\r\nbits\r\n$1\r\n7\r\n'
+= 1
+call bitcount s:bits
+send b'*2\r\n$8\r\nBITCOUNT\r\n$4\r\nbits\r\n'
+= 4
+call bitcount s:bits i:0 i:1 mode=s:BIT
+send b'*5\r\n$8\r\nBITCOUNT\r\n$4\r\nbits\r\n$1\r\n0\r\n$1\r\n1\r\n$3\r\nBIT\r\n'
+= 2
+call bitcount s:bits i:0
+! DataError: Both start and end must be specified
+call bitop s:AND s:dest s:a s:b
+send b'*5\r\n$5\r\nBITOP\r\n$3\r\nAND\r\n$4\r\ndest\r\n$1\r\na\r\n$1\r\nb\r\n'
+= 1
+call bitpos s:bits i:1 i:0
+send b'*4\r\n$6\r\nBITPOS\r\n$4\r\nbits\r\n$1\r\n1\r\n$1\r\n0\r\n'
+= 7
+call bitpos s:bits i:1 i:0 i:-1 mode=s:BYTE
+send b'*6\r\n$6\r\nBITPOS\r\n$4\r\nbits\r\n$1\r\n1\r\n$1\r\n0\r\n$2\r\n-1\r\n$4\r\nBYTE\r\n'
+= 7
+call bitpos s:bits i:2
+! DataError: bit must be 0 or 1
+call bitpos s:bits i:1 end=i:3
+! DataError: start argument is not set, when end is specified
+bitfield s:bits | incrby s:u8 s:#0 i:1 | get s:i4 i:0 | set s:u8 i:8 i:255 | execute
+send b'*13\r\n$8\r\nBITFIELD\r\n$4\r\nbits\r\n$6\r\nINCRBY\r\n$2\r\nu8\r\n$2\r\n#0\r\n$1\r\n1\r\n$3\r\nGET\r\n$2\r\ni4\r\n$1\r\n0\r\n$3\r\nSET\r\n$2\r\nu8\r\n$1\r\n8\r\n$3\r\n255\r\n'
+= [1, 0, 255]
+bitfield s:bits default_overflow=s:fail | incrby s:u2 i:100 i:1 | overflow s:sat | incrby s:u2 i:102 i:1 overflow=s:Wrap | execute
+send <172 bytes, fnv 51bbf82d>
+= [None, 3]
+bitfield s:bits default_overflow=s:WRAP | overflow s:wrap | get s:u8 i:0
+= ['BITFIELD', 'bits', 'GET', 'u8', 0]
+call pfadd s:visits s:a s:b s:c
+send b'*5\r\n$5\r\nPFADD\r\n$6\r\nvisits\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n'
+= 1
+call pfcount s:visits
+send b'*2\r\n$7\r\nPFCOUNT\r\n$6\r\nvisits\r\n'
+= 3
+call pfmerge s:all s:visits s:other
+send b'*4\r\n$7\r\nPFMERGE\r\n$3\r\nall\r\n$6\r\nvisits\r\n$5\r\nother\r\n'
+= True
+close
+
+== server errors
+client
+call get s:list
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$4\r\nlist\r\n'
+! ResponseError: WRONGTYPE Operation against a key holding the wrong kind of value
+call incr s:name
+send b'*3\r\n$6\r\nINCRBY\r\n$4\r\nname\r\n$1\r\n1\r\n'
+! ResponseError: value is not an integer or out of range
+call evalsha s:abc i:0
+send b'*3\r\n$7\r\nEVALSHA\r\n$3\r\nabc\r\n$1\r\n0\r\n'
+! NoScriptError: No matching script
+call set s:a s:b
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\nb\r\n'
+! ReadOnlyError: You can't write against a read only replica.
+call execute_command s:FLUSHALL
+send b'*1\r\n$8\r\nFLUSHALL\r\n'
+! NoPermissionError: User bob has no permissions to run the 'flushall' command
+call set s:a s:b
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\nb\r\n'
+! OutOfMemoryError: command not allowed when used memory > 'maxmemory'.
+call execute_command s:EXEC
+send b'*1\r\n$4\r\nEXEC\r\n'
+! ExecAbortError: Transaction discarded because of previous errors.
+call execute_command s:MODULE%20LOAD s:x.so
+send b'*3\r\n$6\r\nMODULE\r\n$4\r\nLOAD\r\n$4\r\nx.so\r\n'
+! ModuleError: Error loading the extension. Please check the server logs.
+call execute_command s:FOO
+send b'*1\r\n$3\r\nFOO\r\n'
+! ResponseError: unknown command 'FOO', with args beginning with: 
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! AuthenticationError: Authentication required.
+call get s:a
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! BusyLoadingError: Redis is loading the dataset in memory
+call get s:a
+connect #3
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! ConnectionError: max number of clients reached
+call get s:a
+connect #4
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+! ResponseError: 
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+! ResponseError: 
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! InvalidResponse: Protocol Error: b'?what'
+call incr s:a
+connect #5
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*3\r\n$6\r\nINCRBY\r\n$1\r\na\r\n$1\r\n1\r\n'
+close
+! ValueError: invalid literal for int() with base 10: b'12x'
+call ping
+connect #6
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= False
+call ping
+send b'*1\r\n$4\r\nPING\r\n'
+= False
+close
+
+== decoded responses
+client decode=T:
+call get s:k
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\nk\r\n'
+= 'café'
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= ['a', ['b', 3], None]
+call get s:bin
+send b'*2\r\n$3\r\nGET\r\n$3\r\nbin\r\n'
+close
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+call get s:cut
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$3\r\ncut\r\n'
+close
+! UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 2-3: unexpected end of data
+call get s:mid
+connect #3
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$3\r\nmid\r\n'
+close
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe2 in position 1: invalid continuation byte
+call hgetall s:u
+connect #4
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$7\r\nHGETALL\r\n$1\r\nu\r\n'
+= {'name': 'Ada', 'age': '36'}
+call smembers s:s
+send b'*2\r\n$8\r\nSMEMBERS\r\n$1\r\ns\r\n'
+= {'a', 'b'}
+call slowlog_get
+send b'*2\r\n$7\r\nSLOWLOG\r\n$3\r\nGET\r\n'
+= [{'id': 14, 'start_time': 1700000000, 'duration': 15000, 'command': b'KEYS *', 'client_address': b'127.0.0.1:50000', 'client_name': b'worker'}]
+call ping
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+call get s:x
+send b'*2\r\n$3\r\nGET\r\n$1\r\nx\r\n'
+! ResponseError: WRONGTYPE bad é
+close
+
+== replacement characters
+client
+call client_list
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$6\r\nCLIENT\r\n$4\r\nLIST\r\n'
+= [{'id': '1', 'addr': 'x', 'name': 'caf�', 'age': '1'}]
+call config_get s:x
+send b'*3\r\n$6\r\nCONFIG\r\n$3\r\nGET\r\n$1\r\nx\r\n'
+= {'a�b': '1'}
+call script_load s:x
+send b'*3\r\n$6\r\nSCRIPT\r\n$4\r\nLOAD\r\n$1\r\nx\r\n'
+= 'ok'
+call script_load s:y
+send b'*3\r\n$6\r\nSCRIPT\r\n$4\r\nLOAD\r\n$1\r\ny\r\n'
+= '�'
+call script_load s:z
+send b'*3\r\n$6\r\nSCRIPT\r\n$4\r\nLOAD\r\n$1\r\nz\r\n'
+= '���z'
+call script_load s:w
+send b'*3\r\n$6\r\nSCRIPT\r\n$4\r\nLOAD\r\n$1\r\nw\r\n'
+= '��q��'
+close
+
+== resp3 types
+client proto=i:3
+call set s:a s:1
+connect #1
+send b'*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n'
+= True
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= b'1'
+call get s:missing
+send b'*2\r\n$3\r\nGET\r\n$7\r\nmissing\r\n'
+= None
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= 3.14
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= inf
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= -10000000000.0
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= nan
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= True
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= False
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= 3492890328409238509324850943850943825024385
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= -12
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+= b'Some string'
+call smembers s:s
+send b'*2\r\n$8\r\nSMEMBERS\r\n$1\r\ns\r\n'
+= {b'a', b'b', b'c'}
+call smembers s:none
+send b'*2\r\n$8\r\nSMEMBERS\r\n$4\r\nnone\r\n'
+= set()
+call hgetall s:u
+send b'*2\r\n$7\r\nHGETALL\r\n$1\r\nu\r\n'
+= {b'name': b'Ada', b'age': b'36'}
+call hgetall s:none
+send b'*2\r\n$7\r\nHGETALL\r\n$4\r\nnone\r\n'
+= {}
+call zrange s:board i:0 i:-1 withscores=T:
+send b'*5\r\n$6\r\nZRANGE\r\n$5\r\nboard\r\n$1\r\n0\r\n$2\r\n-1\r\n$10\r\nWITHSCORES\r\n'
+= [[b'bob', 7.5], [b'ada', 11.0]]
+call zscore s:board s:bob
+send b'*3\r\n$6\r\nZSCORE\r\n$5\r\nboard\r\n$3\r\nbob\r\n'
+= 7.5
+call zpopmin s:board
+send b'*2\r\n$7\r\nZPOPMIN\r\n$5\r\nboard\r\n'
+= [b'ada', 11.0]
+call xread { s:events s:0 s:audit s:0 }
+send b'*6\r\n$5\r\nXREAD\r\n$7\r\nSTREAMS\r\n$6\r\nevents\r\n$5\r\naudit\r\n$1\r\n0\r\n$1\r\n0\r\n'
+= {b'events': [[(b'1-0', {b'a': b'1'})]], b'audit': [[(b'2-0', {b'b': b'2'})]]}
+call xread { s:events s:$ } block=i:10
+send b'*6\r\n$5\r\nXREAD\r\n$5\r\nBLOCK\r\n$2\r\n10\r\n$7\r\nSTREAMS\r\n$6\r\nevents\r\n$1\r\n$\r\n'
+= {}
+call xreadgroup s:g s:c { s:events s:> }
+send b'*7\r\n$10\r\nXREADGROUP\r\n$5\r\nGROUP\r\n$1\r\ng\r\n$1\r\nc\r\n$7\r\nSTREAMS\r\n$6\r\nevents\r\n$1\r\n>\r\n'
+= {b'events': [[(b'1-0', {b'a': b'1'})]]}
+call config_get s:*
+send b'*3\r\n$6\r\nCONFIG\r\n$3\r\nGET\r\n$1\r\n*\r\n'
+= {'maxmemory': '0', 'appendonly': 'no'}
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= b'v'
+call incr s:n
+send b'*3\r\n$6\r\nINCRBY\r\n$1\r\nn\r\n$1\r\n1\r\n'
+= 5
+call set s:a s:2
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n2\r\n'
+= True
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! InvalidResponse: Protocol Error: b'|1'
+call execute_command s:CUSTOM
+connect #2
+send b'*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+! ResponseError: SYNTAX invalid syntax
+call execute_command s:CUSTOM
+send b'*1\r\n$6\r\nCUSTOM\r\n'
+! NoScriptError: x
+call execute_command s:COMMAND
+send b'*1\r\n$7\r\nCOMMAND\r\n'
+= {'get': {'name': 'get', 'arity': 2, 'flags': {'fast', 'readonly'}, 'first_key_pos': 1, 'last_key_pos': 1, 'step_count': 1, 'acl_categories': [b'@read'], 'tips': [], 'key_specifications': [{b'flags': [b'RO']}], 'subcommands': []}}
+call acl_log
+send b'*2\r\n$3\r\nACL\r\n$3\r\nLOG\r\n'
+= [{'count': 1, 'reason': 'auth', 'age-seconds': 4.5}]
+call acl_log
+send b'*2\r\n$3\r\nACL\r\n$3\r\nLOG\r\n'
+= True
+call execute_command s:STRALGO s:LCS s:IDX
+send b'*3\r\n$7\r\nSTRALGO\r\n$3\r\nLCS\r\n$3\r\nIDX\r\n'
+= {'len': 6, 'matches': []}
+call execute_command s:STRALGO s:LCS
+send b'*2\r\n$7\r\nSTRALGO\r\n$3\r\nLCS\r\n'
+= 'ab'
+call xinfo_groups s:events
+send b'*3\r\n$5\r\nXINFO\r\n$6\r\nGROUPS\r\n$6\r\nevents\r\n'
+= [{'name': b'workers', 'pending': 1}]
+call execute_command s:XINFO%20CONSUMERS s:events s:workers
+send b'*4\r\n$5\r\nXINFO\r\n$9\r\nCONSUMERS\r\n$6\r\nevents\r\n$7\r\nworkers\r\n'
+= [{'name': b'w1', 'pending': 0}]
+call xinfo_stream s:events
+send b'*3\r\n$5\r\nXINFO\r\n$6\r\nSTREAM\r\n$6\r\nevents\r\n'
+= {'length': 1, 'first-entry': (b'1-0', {b'a': b'1'}), 'last-entry': (b'1-0', {b'a': b'1'})}
+call xinfo_stream s:events full=T:
+send b'*4\r\n$5\r\nXINFO\r\n$6\r\nSTREAM\r\n$6\r\nevents\r\n$4\r\nFULL\r\n'
+= {'length': 1, 'entries': {b'1-0': {b'a': b'1'}}, 'groups': [{'name': b'g'}]}
+call execute_command s:SENTINEL%20MASTER s:mymaster
+send b'*3\r\n$8\r\nSENTINEL\r\n$6\r\nMASTER\r\n$8\r\nmymaster\r\n'
+! KeyError: 'name'
+call memory_stats
+send b'*2\r\n$6\r\nMEMORY\r\n$5\r\nSTATS\r\n'
+= {'peak.allocated': 100, 'db.0': {b'overhead.hashtable.main': 72}}
+call acl_getuser s:app
+send b'*3\r\n$3\r\nACL\r\n$7\r\nGETUSER\r\n$3\r\napp\r\n'
+= {'flags': ['on'], 'passwords': [], 'commands': [], 'keys': ['~*'], 'channels': ['&*'], 'selectors': [{'commands': '+get', 'keys': '~a'}], 'categories': ['+@all'], 'enabled': True}
+call zmscore s:board [ s:a s:b ]
+send b'*4\r\n$7\r\nZMSCORE\r\n$5\r\nboard\r\n$1\r\na\r\n$1\r\nb\r\n'
+= [1.5, None]
+call geodist s:p s:a s:b
+send b'*4\r\n$7\r\nGEODIST\r\n$1\r\np\r\n$1\r\na\r\n$1\r\nb\r\n'
+= 1.5
+close
+
+== resp3 null bulk
+client proto=i:3
+call get s:a
+connect #1
+send b'*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! TimeoutError: Timeout reading from socket
+
+== resp3 handshake
+client proto=i:3 decode=T:
+call hgetall s:h
+connect #1
+send b'*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$7\r\nHGETALL\r\n$1\r\nh\r\n'
+= {'a': '1'}
+call smembers s:s
+send b'*2\r\n$8\r\nSMEMBERS\r\n$1\r\ns\r\n'
+= {'x', 'y'}
+close
+
+== resp3 wrong version
+client proto=i:3
+call get s:a
+connect #1
+send b'*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n'
+close
+! ConnectionError: Invalid RESP version
+call get s:a
+connect #2
+send b'*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n'
+close
+! ResponseError: NOPROTO unsupported protocol version
+
+== resp3 with password
+client proto=i:3 password=s:s3cret
+call ping
+connect #1
+send b'*5\r\n$5\r\nHELLO\r\n$1\r\n3\r\n$4\r\nAUTH\r\n$7\r\ndefault\r\n$6\r\ns3cret\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= False
+close
+
+== resp3 with username
+client proto=i:3 username=s:app password=s:s3cret client_name=s:worker-1 db=i:2
+call ping
+connect #1
+send b'*5\r\n$5\r\nHELLO\r\n$1\r\n3\r\n$4\r\nAUTH\r\n$3\r\napp\r\n$6\r\ns3cret\r\n'
+send b'*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$8\r\nworker-1\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$6\r\nSELECT\r\n$1\r\n2\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+close
+
+== auth
+client password=s:s3cret
+call ping
+connect #1
+send b'*2\r\n$4\r\nAUTH\r\n$6\r\ns3cret\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+close
+
+== auth with username
+client username=s:app password=s:s3cret
+call ping
+connect #1
+send b'*3\r\n$4\r\nAUTH\r\n$3\r\napp\r\n$6\r\ns3cret\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+close
+
+== auth fallback
+client username=s:app password=s:s3cret
+call ping
+connect #1
+send b'*3\r\n$4\r\nAUTH\r\n$3\r\napp\r\n$6\r\ns3cret\r\n'
+send b'*2\r\n$4\r\nAUTH\r\n$6\r\ns3cret\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+close
+
+== auth refused
+client password=s:nope
+call ping
+connect #1
+send b'*2\r\n$4\r\nAUTH\r\n$4\r\nnope\r\n'
+close
+! AuthenticationError: invalid username-password pair or user is disabled.
+call ping
+connect #2
+send b'*2\r\n$4\r\nAUTH\r\n$4\r\nnope\r\n'
+close
+! AuthenticationError: Invalid Username or Password
+call ping
+connect #3
+send b'*2\r\n$4\r\nAUTH\r\n$4\r\nnope\r\n'
+close
+! AuthenticationError: AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?
+call ping
+connect #4
+send b'*2\r\n$4\r\nAUTH\r\n$4\r\nnope\r\n'
+close
+! AuthenticationError: invalid password
+
+== client name and db
+client client_name=s:worker-1 db=i:3
+call ping
+connect #1
+send b'*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$8\r\nworker-1\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$6\r\nSELECT\r\n$1\r\n3\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+close
+
+== bad client name
+client client_name=s:worker%201
+call ping
+connect #1
+send b'*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$8\r\nworker 1\r\n'
+close
+! ConnectionError: Error setting client name
+call ping
+connect #2
+send b'*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$8\r\nworker 1\r\n'
+close
+! ResponseError: Client names cannot contain spaces, newlines or special characters.
+
+== bad db
+client db=i:99
+call ping
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$6\r\nSELECT\r\n$2\r\n99\r\n'
+close
+! ResponseError: DB index is out of range
+call ping
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$6\r\nSELECT\r\n$2\r\n99\r\n'
+close
+! ConnectionError: Invalid Database
+
+== old server
+client lib_name=s:my-app lib_version=N:
+call ping
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$6\r\nmy-app\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+close
+
+== no client info
+client lib_name=N: lib_version=N:
+call ping
+connect #1
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+close
+
+== handshake drops
+client lib_name=s:x lib_version=N:
+call ping
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$1\r\nx\r\n'
+close
+! ConnectionError: Connection closed by server.
+call ping
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$1\r\nx\r\n'
+send b'*1\r\n$4\r\nPING\r\n'
+= True
+close
+
+== closed by server
+client
+call set s:a s:1
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n'
+= True
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! ConnectionError: Connection closed by server.
+call get s:a
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= b'1'
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! TimeoutError: Timeout reading from socket
+
+== timeouts
+client
+call get s:a
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! TimeoutError: Timeout reading from socket
+call get s:a
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= b'1'
+close
+
+== retry on timeout
+client retry_on_timeout=T:
+call get s:a
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= b'1'
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+connect #3
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! TimeoutError: Timeout reading from socket
+call get s:a
+connect #4
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+! ConnectionError: Connection closed by server.
+
+== stale data
+client
+call set s:a s:1
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n'
+= True
+call get s:a
+close
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= b'1'
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= b'1'
+call get s:a
+close
+connect #3
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= b'OK'
+close
+
+== pipeline
+client
+pipe begin transaction=F:
+= pipeline
+call set s:a s:1
+= queued
+call incr s:a
+= queued
+call hgetall s:h
+= queued
+call zrange s:z i:0 i:-1 withscores=T:
+= queued
+pipe execute
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n*3\r\n$6\r\nINCRBY\r\n$1\r\na\r\n$1\r\n1\r\n*2\r\n$7\r\nHGETALL\r\n$1\r\nh\r\n*5\r\n$6\r\nZRANGE\r\n$1\r\nz\r\n$1\r\n0\r\n$2\r\n-1\r\n$10\r\nWITHSCORES\r\n'
+= [True, 2, {b'f': b'v'}, [(b'm', 1.5)]]
+call set s:a s:x
+= queued
+call incr s:a
+= queued
+call get s:a
+= queued
+pipe execute
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\nx\r\n*3\r\n$6\r\nINCRBY\r\n$1\r\na\r\n$1\r\n1\r\n*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+! ResponseError: Command # 2 (INCRBY a 1) of pipeline caused error: value is not an integer or out of range
+call set s:a s:x
+= queued
+call incr s:a
+= queued
+call get s:a
+= queued
+pipe execute raise_on_error=F:
+send b'*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\nx\r\n*3\r\n$6\r\nINCRBY\r\n$1\r\na\r\n$1\r\n1\r\n*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+= [True, ResponseError('value is not an integer or out of range'), b'x']
+pipe execute
+= []
+call set s:k r:v*6100
+= queued
+call set s:k2 s:w
+= queued
+pipe execute
+send b'*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$6100\r\n'
+send <6100 bytes, fnv 894fc055>
+send b'\r\n*3\r\n$3\r\nSET\r\n$2\r\nk2\r\n$1\r\nw\r\n'
+= [True, True]
+bitfield s:bits | incrby s:u8 i:0 i:1 | execute
+= queued
+call mget [ ]
+= queued
+pipe execute
+send b'*6\r\n$8\r\nBITFIELD\r\n$4\r\nbits\r\n$6\r\nINCRBY\r\n$2\r\nu8\r\n$1\r\n0\r\n$1\r\n1\r\n*1\r\n$4\r\nMGET\r\n'
+= [[1], []]
+pipe end
+= client
+close
+
+== transaction
+client
+pipe begin
+= pipeline
+call set s:a s:1
+= queued
+call incr s:a
+= queued
+call smembers s:s
+= queued
+call set s:b s:2 get=T:
+= queued
+pipe execute
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n*3\r\n$6\r\nINCRBY\r\n$1\r\na\r\n$1\r\n1\r\n*2\r\n$8\r\nSMEMBERS\r\n$1\r\ns\r\n*4\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n2\r\n$3\r\nGET\r\n*1\r\n$4\r\nEXEC\r\n'
+= [True, 2, {b'x', b'y'}, None]
+call set s:a s:x
+= queued
+call incr s:a
+= queued
+pipe execute
+send b'*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\nx\r\n*3\r\n$6\r\nINCRBY\r\n$1\r\na\r\n$1\r\n1\r\n*1\r\n$4\r\nEXEC\r\n'
+! ResponseError: Command # 2 (INCRBY a 1) of pipeline caused error: value is not an integer or out of range
+call set s:a s:x
+= queued
+call incr s:a
+= queued
+pipe execute raise_on_error=F:
+send b'*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\nx\r\n*3\r\n$6\r\nINCRBY\r\n$1\r\na\r\n$1\r\n1\r\n*1\r\n$4\r\nEXEC\r\n'
+= [True, ResponseError('value is not an integer or out of range')]
+call get s:a
+= queued
+call get s:b
+= queued
+pipe execute
+send b'*1\r\n$5\r\nMULTI\r\n*2\r\n$3\r\nGET\r\n$1\r\na\r\n*2\r\n$3\r\nGET\r\n$1\r\nb\r\n*1\r\n$4\r\nEXEC\r\n'
+! ResponseError: Command # 1 (GET a) of pipeline caused error: wrong number of arguments for 'get' command
+call get s:a
+= queued
+pipe execute
+send b'*1\r\n$5\r\nMULTI\r\n*2\r\n$3\r\nGET\r\n$1\r\na\r\n*1\r\n$4\r\nEXEC\r\n'
+! WatchError: Watched variable changed.
+call get s:a
+= queued
+call get s:b
+= queued
+pipe execute
+send b'*1\r\n$5\r\nMULTI\r\n*2\r\n$3\r\nGET\r\n$1\r\na\r\n*2\r\n$3\r\nGET\r\n$1\r\nb\r\n*1\r\n$4\r\nEXEC\r\n'
+close
+! ResponseError: Wrong number of response items from pipeline execution
+call get s:a
+= queued
+pipe execute raise_on_error=F:
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$5\r\nMULTI\r\n*2\r\n$3\r\nGET\r\n$1\r\na\r\n*1\r\n$4\r\nEXEC\r\n'
+close
+! ResponseError: Wrong number of response items from pipeline execution
+call ping
+= queued
+pipe execute
+connect #3
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$5\r\nMULTI\r\n*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nEXEC\r\n'
+! ExecAbortError: Transaction discarded
+pipe execute
+= []
+pipe end
+= client
+close
+
+== watch
+client
+pipe begin
+= pipeline
+pipe watch s:balance
+connect #1
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*2\r\n$5\r\nWATCH\r\n$7\r\nbalance\r\n'
+= True
+call get s:balance
+send b'*2\r\n$3\r\nGET\r\n$7\r\nbalance\r\n'
+= b'100'
+pipe multi
+= None
+pipe multi
+! RedisError: Cannot issue nested calls to MULTI
+call set s:balance i:90
+= queued
+pipe execute
+send b'*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$7\r\nbalance\r\n$2\r\n90\r\n*1\r\n$4\r\nEXEC\r\n'
+= [True]
+pipe watch s:balance
+send b'*2\r\n$5\r\nWATCH\r\n$7\r\nbalance\r\n'
+= True
+pipe unwatch
+send b'*1\r\n$7\r\nUNWATCH\r\n'
+= True
+pipe unwatch
+= True
+pipe watch s:balance
+send b'*2\r\n$5\r\nWATCH\r\n$7\r\nbalance\r\n'
+= True
+pipe multi
+= None
+call set s:balance i:80
+= queued
+pipe execute
+send b'*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$7\r\nbalance\r\n$2\r\n80\r\n*1\r\n$4\r\nEXEC\r\n'
+! WatchError: Watched variable changed.
+pipe watch s:a s:b
+send b'*3\r\n$5\r\nWATCH\r\n$1\r\na\r\n$1\r\nb\r\n'
+= True
+pipe reset
+send b'*1\r\n$7\r\nUNWATCH\r\n'
+= None
+call get s:a
+= queued
+pipe multi
+! RedisError: Commands without an initial WATCH have already been issued
+pipe watch s:c
+send b'*2\r\n$5\r\nWATCH\r\n$1\r\nc\r\n'
+= True
+pipe reset
+send b'*1\r\n$7\r\nUNWATCH\r\n'
+= None
+pipe watch s:a
+send b'*2\r\n$5\r\nWATCH\r\n$1\r\na\r\n'
+= True
+call get s:a
+send b'*2\r\n$3\r\nGET\r\n$1\r\na\r\n'
+close
+connect #2
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$7\r\nUNWATCH\r\n'
+! WatchError: A ConnectionError occurred on while watching one or more keys
+pipe reset
+= None
+pipe watch s:a
+send b'*2\r\n$5\r\nWATCH\r\n$1\r\na\r\n'
+= True
+pipe multi
+= None
+call incr s:a
+= queued
+pipe execute
+send b'*1\r\n$5\r\nMULTI\r\n*3\r\n$6\r\nINCRBY\r\n$1\r\na\r\n$1\r\n1\r\n*1\r\n$4\r\nEXEC\r\n'
+close
+connect #3
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$8\r\nLIB-NAME\r\n$8\r\nredis-py\r\n'
+send b'*4\r\n$6\r\nCLIENT\r\n$7\r\nSETINFO\r\n$7\r\nLIB-VER\r\n$5\r\n5.2.1\r\n'
+send b'*1\r\n$7\r\nUNWATCH\r\n'
+! WatchError: A ConnectionError occurred on while watching one or more keys
+pipe end
+= client
+close
+
+== urls
+client
+url redis://localhost
+= {'host': 'localhost'}
+url redis://localhost:6380/2
+= {'host': 'localhost', 'port': 6380, 'db': 2}
+url redis://:secret@cache.internal:6379/0
+= {'password': 'secret', 'host': 'cache.internal', 'port': 6379, 'db': 0}
+url redis://app:p%2540ss%253Aword@10.0.0.5:7000
+= {'username': 'app', 'password': 'p@ss:word', 'host': '10.0.0.5', 'port': 7000}
+url rediss://user@secure.example.com/5?ssl_check_hostname=false
+= {'ssl_check_hostname': False, 'username': 'user', 'host': 'secure.example.com', 'db': 5, 'connection_class': <class 'redis.connection.SSLConnection'>}
+url unix:///var/run/redis.sock?db=3
+= {'db': 3, 'path': '/var/run/redis.sock', 'connection_class': <class 'redis.connection.UnixDomainSocketConnection'>}
+url unix://user:pw@/tmp/r.sock
+= {'username': 'user', 'password': 'pw', 'path': '/tmp/r.sock', 'connection_class': <class 'redis.connection.UnixDomainSocketConnection'>}
+url redis://h/1?db=4
+= {'db': 4, 'host': 'h'}
+url redis://h/x
+= {'host': 'h'}
+url redis://h/?socket_timeout=2.5&socket_connect_timeout=1&health_check_interval=30
+= {'socket_timeout': 2.5, 'socket_connect_timeout': 1.0, 'health_check_interval': 30, 'host': 'h'}
+url redis://h?socket_keepalive=no&retry_on_timeout=yes&max_connections=10
+= {'socket_keepalive': False, 'retry_on_timeout': True, 'max_connections': 10, 'host': 'h'}
+url redis://h?socket_keepalive=&decode_responses=True&client_name=my%2520app
+= {'decode_responses': 'True', 'client_name': 'my app', 'host': 'h'}
+url redis://h?db=abc
+! ValueError: Invalid value for 'db' in connection URL.
+url redis://h?max_connections=1.5
+! ValueError: Invalid value for 'max_connections' in connection URL.
+url redis://h?timeout=fast
+! ValueError: Invalid value for 'timeout' in connection URL.
+url redis://[::1]:6379/0
+= {'host': '::1', 'port': 6379, 'db': 0}
+url redis://h?a=1&a=2&b
+= {'a': '1', 'host': 'h'}
+url http://localhost:6379
+! ValueError: Redis URL must specify one of the following schemes (redis://, rediss://, unix://)
+url redis://h:99999
+! ValueError: Port out of range 0-65535
+url redis://h:abc
+! ValueError: Port could not be cast to integer value as 'abc'
+url REDIS://h
+! ValueError: Redis URL must specify one of the following schemes (redis://, rediss://, unix://)
+url redis://h/%252F2
+= {'host': 'h', 'db': 2}
+url redis://h?retry_on_error=x
+= {'retry_on_error': ['x'], 'host': 'h'}
+url redis://H.Example.COM
+= {'host': 'h.example.com'}
