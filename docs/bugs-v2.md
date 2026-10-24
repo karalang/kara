@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| false-positive | 18 |
 | diagnostics | 17 |
-| false-positive | 17 |
-| missing-feature | 16 |
+| missing-feature | 17 |
 | perf | 10 |
 | miscompile | 5 |
 | soundness | 4 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 35 |
 | codegen | 22 |
 | interp | 15 |
-| mir | 11 |
+| mir | 12 |
 | runtime | 8 |
 | cli | 8 |
-| ownership | 4 |
+| ownership | 5 |
 | mir-llvm | 3 |
 | parser | 3 |
 | other | 2 |
@@ -116,7 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-23-16 | 2026-10-23 | cli | low | The v2 build ignores `--monomorphization-budget`, `--enable-hot-swap` and a cross `--target`, and its `--output=json` carries no typecheck warnings; 10 cli tests ignored at the M3 deletion | — |
 | B-2026-10-23-17 | 2026-10-23 | mir-llvm | medium | The v2 wasm build prints a whole float with a trailing `.` (`3.` where native prints `3`) and does not lower the `report` native; 8 wasm tests ignored at the M3 deletion | — |
 | B-2026-10-23-18 | 2026-10-23 | mir | low | v2 renders runtime faults differently from the pinned output: a `main` error goes through Debug instead of its `Display` impl, a panic has no `panicked` line, a contract violation loses its message, the error return trace is missing on some paths, and a tail `Err` runs its errdefers and defers in a different order; 14 tests ignored at the M3 deletion | — |
-| B-2026-10-23-19 | 2026-10-23 | mir | medium | `karac run --interp` (the MIR interpreter) iterates a `Map`/`Set` in the same order on every run and ignores `KARAC_HASH_SEED`, unlike the compiled backend and design.md § Hash (per-process random key); 3 tests ignored at the M3 deletion | — |
 | B-2026-10-23-20 | 2026-10-23 | mir | medium | The v2 build refuses selfhost/ (a move out of a collection element, plus legacy-dialect code), so the 8 self-host oracle tests are ignored at the M3 deletion and the self-host fixpoint has no v2 check | — |
 | B-2026-10-23-21 | 2026-10-23 | cli | low | `karac check` on a project (no file) does not refuse the archived features (WASM exports, exported C ABI, GPU) or the M4a ones by name, as single-file `check` and `build` do; and `karac_jit_runner`'s `--repl-mode` and `--test-batch` paths are dead after the M3 deletion | — |
 | B-2026-10-24-1 | 2026-10-24 | cli+interp | low | The v2 REPL's remaining legacy-only pieces: `%show` and `--auto-clone` / `%set auto-clone` refuse on v2, `:provide` does not check that the provider implements the resource's trait until the next cell, and the `:provide` construction program still replays every earlier cell | — |
@@ -132,6 +131,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-25 | 2026-10-24 | typecheck | medium | Inside a `mut ref self` method, a bare `for x in CONST_ARRAY` over a global `const` is taken to borrow `self`, so any write to a field of `self` (or a call of a method that writes `self`) in the loop body is refused with E0516 "while the `for` loop over `CONST` borrows it". The same loop over `CONST.iter()`, or in a free function over a `mut ref` parameter, passes | — |
 | B-2026-10-24-26 | 2026-10-24 | typecheck | low | `.copied()` on an `Option[ref V]` (from `Map.get`, `SortedMap.get` or `Vec.get`) is `no method 'copied' on type 'Option'` with no hint and no fix, though the library has `.cloned()` for exactly this and documents `m.get(k) ?? d` as the idiom for a `Copy` value; `.copied()` is the Rust spelling an author coming from Rust writes first | — |
 | B-2026-10-24-27 | 2026-10-24 | lexer+parser | low | A lexer error reaches the user wrapped as the parser's `Expected expression, found Error("…")`, Debug-escaped (and escaped again in JSON), with no fix-it: `f"{v.join(\", \")}"` gets the lexer's good 'use plain quotes' advice inside that wrapper, and a bad string escape also cascades a spurious `Expected RightBrace, found EOF` | — |
+| B-2026-10-24-28 | 2026-10-24 | ownership | medium | `f(None, None)` with a `ref Option[T]` first parameter and an owned second one is refused by `karac check`, `karac build` and `karac run`: "cannot move `None` while a borrow into it (a returned reference still points at it) is still live". The two literal `None`s are taken for one place named `None`; `__mir-run` runs the program | — |
+| B-2026-10-24-29 | 2026-10-24 | mir | medium | `Map[K, V, H]` / `Set[T, H]` lose their hasher in MIR (IntrinsicTy::Map(K, V)), so `FxBuildHasher` and a user `BuildHasher` are ignored on both v2 backends: every table hashes and walks with the seeded default; 2 tests ignored at M3 | — |
 
 ### Fixed
 
@@ -162,6 +163,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-23-10 | typecheck | low | A top-level `fn todo(..)` (likewise `unreachable`, `panic`, and `ref_eq`, which is checked against the prelude intrinsic) is accepted but never calle… | a10f2705e6 |
 | B-2026-10-23-12 | typecheck | medium | `karac check` accepts a `Map` whose value type defaulted to `i64` (`let mut m = Map.new(); m.insert(5, 9)`) where `Map[i64, u64]` is wanted as a stru… | a10f2705e6 |
 | B-2026-10-23-13 | codegen | low | (NOT SMALL, kata thread 2026-10-24: 3.4x on kata 951's tuple match of two Option[shared] params, 1.31 s vs 0.39 s for nested matches) A `match` on a… | a97412f163 |
+| B-2026-10-23-19 | mir | medium | `karac run --interp` (the MIR interpreter) iterates a `Map`/`Set` in the same order on every run and ignores `KARAC_HASH_SEED`, unlike the compiled b… | e6d5b77c68 |
 | B-2026-10-24-3 | interp+codegen | high | `v.push(m.get(k).unwrap())` into a `Vec[i64]` stores the ADDRESS of the map's value, not the value: on mir-llvm and `karac build --mir` the element p… | bd015b5c7c |
 | B-2026-10-24-4 | mir | medium | The MIR builder refuses an adaptor called on a value of generic type `I: Iterator[Item = i64]`: `it.map(\|x\| x + 1).count()` checks, and `__mir-run` a… | bc575797b1 |
 | B-2026-10-24-5 | mir | high | MIR borrowck lets the borrowed place change while a ref read through a borrowed struct's `mut ref` field is still live, a use-after-free that `karac… | 930b560ed5 |

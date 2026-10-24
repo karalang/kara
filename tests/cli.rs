@@ -26897,7 +26897,7 @@ fn stable_hash_digest_does_not_move_with_the_process_hash_seed() {
 /// off one shared table: the interpreter stamps `MapData` at `Map.new()`, and
 /// codegen stores a different synthesized hash function in the control block.
 #[test]
-#[ignore = "v2 gap after M3: `karac run --interp` map order does not vary per process or per pinned seed"]
+#[ignore = "B-2026-10-24-29: MIR maps lose their hasher, so a pinned or user hasher is ignored"]
 fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
     let dir = std::env::temp_dir().join(format!("kara_fxhasher_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
@@ -27017,7 +27017,7 @@ fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
 /// the impl's LLVM symbols, and the interpreter drives the same three methods
 /// from a sub-interpreter in `interpreter::user_hasher`.
 #[test]
-#[ignore = "v2 gap after M3: `karac run --interp` map order does not vary per process or per pinned seed"]
+#[ignore = "B-2026-10-24-29: MIR maps lose their hasher, so a pinned or user hasher is ignored"]
 fn a_user_written_hasher_fixes_the_order_across_processes_on_both_surfaces() {
     let dir = std::env::temp_dir().join(format!("kara_userhasher_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
