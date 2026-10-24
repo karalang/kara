@@ -12984,3 +12984,30 @@ fn copied_on_an_option_names_cloned_and_fixes_to_it() {
         "v.get(0).cloned().unwrap_or(0)",
     );
 }
+
+#[test]
+fn a_copy_option_field_read_twice_by_value_stays_usable() {
+    // B-2026-10-24-32: `p.a.unwrap_or(0)` on a `Copy` field (`a: Option[i64]`)
+    // copies the receiver out, so a second read is not a use after move, for
+    // an owned parameter, a `mut ref` parameter and a local alike.
+    accepted_and_runs(
+        "copy-option-field-twice",
+        "struct P { a: Option[i64], s: Option[String] }\n\
+         fn f(p: own P) -> i64 {\n    let x = p.a.unwrap_or(0);\n    x + p.a.unwrap_or(0)\n}\n\
+         fn g(p: mut ref P) -> i64 {\n    let x = p.a.unwrap_or(0);\n    p.a = Some(x + 1);\n    \
+         x + p.a.unwrap_or(0) + p.a.unwrap()\n}\n\
+         fn main() {\n    let p = P { a: Some(3), s: None };\n    println(f\"{f(p)}\");\n    \
+         let mut q = P { a: Some(2), s: None };\n    let y = q.a.unwrap_or(0);\n    \
+         println(f\"{y} {q.a.unwrap_or(1)} {q.a.is_some()} {g(mut q)}\");\n}\n",
+        "6\n2 2 true 8\n",
+    );
+    // A non-`Copy` field still moves out on the first by-value read.
+    rejected(
+        "non-copy-option-field-twice",
+        "struct P { a: Option[i64], s: Option[String] }\n\
+         fn f(p: own P) -> String {\n    let x = p.s.unwrap_or(\"d\".to_string());\n    \
+         x + p.s.unwrap_or(\"e\".to_string())\n}\n\
+         fn main() {\n    let p = P { a: Some(3), s: None };\n    println(f(p));\n}\n",
+        "value 'p.s' moved here",
+    );
+}

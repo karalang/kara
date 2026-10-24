@@ -1043,14 +1043,26 @@ impl<'a> UseClassifier<'a> {
                 }
                 // An `own self` receiver whose every part is a `shared`
                 // handle or `Copy` (`w.o.unwrap()`, `o: Option[H]`) is passed
-                // by counting, as `let a = w.o;` is, and stays usable.
+                // by counting, as `let a = w.o;` is, and a `Copy` receiver
+                // (`p.a.unwrap_or(0)`, `a: Option[i64]`) by copying; both
+                // stay usable. The receiver's own type is its node's: a
+                // projection receiver's span is the call's too, so
+                // `expr_types` there holds the call's result (B-2026-10-24-32).
                 let receiver_counts = crate::ownership::core_rules()
                     && self
                         .tc
-                        .expr_types
-                        .get(&SpanKey::from_span(&object.span))
+                        .node_types
+                        .get(&object.id)
+                        .map(|(t, _)| t)
+                        .or_else(|| self.tc.expr_types.get(&SpanKey::from_span(&object.span)))
                         .is_some_and(|t| {
-                            type_counts_or_copies(t, self.tc, &|t| self.is_copy_type(t), true)
+                            self.is_copy_type(t)
+                                || type_counts_or_copies(
+                                    t,
+                                    self.tc,
+                                    &|t| self.is_copy_type(t),
+                                    true,
+                                )
                         });
                 let receiver_mode = if !receiver_counts
                     && (self.method_consumes_receiver(expr)
