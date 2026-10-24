@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/981-time-based-key-value-store/bench/time_map.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["lib:map", "bench"]
 class = "e"
-bucket = "e-differs:stdout"
-classified_with = "9b5f87b92"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 981 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "8340efb4c"
 extracted_src = "0f141538"
