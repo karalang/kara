@@ -1,0 +1,181 @@
+== regional_sales.xlsx
+  1630 s0.filter_column_list warns: Column '25' outside autofilter() column range (0,7)
+  1677 wb.define_name warns: Invalid Excel characters in defined_name(): '1stQuarter'
+  1677 wb.define_name -> -1
+  1678 wb.define_name warns: Name looks like a cell name in defined_name(): 'AB12'
+  1678 wb.define_name -> -1
+  1679 wb.define_name warns: Invalid name 'R1C1' like a RC cell ref in defined_name()
+  1679 wb.define_name -> -1
+  1680 wb.define_name warns: Unknown sheet name 'Nowhere' in defined_name()
+  1680 wb.define_name -> -1
+  12 parts, 3 sheets, 36 strings (627 uses), 9 cell formats, 0 tables, 6 names
+  [Content_Types].xml                         1439 fd36f3d5
+  _rels/.rels                                  587 da499ff2
+  xl/_rels/workbook.xml.rels                   979 c874b814
+  xl/worksheets/sheet1.xml                   64636 feee6aa3
+  xl/worksheets/sheet2.xml                    2436 d8d195e9
+  xl/worksheets/sheet3.xml                    1179 6c50d646
+  xl/workbook.xml                             1173 733ac1a1
+  xl/sharedStrings.xml                        1075 8e9e669d
+  xl/styles.xml                               2530 59f4c004
+  xl/theme/theme1.xml                         6994 5446fa18
+  docProps/core.xml                            989 d4199a58
+  docProps/app.xml                            1231 73507ff5
+  read back: crc ok
+== inventory.xlsx
+  16 s0.data_validation -> -2
+  19 s0.data_validation warns: Parameter 'criteria' is required in data_validation()
+  19 s0.data_validation -> -2
+  20 s0.data_validation warns: Unknown criteria type '~' for parameter 'criteria' in data_validation()
+  20 s0.data_validation -> -2
+  21 s0.data_validation warns: Unknown validation type 'colour' for parameter 'validate' in data_validation()
+  21 s0.data_validation -> -2
+  22 s0.data_validation warns: Unknown parameter 'prompt' in data_validation()
+  22 s0.data_validation -> -2
+  23 s0.data_validation warns: Parameter 'maximum' is required in data_validation() when using 'between' or 'not between' criteria
+  23 s0.data_validation -> -2
+  24 s0.data_validation warns: Length of list items 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' exceeds Excel's limit of 255, use a formula range instead
+  24 s0.data_validation -> -2
+  25 s0.data_validation warns: Length of input title 'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT' exceeds Excel's limit of 32
+  25 s0.data_validation -> -2
+  26 s0.data_validation warns: Unknown criteria type 'panic' for parameter 'error_type' in data_validation()
+  26 s0.data_validation -> -2
+  40 s0.protect warns: Unknown protection object: 'bogus'
+  46 s1.add_table warns: Name 'Draft table' in add_table() cannot contain spaces
+  46 s1.add_table -> -2
+  47 s1.add_table warns: Name looks like a cell name in add_table(): 'AB12'
+  47 s1.add_table -> -2
+  48 s1.add_table warns: Must have at least one data row in in add_table()
+  48 s1.add_table -> -2
+  49 s1.add_table warns: Duplicate header name in add_table(): 'same'
+  49 s1.add_table -> -2
+  50 s1.add_table warns: Unknown parameter 'autofit' in add_table()
+  50 s1.add_table -> -2
+  51 s1.add_table warns: Invalid name 'R2C3' like a RC cell ref in add_table()
+  51 s1.add_table -> -2
+  53 s1.merge_range raised OverlappingRange: Merge range 'H3:I3' overlaps previous table range 'H1:I4'.
+  55 s1.merge_range raised OverlappingRange: Merge range 'L1:M2' overlaps previous merge range 'K1:L1'.
+  56 s1.merge_range warns: Can't merge single cell
+  16 parts, 2 sheets, 57 strings (91 uses), 6 cell formats, 3 tables, 0 names
+  [Content_Types].xml                         1687 297b2b1e
+  _rels/.rels                                  587 da499ff2
+  xl/_rels/workbook.xml.rels                   838 2ecba3b4
+  xl/worksheets/sheet1.xml                    8641 917897f1
+  xl/worksheets/sheet2.xml                    1735 5a4e03c5
+  xl/workbook.xml                              597 bf5d28e0
+  xl/tables/table1.xml                        1016 a35e9a82
+  xl/tables/table2.xml                         437 59c13396
+  xl/tables/table3.xml                         476 8f6540e6
+  xl/sharedStrings.xml                        1586 dce0ec51
+  xl/styles.xml                               1703 05d84714
+  xl/theme/theme1.xml                         6994 5446fa18
+  xl/worksheets/_rels/sheet1.xml.rels          292 c4987a69
+  xl/worksheets/_rels/sheet2.xml.rels          428 89217fa2
+  docProps/core.xml                            642 e8275dfe
+  docProps/app.xml                             812 50d08a4f
+  read back: crc ok
+== timesheet.xlsx
+  170 s1.write_url warns: Ignoring URL 'https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' with link or location/anchor > 2079 characters since it exceeds Excel's limit for URLS
+  170 s1.write_url -> -3
+  14 parts, 3 sheets, 31 strings (51 uses), 7 cell formats, 0 tables, 0 names
+  [Content_Types].xml                         1439 fd36f3d5
+  _rels/.rels                                  587 da499ff2
+  xl/_rels/workbook.xml.rels                   979 c874b814
+  xl/worksheets/sheet1.xml                    8465 bfed2b32
+  xl/worksheets/sheet2.xml                    2195 9c855c14
+  xl/worksheets/sheet3.xml                     507 70f28284
+  xl/workbook.xml                              706 156bb644
+  xl/sharedStrings.xml                        1152 d8ddd1d2
+  xl/styles.xml                               2004 8a1bd5b2
+  xl/theme/theme1.xml                         6994 5446fa18
+  xl/worksheets/_rels/sheet1.xml.rels          681 6a6505cb
+  xl/worksheets/_rels/sheet2.xml.rels         1897 72fdca30
+  docProps/core.xml                            606 8e37802b
+  docProps/app.xml                             812 9abb33e6
+  read back: crc ok
+== edge_cases.xlsx
+  2 wb.add_worksheet raised InvalidWorksheetName: Invalid Excel character '[]:*?/\' in sheetname 'Sheet[1]'.
+  3 wb.add_worksheet raised InvalidWorksheetName: Excel worksheet name 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' must be <= 31 chars.
+  4 wb.add_worksheet raised InvalidWorksheetName: Sheet name cannot start or end with an apostrophe "'Quoted".
+  5 wb.add_worksheet raised InvalidWorksheetName: Invalid Excel character '[]:*?/\' in sheetname 'What?'.
+  7 wb.add_worksheet raised DuplicateWorksheetName: Sheetname 'q1 results', with case ignored, is already in use.
+  16 wb.add_format warns: Rotation rotation outside range: -90 <= angle <= 90
+  71 s0.write -> -2
+  94 s0.write_formula warns: Formula can't be None or empty
+  94 s0.write_formula -> -1
+  105 s0.write_formula -> -1
+  106 s0.write -> -1
+  107 s0.write -> -1
+  109 s0.write_boolean -> -1
+  110 s0.write_rich_string raised AttributeError: 'NoneType' object has no attribute 'write'
+  112 s0.write_rich_string warns: Excel doesn't allow 2 consecutive formats in rich strings. Ignoring input in write_rich_string().
+  112 s0.write_rich_string -> -3
+  113 s0.write_rich_string warns: Excel doesn't allow empty strings in rich strings. Ignoring input in write_rich_string().
+  113 s0.write_rich_string -> -4
+  114 s0.write_rich_string warns: You must specify more than 2 format/fragments for rich strings. Ignoring input in write_rich_string().
+  114 s0.write_rich_string -> -5
+  116 s0.write_rich_string raised AttributeError: 'NoneType' object has no attribute 'write'
+  118 s0.merge_range raised OverlappingRange: Merge range 'E31:G32' overlaps previous merge range 'D30:F31'.
+  119 s0.add_table raised OverlappingRange: Table range 'D29:F33' overlaps previous merge range 'D30:F31'.
+  120 s0.merge_range warns: Can't merge single cell
+  123 s0.set_column -> -1
+  124 s0.set_row -> -1
+  127 s0.set_zoom warns: Zoom factor 5 outside range: 10 <= zoom <= 400
+  128 s0.set_print_scale warns: Print scale '500' outside range: 10 <= scale <= 400
+  142 s0.set_header warns: Number of header images (0) doesn't match placeholder count (1) in string: &L&G
+  143 s0.set_header warns: Header string cannot be longer than Excel's limit of 255 characters
+  169 s2.write_column -> -2
+  176 wb.define_name warns: Invalid Excel characters in defined_name(): '=Interest_Rate'
+  176 wb.define_name -> -1
+  182 wb.define_name warns: Invalid Excel characters in defined_name(): 'Bad name'
+  182 wb.define_name -> -1
+  183 wb.define_name warns: Invalid name 'r' like a RC cell ref in defined_name()
+  183 wb.define_name -> -1
+  184 wb.define_name warns: Name looks like a cell name in defined_name(): 'aaa1'
+  184 wb.define_name -> -1
+  187 wb.set_tab_ratio warns: Tab ratio '101' outside: 0 <= tab_ratio <= 100
+  14 parts, 4 sheets, 37 strings (37 uses), 17 cell formats, 0 tables, 12 names
+  [Content_Types].xml                         1706 bae4c845
+  _rels/.rels                                  587 da499ff2
+  xl/_rels/workbook.xml.rels                  1256 5e4359ce
+  xl/worksheets/sheet1.xml                    6153 3c4b1da4
+  xl/worksheets/sheet2.xml                     714 043a1665
+  xl/worksheets/sheet3.xml                    1019 881b4ba7
+  xl/worksheets/sheet4.xml                     646 8c41f74f
+  xl/workbook.xml                             1727 f0cd6b41
+  xl/sharedStrings.xml                       67230 533121f0
+  xl/styles.xml                               3801 95ed1e49
+  xl/theme/theme1.xml                         6994 5446fa18
+  docProps/core.xml                            623 e3fb4d1f
+  docProps/app.xml                            1272 5c8c1043
+  xl/metadata.xml                              732 e7850eea
+  read back: crc ok
+== broken.xlsx
+  5 close raised DuplicateTableName: Duplicate name 'orders' used in worksheet.add_table().
+  no file written
+== empty.xlsx
+  9 parts, 1 sheets, 0 strings (0 uses), 1 cell formats, 0 tables, 0 names
+  [Content_Types].xml                         1031 d8869d38
+  _rels/.rels                                  587 da499ff2
+  xl/_rels/workbook.xml.rels                   556 a31b44e5
+  xl/worksheets/sheet1.xml                     454 53bd292c
+  xl/workbook.xml                              550 256a1883
+  xl/styles.xml                                867 c91abc1a
+  xl/theme/theme1.xml                         6994 5446fa18
+  docProps/core.xml                            592 ee56d10e
+  docProps/app.xml                             784 d3a7ba5e
+  read back: crc ok
+== ledger.xlsx
+  11 parts, 2 sheets, 587 strings (4541 uses), 4 cell formats, 0 tables, 1 names
+  [Content_Types].xml                         1303 6fbcbb59
+  _rels/.rels                                  587 da499ff2
+  xl/_rels/workbook.xml.rels                   838 2ecba3b4
+  xl/worksheets/sheet1.xml                  438265 0a4f64fe
+  xl/worksheets/sheet2.xml                    3679 95426a1c
+  xl/workbook.xml                              737 402da2c3
+  xl/sharedStrings.xml                       16379 6b168501
+  xl/styles.xml                               1477 79c276c9
+  xl/theme/theme1.xml                         6994 5446fa18
+  docProps/core.xml                            697 e3df7154
+  docProps/app.xml                             819 71215cb5
+  read back: crc ok
