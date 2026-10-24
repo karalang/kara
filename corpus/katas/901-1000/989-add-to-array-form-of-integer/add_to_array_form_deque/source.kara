@@ -1,0 +1,104 @@
+// LeetCode #989: Add to Array-Form of Integer -- in place, in a deque
+//
+// The digits are copied into a `VecDeque` and k is added into it from
+// the last place: each digit takes what is left of k, keeps the sum's
+// last digit and hands the rest on. Whatever is still left once the
+// digits run out goes on the front, a digit at a time.
+// O(n + log k).
+
+fn add_to_array_form(num: Vec[i64], k: i64) -> Vec[i64] {
+    let mut d: VecDeque[i64] = num.iter().map(|x| *x).collect();
+    let mut rest = k;
+    let mut i = d.len() - 1;
+    while i >= 0 and rest > 0 {
+        rest += d[i];
+        d[i] = rest % 10;
+        rest /= 10;
+        i -= 1;
+    }
+    while rest > 0 {
+        d.push_front(rest % 10);
+        rest /= 10;
+    }
+    d.into_iter().collect()
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n digits, no leading zero unless the number is 0; a digit is 9 with
+// chance `nines` in 8, otherwise any digit.
+fn random_num(n: i64, nines: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut d = if next_random(mut seed) % 8 < nines { 9 } else { next_random(mut seed) % 10 };
+        if i == 0 and n > 1 and d == 0 {
+            d = 1;
+        }
+        out.push(d);
+    }
+    out
+}
+
+fn joined(ds: Slice[i64]) -> String {
+    let parts: Vec[String] = ds.iter().map(|d| f"{d}").collect();
+    parts.join("")
+}
+
+fn shown(ds: ref Vec[i64]) -> String {
+    if ds.len() > 20 {
+        f"{ds.len()} digits, starting {joined(ds[0..6])}, ending {joined(ds[ds.len() - 6..ds.len()])}"
+    } else {
+        let parts: Vec[String] = ds.iter().map(|d| f"{d}").collect();
+        "[" + parts.join(", ") + "]"
+    }
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(Vec[i64], i64)] = vec![
+        (vec![1, 2, 0, 0], 34),
+        (vec![2, 7, 4], 181),
+        (vec![2, 1, 5], 806),
+        (vec![0], 1),
+        (vec![9, 9, 9], 1),
+        (vec![0], 10000),
+        (vec![5], 9995),
+        (vec![1], 9999),
+        (vec![9, 9, 9, 9, 9], 10000),
+        (vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1),
+    ];
+    for (num, k) in cases.iter() {
+        println(f"{shown(num)} + {k} -> {shown(add_to_array_form(num, k))}");
+    }
+    let nines: Vec[i64] = Vec.filled(10000, 9);
+    println(f"10000 nines + 1 -> {shown(add_to_array_form(nines, 1))}");
+    let counting: Vec[i64] = (0..10000).map(|i| (i + 1) % 10).collect();
+    println(f"10000 digits 1 to 0 + 10000 -> {shown(add_to_array_form(counting, 10000))}");
+    // random sums: 300 of up to 6 digits, 3000 of up to 100, 300 of up
+    // to 30 that are mostly nines, and three of LeetCode's longest,
+    // 10000 digits
+    let mut seed = 989;
+    for (count, most, nines) in vec![(300, 6, 2), (3000, 100, 4), (300, 30, 7), (3, 10000, 1)] {
+        let mut digits = 0;
+        let mut out_digits = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if count == 3 { most } else { 1 + next_random(mut seed) % most };
+            let num = random_num(n, nines, mut seed);
+            let k = 1 + next_random(mut seed) % 10000;
+            let got = add_to_array_form(num, k);
+            digits += n;
+            out_digits += got.len();
+            for d in got.iter() {
+                check = (check * 31 + d + 1) % 1000000007;
+            }
+        }
+        println(f"{count} random sums of up to {most} digits: {digits} digits in, {out_digits} out, checksum {check}");
+    }
+}

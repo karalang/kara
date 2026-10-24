@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/901-1000/989-add-to-array-form-of-integer/add_to_array_form_digits.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "mirror"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the kata's Python mirror, which every arm matches on __mir-run, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "1097cf4cd"
+extracted_src = "72c56c24"

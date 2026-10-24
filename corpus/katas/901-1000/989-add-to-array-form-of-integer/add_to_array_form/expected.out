@@ -1,0 +1,16 @@
+[1, 2, 0, 0] + 34 -> [1, 2, 3, 4]
+[2, 7, 4] + 181 -> [4, 5, 5]
+[2, 1, 5] + 806 -> [1, 0, 2, 1]
+[0] + 1 -> [1]
+[9, 9, 9] + 1 -> [1, 0, 0, 0]
+[0] + 10000 -> [1, 0, 0, 0, 0]
+[5] + 9995 -> [1, 0, 0, 0, 0]
+[1] + 9999 -> [1, 0, 0, 0, 0]
+[9, 9, 9, 9, 9] + 10000 -> [1, 0, 9, 9, 9, 9]
+[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] + 1 -> [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+10000 nines + 1 -> 10001 digits, starting 100000, ending 000000
+10000 digits 1 to 0 + 10000 -> 10000 digits, starting 123456, ending 577890
+300 random sums of up to 6 digits: 1042 digits in, 1373 out, checksum 976183933
+3000 random sums of up to 100 digits: 150249 digits in, 150455 out, checksum 814305290
+300 random sums of up to 30 digits: 4315 digits in, 4466 out, checksum 95049512
+3 random sums of up to 10000 digits: 30000 digits in, 30000 out, checksum 869886510

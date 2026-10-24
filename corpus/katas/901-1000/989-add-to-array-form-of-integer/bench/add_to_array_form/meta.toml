@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/989-add-to-array-form-of-integer/bench/add_to_array_form.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "1097cf4cd"
+extracted_src = "436d4829"

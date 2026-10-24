@@ -1,0 +1,327 @@
+// LeetCode #989: Add to Array-Form of Integer -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random numbers.
+
+// ---- star ----
+
+fn star_add_to_array_form(num: Vec[i64], k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut carry = k;
+    let mut i = num.len() - 1;
+    while i >= 0 or carry > 0 {
+        if i >= 0 {
+            carry += num[i];
+            i -= 1;
+        }
+        out.push(carry % 10);
+        carry /= 10;
+    }
+    out.reverse();
+    out
+}
+
+// ---- digits ----
+
+fn digits_digits_of(k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut rest = k;
+    while rest > 0 {
+        out.push(rest % 10);
+        rest /= 10;
+    }
+    out.reverse();
+    out
+}
+
+fn digits_add_to_array_form(num: Vec[i64], k: i64) -> Vec[i64] {
+    let other = digits_digits_of(k);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = num.len() - 1;
+    let mut j = other.len() - 1;
+    let mut carry = 0;
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 {
+            sum += num[i];
+            i -= 1;
+        }
+        if j >= 0 {
+            sum += other[j];
+            j -= 1;
+        }
+        out.push(sum % 10);
+        carry = sum / 10;
+    }
+    out.reverse();
+    out
+}
+
+// ---- deque ----
+
+fn deque_add_to_array_form(num: Vec[i64], k: i64) -> Vec[i64] {
+    let mut d: VecDeque[i64] = num.iter().map(|x| *x).collect();
+    let mut rest = k;
+    let mut i = d.len() - 1;
+    while i >= 0 and rest > 0 {
+        rest += d[i];
+        d[i] = rest % 10;
+        rest /= 10;
+        i -= 1;
+    }
+    while rest > 0 {
+        d.push_front(rest % 10);
+        rest /= 10;
+    }
+    d.into_iter().collect()
+}
+
+// ---- recursive ----
+
+fn recursive_sum_into(num: ref Vec[i64], i: i64, carry: i64, out: mut ref Vec[i64]) {
+    if i < 0 and carry == 0 {
+        return;
+    }
+    let total = if i >= 0 { carry + num[i] } else { carry };
+    recursive_sum_into(num, i - 1, total / 10, mut out);
+    out.push(total % 10);
+}
+
+fn recursive_add_to_array_form(num: Vec[i64], k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    recursive_sum_into(num, num.len() - 1, k, mut out);
+    out
+}
+
+// ---- limbs ----
+
+fn limbs_base() -> i64 {
+    1000000000
+}
+
+fn limbs_add_to_array_form(num: Vec[i64], k: i64) -> Vec[i64] {
+    // limbs, lowest first
+    let mut limbs: Vec[i64] = Vec.new();
+    let mut end = num.len();
+    while end > 0 {
+        let start = if end >= 9 { end - 9 } else { 0 };
+        let mut limb = 0;
+        for i in start..end {
+            limb = limb * 10 + num[i];
+        }
+        limbs.push(limb);
+        end = start;
+    }
+    let mut carry = k;
+    let mut i = 0;
+    while carry > 0 {
+        if i == limbs.len() {
+            limbs.push(0);
+        }
+        let total = limbs[i] + carry;
+        limbs[i] = total % limbs_base();
+        carry = total / limbs_base();
+        i += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let top = limbs.len() - 1;
+    for j in 0..limbs.len() {
+        let limb = limbs[top - j];
+        let mut ds: Vec[i64] = Vec.new();
+        let mut rest = limb;
+        while rest > 0 {
+            ds.push(rest % 10);
+            rest /= 10;
+        }
+        if j > 0 {
+            while ds.len() < 9 {
+                ds.push(0);
+            }
+        } else if ds.len() == 0 {
+            ds.push(0);
+        }
+        ds.reverse();
+        out.extend(ds);
+    }
+    out
+}
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n digits, no leading zero unless the number is 0; a digit is 9 with
+// chance `nines` in 8, otherwise any digit.
+fn random_num(n: i64, nines: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut d = if next_random(mut seed) % 8 < nines { 9 } else { next_random(mut seed) % 10 };
+        if i == 0 and n > 1 and d == 0 {
+            d = 1;
+        }
+        out.push(d);
+    }
+    out
+}
+
+fn arm(a: i64, num: ref Vec[i64], k: i64) -> Vec[i64] {
+    if a == 0 {
+        star_add_to_array_form(num, k)
+    } else if a == 1 {
+        digits_add_to_array_form(num, k)
+    } else if a == 2 {
+        deque_add_to_array_form(num, k)
+    } else if a == 3 {
+        recursive_add_to_array_form(num, k)
+    } else {
+        limbs_add_to_array_form(num, k)
+    }
+}
+
+// The statement read literally: the integer whose digits num lists, left
+// to right, plus k, and the digits of that integer written out. Only for
+// numbers that fit in an i64.
+fn literal(num: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut value = 0;
+    for d in num.iter() {
+        value = value * 10 + d;
+    }
+    let written = f"{value + k}";
+    written.bytes().iter().map(|b| *b as i64 - 48).collect()
+}
+
+// num minus k, the schoolbook way, leading zeros dropped; k is no more
+// than num.
+fn minus(num: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = num.clone();
+    let mut rest = k;
+    let mut borrow = 0;
+    let mut i = out.len() - 1;
+    while i >= 0 {
+        let mut d = out[i] - rest % 10 - borrow;
+        rest /= 10;
+        if d < 0 {
+            d += 10;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        out[i] = d;
+        i -= 1;
+    }
+    let mut start = 0;
+    while start < out.len() - 1 and out[start] == 0 {
+        start += 1;
+    }
+    out[start..out.len()].iter().map(|d| *d).collect()
+}
+
+fn well_formed(got: ref Vec[i64], num: ref Vec[i64], k: i64) -> bool {
+    let k_len = f"{k}".len();
+    let longest = if num.len() > k_len { num.len() } else { k_len };
+    if got.len() != longest and got.len() != longest + 1 {
+        return false;
+    }
+    if got[0] == 0 {
+        return false;
+    }
+    for d in got.iter() {
+        if d < 0 or d > 9 {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, num: ref Vec[i64], k: i64, small: bool, seed: mut ref i64) -> Vec[i64] {
+    let truth = if small { literal(num, k) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, num, k));
+    }
+    let k2 = 1 + next_random(mut seed) % 10000;
+    let d = next_random(mut seed) % 10;
+    let mut appended = num.clone();
+    appended.push(d);
+    for a in 0..5 {
+        let g = got[a].clone();
+        // P1: the statement's answer, on the first 3000 numbers
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: adding k and then k2 is adding k2 and then k
+        check(mut tally, 2, arm(a, g, k2) == arm(a, arm(a, num, k2), k));
+        // P3: with a digit d appended to num, the answer ends in
+        // (d + k) % 10, and the rest is num plus (d + k) / 10
+        let longer = arm(a, appended, k);
+        let up = (d + k) / 10;
+        let rest = if up > 0 { arm(a, num, up) } else { num.clone() };
+        let mut want = rest.clone();
+        want.push((d + k) % 10);
+        check(mut tally, 3, longer == want);
+        // P4: taking k away again gives back num
+        check(mut tally, 4, minus(g, k) == *num);
+        // P5: digits 0 to 9, no leading zero, and as long as the longer
+        // of num and k or one longer
+        check(mut tally, 5, well_formed(g, num, k));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != a and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 989;
+    let mut total = 0;
+    let mut digits_out = 0;
+    let mut check_sum = 0;
+    // 3000 numbers of up to 12 digits against the statement, then 200
+    // of up to 500 digits, few nines and mostly nines in turn
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most = if small { 12 } else { 500 };
+        let nines = if small { c % 8 } else if c % 2 == 0 { 1 } else { 7 };
+        let n = 1 + next_random(mut seed) % most;
+        let num = random_num(n, nines, mut seed);
+        let k = 1 + next_random(mut seed) % 10000;
+        let got = properties(mut tally, num, k, small, mut seed);
+        total += n;
+        digits_out += got.len();
+        for d in got.iter() {
+            check_sum = (check_sum * 31 + d + 1) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 sums of {total} digits: {digits_out} digits out, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
