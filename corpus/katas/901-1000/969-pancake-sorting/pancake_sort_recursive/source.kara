@@ -1,0 +1,170 @@
+// LeetCode #969: Pancake Sorting -- recursion throughout.
+//
+// The same flips as the main arm, with no loop: sorting the top `size`
+// pancakes sends the largest to the bottom and then sorts the top
+// size - 1; finding it recurses down the stack, and a flip swaps its two
+// ends and flips what lies between. O(n^2) time, O(n) stack.
+fn flip(a: mut ref Vec[i64], i: i64, j: i64) {
+    if i < j {
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        flip(mut a, i + 1, j - 1);
+    }
+}
+
+// The index of pancake v, looking from index i down.
+fn find(a: Vec[i64], v: i64, i: i64) -> i64 {
+    if a[i] == v { i } else { find(a, v, i + 1) }
+}
+
+fn sort_top(a: mut ref Vec[i64], size: i64, flips: mut ref Vec[i64]) {
+    if size < 2 {
+        return;
+    }
+    let i = find(a, size, 0);
+    if i != size - 1 {
+        if i != 0 {
+            flip(mut a, 0, i);
+            flips.push(i + 1);
+        }
+        flip(mut a, 0, size - 1);
+        flips.push(size);
+    }
+    sort_top(mut a, size - 1, mut flips);
+}
+
+fn pancake_sort(arr: Vec[i64]) -> Vec[i64] {
+    let mut a = arr.clone();
+    let mut flips: Vec[i64] = Vec.new();
+    sort_top(mut a, a.len(), mut flips);
+    flips
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random permutation of 1..n, shuffled from the top down.
+fn random_permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        a.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i -= 1;
+    }
+    a
+}
+
+fn show(v: Vec[i64]) -> String {
+    let mut s = String.from("[");
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+// Whether the flips sort arr: each k between 1 and n, and the stack in
+// order once they are made.
+fn sorts(arr: Vec[i64], flips: Vec[i64]) -> bool {
+    let mut a = arr.clone();
+    let n = a.len();
+    for k in flips {
+        if k < 1 or k > n {
+            return false;
+        }
+        let mut i = 0;
+        let mut j = k - 1;
+        while i < j {
+            let t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+            i += 1;
+            j -= 1;
+        }
+    }
+    for i in 0..n {
+        if a[i] != i + 1 {
+            return false;
+        }
+    }
+    true
+}
+
+fn checksum(flips: Vec[i64]) -> i64 {
+    let mut check = 0;
+    for k in flips {
+        check = (check * 131 + k) % 1000000007;
+    }
+    check
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![3, 2, 4, 1],
+        vec![1, 2, 3],
+        vec![1],
+        vec![2, 1],
+        vec![3, 1, 2],
+        vec![2, 3, 1],
+        vec![6, 5, 4, 3, 2, 1],
+        vec![2, 3, 4, 5, 1],
+        vec![1, 3, 2, 4, 6, 5],
+        vec![5, 1, 4, 2, 3, 6],
+    ];
+    for arr in cases {
+        let flips = pancake_sort(arr);
+        println(f"{show(arr)}: {show(flips)}, sorts {sorts(arr, flips)}");
+    }
+    // 300 random permutations of 1 to 12 pancakes
+    let mut seed = 969;
+    let mut pancakes = 0;
+    let mut total = 0;
+    let mut sorted = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let arr = random_permutation(n, mut seed);
+        pancakes += n;
+        let flips = pancake_sort(arr);
+        total += flips.len();
+        if sorts(arr, flips) {
+            sorted += 1;
+        }
+        check = (check * 31 + checksum(flips) + 1) % 1000000007;
+    }
+    println(f"300 random stacks of {pancakes} pancakes: {total} flips, {sorted} sorted, checksum {check}");
+    // LeetCode's largest, 100 pancakes: a random stack, the stack upside
+    // down, and the odd pancakes above the even ones
+    let mut odd_even: Vec[i64] = Vec.new();
+    for v in 0..100 {
+        odd_even.push(if v < 50 { 2 * v + 1 } else { 2 * (v - 50) + 2 });
+    }
+    let mut upside_down: Vec[i64] = Vec.new();
+    for v in 0..100 {
+        upside_down.push(100 - v);
+    }
+    let big: Vec[(String, Vec[i64])] = vec![
+        (String.from("a random stack"), random_permutation(100, mut seed)),
+        (String.from("the stack upside down"), upside_down),
+        (String.from("odd above even"), odd_even),
+    ];
+    for (name, arr) in big {
+        let flips = pancake_sort(arr);
+        println(f"{name} of 100: {flips.len()} flips, sorts {sorts(arr, flips)}, checksum {checksum(flips)}");
+    }
+}

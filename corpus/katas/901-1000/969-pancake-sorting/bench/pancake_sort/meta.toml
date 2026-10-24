@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/969-pancake-sorting/bench/pancake_sort.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "f4aff264a"
+extracted_src = "86a10381"

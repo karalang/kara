@@ -1,0 +1,361 @@
+// LeetCode #969: Pancake Sorting -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random stacks.
+
+// ---- star ----
+
+// Reverse the top k pancakes, swapping from both ends inwards.
+fn star_flip(a: mut ref Vec[i64], k: i64) {
+    let mut i = 0;
+    let mut j = k - 1;
+    while i < j {
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i += 1;
+        j -= 1;
+    }
+}
+
+fn star_pancake_sort(arr: Vec[i64]) -> Vec[i64] {
+    let mut a = arr.clone();
+    let mut flips: Vec[i64] = Vec.new();
+    let mut size = a.len();
+    while size > 1 {
+        let mut i = 0;
+        while a[i] != size {
+            i += 1;
+        }
+        if i != size - 1 {
+            if i != 0 {
+                star_flip(mut a, i + 1);
+                flips.push(i + 1);
+            }
+            star_flip(mut a, size);
+            flips.push(size);
+        }
+        size -= 1;
+    }
+    flips
+}
+
+// ---- iter ----
+
+fn iter_pancake_sort(arr: Vec[i64]) -> Vec[i64] {
+    let mut a = arr.clone();
+    let mut flips: Vec[i64] = Vec.new();
+    for size in (2..a.len() + 1).rev() {
+        let i = a[0..size].iter().position(|x| x == size).unwrap();
+        if i + 1 < size {
+            if i > 0 {
+                a[0..i + 1].reverse();
+                flips.push(i + 1);
+            }
+            a[0..size].reverse();
+            flips.push(size);
+        }
+    }
+    flips
+}
+
+// ---- positions ----
+
+fn positions_flip(a: mut ref Vec[i64], pos: mut ref Vec[i64], k: i64) {
+    let mut i = 0;
+    let mut j = k - 1;
+    while i < j {
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i += 1;
+        j -= 1;
+    }
+    for p in 0..k {
+        pos[a[p]] = p;
+    }
+}
+
+fn positions_pancake_sort(arr: Vec[i64]) -> Vec[i64] {
+    let mut a = arr.clone();
+    let n = a.len();
+    let mut pos = Vec.filled(n + 1, 0);
+    for p in 0..n {
+        pos[a[p]] = p;
+    }
+    let mut flips: Vec[i64] = Vec.new();
+    let mut size = n;
+    while size > 1 {
+        let i = pos[size];
+        if i != size - 1 {
+            if i != 0 {
+                positions_flip(mut a, mut pos, i + 1);
+                flips.push(i + 1);
+            }
+            positions_flip(mut a, mut pos, size);
+            flips.push(size);
+        }
+        size -= 1;
+    }
+    flips
+}
+
+// ---- inverse ----
+
+fn inverse_flip(pos: mut ref Vec[i64], k: i64) {
+    for v in 1..pos.len() {
+        if pos[v] < k {
+            pos[v] = k - 1 - pos[v];
+        }
+    }
+}
+
+fn inverse_pancake_sort(arr: Vec[i64]) -> Vec[i64] {
+    let n = arr.len();
+    let mut pos = Vec.filled(n + 1, 0);
+    for p in 0..n {
+        pos[arr[p]] = p;
+    }
+    let mut flips: Vec[i64] = Vec.new();
+    for size in (2..n + 1).rev() {
+        let i = pos[size];
+        if i < size - 1 {
+            if i > 0 {
+                inverse_flip(mut pos, i + 1);
+                flips.push(i + 1);
+            }
+            inverse_flip(mut pos, size);
+            flips.push(size);
+        }
+    }
+    flips
+}
+
+// ---- recursive ----
+
+fn recursive_flip(a: mut ref Vec[i64], i: i64, j: i64) {
+    if i < j {
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        recursive_flip(mut a, i + 1, j - 1);
+    }
+}
+
+// The index of pancake v, looking from index i down.
+fn recursive_find(a: Vec[i64], v: i64, i: i64) -> i64 {
+    if a[i] == v { i } else { recursive_find(a, v, i + 1) }
+}
+
+fn recursive_sort_top(a: mut ref Vec[i64], size: i64, flips: mut ref Vec[i64]) {
+    if size < 2 {
+        return;
+    }
+    let i = recursive_find(a, size, 0);
+    if i != size - 1 {
+        if i != 0 {
+            recursive_flip(mut a, 0, i);
+            flips.push(i + 1);
+        }
+        recursive_flip(mut a, 0, size - 1);
+        flips.push(size);
+    }
+    recursive_sort_top(mut a, size - 1, mut flips);
+}
+
+fn recursive_pancake_sort(arr: Vec[i64]) -> Vec[i64] {
+    let mut a = arr.clone();
+    let mut flips: Vec[i64] = Vec.new();
+    recursive_sort_top(mut a, a.len(), mut flips);
+    flips
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random permutation of 1..n, shuffled from the top down.
+fn random_permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        a.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i -= 1;
+    }
+    a
+}
+
+// The stack after the flips, read as the statement says: each flip
+// reverses arr[0..k - 1].
+fn after(arr: Vec[i64], flips: Vec[i64]) -> Vec[i64] {
+    let mut a = arr.clone();
+    for k in flips {
+        let mut b: Vec[i64] = Vec.new();
+        for i in 0..k {
+            b.push(a[k - 1 - i]);
+        }
+        for i in k..a.len() {
+            b.push(a[i]);
+        }
+        a = b;
+    }
+    a
+}
+
+fn ascending(a: Vec[i64]) -> bool {
+    for i in 0..a.len() {
+        if a[i] != i + 1 {
+            return false;
+        }
+    }
+    true
+}
+
+fn arm(x: i64, arr: Vec[i64]) -> Vec[i64] {
+    if x == 0 {
+        star_pancake_sort(arr)
+    } else if x == 1 {
+        iter_pancake_sort(arr)
+    } else if x == 2 {
+        positions_pancake_sort(arr)
+    } else if x == 3 {
+        inverse_pancake_sort(arr)
+    } else {
+        recursive_pancake_sort(arr)
+    }
+}
+
+fn slice_of(v: Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut s: Vec[i64] = Vec.new();
+    for i in from..to {
+        s.push(v[i]);
+    }
+    s
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, arr: Vec[i64], small: bool) -> Vec[i64] {
+    let n = arr.len();
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, arr));
+    }
+    let mut sorted: Vec[i64] = Vec.new();
+    let mut upside_down: Vec[i64] = Vec.new();
+    let mut below = arr.clone();
+    below.push(n + 1);
+    let mut above = vec![n + 1];
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        sorted.push(i + 1);
+        upside_down.push(n - i);
+        above.push(arr[i]);
+        reversed.push(arr[n - 1 - i]);
+    }
+    for x in 0..5 {
+        let f = got[x].clone();
+        let m = f.len();
+        // P1: the statement, on the first 3000 stacks: every k from 1 to
+        // n, at most 10n flips, and the stack sorted after them
+        if small {
+            let mut in_range = true;
+            for k in f.clone() {
+                if k < 1 or k > n {
+                    in_range = false;
+                }
+            }
+            check(mut t, 1, in_range and m <= 10 * n and ascending(after(arr, f.clone())));
+        }
+        // P2: at most 2(n - 1) flips, none of one pancake, and none the
+        // same as the one before, which would undo it
+        let mut lean = m <= 2 * (n - 1) or m == 0;
+        for j in 0..m {
+            if f[j] < 2 or f[j] > n or (j > 0 and f[j] == f[j - 1]) {
+                lean = false;
+            }
+        }
+        check(mut t, 2, lean);
+        // P3: the flips sort the stack, a sorted stack needs none, and a
+        // stack upside down one flip of the whole
+        let whole: Vec[i64] = if n > 1 { vec![n] } else { Vec.new() };
+        check(mut t, 3, ascending(after(arr, f.clone())) and arm(x, sorted).len() == 0 and arm(x, upside_down) == whole);
+        // P4: the stack after the first flips asks for the rest, cut after
+        // the first flip and halfway
+        let mut rest_ok = true;
+        for j in vec![1, m / 2] {
+            if j <= m and arm(x, after(arr, slice_of(f, 0, j))) != slice_of(f, j, m) {
+                rest_ok = false;
+            }
+        }
+        check(mut t, 4, rest_ok);
+        // P5: a largest pancake put under the stack changes nothing, and
+        // one put on top is flipped to the bottom first, leaving the
+        // stack upside down
+        let mut topped = vec![n + 1];
+        topped.extend(arm(x, reversed));
+        check(mut t, 5, arm(x, below) == f and arm(x, above) == topped);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == f {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 969;
+    let mut pancakes = 0;
+    let mut flips = 0;
+    let mut check_sum = 0;
+    // 3000 random stacks of up to 8 pancakes, against the statement, then
+    // 200 of up to 100
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 100 };
+        let arr = random_permutation(n, mut seed);
+        pancakes += n;
+        let f = properties(mut t, arr, small);
+        flips += f.len();
+        for k in f {
+            check_sum = (check_sum * 131 + k) % 1000000007;
+        }
+        check_sum = (check_sum * 31 + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 stacks of {pancakes} pancakes: {flips} flips, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

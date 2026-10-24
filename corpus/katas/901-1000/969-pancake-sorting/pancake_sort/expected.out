@@ -1,0 +1,14 @@
+[3,2,4,1]: [3,4,2,3,2], sorts true
+[1,2,3]: [], sorts true
+[1]: [], sorts true
+[2,1]: [2], sorts true
+[3,1,2]: [3,2], sorts true
+[2,3,1]: [2,3], sorts true
+[6,5,4,3,2,1]: [6], sorts true
+[2,3,4,5,1]: [4,5], sorts true
+[1,3,2,4,6,5]: [5,6,5,4,2,3,2], sorts true
+[5,1,4,2,3,6]: [5,3,4,2,3,2], sorts true
+300 random stacks of 1993 pancakes: 2194 flips, 300 sorted, checksum 54952068
+a random stack of 100: 186 flips, sorts true, checksum 397676448
+the stack upside down of 100: 1 flips, sorts true, checksum 100
+odd above even of 100: 99 flips, sorts true, checksum 861982182
