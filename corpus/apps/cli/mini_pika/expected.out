@@ -1,0 +1,570 @@
+# URLParameters
+amqp://
+  host='localhost' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://guest:guest@localhost:5672/%2F
+  host='localhost' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqps://svc-billing:not-a-real-password@mq.example.internal/billing?heartbeat=30
+  host='mq.example.internal' port=5671 vhost='billing' user='svc-billing' password='not-a-real-password' ssl=True heartbeat=30 frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+AMQP://Mq-01.Example.Internal:5673/orders?frame_max=8192&channel_max=128
+  host='mq-01.example.internal' port=5673 vhost='orders' user='guest' password='guest' ssl=False heartbeat=None frame_max=8192 channel_max=128 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://user%40corp:p%3Aw%2Fd@rabbit/a%2Fb/c
+  host='rabbit' port=5672 vhost='a/b' user='user@corp' password='p:w/d' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://:only-a-password@rabbit/
+  host='rabbit' port=5672 vhost='/' user='' password='only-a-password' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://user:@rabbit/
+  host='rabbit' port=5672 vhost='/' user='user' password='' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://reader@rabbit/
+  TypeError: argument of type 'NoneType' is not iterable
+amqp://rabbit:99999/
+  ValueError: Port out of range 0-65535
+amqp://rabbit:56x2/
+  ValueError: Port could not be cast to integer value as '56x2'
+amqp://rabbit:/vh
+  host='rabbit' port=5672 vhost='vh' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://[::1]:5673/
+  host='::1' port=5673 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://[::1/
+  ValueError: Invalid IPv6 URL
+amqpx://rabbit/
+  ValueError: Unexpected URL scheme 'httpx'; supported scheme values: amqp, amqps
+localhost:5672
+  ValueError: Unexpected URL scheme 'localhost'; supported scheme values: amqp, amqps
+mq.internal:5672/orders
+  ValueError: Unexpected URL scheme 'mq.internal'; supported scheme values: amqp, amqps
+amqp://rabbit/?heartbeat=10&heartbeat=20
+  ValueError: Expected exactly one value for URL parameter heartbeat, but got 2 values: ['10', '20']
+amqp://rabbit/?prefetch=10
+  ValueError: Unknown URL parameter: 'prefetch'
+amqp://rabbit/?heartbeat=-1
+  ValueError: heartbeat must >= 0, but got -1
+amqp://rabbit/?heartbeat=ten
+  ValueError: Invalid heartbeat value 'ten': ValueError("invalid literal for int() with base 10: 'ten'")
+amqp://rabbit/?heartbeat=+30+
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=30 frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?frame_max=1000
+  ValueError: Min AMQP 0.9.1 Frame Size is 4096, but got 1000
+amqp://rabbit/?frame_max=200000
+  ValueError: Max AMQP 0.9.1 Frame Size is 131072, but got 200000
+amqp://rabbit/?frame_max=4096
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=4096 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?channel_max=0
+  ValueError: channel_max must be <= 65535 and > 0, but got 0
+amqp://rabbit/?channel_max=65536
+  ValueError: channel_max must be <= 65535 and > 0, but got 65536
+amqp://rabbit/?channel_max=1_024
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=1024 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?channel_max=0x10
+  ValueError: Invalid channel_max value '0x10': ValueError("invalid literal for int() with base 10: '0x10'")
+amqp://rabbit/?channel_max=12.0
+  ValueError: Invalid channel_max value '12.0': ValueError("invalid literal for int() with base 10: '12.0'")
+amqp://rabbit/?connection_attempts=0
+  ValueError: connection_attempts must be > 0, but got 0
+amqp://rabbit/?connection_attempts=3&retry_delay=0.25
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=3 retry_delay=0.25 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?retry_delay=soon
+  ValueError: Invalid retry_delay value 'soon': ValueError("could not convert string to float: 'soon'")
+amqp://rabbit/?socket_timeout=0
+  ValueError: socket_timeout must be > 0, but got 0.0
+amqp://rabbit/?socket_timeout=1e1&stack_timeout=1_5
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?stack_timeout=-2
+  ValueError: stack_timeout must be > 0, but got -2.0
+amqp://rabbit/?blocked_connection_timeout=-1
+  ValueError: blocked_connection_timeout must be >= 0, but got -1.0
+amqp://rabbit/?blocked_connection_timeout=inf
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=inf
+amqp://rabbit/?blocked_connection_timeout=1__0
+  ValueError: Invalid blocked_connection_timeout value '1__0': ValueError("could not convert string to float: '1__0'")
+amqp://rabbit/?locale=de_DE
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='de_DE' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?heartbeat=&locale=fr_FR
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='fr_FR' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?heartbeat;locale=fr_FR
+  ValueError: Unknown URL parameter: 'heartbeat;locale'
+amqp://rabbit/?heartbeat=5&&locale=pt%5FBR
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=5 frame_max=131072 channel_max=65535 locale='pt_BR' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/vh;v=1?heartbeat=5
+  host='rabbit' port=5672 vhost='vh' user='guest' password='guest' ssl=False heartbeat=5 frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/one/two
+  host='rabbit' port=5672 vhost='one' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit//
+  host='rabbit' port=5672 vhost='' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/%E2%9C%93
+  host='rabbit' port=5672 vhost='✓' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/%ZZ
+  host='rabbit' port=5672 vhost='%ZZ' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/%C3%28
+  host='rabbit' port=5672 vhost='�(' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit?heartbeat=7
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=7 frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit#frag?heartbeat=7
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?heartbeat=12&socket_timeout=2.5&blocked_connection_timeout=0
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=12 frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=2.5 stack_timeout=15.0 blocked_timeout=0.0
+amqps://secure.internal:443/
+  host='secure.internal' port=443 vhost='/' user='guest' password='guest' ssl=True heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?socket_timeout=.5&stack_timeout=5.
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=0.5 stack_timeout=5.0 blocked_timeout=None
+amqp://rabbit/?retry_delay=1e400
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=inf socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?socket_timeout=nan
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=None frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=nan stack_timeout=15.0 blocked_timeout=None
+amqp://rabbit/?heartbeat=%2B7
+  host='rabbit' port=5672 vhost='/' user='guest' password='guest' ssl=False heartbeat=7 frame_max=131072 channel_max=65535 locale='en_US' attempts=1 retry_delay=2.0 socket_timeout=10.0 stack_timeout=15.0 blocked_timeout=None
+
+# sessions
+
+== orders: amqp://svc-orders:not-a-real-password@mq.internal:5672/shop?heartbeat=30&frame_max=8192&blocked_connection_timeout=10
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     15 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     15 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\', \'connection_name\': \'orders-api\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00svc-orders\\\\x00not-a-real-password\'"])>'])> [341 bytes crc 6df4543e]
+     30 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     30 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=8192', 'heartbeat=30'])>"])> [20 bytes crc 57a397a1]
+     30 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=shop'])>"])> [19 bytes crc 99525926]
+     45 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     45 app: connection open to RabbitMQ 4.0.5, frame_max 8192, channel_max 2047, heartbeat 30
+     45 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=20', 'prefetch_size=0'])>"])> [19 bytes crc bd288a89]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=orders.created', 'ticket=0'])>"])> [34 bytes crc 0b10c948]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=3', 'queue=orders.created'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue orders.created declared: 3 messages, 0 consumers
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Publish(['exchange=orders', 'immediate=False', 'mandatory=False', 'routing_key=order.created', 'ticket=0'])>"])> [36 bytes crc d14535c6]
+     60 > <Header(['body_size=47', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties([\'content_type=application/json\', \'delivery_mode=2\', "headers={\'retries\': 0, \'source\': \'checkout\', \'trace\': b\'\\\\n\\\\xf3\\\\xc9\'}"])>'])> [91 bytes crc 45fa420f]
+     60 > body ch1 47 bytes crc 50eec035
+     60 app: published #1 to 'orders' with key order.created, 47 bytes
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Publish(['exchange=orders', 'immediate=False', 'mandatory=False', 'routing_key=order.created', 'ticket=0'])>"])> [36 bytes crc d14535c6]
+     60 > <Header(['body_size=46', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['content_type=application/json', 'message_id=ord-41018', 'timestamp=1792841400'])>"])> [57 bytes crc a1886d53]
+     60 > body ch1 46 bytes crc da4ff046
+     60 app: published #2 to 'orders' with key order.created, 46 bytes
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Publish(['exchange=orders', 'immediate=False', 'mandatory=True', 'routing_key=order.misrouted', 'ticket=0'])>"])> [38 bytes crc ac3211b1]
+     60 > <Header(['body_size=27', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['content_type=text/plain'])>"])> [33 bytes crc 10261ca5]
+     60 > body ch1 27 bytes crc 14bf7312
+     60 app: published #3 to 'orders' with key order.misrouted, 27 bytes
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Publish(['exchange=orders', 'immediate=False', 'mandatory=False', 'routing_key=order.created', 'ticket=0'])>"])> [36 bytes crc d14535c6]
+     60 > <Header(['body_size=16', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties(["headers={\'amount\': Decimal(\'129.95\'), \'when\': datetime.datetime(2026, 10, 24, 11, 31), \'tags\': [\'vip\', \'eu\'], \'flags\': {\'gift\': True, \'wrap\': False}, \'big\': 9000000000L, \'neg\': -3000000000L, \'none\': None}"])>'])> [135 bytes crc a5fa6815]
+     60 > body ch1 16 bytes crc 306069fa
+     60 app: published #4 to 'orders' with key order.created, 16 bytes
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Publish(['exchange=orders', 'immediate=False', 'mandatory=False', 'routing_key=order.bulk', 'ticket=0'])>"])> [33 bytes crc d215e0ed]
+     60 > <Header(['body_size=20000', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['content_type=application/octet-stream', 'priority=3'])>"])> [48 bytes crc 905b2ad1]
+     60 > body ch1 8184 bytes crc b774f3e0
+     60 > body ch1 8184 bytes crc acbb76de
+     60 > body ch1 3632 bytes crc e9db446a
+     60 app: published #5 to 'orders' with key order.bulk, 20000 bytes
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Publish(['exchange=', 'immediate=False', 'mandatory=False', 'routing_key=orders.created', 'ticket=0'])>"])> [31 bytes crc a12e539b]
+     60 > <Header(['body_size=19', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties>'])> [22 bytes crc 7ccf77d2]
+     60 > body ch1 19 bytes crc c5cbc460
+     60 app: published #6 to '' with key orders.created, 19 bytes
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=orders-worker-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=orders.created', 'ticket=0'])>"])> [50 bytes crc c34b03b7]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=orders-worker-1'])>"])>
+     82 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=orders-worker-1', 'delivery_tag=1', 'exchange=orders', 'redelivered=False', 'routing_key=order.created'])>"])>
+     83 < <Header(['body_size=46', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties([\'content_type=application/json\', \'delivery_mode=2\', \'headers={\\\'x-first-seen\\\': datetime.datetime(2026, 10, 24, 11, 25), \\\'x-retries\\\': 3, \\\'x-shard\\\': -10, \\\'x-score\\\': 97L, \\\'x-ratio\\\': -12L, \\\'x-amount\\\': Decimal(\\\'129.95\\\'), \\\'x-tiny\\\': Decimal(\\\'5E-9\\\'), \\\'x-zero\\\': Decimal(\\\'0.000\\\'), \\\'x-short\\\': -2, \\\'x-ushort\\\': 65000, \\\'x-sshort\\\': -300, \\\'x-long\\\': -70000, \\\'x-ulong\\\': 4000000000, \\\'x-llong\\\': -9000000000000L, \\\'x-ullong\\\': 18000000000000000000L, \\\'x-blob\\\': b\\\'\\\\x00\\\\x01\\\\xfe\\\\\\\'"\\\\\\\\\\\', \\\'x-latin1\\\': b\\\'caf\\\\xe9\\\', \\\'x-utf8\\\': \\\'café → tea\\\', \\\'x-nothing\\\': None, \\\'x-tags\\\': [\\\'a\\\', 7, False, None], \\\'x-nested\\\': {\\\'k\\\': "it\\\'s", \\\'q\\\': \\\'say "hi"\\\'}}\'])>'])>
+     83 < body ch1 46 bytes crc 8399f0c9
+     83 app: message 1 from 'orders' key order.created: b'{"order": 41001, "total": "64.00", "line'... (46 bytes, crc 8399f0c9)
+     83 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=1', 'multiple=False'])>"])> [21 bytes crc 6d51b831]
+     85 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=orders-worker-1', 'delivery_tag=2', 'exchange=orders', 'redelivered=True', 'routing_key=order.created'])>"])>
+     85 < <Header(['body_size=150', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties([\'app_id=checkout\', \'cluster_id=eu-1\', \'content_encoding=gzip\', \'content_type=text/plain\', \'correlation_id=c-77\', \'delivery_mode=1\', \'expiration=60000\', "headers={\'x-death\': [{\'count\': 1L, \'reason\': \'expired\', \'queue\': \'orders.retry\', \'time\': datetime.datetime(2026, 10, 24, 11, 23, 20), \'exchange\': \'\', \'routing-keys\': [\'orders.retry\']}]}", \'message_id=m-41002\', \'priority=9\', \'reply_to=amq.rabbitmq.reply-to\', \'timestamp=1792841200\', \'type=order.created\', \'user_id=svc-orders\'])>'])>
+     85 < body ch1 100 bytes crc 1d7f4fc8
+     85 < body ch1 50 bytes crc 0d3f6c73
+     85 app: message 2 from 'orders' key order.created (redelivered): b'invoice shipment shipment parcel sku rou'... (150 bytes, crc c6594447)
+     85 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=2', 'multiple=False'])>"])> [21 bytes crc 6f170668]
+     85 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=2', 'multiple=True'])>"])>
+     85 app: broker ack for #1, #2; 4 unconfirmed
+     92 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Return(['exchange=orders', 'reply_code=312', 'reply_text=NO_ROUTE', 'routing_key=order.misrouted'])>"])>
+     92 < <Header(['body_size=27', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['content_type=text/plain'])>"])>
+     92 < body ch1 27 bytes crc 14bf7312
+     92 app: returned by the broker: 312 NO_ROUTE, orders/order.misrouted: b'nobody is bound to this key'
+     92 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=3', 'multiple=False'])>"])>
+     92 app: broker ack for #3; 3 unconfirmed
+     92 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Nack(['delivery_tag=4', 'multiple=False', 'requeue=False'])>"])>
+     92 app: broker nack for #4; 2 unconfirmed
+     92 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=6', 'multiple=True'])>"])>
+     92 app: broker ack for #5, #6; 0 unconfirmed
+  15000 < <Heartbeat(['channel_number=0', 'frame_type=8'])>
+  15030 > <Heartbeat(['channel_number=0', 'frame_type=8'])> [8 bytes crc ca1b2b6b]
+  16000 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Blocked(['reason=low on memory'])>"])>
+  16000 app: blocked by the broker: low on memory
+  21000 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Unblocked>'])>
+  21000 app: unblocked
+  30000 < <Heartbeat(['channel_number=0', 'frame_type=8'])>
+  30030 > <Heartbeat(['channel_number=0', 'frame_type=8'])> [8 bytes crc ca1b2b6b]
+  40000 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=orders-worker-1', 'delivery_tag=3', 'exchange=orders', 'redelivered=False', 'routing_key=order.created'])>"])>
+  40000 < <Header(['body_size=19', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['content_type=text/plain'])>"])>
+  40000 < body ch1 19 bytes crc 324c9b5d
+  40000 app: message 3 from 'orders' key order.created: b'poison: bad payload'
+  40000 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Nack(['delivery_tag=3', 'multiple=False', 'requeue=False'])>"])> [21 bytes crc 528a02cd]
+  40000 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=orders-worker-1', 'delivery_tag=4', 'exchange=orders', 'redelivered=False', 'routing_key=order.bulk'])>"])>
+  40000 < <Header(['body_size=20000', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['content_type=application/octet-stream', 'priority=3'])>"])>
+  40002 < body ch1 8184 bytes crc d5f696d8
+  40006 < body ch1 8184 bytes crc b0724da3
+  40008 < body ch1 3632 bytes crc 3ee7caaa
+  40008 app: message 4 from 'orders' key order.bulk: b'warehouse route pallet customer batch ca'... (20000 bytes, crc 3b23e97c)
+  40008 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=4', 'multiple=False'])>"])> [21 bytes crc 6b9a7ada]
+  40008 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=orders-worker-1', 'delivery_tag=5', 'exchange=', 'redelivered=False', 'routing_key=orders.created'])>"])>
+  40008 < <Header(['body_size=0', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties>'])>
+  40008 app: message 5 from '' key orders.created: b''
+  40008 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=5', 'multiple=False'])>"])> [21 bytes crc 6a5810ed]
+  40008 app: closing after 5 messages
+  40008 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Cancel(['consumer_tag=orders-worker-1', 'nowait=True'])>"])> [29 bytes crc d69a47a9]
+  40008 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Close(['class_id=0', 'method_id=0', 'reply_code=200', 'reply_text=Normal shutdown'])>"])> [34 bytes crc 9f368705]
+  40100 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=orders-worker-1', 'delivery_tag=6', 'exchange=orders', 'redelivered=False', 'routing_key=order.created'])>"])>
+  40100 < <Header(['body_size=4', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties>'])>
+  40100 < body ch1 4 bytes crc 6f2a1f95
+  40100 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.CancelOk(['consumer_tag=orders-worker-1'])>"])>
+  40110 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.CloseOk>'])>
+  40110 app: channel 1 closed: ChannelClosedByClient: (200) 'Normal shutdown'
+  40110 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Close(['class_id=0', 'method_id=0', 'reply_code=200', 'reply_text=Normal shutdown'])>"])> [34 bytes crc da14a656]
+  40120 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.CloseOk>'])>
+  40120 transport closed
+  40120 app: connection closed: ConnectionClosedByClient: (200) 'Normal shutdown'
+  received 42 frames, 22328 bytes; sent 39 frames, 21550 bytes; delivered 5, unconfirmed none
+
+== ledger: amqp://ledger-svc:unused@mq.internal/%2Fledger?heartbeat=0&channel_max=16
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN EXTERNAL AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\', \'connection_name\': \'ledger\'}", \'locale=en_US\', \'mechanism=EXTERNAL\', "response=b\'\'"])>'])> [309 bytes crc addc28bd]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=16', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 317a7c75]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/ledger'])>"])> [22 bytes crc 7993dc6f]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 16, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=1', 'prefetch_size=0'])>"])> [19 bytes crc a7c5eb12]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=ledger.entries', 'ticket=0'])>"])> [34 bytes crc 7e3ce021]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.Close([\'class_id=50\', \'method_id=10\', \'reply_code=406\', "reply_text=PRECONDITION_FAILED - inequivalent arg \'durable\' for queue \'ledger.entries\' in vhost \'/ledger\': received \'true\' but current is \'false\'"])>'])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.CloseOk>'])> [12 bytes crc 73c213bc]
+     60 app: channel 1 closed: ChannelClosedByBroker: (406) "PRECONDITION_FAILED - inequivalent arg 'durable' for queue 'ledger.entries' in vhost '/ledger': received 'true' but current is 'false'"
+     60 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Close(['class_id=0', 'method_id=0', 'reply_code=200', 'reply_text=Normal shutdown'])>"])> [34 bytes crc da14a656]
+     70 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.CloseOk>'])>
+     70 transport closed
+     70 app: connection closed: ConnectionClosedByClient: (200) 'Normal shutdown'
+  received 7 frames, 699 bytes; sent 9 frames, 471 bytes; delivered 0, unconfirmed none
+
+== bad_password: amqp://reporting:wrong-on-purpose@mq.internal/
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00reporting\\\\x00wrong-on-purpose\'"])>'])> [306 bytes crc b1aa09f1]
+     20 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Close(['class_id=0', 'method_id=0', 'reply_code=403', 'reply_text=ACCESS_REFUSED - Login was refused using authentication mechanism PLAIN. For details see the broker logfile.'])>"])>
+     20 transport closed
+     20 app: could not connect: ProbableAuthenticationError: Client was disconnected at a connection stage indicating a probable authentication error: ("ConnectionClosedByBroker: (403) 'ACCESS_REFUSED - Login was refused using authentication mechanism PLAIN. For details see the broker logfile.'",)
+  received 2 frames, 591 bytes; sent 2 frames, 314 bytes; delivered 0, unconfirmed none
+
+== vhost_denied: amqp://billing:unused@mq.internal/billing
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00billing\\\\x00unused\'"])>'])> [294 bytes crc 8d473cfa]
+     20 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     20 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])> [20 bytes crc 7c185f8e]
+     20 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=billing'])>"])> [22 bytes crc 5efdb7b0]
+     30 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Close(['class_id=10', 'method_id=40', 'reply_code=530', 'reply_text=NOT_ALLOWED - vhost billing not found'])>"])>
+     30 transport closed
+     30 app: could not connect: ProbableAccessDeniedError: Client was disconnected at a connection stage indicating a probable denial of access to the specified virtual host: ("ConnectionClosedByBroker: (530) 'NOT_ALLOWED - vhost billing not found'",)
+  received 3 frames, 540 bytes; sent 4 frames, 344 bytes; delivered 0, unconfirmed none
+
+== no_plain: amqp://mq.internal/
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'AMQPLAIN SCRAM-SHA-256\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 transport closed
+     10 app: could not connect: AuthenticationError: Server and client could not negotiate use of the PLAIN authentication mechanism
+  received 1 frames, 472 bytes; sent 1 frames, 8 bytes; delivered 0, unconfirmed none
+
+== old_broker: amqp://mq-legacy.internal/
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <ProtocolHeader(['frame_type=-1', 'major=1', 'minor=8', 'revision=1'])>
+     20 end of capture
+     20 app: could not connect: IncompatibleProtocolError: The protocol returned by the server is not supported: ("StreamLostError: ('Transport indicated EOF',)",)
+  received 1 frames, 8 bytes; sent 1 frames, 8 bytes; delivered 0, unconfirmed none
+
+== version_mismatch: amqp://mq-legacy.internal/
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'1.8.1\'}", \'version_major=8\', \'version_minor=0\'])>'])>
+     10 transport closed
+     10 app: could not connect: ProtocolVersionMismatch: Protocol versions did not match: <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> vs <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'1.8.1\'}", \'version_major=8\', \'version_minor=0\'])>'])>
+  received 1 frames, 464 bytes; sent 1 frames, 8 bytes; delivered 0, unconfirmed none
+
+== garbled_start: amqp://mq.internal/
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     11 transport aborted
+     11 app: could not connect: IncompatibleProtocolError: The protocol returned by the server is not supported: ('StreamLostError: ("Stream connection lost: InvalidFrameError: Invalid frame received: \'Invalid FRAME_END marker\'",)',)
+  received 0 frames, 0 bytes; sent 1 frames, 8 bytes; delivered 0, unconfirmed none
+
+== heartbeat_lost: amqp://mq.internal/?heartbeat=12
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\', \'connection_name\': \'metrics\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [319 bytes crc 1ff3e474]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=12'])>"])> [20 bytes crc a35e697d]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 12
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=50', 'prefetch_size=0'])>"])> [19 bytes crc 81e8b0db]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=metrics', 'ticket=0'])>"])> [27 bytes crc f04db6c4]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=0', 'queue=metrics'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue metrics declared: 0 messages, 0 consumers
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=metrics-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=metrics', 'ticket=0'])>"])> [37 bytes crc 5491be03]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=metrics-1'])>"])>
+    200 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=metrics-1', 'delivery_tag=1', 'exchange=metrics', 'redelivered=False', 'routing_key=cpu'])>"])>
+    200 < <Header(['body_size=9', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['content_type=text/plain'])>"])>
+    200 < body ch1 9 bytes crc 4c5e2534
+    200 app: message 1 from 'metrics' key cpu: b'cpu=0.731'
+    200 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=1', 'multiple=False'])>"])> [21 bytes crc 6d51b831]
+   6025 > <Heartbeat(['channel_number=0', 'frame_type=8'])> [8 bytes crc ca1b2b6b]
+  12025 > <Heartbeat(['channel_number=0', 'frame_type=8'])> [8 bytes crc ca1b2b6b]
+  18025 > <Heartbeat(['channel_number=0', 'frame_type=8'])> [8 bytes crc ca1b2b6b]
+  24025 > <Heartbeat(['channel_number=0', 'frame_type=8'])> [8 bytes crc ca1b2b6b]
+  30025 > <Heartbeat(['channel_number=0', 'frame_type=8'])> [8 bytes crc ca1b2b6b]
+  34025 transport closed
+  34025 app: channel 1 closed: AMQPHeartbeatTimeout: ('No activity or too many missed heartbeats in the last 12 seconds',)
+  34025 app: connection closed: AMQPHeartbeatTimeout: ('No activity or too many missed heartbeats in the last 12 seconds',)
+  received 11 frames, 680 bytes; sent 15 frames, 533 bytes; delivered 1, unconfirmed none
+
+== blocked_too_long: amqp://mq.internal/?blocked_connection_timeout=2.5&heartbeat=0
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\', \'connection_name\': \'uploader\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [320 bytes crc 4f92b55e]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 0feb2671]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=5', 'prefetch_size=0'])>"])> [19 bytes crc a0cc43ce]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=uploads', 'ticket=0'])>"])> [27 bytes crc fd8add48]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=0', 'queue=uploads'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue uploads declared: 0 messages, 0 consumers
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Publish(['exchange=uploads', 'immediate=False', 'mandatory=False', 'routing_key=upload.done', 'ticket=0'])>"])> [35 bytes crc 6c6b6188]
+     60 > <Header(['body_size=4', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties>'])> [22 bytes crc b10118f4]
+     60 > body ch1 4 bytes crc 102de0ab
+     60 app: published #1 to 'uploads' with key upload.done, 4 bytes
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=uploads-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=uploads', 'ticket=0'])>"])> [37 bytes crc 2a7c054b]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=uploads-1'])>"])>
+   1000 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Blocked(['reason=low on disk'])>"])>
+   1000 app: blocked by the broker: low on disk
+   3500 transport closed
+   3500 app: channel 1 closed: ConnectionBlockedTimeout: ('Blocked connection timeout expired.',)
+   3500 app: connection closed: ConnectionBlockedTimeout: ('Blocked connection timeout expired.',)
+  received 9 frames, 611 bytes; sent 12 frames, 542 bytes; delivered 0, unconfirmed #1
+
+== corrupt_frame: amqp://mq.internal/?heartbeat=0
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [291 bytes crc 4ba7d064]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 0feb2671]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=10', 'prefetch_size=0'])>"])> [19 bytes crc ab9004f3]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=events', 'ticket=0'])>"])> [26 bytes crc 003c47bb]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=0', 'queue=events'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue events declared: 0 messages, 0 consumers
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=events-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=events', 'ticket=0'])>"])> [35 bytes crc 4b164a93]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=events-1'])>"])>
+    100 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=events-1', 'delivery_tag=1', 'exchange=events', 'redelivered=False', 'routing_key=user.signup'])>"])>
+    100 < <Header(['body_size=5', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties>'])>
+    100 < body ch1 5 bytes crc 3610a686
+    100 app: message 1 from 'events' key user.signup: b'hello'
+    100 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=1', 'multiple=False'])>"])> [21 bytes crc 6d51b831]
+    100 transport aborted
+    100 app: channel 1 closed: StreamLostError: ("Stream connection lost: InvalidFrameError: Invalid frame received: 'Invalid FRAME_END marker'",)
+    100 app: connection closed: StreamLostError: ("Stream connection lost: InvalidFrameError: Invalid frame received: 'Invalid FRAME_END marker'",)
+  received 11 frames, 669 bytes; sent 10 frames, 462 bytes; delivered 1, unconfirmed none
+
+== unknown_method: amqp://mq.internal/?heartbeat=0
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [291 bytes crc 4ba7d064]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 0feb2671]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=10', 'prefetch_size=0'])>"])> [19 bytes crc ab9004f3]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=events', 'ticket=0'])>"])> [26 bytes crc 003c47bb]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=0', 'queue=events'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue events declared: 0 messages, 0 consumers
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=events-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=events', 'ticket=0'])>"])> [35 bytes crc 4b164a93]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=events-1'])>"])>
+    100 transport aborted
+    100 app: channel 1 closed: StreamLostError: ('Stream connection lost: KeyError(3932415)',)
+    100 app: connection closed: StreamLostError: ('Stream connection lost: KeyError(3932415)',)
+  received 8 frames, 585 bytes; sent 9 frames, 441 bytes; delivered 0, unconfirmed none
+
+== bad_field: amqp://mq.internal/?heartbeat=0
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [291 bytes crc 4ba7d064]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 0feb2671]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=10', 'prefetch_size=0'])>"])> [19 bytes crc ab9004f3]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=events', 'ticket=0'])>"])> [26 bytes crc 003c47bb]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=0', 'queue=events'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue events declared: 0 messages, 0 consumers
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=events-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=events', 'ticket=0'])>"])> [35 bytes crc 4b164a93]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=events-1'])>"])>
+    100 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=events-1', 'delivery_tag=1', 'exchange=events', 'redelivered=False', 'routing_key=user.signup'])>"])>
+    100 transport aborted
+    100 app: channel 1 closed: StreamLostError: ("Stream connection lost: InvalidFieldTypeException: Unsupported field kind b'Z'",)
+    100 app: connection closed: StreamLostError: ("Stream connection lost: InvalidFieldTypeException: Unsupported field kind b'Z'",)
+  received 9 frames, 634 bytes; sent 9 frames, 441 bytes; delivered 0, unconfirmed none
+
+== body_too_long: amqp://mq.internal/?heartbeat=0
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [291 bytes crc 4ba7d064]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 0feb2671]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=10', 'prefetch_size=0'])>"])> [19 bytes crc ab9004f3]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=events', 'ticket=0'])>"])> [26 bytes crc 003c47bb]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=0', 'queue=events'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue events declared: 0 messages, 0 consumers
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=events-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=events', 'ticket=0'])>"])> [35 bytes crc 4b164a93]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=events-1'])>"])>
+    100 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=events-1', 'delivery_tag=1', 'exchange=events', 'redelivered=False', 'routing_key=user.signup'])>"])>
+    100 < <Header(['body_size=10', 'channel_number=1', 'frame_type=2', 'properties=<BasicProperties>'])>
+    100 < body ch1 6 bytes crc 4b8e39ef
+    100 < body ch1 6 bytes crc cc12cbad
+    100 transport aborted
+    100 app: channel 1 closed: StreamLostError: ('Stream connection lost: BodyTooLongError: Received too many bytes for a message delivery: Received 12, expected 10',)
+    100 app: connection closed: StreamLostError: ('Stream connection lost: BodyTooLongError: Received too many bytes for a message delivery: Received 12, expected 10',)
+  received 12 frames, 684 bytes; sent 9 frames, 441 bytes; delivered 0, unconfirmed none
+
+== unknown_frame_type: amqp://mq.internal/?heartbeat=0
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [291 bytes crc 4ba7d064]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 0feb2671]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=10', 'prefetch_size=0'])>"])> [19 bytes crc ab9004f3]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=events', 'ticket=0'])>"])> [26 bytes crc 003c47bb]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=0', 'queue=events'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue events declared: 0 messages, 0 consumers
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=events-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=events', 'ticket=0'])>"])> [35 bytes crc 4b164a93]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=events-1'])>"])>
+    100 < <Heartbeat(['channel_number=0', 'frame_type=8'])>
+    100 transport aborted
+    100 app: channel 1 closed: StreamLostError: ("Stream connection lost: InvalidFrameError: Invalid frame received: 'Unknown frame type: 9'",)
+    100 app: connection closed: StreamLostError: ("Stream connection lost: InvalidFrameError: Invalid frame received: 'Unknown frame type: 9'",)
+  received 9 frames, 593 bytes; sent 9 frames, 441 bytes; delivered 0, unconfirmed none
+
+== no_confirms: amqp://mq.internal/?heartbeat=0
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [291 bytes crc 4ba7d064]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 0feb2671]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=10', 'prefetch_size=0'])>"])> [19 bytes crc ab9004f3]
+     50 transport aborted
+     50 app: channel 1 closed: StreamLostError: ("Stream connection lost: MethodNotImplemented: An unspecified AMQP error has occurred; ('Confirm.Select not Supported by Server',)",)
+     50 app: connection closed: StreamLostError: ("Stream connection lost: MethodNotImplemented: An unspecified AMQP error has occurred; ('Confirm.Select not Supported by Server',)",)
+  received 4 frames, 492 bytes; sent 6 frames, 367 bytes; delivered 0, unconfirmed none
+
+== consumer_cancelled: amqp://mq.internal/?heartbeat=0
+      0 > <ProtocolHeader(['frame_type=-1', 'major=0', 'minor=9', 'revision=1'])> [8 bytes crc fccd96e5]
+     10 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Start(["locales=b\'en_US\'", "mechanisms=b\'PLAIN AMQPLAIN\'", "server_properties={\'capabilities\': {\'publisher_confirms\': True, \'exchange_exchange_bindings\': True, \'basic.nack\': True, \'consumer_cancel_notify\': True, \'connection.blocked\': True, \'consumer_priorities\': True, \'authentication_failure_close\': True, \'per_consumer_qos\': True, \'direct_reply_to\': True}, \'cluster_name\': \'rabbit@mq-01\', \'copyright\': \'Copyright (c) 2007-2026 the broker authors\', \'information\': \'See the broker documentation\', \'platform\': \'Erlang/OTP 27.1.2\', \'product\': \'RabbitMQ\', \'version\': \'4.0.5\'}", \'version_major=0\', \'version_minor=9\'])>'])>
+     10 > <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.StartOk(["client_properties={\'product\': \'Pika Python Client Library\', \'platform\': \'replay\', \'capabilities\': {\'authentication_failure_close\': True, \'basic.nack\': True, \'connection.blocked\': True, \'consumer_cancel_notify\': True, \'publisher_confirms\': True}, \'information\': \'See http://pika.rtfd.org\', \'version\': \'1.3.2\', \'connection_name\': \'audit\'}", \'locale=en_US\', \'mechanism=PLAIN\', "response=b\'\\\\x00guest\\\\x00guest\'"])>'])> [317 bytes crc e1622888]
+     25 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Tune(['channel_max=2047', 'frame_max=131072', 'heartbeat=60'])>"])>
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.TuneOk(['channel_max=2047', 'frame_max=131072', 'heartbeat=0'])>"])> [20 bytes crc 0feb2671]
+     25 > <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.Open(['capabilities=', 'insist=True', 'virtual_host=/'])>"])> [16 bytes crc 8bcd498d]
+     40 < <METHOD(['channel_number=0', 'frame_type=1', "method=<Connection.OpenOk(['known_hosts='])>"])>
+     40 app: connection open to RabbitMQ 4.0.5, frame_max 131072, channel_max 2047, heartbeat 0
+     40 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Open(['out_of_band='])>"])> [13 bytes crc a57f3443]
+     50 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Channel.OpenOk(["channel_id=b\'\'"])>'])>
+     50 app: channel 1 open
+     50 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Qos(['global_qos=False', 'prefetch_count=10', 'prefetch_size=0'])>"])> [19 bytes crc ab9004f3]
+     55 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Basic.QosOk>'])>
+     55 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.Declare(['arguments={}', 'auto_delete=False', 'durable=True', 'exclusive=False', 'nowait=False', 'passive=False', 'queue=audit', 'ticket=0'])>"])> [25 bytes crc 67d728d9]
+     60 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Queue.DeclareOk(['consumer_count=0', 'message_count=1', 'queue=audit'])>"])>
+     60 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Confirm.Select(['nowait=False'])>"])> [13 bytes crc c0ec45ba]
+     60 app: queue audit declared: 1 messages, 0 consumers
+     70 < <METHOD(['channel_number=1', 'frame_type=1', 'method=<Confirm.SelectOk>'])>
+     70 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Consume(['arguments={}', 'consumer_tag=audit-1', 'exclusive=False', 'no_ack=False', 'no_local=False', 'nowait=False', 'queue=audit', 'ticket=0'])>"])> [33 bytes crc 2679f163]
+     70 app: publisher confirms on
+     75 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.ConsumeOk(['consumer_tag=audit-1'])>"])>
+    100 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=audit-1', 'delivery_tag=1', 'exchange=audit', 'redelivered=False', 'routing_key=login'])>"])>
+    100 < <Header(['body_size=7', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['type=login'])>"])>
+    100 < body ch1 7 bytes crc 61201b03
+    100 app: message 1 from 'audit' key login: b'user=42'
+    100 > <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Ack(['delivery_tag=1', 'multiple=False'])>"])> [21 bytes crc 6d51b831]
+    200 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Cancel(['consumer_tag=audit-1', 'nowait=False'])>"])>
+    200 app: consumer audit-1 cancelled by the broker
+    210 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Basic.Deliver(['consumer_tag=audit-1', 'delivery_tag=2', 'exchange=audit', 'redelivered=False', 'routing_key=login'])>"])>
+    210 < <Header(['body_size=7', 'channel_number=1', 'frame_type=2', "properties=<BasicProperties(['type=login'])>"])>
+    210 < body ch1 7 bytes crc 16272b95
+    210 < <METHOD(['channel_number=1', 'frame_type=1', "method=<Channel.Flow(['active=False'])>"])>
+    300 < <METHOD(['channel_number=0', 'frame_type=1', 'method=<Connection.Close([\'class_id=0\', \'method_id=0\', \'reply_code=320\', "reply_text=CONNECTION_FORCED - broker forced connection closure with reason \'shutdown\'"])>'])>
+    300 transport closed
+    300 app: channel 1 closed: ConnectionClosedByBroker: (320) "CONNECTION_FORCED - broker forced connection closure with reason 'shutdown'"
+    300 app: connection closed: ConnectionClosedByBroker: (320) "CONNECTION_FORCED - broker forced connection closure with reason 'shutdown'"
+  received 17 frames, 879 bytes; sent 10 frames, 485 bytes; delivered 1, unconfirmed none
