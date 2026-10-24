@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 10056 / 10221 = 98.4%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8143 / 8269 = 98.5%.
-- Every classified non-deferred program (context): 16625 / 17725 = 93.8%.
-- Bench variants (outside the gate): 264 / 955 = 27.6%; timeouts 612.
+- Every classified non-deferred program (context): 16626 / 17725 = 93.8%.
+- Bench variants (outside the gate): 265 / 955 = 27.7%; timeouts 612.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5395 / 5411 = 99.7%; failing mir-gap 16.
 - Deferred (class d): 751; outside the slice (`post-m1:*`): 1138.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -63,7 +63,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (4316): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4317): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -4372,6 +4372,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/901-1000/976-largest-perimeter-triangle/largest_perimeter_multiset`
 - `katas/901-1000/976-largest-perimeter-triangle/largest_perimeter_scan`
 - `katas/901-1000/976-largest-perimeter-triangle/largest_perimeter_top32`
+- `katas/901-1000/977-squares-of-a-sorted-array/bench/sorted_squares`
 - `katas/901-1000/977-squares-of-a-sorted-array/differential`
 - `katas/901-1000/977-squares-of-a-sorted-array/sorted_squares`
 - `katas/901-1000/977-squares-of-a-sorted-array/sorted_squares_counting`
