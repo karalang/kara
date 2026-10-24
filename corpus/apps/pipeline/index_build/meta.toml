@@ -8,4 +8,4 @@ rules = []
 backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L693-L696 four document shards; L699-L702 four fs.write calls; L713-L716 four reads, each with ?; L723-L726 four parses, each with ?; L739-L742 four inverted indexes; L745-L748 four index writes; L754-L757 four index reads, each with ?; L764-L767 four index parses, each with ?; L776-L779 four query batches; L782-L785 four ranking runs; L788-L807 twenty read-only reports. L815-L818 four merge calls take mut cat, where a later shard's copy of a URL replaces an earlier one and term ids go out in arrival order, so they must stay in order"
-extracted_src = "bbe1b8ed"
+extracted_src = "be379161"

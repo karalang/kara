@@ -93,12 +93,15 @@ wiki's terms the low ids.
 - `pick_word(..) + SUFFIXES[..]`, twice: `+` on a `String` takes a
   `String`, and the suffix table is `Array[Str, 7]`. The error is right,
   but unlike the same mismatch at a call it offers no `.to_string()`, so
-  that was added by hand. That is kara ledger row B-2026-10-24-24.
+  that was added by hand. That is kara ledger row B-2026-10-24-24, fixed in
+  cd5b74be01, which adds that fix-it.
 - `STOPWORDS.contains(word)` on `const STOPWORDS: Array[Str, 12]` is `no
   method 'contains' on type 'Array'`, though an `Array` has every `Slice`
   method and `contains` works on an `Array[i64, N]`. It is
-  `STOPWORDS.as_slice().contains(word.as_str())` now. That is kara ledger
-  row B-2026-10-24-23.
+  `STOPWORDS.as_slice().contains(word.as_str())` until kara 6484f80350
+  fixed ledger row B-2026-10-24-23, and `STOPWORDS.contains(word.as_str())`
+  again since. The `.as_str()` stays: a `String` argument against `Str`
+  elements is still refused.
 - `Stats` shadows a prelude type, which `karac check` warns about; it is
   `TokenStats`.
 

@@ -292,7 +292,7 @@ fn tokenize(text: ref String, st: mut ref TokenStats) -> Vec[String] {
             word.push(c);
         } else if word != "" {
             st.tokens += 1;
-            if STOPWORDS.as_slice().contains(word.as_str()) {
+            if STOPWORDS.contains(word.as_str()) {
                 st.stopped += 1;
             } else {
                 out.push(stem(word, mut st));

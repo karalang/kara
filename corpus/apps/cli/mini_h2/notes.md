@@ -98,7 +98,8 @@ right, but it is the generic borrow mismatch with the machine fix
 `.clone()`, a deep copy of every event. A `return e` in the same place
 gets the "cannot give away parameter" message and the fix `own` on the
 parameter, which is the edit wanted here; a `Vec.push` argument does
-not get it. The two helpers take `own` by hand.
+not get it. The two helpers take `own` by hand. Kara b12c3d1318 fixed it:
+a `Vec.push` argument now gets the `own` fix too.
 
 Everything else `karac check` reported was the author's: 26 missing
 `mut` markers where one stream function hands its `mut ref` stream to

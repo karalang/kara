@@ -63,7 +63,8 @@ Compiler gap: `karac fix`'s machine edit for that error is not the borrow.
 It adds `#[derive(Clone)]` to `Truck`, and a second run makes the line
 `fleet.trucks[i].clone()`, a deep copy of every truck's trip list; the
 first message even says no `.clone()` is offered. Filed as
-B-2026-10-24-18, and the borrow is written by hand.
+B-2026-10-24-18, and the borrow is written by hand. Kara 21faffb7ac fixed
+it: `karac fix` now writes that `ref` itself.
 
 After that one edit it matched the mirror on the first run under
 `karac run`, the MIR interpreter, the LLVM backend, the ASan build and the
