@@ -12,7 +12,7 @@
 //! client closes it or asks to (`Connection: close`, or HTTP/1.0 without
 //! `keep-alive`).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
 /// Header (or query) pairs, in the order they came.
@@ -90,7 +90,8 @@ fn form_decode(s: &str) -> String {
 /// A bound listener and the connection it is serving.
 pub struct Server {
     listener: TcpListener,
-    conn: Option<(BufReader<TcpStream>, TcpStream)>,
+    /// The connection, and the bytes read off it past the last request.
+    conn: Option<(TcpStream, Vec<u8>)>,
     keep_alive: bool,
 }
 
@@ -120,13 +121,12 @@ impl Server {
         loop {
             if self.conn.is_none() {
                 let (s, _) = self.listener.accept().map_err(fail)?;
-                let w = s.try_clone().map_err(fail)?;
-                self.conn = Some((BufReader::new(s), w));
+                self.conn = Some((s, Vec::new()));
             }
-            let Some((r, _)) = self.conn.as_mut() else {
+            let Some((s, buf)) = self.conn.as_mut() else {
                 continue;
             };
-            match read_request(r) {
+            match read_request(s, buf) {
                 Ok(Some(req)) => {
                     self.keep_alive = req.keep_alive;
                     return Ok(req);
@@ -138,7 +138,7 @@ impl Server {
 
     /// Answers the request [`Self::accept_request`] returned last.
     pub fn respond(&mut self, status: i64, body: &[u8], headers: &[(String, String)]) {
-        let Some((_, w)) = self.conn.as_mut() else {
+        let Some((w, _)) = self.conn.as_mut() else {
             return;
         };
         let mut head = format!("HTTP/1.1 {status} {}\r\n", reason(status));
@@ -168,23 +168,37 @@ impl Server {
     }
 }
 
-/// Reads one request; `None` when the client closed the connection first.
-fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<Request>> {
-    let bad = |what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_string());
-    let mut line = String::new();
+/// What the bytes read so far off a connection hold of its next request.
+pub enum Parse {
+    /// A whole request, and how many bytes it took.
+    Done(Request, usize),
+    /// Not a whole request yet: read more and ask again.
+    More,
+    /// Nothing but blank lines, and the client closed the connection.
+    Closed,
+    /// Bytes that are no request; the connection is dropped.
+    Bad(&'static str),
+}
+
+/// Parses the next request at the start of `buf`, without blocking: a
+/// reader that may not have the whole request yet (a non-blocking socket)
+/// asks again once more bytes arrive. `eof` says no more will, so a request
+/// that needs more is a bad one.
+pub fn parse_request(buf: &[u8], eof: bool) -> Parse {
+    let mut p = Lines { buf, pos: 0 };
     // Blank lines before a request line are skipped (RFC 9112 §2.2).
-    loop {
-        line.clear();
-        if r.read_line(&mut line)? == 0 {
-            return Ok(None);
+    let first = loop {
+        match p.line() {
+            None if eof && p.rest_is_blank() => return Parse::Closed,
+            None => return p.short(eof, "the request line ends early"),
+            Some(Err(e)) => return Parse::Bad(e),
+            Some(Ok(l)) if l.trim().is_empty() => continue,
+            Some(Ok(l)) => break l,
         }
-        if !line.trim().is_empty() {
-            break;
-        }
-    }
-    let mut words = line.split_whitespace();
+    };
+    let mut words = first.split_whitespace();
     let (Some(method), Some(target), version) = (words.next(), words.next(), words.next()) else {
-        return Err(bad("a malformed request line"));
+        return Parse::Bad("a malformed request line");
     };
     let http10 = version == Some("HTTP/1.0");
     let mut req = Request {
@@ -193,15 +207,17 @@ fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<Request>> {
         ..Request::default()
     };
     loop {
-        line.clear();
-        if r.read_line(&mut line)? == 0 {
-            return Err(bad("the headers end early"));
-        }
-        let h = line.trim_end_matches(['\r', '\n']);
+        let h = match p.line() {
+            None => return p.short(eof, "the headers end early"),
+            Some(Err(e)) => return Parse::Bad(e),
+            Some(Ok(h)) => h,
+        };
         if h.is_empty() {
             break;
         }
-        let (k, v) = h.split_once(':').ok_or_else(|| bad("a malformed header"))?;
+        let Some((k, v)) = h.split_once(':') else {
+            return Parse::Bad("a malformed header");
+        };
         // Names lowercased, as hyper gives them to legacy's handlers; a
         // lookup by `header` ignores case either way.
         req.headers
@@ -217,32 +233,120 @@ fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<Request>> {
         .is_some_and(|t| t.to_ascii_lowercase().contains("chunked"));
     if chunked {
         loop {
-            line.clear();
-            r.read_line(&mut line)?;
-            let size = line.trim().split(';').next().unwrap_or_default();
-            let n = usize::from_str_radix(size, 16).map_err(|_| bad("a malformed chunk size"))?;
+            let size = match p.line() {
+                None if eof => return Parse::Bad("a malformed chunk size"),
+                None => return Parse::More,
+                Some(Err(e)) => return Parse::Bad(e),
+                Some(Ok(l)) => l,
+            };
+            let size = size.trim().split(';').next().unwrap_or_default();
+            let Ok(n) = usize::from_str_radix(size, 16) else {
+                return Parse::Bad("a malformed chunk size");
+            };
             if n == 0 {
-                // Trailers, up to the blank line.
+                // Trailers, up to the blank line or the end.
                 loop {
-                    line.clear();
-                    if r.read_line(&mut line)? == 0 || line.trim().is_empty() {
-                        break;
+                    match p.line() {
+                        None if eof => {
+                            p.pos = buf.len();
+                            break;
+                        }
+                        None => return Parse::More,
+                        Some(Err(e)) => return Parse::Bad(e),
+                        Some(Ok(l)) if l.trim().is_empty() => break,
+                        Some(Ok(_)) => {}
                     }
                 }
                 break;
             }
-            let at = req.body.len();
-            req.body.resize(at + n, 0);
-            r.read_exact(&mut req.body[at..])?;
-            line.clear();
-            r.read_line(&mut line)?;
+            let Some(data) = p.take(n) else {
+                return p.short(eof, "a chunk ends early");
+            };
+            req.body.extend_from_slice(data);
+            // The chunk's line end; the end of the input stands for it.
+            match p.line() {
+                None if eof => p.pos = buf.len(),
+                None => return Parse::More,
+                Some(_) => {}
+            }
         }
     } else if let Some(n) = req.header("content-length") {
-        let n: usize = n.parse().map_err(|_| bad("a malformed content-length"))?;
-        req.body.resize(n, 0);
-        r.read_exact(&mut req.body)?;
+        let Ok(n) = n.parse::<usize>() else {
+            return Parse::Bad("a malformed content-length");
+        };
+        let Some(data) = p.take(n) else {
+            return p.short(eof, "the body ends early");
+        };
+        req.body = data.to_vec();
     }
-    Ok(Some(req))
+    Parse::Done(req, p.pos)
+}
+
+/// A cursor over the bytes [`parse_request`] reads.
+struct Lines<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Lines<'a> {
+    /// The next line without its line end, or `None` when no whole line
+    /// is left; text that is not UTF-8 is an error.
+    fn line(&mut self) -> Option<Result<&'a str, &'static str>> {
+        let rest = &self.buf[self.pos..];
+        let i = rest.iter().position(|&b| b == b'\n')?;
+        self.pos += i + 1;
+        let l = rest[..i].strip_suffix(b"\r").unwrap_or(&rest[..i]);
+        Some(std::str::from_utf8(l).map_err(|_| "a line that is not UTF-8"))
+    }
+
+    /// The next `n` bytes, or `None` when fewer are left.
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let rest = &self.buf[self.pos..];
+        let got = rest.get(..n)?;
+        self.pos += n;
+        Some(got)
+    }
+
+    fn rest_is_blank(&self) -> bool {
+        self.buf[self.pos..].iter().all(u8::is_ascii_whitespace)
+    }
+
+    /// The answer for input that ends inside a request.
+    fn short(&self, eof: bool, what: &'static str) -> Parse {
+        if eof {
+            Parse::Bad(what)
+        } else {
+            Parse::More
+        }
+    }
+}
+
+/// Reads one request from `r`, blocking, with the bytes after it left in
+/// `buf` for the next; `None` when the client closed the connection first.
+fn read_request(r: &mut impl Read, buf: &mut Vec<u8>) -> std::io::Result<Option<Request>> {
+    let bad = |what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_string());
+    let mut eof = false;
+    loop {
+        match parse_request(buf, eof) {
+            Parse::Done(req, used) => {
+                buf.drain(..used);
+                return Ok(Some(req));
+            }
+            Parse::Closed => return Ok(None),
+            Parse::Bad(what) => return Err(bad(what)),
+            Parse::More => {
+                let mut chunk = [0u8; 8192];
+                let n = loop {
+                    match r.read(&mut chunk) {
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        got => break got?,
+                    }
+                };
+                eof = n == 0;
+                buf.extend_from_slice(&chunk[..n]);
+            }
+        }
+    }
 }
 
 /// The reason phrase for `status`.
@@ -275,7 +379,9 @@ mod tests {
     use super::*;
 
     fn parse(raw: &str) -> Request {
-        read_request(&mut raw.as_bytes()).unwrap().unwrap()
+        read_request(&mut raw.as_bytes(), &mut Vec::new())
+            .unwrap()
+            .unwrap()
     }
 
     #[test]
@@ -308,6 +414,50 @@ mod tests {
 
     #[test]
     fn a_closed_connection_is_no_request() {
-        assert!(read_request(&mut "".as_bytes()).unwrap().is_none());
+        assert!(read_request(&mut "".as_bytes(), &mut Vec::new())
+            .unwrap()
+            .is_none());
+        assert!(read_request(&mut "\r\n\r\n".as_bytes(), &mut Vec::new())
+            .unwrap()
+            .is_none());
+    }
+
+    /// A request split anywhere is `More` until its last byte, and two
+    /// pipelined requests parse one after the other.
+    #[test]
+    fn a_request_arriving_in_pieces_parses_once_whole() {
+        let raw = "POST /a HTTP/1.1\r\nContent-Length: 3\r\n\r\nabcGET /b HTTP/1.1\r\n\r\n";
+        let first = raw.find("GET").unwrap();
+        for cut in 0..first {
+            assert!(
+                matches!(parse_request(&raw.as_bytes()[..cut], false), Parse::More),
+                "cut at {cut}"
+            );
+        }
+        let Parse::Done(a, used) = parse_request(raw.as_bytes(), false) else {
+            panic!("the whole first request")
+        };
+        assert_eq!(
+            (a.target.as_str(), a.body_text().as_str(), used),
+            ("/a", "abc", first)
+        );
+        let Parse::Done(b, _) = parse_request(&raw.as_bytes()[used..], false) else {
+            panic!("the second request")
+        };
+        assert_eq!(b.target, "/b");
+        let chunked = "PUT / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+        for cut in 0..chunked.len() {
+            assert!(
+                matches!(
+                    parse_request(&chunked.as_bytes()[..cut], false),
+                    Parse::More
+                ),
+                "chunked cut at {cut}"
+            );
+        }
+        assert!(matches!(
+            parse_request(&chunked.as_bytes()[..20], true),
+            Parse::Bad(_)
+        ));
     }
 }
