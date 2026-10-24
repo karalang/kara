@@ -1,0 +1,1172 @@
+// pipeline/claim_batch
+//
+// An insurer's claims year, the batch a property and casualty company
+// runs over its branches: for each of four branches (north, harbor,
+// plains and metro) it builds the policy book and the year's claims,
+// writes them as CSV, reads them back and parses them with the loader's
+// checks, scores every claim for fraud, adjudicates it against its
+// policy (cover, period, notice, deductible, coinsurance and the policy's
+// remaining limit), runs five reports, and then passes the four
+// branches' payments through one shared stop-loss reinsurance treaty.
+//
+// The builds, the writes, the reads, the parses, the scoring, the
+// adjudications and the reports are each a group of statements that do
+// not depend on each other (a stmt-par app). The treaty cedes what lies
+// above its retention until its limit is used, bills the reinsurer once a
+// month with numbered recoveries and numbers every check as it is cut,
+// so the four cessions have to run in order.
+
+const MASK32: i64 = 4294967295;
+const POLICIES: i64 = 2400;
+const CLAIMS: i64 = 1300;
+const VENDORS: i64 = 40;
+const LINES: Array[Str, 3] = ["auto", "home", "travel"];
+const PERILS: Array[Str, 8] = ["collision", "theft", "glass", "water", "fire", "storm", "medical", "baggage"];
+// Per line: the sum insured range in dollars, the deductibles in dollars,
+// the insurer's share in percent and the premium per $1000 insured.
+const SUM_LO: Array[i64, 3] = [8000, 150000, 5000];
+const SUM_SPAN: Array[i64, 3] = [32000, 750000, 45000];
+const RATE_PER_1000: Array[i64, 3] = [160, 24, 90];
+// Per peril: the claim amount range in dollars.
+const AMOUNT_LO: Array[i64, 8] = [600, 300, 150, 1500, 4000, 2000, 400, 200];
+const AMOUNT_SPAN: Array[i64, 8] = [9000, 5000, 1200, 30000, 120000, 40000, 25000, 2500];
+// Fraud points and the adjudication rules.
+const LATE_REPORT_DAYS: i64 = 30;
+const NEW_POLICY_DAYS: i64 = 30;
+const SIMILAR_DAYS: i64 = 10;
+const REPEAT_DAYS: i64 = 45;
+const REFER_AT: i64 = 50;
+const REVIEW_AT: i64 = 35;
+const NOTICE_LIMIT: i64 = 90;
+// The stop-loss treaty over the year's paid claims of all four branches,
+// in cents: the insurer keeps the first RETENTION, and the reinsurer pays
+// SHARE percent of what lies above it, up to LIMIT in all.
+const RETENTION: i64 = 3000000000;
+const SHARE: i64 = 80;
+const LIMIT: i64 = 900000000;
+const MONTHS: Array[i64, 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+struct Branch {
+    name: String,
+    code: String,
+    seed: i64,
+    // auto, home and travel shares in percent
+    mix_pct: Vec[i64],
+    storm_day: i64,
+    // the vendor behind the ring of near-identical claims
+    ring: i64,
+}
+
+struct Policy {
+    pid: String,
+    line: i64,
+    // cents
+    sum: i64,
+    ded: i64,
+    coins: i64,
+    // day 0 is 2026-01-01
+    start: i64,
+    premium: i64,
+}
+
+struct Claim {
+    cid: String,
+    pid: String,
+    peril: i64,
+    loss: i64,
+    report: i64,
+    amount: i64,
+    vendor: i64,
+    items: i64,
+}
+
+struct Scores {
+    scores: Vec[i64],
+    similar: Vec[i64],
+    reasons: Vec[Vec[String]],
+}
+
+struct Decision {
+    status: String,
+    pay: i64,
+    paid_day: i64,
+    flag: bool,
+    capped: bool,
+}
+
+struct Treaty {
+    net: i64,
+    ceded: i64,
+    recoveries: i64,
+    checks: i64,
+    log: String,
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn pct(a: i64, b: i64) -> String {
+    if b == 0 {
+        return "0.0%".to_string();
+    }
+    let q = a * 1000 / b;
+    f"{q / 10}.{q % 10}%"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+fn index_of(xs: ref Vec[i64], x: i64) -> i64 {
+    for i in 0..xs.len() as i64 {
+        if xs[i] == x {
+            return i;
+        }
+    }
+    -1
+}
+
+fn covers(line: i64) -> Vec[i64] {
+    if line == 0 {
+        [0, 1, 2, 4, 5].to_vec()
+    } else if line == 1 {
+        [1, 2, 3, 4, 5].to_vec()
+    } else {
+        [1, 6, 7].to_vec()
+    }
+}
+
+fn deductibles(line: i64) -> Vec[i64] {
+    if line == 0 {
+        [250, 500, 1000].to_vec()
+    } else if line == 1 {
+        [500, 1000, 2500].to_vec()
+    } else {
+        [0, 100, 250].to_vec()
+    }
+}
+
+fn coinsurance(line: i64) -> Vec[i64] {
+    if line == 1 {
+        [80, 90, 100].to_vec()
+    } else {
+        [100].to_vec()
+    }
+}
+
+fn line_index(t: ref String) -> i64 {
+    for i in 0..3 {
+        if t == LINES[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn peril_index(t: ref String) -> i64 {
+    for i in 0..8 {
+        if t == PERILS[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ dates
+
+fn is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn year_len(y: i64) -> i64 {
+    if is_leap(y) { 366 } else { 365 }
+}
+
+fn month_len(y: i64, m: i64) -> i64 {
+    if m == 2 and is_leap(y) {
+        return 29;
+    }
+    MONTHS[m - 1]
+}
+
+// Day 0 is 2026-01-01; negative days fall in 2025.
+fn date_of(day: i64) -> String {
+    let mut d = day;
+    let mut y = 2026;
+    while d < 0 {
+        y -= 1;
+        d += year_len(y);
+    }
+    while d >= year_len(y) {
+        d -= year_len(y);
+        y += 1;
+    }
+    let mut m = 1;
+    while d >= month_len(y, m) {
+        d -= month_len(y, m);
+        m += 1;
+    }
+    f"{y}-{m:02}-{d + 1:02}"
+}
+
+// The day number of a YYYY-MM-DD date, or None.
+fn day_of(t: ref String) -> Option[i64] {
+    if t.len() != 10 or t.substring(4, 5) != "-" or t.substring(7, 8) != "-" {
+        return None;
+    }
+    let ys = t.substring(0, 4);
+    let ms = t.substring(5, 7);
+    let ds = t.substring(8, 10);
+    if not (is_digits(ys) and is_digits(ms) and is_digits(ds)) {
+        return None;
+    }
+    let y = to_int(ys);
+    let m = to_int(ms);
+    let dd = to_int(ds);
+    if y < 2000 or y > 2100 or m < 1 or m > 12 or dd < 1 or dd > month_len(y, m) {
+        return None;
+    }
+    let mut d = dd - 1;
+    for k in 1..m {
+        d += month_len(y, k);
+    }
+    let mut yy = 2026;
+    while yy > y {
+        yy -= 1;
+        d -= year_len(yy);
+    }
+    while yy < y {
+        d += year_len(yy);
+        yy += 1;
+    }
+    Some(d)
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+// ------------------------------------------------------------ the books
+
+fn pick_line(br: ref Branch, r: i64) -> i64 {
+    let x = r % 100;
+    if x < br.mix_pct[0] {
+        return 0;
+    }
+    if x < br.mix_pct[0] + br.mix_pct[1] {
+        return 1;
+    }
+    2
+}
+
+fn build_policies(br: ref Branch) -> Vec[Policy] {
+    let mut out: Vec[Policy] = Vec.new();
+    for i in 0..POLICIES {
+        let line = pick_line(br, mix(br.seed, i, 1));
+        let mut sum_dollars = SUM_LO[line] + mix(br.seed, i, 2) % SUM_SPAN[line];
+        sum_dollars -= sum_dollars % 100;
+        let ds = deductibles(line);
+        let ded = ds[mix(br.seed, i, 3) % ds.len() as i64];
+        let cs = coinsurance(line);
+        let coins = cs[mix(br.seed, i, 4) % cs.len() as i64];
+        let start = -300 + mix(br.seed, i, 5) % 420;
+        let premium = sum_dollars * 100 * RATE_PER_1000[line] / 1000;
+        out.push(Policy {
+            pid: f"{br.code}-P{i + 1:04}",
+            line: line,
+            sum: sum_dollars * 100,
+            ded: ded * 100,
+            coins: coins,
+            start: start,
+            premium: premium,
+        });
+    }
+    out
+}
+
+// The slot of a policy id in the book it was built with, or -1.
+fn slot_of(pid: ref String, n: i64) -> i64 {
+    let k = to_int(pid.substring(4, pid.len())) - 1;
+    if k < n { k } else { -1 }
+}
+
+fn build_claims(br: ref Branch, policies: ref Vec[Policy]) -> Vec[Claim] {
+    let mut out: Vec[Claim] = Vec.new();
+    for i in 0..CLAIMS {
+        let r = mix(br.seed, i, 11);
+        let mut pid = String.new();
+        let mut line = 0;
+        if r % 200 == 0 {
+            pid = f"{br.code}-P{POLICIES + 1 + r % 50:04}";
+            line = r % 3;
+        } else {
+            let p = ref policies[r % POLICIES];
+            pid = p.pid.clone();
+            line = p.line;
+        }
+        let cov = covers(line);
+        let r2 = mix(br.seed, i, 12);
+        let mut peril = 0;
+        if r2 % 25 == 0 {
+            peril = (cov[0] + 3) % 8;
+            if index_of(cov, peril) >= 0 {
+                peril = if line != 1 { 3 } else { 0 };
+            }
+        } else {
+            peril = cov[r2 % cov.len() as i64];
+        }
+        // Most losses fall in the policy's period; some do not.
+        let r4 = mix(br.seed, i, 13);
+        let slot = slot_of(pid, policies.len() as i64);
+        let mut loss = 0;
+        if r4 % 25 == 0 or slot < 0 {
+            loss = r4 % 365;
+        } else {
+            let st = policies[slot].start;
+            let lo = if st > 0 { st } else { 0 };
+            let hi = if st + 364 < 364 { st + 364 } else { 364 };
+            loss = lo + r4 % (hi - lo + 1);
+        }
+        if line != 2 and mix(br.seed, i, 14) % 7 == 0 {
+            peril = 5;
+            loss = br.storm_day + mix(br.seed, i, 15) % 3;
+        }
+        let r3 = mix(br.seed, i, 16);
+        let lag = if r3 % 10 < 8 { r3 % 12 } else { 20 + r3 % 100 };
+        let mut amount = (AMOUNT_LO[peril] + mix(br.seed, i, 17) % AMOUNT_SPAN[peril]) * 100 + mix(br.seed, i, 18) % 100;
+        if mix(br.seed, i, 19) % 17 == 0 {
+            amount = (amount / 100000 + 1) * 100000;
+        }
+        out.push(Claim {
+            cid: f"{br.code}-C{i + 1:05}",
+            pid: pid,
+            peril: peril,
+            loss: loss,
+            report: loss + lag,
+            amount: amount,
+            vendor: 1 + mix(br.seed, i, 20) % VENDORS,
+            items: 1 + mix(br.seed, i, 21) % 5,
+        });
+    }
+    // A ring: one vendor files near-identical claims on different
+    // policies a few days apart.
+    for j in 0..36 {
+        let p = ref policies[mix(br.seed, j, 31) % POLICIES];
+        let peril = if p.line == 0 { 0 } else if p.line == 1 { 3 } else { 7 };
+        let day = br.storm_day + 40 + (j / 6) * 9 + j % 6;
+        let base = if peril == 0 { 742000 } else if peril == 3 { 1868000 } else { 185000 };
+        out.push(Claim {
+            cid: f"{br.code}-C{CLAIMS + 1 + j:05}",
+            pid: p.pid.clone(),
+            peril: peril,
+            loss: day,
+            report: day + 1 + j % 3,
+            amount: base + (mix(br.seed, j, 32) % 1200) * 10,
+            vendor: br.ring,
+            items: 2,
+        });
+    }
+    out
+}
+
+fn policy_header() -> String {
+    "policy,line,sum_insured,deductible,coinsurance,start,premium".to_string()
+}
+
+fn claim_header() -> String {
+    "claim,policy,peril,loss_date,report_date,amount,vendor,items".to_string()
+}
+
+fn encode_policies(ps: ref Vec[Policy]) -> String {
+    let mut out = f"{policy_header()}\n";
+    for p in ps {
+        out.push_str(f"{p.pid},{LINES[p.line]},{dollars(p.sum)},{dollars(p.ded)},{p.coins},{date_of(p.start)},{dollars(p.premium)}\n");
+    }
+    out
+}
+
+fn encode_claims(cs: ref Vec[Claim]) -> String {
+    let mut out = f"{claim_header()}\n";
+    for c in cs {
+        out.push_str(f"{c.cid},{c.pid},{PERILS[c.peril]},{date_of(c.loss)},{date_of(c.report)},{dollars(c.amount)},V-{c.vendor:03},{c.items}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"could not read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+fn id_ok(t: ref String, code: ref String, letter: ref String, digits: i64) -> bool {
+    t.len() == 4 + digits and t.starts_with(f"{code}-{letter}") and is_digits(t.substring(4, t.len()))
+}
+
+fn parse_policies(path: ref String, br: ref Branch, text: ref String) -> Result[Vec[Policy], BatchError] {
+    let lines = split_on(text, "\n");
+    if lines[0] != policy_header() {
+        return Err(bad(f"{path}: bad header"));
+    }
+    let mut out: Vec[Policy] = Vec.new();
+    for k in 1..lines.len() as i64 {
+        let line = lines[k].clone();
+        if line == "" {
+            continue;
+        }
+        let n = k + 1;
+        let f = split_on(line, ",");
+        if f.len() as i64 != 7 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields"));
+        }
+        if not id_ok(f[0], br.code, "P", 4) {
+            return Err(bad(f"{path} line {n}: bad policy '{f[0]}'"));
+        }
+        let li = line_index(f[1]);
+        if li < 0 {
+            return Err(bad(f"{path} line {n}: bad line '{f[1]}'"));
+        }
+        let sum = match cents_of(f[2]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad sum insured '{f[2]}'")),
+        };
+        let ded = match cents_of(f[3]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad deductible '{f[3]}'")),
+        };
+        let premium = match cents_of(f[6]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad premium '{f[6]}'")),
+        };
+        if not is_digits(f[4]) or to_int(f[4]) < 1 or to_int(f[4]) > 100 {
+            return Err(bad(f"{path} line {n}: bad coinsurance '{f[4]}'"));
+        }
+        let start = match day_of(f[5]) {
+            Some(d) => d,
+            None => return Err(bad(f"{path} line {n}: bad start '{f[5]}'")),
+        };
+        out.push(Policy { pid: f[0].clone(), line: li, sum: sum, ded: ded, coins: to_int(f[4]), start: start, premium: premium });
+    }
+    Ok(out)
+}
+
+fn parse_claims(path: ref String, br: ref Branch, text: ref String) -> Result[Vec[Claim], BatchError] {
+    let lines = split_on(text, "\n");
+    if lines[0] != claim_header() {
+        return Err(bad(f"{path}: bad header"));
+    }
+    let mut out: Vec[Claim] = Vec.new();
+    for k in 1..lines.len() as i64 {
+        let line = lines[k].clone();
+        if line == "" {
+            continue;
+        }
+        let n = k + 1;
+        let f = split_on(line, ",");
+        if f.len() as i64 != 8 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields"));
+        }
+        if not id_ok(f[0], br.code, "C", 5) {
+            return Err(bad(f"{path} line {n}: bad claim '{f[0]}'"));
+        }
+        if not id_ok(f[1], br.code, "P", 4) {
+            return Err(bad(f"{path} line {n}: bad policy '{f[1]}'"));
+        }
+        let peril = peril_index(f[2]);
+        if peril < 0 {
+            return Err(bad(f"{path} line {n}: bad peril '{f[2]}'"));
+        }
+        let loss = match day_of(f[3]) {
+            Some(d) => d,
+            None => return Err(bad(f"{path} line {n}: bad loss date '{f[3]}'")),
+        };
+        let report = match day_of(f[4]) {
+            Some(d) => d,
+            None => return Err(bad(f"{path} line {n}: bad report date '{f[4]}'")),
+        };
+        if report < loss {
+            return Err(bad(f"{path} line {n}: reported before the loss"));
+        }
+        let amount = match cents_of(f[5]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad amount '{f[5]}'")),
+        };
+        let v = f[6].clone();
+        if v.len() != 5 or not v.starts_with("V-") or not is_digits(v.substring(2, 5)) {
+            return Err(bad(f"{path} line {n}: bad vendor '{v}'"));
+        }
+        if not is_digits(f[7]) {
+            return Err(bad(f"{path} line {n}: bad items '{f[7]}'"));
+        }
+        out.push(Claim {
+            cid: f[0].clone(),
+            pid: f[1].clone(),
+            peril: peril,
+            loss: loss,
+            report: report,
+            amount: amount,
+            vendor: to_int(v.substring(2, 5)),
+            items: to_int(f[7]),
+        });
+    }
+    Ok(out)
+}
+
+fn same_policies(a: ref Vec[Policy], b: ref Vec[Policy]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.pid != y.pid or x.line != y.line or x.sum != y.sum or x.ded != y.ded or x.coins != y.coins or x.start != y.start or x.premium != y.premium {
+            return false;
+        }
+    }
+    true
+}
+
+fn same_claims(a: ref Vec[Claim], b: ref Vec[Claim]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.cid != y.cid or x.pid != y.pid or x.peril != y.peril or x.loss != y.loss or x.report != y.report or x.amount != y.amount or x.vendor != y.vendor or x.items != y.items {
+            return false;
+        }
+    }
+    true
+}
+
+fn policy_index(ps: ref Vec[Policy]) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    for i in 0..ps.len() as i64 {
+        m.insert(ps[i].pid.clone(), i);
+    }
+    m
+}
+
+// Claim indexes ordered by a key, then by position in the file.
+fn order_by(keys: ref Vec[i64]) -> Vec[i64] {
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..keys.len() as i64 {
+        pairs.push((keys[i], i));
+    }
+    pairs.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+    let mut out: Vec[i64] = Vec.new();
+    for p in pairs {
+        out.push(p.1);
+    }
+    out
+}
+
+// ------------------------------------------------------------ fraud scoring
+
+fn score_claims(ps: ref Vec[Policy], cs: ref Vec[Claim]) -> Scores {
+    let idx = policy_index(ps);
+    let n = cs.len() as i64;
+    let mut losses: Vec[i64] = Vec.new();
+    for c in cs {
+        losses.push(c.loss);
+    }
+    let order = order_by(losses);
+    let mut scores: Vec[i64] = Vec.filled(n, 0);
+    let mut similar: Vec[i64] = Vec.filled(n, 0);
+    let mut reasons: Vec[Vec[String]] = Vec.new();
+    for _ in 0..n {
+        reasons.push(Vec.new());
+    }
+    // Similar claims: the same vendor and peril on a different policy,
+    // within SIMILAR_DAYS of the loss and within 2% of the amount.
+    for a in 0..n {
+        let i = order[a];
+        let ci = ref cs[i];
+        let mut hits = 0;
+        let mut b = a - 1;
+        while b >= 0 {
+            let cj = ref cs[order[b]];
+            if (cj.loss - ci.loss).abs() > SIMILAR_DAYS {
+                break;
+            }
+            if cj.vendor == ci.vendor and cj.peril == ci.peril and cj.pid != ci.pid and (cj.amount - ci.amount).abs() * 50 <= ci.amount {
+                hits += 1;
+            }
+            b -= 1;
+        }
+        b = a + 1;
+        while b < n {
+            let cj = ref cs[order[b]];
+            if (cj.loss - ci.loss).abs() > SIMILAR_DAYS {
+                break;
+            }
+            if cj.vendor == ci.vendor and cj.peril == ci.peril and cj.pid != ci.pid and (cj.amount - ci.amount).abs() * 50 <= ci.amount {
+                hits += 1;
+            }
+            b += 1;
+        }
+        similar[i] = hits;
+    }
+    // Repeat claims: the same policy and peril within REPEAT_DAYS before.
+    let mut last: Map[String, i64] = Map.new();
+    for a in 0..n {
+        let i = order[a];
+        let key = f"{cs[i].pid}/{cs[i].peril}";
+        let prev = last.get(key) ?? -1000000;
+        if cs[i].loss - prev <= REPEAT_DAYS {
+            scores[i] += 20;
+            reasons[i].push("repeat".to_string());
+        }
+        last.insert(key, cs[i].loss);
+    }
+    for i in 0..n {
+        let c = ref cs[i];
+        if c.report - c.loss > LATE_REPORT_DAYS {
+            scores[i] += 15;
+            reasons[i].push("late".to_string());
+        }
+        match idx.get(c.pid) {
+            Some(pi) => {
+                let p = ref ps[*pi];
+                if c.loss - p.start >= 0 and c.loss - p.start < NEW_POLICY_DAYS {
+                    scores[i] += 20;
+                    reasons[i].push("new".to_string());
+                }
+                if c.amount * 100 >= p.sum * 60 {
+                    scores[i] += 15;
+                    reasons[i].push("large".to_string());
+                }
+            },
+            None => {},
+        }
+        if c.amount % 100000 == 0 {
+            scores[i] += 10;
+            reasons[i].push("round".to_string());
+        }
+        if similar[i] > 0 {
+            let pts = if 10 * similar[i] < 40 { 10 * similar[i] } else { 40 };
+            scores[i] += pts;
+            reasons[i].push(f"similar x{similar[i]}");
+        }
+    }
+    Scores { scores: scores, similar: similar, reasons: reasons }
+}
+
+// ------------------------------------------------------------ adjudication
+
+// Claims in report order (then file order); each policy's limit is used
+// up by the claims paid before it.
+fn adjudicate(ps: ref Vec[Policy], cs: ref Vec[Claim], sc: ref Scores) -> Vec[Decision] {
+    let idx = policy_index(ps);
+    let mut left: Vec[i64] = Vec.new();
+    for p in ps {
+        left.push(p.sum);
+    }
+    let n = cs.len() as i64;
+    let mut reports: Vec[i64] = Vec.new();
+    for c in cs {
+        reports.push(c.report);
+    }
+    let order = order_by(reports);
+    let mut out: Vec[Decision] = Vec.new();
+    for _ in 0..n {
+        out.push(Decision { status: String.new(), pay: 0, paid_day: 0, flag: false, capped: false });
+    }
+    for a in 0..n {
+        let i = order[a];
+        let c = ref cs[i];
+        let s = sc.scores[i];
+        out[i].flag = s >= REVIEW_AT and s < REFER_AT;
+        let pi = idx.get(c.pid) ?? -1;
+        if pi < 0 {
+            out[i].status = "no policy".to_string();
+            continue;
+        }
+        let p = ref ps[pi];
+        if index_of(covers(p.line), c.peril) < 0 {
+            out[i].status = "not covered".to_string();
+            continue;
+        }
+        if c.loss < p.start or c.loss > p.start + 364 {
+            out[i].status = "outside period".to_string();
+            continue;
+        }
+        if c.report - c.loss > NOTICE_LIMIT {
+            out[i].status = "late notice".to_string();
+            continue;
+        }
+        if s >= REFER_AT {
+            out[i].status = "referred".to_string();
+            continue;
+        }
+        let mut covered = c.amount - p.ded;
+        if covered <= 0 {
+            out[i].status = "below deductible".to_string();
+            continue;
+        }
+        covered = covered * p.coins / 100;
+        let pay = if covered < left[pi] { covered } else { left[pi] };
+        if pay <= 0 {
+            out[i].status = "limit used".to_string();
+            continue;
+        }
+        out[i].capped = pay < covered;
+        left[pi] -= pay;
+        out[i].status = "paid".to_string();
+        out[i].pay = pay;
+        let review = if out[i].flag { 14 } else { 0 };
+        out[i].paid_day = c.report + 5 + mix(c.cid.len() as i64 + c.amount, c.vendor, 41) % 10 + review;
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+// Indexes 0..n-1 by count, highest first, ties by index.
+fn rank(counts: ref Vec[i64]) -> Vec[i64] {
+    let mut neg: Vec[i64] = Vec.new();
+    for c in counts {
+        neg.push(-*c);
+    }
+    order_by(neg)
+}
+
+fn volume_report(br: ref Branch, cs: ref Vec[Claim]) -> String {
+    let mut counts: Vec[i64] = Vec.filled(8, 0);
+    let mut total = 0;
+    let mut storm = 0;
+    for c in cs {
+        counts[c.peril] += 1;
+        total += c.amount;
+        if c.peril == 5 and c.loss >= br.storm_day and c.loss <= br.storm_day + 2 {
+            storm += 1;
+        }
+    }
+    let top = rank(counts);
+    let mut tops: Vec[String] = Vec.new();
+    for k in 0..3 {
+        tops.push(f"{PERILS[top[k]]} {counts[top[k]]}");
+    }
+    f"{br.name} claims: {group3(cs.len() as i64)} for {money(total)}; most {tops.join(", ")}; storm of {date_of(br.storm_day)}: {storm} claims"
+}
+
+fn fraud_report(br: ref Branch, cs: ref Vec[Claim], sc: ref Scores) -> String {
+    let mut refer = 0;
+    let mut review = 0;
+    for s in sc.scores {
+        if *s >= REFER_AT {
+            refer += 1;
+        } else if *s >= REVIEW_AT {
+            review += 1;
+        }
+    }
+    let top = rank(sc.scores);
+    let mut tops: Vec[String] = Vec.new();
+    for k in 0..3 {
+        let i = top[k];
+        tops.push(f"{cs[i].cid} {sc.scores[i]} ({sc.reasons[i].join(" ")})");
+    }
+    let mut per_vendor: Vec[i64] = Vec.filled(VENDORS + 1, 0);
+    let mut any = false;
+    for i in 0..cs.len() as i64 {
+        if sc.similar[i] > 0 {
+            per_vendor[cs[i].vendor] += 1;
+            any = true;
+        }
+    }
+    let ring = if any {
+        let v = rank(per_vendor)[0];
+        f"V-{v:03} on {per_vendor[v]} similar claims"
+    } else {
+        "none".to_string()
+    };
+    f"{br.name} fraud: {refer} referred, {review} for review; highest {tops.join("; ")}; likeliest ring {ring}"
+}
+
+fn outcome_report(br: ref Branch, ps: ref Vec[Policy], res: ref Vec[Decision]) -> String {
+    let mut paid = 0;
+    let mut total = 0;
+    let mut capped = 0;
+    let mut names: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for r in res {
+        if r.status == "paid" {
+            paid += 1;
+            total += r.pay;
+            if r.capped {
+                capped += 1;
+            }
+        } else {
+            let mut k = 0;
+            while k < names.len() as i64 and names[k] != r.status {
+                k += 1;
+            }
+            if k == names.len() as i64 {
+                names.push(r.status.clone());
+                counts.push(0);
+            }
+            counts[k] += 1;
+        }
+    }
+    // by count, highest first, then by name
+    let mut pairs: Vec[(i64, String)] = Vec.new();
+    for k in 0..names.len() as i64 {
+        pairs.push((-counts[k], names[k].clone()));
+    }
+    pairs.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+    let mut whys: Vec[String] = Vec.new();
+    for p in pairs {
+        whys.push(f"{p.1} {-p.0}");
+    }
+    let mut premium = 0;
+    for p in ps {
+        premium += p.premium;
+    }
+    f"{br.name} outcomes: {paid} paid for {money(total)} ({capped} at the limit), loss ratio {pct(total, premium)}; not paid: {whys.join(", ")}"
+}
+
+fn nth(xs: ref Vec[i64], k: i64) -> i64 {
+    let last = xs.len() as i64 - 1;
+    xs[if k < last { k } else { last }]
+}
+
+fn lag_report(br: ref Branch, cs: ref Vec[Claim], res: ref Vec[Decision]) -> String {
+    let mut lags: Vec[i64] = Vec.new();
+    let mut pays: Vec[i64] = Vec.new();
+    for i in 0..cs.len() as i64 {
+        lags.push(cs[i].report - cs[i].loss);
+        if res[i].status == "paid" {
+            pays.push(res[i].paid_day - cs[i].report);
+        }
+    }
+    lags.sort();
+    pays.sort();
+    let n = lags.len() as i64;
+    let m = pays.len() as i64;
+    f"{br.name} lags: reported in {nth(lags, n / 2)} days at the median, {nth(lags, n * 9 / 10)} at p90, {lags[n - 1]} at most; paid {nth(pays, m / 2)} days after the report at the median, {nth(pays, m * 9 / 10)} at p90"
+}
+
+fn line_report(br: ref Branch, ps: ref Vec[Policy], cs: ref Vec[Claim], res: ref Vec[Decision]) -> String {
+    let idx = policy_index(ps);
+    let mut parts: Vec[String] = Vec.new();
+    for line in 0..3 {
+        let mut n = 0;
+        let mut total = 0;
+        for i in 0..cs.len() as i64 {
+            if res[i].status == "paid" {
+                let pi = idx.get(cs[i].pid) ?? -1;
+                if ps[pi].line == line {
+                    n += 1;
+                    total += res[i].pay;
+                }
+            }
+        }
+        let avg = if n > 0 { total / n } else { 0 };
+        parts.push(f"{LINES[line]} {n} paid, {money(total)}, average {money(avg)}");
+    }
+    f"{br.name} lines: {parts.join("; ")}"
+}
+
+// ------------------------------------------------------------ the treaty
+
+fn month_of(d: i64) -> String {
+    date_of(d).substring(0, 7)
+}
+
+// Bill the month's ceded amount to the reinsurer as a numbered recovery.
+fn close_month(tr: mut ref Treaty, br: ref Branch, month: ref String, bill: i64, bill_n: i64, ids: mut ref Vec[String]) {
+    if bill > 0 {
+        tr.recoveries += 1;
+        let rid = f"RC-{tr.recoveries:04}";
+        tr.log.push_str(f"{rid},{br.name},{month},{bill_n},{dollars(bill)}\n");
+        ids.push(rid);
+    }
+}
+
+// The branch's payments in payment order go through the one treaty: each
+// payment's share above the retention is ceded until the limit is used,
+// the ceded amounts are billed once a month, and every payment takes the
+// next check number.
+fn cede(tr: mut ref Treaty, br: ref Branch, cs: ref Vec[Claim], res: ref Vec[Decision]) -> String {
+    let mut keys: Vec[i64] = Vec.new();
+    let mut paid_ix: Vec[i64] = Vec.new();
+    for i in 0..cs.len() as i64 {
+        if res[i].status == "paid" {
+            keys.push(res[i].paid_day);
+            paid_ix.push(i);
+        }
+    }
+    let ord = order_by(keys);
+    let mut paid = 0;
+    let mut ceded = 0;
+    let mut first_check = -1;
+    let mut ids: Vec[String] = Vec.new();
+    let mut month = String.new();
+    let mut bill = 0;
+    let mut bill_n = 0;
+    for k in ord {
+        let i = paid_ix[k];
+        let pay = res[i].pay;
+        let m = month_of(res[i].paid_day);
+        if m != month {
+            close_month(mut tr, br, month, bill, bill_n, mut ids);
+            bill = 0;
+            bill_n = 0;
+            month = m;
+        }
+        tr.checks += 1;
+        if first_check < 0 {
+            first_check = tr.checks;
+        }
+        tr.log.push_str(f"CHK-{tr.checks:06},{cs[i].cid},{date_of(res[i].paid_day)},{dollars(pay)}\n");
+        let before = tr.net;
+        tr.net += pay;
+        paid += pay;
+        let floor = if before > RETENTION { before } else { RETENTION };
+        let over = if tr.net - floor > 0 { tr.net - floor } else { 0 };
+        let room = LIMIT - tr.ceded;
+        let part = if over * SHARE / 100 < room { over * SHARE / 100 } else { room };
+        if part > 0 {
+            tr.ceded += part;
+            ceded += part;
+            bill += part;
+            bill_n += 1;
+        }
+    }
+    close_month(mut tr, br, month, bill, bill_n, mut ids);
+    let first = if ids.len() > 1 {
+        f" {ids[0]} to {ids[ids.len() - 1]}"
+    } else if ids.len() == 1 {
+        f" {ids[0]}"
+    } else {
+        String.new()
+    };
+    let plural = if ids.len() == 1 { "y" } else { "ies" };
+    let checks = if first_check > 0 { f"checks {first_check} to {tr.checks}" } else { "no checks".to_string() };
+    f"{br.name} ceded: {paid_ix.len()} payments ({checks}), {money(paid)} paid, {money(ceded)} recovered in {ids.len()} monthly recover{plural}{first}; net retained {money(paid - ceded)}; year to date {money(tr.net)}, treaty left {money(LIMIT - tr.ceded)}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let north = Branch { name: "north", code: "NB", seed: 11, mix_pct: [55, 30, 15].to_vec(), storm_day: 201, ring: 7 };
+    let harbor = Branch { name: "harbor", code: "HB", seed: 23, mix_pct: [40, 45, 15].to_vec(), storm_day: 255, ring: 19 };
+    let plains = Branch { name: "plains", code: "PB", seed: 37, mix_pct: [60, 35, 5].to_vec(), storm_day: 143, ring: 31 };
+    let metro = Branch { name: "metro", code: "MB", seed: 53, mix_pct: [45, 25, 30].to_vec(), storm_day: 288, ring: 3 };
+
+    // Four policy books.
+    let p1 = build_policies(north);
+    let p2 = build_policies(harbor);
+    let p3 = build_policies(plains);
+    let p4 = build_policies(metro);
+
+    // Four years of claims.
+    let c1 = build_claims(north, p1);
+    let c2 = build_claims(harbor, p2);
+    let c3 = build_claims(plains, p3);
+    let c4 = build_claims(metro, p4);
+
+    // Eight writes.
+    let w1 = fs.write("north_policies.csv", encode_policies(p1));
+    let w2 = fs.write("harbor_policies.csv", encode_policies(p2));
+    let w3 = fs.write("plains_policies.csv", encode_policies(p3));
+    let w4 = fs.write("metro_policies.csv", encode_policies(p4));
+    let w5 = fs.write("north_claims.csv", encode_claims(c1));
+    let w6 = fs.write("harbor_claims.csv", encode_claims(c2));
+    let w7 = fs.write("plains_claims.csv", encode_claims(c3));
+    let w8 = fs.write("metro_claims.csv", encode_claims(c4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() {
+        return Err(bad("could not write the branch files"));
+    }
+
+    let whole = read_text("harbor_claims.csv")?;
+    if fs.write("harbor_claims.bad", damage(whole, 412, 5, "1250.5O")).is_err() {
+        return Err(bad("could not write harbor_claims.bad"));
+    }
+
+    // Eight reads.
+    let tp1 = read_text("north_policies.csv")?;
+    let tp2 = read_text("harbor_policies.csv")?;
+    let tp3 = read_text("plains_policies.csv")?;
+    let tp4 = read_text("metro_policies.csv")?;
+    let tc1 = read_text("north_claims.csv")?;
+    let tc2 = read_text("harbor_claims.csv")?;
+    let tc3 = read_text("plains_claims.csv")?;
+    let tc4 = read_text("metro_claims.csv")?;
+    println(f"north: policies {group3(tp1.len() as i64)} bytes, fnv {text_sum(tp1):08x}; claims {group3(tc1.len() as i64)} bytes, fnv {text_sum(tc1):08x}");
+    println(f"harbor: policies {group3(tp2.len() as i64)} bytes, fnv {text_sum(tp2):08x}; claims {group3(tc2.len() as i64)} bytes, fnv {text_sum(tc2):08x}");
+    println(f"plains: policies {group3(tp3.len() as i64)} bytes, fnv {text_sum(tp3):08x}; claims {group3(tc3.len() as i64)} bytes, fnv {text_sum(tc3):08x}");
+    println(f"metro: policies {group3(tp4.len() as i64)} bytes, fnv {text_sum(tp4):08x}; claims {group3(tc4.len() as i64)} bytes, fnv {text_sum(tc4):08x}");
+
+    // Eight parses. Each can fail with `?`, so a parallel run has to
+    // report the first failure in source order.
+    let gp1 = parse_policies("north_policies.csv", north, tp1)?;
+    let gp2 = parse_policies("harbor_policies.csv", harbor, tp2)?;
+    let gp3 = parse_policies("plains_policies.csv", plains, tp3)?;
+    let gp4 = parse_policies("metro_policies.csv", metro, tp4)?;
+    let gc1 = parse_claims("north_claims.csv", north, tc1)?;
+    let gc2 = parse_claims("harbor_claims.csv", harbor, tc2)?;
+    let gc3 = parse_claims("plains_claims.csv", plains, tc3)?;
+    let gc4 = parse_claims("metro_claims.csv", metro, tc4)?;
+    match parse_claims("harbor_claims.bad", harbor, read_text("harbor_claims.bad")?) {
+        Ok(_) => println("harbor_claims.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_policies("metro_policies.csv", north, tp4) {
+        Ok(_) => println("metro_policies.csv as north: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_policies(gp1, p1) and same_policies(gp2, p2) and same_policies(gp3, p3) and same_policies(gp4, p4) and same_claims(gc1, c1) and same_claims(gc2, c2) and same_claims(gc3, c3) and same_claims(gc4, c4);
+    println(f"parsed files match the built ones: {same}");
+
+    // Four fraud scorings.
+    let s1 = score_claims(gp1, gc1);
+    let s2 = score_claims(gp2, gc2);
+    let s3 = score_claims(gp3, gc3);
+    let s4 = score_claims(gp4, gc4);
+
+    // Four adjudications.
+    let d1 = adjudicate(gp1, gc1, s1);
+    let d2 = adjudicate(gp2, gc2, s2);
+    let d3 = adjudicate(gp3, gc3, s3);
+    let d4 = adjudicate(gp4, gc4, s4);
+
+    // Reports that only read what came before.
+    let v1 = volume_report(north, gc1);
+    let v2 = volume_report(harbor, gc2);
+    let v3 = volume_report(plains, gc3);
+    let v4 = volume_report(metro, gc4);
+    let f1 = fraud_report(north, gc1, s1);
+    let f2 = fraud_report(harbor, gc2, s2);
+    let f3 = fraud_report(plains, gc3, s3);
+    let f4 = fraud_report(metro, gc4, s4);
+    let o1 = outcome_report(north, gp1, d1);
+    let o2 = outcome_report(harbor, gp2, d2);
+    let o3 = outcome_report(plains, gp3, d3);
+    let o4 = outcome_report(metro, gp4, d4);
+    let l1 = lag_report(north, gc1, d1);
+    let l2 = lag_report(harbor, gc2, d2);
+    let l3 = lag_report(plains, gc3, d3);
+    let l4 = lag_report(metro, gc4, d4);
+    let n1 = line_report(north, gp1, gc1, d1);
+    let n2 = line_report(harbor, gp2, gc2, d2);
+    let n3 = line_report(plains, gp3, gc3, d3);
+    let n4 = line_report(metro, gp4, gc4, d4);
+    for line in [v1, v2, v3, v4, f1, f2, f3, f4, o1, o2, o3, o4, l1, l2, l3, l4, n1, n2, n3, n4] {
+        println(line);
+    }
+
+    // One treaty: each branch's payments land on what the branches before
+    // it have paid, and checks and recoveries are numbered as they go.
+    let mut tr = Treaty { net: 0, ceded: 0, recoveries: 0, checks: 0, log: String.new() };
+    println(cede(mut tr, north, gc1, d1));
+    println(cede(mut tr, harbor, gc2, d2));
+    println(cede(mut tr, plains, gc3, d3));
+    println(cede(mut tr, metro, gc4, d4));
+    if fs.write("treaty.log", tr.log).is_err() {
+        return Err(bad("could not write treaty.log"));
+    }
+    let back = read_text("treaty.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"treaty.log: {rows} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["north_policies.csv", "harbor_policies.csv", "plains_policies.csv", "metro_policies.csv", "north_claims.csv", "harbor_claims.csv", "plains_claims.csv", "metro_claims.csv", "harbor_claims.bad", "treaty.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"claim_batch failed: {e.describe()}"),
+    }
+}

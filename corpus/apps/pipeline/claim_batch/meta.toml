@@ -1,0 +1,10 @@
+source = "kara-katas/apps/pipeline/claim_batch/claim_batch.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "9c966c5d"

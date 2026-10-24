@@ -1,0 +1,32 @@
+north: policies 129,202 bytes, fnv fd67ebed; claims 85,270 bytes, fnv 58742cdc
+harbor: policies 129,727 bytes, fnv 62a889bd; claims 85,229 bytes, fnv 8e80343d
+plains: policies 129,130 bytes, fnv f209d0e4; claims 85,238 bytes, fnv 4d44fc38
+metro: policies 129,284 bytes, fnv 7508b641; claims 85,343 bytes, fnv bc641809
+harbor_claims.bad line 413: bad amount '1250.5O'
+metro_policies.csv line 2: bad policy 'MB-P0001'
+parsed files match the built ones: true
+north claims: 1,336 for $24,202,622.10; most storm 340, theft 231, fire 194; storm of 2026-07-21: 159 claims
+harbor claims: 1,336 for $23,942,193.98; most storm 373, theft 219, glass 180; storm of 2026-09-13: 178 claims
+plains claims: 1,336 for $24,366,679.27; most storm 357, glass 221, theft 219; storm of 2026-05-24: 147 claims
+metro claims: 1,336 for $21,779,389.33; most theft 293, storm 280, fire 186; storm of 2026-10-16: 139 claims
+north fraud: 6 referred, 37 for review; highest NB-C01314 55 (large similar x7); NB-C01315 55 (large similar x8); NB-C00440 50 (late new large); likeliest ring V-007 on 34 similar claims
+harbor fraud: 4 referred, 44 for review; highest HB-C00859 70 (repeat late large similar x2); HB-C01330 55 (large similar x4); HB-C00033 50 (late new large); likeliest ring V-019 on 34 similar claims
+plains fraud: 2 referred, 48 for review; highest PB-C00413 50 (repeat late large); PB-C00910 50 (repeat late large); PB-C00231 45 (repeat late round); likeliest ring V-031 on 37 similar claims
+metro fraud: 6 referred, 37 for review; highest MB-C01326 60 (repeat similar x4); MB-C01308 55 (large similar x4); MB-C01317 55 (large similar x5); likeliest ring V-003 on 37 similar claims
+north outcomes: 1000 paid for $13,268,019.71 (171 at the limit), loss ratio 87.3%; not paid: outside period 95, below deductible 87, late notice 77, limit used 36, not covered 33, no policy 6, referred 2
+harbor outcomes: 940 paid for $13,754,339.06 (120 at the limit), loss ratio 75.3%; not paid: outside period 126, below deductible 107, late notice 74, not covered 54, limit used 24, no policy 10, referred 1
+plains outcomes: 1020 paid for $13,518,541.50 (195 at the limit), loss ratio 84.2%; not paid: below deductible 104, late notice 66, outside period 60, not covered 41, limit used 37, no policy 7, referred 1
+metro outcomes: 998 paid for $11,294,961.83 (149 at the limit), loss ratio 84.4%; not paid: outside period 107, below deductible 78, late notice 70, not covered 39, limit used 33, no policy 9, referred 2
+north lags: reported in 7 days at the median, 69 at p90, 119 at most; paid 10 days after the report at the median, 14 at p90
+harbor lags: reported in 7 days at the median, 78 at p90, 119 at most; paid 10 days after the report at the median, 14 at p90
+plains lags: reported in 7 days at the median, 78 at p90, 119 at most; paid 10 days after the report at the median, 14 at p90
+metro lags: reported in 7 days at the median, 68 at p90, 119 at most; paid 9 days after the report at the median, 14 at p90
+north lines: auto 514 paid, $5,453,804.55, average $10,610.51; home 298 paid, $6,871,251.25, average $23,057.89; travel 188 paid, $942,963.91, average $5,015.76
+harbor lines: auto 351 paid, $3,823,471.33, average $10,893.08; home 409 paid, $8,999,124.28, average $22,002.74; travel 180 paid, $931,743.45, average $5,176.35
+plains lines: auto 616 paid, $5,995,054.39, average $9,732.23; home 352 paid, $7,321,883.50, average $20,800.80; travel 52 paid, $201,603.61, average $3,876.99
+metro lines: auto 453 paid, $4,570,839.25, average $10,090.15; home 219 paid, $5,056,885.33, average $23,090.80; travel 326 paid, $1,667,237.25, average $5,114.22
+north ceded: 1000 payments (checks 1 to 1000), $13,268,019.71 paid, $0.00 recovered in 0 monthly recoveries; net retained $13,268,019.71; year to date $13,268,019.71, treaty left $9,000,000.00
+harbor ceded: 940 payments (checks 1001 to 1940), $13,754,339.06 paid, $0.00 recovered in 0 monthly recoveries; net retained $13,754,339.06; year to date $27,022,358.77, treaty left $9,000,000.00
+plains ceded: 1020 payments (checks 1941 to 2960), $13,518,541.50 paid, $8,432,717.94 recovered in 14 monthly recoveries RC-0001 to RC-0014; net retained $5,085,823.56; year to date $40,540,900.27, treaty left $567,282.06
+metro ceded: 998 payments (checks 2961 to 3958), $11,294,961.83 paid, $567,282.06 recovered in 1 monthly recovery RC-0015; net retained $10,727,679.77; year to date $51,835,862.10, treaty left $0.00
+treaty.log: 3973 entries, 159,758 bytes, fnv 69b09f69
