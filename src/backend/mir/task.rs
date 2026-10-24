@@ -112,6 +112,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
             }
             ("TcpStream", "connect", _) => self.llcx.bool_type().const_int(1, false),
+            // A value to lend, by the timeout (B-2026-10-21-44).
+            ("Pool", "acquire", [p, d, ..]) => {
+                let h = self.pool_handle(p)?;
+                let ns = self.duration_ns(d)?;
+                self.rt_flag("ready_pool", &[h.into(), ns.into()])?
+            }
             ("Mutex", "acquire", [m, ..]) => {
                 let (cell, _) = self.cell_arg(m)?;
                 self.rt_flag("mutex_ready", &[cell.into()])?

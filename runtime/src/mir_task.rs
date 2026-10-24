@@ -395,6 +395,41 @@ pub extern "C" fn karac_mir_ready_sleep(ms: i64) -> u8 {
     }
 }
 
+/// Whether the running task waits by a deadline (a pool's `acquire`, as
+/// [`ready_by`] keeps it), or `None` outside the executor.
+pub(crate) fn deadline_set() -> Option<bool> {
+    EXEC.with(|e| e.borrow().cur.as_ref().map(|cur| cur.0.is_some()))
+}
+
+/// `__ready` of a call that waits up to `ns` nanoseconds for a condition
+/// only the program's other tasks change (a pool's `acquire`,
+/// B-2026-10-21-44): `ready` now, or the running task waits by the
+/// deadline its first ask sets. Answers the readiness and whether the
+/// deadline passed first; the deadline clears once either happens.
+pub(crate) fn ready_by(ready: bool, ns: i64) -> (u8, bool) {
+    let at = EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let cur = e.cur.as_mut()?;
+        if ready {
+            cur.0 = None;
+            return None;
+        }
+        let now = Instant::now();
+        let at = *cur
+            .0
+            .get_or_insert_with(|| now + Duration::from_nanos(ns.max(0) as u64));
+        if now >= at {
+            cur.0 = None;
+        }
+        Some(at)
+    });
+    match at {
+        None => (note(true, Wait::None), false),
+        Some(at) if Instant::now() >= at => (note(true, Wait::None), true),
+        Some(at) => (note(false, Wait::Until(at)), false),
+    }
+}
+
 /// Whether the running task's `__ready` already waited its pause out; the
 /// flag is cleared, so `sleep_ms` asks it once.
 pub(crate) fn take_slept() -> bool {

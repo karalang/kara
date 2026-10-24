@@ -255,6 +255,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_str_decode,
         mir::karac_mir_string_from_chars,
         mir::karac_mir_pool_new,
+        mir::karac_mir_ready_pool,
+        mir::karac_mir_pool_full,
         mir::karac_mir_pool_share,
         mir::karac_mir_pool_fn,
         mir::karac_mir_pool_pop,

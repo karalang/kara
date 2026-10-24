@@ -32,7 +32,7 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<Option<()>> {
         let dty = self.place_type(dest)?;
         match (method, args) {
-            ("new", [create, max, _]) => {
+            ("new", [create, max, waiters]) => {
                 let el = self.type_arg(dty)?;
                 // The factory moves into the pool, erased.
                 let from = self.operand_type(create)?;
@@ -47,11 +47,18 @@ impl<'ctx> Cx<'ctx, '_> {
                 });
                 let cp = self.erased_operand(create, to)?;
                 let max = self.int_arg(max)?;
+                let waiters = self.int_arg(waiters)?;
                 let size = self.i64(self.layout(el)?.size);
                 let glue = self.glue_or_null(el);
                 let h = self.mrt_ptr(
                     "pool_new",
-                    &[size.into(), max.into(), cp.into(), glue.into()],
+                    &[
+                        size.into(),
+                        max.into(),
+                        waiters.into(),
+                        cp.into(),
+                        glue.into(),
+                    ],
                 )?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, h.into())?;
@@ -94,7 +101,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);
             }
-            ("acquire", [recv, _]) => self.pool_acquire(recv, dest)?,
+            ("acquire", [recv, timeout]) => self.pool_acquire(recv, timeout, dest)?,
             // B-2026-10-21-45: a hand-built pool has nothing to close.
             ("close", [recv]) => {
                 let h = self.pool_handle(recv)?;
@@ -141,7 +148,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The runtime pool a `Pool` operand (or a reference to one) holds.
-    fn pool_handle(&mut self, a: &Operand) -> R<PointerValue<'ctx>> {
+    pub(super) fn pool_handle(&mut self, a: &Operand) -> R<PointerValue<'ctx>> {
         let mut t = self.operand_type(a)?;
         let mut p = self.operand_ptr(a)?;
         while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
@@ -151,14 +158,22 @@ impl<'ctx> Cx<'ctx, '_> {
         self.load_ptr(p)
     }
 
+    /// The nanoseconds of a `Duration` operand (a struct of one `ns`), or
+    /// of one behind a reference.
+    pub(super) fn duration_ns(&mut self, d: &Operand) -> R<IntValue<'ctx>> {
+        let (at, _) = self.behind_refs(d)?;
+        self.load_i64(at)
+    }
+
     /// `pool.acquire(timeout)`: an idle value that passes the health check
     /// (a failing one is evicted), else a fresh one from the factory while
     /// the pool is below its bound (its `Err(e)` is `CreateFailed(e)`, and
-    /// counts nothing), else `Timeout`; `PoolClosed` for a hand-built or
-    /// closed pool.
-    fn pool_acquire(&mut self, recv: &Operand, dest: &Place) -> R<()> {
+    /// counts nothing), else `Busy` or `Timeout` as `karac_mir_pool_full`
+    /// says (B-2026-10-21-44); `PoolClosed` for a hand-built or closed pool.
+    fn pool_acquire(&mut self, recv: &Operand, timeout: &Operand, dest: &Place) -> R<()> {
         let dty = self.place_type(dest)?;
         let h = self.pool_handle(recv)?;
+        let timeout_d = timeout;
         let d = self.place_ptr(dest)?;
         let okv = self.variant_of(dty, "Ok")?;
         let errv = self.variant_of(dty, "Err")?;
@@ -223,7 +238,20 @@ impl<'ctx> Cx<'ctx, '_> {
         };
         self.builder.position_at_end(closed);
         fail(self, "PoolClosed")?;
+        // Full: what the wait came to, or a wait of the whole timeout.
         self.builder.position_at_end(timeout);
+        let ns = self.duration_ns(timeout_d)?;
+        let busy = self.rt_flag("pool_full", &[h.into(), ns.into()])?;
+        let (turned, waited) = (
+            self.llcx.append_basic_block(f, "pool.busy"),
+            self.llcx.append_basic_block(f, "pool.waited"),
+        );
+        self.builder
+            .build_conditional_branch(busy, turned, waited)
+            .map_err(e)?;
+        self.builder.position_at_end(turned);
+        fail(self, "Busy")?;
+        self.builder.position_at_end(waited);
         fail(self, "Timeout")?;
 
         // Idle values first, newest first, each through the check.

@@ -54,5 +54,5 @@ When the `Pool` itself drops, its idle values drop. A loan that outlives its poo
 
 ## Not yet implemented
 
-- Waiting. `acquire` fails with `Timeout` at once when every value is in use, whatever the `timeout`, `max_waiters` limits nothing, and `Busy` is never produced (B-2026-10-21-44).
+- Waiting is between tasks. A full pool's `acquire` parks its task until a loan comes back or the timeout passes. Outside any task nothing can give a value back meanwhile, so it waits the whole timeout and fails with `Timeout`. The same happens to an `acquire` called through a function value inside a task, which cannot suspend yet (M4 item 4): it blocks the thread for the timeout.
 - `#[must_use]` on `PooledConnection` is recorded but not enforced. A bare `pool.acquire(..);` statement is still warned about, because `Result` is always must-use.

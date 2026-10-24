@@ -9,9 +9,11 @@
 // loans); a hand-built `Pool { handle_id: 0 }` has none, and every
 // `acquire` answers it `PoolClosed`.
 //
-// Neither backend waits yet (B-2026-10-21-44): at `max_connections`,
-// `acquire` fails with `Timeout` at once whatever the `timeout`,
-// `max_waiters` limits nothing and `Busy` is never produced.
+// At `max_connections`, `acquire` waits in its task for a value to come
+// back, up to `timeout`, and fails with `Busy` at once when `max_waiters`
+// callers already wait (B-2026-10-21-44). Both backends' executors park
+// the waiting task; outside a task nothing can give a value back, so the
+// call waits its whole timeout.
 
 import std.time.{Duration};
 

@@ -3998,8 +3998,14 @@ impl<'a> Interp<'a> {
         }
         match method {
             "new" => {
-                let (Some(create), Some(Value::Int(max))) = (args.next(), args.next()) else {
+                let (Some(create), Some(Value::Int(max)), waiters) =
+                    (args.next(), args.next(), args.next())
+                else {
                     return err(format!("{name} takes a factory and two bounds"));
+                };
+                let max_waiters = match waiters {
+                    Some(Value::Int(w)) => w,
+                    _ => 0,
                 };
                 let elem = self
                     .tys
@@ -4024,6 +4030,8 @@ impl<'a> Interp<'a> {
                     next_conn: 1,
                     refs: 1,
                     closed: false,
+                    max_waiters,
+                    waiting: 0,
                 });
                 Ok(Value::Agg(vec![Value::Int(self.pools.len() as i128)]))
             }
@@ -4113,6 +4121,27 @@ impl<'a> Interp<'a> {
                     return fail(self, "PoolClosed");
                 };
                 if p.active >= p.max {
+                    let crowded = p.waiting >= p.max_waiters;
+                    // Under the executor `__ready` waited, and left what the
+                    // wait came to. Outside it nothing can give a value
+                    // back, so the call waits its whole timeout.
+                    let verdict = self
+                        .tasks
+                        .get_mut(self.cur_task)
+                        .and_then(|t| t.pool_verdict.take());
+                    if let Some(why) = verdict {
+                        return fail(self, why);
+                    }
+                    if crowded {
+                        return fail(self, "Busy");
+                    }
+                    if let Some(d) = args.next() {
+                        let ns = self.duration_ns(&d, name)?;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        std::thread::sleep(std::time::Duration::from_nanos(ns.max(0) as u64));
+                        #[cfg(target_arch = "wasm32")]
+                        let _ = ns;
+                    }
                     return fail(self, "Timeout");
                 }
                 let Value::Box(f) = p.create.clone() else {
@@ -5845,6 +5874,8 @@ impl<'a> Interp<'a> {
             handle,
             deadline: None,
             slept: false,
+            pool_wait: None,
+            pool_verdict: None,
             spans: self.active_spans.clone(),
         });
         self.spawned.push(self.tasks.len() - 1);
@@ -12117,6 +12148,8 @@ impl<'a> Interp<'a> {
             handle: 0,
             deadline: None,
             slept: false,
+            pool_wait: None,
+            pool_verdict: None,
             spans: self.active_spans.clone(),
         });
         self.run_tasks(entry)
@@ -12216,7 +12249,9 @@ impl<'a> Interp<'a> {
         let mut nearest: Option<std::time::Instant> = None;
         for (_, w) in parked {
             match w {
-                Wait::Until(at) => nearest = Some(nearest.map_or(*at, |n| n.min(*at))),
+                Wait::Until(at) | Wait::Pool(_, at) => {
+                    nearest = Some(nearest.map_or(*at, |n| n.min(*at)))
+                }
                 Wait::Accept(_)
                 | Wait::Read(_)
                 | Wait::Write(..)
@@ -12320,6 +12355,7 @@ impl<'a> Interp<'a> {
                 other => return err(format!("{callee} of a child holding {other:?}")),
             },
             ("Mutex", "acquire", [m, ..]) => Some(Wait::Lock(self.atomic_cell(m, &callee)?)),
+            ("Pool", "acquire", [p, d, ..]) => self.ready_pool(p, d, &callee)?,
             _ => return err(format!("__ready of {callee}, which does not suspend")),
         };
         let ready = match &wait {
@@ -12335,6 +12371,62 @@ impl<'a> Interp<'a> {
             t.slept = true;
         }
         Ok(Value::Bool(ready))
+    }
+
+    /// `__ready` of a `Pool.acquire` (B-2026-10-21-44): ready when the pool
+    /// has an idle value, room for a new one, or is closed. Otherwise the
+    /// task joins the pool's waiters and waits up to the timeout `d`, or is
+    /// turned away at once (`Busy`) when `max_waiters` already wait; the
+    /// `acquire` after a wait that ends without a value reads the verdict.
+    fn ready_pool(&mut self, p: &Value, d: &Value, name: &str) -> R<Option<Wait>> {
+        let id = self.handle_field(Some(p), name)?;
+        let ns = self.duration_ns(d, name)?;
+        let cur = self.cur_task;
+        let free = self.pool(id).is_none_or(|p| pool_free(p));
+        let waiting = self.tasks[cur].pool_wait;
+        let leave = |me: &mut Self| {
+            if let Some(w) = me.tasks[cur].pool_wait.take() {
+                if let Some(p) = me.pool(w) {
+                    p.waiting -= 1;
+                }
+            }
+            me.tasks[cur].deadline = None;
+        };
+        if free {
+            leave(self);
+            return Ok(None);
+        }
+        let now = std::time::Instant::now();
+        let at = match waiting {
+            Some(_) => self.tasks[cur].deadline.unwrap_or(now),
+            None => {
+                let p = self.pool(id).expect("not free, so present");
+                if p.waiting >= p.max_waiters {
+                    self.tasks[cur].pool_verdict = Some("Busy");
+                    return Ok(None);
+                }
+                p.waiting += 1;
+                let at = now + std::time::Duration::from_nanos(ns.max(0) as u64);
+                let t = &mut self.tasks[cur];
+                t.pool_wait = Some(id);
+                t.deadline = Some(at);
+                at
+            }
+        };
+        if now >= at {
+            leave(self);
+            self.tasks[cur].pool_verdict = Some("Timeout");
+            return Ok(None);
+        }
+        Ok(Some(Wait::Pool(id, at)))
+    }
+
+    /// The nanoseconds of a `Duration` value, or of one behind a reference.
+    fn duration_ns(&mut self, d: &Value, name: &str) -> R<i64> {
+        match self.struct_value(d, name)?.as_slice() {
+            [Value::Int(ns)] => Ok(*ns as i64),
+            other => err(format!("{name}: a Duration holding {other:?}")),
+        }
     }
 
     /// The descriptor a `TcpListener` / `TcpStream` value names.
@@ -12435,6 +12527,9 @@ impl<'a> Interp<'a> {
                 let got = u.peek_from(&mut [0u8; 1]);
                 let _ = u.set_nonblocking(false);
                 !matches!(got, Err(e) if e.kind() == WouldBlock)
+            }
+            Wait::Pool(id, at) => {
+                std::time::Instant::now() >= *at || self.pool(*id).is_none_or(|p| pool_free(p))
             }
             Wait::Child(id) => {
                 let slot = usize::try_from(*id - 1).ok();
@@ -13939,6 +14034,12 @@ struct TaskSlot {
     /// Its `__ready` waited the pause out, so the `sleep_ms` after it
     /// returns at once.
     slept: bool,
+    /// The pool, by id, whose `acquire` it waits in, counted among the
+    /// pool's waiters (B-2026-10-21-44).
+    pool_wait: Option<i128>,
+    /// What its waiting `acquire` comes to without a value: `Busy` or
+    /// `Timeout`, set by `__ready` for the `acquire` that follows.
+    pool_verdict: Option<&'static str>,
     /// Its active span stack while it is not running (B-2026-10-20-37):
     /// span context is per task, inherited from the spawner.
     spans: Vec<i128>,
@@ -13978,6 +14079,8 @@ enum Wait {
     Datagram(i64),
     /// A child, by its `ChildProcess` id, to exit.
     Child(i128),
+    /// A pool, by id, to have a value to lend, or the deadline to pass.
+    Pool(i128, std::time::Instant),
     /// A spawned task to return, by handle id.
     Join(usize),
     /// Room under a group's limit, or (`true`) all its tasks returned.
@@ -14086,6 +14189,12 @@ struct Limiter {
 /// back to its pool.
 const RELEASED: i128 = -1;
 
+/// Whether `acquire` on `p` can complete now: an idle value, room for a
+/// new one, or a closed pool.
+fn pool_free(p: &PoolEntry) -> bool {
+    p.closed || !p.slots.is_empty() || p.active < p.max
+}
+
 struct PoolEntry {
     /// The connection type `T`.
     elem: Ty,
@@ -14100,6 +14209,9 @@ struct PoolEntry {
     refs: i128,
     /// `close` was called: nothing is lent or kept any more.
     closed: bool,
+    /// How many `acquire` calls may wait at once, and how many do.
+    max_waiters: i128,
+    waiting: i128,
 }
 
 struct Callee<'a> {

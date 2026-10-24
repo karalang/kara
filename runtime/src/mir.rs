@@ -3328,10 +3328,86 @@ pub struct MirPool {
     next_conn: i64,
     /// `close` was called: nothing is lent or kept any more.
     closed: bool,
+    /// How many `acquire` calls may wait at once, and how many do
+    /// (B-2026-10-21-44).
+    max_waiters: i64,
+    waiting: i64,
+}
+
+impl MirPool {
+    /// Whether `acquire` can complete now: an idle value, room for a new
+    /// one, or a closed pool.
+    fn free(&self) -> bool {
+        self.closed || !self.slots.is_empty() || self.active < self.max
+    }
+}
+
+thread_local! {
+    /// What the waiting `acquire` that `karac_mir_ready_pool` let through
+    /// comes to without a value: 1 `Busy`, 0 `Timeout`.
+    static POOL_VERDICT: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
+}
+
+/// `__ready` of a `Pool.acquire` with a timeout of `ns` nanoseconds: ready
+/// when the pool has a value to lend. Otherwise the task joins the pool's
+/// waiters and waits by the deadline, or is turned away at once when
+/// `max_waiters` already wait; [`karac_mir_pool_full`] then reads which.
+///
+/// # Safety
+/// `h` is a live pool or null.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_ready_pool(h: *mut MirPool, ns: i64) -> u8 {
+    let Some(waiting) = crate::mir_task::deadline_set() else {
+        return 1;
+    };
+    if h.is_null() {
+        return 1;
+    }
+    // SAFETY: the caller's contract.
+    let p = unsafe { &mut *h };
+    let free = p.free();
+    if !free && !waiting {
+        if p.waiting >= p.max_waiters {
+            POOL_VERDICT.with(|v| v.set(Some(1)));
+            return crate::mir_task::ready_by(true, ns).0;
+        }
+        p.waiting += 1;
+    }
+    let (ready, timed_out) = crate::mir_task::ready_by(free, ns);
+    if ready != 0 && (waiting || !free) {
+        p.waiting -= 1;
+    }
+    if timed_out {
+        POOL_VERDICT.with(|v| v.set(Some(0)));
+    }
+    ready
+}
+
+/// `acquire` on a full pool with a timeout of `ns` nanoseconds: 1 for
+/// `Busy`, 0 for `Timeout`. After a wait, what it came to; outside one,
+/// nothing can give a value back, so the call waits its whole timeout.
+///
+/// # Safety
+/// `h` is a live pool.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_full(h: *mut MirPool, ns: i64) -> u8 {
+    if let Some(v) = POOL_VERDICT.with(|v| v.take()) {
+        return v;
+    }
+    // SAFETY: the caller's contract.
+    if unsafe { &*h }.waiting >= unsafe { &*h }.max_waiters {
+        return 1;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::sleep(std::time::Duration::from_nanos(ns.max(0) as u64));
+    #[cfg(target_arch = "wasm32")]
+    let _ = ns;
+    0
 }
 
 /// A new pool of `size`-byte values minted by the erased function at
-/// `create` (moved in), at most `max` at once.
+/// `create` (moved in), at most `max` at once, with at most `max_waiters`
+/// callers waiting in `acquire`.
 ///
 /// # Safety
 /// `create` is a live erased function value, which the pool now owns.
@@ -3339,6 +3415,7 @@ pub struct MirPool {
 pub unsafe extern "C" fn karac_mir_pool_new(
     size: u64,
     max: i64,
+    max_waiters: i64,
     create: *const MirFnBytes,
     drop: Option<unsafe extern "C" fn(*mut u8)>,
 ) -> *mut MirPool {
@@ -3356,6 +3433,8 @@ pub unsafe extern "C" fn karac_mir_pool_new(
         out: Default::default(),
         next_conn: 1,
         closed: false,
+        max_waiters,
+        waiting: 0,
     }))
 }
 
