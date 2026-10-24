@@ -15,8 +15,18 @@
 //!   `acc = acc op e`, with `op` one of `+`, `*`, `&`, `|`, `^` and `acc`
 //!   used nowhere else in the body, conflicts between iterations only
 //!   through that statement. The verdict names it, and the builder makes
-//!   the task return `e` and folds the results in iteration order, which
-//!   gives the sequential result bit for bit (overflow included).
+//!   each task fold its run of iterations from `op`'s identity and folds
+//!   the results in iteration order. That regrouping is exact for `&`,
+//!   `|`, `^` and wrapping `+` and `*`, but not for an operation checked
+//!   for overflow: a run's partial result can overflow where the in-order
+//!   one never does (B-2026-10-24-20). A checked `*` is therefore never a
+//!   reduction (an earlier 0 keeps the in-order product at 0 while a later
+//!   run's overflows, unsigned or not); a checked `+` is, and the builder
+//!   makes a signed one's join exact by checking each run's smallest and
+//!   largest prefix against the type's range in order (an `i128` sum, with
+//!   no wider type to keep the prefixes in, it keeps in order). An
+//!   unsigned sum's prefixes only grow, so a run overflows only where the
+//!   in-order sum does.
 //! - **A statement reads what an earlier one binds.** A `let` in one
 //!   statement is visible to the next, where a written `par {}` refuses it
 //!   at resolution; here the binding is a local the first statement has to
@@ -524,11 +534,13 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
             BinOp::Add | BinOp::Mul | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
         )
     };
-    // `op` and the operand other than `acc`, when `rv` combines `acc` with
-    // one by a reducible operator.
+    // `op`, when `rv` combines `acc` with one other operand by a reducible
+    // operator. Not a checked `*`, whose partial products can overflow
+    // where the in-order product never does (B-2026-10-24-20).
     let combines = |rv: &Rvalue, acc: Local| -> Option<BinOp> {
         let (op, x, y) = match rv {
-            Rvalue::BinaryOp(op, x, y) | Rvalue::CheckedBinaryOp(op, x, y) => (*op, x, y),
+            Rvalue::BinaryOp(op, x, y) => (*op, x, y),
+            Rvalue::CheckedBinaryOp(op, x, y) if *op != BinOp::Mul => (*op, x, y),
             _ => return None,
         };
         let is_acc = |o: &Operand| matches!(o, Operand::Copy(p) if *p == Place::local(acc));
@@ -775,6 +787,46 @@ fn main() {
             Err(Refusal::Conflict(c)) => assert_eq!(c.first.1, "writes(Stdout)"),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// B-2026-10-24-20: a product checked for overflow is not a reduction,
+    /// since a run's partial product can overflow where the in-order one
+    /// never does (after a 0, say), so its loop keeps its order; a checked
+    /// sum still is.
+    #[test]
+    fn auto_par_checked_product_is_not_a_reduction() {
+        let v = written(
+            "fn factorial() -> u64 {
+    let mut p: u64 = 1;
+    par for i in 0..15 {
+        p *= i as u64;
+    }
+    p
+}
+
+fn triangle() -> u64 {
+    let mut t: u64 = 0;
+    par for i in 0..15 {
+        t += i as u64;
+    }
+    t
+}
+
+fn main() {
+    println(factorial());
+    println(triangle());
+}
+",
+        );
+        match &only(&v, "factorial").verdict {
+            Err(Refusal::Conflict(c)) => assert_eq!(c.branches, (0, 0)),
+            other => panic!("{other:?}"),
+        }
+        let t = only(&v, "triangle")
+            .verdict
+            .as_ref()
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(t.iter().map(|x| x.op).collect::<Vec<_>>(), [BinOp::Add]);
     }
 
     /// D6: a call into C has unknown effects, so the loop stays in order
