@@ -1,0 +1,533 @@
+// LeetCode #971: Flip Binary Tree To Match Preorder Traversal --
+// differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random trees and voyages.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star ----
+
+fn star_walk(t: ref Option[TreeNode], voyage: Vec[i64], i: mut ref i64, flipped: mut ref Vec[i64]) -> bool {
+    match t {
+        None => true,
+        Some(node) => {
+            if node.val != voyage[*i] {
+                return false;
+            }
+            *i += 1;
+            let wrong_left = match node.left {
+                Some(l) => l.val != voyage[*i],
+                None => false,
+            };
+            if wrong_left {
+                flipped.push(node.val);
+                star_walk(node.right, voyage, mut i, mut flipped) and star_walk(node.left, voyage, mut i, mut flipped)
+            } else {
+                star_walk(node.left, voyage, mut i, mut flipped) and star_walk(node.right, voyage, mut i, mut flipped)
+            }
+        }
+    }
+}
+
+fn star_flip_match_voyage(root: Option[TreeNode], voyage: Vec[i64]) -> Vec[i64] {
+    let mut i = 0;
+    let mut flipped: Vec[i64] = Vec.new();
+    if star_walk(root, voyage, mut i, mut flipped) {
+        flipped
+    } else {
+        vec![-1]
+    }
+}
+
+// ---- stack ----
+
+fn stack_flip_match_voyage(root: Option[TreeNode], voyage: Vec[i64]) -> Vec[i64] {
+    let mut flipped: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    let mut i = 0;
+    while let Some(node) = stack.pop() {
+        if node.val != voyage[i] {
+            return vec![-1];
+        }
+        i += 1;
+        match (node.left, node.right) {
+            (Some(l), Some(r)) => {
+                if l.val == voyage[i] {
+                    stack.push(r);
+                    stack.push(l);
+                } else {
+                    flipped.push(node.val);
+                    stack.push(l);
+                    stack.push(r);
+                }
+            }
+            (Some(l), None) => stack.push(l),
+            (None, Some(r)) => stack.push(r),
+            (None, None) => {}
+        }
+    }
+    flipped
+}
+
+// ---- sizes ----
+
+fn sizes_count(t: ref Option[TreeNode], sizes: mut ref Vec[i64]) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => {
+            let s = 1 + sizes_count(node.left, mut sizes) + sizes_count(node.right, mut sizes);
+            sizes[node.val] = s;
+            s
+        }
+    }
+}
+
+fn sizes_place(t: ref Option[TreeNode], at: i64, voyage: Vec[i64], sizes: Vec[i64], flipped: mut ref Vec[i64]) -> bool {
+    let Some(node) = t else {
+        return true;
+    };
+    if node.val != voyage[at] {
+        return false;
+    }
+    match (node.left, node.right) {
+        (Some(l), Some(r)) => {
+            if l.val == voyage[at + 1] {
+                sizes_place(node.left, at + 1, voyage, sizes, mut flipped) and sizes_place(node.right, at + 1 + sizes[l.val], voyage, sizes, mut flipped)
+            } else {
+                flipped.push(node.val);
+                sizes_place(node.right, at + 1, voyage, sizes, mut flipped) and sizes_place(node.left, at + 1 + sizes[r.val], voyage, sizes, mut flipped)
+            }
+        }
+        _ => sizes_place(node.left, at + 1, voyage, sizes, mut flipped) and sizes_place(node.right, at + 1, voyage, sizes, mut flipped),
+    }
+}
+
+fn sizes_flip_match_voyage(root: Option[TreeNode], voyage: Vec[i64]) -> Vec[i64] {
+    let mut sizes = Vec.filled(voyage.len() + 1, 0);
+    sizes_count(root, mut sizes);
+    let mut flipped: Vec[i64] = Vec.new();
+    if sizes_place(root, 0, voyage, sizes, mut flipped) {
+        flipped
+    } else {
+        vec![-1]
+    }
+}
+
+// ---- rebuild ----
+
+fn rebuild_copy(t: ref Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: node.val, left: rebuild_copy(node.left), right: rebuild_copy(node.right) }),
+    }
+}
+
+fn rebuild_size(t: ref Option[TreeNode]) -> i64 {
+    match t {
+        None => 0,
+        Some(node) => 1 + rebuild_size(node.left) + rebuild_size(node.right),
+    }
+}
+
+// Flip the copy below node, which sits at voyage index at.
+fn rebuild_fix(t: ref Option[TreeNode], at: i64, voyage: Vec[i64], flipped: mut ref Vec[i64]) {
+    let Some(node) = t else {
+        return;
+    };
+    if let Some(l) = node.left {
+        if at + 1 < voyage.len() and l.val != voyage[at + 1] {
+            let r = node.right;
+            node.right = node.left;
+            node.left = r;
+            flipped.push(node.val);
+        }
+    }
+    rebuild_fix(node.left, at + 1, voyage, mut flipped);
+    rebuild_fix(node.right, at + 1 + rebuild_size(node.left), voyage, mut flipped);
+}
+
+fn rebuild_preorder(t: ref Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(node) = t {
+        out.push(node.val);
+        rebuild_preorder(node.left, mut out);
+        rebuild_preorder(node.right, mut out);
+    }
+}
+
+fn rebuild_flip_match_voyage(root: Option[TreeNode], voyage: Vec[i64]) -> Vec[i64] {
+    let tree = rebuild_copy(root);
+    let mut flipped: Vec[i64] = Vec.new();
+    rebuild_fix(tree, 0, voyage, mut flipped);
+    let mut seen: Vec[i64] = Vec.new();
+    rebuild_preorder(tree, mut seen);
+    if seen == voyage {
+        flipped
+    } else {
+        vec![-1]
+    }
+}
+
+// ---- ranges ----
+
+fn ranges_fits(t: ref Option[TreeNode], lo: i64, hi: i64, voyage: Vec[i64], pos: Vec[i64], flipped: mut ref Vec[i64]) -> bool {
+    let Some(node) = t else {
+        return lo == hi;
+    };
+    if lo >= hi or voyage[lo] != node.val {
+        return false;
+    }
+    match (node.left, node.right) {
+        (Some(l), Some(r)) => {
+            let (first, second) = if pos[l.val] == lo + 1 {
+                (node.left, r)
+            } else {
+                flipped.push(node.val);
+                (node.right, l)
+            };
+            let split = pos[second.val];
+            split > lo + 1 and ranges_fits(first, lo + 1, split, voyage, pos, mut flipped) and ranges_fits(Some(second), split, hi, voyage, pos, mut flipped)
+        }
+        (Some(_), None) => ranges_fits(node.left, lo + 1, hi, voyage, pos, mut flipped),
+        (None, _) => ranges_fits(node.right, lo + 1, hi, voyage, pos, mut flipped),
+    }
+}
+
+fn ranges_flip_match_voyage(root: Option[TreeNode], voyage: Vec[i64]) -> Vec[i64] {
+    let n = voyage.len();
+    let mut pos = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        pos[voyage[i]] = i;
+    }
+    let mut flipped: Vec[i64] = Vec.new();
+    if ranges_fits(root, 0, n, voyage, pos, mut flipped) {
+        flipped
+    } else {
+        vec![-1]
+    }
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random permutation of 1..n, shuffled from the top down.
+fn random_permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        a.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i -= 1;
+    }
+    a
+}
+
+// A tree of the values in order, each new node hung below the root,
+// going left or right at random down to the first empty place.
+fn random_tree(vals: Vec[i64], seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for k in 1..vals.len() {
+        let node = TreeNode { val: vals[k], left: None, right: None };
+        let mut cur = root;
+        loop {
+            if next_random(mut seed) % 2 == 0 {
+                match cur.left {
+                    Some(l) => cur = l,
+                    None => {
+                        cur.left = Some(node);
+                        break;
+                    }
+                }
+            } else {
+                match cur.right {
+                    Some(r) => cur = r,
+                    None => {
+                        cur.right = Some(node);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// A preorder of the tree with each node's children taken in a random
+// order, so some flips reach it.
+fn random_voyage(t: ref Option[TreeNode], seed: mut ref i64, out: mut ref Vec[i64]) {
+    if let Some(node) = t {
+        out.push(node.val);
+        if next_random(mut seed) % 2 == 0 {
+            random_voyage(node.left, mut seed, mut out);
+            random_voyage(node.right, mut seed, mut out);
+        } else {
+            random_voyage(node.right, mut seed, mut out);
+            random_voyage(node.left, mut seed, mut out);
+        }
+    }
+}
+
+// A copy of the tree with the nodes whose values are marked flipped.
+fn flipped_copy(t: ref Option[TreeNode], mark: Vec[bool]) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => {
+            let l = flipped_copy(node.left, mark);
+            let r = flipped_copy(node.right, mark);
+            if mark[node.val] {
+                Some(TreeNode { val: node.val, left: r, right: l })
+            } else {
+                Some(TreeNode { val: node.val, left: l, right: r })
+            }
+        }
+    }
+}
+
+// The tree with every value v replaced by n + 1 - v.
+fn relabelled(t: ref Option[TreeNode], n: i64) -> Option[TreeNode] {
+    match t {
+        None => None,
+        Some(node) => Some(TreeNode { val: n + 1 - node.val, left: relabelled(node.left, n), right: relabelled(node.right, n) }),
+    }
+}
+
+fn read(t: ref Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(node) = t {
+        out.push(node.val);
+        read(node.left, mut out);
+        read(node.right, mut out);
+    }
+}
+
+// The values of the nodes with two children, ascending.
+fn forks(t: ref Option[TreeNode], n: i64) -> Vec[i64] {
+    let mut is_fork = Vec.filled(n + 1, false);
+    fork_marks(t, mut is_fork);
+    let mut out: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        if is_fork[v] {
+            out.push(v);
+        }
+    }
+    out
+}
+
+fn fork_marks(t: ref Option[TreeNode], marks: mut ref Vec[bool]) {
+    if let Some(node) = t {
+        if node.left.is_some() and node.right.is_some() {
+            marks[node.val] = true;
+        }
+        fork_marks(node.left, mut marks);
+        fork_marks(node.right, mut marks);
+    }
+}
+
+fn marks_of(vals: Vec[i64], n: i64) -> Vec[bool] {
+    let mut mark = Vec.filled(n + 1, false);
+    for v in vals {
+        mark[v] = true;
+    }
+    mark
+}
+
+// The statement read literally: every set of nodes, fewest first, each
+// flipped in a copy of the tree, until one reads as the voyage.
+fn literal(t: ref Option[TreeNode], n: i64, voyage: Vec[i64]) -> Vec[i64] {
+    for k in 0..n + 1 {
+        for set in 0..(1 << n) {
+            let mut chosen: Vec[i64] = Vec.new();
+            for b in 0..n {
+                if (set >> b) % 2 == 1 {
+                    chosen.push(b + 1);
+                }
+            }
+            if chosen.len() != k {
+                continue;
+            }
+            let mut seen: Vec[i64] = Vec.new();
+            read(flipped_copy(t, marks_of(chosen.clone(), n)), mut seen);
+            if seen == voyage {
+                return chosen;
+            }
+        }
+    }
+    vec![-1]
+}
+
+fn arm(k: i64, root: Option[TreeNode], voyage: Vec[i64]) -> Vec[i64] {
+    let mut got = if k == 0 {
+        star_flip_match_voyage(root, voyage)
+    } else if k == 1 {
+        stack_flip_match_voyage(root, voyage)
+    } else if k == 2 {
+        sizes_flip_match_voyage(root, voyage)
+    } else if k == 3 {
+        rebuild_flip_match_voyage(root, voyage)
+    } else {
+        ranges_flip_match_voyage(root, voyage)
+    };
+    got.sort();
+    got
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, root: Option[TreeNode], n: i64, voyage: Vec[i64], small: bool, seed: mut ref i64) -> Vec[i64] {
+    let truth = if small { literal(root, n, voyage) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, root, voyage));
+    }
+    let two = forks(root, n);
+    let is_fork = marks_of(two.clone(), n);
+    // the mirror image: every fork already flipped
+    let mirror = flipped_copy(root, is_fork.clone());
+    // the voyage relabelled v -> n + 1 - v
+    let mut voyage_r: Vec[i64] = Vec.new();
+    for v in voyage.clone() {
+        voyage_r.push(n + 1 - v);
+    }
+    let root_r = relabelled(root, n);
+    // a random set of forks, and the voyage that flipping them gives
+    let mut chosen: Vec[i64] = Vec.new();
+    for v in two.clone() {
+        if next_random(mut seed) % 2 == 0 {
+            chosen.push(v);
+        }
+    }
+    let mut reached: Vec[i64] = Vec.new();
+    read(flipped_copy(root, marks_of(chosen.clone(), n)), mut reached);
+    let mut plain: Vec[i64] = Vec.new();
+    read(root, mut plain);
+    for k in 0..5 {
+        let a = got[k].clone();
+        let fail = a == vec![-1];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: an answer other than [-1] names forks, each once, and the
+        // tree with them flipped reads as the voyage
+        let mut sound = true;
+        if not fail {
+            for i in 0..a.len() {
+                if a[i] < 1 or a[i] > n or not is_fork[a[i]] or (i > 0 and a[i] == a[i - 1]) {
+                    sound = false;
+                }
+            }
+            if sound {
+                let mut seen: Vec[i64] = Vec.new();
+                read(flipped_copy(root, marks_of(a.clone(), n)), mut seen);
+                sound = seen == voyage;
+            }
+        }
+        check(mut t, 2, sound);
+        // P3: the mirror image needs exactly the other forks flipped
+        let mut rest: Vec[i64] = Vec.new();
+        if fail {
+            rest.push(-1);
+        } else {
+            for v in two.clone() {
+                if not a.contains(v) {
+                    rest.push(v);
+                }
+            }
+        }
+        check(mut t, 3, arm(k, mirror, voyage) == rest);
+        // P4: relabelling every value v as n + 1 - v relabels the answer
+        let mut want: Vec[i64] = Vec.new();
+        for v in a.clone() {
+            want.push(if fail { -1 } else { n + 1 - v });
+        }
+        want.sort();
+        check(mut t, 4, arm(k, root_r, voyage_r.clone()) == want);
+        // P5: the tree's own preorder needs no flip, and the preorder after
+        // flipping a random set of forks needs exactly that set
+        check(mut t, 5, arm(k, root, plain.clone()).len() == 0 and arm(k, root, reached.clone()) == chosen);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 971;
+    let mut nodes = 0;
+    let mut matched = 0;
+    let mut flips = 0;
+    let mut check_sum = 0;
+    // 3000 random trees of up to 8 nodes, against the statement, then 200
+    // of up to 100; half with a voyage some flips reach, a quarter with
+    // two of its values swapped, and a quarter with a random order
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 100 };
+        let root = Some(random_tree(random_permutation(n, mut seed), mut seed));
+        nodes += n;
+        let mut voyage: Vec[i64] = Vec.new();
+        random_voyage(root, mut seed, mut voyage);
+        if c % 4 == 2 {
+            let i = next_random(mut seed) % n;
+            let j = next_random(mut seed) % n;
+            let s = voyage[i];
+            voyage[i] = voyage[j];
+            voyage[j] = s;
+        } else if c % 4 == 3 {
+            voyage = random_permutation(n, mut seed);
+        }
+        let a = properties(mut t, root, n, voyage, small, mut seed);
+        if a != vec![-1] {
+            matched += 1;
+            flips += a.len();
+        }
+        for v in a {
+            check_sum = (check_sum * 31 + v + 2) % 1000000007;
+        }
+        check_sum = (check_sum * 31 + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 trees of {nodes} nodes: {matched} matched with {flips} flips, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

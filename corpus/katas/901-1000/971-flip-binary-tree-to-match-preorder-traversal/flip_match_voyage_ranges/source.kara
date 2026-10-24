@@ -1,0 +1,251 @@
+// LeetCode #971: Flip Binary Tree To Match Preorder Traversal -- a stretch
+// of the voyage for each subtree.
+//
+// Each subtree must be one contiguous stretch voyage[lo..hi] that starts
+// with its root. Where each value sits in the voyage is looked up in a
+// table, so a node with two children splits its stretch at its second
+// child's place: the child at lo + 1 takes up to there and the other
+// takes the rest, and the node flips when the child at lo + 1 is its
+// right one. A node with one child hands it the whole rest, and a leaf's
+// stretch must be the leaf alone. O(n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn fits(t: ref Option[TreeNode], lo: i64, hi: i64, voyage: Vec[i64], pos: Vec[i64], flipped: mut ref Vec[i64]) -> bool {
+    let Some(node) = t else {
+        return lo == hi;
+    };
+    if lo >= hi or voyage[lo] != node.val {
+        return false;
+    }
+    match (node.left, node.right) {
+        (Some(l), Some(r)) => {
+            let (first, second) = if pos[l.val] == lo + 1 {
+                (node.left, r)
+            } else {
+                flipped.push(node.val);
+                (node.right, l)
+            };
+            let split = pos[second.val];
+            split > lo + 1 and fits(first, lo + 1, split, voyage, pos, mut flipped) and fits(Some(second), split, hi, voyage, pos, mut flipped)
+        }
+        (Some(_), None) => fits(node.left, lo + 1, hi, voyage, pos, mut flipped),
+        (None, _) => fits(node.right, lo + 1, hi, voyage, pos, mut flipped),
+    }
+}
+
+fn flip_match_voyage(root: Option[TreeNode], voyage: Vec[i64]) -> Vec[i64] {
+    let n = voyage.len();
+    let mut pos = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        pos[voyage[i]] = i;
+    }
+    let mut flipped: Vec[i64] = Vec.new();
+    if fits(root, 0, n, voyage, pos, mut flipped) {
+        flipped
+    } else {
+        vec![-1]
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A random permutation of 1..n, shuffled from the top down.
+fn random_permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        a.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i -= 1;
+    }
+    a
+}
+
+// A tree of the values in order, each new node hung below the root,
+// going left or right at random down to the first empty place.
+fn random_tree(vals: Vec[i64], seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for k in 1..vals.len() {
+        let node = TreeNode { val: vals[k], left: None, right: None };
+        let mut cur = root;
+        loop {
+            if next_random(mut seed) % 2 == 0 {
+                match cur.left {
+                    Some(l) => cur = l,
+                    None => {
+                        cur.left = Some(node);
+                        break;
+                    }
+                }
+            } else {
+                match cur.right {
+                    Some(r) => cur = r,
+                    None => {
+                        cur.right = Some(node);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// A preorder of the tree with each node's children taken in a random
+// order, so some flips reach it.
+fn random_voyage(t: ref Option[TreeNode], seed: mut ref i64, out: mut ref Vec[i64]) {
+    if let Some(node) = t {
+        out.push(node.val);
+        if next_random(mut seed) % 2 == 0 {
+            random_voyage(node.left, mut seed, mut out);
+            random_voyage(node.right, mut seed, mut out);
+        } else {
+            random_voyage(node.right, mut seed, mut out);
+            random_voyage(node.left, mut seed, mut out);
+        }
+    }
+}
+
+fn show(v: Vec[i64]) -> String {
+    let mut s = String.from("[");
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more, each answer sorted
+    let cases: Vec[(Vec[Option[i64]], Vec[i64])] = vec![
+        (vec![Some(1), Some(2)], vec![2, 1]),
+        (vec![Some(1), Some(2), Some(3)], vec![1, 3, 2]),
+        (vec![Some(1), Some(2), Some(3)], vec![1, 2, 3]),
+        (vec![Some(1)], vec![1]),
+        (vec![Some(1), None, Some(2)], vec![1, 2]),
+        (vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)], vec![1, 3, 7, 6, 2, 5, 4]),
+        (vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)], vec![1, 3, 6, 7, 2, 4, 5]),
+        (vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)], vec![1, 2, 4, 3, 5, 6, 7]),
+        (vec![Some(2), Some(1), None, Some(4), Some(3)], vec![2, 1, 3, 4]),
+        (vec![Some(1), Some(2), None, Some(3)], vec![1, 3, 2]),
+    ];
+    for (tree, voyage) in cases {
+        let mut got = flip_match_voyage(from_level_order(tree), voyage);
+        got.sort();
+        println(f"voyage {show(voyage)}: {show(got)}");
+    }
+    // 300 random trees of 1 to 12 nodes: half with a voyage some flips
+    // reach, a quarter with two of its values swapped, and a quarter with
+    // a random order
+    let mut seed = 971;
+    let mut nodes = 0;
+    let mut matched = 0;
+    let mut flips = 0;
+    let mut check = 0;
+    for c in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let root = Some(random_tree(random_permutation(n, mut seed), mut seed));
+        nodes += n;
+        let mut voyage: Vec[i64] = Vec.new();
+        random_voyage(root, mut seed, mut voyage);
+        if c % 4 == 2 {
+            let i = next_random(mut seed) % n;
+            let j = next_random(mut seed) % n;
+            let t = voyage[i];
+            voyage[i] = voyage[j];
+            voyage[j] = t;
+        } else if c % 4 == 3 {
+            voyage = random_permutation(n, mut seed);
+        }
+        let mut got = flip_match_voyage(root, voyage);
+        got.sort();
+        if got != vec![-1] {
+            matched += 1;
+            flips += got.len();
+        }
+        for v in got {
+            check = (check * 31 + v + 2) % 1000000007;
+        }
+        check = (check * 31 + 1) % 1000000007;
+    }
+    println(f"300 random trees of {nodes} nodes: {matched} matched with {flips} flips, checksum {check}");
+    // LeetCode's largest, 100 nodes: a random tree with a voyage that
+    // matches, the same voyage with its last two values swapped, and the
+    // complete tree read with every node flipped
+    let root = Some(random_tree(random_permutation(100, mut seed), mut seed));
+    let mut voyage: Vec[i64] = Vec.new();
+    random_voyage(root, mut seed, mut voyage);
+    let mut got = flip_match_voyage(root, voyage);
+    got.sort();
+    println(f"a random tree of 100 nodes: {got.len()} flips, {show(got)}");
+    let t = voyage[98];
+    voyage[98] = voyage[99];
+    voyage[99] = t;
+    println(f"the same with its last two swapped: {show(flip_match_voyage(root, voyage))}");
+    let mut level: Vec[Option[i64]] = Vec.new();
+    for v in 1..101 {
+        level.push(Some(v));
+    }
+    let complete = from_level_order(level);
+    let mut mirror: Vec[i64] = Vec.new();
+    mirrored(complete, mut mirror);
+    let mut all = flip_match_voyage(complete, mirror);
+    all.sort();
+    println(f"the complete tree of 100 nodes read mirrored: {all.len()} flips, the first {all[0]} and the last {all[all.len() - 1]}");
+}
+
+// The preorder of the mirror image: right child first everywhere.
+fn mirrored(t: ref Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(node) = t {
+        out.push(node.val);
+        mirrored(node.right, mut out);
+        mirrored(node.left, mut out);
+    }
+}

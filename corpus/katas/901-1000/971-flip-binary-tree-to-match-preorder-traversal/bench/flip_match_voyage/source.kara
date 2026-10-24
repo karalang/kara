@@ -1,0 +1,139 @@
+// Benchmark: LeetCode #971 Flip Binary Tree To Match Preorder Traversal
+// -- the ★ arm, one walk flipping where the voyage says, on 200 random
+// trees of 100 nodes. Mirrors flip_match_voyage.c, .rs, .py and go-seq/.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn walk(t: ref Option[TreeNode], voyage: Vec[i64], i: mut ref i64, flipped: mut ref Vec[i64]) -> bool {
+    match t {
+        None => true,
+        Some(node) => {
+            if node.val != voyage[*i] {
+                return false;
+            }
+            *i += 1;
+            let wrong_left = match node.left {
+                Some(l) => l.val != voyage[*i],
+                None => false,
+            };
+            if wrong_left {
+                flipped.push(node.val);
+                walk(node.right, voyage, mut i, mut flipped) and walk(node.left, voyage, mut i, mut flipped)
+            } else {
+                walk(node.left, voyage, mut i, mut flipped) and walk(node.right, voyage, mut i, mut flipped)
+            }
+        }
+    }
+}
+
+fn flip_match_voyage(root: Option[TreeNode], voyage: Vec[i64]) -> Vec[i64] {
+    let mut i = 0;
+    let mut flipped: Vec[i64] = Vec.new();
+    if walk(root, voyage, mut i, mut flipped) {
+        flipped
+    } else {
+        vec![-1]
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        a.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i -= 1;
+    }
+    a
+}
+
+fn random_tree(vals: Vec[i64], seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for k in 1..vals.len() {
+        let node = TreeNode { val: vals[k], left: None, right: None };
+        let mut cur = root;
+        loop {
+            if next_random(mut seed) % 2 == 0 {
+                match cur.left {
+                    Some(l) => cur = l,
+                    None => {
+                        cur.left = Some(node);
+                        break;
+                    }
+                }
+            } else {
+                match cur.right {
+                    Some(r) => cur = r,
+                    None => {
+                        cur.right = Some(node);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+fn random_voyage(t: ref Option[TreeNode], seed: mut ref i64, out: mut ref Vec[i64]) {
+    if let Some(node) = t {
+        out.push(node.val);
+        if next_random(mut seed) % 2 == 0 {
+            random_voyage(node.left, mut seed, mut out);
+            random_voyage(node.right, mut seed, mut out);
+        } else {
+            random_voyage(node.right, mut seed, mut out);
+            random_voyage(node.left, mut seed, mut out);
+        }
+    }
+}
+
+fn main() {
+    let rounds = 1000;
+    let count = 200;
+    let mut seed = 971;
+    // every fourth voyage has two of its values swapped, so most of
+    // those fail part way
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    let mut voyages: Vec[Vec[i64]] = Vec.new();
+    for c in 0..count {
+        let root = Some(random_tree(random_permutation(100, mut seed), mut seed));
+        let mut voyage: Vec[i64] = Vec.new();
+        random_voyage(root, mut seed, mut voyage);
+        if c % 4 == 3 {
+            let i = next_random(mut seed) % 100;
+            let j = next_random(mut seed) % 100;
+            let t = voyage[i];
+            voyage[i] = voyage[j];
+            voyage[j] = t;
+        }
+        trees.push(root);
+        voyages.push(voyage);
+    }
+    let mut flips = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for s in 0..count {
+            let c = (r + s) % count;
+            for v in flip_match_voyage(trees[c], voyages[c]) {
+                flips += 1;
+                check = (check * 31 + v + 2) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over {count} trees of 100 nodes: {flips} values, checksum {check}");
+}
