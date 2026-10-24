@@ -1,0 +1,479 @@
+// LeetCode #981: Time Based Key-Value Store -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random sessions of sets and gets.
+
+// ---- star ----
+
+struct StarTimeMap {
+    store: Map[String, Vec[(i64, String)]],
+}
+
+impl StarTimeMap {
+    fn new() -> StarTimeMap {
+        StarTimeMap { store: Map.new() }
+    }
+
+    fn set(mut ref self, key: own String, value: own String, timestamp: i64) {
+        self.store.entry(key).or_insert_with(Vec.new).push((timestamp, value));
+    }
+
+    fn get(self, key: String, timestamp: i64) -> String {
+        let Some(list) = self.store.get(key) else {
+            return String.new();
+        };
+        // the first place whose timestamp is after the one asked
+        let mut lo = 0;
+        let mut hi = list.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if list[mid].0 <= timestamp {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo == 0 {
+            String.new()
+        } else {
+            list[lo - 1].1.clone()
+        }
+    }
+}
+
+fn star_run(ops: ref Vec[Op], names: ref Vec[String], extra: ref Vec[(i64, i64)]) -> Vec[String] {
+    let mut tm = StarTimeMap.new();
+    let mut answers: Vec[String] = Vec.new();
+    for op in ops {
+        if op.set {
+            tm.set(names[op.key].clone(), op.value.clone(), op.t);
+        } else {
+            answers.push(tm.get(names[op.key], op.t));
+        }
+    }
+    for (k, t) in extra {
+        answers.push(tm.get(names[k], t));
+    }
+    answers
+}
+
+// ---- sorted ----
+
+struct SortedTimeMap {
+    store: Map[String, SortedMap[i64, String]],
+}
+
+impl SortedTimeMap {
+    fn new() -> SortedTimeMap {
+        SortedTimeMap { store: Map.new() }
+    }
+
+    fn set(mut ref self, key: own String, value: own String, timestamp: i64) {
+        self.store.entry(key).or_insert_with(SortedMap.new).insert(timestamp, value);
+    }
+
+    fn get(self, key: String, timestamp: i64) -> String {
+        let Some(times) = self.store.get(key) else {
+            return String.new();
+        };
+        match times.floor(timestamp) {
+            Some((_, value)) => value.clone(),
+            None => String.new(),
+        }
+    }
+}
+
+fn sorted_run(ops: ref Vec[Op], names: ref Vec[String], extra: ref Vec[(i64, i64)]) -> Vec[String] {
+    let mut tm = SortedTimeMap.new();
+    let mut answers: Vec[String] = Vec.new();
+    for op in ops {
+        if op.set {
+            tm.set(names[op.key].clone(), op.value.clone(), op.t);
+        } else {
+            answers.push(tm.get(names[op.key], op.t));
+        }
+    }
+    for (k, t) in extra {
+        answers.push(tm.get(names[k], t));
+    }
+    answers
+}
+
+// ---- scan ----
+
+struct ScanTimeMap {
+    store: Map[String, Vec[(i64, String)]],
+}
+
+impl ScanTimeMap {
+    fn new() -> ScanTimeMap {
+        ScanTimeMap { store: Map.new() }
+    }
+
+    fn set(mut ref self, key: own String, value: own String, timestamp: i64) {
+        self.store.entry(key).or_insert_with(Vec.new).push((timestamp, value));
+    }
+
+    fn get(self, key: String, timestamp: i64) -> String {
+        let Some(list) = self.store.get(key) else {
+            return String.new();
+        };
+        let mut i = list.len();
+        while i > 0 {
+            i -= 1;
+            if list[i].0 <= timestamp {
+                return list[i].1.clone();
+            }
+        }
+        String.new()
+    }
+}
+
+fn scan_run(ops: ref Vec[Op], names: ref Vec[String], extra: ref Vec[(i64, i64)]) -> Vec[String] {
+    let mut tm = ScanTimeMap.new();
+    let mut answers: Vec[String] = Vec.new();
+    for op in ops {
+        if op.set {
+            tm.set(names[op.key].clone(), op.value.clone(), op.t);
+        } else {
+            answers.push(tm.get(names[op.key], op.t));
+        }
+    }
+    for (k, t) in extra {
+        answers.push(tm.get(names[k], t));
+    }
+    answers
+}
+
+// ---- pairs ----
+
+struct PairsTimeMap {
+    store: SortedMap[(String, i64), String],
+}
+
+impl PairsTimeMap {
+    fn new() -> PairsTimeMap {
+        PairsTimeMap { store: SortedMap.new() }
+    }
+
+    fn set(mut ref self, key: own String, value: own String, timestamp: i64) {
+        self.store.insert((key, timestamp), value);
+    }
+
+    fn get(self, key: String, timestamp: i64) -> String {
+        match self.store.floor((key.clone(), timestamp)) {
+            Some((at, value)) if at.0 == key => value.clone(),
+            _ => String.new(),
+        }
+    }
+}
+
+fn pairs_run(ops: ref Vec[Op], names: ref Vec[String], extra: ref Vec[(i64, i64)]) -> Vec[String] {
+    let mut tm = PairsTimeMap.new();
+    let mut answers: Vec[String] = Vec.new();
+    for op in ops {
+        if op.set {
+            tm.set(names[op.key].clone(), op.value.clone(), op.t);
+        } else {
+            answers.push(tm.get(names[op.key], op.t));
+        }
+    }
+    for (k, t) in extra {
+        answers.push(tm.get(names[k], t));
+    }
+    answers
+}
+
+// ---- log ----
+
+struct LogTimeMap {
+    log: Vec[(String, i64, String)],
+}
+
+impl LogTimeMap {
+    fn new() -> LogTimeMap {
+        LogTimeMap { log: Vec.new() }
+    }
+
+    fn set(mut ref self, key: own String, value: own String, timestamp: i64) {
+        self.log.push((key, timestamp, value));
+    }
+
+    fn get(self, key: String, timestamp: i64) -> String {
+        let mut best = -1;
+        let mut found = String.new();
+        for (k, t, v) in self.log {
+            if k == key and t <= timestamp and t > best {
+                best = t;
+                found = v.clone();
+            }
+        }
+        found
+    }
+}
+
+fn log_run(ops: ref Vec[Op], names: ref Vec[String], extra: ref Vec[(i64, i64)]) -> Vec[String] {
+    let mut tm = LogTimeMap.new();
+    let mut answers: Vec[String] = Vec.new();
+    for op in ops {
+        if op.set {
+            tm.set(names[op.key].clone(), op.value.clone(), op.t);
+        } else {
+            answers.push(tm.get(names[op.key], op.t));
+        }
+    }
+    for (k, t) in extra {
+        answers.push(tm.get(names[k], t));
+    }
+    answers
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// One call: a set of `value` at `t`, or a get at `t`, on key number
+// `key`; `now` is the last set's timestamp when the call is made.
+struct Op {
+    set: bool,
+    key: i64,
+    value: String,
+    t: i64,
+    now: i64,
+}
+
+fn copy_op(op: ref Op) -> Op {
+    Op { set: op.set, key: op.key, value: op.value.clone(), t: op.t, now: op.now }
+}
+
+// `n` calls on `keys` keys, each a set with chance `sets` in 4: a set's
+// timestamp is 1 to `gap` past the last, as LeetCode's only grow, and its
+// value names it; a get asks a random time up to 3 past the last set.
+fn random_session(n: i64, keys: i64, gap: i64, sets: i64, seed: mut ref i64) -> Vec[Op] {
+    let words = vec!["bar", "high", "low", "x", "v"];
+    let mut ops: Vec[Op] = Vec.new();
+    let mut now = 0;
+    for _ in 0..n {
+        let key = next_random(mut seed) % keys;
+        if next_random(mut seed) % 4 < sets {
+            now += 1 + next_random(mut seed) % gap;
+            let value = f"{words[next_random(mut seed) % words.len()]}{now}";
+            ops.push(Op { set: true, key: key, value: value, t: now, now: now });
+        } else {
+            let t = 1 + next_random(mut seed) % (now + 3);
+            ops.push(Op { set: false, key: key, value: String.new(), t: t, now: now });
+        }
+    }
+    ops
+}
+
+// The statement read literally: a get returns the value set for its key
+// with the largest timestamp_prev <= timestamp, or "" when there is
+// none, so every time from the one asked down to 1 is tried in turn
+// against every set so far.
+fn literal(ops: ref Vec[Op], names: ref Vec[String]) -> Vec[String] {
+    let mut done: Vec[(String, i64, String)] = Vec.new();
+    let mut answers: Vec[String] = Vec.new();
+    for op in ops {
+        if op.set {
+            done.push((names[op.key].clone(), op.t, op.value.clone()));
+            continue;
+        }
+        let mut answer = String.new();
+        let mut prev = op.t;
+        while prev >= 1 and answer.len() == 0 {
+            for (key, t, value) in done {
+                if key == names[op.key] and t == prev {
+                    answer = value.clone();
+                }
+            }
+            prev -= 1;
+        }
+        answers.push(answer);
+    }
+    answers
+}
+
+fn arm(a: i64, ops: ref Vec[Op], names: ref Vec[String], extra: ref Vec[(i64, i64)]) -> Vec[String] {
+    if a == 0 {
+        star_run(ops, names, extra)
+    } else if a == 1 {
+        sorted_run(ops, names, extra)
+    } else if a == 2 {
+        scan_run(ops, names, extra)
+    } else if a == 3 {
+        pairs_run(ops, names, extra)
+    } else {
+        log_run(ops, names, extra)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, ops: ref Vec[Op], keys: i64, small: bool, seed: mut ref i64) -> Vec[String] {
+    let names: Vec[String] = vec!["foo", "bar", "love", "high", "low", "k", "key2", "zz"].iter().map(|s| s.to_string()).collect();
+    let none: Vec[(i64, i64)] = Vec.new();
+    let truth = if small { literal(ops, names) } else { Vec.new() };
+    let mut got: Vec[Vec[String]] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, ops, names, none));
+    }
+    // the keys renamed, by a random permutation of other names that sort
+    // in a different order, some a prefix of another
+    let mut renamed: Vec[String] = vec!["a", "ab", "b", "zz", "k", "foo2", "key", "9"].iter().map(|s| s.to_string()).collect();
+    for i in 1..renamed.len() {
+        let j = next_random(mut seed) % (i + 1);
+        renamed.swap(i, j);
+    }
+    // every get asked again at the end, at its own time or, when that is
+    // past the last set before it, at that set's time
+    let mut again: Vec[(i64, i64)] = Vec.new();
+    // every set asked for at the end at its own time, and every key one
+    // tick before its first set
+    let mut exact: Vec[(i64, i64)] = Vec.new();
+    let mut expect: Vec[String] = Vec.new();
+    let mut first = vec![false; 8];
+    for op in ops {
+        if op.set {
+            exact.push((op.key, op.t));
+            expect.push(op.value.clone());
+            if not first[op.key] and op.t > 1 {
+                exact.push((op.key, op.t - 1));
+                expect.push(String.new());
+            }
+            first[op.key] = true;
+        } else {
+            again.push((op.key, if op.t < op.now { op.t } else { op.now }));
+        }
+    }
+    // each key's calls alone, in order
+    let mut apart: Vec[Vec[Op]] = Vec.new();
+    for k in 0..keys {
+        let mut alone: Vec[Op] = Vec.new();
+        for op in ops {
+            if op.key == k {
+                alone.push(copy_op(op));
+            }
+        }
+        apart.push(alone);
+    }
+    for a in 0..5 {
+        let p = got[a].clone();
+        // P1: the statement's answer, on the first 3000 sessions
+        if small {
+            check(mut tally, 1, p == truth);
+        }
+        // P2: the keys renamed give the same answers
+        check(mut tally, 2, arm(a, ops, renamed, none) == p);
+        // P3: later sets never change an earlier answer
+        let late = arm(a, ops, names, again);
+        let mut same = late.len() == 2 * p.len();
+        for i in 0..p.len() {
+            if same and late[p.len() + i] != p[i] {
+                same = false;
+            }
+        }
+        check(mut tally, 3, same);
+        // P4: each key's calls alone give that key's answers
+        let mut alone: Vec[Vec[String]] = Vec.new();
+        for k in 0..keys {
+            alone.push(arm(a, apart[k], names, none));
+        }
+        let mut next = vec![0; 8];
+        let mut i = 0;
+        let mut ok = true;
+        for op in ops {
+            if not op.set {
+                let k = op.key;
+                if next[k] >= alone[k].len() or alone[k][next[k]] != p[i] {
+                    ok = false;
+                } else {
+                    next[k] += 1;
+                }
+                i += 1;
+            }
+        }
+        check(mut tally, 4, ok);
+        // P5: every set's value found at its own time, nothing before a
+        // key's first set
+        let hits = arm(a, ops, names, exact);
+        let mut found = hits.len() == p.len() + expect.len();
+        for j in 0..expect.len() {
+            if found and hits[p.len() + j] != expect[j] {
+                found = false;
+            }
+        }
+        check(mut tally, 5, found);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == p {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn fold(check: i64, s: ref String) -> i64 {
+    let mut h = (check * 131 + s.len()) % 1000000007;
+    for b in s.bytes() {
+        h = (h * 131 + b as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 981;
+    let mut calls = 0;
+    let mut gets = 0;
+    let mut found = 0;
+    let mut check_sum = 0;
+    // 3000 sessions of up to 30 calls on up to 3 keys against the
+    // statement, then 200 of 300 calls on up to 8; sets come one, two or
+    // three times in four by turns, and timestamps step by 1, up to 3 or
+    // up to 20 (up to 1000 in the long sessions)
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 30 } else { 300 };
+        let keys = 1 + next_random(mut seed) % (if small { 3 } else { 8 });
+        let gap = if c % 3 == 0 { 1 } else if c % 3 == 1 { 3 } else if small { 20 } else { 1000 };
+        let ops = random_session(n, keys, gap, 1 + c % 3, mut seed);
+        let got = properties(mut tally, ops, keys, small, mut seed);
+        calls += n;
+        for answer in got {
+            gets += 1;
+            if answer.len() > 0 {
+                found += 1;
+            }
+            check_sum = fold(check_sum, answer);
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 sessions of {calls} calls: {gets} gets, {found} values found, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

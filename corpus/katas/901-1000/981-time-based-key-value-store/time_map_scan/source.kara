@@ -1,0 +1,114 @@
+// LeetCode #981: Time Based Key-Value Store -- a list per key, scanned
+// back.
+//
+// The same lists as the binary search, but a get walks its key's list
+// from the newest pair back to the first whose timestamp is at or
+// before the one asked. O(1) set, O(n) get.
+
+struct TimeMap {
+    store: Map[String, Vec[(i64, String)]],
+}
+
+impl TimeMap {
+    fn new() -> TimeMap {
+        TimeMap { store: Map.new() }
+    }
+
+    fn set(mut ref self, key: own String, value: own String, timestamp: i64) {
+        self.store.entry(key).or_insert_with(Vec.new).push((timestamp, value));
+    }
+
+    fn get(self, key: String, timestamp: i64) -> String {
+        let Some(list) = self.store.get(key) else {
+            return String.new();
+        };
+        let mut i = list.len();
+        while i > 0 {
+            i -= 1;
+            if list[i].0 <= timestamp {
+                return list[i].1.clone();
+            }
+        }
+        String.new()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn fold(check: i64, s: ref String) -> i64 {
+    let mut h = (check * 131 + s.len()) % 1000000007;
+    for b in s.bytes() {
+        h = (h * 131 + b as i64) % 1000000007;
+    }
+    h
+}
+
+// `ops` random operations on `keys` keys, a set or a get by turns of a
+// coin: each set's timestamp is 1 to 3 past the last, as LeetCode
+// requires, and each get asks a random time up to 3 past the last set.
+// Returns the gets that found a value and a checksum of every answer.
+fn session(ops: i64, keys: i64, seed: mut ref i64) -> (i64, i64) {
+    let names = vec!["foo", "bar", "love", "high", "low", "k", "key2", "zz"];
+    let words = vec!["bar", "bar2", "high", "low", "x", "", "v"];
+    let mut tm = TimeMap.new();
+    let mut now = 0;
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..ops {
+        let key = names[next_random(mut seed) % keys].to_string();
+        if next_random(mut seed) % 2 == 0 {
+            now += 1 + next_random(mut seed) % 3;
+            let value = f"{words[next_random(mut seed) % words.len()]}{now % 7}";
+            tm.set(key, value, now);
+        } else {
+            let t = 1 + next_random(mut seed) % (now + 3);
+            let got = tm.get(key, t);
+            if got.len() > 0 {
+                found += 1;
+            }
+            check = fold(check, got);
+        }
+    }
+    (found, check)
+}
+
+fn main() {
+    // LeetCode's example
+    let mut tm = TimeMap.new();
+    tm.set("foo".to_string(), "bar".to_string(), 1);
+    println(f"get(foo, 1) = {tm.get("foo".to_string(), 1)}");
+    println(f"get(foo, 3) = {tm.get("foo".to_string(), 3)}");
+    tm.set("foo".to_string(), "bar2".to_string(), 4);
+    println(f"get(foo, 4) = {tm.get("foo".to_string(), 4)}");
+    println(f"get(foo, 5) = {tm.get("foo".to_string(), 5)}");
+    // a few more: before the first set, an unknown key, two keys apart
+    println(f"get(foo, 0) = [{tm.get("foo".to_string(), 0)}]");
+    println(f"get(bar, 9) = [{tm.get("bar".to_string(), 9)}]");
+    tm.set("love".to_string(), "high".to_string(), 10);
+    tm.set("love".to_string(), "low".to_string(), 20);
+    println(f"get(love, 5) = [{tm.get("love".to_string(), 5)}]");
+    println(f"get(love, 10) = {tm.get("love".to_string(), 10)}");
+    println(f"get(love, 15) = {tm.get("love".to_string(), 15)}");
+    println(f"get(love, 20) = {tm.get("love".to_string(), 20)}");
+    println(f"get(love, 25) = {tm.get("love".to_string(), 25)}");
+    println(f"get(foo, 25) = {tm.get("foo".to_string(), 25)}");
+    // random sessions: 300 short ones on 2 keys, 3000 on up to 8, then 4
+    // long ones on up to 8
+    let mut seed = 981;
+    for (count, ops) in vec![(300, 12), (3000, 60), (4, 3000)] {
+        let mut found = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let keys = if count == 300 { 2 } else { 1 + next_random(mut seed) % 8 };
+            let (f, c) = session(ops, keys, mut seed);
+            found += f;
+            check = (check * 31 + c) % 1000000007;
+        }
+        println(f"{count} random sessions of {ops} operations: {found} values found, checksum {check}");
+    }
+}

@@ -1,0 +1,15 @@
+get(foo, 1) = bar
+get(foo, 3) = bar
+get(foo, 4) = bar2
+get(foo, 5) = bar2
+get(foo, 0) = []
+get(bar, 9) = []
+get(love, 5) = []
+get(love, 10) = high
+get(love, 15) = high
+get(love, 20) = low
+get(love, 25) = low
+get(foo, 25) = bar2
+300 random sessions of 12 operations: 926 values found, checksum 254102817
+3000 random sessions of 60 operations: 62509 values found, checksum 686030239
+4 random sessions of 3000 operations: 5929 values found, checksum 216181895
