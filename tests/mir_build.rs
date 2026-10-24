@@ -9143,3 +9143,56 @@ fn main() {
         }
     }
 }
+
+/// A reference read through a borrowed struct's `mut ref` field keeps that
+/// field's loan live, whether or not the struct is used again: changing
+/// the place it borrows while the reference is live is refused, by
+/// `karac check` and by the MIR pipeline (B-2026-10-24-5). Was a
+/// use-after-free.
+#[test]
+fn mir_a_ref_read_through_a_borrowed_holder_keeps_its_loan() {
+    let holder = r#"struct Own { v: Vec[i64] }
+struct Lend { o: mut ref Own }
+impl Own {
+    fn lend(mut ref self) -> Lend { Lend { o: self } }
+}
+impl Lend {
+    fn first(ref self) -> ref i64 { self.o.v.get(0).unwrap() }
+}
+fn main() {
+    let mut o = Own { v: vec![1, 2, 3] };
+    let l = o.lend();
+    let x = l.first();
+"#;
+    let bad = format!("{holder}    o.v.push(4);\n    println(f\"{{*x}}\");\n}}\n");
+    let good = format!(
+        "{holder}    println(f\"{{*x}}\");\n    o.v.push(4);\n    println(f\"{{o.v.len()}}\");\n}}\n"
+    );
+    let err = karac::mir::lower::run_source(&bad).expect_err("refused");
+    assert!(err.contains("13:5") && err.contains("E0516"), "{err}");
+    let interp = karac::mir::lower::run_source(&good).expect("MIR interpreter");
+    assert_eq!(interp.output, "1\n4\n", "__mir-run");
+    for opt in 0..=3 {
+        if let Some(out) = build_and_run(&good, opt) {
+            assert_eq!(out, "1\n4\n", "at -O{opt}");
+        }
+    }
+    let dir = Scratch::new();
+    for (name, text, ok) in [("bad.kara", &bad, false), ("good.kara", &good, true)] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .arg("check")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.success(), ok, "{name}: {stderr}");
+        if !ok {
+            assert!(
+                stderr.contains(":13:5:") && stderr.contains("[E0516]"),
+                "{name}: {stderr}"
+            );
+        }
+    }
+}

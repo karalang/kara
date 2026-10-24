@@ -173,11 +173,28 @@ impl Origins {
         changed
     }
 
-    /// The loans some local of `live` may hold.
-    fn live_loans(&self, live: &[Local]) -> LoanSet {
+    /// The loans some local of `live` may hold, and the loans a borrowed
+    /// local holds while a borrow of it is live: a reference to a `Lend`
+    /// that holds `mut ref o` reads `o` through it, whether or not the
+    /// `Lend` itself is used again (B-2026-10-24-5).
+    fn live_loans(&self, live: &[Local], loans: &[Loan]) -> LoanSet {
         let mut out = LoanSet::default();
         for l in live {
             out.union(self.get(*l));
+        }
+        let mut work: Vec<usize> = out.iter().collect();
+        while let Some(li) = work.pop() {
+            let place = &loans[li].place;
+            // A reborrow through `r` (`&(*r).f`) already holds `r`'s loans
+            // itself: `transfer` adds them at the `Ref`.
+            if place.projection.contains(&ProjElem::Deref) {
+                continue;
+            }
+            for held in self.get(place.local).iter() {
+                if out.insert(held) {
+                    work.push(held);
+                }
+            }
         }
         out
     }
@@ -317,7 +334,7 @@ pub fn borrow_errors(
             let live_loans = if accesses.is_empty() {
                 LoanSet::default()
             } else {
-                o.live_loans(live)
+                o.live_loans(live, &loans)
             };
             for (place, access) in accesses {
                 for li in live_loans.iter() {
@@ -477,7 +494,7 @@ pub(super) fn loan_liveness(
         let mut points = Vec::with_capacity(n + 1);
         for (si, live) in live_before.iter().enumerate() {
             let mut point = vec![false; loans.len()];
-            for li in o.live_loans(live).iter() {
+            for li in o.live_loans(live, &loans).iter() {
                 point[li] = true;
             }
             points.push(point);
