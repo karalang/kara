@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/983-minimum-cost-for-tickets/bench/mincost_tickets.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "395f71ae0"
+extracted_src = "8da674d9"

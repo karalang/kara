@@ -1,0 +1,107 @@
+// LeetCode #983: Minimum Cost For Tickets -- forward choices, memoised.
+//
+// From the i-th travel day on, the cheapest plan buys some pass on that
+// day and then the cheapest plan from the first travel day the pass does
+// not cover, found by binary search. Each start is solved once and kept.
+// O(n log n).
+
+fn first_after(days: ref Vec[i64], day: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = days.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if days[mid] < day {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn cheapest_from(i: i64, days: ref Vec[i64], costs: ref Vec[i64], memo: mut ref Vec[i64]) -> i64 {
+    if i == days.len() {
+        return 0;
+    }
+    if memo[i] >= 0 {
+        return memo[i];
+    }
+    let lengths = vec![1, 7, 30];
+    let mut least = -1;
+    for k in 0..3 {
+        let next = first_after(days, days[i] + lengths[k]);
+        let total = costs[k] + cheapest_from(next, days, costs, mut memo);
+        if least < 0 or total < least {
+            least = total;
+        }
+    }
+    memo[i] = least;
+    least
+}
+
+fn mincost_tickets(days: Vec[i64], costs: Vec[i64]) -> i64 {
+    let mut memo: Vec[i64] = Vec.filled(days.len(), -1);
+    cheapest_from(0, days, costs, mut memo)
+}
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(days: Vec[i64], costs: Vec[i64]) {
+    let shown = if days.len() > 12 { f"{days[0]} to {days[days.len() - 1]} ({days.len()} days)" } else { f"{days}" };
+    println(f"days {shown}, costs {costs} -> {mincost_tickets(days, costs)}");
+}
+
+// `n` distinct days from 1 to `span`, in order: each day is kept with
+// chance n / span, as long as days are needed.
+fn random_days(n: i64, span: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut days: Vec[i64] = Vec.new();
+    let mut need = n;
+    for d in 1..span + 1 {
+        if need > 0 and next_random(mut seed) % (span - d + 1) < need {
+            days.push(d);
+            need -= 1;
+        }
+    }
+    days
+}
+
+fn main() {
+    // LeetCode's examples
+    show(vec![1, 4, 6, 7, 8, 20], vec![2, 7, 15]);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 30, 31], vec![2, 7, 15]);
+    // a few more: one day, the last day of the year, a week pass cheaper
+    // than a day pass, a month pass cheapest of all, days 7 and 30 apart,
+    // the whole year
+    show(vec![1], vec![2, 7, 15]);
+    show(vec![365], vec![9, 4, 20]);
+    show(vec![1, 3, 5], vec![7, 2, 15]);
+    show(vec![1, 2, 3, 4, 5], vec![2, 7, 1]);
+    show(vec![1, 8, 15, 22], vec![3, 3, 9]);
+    show(vec![1, 31, 61], vec![20, 30, 5]);
+    let mut year: Vec[i64] = Vec.new();
+    for d in 1..366 {
+        year.push(d);
+    }
+    show(year.clone(), vec![2, 7, 15]);
+    show(year, vec![1000, 1000, 1]);
+    // random plans: 300 of up to 12 days within 40, 3000 of up to 60 days
+    // within the year, then 4 of up to LeetCode's 365
+    let mut seed = 983;
+    for (count, most, span, top) in vec![(300, 12, 40, 20), (3000, 60, 365, 100), (4, 365, 365, 1000)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = 1 + next_random(mut seed) % most;
+            let days = random_days(n, span, mut seed);
+            let costs = vec![1 + next_random(mut seed) % top, 1 + next_random(mut seed) % top, 1 + next_random(mut seed) % top];
+            let c = mincost_tickets(days, costs);
+            total += c;
+            check = (check * 31 + c) % 1000000007;
+        }
+        println(f"{count} random plans of up to {most} days within {span}: cost {total}, checksum {check}");
+    }
+}

@@ -1,0 +1,330 @@
+// LeetCode #983: Minimum Cost For Tickets -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random travel plans.
+
+// ---- star ----
+
+fn star_mincost_tickets(days: Vec[i64], costs: Vec[i64]) -> i64 {
+    let last = days[days.len() - 1];
+    let mut travel: Vec[bool] = Vec.filled(last + 1, false);
+    for d in days {
+        travel[d] = true;
+    }
+    let mut best: Vec[i64] = Vec.filled(last + 1, 0);
+    for d in 1..last + 1 {
+        if not travel[d] {
+            best[d] = best[d - 1];
+            continue;
+        }
+        let week = if d >= 7 { best[d - 7] } else { 0 };
+        let month = if d >= 30 { best[d - 30] } else { 0 };
+        best[d] = (best[d - 1] + costs[0]).min(week + costs[1]).min(month + costs[2]);
+    }
+    best[last]
+}
+
+// ---- windows ----
+
+fn windows_mincost_tickets(days: Vec[i64], costs: Vec[i64]) -> i64 {
+    let n = days.len();
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut week = 0;
+    let mut month = 0;
+    for i in 0..n {
+        while days[week] <= days[i] - 7 {
+            week += 1;
+        }
+        while days[month] <= days[i] - 30 {
+            month += 1;
+        }
+        best[i + 1] = (best[i] + costs[0]).min(best[week] + costs[1]).min(best[month] + costs[2]);
+    }
+    best[n]
+}
+
+// ---- memo ----
+
+fn memo_first_after(days: ref Vec[i64], day: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = days.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if days[mid] < day {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn memo_cheapest_from(i: i64, days: ref Vec[i64], costs: ref Vec[i64], memo: mut ref Vec[i64]) -> i64 {
+    if i == days.len() {
+        return 0;
+    }
+    if memo[i] >= 0 {
+        return memo[i];
+    }
+    let lengths = vec![1, 7, 30];
+    let mut least = -1;
+    for k in 0..3 {
+        let next = memo_first_after(days, days[i] + lengths[k]);
+        let total = costs[k] + memo_cheapest_from(next, days, costs, mut memo);
+        if least < 0 or total < least {
+            least = total;
+        }
+    }
+    memo[i] = least;
+    least
+}
+
+fn memo_mincost_tickets(days: Vec[i64], costs: Vec[i64]) -> i64 {
+    let mut memo: Vec[i64] = Vec.filled(days.len(), -1);
+    memo_cheapest_from(0, days, costs, mut memo)
+}
+
+// ---- dijkstra ----
+
+fn dijkstra_mincost_tickets(days: Vec[i64], costs: Vec[i64]) -> i64 {
+    let n = days.len();
+    let lengths = vec![1, 7, 30];
+    let mut dist: Vec[i64] = Vec.filled(n + 1, -1);
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((0, 0));
+    while let Some((d, at)) = queue.pop() {
+        if dist[at] >= 0 {
+            continue;
+        }
+        dist[at] = d;
+        if at == n {
+            break;
+        }
+        for k in 0..3 {
+            let mut next = at;
+            while next < n and days[next] < days[at] + lengths[k] {
+                next += 1;
+            }
+            if dist[next] < 0 {
+                queue.push((d + costs[k], next));
+            }
+        }
+    }
+    dist[n]
+}
+
+// ---- deque ----
+
+fn deque_mincost_tickets(days: Vec[i64], costs: Vec[i64]) -> i64 {
+    let mut weeks: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut months: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut cost = 0;
+    for d in days {
+        while let Some((s, _)) = weeks.front() {
+            if s + 7 > d {
+                break;
+            }
+            weeks.pop_front();
+        }
+        while let Some((s, _)) = months.front() {
+            if s + 30 > d {
+                break;
+            }
+            months.pop_front();
+        }
+        weeks.push_back((d, cost + costs[1]));
+        months.push_back((d, cost + costs[2]));
+        let (_, w) = weeks.front().unwrap();
+        let (_, m) = months.front().unwrap();
+        cost = (cost + costs[0]).min(w).min(m);
+    }
+    cost
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_days(n: i64, span: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut days: Vec[i64] = Vec.new();
+    let mut need = n;
+    for d in 1..span + 1 {
+        if need > 0 and next_random(mut seed) % (span - d + 1) < need {
+            days.push(d);
+            need -= 1;
+        }
+    }
+    days
+}
+
+// Every plan that buys, on each travel day from `i` on, nothing or one
+// of the three passes, keeping those whose passes cover every travel
+// day; `covered` is the last day the passes bought so far reach. A pass
+// that starts on a day with no travel can start on the next travel day
+// instead and cover no less, so these plans include a cheapest one.
+fn plans(i: i64, covered: i64, spent: i64, days: ref Vec[i64], costs: ref Vec[i64], least: mut ref i64) {
+    if i == days.len() {
+        if *least < 0 or spent < *least {
+            *least = spent;
+        }
+        return;
+    }
+    if days[i] <= covered {
+        plans(i + 1, covered, spent, days, costs, mut least);
+    }
+    let lengths = vec![1, 7, 30];
+    for k in 0..3 {
+        let reach = days[i] + lengths[k] - 1;
+        plans(i + 1, if reach > covered { reach } else { covered }, spent + costs[k], days, costs, mut least);
+    }
+}
+
+// The statement read literally: the least total price of passes that
+// cover every travel day, over every such plan.
+fn literal(days: ref Vec[i64], costs: ref Vec[i64]) -> i64 {
+    let mut least = -1;
+    plans(0, 0, 0, days, costs, mut least);
+    least
+}
+
+fn arm(a: i64, days: ref Vec[i64], costs: ref Vec[i64]) -> i64 {
+    if a == 0 {
+        star_mincost_tickets(days, costs)
+    } else if a == 1 {
+        windows_mincost_tickets(days, costs)
+    } else if a == 2 {
+        memo_mincost_tickets(days, costs)
+    } else if a == 3 {
+        dijkstra_mincost_tickets(days, costs)
+    } else {
+        deque_mincost_tickets(days, costs)
+    }
+}
+
+// The fewest passes of `length` days that cover every travel day, laid
+// greedily from the first uncovered day.
+fn greedy(days: ref Vec[i64], length: i64) -> i64 {
+    let mut count = 0;
+    let mut covered = 0;
+    for d in days {
+        if d > covered {
+            count += 1;
+            covered = d + length - 1;
+        }
+    }
+    count
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, days: ref Vec[i64], costs: ref Vec[i64], small: bool, seed: mut ref i64) -> i64 {
+    let n = days.len();
+    let first = days[0];
+    let last = days[n - 1];
+    let truth = if small { literal(days, costs) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, days, costs));
+    }
+    // every day moved by the same amount, within the year
+    let shift = next_random(mut seed) % (365 - last + first) - (first - 1);
+    let mut moved: Vec[i64] = Vec.new();
+    for d in days {
+        moved.push(d + shift);
+    }
+    // the bounds: never less than the cheapest pass, never more than a
+    // day pass for every day, or the fewest passes of one length laid
+    // greedily
+    let cheapest = costs[0].min(costs[1]).min(costs[2]);
+    let dear = (n * costs[0]).min(greedy(days, 7) * costs[1]).min(greedy(days, 30) * costs[2]);
+    // every price tripled, and one price raised
+    let tripled = vec![costs[0] * 3, costs[1] * 3, costs[2] * 3];
+    let k = next_random(mut seed) % 3;
+    let mut raised = costs.clone();
+    raised[k] = raised[k] + 1 + next_random(mut seed) % 50;
+    // the plan again, at least 30 days after its last day, when the year
+    // has room
+    let gap = last - first + 30 + next_random(mut seed) % 10;
+    let twice = last + gap <= 365;
+    let mut doubled = days.clone();
+    if twice {
+        for d in days {
+            doubled.push(d + gap);
+        }
+    }
+    for a in 0..5 {
+        let p = got[a];
+        // P1: the statement's answer, on the first 3000 plans
+        if small {
+            check(mut tally, 1, p == truth);
+        }
+        // P2: only the gaps between the days matter
+        check(mut tally, 2, arm(a, moved, costs) == p);
+        // P3: the bounds
+        check(mut tally, 3, cheapest <= p and p <= dear);
+        // P4: tripled prices triple the cost; a dearer pass never makes
+        // it cheaper
+        check(mut tally, 4, arm(a, days, tripled) == 3 * p and arm(a, days, raised) >= p);
+        // P5: two copies of the plan 30 or more days apart cost twice as
+        // much, since no pass reaches from one to the other
+        check(mut tally, 5, not twice or arm(a, doubled, costs) == 2 * p);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == p {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 983;
+    let mut total_days = 0;
+    let mut cost = 0;
+    let mut check_sum = 0;
+    // 3000 plans of 1 to 7 days against the statement, then 200 of up to
+    // LeetCode's 365; the days fall within 10, 40, 120 or 365 by turns,
+    // and the prices run up to 10 or up to 1000 by turns
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = 1 + next_random(mut seed) % (if small { 7 } else { 365 });
+        let span = vec![10, 40, 120, 365][c % 4];
+        let span = if span < n { n } else { span };
+        let days = random_days(n, span, mut seed);
+        let top = if c % 2 == 0 { 10 } else { 1000 };
+        let costs = vec![1 + next_random(mut seed) % top, 1 + next_random(mut seed) % top, 1 + next_random(mut seed) % top];
+        let got = properties(mut tally, days, costs, small, mut seed);
+        total_days += n;
+        cost += got;
+        check_sum = (check_sum * 31 + got) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 plans of {total_days} days: cost {cost}, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,58 @@
+// Benchmark: LeetCode #983 Minimum Cost For Tickets -- the ★ arm, a
+// table over the calendar, on plans of up to LeetCode's 365 days.
+// Mirrors mincost_tickets.rs, .c, .py and go-seq/.
+
+fn mincost_tickets(days: Vec[i64], costs: Vec[i64]) -> i64 {
+    let last = days[days.len() - 1];
+    let mut travel: Vec[bool] = Vec.filled(last + 1, false);
+    for d in days {
+        travel[d] = true;
+    }
+    let mut best: Vec[i64] = Vec.filled(last + 1, 0);
+    for d in 1..last + 1 {
+        if not travel[d] {
+            best[d] = best[d - 1];
+            continue;
+        }
+        let week = if d >= 7 { best[d - 7] } else { 0 };
+        let month = if d >= 30 { best[d - 30] } else { 0 };
+        best[d] = (best[d - 1] + costs[0]).min(week + costs[1]).min(month + costs[2]);
+    }
+    best[last]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 300;
+    let mut seed = 983;
+    let mut plans: Vec[Vec[i64]] = Vec.new();
+    let mut prices: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..1000 {
+        let n = 1 + next_random(mut seed) % 365;
+        let mut days: Vec[i64] = Vec.new();
+        let mut need = n;
+        for d in 1..366 {
+            if need > 0 and next_random(mut seed) % (366 - d) < need {
+                days.push(d);
+                need -= 1;
+            }
+        }
+        plans.push(days);
+        prices.push(vec![1 + next_random(mut seed) % 1000, 1 + next_random(mut seed) % 1000, 1 + next_random(mut seed) % 1000]);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..1000 {
+            let j = (r + i) % 1000;
+            let c = mincost_tickets(plans[j], prices[j]);
+            total += c;
+            check = (check * 31 + c) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 1000 plans of up to 365 days: cost {total}, checksum {check}");
+}

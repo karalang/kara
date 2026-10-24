@@ -1,0 +1,13 @@
+days [1, 4, 6, 7, 8, 20], costs [2, 7, 15] -> 11
+days [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 30, 31], costs [2, 7, 15] -> 17
+days [1], costs [2, 7, 15] -> 2
+days [365], costs [9, 4, 20] -> 4
+days [1, 3, 5], costs [7, 2, 15] -> 2
+days [1, 2, 3, 4, 5], costs [2, 7, 1] -> 1
+days [1, 8, 15, 22], costs [3, 3, 9] -> 9
+days [1, 31, 61], costs [20, 30, 5] -> 15
+days 1 to 365 (365 days), costs [2, 7, 15] -> 187
+days 1 to 365 (365 days), costs [1000, 1000, 1] -> 13
+300 random plans of up to 12 days within 40: cost 3583, checksum 260260844
+3000 random plans of up to 60 days within 365: cost 924118, checksum 501866405
+4 random plans of up to 365 days within 365: cost 29994, checksum 223779174
