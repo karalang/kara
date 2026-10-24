@@ -12423,3 +12423,36 @@ fn a_call_result_no_use_fixes_is_refused() {
         "18\n",
     );
 }
+
+/// A binding bound out of a bare parameter is a borrow of it, so giving it
+/// away names the parameter's `own` fix, which `karac fix` writes: a
+/// catch-all arm, a destructuring `let`, a payload returned from an arm
+/// (B-2026-10-20-16).
+#[test]
+fn giving_away_a_part_of_a_bare_parameter_names_its_own_fix() {
+    rejected_then_fixed_by(
+        "catch-all-arm",
+        "enum E { A, B(i64) }\nfn pass(r: Result[i64, E]) -> Result[i64, E] {\n    \
+         match r {\n        Err(E.A) => Ok(0),\n        other => other,\n    }\n}\n\
+         fn main() {\n    println(f\"{pass(Ok(1)).is_ok()}\");\n}\n",
+        "cannot give away `other`, bound out of parameter `r`",
+        "r: own Result[i64, E]",
+    );
+    rejected_then_fixed_by(
+        "let-destructure",
+        "struct R { s: String }\nstruct W { r: R, n: i64 }\n\
+         fn take(w: W) -> R {\n    let W { r, n } = w;\n    r\n}\n\
+         fn main() {\n    let w = W { r: R { s: f\"x\" }, n: 1 };\n    println(take(w).s);\n}\n",
+        "cannot give away `r`, bound out of parameter `w`",
+        "w: own W",
+    );
+    rejected_then_fixed_by(
+        "payload-return",
+        "struct R { s: String }\nenum Box2 { Empty, Full(R) }\nfn get(b: Box2) -> R {\n    \
+         match b {\n        Box2.Full(r) => {\n            return r;\n        }\n        \
+         Box2.Empty => R { s: f\"e\" },\n    }\n}\n\
+         fn main() {\n    println(get(Box2.Full(R { s: f\"x\" })).s);\n}\n",
+        "cannot give away `r`, bound out of parameter `b`",
+        "b: own Box2",
+    );
+}

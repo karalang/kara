@@ -1997,6 +1997,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        self.mark_d5_parts(pattern, scrutinee);
         let moves = std::mem::replace(&mut self.core_pattern_moves, prev);
         if !moves.is_empty() {
             self.core_moving_scrutinees

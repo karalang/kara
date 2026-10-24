@@ -1257,6 +1257,12 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::SelfValue => "self",
             _ => return None,
         };
+        if name != "self"
+            && !self.current_fn_d5_params.contains_key(name)
+            && self.local_scope.part_of(name).is_some()
+        {
+            return self.d5_give_away_part(expr, name, expected);
+        }
         let implied = self.current_fn_d5_params.get(name).copied();
         let ty = if name == "self" {
             if !self.current_fn_ref_params.contains("self") {
@@ -1315,6 +1321,92 @@ impl<'a> super::TypeChecker<'a> {
             kind: TypeErrorKind::TypeMismatch,
             lint_name: None,
             fix_it: implied.map(|at| FixIt {
+                span: at,
+                replacement: "own ".to_string(),
+            }),
+            class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+            expected: Some(type_display(expected)),
+            got: Some(format!("ref {shown}")),
+        });
+        Some(expected.clone())
+    }
+
+    /// The bare parameter a scrutinee names: the parameter itself while it
+    /// is still the borrow (not shadowed), or a binding already bound out
+    /// of one.
+    fn d5_param_root(&self, scrutinee: &Expr) -> Option<String> {
+        let ExprKind::Identifier(n) = &scrutinee.kind else {
+            return None;
+        };
+        if let Some(p) = self.local_scope.part_of(n) {
+            return Some(p.to_string());
+        }
+        (self.current_fn_d5_params.contains_key(n)
+            && matches!(self.local_scope.lookup(n), Some(Type::Ref(_))))
+        .then(|| n.clone())
+    }
+
+    /// Record the bindings of `pattern`, bound out of `scrutinee`, as parts
+    /// of the bare parameter it names, so giving one away names that
+    /// parameter's `own` fix (B-2026-10-20-16).
+    pub(super) fn mark_d5_parts(&mut self, pattern: &Pattern, scrutinee: &Expr) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let Some(root) = self.d5_param_root(scrutinee) else {
+            return;
+        };
+        for n in pattern.binding_names() {
+            self.local_scope.mark_part_of(&n, &root);
+        }
+    }
+
+    /// [`Self::d5_give_away`] for a binding bound out of a bare parameter
+    /// (`r` in `let W { r, n } = w; r`, `other` in `match r { .. other =>
+    /// other }`): the borrow is the parameter's, so the fix is its `own`.
+    fn d5_give_away_part(&mut self, expr: &Expr, name: &str, expected: &Type) -> Option<Type> {
+        let param = self.local_scope.part_of(name)?.to_string();
+        let at = *self.current_fn_d5_params.get(&param)?;
+        let Type::Ref(param_ty) = self.local_scope.lookup(&param)?.clone() else {
+            return None;
+        };
+        let Type::Ref(ty) = self.infer_expr(expr) else {
+            return None;
+        };
+        if !self.type_cannot_leave_a_borrowed_place(&ty)
+            || !unify_types(
+                &ty,
+                expected,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            )
+        {
+            return None;
+        }
+        let shown = type_display(&ty);
+        let param_shown = type_display(&param_ty);
+        let (subject, spelling) = if self.closure_d5_params.contains(&param) {
+            (
+                format!("closure parameter `{param}`"),
+                format!("`|{param}: own {param_shown}|`"),
+            )
+        } else {
+            (
+                format!("parameter `{param}`"),
+                format!("`{param}: own {param_shown}`"),
+            )
+        };
+        self.errors.push(TypeError {
+            message: format!(
+                "cannot give away `{name}`, bound out of {subject}: a bare parameter \
+                 borrows (core-semantics §4.1), so `{name}` is a borrow too, and an owned \
+                 '{shown}' is wanted here. Take `{param}` by value with {spelling}, or \
+                 hand on a copy with `.clone()`"
+            ),
+            span: expr.span,
+            kind: TypeErrorKind::TypeMismatch,
+            lint_name: None,
+            fix_it: Some(FixIt {
                 span: at,
                 replacement: "own ".to_string(),
             }),

@@ -593,6 +593,10 @@ pub(super) struct LocalTypeScope {
     /// collection, whose `next()` items are views as that call's are.
     /// Cleared like `views` by a shadowing `insert`.
     lent_iters: Vec<FxHashSet<String>>,
+    /// Per scope, the names bound out of a bare (D5-borrowed) parameter, to
+    /// that parameter's name: `r` in `let W { r, n } = w` or in a `match w`
+    /// arm. Cleared like `views` by a shadowing `insert`.
+    parts_of: Vec<FxHashMap<String, String>>,
 }
 
 impl LocalTypeScope {
@@ -601,6 +605,7 @@ impl LocalTypeScope {
             scopes: vec![FxHashMap::default()],
             views: vec![Default::default()],
             lent_iters: vec![Default::default()],
+            parts_of: vec![Default::default()],
         }
     }
 
@@ -608,12 +613,14 @@ impl LocalTypeScope {
         self.scopes.push(FxHashMap::default());
         self.views.push(Default::default());
         self.lent_iters.push(Default::default());
+        self.parts_of.push(Default::default());
     }
 
     pub(super) fn pop(&mut self) {
         self.scopes.pop();
         self.views.pop();
         self.lent_iters.pop();
+        self.parts_of.pop();
     }
 
     pub(super) fn insert(&mut self, name: String, ty: Type) {
@@ -621,6 +628,9 @@ impl LocalTypeScope {
             v.remove(name.as_str());
         }
         if let Some(v) = self.lent_iters.last_mut() {
+            v.remove(name.as_str());
+        }
+        if let Some(v) = self.parts_of.last_mut() {
             v.remove(name.as_str());
         }
         if let Some(scope) = self.scopes.last_mut() {
@@ -665,6 +675,26 @@ impl LocalTypeScope {
             }
         }
         false
+    }
+
+    /// Mark `name`, already bound in the innermost scope, as bound out of
+    /// the bare parameter `param`.
+    pub(super) fn mark_part_of(&mut self, name: &str, param: &str) {
+        if self.scopes.last().is_some_and(|s| s.contains_key(name)) {
+            if let Some(v) = self.parts_of.last_mut() {
+                v.insert(name.to_string(), param.to_string());
+            }
+        }
+    }
+
+    /// The bare parameter `name` was bound out of, per [`Self::mark_part_of`].
+    pub(super) fn part_of(&self, name: &str) -> Option<&str> {
+        for (scope, parts) in self.scopes.iter().zip(self.parts_of.iter()).rev() {
+            if scope.contains_key(name) {
+                return parts.get(name).map(String::as_str);
+            }
+        }
+        None
     }
 
     /// The scope depth `name` resolves at (0 is the outermost).

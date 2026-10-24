@@ -8973,6 +8973,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.current_scrutinee_mut_self = prev_ms;
                     self.current_scrutinee_clone_view = prev_cv;
                 }
+                self.mark_d5_parts(pattern, value);
             }
             StmtKind::LetUninit {
                 is_mut: _,
