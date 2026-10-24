@@ -1484,6 +1484,9 @@ impl<'a> Resolver<'a> {
         // the module-binding renames proposed in pass 1 can be offered as
         // a *complete* edit (B-2026-07-31-33).
         self.attach_module_binding_renames();
+        // Pass 4: a primitive type name is never a binding's name (design.md
+        // § Primitive type names, B-2026-10-24-22).
+        self.reject_primitive_bindings();
 
         ResolveResult {
             resolutions: self.resolutions,
@@ -1494,6 +1497,39 @@ impl<'a> Resolver<'a> {
             def_paths: crate::def_path::collect_item_def_paths(self.program),
             queries: Vec::new(),
             error_fix_diffs: self.error_fix_diffs,
+        }
+    }
+
+    /// `let i64 = 3;`, a parameter `u8: i64`, `for char in ..`, a match or
+    /// closure binding: a primitive type name is reserved and cannot be bound
+    /// (design.md § Primitive type names). The bindings are still defined, so
+    /// the error is the binding's alone; a later `u8.len()`, which names the
+    /// type, would otherwise be the only report, far from its cause.
+    fn reject_primitive_bindings(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        for sym in self.table.all_symbols() {
+            if matches!(sym.kind, SymbolKind::Variable { .. })
+                && sym.span.line != 0
+                && crate::parser::is_primitive_type_name(&sym.name)
+                && seen.insert((sym.span.line, sym.span.column))
+            {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "`{}` is a primitive type name and cannot be bound as a value \
+                         (design.md § Primitive type names); as a path's first \
+                         segment it always names the type",
+                        sym.name
+                    ),
+                    span: sym.span,
+                    kind: ResolveErrorKind::ReservedIdentifier,
+                    suggestion: Some(format!(
+                        "rename the binding, for example `{}_value`",
+                        sym.name
+                    )),
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
         }
     }
 

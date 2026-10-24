@@ -10,6 +10,7 @@ use rustc_hash::FxHashMap;
 
 mod attributes;
 mod exprs;
+pub(crate) use exprs::is_primitive_type_name;
 mod generics;
 mod items;
 mod items_effects;

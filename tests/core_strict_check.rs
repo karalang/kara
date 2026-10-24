@@ -13014,3 +13014,45 @@ fn a_copy_option_field_read_twice_by_value_stays_usable() {
         "value 'p.s' moved here",
     );
 }
+
+#[test]
+fn a_primitive_type_name_cannot_be_bound_as_a_value() {
+    // B-2026-10-24-22, design.md § Primitive type names: `let i64 = 3;` is an
+    // error, at every binding site, and the error names the binding rather
+    // than a type path at a later use.
+    for (tag, src, name) in [
+        ("prim-let", "fn main() {\n    let i64 = 3;\n    println(f\"{i64 + 1}\");\n}\n", "i64"),
+        (
+            "prim-param",
+            "fn twice(u8: i64) -> i64 {\n    u8 * 2\n}\nfn main() {\n    println(f\"{twice(4)}\");\n}\n",
+            "u8",
+        ),
+        ("prim-for", "fn main() {\n    for char in [1, 2] {\n        println(char);\n    }\n}\n", "char"),
+        (
+            "prim-match",
+            "fn main() {\n    let o: Option[i64] = Some(1);\n    match o {\n        \
+             Some(usize) => println(usize),\n        None => {}\n    }\n}\n",
+            "usize",
+        ),
+        (
+            "prim-closure",
+            "fn main() {\n    let f = |bool: i64| bool + 1;\n    println(f(1));\n}\n",
+            "bool",
+        ),
+        (
+            "prim-method-use",
+            "fn show(s: ref String) {\n    println(s);\n}\nfn main() {\n    \
+             let u8 = \"abc\".to_string();\n    show(u8);\n    println(f\"{u8.len()}\");\n}\n",
+            "u8",
+        ),
+    ] {
+        rejected(tag, src, &format!("`{name}` is a primitive type name and cannot be bound"));
+    }
+    // A field named after a primitive is not a binding.
+    accepted_and_runs(
+        "prim-field-name",
+        "struct S { usize: i64 }\nfn main() {\n    let s = S { usize: 4 };\n    \
+         println(f\"{s.usize} {i64.MAX > 0}\");\n}\n",
+        "4 true\n",
+    );
+}

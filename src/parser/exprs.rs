@@ -3847,8 +3847,8 @@ impl super::Parser {
 }
 
 /// Whether `name` is a primitive type, which can root an associated constant
-/// (`i64.MAX`) but never a module path.
-fn is_primitive_type_name(name: &str) -> bool {
+/// (`i64.MAX`) but never a module path, and is never a binding's name.
+pub(crate) fn is_primitive_type_name(name: &str) -> bool {
     matches!(
         name,
         "i8" | "i16"
