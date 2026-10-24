@@ -13,7 +13,9 @@
 //!
 //! - **A loop may carry reductions.** An accumulator a loop writes as
 //!   `acc = acc op e`, with `op` one of `+`, `*`, `&`, `|`, `^` and `acc`
-//!   used nowhere else in the body, conflicts between iterations only
+//!   used nowhere else in the body (or a chain of one such `op` with `acc`
+//!   a leaf of it, `acc = a op acc op b`, which regroups as exactly as
+//!   one does), conflicts between iterations only
 //!   through that statement. The verdict names it, and the builder makes
 //!   each task fold its run of iterations from `op`'s identity and folds
 //!   the results in iteration order. That regrouping is exact for `&`,
@@ -526,42 +528,24 @@ pub(super) fn verdict(
 }
 
 /// The accumulators loop body `set` carries as `acc = acc op e`, given its
-/// uses of shared places: each written there and used nowhere else.
+/// uses of shared places: each written there and used nowhere else. The
+/// operation may be a chain of one operator with `acc` a leaf of it, as in
+/// `acc = acc + a + b` or `acc = a + acc + b`, which regroups as exactly as
+/// one `op` does.
 fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) -> Vec<Reduction> {
-    let reducible = |op: BinOp| {
-        matches!(
-            op,
-            BinOp::Add | BinOp::Mul | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
-        )
-    };
-    // `op`, when `rv` combines `acc` with one other operand by a reducible
-    // operator. Not a checked `*`, whose partial products can overflow
-    // where the in-order product never does (B-2026-10-24-20).
-    let combines = |rv: &Rvalue, acc: Local| -> Option<BinOp> {
-        let (op, x, y) = match rv {
-            Rvalue::BinaryOp(op, x, y) => (*op, x, y),
-            Rvalue::CheckedBinaryOp(op, x, y) if *op != BinOp::Mul => (*op, x, y),
-            _ => return None,
-        };
-        let is_acc = |o: &Operand| matches!(o, Operand::Copy(p) if *p == Place::local(acc));
-        (reducible(op) && (is_acc(x) != is_acc(y))).then_some(op)
-    };
-    // The one statement in the body assigning local `t`.
-    let assignment = |t: Local| -> Option<&Rvalue> {
-        let mut found = None;
-        for b in set {
-            for st in &body.blocks[b.index()].statements {
-                if let StatementKind::Assign(dst, rv) = &st.kind {
-                    if dst.local == t {
-                        if found.is_some() || !dst.projection.is_empty() {
-                            return None;
-                        }
-                        found = Some(rv);
-                    }
-                }
-            }
+    // How often the body reads each local, leaving out a checked
+    // operation's overflow flag (field 1), which only its assert reads.
+    let mut reads: BTreeMap<Local, usize> = BTreeMap::new();
+    for (_, how, p) in branch_uses(body, set) {
+        let flag = matches!(p.projection.first(), Some(ProjElem::Field(f, _)) if f.0 == 1);
+        if matches!(how, Use::Read | Use::Move) && !flag {
+            *reads.entry(p.local).or_default() += 1;
         }
-        found
+    }
+    let chain = Chain {
+        body,
+        set,
+        reads: &reads,
     };
     let mut out = Vec::new();
     for b in set {
@@ -573,37 +557,9 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
                 continue;
             }
             let acc = dst.local;
-            // `acc = acc op e`, or `acc = t.0` after `t = acc op e`
-            // checked for overflow, either through copies of temporaries
-            // the body assigns once.
-            let mut rv = rv;
-            let mut op = None;
-            for _ in 0..4 {
-                match rv {
-                    Rvalue::BinaryOp(..) => {
-                        op = combines(rv, acc);
-                        break;
-                    }
-                    Rvalue::Use(Operand::Copy(p) | Operand::Move(p)) if p.projection.is_empty() => {
-                        match assignment(p.local) {
-                            Some(next) => rv = next,
-                            None => break,
-                        }
-                    }
-                    Rvalue::Use(Operand::Copy(p) | Operand::Move(p))
-                        if p.projection.len() == 1
-                            && matches!(p.projection[0], ProjElem::Field(f, _) if f.0 == 0) =>
-                    {
-                        op = assignment(p.local).and_then(|t| match t {
-                            Rvalue::CheckedBinaryOp(..) => combines(t, acc),
-                            _ => None,
-                        });
-                        break;
-                    }
-                    _ => break,
-                }
-            }
-            let Some(op) = op else { continue };
+            let Some(op) = chain.op(rv, acc) else {
+                continue;
+            };
             // Used nowhere else: one read, the one in the operation, and
             // this write.
             let uses: Vec<&PlaceAccess> = touched.iter().filter(|a| a.place.local == acc).collect();
@@ -623,6 +579,109 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
         }
     }
     out
+}
+
+/// A loop body's operations, read back from their temporaries.
+struct Chain<'a> {
+    body: &'a Body,
+    set: &'a BTreeSet<BasicBlock>,
+    reads: &'a BTreeMap<Local, usize>,
+}
+
+/// How far [`Chain`] follows temporaries, so a long chain is refused
+/// rather than walked without end.
+const CHAIN_HOPS: usize = 64;
+
+impl Chain<'_> {
+    /// The one statement in the body assigning local `t`.
+    fn assignment(&self, t: Local) -> Option<&Rvalue> {
+        let mut found = None;
+        for b in self.set {
+            for st in &self.body.blocks[b.index()].statements {
+                if let StatementKind::Assign(dst, rv) = &st.kind {
+                    if dst.local == t {
+                        if found.is_some() || !dst.projection.is_empty() {
+                            return None;
+                        }
+                        found = Some(rv);
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// The operation `rv` stands for: itself, or through copies of
+    /// temporaries the body assigns once and reads once, the operation
+    /// assigned to the first, with whether its value is field 0 of a
+    /// checked operation's result.
+    fn resolve<'r>(&'r self, mut rv: &'r Rvalue, hops: &mut usize) -> Option<(&'r Rvalue, bool)> {
+        loop {
+            *hops += 1;
+            if *hops > CHAIN_HOPS {
+                return None;
+            }
+            let Rvalue::Use(Operand::Copy(p) | Operand::Move(p)) = rv else {
+                return Some((rv, false));
+            };
+            if self.reads.get(&p.local) != Some(&1) {
+                return None;
+            }
+            match p.projection.as_slice() {
+                [] => rv = self.assignment(p.local)?,
+                [ProjElem::Field(f, _)] if f.0 == 0 => {
+                    return Some((self.assignment(p.local)?, true));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// `op` when `rv`, the value assigned to `acc`, is a chain of `op`
+    /// with `acc` one of its leaves: one reducible operator throughout,
+    /// all checked for overflow or none, and not a checked `*`, whose
+    /// partial products can overflow where the in-order product never
+    /// does (B-2026-10-24-20).
+    fn op(&self, rv: &Rvalue, acc: Local) -> Option<BinOp> {
+        let mut hops = 0;
+        let (rv, field) = self.resolve(rv, &mut hops)?;
+        let (op, checked) = match rv {
+            Rvalue::BinaryOp(op, ..) if !field => (*op, false),
+            Rvalue::CheckedBinaryOp(op, ..) if field && *op != BinOp::Mul => (*op, true),
+            _ => return None,
+        };
+        let reducible = matches!(
+            op,
+            BinOp::Add | BinOp::Mul | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
+        );
+        (reducible && self.holds(rv, acc, op, checked, &mut hops)).then_some(op)
+    }
+
+    /// Whether `acc` is a leaf of link `rv` of an `op` chain: an operand
+    /// itself, or below exactly one operand through more links.
+    fn holds(&self, rv: &Rvalue, acc: Local, op: BinOp, checked: bool, hops: &mut usize) -> bool {
+        let (x, y) = match rv {
+            Rvalue::BinaryOp(o, x, y) if *o == op && !checked => (x, y),
+            Rvalue::CheckedBinaryOp(o, x, y) if *o == op && checked => (x, y),
+            _ => return false,
+        };
+        let below = |o: &Operand, hops: &mut usize| -> bool {
+            match o {
+                Operand::Copy(p) if *p == Place::local(acc) => true,
+                Operand::Copy(p) | Operand::Move(p) if p.local != acc => {
+                    let link = Rvalue::Use(o.clone());
+                    match self.resolve(&link, hops) {
+                        Some((next, field)) if field == checked => {
+                            self.holds(next, acc, op, checked, hops)
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+        };
+        below(x, hops) != below(y, hops)
+    }
 }
 
 #[cfg(test)]
@@ -827,6 +886,83 @@ fn main() {
             .as_ref()
             .unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(t.iter().map(|x| x.op).collect::<Vec<_>>(), [BinOp::Add]);
+    }
+
+    /// A chain of one operator with the accumulator a leaf of it is a
+    /// reduction wherever the leaf sits; a chain mixing operators is not,
+    /// nor one whose partial result the body also reads.
+    #[test]
+    fn auto_par_operator_chain_is_a_reduction() {
+        let v = written(
+            "fn front() -> i64 {
+    let mut s = 0;
+    par for i in 0..10 {
+        s = s + i + 1;
+    }
+    s
+}
+
+fn middle() -> i64 {
+    let mut s = 0;
+    par for i in 0..10 {
+        s = i + s + 1 + i * 2;
+    }
+    s
+}
+
+fn masks() -> i64 {
+    let mut m = 0;
+    par for i in 0..10 {
+        m = m | i | (i * 4);
+    }
+    m
+}
+
+fn mixed() -> i64 {
+    let mut s = 0;
+    par for i in 0..10 {
+        s = (s ^ i) + 1;
+    }
+    s
+}
+
+fn seen() -> i64 {
+    let mut s = 0;
+    let mut last = 0;
+    par for i in 0..10 {
+        let t = s + i;
+        s = t + 1;
+        last ^= t;
+    }
+    s + last
+}
+
+fn main() {
+    println(front());
+    println(middle());
+    println(masks());
+    println(mixed());
+    println(seen());
+}
+",
+        );
+        for (name, op) in [
+            ("front", BinOp::Add),
+            ("middle", BinOp::Add),
+            ("masks", BinOp::BitOr),
+        ] {
+            let r = only(&v, name)
+                .verdict
+                .as_ref()
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(r.iter().map(|x| x.op).collect::<Vec<_>>(), [op], "{name}");
+        }
+        for name in ["mixed", "seen"] {
+            match &only(&v, name).verdict {
+                Err(Refusal::Conflict(c)) => assert_eq!(c.branches, (0, 0), "{name}"),
+                other => panic!("{name}: {other:?}"),
+            }
+        }
     }
 
     /// D6: a call into C has unknown effects, so the loop stays in order
