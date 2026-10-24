@@ -2011,11 +2011,17 @@ impl RawDeque {
         }
         let cap = (self.cap * 2).max(4);
         let buf = karac_realloc_or_panic(std::ptr::null_mut(), cap * size);
-        for i in 0..self.len {
-            // SAFETY: element `i` is live; slot `i` of the new buffer is free.
-            unsafe { std::ptr::copy_nonoverlapping(self.slot(i, size), buf.add(i * size), size) };
-        }
+        // The ring is full, so its elements are the run from `head` to the
+        // end of the buffer and then the run from its start up to `head`:
+        // two copies, not one per element.
         if self.cap != 0 {
+            let first = self.cap - self.head;
+            // SAFETY: slots `head..cap` and `0..head` are live and inside
+            // the old buffer; the new buffer has room for `len` elements.
+            unsafe {
+                std::ptr::copy_nonoverlapping(self.ptr.add(self.head * size), buf, first * size);
+                std::ptr::copy_nonoverlapping(self.ptr, buf.add(first * size), self.head * size);
+            }
             // SAFETY: the old buffer came from `karac_realloc_or_panic`.
             unsafe { free(self.ptr.cast()) };
         }
@@ -3537,6 +3543,72 @@ pub unsafe extern "C" fn karac_mir_pool_drop(h: *mut MirPool) {
 
 #[cfg(test)]
 mod tests {
+    /// Random pushes and pops at both ends agree with `std`'s `VecDeque`,
+    /// with 1-, 8- and 24-byte elements, so the ring wraps and grows from
+    /// every head position (the growth copies the two runs of a wrapped
+    /// ring in bulk).
+    #[test]
+    fn deque_agrees_with_std_vecdeque() {
+        use std::collections::VecDeque;
+        let mut seed = 958u64;
+        let mut next = |k: u64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) % k
+        };
+        for size in [1usize, 8, 24] {
+            for _ in 0..200 {
+                let mut q = super::RawDeque::new(std::ptr::null_mut(), 0, 0, 0);
+                let mut want: VecDeque<u8> = VecDeque::new();
+                let mut tag = 0u8;
+                for _ in 0..next(300) {
+                    let front = next(2) as u8;
+                    if next(3) == 0 {
+                        let mut out = vec![0u8; size];
+                        // SAFETY: `q` is a live deque of `size`-byte elements.
+                        let got = unsafe {
+                            super::karac_mir_deque_pop(&mut q, out.as_mut_ptr(), size as u64, front)
+                        };
+                        let expect = if front != 0 {
+                            want.pop_front()
+                        } else {
+                            want.pop_back()
+                        };
+                        assert_eq!(got != 0, expect.is_some());
+                        if let Some(t) = expect {
+                            assert!(out.iter().all(|&b| b == t), "size {size}");
+                        }
+                    } else {
+                        tag = tag.wrapping_add(1);
+                        let elem = vec![tag; size];
+                        // SAFETY: as above; `elem` holds `size` bytes.
+                        unsafe {
+                            super::karac_mir_deque_push(&mut q, elem.as_ptr(), size as u64, front)
+                        };
+                        if front != 0 {
+                            want.push_front(tag)
+                        } else {
+                            want.push_back(tag)
+                        }
+                    }
+                    assert_eq!(q.len, want.len());
+                    for (i, &t) in want.iter().enumerate() {
+                        // SAFETY: element `i` is live.
+                        let at = unsafe { super::karac_mir_deque_slot(&q, i as u64, size as u64) };
+                        // SAFETY: the slot holds `size` bytes.
+                        let bytes = unsafe { std::slice::from_raw_parts(at, size) };
+                        assert!(bytes.iter().all(|&b| b == t), "size {size}, element {i}");
+                    }
+                }
+                if q.cap != 0 {
+                    // SAFETY: the buffer came from `karac_realloc_or_panic`.
+                    unsafe { super::free(q.ptr.cast()) };
+                }
+            }
+        }
+    }
+
     #[test]
     fn padded_int_agrees_with_format_spec() {
         use crate::fmt::format_spec::FormatSpec;

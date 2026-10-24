@@ -219,6 +219,64 @@ fn mir_asan_partition_sort_of_strings_runs_clean() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "key-0-with-padding-to-live-on-the-heap 4 key-4-with-padding-to-live-on-the-heap 5996 575934588\n");
 }
 
+/// A `VecDeque[String]` whose head has marched past the middle of the
+/// ring when it grows: the growth copies the ring's two runs in bulk into
+/// the new buffer, and no string may be freed twice, read after its free
+/// or leaked (kata 958).
+#[test]
+fn mir_asan_wrapped_deque_of_strings_grows_clean() {
+    if !asan_available() {
+        eprintln!("skipping: no ASan-capable cc");
+        return;
+    }
+    let dir = Scratch::new();
+    let src = dir.path().join("main.kara");
+    std::fs::write(
+        &src,
+        r#"fn main() {
+    // the head marched past the middle of the ring before each growth
+    let mut q: VecDeque[String] = VecDeque.new();
+    let mut popped = 0;
+    let mut h = 0;
+    for r in 0..40 {
+        for k in 0..(r % 11 + 3) {
+            q.push_back(f"back-{r}-{k}-padded-to-live-on-the-heap");
+        }
+        if r % 3 == 0 {
+            q.push_front(f"front-{r}-padded-to-live-on-the-heap");
+        }
+        for _ in 0..(r % 7 + 2) {
+            match q.pop_front() {
+                Some(s) => {
+                    popped += 1;
+                    h = (h * 31 + s.len()) % 1000000007;
+                }
+                None => {}
+            }
+        }
+    }
+    println(f"{q.len()} {popped} {h} {q.front().unwrap()} {q.back().unwrap()}");
+}
+"#,
+    )
+    .expect("write source");
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("__mir-llvm-asan")
+        .arg(&src)
+        .output()
+        .expect("run karac");
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() == Some(3) && err.contains("Linker failed") {
+        let _ = common::link_or_skip(Err(err.into_owned()));
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{err}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "125 195 177942252 back-23-2-padded-to-live-on-the-heap back-39-8-padded-to-live-on-the-heap\n"
+    );
+}
+
 /// The lane's canary: a Kāra program that leaks a two-node `shared` cycle
 /// must be REPORTED. `main` used to run on a hand-switched stack that
 /// LeakSanitizer does not scan, and every leak verdict was clean
