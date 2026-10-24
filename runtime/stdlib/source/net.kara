@@ -78,12 +78,12 @@ struct TlsStream {
 
 impl TcpListener {
     #[compiler_builtin]
-    fn bind(addr: Str) -> Result[TcpListener, NetError] {
+    fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network) blocks {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn accept(ref self) -> Result[TcpStream, NetError] with sends(Network) receives(Network) {
+    fn accept(ref self) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
@@ -97,7 +97,7 @@ impl TcpListener {
 
 impl TcpStream {
     #[compiler_builtin]
-    fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) {
+    fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
@@ -107,17 +107,17 @@ impl TcpStream {
     }
 
     #[compiler_builtin]
-    fn shutdown_write(ref self) -> Result[(), NetError] {
+    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) blocks {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
@@ -125,7 +125,7 @@ impl TcpStream {
     // goes round again, and so does `Interrupted`. Inside a task each
     // `write` suspends on its own, so one that would block keeps the bytes
     // already sent (M4 item 2).
-    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
         let mut done = 0;
         while done < buf.len() {
             match self.write(buf[done..buf.len()]) {
@@ -149,37 +149,37 @@ impl TcpStream {
 
 impl UdpSocket {
     #[compiler_builtin]
-    fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) {
+    fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) blocks {
         Err(NetError.Other(-1))
     }
 
     // Sends `buf` as one datagram to `addr`; the count sent.
     #[compiler_builtin]
-    fn send_to(ref self, buf: Slice[u8], addr: Str) -> Result[i64, NetError] with sends(Network) {
+    fn send_to(ref self, buf: Slice[u8], addr: Str) -> Result[i64, NetError] with sends(Network) blocks {
         Err(NetError.Other(-1))
     }
 
     // Waits for one datagram and stores it in `buf`: the count stored and
     // the sender's "ip:port". A datagram longer than `buf` is cut to fit.
     #[compiler_builtin]
-    fn recv_from(ref self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(Network) {
+    fn recv_from(ref self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
     // Sets the peer `send` sends to; `recv` then takes datagrams from it
     // only.
     #[compiler_builtin]
-    fn connect(ref self, addr: Str) -> Result[(), NetError] with sends(Network) {
+    fn connect(ref self, addr: Str) -> Result[(), NetError] with sends(Network) blocks {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn send(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) {
+    fn send(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) blocks {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn recv(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(Network) {
+    fn recv(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
@@ -206,12 +206,12 @@ impl TlsListener {
     // private key `key_pem` (PEM text, not paths). A chain or key that does
     // not parse, or a key that does not match, is `InvalidInput`.
     #[compiler_builtin]
-    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] {
+    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] with sends(Network) receives(Network) blocks {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn accept(ref self) -> Result[TlsStream, NetError] with sends(Network) receives(Network) {
+    fn accept(ref self) -> Result[TlsStream, NetError] with sends(Network) receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
@@ -224,22 +224,22 @@ impl TlsListener {
 impl TlsStream {
     // Sends `close_notify`: the peer reads the end of the stream.
     #[compiler_builtin]
-    fn shutdown_write(ref self) -> Result[(), NetError] {
+    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) blocks {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
     // As `TcpStream.write_all`.
-    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
         let mut done = 0;
         while done < buf.len() {
             match self.write(buf[done..buf.len()]) {

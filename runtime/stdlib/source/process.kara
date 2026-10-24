@@ -211,7 +211,7 @@ impl Child {
     // is closed first, so a child reading to end of file can finish. Once
     // the process has ended, waiting again returns the same status.
     #[compiler_builtin]
-    fn wait(ref self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks {
+    fn wait(ref self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks suspends {
         Err(IoError.Unsupported)
     }
 
