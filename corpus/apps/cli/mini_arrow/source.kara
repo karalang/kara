@@ -4647,13 +4647,13 @@ fn build_datetime(parts: mut ref Parts) -> Result[DateTime, PyErr] {
     }
     let mut day_increment = 0;
     if hour == 24 {
-        if parts.minute.clone().unwrap_or(0) != 0 {
+        if parts.minute.unwrap_or(0) != 0 {
             return Err(parser_error("Midnight at the end of day must not contain minutes".to_string()));
         }
-        if parts.second.clone().unwrap_or(0) != 0 {
+        if parts.second.unwrap_or(0) != 0 {
             return Err(parser_error("Midnight at the end of day must not contain seconds".to_string()));
         }
-        if parts.microsecond.clone().unwrap_or(0) != 0 {
+        if parts.microsecond.unwrap_or(0) != 0 {
             return Err(parser_error("Midnight at the end of day must not contain microseconds".to_string()));
         }
         hour = 0;

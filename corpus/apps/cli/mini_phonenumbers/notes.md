@@ -110,7 +110,8 @@ One, a new shape of an open row, B-2026-10-24-32 (from mini_arrow):
 `Option[i64]` field and so `Copy`, and then refuses `metas.push(m)` in
 `load_ctx` because `m` was partly moved. The MIR interpreter runs the
 refused program correctly. `karac fix` inserted `.clone()` before the
-`unwrap_or`. Its other five fixes were real: two `.clone()`s on vector
+`unwrap_or`; Thread A fixed the row in kara ea1fd651e8, and the call is
+back to the natural `m.cc.unwrap_or(0)`. Its other five fixes were real: two `.clone()`s on vector
 elements matched as a pair, one on a field matched by value, and two
 `ref` bindings in `if let`. With those the port passed `karac check`, and
 its first run printed the oracle's output under the MIR interpreter, the

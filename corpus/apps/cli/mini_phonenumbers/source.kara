@@ -2996,7 +2996,7 @@ fn load_ctx(codes_text: ref String, meta_text: ref String) -> Result[Ctx, String
         let m = read_meta(mut rx, j);
         let i = metas.len();
         if m.id == non_geo() {
-            by_code.insert(m.cc.clone().unwrap_or(0), i);
+            by_code.insert(m.cc.unwrap_or(0), i);
         } else {
             by_region.insert(m.id.clone(), i);
         }

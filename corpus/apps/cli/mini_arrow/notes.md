@@ -137,8 +137,9 @@ as a move when `a` is an `Option[i64]` field and `p` is an owned local, an
 is refused, though `Option[i64]` is `Copy` (core-semantics §1.1). Through
 a `ref` parameter, and on a whole `Option` local, it is accepted, and
 the MIR interpreter runs the refused programs correctly. `karac fix`
-inserted `.clone()` before the six `unwrap_or` calls on `Parts` fields in
-`build_datetime`. The other fixes `karac fix` applied were call-site
+inserted `.clone()` before three `unwrap_or` calls on `Parts` fields in
+`build_datetime`. Thread A fixed the row in kara ea1fd651e8, and those
+calls are back to the natural `parts.minute.unwrap_or(0)`. The other fixes `karac fix` applied were call-site
 `mut` markers and two `.clone()`s on a match of a borrowed `Option[Tz]`
 pair. With those, the first run printed the oracle's output under all
 four backends, with nothing on stderr.
