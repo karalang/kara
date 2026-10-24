@@ -1,0 +1,39 @@
+albany: reservations 37,549 bytes, fnv 2efeaf86; postings 39,331 bytes, fnv c8ec9329
+bristol: reservations 25,213 bytes, fnv fb8682c0; postings 27,864 bytes, fnv b53158aa
+carmel: reservations 18,849 bytes, fnv cde1169b; postings 20,413 bytes, fnv 71180542
+denver: reservations 50,146 bytes, fnv dbe403b5; postings 51,086 bytes, fnv 60344cfb
+albany_reservations.bad line 301: bad arrival '2026-10-32'
+carmel_postings.csv line 2: bad reservation 'C100096'
+parsed files match the built ones: true
+albany occupancy: 83.6% (1,053 of 1,260 room-nights); peak Fri 10-23 98.3%; ADR $168.98, RevPAR $141.21; 14 walked for $1,680.00, 0 oversold
+bristol occupancy: 85.6% (719 of 840 room-nights); peak Fri 10-23 98.3%; ADR $193.48, RevPAR $165.61; 10 walked for $1,200.00, 0 oversold
+carmel occupancy: 91.4% (576 of 630 room-nights); peak Mon 10-19 100.0%; ADR $288.78, RevPAR $264.03; 24 walked for $2,880.00, 0 oversold
+denver occupancy: 83.2% (1,397 of 1,680 room-nights); peak Fri 10-23 100.0%; ADR $134.97, RevPAR $112.24; 12 walked for $1,440.00, 0 oversold
+albany revenue: rooms $177,937.03 (transient $93,220.86, corporate $29,767.85, group $16,874.52, ota $38,073.80); 27 no-shows $4,360.09, 5 late cancels $766.07, 39 free; OTA commission $6,853.08; net $174,530.11
+bristol revenue: rooms $139,112.46 (transient $70,436.51, corporate $25,287.50, group $14,387.10, ota $29,001.35); 11 no-shows $1,888.60, 2 late cancels $545.65, 27 free; OTA commission $5,220.06; net $135,126.65
+carmel revenue: rooms $166,339.30 (transient $75,480.94, corporate $29,662.45, group $21,104.46, ota $40,091.45); 7 no-shows $1,669.05, 4 late cancels $1,218.45, 21 free; OTA commission $7,216.33; net $159,130.47
+denver revenue: rooms $188,566.72 (transient $86,283.88, corporate $40,548.40, group $15,110.94, ota $46,623.50); 34 no-shows $4,358.23, 6 late cancels $763.35, 53 free; OTA commission $8,391.90; net $183,856.40
+albany tax: city tax 14.75% $27,001.82, occupancy fee $2,632.50, remit $29,634.32; best night Fri 10-23 $31,518.53
+bristol tax: city tax 12.00% $16,985.61, occupancy fee $0.00, remit $16,985.61; best night Fri 10-23 $24,327.66
+carmel tax: city tax 10.50% $17,768.81, occupancy fee $1,728.00, remit $19,496.81; best night Mon 10-19 $25,538.15
+denver tax: city tax 15.75% $30,505.91, occupancy fee $2,794.00, remit $33,299.91; best night Fri 10-23 $35,347.29
+albany incidentals: $81,765.85; top spa $41,177.39; 57 to suspense $3,725.78 (first A900033 PK $35.39)
+bristol incidentals: $59,141.19; top spa $30,561.88; 28 to suspense $3,261.32 (first B900336 MB $10.86)
+carmel incidentals: $38,693.36; top spa $17,782.85; 60 to suspense $6,027.89 (first C900289 RT $75.83)
+denver incidentals: $101,770.62; top spa $47,398.12; 39 to suspense $3,695.08 (first D900465 MB $22.20)
+albany folios: 393 checked out, $193,264.18 due, $1,451.66 in credit; 177 still in house; largest A100273 Petrov Z. $2,842.56
+bristol folios: 270 checked out, $135,697.35 due, $1,605.41 in credit; 118 still in house; largest B100123 Brandt V. $2,220.68
+carmel folios: 191 checked out, $151,930.67 due, $172.94 in credit; 85 still in house; largest C100243 Moreau Y. $3,152.30
+denver folios: 524 checked out, $193,196.89 due, $4,230.80 in credit; 240 still in house; largest D101059 Tanaka I. $1,577.88
+albany loyalty: 155 stays posted for 590,250 points; 14 upgrades
+bristol loyalty: 113 stays posted for 472,417 points; 14 upgrades
+carmel loyalty: 81 stays posted for 604,165 points; 27 upgrades
+denver loyalty: 210 stays posted for 618,346 points; 20 upgrades
+M0067 to gold at carmel with 48,308 points
+M0013 to gold at carmel with 62,765 points
+M0077 to gold at denver with 49,262 points
+M0047 to gold at denver with 48,194 points
+M0024 to gold at denver with 53,279 points
+top members: M0013 68,654 gold, M0067 57,224 gold, M0024 53,279 gold, M0077 49,262 gold, M0047 48,194 gold
+tiers: 195 member, 65 silver, 5 gold, 0 platinum; 2,285,178 points issued
+loyalty.log: 564 entries, 21,372 bytes, fnv 16f9a259

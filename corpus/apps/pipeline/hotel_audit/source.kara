@@ -1,0 +1,1084 @@
+// pipeline/hotel_audit
+//
+// A hotel group's night audit at the end of a week, for four hotels
+// (Albany, Bristol, Carmel and Denver): it builds each hotel's
+// reservations and folio postings, writes them as CSV, reads them back and
+// parses them with the property system's checks, then audits the seven
+// nights from Saturday 17 to Friday 23 October 2026: it fills the
+// room-night grid by room type and walks the latest-booked arrivals on a
+// night that is oversold, prices every room-night by rate code and night
+// of the week, charges no-show and late-cancellation fees, works out the
+// city tax and occupancy fees, opens a folio for every stay and posts the
+// incidental charges and payments to it, and runs five reports. Then it
+// posts every checked-out stay of a loyalty member to the group's one
+// loyalty ledger.
+//
+// The builds, the writes, the reads, the parses, the audits and the
+// reports are each a group of statements that do not depend on each other
+// (a stmt-par app). A stay earns points at the multiplier of the tier its
+// member holds when it posts, and tiers change as stays post, so the four
+// hotels have to be posted in order.
+
+const MASK32: i64 = 4294967295;
+const NIGHTS: i64 = 7;
+// Night 0 is Saturday 17 October 2026; a day is an index from it, and
+// FIRST_WEEKDAY is its weekday counting Monday as 0.
+const FIRST_WEEKDAY: i64 = 5;
+const WEEKDAYS: Array[Str, 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const ROOM_TYPES: Array[Str, 3] = ["K", "Q", "S"];
+const RATE_CODES: Array[Str, 5] = ["BAR", "AAA", "CORP", "GRP", "OTA"];
+// Per rate code: the share of the rack rate in percent, whether Friday
+// and Saturday nights carry the weekend uplift, and the segment (an index
+// into SEGMENT_NAMES).
+const RATE_PCT: Array[i64, 5] = [100, 90, 85, 78, 100];
+const RATE_WEEKEND: Array[bool, 5] = [true, true, false, false, true];
+const RATE_SEGMENT: Array[i64, 5] = [0, 0, 1, 2, 3];
+const SEGMENT_NAMES: Array[Str, 4] = ["transient", "corporate", "group", "ota"];
+const WEEKEND_PCT: i64 = 15;
+const OTA_COMMISSION_BP: i64 = 1800;
+// What a walked guest's night at the partner hotel costs.
+const WALK_COST: i64 = 12000;
+const FREE_CANCEL_DAYS: i64 = 2;
+const DEPTS: Array[Str, 6] = ["RS", "MB", "PK", "SP", "RT", "PY"];
+const DEPT_NAMES: Array[Str, 5] = ["room service", "minibar", "parking", "spa", "restaurant"];
+const DEPT_BASE: Array[i64, 5] = [1800, 600, 2500, 9000, 3500];
+const DEPT_SPREAD: Array[i64, 5] = [6000, 2400, 1500, 16000, 9000];
+const SURNAMES: Array[Str, 26] = ["Abara", "Brandt", "Castillo", "Dubois", "Eriksen", "Fontaine", "Garcia", "Haddad", "Ivanova", "Jensen",
+    "Kowalski", "Laurent", "Moreau", "Nakamura", "Okafor", "Petrov", "Quinn", "Rossi", "Sato", "Tanaka",
+    "Ueda", "Varga", "Weber", "Xu", "Yilmaz", "Zhang"];
+const MEMBERS: i64 = 400;
+// Loyalty tiers: the lifetime points that reach each, and the multiplier
+// in percent on a stay's base points.
+const TIERS: Array[Str, 4] = ["member", "silver", "gold", "platinum"];
+const TIER_AT: Array[i64, 4] = [0, 20000, 45000, 90000];
+const TIER_PCT: Array[i64, 4] = [100, 125, 150, 200];
+const GOLD_BONUS: i64 = 2500;
+// Days from 1 January to the first of each month in 2026.
+const MONTH_START: Array[i64, 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const MONTH_DAYS: Array[i64, 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const DAY0: i64 = 289;
+
+struct Hotel {
+    name: String,
+    code: String,
+    // rooms of each type
+    rooms: Vec[i64],
+    // the rack rate of each room type, in cents a night
+    rack: Vec[i64],
+    seed: i64,
+    // the city tax in basis points of room revenue, and the flat
+    // occupancy fee per room-night
+    tax_bp: i64,
+    fee: i64,
+}
+
+#[derive(Clone)]
+struct Res {
+    rid: String,
+    guest: String,
+    // a loyalty number, or -
+    member: String,
+    room: String,
+    rate: String,
+    arrival: i64,
+    nights: i64,
+    // B booked, X cancelled, N no-show
+    status: String,
+    booked: i64,
+    cancelled: Option[i64],
+}
+
+#[derive(Clone)]
+struct Post {
+    rid: String,
+    day: i64,
+    dept: String,
+    amount: i64,
+}
+
+struct Audit {
+    // rooms sold, by night and room type
+    sold: Vec[Vec[i64]],
+    revenue: Vec[i64],
+    // reservation places, in walk order
+    walked: Vec[i64],
+    oversold: i64,
+    by_segment: Vec[i64],
+    noshow_fees: i64,
+    noshows: i64,
+    late_fees: i64,
+    late: i64,
+    free_cancels: i64,
+    commission: i64,
+    tax: i64,
+    fees: i64,
+    // the room revenue of each reservation's whole stay, or -1 for one
+    // with no folio
+    stay_revenue: Vec[i64],
+    // a reservation id's folio: its place in charges and payments
+    folio: Map[String, i64],
+    charges: Vec[i64],
+    payments: Vec[i64],
+    incidentals: Vec[i64],
+    // postings to no open folio
+    suspense: Vec[Post],
+}
+
+struct Ledger {
+    points: Map[String, i64],
+    tier: Map[String, i64],
+    log: Vec[String],
+    upgrades: Vec[String],
+    issued: i64,
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+// A percentage with one decimal, rounded half up.
+fn pct1(num: i64, den: i64) -> String {
+    if den == 0 {
+        return "0.0%".to_string();
+    }
+    let t = (num * 2000 + den) / (2 * den);
+    f"{t / 10}.{t % 10}%"
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 6 {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+fn date_of(day: i64) -> String {
+    let n = DAY0 + day;
+    let mut m = 11;
+    while MONTH_START[m] > n {
+        m -= 1;
+    }
+    f"2026-{m + 1:02}-{n - MONTH_START[m] + 1:02}"
+}
+
+// The day of a YYYY-MM-DD date in 2026, or None.
+fn day_of(t: ref String) -> Option[i64] {
+    if t.len() != 10 or t.substring(4, 5) != "-" or t.substring(7, 8) != "-" {
+        return None;
+    }
+    let ys = t.substring(0, 4);
+    let ms = t.substring(5, 7);
+    let ds = t.substring(8, 10);
+    if not (is_digits(ys) and is_digits(ms) and is_digits(ds)) {
+        return None;
+    }
+    let y = to_int(ys);
+    let m = to_int(ms);
+    let d = to_int(ds);
+    if y != 2026 or m < 1 or m > 12 or d < 1 or d > MONTH_DAYS[m - 1] {
+        return None;
+    }
+    Some(MONTH_START[m - 1] + d - 1 - DAY0)
+}
+
+fn weekday(day: i64) -> i64 {
+    ((FIRST_WEEKDAY + day) % 7 + 7) % 7
+}
+
+fn night_name(day: i64) -> String {
+    let d = date_of(day);
+    f"{WEEKDAYS[weekday(day)]} {d.substring(5, 10)}"
+}
+
+fn index_of(t: ref String, table: ref Vec[String]) -> i64 {
+    for i in 0..table.len() as i64 {
+        if t == table[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn room_index(t: ref String) -> i64 {
+    for i in 0..3 {
+        if t == ROOM_TYPES[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rate_index(t: ref String) -> i64 {
+    for i in 0..5 {
+        if t == RATE_CODES[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn dept_index(t: ref String) -> i64 {
+    for i in 0..6 {
+        if t == DEPTS[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ building
+
+fn build_reservations(ht: ref Hotel) -> Vec[Res] {
+    let mut out: Vec[Res] = Vec.new();
+    let total = ht.rooms[0] + ht.rooms[1] + ht.rooms[2];
+    let count = total * 37 / 10;
+    for i in 0..count {
+        let rid = f"{ht.code}{100000 + i * 3:06}";
+        let initial = char.try_from((65 + mix(ht.seed, i, 2) % 26) as u32).unwrap_or('A');
+        let guest = f"{SURNAMES[mix(ht.seed, i, 1) % 26]} {initial}.";
+        let member = if mix(ht.seed, i, 3) % 5 < 2 {
+            f"M{1 + min2(mix(ht.seed, i, 4) % MEMBERS, mix(ht.seed, i, 5) % MEMBERS):04}"
+        } else {
+            "-".to_string()
+        };
+        let tr = mix(ht.seed, i, 6) % total;
+        let room = if tr < ht.rooms[0] { 0 } else if tr < ht.rooms[0] + ht.rooms[1] { 1 } else { 2 };
+        let cr = mix(ht.seed, i, 7) % 100;
+        let rate = if cr < 38 { 0 } else if cr < 46 { 1 } else if cr < 66 { 2 } else if cr < 78 { 3 } else { 4 };
+        let ar = mix(ht.seed, i, 8) % 24;
+        let arrival = if ar < 2 {
+            -3 + ar
+        } else if ar < 3 {
+            -1
+        } else if ar < 8 {
+            0
+        } else if ar < 12 {
+            6
+        } else {
+            1 + mix(ht.seed, i, 9) % 5
+        };
+        let nr = mix(ht.seed, i, 10) % 20;
+        let nights = if nr < 6 { 1 } else if nr < 12 { 2 } else if nr < 16 { 3 } else if nr < 18 { 4 } else { 5 + mix(ht.seed, i, 11) % 3 };
+        let booked = arrival - 1 - mix(ht.seed, i, 12) % 70;
+        let sr = mix(ht.seed, i, 13) % 100;
+        let mut status = "B".to_string();
+        let mut cancelled: Option[i64] = None;
+        if sr < 8 {
+            status = "X".to_string();
+            cancelled = Some(min2(arrival, booked + 1 + mix(ht.seed, i, 14) % (arrival - booked)));
+        } else if sr < 12 {
+            status = "N".to_string();
+        }
+        out.push(Res {
+            rid: rid,
+            guest: guest,
+            member: member,
+            room: ROOM_TYPES[room].to_string(),
+            rate: RATE_CODES[rate].to_string(),
+            arrival: arrival,
+            nights: nights,
+            status: status,
+            booked: booked,
+            cancelled: cancelled,
+        });
+    }
+    out
+}
+
+fn cmp_post(a: ref Post, b: ref Post) -> Ordering {
+    if a.day != b.day {
+        return a.day.cmp(b.day);
+    }
+    if a.rid != b.rid {
+        return a.rid.cmp(b.rid);
+    }
+    if a.dept != b.dept {
+        return a.dept.cmp(b.dept);
+    }
+    a.amount.cmp(b.amount)
+}
+
+// The week's folio postings: up to four incidental charges for each stay
+// (one in ninety keyed to a mistyped reservation) and a deposit for one
+// stay in three.
+fn build_postings(ht: ref Hotel, res: ref Vec[Res]) -> Vec[Post] {
+    let mut out: Vec[Post] = Vec.new();
+    for i in 0..res.len() as i64 {
+        let rv = ref res[i];
+        if rv.status != "B" {
+            continue;
+        }
+        let n = mix(ht.seed, i, 20) % 5;
+        for k in 0..n {
+            let day = rv.arrival + mix(ht.seed, i, 21 + k) % rv.nights;
+            let dept = mix(ht.seed, i, 26 + k) % 5;
+            let amount = DEPT_BASE[dept] + mix(ht.seed, i, 31 + k) % DEPT_SPREAD[dept];
+            let rid = if mix(ht.seed, i, 36 + k) % 90 == 0 { f"{ht.code}{900000 + i:06}" } else { rv.rid.clone() };
+            out.push(Post { rid: rid, day: day, dept: DEPTS[dept].to_string(), amount: amount });
+        }
+        if mix(ht.seed, i, 41) % 3 == 0 {
+            out.push(Post { rid: rv.rid.clone(), day: rv.arrival, dept: "PY".to_string(), amount: 10000 * (1 + mix(ht.seed, i, 42) % 4) });
+        }
+    }
+    out.sort_by(|a, b| cmp_post(a, b));
+    out
+}
+
+fn res_header() -> String {
+    "reservation,guest,member,room,rate,arrival,nights,status,booked,cancelled".to_string()
+}
+
+fn post_header() -> String {
+    "reservation,date,dept,amount".to_string()
+}
+
+fn encode_reservations(res: ref Vec[Res]) -> String {
+    let mut out = f"{res_header()}\n";
+    for rv in res {
+        let c = match rv.cancelled {
+            Some(d) => date_of(d),
+            None => "-".to_string(),
+        };
+        out.push_str(f"{rv.rid},{rv.guest},{rv.member},{rv.room},{rv.rate},{date_of(rv.arrival)},{rv.nights},{rv.status},{date_of(rv.booked)},{c}\n");
+    }
+    out
+}
+
+fn encode_postings(posts: ref Vec[Post]) -> String {
+    let mut out = f"{post_header()}\n";
+    for p in posts {
+        out.push_str(f"{p.rid},{date_of(p.day)},{p.dept},{dollars(p.amount)}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+fn rid_ok(t: ref String, code: ref String) -> bool {
+    t.len() == 7 and t.substring(0, 1) == code and is_digits(t.substring(1, 7))
+}
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn parse_reservations(path: ref String, ht: ref Hotel, text: ref String) -> Result[Vec[Res], BatchError] {
+    let body = body_lines(path, text, res_header())?;
+    let mut out: Vec[Res] = Vec.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() as i64 != 10 {
+            return Err(bad(f"{path} line {n}: expected 10 fields, found {f.len()}"));
+        }
+        if not rid_ok(f[0], ht.code) {
+            return Err(bad(f"{path} line {n}: bad reservation '{f[0]}'"));
+        }
+        if f[1] == "" {
+            return Err(bad(f"{path} line {n}: empty guest name"));
+        }
+        if f[2] != "-" and not (f[2].len() == 5 and f[2].substring(0, 1) == "M" and is_digits(f[2].substring(1, 5))) {
+            return Err(bad(f"{path} line {n}: bad member '{f[2]}'"));
+        }
+        if room_index(f[3]) < 0 {
+            return Err(bad(f"{path} line {n}: bad room type '{f[3]}'"));
+        }
+        if rate_index(f[4]) < 0 {
+            return Err(bad(f"{path} line {n}: unknown rate code '{f[4]}'"));
+        }
+        let arrival = match day_of(f[5]) {
+            Some(d) => d,
+            None => return Err(bad(f"{path} line {n}: bad arrival '{f[5]}'")),
+        };
+        if not is_digits(f[6]) or f[6].len() > 2 or to_int(f[6]) < 1 or to_int(f[6]) > 14 {
+            return Err(bad(f"{path} line {n}: bad nights '{f[6]}'"));
+        }
+        if f[7] != "B" and f[7] != "X" and f[7] != "N" {
+            return Err(bad(f"{path} line {n}: bad status '{f[7]}'"));
+        }
+        let booked = match day_of(f[8]) {
+            Some(d) => d,
+            None => return Err(bad(f"{path} line {n}: bad booking date '{f[8]}'")),
+        };
+        if booked >= arrival {
+            return Err(bad(f"{path} line {n}: bad booking date '{f[8]}'"));
+        }
+        let mut cancelled: Option[i64] = None;
+        if f[9] != "-" {
+            let c = match day_of(f[9]) {
+                Some(d) => d,
+                None => return Err(bad(f"{path} line {n}: bad cancellation date '{f[9]}'")),
+            };
+            if c < booked or c > arrival {
+                return Err(bad(f"{path} line {n}: bad cancellation date '{f[9]}'"));
+            }
+            cancelled = Some(c);
+        }
+        if (f[7] == "X") != cancelled.is_some() {
+            return Err(bad(f"{path} line {n}: status and cancellation date disagree"));
+        }
+        out.push(Res {
+            rid: f[0].clone(),
+            guest: f[1].clone(),
+            member: f[2].clone(),
+            room: f[3].clone(),
+            rate: f[4].clone(),
+            arrival: arrival,
+            nights: to_int(f[6]),
+            status: f[7].clone(),
+            booked: booked,
+            cancelled: cancelled,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_postings(path: ref String, ht: ref Hotel, text: ref String) -> Result[Vec[Post], BatchError] {
+    let body = body_lines(path, text, post_header())?;
+    let mut out: Vec[Post] = Vec.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() as i64 != 4 {
+            return Err(bad(f"{path} line {n}: expected 4 fields, found {f.len()}"));
+        }
+        if not rid_ok(f[0], ht.code) {
+            return Err(bad(f"{path} line {n}: bad reservation '{f[0]}'"));
+        }
+        let day = match day_of(f[1]) {
+            Some(d) => d,
+            None => return Err(bad(f"{path} line {n}: bad date '{f[1]}'")),
+        };
+        if dept_index(f[2]) < 0 {
+            return Err(bad(f"{path} line {n}: unknown department '{f[2]}'"));
+        }
+        let amount = match cents_of(f[3]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad amount '{f[3]}'")),
+        };
+        if amount == 0 {
+            return Err(bad(f"{path} line {n}: bad amount '{f[3]}'"));
+        }
+        out.push(Post { rid: f[0].clone(), day: day, dept: f[2].clone(), amount: amount });
+    }
+    Ok(out)
+}
+
+fn same_res(a: ref Vec[Res], b: ref Vec[Res]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.rid != y.rid or x.guest != y.guest or x.member != y.member or x.room != y.room or x.rate != y.rate
+            or x.arrival != y.arrival or x.nights != y.nights or x.status != y.status or x.booked != y.booked
+            or x.cancelled != y.cancelled {
+            return false;
+        }
+    }
+    true
+}
+
+fn same_posts(a: ref Vec[Post], b: ref Vec[Post]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.rid != y.rid or x.day != y.day or x.dept != y.dept or x.amount != y.amount {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ the audit
+
+fn night_rate(ht: ref Hotel, rv: ref Res, day: i64) -> i64 {
+    let code = rate_index(rv.rate);
+    let mut rate = ht.rack[room_index(rv.room)] * RATE_PCT[code] / 100;
+    let wd = weekday(day);
+    if RATE_WEEKEND[code] and (wd == 4 or wd == 5) {
+        rate += rate * WEEKEND_PCT / 100;
+    }
+    rate
+}
+
+fn audit(ht: ref Hotel, res: ref Vec[Res], posts: ref Vec[Post]) -> Audit {
+    let n = res.len() as i64;
+    let mut au = Audit {
+        sold: Vec.new(),
+        revenue: Vec.filled(NIGHTS, 0),
+        walked: Vec.new(),
+        oversold: 0,
+        by_segment: Vec.filled(4, 0),
+        noshow_fees: 0,
+        noshows: 0,
+        late_fees: 0,
+        late: 0,
+        free_cancels: 0,
+        commission: 0,
+        tax: 0,
+        fees: 0,
+        stay_revenue: Vec.filled(n, -1),
+        folio: Map.new(),
+        charges: Vec.new(),
+        payments: Vec.new(),
+        incidentals: Vec.filled(5, 0),
+        suspense: Vec.new(),
+    };
+    let mut walked: Vec[bool] = Vec.filled(n, false);
+    for night in 0..NIGHTS {
+        let mut sold_row: Vec[i64] = Vec.new();
+        for t in 0..3 {
+            let mut house: Vec[i64] = Vec.new();
+            for i in 0..n {
+                let rv = ref res[i];
+                if rv.status == "B" and rv.room == ROOM_TYPES[t] and not walked[i] and rv.arrival <= night and night < rv.arrival + rv.nights {
+                    house.push(i);
+                }
+            }
+            let over = house.len() as i64 - ht.rooms[t];
+            if over > 0 {
+                // walk tonight's arrivals that booked last
+                let mut arriving: Vec[i64] = Vec.new();
+                for i in house {
+                    if res[i].arrival == night {
+                        arriving.push(i);
+                    }
+                }
+                arriving.sort_by(|a, b| if res[b].booked != res[a].booked { res[b].booked.cmp(res[a].booked) } else { res[b].rid.cmp(res[a].rid) });
+                let take = min2(over, arriving.len() as i64);
+                for k in 0..take {
+                    walked[arriving[k]] = true;
+                    au.walked.push(arriving[k]);
+                }
+                if over > arriving.len() as i64 {
+                    au.oversold += over - arriving.len() as i64;
+                }
+                let mut kept: Vec[i64] = Vec.new();
+                for i in house {
+                    if not walked[i] {
+                        kept.push(i);
+                    }
+                }
+                house = kept;
+            }
+            sold_row.push(min2(house.len() as i64, ht.rooms[t]));
+            for i in house {
+                let rate = night_rate(ht, res[i], night);
+                au.revenue[night] += rate;
+                au.by_segment[RATE_SEGMENT[rate_index(res[i].rate)]] += rate;
+                if res[i].rate == "OTA" {
+                    au.commission += rate * OTA_COMMISSION_BP / 10000;
+                }
+            }
+        }
+        au.sold.push(sold_row);
+    }
+    for rv in res {
+        if rv.status == "N" and rv.arrival >= 0 and rv.arrival < NIGHTS {
+            au.noshows += 1;
+            au.noshow_fees += night_rate(ht, rv, rv.arrival);
+        }
+        if rv.status == "X" and rv.arrival >= 0 and rv.arrival < NIGHTS {
+            let c = rv.cancelled.unwrap_or(rv.arrival);
+            if rv.arrival - c < FREE_CANCEL_DAYS {
+                au.late += 1;
+                au.late_fees += night_rate(ht, rv, rv.arrival);
+            } else {
+                au.free_cancels += 1;
+            }
+        }
+    }
+    let mut room_nights = 0;
+    let mut room_revenue = 0;
+    for night in 0..NIGHTS {
+        room_nights += au.sold[night][0] + au.sold[night][1] + au.sold[night][2];
+        room_revenue += au.revenue[night];
+    }
+    let taxable = room_revenue + au.noshow_fees + au.late_fees;
+    au.tax = (taxable * ht.tax_bp + 5000) / 10000;
+    au.fees = room_nights * ht.fee;
+    for i in 0..n {
+        let rv = ref res[i];
+        if rv.status != "B" or walked[i] {
+            continue;
+        }
+        let mut stay = 0;
+        for d in rv.arrival..rv.arrival + rv.nights {
+            stay += night_rate(ht, rv, d);
+        }
+        au.stay_revenue[i] = stay;
+        let tax = (stay * ht.tax_bp + 5000) / 10000 + rv.nights * ht.fee;
+        au.folio.insert(rv.rid.clone(), au.charges.len() as i64);
+        au.charges.push(stay + tax);
+        au.payments.push(0);
+    }
+    for p in posts {
+        let at = match au.folio.get(p.rid) {
+            Some(k) => *k,
+            None => {
+                au.suspense.push(p.clone());
+                continue;
+            },
+        };
+        if p.dept == "PY" {
+            au.payments[at] += p.amount;
+        } else {
+            au.charges[at] += p.amount;
+            au.incidentals[dept_index(p.dept)] += p.amount;
+        }
+    }
+    au
+}
+
+// ------------------------------------------------------------ reports
+
+fn sold_on(au: ref Audit, night: i64) -> i64 {
+    au.sold[night][0] + au.sold[night][1] + au.sold[night][2]
+}
+
+fn total_rooms(ht: ref Hotel) -> i64 {
+    ht.rooms[0] + ht.rooms[1] + ht.rooms[2]
+}
+
+fn room_revenue(au: ref Audit) -> i64 {
+    let mut rev = 0;
+    for x in au.revenue {
+        rev += x;
+    }
+    rev
+}
+
+fn occupancy_report(ht: ref Hotel, au: ref Audit) -> String {
+    let avail = total_rooms(ht) * NIGHTS;
+    let mut sold = 0;
+    let mut peak = 0;
+    for night in 0..NIGHTS {
+        sold += sold_on(au, night);
+        if sold_on(au, night) > sold_on(au, peak) {
+            peak = night;
+        }
+    }
+    let rev = room_revenue(au);
+    let adr = if sold > 0 { rev / sold } else { 0 };
+    let revpar = rev / avail;
+    let walked = au.walked.len() as i64;
+    f"{ht.name} occupancy: {pct1(sold, avail)} ({group3(sold)} of {group3(avail)} room-nights); peak {night_name(peak)} {pct1(sold_on(au, peak), total_rooms(ht))}; ADR {money(adr)}, RevPAR {money(revpar)}; {walked} walked for {money(walked * WALK_COST)}, {au.oversold} oversold"
+}
+
+fn revenue_report(ht: ref Hotel, au: ref Audit) -> String {
+    let rev = room_revenue(au);
+    let mut segs: Vec[String] = Vec.new();
+    for k in 0..4 {
+        segs.push(f"{SEGMENT_NAMES[k]} {money(au.by_segment[k])}");
+    }
+    let net = rev + au.noshow_fees + au.late_fees - au.commission - au.walked.len() as i64 * WALK_COST;
+    f"{ht.name} revenue: rooms {money(rev)} ({segs.join(", ")}); {au.noshows} no-shows {money(au.noshow_fees)}, {au.late} late cancels {money(au.late_fees)}, {au.free_cancels} free; OTA commission {money(au.commission)}; net {money(net)}"
+}
+
+fn tax_report(ht: ref Hotel, au: ref Audit) -> String {
+    let mut best = 0;
+    for night in 1..NIGHTS {
+        if au.revenue[night] > au.revenue[best] {
+            best = night;
+        }
+    }
+    f"{ht.name} tax: city tax {ht.tax_bp / 100}.{ht.tax_bp % 100:02}% {money(au.tax)}, occupancy fee {money(au.fees)}, remit {money(au.tax + au.fees)}; best night {night_name(best)} {money(au.revenue[best])}"
+}
+
+fn incidental_report(ht: ref Hotel, au: ref Audit) -> String {
+    let mut total = 0;
+    let mut top = 0;
+    for k in 0..5 {
+        total += au.incidentals[k];
+        if au.incidentals[k] > au.incidentals[top] {
+            top = k;
+        }
+    }
+    let mut sus = 0;
+    for p in au.suspense {
+        sus += p.amount;
+    }
+    let first = if au.suspense.len() > 0 {
+        let p = ref au.suspense[0];
+        f"first {p.rid} {p.dept} {money(p.amount)}"
+    } else {
+        "none".to_string()
+    };
+    f"{ht.name} incidentals: {money(total)}; top {DEPT_NAMES[top]} {money(au.incidentals[top])}; {au.suspense.len()} to suspense {money(sus)} ({first})"
+}
+
+fn folio_report(ht: ref Hotel, res: ref Vec[Res], au: ref Audit) -> String {
+    let mut out = 0;
+    let mut due = 0;
+    let mut credit = 0;
+    let mut house = 0;
+    let mut big = -1;
+    let mut big_bal = 0;
+    for i in 0..res.len() as i64 {
+        let rv = ref res[i];
+        let at = match au.folio.get(rv.rid) {
+            Some(k) => *k,
+            None => continue,
+        };
+        if rv.arrival + rv.nights > NIGHTS - 1 {
+            house += 1;
+            continue;
+        }
+        out += 1;
+        let bal = au.charges[at] - au.payments[at];
+        if bal >= 0 {
+            due += bal;
+        } else {
+            credit -= bal;
+        }
+        if big < 0 or bal > big_bal {
+            big = i;
+            big_bal = bal;
+        }
+    }
+    let tail = if big >= 0 { f"largest {res[big].rid} {res[big].guest} {money(big_bal)}" } else { "none".to_string() };
+    f"{ht.name} folios: {group3(out)} checked out, {money(due)} due, {money(credit)} in credit; {group3(house)} still in house; {tail}"
+}
+
+// ------------------------------------------------------------ the loyalty ledger
+
+// A member's points from before this week.
+fn opening(member: ref String) -> i64 {
+    let n = to_int(member.substring(1, member.len()));
+    hash32(n * 7919 + 13) % 16000
+}
+
+fn tier_of(points: i64) -> i64 {
+    let mut t = 0;
+    for k in 0..4 {
+        if points >= TIER_AT[k] {
+            t = k;
+        }
+    }
+    t
+}
+
+// Post a hotel's checked-out member stays, in check-out order, each at
+// the multiplier of the tier its member holds as it posts.
+fn post_stays(lg: mut ref Ledger, ht: ref Hotel, res: ref Vec[Res], au: ref Audit) -> String {
+    let mut stays: Vec[i64] = Vec.new();
+    for i in 0..res.len() as i64 {
+        if au.stay_revenue[i] >= 0 and res[i].member != "-" and res[i].arrival + res[i].nights <= NIGHTS - 1 {
+            stays.push(i);
+        }
+    }
+    stays.sort_by(|a, b| {
+        let da = res[a].arrival + res[a].nights;
+        let db = res[b].arrival + res[b].nights;
+        if da != db { da.cmp(db) } else { res[a].rid.cmp(res[b].rid) }
+    });
+    let mut issued = 0;
+    let mut ups = 0;
+    for i in stays {
+        let rv = ref res[i];
+        let m = rv.member.clone();
+        if not lg.points.contains_key(m) {
+            let start = opening(m);
+            lg.points.insert(m.clone(), start);
+            lg.tier.insert(m.clone(), tier_of(start));
+        }
+        let mut points = *lg.points.get(m).unwrap_or(0);
+        let mut tier = *lg.tier.get(m).unwrap_or(0);
+        let pts = au.stay_revenue[i] / 10 * TIER_PCT[tier] / 100;
+        points += pts;
+        issued += pts;
+        lg.log.push(f"{m} {rv.rid} {date_of(rv.arrival + rv.nights)} +{pts} {TIERS[tier]}");
+        let mut t = tier_of(points);
+        while tier < t {
+            tier += 1;
+            if tier == 2 {
+                points += GOLD_BONUS;
+                issued += GOLD_BONUS;
+                lg.log.push(f"{m} gold bonus +{GOLD_BONUS}");
+            }
+            if tier >= 2 {
+                lg.upgrades.push(f"{m} to {TIERS[tier]} at {ht.name} with {group3(points)} points");
+            }
+            ups += 1;
+            t = tier_of(points);
+        }
+        lg.points.insert(m.clone(), points);
+        lg.tier.insert(m.clone(), tier);
+    }
+    lg.issued += issued;
+    f"{ht.name} loyalty: {stays.len()} stays posted for {group3(issued)} points; {ups} upgrades"
+}
+
+fn ledger_summary(lg: ref Ledger) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for u in lg.upgrades {
+        out.push(u.clone());
+    }
+    let mut members: Vec[(String, i64)] = Vec.new();
+    let mut counts: Vec[i64] = Vec.filled(4, 0);
+    for (m, p) in lg.points {
+        members.push((m.clone(), *p));
+    }
+    for (_, t) in lg.tier {
+        counts[*t] += 1;
+    }
+    members.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
+    let mut top: Vec[String] = Vec.new();
+    for k in 0..min2(5, members.len() as i64) {
+        let m = ref members[k];
+        let tier = *lg.tier.get(m.0).unwrap_or(0);
+        top.push(f"{m.0} {group3(m.1)} {TIERS[tier]}");
+    }
+    out.push(f"top members: {top.join(", ")}");
+    let mut tiers: Vec[String] = Vec.new();
+    for k in 0..4 {
+        tiers.push(f"{counts[k]} {TIERS[k]}");
+    }
+    out.push(f"tiers: {tiers.join(", ")}; {group3(lg.issued)} points issued");
+    out
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let albany = Hotel { name: "albany", code: "A", rooms: [90, 70, 20].to_vec(), rack: [15900, 14900, 32900].to_vec(), seed: 23, tax_bp: 1475, fee: 250 };
+    let bristol = Hotel { name: "bristol", code: "B", rooms: [60, 48, 12].to_vec(), rack: [18900, 17500, 38500].to_vec(), seed: 41, tax_bp: 1200, fee: 0 };
+    let carmel = Hotel { name: "carmel", code: "C", rooms: [40, 34, 16].to_vec(), rack: [26500, 24900, 52000].to_vec(), seed: 59, tax_bp: 1050, fee: 300 };
+    let denver = Hotel { name: "denver", code: "D", rooms: [120, 96, 24].to_vec(), rack: [12900, 11900, 27500].to_vec(), seed: 73, tax_bp: 1575, fee: 200 };
+
+    // Four reservation books.
+    let r1 = build_reservations(albany);
+    let r2 = build_reservations(bristol);
+    let r3 = build_reservations(carmel);
+    let r4 = build_reservations(denver);
+
+    // Four weeks of folio postings.
+    let p1 = build_postings(albany, r1);
+    let p2 = build_postings(bristol, r2);
+    let p3 = build_postings(carmel, r3);
+    let p4 = build_postings(denver, r4);
+
+    // Eight writes.
+    let w1 = fs.write("albany_reservations.csv", encode_reservations(r1));
+    let w2 = fs.write("bristol_reservations.csv", encode_reservations(r2));
+    let w3 = fs.write("carmel_reservations.csv", encode_reservations(r3));
+    let w4 = fs.write("denver_reservations.csv", encode_reservations(r4));
+    let w5 = fs.write("albany_postings.csv", encode_postings(p1));
+    let w6 = fs.write("bristol_postings.csv", encode_postings(p2));
+    let w7 = fs.write("carmel_postings.csv", encode_postings(p3));
+    let w8 = fs.write("denver_postings.csv", encode_postings(p4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() {
+        return Err(bad("could not write the hotel files"));
+    }
+
+    let whole = read_text("albany_reservations.csv")?;
+    if fs.write("albany_reservations.bad", damage(whole, 300, 5, "2026-10-32")).is_err() {
+        return Err(bad("could not write albany_reservations.bad"));
+    }
+
+    // Eight reads.
+    let tr1 = read_text("albany_reservations.csv")?;
+    let tr2 = read_text("bristol_reservations.csv")?;
+    let tr3 = read_text("carmel_reservations.csv")?;
+    let tr4 = read_text("denver_reservations.csv")?;
+    let tp1 = read_text("albany_postings.csv")?;
+    let tp2 = read_text("bristol_postings.csv")?;
+    let tp3 = read_text("carmel_postings.csv")?;
+    let tp4 = read_text("denver_postings.csv")?;
+    println(f"albany: reservations {group3(tr1.len() as i64)} bytes, fnv {text_sum(tr1):08x}; postings {group3(tp1.len() as i64)} bytes, fnv {text_sum(tp1):08x}");
+    println(f"bristol: reservations {group3(tr2.len() as i64)} bytes, fnv {text_sum(tr2):08x}; postings {group3(tp2.len() as i64)} bytes, fnv {text_sum(tp2):08x}");
+    println(f"carmel: reservations {group3(tr3.len() as i64)} bytes, fnv {text_sum(tr3):08x}; postings {group3(tp3.len() as i64)} bytes, fnv {text_sum(tp3):08x}");
+    println(f"denver: reservations {group3(tr4.len() as i64)} bytes, fnv {text_sum(tr4):08x}; postings {group3(tp4.len() as i64)} bytes, fnv {text_sum(tp4):08x}");
+
+    // Eight parses. Each can fail with `?`, so a parallel run has to
+    // report the first failure in source order.
+    let gr1 = parse_reservations("albany_reservations.csv", albany, tr1)?;
+    let gr2 = parse_reservations("bristol_reservations.csv", bristol, tr2)?;
+    let gr3 = parse_reservations("carmel_reservations.csv", carmel, tr3)?;
+    let gr4 = parse_reservations("denver_reservations.csv", denver, tr4)?;
+    let gp1 = parse_postings("albany_postings.csv", albany, tp1)?;
+    let gp2 = parse_postings("bristol_postings.csv", bristol, tp2)?;
+    let gp3 = parse_postings("carmel_postings.csv", carmel, tp3)?;
+    let gp4 = parse_postings("denver_postings.csv", denver, tp4)?;
+    match parse_reservations("albany_reservations.bad", albany, read_text("albany_reservations.bad")?) {
+        Ok(_) => println("albany_reservations.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_postings("carmel_postings.csv", denver, tp3) {
+        Ok(_) => println("carmel_postings.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_res(gr1, r1) and same_res(gr2, r2) and same_res(gr3, r3) and same_res(gr4, r4) and same_posts(gp1, p1) and same_posts(gp2, p2) and same_posts(gp3, p3) and same_posts(gp4, p4);
+    println(f"parsed files match the built ones: {same}");
+
+    // Four audits, the hot group.
+    let a1 = audit(albany, gr1, gp1);
+    let a2 = audit(bristol, gr2, gp2);
+    let a3 = audit(carmel, gr3, gp3);
+    let a4 = audit(denver, gr4, gp4);
+
+    // Reports that only read what came before.
+    let o1 = occupancy_report(albany, a1);
+    let o2 = occupancy_report(bristol, a2);
+    let o3 = occupancy_report(carmel, a3);
+    let o4 = occupancy_report(denver, a4);
+    let v1 = revenue_report(albany, a1);
+    let v2 = revenue_report(bristol, a2);
+    let v3 = revenue_report(carmel, a3);
+    let v4 = revenue_report(denver, a4);
+    let t1 = tax_report(albany, a1);
+    let t2 = tax_report(bristol, a2);
+    let t3 = tax_report(carmel, a3);
+    let t4 = tax_report(denver, a4);
+    let i1 = incidental_report(albany, a1);
+    let i2 = incidental_report(bristol, a2);
+    let i3 = incidental_report(carmel, a3);
+    let i4 = incidental_report(denver, a4);
+    let f1 = folio_report(albany, gr1, a1);
+    let f2 = folio_report(bristol, gr2, a2);
+    let f3 = folio_report(carmel, gr3, a3);
+    let f4 = folio_report(denver, gr4, a4);
+    for line in [o1, o2, o3, o4, v1, v2, v3, v4, t1, t2, t3, t4, i1, i2, i3, i4, f1, f2, f3, f4] {
+        println(line);
+    }
+
+    // One loyalty ledger: a stay earns at the tier its member holds when
+    // it posts, and posting moves members up, so the hotels post in order.
+    let mut lg = Ledger { points: Map.new(), tier: Map.new(), log: Vec.new(), upgrades: Vec.new(), issued: 0 };
+    println(post_stays(mut lg, albany, gr1, a1));
+    println(post_stays(mut lg, bristol, gr2, a2));
+    println(post_stays(mut lg, carmel, gr3, a3));
+    println(post_stays(mut lg, denver, gr4, a4));
+    for line in ledger_summary(lg) {
+        println(line);
+    }
+    if fs.write("loyalty.log", f"{lg.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write loyalty.log"));
+    }
+    let back = read_text("loyalty.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"loyalty.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["albany_reservations.csv", "bristol_reservations.csv", "carmel_reservations.csv", "denver_reservations.csv", "albany_postings.csv", "bristol_postings.csv", "carmel_postings.csv", "denver_postings.csv", "albany_reservations.bad", "loyalty.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"hotel_audit failed: {e.describe()}"),
+    }
+}
