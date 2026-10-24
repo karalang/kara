@@ -1,0 +1,14 @@
+"abc": 7
+"aba": 6
+"aaa": 3
+"a": 1
+"ab": 3
+"abab": 11
+"zyxz": 14
+"abcdefghijklmnopqrstuvwxyz": 67108863
+300 random words of 14721 letters: counts adding to 98160516783, checksum 702975209
+2000 times a: 2000
+ab 1000 times: 694708213
+the alphabet 76 times and abcd: 712018203
+2000 random letters: 304795967
+2000 random letters from abc: 973045812

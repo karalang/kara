@@ -1,0 +1,75 @@
+// LeetCode #940: Distinct Subsequences II -- doubling, less the repeats.
+//
+// Count the distinct subsequences of each prefix, the empty one
+// included. A new letter doubles them: each one, with or without the
+// letter. The ones counted twice are those that already ended in this
+// letter, and those are exactly the prefix before its last place with the
+// letter put after, so take away the count from just before it. Drop the
+// empty one at the end. O(n) time.
+
+fn distinct_subseq_ii(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    // count[i]: distinct subsequences of the first i letters, the empty
+    // one included
+    let mut count: Vec[i64] = vec![1];
+    // last[c]: one past where letter c was last seen, 0 if never
+    let mut last: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        last.push(0);
+    }
+    for i in 0..n {
+        let c = (b[i] - b'a') as i64;
+        let mut next = 2 * count[i] % m;
+        if last[c] > 0 {
+            next = (next - count[last[c] - 1] + m) % m;
+        }
+        count.push(next);
+        last[c] = i + 1;
+    }
+    (count[n] - 1 + m) % m
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n random letters from the first k of the alphabet.
+fn random_word(seed: mut ref i64, n: i64, k: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((next_random(mut seed) % k + 97) as u8 as char);
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    for s in ["abc", "aba", "aaa", "a", "ab", "abab", "zyxz", "abcdefghijklmnopqrstuvwxyz"] {
+        println(f"\"{s}\": {distinct_subseq_ii(s.to_string())}");
+    }
+    // 300 random words of 1 to 100 letters from the first 1 to 26
+    let mut seed = 940;
+    let mut letters = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 100;
+        let k = 1 + next_random(mut seed) % 26;
+        let a = distinct_subseq_ii(random_word(mut seed, n, k));
+        letters += n;
+        total += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"300 random words of {letters} letters: counts adding to {total}, checksum {check}");
+    // LeetCode's longest: 2000 letters
+    println(f"2000 times a: {distinct_subseq_ii("a".repeat(2000))}");
+    println(f"ab 1000 times: {distinct_subseq_ii("ab".repeat(1000))}");
+    println(f"the alphabet 76 times and abcd: {distinct_subseq_ii("abcdefghijklmnopqrstuvwxyz".repeat(76) + "abcd")}");
+    println(f"2000 random letters: {distinct_subseq_ii(random_word(mut seed, 2000, 26))}");
+    println(f"2000 random letters from abc: {distinct_subseq_ii(random_word(mut seed, 2000, 3))}");
+}

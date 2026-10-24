@@ -1,0 +1,342 @@
+// LeetCode #940: Distinct Subsequences II -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given a string s, return the number of distinct
+// non-empty subsequences of s. Since the answer may be very large,
+// return it modulo 10^9 + 7. A subsequence of a string is a new string
+// formed from the original by deleting some (can be none) of the
+// characters without disturbing the relative positions of the remaining
+// characters.
+
+// ---- the ★ arm: doubling, less the repeats --------------------------------
+fn star_distinct_subseq_ii(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    // count[i]: distinct subsequences of the first i letters, the empty
+    // one included
+    let mut count: Vec[i64] = vec![1];
+    // last[c]: one past where letter c was last seen, 0 if never
+    let mut last: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        last.push(0);
+    }
+    for i in 0..n {
+        let c = (b[i] - b'a') as i64;
+        let mut next = 2 * count[i] % m;
+        if last[c] > 0 {
+            next = (next - count[last[c] - 1] + m) % m;
+        }
+        count.push(next);
+        last[c] = i + 1;
+    }
+    (count[n] - 1 + m) % m
+}
+
+// ---- the ends arm: counts by last letter ----------------------------------
+fn ends_distinct_subseq_ii(s: String) -> i64 {
+    let m = 1000000007;
+    let mut ends: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        ends.push(0);
+    }
+    for ch in s.bytes() {
+        let c = (ch - b'a') as i64;
+        let mut total = 1;
+        for k in 0..26 {
+            total = (total + ends[k]) % m;
+        }
+        ends[c] = total;
+    }
+    let mut answer = 0;
+    for k in 0..26 {
+        answer = (answer + ends[k]) % m;
+    }
+    answer
+}
+
+// ---- the suffix arm: the subsequence automaton ----------------------------
+fn suffix_distinct_subseq_ii(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    // next[i * 26 + c]: the first place at or after i holding letter c,
+    // n if none
+    let mut next: Vec[i64] = Vec.new();
+    for _ in 0..((n + 1) * 26) {
+        next.push(n);
+    }
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        for c in 0..26 {
+            next[i * 26 + c] = next[(i + 1) * 26 + c];
+        }
+        next[i * 26 + (b[i] - b'a') as i64] = i;
+    }
+    // from[i]: distinct non-empty subsequences of the letters from i on
+    let mut from: Vec[i64] = Vec.new();
+    for _ in 0..(n + 1) {
+        from.push(0);
+    }
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        let mut total = 0;
+        for c in 0..26 {
+            let p = next[i * 26 + c];
+            if p < n {
+                total = (total + 1 + from[p + 1]) % m;
+            }
+        }
+        from[i] = total;
+    }
+    from[0]
+}
+
+// ---- the memo arm: recursion with a memo ----------------------------------
+fn memo_count_from(b: ref Vec[u8], i: i64, memo: mut ref Vec[i64]) -> i64 {
+    if memo[i] >= 0 {
+        return memo[i];
+    }
+    let m = 1000000007;
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..26 {
+        seen.push(false);
+    }
+    let mut total = 0;
+    for p in i..b.len() {
+        let c = (b[p] - b'a') as i64;
+        if not seen[c] {
+            seen[c] = true;
+            total = (total + 1 + memo_count_from(b, p + 1, mut memo)) % m;
+        }
+    }
+    memo[i] = total;
+    total
+}
+
+fn memo_distinct_subseq_ii(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut memo: Vec[i64] = Vec.new();
+    for _ in 0..(b.len() + 1) {
+        memo.push(-1);
+    }
+    memo_count_from(b, 0, mut memo)
+}
+
+// ---- the lengths arm: counts by length ------------------------------------
+fn lengths_distinct_subseq_ii(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    // ends[c * (n + 1) + l] and total[l], for lengths l from 0 to n
+    let mut ends: Vec[i64] = Vec.new();
+    for _ in 0..(26 * (n + 1)) {
+        ends.push(0);
+    }
+    let mut total: Vec[i64] = vec![1];
+    for _ in 0..n {
+        total.push(0);
+    }
+    for i in 0..n {
+        let c = (b[i] - b'a') as i64;
+        let mut l = i + 1;
+        while l >= 1 {
+            let was = ends[c * (n + 1) + l];
+            let now = total[l - 1];
+            ends[c * (n + 1) + l] = now;
+            total[l] = (total[l] - was + now + m) % m;
+            l -= 1;
+        }
+    }
+    let mut answer = 0;
+    for l in 1..(n + 1) {
+        answer = (answer + total[l]) % m;
+    }
+    answer
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, s: String) -> i64 {
+    if x == 0 {
+        star_distinct_subseq_ii(s)
+    } else if x == 1 {
+        ends_distinct_subseq_ii(s)
+    } else if x == 2 {
+        suffix_distinct_subseq_ii(s)
+    } else if x == 3 {
+        memo_distinct_subseq_ii(s)
+    } else {
+        lengths_distinct_subseq_ii(s)
+    }
+}
+
+// The statement read literally: every choice of letters to keep, the
+// letters kept read in order, and the different ones counted, leaving
+// out the empty one.
+fn literal(s: ref String) -> i64 {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut found: Set[String] = Set.new();
+    for mask in 1..(1 << n) {
+        let mut t = String.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                t.push(b[i] as char);
+            }
+        }
+        found.insert(t);
+    }
+    found.len()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n random letters from the first k of the alphabet.
+fn random_word(seed: mut ref i64, n: i64, k: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((next_random(mut seed) % k + 97) as u8 as char);
+    }
+    s
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, s: String, k: i64, small: bool) -> i64 {
+    let m = 1000000007;
+    let truth = if small { literal(s) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, s));
+    }
+    // the inputs P3 to P5 share
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut reversed = String.new();
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        reversed.push(b[i] as char);
+    }
+    // the letters shuffled into a new order, and s written in them
+    let mut order: Vec[i64] = Vec.new();
+    for c in 0..26 {
+        order.push(c);
+    }
+    let mut c = 25;
+    while c > 0 {
+        let j = next_random(mut seed) % (c + 1);
+        order.swap(c, j);
+        c -= 1;
+    }
+    let mut relabelled = String.new();
+    let mut used: Vec[bool] = Vec.new();
+    for _ in 0..26 {
+        used.push(false);
+    }
+    for ch in b.iter() {
+        relabelled.push((order[(*ch - b'a') as i64] + 97) as u8 as char);
+        used[(*ch - b'a') as i64] = true;
+    }
+    // a word in letters s does not use, up to 6 of them
+    let mut spare: Vec[i64] = Vec.new();
+    for c in 0..26 {
+        if not used[c] {
+            spare.push(c);
+        }
+    }
+    let mut other = String.new();
+    if spare.len() > 0 {
+        let len = 1 + next_random(mut seed) % 6;
+        for _ in 0..len {
+            other.push((spare[next_random(mut seed) % spare.len()] + 97) as u8 as char);
+        }
+    }
+    // one more letter, and s up to just before its last place in s
+    let extra = next_random(mut seed) % k;
+    let mut before = -1;
+    for p in 0..n {
+        if (b[p] - b'a') as i64 == extra {
+            before = p;
+        }
+    }
+    let longer = s + ((extra + 97) as u8 as char).to_string();
+    let head = if before >= 0 { s.substring(0, before) } else { String.new() };
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's count, on the small words
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: below the modulus, and for up to 29 letters from n, one of
+        // each length at least, to 2^n - 1
+        check(mut t, 2, a >= 0 and a < m and (n > 29 or (a >= n and a <= (1 << n) - 1)));
+        // P3: the word reversed, the same
+        check(mut t, 3, arm(x, reversed) == a);
+        // P4: the letters renamed, the same; and followed by a word in
+        // other letters, each part's choices multiplied
+        let joined = (a + 1) * (arm(x, other) + 1) % m;
+        check(mut t, 4, arm(x, relabelled) == a and arm(x, s + other) == (joined - 1 + m) % m);
+        // P5: one more letter doubles the count, less the ones counted
+        // before that ended in it, which are the count up to its last place
+        let want = if before >= 0 { (2 * a - arm(x, head) + 2 * m) % m } else { (2 * a + 1) % m };
+        check(mut t, 5, arm(x, longer) == want);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 940;
+    let mut words = 0;
+    let mut letters = 0;
+    let mut check_sum = 0;
+    // words of up to 10 letters from the first 1 to 4 against the
+    // statement; then up to 200 from the first 1 to 26
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 10 } else { 1 + next_random(mut seed) % 200 };
+        let k = if small { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 26 };
+        let s = random_word(mut seed, n, k);
+        words += 1;
+        letters += n;
+        let a = properties(mut t, mut seed, s, k, small);
+        check_sum = (check_sum * 1000003 + a) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{words} words of {letters} letters, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

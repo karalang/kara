@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/940-distinct-subsequences-ii/distinct_subseq_ii_suffix.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "610df13d1"
+extracted_src = "a59d781e"
+model_rev = "aafbe785"
+model_src = "a59d781e"
