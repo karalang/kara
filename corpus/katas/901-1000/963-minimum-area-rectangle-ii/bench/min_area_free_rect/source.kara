@@ -1,0 +1,90 @@
+// Benchmark: LeetCode #963 Minimum Area Rectangle II -- the ★ arm,
+// diagonals grouped by centre, on 50 points, LeetCode's largest, packed
+// into small grids so that many pairs share a centre and a length. Each
+// call first moves one point to a free spot, so no two calls see the
+// same points. Mirrors min_area_free_rect.c, .rs, .py and go-seq/.
+fn min_area_free_rect(points: ref Vec[Vec[i64]]) -> f64 {
+    let n = points.len();
+    let mut groups: Map[(i64, i64, i64), Vec[(i64, i64)]] = Map.new();
+    for i in 0..n {
+        for j in i + 1..n {
+            let dx = points[i][0] - points[j][0];
+            let dy = points[i][1] - points[j][1];
+            let key = (points[i][0] + points[j][0], points[i][1] + points[j][1], dx * dx + dy * dy);
+            groups.entry(key).or_insert(Vec.new()).push((i, j));
+        }
+    }
+    let mut best = 0;
+    for (_, pairs) in groups.iter() {
+        for x in 0..pairs.len() {
+            for y in x + 1..pairs.len() {
+                let (i, _) = pairs[x];
+                let (k, l) = pairs[y];
+                let ux = points[k][0] - points[i][0];
+                let uy = points[k][1] - points[i][1];
+                let vx = points[l][0] - points[i][0];
+                let vy = points[l][1] - points[i][1];
+                let area = (ux * vy - uy * vx).abs();
+                if best == 0 or area < best {
+                    best = area;
+                }
+            }
+        }
+    }
+    best as f64
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn has(points: ref Vec[Vec[i64]], x: i64, y: i64) -> bool {
+    for p in points.iter() {
+        if p[0] == x and p[1] == y {
+            return true;
+        }
+    }
+    false
+}
+
+// n distinct points with coordinates from 0 to top.
+fn packed(seed: mut ref i64, n: i64, top: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    while out.len() < n {
+        let x = next_random(mut seed) % (top + 1);
+        let y = next_random(mut seed) % (top + 1);
+        if not has(out, x, y) {
+            out.push(vec![x, y]);
+        }
+    }
+    out
+}
+
+fn main() {
+    let rounds = 40;
+    // 50 cases of 50 points in grids from 8 by 8 to 17 by 17, made once
+    let mut seed = 963;
+    let mut cases: Vec[Vec[Vec[i64]]] = Vec.new();
+    for i in 0..50 {
+        cases.push(packed(mut seed, 50, 7 + i % 10));
+    }
+    let mut total = 0.0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..50 {
+            let c = (r + i) % 50;
+            let top = 7 + c % 10;
+            let p = next_random(mut seed) % 50;
+            let x = next_random(mut seed) % (top + 1);
+            let y = next_random(mut seed) % (top + 1);
+            if not has(cases[c], x, y) {
+                cases[c][p] = vec![x, y];
+            }
+            let a = min_area_free_rect(cases[c]);
+            total += a;
+            check = (check * 31 + a as i64 + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 50 cases of 50 points: the areas sum to {total:.5}, checksum {check}");
+}

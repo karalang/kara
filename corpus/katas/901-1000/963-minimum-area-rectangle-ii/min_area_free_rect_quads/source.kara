@@ -1,0 +1,138 @@
+// LeetCode #963: Minimum Area Rectangle II -- every four points.
+//
+// Try every four points, and each of the three ways to split them into
+// two pairs: when the two pairs share their midpoint and their length
+// they are the diagonals of a rectangle. O(n^4).
+fn diagonals(points: ref Vec[Vec[i64]], p: i64, q: i64, r: i64, s: i64) -> i64 {
+    let a = ref points[p];
+    let b = ref points[q];
+    let c = ref points[r];
+    let d = ref points[s];
+    if a[0] + b[0] != c[0] + d[0] or a[1] + b[1] != c[1] + d[1] {
+        return 0;
+    }
+    let len1 = (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
+    let len2 = (c[0] - d[0]) * (c[0] - d[0]) + (c[1] - d[1]) * (c[1] - d[1]);
+    if len1 != len2 {
+        return 0;
+    }
+    ((c[0] - a[0]) * (d[1] - a[1]) - (c[1] - a[1]) * (d[0] - a[0])).abs()
+}
+
+fn min_area_free_rect(points: ref Vec[Vec[i64]]) -> f64 {
+    let n = points.len();
+    let mut best = 0;
+    for p in 0..n {
+        for q in p + 1..n {
+            for r in q + 1..n {
+                for s in r + 1..n {
+                    for area in [diagonals(points, p, q, r, s), diagonals(points, p, r, q, s), diagonals(points, p, s, q, r)] {
+                        if area > 0 and (best == 0 or area < best) {
+                            best = area;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best as f64
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n distinct points with coordinates from 0 to top.
+fn random_points(seed: mut ref i64, n: i64, top: i64) -> Vec[Vec[i64]] {
+    let mut seen: Set[i64] = Set.new();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    while out.len() < n {
+        let x = next_random(mut seed) % (top + 1);
+        let y = next_random(mut seed) % (top + 1);
+        if not seen.contains(x * 1000000 + y) {
+            seen.insert(x * 1000000 + y);
+            out.push(vec![x, y]);
+        }
+    }
+    out
+}
+
+fn show(points: ref Vec[Vec[i64]]) -> String {
+    let mut s = String.new();
+    for i in 0..points.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"[{points[i][0]},{points[i][1]}]";
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's four examples, then a few more
+    let cases: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![1, 2], vec![2, 1], vec![1, 0], vec![0, 1]],
+        vec![vec![0, 1], vec![2, 1], vec![1, 1], vec![1, 0], vec![2, 0]],
+        vec![vec![0, 3], vec![1, 2], vec![3, 1], vec![1, 3], vec![2, 1]],
+        vec![vec![3, 1], vec![1, 1], vec![0, 1], vec![2, 1], vec![3, 3], vec![3, 2], vec![0, 2], vec![2, 3]],
+        vec![vec![0, 0]],
+        vec![vec![0, 0], vec![0, 1], vec![1, 0], vec![1, 1]],
+        vec![vec![0, 2], vec![2, 0], vec![4, 2], vec![2, 4]],
+        vec![vec![1, 0], vec![4, 1], vec![3, 4], vec![0, 3]],
+        vec![vec![0, 0], vec![0, 40000], vec![40000, 0], vec![40000, 40000]],
+        vec![vec![0, 0], vec![1, 1], vec![2, 2], vec![3, 3]],
+        vec![vec![0, 0], vec![2, 0], vec![2, 1], vec![0, 1], vec![1, 0], vec![1, 1]],
+    ];
+    for points in cases.iter() {
+        println(f"{show(points)}: {min_area_free_rect(points):.5}");
+    }
+    // 300 random cases of 1 to 10 points from 0 to 4
+    let mut seed = 963;
+    let mut count = 0;
+    let mut total = 0.0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10;
+        let points = random_points(mut seed, n, 4);
+        let a = min_area_free_rect(points);
+        count += n;
+        total += a;
+        check = (check * 31 + a as i64) % 1000000007;
+    }
+    println(f"300 random cases of {count} points: the areas sum to {total:.5}, checksum {check}");
+    // LeetCode's largest: 50 points from 0 to 40000
+    let big = random_points(mut seed, 50, 40000);
+    println(f"50 random points: {min_area_free_rect(big):.5}");
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for i in 0..50 {
+        grid.push(vec![4000 * (i % 10), 4000 * (i / 10)]);
+    }
+    println(f"a 10 by 5 grid 4000 apart: {min_area_free_rect(grid):.5}");
+    // 25 points on the circle of radius 1105 round (20000, 20000), on
+    // the same side of a diameter, and the 25 opposite them
+    let mut circle: Vec[Vec[i64]] = Vec.new();
+    let mut x = -1105;
+    while circle.len() < 50 {
+        let mut y = 0;
+        while y * y + x * x < 1105 * 1105 {
+            y += 1;
+        }
+        if y * y + x * x == 1105 * 1105 and y > 0 {
+            circle.push(vec![20000 + x, 20000 + y]);
+            circle.push(vec![20000 - x, 20000 - y]);
+        }
+        x += 1;
+    }
+    println(f"50 points on one circle: {min_area_free_rect(circle):.5}");
+    let mut tilted: Vec[Vec[i64]] = Vec.new();
+    for i in 0..49 {
+        let a = i % 7;
+        let b = i / 7;
+        tilted.push(vec![20000 + 3 * a - 4 * b, 100 + 4 * a + 3 * b]);
+    }
+    tilted.push(vec![0, 0]);
+    println(f"a 7 by 7 grid tilted, and a stray point: {min_area_free_rect(tilted):.5}");
+}

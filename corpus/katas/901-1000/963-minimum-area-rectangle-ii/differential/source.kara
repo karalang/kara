@@ -1,0 +1,413 @@
+// LeetCode #963: Minimum Area Rectangle II -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random points in small grids and on wide planes with tilted
+// rectangles planted among them.
+
+// ---- star ----
+
+fn star_min_area_free_rect(points: ref Vec[Vec[i64]]) -> f64 {
+    let n = points.len();
+    let mut groups: Map[(i64, i64, i64), Vec[(i64, i64)]] = Map.new();
+    for i in 0..n {
+        for j in i + 1..n {
+            let dx = points[i][0] - points[j][0];
+            let dy = points[i][1] - points[j][1];
+            let key = (points[i][0] + points[j][0], points[i][1] + points[j][1], dx * dx + dy * dy);
+            groups.entry(key).or_insert(Vec.new()).push((i, j));
+        }
+    }
+    let mut best = 0;
+    for (_, pairs) in groups.iter() {
+        for x in 0..pairs.len() {
+            for y in x + 1..pairs.len() {
+                let (i, _) = pairs[x];
+                let (k, l) = pairs[y];
+                let ux = points[k][0] - points[i][0];
+                let uy = points[k][1] - points[i][1];
+                let vx = points[l][0] - points[i][0];
+                let vy = points[l][1] - points[i][1];
+                let area = (ux * vy - uy * vx).abs();
+                if best == 0 or area < best {
+                    best = area;
+                }
+            }
+        }
+    }
+    best as f64
+}
+
+// ---- corners ----
+
+fn corners_min_area_free_rect(points: ref Vec[Vec[i64]]) -> f64 {
+    let n = points.len();
+    let mut at: Set[(i64, i64)] = Set.new();
+    for p in points.iter() {
+        at.insert((p[0], p[1]));
+    }
+    let mut best = 0;
+    for a in 0..n {
+        for b in 0..n {
+            for c in b + 1..n {
+                if b == a or c == a {
+                    continue;
+                }
+                let ux = points[b][0] - points[a][0];
+                let uy = points[b][1] - points[a][1];
+                let vx = points[c][0] - points[a][0];
+                let vy = points[c][1] - points[a][1];
+                if ux * vx + uy * vy == 0 and at.contains((points[b][0] + vx, points[b][1] + vy)) {
+                    let area = (ux * vy - uy * vx).abs();
+                    if best == 0 or area < best {
+                        best = area;
+                    }
+                }
+            }
+        }
+    }
+    best as f64
+}
+
+// ---- sides ----
+
+fn sides_sq(points: ref Vec[Vec[i64]], i: i64, j: i64) -> i64 {
+    let dx = points[i][0] - points[j][0];
+    let dy = points[i][1] - points[j][1];
+    dx * dx + dy * dy
+}
+
+fn sides_min_area_free_rect(points: ref Vec[Vec[i64]]) -> f64 {
+    let n = points.len();
+    let mut keys: Vec[i64] = Vec.new();
+    for p in points.iter() {
+        keys.push(p[0] * 1000000 + p[1]);
+    }
+    keys.sort();
+    let mut best = 0;
+    for a in 0..n {
+        for b in 0..n {
+            for c in b + 1..n {
+                if b == a or c == a or sides_sq(points, a, b) + sides_sq(points, a, c) != sides_sq(points, b, c) {
+                    continue;
+                }
+                let x = points[b][0] + points[c][0] - points[a][0];
+                let y = points[b][1] + points[c][1] - points[a][1];
+                let want = x * 1000000 + y;
+                let mut lo = 0;
+                let mut hi = n;
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    if keys[mid] < want {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                if lo < n and keys[lo] == want {
+                    let ux = points[b][0] - points[a][0];
+                    let uy = points[b][1] - points[a][1];
+                    let vx = points[c][0] - points[a][0];
+                    let vy = points[c][1] - points[a][1];
+                    let area = (ux * vy - uy * vx).abs();
+                    if best == 0 or area < best {
+                        best = area;
+                    }
+                }
+            }
+        }
+    }
+    best as f64
+}
+
+// ---- sorted ----
+
+fn sorted_min_area_free_rect(points: ref Vec[Vec[i64]]) -> f64 {
+    let n = points.len();
+    let mut pairs: Vec[(i64, i64, i64, i64, i64)] = Vec.new();
+    for i in 0..n {
+        for j in i + 1..n {
+            let dx = points[i][0] - points[j][0];
+            let dy = points[i][1] - points[j][1];
+            pairs.push((points[i][0] + points[j][0], points[i][1] + points[j][1], dx * dx + dy * dy, i, j));
+        }
+    }
+    pairs.sort();
+    let mut best = 0;
+    let mut start = 0;
+    while start < pairs.len() {
+        let mut end = start + 1;
+        while end < pairs.len() and pairs[end].0 == pairs[start].0 and pairs[end].1 == pairs[start].1 and pairs[end].2 == pairs[start].2 {
+            end += 1;
+        }
+        for x in start..end {
+            for y in x + 1..end {
+                let i = pairs[x].3;
+                let k = pairs[y].3;
+                let l = pairs[y].4;
+                let ux = points[k][0] - points[i][0];
+                let uy = points[k][1] - points[i][1];
+                let vx = points[l][0] - points[i][0];
+                let vy = points[l][1] - points[i][1];
+                let area = (ux * vy - uy * vx).abs();
+                if best == 0 or area < best {
+                    best = area;
+                }
+            }
+        }
+        start = end;
+    }
+    best as f64
+}
+
+// ---- quads ----
+
+fn quads_diagonals(points: ref Vec[Vec[i64]], p: i64, q: i64, r: i64, s: i64) -> i64 {
+    let a = ref points[p];
+    let b = ref points[q];
+    let c = ref points[r];
+    let d = ref points[s];
+    if a[0] + b[0] != c[0] + d[0] or a[1] + b[1] != c[1] + d[1] {
+        return 0;
+    }
+    let len1 = (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
+    let len2 = (c[0] - d[0]) * (c[0] - d[0]) + (c[1] - d[1]) * (c[1] - d[1]);
+    if len1 != len2 {
+        return 0;
+    }
+    ((c[0] - a[0]) * (d[1] - a[1]) - (c[1] - a[1]) * (d[0] - a[0])).abs()
+}
+
+fn quads_min_area_free_rect(points: ref Vec[Vec[i64]]) -> f64 {
+    let n = points.len();
+    let mut best = 0;
+    for p in 0..n {
+        for q in p + 1..n {
+            for r in q + 1..n {
+                for s in r + 1..n {
+                    for area in [quads_diagonals(points, p, q, r, s), quads_diagonals(points, p, r, q, s), quads_diagonals(points, p, s, q, r)] {
+                        if area > 0 and (best == 0 or area < best) {
+                            best = area;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best as f64
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn add_point(out: mut ref Vec[Vec[i64]], seen: mut ref Set[i64], x: i64, y: i64) {
+    if not seen.contains(x * 1000000 + y) {
+        seen.insert(x * 1000000 + y);
+        out.push(vec![x, y]);
+    }
+}
+
+// The corners of `rects` rectangles, each with sides (a, b) and m(-b, a)
+// from a random corner, then random points up to n in all; every
+// coordinate from 0 to top.
+fn planted(seed: mut ref i64, n: i64, top: i64, rects: i64) -> Vec[Vec[i64]] {
+    let mut seen: Set[i64] = Set.new();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rects {
+        let a = 1 + next_random(mut seed) % 6;
+        let b = next_random(mut seed) % 7 - 3;
+        let m = 1 + next_random(mut seed) % 3;
+        let x = 25 + next_random(mut seed) % (top - 50);
+        let y = 25 + next_random(mut seed) % (top - 50);
+        add_point(mut out, mut seen, x, y);
+        add_point(mut out, mut seen, x + a, y + b);
+        add_point(mut out, mut seen, x - m * b, y + m * a);
+        add_point(mut out, mut seen, x + a - m * b, y + b + m * a);
+    }
+    while out.len() < n {
+        let x = next_random(mut seed) % (top + 1);
+        let y = next_random(mut seed) % (top + 1);
+        add_point(mut out, mut seen, x, y);
+    }
+    out
+}
+
+// The statement read literally: every four points in each of their three
+// cyclic orders, a rectangle when all four corners are right angles, its
+// area one side's length times the next's, found as their cross product.
+fn literal(points: ref Vec[Vec[i64]]) -> i64 {
+    let n = points.len();
+    let mut best = 0;
+    for p in 0..n {
+        for q in p + 1..n {
+            for r in q + 1..n {
+                for s in r + 1..n {
+                    for order in [[p, q, r, s], [p, q, s, r], [p, r, q, s]] {
+                        let mut right = true;
+                        for k in 0..4 {
+                            let o = ref points[order[k]];
+                            let u = ref points[order[(k + 1) % 4]];
+                            let v = ref points[order[(k + 3) % 4]];
+                            if (u[0] - o[0]) * (v[0] - o[0]) + (u[1] - o[1]) * (v[1] - o[1]) != 0 {
+                                right = false;
+                            }
+                        }
+                        if right {
+                            let o = ref points[order[0]];
+                            let u = ref points[order[1]];
+                            let v = ref points[order[3]];
+                            let area = ((u[0] - o[0]) * (v[1] - o[1]) - (u[1] - o[1]) * (v[0] - o[0])).abs();
+                            if best == 0 or area < best {
+                                best = area;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+fn arm(x: i64, points: ref Vec[Vec[i64]]) -> i64 {
+    let a = if x == 0 {
+        star_min_area_free_rect(points)
+    } else if x == 1 {
+        corners_min_area_free_rect(points)
+    } else if x == 2 {
+        sides_min_area_free_rect(points)
+    } else if x == 3 {
+        sorted_min_area_free_rect(points)
+    } else {
+        quads_min_area_free_rect(points)
+    };
+    a as i64
+}
+
+// Every point moved by (dx, dy).
+fn moved(points: ref Vec[Vec[i64]], dx: i64, dy: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for p in points.iter() {
+        out.push(vec![p[0] + dx, p[1] + dy]);
+    }
+    out
+}
+
+// Every point turned a quarter round (10000, 10000).
+fn turned(points: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for p in points.iter() {
+        out.push(vec![20000 - p[1], p[0]]);
+    }
+    out
+}
+
+// Every coordinate doubled.
+fn doubled(points: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for p in points.iter() {
+        out.push(vec![2 * p[0], 2 * p[1]]);
+    }
+    out
+}
+
+// The points in a random order.
+fn shuffled(points: ref Vec[Vec[i64]], seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut out = points.clone();
+    for i in 0..out.len() {
+        let j = i + next_random(mut seed) % (out.len() - i);
+        out.swap(i, j);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, points: Vec[Vec[i64]], small: bool) -> i64 {
+    let truth = if small { literal(points) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, points));
+    }
+    let dx = next_random(mut seed) % 20001;
+    let dy = next_random(mut seed) % 20001;
+    let away = moved(points, dx, dy);
+    let round = turned(points);
+    let twice = doubled(points);
+    let mixed = shuffled(points, mut seed);
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: every point moved the same way, the same
+        check(mut t, 2, arm(x, away) == a);
+        // P3: every point turned a quarter round, the same
+        check(mut t, 3, arm(x, round) == a);
+        // P4: every coordinate doubled, four times the area
+        check(mut t, 4, arm(x, twice) == 4 * a);
+        // P5: the points in another order, the same
+        check(mut t, 5, arm(x, mixed) == a);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 963;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 cases of 1 to 8 points from 0 to at most 5, against the
+    // statement, then 200 of 4 to 24 points from 0 to 20000 with up to
+    // three tilted rectangles planted
+    for c in 0..3200 {
+        let small = c < 3000;
+        let points = if small {
+            let top = 2 + next_random(mut seed) % 4;
+            let n = 1 + next_random(mut seed) % 8;
+            planted(mut seed, n, top, 0)
+        } else {
+            let n = 4 + next_random(mut seed) % 21;
+            planted(mut seed, n, 20000, next_random(mut seed) % 4)
+        };
+        count += points.len();
+        let a = properties(mut t, mut seed, points, small);
+        total += a;
+        check_sum = (check_sum * 31 + a) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {count} points: the areas sum to {total}, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
