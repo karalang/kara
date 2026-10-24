@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/901-1000/962-maximum-width-ramp/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "d91a73159"
+extracted_src = "e7629d2c"

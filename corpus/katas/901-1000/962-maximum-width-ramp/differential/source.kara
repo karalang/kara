@@ -1,0 +1,296 @@
+// LeetCode #962: Maximum Width Ramp -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random arrays over narrow and wide ranges of numbers.
+
+// ---- star ----
+
+fn star_max_width_ramp(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut stack: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if stack.is_empty() or nums[i] < nums[stack[stack.len() - 1]] {
+            stack.push(i);
+        }
+    }
+    let mut best = 0;
+    let mut j = n - 1;
+    while j >= 0 and not stack.is_empty() {
+        while not stack.is_empty() and nums[stack[stack.len() - 1]] <= nums[j] {
+            best = best.max(j - stack[stack.len() - 1]);
+            stack.pop();
+        }
+        j -= 1;
+    }
+    best
+}
+
+// ---- sorted ----
+
+fn sorted_max_width_ramp(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..n {
+        order.push(i);
+    }
+    order.sort_by_key(|i| nums[i] * n + i);
+    let mut best = 0;
+    let mut first = n;
+    for i in order.iter() {
+        best = best.max(*i - first);
+        first = first.min(*i);
+    }
+    best
+}
+
+// ---- suffix ----
+
+fn suffix_max_width_ramp(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut right: Vec[i64] = Vec.filled(n, 0);
+    right[n - 1] = nums[n - 1];
+    let mut k = n - 2;
+    while k >= 0 {
+        right[k] = right[k + 1].max(nums[k]);
+        k -= 1;
+    }
+    let mut best = 0;
+    let mut i = 0;
+    let mut j = 0;
+    while j < n {
+        if nums[i] <= right[j] {
+            best = best.max(j - i);
+            j += 1;
+        } else {
+            i += 1;
+        }
+    }
+    best
+}
+
+// ---- search ----
+
+fn search_max_width_ramp(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut lows: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if lows.is_empty() or nums[i] < nums[lows[lows.len() - 1]] {
+            lows.push(i);
+        }
+    }
+    let mut best = 0;
+    for j in 0..n {
+        let mut lo = 0;
+        let mut hi = lows.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if nums[lows[mid]] <= nums[j] {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        if lo < lows.len() {
+            best = best.max(j - lows[lo]);
+        }
+    }
+    best
+}
+
+// ---- fenwick ----
+
+fn fenwick_max_width_ramp(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut top = 0;
+    for x in nums.iter() {
+        top = top.max(*x);
+    }
+    let mut tree: Vec[i64] = Vec.filled(top + 2, n);
+    let mut best = 0;
+    for j in 0..n {
+        let mut k = nums[j] + 1;
+        let mut low = n;
+        while k > 0 {
+            low = low.min(tree[k]);
+            k -= k & -k;
+        }
+        best = best.max(j - low);
+        k = nums[j] + 1;
+        while k <= top + 1 {
+            tree[k] = tree[k].min(j);
+            k += k & -k;
+        }
+    }
+    best
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n numbers from 0 to top.
+fn random_nums(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        out.push(next_random(mut seed) % (top + 1));
+    }
+    out
+}
+
+// The statement read literally: every pair i < j tried, the widest with
+// nums[i] <= nums[j] kept, 0 when there is none.
+fn literal(nums: ref Vec[i64]) -> i64 {
+    let mut best = 0;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            if nums[i] <= nums[j] and j - i > best {
+                best = j - i;
+            }
+        }
+    }
+    best
+}
+
+fn arm(x: i64, nums: ref Vec[i64]) -> i64 {
+    if x == 0 {
+        star_max_width_ramp(nums)
+    } else if x == 1 {
+        sorted_max_width_ramp(nums)
+    } else if x == 2 {
+        suffix_max_width_ramp(nums)
+    } else if x == 3 {
+        search_max_width_ramp(nums)
+    } else {
+        fenwick_max_width_ramp(nums)
+    }
+}
+
+// Every number 1000 larger.
+fn shifted(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        out.push(*x + 1000);
+    }
+    out
+}
+
+// Back to front, each number x turned into 50000 - x.
+fn flipped(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = nums.len() - 1;
+    while i >= 0 {
+        out.push(50000 - nums[i]);
+        i -= 1;
+    }
+    out
+}
+
+// Every number twice, side by side.
+fn doubled(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        out.push(*x);
+        out.push(*x);
+    }
+    out
+}
+
+// Each number replaced by how many distinct numbers are smaller.
+fn ranked(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut values = nums.clone();
+    values.sort();
+    values.dedup();
+    let mut rank: Map[i64, i64] = Map.new();
+    for k in 0..values.len() {
+        rank.insert(values[k], k);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        out.push(rank[*x]);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, nums: Vec[i64], small: bool) -> i64 {
+    let truth = if small { literal(nums) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, nums));
+    }
+    let up = shifted(nums);
+    let turned = flipped(nums);
+    let twice = doubled(nums);
+    let ranks = ranked(nums);
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: every number 1000 larger, the same
+        check(mut t, 2, arm(x, up) == a);
+        // P3: back to front with each number turned round, the same
+        check(mut t, 3, arm(x, turned) == a);
+        // P4: every number twice, side by side, twice as wide and one
+        // more
+        check(mut t, 4, arm(x, twice) == 2 * a + 1);
+        // P5: each number replaced by its rank, the same
+        check(mut t, 5, arm(x, ranks) == a);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 962;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 cases of 2 to 10 numbers from 0 to at most 6, against the
+    // statement, then 200 of up to 2000 numbers from 0 to at most 49000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 2 + next_random(mut seed) % 9 } else { 2 + next_random(mut seed) % 1999 };
+        let top = if small { next_random(mut seed) % 7 } else { next_random(mut seed) % 49001 };
+        let nums = random_nums(mut seed, n, top);
+        count += n;
+        let a = properties(mut t, nums, small);
+        total += a;
+        check_sum = (check_sum * 31 + a) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {count} numbers: the ramps sum to {total}, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

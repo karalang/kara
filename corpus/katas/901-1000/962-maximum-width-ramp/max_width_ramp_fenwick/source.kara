@@ -1,0 +1,113 @@
+// LeetCode #962: Maximum Width Ramp -- Fenwick tree.
+//
+// Walk the places left to right, keeping a Fenwick tree over the numbers
+// that gives the smallest place holding a number at most v. The widest
+// ramp ending at j starts at that place for v = nums[j]; then j goes into
+// the tree. O(n log m) for numbers up to m.
+fn max_width_ramp(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut top = 0;
+    for x in nums.iter() {
+        top = top.max(*x);
+    }
+    let mut tree: Vec[i64] = Vec.filled(top + 2, n);
+    let mut best = 0;
+    for j in 0..n {
+        let mut k = nums[j] + 1;
+        let mut low = n;
+        while k > 0 {
+            low = low.min(tree[k]);
+            k -= k & -k;
+        }
+        best = best.max(j - low);
+        k = nums[j] + 1;
+        while k <= top + 1 {
+            tree[k] = tree[k].min(j);
+            k += k & -k;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n numbers from 0 to top.
+fn random_nums(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        out.push(next_random(mut seed) % (top + 1));
+    }
+    out
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + f"{nums[i]}";
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![6, 0, 8, 2, 1, 5],
+        vec![9, 8, 1, 0, 1, 9, 4, 0, 4, 1],
+        vec![1, 0],
+        vec![0, 1],
+        vec![5, 5],
+        vec![3, 2, 1],
+        vec![1, 2, 3],
+        vec![0, 0, 0, 0],
+        vec![4, 3, 2, 1, 5],
+        vec![2, 9, 1, 3, 0],
+        vec![50000, 0, 0, 50000],
+    ];
+    for nums in cases.iter() {
+        println(f"{show(nums)}: {max_width_ramp(nums)}");
+    }
+    // 300 random cases of 2 to 20 numbers from 0 to at most 9
+    let mut seed = 962;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 19;
+        let top = 1 + next_random(mut seed) % 9;
+        let nums = random_nums(mut seed, n, top);
+        let w = max_width_ramp(nums);
+        count += n;
+        total += w;
+        check = (check * 31 + w) % 1000000007;
+    }
+    println(f"300 random cases of {count} numbers: the ramps sum to {total}, checksum {check}");
+    // LeetCode's largest: 50000 numbers from 0 to 50000
+    let big = random_nums(mut seed, 50000, 50000);
+    println(f"50000 random numbers: {max_width_ramp(big)}");
+    let mut down: Vec[i64] = Vec.new();
+    let mut up: Vec[i64] = Vec.new();
+    let mut valley: Vec[i64] = Vec.new();
+    let mut zigzag: Vec[i64] = Vec.new();
+    for i in 0..50000 {
+        down.push(50000 - i);
+        up.push(i);
+        valley.push(if i < 25000 { 50000 - 2 * i } else { 2 * i - 49999 });
+        zigzag.push(if i % 2 == 0 { 50000 - i } else { i });
+    }
+    println(f"falling from 50000: {max_width_ramp(down)}");
+    println(f"rising from 0: {max_width_ramp(up)}");
+    println(f"falling then rising: {max_width_ramp(valley)}");
+    println(f"falling and rising in turn: {max_width_ramp(zigzag)}");
+    let same: Vec[i64] = Vec.filled(50000, 7);
+    println(f"50000 sevens: {max_width_ramp(same)}");
+    down[49999] = 50000;
+    println(f"falling, then 50000 at the end: {max_width_ramp(down)}");
+}

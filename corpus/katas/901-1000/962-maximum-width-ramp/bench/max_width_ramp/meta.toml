@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/962-maximum-width-ramp/bench/max_width_ramp.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "d91a73159"
+extracted_src = "6dc95101"
