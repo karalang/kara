@@ -29536,7 +29536,7 @@ fn test_module_binding_nested_coercion_keeps_real_errors() {
          let CONFIG: Cfg = Cfg { name: 5, retries: 3 };",
     );
     assert!(
-        type_err.iter().any(|e| e.message.contains("StringSlice")),
+        type_err.iter().any(|e| e.message.contains("'Str'")),
         "a non-string in a StringSlice field must still mismatch: {:?}",
         type_err.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
@@ -29575,7 +29575,7 @@ fn test_module_binding_nested_coercion_keeps_real_errors() {
     );
     let elem = typecheck_errors("let ARR: Array[StringSlice, 2] = [\"a\", 7];");
     assert!(
-        elem.iter().any(|e| e.message.contains("StringSlice")),
+        elem.iter().any(|e| e.message.contains("'Str'")),
         "a non-string array element must still mismatch: {:?}",
         elem.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
@@ -29948,9 +29948,9 @@ fn test_module_binding_heap_string_type_rejected() {
         errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
     assert!(
-        errs.iter()
-            .any(|e| e.message.contains("E_MODULE_BINDING_HEAP_TYPE")
-                && e.message.contains("StringSlice")),
+        errs.iter().any(
+            |e| e.message.contains("E_MODULE_BINDING_HEAP_TYPE") && e.message.contains("'Str'")
+        ),
         "diagnostic should name the code and suggest StringSlice",
     );
 }
@@ -30140,7 +30140,7 @@ fn test_module_binding_inferred_heap_string_rejected_without_annotation() {
     assert!(
         errs.iter()
             .any(|e| e.message.contains("E_MODULE_BINDING_HEAP_TYPE")
-                && e.message.contains("StringSlice")),
+                && e.message.contains("`: Str`")),
         "diagnostic should point at the StringSlice annotation fix-it",
     );
 }

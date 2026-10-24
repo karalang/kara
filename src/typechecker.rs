@@ -719,6 +719,29 @@ impl LocalTypeScope {
 
 // ── Errors ──────────────────────────────────────────────────────
 
+/// `text` with each whole-word `StringSlice` written `Str`, the name the
+/// language gives the string view (design.md § Strings).
+pub(crate) fn display_str_view(text: &str) -> std::borrow::Cow<'_, str> {
+    const NAME: &str = "StringSlice";
+    if !text.contains(NAME) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(NAME) {
+        let before = &rest[..at];
+        let after = &rest[at + NAME.len()..];
+        let whole = !before.chars().next_back().is_some_and(word)
+            && !after.chars().next().is_some_and(word);
+        out.push_str(before);
+        out.push_str(if whole { "Str" } else { NAME });
+        rest = after;
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeError {
     pub message: String,
@@ -4008,6 +4031,18 @@ impl<'a> TypeChecker<'a> {
                 e.message = m;
             }
         }
+        // The string view is `Str` in the source and the pages; `StringSlice`
+        // is the checker's name for it (B-2026-10-21-79).
+        for e in self.errors.iter_mut().chain(self.warnings.iter_mut()) {
+            for text in [Some(&mut e.message), e.expected.as_mut(), e.got.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                if let std::borrow::Cow::Owned(m) = display_str_view(text) {
+                    *text = m;
+                }
+            }
+        }
         TypeCheckResult {
             errors: self.errors,
             warnings: self.warnings,
@@ -7050,6 +7085,32 @@ impl<'a> TypeChecker<'a> {
                 expected: Some(type_display(expected)),
                 got: Some(type_display(found)),
             });
+            return false;
+        }
+        // A `Slice[Str]` parameter given a `Vec[String]` (`Command.args(a)`,
+        // B-2026-10-21-79): each element owns its text, so the vector lends
+        // no `Str` views. Name the two spellings that do.
+        let str_view = |t: &Type| matches!(t, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
+        let owned_strings = |t: &Type| {
+            let mut t = t;
+            while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                t = inner;
+            }
+            matches!(t, Type::Named { name, args } if name == "Vec" && args.len() == 1 && matches!(args[0], Type::Str))
+        };
+        if matches!(expected, Type::Slice { element, mutable: false } if str_view(element))
+            && owned_strings(found)
+        {
+            self.type_error_with_types(
+                "expected 'Slice[Str]', found 'Vec[String]': each `String` owns its text, so a \
+                 `Vec[String]` lends no `Str` views. Build the list as `Str`s (`let a: \
+                 Vec[Str] = [...]` or `Array[Str, N]`), or pass the elements one at a time"
+                    .to_string(),
+                span,
+                TypeErrorKind::TypeMismatch,
+                expected,
+                found,
+            );
             return false;
         }
         // Canonical assignment-mismatch site. Use the typed-fields

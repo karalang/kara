@@ -9065,7 +9065,7 @@ fn fix_migrates_parse_result_and_lazy_split_shapes() {
     rejected_then_fixed_by(
         "split-collect-strings",
         &prog("let csv = \"1,,2\".to_string();\n    let parts: Vec[String] = csv.split(\",\").filter(|p| p.len() > 0).collect();\n    println(f\"{parts.len()}\");"),
-        "FromIterator[StringSlice]",
+        "FromIterator[Str]",
         ".filter(|p| p.len() > 0).map(|p| p.to_string()).collect()",
     );
 }
@@ -10200,10 +10200,7 @@ fn a_tuple_literal_takes_str_from_its_slot() {
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "check must reject: {err}");
-    assert!(
-        err.contains("expected '(StringSlice, StringSlice)'"),
-        "{err}"
-    );
+    assert!(err.contains("expected '(Str, Str)'"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -12493,5 +12490,22 @@ fn a_spawned_task_returns_only_a_cross_task_value() {
          let h = g.spawn(|| P { v: 1 });\n    let k = g.spawn(|| [1, 2, 3]);\n    \
          println(h.join().v);\n    println(k.join().len());\n}\n",
         "1\n3\n",
+    );
+}
+
+#[test]
+fn a_mismatch_names_the_string_view_str() {
+    // B-2026-10-21-79: the view is `Str` in the source and the pages;
+    // `StringSlice` is the checker's own name for it.
+    rejected(
+        "command-args-vec-string",
+        "fn main() {\n    let a = [\"-n\", \"hi\"];\n    \
+         let o = Command.new(\"echo\").args(a).output().unwrap();\n}\n",
+        "expected 'Slice[Str]', found 'Vec[String]': each `String` owns its text",
+    );
+    rejected(
+        "str-view-in-a-tuple",
+        "fn main() {\n    let v: (Str, i64) = (5, 1);\n}\n",
+        "expected '(Str, i64)', found '(i64, i64)'",
     );
 }
