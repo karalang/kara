@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/988-smallest-string-starting-from-leaf/bench/smallest_from_leaf.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 988 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "34b0d80ff"
+classified_with = "195b9d545"
 extracted_src = "cd033c8e"
