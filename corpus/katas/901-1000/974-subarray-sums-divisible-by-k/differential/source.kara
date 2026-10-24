@@ -1,0 +1,263 @@
+// LeetCode #974: Subarray Sums Divisible by K -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random arrays.
+
+// ---- star ----
+
+fn star_subarrays_div_by_k(nums: Vec[i64], k: i64) -> i64 {
+    let mut count = Vec.filled(k, 0);
+    count[0] = 1;
+    let mut sum = 0;
+    let mut total = 0;
+    for x in nums {
+        sum += x;
+        let r = (sum % k + k) % k;
+        total += count[r];
+        count[r] += 1;
+    }
+    total
+}
+
+// ---- map ----
+
+fn map_subarrays_div_by_k(nums: Vec[i64], k: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    seen.insert(0, 1);
+    let mut r = 0;
+    let mut total = 0;
+    for x in nums {
+        r = (r + x % k + k) % k;
+        let c = seen.get(r) ?? 0;
+        total += c;
+        seen.insert(r, c + 1);
+    }
+    total
+}
+
+// ---- pairs ----
+
+fn pairs_subarrays_div_by_k(nums: Vec[i64], k: i64) -> i64 {
+    let mut count = Vec.filled(k, 0);
+    count[0] = 1;
+    let mut sum = 0;
+    for x in nums {
+        sum += x;
+        count[((sum % k) + k) % k] += 1;
+    }
+    let mut total = 0;
+    for c in count {
+        total += c * (c - 1) / 2;
+    }
+    total
+}
+
+// ---- sorted ----
+
+fn sorted_subarrays_div_by_k(nums: Vec[i64], k: i64) -> i64 {
+    let mut rems: Vec[i64] = vec![0];
+    let mut sum = 0;
+    for x in nums {
+        sum += x;
+        rems.push((sum % k + k) % k);
+    }
+    rems.sort();
+    let mut total = 0;
+    let mut run = 1;
+    for i in 1..rems.len() {
+        if rems[i] == rems[i - 1] {
+            run += 1;
+        } else {
+            total += run * (run - 1) / 2;
+            run = 1;
+        }
+    }
+    total + run * (run - 1) / 2
+}
+
+// ---- halves ----
+
+fn halves_count(nums: ref Vec[i64], lo: i64, hi: i64, k: i64, table: mut ref Vec[i64]) -> i64 {
+    if hi - lo == 1 {
+        return if nums[lo] % k == 0 { 1 } else { 0 };
+    }
+    let mid = (lo + hi) / 2;
+    let mut sum = 0;
+    for i in (lo..mid).rev() {
+        sum += nums[i];
+        table[(sum % k + k) % k] += 1;
+    }
+    let mut crossing = 0;
+    sum = 0;
+    for j in mid..hi {
+        sum += nums[j];
+        let b = (sum % k + k) % k;
+        crossing += table[(k - b) % k];
+    }
+    sum = 0;
+    for i in (lo..mid).rev() {
+        sum += nums[i];
+        table[(sum % k + k) % k] -= 1;
+    }
+    halves_count(nums, lo, mid, k, mut table) + halves_count(nums, mid, hi, k, mut table) + crossing
+}
+
+fn halves_subarrays_div_by_k(nums: Vec[i64], k: i64) -> i64 {
+    let mut table = Vec.filled(k, 0);
+    halves_count(nums, 0, nums.len(), k, mut table)
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, span: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * span + 1) - span);
+    }
+    nums
+}
+
+// The statement read literally: every subarray summed, extending each
+// start one number at a time, and tested.
+fn literal(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut total = 0;
+    for i in 0..nums.len() {
+        let mut sum = 0;
+        for j in i..nums.len() {
+            sum += nums[j];
+            if sum % k == 0 {
+                total += 1;
+            }
+        }
+    }
+    total
+}
+
+fn arm(a: i64, nums: Vec[i64], k: i64) -> i64 {
+    if a == 0 {
+        star_subarrays_div_by_k(nums, k)
+    } else if a == 1 {
+        map_subarrays_div_by_k(nums, k)
+    } else if a == 2 {
+        pairs_subarrays_div_by_k(nums, k)
+    } else if a == 3 {
+        sorted_subarrays_div_by_k(nums, k)
+    } else {
+        halves_subarrays_div_by_k(nums, k)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, nums: Vec[i64], k: i64, small: bool, seed: mut ref i64) -> i64 {
+    let n = nums.len();
+    let truth = if small { literal(nums, k) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, nums, k));
+    }
+    let mut reversed = nums.clone();
+    reversed.reverse();
+    let mut negated: Vec[i64] = Vec.new();
+    let mut remainders: Vec[i64] = Vec.new();
+    for x in nums {
+        negated.push(-x);
+        remainders.push((x % k + k) % k);
+    }
+    // one number moved by k, staying within -10^4 to 10^4
+    let at = next_random(mut seed) % n;
+    let mut moved = nums.clone();
+    moved[at] = if nums[at] - k >= -10000 { nums[at] - k } else { nums[at] + k };
+    // a 0 in front, and how many nonempty prefixes are divisible by k
+    let mut zeroed: Vec[i64] = vec![0];
+    zeroed.extend(nums.clone());
+    let mut prefixes = 0;
+    let mut sum = 0;
+    for x in nums {
+        sum += x;
+        if sum % k == 0 {
+            prefixes += 1;
+        }
+    }
+    for a in 0..5 {
+        let c = got[a];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut tally, 1, c == truth);
+        }
+        // P2: the array reversed gives the same count
+        check(mut tally, 2, arm(a, reversed, k) == c);
+        // P3: every number negated gives the same count
+        check(mut tally, 3, arm(a, negated, k) == c);
+        // P4: a 0 in front adds itself and one subarray for each prefix
+        // divisible by k
+        check(mut tally, 4, arm(a, zeroed, k) == c + 1 + prefixes);
+        // P5: only remainders matter: every number replaced by its
+        // remainder, or one number moved by k, gives the same count
+        check(mut tally, 5, arm(a, remainders, k) == c and arm(a, moved, k) == c);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == c {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 974;
+    let mut total = 0;
+    let mut subarrays = 0;
+    let mut check_sum = 0;
+    // 3000 small cases against the statement, with small and large
+    // numbers and divisors, then 200 of 300 numbers over LeetCode's
+    // whole range with k up to 10^4
+    for c in 0..3200 {
+        let small = c < 3000;
+        let (nums, k) = if small {
+            let n = 1 + next_random(mut seed) % 30;
+            let span = vec![3, 10, 100, 10000][c % 4];
+            let top = vec![3, 10, 100, 10000][(c / 4) % 4];
+            let nums = random_nums(n, span, mut seed);
+            (nums, 2 + next_random(mut seed) % (top - 1))
+        } else {
+            let nums = random_nums(300, 10000, mut seed);
+            (nums, 2 + next_random(mut seed) % 9999)
+        };
+        let got = properties(mut tally, nums, k, small, mut seed);
+        total += nums.len();
+        subarrays += got;
+        check_sum = (check_sum * 31 + got) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {total} numbers: {subarrays} subarrays, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

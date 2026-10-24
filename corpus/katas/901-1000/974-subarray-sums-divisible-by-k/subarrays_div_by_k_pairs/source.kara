@@ -1,0 +1,69 @@
+// LeetCode #974: Subarray Sums Divisible by K -- choose two.
+//
+// Count every prefix remainder first, the empty prefix's 0 included;
+// then c prefixes sharing a remainder give c * (c - 1) / 2 subarrays,
+// one for each pair of them. O(n + k).
+
+fn subarrays_div_by_k(nums: Vec[i64], k: i64) -> i64 {
+    let mut count = Vec.filled(k, 0);
+    count[0] = 1;
+    let mut sum = 0;
+    for x in nums {
+        sum += x;
+        count[((sum % k) + k) % k] += 1;
+    }
+    let mut total = 0;
+    for c in count {
+        total += c * (c - 1) / 2;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, span: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * span + 1) - span);
+    }
+    nums
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[(Vec[i64], i64)] = vec![
+        (vec![4, 5, 0, -2, -3, 1], 5),
+        (vec![5], 9),
+        (vec![0, 0, 0], 2),
+        (vec![-1, 2, 9], 2),
+        (vec![7, -7], 7),
+        (vec![-5, -5, -5], 5),
+        (vec![-3, 1, -1, 3], 4),
+        (vec![10000, -10000, 10000], 10000),
+        (vec![1, 2, 3], 10000),
+        (vec![2, -2, 2, -2], 3),
+    ];
+    for (nums, k) in cases {
+        println(f"{nums} with k = {k}: {subarrays_div_by_k(nums, k)}");
+    }
+    // random cases: 300 small, 3000 longer, then 4 of 30000 numbers
+    let mut seed = 974;
+    for (count, most, span, top) in vec![(300, 12, 10, 6), (3000, 60, 10000, 50), (4, 30000, 10000, 10000)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if most == 30000 { most } else { 1 + next_random(mut seed) % most };
+            let nums = random_nums(n, span, mut seed);
+            let k = 2 + next_random(mut seed) % (top - 1);
+            let got = subarrays_div_by_k(nums, k);
+            total += got;
+            check = (check * 31 + got) % 1000000007;
+        }
+        println(f"{count} random cases of up to {most} numbers: {total} subarrays, checksum {check}");
+    }
+}

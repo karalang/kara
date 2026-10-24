@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/901-1000/974-subarray-sums-divisible-by-k/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "f00cc0870"
+extracted_src = "d36336aa"

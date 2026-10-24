@@ -1,0 +1,48 @@
+// Benchmark: LeetCode #974 Subarray Sums Divisible by K -- the ★ arm,
+// counts of prefix remainders, on 20 arrays of 30000 random numbers.
+// Mirrors subarrays_div_by_k.rs, .c, .py and go-seq/.
+
+fn subarrays_div_by_k(nums: Vec[i64], k: i64) -> i64 {
+    let mut count = Vec.filled(k, 0);
+    count[0] = 1;
+    let mut sum = 0;
+    let mut total = 0;
+    for x in nums {
+        sum += x;
+        let r = (sum % k + k) % k;
+        total += count[r];
+        count[r] += 1;
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 200;
+    let count = 20;
+    let mut seed = 974;
+    let mut cases: Vec[(Vec[i64], i64)] = Vec.new();
+    for _ in 0..count {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..30000 {
+            nums.push(next_random(mut seed) % 20001 - 10000);
+        }
+        let k = 2 + next_random(mut seed) % 9999;
+        cases.push((nums, k));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let c = (r + i) % count;
+            let got = subarrays_div_by_k(cases[c].0, cases[c].1);
+            total += got;
+            check = (check * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} arrays of 30000 numbers: {total} subarrays, checksum {check}");
+}
