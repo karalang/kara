@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | false-positive | 15 |
 | missing-feature | 15 |
-| diagnostics | 11 |
+| diagnostics | 13 |
 | perf | 10 |
 | miscompile | 4 |
 | soundness | 4 |
@@ -72,12 +72,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 29 |
-| codegen | 23 |
-| interp | 16 |
-| mir | 9 |
+| typecheck | 30 |
+| codegen | 22 |
+| interp | 15 |
+| mir | 10 |
 | runtime | 8 |
-| cli | 7 |
+| cli | 8 |
 | ownership | 4 |
 | other | 2 |
 | mir-llvm | 2 |
@@ -131,9 +131,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-11 | 2026-10-24 | mir | low | A `match` on a tuple of handle LOCALS that outlive it (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`, kata 558's `intersect`) still counts each handle into the built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads | — |
 | B-2026-10-24-12 | 2026-10-24 | parser | low | `karac fix` has no fix for `format!("..{}..", a, b)`: the error names the f-string to write but offers no edit, though a literal whose holes are all `{}` or `{:spec}` with one argument each maps one-to-one onto `f"..{a}..{b:spec}.."` | — |
 | B-2026-10-24-13 | 2026-10-24 | parser | low | The turbofish fix deletes `::<T>` / `::[T]` from `let x = it.collect::[Vec[char]]();` and leaves `let x = it.collect();`, which then fails E0238 "cannot infer type parameter 'C'": in a `let` with no annotation the fix should move the type onto the binding, as its own message tells the author to | — |
-| B-2026-10-24-15 | 2026-10-24 | typecheck+interp+codegen | low | A binding of a non-Copy payload from a `match` on a FIELD of a `mut ref` parameter (`match c.s { S.B(buf) => add(mut buf, 7) }`, `c: mut ref C`) is a `mut ref` under `karac check`, per core-semantics §4.6, but `ref` under the MIR typecheck, which refuses passing it as a `mut ref` argument; a method call through the same binding is accepted by both | — |
-| B-2026-10-24-16 | 2026-10-24 | typecheck | medium | `karac check` rejects `.collect()` after an item-preserving adaptor on a generic iterator: under `I: Iterator[Item = i64]`, `it.filter(|x| x % 2 == 0).collect()` and `it.take(2).collect()` into a `Vec[i64]` give "trait bound `C: FromIterator[ItemV]` is not satisfied; `Vec[i64]` implements `FromIterator[i64]`, not `FromIterator[ItemV]`" | — |
-| B-2026-10-24-17 | 2026-10-24 | typecheck+interp | medium | An integer literal in a tuple literal gets no range check against its slot: `let t: (i64, u8) = (1, 300);` passes `karac check` and the MIR run prints `t.1` as 44, where `let x: u8 = 300;` is refused | — |
+| B-2026-10-24-15 | 2026-10-24 | typecheck+mir | low | A binding of a non-Copy payload from a `match` on a FIELD of a `mut ref` parameter (`match c.s { S.B(buf) => add(mut buf, 7) }`, `c: mut ref C`) is a `mut ref` under `karac check`, per core-semantics §4.6, but `ref` under the MIR typecheck, which refuses passing it as a `mut ref` argument; a method call through the same binding is accepted by both | — |
+| B-2026-10-24-18 | 2026-10-24 | cli | low | `karac fix` answers E_INDEX_MOVE_NON_COPY on `let t = v[i];` (a non-Copy element, only read afterwards) by adding `#[derive(Clone)]` to the element type and then `.clone()`, a deep copy, instead of the `ref v[i]` borrow the message lists first; the first message also says no `.clone()` is offered while its fix adds the derive | — |
+| B-2026-10-24-19 | 2026-10-24 | typecheck | low | A bare parameter, or a binding out of one, handed to `Vec.push` gets the generic borrow mismatch (no fix for a non-Clone type, `.clone()` for a Clone one) instead of the "cannot give away parameter" message and `own` fix that `return e` gets in the same function | — |
 
 ### Fixed
 
@@ -164,6 +164,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-5 | mir | high | MIR borrowck lets the borrowed place change while a ref read through a borrowed struct's `mut ref` field is still live, a use-after-free that `karac… | 930b560ed5 |
 | B-2026-10-24-7 | typecheck | low | `c as i128` and `c as u128` on a `char` are refused with a bare "cannot cast 'char' to 'i128'", though `c as i64` and `c as u64` are accepted: intege… | a10f2705e6 |
 | B-2026-10-24-14 | runtime | medium | A growing `VecDeque` moves its elements into the new buffer one at a time on the compiled backends: RawDeque::grow (runtime/src/mir.rs) computes each… | d34614d017 |
+| B-2026-10-24-16 | typecheck | medium | `karac check` rejects `.collect()` after an item-preserving adaptor on a generic iterator: under `I: Iterator[Item = i64]`, `it.filter(\|x\| x % 2 == 0… | 311a15fb9b |
+| B-2026-10-24-17 | typecheck+interp | medium | An integer literal in a tuple literal gets no range check against its slot: `let t: (i64, u8) = (1, 300);` passes `karac check` and the MIR run print… | 311a15fb9b |
 
 </details>
 
