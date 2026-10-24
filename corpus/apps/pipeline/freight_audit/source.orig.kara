@@ -1,0 +1,1239 @@
+// pipeline/freight_audit
+//
+// A shipper's October 2026 freight-payment batch over four carriers:
+// Parcelo (parcel), Swift (expedited air), Northline (less than
+// truckload) and Coastal (truckload). It builds the bill-of-lading file
+// for the month's shipments from three distribution centres and each
+// carrier's invoice file, writes them as CSV, reads them back and parses
+// them with the audit desk's checks, then audits every invoice: it finds
+// the shipment the invoice bills, rejects bills for shipments the carrier
+// never carried and duplicate bills, refunds Swift's late deliveries under
+// its service guarantee, and re-rates the shipment against the carrier's
+// contract tariff (dimensional weight for parcel and air, freight class
+// and weight breaks for LTL, miles and stops for truckload), approving
+// what the tariff says when the bill is over it, has the wrong weight or
+// adds an accessorial nobody ordered. Four reports per carrier follow.
+// Then one payment schedule takes every carrier's approved invoices into
+// weekly payment runs that share one cash budget, with a discount for
+// paying early and a fee for paying late.
+//
+// The builds, the writes, the reads, the parses, the audits and the
+// reports are each a group of statements that do not depend on each
+// other (a stmt-par app). Which run an invoice lands in depends on how
+// much of each run's budget the invoices scheduled before it used, so
+// the four carriers have to be scheduled in order.
+
+const MASK32: i64 = 4294967295;
+// Days from 1 January to the first of each month in 2026; day 0 is
+// Thursday 1 October.
+const MONTH_START: Array[i64, 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const MONTH_DAYS: Array[i64, 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const DAY0: i64 = 273;
+const MONTH_LEN: i64 = 31;
+const SHIPMENTS: i64 = 2000;
+const CONSIGNEES: i64 = 60;
+const REGIONS: i64 = 40;
+// The shipper's three distribution centres: name, ZIP3 and map position
+// in miles.
+const DC_NAMES: Array[Str, 3] = ["Newark", "Columbus", "Reno"];
+const DC_ZIPS: Array[Str, 3] = ["071", "432", "895"];
+const DC_X: Array[i64, 3] = [2350, 1640, 260];
+const DC_Y: Array[i64, 3] = [620, 700, 760];
+const CARRIER_CODES: Str = "PSNC";
+// The LTL freight classes and the accessorial codes: liftgate,
+// residential, inside delivery.
+const CLASSES: Array[i64, 18] = [50, 55, 60, 65, 70, 77, 85, 92, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
+const ACC_CODES: Str = "LRI";
+// The accessorials each kind of carrier offers.
+const ALLOWED: Array[Str, 4] = ["R", "R", "LRI", "L"];
+// LTL weight breaks (pounds) and what each pays of the base, per mille.
+const BREAKS: Array[i64, 4] = [500, 1000, 2000, 5000];
+const BREAK_FACTOR: Array[i64, 5] = [1000, 880, 760, 650, 550];
+const LTL_ACC: Array[i64, 3] = [7500, 9500, 12000];
+const VERDICTS: Array[Str, 8] = ["OK", "OVER", "UNDER", "WGT", "ACC", "DUP", "UNK", "GSR"];
+const VERDICT_NAMES: Array[Str, 8] = ["billed as rated", "over-billed", "under-billed", "billed weight is not the BOL's", "accessorial not authorized", "duplicate invoice", "no such shipment for this carrier", "late, refunded under the service guarantee"];
+const TOLERANCE: i64 = 100;
+// Payment runs every Friday from 9 October, each with the same cash budget.
+const RUNS: i64 = 8;
+const RUN_DAYS: Array[i64, 8] = [8, 15, 22, 29, 36, 43, 50, 57];
+const RUN_BUDGET: i64 = 20000000;
+const APPROVAL_DAYS: i64 = 3;
+const DISCOUNT_DAYS: i64 = 10;
+const NET_DAYS: i64 = 30;
+
+struct Carrier {
+    name: Str,
+    code: Str,
+    // 0 parcel, 1 air, 2 LTL, 3 truckload
+    kind: i64,
+    seed: i64,
+    // bills for shipments that are not this carrier's
+    strangers: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Shipment {
+    bol: String,
+    day: i64,
+    dc: i64,
+    consignee: String,
+    zip3: String,
+    residential: bool,
+    carrier: String,
+    // pounds, and inches for parcel and air
+    weight: i64,
+    length: i64,
+    width: i64,
+    height: i64,
+    // LTL only
+    class: i64,
+    // truckload only: stops, and hours waited at the dock
+    stops: i64,
+    wait: i64,
+    acc: String,
+    promised: i64,
+    delivered: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Invoice {
+    inv: String,
+    day: i64,
+    bol: String,
+    weight: i64,
+    acc: String,
+    // cents
+    amount: i64,
+}
+
+// An invoice while it is built: its date, then the order it was made in,
+// which breaks ties.
+struct Raw {
+    day: i64,
+    order: i64,
+    bol: String,
+    weight: i64,
+    acc: String,
+    amount: i64,
+}
+
+struct Outcome {
+    // an index into VERDICTS
+    verdict: i64,
+    audited: i64,
+    approved: i64,
+    // the shipment's index, or -1
+    ship: i64,
+}
+
+// Amounts by name, in the order the names first came.
+struct Tally {
+    index: Map[String, i64],
+    names: Vec[String],
+    sums: Vec[i64],
+    counts: Vec[i64],
+}
+
+struct Schedule {
+    // what each run has left of its budget
+    left: Vec[i64],
+    paid: i64,
+    discounts: i64,
+    fees: i64,
+    unpaid: i64,
+    unpaid_n: i64,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+// num / den with one decimal, rounded half up.
+fn tenths(num: i64, den: i64) -> String {
+    let t = (num * 20 + den) / (2 * den);
+    f"{t / 10}.{t % 10}"
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn max2(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn ceil_div(a: i64, b: i64) -> i64 {
+    (a + b - 1) / b
+}
+
+// pm per ten thousand of c, rounded half up.
+fn percent_of(c: i64, pm: i64) -> i64 {
+    (c * pm + 5000) / 10000
+}
+
+// Newton's method from above.
+fn isqrt(n: i64) -> i64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 7 {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 6 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+fn date_of(day: i64) -> String {
+    let n = DAY0 + day;
+    let mut m = 11;
+    while MONTH_START[m] > n {
+        m -= 1;
+    }
+    f"2026-{m + 1:02}-{n - MONTH_START[m] + 1:02}"
+}
+
+// The day of a YYYY-MM-DD date in 2026, or None.
+fn day_of(t: ref String) -> Option[i64] {
+    if t.len() != 10 or t.substring(4, 5) != "-" or t.substring(7, 8) != "-" {
+        return None;
+    }
+    let ys = t.substring(0, 4);
+    let ms = t.substring(5, 7);
+    let ds = t.substring(8, 10);
+    if not (is_digits(ys) and is_digits(ms) and is_digits(ds)) {
+        return None;
+    }
+    let y = to_int(ys);
+    let m = to_int(ms);
+    let d = to_int(ds);
+    if y != 2026 or m < 1 or m > 12 or d < 1 or d > MONTH_DAYS[m - 1] {
+        return None;
+    }
+    Some(MONTH_START[m - 1] + d - 1 - DAY0)
+}
+
+fn short_date(day: i64) -> String {
+    date_of(day).substring(5, 10)
+}
+
+// ------------------------------------------------------------ the map
+
+fn region_zip(i: i64) -> String {
+    f"{100 + (i * 37) % 899:03}"
+}
+
+fn region_x(i: i64) -> i64 {
+    mix(7, i, 1) % 2600
+}
+
+fn region_y(i: i64) -> i64 {
+    mix(7, i, 2) % 1400
+}
+
+// The delivery region a ZIP3 is in, or -1.
+fn region_of(zip3: ref String) -> i64 {
+    if zip3.len() != 3 or not is_digits(zip3) {
+        return -1;
+    }
+    let z = to_int(zip3);
+    for i in 0..REGIONS {
+        if 100 + (i * 37) % 899 == z {
+            return i;
+        }
+    }
+    -1
+}
+
+fn consignee_region(c: i64) -> i64 {
+    mix(9, c, 1) % REGIONS
+}
+
+fn consignee_residential(c: i64) -> bool {
+    mix(9, c, 2) % 5 == 0
+}
+
+fn miles(dc: i64, zip3: ref String) -> i64 {
+    let r = region_of(zip3);
+    let dx = DC_X[dc] - region_x(r);
+    let dy = DC_Y[dc] - region_y(r);
+    max2(isqrt(dx * dx + dy * dy) * 117 / 100, 25)
+}
+
+fn zone_of(m: i64) -> i64 {
+    min2(2 + m / 300, 8)
+}
+
+fn dc_of(zip3: ref String) -> i64 {
+    for d in 0..3 {
+        if zip3 == DC_ZIPS[d] {
+            return d;
+        }
+    }
+    -1
+}
+
+fn class_ok(class: i64) -> bool {
+    for c in CLASSES {
+        if c == class {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ building
+
+fn build_shipments() -> Vec[Shipment] {
+    let mut out: Vec[Shipment] = Vec.new();
+    for k in 0..SHIPMENTS {
+        let day = k * MONTH_LEN / SHIPMENTS;
+        let dc = mix(11, k, 0) % 3;
+        let c = mix(11, k, 1) % CONSIGNEES;
+        let zip3 = region_zip(consignee_region(c));
+        let res = consignee_residential(c);
+        let r = mix(11, k, 2) % 100;
+        let m = miles(dc, zip3);
+        let carrier = if r < 46 { "P" } else if r < 54 { "S" } else if r < 91 { "N" } else { "C" };
+        let weight = if carrier == "P" {
+            1 + mix(11, k, 3) % 70
+        } else if carrier == "S" {
+            1 + mix(11, k, 3) % 90
+        } else if carrier == "N" {
+            150 + mix(11, k, 3) % 7851
+        } else {
+            9000 + mix(11, k, 3) % 33001
+        };
+        let mut length = 0;
+        let mut width = 0;
+        let mut height = 0;
+        let mut class = 0;
+        let mut stops = 0;
+        let mut wait = 0;
+        let mut acc = String.new();
+        let mut promised = 0;
+        if carrier == "P" or carrier == "S" {
+            length = 6 + mix(11, k, 4) % 31;
+            width = 4 + mix(11, k, 5) % 21;
+            height = 2 + mix(11, k, 6) % 17;
+            if res {
+                acc.push_str("R");
+            }
+            promised = if carrier == "S" { 1 } else { 1 + m / 600 };
+        } else if carrier == "N" {
+            class = CLASSES[mix(11, k, 4) % 18];
+            if mix(11, k, 5) % 6 == 0 {
+                acc.push_str("L");
+            }
+            if res {
+                acc.push_str("R");
+            }
+            if mix(11, k, 6) % 10 == 0 {
+                acc.push_str("I");
+            }
+            promised = 1 + m / 450;
+        } else {
+            stops = 1 + mix(11, k, 4) % 3;
+            wait = mix(11, k, 5) % 7;
+            promised = 1 + m / 500;
+        }
+        let late = mix(11, k, 7) % 90;
+        let delay = if late < 3 { 2 } else if late < 13 { 1 } else { 0 };
+        out.push(Shipment {
+            bol: f"B{k + 1:05}",
+            day: day,
+            dc: dc,
+            consignee: f"C{c + 1:04}",
+            zip3: zip3,
+            residential: res,
+            carrier: carrier.to_string(),
+            weight: weight,
+            length: length,
+            width: width,
+            height: height,
+            class: class,
+            stops: stops,
+            wait: wait,
+            acc: acc,
+            promised: promised,
+            delivered: day + promised + delay,
+        });
+    }
+    out
+}
+
+// The contract tariff: what a shipment should cost at a given weight with
+// the given accessorials.
+fn rate(kind: i64, s: ref Shipment, weight: i64, acc: ref String) -> i64 {
+    let m = miles(s.dc, s.zip3);
+    let zone = zone_of(m);
+    if kind == 0 {
+        let dim = ceil_div(s.length * s.width * s.height, 139);
+        let billable = max2(weight, dim);
+        let mut sub = 900 + 110 * (zone - 2) + billable * (35 + 9 * (zone - 2));
+        if acc.contains("R") {
+            sub += 460;
+        }
+        return sub + percent_of(sub, 1425);
+    }
+    if kind == 1 {
+        let dim = ceil_div(s.length * s.width * s.height, 166);
+        let billable = max2(weight, dim);
+        let mut sub = max2(2500 + billable * (110 + 22 * (zone - 2)), 4500);
+        if acc.contains("R") {
+            sub += 600;
+        }
+        return sub + percent_of(sub, 1800);
+    }
+    if kind == 2 {
+        let cwt = ceil_div(weight, 100);
+        let base_cwt = (1800 + m * 4) * s.class / 100;
+        let mut b = 0;
+        while b < 4 and weight >= BREAKS[b] {
+            b += 1;
+        }
+        let gross = cwt * base_cwt * BREAK_FACTOR[b] / 1000;
+        let mut net = max2(gross * 32 / 100, 9500);
+        for i in 0..3 {
+            if acc.contains(ACC_CODES.substring(i, i + 1)) {
+                net += LTL_ACC[i];
+            }
+        }
+        return net + percent_of(net, 2240);
+    }
+    let linehaul = max2(m * 285, 85000);
+    let mut extra = 15000 * (s.stops - 1) + 7500 * max2(s.wait - 2, 0);
+    if acc.contains("L") {
+        extra += 9000;
+    }
+    linehaul + extra + m * 62
+}
+
+fn build_invoices(cr: ref Carrier, ships: ref Vec[Shipment]) -> Vec[Invoice] {
+    let mut raw: Vec[Raw] = Vec.new();
+    let mut order = 0;
+    let mut k = 0;
+    let seed = cr.seed;
+    for s in ships {
+        if s.carrier != cr.code {
+            continue;
+        }
+        let e = mix(seed, k, 5) % 1000;
+        let day = s.delivered + 1 + mix(seed, k, 6) % 3;
+        let mut weight = s.weight;
+        let mut acc = s.acc.clone();
+        let mut amount = 0;
+        if e < 40 {
+            // a billed weight over the BOL's
+            weight = s.weight * (110 + mix(seed, k, 7) % 30) / 100;
+            amount = rate(cr.kind, s, weight, acc);
+        } else if e < 90 {
+            // an accessorial the shipper did not order
+            let offered = if cr.kind < 2 { "R" } else if cr.kind == 2 { "LI" } else { "L" };
+            let mut extra = String.new();
+            for i in 0..offered.len() as i64 {
+                let ch = offered.substring(i, i + 1);
+                if not acc.contains(ch) {
+                    extra = ch.to_string();
+                    break;
+                }
+            }
+            if extra != "" {
+                let mut with = String.new();
+                for i in 0..3 {
+                    let ch = ACC_CODES.substring(i, i + 1);
+                    if acc.contains(ch) or ch == extra {
+                        with.push_str(ch);
+                    }
+                }
+                acc = with;
+            }
+            amount = rate(cr.kind, s, weight, acc);
+        } else if e < 125 {
+            amount = rate(cr.kind, s, weight, acc) * (103 + mix(seed, k, 7) % 10) / 100;
+        } else if e < 140 {
+            amount = rate(cr.kind, s, weight, acc) * (90 + mix(seed, k, 7) % 8) / 100;
+        } else if e < 155 {
+            // off by less than the tolerance
+            amount = rate(cr.kind, s, weight, acc) + mix(seed, k, 7) % 81;
+        } else {
+            amount = rate(cr.kind, s, weight, acc);
+        }
+        raw.push(Raw { day: day, order: order, bol: s.bol.clone(), weight: weight, acc: acc.clone(), amount: amount });
+        order += 1;
+        if mix(seed, k, 8) % 40 == 0 {
+            raw.push(Raw { day: day + 4 + mix(seed, k, 9) % 6, order: order, bol: s.bol.clone(), weight: weight, acc: acc, amount: amount });
+            order += 1;
+        }
+        k += 1;
+    }
+    // Bills for shipments that are not this carrier's: some on no BOL at
+    // all, some on another carrier's.
+    let mut other: Vec[i64] = Vec.new();
+    for i in 0..ships.len() as i64 {
+        if ships[i].carrier != cr.code {
+            other.push(i);
+        }
+    }
+    for j in 0..cr.strangers {
+        let h = mix(seed, j, 10);
+        let amount = 5000 + mix(seed, j, 11) % 85000;
+        if j % 3 == 2 {
+            let s = ref ships[other[h % other.len() as i64]];
+            raw.push(Raw { day: s.delivered + 2, order: order, bol: s.bol.clone(), weight: s.weight, acc: String.new(), amount: amount });
+        } else {
+            raw.push(Raw { day: 3 + h % 36, order: order, bol: f"B{90000 + h % 9000:05}", weight: 1 + mix(seed, j, 12) % 900, acc: String.new(), amount: amount });
+        }
+        order += 1;
+    }
+    raw.sort_by(|a, b| if a.day != b.day { a.day.cmp(b.day) } else { a.order.cmp(b.order) });
+    let mut out: Vec[Invoice] = Vec.new();
+    for n in 0..raw.len() as i64 {
+        let x = ref raw[n];
+        out.push(Invoice { inv: f"{cr.code}{n + 1:06}", day: x.day, bol: x.bol.clone(), weight: x.weight, acc: x.acc.clone(), amount: x.amount });
+    }
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn ship_header() -> String {
+    "bol,day,dc,consignee,zip,residential,carrier,weight,length,width,height,class,stops,wait,acc,promised,delivered".to_string()
+}
+
+fn inv_header() -> String {
+    "invoice,day,bol,weight,acc,amount".to_string()
+}
+
+fn acc_text(acc: ref String) -> String {
+    if acc != "" { acc.clone() } else { "-".to_string() }
+}
+
+fn encode_shipments(ships: ref Vec[Shipment]) -> String {
+    let mut out = f"{ship_header()}\n";
+    for s in ships {
+        let res = if s.residential { "Y" } else { "N" };
+        out.push_str(f"{s.bol},{date_of(s.day)},{DC_ZIPS[s.dc]},{s.consignee},{s.zip3},{res},{s.carrier},{s.weight},{s.length},{s.width},{s.height},{s.class},{s.stops},{s.wait},{acc_text(s.acc)},{s.promised},{date_of(s.delivered)}\n");
+    }
+    out
+}
+
+fn encode_invoices(invs: ref Vec[Invoice]) -> String {
+    let mut out = f"{inv_header()}\n";
+    for v in invs {
+        out.push_str(f"{v.inv},{date_of(v.day)},{v.bol},{v.weight},{acc_text(v.acc)},{dollars(v.amount)}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn int_field(path: ref String, n: i64, what: Str, t: ref String, lo: i64, hi: i64) -> Result[i64, BatchError] {
+    match small_int(t, lo, hi) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn day_field(path: ref String, n: i64, what: Str, t: ref String, lo: i64, hi: i64) -> Result[i64, BatchError] {
+    match day_of(t) {
+        Some(v) if v >= lo and v <= hi => Ok(v),
+        _ => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+// Accessorial codes, each one allowed and in LRI order, or - for none.
+fn acc_field(path: ref String, n: i64, t: ref String, allowed: Str) -> Result[String, BatchError] {
+    if t == "-" {
+        return Ok(String.new());
+    }
+    let mut k = 0;
+    for i in 0..t.len() as i64 {
+        let ch = t.substring(i, i + 1);
+        let at = match ACC_CODES.find(ch) {
+            Some(p) => p,
+            None => -1,
+        };
+        if not allowed.contains(ch) or at < k {
+            return Err(bad(f"{path} line {n}: bad accessorials '{t}'"));
+        }
+        k = at + 1;
+    }
+    Ok(t.clone())
+}
+
+fn bol_ok(t: ref String) -> bool {
+    t.len() == 6 and t.substring(0, 1) == "B" and is_digits(t.substring(1, 6))
+}
+
+fn parse_shipments(path: ref String, text: ref String) -> Result[Vec[Shipment], BatchError] {
+    let body = body_lines(path, text, ship_header())?;
+    let mut out: Vec[Shipment] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    let mut last = 0;
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() != 17 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 17"));
+        }
+        if not bol_ok(f[0]) {
+            return Err(bad(f"{path} line {n}: bad BOL '{f[0]}'"));
+        }
+        if seen.contains(f[0]) {
+            return Err(bad(f"{path} line {n}: BOL {f[0]} twice"));
+        }
+        seen.insert(f[0].clone());
+        let day = day_field(path, n, "ship date", f[1], last, MONTH_LEN - 1)?;
+        last = day;
+        let dc = dc_of(f[2]);
+        if dc < 0 {
+            return Err(bad(f"{path} line {n}: no DC at '{f[2]}'"));
+        }
+        if f[3].len() != 5 or f[3].substring(0, 1) != "C" or not is_digits(f[3].substring(1, 5)) {
+            return Err(bad(f"{path} line {n}: bad consignee '{f[3]}'"));
+        }
+        if region_of(f[4]) < 0 {
+            return Err(bad(f"{path} line {n}: no lane to '{f[4]}'"));
+        }
+        if f[5] != "Y" and f[5] != "N" {
+            return Err(bad(f"{path} line {n}: bad residential flag '{f[5]}'"));
+        }
+        let kind = match CARRIER_CODES.find(f[6]) {
+            Some(p) if f[6].len() == 1 => p,
+            _ => return Err(bad(f"{path} line {n}: bad carrier '{f[6]}'")),
+        };
+        let weight = int_field(path, n, "weight", f[7], 1, 45000)?;
+        let small = kind < 2;
+        let lo = if small { 1 } else { 0 };
+        let hi = if small { 108 } else { 0 };
+        let length = int_field(path, n, "length", f[8], lo, hi)?;
+        let width = int_field(path, n, "width", f[9], lo, hi)?;
+        let height = int_field(path, n, "height", f[10], lo, hi)?;
+        let class = int_field(path, n, "class", f[11], 0, 500)?;
+        if (kind == 2) != class_ok(class) {
+            return Err(bad(f"{path} line {n}: bad class '{f[11]}'"));
+        }
+        let stops = int_field(path, n, "stops", f[12], if kind == 3 { 1 } else { 0 }, if kind == 3 { 9 } else { 0 })?;
+        let wait = int_field(path, n, "wait", f[13], 0, if kind == 3 { 24 } else { 0 })?;
+        let acc = acc_field(path, n, f[14], ALLOWED[kind])?;
+        let promised = int_field(path, n, "promised days", f[15], 1, 9)?;
+        let delivered = day_field(path, n, "delivery date", f[16], day, day + 20)?;
+        out.push(Shipment {
+            bol: f[0].clone(),
+            day: day,
+            dc: dc,
+            consignee: f[3].clone(),
+            zip3: f[4].clone(),
+            residential: f[5] == "Y",
+            carrier: f[6].clone(),
+            weight: weight,
+            length: length,
+            width: width,
+            height: height,
+            class: class,
+            stops: stops,
+            wait: wait,
+            acc: acc,
+            promised: promised,
+            delivered: delivered,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_invoices(path: ref String, cr: ref Carrier, text: ref String) -> Result[Vec[Invoice], BatchError] {
+    let body = body_lines(path, text, inv_header())?;
+    let mut out: Vec[Invoice] = Vec.new();
+    let mut last = 0;
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = split_on(body[k], ",");
+        if f.len() != 6 {
+            return Err(bad(f"{path} line {n}: {f.len()} fields, not 6"));
+        }
+        if f[0].len() != 7 or f[0].substring(0, 1) != cr.code or not is_digits(f[0].substring(1, 7)) {
+            return Err(bad(f"{path} line {n}: invoice '{f[0]}' is not {cr.name}'s"));
+        }
+        let day = match day_of(f[1]) {
+            Some(d) if d >= 0 and d <= 60 => d,
+            _ => return Err(bad(f"{path} line {n}: bad invoice date '{f[1]}'")),
+        };
+        if day < last {
+            return Err(bad(f"{path} line {n}: invoice date {f[1]} is before the line above"));
+        }
+        last = day;
+        if not bol_ok(f[2]) {
+            return Err(bad(f"{path} line {n}: bad BOL '{f[2]}'"));
+        }
+        let weight = int_field(path, n, "weight", f[3], 1, 60000)?;
+        let acc = acc_field(path, n, f[4], ACC_CODES)?;
+        let amount = match cents_of(f[5]) {
+            Some(c) => c,
+            None => return Err(bad(f"{path} line {n}: bad amount '{f[5]}'")),
+        };
+        out.push(Invoice { inv: f[0].clone(), day: day, bol: f[2].clone(), weight: weight, acc: acc, amount: amount });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the audit
+
+fn outcome(verdict: i64, audited: i64, approved: i64, ship: i64) -> Outcome {
+    Outcome { verdict: verdict, audited: audited, approved: approved, ship: ship }
+}
+
+// Whether a bill carries an accessorial the BOL does not.
+fn unordered(billed: ref String, ordered: ref String) -> bool {
+    for i in 0..billed.len() as i64 {
+        if not ordered.contains(billed.substring(i, i + 1)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn audit(cr: ref Carrier, ships: ref Vec[Shipment], invs: ref Vec[Invoice]) -> Vec[Outcome] {
+    let mut by_bol: Map[String, i64] = Map.new();
+    for i in 0..ships.len() as i64 {
+        by_bol.insert(ships[i].bol.clone(), i);
+    }
+    let mut seen: Set[String] = Set.new();
+    let mut out: Vec[Outcome] = Vec.new();
+    for v in invs {
+        let i = *by_bol.get(v.bol).unwrap_or(-1);
+        if i < 0 or ships[i].carrier != cr.code {
+            out.push(outcome(6, 0, 0, -1));
+            continue;
+        }
+        let s = ref ships[i];
+        let audited = rate(cr.kind, s, s.weight, s.acc);
+        if seen.contains(v.bol) {
+            out.push(outcome(5, audited, 0, i));
+            continue;
+        }
+        seen.insert(v.bol.clone());
+        if cr.kind == 1 and s.delivered > s.day + s.promised {
+            out.push(outcome(7, audited, 0, i));
+        } else if v.weight != s.weight {
+            out.push(outcome(3, audited, audited, i));
+        } else if unordered(v.acc, s.acc) {
+            out.push(outcome(4, audited, audited, i));
+        } else if v.amount > audited + TOLERANCE {
+            out.push(outcome(1, audited, audited, i));
+        } else if v.amount < audited - TOLERANCE {
+            out.push(outcome(2, audited, v.amount, i));
+        } else {
+            out.push(outcome(0, audited, v.amount, i));
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn new_tally() -> Tally {
+    Tally { index: Map.new(), names: Vec.new(), sums: Vec.new(), counts: Vec.new() }
+}
+
+fn add(t: mut ref Tally, name: ref String, amount: i64) {
+    let i = match t.index.get(name) {
+        Some(i) => *i,
+        None => {
+            let i = t.names.len() as i64;
+            t.index.insert(name.clone(), i);
+            t.names.push(name.clone());
+            t.sums.push(0);
+            t.counts.push(0);
+            i
+        }
+    };
+    t.sums[i] += amount;
+    t.counts[i] += 1;
+}
+
+// The names by amount, largest first, then by name.
+fn ranked(t: ref Tally) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..t.names.len() as i64 {
+        order.push(i);
+    }
+    order.sort_by(|a, b| if t.sums[a] != t.sums[b] { t.sums[b].cmp(t.sums[a]) } else { t.names[a].cmp(t.names[b]) });
+    order
+}
+
+fn audit_report(cr: ref Carrier, invs: ref Vec[Invoice], outs: ref Vec[Outcome]) -> Vec[String] {
+    let mut counts: Vec[i64] = Vec.filled(8, 0);
+    let mut first: Vec[i64] = Vec.filled(8, -1);
+    let mut billed = 0;
+    let mut approved = 0;
+    for k in 0..invs.len() as i64 {
+        let o = ref outs[k];
+        counts[o.verdict] += 1;
+        if first[o.verdict] < 0 {
+            first[o.verdict] = k;
+        }
+        billed += invs[k].amount;
+        approved += o.approved;
+    }
+    let mut tally: Vec[String] = Vec.new();
+    for c in 0..8 {
+        if counts[c] > 0 {
+            tally.push(f"{VERDICTS[c]} {counts[c]}");
+        }
+    }
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(f"{cr.name}: {group3(invs.len() as i64)} invoices, {money(billed)} billed, {money(approved)} approved, saved {money(billed - approved)} ({tenths((billed - approved) * 100, billed)}%): {tally.join(", ")}");
+    for c in 1..8 {
+        if first[c] >= 0 {
+            let v = ref invs[first[c]];
+            let o = ref outs[first[c]];
+            let mut what = f"billed {money(v.amount)}";
+            if o.ship >= 0 {
+                what.push_str(f", audited {money(o.audited)}");
+            }
+            lines.push(f"  {VERDICTS[c]} {VERDICT_NAMES[c]}: {v.inv} {v.bol} {what}");
+        }
+    }
+    lines
+}
+
+fn spend_report(cr: ref Carrier, ships: ref Vec[Shipment], outs: ref Vec[Outcome]) -> String {
+    let mut by_dc: Vec[i64] = Vec.filled(3, 0);
+    let mut n_dc: Vec[i64] = Vec.filled(3, 0);
+    let mut lanes = new_tally();
+    let mut weight = 0;
+    let mut total = 0;
+    let mut n = 0;
+    for o in outs {
+        if o.approved == 0 {
+            continue;
+        }
+        let s = ref ships[o.ship];
+        by_dc[s.dc] += o.approved;
+        n_dc[s.dc] += 1;
+        add(mut lanes, f"{DC_ZIPS[s.dc]}-{s.zip3}", o.approved);
+        weight += s.weight;
+        total += o.approved;
+        n += 1;
+    }
+    let best = ranked(lanes)[0];
+    let mut dcs: Vec[String] = Vec.new();
+    for d in 0..3 {
+        dcs.push(f"{DC_NAMES[d]} {money(by_dc[d])} ({n_dc[d]})");
+    }
+    f"{cr.name} spend: {money(total)} on {group3(n)} shipments, {money(total * 100 / weight)} a hundredweight; {dcs.join(", ")}; top lane {lanes.names[best]} {money(lanes.sums[best])} on {lanes.counts[best]}"
+}
+
+fn service_report(cr: ref Carrier, ships: ref Vec[Shipment]) -> String {
+    let mut n = 0;
+    let mut on_time = 0;
+    let mut late1 = 0;
+    let mut late2 = 0;
+    let mut transit = 0;
+    let mut worst = -1;
+    let mut worst_over = 0;
+    for i in 0..ships.len() as i64 {
+        let s = ref ships[i];
+        if s.carrier != cr.code {
+            continue;
+        }
+        n += 1;
+        let took = s.delivered - s.day;
+        transit += took;
+        let over = took - s.promised;
+        if over <= 0 {
+            on_time += 1;
+        } else if over == 1 {
+            late1 += 1;
+        } else {
+            late2 += 1;
+        }
+        if over > 0 and (worst < 0 or over > worst_over or (over == worst_over and s.day > ships[worst].day)) {
+            worst = i;
+            worst_over = over;
+        }
+    }
+    let mut text = f"{cr.name} service: {group3(on_time)} of {group3(n)} on time ({tenths(on_time * 100, n)}%), {tenths(transit, n)} days in transit on average, {late1} a day late, {late2} two days late";
+    if worst >= 0 {
+        let s = ref ships[worst];
+        text.push_str(f"; latest late {s.bol} shipped {short_date(s.day)}, promised {s.promised}, took {s.delivered - s.day}");
+    }
+    text
+}
+
+fn consignee_report(cr: ref Carrier, ships: ref Vec[Shipment], outs: ref Vec[Outcome]) -> String {
+    let mut spend = new_tally();
+    let mut residential = 0;
+    for o in outs {
+        if o.approved == 0 {
+            continue;
+        }
+        let s = ref ships[o.ship];
+        add(mut spend, s.consignee, o.approved);
+        if s.residential {
+            residential += 1;
+        }
+    }
+    let order = ranked(spend);
+    let mut top: Vec[String] = Vec.new();
+    for k in 0..min2(3, order.len() as i64) {
+        let i = order[k];
+        top.push(f"{spend.names[i]} {money(spend.sums[i])}");
+    }
+    f"{cr.name} consignees: {spend.names.len()} billed, {residential} residential deliveries; top {top.join(", ")}"
+}
+
+// ------------------------------------------------------------ the payment run
+
+fn new_schedule() -> Schedule {
+    Schedule { left: Vec.filled(RUNS, RUN_BUDGET), paid: 0, discounts: 0, fees: 0, unpaid: 0, unpaid_n: 0, log: Vec.new() }
+}
+
+// What an approved invoice costs in a run: 2% off within the discount
+// window, 1.5% more past net 30.
+fn due_on(run_day: i64, inv_day: i64, approved: i64) -> i64 {
+    if run_day <= inv_day + DISCOUNT_DAYS {
+        return approved - (approved * 2 + 50) / 100;
+    }
+    if run_day > inv_day + NET_DAYS {
+        return approved + (approved * 15 + 500) / 1000;
+    }
+    approved
+}
+
+// Each approved invoice goes into the first run after its approval that
+// still has the budget for it.
+fn schedule(pay: mut ref Schedule, cr: ref Carrier, invs: ref Vec[Invoice], outs: ref Vec[Outcome]) -> String {
+    let mut n = 0;
+    let mut paid = 0;
+    let mut disc_n = 0;
+    let mut disc = 0;
+    let mut late_n = 0;
+    let mut fees = 0;
+    let mut unpaid_n = 0;
+    let mut unpaid = 0;
+    let mut runs_used: Set[i64] = Set.new();
+    for k in 0..invs.len() as i64 {
+        let o = ref outs[k];
+        if o.approved == 0 {
+            continue;
+        }
+        let v = ref invs[k];
+        let ready = v.day + APPROVAL_DAYS;
+        let mut placed = false;
+        for r in 0..RUNS {
+            if RUN_DAYS[r] < ready {
+                continue;
+            }
+            let due = due_on(RUN_DAYS[r], v.day, o.approved);
+            if due > pay.left[r] {
+                continue;
+            }
+            pay.left[r] -= due;
+            runs_used.insert(r);
+            n += 1;
+            paid += due;
+            if due < o.approved {
+                disc_n += 1;
+                disc += o.approved - due;
+            } else if due > o.approved {
+                late_n += 1;
+                fees += due - o.approved;
+            }
+            pay.log.push(f"{date_of(RUN_DAYS[r])} {v.inv} {v.bol} {dollars(o.approved)} paid {dollars(due)}");
+            placed = true;
+            break;
+        }
+        if not placed {
+            unpaid_n += 1;
+            unpaid += o.approved;
+            pay.log.push(f"unpaid {v.inv} {v.bol} {dollars(o.approved)}");
+        }
+    }
+    pay.paid += paid;
+    pay.discounts += disc;
+    pay.fees += fees;
+    pay.unpaid += unpaid;
+    pay.unpaid_n += unpaid_n;
+    f"{cr.name} paid: {group3(n)} invoices, {money(paid)} over {runs_used.len()} runs; {disc_n} took the 2% discount, saving {money(disc)}; {late_n} paid past net {NET_DAYS}, {money(fees)} in late fees; {unpaid_n} unpaid at the cutoff, {money(unpaid)}"
+}
+
+fn schedule_summary(pay: ref Schedule) -> Vec[String] {
+    let mut runs: Vec[String] = Vec.new();
+    for r in 0..RUNS {
+        runs.push(f"{short_date(RUN_DAYS[r])} {money(RUN_BUDGET - pay.left[r])}");
+    }
+    let mut out: Vec[String] = Vec.new();
+    out.push(f"payments: {money(pay.paid)} paid, {money(pay.discounts)} in discounts taken, {money(pay.fees)} in late fees, {pay.unpaid_n} invoices unpaid at the cutoff ({money(pay.unpaid)})");
+    out.push(f"runs of {money(RUN_BUDGET)}: {runs.join(", ")}");
+    out
+}
+
+fn file_line(name: Str, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let parcelo = Carrier { name: "parcelo", code: "P", kind: 0, seed: 501, strangers: 9 };
+    let swift = Carrier { name: "swift", code: "S", kind: 1, seed: 602, strangers: 6 };
+    let northline = Carrier { name: "northline", code: "N", kind: 2, seed: 703, strangers: 9 };
+    let coastal = Carrier { name: "coastal", code: "C", kind: 3, seed: 804, strangers: 6 };
+
+    let ships = build_shipments();
+
+    // Four carriers' invoices.
+    let x1 = build_invoices(parcelo, ships);
+    let x2 = build_invoices(swift, ships);
+    let x3 = build_invoices(northline, ships);
+    let x4 = build_invoices(coastal, ships);
+
+    // Five writes.
+    let w1 = fs.write("shipments.csv", encode_shipments(ships));
+    let w2 = fs.write("parcelo_invoices.csv", encode_invoices(x1));
+    let w3 = fs.write("swift_invoices.csv", encode_invoices(x2));
+    let w4 = fs.write("northline_invoices.csv", encode_invoices(x3));
+    let w5 = fs.write("coastal_invoices.csv", encode_invoices(x4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() {
+        return Err(bad("could not write the batch files"));
+    }
+
+    // A copy of Northline's file with one amount cut short, and a copy of
+    // Parcelo's with one invoice dated before the line above it.
+    let whole = read_text("northline_invoices.csv")?;
+    let amount = split_on(split_on(whole, "\n")[57], ",")[5].clone();
+    if fs.write("northline_invoices.bad", damage(whole, 57, 5, amount.substring(0, amount.len() - 1))).is_err() {
+        return Err(bad("could not write northline_invoices.bad"));
+    }
+    let whole2 = read_text("parcelo_invoices.csv")?;
+    let earlier = split_on(split_on(whole2, "\n")[40], ",")[1].clone();
+    if fs.write("parcelo_invoices.bad", damage(whole2, 300, 1, earlier)).is_err() {
+        return Err(bad("could not write parcelo_invoices.bad"));
+    }
+
+    // Five reads.
+    let ts = read_text("shipments.csv")?;
+    let t1 = read_text("parcelo_invoices.csv")?;
+    let t2 = read_text("swift_invoices.csv")?;
+    let t3 = read_text("northline_invoices.csv")?;
+    let t4 = read_text("coastal_invoices.csv")?;
+    println(file_line("shipments", ts));
+    println(file_line("parcelo", t1));
+    println(file_line("swift", t2));
+    println(file_line("northline", t3));
+    println(file_line("coastal", t4));
+
+    // The shipments, then the four invoice files. Each can fail with `?`,
+    // so a parallel run has to report the first failure in source order.
+    let gs = parse_shipments("shipments.csv", ts)?;
+    let g1 = parse_invoices("parcelo_invoices.csv", parcelo, t1)?;
+    let g2 = parse_invoices("swift_invoices.csv", swift, t2)?;
+    let g3 = parse_invoices("northline_invoices.csv", northline, t3)?;
+    let g4 = parse_invoices("coastal_invoices.csv", coastal, t4)?;
+    match parse_invoices("northline_invoices.bad", northline, read_text("northline_invoices.bad")?) {
+        Ok(_) => println("northline_invoices.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_invoices("parcelo_invoices.bad", parcelo, read_text("parcelo_invoices.bad")?) {
+        Ok(_) => println("parcelo_invoices.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_invoices("coastal_invoices.csv", swift, t4) {
+        Ok(_) => println("coastal_invoices.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = gs == ships and g1 == x1 and g2 == x2 and g3 == x3 and g4 == x4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four audits, the hot group.
+    let o1 = audit(parcelo, gs, g1);
+    let o2 = audit(swift, gs, g2);
+    let o3 = audit(northline, gs, g3);
+    let o4 = audit(coastal, gs, g4);
+
+    // Reports that only read what came before.
+    let r1 = audit_report(parcelo, g1, o1);
+    let r2 = audit_report(swift, g2, o2);
+    let r3 = audit_report(northline, g3, o3);
+    let r4 = audit_report(coastal, g4, o4);
+    let p1 = spend_report(parcelo, gs, o1);
+    let p2 = spend_report(swift, gs, o2);
+    let p3 = spend_report(northline, gs, o3);
+    let p4 = spend_report(coastal, gs, o4);
+    let s1 = service_report(parcelo, gs);
+    let s2 = service_report(swift, gs);
+    let s3 = service_report(northline, gs);
+    let s4 = service_report(coastal, gs);
+    let c1 = consignee_report(parcelo, gs, o1);
+    let c2 = consignee_report(swift, gs, o2);
+    let c3 = consignee_report(northline, gs, o3);
+    let c4 = consignee_report(coastal, gs, o4);
+    for lines in [r1, r2, r3, r4] {
+        for line in lines {
+            println(line);
+        }
+    }
+    for line in [p1, p2, p3, p4, s1, s2, s3, s4, c1, c2, c3, c4] {
+        println(line);
+    }
+
+    // One payment schedule: which run an invoice lands in, and so whether
+    // it earns the discount or pays the late fee, depends on the invoices
+    // scheduled before it, so the carriers are scheduled in order.
+    let mut pay = new_schedule();
+    println(schedule(mut pay, parcelo, g1, o1));
+    println(schedule(mut pay, swift, g2, o2));
+    println(schedule(mut pay, northline, g3, o3));
+    println(schedule(mut pay, coastal, g4, o4));
+    for line in schedule_summary(pay) {
+        println(line);
+    }
+    if fs.write("payments.log", f"{pay.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write payments.log"));
+    }
+    let back = read_text("payments.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"payments.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["shipments.csv", "parcelo_invoices.csv", "swift_invoices.csv", "northline_invoices.csv", "coastal_invoices.csv", "northline_invoices.bad", "parcelo_invoices.bad", "payments.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"freight_audit failed: {e.describe()}"),
+    }
+}

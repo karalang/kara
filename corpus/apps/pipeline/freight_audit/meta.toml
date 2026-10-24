@@ -1,0 +1,10 @@
+source = "kara-katas/apps/pipeline/freight_audit/freight_audit.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "497d9b7c"

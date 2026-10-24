@@ -1,0 +1,57 @@
+shipments: 2,000 rows, 137,397 bytes, fnv 48f9af8a
+parcelo: 939 rows, 34,695 bytes, fnv 293e907a
+swift: 169 rows, 6,397 bytes, fnv 7a062aeb
+northline: 799 rows, 32,243 bytes, fnv 7907fb46
+coastal: 168 rows, 7,061 bytes, fnv dd919e2e
+northline_invoices.bad line 58: bad amount '520.9'
+parcelo_invoices.bad line 301: invoice date 2026-10-06 is before the line above
+coastal_invoices.csv line 2: invoice 'C000001' is not swift's
+parsed files match the built ones: true
+parcelo: 939 invoices, $48,659.57 billed, $41,478.82 approved, saved $7,180.75 (14.8%): OK 786, OVER 38, UNDER 12, WGT 37, ACC 31, DUP 26, UNK 9
+  OVER over-billed: P000054 B00131 billed $47.37, audited $42.68
+  UNDER under-billed: P000006 B00033 billed $30.11, audited $31.37
+  WGT billed weight is not the BOL's: P000132 B00196 billed $43.07, audited $43.07
+  ACC accessorial not authorized: P000001 B00010 billed $48.46, audited $43.21
+  DUP duplicate invoice: P000194 B00238 billed $15.88, audited $15.88
+  UNK no such shipment for this carrier: P000126 B00096 billed $730.87
+swift: 169 invoices, $25,721.46 billed, $18,574.75 approved, saved $7,146.71 (27.8%): OK 108, OVER 5, UNDER 4, WGT 10, ACC 8, DUP 5, UNK 6, GSR 23
+  OVER over-billed: S000004 B00015 billed $157.30, audited $151.25
+  UNDER under-billed: S000002 B00037 billed $92.16, audited $100.18
+  WGT billed weight is not the BOL's: S000021 B00256 billed $68.44, audited $63.77
+  ACC accessorial not authorized: S000001 B00029 billed $239.33, audited $232.25
+  DUP duplicate invoice: S000117 B00943 billed $129.45, audited $129.45
+  UNK no such shipment for this carrier: S000007 B00002 billed $270.61
+  GSR late, refunded under the service guarantee: S000012 B00129 billed $92.32, audited $92.32
+northline: 799 invoices, $879,835.40 billed, $845,999.97 approved, saved $33,835.43 (3.8%): OK 660, OVER 38, UNDER 8, WGT 31, ACC 41, DUP 12, UNK 9
+  OVER over-billed: N000040 B00206 billed $203.73, audited $197.80
+  UNDER under-billed: N000104 B00170 billed $2,408.47, audited $2,562.21
+  WGT billed weight is not the BOL's: N000007 B00103 billed $1,491.43, audited $1,254.84
+  ACC accessorial not authorized: N000035 B00066 billed $4,469.13, audited $4,377.33
+  DUP duplicate invoice: N000143 B00155 billed $977.02, audited $977.02
+  UNK no such shipment for this carrier: N000018 B00027 billed $491.93
+coastal: 168 invoices, $750,100.67 billed, $741,566.67 approved, saved $8,534.00 (1.1%): OK 138, OVER 4, UNDER 3, WGT 8, ACC 7, DUP 2, UNK 6
+  OVER over-billed: C000058 B00887 billed $3,539.27, audited $3,160.07
+  UNDER under-billed: C000006 B00177 billed $2,494.08, audited $2,740.75
+  WGT billed weight is not the BOL's: C000018 B00407 billed $1,576.17, audited $1,576.17
+  ACC accessorial not authorized: C000003 B00062 billed $1,516.17, audited $1,426.17
+  DUP duplicate invoice: C000039 B00407 billed $1,576.17, audited $1,576.17
+  UNK no such shipment for this carrier: C000011 B98428 billed $749.92
+parcelo spend: $41,478.82 on 904 shipments, $128.36 a hundredweight; Newark $12,676.15 (271), Columbus $13,079.85 (300), Reno $15,722.82 (333); top lane 432-496 $1,459.79 on 24
+swift spend: $18,574.75 on 135 shipments, $311.97 a hundredweight; Newark $5,688.75 (43), Columbus $7,080.22 (51), Reno $5,805.78 (41); top lane 432-137 $776.21 on 5
+northline spend: $845,999.97 on 778 shipments, $26.63 a hundredweight; Newark $322,741.13 (271), Columbus $219,141.48 (249), Reno $304,117.36 (258); top lane 071-607 $41,656.29 on 17
+coastal spend: $741,566.67 on 160 shipments, $18.56 a hundredweight; Newark $248,806.96 (51), Columbus $244,641.31 (60), Reno $248,118.40 (49); top lane 071-496 $46,051.99 on 5
+parcelo service: 763 of 904 on time (84.4%), 2.7 days in transit on average, 114 a day late, 27 two days late; latest late B01872 shipped 10-30, promised 2, took 4
+swift service: 135 of 158 on time (85.4%), 1.2 days in transit on average, 19 a day late, 4 two days late; latest late B01855 shipped 10-29, promised 1, took 3
+northline service: 671 of 778 on time (86.2%), 3.4 days in transit on average, 77 a day late, 30 two days late; latest late B01900 shipped 10-30, promised 6, took 8
+coastal service: 123 of 160 on time (76.9%), 3.3 days in transit on average, 25 a day late, 12 two days late; latest late B01970 shipped 10-31, promised 4, took 6
+parcelo consignees: 60 billed, 173 residential deliveries; top C0001 $1,009.75, C0021 $971.55, C0045 $947.93
+swift consignees: 52 billed, 28 residential deliveries; top C0038 $785.95, C0051 $778.46, C0023 $683.67
+northline consignees: 60 billed, 162 residential deliveries; top C0012 $31,761.27, C0008 $30,230.90, C0036 $28,817.51
+coastal consignees: 56 billed, 29 residential deliveries; top C0018 $30,858.88, C0056 $30,611.24, C0027 $26,107.90
+parcelo paid: 904 invoices, $40,649.24 over 6 runs; 904 took the 2% discount, saving $829.58; 0 paid past net 30, $0.00 in late fees; 0 unpaid at the cutoff, $0.00
+swift paid: 135 invoices, $18,203.30 over 6 runs; 135 took the 2% discount, saving $371.45; 0 paid past net 30, $0.00 in late fees; 0 unpaid at the cutoff, $0.00
+northline paid: 778 invoices, $829,079.71 over 6 runs; 778 took the 2% discount, saving $16,920.26; 0 paid past net 30, $0.00 in late fees; 0 unpaid at the cutoff, $0.00
+coastal paid: 122 invoices, $548,682.65 over 7 runs; 13 took the 2% discount, saving $650.86; 77 paid past net 30, $5,598.55 in late fees; 38 unpaid at the cutoff, $197,831.71
+payments: $1,436,614.90 paid, $18,772.15 in discounts taken, $5,598.55 in late fees, 38 invoices unpaid at the cutoff ($197,831.71)
+runs of $200,000.00: 10-09 $39,218.44, 10-16 $199,945.16, 10-23 $199,650.43, 10-30 $199,243.17, 11-06 $199,889.48, 11-13 $199,510.44, 11-20 $199,438.26, 11-27 $199,719.52
+payments.log: 1,977 entries, 87,276 bytes, fnv 64e5d6f6
