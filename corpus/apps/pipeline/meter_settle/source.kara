@@ -1,0 +1,839 @@
+// pipeline/meter_settle
+//
+// A weekly smart-meter run, the job an electricity retailer does after
+// the meter data arrives: for each of four regions (north, coast, valley
+// and metro) it builds a week of half-hourly reads for every meter,
+// writes them as CSV, reads them back and parses them with the loader's
+// checks, estimates the missing reads, bills every meter on its
+// time-of-use tariff (and prices two residential alternatives), builds
+// the region's load profile, runs five reports, and then settles the four
+// regions' demand against one wholesale portfolio.
+//
+// The builds, the writes, the reads, the parses, the estimates, the
+// bills, the profiles and the reports are each a group of statements that
+// do not depend on each other (a stmt-par app). The settlement buys every
+// half hour from what the regions before it left and numbers its
+// shortfall tickets as they are raised, so the four settlements have to
+// run in order.
+
+const MASK32: i64 = 4294967295;
+const METERS: i64 = 96;
+const DAYS: i64 = 7;
+const SLOTS: i64 = 48;
+const WEEK: i64 = 336;
+// A read that did not arrive.
+const MISSING: i64 = -1000000000;
+const DAY_NAMES: Array[Str, 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const KINDS: Array[Str, 3] = ["res", "com", "ind"];
+// Per kind: the floor and span of a meter's base half-hour load (Wh), the
+// time-of-use rates (hundredths of a cent per kWh: peak, shoulder,
+// off-peak), the export credit, the daily supply charge (hundredths of a
+// cent) and the demand charge (hundredths of a cent per kW of the week's
+// highest half hour).
+const BASE_LO: Array[i64, 3] = [150, 800, 4000];
+const BASE_SPAN: Array[i64, 3] = [300, 2200, 8000];
+const RATE_PEAK: Array[i64, 3] = [3450, 2980, 2410];
+const RATE_SHOULDER: Array[i64, 3] = [2280, 2110, 1720];
+const RATE_OFF: Array[i64, 3] = [1390, 1250, 1080];
+const EXPORT_CREDIT: Array[i64, 3] = [620, 540, 480];
+const SUPPLY: Array[i64, 3] = [9800, 24500, 61000];
+const DEMAND: Array[i64, 3] = [0, 26500, 19800];
+// The two residential alternatives: one flat rate, and a demand tariff
+// (lower energy rates plus a charge on the highest half hour from 16:00
+// to 21:00 on weekdays).
+const FLAT_RATE: i64 = 2300;
+const DEMAND_TARIFF_ENERGY: i64 = 1640;
+const DEMAND_TARIFF_KW: i64 = 50000;
+const GST: i64 = 10;
+// The wholesale portfolio: kWh on offer in every half hour from each
+// tranche and its price (hundredths of a cent per kWh), cheapest first;
+// past the last tranche energy comes at the scarcity price.
+const TRANCHES: Array[Str, 3] = ["base", "mid", "peaker"];
+const TRANCHE_KWH: Array[i64, 3] = [260, 190, 150];
+const TRANCHE_PRICE: Array[i64, 3] = [450, 720, 1600];
+const SCARCITY: i64 = 9000;
+
+struct Region {
+    name: String,
+    code: String,
+    seed: i64,
+    // res, com and ind shares in percent
+    mix_pct: Vec[i64],
+    // share of residential meters with solar
+    solar_pct: i64,
+}
+
+struct Meter {
+    mid: String,
+    kind: i64,
+    solar: i64,
+    // WEEK half hours of net Wh, MISSING where a read did not arrive
+    reads: Vec[i64],
+    filled: i64,
+}
+
+struct Bill {
+    mid: String,
+    kind: i64,
+    // imported Wh by band: peak, shoulder, off-peak
+    wh: Vec[i64],
+    export: i64,
+    // hundredths of a cent, with GST
+    total: i64,
+    // -1, or 0 flat / 1 demand tariff for a cheaper residential option
+    best_alt: i64,
+    alt_saving: i64,
+}
+
+struct Profile {
+    load: Vec[i64],
+    peak_k: i64,
+    low_k: i64,
+    by_kind_at_peak: Vec[i64],
+}
+
+struct Market {
+    // Wh left in every half hour, per tranche
+    left: Vec[Vec[i64]],
+    tickets: i64,
+    log: String,
+}
+
+enum SettleError {
+    Bad(String),
+}
+
+impl SettleError {
+    fn describe(ref self) -> String {
+        match self {
+            SettleError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> SettleError {
+    SettleError.Bad(what.clone())
+}
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+// Hundredths of a cent as dollars and cents, truncated.
+fn money(hc: i64) -> String {
+    let cents = hc / 100;
+    let sign = if cents < 0 { "-" } else { "" };
+    let c = cents.abs();
+    f"{sign}${group3(c / 100)}.{c % 100:02}"
+}
+
+fn kwh(wh: i64) -> String {
+    group3(wh / 1000)
+}
+
+fn pct(a: i64, b: i64) -> String {
+    if b == 0 {
+        return "0.0%".to_string();
+    }
+    let q = a * 1000 / b;
+    f"{q / 10}.{q % 10}%"
+}
+
+fn clock(s: i64) -> String {
+    f"{s / 2:02}:{(s % 2) * 30:02}"
+}
+
+fn when(k: i64) -> String {
+    f"{DAY_NAMES[k / SLOTS]} {clock(k % SLOTS)}"
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn kind_index(k: ref String) -> i64 {
+    for i in 0..3 {
+        if k == KINDS[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn header() -> String {
+    let mut h = "meter,kind,solar,day".to_string();
+    for s in 0..SLOTS {
+        h.push_str(f",h{s / 2:02}{(s % 2) * 30:02}");
+    }
+    h
+}
+
+// ------------------------------------------------------------ the data
+
+// 0 peak, 1 shoulder, 2 off-peak.
+fn band(k: i64) -> i64 {
+    let d = k / SLOTS;
+    let s = k % SLOTS;
+    if d < 5 {
+        if s >= 32 and s <= 41 {
+            return 0;
+        }
+        if (s >= 14 and s <= 31) or (s >= 42 and s <= 43) {
+            return 1;
+        }
+        return 2;
+    }
+    if s >= 14 and s <= 43 { 1 } else { 2 }
+}
+
+// A kind's load in each half hour, in percent of its base.
+fn shape(kind: i64, k: i64) -> i64 {
+    let d = k / SLOTS;
+    let s = k % SLOTS;
+    let weekday = d < 5;
+    if kind == 0 {
+        if s < 12 {
+            return 40;
+        }
+        if s < 18 {
+            return if weekday { 120 } else { 80 };
+        }
+        if s < 34 {
+            return if weekday { 70 } else { 105 };
+        }
+        if s < 43 {
+            return 160;
+        }
+        return 90;
+    }
+    if kind == 1 {
+        if not weekday {
+            return if d == 6 { 25 } else { 45 };
+        }
+        if s >= 16 and s <= 35 {
+            return 150;
+        }
+        if s >= 14 and s <= 37 {
+            return 90;
+        }
+        return 30;
+    }
+    if not weekday {
+        return 60;
+    }
+    if s == 12 or s == 28 or s == 44 {
+        return 80;
+    }
+    100
+}
+
+// Solar output in 24ths of a panel's peak.
+fn sun(s: i64) -> i64 {
+    let d = (2 * s - 51).abs();
+    (24 - d).max(0)
+}
+
+fn build_meters(rg: ref Region) -> Vec[Meter] {
+    let mut out: Vec[Meter] = Vec.new();
+    let mut day_temp: Vec[i64] = Vec.new();
+    let mut day_cloud: Vec[i64] = Vec.new();
+    for d in 0..DAYS {
+        day_temp.push(90 + mix(rg.seed, d, 9) % 31);
+        day_cloud.push(30 + mix(rg.seed, d, 10) % 71);
+    }
+    for i in 0..METERS {
+        let h = mix(rg.seed, i, 1);
+        let r = h % 100;
+        let kind = if r < rg.mix_pct[0] { 0 } else if r < rg.mix_pct[0] + rg.mix_pct[1] { 1 } else { 2 };
+        let solar = if kind == 0 and (h >> 8) % 100 < rg.solar_pct { 1 } else { 0 };
+        let base = BASE_LO[kind] + (h >> 12) % BASE_SPAN[kind];
+        let panel = 600 + (h >> 20) % 1200;
+        let mut reads: Vec[i64] = Vec.new();
+        for k in 0..WEEK {
+            let hk = mix(rg.seed, i * WEEK + k, 2);
+            if hk % 173 == 0 {
+                reads.push(MISSING);
+                continue;
+            }
+            let noise = (hk >> 5) % 31 - 15;
+            let mut wh = base * shape(kind, k) * (100 + noise) / 10000;
+            if kind == 0 {
+                wh = wh * day_temp[k / SLOTS] / 100;
+            }
+            if solar == 1 {
+                wh -= panel * sun(k % SLOTS) * day_cloud[k / SLOTS] / 2400;
+            }
+            reads.push(wh);
+        }
+        out.push(Meter { mid: f"{rg.code}-{i + 1:05}", kind: kind, solar: solar, reads: reads, filled: 0 });
+    }
+    out
+}
+
+fn encode_meters(meters: ref Vec[Meter]) -> String {
+    let mut out = f"{header()}\n";
+    for m in meters {
+        for d in 0..DAYS {
+            out.push_str(f"{m.mid},{KINDS[m.kind]},{m.solar},{d + 1}");
+            for s in 0..SLOTS {
+                let x = m.reads[d * SLOTS + s];
+                if x == MISSING {
+                    out.push(',');
+                } else {
+                    out.push_str(f",{x}");
+                }
+            }
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, SettleError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"could not read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+fn read_field(path: ref String, n: i64, s: i64, t: ref String, solar: i64) -> Result[i64, SettleError] {
+    if t.len() == 0 {
+        return Ok(MISSING);
+    }
+    let neg = t.starts_with("-");
+    let body = if neg { t.substring(1, t.len()) } else { t.clone() };
+    if not is_digits(body) {
+        return Err(bad(f"{path} line {n}: bad read at {clock(s)} '{t}'"));
+    }
+    if neg and solar == 0 {
+        return Err(bad(f"{path} line {n}: export at {clock(s)} on a meter without solar"));
+    }
+    let v = match i64.parse(body) {
+        Ok(v) => v,
+        Err(_) => return Err(bad(f"{path} line {n}: bad read at {clock(s)} '{t}'")),
+    };
+    Ok(if neg { -v } else { v })
+}
+
+fn parse_meters(path: ref String, rg: ref Region, text: ref String) -> Result[Vec[Meter], SettleError] {
+    let lines = split_on(text, "\n");
+    if lines[0] != header() {
+        return Err(bad(f"{path}: bad header"));
+    }
+    let mut out: Vec[Meter] = Vec.new();
+    for k in 1..lines.len() as i64 {
+        let line = lines[k].clone();
+        if line == "" {
+            continue;
+        }
+        let n = k + 1;
+        let f = split_on(line, ",");
+        if f.len() as i64 != 4 + SLOTS {
+            return Err(bad(f"{path} line {n}: {f.len()} fields"));
+        }
+        let mid = f[0].clone();
+        let prefix = f"{rg.code}-";
+        if mid.len() != 8 or not mid.starts_with(prefix) or not is_digits(mid.substring(3, 8)) {
+            return Err(bad(f"{path} line {n}: bad meter '{mid}'"));
+        }
+        let kind = kind_index(f[1]);
+        if kind < 0 {
+            return Err(bad(f"{path} line {n}: bad kind '{f[1]}'"));
+        }
+        if f[2] != "0" and f[2] != "1" {
+            return Err(bad(f"{path} line {n}: bad solar flag '{f[2]}'"));
+        }
+        if not is_digits(f[3]) {
+            return Err(bad(f"{path} line {n}: bad day '{f[3]}'"));
+        }
+        let day = match i64.parse(f[3]) {
+            Ok(v) => v,
+            Err(_) => return Err(bad(f"{path} line {n}: bad day '{f[3]}'")),
+        };
+        let solar = if f[2] == "1" { 1 } else { 0 };
+        if day == 1 {
+            out.push(Meter { mid: mid.clone(), kind: kind, solar: solar, reads: Vec.new(), filled: 0 });
+        } else {
+            let last = out.len() as i64 - 1;
+            if last < 0 or out[last].mid != mid or out[last].reads.len() as i64 != (day - 1) * SLOTS {
+                return Err(bad(f"{path} line {n}: day {day} of {mid} out of order"));
+            }
+        }
+        let last = out.len() as i64 - 1;
+        for s in 0..SLOTS {
+            let v = read_field(path, n, s, f[4 + s], solar)?;
+            out[last].reads.push(v);
+        }
+    }
+    for m in out {
+        if m.reads.len() as i64 != WEEK {
+            return Err(bad(f"{path}: {m.mid} has {m.reads.len()} of {WEEK} reads"));
+        }
+    }
+    Ok(out)
+}
+
+fn same_meters(a: ref Vec[Meter], b: ref Vec[Meter]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() as i64 {
+        let x = ref a[i];
+        let y = ref b[i];
+        if x.mid != y.mid or x.kind != y.kind or x.solar != y.solar or x.reads != y.reads {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ estimation
+
+// Fill each gap by straight-line interpolation between the reads either
+// side (truncated), or with the nearest read at the week's ends.
+fn estimate(meters: ref Vec[Meter]) -> Vec[Meter] {
+    let mut out: Vec[Meter] = Vec.new();
+    for m in meters {
+        let mut reads = m.reads.clone();
+        let mut k = 0;
+        let mut filled = 0;
+        while k < WEEK {
+            if reads[k] != MISSING {
+                k += 1;
+                continue;
+            }
+            let mut j = k;
+            while j < WEEK and reads[j] == MISSING {
+                j += 1;
+            }
+            let gap = j - k;
+            let prev = if k > 0 { reads[k - 1] } else { MISSING };
+            let next = if j < WEEK { reads[j] } else { MISSING };
+            for t in 0..gap {
+                let v = if prev == MISSING {
+                    if next != MISSING { next } else { 0 }
+                } else if next == MISSING {
+                    prev
+                } else {
+                    prev + (next - prev) * (t + 1) / (gap + 1)
+                };
+                reads[k + t] = v;
+                filled += 1;
+            }
+            k = j;
+        }
+        out.push(Meter { mid: m.mid.clone(), kind: m.kind, solar: m.solar, reads: reads, filled: filled });
+    }
+    out
+}
+
+// ------------------------------------------------------------ billing
+
+fn with_gst(x: i64) -> i64 {
+    x + x * GST / 100
+}
+
+fn bill_one(m: ref Meter) -> Bill {
+    let kind = m.kind;
+    let mut wh: Vec[i64] = [0, 0, 0].to_vec();
+    let mut export = 0;
+    let mut peak_wh = 0;
+    let mut window_peak = 0;
+    for k in 0..WEEK {
+        let x = m.reads[k];
+        if x < 0 {
+            export -= x;
+            continue;
+        }
+        let b = band(k);
+        wh[b] += x;
+        if x > peak_wh {
+            peak_wh = x;
+        }
+        if b == 0 and x > window_peak {
+            window_peak = x;
+        }
+    }
+    let energy = wh[0] * RATE_PEAK[kind] / 1000 + wh[1] * RATE_SHOULDER[kind] / 1000 + wh[2] * RATE_OFF[kind] / 1000;
+    let credit = export * EXPORT_CREDIT[kind] / 1000;
+    let demand = peak_wh * 2 * DEMAND[kind] / 1000;
+    let supply = DAYS * SUPPLY[kind];
+    let total = with_gst(energy - credit + demand + supply);
+    let mut best_alt = -1;
+    let mut saving = 0;
+    if kind == 0 {
+        let imported = wh[0] + wh[1] + wh[2];
+        let flat = imported * FLAT_RATE / 1000 - credit + supply;
+        let dem = imported * DEMAND_TARIFF_ENERGY / 1000 - credit + supply + window_peak * 2 * DEMAND_TARIFF_KW / 1000;
+        let alts = [flat, dem];
+        for i in 0..2 {
+            let alt_total = with_gst(alts[i]);
+            if total - alt_total > saving {
+                saving = total - alt_total;
+                best_alt = i;
+            }
+        }
+    }
+    Bill { mid: m.mid.clone(), kind: kind, wh: wh, export: export, total: total, best_alt: best_alt, alt_saving: saving }
+}
+
+fn bill_all(meters: ref Vec[Meter]) -> Vec[Bill] {
+    let mut out: Vec[Bill] = Vec.new();
+    for m in meters {
+        out.push(bill_one(m));
+    }
+    out
+}
+
+// ------------------------------------------------------------ profiles
+
+fn profile(meters: ref Vec[Meter]) -> Profile {
+    let mut load: Vec[i64] = Vec.filled(WEEK, 0);
+    for m in meters {
+        for k in 0..WEEK {
+            load[k] += m.reads[k];
+        }
+    }
+    let mut peak_k = 0;
+    let mut low_k = 0;
+    for k in 0..WEEK {
+        if load[k] > load[peak_k] {
+            peak_k = k;
+        }
+        if load[k] < load[low_k] {
+            low_k = k;
+        }
+    }
+    let mut by_kind: Vec[i64] = [0, 0, 0].to_vec();
+    for m in meters {
+        by_kind[m.kind] += m.reads[peak_k];
+    }
+    Profile { load: load, peak_k: peak_k, low_k: low_k, by_kind_at_peak: by_kind }
+}
+
+// ------------------------------------------------------------ reports
+
+fn usage_report(rg: ref Region, meters: ref Vec[Meter]) -> String {
+    let mut counts: Vec[i64] = [0, 0, 0].to_vec();
+    let mut solar = 0;
+    let mut imported = 0;
+    let mut exported = 0;
+    let mut est = 0;
+    for m in meters {
+        counts[m.kind] += 1;
+        solar += m.solar;
+        est += m.filled;
+        for k in 0..WEEK {
+            let x = m.reads[k];
+            if x < 0 {
+                exported -= x;
+            } else {
+                imported += x;
+            }
+        }
+    }
+    f"{rg.name} usage: {meters.len()} meters (res {counts[0]}, com {counts[1]}, ind {counts[2]}; {solar} with solar), {kwh(imported)} kWh in, {kwh(exported)} kWh out, {est} reads estimated"
+}
+
+fn bill_report(rg: ref Region, bills: ref Vec[Bill]) -> String {
+    let mut total = 0;
+    let mut sums: Vec[i64] = [0, 0, 0].to_vec();
+    let mut counts: Vec[i64] = [0, 0, 0].to_vec();
+    for b in bills {
+        total += b.total;
+        sums[b.kind] += b.total;
+        counts[b.kind] += 1;
+    }
+    let mut avg: Vec[String] = Vec.new();
+    for k in 0..3 {
+        if counts[k] > 0 {
+            avg.push(f"{KINDS[k]} {money(sums[k] / counts[k])}");
+        } else {
+            avg.push(f"{KINDS[k]} -");
+        }
+    }
+    let mut order: Vec[(i64, String, i64)] = Vec.new();
+    for i in 0..bills.len() as i64 {
+        order.push((bills[i].total, bills[i].mid.clone(), i));
+    }
+    order.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+    let mut tops: Vec[String] = Vec.new();
+    for j in 0..3 {
+        let i = order[j].2;
+        tops.push(f"{bills[i].mid} {money(bills[i].total)}");
+    }
+    f"{rg.name} bills: {money(total)} in all; average {avg.join(", ")}; largest {tops.join(", ")}"
+}
+
+fn band_report(rg: ref Region, bills: ref Vec[Bill]) -> String {
+    let mut wh: Vec[i64] = [0, 0, 0].to_vec();
+    let mut export = 0;
+    for b in bills {
+        for i in 0..3 {
+            wh[i] += b.wh[i];
+        }
+        export += b.export;
+    }
+    let all_wh = wh[0] + wh[1] + wh[2];
+    f"{rg.name} bands: peak {pct(wh[0], all_wh)}, shoulder {pct(wh[1], all_wh)}, off-peak {pct(wh[2], all_wh)} of {kwh(all_wh)} kWh; exports {pct(export, all_wh)} of imports"
+}
+
+fn peak_report(rg: ref Region, prof: ref Profile) -> String {
+    let peak = prof.load[prof.peak_k];
+    let mut total = 0;
+    for k in 0..WEEK {
+        total += prof.load[k];
+    }
+    let avg = total / WEEK;
+    let mut parts: Vec[String] = Vec.new();
+    for k in 0..3 {
+        parts.push(f"{KINDS[k]} {pct(prof.by_kind_at_peak[k], peak)}");
+    }
+    let low = prof.load[prof.low_k];
+    f"{rg.name} peak: {group3(peak * 2 / 1000)} kW at {when(prof.peak_k)}, low {group3(low * 2 / 1000)} kW at {when(prof.low_k)}, load factor {pct(avg, peak)}; at the peak {parts.join(", ")}"
+}
+
+fn tariff_report(rg: ref Region, bills: ref Vec[Bill]) -> String {
+    let mut n: Vec[i64] = [0, 0].to_vec();
+    let mut save: Vec[i64] = [0, 0].to_vec();
+    let mut res = 0;
+    for b in bills {
+        if b.kind != 0 {
+            continue;
+        }
+        res += 1;
+        if b.best_alt >= 0 {
+            n[b.best_alt] += 1;
+            save[b.best_alt] += b.alt_saving;
+        }
+    }
+    f"{rg.name} tariffs: of {res} residential meters, {n[0]} would pay less on flat ({money(save[0])} in all) and {n[1]} on the demand tariff ({money(save[1])})"
+}
+
+// ------------------------------------------------------------ settlement
+
+// Buy the region's import in every half hour from what the regions
+// settled before it left, cheapest tranche first; anything beyond is
+// bought at the scarcity price, and each run of short half hours raises
+// one numbered ticket.
+fn settle(mkt: mut ref Market, rg: ref Region, prof: ref Profile, bills: ref Vec[Bill]) -> String {
+    let mut bought: Vec[i64] = [0, 0, 0, 0].to_vec();
+    let mut cost = 0;
+    let mut tickets: Vec[String] = Vec.new();
+    let mut short_run = false;
+    for k in 0..WEEK {
+        let mut need = prof.load[k];
+        if need <= 0 {
+            short_run = false;
+            continue;
+        }
+        for t in 0..3 {
+            let take = need.min(mkt.left[k][t]);
+            mkt.left[k][t] -= take;
+            need -= take;
+            bought[t] += take;
+            cost += take * TRANCHE_PRICE[t] / 1000;
+        }
+        if need > 0 {
+            bought[3] += need;
+            cost += need * SCARCITY / 1000;
+            if not short_run {
+                mkt.tickets += 1;
+                let tid = f"SF-{mkt.tickets:04}";
+                mkt.log.push_str(f"{tid} {rg.name} {when(k)} short {kwh(need)} kWh\n");
+                tickets.push(tid);
+            }
+            short_run = true;
+        } else {
+            short_run = false;
+        }
+        if k % SLOTS == SLOTS - 1 {
+            let day = DAY_NAMES[k / SLOTS];
+            mkt.log.push_str(f"{rg.name} {day} bought base {kwh(bought[0])}, mid {kwh(bought[1])}, peaker {kwh(bought[2])}, scarcity {kwh(bought[3])}\n");
+        }
+    }
+    let mut energy_rev = 0;
+    for b in bills {
+        let kind = b.kind;
+        energy_rev += b.wh[0] * RATE_PEAK[kind] / 1000 + b.wh[1] * RATE_SHOULDER[kind] / 1000 + b.wh[2] * RATE_OFF[kind] / 1000;
+    }
+    let all_wh = bought[0] + bought[1] + bought[2] + bought[3];
+    // cents per MWh
+    let avg = if all_wh > 0 { cost * 10000 / all_wh } else { 0 };
+    let first = if tickets.len() > 0 { f" from {tickets[0]}" } else { String.new() };
+    let plural = if tickets.len() == 1 { "" } else { "s" };
+    let mut shares: Vec[String] = Vec.new();
+    for t in 0..3 {
+        shares.push(f"{TRANCHES[t]} {pct(bought[t], all_wh)}");
+    }
+    f"{rg.name} settled: {kwh(all_wh)} kWh ({shares.join(", ")}), {money(cost)} at ${avg / 100}.{avg % 100:02}/MWh, {tickets.len()} shortfall ticket{plural}{first}; margin on energy {money(energy_rev - cost)}"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), SettleError] {
+    let north = Region { name: "north", code: "NR", seed: 11, mix_pct: [72, 20, 8].to_vec(), solar_pct: 30 };
+    let coast = Region { name: "coast", code: "CO", seed: 23, mix_pct: [64, 26, 10].to_vec(), solar_pct: 45 };
+    let valley = Region { name: "valley", code: "VA", seed: 37, mix_pct: [55, 15, 30].to_vec(), solar_pct: 20 };
+    let metro = Region { name: "metro", code: "ME", seed: 53, mix_pct: [40, 48, 12].to_vec(), solar_pct: 15 };
+
+    // Four regions of meters.
+    let m1 = build_meters(north);
+    let m2 = build_meters(coast);
+    let m3 = build_meters(valley);
+    let m4 = build_meters(metro);
+
+    // Four writes.
+    let w1 = fs.write("north.csv", encode_meters(m1));
+    let w2 = fs.write("coast.csv", encode_meters(m2));
+    let w3 = fs.write("valley.csv", encode_meters(m3));
+    let w4 = fs.write("metro.csv", encode_meters(m4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() {
+        return Err(bad("could not write the meter files"));
+    }
+
+    let whole = read_text("coast.csv")?;
+    if fs.write("coast.bad", damage(whole, 300, 30, "4.5")).is_err() {
+        return Err(bad("could not write coast.bad"));
+    }
+
+    // Four reads.
+    let t1 = read_text("north.csv")?;
+    let t2 = read_text("coast.csv")?;
+    let t3 = read_text("valley.csv")?;
+    let t4 = read_text("metro.csv")?;
+    println(f"north.csv: {group3(t1.len() as i64)} bytes, fnv {text_sum(t1):08x}");
+    println(f"coast.csv: {group3(t2.len() as i64)} bytes, fnv {text_sum(t2):08x}");
+    println(f"valley.csv: {group3(t3.len() as i64)} bytes, fnv {text_sum(t3):08x}");
+    println(f"metro.csv: {group3(t4.len() as i64)} bytes, fnv {text_sum(t4):08x}");
+
+    // Four parses.
+    let g1 = parse_meters("north.csv", north, t1)?;
+    let g2 = parse_meters("coast.csv", coast, t2)?;
+    let g3 = parse_meters("valley.csv", valley, t3)?;
+    let g4 = parse_meters("metro.csv", metro, t4)?;
+    match parse_meters("coast.bad", coast, read_text("coast.bad")?) {
+        Ok(_) => println("coast.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_meters("metro.csv", north, t4) {
+        Ok(_) => println("metro.csv as north: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = same_meters(g1, m1) and same_meters(g2, m2) and same_meters(g3, m3) and same_meters(g4, m4);
+    println(f"parsed meters match the built ones: {same}");
+
+    // Four estimates.
+    let e1 = estimate(g1);
+    let e2 = estimate(g2);
+    let e3 = estimate(g3);
+    let e4 = estimate(g4);
+
+    // Four billing runs: every meter's week on its tariff and, for
+    // residential meters, on the two alternatives.
+    let b1 = bill_all(e1);
+    let b2 = bill_all(e2);
+    let b3 = bill_all(e3);
+    let b4 = bill_all(e4);
+
+    // Four load profiles.
+    let p1 = profile(e1);
+    let p2 = profile(e2);
+    let p3 = profile(e3);
+    let p4 = profile(e4);
+
+    // Reports that only read what came before.
+    let u1 = usage_report(north, e1);
+    let u2 = usage_report(coast, e2);
+    let u3 = usage_report(valley, e3);
+    let u4 = usage_report(metro, e4);
+    let r1 = bill_report(north, b1);
+    let r2 = bill_report(coast, b2);
+    let r3 = bill_report(valley, b3);
+    let r4 = bill_report(metro, b4);
+    let n1 = band_report(north, b1);
+    let n2 = band_report(coast, b2);
+    let n3 = band_report(valley, b3);
+    let n4 = band_report(metro, b4);
+    let k1 = peak_report(north, p1);
+    let k2 = peak_report(coast, p2);
+    let k3 = peak_report(valley, p3);
+    let k4 = peak_report(metro, p4);
+    let a1 = tariff_report(north, b1);
+    let a2 = tariff_report(coast, b2);
+    let a3 = tariff_report(valley, b3);
+    let a4 = tariff_report(metro, b4);
+    for line in [u1, u2, u3, u4, r1, r2, r3, r4, n1, n2, n3, n4, k1, k2, k3, k4, a1, a2, a3, a4] {
+        println(line);
+    }
+
+    // One wholesale portfolio: each region buys from what the regions
+    // before it left, and shortfall tickets are numbered as they are
+    // raised.
+    let mut left: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..WEEK {
+        left.push([TRANCHE_KWH[0] * 1000, TRANCHE_KWH[1] * 1000, TRANCHE_KWH[2] * 1000].to_vec());
+    }
+    let mut mkt = Market { left: left, tickets: 0, log: String.new() };
+    println(settle(mut mkt, north, p1, b1));
+    println(settle(mut mkt, coast, p2, b2));
+    println(settle(mut mkt, valley, p3, b3));
+    println(settle(mut mkt, metro, p4, b4));
+    if fs.write("settlement.log", mkt.log).is_err() {
+        return Err(bad("could not write settlement.log"));
+    }
+    let back = read_text("settlement.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"settlement.log: {rows} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["north.csv", "coast.csv", "valley.csv", "metro.csv", "coast.bad", "settlement.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"meter_settle failed: {e.describe()}"),
+    }
+}

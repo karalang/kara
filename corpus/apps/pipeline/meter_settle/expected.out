@@ -1,0 +1,32 @@
+north.csv: 146,293 bytes, fnv 63faec5b
+coast.csv: 148,831 bytes, fnv bfcdde63
+valley.csv: 149,773 bytes, fnv 4c66a665
+metro.csv: 147,762 bytes, fnv 7dba3d37
+coast.bad line 301: bad read at 13:00 '4.5'
+metro.csv line 2: bad meter 'ME-00001'
+parsed meters match the built ones: true
+north usage: 96 meters (res 65, com 21, ind 10; 19 with solar), 36,307 kWh in, 681 kWh out, 185 reads estimated
+coast usage: 96 meters (res 56, com 30, ind 10; 28 with solar), 43,322 kWh in, 981 kWh out, 174 reads estimated
+valley usage: 96 meters (res 62, com 9, ind 25; 9 with solar), 64,266 kWh in, 246 kWh out, 184 reads estimated
+metro usage: 96 meters (res 43, com 48, ind 5; 4 with solar), 40,030 kWh in, 81 kWh out, 197 reads estimated
+north bills: $9,471.52 in all; average res $27.69, com $146.98, ind $458.45; largest NR-00017 $720.66, NR-00014 $698.81, NR-00071 $624.39
+coast bills: $11,215.39 in all; average res $25.55, com $151.16, ind $524.96; largest CO-00012 $725.88, CO-00076 $681.32, CO-00016 $610.00
+valley bills: $14,877.66 in all; average res $30.38, com $139.23, ind $469.63; largest VA-00083 $705.66, VA-00029 $683.05, VA-00071 $632.62
+metro bills: $11,318.50 in all; average res $31.66, com $147.74, ind $572.96; largest ME-00093 $708.23, ME-00028 $614.60, ME-00063 $537.93
+north bands: peak 18.8%, shoulder 50.9%, off-peak 30.2% of 36,307 kWh; exports 1.8% of imports
+coast bands: peak 18.5%, shoulder 51.7%, off-peak 29.6% of 43,322 kWh; exports 2.2% of imports
+valley bands: peak 17.7%, shoulder 47.3%, off-peak 34.9% of 64,266 kWh; exports 0.3% of imports
+metro bands: peak 18.8%, shoulder 56.6%, off-peak 24.4% of 40,030 kWh; exports 0.2% of imports
+north peak: 336 kW at Tue 17:30, low 102 kW at Sun 12:30, load factor 63.0%; at the peak res 19.1%, com 37.5%, ind 43.2%
+coast peak: 407 kW at Fri 17:00, low 118 kW at Sun 12:30, load factor 61.8%; at the peak res 12.2%, com 46.0%, ind 41.7%
+valley peak: 486 kW at Fri 17:30, low 239 kW at Sun 01:00, load factor 78.3%; at the peak res 13.1%, com 10.0%, ind 76.8%
+metro peak: 431 kW at Thu 17:00, low 110 kW at Sun 02:30, load factor 55.1%; at the peak res 10.7%, com 67.5%, ind 21.7%
+north tariffs: of 65 residential meters, 7 would pay less on flat ($1.31 in all) and 46 on the demand tariff ($31.36)
+coast tariffs: of 56 residential meters, 31 would pay less on flat ($10.40 in all) and 1 on the demand tariff ($0.61)
+valley tariffs: of 62 residential meters, 32 would pay less on flat ($12.19 in all) and 23 on the demand tariff ($12.11)
+metro tariffs: of 43 residential meters, 2 would pay less on flat ($0.63 in all) and 38 on the demand tariff ($21.64)
+north settled: 35,626 kWh (base 100.0%, mid 0.0%, peaker 0.0%), $1,603.15 at $44.99/MWh, 0 shortfall tickets; margin on energy $5,112.78
+coast settled: 42,341 kWh (base 84.6%, mid 15.3%, peaker 0.0%), $2,080.27 at $49.13/MWh, 0 shortfall tickets; margin on energy $5,915.86
+valley settled: 64,020 kWh (base 24.5%, mid 58.3%, peaker 17.0%), $5,163.31 at $80.65/MWh, 3 shortfall tickets from SF-0001; margin on energy $5,733.05
+metro settled: 39,948 kWh (base 0.3%, mid 27.7%, peaker 34.0%), $16,559.50 at $414.52/MWh, 5 shortfall tickets from SF-0004; margin on energy -$8,667.10
+settlement.log: 36 entries, 2,077 bytes, fnv 410a60cc
