@@ -1,0 +1,248 @@
+// LeetCode #966: Vowel Spellchecker -- tries.
+//
+// Three tries, one per rule, over the letters as the rule sees them: the
+// word as written (52 letters), its lowercase form (26) and its lowercase
+// form with every vowel one letter (21 consonants and the vowel). Each
+// node keeps the first word ending there; a query walks each trie in
+// turn and takes the first word it ends on. O(total length) time and
+// space.
+
+struct Trie {
+    width: i64,
+    next: Vec[i64],
+    first: Vec[i64],
+}
+
+impl Trie {
+    fn new(width: i64) -> Trie {
+        Trie { width: width, next: vec![-1; width], first: vec![-1] }
+    }
+
+    // Add word i's letters, as slots; keep the first index at the end.
+    fn add(mut ref self, slots: Vec[i64], i: i64) {
+        let mut node = 0;
+        for s in slots {
+            let at = node * self.width + s;
+            if self.next[at] < 0 {
+                self.next[at] = self.first.len();
+                self.first.push(-1);
+                for _ in 0..self.width {
+                    self.next.push(-1);
+                }
+            }
+            node = self.next[at];
+        }
+        if self.first[node] < 0 {
+            self.first[node] = i;
+        }
+    }
+
+    fn find(self, slots: Vec[i64]) -> i64 {
+        let mut node = 0;
+        for s in slots {
+            node = self.next[node * self.width + s];
+            if node < 0 {
+                return -1;
+            }
+        }
+        self.first[node]
+    }
+}
+
+// The letters of w as slots: rule 0 keeps the case (A to Z after a to
+// z), rule 1 folds it, rule 2 also folds every vowel into slot 0.
+fn slots(w: String, rule: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for b in w.bytes() {
+        let x = b as i64;
+        let lower = if x < 97 { x - 65 } else { x - 97 };
+        if rule == 0 {
+            out.push(if x < 97 { 26 + lower } else { lower });
+        } else if rule == 1 {
+            out.push(lower);
+        } else if lower == 4 or lower == 8 or lower == 14 or lower == 20 {
+            out.push(0);
+        } else {
+            out.push(lower);
+        }
+    }
+    out
+}
+
+fn spellchecker(wordlist: Vec[String], queries: Vec[String]) -> Vec[String] {
+    let mut tries: Vec[Trie] = vec![Trie.new(52), Trie.new(26), Trie.new(26)];
+    for i in 0..wordlist.len() {
+        for rule in 0..3 {
+            tries[rule].add(slots(wordlist[i], rule), i);
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for q in queries {
+        let mut answer = String.new();
+        for rule in 0..3 {
+            let i = tries[rule].find(slots(q, rule));
+            if i >= 0 {
+                answer = wordlist[i].clone();
+                break;
+            }
+        }
+        out.push(answer);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn words(list: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in list {
+        out.push(w.to_string());
+    }
+    out
+}
+
+// The answer as LeetCode writes it.
+fn show(v: Vec[String]) -> String {
+    let mut s = String.from("[");
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str("\"");
+        s.push_str(v[i]);
+        s.push_str("\"");
+    }
+    s.push_str("]");
+    s
+}
+
+// Letters as indices: 0 to 4 the vowels and 5, 6 two consonants, in
+// lowercase; 7 to 13 the same in uppercase.
+fn spell(letters: Vec[i64]) -> String {
+    let alphabet: Vec[char] = "aeioukbAEIOUKB".chars().collect();
+    let mut s = String.new();
+    for x in letters {
+        s.push(alphabet[x]);
+    }
+    s
+}
+
+fn random_word(len: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut w: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        w.push(next_random(mut seed) % 14);
+    }
+    w
+}
+
+// A query made from a word, by kind: 0 the word itself, 1 some letters'
+// case flipped, 2 some vowels replaced by any vowel in either case, 3 a
+// new word.
+fn query_from(w: Vec[i64], kind: i64, max_len: i64, seed: mut ref i64) -> Vec[i64] {
+    if kind == 3 {
+        return random_word(1 + next_random(mut seed) % max_len, mut seed);
+    }
+    let mut q = w.clone();
+    for i in 0..q.len() {
+        if kind == 1 and next_random(mut seed) % 2 == 0 {
+            q[i] = (q[i] + 7) % 14;
+        } else if kind == 2 and q[i] % 7 < 5 and next_random(mut seed) % 2 == 0 {
+            q[i] = next_random(mut seed) % 5 + 7 * (next_random(mut seed) % 2);
+        }
+    }
+    q
+}
+
+fn fold(s: String, check: i64) -> i64 {
+    let mut h = check;
+    for b in s.bytes() {
+        h = (h * 131 + b as i64) % 1000000007;
+    }
+    (h * 131 + 1) % 1000000007
+}
+
+// n words of 1 to max_len letters and m queries made from them; prints
+// how many answers came from each rule and a checksum.
+fn random_case(n: i64, m: i64, max_len: i64, seed: mut ref i64) -> (Vec[String], Vec[String]) {
+    let mut ws: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        ws.push(random_word(1 + next_random(mut seed) % max_len, mut seed));
+    }
+    let mut qs: Vec[String] = Vec.new();
+    for _ in 0..m {
+        let w = ws[next_random(mut seed) % n].clone();
+        qs.push(spell(query_from(w, next_random(mut seed) % 4, max_len, mut seed)));
+    }
+    let mut wl: Vec[String] = Vec.new();
+    for w in ws {
+        wl.push(spell(w.clone()));
+    }
+    (wl, qs)
+}
+
+// Which rule gave each answer: 0 the word itself, 1 its case, 2 its
+// vowels, 3 none.
+fn tally(qs: ref Vec[String], got: ref Vec[String], by_rule: mut ref Vec[i64]) {
+    for i in 0..qs.len() {
+        let rule = if got[i] == qs[i] {
+            0
+        } else if got[i].len() == 0 {
+            3
+        } else if got[i].to_lowercase() == qs[i].to_lowercase() {
+            1
+        } else {
+            2
+        };
+        by_rule[rule] += 1;
+    }
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    println(show(spellchecker(
+        words(vec!["KiTe", "kite", "hare", "Hare"]),
+        words(vec!["kite", "Kite", "KiTe", "Hare", "HARE", "Hear", "hear", "keti", "keet", "keto"]),
+    )));
+    println(show(spellchecker(words(vec!["yellow"]), words(vec!["YellOw"]))));
+    println(show(spellchecker(words(vec!["a", "A", "e"]), words(vec!["A", "E", "i", "b", "a"]))));
+    println(show(spellchecker(
+        words(vec!["zeo", "Zuo"]),
+        words(vec!["zuo", "ZEO", "zoe", "zo", "zeoo"]),
+    )));
+    println(show(spellchecker(
+        words(vec!["AaAa", "aaaa", "uuuu", "UUUU"]),
+        words(vec!["aaaa", "AAAA", "uUuU", "ieao", "AAA", "aaaaa"]),
+    )));
+    println(show(spellchecker(words(vec!["bcd"]), words(vec!["BCD", "bcd", "bad", "bcdd"]))));
+    // 300 random cases of 1 to 12 words of 1 to 4 letters, and as many
+    // queries
+    let mut seed = 966;
+    let mut by_rule: Vec[i64] = vec![0, 0, 0, 0];
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let m = 1 + next_random(mut seed) % 12;
+        let (wl, qs) = random_case(n, m, 4, mut seed);
+        let got = spellchecker(wl, qs);
+        tally(qs, got, mut by_rule);
+        for g in got {
+            check = fold(g, check);
+        }
+    }
+    println(f"300 random cases: {by_rule[0]} words, {by_rule[1]} by case, {by_rule[2]} by vowels, {by_rule[3]} unmatched, checksum {check}");
+    // LeetCode's largest: 5000 words and 5000 queries of up to 7 letters
+    let (wl, qs) = random_case(5000, 5000, 7, mut seed);
+    let got = spellchecker(wl, qs);
+    let mut big: Vec[i64] = vec![0, 0, 0, 0];
+    tally(qs, got, mut big);
+    let mut big_check = 0;
+    for g in got {
+        big_check = fold(g, big_check);
+    }
+    println(f"5000 words, 5000 queries: {big[0]} words, {big[1]} by case, {big[2]} by vowels, {big[3]} unmatched, checksum {big_check}");
+}

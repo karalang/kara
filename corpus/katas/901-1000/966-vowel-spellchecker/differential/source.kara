@@ -1,0 +1,557 @@
+// LeetCode #966: Vowel Spellchecker -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random word lists over five vowels and two consonants in both
+// cases, with queries made from the words: the word itself, its case
+// changed, its vowels changed, or a new word.
+
+// ---- star ----
+
+fn star_devowel(w: String) -> String {
+    let mut out = String.with_capacity(w.len());
+    for c in w.to_lowercase().chars() {
+        if c == 'a' or c == 'e' or c == 'i' or c == 'o' or c == 'u' {
+            out.push('*');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn star_spellchecker(wordlist: Vec[String], queries: Vec[String]) -> Vec[String] {
+    let mut exact: Set[String] = Set.new();
+    let mut by_case: Map[String, String] = Map.new();
+    let mut by_vowel: Map[String, String] = Map.new();
+    for w in wordlist {
+        exact.insert(w.clone());
+        by_case.entry(w.to_lowercase()).or_insert(w.clone());
+        by_vowel.entry(star_devowel(w)).or_insert(w.clone());
+    }
+    let mut out: Vec[String] = Vec.new();
+    for q in queries {
+        if exact.contains(q) {
+            out.push(q.clone());
+        } else if let Some(w) = by_case.get(q.to_lowercase()) {
+            out.push(w.clone());
+        } else if let Some(w) = by_vowel.get(star_devowel(q)) {
+            out.push(w.clone());
+        } else {
+            out.push(String.new());
+        }
+    }
+    out
+}
+
+// ---- scan ----
+
+fn scan_blanked(w: String) -> String {
+    let mut out = String.new();
+    for c in w.to_lowercase().chars() {
+        if "aeiou".contains(c.to_string()) {
+            out.push('*');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn scan_spellchecker(wordlist: Vec[String], queries: Vec[String]) -> Vec[String] {
+    let mut lower: Vec[String] = Vec.new();
+    let mut vowelless: Vec[String] = Vec.new();
+    for w in wordlist {
+        lower.push(w.to_lowercase());
+        vowelless.push(scan_blanked(w));
+    }
+    let mut out: Vec[String] = Vec.new();
+    for q in queries {
+        let ql = q.to_lowercase();
+        let qv = scan_blanked(q);
+        let mut found: Option[i64] = None;
+        for i in 0..wordlist.len() {
+            if wordlist[i] == q {
+                found = Some(i);
+                break;
+            }
+        }
+        if found.is_none() {
+            for i in 0..wordlist.len() {
+                if lower[i] == ql {
+                    found = Some(i);
+                    break;
+                }
+            }
+        }
+        if found.is_none() {
+            for i in 0..wordlist.len() {
+                if vowelless[i] == qv {
+                    found = Some(i);
+                    break;
+                }
+            }
+        }
+        out.push(match found {
+            Some(i) => wordlist[i].clone(),
+            None => String.new(),
+        });
+    }
+    out
+}
+
+// ---- buckets ----
+
+fn buckets_pattern(w: String) -> String {
+    let mut out = String.new();
+    for c in w.chars() {
+        match c {
+            'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U' => out.push('*'),
+            _ => out.push_str(c.to_string().to_lowercase()),
+        }
+    }
+    out
+}
+
+fn buckets_spellchecker(wordlist: Vec[String], queries: Vec[String]) -> Vec[String] {
+    let mut buckets: Map[String, Vec[i64]] = Map.new();
+    for i in 0..wordlist.len() {
+        buckets.entry(buckets_pattern(wordlist[i])).or_insert(Vec.new()).push(i);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for q in queries {
+        let answer = match buckets.get(buckets_pattern(q)) {
+            None => String.new(),
+            Some(bucket) => {
+                let ql = q.to_lowercase();
+                let mut same_case: Option[i64] = None;
+                let mut exact = false;
+                for i in bucket {
+                    if wordlist[*i] == q {
+                        exact = true;
+                        break;
+                    }
+                    if same_case.is_none() and wordlist[*i].to_lowercase() == ql {
+                        same_case = Some(*i);
+                    }
+                }
+                if exact {
+                    q.clone()
+                } else {
+                    wordlist[same_case ?? bucket[0]].clone()
+                }
+            }
+        };
+        out.push(answer);
+    }
+    out
+}
+
+// ---- sorted ----
+
+fn sorted_vowels_out(w: String) -> String {
+    let mut out = String.new();
+    for c in w.to_lowercase().chars() {
+        out.push(if c == 'a' or c == 'e' or c == 'i' or c == 'o' or c == 'u' { '*' } else { c });
+    }
+    out
+}
+
+// The index paired with key k in pairs, sorted, at its first place.
+fn sorted_first_with(pairs: ref Vec[(String, i64)], k: String) -> Option[i64] {
+    let mut lo = 0;
+    let mut hi = pairs.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if pairs[mid].0 < k {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < pairs.len() and pairs[lo].0 == k {
+        Some(pairs[lo].1)
+    } else {
+        None
+    }
+}
+
+fn sorted_spellchecker(wordlist: Vec[String], queries: Vec[String]) -> Vec[String] {
+    let mut exact: Vec[String] = wordlist.clone();
+    exact.sort();
+    let mut by_case: Vec[(String, i64)] = Vec.new();
+    let mut by_vowel: Vec[(String, i64)] = Vec.new();
+    for i in 0..wordlist.len() {
+        by_case.push((wordlist[i].to_lowercase(), i));
+        by_vowel.push((sorted_vowels_out(wordlist[i]), i));
+    }
+    by_case.sort();
+    by_vowel.sort();
+    let mut out: Vec[String] = Vec.new();
+    for q in queries {
+        if exact.binary_search(q.clone()).is_some() {
+            out.push(q.clone());
+        } else if let Some(i) = sorted_first_with(by_case, q.to_lowercase()) {
+            out.push(wordlist[i].clone());
+        } else if let Some(i) = sorted_first_with(by_vowel, sorted_vowels_out(q)) {
+            out.push(wordlist[i].clone());
+        } else {
+            out.push(String.new());
+        }
+    }
+    out
+}
+
+// ---- trie ----
+
+struct Trie {
+    width: i64,
+    next: Vec[i64],
+    first: Vec[i64],
+}
+
+impl Trie {
+    fn new(width: i64) -> Trie {
+        Trie { width: width, next: vec![-1; width], first: vec![-1] }
+    }
+
+    // Add word i's letters, as slots; keep the first index at the end.
+    fn add(mut ref self, slots: Vec[i64], i: i64) {
+        let mut node = 0;
+        for s in slots {
+            let at = node * self.width + s;
+            if self.next[at] < 0 {
+                self.next[at] = self.first.len();
+                self.first.push(-1);
+                for _ in 0..self.width {
+                    self.next.push(-1);
+                }
+            }
+            node = self.next[at];
+        }
+        if self.first[node] < 0 {
+            self.first[node] = i;
+        }
+    }
+
+    fn find(self, slots: Vec[i64]) -> i64 {
+        let mut node = 0;
+        for s in slots {
+            node = self.next[node * self.width + s];
+            if node < 0 {
+                return -1;
+            }
+        }
+        self.first[node]
+    }
+}
+
+// The letters of w as slots: rule 0 keeps the case (A to Z after a to
+// z), rule 1 folds it, rule 2 also folds every vowel into slot 0.
+fn trie_slots(w: String, rule: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for b in w.bytes() {
+        let x = b as i64;
+        let lower = if x < 97 { x - 65 } else { x - 97 };
+        if rule == 0 {
+            out.push(if x < 97 { 26 + lower } else { lower });
+        } else if rule == 1 {
+            out.push(lower);
+        } else if lower == 4 or lower == 8 or lower == 14 or lower == 20 {
+            out.push(0);
+        } else {
+            out.push(lower);
+        }
+    }
+    out
+}
+
+fn trie_spellchecker(wordlist: Vec[String], queries: Vec[String]) -> Vec[String] {
+    let mut tries: Vec[Trie] = vec![Trie.new(52), Trie.new(26), Trie.new(26)];
+    for i in 0..wordlist.len() {
+        for rule in 0..3 {
+            tries[rule].add(trie_slots(wordlist[i], rule), i);
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for q in queries {
+        let mut answer = String.new();
+        for rule in 0..3 {
+            let i = tries[rule].find(trie_slots(q, rule));
+            if i >= 0 {
+                answer = wordlist[i].clone();
+                break;
+            }
+        }
+        out.push(answer);
+    }
+    out
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Letters as indices: 0 to 4 the vowels and 5, 6 two consonants, in
+// lowercase; 7 to 13 the same in uppercase.
+fn spell(letters: Vec[i64]) -> String {
+    let alphabet: Vec[char] = "aeioukbAEIOUKB".chars().collect();
+    let mut s = String.new();
+    for x in letters {
+        s.push(alphabet[x]);
+    }
+    s
+}
+
+fn random_word(len: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut w: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        w.push(next_random(mut seed) % 14);
+    }
+    w
+}
+
+// A query made from a word, by kind: 0 the word itself, 1 some letters'
+// case flipped, 2 some vowels replaced by any vowel in either case, 3 a
+// new word.
+fn query_from(w: Vec[i64], kind: i64, max_len: i64, seed: mut ref i64) -> Vec[i64] {
+    if kind == 3 {
+        return random_word(1 + next_random(mut seed) % max_len, mut seed);
+    }
+    let mut q = w.clone();
+    for i in 0..q.len() {
+        if kind == 1 and next_random(mut seed) % 2 == 0 {
+            q[i] = (q[i] + 7) % 14;
+        } else if kind == 2 and q[i] % 7 < 5 and next_random(mut seed) % 2 == 0 {
+            q[i] = next_random(mut seed) % 5 + 7 * (next_random(mut seed) % 2);
+        }
+    }
+    q
+}
+
+fn fold(s: String, check: i64) -> i64 {
+    let mut h = check;
+    for b in s.bytes() {
+        h = (h * 131 + b as i64) % 1000000007;
+    }
+    (h * 131 + 1) % 1000000007
+}
+
+// n words of 1 to max_len letters and m queries made from them.
+fn random_case(n: i64, m: i64, max_len: i64, seed: mut ref i64) -> (Vec[String], Vec[String]) {
+    let mut ws: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        ws.push(random_word(1 + next_random(mut seed) % max_len, mut seed));
+    }
+    let mut qs: Vec[String] = Vec.new();
+    for _ in 0..m {
+        let w = ws[next_random(mut seed) % n].clone();
+        qs.push(spell(query_from(w, next_random(mut seed) % 4, max_len, mut seed)));
+    }
+    let mut wl: Vec[String] = Vec.new();
+    for w in ws {
+        wl.push(spell(w.clone()));
+    }
+    (wl, qs)
+}
+
+// The statement read literally, letter by letter on the bytes: a word
+// matches the query by case when each letter is the same up to case, and
+// by vowels when each letter is, or both are vowels.
+fn fold_case(b: i64) -> i64 {
+    if b < 97 { b + 32 } else { b }
+}
+
+fn is_vowel(b: i64) -> bool {
+    let l = fold_case(b);
+    l == 97 or l == 101 or l == 105 or l == 111 or l == 117
+}
+
+fn matches(w: String, q: String, by_vowels: bool) -> bool {
+    if w.len() != q.len() {
+        return false;
+    }
+    let (wb, qb) = (w.bytes(), q.bytes());
+    for i in 0..w.len() {
+        let (x, y) = (wb[i] as i64, qb[i] as i64);
+        let same = fold_case(x) == fold_case(y);
+        if not (same or (by_vowels and is_vowel(x) and is_vowel(y))) {
+            return false;
+        }
+    }
+    true
+}
+
+fn literal(wordlist: ref Vec[String], queries: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for q in queries {
+        let mut answer: Option[String] = None;
+        for w in wordlist {
+            if w == q {
+                answer = Some(q.clone());
+            }
+        }
+        for rule in 0..2 {
+            if answer.is_none() {
+                for w in wordlist {
+                    if answer.is_none() and matches(w, q, rule == 1) {
+                        answer = Some(w.clone());
+                    }
+                }
+            }
+        }
+        out.push(answer ?? String.new());
+    }
+    out
+}
+
+fn arm(x: i64, wordlist: ref Vec[String], queries: ref Vec[String]) -> Vec[String] {
+    if x == 0 {
+        star_spellchecker(wordlist, queries)
+    } else if x == 1 {
+        scan_spellchecker(wordlist, queries)
+    } else if x == 2 {
+        buckets_spellchecker(wordlist, queries)
+    } else if x == 3 {
+        sorted_spellchecker(wordlist, queries)
+    } else {
+        trie_spellchecker(wordlist, queries)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, wl: ref Vec[String], qs: ref Vec[String], small: bool) -> Vec[String] {
+    let truth = if small { literal(wl, qs) } else { Vec.new() };
+    let mut got: Vec[Vec[String]] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, wl, qs));
+    }
+    let mut doubled = wl.clone();
+    for w in wl {
+        doubled.push(w.clone());
+    }
+    let mut backwards: Vec[String] = Vec.new();
+    for i in 0..qs.len() {
+        backwards.push(qs[qs.len() - 1 - i].clone());
+    }
+    let mut shouted: Vec[String] = Vec.new();
+    for w in wl {
+        shouted.push(w.to_uppercase());
+    }
+    for x in 0..5 {
+        let a = got[x].clone();
+        // P1: the statement's answers, on the first 3000 cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: each answer is empty exactly when no word matches the query
+        // by vowels, and otherwise a word that does
+        let mut sound = a.len() == qs.len();
+        for i in 0..qs.len() {
+            if sound {
+                let mut any = false;
+                for w in wl {
+                    any = any or matches(w, qs[i], true);
+                }
+                sound = if any { wl.contains(a[i]) and matches(a[i], qs[i], true) } else { a[i].len() == 0 };
+            }
+        }
+        check(mut t, 2, sound);
+        // P3: the same answers with the word list given twice over, and in
+        // reverse order for the queries reversed
+        let twice = arm(x, doubled, qs);
+        let rev = arm(x, wl, backwards);
+        let mut flipped = true;
+        for i in 0..qs.len() {
+            flipped = flipped and rev[i] == a[qs.len() - 1 - i];
+        }
+        check(mut t, 3, twice == a and flipped);
+        // P4: each query asked alone gets its answer in the batch
+        let mut alone = true;
+        for i in 0..qs.len() {
+            let one = arm(x, wl, vec![qs[i].clone()]);
+            alone = alone and one.len() == 1 and one[0] == a[i];
+        }
+        check(mut t, 4, alone);
+        // P5: the words asked as queries answer themselves, and in
+        // uppercase each answers a word of the same lowercase
+        let own = arm(x, wl, wl);
+        let loud = arm(x, wl, shouted);
+        let mut cased = loud.len() == wl.len();
+        for i in 0..wl.len() {
+            cased = cased and loud[i].to_lowercase() == wl[i].to_lowercase();
+        }
+        check(mut t, 5, own == *wl and cased);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 966;
+    let mut words = 0;
+    let mut queries = 0;
+    let mut by_rule: Vec[i64] = vec![0, 0, 0, 0];
+    let mut check_sum = 0;
+    // 3000 cases of up to 6 words and 6 queries of up to 3 letters,
+    // against the statement, then 200 of up to 50 words and 50 queries
+    // of up to 7 letters
+    for c in 0..3200 {
+        let small = c < 3000;
+        let (n, m, len) = if small {
+            (1 + next_random(mut seed) % 6, 1 + next_random(mut seed) % 6, 3)
+        } else {
+            (1 + next_random(mut seed) % 50, 1 + next_random(mut seed) % 50, 7)
+        };
+        let (wl, qs) = random_case(n, m, len, mut seed);
+        words += wl.len();
+        queries += qs.len();
+        let got = properties(mut t, wl, qs, small);
+        for i in 0..qs.len() {
+            let rule = if got[i] == qs[i] {
+                0
+            } else if got[i].len() == 0 {
+                3
+            } else if got[i].to_lowercase() == qs[i].to_lowercase() {
+                1
+            } else {
+                2
+            };
+            by_rule[rule] += 1;
+            check_sum = fold(got[i], check_sum);
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {words} words and {queries} queries: {by_rule[0]} words, {by_rule[1]} by case, {by_rule[2]} by vowels, {by_rule[3]} unmatched, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

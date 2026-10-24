@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/966-vowel-spellchecker/bench/spellchecker.kara"
+dedup_of = []
+tags = ["lib:map", "lib:set", "bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "91a146c29"
+extracted_src = "2f7e6239"

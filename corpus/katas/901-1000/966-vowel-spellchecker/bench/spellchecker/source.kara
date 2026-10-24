@@ -1,0 +1,134 @@
+// Benchmark: LeetCode #966 Vowel Spellchecker -- the ★ arm, three maps,
+// on cases of 5000 words and 5000 queries, LeetCode's largest. Mirrors
+// spellchecker.c, .rs, .py and go-seq/.
+
+fn devowel(w: String) -> String {
+    let mut out = String.with_capacity(w.len());
+    for c in w.to_lowercase().chars() {
+        if c == 'a' or c == 'e' or c == 'i' or c == 'o' or c == 'u' {
+            out.push('*');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn spellchecker(wordlist: Vec[String], queries: Vec[String]) -> Vec[String] {
+    let mut exact: Set[String] = Set.new();
+    let mut by_case: Map[String, String] = Map.new();
+    let mut by_vowel: Map[String, String] = Map.new();
+    for w in wordlist {
+        exact.insert(w.clone());
+        by_case.entry(w.to_lowercase()).or_insert(w.clone());
+        by_vowel.entry(devowel(w)).or_insert(w.clone());
+    }
+    let mut out: Vec[String] = Vec.new();
+    for q in queries {
+        if exact.contains(q) {
+            out.push(q.clone());
+        } else if let Some(w) = by_case.get(q.to_lowercase()) {
+            out.push(w.clone());
+        } else if let Some(w) = by_vowel.get(devowel(q)) {
+            out.push(w.clone());
+        } else {
+            out.push(String.new());
+        }
+    }
+    out
+}
+
+// ---- workload ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Letters as indices: 0 to 4 the vowels and 5, 6 two consonants, in
+// lowercase; 7 to 13 the same in uppercase.
+fn spell(letters: Vec[i64]) -> String {
+    let alphabet: Vec[char] = "aeioukbAEIOUKB".chars().collect();
+    let mut s = String.new();
+    for x in letters {
+        s.push(alphabet[x]);
+    }
+    s
+}
+
+fn random_word(len: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut w: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        w.push(next_random(mut seed) % 14);
+    }
+    w
+}
+
+// A query made from a word, by kind: 0 the word itself, 1 some letters'
+// case flipped, 2 some vowels replaced by any vowel in either case, 3 a
+// new word.
+fn query_from(w: Vec[i64], kind: i64, max_len: i64, seed: mut ref i64) -> Vec[i64] {
+    if kind == 3 {
+        return random_word(1 + next_random(mut seed) % max_len, mut seed);
+    }
+    let mut q = w.clone();
+    for i in 0..q.len() {
+        if kind == 1 and next_random(mut seed) % 2 == 0 {
+            q[i] = (q[i] + 7) % 14;
+        } else if kind == 2 and q[i] % 7 < 5 and next_random(mut seed) % 2 == 0 {
+            q[i] = next_random(mut seed) % 5 + 7 * (next_random(mut seed) % 2);
+        }
+    }
+    q
+}
+
+fn fold(s: String, check: i64) -> i64 {
+    let mut h = check;
+    for b in s.bytes() {
+        h = (h * 131 + b as i64) % 1000000007;
+    }
+    (h * 131 + 1) % 1000000007
+}
+
+// n words of 1 to max_len letters and m queries made from them.
+fn random_case(n: i64, m: i64, max_len: i64, seed: mut ref i64) -> (Vec[String], Vec[String]) {
+    let mut ws: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        ws.push(random_word(1 + next_random(mut seed) % max_len, mut seed));
+    }
+    let mut qs: Vec[String] = Vec.new();
+    for _ in 0..m {
+        let w = ws[next_random(mut seed) % n].clone();
+        qs.push(spell(query_from(w, next_random(mut seed) % 4, max_len, mut seed)));
+    }
+    let mut wl: Vec[String] = Vec.new();
+    for w in ws {
+        wl.push(spell(w.clone()));
+    }
+    (wl, qs)
+}
+
+fn main() {
+    let rounds = 200;
+    // five cases of LeetCode's largest size, made once
+    let mut seed = 966;
+    let mut wls: Vec[Vec[String]] = Vec.new();
+    let mut qss: Vec[Vec[String]] = Vec.new();
+    for _ in 0..5 {
+        let (wl, qs) = random_case(5000, 5000, 7, mut seed);
+        wls.push(wl);
+        qss.push(qs);
+    }
+    let mut matched = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let got = spellchecker(wls[r % 5], qss[r % 5]);
+        for g in got {
+            if g.len() > 0 {
+                matched += 1;
+            }
+            check = fold(g, check);
+        }
+    }
+    println(f"{rounds} rounds over 5 cases of 5000 words and 5000 queries: {matched} matched, checksum {check}");
+}
