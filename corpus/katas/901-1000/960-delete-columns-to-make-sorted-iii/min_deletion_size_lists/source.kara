@@ -1,0 +1,127 @@
+// LeetCode #960: Delete Columns to Make Sorted III -- successor lists.
+//
+// Each column with the list of later columns it may come before, built in
+// one pass over the pairs. The chains are then measured from the right:
+// the longest chain starting at column j is one more than the longest
+// starting at any column in its list, all of which lie to its right and
+// are done already. O(m^2 n).
+
+fn min_deletion_size(strs: ref Vec[String]) -> i64 {
+    let m = strs[0].len();
+    let mut after: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        after.push(Vec.new());
+    }
+    for k in 0..m {
+        for j in k + 1..m {
+            if strs.iter().all(|s| s.bytes()[k] <= s.bytes()[j]) {
+                after[k].push(j);
+            }
+        }
+    }
+    let mut start: Vec[i64] = Vec.filled(m, 1);
+    let mut best = 0;
+    let mut j = m - 1;
+    while j >= 0 {
+        for k in after[j].iter() {
+            start[j] = start[j].max(start[*k] + 1);
+        }
+        best = best.max(start[j]);
+        j -= 1;
+    }
+    m - best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n strings of m letters from the first `letters` of the alphabet.
+fn random_strs(seed: mut ref i64, n: i64, m: i64, letters: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let mut s = String.new();
+        for _ in 0..m {
+            s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        out.push(s);
+    }
+    out
+}
+
+fn show(strs: ref Vec[String]) -> String {
+    let mut s = String.new();
+    for i in 0..strs.len() {
+        if i > 0 {
+            s = s + ",";
+        }
+        s = s + strs[i];
+    }
+    f"[{s}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[String]] = vec![
+        vec!["babca".to_string(), "bbazb".to_string()],
+        vec!["edcba".to_string()],
+        vec!["ghi".to_string(), "def".to_string(), "abc".to_string()],
+        vec!["a".to_string()],
+        vec!["ba".to_string()],
+        vec!["ab".to_string(), "ba".to_string()],
+        vec!["aaa".to_string(), "aaa".to_string()],
+        vec!["acb".to_string(), "bca".to_string(), "abc".to_string()],
+        vec!["zabcd".to_string(), "abcde".to_string()],
+        vec!["abcdz".to_string(), "bcdea".to_string()],
+    ];
+    for strs in cases.iter() {
+        println(f"{show(strs)}: {min_deletion_size(strs)}");
+    }
+    // 300 random cases of 1 to 8 strings of 1 to 10 letters from a to d
+    let mut seed = 960;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 8;
+        let m = 1 + next_random(mut seed) % 10;
+        let strs = random_strs(mut seed, n, m, 4);
+        let d = min_deletion_size(strs);
+        count += n;
+        total += d;
+        check = (check * 31 + d) % 1000000007;
+    }
+    println(f"300 random cases of {count} strings: {total} columns deleted, checksum {check}");
+    // LeetCode's largest: 100 strings of 100 letters
+    let wide = random_strs(mut seed, 100, 100, 26);
+    println(f"100 random strings of 100 letters: {min_deletion_size(wide)}");
+    let one = random_strs(mut seed, 1, 100, 26);
+    println(f"one random string of 100 letters: {min_deletion_size(one)}");
+    let narrow = random_strs(mut seed, 100, 100, 2);
+    println(f"100 random strings of 100 letters from a and b: {min_deletion_size(narrow)}");
+    let same: Vec[String] = Vec.filled(100, wide[0].clone());
+    println(f"100 copies of one string: {min_deletion_size(same)}");
+    // each string's letters sorted: nothing to delete
+    let mut sorted: Vec[String] = Vec.new();
+    for s in wide.iter() {
+        let mut b = s.bytes().to_vec();
+        b.sort();
+        let mut t = String.new();
+        for x in b.iter() {
+            t.push(*x as char);
+        }
+        sorted.push(t);
+    }
+    println(f"the same with each string's letters sorted: {min_deletion_size(sorted)}");
+    // a to z and back again
+    let mut zig = String.new();
+    for i in 0..100 {
+        let k = i % 50;
+        let c = if k < 25 { k } else { 49 - k };
+        zig.push((b'a' + c as u8) as char);
+    }
+    println(f"a to z and back, twice: {min_deletion_size(vec![zig])}");
+}

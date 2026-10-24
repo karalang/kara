@@ -1,0 +1,358 @@
+// LeetCode #960: Delete Columns to Make Sorted III -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random strings over small and large alphabets.
+
+// ---- star ----
+
+fn star_min_deletion_size(strs: ref Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut longest: Vec[i64] = Vec.filled(m, 1);
+    let mut best = 0;
+    for j in 0..m {
+        for k in 0..j {
+            let mut before = true;
+            for i in 0..n {
+                if strs[i].bytes()[k] > strs[i].bytes()[j] {
+                    before = false;
+                    break;
+                }
+            }
+            if before {
+                longest[j] = longest[j].max(longest[k] + 1);
+            }
+        }
+        best = best.max(longest[j]);
+    }
+    m - best
+}
+
+// ---- matrix ----
+
+fn matrix_min_deletion_size(strs: ref Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut cols: Vec[Vec[u8]] = Vec.new();
+    for c in 0..m {
+        let mut col: Vec[u8] = Vec.new();
+        for i in 0..n {
+            col.push(strs[i].bytes()[c]);
+        }
+        cols.push(col);
+    }
+    let mut before: Vec[bool] = Vec.filled(m * m, true);
+    for k in 0..m {
+        for j in k + 1..m {
+            for i in 0..n {
+                if cols[k][i] > cols[j][i] {
+                    before[k * m + j] = false;
+                    break;
+                }
+            }
+        }
+    }
+    let mut longest: Vec[i64] = Vec.filled(m, 1);
+    for j in 0..m {
+        for k in 0..j {
+            if before[k * m + j] and longest[k] + 1 > longest[j] {
+                longest[j] = longest[k] + 1;
+            }
+        }
+    }
+    let mut best = 0;
+    for x in longest.iter() {
+        best = best.max(*x);
+    }
+    m - best
+}
+
+// ---- memo ----
+
+fn memo_may_precede(strs: ref Vec[String], k: i64, j: i64) -> bool {
+    for s in strs.iter() {
+        if s.bytes()[k] > s.bytes()[j] {
+            return false;
+        }
+    }
+    true
+}
+
+fn memo_chain_from(strs: ref Vec[String], j: i64, memo: mut ref Map[i64, i64]) -> i64 {
+    if let Some(v) = memo.get(j) {
+        return *v;
+    }
+    let m = strs[0].len();
+    let mut best = 1;
+    for k in j + 1..m {
+        if memo_may_precede(strs, j, k) {
+            best = best.max(1 + memo_chain_from(strs, k, mut memo));
+        }
+    }
+    memo.insert(j, best);
+    best
+}
+
+fn memo_min_deletion_size(strs: ref Vec[String]) -> i64 {
+    let m = strs[0].len();
+    let mut memo: Map[i64, i64] = Map.new();
+    let mut best = 0;
+    for j in 0..m {
+        best = best.max(memo_chain_from(strs, j, mut memo));
+    }
+    m - best
+}
+
+// ---- deletes ----
+
+fn deletes_min_deletion_size(strs: ref Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut deleted: Vec[i64] = Vec.new();
+    let mut answer = m;
+    for j in 0..m {
+        let mut d = j;
+        for k in 0..j {
+            let mut ok = true;
+            let mut i = 0;
+            while ok and i < n {
+                ok = strs[i].bytes()[k] <= strs[i].bytes()[j];
+                i += 1;
+            }
+            if ok {
+                d = d.min(deleted[k] + j - k - 1);
+            }
+        }
+        deleted.push(d);
+        answer = answer.min(d + m - 1 - j);
+    }
+    answer
+}
+
+// ---- lists ----
+
+fn lists_min_deletion_size(strs: ref Vec[String]) -> i64 {
+    let m = strs[0].len();
+    let mut after: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        after.push(Vec.new());
+    }
+    for k in 0..m {
+        for j in k + 1..m {
+            if strs.iter().all(|s| s.bytes()[k] <= s.bytes()[j]) {
+                after[k].push(j);
+            }
+        }
+    }
+    let mut start: Vec[i64] = Vec.filled(m, 1);
+    let mut best = 0;
+    let mut j = m - 1;
+    while j >= 0 {
+        for k in after[j].iter() {
+            start[j] = start[j].max(start[*k] + 1);
+        }
+        best = best.max(start[j]);
+        j -= 1;
+    }
+    m - best
+}
+
+// ---- harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n strings of m letters from the first `letters` of the alphabet.
+fn random_strs(seed: mut ref i64, n: i64, m: i64, letters: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let mut s = String.new();
+        for _ in 0..m {
+            s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        out.push(s);
+    }
+    out
+}
+
+// The statement read literally: every set of columns tried, the largest
+// whose letters leave every string non-decreasing kept, the rest deleted.
+// Used on strings of up to 8 letters.
+fn literal(strs: ref Vec[String]) -> i64 {
+    let m = strs[0].len();
+    let mut best = 0;
+    for mask in 0..(1 << m) {
+        let mut ok = true;
+        for s in strs.iter() {
+            let b = s.bytes();
+            let mut prev = 0;
+            for c in 0..m {
+                if (mask >> c) & 1 == 1 {
+                    if (b[c] as i64) < prev {
+                        ok = false;
+                    }
+                    prev = b[c] as i64;
+                }
+            }
+        }
+        if ok {
+            let mut kept = 0;
+            for c in 0..m {
+                kept += (mask >> c) & 1;
+            }
+            best = best.max(kept);
+        }
+    }
+    m - best
+}
+
+fn arm(x: i64, strs: ref Vec[String]) -> i64 {
+    if x == 0 {
+        star_min_deletion_size(strs)
+    } else if x == 1 {
+        matrix_min_deletion_size(strs)
+    } else if x == 2 {
+        memo_min_deletion_size(strs)
+    } else if x == 3 {
+        deletes_min_deletion_size(strs)
+    } else {
+        lists_min_deletion_size(strs)
+    }
+}
+
+// The strings in a random order.
+fn shuffled(strs: ref Vec[String], seed: mut ref i64) -> Vec[String] {
+    let mut out = strs.clone();
+    for i in 0..out.len() {
+        let j = i + next_random(mut seed) % (out.len() - i);
+        out.swap(i, j);
+    }
+    out
+}
+
+// Each string backwards, each letter c turned into the letter as far
+// from z as c is from a.
+fn reversed_complement(strs: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in strs.iter() {
+        let b = s.bytes();
+        let mut t = String.new();
+        let mut c = b.len() - 1;
+        while c >= 0 {
+            t.push((b'a' + b'z' - b[c]) as char);
+            c -= 1;
+        }
+        out.push(t);
+    }
+    out
+}
+
+// A column of a's in front and a column of z's at the end.
+fn padded(strs: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in strs.iter() {
+        out.push("a" + s + "z");
+    }
+    out
+}
+
+// Every column twice, side by side.
+fn doubled(strs: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in strs.iter() {
+        let mut t = String.new();
+        for x in s.bytes().iter() {
+            t.push(*x as char);
+            t.push(*x as char);
+        }
+        out.push(t);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, strs: Vec[String], small: bool) -> i64 {
+    let truth = if small { literal(strs) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, strs));
+    }
+    let mixed = shuffled(strs, mut seed);
+    let flipped = reversed_complement(strs);
+    let wider = padded(strs);
+    let twice = doubled(strs);
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: the strings in another order, the same
+        check(mut t, 2, arm(x, mixed) == a);
+        // P3: each string backwards with its letters turned round, the
+        // same
+        check(mut t, 3, arm(x, flipped) == a);
+        // P4: a column of a's in front and of z's at the end, the same
+        check(mut t, 4, arm(x, wider) == a);
+        // P5: every column twice, twice as many deleted
+        check(mut t, 5, arm(x, twice) == 2 * a);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 960;
+    let mut count = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 cases of up to 6 strings of up to 8 letters from a to d, against
+    // the statement, then 200 of up to 20 strings of up to 30 letters from
+    // up to 26
+    for c in 0..3200 {
+        let small = c < 3000;
+        let (n, m, letters) = if small {
+            (1 + next_random(mut seed) % 6, 1 + next_random(mut seed) % 8, 4)
+        } else {
+            (1 + next_random(mut seed) % 20, 1 + next_random(mut seed) % 30, 2 + next_random(mut seed) % 25)
+        };
+        let strs = random_strs(mut seed, n, m, letters);
+        count += n;
+        let r = properties(mut t, mut seed, strs, small);
+        total += r;
+        check_sum = (check_sum * 31 + r) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"3200 cases of {count} strings: {total} columns deleted, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

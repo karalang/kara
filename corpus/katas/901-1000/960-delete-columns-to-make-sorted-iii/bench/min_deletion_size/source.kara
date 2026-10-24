@@ -1,0 +1,83 @@
+// Benchmark: LeetCode #960 Delete Columns to Make Sorted III -- the ★
+// arm, longest chain, on 100 strings of 100 letters, LeetCode's largest.
+// Mirrors min_deletion_size.c, .rs, .py and go-seq/.
+//
+//
+// The columns kept must make every string non-decreasing, so a column k
+// may come before a later column j exactly when every string's letter in
+// k is at most its letter in j. Keep the longest chain of columns under
+// that order: for each column j, the longest chain that ends at it is one
+// more than the longest ending at any earlier column that may come before
+// it. Delete the rest. O(m^2 n) for n strings of length m.
+
+fn min_deletion_size(strs: ref Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut longest: Vec[i64] = Vec.filled(m, 1);
+    let mut best = 0;
+    for j in 0..m {
+        for k in 0..j {
+            let mut before = true;
+            for i in 0..n {
+                if strs[i].bytes()[k] > strs[i].bytes()[j] {
+                    before = false;
+                    break;
+                }
+            }
+            if before {
+                longest[j] = longest[j].max(longest[k] + 1);
+            }
+        }
+        best = best.max(longest[j]);
+    }
+    m - best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n strings of m letters from the first `letters` of the alphabet, each
+// sorted and then disturbed by `swaps` swaps of neighbouring letters.
+fn nearly_sorted(seed: mut ref i64, n: i64, m: i64, letters: i64, swaps: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let mut b: Vec[u8] = Vec.new();
+        for _ in 0..m {
+            b.push(b'a' + (next_random(mut seed) % letters) as u8);
+        }
+        b.sort();
+        for _ in 0..swaps {
+            let p = next_random(mut seed) % (m - 1);
+            b.swap(p, p + 1);
+        }
+        let mut s = String.new();
+        for x in b.iter() {
+            s.push(*x as char);
+        }
+        out.push(s);
+    }
+    out
+}
+
+fn main() {
+    let rounds = 40;
+    // 50 cases of 100 strings of 100 letters, made once, from the first 2
+    // to 26 letters, each string sorted and then 0 to 9 swaps away
+    let mut seed = 960;
+    let mut cases: Vec[Vec[String]] = Vec.new();
+    for i in 0..50 {
+        cases.push(nearly_sorted(mut seed, 100, 100, 2 + i % 25, i % 10));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..50 {
+            let d = min_deletion_size(cases[(r + i) % 50]);
+            total += d;
+            check = (check * 31 + d + i) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 50 cases of 100 strings of 100 letters: {total} columns deleted, checksum {check}");
+}

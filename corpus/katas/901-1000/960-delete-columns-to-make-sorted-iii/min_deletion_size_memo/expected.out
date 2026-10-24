@@ -1,0 +1,17 @@
+[babca,bbazb]: 3
+[edcba]: 4
+[ghi,def,abc]: 0
+[a]: 0
+[ba]: 1
+[ab,ba]: 1
+[aaa,aaa]: 0
+[acb,bca,abc]: 1
+[zabcd,abcde]: 1
+[abcdz,bcdea]: 1
+300 random cases of 1404 strings: 1103 columns deleted, checksum 390952239
+100 random strings of 100 letters: 99
+one random string of 100 letters: 83
+100 random strings of 100 letters from a and b: 99
+100 copies of one string: 84
+the same with each string's letters sorted: 0
+a to z and back, twice: 72
