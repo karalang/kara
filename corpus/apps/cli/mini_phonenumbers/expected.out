@@ -1,0 +1,908 @@
+parse '(650) 253-0000' US: Country Code: 1 National Number: 6502530000 Country Code Source: 20
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+  original (650) 253-0000
+parse '+1 650-253-0000' US: Country Code: 1 National Number: 6502530000 Country Code Source: 1
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+  original +1 650-253-0000
+parse '1-650-253-0000' US: Country Code: 1 National Number: 6502530000 Country Code Source: 10
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+  original 1 650-253-0000
+parse '650.253.0000 ext. 123' US: Country Code: 1 National Number: 6502530000 Extension: 123 Country Code Source: 20
+  e164 +16502530000 | intl +1 650-253-0000 ext. 123 | national (650) 253-0000 ext. 123 | rfc3966 tel:+1-650-253-0000;ext=123
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+  original (650) 253-0000 ext. 123
+parse '6502530000;ext=55' US: Country Code: 1 National Number: 6502530000 Extension: 55
+  e164 +16502530000 | intl +1 650-253-0000 ext. 55 | national (650) 253-0000 ext. 55 | rfc3966 tel:+1-650-253-0000;ext=55
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse 'tel:+1-650-253-0000;isub=12' US: Country Code: 1 National Number: 6502530000
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse 'tel:253-0000;phone-context=+1-650' US: Country Code: 1 National Number: 6502530000 Country Code Source: 1
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+  original tel:253-0000;phone-context=+1-650
+parse 'tel:+1-650-253-0000;phone-context=example.com' US: Country Code: 1 National Number: 6502530000
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse 'tel:253-0000;phone-context=' US: (1) The phone-context value is invalid
+parse 'tel:253-0000;phone-context=-example' US: (1) The phone-context value is invalid
+parse '1-800-FLOWERS' US: Country Code: 1 National Number: 8003569377 Country Code Source: 10
+  e164 +18003569377 | intl +1 800-356-9377 | national (800) 356-9377 | rfc3966 tel:+1-800-356-9377
+  type TOLL_FREE, valid True, region US, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for US True
+  original 1-800-FLOWERS
+parse '800 MY APPLE' US: Country Code: 1 National Number: 8006927753 Country Code Source: 20
+  e164 +18006927753 | intl +1 800-692-7753 | national (800) 692-7753 | rfc3966 tel:+1-800-692-7753
+  type TOLL_FREE, valid True, region US, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for US True
+  original 800 MY APPLE
+parse '011 44 20 7031 3000' US: Country Code: 44 National Number: 2070313000 Country Code Source: 5
+  e164 +442070313000 | intl +44 20 7031 3000 | national 020 7031 3000 | rfc3966 tel:+44-20-7031-3000
+  type FIXED_LINE, valid True, region GB, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for US False
+  original 011 44 20 7031 3000
+parse '+1 (201) 555-0123 x 42/x43' US: Country Code: 1 National Number: 2015550123 Extension: 42
+  e164 +12015550123 | intl +1 201-555-0123 ext. 42 | national (201) 555-0123 ext. 42 | rfc3966 tel:+1-201-555-0123;ext=42
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse '201-555-0123 #' US: (1) The string supplied did not seem to be a phone number.
+parse '201 555 0123 - 503#' US: Country Code: 1 National Number: 2015550123 Extension: 503
+  e164 +12015550123 | intl +1 201-555-0123 ext. 503 | national (201) 555-0123 ext. 503 | rfc3966 tel:+1-201-555-0123;ext=503
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse '2015550123,,456' US: Country Code: 1 National Number: 2015550123 Extension: 456
+  e164 +12015550123 | intl +1 201-555-0123 ext. 456 | national (201) 555-0123 ext. 456 | rfc3966 tel:+1-201-555-0123;ext=456
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse '(201) 555-0123;789' US: Country Code: 1 National Number: 2015550123 Extension: 789
+  e164 +12015550123 | intl +1 201-555-0123 ext. 789 | national (201) 555-0123 ext. 789 | rfc3966 tel:+1-201-555-0123;ext=789
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse '201 555 0123 extensión 7' US: Country Code: 1 National Number: 2015550123 Extension: 7
+  e164 +12015550123 | intl +1 201-555-0123 ext. 7 | national (201) 555-0123 ext. 7 | rfc3966 tel:+1-201-555-0123;ext=7
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse '201 555 0123 доб 8' US: Country Code: 1 National Number: 2015550123 Extension: 8
+  e164 +12015550123 | intl +1 201-555-0123 ext. 8 | national (201) 555-0123 ext. 8 | rfc3966 tel:+1-201-555-0123;ext=8
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+parse '555-0123' US: Country Code: 1 National Number: 5550123 Country Code Source: 20
+  e164 +15550123 | intl +1 5550123 | national 555-0123 | rfc3966 tel:+1-5550123
+  type UNKNOWN, valid False, region None, possible IS_POSSIBLE_LOCAL_ONLY, geographical False
+  area code 0, ndc 0, dialable from abroad True, valid for US False
+  original 555-0123
+parse '12' US: Country Code: 1 National Number: 12
+  e164 +112 | intl +1 12 | national 12 | rfc3966 tel:+1-12
+  type UNKNOWN, valid False, region None, possible TOO_SHORT, geographical False
+  area code 0, ndc 0, dialable from abroad True, valid for US False
+parse '1' US: (1) The string supplied did not seem to be a phone number.
+parse 'abc' US: (1) The string supplied did not seem to be a phone number.
+parse '+' US: (1) The string supplied did not seem to be a phone number.
+parse '+0 1234' US: (0) Could not interpret numbers after plus-sign.
+parse '+999 123 456 789' US: (0) Could not interpret numbers after plus-sign.
+parse '+1 123 456 7890' US: Country Code: 1 National Number: 1234567890
+  e164 +11234567890 | intl +1 1234567890 | national 1234567890 | rfc3966 tel:+1-1234567890
+  type UNKNOWN, valid False, region None, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 0, dialable from abroad True, valid for US False
+parse '12015550123' US: Country Code: 1 National Number: 2015550123 Country Code Source: 10
+  e164 +12015550123 | intl +1 201-555-0123 | national (201) 555-0123 | rfc3966 tel:+1-201-555-0123
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+  original 1 201-555-0123
+parse '011 1' US: (2) Phone number had an IDD, but after this was not long enough to be a viable phone number.
+parse '+44 1' None: (3) The string supplied is too short to be a phone number.
+parse '+1 234567890123456789' None: (4) The string supplied is too long to be a phone number.
+parse '+1 650 253 0000 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------' US: (4) The string supplied was too long to parse.
+parse '＋１ ６５０ ２５３ ００００' US: Country Code: 1 National Number: 6502530000 Country Code Source: 1
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for US True
+  original ＋１ ６５０ ２５３ ００００
+parse 'Call 650 253 0000 now!' US: Country Code: 1 National Number: 6502530000669
+  e164 +16502530000669 | intl +1 6502530000669 | national 6502530000669 | rfc3966 tel:+1-6502530000669
+  type UNKNOWN, valid False, region None, possible TOO_LONG, geographical False
+  area code 0, ndc 0, dialable from abroad True, valid for US False
+parse '+1 613 555 0199' CA: Country Code: 1 National Number: 6135550199
+  e164 +16135550199 | intl +1 613-555-0199 | national (613) 555-0199 | rfc3966 tel:+1-613-555-0199
+  type FIXED_LINE_OR_MOBILE, valid True, region CA, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for CA True
+parse '613 555 0199' CA: Country Code: 1 National Number: 6135550199 Country Code Source: 20
+  e164 +16135550199 | intl +1 613-555-0199 | national (613) 555-0199 | rfc3966 tel:+1-613-555-0199
+  type FIXED_LINE_OR_MOBILE, valid True, region CA, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for CA True
+  original (613) 555-0199
+parse '+1 242 357 1234' None: Country Code: 1 National Number: 2423571234
+  e164 +12423571234 | intl +1 242-357-1234 | national (242) 357-1234 | rfc3966 tel:+1-242-357-1234
+  type MOBILE, valid True, region BS, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True
+parse '+1 876 512 3456' None: Country Code: 1 National Number: 8765123456
+  e164 +18765123456 | intl +1 876-512-3456 | national (876) 512-3456 | rfc3966 tel:+1-876-512-3456
+  type MOBILE, valid True, region JM, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True
+parse '+1 345 323 4567' None: Country Code: 1 National Number: 3453234567
+  e164 +13453234567 | intl +1 345-323-4567 | national (345) 323-4567 | rfc3966 tel:+1-345-323-4567
+  type MOBILE, valid True, region KY, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True
+parse '+1 268 464 1234' None: Country Code: 1 National Number: 2684641234
+  e164 +12684641234 | intl +1 268-464-1234 | national (268) 464-1234 | rfc3966 tel:+1-268-464-1234
+  type MOBILE, valid True, region AG, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True
+parse '+1 787 234 5678' None: Country Code: 1 National Number: 7872345678
+  e164 +17872345678 | intl +1 787-234-5678 | national (787) 234-5678 | rfc3966 tel:+1-787-234-5678
+  type FIXED_LINE_OR_MOBILE, valid True, region PR, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True
+parse '+1 340 642 1234' None: Country Code: 1 National Number: 3406421234
+  e164 +13406421234 | intl +1 340-642-1234 | national (340) 642-1234 | rfc3966 tel:+1-340-642-1234
+  type FIXED_LINE_OR_MOBILE, valid True, region VI, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True
+parse '+1 671 300 1234' None: Country Code: 1 National Number: 6713001234
+  e164 +16713001234 | intl +1 671-300-1234 | national (671) 300-1234 | rfc3966 tel:+1-671-300-1234
+  type FIXED_LINE_OR_MOBILE, valid True, region GU, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True
+parse '300 1234' GU: Country Code: 1 National Number: 6713001234 Country Code Source: 20
+  e164 +16713001234 | intl +1 671-300-1234 | national (671) 300-1234 | rfc3966 tel:+1-671-300-1234
+  type FIXED_LINE_OR_MOBILE, valid True, region GU, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for GU True
+  original 300 1234
+parse '020 7031 3000' GB: Country Code: 44 National Number: 2070313000 Country Code Source: 20
+  e164 +442070313000 | intl +44 20 7031 3000 | national 020 7031 3000 | rfc3966 tel:+44-20-7031-3000
+  type FIXED_LINE, valid True, region GB, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for GB True
+  original 020 7031 3000
+parse '+44 (0) 20 7031 3000' GB: Country Code: 44 National Number: 2070313000 Country Code Source: 1
+  e164 +442070313000 | intl +44 20 7031 3000 | national 020 7031 3000 | rfc3966 tel:+44-20-7031-3000
+  type FIXED_LINE, valid True, region GB, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for GB True
+  original +44 (0) 20 7031 3000
+parse '07400 123456' GB: Country Code: 44 National Number: 7400123456 Country Code Source: 20
+  e164 +447400123456 | intl +44 7400 123456 | national 07400 123456 | rfc3966 tel:+44-7400-123456
+  type MOBILE, valid True, region GB, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 4, dialable from abroad True, valid for GB True
+  original 07400 123456
+parse '0800 123 4567' GB: Country Code: 44 National Number: 8001234567
+  e164 +448001234567 | intl +44 800 123 4567 | national 0800 123 4567 | rfc3966 tel:+44-800-123-4567
+  type TOLL_FREE, valid True, region GB, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for GB True
+parse '0044 20 7031 3000' GB: Country Code: 44 National Number: 2070313000 Country Code Source: 5
+  e164 +442070313000 | intl +44 20 7031 3000 | national 020 7031 3000 | rfc3966 tel:+44-20-7031-3000
+  type FIXED_LINE, valid True, region GB, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for GB True
+  original 0044 20 7031 3000
+parse '+44 1481 256789' None: Country Code: 44 National Number: 1481256789
+  e164 +441481256789 | intl +44 1481 256789 | national 01481 256789 | rfc3966 tel:+44-1481-256789
+  type FIXED_LINE, valid True, region GG, possible IS_POSSIBLE, geographical True
+  area code 4, ndc 4, dialable from abroad True
+parse '01624 756789' IM: Country Code: 44 National Number: 1624756789 Country Code Source: 20
+  e164 +441624756789 | intl +44 1624 756789 | national 01624 756789 | rfc3966 tel:+44-1624-756789
+  type FIXED_LINE, valid True, region IM, possible IS_POSSIBLE, geographical True
+  area code 4, ndc 4, dialable from abroad True, valid for IM True
+  original 01624 756789
+parse '+441534 456789' None: Country Code: 44 National Number: 1534456789
+  e164 +441534456789 | intl +44 1534 456789 | national 01534 456789 | rfc3966 tel:+44-1534-456789
+  type FIXED_LINE, valid True, region JE, possible IS_POSSIBLE, geographical True
+  area code 4, ndc 4, dialable from abroad True
+parse '456789' JE: Country Code: 44 National Number: 1534456789 Country Code Source: 20
+  e164 +441534456789 | intl +44 1534 456789 | national 01534 456789 | rfc3966 tel:+44-1534-456789
+  type FIXED_LINE, valid True, region JE, possible IS_POSSIBLE, geographical True
+  area code 4, ndc 4, dialable from abroad True, valid for JE True
+  original 456789
+parse '٠٢٠ ٧٠٣١ ٣٠٠٠' GB: Country Code: 44 National Number: 2070313000
+  e164 +442070313000 | intl +44 20 7031 3000 | national 020 7031 3000 | rfc3966 tel:+44-20-7031-3000
+  type FIXED_LINE, valid True, region GB, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for GB True
+parse '020 7031 3000' None: (0) Missing or invalid default region.
+parse '020 7031 3000' ZZ: (0) Missing or invalid default region.
+parse '+44 20 7031 300' None: Country Code: 44 National Number: 207031300
+  e164 +44207031300 | intl +44 207031300 | national 207031300 | rfc3966 tel:+44-207031300
+  type UNKNOWN, valid False, region None, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 0, dialable from abroad True
+parse '030 123456' DE: Country Code: 49 National Number: 30123456 Country Code Source: 20
+  e164 +4930123456 | intl +49 30 123456 | national 030 123456 | rfc3966 tel:+49-30-123456
+  type FIXED_LINE, valid True, region DE, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for DE True
+  original 030 123456
+parse '+49 (0)30 1234 5678' DE: Country Code: 49 National Number: 3012345678 Country Code Source: 1
+  e164 +493012345678 | intl +49 30 12345678 | national 030 12345678 | rfc3966 tel:+49-30-12345678
+  type FIXED_LINE, valid True, region DE, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for DE True
+  original +49 (0)30 1234 5678
+parse '0151 23456789' DE: Country Code: 49 National Number: 15123456789 Country Code Source: 20
+  e164 +4915123456789 | intl +49 1512 3456789 | national 01512 3456789 | rfc3966 tel:+49-1512-3456789
+  type MOBILE, valid True, region DE, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 4, dialable from abroad True, valid for DE True
+  original 01512 3456789
+parse '089 1234567' DE: Country Code: 49 National Number: 891234567
+  e164 +49891234567 | intl +49 89 1234567 | national 089 1234567 | rfc3966 tel:+49-89-1234567
+  type FIXED_LINE, valid True, region DE, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for DE True
+parse '0180 2 123456' DE: Country Code: 49 National Number: 1802123456
+  e164 +491802123456 | intl +49 180 2 123456 | national 0180 2 123456 | rfc3966 tel:+49-180-2-123456
+  type SHARED_COST, valid True, region DE, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for DE True
+parse '+49 30 12345678901234' None: Country Code: 49 National Number: 3012345678901234
+  e164 +493012345678901234 | intl +49 3012345678901234 | national 3012345678901234 | rfc3966 tel:+49-3012345678901234
+  type UNKNOWN, valid False, region DE, possible TOO_LONG, geographical False
+  area code 0, ndc 0, dialable from abroad True
+parse '01 23 45 67 89' FR: Country Code: 33 National Number: 123456789 Country Code Source: 20
+  e164 +33123456789 | intl +33 1 23 45 67 89 | national 01 23 45 67 89 | rfc3966 tel:+33-1-23-45-67-89
+  type FIXED_LINE, valid True, region FR, possible IS_POSSIBLE, geographical True
+  area code 1, ndc 1, dialable from abroad True, valid for FR True
+  original 01 23 45 67 89
+parse '+33 6 12 34 56 78' FR: Country Code: 33 National Number: 612345678
+  e164 +33612345678 | intl +33 6 12 34 56 78 | national 06 12 34 56 78 | rfc3966 tel:+33-6-12-34-56-78
+  type MOBILE, valid True, region FR, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 1, dialable from abroad True, valid for FR True
+parse '0033 1 23 45 67 89' FR: Country Code: 33 National Number: 123456789 Country Code Source: 5
+  e164 +33123456789 | intl +33 1 23 45 67 89 | national 01 23 45 67 89 | rfc3966 tel:+33-1-23-45-67-89
+  type FIXED_LINE, valid True, region FR, possible IS_POSSIBLE, geographical True
+  area code 1, ndc 1, dialable from abroad True, valid for FR True
+  original 0033 1 23 45 67 89
+parse '02 1234 5678' IT: Country Code: 39 National Number: 212345678 Leading Zero(s): True Country Code Source: 20
+  e164 +390212345678 | intl +39 02 1234 5678 | national 02 1234 5678 | rfc3966 tel:+39-02-1234-5678
+  type FIXED_LINE, valid True, region IT, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for IT True
+  original 02 1234 5678
+parse '+39 06 6981 2345' None: Country Code: 39 National Number: 669812345 Leading Zero(s): True
+  e164 +390669812345 | intl +39 06 6981 2345 | national 06 6981 2345 | rfc3966 tel:+39-06-6981-2345
+  type FIXED_LINE, valid True, region VA, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True
+parse '+39 312 345 6789' None: Country Code: 39 National Number: 3123456789
+  e164 +393123456789 | intl +39 312 345 6789 | national 312 345 6789 | rfc3966 tel:+39-312-345-6789
+  type MOBILE, valid True, region IT, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True
+parse '0039 02 12345678' IT: Country Code: 39 National Number: 212345678 Leading Zero(s): True Country Code Source: 5
+  e164 +390212345678 | intl +39 02 1234 5678 | national 02 1234 5678 | rfc3966 tel:+39-02-1234-5678
+  type FIXED_LINE, valid True, region IT, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for IT True
+  original 0039 02 12345678
+parse '+3900012345' None: Country Code: 39 National Number: 12345 Leading Zero(s): True Number of leading zeros: 3
+  e164 +3900012345 | intl +39 00012345 | national 00012345 | rfc3966 tel:+39-00012345
+  type UNKNOWN, valid False, region None, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 0, dialable from abroad True
+parse '912 34 56 78' ES: Country Code: 34 National Number: 912345678 Country Code Source: 20
+  e164 +34912345678 | intl +34 912 34 56 78 | national 912 34 56 78 | rfc3966 tel:+34-912-34-56-78
+  type FIXED_LINE, valid True, region ES, possible IS_POSSIBLE, geographical True
+  area code 0, ndc 3, dialable from abroad True, valid for ES True
+  original 912 34 56 78
+parse '+34 612 34 56 78' ES: Country Code: 34 National Number: 612345678
+  e164 +34612345678 | intl +34 612 34 56 78 | national 612 34 56 78 | rfc3966 tel:+34-612-34-56-78
+  type MOBILE, valid True, region ES, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for ES True
+parse '044 668 18 00' CH: Country Code: 41 National Number: 446681800 Country Code Source: 20
+  e164 +41446681800 | intl +41 44 668 18 00 | national 044 668 18 00 | rfc3966 tel:+41-44-668-18-00
+  type FIXED_LINE, valid True, region CH, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for CH True
+  original 044 668 18 00
+parse '+41 79 123 45 67' CH: Country Code: 41 National Number: 791234567
+  e164 +41791234567 | intl +41 79 123 45 67 | national 079 123 45 67 | rfc3966 tel:+41-79-123-45-67
+  type MOBILE, valid True, region CH, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 2, dialable from abroad True, valid for CH True
+parse '00 41 44 668 18 00' CH: Country Code: 41 National Number: 446681800 Country Code Source: 5
+  e164 +41446681800 | intl +41 44 668 18 00 | national 044 668 18 00 | rfc3966 tel:+41-44-668-18-00
+  type FIXED_LINE, valid True, region CH, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for CH True
+  original 00 41 44 668 18 00
+parse '020 123 4567' NL: Country Code: 31 National Number: 201234567 Country Code Source: 20
+  e164 +31201234567 | intl +31 20 123 4567 | national 020 123 4567 | rfc3966 tel:+31-20-123-4567
+  type FIXED_LINE, valid True, region NL, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for NL True
+  original 020 123 4567
+parse '06 12345678' NL: Country Code: 31 National Number: 612345678
+  e164 +31612345678 | intl +31 6 12345678 | national 06 12345678 | rfc3966 tel:+31-6-12345678
+  type MOBILE, valid True, region NL, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 1, dialable from abroad True, valid for NL True
+parse '+31 (0)20 123 4567' NL: Country Code: 31 National Number: 201234567 Country Code Source: 1
+  e164 +31201234567 | intl +31 20 123 4567 | national 020 123 4567 | rfc3966 tel:+31-20-123-4567
+  type FIXED_LINE, valid True, region NL, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for NL True
+  original +31 (0)20 123 4567
+parse '8 (495) 123-45-67' RU: Country Code: 7 National Number: 4951234567 Country Code Source: 20
+  e164 +74951234567 | intl +7 495 123-45-67 | national 8 (495) 123-45-67 | rfc3966 tel:+7-495-123-45-67
+  type FIXED_LINE, valid True, region RU, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for RU True
+  original 8 (495) 123-45-67
+parse '+7 912 345-67-89' RU: Country Code: 7 National Number: 9123456789
+  e164 +79123456789 | intl +7 912 345-67-89 | national 8 (912) 345-67-89 | rfc3966 tel:+7-912-345-67-89
+  type MOBILE, valid True, region RU, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for RU True
+parse '8 10 1 650 253 0000' RU: Country Code: 1 National Number: 6502530000 Country Code Source: 5
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for RU False
+  original 8~10 1 650-253-0000
+parse '+7 701 123 4567' None: Country Code: 7 National Number: 7011234567
+  e164 +77011234567 | intl +7 701 123 4567 | national 8 (701) 123 4567 | rfc3966 tel:+7-701-123-4567
+  type MOBILE, valid True, region KZ, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True
+parse '+7 727 123 4567' None: Country Code: 7 National Number: 7271234567
+  e164 +77271234567 | intl +7 727 123 4567 | national 8 (727) 123 4567 | rfc3966 tel:+7-727-123-4567
+  type UNKNOWN, valid False, region KZ, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True
+parse '(02) 9876 5432' AU: Country Code: 61 National Number: 298765432 Country Code Source: 20
+  e164 +61298765432 | intl +61 2 9876 5432 | national (02) 9876 5432 | rfc3966 tel:+61-2-9876-5432
+  type FIXED_LINE, valid True, region AU, possible IS_POSSIBLE, geographical True
+  area code 1, ndc 1, dialable from abroad True, valid for AU True
+  original (02) 9876 5432
+parse '0412 345 678' AU: Country Code: 61 National Number: 412345678
+  e164 +61412345678 | intl +61 412 345 678 | national 0412 345 678 | rfc3966 tel:+61-412-345-678
+  type MOBILE, valid True, region AU, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for AU True
+parse '+61 1800 123 456' AU: Country Code: 61 National Number: 1800123456
+  e164 +611800123456 | intl +61 1800 123 456 | national 1800 123 456 | rfc3966 tel:+61-1800-123-456
+  type TOLL_FREE, valid True, region AU, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 4, dialable from abroad False, valid for AU True
+parse '0011 1 650 253 0000' AU: Country Code: 1 National Number: 6502530000 Country Code Source: 5
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for AU False
+  original 0011 1 650-253-0000
+parse '0014 44 20 7031 3000' AU: Country Code: 44 National Number: 2070313000 Country Code Source: 5
+  e164 +442070313000 | intl +44 20 7031 3000 | national 020 7031 3000 | rfc3966 tel:+44-20-7031-3000
+  type FIXED_LINE, valid True, region GB, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for AU False
+  original 0014 44 20 7031 3000
+parse '+61 8 9162 1234' None: Country Code: 61 National Number: 891621234
+  e164 +61891621234 | intl +61 8 9162 1234 | national (08) 9162 1234 | rfc3966 tel:+61-8-9162-1234
+  type FIXED_LINE, valid True, region CC, possible IS_POSSIBLE, geographical True
+  area code 1, ndc 1, dialable from abroad True
+parse '+61 8 9164 1234' None: Country Code: 61 National Number: 891641234
+  e164 +61891641234 | intl +61 8 9164 1234 | national (08) 9164 1234 | rfc3966 tel:+61-8-9164-1234
+  type FIXED_LINE, valid True, region CX, possible IS_POSSIBLE, geographical True
+  area code 1, ndc 1, dialable from abroad True
+parse '09 123 4567' NZ: Country Code: 64 National Number: 91234567 Country Code Source: 20
+  e164 +6491234567 | intl +64 91234567 | national 91234567 | rfc3966 tel:+64-91234567
+  type UNKNOWN, valid False, region NZ, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 0, dialable from abroad True, valid for NZ False
+  original 09 123 4567
+parse '021 123 4567' NZ: Country Code: 64 National Number: 211234567
+  e164 +64211234567 | intl +64 21 123 4567 | national 021 123 4567 | rfc3966 tel:+64-21-123-4567
+  type MOBILE, valid True, region NZ, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 2, dialable from abroad True, valid for NZ True
+parse '0161 1 650 253 0000' NZ: Country Code: 1 National Number: 6502530000 Country Code Source: 5
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for NZ False
+  original 0161 1 650 253 0000
+parse '03-1234-5678' JP: Country Code: 81 National Number: 312345678 Country Code Source: 20
+  e164 +81312345678 | intl +81 3-1234-5678 | national 03-1234-5678 | rfc3966 tel:+81-3-1234-5678
+  type FIXED_LINE, valid True, region JP, possible IS_POSSIBLE, geographical True
+  area code 1, ndc 1, dialable from abroad True, valid for JP True
+  original 03-1234-5678
+parse '090-1234-5678' JP: Country Code: 81 National Number: 9012345678 Country Code Source: 20
+  e164 +819012345678 | intl +81 90-1234-5678 | national 090-1234-5678 | rfc3966 tel:+81-90-1234-5678
+  type MOBILE, valid True, region JP, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 2, dialable from abroad True, valid for JP True
+  original 090-1234-5678
+parse '+81 3 1234 5678' JP: Country Code: 81 National Number: 312345678
+  e164 +81312345678 | intl +81 3-1234-5678 | national 03-1234-5678 | rfc3966 tel:+81-3-1234-5678
+  type FIXED_LINE, valid True, region JP, possible IS_POSSIBLE, geographical True
+  area code 1, ndc 1, dialable from abroad True, valid for JP True
+parse '0120-123-456' JP: Country Code: 81 National Number: 120123456
+  e164 +81120123456 | intl +81 120-123-456 | national 0120-123-456 | rfc3966 tel:+81-120-123-456
+  type TOLL_FREE, valid True, region JP, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for JP True
+parse '011 2345 6789' IN: Country Code: 91 National Number: 1123456789 Country Code Source: 20
+  e164 +911123456789 | intl +91 11 2345 6789 | national 011 2345 6789 | rfc3966 tel:+91-11-2345-6789
+  type FIXED_LINE, valid True, region IN, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for IN True
+  original 011 2345 6789
+parse '+91 98765 43210' IN: Country Code: 91 National Number: 9876543210
+  e164 +919876543210 | intl +91 98765 43210 | national 098765 43210 | rfc3966 tel:+91-98765-43210
+  type MOBILE, valid True, region IN, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 5, dialable from abroad True, valid for IN True
+parse '098765 43210' IN: Country Code: 91 National Number: 9876543210 Country Code Source: 20
+  e164 +919876543210 | intl +91 98765 43210 | national 098765 43210 | rfc3966 tel:+91-98765-43210
+  type MOBILE, valid True, region IN, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 5, dialable from abroad True, valid for IN True
+  original 098765 43210
+parse '1800 123 4567' IN: Country Code: 91 National Number: 18001234567
+  e164 +9118001234567 | intl +91 1800 123 4567 | national 1800 123 4567 | rfc3966 tel:+91-1800-123-4567
+  type TOLL_FREE, valid True, region IN, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 4, dialable from abroad False, valid for IN True
+parse '6123 4567' SG: Country Code: 65 National Number: 61234567 Country Code Source: 20
+  e164 +6561234567 | intl +65 6123 4567 | national 6123 4567 | rfc3966 tel:+65-6123-4567
+  type FIXED_LINE, valid True, region SG, possible IS_POSSIBLE, geographical True
+  area code 0, ndc 4, dialable from abroad True, valid for SG True
+  original 6123 4567
+parse '+65 8123 4567' SG: Country Code: 65 National Number: 81234567
+  e164 +6581234567 | intl +65 8123 4567 | national 8123 4567 | rfc3966 tel:+65-8123-4567
+  type MOBILE, valid True, region SG, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 4, dialable from abroad True, valid for SG True
+parse '001 1 650 253 0000' SG: Country Code: 1 National Number: 6502530000 Country Code Source: 5
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for SG False
+  original 001 1 650 253 0000
+parse '+800 1234 5678' None: Country Code: 800 National Number: 12345678
+  e164 +80012345678 | intl +800 1234 5678 | national 1234 5678 | rfc3966 tel:+800-1234-5678
+  type TOLL_FREE, valid True, region 001, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 4, dialable from abroad True
+parse '+800 1234 5678' US: Country Code: 800 National Number: 12345678 Country Code Source: 1
+  e164 +80012345678 | intl +800 1234 5678 | national 1234 5678 | rfc3966 tel:+800-1234-5678
+  type TOLL_FREE, valid True, region 001, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 4, dialable from abroad True, valid for US False
+  original +800 1234 5678
+parse '011 15 2345-6789' AR: Country Code: 54 National Number: 91123456789 Country Code Source: 20
+  e164 +5491123456789 | intl +54 9 11 2345-6789 | national 011 15-2345-6789 | rfc3966 tel:+54-9-11-2345-6789
+  type MOBILE, valid True, region AR, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for AR True
+  original 011 15-2345-6789
+parse '+54 9 11 2345 6789' AR: Country Code: 54 National Number: 91123456789 Country Code Source: 1
+  e164 +5491123456789 | intl +54 9 11 2345-6789 | national 011 15-2345-6789 | rfc3966 tel:+54-9-11-2345-6789
+  type MOBILE, valid True, region AR, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for AR True
+  original +54 9 11 2345-6789
+parse '0351 15 412 3456' AR: Country Code: 54 National Number: 93514123456 Country Code Source: 20
+  e164 +5493514123456 | intl +54 9 351 412-3456 | national 0351 15-412-3456 | rfc3966 tel:+54-9-351-412-3456
+  type MOBILE, valid True, region AR, possible IS_POSSIBLE, geographical True
+  area code 4, ndc 4, dialable from abroad True, valid for AR True
+  original 0351 15-412-3456
+parse '(011) 4567-8901' AR: Country Code: 54 National Number: 1145678901 Country Code Source: 20
+  e164 +541145678901 | intl +54 11 4567-8901 | national 011 4567-8901 | rfc3966 tel:+54-11-4567-8901
+  type FIXED_LINE, valid True, region AR, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for AR True
+  original 011 4567-8901
+parse '+54 11 4567-8901' None: Country Code: 54 National Number: 1145678901
+  e164 +541145678901 | intl +54 11 4567-8901 | national 011 4567-8901 | rfc3966 tel:+54-11-4567-8901
+  type FIXED_LINE, valid True, region AR, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True
+parse '0800 123 4567' AR: Country Code: 54 National Number: 8001234567
+  e164 +548001234567 | intl +54 800-123-4567 | national 0800-123-4567 | rfc3966 tel:+54-800-123-4567
+  type TOLL_FREE, valid True, region AR, possible IS_POSSIBLE, geographical False
+  area code 0, ndc 3, dialable from abroad True, valid for AR True
+parse '(11) 96123-4567' BR: Country Code: 55 National Number: 11961234567 Country Code Source: 20
+  e164 +5511961234567 | intl +55 11 96123-4567 | national (11) 96123-4567 | rfc3966 tel:+55-11-96123-4567
+  type MOBILE, valid True, region BR, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for BR True
+  original (11) 96123-4567
+parse '0 15 11 96123 4567' BR: Country Code: 55 National Number: 11961234567 Country Code Source: 20 Preferred Domestic Carrier Code: 15
+  e164 +5511961234567 | intl +55 11 96123-4567 | national (11) 96123-4567 | rfc3966 tel:+55-11-96123-4567
+  type MOBILE, valid True, region BR, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for BR True
+  original 0 15 11 96123 4567
+parse '+55 21 2345 6789' BR: Country Code: 55 National Number: 2123456789
+  e164 +552123456789 | intl +55 21 2345-6789 | national (21) 2345-6789 | rfc3966 tel:+55-21-2345-6789
+  type FIXED_LINE, valid True, region BR, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for BR True
+parse '0xx21 2345 6789' BR: Country Code: 55 National Number: 2123456789 Country Code Source: 20
+  e164 +552123456789 | intl +55 21 2345-6789 | national (21) 2345-6789 | rfc3966 tel:+55-21-2345-6789
+  type FIXED_LINE, valid True, region BR, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for BR True
+  original 0xx21 2345 6789
+parse '0021 1 650 253 0000' BR: Country Code: 1 National Number: 6502530000 Country Code Source: 5
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for BR False
+  original 0021 1 650 253 0000
+parse '55 1234 5678' MX: Country Code: 52 National Number: 5512345678 Country Code Source: 20
+  e164 +525512345678 | intl +52 55 1234 5678 | national 55 1234 5678 | rfc3966 tel:+52-55-1234-5678
+  type FIXED_LINE_OR_MOBILE, valid True, region MX, possible IS_POSSIBLE, geographical True
+  area code 2, ndc 2, dialable from abroad True, valid for MX True
+  original 55 1234 5678
+parse '+52 1 55 1234 5678' MX: Country Code: 52 National Number: 15512345678 Country Code Source: 1
+  e164 +5215512345678 | intl +52 15512345678 | national 15512345678 | rfc3966 tel:+52-15512345678
+  type UNKNOWN, valid False, region MX, possible TOO_LONG, geographical False
+  area code 0, ndc 0, dialable from abroad True, valid for MX False
+  original +52 1 55 1234 5678
+parse '044 55 1234 5678' MX: Country Code: 52 National Number: 445512345678 Leading Zero(s): True Country Code Source: 20
+  e164 +520445512345678 | intl +52 0445512345678 | national 0445512345678 | rfc3966 tel:+52-0445512345678
+  type UNKNOWN, valid False, region MX, possible TOO_LONG, geographical False
+  area code 0, ndc 0, dialable from abroad True, valid for MX False
+  original 044 55 1234 5678
+parse '01 55 1234 5678' MX: Country Code: 52 National Number: 15512345678 Leading Zero(s): True Country Code Source: 20
+  e164 +52015512345678 | intl +52 015512345678 | national 015512345678 | rfc3966 tel:+52-015512345678
+  type UNKNOWN, valid False, region MX, possible TOO_LONG, geographical False
+  area code 0, ndc 0, dialable from abroad True, valid for MX False
+  original 01 55 1234 5678
+parse '00 1 650 253 0000' MX: Country Code: 1 National Number: 6502530000 Country Code Source: 5
+  e164 +16502530000 | intl +1 650-253-0000 | national (650) 253-0000 | rfc3966 tel:+1-650-253-0000
+  type FIXED_LINE_OR_MOBILE, valid True, region US, possible IS_POSSIBLE, geographical True
+  area code 3, ndc 3, dialable from abroad True, valid for MX False
+  original 00 1 650-253-0000
+dial '650 253 0000' US: +16502530000
+  from US: 1 (650) 253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from CA: 1 (650) 253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from GB: 00 1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from DE: 00 1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from AU: 0011 1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from RU: 8~10 1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from BR: +1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from MX: 00 1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from SG: +1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from JP: 010 1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+  from NZ: 00 1 650-253-0000 | mobile '+1 650-253-0000' | '+16502530000'
+dial '020 7031 3000' GB: +442070313000
+  from US: 011 44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from CA: 011 44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from GB: 020 7031 3000 | mobile '020 7031 3000' | '02070313000'
+  from DE: 00 44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from AU: 0011 44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from RU: 8~10 44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from BR: +44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from MX: 00 44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from SG: +44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from JP: 010 44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+  from NZ: 00 44 20 7031 3000 | mobile '+44 20 7031 3000' | '+442070313000'
+dial '07400 123456' GB: +447400123456
+  from GB: 07400 123456 | mobile '07400 123456' | '07400123456'
+  from GG: 07400 123456 | mobile '+44 7400 123456' | '+447400123456'
+  from US: 011 44 7400 123456 | mobile '+44 7400 123456' | '+447400123456'
+  from DE: 00 44 7400 123456 | mobile '+44 7400 123456' | '+447400123456'
+dial '030 123456' DE: +4930123456
+  from DE: 030 123456 | mobile '030 123456' | '030123456'
+  from CH: 00 49 30 123456 | mobile '+49 30 123456' | '+4930123456'
+  from US: 011 49 30 123456 | mobile '+49 30 123456' | '+4930123456'
+  from AU: 0011 49 30 123456 | mobile '+49 30 123456' | '+4930123456'
+dial '0800 123 4567' GB: +448001234567
+  from GB: 0800 123 4567 | mobile '0800 123 4567' | '08001234567'
+  from US: 011 44 800 123 4567 | mobile '+44 800 123 4567' | '+448001234567'
+dial '011 15 2345-6789' AR: +5491123456789
+  from AR: 011 15-2345-6789 | mobile '011 15-2345-6789' | '0111523456789'
+  from US: 011 54 9 11 2345-6789 | mobile '+54 9 11 2345-6789' | '+5491123456789'
+  from BR: +54 9 11 2345-6789 | mobile '+54 9 11 2345-6789' | '+5491123456789'
+dial '(11) 96123-4567' BR: +5511961234567
+  from BR: (11) 96123-4567 | mobile '' | ''
+  from AR: 00 55 11 96123-4567 | mobile '+55 11 96123-4567' | '+5511961234567'
+  from US: 011 55 11 96123-4567 | mobile '+55 11 96123-4567' | '+5511961234567'
+dial '0 15 11 96123 4567' BR: +5511961234567
+  from BR: (11) 96123-4567 | mobile '' | ''
+  from US: 011 55 11 96123-4567 | mobile '+55 11 96123-4567' | '+5511961234567'
+dial '55 1234 5678' MX: +525512345678
+  from MX: 55 1234 5678 | mobile '+52 55 1234 5678' | '+525512345678'
+  from US: 011 52 55 1234 5678 | mobile '+52 55 1234 5678' | '+525512345678'
+dial '+800 1234 5678' None: +80012345678
+  from US: 011 800 1234 5678 | mobile '+800 1234 5678' | '+80012345678'
+  from GB: 00 800 1234 5678 | mobile '+800 1234 5678' | '+80012345678'
+  from JP: 010 800 1234 5678 | mobile '+800 1234 5678' | '+80012345678'
+dial '02 1234 5678' IT: +390212345678
+  from IT: 02 1234 5678 | mobile '02 1234 5678' | '0212345678'
+  from VA: 02 1234 5678 | mobile '+39 02 1234 5678' | '+390212345678'
+  from US: 011 39 02 1234 5678 | mobile '+39 02 1234 5678' | '+390212345678'
+dial '8 (495) 123-45-67' RU: +74951234567
+  from RU: 8 (495) 123-45-67 | mobile '8 (495) 123-45-67' | '84951234567'
+  from KZ: 8 (495) 123-45-67 | mobile '+7 495 123-45-67' | '+74951234567'
+  from US: 011 7 495 123-45-67 | mobile '+7 495 123-45-67' | '+74951234567'
+dial '+1 242 357 1234' None: +12423571234
+  from US: 1 (242) 357-1234 | mobile '+1 242-357-1234' | '+12423571234'
+  from BS: 1 (242) 357-1234 | mobile '+1 242-357-1234' | '+12423571234'
+  from GB: 00 1 242-357-1234 | mobile '+1 242-357-1234' | '+12423571234'
+dial '650.253.0000 ext. 123' US: +16502530000
+  from US: 1 (650) 253-0000 ext. 123 | mobile '+1 650-253-0000' | '+16502530000'
+  from GB: 00 1 650-253-0000 ext. 123 | mobile '+1 650-253-0000' | '+16502530000'
+dial '+44 20 7031 3000 ext 22' None: +442070313000
+  from GB: 020 7031 3000 x22 | mobile '020 7031 3000' | '02070313000'
+  from US: 011 44 20 7031 3000 x22 | mobile '+44 20 7031 3000' | '+442070313000'
+  from ZZ: +44 20 7031 3000 x22 | mobile '+44 20 7031 3000' | '+442070313000'
+dial '09 123 4567' NZ: +6491234567
+  from NZ: 91234567 | mobile '91234567' | '91234567'
+  from AU: 0011 64 91234567 | mobile '' | ''
+  from US: 011 64 91234567 | mobile '' | ''
+alpha '1-800-FLOWERS' US: alpha True, converted '1-800-3569377'
+  from US: 1 800-FLOWERS
+  from GB: 00 1 800-FLOWERS
+  from AU: 0011 1 800-FLOWERS
+  from DE: 00 1 800-FLOWERS
+alpha '800 MY APPLE' US: alpha True, converted '800 69 27753'
+  from US: 1 800 MY APPLE
+  from GB: 00 1 800 MY APPLE
+alpha '0800 BUY NOW' GB: alpha True, converted '0800 289 669'
+  from GB: 0800 BUY NOW
+  from US: 011 44 800 BUY NOW
+alpha '+61 1300 TAXI CAB' None: alpha True, converted '+61 1300 8294 222'
+  from AU: 1300 TAXI CAB
+  from NZ: 00 61 1300 TAXI CAB
+carrier '(11) 96123-4567' BR '15': 0 15 (11) 96123-4567 | preferred 0 15 (11) 96123-4567
+carrier '0 21 11 96123 4567' BR '15': 0 15 (11) 96123-4567 | preferred 0 21 (11) 96123-4567
+carrier '+55 21 2345 6789' None '': (21) 2345-6789 | preferred (21) 2345-6789
+carrier '011 15 2345-6789' AR '15': 011 15-2345-6789 | preferred 011 15-2345-6789
+carrier '650 253 0000' US '15': (650) 253-0000 | preferred (650) 253-0000
+match '+1 650 253 0000' '+1-650-253-0000': EXACT_MATCH
+match '+1 650 253 0000' '650 253 0000': NSN_MATCH
+match '650 253 0000' '+1 650 253 0000': NSN_MATCH
+match '650 253 0000' '(650) 253-0000': NSN_MATCH
+match '+1 650 253 0000' '253 0000': SHORT_NSN_MATCH
+match '+1 650 253 0000 ext 1' '+1 650 253 0000 ext 2': NO_MATCH
+match '+1 650 253 0000 ext 1' '+1 650 253 0000': SHORT_NSN_MATCH
+match '+44 20 7031 3000' '+1 20 7031 3000': NO_MATCH
+match '+39 02 1234 5678' '+39 2 1234 5678': SHORT_NSN_MATCH
+match 'abc' '+1 650 253 0000': NOT_A_NUMBER
+match '3 1234 5678' '+81 3 1234 5678': NSN_MATCH
+match '+800 1234 5678' '1234 5678': NOT_A_NUMBER
+truncate '+1 650 253 00001': +165025300001 -> True +16502530000
+truncate '+44 20 7031 30001234': +4420703130001234 -> True +442070313000
+truncate '+49 30 1234567890123': +49301234567890123 -> True +49301234567890123
+truncate '+1 123 456 78901': +12345678901 -> True +12345678901
+truncate '+33 1 23 45 67 89': +33123456789 -> True +33123456789
+type US '6502530000': 6 | 65 | 650 | 650-2 | 650-25 | 650-253 | 650-2530 | (650) 253-00 | (650) 253-000 | (650) 253-0000
+  remembered position 8
+  after clear: 6 | 65 | 650 | 650-2
+type US '16502530000': 1 | 16 | 1 65 | 1 (650 | 1 (650) 2 | 1 (650) 25 | 1 (650) 253 | 1 (650) 253-0 | 1 (650) 253-00 | 1 (650) 253-000 | 1 (650) 253-0000
+  after clear: 1 | 16 | 1 65 | 1 (650
+type US '+16502530000': + | +1 | +1 6 | +1 65 | +1 650 | +1 650-2 | +1 650-25 | +1 650-253 | +1 650-253-0 | +1 650-253-00 | +1 650-253-000 | +1 650-253-0000
+  remembered position 10
+  after clear: + | +1 | +1 6 | +1 65
+type US '011442070313000': 0 | 01 | 011  | 011 4 | 011 44  | 011 44 2 | 011 44 20 | 011 44 20 7 | 011 44 20 70 | 011 44 20 703 | 011 44 20 7031 | 011 44 20 7031 3 | 011 44 20 7031 30 | 011 44 20 7031 300 | 011 44 20 7031 3000
+  after clear: 0 | 01 | 011  | 011 4
+type US '650-253-0000': 6 | 65 | 650 | 650- | 650-2 | 650-25 | 650-253 | 650-253- | 650-253-0 | 650-253-00 | 650-253-000 | 650-253-0000
+  remembered position 6
+  after clear: 6 | 65 | 650 | 650-
+type US '18002345678': 1 | 18 | 1 80 | 1 (800 | 1 (800) 2 | 1 (800) 23 | 1 (800) 234 | 1 (800) 234-5 | 1 (800) 234-56 | 1 (800) 234-567 | 1 (800) 234-5678
+  after clear: 1 | 18 | 1 80 | 1 (800
+type CA '+442070313000': + | +4 | +44  | +44 2 | +44 20 | +44 20 7 | +44 20 70 | +44 20 703 | +44 20 7031 | +44 20 7031 3 | +44 20 7031 30 | +44 20 7031 300 | +44 20 7031 3000
+  after clear: + | +4 | +44  | +44 2
+type GB '02070313000': 0 | 02 | 020 | 020 7 | 020 70 | 020 703 | 020 7031 | 020 7031 3 | 020 7031 30 | 020 7031 300 | 020 7031 3000
+  remembered position 5
+  after clear: 0 | 02 | 020 | 020 7
+type GB '07400123456': 0 | 07 | 074 | 0740 | 07400 | 07400 1 | 07400 12 | 07400 123 | 07400 1234 | 07400 12345 | 07400 123456
+  after clear: 0 | 07 | 074 | 0740
+type GB '00498912345678': 0 | 00 | 00 4 | 00 49  | 00 49 8 | 00 49 89 | 00 49 89 1 | 00 49 89 12 | 00 49 89 123 | 00 49 89 1234 | 00 49 89 12345 | 00 49 89 123456 | 00 49 89 1234567 | 00 49 89 12345678
+  after clear: 0 | 00 | 00 4 | 00 49 
+type DE '03012345678': 0 | 03 | 030 | 030 1 | 030 12 | 030 123 | 030 1234 | 030 12345 | 030 123456 | 030 1234567 | 030 12345678
+  after clear: 0 | 03 | 030 | 030 1
+type DE '015123456789': 0 | 01 | 015 | 0151 | 01512 | 01512 3 | 01512 34 | 01512 345 | 01512 3456 | 01512 34567 | 01512 345678 | 01512 3456789
+  after clear: 0 | 01 | 015 | 0151
+type AR '01123456789': 0 | 01 | 011 | 011 2 | 011 23 | 011 234 | 011 2345 | 011 2345-6 | 011 2345-67 | 011 2345-678 | 011 2345-6789
+  after clear: 0 | 01 | 011 | 011 2
+type AR '0111523456789': 0 | 01 | 011 | 011 1 | 011 15 | 011 152 | 011 1523 | 011 1523-4 | 011 1523-45 | 011 1523-456 | 011 1523-4567 | 011152345678 | 01115 2345 67-89
+  after clear: 0 | 01 | 011 | 011 1
+type AR '+5491123456789': + | +5 | +54  | +54 9 | +54 91 | +54 9 11 | +54 9 11 2 | +54 9 11 23 | +54 9 11 234 | +54 9 11 2345 | +54 9 11 2345-6 | +54 9 11 2345-67 | +54 9 11 2345-678 | +54 9 11 2345-6789
+  after clear: + | +5 | +54  | +54 9
+type BR '011961234567': 0 | 01 | 011 | 011 9 | 011 96 | 011 961 | 011 9612 | 011 96123 | 011 96123-4 | 011 96123-45 | 011 96123-456 | 011 96123-4567
+  after clear: 0 | 01 | 011 | 011 9
+type BR '0151196123456': 0 | 01 | 015 | 015 1 | 015 11 | 015 119 | 015 1196 | 015 11961 | 015 11961-2 | 015 11961-23 | 015 11961-234 | 015 11961-2345 | 0151196123456
+  after clear: 0 | 01 | 015 | 015 1
+type JP '0312345678': 0 | 03 | 031 | 03-12 | 03-123 | 03-1234 | 03-1234-5 | 03-1234-56 | 03-1234-567 | 03-1234-5678
+  after clear: 0 | 03 | 031 | 03-12
+type JP '09012345678': 0 | 09 | 090 | 090-1 | 090-12 | 090-123 | 090-1234 | 090-1234-5 | 090-1234-56 | 090-1234-567 | 090-1234-5678
+  after clear: 0 | 09 | 090 | 090-1
+type AU '0011442070313000': 0 | 00 | 001 | 0011 | 00114 | 0011 44  | 0011 44 2 | 0011 44 20 | 0011 44 20 7 | 0011 44 20 70 | 0011 44 20 703 | 0011 44 20 7031 | 0011 44 20 7031 3 | 0011 44 20 7031 30 | 0011 44 20 7031 300 | 0011 44 20 7031 3000
+  after clear: 0 | 00 | 001 | 0011
+type AU '0298765432': 0 | 02 | 029 | 02 98 | 02 987 | 02 9876 | 02 9876 5 | 02 9876 54 | 02 9876 543 | 02 9876 5432
+  after clear: 0 | 02 | 029 | 02 98
+type MX '5512345678': 5 | 55 | 55 1 | 55 12 | 55 123 | 55 1234 | 55 1234 5 | 55 1234 56 | 55 1234 567 | 55 1234 5678
+  after clear: 5 | 55 | 55 1 | 55 12
+type MX '0445512345678': 0 | 04 | 044 | 0445 | 04455 | 044551 | 0445512 | 04455123 | 044551234 | 0445512345 | 04455123456 | 044551234567 | 0445512345678
+  after clear: 0 | 04 | 044 | 0445
+type RU '84951234567': 8 | 84 | 849 | 8 495 | 8 495 1 | 8 495 12 | 8 495 123 | 8 495 123-4 | 8 495 123-45 | 8 495 123-45-6 | 8 495 123-45-67
+  after clear: 8 | 84 | 849 | 8 495
+type RU '+79123456789': + | +7 | +7 9 | +7 91 | +7 912 | +7 912 3 | +7 912 34 | +7 912 345 | +7 912 345-6 | +7 912 345-67 | +7 912 345-67-8 | +7 912 345-67-89
+  after clear: + | +7 | +7 9 | +7 91
+type IT '0212345678': 0 | 02 | 02 1 | 02 12 | 02 123 | 02 1234 | 02 12345 | 02 123456 | 02 123 4567 | 02 1234 5678
+  after clear: 0 | 02 | 02 1 | 02 12
+type IN '09876543210': 0 | 09 | 098 | 0987 | 09876 | 098765 | 098765 4 | 098765 43 | 098765 432 | 098765 4321 | 098765 43210
+  after clear: 0 | 09 | 098 | 0987
+type SG '61234567': 6 | 61 | 612 | 6123 | 6123 4 | 6123 45 | 6123 456 | 6123 4567
+  after clear: 6 | 61 | 612 | 6123
+type NZ '091234567': 0 | 09 | 091 | 0912 | 0912 3 | 0912 34 | 0912 345 | 0912 345 6 | 0912 345 67
+  after clear: 0 | 09 | 091 | 0912
+type GG '01481256789': 0 | 01 | 014 | 0148 | 01481 | 01481 2 | 01481 25 | 01481 256 | 01481 2567 | 01481 25678 | 01481 256789
+  after clear: 0 | 01 | 014 | 0148
+type ZZ '+80012345678': + | +8 | +80 | +800  | +800 1 | +800 12 | +800 123 | +800 1234 | +800 1234 5 | +800 1234 56 | +800 1234 567 | +800 1234 5678
+  after clear: + | +8 | +80 | +800 
+type ZZ '6502530000': 6 | 65 | 650 | 6502 | 65025 | 650253 | 6502530 | 65025300 | 650253000 | 6502530000
+  after clear: 6 | 65 | 650 | 6502
+type US '*6502530000': * | *6 | *65 | *650 | *6502 | *65025 | *650253 | *6502530 | *65025300 | *650253000 | *6502530000
+  after clear: * | *6 | *65 | *650
+type US '＋１６５０２５３００００': ＋ | ＋１ | ＋１６ | ＋１６５ | ＋１６５０ | ＋１６５０２ | ＋１６５０２５ | ＋１６５０２５３ | ＋１６５０２５３０ | ＋１６５０２５３００ | ＋１６５０２５３０００ | ＋１６５０２５３００００
+  after clear: ＋ | ＋１ | ＋１６ | ＋１６５
+region US: code 1, national prefix '1' / '1', nanpa True, portable True
+  types FIXED_LINE, MOBILE, PERSONAL_NUMBER, PREMIUM_RATE, TOLL_FREE, VOIP
+  sharing 1: US AG AI AS BB BM BS CA DM DO GD GU JM KN KY LC MP MS PR SX TC TT VC VG VI
+region CA: code 1, national prefix '1' / '1', nanpa True, portable True
+  types FIXED_LINE, MOBILE, PERSONAL_NUMBER, PREMIUM_RATE, TOLL_FREE, UAN, VOIP
+  sharing 1: US AG AI AS BB BM BS CA DM DO GD GU JM KN KY LC MP MS PR SX TC TT VC VG VI
+region GB: code 44, national prefix '0' / '0', nanpa False, portable True
+  types FIXED_LINE, MOBILE, PAGER, PERSONAL_NUMBER, PREMIUM_RATE, TOLL_FREE, UAN, VOIP
+  sharing 44: GB GG IM JE
+region GG: code 44, national prefix '0' / '0', nanpa False, portable False
+  types FIXED_LINE, MOBILE, PAGER, PERSONAL_NUMBER, PREMIUM_RATE, TOLL_FREE, UAN, VOIP
+  sharing 44: GB GG IM JE
+region DE: code 49, national prefix '0' / '0', nanpa False, portable True
+  types FIXED_LINE, MOBILE, PAGER, PERSONAL_NUMBER, PREMIUM_RATE, SHARED_COST, TOLL_FREE, UAN, VOICEMAIL
+  sharing 49: DE
+region AR: code 54, national prefix '0' / '0', nanpa False, portable True
+  types FIXED_LINE, MOBILE, PREMIUM_RATE, TOLL_FREE, UAN
+  sharing 54: AR
+region BR: code 55, national prefix '0' / '0', nanpa False, portable True
+  types FIXED_LINE, MOBILE, PREMIUM_RATE, SHARED_COST, TOLL_FREE
+  sharing 55: BR
+region AU: code 61, national prefix '0' / '0', nanpa False, portable True
+  types FIXED_LINE, MOBILE, PAGER, PREMIUM_RATE, SHARED_COST, TOLL_FREE, VOIP
+  sharing 61: AU CC CX
+region RU: code 7, national prefix '8' / '8', nanpa False, portable True
+  types FIXED_LINE, MOBILE, PERSONAL_NUMBER, PREMIUM_RATE, TOLL_FREE
+  sharing 7: RU KZ
+region KZ: code 7, national prefix '8' / '8', nanpa False, portable True
+  types FIXED_LINE, MOBILE, PERSONAL_NUMBER, PREMIUM_RATE, TOLL_FREE, VOIP
+  sharing 7: RU KZ
+region VA: code 39, national prefix None / None, nanpa False, portable True
+  types FIXED_LINE, MOBILE, PERSONAL_NUMBER, PREMIUM_RATE, SHARED_COST, TOLL_FREE, VOICEMAIL, VOIP
+  sharing 39: IT VA
+region ZZ: code 0, national prefix None / None, nanpa False, portable False
+  types 
+  sharing 0: 
+region AA: code 0, national prefix None / None, nanpa False, portable False
+  types 
+  sharing 0: 
+example US FIXED_LINE: +1 201-555-0123, which is FIXED_LINE_OR_MOBILE
+example US MOBILE: +1 201-555-0123, which is FIXED_LINE_OR_MOBILE
+example US TOLL_FREE: +1 800-234-5678, which is TOLL_FREE
+example US PERSONAL_NUMBER: +1 500-234-5678, which is PERSONAL_NUMBER
+example GB FIXED_LINE: +44 121 234 5678, which is FIXED_LINE
+example GB MOBILE: +44 7400 123456, which is MOBILE
+example GB TOLL_FREE: +44 800 123 4567, which is TOLL_FREE
+example GB PREMIUM_RATE: +44 901 234 5678, which is PREMIUM_RATE
+example GB VOIP: +44 56 1234 5678, which is VOIP
+example GB PAGER: +44 76 4012 3456, which is PAGER
+example GB UAN: +44 55 1234 5678, which is UAN
+example DE FIXED_LINE: +49 30 123456, which is FIXED_LINE
+example DE MOBILE: +49 1512 3456789, which is MOBILE
+example DE SHARED_COST: +49 180 1 2345, which is SHARED_COST
+example DE VOICEMAIL: +49 177 99 1234567, which is VOICEMAIL
+example AR FIXED_LINE: +54 11 2345-6789, which is FIXED_LINE
+example AR MOBILE: +54 9 11 2345-6789, which is MOBILE
+example AR TOLL_FREE: +54 800-123-4567, which is TOLL_FREE
+example BR FIXED_LINE: +55 11 2345-6789, which is FIXED_LINE
+example BR MOBILE: +55 11 96123-4567, which is MOBILE
+example BR SHARED_COST: +55 4004-1234, which is SHARED_COST
+example JP FIXED_LINE: +81 3-1234-5678, which is FIXED_LINE
+example JP MOBILE: +81 90-1234-5678, which is MOBILE
+example JP PAGER: +81 20-1234-5678, which is PAGER
+example IT FIXED_LINE: +39 02 1234 5678, which is FIXED_LINE
+example IT MOBILE: +39 312 345 6789, which is MOBILE
+example IT VOICEMAIL: +39 331 0123 4501, which is VOICEMAIL
+example AU FIXED_LINE: +61 2 1234 5678, which is FIXED_LINE
+example AU MOBILE: +61 412 345 678, which is MOBILE
+example AU SHARED_COST: +61 1300 123 456, which is SHARED_COST
+example AU PAGER: +61 16 312 34, which is PAGER
+example IN FIXED_LINE: +91 74104 10123, which is FIXED_LINE_OR_MOBILE
+example IN MOBILE: +91 81234 56789, which is MOBILE
+example IN PREMIUM_RATE: +91 1861 123 456 789, which is PREMIUM_RATE
+example SG TOLL_FREE: +65 1800 123 4567, which is TOLL_FREE
+example SG UAN: +65 7000 1234 567, which is UAN
+== contacts
+Dalia Weber: +447400123494 (GB MOBILE) +44 7400 123494
+Vera Jensen: +911800123410 (IN TOLL_FREE) 01800123410
+Ada Weber: +441212345665 (GB FIXED_LINE) +44 121 234 5665
+Tomas Sato: +39800123429 (IT TOLL_FREE) 800 123 429
+Omar Quiroga: +34612345600 (ES MOBILE) 612 34 56 00
+Lars Rossi: +819012345685 (JP MOBILE) 090-1234-5685
+Kiri Abara: +31612345627 (NL MOBILE) 06 12345627
+Uma Engel: +61412345650 (AU MOBILE) +61 412 345 650
+Ines Dubois: +33612345632 (FR MOBILE) 06 12 34 56 32
+Tomas Patel: +6581234565 (SG MOBILE) 8123 4565 ext. 992
+Jonas Nakamura: +819012345657 (JP MOBILE) +81 90-1234-5657
+Chen Brandt: +18002345607 (US TOLL_FREE) +1 800-234-5607
+Goran Quiroga: +64800123433 (NZ TOLL_FREE) 0800 123 433
+Goran Young: +33612345699 (FR MOBILE) 0033612345699
+Bruno Dubois: +73011234510 (RU FIXED_LINE) +7 301 123-45-10
+Wim Jensen: +31612345686 (NL MOBILE) 06 12345686
+Dalia Fischer: +34612345682 (ES MOBILE) +34 612 34 56 82
+Wim Abara: 078 12 3456 2 is not valid (IS_POSSIBLE, +44781234562)
+Mei Hughes: +441212345600 (GB FIXED_LINE) 00441212345600
+Mei Jensen: +61412345615 (AU MOBILE) 0412 345 615
+Omar Tanaka: +447400123435 (GB MOBILE) 07400 123435
+Uma Nakamura: 0012015550136 is not valid (TOO_LONG, +10012015550136)
+Kiri Ueda: +15062345612 (CA FIXED_LINE_OR_MOBILE) 1 506-234-5612
+Sven Sato: +12423591246 (BS MOBILE) 1 242-359-1246
+Yuki Tanaka: (2221) 2345 08 ext 96 ((0) Missing or invalid default region.)
+Xavier Okafor: +528001234599 (MX TOLL_FREE) 800 123 4599
+Mei Kato: +61412345665 (AU MOBILE) 0412 345 665
+Freya Quiroga: +34612345652 (ES MOBILE) +34 612 34 56 52
+Goran Costa: +18002345662 (US TOLL_FREE) 1 800-234-5662
+Wim Sato: +6561234567 (SG FIXED_LINE) +65 6123 4567
+Rosa Dubois: +12015550138 (US FIXED_LINE_OR_MOBILE) 1 201-555-0138
+Chen Ueda: 008131234563 is not valid (IS_POSSIBLE, +81008131234563)
+Yuki Dubois: +6581234554 (SG MOBILE) +65 8123 4554
+Tomas Lopez: +18002345664 (US TOLL_FREE) +1 800-234-5664
+Ines Moreau: 0015062345647 is not valid (TOO_LONG, +10015062345647)
+Freya Hughes: +393123456733 (IT MOBILE) 312 345 6733
+Quinn Moreau: +918123456771 (IN MOBILE) 081234 56771
+Yuki Hughes: +79123456749 (RU MOBILE) 8 (912) 345-67-49
+Yuki Engel: 1800.2123.4928 is not valid (TOO_LONG, +180021234928)
+Bruno Rossi: 0012015550140 is not valid (TOO_LONG, +10012015550140)
+Hana Ueda: +819012345653 (JP MOBILE) +81 90-1234-5653
+Ines Okafor: +44 15344567661 is not valid (TOO_LONG, +4415344567661)
+Ada Dubois: +917410410126 (IN FIXED_LINE_OR_MOBILE) 074104 10126
+Jonas Lopez: +79123456748 (RU MOBILE) 8 (912) 345-67-48
+Hana Abara: +31612345631 (NL MOBILE) 061-2345-631 ext 739
+Quinn Ueda: +4915123456742 (DE MOBILE) 0151-234-567-42 ext 363
+Emeka Lopez: +33801234560 (FR TOLL_FREE) 0 801 23 45 60
+Ada Dubois (work): +917410410126 (IN FIXED_LINE_OR_MOBILE) 074104 10126
+Priya Brandt: +6432345617 (NZ FIXED_LINE) +64 3 234 5617
+Emeka Engel: +541123456750 (AR FIXED_LINE) 011 2345-6750
+Priya Nakamura: +4930123498 (DE FIXED_LINE) 030 123498
+Uma Moreau: +551123456741 (BR FIXED_LINE) 01123.456.741
+Ada Brandt: +1 2015 5501 528 is not valid (TOO_LONG, +120155501528)
+Rosa Dubois (work): +12015550138 (US FIXED_LINE_OR_MOBILE) 1 201-555-0138
+Hana Hughes: +5491123456717 (AR MOBILE) 005491123456717
+Ines Sato: +5511961234580 (BR MOBILE) 011961234580
+Jonas Lopez (work): +79123456748 (RU MOBILE) 8 (912) 345-67-48
+Emeka Costa: +611800123458 (AU TOLL_FREE) +61 1800 123 458
+Xavier Costa: +5491123456758 (AR MOBILE) +54 9 11 2345-6758
+Zara Quiroga (work): 081234567785270 is not valid (TOO_LONG, +9181234567785270)
+Sven Nakamura: +33612345617 (FR MOBILE) 06 12 34 56 17
+Dalia Costa: +4930123425 (DE FIXED_LINE) +49 30 123425
+Sven Fischer: +12015550139 (US FIXED_LINE_OR_MOBILE) +1 201-555-0139
+Quinn Young: +551123456755 (BR FIXED_LINE) +55 11 2345-6755
+Hana Kato: +447781123403 (GG MOBILE) 07781 123403
+Zara Quiroga: 081 2345 6778 5 ext 270 is not valid (IS_POSSIBLE, +9181234567785)
+Priya Engel: +18002123426 (US TOLL_FREE) 1 800-212-3426
+Xavier Fischer: +522001234559 (MX FIXED_LINE) +52 200 123 4559
+Xavier Quiroga: +78001234596 (RU TOLL_FREE) 8(800).1234.596 ext 685
+Chen Ivanova: +41781234581 (CH MOBILE) +41 78 123 45 81
+Bruno Varga: +447400123489 (GB MOBILE) +44 7400 123489
+Ada Hughes: +390212345675 (IT FIXED_LINE) +39 02 1234 5675
+Goran Costa (work): +18002345662 (US TOLL_FREE) 1 800-234-5662
+Rosa Lopez: +448001234544 (GB TOLL_FREE) 0800 123 4544
+Hana Engel: +55800123473 (BR TOLL_FREE) 080.012.3473 ext 900
+Omar Jensen: +4930123483 (DE FIXED_LINE) +49 30 123483
+Wim Sato (work): +6561234567 (SG FIXED_LINE) +65 6123 4567
+Omar Nakamura: 0212.3456.20 ((0) Missing or invalid default region.)
+Jonas Gallo: +4915123456740 (DE MOBILE) 015123456740 ext 890
+same number: Goran Costa and Goran Costa (work) (EXACT_MATCH)
+same number: Wim Sato and Wim Sato (work) (EXACT_MATCH)
+same number: Rosa Dubois and Rosa Dubois (work) (EXACT_MATCH)
+same number: Ada Dubois and Ada Dubois (work) (EXACT_MATCH)
+same number: Jonas Lopez and Jonas Lopez (work) (EXACT_MATCH)
+valid 67, rejected 12
+by region: AR 3, AU 4, BR 4, BS 1, CA 1, CH 1, DE 5, ES 3, FR 4, GB 6, GG 1, IN 4, IT 3, JP 3, MX 2, NL 3, NZ 2, RU 5, SG 4, US 8
+by type: FIXED_LINE 14, FIXED_LINE_OR_MOBILE 6, MOBILE 33, TOLL_FREE 14
+== calls
+BR 005491123456717: dial +54 9 11 2345-6717, MOBILE, 53 min, 12.72
+MX 01800123410: TOLL_FREE cannot be dialled from MX
+US 01123.456.741: dial +55 11 2345-6741, FIXED_LINE, 42 min, 10.08
+MX 0212.3456.20: not a valid number
+AU 12015 5501 38: dial +1 201-555-0138, FIXED_LINE_OR_MOBILE, 17 min, 1.53
+US +1 8002345607: dial +1 800-234-5607, TOLL_FREE, 29 min, 0.00
+US 07781-1234-03: dial +44 7781 123403, MOBILE, 46 min, 4.14
+GB +6561234567: dial +65 6123 4567, FIXED_LINE, 5 min, 1.20
+BR +55 (112) 345 6755: FIXED_LINE cannot be dialled from BR
+US 061-2345-631 ext 739: dial +31 6 12345631, MOBILE, 6 min, 0.54
+US 078 12 3456 2: not a valid number
+AU +52 200 12 345 59: dial +52 200 123 4559, FIXED_LINE, 31 min, 7.44
+JP (8001)234599: dial +52 800 123 4599, TOLL_FREE, 26 min, 0.00
+BR +64 3234-5617: dial +64 3 234 5617, FIXED_LINE, 7 min, 1.68
+DE (800) 1234 29: dial +39 800 123 429, TOLL_FREE, 42 min, 0.00
+MX +7 3011-23-451-0: dial +7 301 123-45-10, FIXED_LINE, 15 min, 3.60
+AU +52 200 12 345 59: dial +52 200 123 4559, FIXED_LINE, 49 min, 11.76
+AU +34 6123 456 52: dial +34 612 34 56 52, MOBILE, 6 min, 0.54
+AU 030123498: dial +49 30 123498, FIXED_LINE, 32 min, 2.88
+US 0812 345 6771: dial +91 81234 56771, MOBILE, 16 min, 3.84
+AU 00441212345600: dial +44 121 234 5600, FIXED_LINE, 16 min, 1.44
+AU 008131234563: not a valid number
+BR 612 345 600: dial +34 612 34 56 00, MOBILE, 27 min, 2.43
+DE 12015 5501 38: dial +1 201-555-0138, FIXED_LINE_OR_MOBILE, 19 min, 1.71
+GB +44 740-012-34-89: dial 07400 123489, MOBILE, 26 min, 0.78
+US +81 901.2345.657: dial +81 90-1234-5657, MOBILE, 19 min, 4.56
+GB 81234565 ext 992: dial +65 8123 4565, MOBILE, 53 min, 12.72
+US +81 9012345653: dial +81 90-1234-5653, MOBILE, 51 min, 12.24
+BR 0151-234-567-42 ext 363: dial +49 1512 3456742, MOBILE, 29 min, 2.61
+DE +1 8002.3456.64: dial +1 800-234-5664, TOLL_FREE, 55 min, 0.00
+DE 0812 345 6771: dial +91 81234 56771, MOBILE, 45 min, 10.80
+GB +1 8002.3456.64: dial +1 800-234-5664, TOLL_FREE, 6 min, 0.00
+AU +61 (4123) 4565 0: dial 0412 345 650, MOBILE, 9 min, 0.27
+AU +44 7400123494: dial +44 7400 123494, MOBILE, 47 min, 4.23
+US +44 740-012-34-89: dial +44 7400 123489, MOBILE, 8 min, 0.72
+AU 080.012.3473 ext 900: TOLL_FREE cannot be dialled from AU
+GB 081234567785270: not a valid number
+GB +1 8002.3456.64: dial +1 800-234-5664, TOLL_FREE, 30 min, 0.00
+DE 12015 5501 38: dial +1 201-555-0138, FIXED_LINE_OR_MOBILE, 7 min, 0.63
+US 8(800).1234.596 ext 685: dial +7 800 123-45-96, TOLL_FREE, 51 min, 0.00
+US 1-800-FLOWERS: dial +1 800-356-9377, TOLL_FREE, 5 min, 0.00
+GB 0800 123 4567: dial 0800 123 4567, TOLL_FREE, 3 min, 0.00
+DE 0900 1234567: dial 0900 1 234567, PREMIUM_RATE, 12 min, 18.00
+JP +800 1234 5678: dial +800 1234 5678, TOLL_FREE, 7 min, 0.00
+947 minutes, 135.09
+by caller: AU 30.09, BR 19.44, DE 31.14, GB 14.70, JP 0.00, MX 3.60, US 36.12
