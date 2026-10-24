@@ -1,0 +1,408 @@
+// LeetCode #975: Odd Even Jump -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random arrays.
+
+// ---- star ----
+
+fn star_odd_even_jumps(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut higher = Vec.filled(n, false);
+    let mut lower = Vec.filled(n, false);
+    higher[n - 1] = true;
+    lower[n - 1] = true;
+    let mut seen: SortedMap[i64, i64] = SortedMap.new();
+    seen.insert(arr[n - 1], n - 1);
+    let mut good = 1;
+    for i in (0..n - 1).rev() {
+        if let Some((_, j)) = seen.ceiling(arr[i]) {
+            higher[i] = lower[*j];
+        }
+        if let Some((_, j)) = seen.floor(arr[i]) {
+            lower[i] = higher[*j];
+        }
+        seen.insert(arr[i], i);
+        if higher[i] {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- stack ----
+
+fn stack_next_in(order: ref Vec[i64], n: i64) -> Vec[i64] {
+    let mut next = Vec.filled(n, -1);
+    let mut stack: Vec[i64] = Vec.new();
+    for i in order {
+        while stack.len() > 0 and *stack.last().unwrap() < *i {
+            next[stack.pop().unwrap()] = *i;
+        }
+        stack.push(*i);
+    }
+    next
+}
+
+fn stack_odd_even_jumps(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut up: Vec[i64] = (0..n).collect();
+    up.sort_by_key(|i| (arr[i], i));
+    let mut down: Vec[i64] = (0..n).collect();
+    down.sort_by_key(|i| (-arr[i], i));
+    let odd = stack_next_in(up, n);
+    let even = stack_next_in(down, n);
+    let mut higher = Vec.filled(n, false);
+    let mut lower = Vec.filled(n, false);
+    higher[n - 1] = true;
+    lower[n - 1] = true;
+    for i in (0..n - 1).rev() {
+        if odd[i] >= 0 {
+            higher[i] = lower[odd[i]];
+        }
+        if even[i] >= 0 {
+            lower[i] = higher[even[i]];
+        }
+    }
+    higher.iter().filter(|h| *h).count()
+}
+
+// ---- scan ----
+
+fn scan_odd_even_jumps(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut higher = Vec.filled(n, false);
+    let mut lower = Vec.filled(n, false);
+    higher[n - 1] = true;
+    lower[n - 1] = true;
+    let mut good = 1;
+    for i in (0..n - 1).rev() {
+        let mut odd = -1;
+        let mut even = -1;
+        for j in i + 1..n {
+            if arr[j] >= arr[i] and (odd < 0 or arr[j] < arr[odd]) {
+                odd = j;
+            }
+            if arr[j] <= arr[i] and (even < 0 or arr[j] > arr[even]) {
+                even = j;
+            }
+        }
+        if odd >= 0 {
+            higher[i] = lower[odd];
+        }
+        if even >= 0 {
+            lower[i] = higher[even];
+        }
+        if higher[i] {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- sortedvec ----
+
+fn sortedvec_place(values: ref Vec[i64], v: i64) -> i64 {
+    // the first place whose value is at least v
+    let mut lo = 0;
+    let mut hi = values.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if values[mid] < v {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn sortedvec_odd_even_jumps(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut higher = Vec.filled(n, false);
+    let mut lower = Vec.filled(n, false);
+    higher[n - 1] = true;
+    lower[n - 1] = true;
+    let mut values: Vec[i64] = vec![arr[n - 1]];
+    let mut top = 0;
+    for v in arr {
+        top = top.max(v);
+    }
+    let mut at = Vec.filled(top + 1, -1);
+    at[arr[n - 1]] = n - 1;
+    let mut good = 1;
+    for i in (0..n - 1).rev() {
+        let v = arr[i];
+        let p = sortedvec_place(values, v);
+        if p < values.len() {
+            higher[i] = lower[at[values[p]]];
+        }
+        if p < values.len() and values[p] == v {
+            lower[i] = higher[at[v]];
+        } else if p > 0 {
+            lower[i] = higher[at[values[p - 1]]];
+        }
+        if at[v] < 0 {
+            values.insert(p, v);
+        }
+        at[v] = i;
+        if higher[i] {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- segtree ----
+
+fn segtree_first_at_or_above(tree: ref Vec[i64], v: i64, node: i64, lo: i64, hi: i64) -> i64 {
+    if tree[node] == 0 or hi <= v {
+        return -1;
+    }
+    if hi - lo == 1 {
+        return lo;
+    }
+    let mid = (lo + hi) / 2;
+    let left = segtree_first_at_or_above(tree, v, 2 * node, lo, mid);
+    if left >= 0 { left } else { segtree_first_at_or_above(tree, v, 2 * node + 1, mid, hi) }
+}
+
+fn segtree_last_at_or_below(tree: ref Vec[i64], v: i64, node: i64, lo: i64, hi: i64) -> i64 {
+    if tree[node] == 0 or lo > v {
+        return -1;
+    }
+    if hi - lo == 1 {
+        return lo;
+    }
+    let mid = (lo + hi) / 2;
+    let right = segtree_last_at_or_below(tree, v, 2 * node + 1, mid, hi);
+    if right >= 0 { right } else { segtree_last_at_or_below(tree, v, 2 * node, lo, mid) }
+}
+
+fn segtree_mark(tree: mut ref Vec[i64], size: i64, v: i64) {
+    let mut node = size + v;
+    if tree[node] == 0 {
+        while node >= 1 {
+            tree[node] += 1;
+            node /= 2;
+        }
+    }
+}
+
+fn segtree_odd_even_jumps(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut values = arr.clone();
+    values.sort();
+    values.dedup();
+    let mut rank: Vec[i64] = Vec.new();
+    for v in arr {
+        rank.push(values.binary_search(v).unwrap());
+    }
+    let mut size = 1;
+    while size < values.len() {
+        size *= 2;
+    }
+    let mut tree = Vec.filled(2 * size, 0);
+    let mut at = Vec.filled(size, -1);
+    let mut higher = Vec.filled(n, false);
+    let mut lower = Vec.filled(n, false);
+    higher[n - 1] = true;
+    lower[n - 1] = true;
+    segtree_mark(mut tree, size, rank[n - 1]);
+    at[rank[n - 1]] = n - 1;
+    let mut good = 1;
+    for i in (0..n - 1).rev() {
+        let up = segtree_first_at_or_above(tree, rank[i], 1, 0, size);
+        if up >= 0 {
+            higher[i] = lower[at[up]];
+        }
+        let down = segtree_last_at_or_below(tree, rank[i], 1, 0, size);
+        if down >= 0 {
+            lower[i] = higher[at[down]];
+        }
+        segtree_mark(mut tree, size, rank[i]);
+        at[rank[i]] = i;
+        if higher[i] {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- differential ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_arr(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        arr.push(next_random(mut seed) % top);
+    }
+    arr
+}
+
+// The statement read literally: from each start, make the jumps one by
+// one, each found by looking at every index to the right, until the
+// end is reached or no jump is possible.
+fn literal(arr: ref Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut good = 0;
+    for start in 0..n {
+        let mut i = start;
+        let mut odd = true;
+        loop {
+            if i == n - 1 {
+                good += 1;
+                break;
+            }
+            let mut to = -1;
+            for j in i + 1..n {
+                let fits = if odd { arr[j] >= arr[i] } else { arr[j] <= arr[i] };
+                if fits {
+                    let better = to < 0 or (if odd { arr[j] < arr[to] } else { arr[j] > arr[to] });
+                    if better {
+                        to = j;
+                    }
+                }
+            }
+            if to < 0 {
+                break;
+            }
+            i = to;
+            odd = not odd;
+        }
+    }
+    good
+}
+
+fn arm(a: i64, arr: Vec[i64]) -> i64 {
+    if a == 0 {
+        star_odd_even_jumps(arr)
+    } else if a == 1 {
+        stack_odd_even_jumps(arr)
+    } else if a == 2 {
+        scan_odd_even_jumps(arr)
+    } else if a == 3 {
+        sortedvec_odd_even_jumps(arr)
+    } else {
+        segtree_odd_even_jumps(arr)
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, arr: Vec[i64], small: bool, seed: mut ref i64) -> i64 {
+    let n = arr.len();
+    let truth = if small { literal(arr) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, arr));
+    }
+    // the values replaced by their ranks, and all raised by up to 1000
+    // within LeetCode's range: both keep every comparison
+    let mut sorted = arr.clone();
+    sorted.sort();
+    sorted.dedup();
+    let top = sorted[sorted.len() - 1];
+    let lift = next_random(mut seed) % (1 + (99999 - top).min(1000));
+    let mut ranked: Vec[i64] = Vec.new();
+    let mut raised: Vec[i64] = Vec.new();
+    for v in arr {
+        ranked.push(sorted.iter().position(|w| w == v).unwrap());
+        raised.push(v + lift);
+    }
+    // the suffixes from s and s + 1, when the array has more than one
+    // value
+    let s = if n > 1 { next_random(mut seed) % (n - 1) } else { 0 };
+    let mut from_s: Vec[i64] = Vec.new();
+    for i in s..n {
+        from_s.push(arr[i]);
+    }
+    let mut from_next: Vec[i64] = Vec.new();
+    for i in s + 1..n {
+        from_next.push(arr[i]);
+    }
+    // the end value repeated, and a value above every other in front
+    let mut repeated = arr.clone();
+    repeated.push(arr[n - 1]);
+    let mut fronted: Vec[i64] = vec![top + 1];
+    fronted.extend(arr.clone());
+    for a in 0..5 {
+        let c = got[a];
+        // P1: the statement's answer, on the first 3000 cases
+        if small {
+            check(mut tally, 1, c == truth);
+        }
+        // P2: only the order of the values matters: ranks, or all values
+        // raised alike, give the same count
+        check(mut tally, 2, arm(a, ranked) == c and arm(a, raised) == c);
+        // P3: whether a start is good depends only on what follows it, so
+        // the suffix from s counts at most one more than the suffix from
+        // s + 1, and no more than its length
+        let f = arm(a, from_s);
+        check(mut tally, 3, n == 1 or (f - arm(a, from_next) >= 0 and f - arm(a, from_next) <= 1 and f <= n - s and f <= c));
+        // P4: the end value repeated adds exactly one good start: every
+        // jump that reached the old end still lands there, and from it
+        // either jump reaches the new end
+        check(mut tally, 4, arm(a, repeated) == c + 1);
+        // P5: a value above every other in front can never make its first
+        // jump, so the count stays, when there is room for it
+        check(mut tally, 5, top == 99999 or arm(a, fronted) == c);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for b in 0..5 {
+            if b != a and got[b] == c {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 975;
+    let mut total = 0;
+    let mut good = 0;
+    let mut check_sum = 0;
+    // 3000 small cases against the statement, with few or many distinct
+    // values, then 200 of 100 values over LeetCode's whole range
+    for c in 0..3200 {
+        let small = c < 3000;
+        let arr = if small {
+            let n = 1 + next_random(mut seed) % 30;
+            random_arr(n, vec![3, 10, 1000][c % 3], mut seed)
+        } else {
+            random_arr(100, 100000, mut seed)
+        };
+        let got = properties(mut tally, arr, small, mut seed);
+        total += arr.len();
+        good += got;
+        check_sum = (check_sum * 31 + got) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 arrays of {total} values: {good} good starts, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

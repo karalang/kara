@@ -1,0 +1,13 @@
+[10, 13, 12, 14, 15]: 2
+[2, 3, 1, 1, 4]: 3
+[5, 1, 3, 4, 2]: 3
+[7]: 1
+[1, 1, 1, 1]: 4
+[1, 2, 3, 4, 5]: 2
+[5, 4, 3, 2, 1]: 1
+[0, 99999, 0, 99999]: 3
+[3, 1, 2, 3, 1, 2]: 4
+[1, 3, 2, 3, 1]: 4
+300 random arrays of up to 12 values: 1220 good starts, checksum 36793996
+3000 random arrays of up to 60 values: 48285 good starts, checksum 426093320
+20 random arrays of up to 2000 values: 20212 good starts, checksum 73116976

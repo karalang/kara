@@ -1,0 +1,73 @@
+// Benchmark: LeetCode #975 Odd Even Jump -- the stack arm (sorted order
+// and a monotonic stack), on 20 arrays of 20000 random values.
+//
+// The ★ arm keeps its values in a `SortedMap`, which C and Go do not
+// have, so the bench uses the arm that is the same algorithm in all
+// five languages: sort the indices by (value, index) and by (-value,
+// index), find each jump target with a stack, then fill in which
+// starts reach the end from the right. Mirrors odd_even_jumps.rs, .c,
+// .py and go-seq/.
+
+fn next_in(order: ref Vec[i64], n: i64) -> Vec[i64] {
+    let mut next = Vec.filled(n, -1);
+    let mut stack: Vec[i64] = Vec.new();
+    for i in order {
+        while stack.len() > 0 and *stack.last().unwrap() < *i {
+            next[stack.pop().unwrap()] = *i;
+        }
+        stack.push(*i);
+    }
+    next
+}
+
+fn odd_even_jumps(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut up: Vec[i64] = (0..n).collect();
+    up.sort_by_key(|i| (arr[i], i));
+    let mut down: Vec[i64] = (0..n).collect();
+    down.sort_by_key(|i| (-arr[i], i));
+    let odd = next_in(up, n);
+    let even = next_in(down, n);
+    let mut higher = Vec.filled(n, false);
+    let mut lower = Vec.filled(n, false);
+    higher[n - 1] = true;
+    lower[n - 1] = true;
+    for i in (0..n - 1).rev() {
+        if odd[i] >= 0 {
+            higher[i] = lower[odd[i]];
+        }
+        if even[i] >= 0 {
+            lower[i] = higher[even[i]];
+        }
+    }
+    higher.iter().filter(|h| *h).count()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 10;
+    let count = 20;
+    let mut seed = 975;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..20000 {
+            arr.push(next_random(mut seed) % 100000);
+        }
+        arrays.push(arr);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..count {
+            let good = odd_even_jumps(arrays[(r + i) % count]);
+            total += good;
+            check = (check * 31 + good) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} arrays of 20000 values: {total} good starts, checksum {check}");
+}

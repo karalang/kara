@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/975-odd-even-jump/bench/odd_even_jumps.kara"
+dedup_of = []
+tags = ["lib:sortedmap", "bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "5be745d98"
+extracted_src = "8341e574"

@@ -1,0 +1,107 @@
+// LeetCode #975: Odd Even Jump -- a sorted vector of values.
+//
+// Walking from the right, the distinct values seen so far are kept in
+// a sorted `Vec`, each new value inserted at the place a binary search
+// finds, and the leftmost index of each value in a table by value. The
+// search's place is the odd jump's value, or the one before it the
+// even jump's when the value itself is absent. O(n^2) worst case for
+// the insertions, which move memory, O(n log n) comparisons.
+
+fn place(values: ref Vec[i64], v: i64) -> i64 {
+    // the first place whose value is at least v
+    let mut lo = 0;
+    let mut hi = values.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if values[mid] < v {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn odd_even_jumps(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut higher = Vec.filled(n, false);
+    let mut lower = Vec.filled(n, false);
+    higher[n - 1] = true;
+    lower[n - 1] = true;
+    let mut values: Vec[i64] = vec![arr[n - 1]];
+    let mut top = 0;
+    for v in arr {
+        top = top.max(v);
+    }
+    let mut at = Vec.filled(top + 1, -1);
+    at[arr[n - 1]] = n - 1;
+    let mut good = 1;
+    for i in (0..n - 1).rev() {
+        let v = arr[i];
+        let p = place(values, v);
+        if p < values.len() {
+            higher[i] = lower[at[values[p]]];
+        }
+        if p < values.len() and values[p] == v {
+            lower[i] = higher[at[v]];
+        } else if p > 0 {
+            lower[i] = higher[at[values[p - 1]]];
+        }
+        if at[v] < 0 {
+            values.insert(p, v);
+        }
+        at[v] = i;
+        if higher[i] {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_arr(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        arr.push(next_random(mut seed) % top);
+    }
+    arr
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![10, 13, 12, 14, 15],
+        vec![2, 3, 1, 1, 4],
+        vec![5, 1, 3, 4, 2],
+        vec![7],
+        vec![1, 1, 1, 1],
+        vec![1, 2, 3, 4, 5],
+        vec![5, 4, 3, 2, 1],
+        vec![0, 99999, 0, 99999],
+        vec![3, 1, 2, 3, 1, 2],
+        vec![1, 3, 2, 3, 1],
+    ];
+    for arr in cases {
+        println(f"{arr}: {odd_even_jumps(arr)}");
+    }
+    // random arrays: 300 small, 3000 longer, then 20 of 2000 values
+    let mut seed = 975;
+    for (count, most, top) in vec![(300, 12, 5), (3000, 60, 1000), (20, 2000, 100000)] {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if most == 2000 { most } else { 1 + next_random(mut seed) % most };
+            let arr = random_arr(n, top, mut seed);
+            let good = odd_even_jumps(arr);
+            total += good;
+            check = (check * 31 + good) % 1000000007;
+        }
+        println(f"{count} random arrays of up to {most} values: {total} good starts, checksum {check}");
+    }
+}
