@@ -12698,3 +12698,53 @@ fn a_list_literal_reads_a_ref_to_a_copy_element_as_the_value() {
         "[3] [3, 1] [3]\n[4] [4, 1] [4]\n",
     );
 }
+
+#[test]
+fn a_str_lookup_leaves_an_unannotated_key_open() {
+    // B-2026-10-21-3: a `Str` lookup fits a `String` key, so it does not fix
+    // an unannotated `Map.new()` / `Set.new()` key; the insert decides.
+    accepted_and_runs(
+        "str-lookup-then-string-insert",
+        "fn main() {\n    let text = \"a b a\";\n    let mut m = Map.new();\n    \
+         for w in text.split_whitespace() {\n        let n = m.get(w) ?? 0;\n        m[w.to_string()] = n + 1;\n    }\n    \
+         let mut seen = Set.new();\n    for w in text.split_whitespace() {\n        \
+         if not seen.contains(w) { seen.insert(w.to_string()); }\n    }\n    \
+         println(f\"{m.len()} {m[\"a\"]} {seen.len()}\");\n}\n",
+        "2 2 2\n",
+    );
+}
+
+#[test]
+fn a_block_arm_lending_among_owned_arms_has_no_unparseable_fix() {
+    // B-2026-10-20-36: a block arm's copy goes on the values it yields, which
+    // carry their own fixes; `.clone()` after the block does not parse.
+    let src = "#[derive(Clone)]\nstruct NDef { bold: bool }\nfn main() {\n    \
+               let mut nd: Map[String, NDef] = Map.new();\n    \
+               nd.insert(\"\".to_string(), NDef { bold: false });\n    let parent = nd.get(\"\");\n    \
+               let flag = true;\n    let mut n = match parent {\n        None => NDef { bold: false },\n        \
+               Some(p) => {\n            if flag { nd.get(\"\").unwrap() } else { p }\n        }\n    };\n    \
+               n.bold = true;\n    println(f\"{n.bold}\");\n}\n";
+    let (dir, path) = fixture("block-arm-lends", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    assert!(
+        err.contains("Write `.clone()` on each value this arm yields"),
+        "{err}"
+    );
+    let out = karac().arg("fix").arg(&path).output().unwrap();
+    let fix_err = String::from_utf8_lossy(&out.stderr);
+    assert!(!fix_err.contains("skipped a fix"), "{fix_err}");
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        fixed.contains("nd.get(\"\").unwrap().clone() } else { p.clone() }"),
+        "{fixed}"
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

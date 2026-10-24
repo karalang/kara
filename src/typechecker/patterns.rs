@@ -881,17 +881,26 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Identifier(n) => format!("cannot move '{n}': it borrows its value"),
             _ => "cannot move a non-`Copy` value out of a borrowed place".to_string(),
         };
+        // A block, `if` or `match` arm yields its value from its tails, so the
+        // copy goes there: `.clone()` after the arm's block does not parse
+        // (B-2026-10-20-36), and each tail that lends carries its own fix.
+        let compound = matches!(
+            body.kind,
+            ExprKind::Block(..) | ExprKind::If { .. } | ExprKind::Match { .. }
+        );
         let message = format!(
             "{what}, and the other arms of this `match` are an owned '{}'{}",
             type_display(&owned),
-            if has_clone {
+            if has_clone && compound {
+                ". Write `.clone()` on each value this arm yields to take a copy"
+            } else if has_clone {
                 ". Write `.clone()` to take a copy"
             } else {
                 ". This type has no `.clone()`: return a borrow from every arm, or use \
                  the value in place"
             }
         );
-        if has_clone {
+        if has_clone && !compound {
             let end = Span {
                 offset: body.span.offset + body.span.length,
                 length: 0,

@@ -53,6 +53,14 @@ impl<'a> super::TypeChecker<'a> {
             return false;
         }
         match (key, arg) {
+            // A key not yet solved is left open by a view lookup: `Str` fits a
+            // `Str` key and a `String` one alike, so the store that follows
+            // decides (`m.get(w)` before `m[w.to_string()] = n`,
+            // B-2026-10-21-3).
+            (Type::TypeVar(_), Type::Named { name, args }) => {
+                name == "StringSlice" && args.is_empty()
+            }
+            (Type::TypeVar(_), Type::Slice { .. }) => true,
             (Type::Str, Type::Named { name, args }) => name == "StringSlice" && args.is_empty(),
             (Type::Named { name, args }, Type::Slice { element, .. }) => {
                 name == "Vec"
