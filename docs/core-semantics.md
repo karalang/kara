@@ -662,6 +662,8 @@ Pin: `par_error_runs_siblings`.
 
 **11.11 `select`.**
 - The syntax and meaning are as in deferred.md § `select` Across Channels. Arms are `recv`, `send` or `after(d)`, with an optional `default`. The first arm to become ready runs, and the block's value is that arm's value.
+- Each arm's pattern is irrefutable, as in `let`. It binds the operation's own result: `Option[T]` for `recv`, `Result[(), SendError[T]]` for `send`, `()` for `after`. The channel, value and duration expressions are evaluated once, in source order, when the `select` is entered, and `after(d)` counts from then.
+- **Choosing an arm performs its operation.** The arm that runs has received or sent, and no other arm has. A send arm that is not chosen still owns its value, which drops as the `select` ends. A closed channel makes its arm ready: `recv` gives `None` and `send` gives `Err(SendError.Closed(v))`, as the plain calls do.
 - **When several arms are ready at once, the source-first ready arm wins.** That is deterministic, unlike Go's random choice. The fairness cost is accepted: order the arms to suit.
 - A `select` with no `default` is a suspension point, and so a cancellation point (§11.9).
 - `recv_timeout` and `send_timeout` arrive with it. Each is defined as a two-arm `select`.
