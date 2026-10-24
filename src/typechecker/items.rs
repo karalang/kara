@@ -2341,6 +2341,7 @@ impl<'a> super::TypeChecker<'a> {
         // restored on the same terms as the flag above so a nested item walk
         // (an impl method, a trait default body) does not inherit them.
         let saved_iter_lets = std::mem::take(&mut self.iter_lets);
+        let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
         let saved_frozen_params = std::mem::replace(
             &mut self.current_fn_frozen_params,
@@ -2418,6 +2419,8 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.offer_iter_let_fixes();
         self.iter_lets = saved_iter_lets;
+        self.explain_str_lit_lets();
+        self.str_lit_lets = saved_str_lit_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
         self.current_fn_frozen_lets = saved_frozen_lets;
@@ -8802,8 +8805,10 @@ impl<'a> super::TypeChecker<'a> {
                 if let PatternKind::Binding(name) = &pattern.kind {
                     if ty.is_none() {
                         self.note_iter_let(name, pattern.span, &value.span, &expected_ty);
+                        self.note_str_lit_let(name, pattern.span, value, &expected_ty);
                     } else {
                         self.iter_lets.remove(name.as_str());
+                        self.str_lit_lets.remove(name.as_str());
                     }
                 }
                 // design.md § "The index operator (`expr[i]`)" — a `let`
@@ -9196,6 +9201,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.in_defer = prev;
             }
             StmtKind::Assign { target, value } => {
+                self.note_str_lit_assign(target, value);
                 // design.md § "The index operator (`expr[i]`)" — the RHS of an
                 // assignment is a value position exactly as a `let` initializer
                 // is, so `v[i] = v[j]` falls to the same rule

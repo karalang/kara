@@ -719,6 +719,27 @@ impl LocalTypeScope {
 
 // ── Errors ──────────────────────────────────────────────────────
 
+/// Whether `e` is a string literal, or a block, `if`/`else` or `match` each
+/// of whose values is one (`if c { "x" } else { "y" }`): a `String` that
+/// `: Str` on its binding would make a `Str` (B-2026-10-24-33).
+fn str_literal_value(e: &Expr) -> bool {
+    let block =
+        |b: &Block| b.stmts.is_empty() && b.final_expr.as_deref().is_some_and(str_literal_value);
+    match &e.kind {
+        ExprKind::StringLit(_) => true,
+        ExprKind::Block(b) => block(b),
+        ExprKind::If {
+            then_block,
+            else_branch: Some(other),
+            ..
+        } => block(then_block) && str_literal_value(other),
+        ExprKind::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|a| str_literal_value(&a.body))
+        }
+        _ => false,
+    }
+}
+
 /// The message for two types that agree except for a numeric type nested
 /// in them (`Map[i64, i64]` for a `Map[i64, u64]`, `(i64, i64)` for an
 /// `(i64, i8)`), or `None` when they differ otherwise (B-2026-10-23-12).
@@ -869,6 +890,19 @@ pub(crate) struct IterLet {
     /// The element a use wants when it is not the item (`String` pieces
     /// of a `Str` iterator); one such use decides for every use.
     want: Option<Type>,
+}
+
+/// An unannotated `let` whose value is a string literal, so a `String`
+/// (design.md § String literals; see `TypeChecker::str_lit_lets`).
+#[derive(Debug, Clone)]
+pub(crate) struct StrLitLet {
+    /// The bound name; `: Str` goes at its end.
+    name: Span,
+    /// Whether every value assigned to it is a string literal too, so
+    /// declaring it `Str` is the whole fix.
+    literal_only: bool,
+    /// The errors reported where it is used as a `Str`, in order.
+    uses: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3426,6 +3460,12 @@ pub struct TypeChecker<'a> {
     pub(super) iter_lets: FxHashMap<String, IterLet>,
     /// The spans of identifiers that read an [`IterLet`] binding.
     pub(super) iter_let_uses: FxHashMap<SpanKey, String>,
+    /// `let x = "text"` with no annotation, by name: a use of `x` as a
+    /// `Str` names the binding, and `karac fix` writes `: Str` on it when
+    /// it only ever holds literals (B-2026-10-24-33).
+    pub(super) str_lit_lets: FxHashMap<String, StrLitLet>,
+    /// The spans of identifiers that read a [`StrLitLet`] binding.
+    pub(super) str_lit_let_uses: FxHashMap<SpanKey, String>,
     /// The type of a value just checked into a `weak` slot, for typed HIR
     /// (B-2026-10-13-23).
     pub(super) weak_store_actual: Option<Type>,
@@ -3742,6 +3782,8 @@ impl<'a> TypeChecker<'a> {
             option_recv_spans: FxHashSet::default(),
             iter_lets: FxHashMap::default(),
             iter_let_uses: FxHashMap::default(),
+            str_lit_lets: FxHashMap::default(),
+            str_lit_let_uses: FxHashMap::default(),
             weak_store_actual: None,
             baked_impls: FxHashSet::default(),
             reported_uninferrable_empty_literal: false,
@@ -6313,6 +6355,80 @@ impl<'a> TypeChecker<'a> {
     /// For each iterator binding of the function just checked that is used
     /// as a `Vec`: the fix that collects it where it is bound, `.collect()`
     /// (or its kin) on the initializer and `: Vec[T]` on the name.
+    /// Note `let name = value` with no annotation: a string-literal value
+    /// makes it a `String`, which a later use as a `Str` cannot see.
+    pub(super) fn note_str_lit_let(
+        &mut self,
+        name: &str,
+        name_span: Span,
+        value: &Expr,
+        ty: &Type,
+    ) {
+        if *ty == Type::Str && str_literal_value(value) {
+            self.str_lit_lets.insert(
+                name.to_string(),
+                StrLitLet {
+                    name: name_span,
+                    literal_only: true,
+                    uses: Vec::new(),
+                },
+            );
+        } else {
+            self.str_lit_lets.remove(name);
+        }
+    }
+
+    /// `name = value`: a value other than a string literal means `: Str`
+    /// alone no longer fixes the binding.
+    pub(super) fn note_str_lit_assign(&mut self, target: &Expr, value: &Expr) {
+        if let ExprKind::Identifier(n) = &target.kind {
+            if !str_literal_value(value) {
+                if let Some(rec) = self.str_lit_lets.get_mut(n.as_str()) {
+                    rec.literal_only = false;
+                }
+            }
+        }
+    }
+
+    /// At the end of a function, say at each use of a string-literal
+    /// binding as a `Str` why it is a `String`, and, when it only ever holds
+    /// literals, offer `: Str` on the `let` with the first use.
+    pub(super) fn explain_str_lit_lets(&mut self) {
+        let recs: Vec<(String, StrLitLet)> = self
+            .str_lit_lets
+            .drain()
+            .filter(|(_, r)| !r.uses.is_empty())
+            .collect();
+        for (name, rec) in recs {
+            let fix = rec.literal_only.then(|| FixIt {
+                span: Span {
+                    line: rec.name.line,
+                    column: rec.name.column + rec.name.length,
+                    offset: rec.name.offset + rec.name.length,
+                    length: 0,
+                },
+                replacement: ": Str".to_string(),
+            });
+            let because = format!(
+                ": `{name}` (bound at {}:{}) is a `String`, because a string literal with no \
+                 expected type is one (design.md § String literals)",
+                rec.name.line, rec.name.column
+            );
+            for (i, at) in rec.uses.iter().enumerate() {
+                let Some(e) = self.errors.get_mut(*at) else {
+                    continue;
+                };
+                e.message.push_str(&because);
+                if rec.literal_only {
+                    e.message.push_str(&format!("; declare it `{name}: Str`"));
+                    if i == 0 {
+                        e.fix_it = fix.clone();
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn offer_iter_let_fixes(&mut self) {
         let mut recs: Vec<(String, IterLet)> =
             self.iter_lets.drain().filter(|(_, r)| r.used).collect();
@@ -7059,6 +7175,34 @@ impl<'a> TypeChecker<'a> {
                         replacement: ".to_string()".to_string(),
                     },
                 );
+                return false;
+            }
+        }
+        if let Some(name) = self
+            .str_lit_let_uses
+            .get(&SpanKey::from_span(&span))
+            .cloned()
+        {
+            let want = match expected {
+                Type::Ref(t) => t.as_ref(),
+                t => t,
+            };
+            let view = matches!(
+                inference::resolve_type_var_top(want, &self.env.substitutions),
+                Type::Named { ref name, ref args } if name == "StringSlice" && args.is_empty()
+            );
+            if view && *found == Type::Str && self.str_lit_lets.contains_key(name.as_str()) {
+                self.type_error_with_types(
+                    format!("expected '{}', found 'String'", type_display(expected)),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                    expected,
+                    found,
+                );
+                let at = self.errors.len() - 1;
+                if let Some(rec) = self.str_lit_lets.get_mut(name.as_str()) {
+                    rec.uses.push(at);
+                }
                 return false;
             }
         }

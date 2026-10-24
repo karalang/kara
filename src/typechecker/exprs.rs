@@ -8312,6 +8312,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.iter_let_uses
                         .insert(SpanKey::from_span(&expr.span), name.clone());
                 }
+                if self.str_lit_lets.contains_key(name.as_str()) {
+                    self.str_lit_let_uses
+                        .insert(SpanKey::from_span(&expr.span), name.clone());
+                }
                 let ty = self.resolve_identifier_type(name, &expr.span);
                 self.refuse_core_bare_variant(name, &ty, &expr.span);
                 // B-2026-08-19-17 (b) — a bare variant name that two or more

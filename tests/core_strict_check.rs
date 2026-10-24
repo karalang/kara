@@ -13056,3 +13056,36 @@ fn a_primitive_type_name_cannot_be_bound_as_a_value() {
         "4 true\n",
     );
 }
+
+#[test]
+fn a_string_literal_let_used_as_a_str_names_the_binding_and_fixes_it() {
+    // B-2026-10-24-33: `let mut how = "plate";` is a `String` (design.md §
+    // String literals), so a use as a `Str` is refused; the error says why at
+    // the use and, when the binding only ever holds literals, `karac fix`
+    // declares it `: Str`.
+    let src = "struct Hit {\n    how: Str,\n}\nfn pick(tagged: bool) -> Hit {\n    \
+               let mut how = \"plate\";\n    if tagged {\n        how = \"tag\";\n    }\n    \
+               Hit { how: how }\n}\nfn f() -> Str {\n    let b = \"x\";\n    b\n}\n\
+               fn g(c: bool) -> (i64, Str) {\n    let b = if c { \"x\" } else { \"y\" };\n    (1, b)\n}\n\
+               fn main() {\n    println(pick(true).how);\n    println(f());\n    println(g(false).1);\n}\n";
+    for edit in [
+        "let mut how: Str = \"plate\";",
+        "let b: Str = \"x\";",
+        "let b: Str = if c",
+    ] {
+        rejected_then_fixed_by(
+            "str-lit-let",
+            src,
+            "`how` (bound at 5:13) is a `String`, because a string literal with no expected type is one",
+            edit,
+        );
+    }
+    // Assigned a value other than a literal: the reason, and no fix.
+    rejected(
+        "str-lit-let-assigned",
+        "fn h(s: ref String) -> Str {\n    let mut b = \"x\";\n    b = s.to_string();\n    b\n}\n\
+         fn main() {\n    println(h(\"a\".to_string()));\n}\n",
+        "`b` (bound at 2:13) is a `String`, because a string literal with no expected type is one \
+         (design.md § String literals)\n",
+    );
+}
