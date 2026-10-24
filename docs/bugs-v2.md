@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 19 |
+| diagnostics | 21 |
 | false-positive | 19 |
 | missing-feature | 17 |
 | perf | 10 |
-| miscompile | 5 |
+| miscompile | 7 |
 | soundness | 4 |
 | run-vs-build | 4 |
 | other | 2 |
@@ -72,10 +72,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 36 |
+| typecheck | 38 |
 | codegen | 22 |
 | interp | 15 |
-| mir | 12 |
+| mir | 15 |
 | runtime | 8 |
 | cli | 8 |
 | ownership | 6 |
@@ -131,7 +131,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-28 | 2026-10-24 | ownership | medium | `f(None, None)` with a `ref Option[T]` first parameter and an owned second one is refused by `karac check`, `karac build` and `karac run`: "cannot move `None` while a borrow into it (a returned reference still points at it) is still live". The two literal `None`s are taken for one place named `None`; `__mir-run` runs the program | — |
 | B-2026-10-24-29 | 2026-10-24 | mir | medium | `Map[K, V, H]` / `Set[T, H]` lose their hasher in MIR (IntrinsicTy::Map(K, V)), so `FxBuildHasher` and a user `BuildHasher` are ignored on both v2 backends: every table hashes and walks with the seeded default; 2 tests ignored at M3 | — |
 | B-2026-10-24-31 | 2026-10-24 | parser | low | A reserved keyword (`and`) bound by a `for` loop, or as a match-arm pattern, gets the right "reserved keyword" error and then cascade errors: `Expected expression, found RightBrace` and, for the loop, a false `file contains both top-level statements and an explicit fn main()` that points at a statement inside `main` | — |
-| B-2026-10-24-32 | 2026-10-24 | ownership | low | E0500 FALSE POSITIVE ON A SECOND `unwrap_or` OF A COPY `Option[i64]` FIELD -- `p.a.unwrap_or(0)` twice is refused as a move when `p` is an owned local, an `own` param or a `mut ref` param, though Option[i64] is Copy (core-semantics §1.1); accepted through a `ref` param and on a whole Option local, and `karac __mir-run` runs every refused program correctly. The fix-it adds a needless `.clone()` | — |
+| B-2026-10-24-32 | 2026-10-24 | ownership | low | E0500 FALSE POSITIVE ON A SECOND `unwrap_or` OF A COPY `Option[i64]` FIELD -- `p.a.unwrap_or(0)` twice is refused as a move when `p` is an owned local, an `own` param or a `mut ref` param, though Option[i64] is Copy (core-semantics §1.1); accepted through a `ref` param and on a whole Option local, and `karac __mir-run` runs every refused program correctly. The fix-it adds a needless `.clone()`; it also refuses moving the owner (`v.push(m)`) after one `m.cc.unwrap_or(0)` | — |
+| B-2026-10-24-33 | 2026-10-24 | typecheck | low | A string literal bound with no type (`let mut how = "";`) is a `String`, as design.md §3 says, but using the binding where a `Str` is expected (a `Str` field, a `Str` return, a tuple with a `Str`) reports a bare `expected 'Str', found 'String'` at the use, with no note naming the binding and no fix-it | — |
+| B-2026-10-24-34 | 2026-10-24 | mir | medium | Auto-par statement verdicts (`KARAC_AUTO_PAR=1`) drop every use in an arm that ends in `return`, not only its drops and its write of the result, so `fill(mut v, n); if c { ...read v...; return t; }` is grouped and the arm can read `v` before the fill writes it | — |
+| B-2026-10-24-35 | 2026-10-24 | mir | medium | Auto-par statement verdicts (`KARAC_AUTO_PAR=1`) let a statement that may panic run beside an earlier one that may return, so `if grow(n) < 10 { return -1; } let g = grow(lines[1]);` is grouped and the second statement's panic can end a run the first statement's return would have let go on | — |
+| B-2026-10-24-36 | 2026-10-24 | typecheck+mir | low | A `Copy` binding over `VecDeque.front()` takes `*` inconsistently: `karac check` refuses `*w` after `let (_, w) = q.front().unwrap()` (right, per core-semantics §4.6/§5.10) but accepts `*s` after `while let Some((s, _)) = q.front()` and `*a` after `if let Some((a, _)) = q.front()`, and every MIR front end accepts all three | — |
 
 ### Fixed
 
