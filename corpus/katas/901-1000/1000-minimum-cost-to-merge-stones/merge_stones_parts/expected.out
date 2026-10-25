@@ -1,0 +1,19 @@
+stones = [3,2,4,1], k = 2 -> 20
+stones = [3,2,4,1], k = 3 -> -1
+stones = [3,5,1,2,6], k = 3 -> 25
+stones = [7], k = 2 -> 0
+stones = [7], k = 5 -> 0
+stones = [4,6], k = 2 -> 10
+stones = [4,6], k = 3 -> -1
+stones = [1,2,3], k = 3 -> 6
+stones = [6,4,4,6], k = 2 -> 40
+stones = [1,100,1,100,1], k = 3 -> 305
+30 piles of 100, k = 2: 14800
+30 piles of 100, k = 30: 3000
+30 piles of 100, k = 3: -1
+29 piles of 1 to 29, k = 3: 1290
+29 piles of 1 to 29, k = 15: 555
+29 piles, 100 and 1 in turn, k = 5: 3231
+300 random rows of 944 piles: 60 impossible, cost 44714, checksum 755285029
+3000 random rows of 23103 piles: 697 impossible, cost 1935366, checksum 906054088
+300 random rows of 4475 piles: 67 impossible, cost 515336, checksum 520959676

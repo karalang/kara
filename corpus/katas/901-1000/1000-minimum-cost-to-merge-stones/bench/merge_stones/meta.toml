@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/1000-minimum-cost-to-merge-stones/bench/merge_stones.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "1ba641dda"
+extracted_src = "5abd683a"

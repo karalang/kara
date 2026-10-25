@@ -1,0 +1,418 @@
+// LeetCode #1000: Minimum Cost to Merge Stones -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random rows of piles.
+
+// ---- star ----
+
+// LeetCode #1000: Minimum Cost to Merge Stones -- a table by length
+//
+// Each move turns k piles into one, so n piles end as one only when
+// k - 1 divides n - 1. dp[i][j] is the least cost of merging piles i to
+// j into as few piles as they can be, which is one exactly when k - 1
+// divides j - i. The first of those piles comes from piles i to m with
+// k - 1 dividing m - i, so m steps by k - 1; and when the stretch ends
+// as one pile, the last move costs every stone in it. O(n^3 / k).
+
+fn star_merge_stones(stones: ref Vec[i64], k: i64) -> i64 {
+    let n = stones.len();
+    if (n - 1) % (k - 1) != 0 {
+        return -1;
+    }
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + stones[i];
+    }
+    let mut dp: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        dp.push(Vec.filled(n, 0));
+    }
+    for length in k..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            let mut best = 1 << 60;
+            let mut m = i;
+            while m < j {
+                best = best.min(dp[i][m] + dp[m + 1][j]);
+                m += k - 1;
+            }
+            if (length - 1) % (k - 1) == 0 {
+                best += prefix[j + 1] - prefix[i];
+            }
+            dp[i][j] = best;
+        }
+    }
+    dp[0][n - 1]
+}
+
+// ---- piles ----
+
+// LeetCode #1000: Minimum Cost to Merge Stones -- by number of piles
+//
+// cost(i, j, p) is the least cost of turning piles i to j into exactly p
+// piles. For p of 2 or more the first of the p comes from piles i to m
+// as one pile and the rest from m + 1 to j as p - 1; one pile is k piles
+// and a last move that costs every stone in the stretch. The table
+// fills by length, three numbers to a cell. O(n^3 k).
+
+fn piles_merge_stones(stones: ref Vec[i64], k: i64) -> i64 {
+    let n = stones.len();
+    let none = 1 << 60;
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + stones[i];
+    }
+    // cost[(i * n + j) * (k + 1) + p]
+    let mut cost: Vec[i64] = Vec.filled(n * n * (k + 1), none);
+    for i in 0..n {
+        cost[(i * n + i) * (k + 1) + 1] = 0;
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            let cell = (i * n + j) * (k + 1);
+            for p in 2..k + 1 {
+                if p > length {
+                    break;
+                }
+                let mut best = none;
+                for m in i..j {
+                    let first = cost[(i * n + m) * (k + 1) + 1];
+                    let rest = cost[((m + 1) * n + j) * (k + 1) + p - 1];
+                    if first < none and rest < none {
+                        best = best.min(first + rest);
+                    }
+                }
+                cost[cell + p] = best;
+            }
+            if cost[cell + k] < none {
+                cost[cell + 1] = cost[cell + k] + prefix[j + 1] - prefix[i];
+            }
+        }
+    }
+    let answer = cost[(n - 1) * (k + 1) + 1];
+    if answer < none { answer } else { -1 }
+}
+
+// ---- memo ----
+
+// LeetCode #1000: Minimum Cost to Merge Stones -- recursion with a memo
+//
+// The same question as by number of piles, asked from the top: the
+// least cost of turning piles i to j into p piles. The last of the p
+// comes from piles m + 1 to j as one pile; one pile is k piles and a
+// last move over every stone. A stretch can end as p piles only when
+// k - 1 divides its length less p, which cuts the search short, and a
+// Map keeps every answer. O(n^3 k).
+
+fn memo_least(i: i64, j: i64, p: i64, k: i64, prefix: ref Vec[i64], memo: mut ref Map[i64, i64]) -> i64 {
+    let none = 1 << 60;
+    let length = j - i + 1;
+    if p > length or (length - p) % (k - 1) != 0 {
+        return none;
+    }
+    if length == 1 {
+        return 0;
+    }
+    let key = (i * 31 + j) * 31 + p;
+    if let Some(v) = memo.get(key) {
+        return *v;
+    }
+    let mut best = none;
+    if p == 1 {
+        let c = memo_least(i, j, k, k, prefix, mut memo);
+        if c < none {
+            best = c + prefix[j + 1] - prefix[i];
+        }
+    } else {
+        for m in i..j {
+            let front = memo_least(i, m, p - 1, k, prefix, mut memo);
+            let last = memo_least(m + 1, j, 1, k, prefix, mut memo);
+            if front < none and last < none {
+                best = best.min(front + last);
+            }
+        }
+    }
+    memo.insert(key, best);
+    best
+}
+
+fn memo_merge_stones(stones: ref Vec[i64], k: i64) -> i64 {
+    let n = stones.len();
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + stones[i];
+    }
+    let mut memo: Map[i64, i64] = Map.new();
+    let answer = memo_least(0, n - 1, 1, k, prefix, mut memo);
+    if answer < 1 << 60 { answer } else { -1 }
+}
+
+// ---- recursive ----
+
+// LeetCode #1000: Minimum Cost to Merge Stones -- the table from the top
+//
+// The table by length, asked recursively instead: the least cost of
+// merging piles i to j into as few piles as they can be, split after
+// piles i to m that end as one pile, so m steps by k - 1, with every
+// stone paid once more when the stretch ends as one pile. A stretch
+// shorter than k costs nothing. A list of answers, -1 for none yet,
+// keeps each stretch to one visit. O(n^3 / k).
+
+fn recursive_fewest(i: i64, j: i64, k: i64, prefix: ref Vec[i64], memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if j - i + 1 < k {
+        return 0;
+    }
+    if memo[i][j] >= 0 {
+        return memo[i][j];
+    }
+    let mut best = 1 << 60;
+    let mut m = i;
+    while m < j {
+        best = best.min(recursive_fewest(i, m, k, prefix, mut memo) + recursive_fewest(m + 1, j, k, prefix, mut memo));
+        m += k - 1;
+    }
+    if (j - i) % (k - 1) == 0 {
+        best += prefix[j + 1] - prefix[i];
+    }
+    memo[i][j] = best;
+    best
+}
+
+fn recursive_merge_stones(stones: ref Vec[i64], k: i64) -> i64 {
+    let n = stones.len();
+    if (n - 1) % (k - 1) != 0 {
+        return -1;
+    }
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + stones[i];
+    }
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        memo.push(Vec.filled(n, -1));
+    }
+    recursive_fewest(0, n - 1, k, prefix, mut memo)
+}
+
+// ---- parts ----
+
+// LeetCode #1000: Minimum Cost to Merge Stones -- k parts of one pile
+//
+// one[i][j] is the least cost of merging piles i to j into one pile. Its
+// last move merges k piles, each made from a part of the stretch, so
+// one[i][j] is every stone in it plus the cheapest way to cut it into k
+// parts that each end as one pile, found by a small table of its own:
+// the cheapest way to cover piles i to t with q such parts. O(n^4).
+
+fn parts_merge_stones(stones: ref Vec[i64], k: i64) -> i64 {
+    let n = stones.len();
+    let none = 1 << 60;
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + stones[i];
+    }
+    let mut one: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.filled(n, none);
+        row[i] = 0;
+        one.push(row);
+    }
+    for length in k..n + 1 {
+        if (length - 1) % (k - 1) != 0 {
+            continue;
+        }
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            // cover[q][t]: piles i to t as q parts of one pile each
+            let mut cover: Vec[Vec[i64]] = Vec.new();
+            for _ in 0..k + 1 {
+                cover.push(Vec.filled(n, none));
+            }
+            for t in i..j + 1 {
+                cover[1][t] = one[i][t];
+            }
+            for q in 2..k + 1 {
+                for t in i..j + 1 {
+                    for s in i..t {
+                        if cover[q - 1][s] < none and one[s + 1][t] < none {
+                            cover[q][t] = cover[q][t].min(cover[q - 1][s] + one[s + 1][t]);
+                        }
+                    }
+                }
+            }
+            if cover[k][j] < none {
+                one[i][j] = cover[k][j] + prefix[j + 1] - prefix[i];
+            }
+        }
+    }
+    if one[0][n - 1] < none { one[0][n - 1] } else { -1 }
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// up to `most` piles of 1 to 100 stones and a k from 2 to `kmax`: half
+// the time a pile count that k can merge down to one pile
+fn random_case(most: i64, kmax: i64, seed: mut ref i64) -> (Vec[i64], i64) {
+    let k = 2 + next_random(mut seed) % (kmax - 1);
+    let mut n = 0;
+    if next_random(mut seed) % 2 == 0 {
+        let merges = next_random(mut seed) % ((most - 1) / (k - 1) + 1);
+        n = 1 + merges * (k - 1);
+    } else {
+        n = 1 + next_random(mut seed) % most;
+    }
+    let stones: Vec[i64] = (0..n).map(|_| 1 + next_random(mut seed) % 100).collect();
+    (stones, k)
+}
+
+fn arm(a: i64, stones: ref Vec[i64], k: i64) -> i64 {
+    if a == 0 {
+        star_merge_stones(stones, k)
+    } else if a == 1 {
+        piles_merge_stones(stones, k)
+    } else if a == 2 {
+        memo_merge_stones(stones, k)
+    } else if a == 3 {
+        recursive_merge_stones(stones, k)
+    } else {
+        parts_merge_stones(stones, k)
+    }
+}
+
+// The statement read literally: every way to make the moves, each move
+// merging k piles side by side into one at the cost of their stones,
+// tried in turn until one pile is left; the cheapest, or none.
+fn cheapest(piles: ref Vec[i64], k: i64) -> i64 {
+    let none = 1 << 60;
+    if piles.len() == 1 {
+        return 0;
+    }
+    let mut best = none;
+    if piles.len() < k {
+        return best;
+    }
+    for s in 0..piles.len() - k + 1 {
+        let mut sum = 0;
+        for t in s..s + k {
+            sum += piles[t];
+        }
+        let mut next: Vec[i64] = Vec.new();
+        for t in 0..s {
+            next.push(piles[t]);
+        }
+        next.push(sum);
+        for t in s + k..piles.len() {
+            next.push(piles[t]);
+        }
+        let rest = cheapest(next, k);
+        if rest < none {
+            best = best.min(rest + sum);
+        }
+    }
+    best
+}
+
+fn literal(stones: ref Vec[i64], k: i64) -> i64 {
+    let c = cheapest(stones, k);
+    if c < 1 << 60 { c } else { -1 }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, stones: ref Vec[i64], k: i64, small: bool, seed: mut ref i64) -> i64 {
+    let n = stones.len();
+    let truth = if small { literal(stones, k) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, stones, k));
+    }
+    let reversed: Vec[i64] = (0..n).map(|i| stones[n - 1 - i]).collect();
+    let doubled: Vec[i64] = stones.iter().map(|x| 2 * *x).collect();
+    let at = next_random(mut seed) % n;
+    let d = 1 + next_random(mut seed) % 10;
+    let mut grown = stones.clone();
+    grown[at] += d;
+    let merges = (n - 1) / (k - 1);
+    for a in 0..5 {
+        let g = got[a];
+        // P1: the statement's answer, on the first 3000 rows
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: the row reversed gives the same answer
+        check(mut tally, 2, arm(a, reversed, k) == g);
+        // P3: every pile doubled doubles the answer
+        let twice = arm(a, doubled, k);
+        check(mut tally, 3, if g < 0 { twice == -1 } else { twice == 2 * g });
+        // P4: -1 exactly when k - 1 does not divide n - 1
+        check(mut tally, 4, (g == -1) == ((n - 1) % (k - 1) != 0));
+        // P5: one pile grown by d adds at least d and at most d for every
+        // merge, nothing to one pile, and leaves -1 as it is
+        let more = arm(a, grown, k);
+        let p5 = if g < 0 {
+            more == -1
+        } else if n == 1 {
+            more == 0
+        } else {
+            more - g >= d and more - g <= d * merges
+        };
+        check(mut tally, 5, p5);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != a and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 1000;
+    let mut piles = 0;
+    let mut impossible = 0;
+    let mut check_sum = 0;
+    // 3000 rows of up to 7 piles with k up to 4 against the statement,
+    // then 200 of up to 30 piles with k up to 9
+    for c in 0..3200 {
+        let small = c < 3000;
+        let (stones, k) = if small { random_case(7, 4, mut seed) } else { random_case(30, 9, mut seed) };
+        piles += stones.len();
+        let got = properties(mut tally, stones, k, small, mut seed);
+        if got < 0 {
+            impossible += 1;
+        }
+        check_sum = (check_sum * 31 + got + 2) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 rows of {piles} piles: {impossible} impossible, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

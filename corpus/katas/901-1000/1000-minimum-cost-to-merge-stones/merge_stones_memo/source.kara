@@ -1,0 +1,123 @@
+// LeetCode #1000: Minimum Cost to Merge Stones -- recursion with a memo
+//
+// The same question as by number of piles, asked from the top: the
+// least cost of turning piles i to j into p piles. The last of the p
+// comes from piles m + 1 to j as one pile; one pile is k piles and a
+// last move over every stone. A stretch can end as p piles only when
+// k - 1 divides its length less p, which cuts the search short, and a
+// Map keeps every answer. O(n^3 k).
+
+fn least(i: i64, j: i64, p: i64, k: i64, prefix: ref Vec[i64], memo: mut ref Map[i64, i64]) -> i64 {
+    let none = 1 << 60;
+    let length = j - i + 1;
+    if p > length or (length - p) % (k - 1) != 0 {
+        return none;
+    }
+    if length == 1 {
+        return 0;
+    }
+    let key = (i * 31 + j) * 31 + p;
+    if let Some(v) = memo.get(key) {
+        return *v;
+    }
+    let mut best = none;
+    if p == 1 {
+        let c = least(i, j, k, k, prefix, mut memo);
+        if c < none {
+            best = c + prefix[j + 1] - prefix[i];
+        }
+    } else {
+        for m in i..j {
+            let front = least(i, m, p - 1, k, prefix, mut memo);
+            let last = least(m + 1, j, 1, k, prefix, mut memo);
+            if front < none and last < none {
+                best = best.min(front + last);
+            }
+        }
+    }
+    memo.insert(key, best);
+    best
+}
+
+fn merge_stones(stones: ref Vec[i64], k: i64) -> i64 {
+    let n = stones.len();
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + stones[i];
+    }
+    let mut memo: Map[i64, i64] = Map.new();
+    let answer = least(0, n - 1, 1, k, prefix, mut memo);
+    if answer < 1 << 60 { answer } else { -1 }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// up to `most` piles of 1 to 100 stones and a k from 2 up: half the time
+// a pile count that k can merge down to one pile, half the time any
+fn random_case(most: i64, seed: mut ref i64) -> (Vec[i64], i64) {
+    let k = 2 + next_random(mut seed) % 4;
+    let mut n = 0;
+    if next_random(mut seed) % 2 == 0 {
+        let merges = next_random(mut seed) % ((most - 1) / (k - 1) + 1);
+        n = 1 + merges * (k - 1);
+    } else {
+        n = 1 + next_random(mut seed) % most;
+    }
+    let stones: Vec[i64] = (0..n).map(|_| 1 + next_random(mut seed) % 100).collect();
+    (stones, k)
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(Vec[i64], i64)] = vec![
+        (vec![3, 2, 4, 1], 2),
+        (vec![3, 2, 4, 1], 3),
+        (vec![3, 5, 1, 2, 6], 3),
+        (vec![7], 2),
+        (vec![7], 5),
+        (vec![4, 6], 2),
+        (vec![4, 6], 3),
+        (vec![1, 2, 3], 3),
+        (vec![6, 4, 4, 6], 2),
+        (vec![1, 100, 1, 100, 1], 3),
+    ];
+    for (stones, k) in cases.iter() {
+        let text: Vec[String] = stones.iter().map(|x| f"{x}").collect();
+        println(f"stones = [{text.join(",")}], k = {k} -> {merge_stones(stones, *k)}");
+    }
+    let big: Vec[(String, Vec[i64], i64)] = vec![
+        ("30 piles of 100, k = 2".to_string(), Vec.filled(30, 100), 2),
+        ("30 piles of 100, k = 30".to_string(), Vec.filled(30, 100), 30),
+        ("30 piles of 100, k = 3".to_string(), Vec.filled(30, 100), 3),
+        ("29 piles of 1 to 29, k = 3".to_string(), (1..30).collect(), 3),
+        ("29 piles of 1 to 29, k = 15".to_string(), (1..30).collect(), 15),
+        ("29 piles, 100 and 1 in turn, k = 5".to_string(), (0..29).map(|i| if i % 2 == 0 { 100 } else { 1 }).collect(), 5),
+    ];
+    for (name, stones, k) in big.iter() {
+        println(f"{name}: {merge_stones(stones, *k)}");
+    }
+    let mut seed = 1000;
+    for (count, most) in vec![(300, 6), (3000, 15), (300, 30)] {
+        let mut piles = 0;
+        let mut impossible = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let (stones, k) = random_case(most, mut seed);
+            let got = merge_stones(stones, k);
+            piles += stones.len();
+            if got < 0 {
+                impossible += 1;
+            } else {
+                total += got;
+            }
+            check = (check * 31 + got + 2) % 1000000007;
+        }
+        println(f"{count} random rows of {piles} piles: {impossible} impossible, cost {total}, checksum {check}");
+    }
+}
