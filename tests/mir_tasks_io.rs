@@ -269,8 +269,10 @@ fn main() {
 }
 
 /// An HTTP server that answers in pairs: it reads two requests, answers
-/// the second, then the first. A client that holds the one thread while
-/// its request waits never lets the second request start.
+/// `/second`, then `/first`. A client that holds the one thread while its
+/// request waits never lets the second request start. It goes by path, not
+/// by the order it accepted them: the helpers that send the two requests
+/// connect in either order.
 fn pairs_server() -> u16 {
     use std::io::{Read, Write};
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -296,7 +298,8 @@ fn pairs_server() -> u16 {
                 .to_string();
             pair.push((s, path));
         }
-        for (mut s, path) in pair.into_iter().rev() {
+        pair.sort_by(|a, b| b.1.cmp(&a.1));
+        for (mut s, path) in pair {
             let body = format!("answer {path}");
             let _ = write!(
                 s,
