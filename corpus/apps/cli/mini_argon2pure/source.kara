@@ -1,0 +1,1192 @@
+// cli/mini_argon2pure
+//
+// A port of argon2pure 1.3 (MIT; Bas Westerbaan), the pure-Python Argon2
+// password hash: Argon2d, Argon2i and Argon2id in versions 1.0 and 1.3,
+// the parameter checks, the H0 pre-hash, the lane and slice schedule, the
+// data-independent address blocks, the indexing of section 3.3 of the
+// spec, the compression function G with its BlaMka permutation, the
+// variable-length hash H', and the minimal Blake2b the library carries.
+// On top of it sits what a login service builds from Argon2: a password
+// store of PHC strings with a server-side pepper, logins that rehash when
+// the policy is raised, and a users file written and read back.
+//
+// The jobs are in jobs_text(), generated from data/jobs.txt; oracle.py
+// plays the same jobs through the vendored argon2pure.
+
+const ARGON2D: i64 = 0;
+const ARGON2I: i64 = 1;
+const ARGON2ID: i64 = 2;
+const ARGON2_DEFAULT_VERSION: i64 = 0x13;
+const MASK32: i64 = 4294967295;
+const LOW32: u64 = 0xffffffffu64;
+const B64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+enum Fail {
+    // Argon2ParameterError
+    Param(String),
+    // a failed `assert` in Blake2b
+    Assertion,
+}
+
+impl Fail {
+    fn describe(ref self) -> String {
+        match self {
+            Fail.Param(msg) => f"! Argon2ParameterError: {msg}",
+            Fail.Assertion => "! AssertionError".to_string(),
+        }
+    }
+}
+
+fn param_error(msg: ref String) -> Fail {
+    Fail.Param(msg.clone())
+}
+
+// ------------------------------------------------------------ bytes
+
+fn hex_digit(c: u8) -> i64 {
+    let n = c as i64;
+    if n >= 48 and n <= 57 {
+        n - 48
+    } else if n >= 97 and n <= 102 {
+        n - 87
+    } else {
+        n - 55
+    }
+}
+
+fn from_hex(text: ref String) -> Vec[u8] {
+    let raw = text.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < raw.len() as i64 {
+        out.push((hex_digit(raw[i]) * 16 + hex_digit(raw[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn to_hex(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        let n = x as i64;
+        out.push_str(f"{n:02x}");
+    }
+    out
+}
+
+fn fnv(data: ref Vec[u8]) -> i64 {
+    let mut h = 2166136261;
+    for c in data {
+        h = ((h ^ (c as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn concat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = a.clone();
+    for x in b {
+        out.push(x);
+    }
+    out
+}
+
+fn slice_of(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let end = if to < b.len() as i64 { to } else { b.len() as i64 };
+    let mut i = from;
+    while i < end {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn zeros(n: i64) -> Vec[u8] {
+    Vec.filled(n, 0u8)
+}
+
+// struct.pack('<I', v) and '<i' for the non-negative values Argon2 packs
+fn pack_u32(out: mut ref Vec[u8], v: i64) {
+    for k in 0..4 {
+        out.push(((v >> (8 * k)) & 255) as u8);
+    }
+}
+
+fn le_word(b: ref Vec[u8], at: i64) -> u64 {
+    let mut v = 0u64;
+    for k in 0..8 {
+        v = (v << 8u64) | (b[at + 7 - k] as u64);
+    }
+    v
+}
+
+fn words_of(b: ref Vec[u8]) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() as i64 {
+        out.push(le_word(b, i));
+        i += 8;
+    }
+    out
+}
+
+fn bytes_of(w: ref Vec[u64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in w {
+        for k in 0..8 {
+            out.push(((x >> ((8 * k) as u64)) & 0xffu64) as u8);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ Blake2b
+
+const IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64,
+    0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64,
+    0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+const SIGMA: Array[i64, 192] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
+    11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4,
+    7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8,
+    9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13,
+    2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9,
+    12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11,
+    13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10,
+    6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5,
+    10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
+];
+
+// Minimal implementation of Blake2b, as required by Argon2.
+struct Blake2b {
+    digest_length: i64,
+    // data that didn't fit in a block yet
+    buf: Vec[u8],
+    // current hash
+    h: Vec[u64],
+    // counter
+    t: Vec[u64],
+    // finalization flags
+    f: Vec[u64],
+    n: u64,
+    finalized: bool,
+    digest: Vec[u8],
+}
+
+fn blake2b(data: ref Vec[u8], key: ref Vec[u8], digest_length: i64) -> Result[Blake2b, Fail] {
+    // default parameter block for sequential Blake2b with 128 byte
+    // digest and key.
+    if key.len() as i64 > 128 {
+        return Err(Fail.Assertion);
+    }
+    if not (0 < digest_length and digest_length <= 64) {
+        return Err(Fail.Assertion);
+    }
+    let mut p0 = 0x0000000001010000u64;
+    p0 = p0 | ((key.len() as u64) << 8u64);
+    p0 = p0 | (digest_length as u64);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(if i == 0 { IV[0] ^ p0 } else { IV[i] });
+    }
+    let mut b = Blake2b {
+        digest_length: digest_length,
+        buf: Vec.new(),
+        h: h,
+        t: vec![0u64, 0u64],
+        f: vec![0u64, 0u64],
+        n: 0u64,
+        finalized: false,
+        digest: Vec.new(),
+    };
+    if key.len() > 0 {
+        b.update(concat(key, zeros(128 - key.len() as i64)))?;
+    }
+    if data.len() > 0 {
+        b.update(data)?;
+    }
+    Ok(b)
+}
+
+fn blake2b_digest(data: ref Vec[u8], digest_length: i64) -> Vec[u8] {
+    match blake2b(data, Vec.new(), digest_length) {
+        Ok(b) => {
+            let mut b = b;
+            b.final()
+        }
+        Err(_) => Vec.new(),
+    }
+}
+
+impl Blake2b {
+    fn update(mut ref self, data: ref Vec[u8]) -> Result[(), Fail] {
+        if self.finalized {
+            return Err(Fail.Assertion);
+        }
+        let l = data.len() as i64;
+        let nbuf = self.buf.len() as i64;
+
+        if nbuf + l <= 128 {
+            // We do not have enough data for one compression.  Store it in
+            // the buffer and return.
+            for x in data {
+                self.buf.push(x);
+            }
+            return Ok(());
+        }
+
+        // First, use the buffer
+        let first = concat(self.buf, slice_of(data, 0, 128 - nbuf));
+        self.compress(first, 128);
+        let mut i = 128 - nbuf;
+
+        // Now take as many blocks from data as we can.
+        while l - i > 128 {
+            self.compress(slice_of(data, i, i + 128), 128);
+            i += 128;
+        }
+
+        // Put the rest in the buffer
+        self.buf = slice_of(data, i, l);
+        Ok(())
+    }
+
+    fn final(mut ref self) -> Vec[u8] {
+        if not self.finalized {
+            let n_remaining = self.buf.len() as i64;
+            let block = concat(self.buf, zeros(128 - n_remaining));
+            self.f[0] = 0xffffffffffffffffu64;
+            self.compress(block, n_remaining);
+            self.digest = slice_of(bytes_of(self.h), 0, self.digest_length);
+            self.finalized = true;
+        }
+        self.digest.clone()
+    }
+
+    fn hexdigest(mut ref self) -> String {
+        to_hex(self.final())
+    }
+
+    fn compress(mut ref self, block: ref Vec[u8], n_data: i64) {
+        self.n = self.n.wrapping_add(n_data as u64);
+        self.t[0] = self.n;
+        // _N >> 64: the counter never reaches 2**64 bytes here
+        self.t[1] = 0u64;
+        let m = words_of(block);
+        let mut v: Vec[u64] = self.h.clone();
+        for i in 0..8 {
+            v.push(IV[i]);
+        }
+        v[12] = v[12] ^ self.t[0];
+        v[13] = v[13] ^ self.t[1];
+        v[14] = v[14] ^ self.f[0];
+        v[15] = v[15] ^ self.f[1];
+        for r in 0..12 {
+            b2_g(mut v, m, r, 0, 0, 4, 8, 12);
+            b2_g(mut v, m, r, 1, 1, 5, 9, 13);
+            b2_g(mut v, m, r, 2, 2, 6, 10, 14);
+            b2_g(mut v, m, r, 3, 3, 7, 11, 15);
+            b2_g(mut v, m, r, 4, 0, 5, 10, 15);
+            b2_g(mut v, m, r, 5, 1, 6, 11, 12);
+            b2_g(mut v, m, r, 6, 2, 7, 8, 13);
+            b2_g(mut v, m, r, 7, 3, 4, 9, 14);
+        }
+        for i in 0..8 {
+            self.h[i] = self.h[i] ^ v[i] ^ v[i + 8];
+        }
+    }
+}
+
+fn b2_g(v: mut ref Vec[u64], m: ref Vec[u64], r: i64, i: i64, a: i64, b: i64, c: i64, d: i64) {
+    let mut va = v[a];
+    let mut vb = v[b];
+    let mut vc = v[c];
+    let mut vd = v[d];
+    va = va.wrapping_add(vb).wrapping_add(m[SIGMA[r * 16 + 2 * i]]);
+    let mut tmp = vd ^ va;
+    vd = (tmp >> 32u64) | ((tmp & 0xffffffffu64) << 32u64);
+    vc = vc.wrapping_add(vd);
+    tmp = vb ^ vc;
+    vb = (tmp >> 24u64) | ((tmp & 0xffffffu64) << 40u64);
+    va = va.wrapping_add(vb).wrapping_add(m[SIGMA[r * 16 + 2 * i + 1]]);
+    tmp = vd ^ va;
+    vd = (tmp >> 16u64) | ((tmp & 0xffffu64) << 48u64);
+    vc = vc.wrapping_add(vd);
+    tmp = vb ^ vc;
+    vb = (tmp >> 63u64) | (tmp << 1u64);
+    v[a] = va;
+    v[b] = vb;
+    v[c] = vc;
+    v[d] = vd;
+}
+
+// ------------------------------------------------------------ Argon2
+
+// xor1024: XOR two 1024 byte blocks with eachother.
+fn xor1024(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    for k in 0..128 {
+        out.push(a[k] ^ b[k]);
+    }
+    out
+}
+
+// Argon2's compression function G.
+//
+// This function is based on Blake2's compression function. For the
+// definition, see section 3.4 of Argon2's specification. A block is
+// held as its 128 little-endian words, so the 16-byte registers the
+// library slices out are the word pairs 2k and 2k + 1.
+fn compress(x: ref Vec[u64], y: ref Vec[u64]) -> Vec[u64] {
+    let r = xor1024(x, y);
+    let mut q: Vec[u64] = Vec.new();
+    let mut s: Vec[u64] = Vec.filled(16, 0u64);
+    let mut i = 0;
+    while i < 64 {
+        for k in 0..16 {
+            s[k] = r[i * 2 + k];
+        }
+        permute(mut s);
+        for k in 0..16 {
+            q.push(s[k]);
+        }
+        i += 8;
+    }
+    let mut z: Vec[u64] = Vec.filled(128, 0u64);
+    for i in 0..8 {
+        for k in 0..8 {
+            s[2 * k] = q[2 * (i + 8 * k)];
+            s[2 * k + 1] = q[2 * (i + 8 * k) + 1];
+        }
+        permute(mut s);
+        for j in 0..8 {
+            z[2 * (i + j * 8)] = s[2 * j];
+            z[2 * (i + j * 8) + 1] = s[2 * j + 1];
+        }
+    }
+    xor1024(z, r)
+}
+
+// Permutation used in Argon2's compression function G.
+//
+// It is a modification of the permutation used in Blake2. See Appendix A
+// of the specification of Argon2.
+fn permute(v: mut ref Vec[u64]) {
+    a2_g(mut v, 0, 4, 8, 12);
+    a2_g(mut v, 1, 5, 9, 13);
+    a2_g(mut v, 2, 6, 10, 14);
+    a2_g(mut v, 3, 7, 11, 15);
+    a2_g(mut v, 0, 5, 10, 15);
+    a2_g(mut v, 1, 6, 11, 12);
+    a2_g(mut v, 2, 7, 8, 13);
+    a2_g(mut v, 3, 4, 9, 14);
+}
+
+fn blamka(x: u64, y: u64) -> u64 {
+    x.wrapping_add(y).wrapping_add(2u64.wrapping_mul(x & LOW32).wrapping_mul(y & LOW32))
+}
+
+// Quarter-round of the permutation used in the compression of Argon2.
+//
+// It is a modification of the quarter-round used in Blake2, which in turn
+// is a modification of ChaCha. See Appendix A of the specification of
+// Argon2.
+fn a2_g(v: mut ref Vec[u64], a: i64, b: i64, c: i64, d: i64) {
+    let mut va = v[a];
+    let mut vb = v[b];
+    let mut vc = v[c];
+    let mut vd = v[d];
+    va = blamka(va, vb);
+    let mut tmp = vd ^ va;
+    vd = (tmp >> 32u64) | ((tmp & 0xffffffffu64) << 32u64);
+    vc = blamka(vc, vd);
+    tmp = vb ^ vc;
+    vb = (tmp >> 24u64) | ((tmp & 0xffffffu64) << 40u64);
+    va = blamka(va, vb);
+    tmp = vd ^ va;
+    vd = (tmp >> 16u64) | ((tmp & 0xffffu64) << 48u64);
+    vc = blamka(vc, vd);
+    tmp = vb ^ vc;
+    vb = (tmp >> 63u64) | (tmp << 1u64);
+    v[a] = va;
+    v[b] = vb;
+    v[c] = vc;
+    v[d] = vd;
+}
+
+// Blake2b turned into a "variable-length hash function".
+//
+// See definition of H' in section 3.2 of the argon2 spec.
+fn h_prime(x: ref Vec[u8], tag_length: i64) -> Vec[u8] {
+    let mut head: Vec[u8] = Vec.new();
+    pack_u32(mut head, tag_length);
+    if tag_length <= 64 {
+        return blake2b_digest(concat(head, x), tag_length);
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    // V_1
+    let mut v = blake2b_digest(concat(head, x), 64);
+    for k in 0..32 {
+        buf.push(v[k]);
+    }
+    let mut todo = tag_length - 32;
+    while todo > 64 {
+        // V_2, ..., V_r
+        v = blake2b_digest(v, 64);
+        for k in 0..32 {
+            buf.push(v[k]);
+        }
+        todo -= 32;
+    }
+    // V_{r+1}
+    for b in blake2b_digest(v, todo) {
+        buf.push(b);
+    }
+    buf
+}
+
+struct Params {
+    time_cost: i64,
+    memory_cost: i64,
+    parallelism: i64,
+    tag_length: i64,
+    type_code: i64,
+    // None: as many as the lanes
+    threads: Option[i64],
+    version: i64,
+}
+
+// Compute the Argon2 hash for `password`.
+fn argon2(password: ref Vec[u8], salt: ref Vec[u8], secret: ref Vec[u8], associated_data: ref Vec[u8], p: ref Params) -> Result[Vec[u8], Fail] {
+    let parallelism = p.parallelism;
+    let mut threads = match p.threads {
+        Some(n) => n,
+        None => parallelism,
+    };
+    if parallelism <= 0 {
+        return Err(param_error("parallelism must be strictly positive"));
+    }
+    if threads <= 0 {
+        return Err(param_error("threads must be strictly positive"));
+    }
+    if p.time_cost <= 0 {
+        return Err(param_error("time_cost must be strictly positive"));
+    }
+    if p.memory_cost < 8 * parallelism {
+        return Err(param_error("memory_cost can't be less than 8 times the number of lanes"));
+    }
+    if p.type_code != ARGON2D and p.type_code != ARGON2I and p.type_code != ARGON2ID {
+        return Err(param_error(f"type_code {p.type_code} not supported"));
+    }
+    if p.version != 0x10 and p.version != 0x13 {
+        return Err(param_error(f"version {p.version} not supported"));
+    }
+
+    // The worker pool is not ported: the segments of a slice never read
+    // each other, so filling them lane by lane gives the same blocks.
+    threads = if parallelism < threads { parallelism } else { threads };
+    let _ = threads;
+
+    // Compute the pre-hasing digest
+    let mut pre: Vec[u8] = Vec.new();
+    pack_u32(mut pre, parallelism);
+    pack_u32(mut pre, p.tag_length);
+    pack_u32(mut pre, p.memory_cost);
+    pack_u32(mut pre, p.time_cost);
+    pack_u32(mut pre, p.version);
+    pack_u32(mut pre, p.type_code);
+    let mut h = blake2b(Vec.new(), Vec.new(), 64)?;
+    h.update(pre)?;
+    for part in [password, salt, secret, associated_data] {
+        let mut n: Vec[u8] = Vec.new();
+        pack_u32(mut n, part.len() as i64);
+        h.update(n)?;
+        h.update(part)?;
+    }
+    let h0 = h.final();
+
+    let m_prime = (p.memory_cost / (4 * parallelism)) * (4 * parallelism);
+    // lane_length
+    let q = m_prime / parallelism;
+    let segment_length = q / 4;
+
+    // Allocate the matrix, lane by lane.
+    let mut blocks: Vec[Vec[u64]] = Vec.new();
+    for _ in 0..parallelism * q {
+        blocks.push(Vec.new());
+    }
+
+    // The blocks in Argon2 are arranged in a matrix.  For each thread,
+    // there is a row, which is also called a lane.  The number of
+    // columns depends on the memory_cost.
+    // There will be time_cost passes over the whole matrix.
+    // The colums are put into groups of four, called slices.
+    // The intersection of a lane with a slice is called a segment.
+    // The matrix is filled one slice at the time.  The segments within
+    // a slice can be computed in parallel.
+    let geo = Geometry { segment_length: segment_length, q: q, parallelism: parallelism, m_prime: m_prime, time_cost: p.time_cost, type_code: p.type_code, version: p.version };
+    for t in 0..p.time_cost {
+        for segment in 0..4 {
+            for i in 0..parallelism {
+                fill_segment(mut blocks, t, segment, i, h0, geo);
+            }
+        }
+    }
+
+    let mut b_final: Vec[u64] = Vec.filled(128, 0u64);
+    for i in 0..parallelism {
+        b_final = xor1024(b_final, blocks[i * q + q - 1]);
+    }
+    Ok(h_prime(bytes_of(b_final), p.tag_length))
+}
+
+struct Geometry {
+    segment_length: i64,
+    q: i64,
+    parallelism: i64,
+    m_prime: i64,
+    time_cost: i64,
+    type_code: i64,
+    version: i64,
+}
+
+fn fill_segment(b: mut ref Vec[Vec[u64]], t: i64, segment: i64, i: i64, h0: ref Vec[u8], g: ref Geometry) {
+    let q = g.q;
+    let segment_length = g.segment_length;
+    // Argon2i computes a bunch of pseudo-random numbers
+    // for every segment.
+    let data_independant = g.type_code == ARGON2I or (g.type_code == ARGON2ID and t == 0 and segment <= 1);
+    let mut pseudo_rands: Vec[u64] = Vec.new();
+    if data_independant {
+        // See `generate_addresses' in reference implementation
+        // and section 3.3 of the specification.
+        let zero: Vec[u64] = Vec.filled(128, 0u64);
+        // `i' in the specification
+        let mut ctr = 0;
+        while (pseudo_rands.len() as i64) < segment_length {
+            ctr += 1;
+            let mut input: Vec[u64] = Vec.filled(128, 0u64);
+            input[0] = t as u64;
+            input[1] = i as u64;
+            input[2] = segment as u64;
+            input[3] = g.m_prime as u64;
+            input[4] = g.time_cost as u64;
+            input[5] = g.type_code as u64;
+            input[6] = ctr as u64;
+            let address_block = compress(zero, compress(zero, input));
+            for w in address_block {
+                pseudo_rands.push(w);
+            }
+        }
+    }
+
+    for index in 0..segment_length {
+        let j = segment * segment_length + index;
+        if t == 0 and j < 2 {
+            // First two columns are special.
+            let mut seed = h0.clone();
+            pack_u32(mut seed, j);
+            pack_u32(mut seed, i);
+            b[i * q + j] = words_of(h_prime(seed, 1024));
+            continue;
+        }
+
+        // See `section 3.3. Indexing' of argon2 spec.
+        // First, we derive two pseudo-random values from the current
+        // state.  This is where Argon2i and Argon2d differ.
+        let prev = (j - 1 + q) % q;
+        let word = if data_independant { pseudo_rands[index] } else { b[i * q + prev][0] };
+        let j1 = word & LOW32;
+        let j2 = (word >> 32u64) as i64;
+
+        // Using the pseudo-random J1 and J2, we pick a reference
+        // block to mix with the previous one to create the next.
+        let i_prime = if t == 0 and segment == 0 { i } else { j2 % g.parallelism };
+
+        let ref_area_size = if t == 0 {
+            if segment == 0 or i == i_prime {
+                j - 1
+            } else if index == 0 {
+                segment * segment_length - 1
+            } else {
+                segment * segment_length
+            }
+        } else if i == i_prime {
+            // same_lane
+            q - segment_length + index - 1
+        } else if index == 0 {
+            q - segment_length - 1
+        } else {
+            q - segment_length
+        };
+
+        let mut rel_pos = ((j1 * j1) >> 32u64) as i64;
+        rel_pos = ref_area_size - 1 - ((ref_area_size * rel_pos) >> 32);
+        let mut start_pos = 0;
+
+        if t != 0 and segment != 3 {
+            start_pos = (segment + 1) * segment_length;
+        }
+        let j_prime = (start_pos + rel_pos) % q;
+
+        // Mix the previous and reference block to create
+        // the next block.
+        let mut new_block = compress(b[i * q + prev], b[i_prime * q + j_prime]);
+        if t != 0 and g.version == 0x13 {
+            new_block = xor1024(b[i * q + j], new_block);
+        }
+        b[i * q + j] = new_block;
+    }
+}
+
+// ------------------------------------------------------------ PHC strings
+
+fn type_name(code: i64) -> String {
+    if code == ARGON2D {
+        "argon2d".to_string()
+    } else if code == ARGON2I {
+        "argon2i".to_string()
+    } else {
+        "argon2id".to_string()
+    }
+}
+
+fn b64e(data: ref Vec[u8]) -> String {
+    let alpha = B64_ALPHABET.bytes();
+    let mut out = String.new();
+    let mut i = 0;
+    let len = data.len() as i64;
+    while i < len {
+        let take = if len - i < 3 { len - i } else { 3 };
+        let mut n = 0;
+        for k in 0..3 {
+            n = n * 256 + if k < take { data[i + k] as i64 } else { 0 };
+        }
+        for k in 0..take + 1 {
+            out.push(alpha[(n >> (18 - 6 * k)) & 63] as char);
+        }
+        i += 3;
+    }
+    out
+}
+
+fn b64d(text: ref String) -> Option[Vec[u8]] {
+    if text.len() % 4 == 1 {
+        return None;
+    }
+    let mut bits = 0;
+    let mut nbits = 0;
+    let mut out: Vec[u8] = Vec.new();
+    for ch in text.chars() {
+        let k = match B64_ALPHABET.find(ch.to_string()) {
+            Some(k) => k as i64,
+            None => return None,
+        };
+        bits = ((bits << 6) | k) & 0xffffff;
+        nbits += 6;
+        if nbits >= 8 {
+            nbits -= 8;
+            out.push(((bits >> nbits) & 255) as u8);
+        }
+    }
+    Some(out)
+}
+
+fn number(text: ref String) -> Option[i64] {
+    if text.len() == 0 or text.len() > 10 or not text.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if text.len() > 1 and text.starts_with("0") {
+        return None;
+    }
+    match i64.parse(text) {
+        Ok(v) => Some(v),
+        Err(_) => None,
+    }
+}
+
+fn phc_encode(type_code: i64, version: i64, m: i64, t: i64, p: i64, salt: ref Vec[u8], digest: ref Vec[u8]) -> String {
+    f"${type_name(type_code)}$v={version}$m={m},t={t},p={p}${b64e(salt)}${b64e(digest)}"
+}
+
+struct Phc {
+    type_code: i64,
+    version: i64,
+    m: i64,
+    t: i64,
+    p: i64,
+    salt: Vec[u8],
+    digest: Vec[u8],
+}
+
+fn phc_decode(s: ref String) -> Result[Phc, String] {
+    let parts: Vec[String] = s.split("$").map(|x| x.to_string()).collect();
+    if parts.len() < 2 or parts[0] != "" {
+        return Err("not a PHC string".to_string());
+    }
+    let type_code = if parts[1] == "argon2d" {
+        ARGON2D
+    } else if parts[1] == "argon2i" {
+        ARGON2I
+    } else if parts[1] == "argon2id" {
+        ARGON2ID
+    } else {
+        return Err(f"unknown type '{parts[1]}'");
+    };
+    let mut idx = 2;
+    let mut version = 0x10;
+    if parts.len() as i64 > idx and parts[idx].starts_with("v=") {
+        let text = parts[idx].substring(2);
+        version = match number(text) {
+            Some(v) if v == 0x10 or v == 0x13 => v,
+            _ => return Err(f"bad version '{text}'"),
+        };
+        idx += 1;
+    }
+    if parts.len() as i64 != idx + 3 {
+        return Err(f"expected {idx + 3} fields, found {parts.len()}");
+    }
+    let fields: Vec[String] = parts[idx].split(",").map(|x| x.to_string()).collect();
+    let mut vals: Vec[i64] = Vec.new();
+    if fields.len() == 3 {
+        let names = ["m=", "t=", "p="];
+        for k in 0..3 {
+            if fields[k].starts_with(names[k]) {
+                match number(fields[k].substring(2)) {
+                    Some(v) => vals.push(v),
+                    None => {}
+                }
+            }
+        }
+    }
+    if vals.len() != 3 {
+        return Err(f"bad parameters '{parts[idx]}'");
+    }
+    let salt = match b64d(parts[idx + 1]) {
+        Some(b) => b,
+        None => return Err("bad salt".to_string()),
+    };
+    let digest = match b64d(parts[idx + 2]) {
+        Some(b) if b.len() >= 4 => b,
+        _ => return Err("bad hash".to_string()),
+    };
+    Ok(Phc { type_code: type_code, version: version, m: vals[0], t: vals[1], p: vals[2], salt: salt, digest: digest })
+}
+
+// ------------------------------------------------------------ the store
+
+struct Policy {
+    type_code: i64,
+    t: i64,
+    m: i64,
+    p: i64,
+}
+
+// A login service's password store: users in the order they registered,
+// each with a PHC string.
+struct Store {
+    names: Vec[String],
+    hashes: Vec[String],
+    policy: Policy,
+    pepper: Vec[u8],
+    salts: i64,
+    objs: Map[String, Blake2b],
+}
+
+enum Verdict {
+    Denied,
+    Ok,
+    // right password, made under another policy
+    Stale,
+}
+
+impl Store {
+    fn find(ref self, user: ref String) -> i64 {
+        for k in 0..self.names.len() as i64 {
+            if self.names[k] == user {
+                return k;
+            }
+        }
+        -1
+    }
+
+    fn new_salt(mut ref self, user: ref String) -> Vec[u8] {
+        self.salts += 1;
+        blake2b_digest(f"salt:{user}:{self.salts}".bytes().to_vec(), 16)
+    }
+
+    fn make(mut ref self, user: ref String, pw: ref Vec[u8]) -> Result[String, Fail] {
+        let salt = self.new_salt(user);
+        let params = Params { time_cost: self.policy.t, memory_cost: self.policy.m, parallelism: self.policy.p, tag_length: 32, type_code: self.policy.type_code, threads: None, version: ARGON2_DEFAULT_VERSION };
+        let digest = argon2(pw, salt, self.pepper, Vec.new(), params)?;
+        Ok(phc_encode(self.policy.type_code, 0x13, self.policy.m, self.policy.t, self.policy.p, salt, digest))
+    }
+
+    fn verify(ref self, phc: ref Phc, pw: ref Vec[u8]) -> Result[Verdict, Fail] {
+        let params = Params { time_cost: phc.t, memory_cost: phc.m, parallelism: phc.p, tag_length: phc.digest.len() as i64, type_code: phc.type_code, threads: None, version: phc.version };
+        let got = argon2(pw, phc.salt, self.pepper, Vec.new(), params)?;
+        if got != phc.digest {
+            return Ok(Verdict.Denied);
+        }
+        let pol = ref self.policy;
+        let same = phc.type_code == pol.type_code and phc.version == 0x13 and phc.m == pol.m and phc.t == pol.t and phc.p == pol.p and phc.digest.len() == 32;
+        Ok(if same { Verdict.Ok } else { Verdict.Stale })
+    }
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn unesc_bytes(text: ref String) -> Vec[u8] {
+    let raw = text.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < raw.len() as i64 {
+        if raw[i] == 126u8 {
+            out.push((hex_digit(raw[i + 1]) * 16 + hex_digit(raw[i + 2])) as u8);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn value(tok: ref String) -> Vec[u8] {
+    let body = tok.substring(2);
+    if tok.starts_with("h:") {
+        return from_hex(body);
+    }
+    if tok.starts_with("b:") {
+        return unesc_bytes(body);
+    }
+    // r:<n>:<hex>
+    let parts: Vec[String] = body.split(":").map(|x| x.to_string()).collect();
+    let n = to_int(parts[0]);
+    let pat = from_hex(parts[1]);
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while (out.len() as i64) < n {
+        out.push(pat[k % pat.len() as i64]);
+        k += 1;
+    }
+    out
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+fn opts(toks: ref Vec[String], from: i64) -> Map[String, String] {
+    let mut m: Map[String, String] = Map.new();
+    for k in from..toks.len() as i64 {
+        let t = ref toks[k];
+        match t.find("=") {
+            Some(at) => {
+                m.insert(t.substring(0, at), t.substring(at + 1));
+            }
+            None => {}
+        }
+    }
+    m
+}
+
+fn opt(m: ref Map[String, String], key: Str, default: Str) -> String {
+    match m.get(key) {
+        Some(v) => v.clone(),
+        None => default.to_string(),
+    }
+}
+
+fn type_of(name: ref String) -> i64 {
+    if name == "d" {
+        ARGON2D
+    } else if name == "i" {
+        ARGON2I
+    } else if name == "id" {
+        ARGON2ID
+    } else {
+        to_int(name)
+    }
+}
+
+fn run_step(st: mut ref Store, line: ref String) {
+    let toks: Vec[String] = line.split(" ").map(|x| x.to_string()).collect();
+    let op = ref toks[0];
+    if op == "a2" {
+        let o = opts(toks, 1);
+        let params = Params {
+            time_cost: to_int(opt(o, "t", "0")),
+            memory_cost: to_int(opt(o, "m", "0")),
+            parallelism: to_int(opt(o, "p", "0")),
+            tag_length: to_int(opt(o, "tag", "32")),
+            type_code: type_of(opt(o, "type", "1")),
+            threads: match o.get("threads") {
+                Some(v) => Some(to_int(v)),
+                None => None,
+            },
+            version: if o.contains_key("v") { to_int(opt(o, "v", "")) } else { ARGON2_DEFAULT_VERSION },
+        };
+        let pw = value(opt(o, "pw", "b:password"));
+        let salt = value(opt(o, "salt", "b:saltysaltsaltysalt"));
+        match argon2(pw, salt, value(opt(o, "secret", "b:")), value(opt(o, "ad", "b:")), params) {
+            Ok(r) => println(f"{line} = {to_hex(r)}"),
+            Err(e) => println(f"{line} = {e.describe()}"),
+        }
+    } else if op == "b2" {
+        let data = value(toks[1]);
+        let o = opts(toks, 2);
+        let key = value(opt(o, "key", "b:"));
+        let n = to_int(opt(o, "len", "64"));
+        let label = f"b2 {data.len()} bytes, key {key.len()}, len {n} = ";
+        match blake2b(data, key, n) {
+            Ok(b) => {
+                let mut b = b;
+                println(f"{label}{b.hexdigest()}");
+            }
+            Err(e) => println(f"{label}{e.describe()}"),
+        }
+    } else if op == "new" {
+        let o = opts(toks, 2);
+        match blake2b(Vec.new(), value(opt(o, "key", "b:")), to_int(opt(o, "len", "64"))) {
+            Ok(b) => {
+                st.objs.insert(toks[1].clone(), b);
+                println(f"new {toks[1]} = ok");
+            }
+            Err(e) => println(f"new {toks[1]} = {e.describe()}"),
+        }
+    } else if op == "up" {
+        let data = value(toks[2]);
+        let mut b = match st.objs.remove(toks[1]) {
+            Some(b) => b,
+            None => return,
+        };
+        match b.update(data) {
+            Ok(_) => println(f"up {toks[1]} +{data.len()} = ok"),
+            Err(e) => println(f"up {toks[1]} +{data.len()} = {e.describe()}"),
+        }
+        st.objs.insert(toks[1].clone(), b);
+    } else if op == "dig" {
+        let mut b = match st.objs.remove(toks[1]) {
+            Some(b) => b,
+            None => return,
+        };
+        println(f"dig {toks[1]} = {b.hexdigest()}");
+        st.objs.insert(toks[1].clone(), b);
+    } else if op == "chain" {
+        let which = ref toks[1];
+        let mut cur: Vec[u8] = Vec.new();
+        if which == "keyed" {
+            cur = "!".bytes().to_vec();
+            for i in 1..10 {
+                cur = keyed_digest(cur, slice_of(cur, 0, i), 64);
+            }
+        } else if which == "unkeyed" {
+            for _ in 0..100 {
+                cur = blake2b_digest(cur, 64);
+            }
+            cur = blake2b_digest(cur, 64);
+        } else {
+            cur = "!".bytes().to_vec();
+            for i in 1..64 {
+                cur = keyed_digest(cur, slice_of(cur, 0, i), i);
+            }
+        }
+        println(f"chain {which} = {to_hex(cur)}");
+    } else if op == "hp" {
+        let n = to_int(toks[1]);
+        let r = h_prime(value(toks[2]), n);
+        if n > 128 {
+            println(f"hp {n} = {r.len()} bytes, fnv {fnv(r):08x}, starts {to_hex(slice_of(r, 0, 16))}");
+        } else {
+            println(f"hp {n} = {to_hex(r)}");
+        }
+    } else if op == "policy" {
+        let o = opts(toks, 1);
+        st.policy = Policy { type_code: type_of(opt(o, "type", "id")), t: to_int(opt(o, "t", "1")), m: to_int(opt(o, "m", "8")), p: to_int(opt(o, "p", "1")) };
+        println(f"policy = {type_name(st.policy.type_code)} t={st.policy.t} m={st.policy.m} p={st.policy.p}");
+    } else if op == "pepper" {
+        st.pepper = value(toks[1]);
+        println(f"pepper = {st.pepper.len()} bytes");
+    } else if op == "reg" {
+        let user = ref toks[1];
+        if st.find(user) >= 0 {
+            println(f"reg {user}: already registered");
+            return;
+        }
+        match st.make(user, value(toks[2])) {
+            Ok(phc) => {
+                println(f"reg {user} = {phc}");
+                st.names.push(user.clone());
+                st.hashes.push(phc);
+            }
+            Err(e) => println(f"reg {user} = {e.describe()}"),
+        }
+    } else if op == "login" {
+        let user = ref toks[1];
+        let k = st.find(user);
+        if k < 0 {
+            println(f"login {user}: no such user");
+            return;
+        }
+        let pw = value(toks[2]);
+        let phc = match phc_decode(st.hashes[k]) {
+            Ok(p) => p,
+            Err(why) => {
+                println(f"login {user}: ! bad hash: {why}");
+                return;
+            }
+        };
+        match st.verify(phc, pw) {
+            Ok(Verdict.Denied) => println(f"login {user}: denied"),
+            Ok(Verdict.Ok) => println(f"login {user}: ok"),
+            Ok(Verdict.Stale) => match st.make(user, pw) {
+                Ok(fresh) => {
+                    println(f"login {user}: ok, rehashed to {fresh}");
+                    st.hashes[k] = fresh;
+                }
+                Err(e) => println(f"login {user}: {e.describe()}"),
+            },
+            Err(e) => println(f"login {user}: {e.describe()}"),
+        }
+    } else if op == "forget" {
+        let k = st.find(toks[1]);
+        if k >= 0 {
+            st.names.remove(k);
+            st.hashes.remove(k);
+        }
+        println(f"forget {toks[1]}: {st.names.len()} users left");
+    } else if op == "check" {
+        let phc = match phc_decode(toks[1]) {
+            Ok(p) => p,
+            Err(why) => {
+                println(f"check: ! bad hash: {why}");
+                return;
+            }
+        };
+        match st.verify(phc, value(toks[2])) {
+            Ok(Verdict.Denied) => println("check: denied"),
+            Ok(Verdict.Ok) => println("check: ok"),
+            Ok(Verdict.Stale) => println("check: ok, needs rehash"),
+            Err(e) => println(f"check: {e.describe()}"),
+        }
+    } else if op == "save" {
+        let mut text = String.new();
+        for k in 0..st.names.len() as i64 {
+            text.push_str(f"{st.names[k]}:{st.hashes[k]}\n");
+        }
+        match fs.write(toks[1], text) {
+            Ok(_) => println(f"save {toks[1]}: {st.names.len()} users, {text.len()} bytes, fnv {fnv(text.bytes().to_vec()):08x}"),
+            Err(_) => println(f"save {toks[1]}: cannot write"),
+        }
+    } else if op == "drop" {
+        st.names = Vec.new();
+        st.hashes = Vec.new();
+        println("drop: 0 users");
+    } else if op == "load" {
+        let text = match fs.read_to_string(toks[1]) {
+            Ok(t) => t,
+            Err(_) => {
+                println(f"load {toks[1]}: cannot read");
+                return;
+            }
+        };
+        st.names = Vec.new();
+        st.hashes = Vec.new();
+        for ln in text.split("\n") {
+            let ln = ln.to_string();
+            if ln == "" {
+                continue;
+            }
+            match ln.find(":") {
+                Some(at) => {
+                    st.names.push(ln.substring(0, at));
+                    st.hashes.push(ln.substring(at + 1));
+                }
+                None => {}
+            }
+        }
+        println(f"load {toks[1]}: {st.names.len()} users");
+    } else {
+        println(f"bad step {line}");
+    }
+}
+
+fn keyed_digest(data: ref Vec[u8], key: ref Vec[u8], n: i64) -> Vec[u8] {
+    match blake2b(data, key, n) {
+        Ok(b) => {
+            let mut b = b;
+            b.final()
+        }
+        Err(_) => Vec.new(),
+    }
+}
+
+fn main() {
+    let text = unesc(jobs_text());
+    let mut st = Store {
+        names: Vec.new(),
+        hashes: Vec.new(),
+        policy: Policy { type_code: ARGON2ID, t: 1, m: 8, p: 1 },
+        pepper: Vec.new(),
+        salts: 0,
+        objs: Map.new(),
+    };
+    for line in text.split("\n") {
+        let line = line.to_string();
+        if line == "" {
+            continue;
+        }
+        if line.starts_with("job ") {
+            st.objs = Map.new();
+            println(f"== {line.substring(4)}");
+            continue;
+        }
+        run_step(mut st, line);
+    }
+    let _ = fs.remove_file("users.db");
+}
+
+// The ~ escapes gen_kara.py writes for characters a string literal treats
+// specially.
+fn unesc(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < cs.len() as i64 {
+        if cs[i] == '~' and i + 1 < cs.len() as i64 {
+            let c = cs[i + 1];
+            out.push(if c == 't' { '~' } else if c == 'b' { '\\' } else if c == 'q' { '"' } else if c == 'o' { '{' } else { '}' });
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("job argon2pure's README example\na2 t=1 m=16 p=2 pw=b:password salt=b:randomsalt\njob RFC 9106 test vectors: Argon2d, Argon2i and Argon2id\na2 type=d t=3 m=32 p=4 pw=r:32:01 salt=r:16:02 secret=r:8:03 ad=r:12:04\na2 type=i t=3 m=32 p=4 pw=r:32:01 salt=r:16:02 secret=r:8:03 ad=r:12:04\na2 type=id t=3 m=32 p=4 pw=r:32:01 salt=r:16:02 secret=r:8:03 ad=r:12:04\njob argon2pure's tests: base parameters\na2 type=d v=16 t=1 m=8 p=1\na2 type=d v=19 t=1 m=8 p=1\na2 type=i v=16 t=1 m=8 p=1\na2 type=i v=19 t=1 m=8 p=1\na2 type=id v=16 t=1 m=8 p=1\na2 type=id v=19 t=1 m=8 p=1\na2 type=d v=16 t=1 m=9 p=1\na2 type=d v=19 t=1 m=9 p=1\na2 type=i v=16 t=1 m=9 p=1\na2 type=i v=19 t=1 m=9 p=1\na2 type=id v=16 t=1 m=9 p=1\na2 type=id v=19 t=1 m=9 p=1\na2 type=d v=16 t=1 m=10 p=1\na2 type=d v=19 t=1 m=10 p=1\na2 type=i v=16 t=1 m=10 p=1\na2 type=i v=19 t=1 m=10 p=1\na2 type=id v=16 t=1 m=10 p=1\na2 type=id v=19 t=1 m=10 p=1\na2 type=d v=16 t=1 m=11 p=1\na2 type=d v=19 t=1 m=11 p=1\na2 type=i v=16 t=1 m=11 p=1\na2 type=i v=19 t=1 m=11 p=1\na2 type=id v=16 t=1 m=11 p=1\na2 type=id v=19 t=1 m=11 p=1\na2 type=d v=16 t=1 m=12 p=1\na2 type=d v=19 t=1 m=12 p=1\na2 type=i v=16 t=1 m=12 p=1\na2 type=i v=19 t=1 m=12 p=1\na2 type=id v=16 t=1 m=12 p=1\na2 type=id v=19 t=1 m=12 p=1\na2 type=d v=16 t=1 m=13 p=1\na2 type=d v=19 t=1 m=13 p=1\na2 type=i v=16 t=1 m=13 p=1\na2 type=i v=19 t=1 m=13 p=1\na2 type=id v=16 t=1 m=13 p=1\na2 type=id v=19 t=1 m=13 p=1\na2 type=d v=16 t=1 m=14 p=1\na2 type=d v=19 t=1 m=14 p=1\na2 type=i v=16 t=1 m=14 p=1\na2 type=i v=19 t=1 m=14 p=1\na2 type=id v=16 t=1 m=14 p=1\na2 type=id v=19 t=1 m=14 p=1\na2 type=d v=16 t=1 m=15 p=1\na2 type=d v=19 t=1 m=15 p=1\na2 type=i v=16 t=1 m=15 p=1\na2 type=i v=19 t=1 m=15 p=1\na2 type=id v=16 t=1 m=15 p=1\na2 type=id v=19 t=1 m=15 p=1\na2 type=d v=16 t=1 m=16 p=1\na2 type=d v=19 t=1 m=16 p=1\na2 type=i v=16 t=1 m=16 p=1\na2 type=i v=19 t=1 m=16 p=1\na2 type=id v=16 t=1 m=16 p=1\na2 type=id v=19 t=1 m=16 p=1\na2 type=d v=16 t=1 m=17 p=1\n");
+    s.push_str("a2 type=d v=19 t=1 m=17 p=1\na2 type=i v=16 t=1 m=17 p=1\na2 type=i v=19 t=1 m=17 p=1\na2 type=id v=16 t=1 m=17 p=1\na2 type=id v=19 t=1 m=17 p=1\njob argon2pure's tests: high memory\na2 type=d v=16 t=2 m=17 p=2\na2 type=d v=19 t=2 m=17 p=2\na2 type=i v=16 t=2 m=17 p=2\na2 type=i v=19 t=2 m=17 p=2\na2 type=id v=16 t=2 m=17 p=2\na2 type=id v=19 t=2 m=17 p=2\na2 type=d v=16 t=2 m=20 p=2\na2 type=d v=19 t=2 m=20 p=2\na2 type=i v=16 t=2 m=20 p=2\na2 type=i v=19 t=2 m=20 p=2\na2 type=id v=16 t=2 m=20 p=2\na2 type=id v=19 t=2 m=20 p=2\na2 type=d v=16 t=2 m=32 p=2\na2 type=d v=19 t=2 m=32 p=2\na2 type=i v=16 t=2 m=32 p=2\na2 type=i v=19 t=2 m=32 p=2\na2 type=id v=16 t=2 m=32 p=2\na2 type=id v=19 t=2 m=32 p=2\na2 type=d v=16 t=2 m=80 p=2\na2 type=d v=19 t=2 m=80 p=2\na2 type=i v=16 t=2 m=80 p=2\na2 type=i v=19 t=2 m=80 p=2\na2 type=id v=16 t=2 m=80 p=2\na2 type=id v=19 t=2 m=80 p=2\njob Tag lengths\na2 type=id t=1 m=8 p=1 tag=4\na2 type=id t=1 m=8 p=1 tag=16\na2 type=id t=1 m=8 p=1 tag=31\na2 type=id t=1 m=8 p=1 tag=32\na2 type=id t=1 m=8 p=1 tag=33\na2 type=id t=1 m=8 p=1 tag=63\na2 type=id t=1 m=8 p=1 tag=64\na2 type=id t=1 m=8 p=1 tag=65\na2 type=id t=1 m=8 p=1 tag=96\na2 type=id t=1 m=8 p=1 tag=97\na2 type=id t=1 m=8 p=1 tag=100\na2 type=id t=1 m=8 p=1 tag=128\na2 type=id t=1 m=8 p=1 tag=200\njob Lanes, passes, secrets and associated data\na2 type=id t=1 m=11 p=1 pw=b:correct~t20horse~t20battery~t20staple salt=b:NaCl-and-pepper\na2 type=id t=3 m=11 p=1 pw=b:correct~t20horse~t20battery~t20staple salt=b:NaCl-and-pepper\na2 type=id t=1 m=19 p=2 pw=b:correct~t20horse~t20battery~t20staple salt=b:NaCl-and-pepper\na2 type=id t=3 m=19 p=2 pw=b:correct~t20horse~t20battery~t20staple salt=b:NaCl-and-pepper\na2 type=id t=1 m=27 p=3 pw=b:correct~t20horse~t20battery~t20staple salt=b:NaCl-and-pepper\na2 type=id t=3 m=27 p=3 pw=b:correct~t20horse~t20battery~t20staple salt=b:NaCl-and-pepper\na2 type=id t=1 m=35 p=4 pw=b:correct~t20horse~t20battery~t20staple salt=b:NaCl-and-pepper\na2 type=id t=3 m=35 p=4 pw=b:correct~t20horse~t20battery~t20staple salt=b:NaCl-and-pepper\n");
+    s.push_str("a2 type=id t=2 m=16 p=2 secret=b:server-side-key\na2 type=id t=2 m=16 p=2 ad=b:user:42\na2 type=id t=2 m=16 p=2 secret=b:server-side-key ad=b:user:42\na2 type=id t=2 m=16 p=2 threads=1\na2 type=id t=2 m=16 p=2 threads=2\na2 type=id t=2 m=16 p=2 threads=8\na2 type=d t=1 m=8 p=1 pw=b: salt=b:\na2 type=i t=1 m=8 p=1 pw=r:300:a5 salt=r:200:5a\na2 type=d t=4 m=24 p=3 v=16\njob Parameter errors\na2 t=1 m=8 p=0\na2 t=1 m=8 p=-1\na2 t=1 m=8 p=1 threads=0\na2 t=0 m=8 p=1\na2 t=1 m=15 p=2\na2 t=1 m=7 p=1\na2 t=1 m=8 p=1 type=3\na2 t=1 m=8 p=1 v=18\na2 t=0 m=0 p=0 type=9 v=0\na2 t=0 m=0 p=1 type=9 v=0\na2 t=1 m=8 p=1 type=9 v=0\na2 t=1 m=16 p=2 threads=1 tag=8\njob BLAKE2b one-shot\nb2 b:\nb2 b:abc\nb2 b:The~t20quick~t20brown~t20fox~t20jumps~t20over~t20the~t20lazy~t20dog\nb2 b:abc len=32\nb2 b:abc len=1\nb2 b:abc key=b:k\nb2 r:63:3f\nb2 r:64:40\nb2 r:127:7f\nb2 r:128:80\nb2 r:129:81\nb2 r:255:ff\nb2 r:256:00\nb2 r:257:01\nb2 r:1000:e8\nb2 r:64:00 key=h:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f\nb2 h:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe key=h:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f\nb2 b:abc key=r:128:6b len=64\nb2 b:abc key=r:129:6b\nb2 b:abc len=0\nb2 b:abc len=65\njob BLAKE2b incremental\nnew s\nup s h:d9\nup s h:c273\nup s h:64e324\ndig s\nb2 h:d9c27364e324\nnew s\nup s h:d1ba49451aade1c726b72af7161f331083d6f16ffc140aa674c6ed8ba57344efe91ab994753da254a29bccbc8ecb1d143d284dc21f98b4c7725d8bc728590169ddd5bc93f771003debbb73e9677d6aaf6507737d1c5351f6bf69d9e6e01d7be07f6c650c7a4aa99b5ea1627dbf87a2d889c6d162a128ffd5dc04266562438a\n");
+    s.push_str("up s h:05\ndig s\nb2 h:d1ba49451aade1c726b72af7161f331083d6f16ffc140aa674c6ed8ba57344efe91ab994753da254a29bccbc8ecb1d143d284dc21f98b4c7725d8bc728590169ddd5bc93f771003debbb73e9677d6aaf6507737d1c5351f6bf69d9e6e01d7be07f6c650c7a4aa99b5ea1627dbf87a2d889c6d162a128ffd5dc04266562438a05\nnew s\nup s h:313c390bf3c272d61d203bee3c5c90a468bc24ea3a8351032d2c0146c2f55c46f2c90ad01a00ca134f4edacd4fb4ab8c8aebd3d8969782f3e04e61ce9b4d1c21421d3dddd7a8985c897bf5479aa191360ddf3955130cfed2af8fce1347c84b162d3ae45f8bf25eaf3303a51b4c7bb5967ca29b78a80e46c12ca4e6d8b5917d35\ndig s\nb2 h:313c390bf3c272d61d203bee3c5c90a468bc24ea3a8351032d2c0146c2f55c46f2c90ad01a00ca134f4edacd4fb4ab8c8aebd3d8969782f3e04e61ce9b4d1c21421d3dddd7a8985c897bf5479aa191360ddf3955130cfed2af8fce1347c84b162d3ae45f8bf25eaf3303a51b4c7bb5967ca29b78a80e46c12ca4e6d8b5917d35\nnew s\nup s h:03cc6813bd9dea8bb652b8312abe11464bfef0d8fb24eb5a5acddcbd2830a4c6b21ac6c4205d9d2e92131a128ab3156597cca0e516a473c779730ea42098f55f5d422bc0373b805b608cd4e1e0f4f9fec6dab3f03e1421aa5d46f1528b821abf767ddf78585b1e74638c645304ff61acbcf9e6e67d51574af4e1abb9c174901f\nup s h:4b\ndig s\nb2 h:03cc6813bd9dea8bb652b8312abe11464bfef0d8fb24eb5a5acddcbd2830a4c6b21ac6c4205d9d2e92131a128ab3156597cca0e516a473c779730ea42098f55f5d422bc0373b805b608cd4e1e0f4f9fec6dab3f03e1421aa5d46f1528b821abf767ddf78585b1e74638c645304ff61acbcf9e6e67d51574af4e1abb9c174901f4b\nnew s\nup s h:c5b59a102970c030ed7c4d3a8d1b32a04e5fcf495dafd8bacf8ea99589b77a4b6cee56f403ddd458a4a2b10086cb51ccdc1a35129a9447e8c68a047f55eab8ec\nup s h:7c07a49a7012cfa381759915d1bb09d82d2dfbcacee59f2fd467cdaa2471549a50f251490b591e328ff10a6e870f580826b306080c254c214bdb41e2d4c04d26\nup s h:8ea0fe1fbdfdb54ebb28bb5b2cd8aae06832138c4ed3e920ace453b6c628e0e60e86e5f9ddde3186f6d27c250df3f8e099c39dfae264bcb03a130f97903b4873\ndig s\nb2 h:c5b59a102970c030ed7c4d3a8d1b32a04e5fcf495dafd8bacf8ea99589b77a4b6cee56f403ddd458a4a2b10086cb51ccdc1a35129a9447e8c68a047f55eab8ec7c07a49a7012cfa381759915d1bb09d82d2dfbcacee59f2fd467cdaa2471549a50f251490b591e328ff10a6e870f580826b306080c254c214bdb41e2d4c04d268ea0fe1fbdfdb54ebb28bb5b2cd8aae06832138c4ed3e920ace453b6c628e0e60e86e5f9ddde3186f6d27c250df3f8e099c39dfae264bcb03a130f97903b4873\n");
+    s.push_str("new s\nup s h:7114ec2b57cf0d27bcd3dd5eeeb7b39510fde5edd57289064fa862d4b0ca28652b3b66738db6f66b4831802000d0aa7cf6d6c8b1c560d9a73ad0a81af3c34d7a8e28670ad4bf9fb0f69d1da4ee84b4dfe3f8fb9c81a9093e830483c06b9832f43a6b09761df5aada9ed03afb880f22c6431c5ed528ed7dbd8ff891807848863d35\nup s h:0dbeeba851362dd4d549d34e83df5bd5de38790f830f00b7b06b629b2eb6d1fd1689d6bed2cdd17e90ae91612c6986328166612e80e5d507b9c23f39cf79c7e02a4b5fe76c866417cc70b1e56a0a3547654480b2d4814e19f808cfa3bdc56e69e3922c3b39b41f4e4310e2b013aac2571894c2c101d8ea40c18ae8d20ae1f3\nup s h:e9b248d2038ea79afb5c1f67bfbc5b56890055524acdc916771de97f528805f09d4da60b73e264a0c619892415f20188621e66fdd43b43b88544f5c701eb517f855e3f33d18d314f3c58cc907d76452ab89f43baaf4cce0d4e7f1bfee5be94464d6ee297f1dca81795822a064c0d76900f47a851be801976acd632236d52752c\ndig s\nb2 h:7114ec2b57cf0d27bcd3dd5eeeb7b39510fde5edd57289064fa862d4b0ca28652b3b66738db6f66b4831802000d0aa7cf6d6c8b1c560d9a73ad0a81af3c34d7a8e28670ad4bf9fb0f69d1da4ee84b4dfe3f8fb9c81a9093e830483c06b9832f43a6b09761df5aada9ed03afb880f22c6431c5ed528ed7dbd8ff891807848863d350dbeeba851362dd4d549d34e83df5bd5de38790f830f00b7b06b629b2eb6d1fd1689d6bed2cdd17e90ae91612c6986328166612e80e5d507b9c23f39cf79c7e02a4b5fe76c866417cc70b1e56a0a3547654480b2d4814e19f808cfa3bdc56e69e3922c3b39b41f4e4310e2b013aac2571894c2c101d8ea40c18ae8d20ae1f3e9b248d2038ea79afb5c1f67bfbc5b56890055524acdc916771de97f528805f09d4da60b73e264a0c619892415f20188621e66fdd43b43b88544f5c701eb517f855e3f33d18d314f3c58cc907d76452ab89f43baaf4cce0d4e7f1bfee5be94464d6ee297f1dca81795822a064c0d76900f47a851be801976acd632236d52752c\nnew s\nup s h:28185ea9cbecf1e7fd095edec23c45dc3bc642510e0d9ba433c2a40292ab6138ceaa67495f41bf719e7cedcdde40cf253b0751f54a165a239840d8f02efed0e61447af1d1d6b55231c43b15adbcd46c4d42311e9aa1dc0e9495bb690750c7c2e0b506bf16eddb31808350859ffab053c5449d4f51a411b92eb24faa8f8f3fbf8888e03f0adc829d116306dc605e59e319d8a01dde70db3c2d2912093e78c8008901e427b3fc2d6217c4f3e08e435396b25072fc1bdb6337b0465cd9d72ff6d631cdde9df5d920f97\n");
+    s.push_str("up s h:7878a7e0c6fec966bc970eae7aae4e91cb7d359873942ceb91de3dd2a7fc8b5160ca7d195bf5ab253c570aee257acd0eca14d0b0f68b8e36\ndig s\nb2 h:28185ea9cbecf1e7fd095edec23c45dc3bc642510e0d9ba433c2a40292ab6138ceaa67495f41bf719e7cedcdde40cf253b0751f54a165a239840d8f02efed0e61447af1d1d6b55231c43b15adbcd46c4d42311e9aa1dc0e9495bb690750c7c2e0b506bf16eddb31808350859ffab053c5449d4f51a411b92eb24faa8f8f3fbf8888e03f0adc829d116306dc605e59e319d8a01dde70db3c2d2912093e78c8008901e427b3fc2d6217c4f3e08e435396b25072fc1bdb6337b0465cd9d72ff6d631cdde9df5d920f977878a7e0c6fec966bc970eae7aae4e91cb7d359873942ceb91de3dd2a7fc8b5160ca7d195bf5ab253c570aee257acd0eca14d0b0f68b8e36\nnew s\nup s b:\nup s b:\nup s h:d5d3abc493ef7a492173d46eb1da2c4614b83903b7d974a6e9318a42ee3b8391cae24895b73006d05adc099e769731d5dd6e5c023a58d778431b07fe93978474b4fdc4895192d452e15a4fcb55ccef418c433a7a6912625c7b0db897347a58eedd9b7c8fed31fdbc9ac3b46edd0f235e8eca9b56edf757cfddc341fe2104be85\nup s b:\ndig s\nb2 h:d5d3abc493ef7a492173d46eb1da2c4614b83903b7d974a6e9318a42ee3b8391cae24895b73006d05adc099e769731d5dd6e5c023a58d778431b07fe93978474b4fdc4895192d452e15a4fcb55ccef418c433a7a6912625c7b0db897347a58eedd9b7c8fed31fdbc9ac3b46edd0f235e8eca9b56edf757cfddc341fe2104be85\nnew k key=b:secret len=20\nup k b:message\ndig k\ndig k\nup k b:more\nnew z len=99\njob BLAKE2b chains from argon2pure's tests\nchain keyed\nchain unkeyed\nchain various\njob Argon2's variable-length hash H'\nhp 1 b:password\nhp 4 b:password\nhp 32 b:password\nhp 63 b:password\nhp 64 b:password\nhp 65 b:password\nhp 96 b:password\nhp 128 b:password\nhp 129 b:password\nhp 1024 b:password\nhp 72 h:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041424344454647\njob A login service's password store\npolicy type=id t=1 m=8 p=1\npepper b:not-a-real-pepper\nreg alice b:alice-1027-Quartz\nreg bob b:bob-2623-Lumen\nreg carol b:carol-8824-Lumen\nreg dave b:dave-2099-Tulip\nreg alice b:again\nlogin alice b:alice-1027-Quartz\n");
+    s.push_str("login alice b:alice-1027-Quartz!\nlogin bob b:BOB-2623-LUMEN\nlogin mallory b:guess\nsave users.db\ndrop\nlogin carol b:carol-8824-Lumen\nload users.db\nlogin carol b:carol-8824-Lumen\njob The policy is raised and logins rehash\npolicy type=id t=2 m=16 p=2\nlogin alice b:alice-1027-Quartz\nlogin alice b:alice-1027-Quartz\nlogin bob b:wrong\nlogin bob b:bob-2623-Lumen\nreg erin b:erin-1338-Ember\nreg frank b:frank-7665-Tulip\nforget dave\nlogin dave b:dave-2099-Tulip\nsave users.db\ndrop\nload users.db\nlogin alice b:alice-1027-Quartz\nlogin bob b:bob-2623-Lumen\nlogin carol b:carol-8824-Lumen\nlogin dave b:dave-2099-Tulip\nlogin erin b:erin-1338-Ember\nlogin frank b:frank-7665-Tulip\njob A new pepper locks out every old hash\npepper b:another-fake-pepper\nlogin erin b:erin-1338-Ember\npepper b:not-a-real-pepper\nlogin erin b:erin-1338-Ember\njob Hashes from elsewhere\npolicy type=i t=1 m=8 p=1\npepper b:\ncheck $argon2i$v=19$m=16,t=1,p=2$cmFuZG9tc2FsdA$AWPF+okoGQVesHuKy5T9L/UnPmibNBB9qqrO2mSPHhs b:password\ncheck $argon2i$v=19$m=16,t=1,p=2$cmFuZG9tc2FsdA$AWPF+okoGQVesHuKy5T9L/UnPmibNBB9qqrO2mSPHhs b:Password\ncheck $argon2i$m=16,t=1,p=2$cmFuZG9tc2FsdA$AWPF+okoGQVesHuKy5T9L/UnPmibNBB9qqrO2mSPHhs b:password\ncheck $argon2i$v=16$m=16,t=1,p=2$cmFuZG9tc2FsdA$AWPF+okoGQVesHuKy5T9L/UnPmibNBB9qqrO2mSPHhs b:password\ncheck argon2i$v=19$m=16,t=1,p=2$cmFuZG9tc2FsdA$AWPF b:password\ncheck $argon2x$v=19$m=16,t=1,p=2$cmFuZG9tc2FsdA$AWPF b:password\ncheck $argon2i$v=20$m=16,t=1,p=2$cmFuZG9tc2FsdA$AWPF b:password\ncheck $argon2i$v=19$t=1,m=16,p=2$cmFuZG9tc2FsdA$AWPF b:password\ncheck $argon2i$v=19$m=16,t=1,p=2$cmFuZG9tc2FsdA b:password\ncheck $argon2i$v=19$m=16,t=1,p=2$cmFuZG9tc2Fsd$AWPF+okoGQVesHuKy5T9L/UnPmibNBB9qqrO2mSPHhs b:password\ncheck $argon2i$v=19$m=16,t=1,p=2$cmFuZG9tc2FsdA$AWPF*okoGQVesHuKy5T9L/UnPmibNBB9qqrO2mSPHhs b:password\ncheck $argon2i$v=19$m=4,t=1,p=1$cmFuZG9tc2FsdA$AWPF+okoGQVesHuKy5T9L/UnPmibNBB9qqrO2mSPHhs b:password\ncheck $argon2i$v=19$m=16,t=1,p=2$cmFuZG9tc2FsdA$ b:password\n");
+    s.push_str("check $argon2i$v=19$m=016,t=1,p=2$cmFuZG9tc2FsdA$AWPF+okoGQVesHuKy5T9L/UnPmibNBB9qqrO2mSPHhs b:password\n");
+    s
+}

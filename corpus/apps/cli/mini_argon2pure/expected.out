@@ -1,0 +1,284 @@
+== argon2pure's README example
+a2 t=1 m=16 p=2 pw=b:password salt=b:randomsalt = 0163c5fa892819055eb07b8acb94fd2ff5273e689b34107daaaaceda648f1e1b
+== RFC 9106 test vectors: Argon2d, Argon2i and Argon2id
+a2 type=d t=3 m=32 p=4 pw=r:32:01 salt=r:16:02 secret=r:8:03 ad=r:12:04 = 512b391b6f1162975371d30919734294f868e3be3984f3c1a13a4db9fabe4acb
+a2 type=i t=3 m=32 p=4 pw=r:32:01 salt=r:16:02 secret=r:8:03 ad=r:12:04 = c814d9d1dc7f37aa13f0d77f2494bda1c8de6b016dd388d29952a4c4672b6ce8
+a2 type=id t=3 m=32 p=4 pw=r:32:01 salt=r:16:02 secret=r:8:03 ad=r:12:04 = 0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659
+== argon2pure's tests: base parameters
+a2 type=d v=16 t=1 m=8 p=1 = 04d03d88d43d395cde2b9db9c041190a2167f3c15930d8884ef4f55deb1246bf
+a2 type=d v=19 t=1 m=8 p=1 = 438358bc3b9814dadbd44439511b38be78d520ca00ab1d4af78d8299ba423c20
+a2 type=i v=16 t=1 m=8 p=1 = a53455318f009eff036a08aee96b2e477898911541606bfcf95a41575d56252a
+a2 type=i v=19 t=1 m=8 p=1 = 0e28ebca4cc93b9da0d724123e0b3ad1c972b9f4b79b7f7dd86a019204511ad4
+a2 type=id v=16 t=1 m=8 p=1 = 5fc9a2a296188a04fd196ae5a2abcd39c97b29c5629ce148f9510cad8eb2c2f7
+a2 type=id v=19 t=1 m=8 p=1 = 40431ef0b9198864422e8d1328ffa9d93425475422587c321f792dfc7473aaf1
+a2 type=d v=16 t=1 m=9 p=1 = fdafcb3a5343a3c7ccdc2d42fcbb8fe27138524c0782c1ff2723c3bd353f45ad
+a2 type=d v=19 t=1 m=9 p=1 = 8f0da2ed23a50fe08557200789890bf5eac427569f20160f418c8cf8d08ca949
+a2 type=i v=16 t=1 m=9 p=1 = ed735dedad4267c8b26e566eb1853994a743643d26c0704a1e58fd6970991966
+a2 type=i v=19 t=1 m=9 p=1 = 324772a9bbebc344a63ef969f631b6ad5b2099b1af41010437d079f292b81591
+a2 type=id v=16 t=1 m=9 p=1 = 6cfcaa92cf09194e345bfd927a7e3570dd28f8eda51de2a733e79a6fe6f68122
+a2 type=id v=19 t=1 m=9 p=1 = 44d279679ed63e733d8019c2adfb3269fa0d10876af33ff82f78fab94aa1d07e
+a2 type=d v=16 t=1 m=10 p=1 = d2bbc3215188baced821e0e7786305011917d9c7ea411b15e46ae8c6f835b784
+a2 type=d v=19 t=1 m=10 p=1 = 6d166412382d3d8cc9746d02345c1dc47fd6d146f8794fc5d935a5f74a9514f5
+a2 type=i v=16 t=1 m=10 p=1 = 6fde53592643fd970b47ad703f5ae9ffed8a7dad9cb3fa934f749fff219648ff
+a2 type=i v=19 t=1 m=10 p=1 = 26eba1f819b7ee35da0de12e02bda438517865e491a5ba0f7f7652ad6391a667
+a2 type=id v=16 t=1 m=10 p=1 = 7b8c1004ee0f70f57ab48d7bd15e431d2c7c94335a4944d5269233e453743a06
+a2 type=id v=19 t=1 m=10 p=1 = 461d3a2d30cd4b2387c1def03d1aae9c99ea4f52ff94e8810d6dd94d7ce73349
+a2 type=d v=16 t=1 m=11 p=1 = bec0471fac490835f6205edda1911c146c27193efd5265092c98c0b2769cbe07
+a2 type=d v=19 t=1 m=11 p=1 = cb00a466015fc29d3d6c10f8e995f8a42d438524c41f6543a80b3ea6a866f3a6
+a2 type=i v=16 t=1 m=11 p=1 = 17f7644d4f423fb5be5a2d62558ff2e4cfe57920da10caabdb00352e7b629d8c
+a2 type=i v=19 t=1 m=11 p=1 = eefcc5972b274d6902ea1c083f951e01e2f7e7684673a0c6c11ef1dd6c590b51
+a2 type=id v=16 t=1 m=11 p=1 = 868ab70cd35392ee81bf0c8739b4c2993008302784fb9d71a3c118d583ecf333
+a2 type=id v=19 t=1 m=11 p=1 = 46e0661b963e5404cc4f49cd23c35f28ed17d99ebe193879051d9c3dba03cddf
+a2 type=d v=16 t=1 m=12 p=1 = a6ebb03f1e5facb7d95d14f2a615771f8e5eb0cd54dcec113a0213fe137ddcb4
+a2 type=d v=19 t=1 m=12 p=1 = b02ca118173ce1907b4d5f388c134f40ec8e118a56b89a5a774f9a5a9e7aeb4c
+a2 type=i v=16 t=1 m=12 p=1 = 1ba63dd23137530a100e9ef13ef10c9e55748d639cb65187aa91c76e82ae1b3d
+a2 type=i v=19 t=1 m=12 p=1 = f2c24a21a49ec694fdfbab8a2c888d9b08c165370ec7233386978c5977718bba
+a2 type=id v=16 t=1 m=12 p=1 = b8cc07f73de4a9d1f3d09c8bf5ccdf7977cf699478948560234f7c2ae5078e13
+a2 type=id v=19 t=1 m=12 p=1 = e3d0fb0194cf7203a80f621b32a0d017c9168aed85e057983746175ebc443520
+a2 type=d v=16 t=1 m=13 p=1 = a8ba917258ef2bdf38602b69971f918cd8fe3090e1d324415df8c5a20dfc8467
+a2 type=d v=19 t=1 m=13 p=1 = a2e4a3c9e054d1cf9698ee45ff848b67c3b8873a76315661b1dbc61b17f42604
+a2 type=i v=16 t=1 m=13 p=1 = f53c3b967d683b5137f681c3e9eff2cfa0a7d6b1a2027e12da755be41cb13d0c
+a2 type=i v=19 t=1 m=13 p=1 = aa8fe5d4d69cd43c3e8d35998c7b391ae8f16357682350816ca45b9391377850
+a2 type=id v=16 t=1 m=13 p=1 = 7ed20c078e626dcfc9afbc82076579591f7d797f4e850822dfa5e1611194a570
+a2 type=id v=19 t=1 m=13 p=1 = 51424b6528452beeec8c62d75a01df7a4757921494714ed42a09a1ce4bf44fd5
+a2 type=d v=16 t=1 m=14 p=1 = 6071e367398a85f45be697a5f1cf4853c0fbf428d261923697a4314f025a6c2d
+a2 type=d v=19 t=1 m=14 p=1 = 0b0e14823c9a0c578cb72c250b09ffc2198b3ed691870ae8185483d1baf45f6f
+a2 type=i v=16 t=1 m=14 p=1 = f6a9f5cb496b1f6a2fb8c26a8bbe22d553220765406d069eed410e66412b8810
+a2 type=i v=19 t=1 m=14 p=1 = ddec7a60d699209b8984503a7d89b5802d3e737c47354a42913ffa97ae62bf77
+a2 type=id v=16 t=1 m=14 p=1 = d9ad1ba107f35d0a4991437bdb07d33531a2a937ea3226755faf43a012ca7dd7
+a2 type=id v=19 t=1 m=14 p=1 = db03869c252168478f6766c152eabcbccc98e54437c50d74e3356bae7aea7733
+a2 type=d v=16 t=1 m=15 p=1 = 314f7be8c6519e78cd7bfca35eb77818bfd4633156d84fe6adb1c6ed78e83dd8
+a2 type=d v=19 t=1 m=15 p=1 = a4c3167af1abe89ae0a678bc9d9de91c152403c6d6fb8ac360cd7ec5023acb8b
+a2 type=i v=16 t=1 m=15 p=1 = cc82f818da74943ade0c23291246a5c16bd07f962c86f405cc253958a883e663
+a2 type=i v=19 t=1 m=15 p=1 = 38c2271811b5ba0f4f743ddcc653cfa54140d38e71c988f0be32cb354f164dd3
+a2 type=id v=16 t=1 m=15 p=1 = 5a6d0db71c9a083b758e5731f33c4cf4b1b0ccfdc8ed35a86ee7d9df33e505b8
+a2 type=id v=19 t=1 m=15 p=1 = 58cd1de4348c9242edd278492258fa0147c80c35a0444b956b3385121f966510
+a2 type=d v=16 t=1 m=16 p=1 = 3b8d4c0839845ef26fe387fb2e6f5cd7c5f169e54c89d1ac8b59e07f3e4cf4e3
+a2 type=d v=19 t=1 m=16 p=1 = e0c1fedb1b9def20767d5ef054000fb34c7de50a75ff191fcbc63d0bad96b0e5
+a2 type=i v=16 t=1 m=16 p=1 = 7e9011d7d769f390b6a200b8df1530eee2bc7293ae73a76416e061c863d414f0
+a2 type=i v=19 t=1 m=16 p=1 = bfb31c7d88f6763a9fadeadeb71504418b71ed428284b25d3c84be9d56f49943
+a2 type=id v=16 t=1 m=16 p=1 = 5a8e067c9b419ef6fea152285f0e0111db3aab075f7a113200e082d17c044584
+a2 type=id v=19 t=1 m=16 p=1 = f2542b2a466f0bff1496bb96fa20d2f5d2d145e9906618354ebf3fa08d51ffa8
+a2 type=d v=16 t=1 m=17 p=1 = 62c1c6a33ded3348805226c866580f131132eaad4deb79c0cacaf709eeb29710
+a2 type=d v=19 t=1 m=17 p=1 = 0ee3daedef1163b963a4e3b78cdb1fae39b7c4c33363dd88864e0384e590811d
+a2 type=i v=16 t=1 m=17 p=1 = d6b3a1b13e690d13a7c4018098adb220a64d605af3700008698da8834c5412fa
+a2 type=i v=19 t=1 m=17 p=1 = ead630bf1f0ad162bbc9f6524730c395474ecc0d5247c9247b517702a0461fcc
+a2 type=id v=16 t=1 m=17 p=1 = 71124830d016895104289d5927c94859dad33163742873f7437b8d71913c4c60
+a2 type=id v=19 t=1 m=17 p=1 = c7fbb4ff54e627a4262c07c0b8590c0f1106bb6c66c7bc647ff27fc0b02964c6
+== argon2pure's tests: high memory
+a2 type=d v=16 t=2 m=17 p=2 = eb91fd47dd023eb250918d14d347360f1f30033e09aecd214d95b1347ea5a975
+a2 type=d v=19 t=2 m=17 p=2 = 88a30ba15c5831e0f4c838df50f1f974e1d50ff5b8b02567e0dd126469ab3ff7
+a2 type=i v=16 t=2 m=17 p=2 = 6b94fb86bd1bef11a106aa80328ca5ab781816a4aef9f95518b064788643dfdd
+a2 type=i v=19 t=2 m=17 p=2 = 868c29b0dae84e6857be67c5f78ecf6fb7a8891f2dfa1f8bf7c1696c1e9377de
+a2 type=id v=16 t=2 m=17 p=2 = 9901e4e9d663c370d81445e27a6340f20866f91ffc83e2b45375cea959252b6b
+a2 type=id v=19 t=2 m=17 p=2 = f5a581c7a2db8a4cd706f9ee3dde64791388bb2d747006cf2e50120f3be080a6
+a2 type=d v=16 t=2 m=20 p=2 = bcc45d7e3a5fcd1571856375eb7c86278b4fdeffe1633f42dbf7d9cc0e6692cd
+a2 type=d v=19 t=2 m=20 p=2 = 515c56f6e6e3cf6550bad8e14ef49cd465c7411aa20537dd91456644f56f3e5c
+a2 type=i v=16 t=2 m=20 p=2 = 8e65bdc9e427bffc90f6d8c011be2791258192b3154e64016dc414be3be2d893
+a2 type=i v=19 t=2 m=20 p=2 = 03aa76cb0fb7116ccbd8d89c7a524de918909d119a110c709399ee2a5885fffb
+a2 type=id v=16 t=2 m=20 p=2 = c4f9c1dfc115e789999f01ef4d09948e5fed8bc4466f1c337907079ebeab2032
+a2 type=id v=19 t=2 m=20 p=2 = 9008f624419dc7174797638515828d7e273469f6ff6333526710f9f3101398e4
+a2 type=d v=16 t=2 m=32 p=2 = 72889335763ee30648700e8b1206150e34710f159ab96fe0b956d4d69ca9b3fd
+a2 type=d v=19 t=2 m=32 p=2 = 1cf463f7e2ff93ff580cd52cce0a93fee85e465d0278886b1f7200f14046265a
+a2 type=i v=16 t=2 m=32 p=2 = 5bf85ccd2ba6d4da19296625c286746a7a8df0067da9f6c3bcfdd5d86244dd9a
+a2 type=i v=19 t=2 m=32 p=2 = ef045e41f20c766426f477a79b2a959d1e450b377fcf617075d96ed18cdb9758
+a2 type=id v=16 t=2 m=32 p=2 = 338d3d0f0d3c21c20aef753987dcf6d6cb73bf18ac1afc54ecaf4e40f5fdd5b8
+a2 type=id v=19 t=2 m=32 p=2 = 95b6d23e769ee7f5f5a0dc23dd8bd46aa33000f91e4e72aa0c7841df25a52419
+a2 type=d v=16 t=2 m=80 p=2 = fbfffc0c3b0574e3a7871799a65e46af8ebbc22320d59040fc6854316abe76ea
+a2 type=d v=19 t=2 m=80 p=2 = 873058980be7d4fd4af22b424a1c719f3e2bc6750e79b66ce849c98cc3793f8c
+a2 type=i v=16 t=2 m=80 p=2 = 684ca1eeda88b783676bbbf9971e936437ef5a86fee207fe5f608ea08bc364e1
+a2 type=i v=19 t=2 m=80 p=2 = 7b2352ac5a7e0efa7541b0503d14b14a5d7e90089bb38d01a6a7242207de65ef
+a2 type=id v=16 t=2 m=80 p=2 = 3b07a85c31f6e455b4f6badd95e6e5d5c598006d0cbaf866d1e8e9d7375ddb42
+a2 type=id v=19 t=2 m=80 p=2 = c335454f4609b700091475bfd1dca1d3bb4624457fdbac9952de7726edbe6119
+== Tag lengths
+a2 type=id t=1 m=8 p=1 tag=4 = c113699b
+a2 type=id t=1 m=8 p=1 tag=16 = c649f61c99e9f95247c80e85dd202579
+a2 type=id t=1 m=8 p=1 tag=31 = b40663dc7f41b0e7ed6a1eaafc41b77a52ca16fba1540ab510c42b61c628a6
+a2 type=id t=1 m=8 p=1 tag=32 = 40431ef0b9198864422e8d1328ffa9d93425475422587c321f792dfc7473aaf1
+a2 type=id t=1 m=8 p=1 tag=33 = b8a308affea45e12c242d9ac503f6345d396b53cf06619dfa47f02a69a5723bc9c
+a2 type=id t=1 m=8 p=1 tag=63 = 1414d80fd31027e39f6824e6ec9aea7d471b783ee61162028511d0dcf94bb16d6038b4d41d4890307e8c28935acd300d962cbc53b04d5a2f3e727161088ba3
+a2 type=id t=1 m=8 p=1 tag=64 = 04e0ca64cd8d147b43a7ed0d672d2f067c7c3a51e1acb5993d8f39e8ae10000405e805d0bc9041c715ee348c6e7e527761e29dceb57f5fc1d7131a480e25fad3
+a2 type=id t=1 m=8 p=1 tag=65 = 16f34ea74c373310f9727fa95a378f23aa951f990d1084e1118e878ed5ffb3b4a7dd9ef54827aedbf14f169e7d5afea43c831c2b525b8287c9dc1d6b5dfa841e24
+a2 type=id t=1 m=8 p=1 tag=96 = a22ad6382a6d43118dba92be414daf5b7bbd85a7fc5768bc2c0cdef4956fc0c64de5fe74be81ae2484d79f74de719f59a3eff1d80ade85c6f192327adebdb89e9062a516be77ef0d89dbab4508df5d39074c0432ac4b1d5e5ade85b2613d65c9
+a2 type=id t=1 m=8 p=1 tag=97 = 7cee38d2d7cf2970089d8025590ab7dd2bdbce4f81830d8c9d59be589adde85192700fd6b8a2f12b953a0fe76402da1a96fd487d8a11e3a360594e91165373939e3280108600056fccafb4d69c55c1b0920ad80809bb82d6ff259b7c9b3a01183b
+a2 type=id t=1 m=8 p=1 tag=100 = 6af15709d7a6b71ef49bc6ecd69cd4949c47b4d7e9406801aa5dea067fb241caa68209a1df502dac1919e4cabe76d8d8d8f941f2cfa784d088e554561fd3025a25a740f7a6abb9c2de2fc1ef211b1b42cf139f14b0061b3ccedd6e85ee4f17b93ba1fb54
+a2 type=id t=1 m=8 p=1 tag=128 = 0b740678adeb757351c94b393566a63e997bbda213fdf3c065f59061eef287a400c803920c9f8506776d08c0fead090dce69de62bb95c2bc2b6b0ec26e4728ec192fd90db110cc4d697136d5e0a9d181c1beab251559fa6f287931787a040c1f869c3ab8de6196851349e6bd734790ccad12145709ec28ced1ec6a1ef2c2bb59
+a2 type=id t=1 m=8 p=1 tag=200 = 3adab70cf8ec04ef601415b1a5c32e8eca8218e5af6d123e0b8f62a2eed00f9247869cea05def5fbe3b16b37dd2d07e148ec3694e89ade6c6ca1eb657ef1dd67f7bbc437773c6d9ad027a8ba41252fc4b5d353afd061dd0c2f2d70cdd7b47162e6999ff65e4232704836d215b181737b075fb841be2612bcfa9da6340b2321b6eb935dd70351fd86e8a1e01df012601003b507c958751c4facbe7d694375c7eef5736cb71229f12940a4f663b3152a0b6681df1ad674ad8bd8d935adc6abe365a972515bacbd9258
+== Lanes, passes, secrets and associated data
+a2 type=id t=1 m=11 p=1 pw=b:correct~20horse~20battery~20staple salt=b:NaCl-and-pepper = 05b441f4ab2db07e7c29ff222fc560fe4c30e70f1241dd705217521e9d79a3c0
+a2 type=id t=3 m=11 p=1 pw=b:correct~20horse~20battery~20staple salt=b:NaCl-and-pepper = 1649877e869c552e997d99f29b64d720070ec5cd62f324fa50187053e29674d8
+a2 type=id t=1 m=19 p=2 pw=b:correct~20horse~20battery~20staple salt=b:NaCl-and-pepper = 8ee3093a274d26fe2586adbca119c57f01b67f0b0210c765df2571c170a938fa
+a2 type=id t=3 m=19 p=2 pw=b:correct~20horse~20battery~20staple salt=b:NaCl-and-pepper = 5faf704327079ecbaba145a93ae238365fba82a34b97305130a914c2694008dc
+a2 type=id t=1 m=27 p=3 pw=b:correct~20horse~20battery~20staple salt=b:NaCl-and-pepper = 23fe25fc0ae9067f7ad86d05d11eb8f98f914764d273a6baccddc0ef419a18bb
+a2 type=id t=3 m=27 p=3 pw=b:correct~20horse~20battery~20staple salt=b:NaCl-and-pepper = 1abd8abbaf74d3245c9cf5132965373894781a6cae73c75f817ff3bb2da82d5d
+a2 type=id t=1 m=35 p=4 pw=b:correct~20horse~20battery~20staple salt=b:NaCl-and-pepper = c59fb185e1675e0b97b17d11516eb8b8f9fe5e01fcaaac75e13b0777a2e0b7fd
+a2 type=id t=3 m=35 p=4 pw=b:correct~20horse~20battery~20staple salt=b:NaCl-and-pepper = b116b18ac7dd10ddb038f0bdaa3e3845410fc6068cf30fe5d2f398f819b7752f
+a2 type=id t=2 m=16 p=2 secret=b:server-side-key = 7f8699a09625dacd01abc2571edeef8bdd1b1c0ffa4ae0803c5d1125430570ab
+a2 type=id t=2 m=16 p=2 ad=b:user:42 = 31c7cd9d3c7230ded595ad6bdb041aa4c87a2cf9d2e76b6ae76a8d7800fd3494
+a2 type=id t=2 m=16 p=2 secret=b:server-side-key ad=b:user:42 = 4c1cace01bfb9cda17c6b1f04b84a2bdacb5d97f8f36307bbd845553dc4ef881
+a2 type=id t=2 m=16 p=2 threads=1 = cbae08894cf57335035c14a440956a7311b8dc228519ea9dd457e98b17b71768
+a2 type=id t=2 m=16 p=2 threads=2 = cbae08894cf57335035c14a440956a7311b8dc228519ea9dd457e98b17b71768
+a2 type=id t=2 m=16 p=2 threads=8 = cbae08894cf57335035c14a440956a7311b8dc228519ea9dd457e98b17b71768
+a2 type=d t=1 m=8 p=1 pw=b: salt=b: = b584b01d10c7cd3d71866443df4004db44614f2d1dc78e29cc6a0a57c8be0daa
+a2 type=i t=1 m=8 p=1 pw=r:300:a5 salt=r:200:5a = 5ebeecd32af1c9a6d20f291688cb217d072653da46c17082e859320475820ee8
+a2 type=d t=4 m=24 p=3 v=16 = 93f0d06bdb9203ba312b623547ffe113c0707857f72780e5e2d4c5773463e110
+== Parameter errors
+a2 t=1 m=8 p=0 = ! Argon2ParameterError: parallelism must be strictly positive
+a2 t=1 m=8 p=-1 = ! Argon2ParameterError: parallelism must be strictly positive
+a2 t=1 m=8 p=1 threads=0 = ! Argon2ParameterError: threads must be strictly positive
+a2 t=0 m=8 p=1 = ! Argon2ParameterError: time_cost must be strictly positive
+a2 t=1 m=15 p=2 = ! Argon2ParameterError: memory_cost can't be less than 8 times the number of lanes
+a2 t=1 m=7 p=1 = ! Argon2ParameterError: memory_cost can't be less than 8 times the number of lanes
+a2 t=1 m=8 p=1 type=3 = ! Argon2ParameterError: type_code 3 not supported
+a2 t=1 m=8 p=1 v=18 = ! Argon2ParameterError: version 18 not supported
+a2 t=0 m=0 p=0 type=9 v=0 = ! Argon2ParameterError: parallelism must be strictly positive
+a2 t=0 m=0 p=1 type=9 v=0 = ! Argon2ParameterError: time_cost must be strictly positive
+a2 t=1 m=8 p=1 type=9 v=0 = ! Argon2ParameterError: type_code 9 not supported
+a2 t=1 m=16 p=2 threads=1 tag=8 = 4c43950cbc57c150
+== BLAKE2b one-shot
+b2 0 bytes, key 0, len 64 = 786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce
+b2 3 bytes, key 0, len 64 = ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923
+b2 43 bytes, key 0, len 64 = a8add4bdddfd93e4877d2746e62817b116364a1fa7bc148d95090bc7333b3673f82401cf7aa2e4cb1ecd90296e3f14cb5413f8ed77be73045b13914cdcd6a918
+b2 3 bytes, key 0, len 32 = bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319
+b2 3 bytes, key 0, len 1 = 6b
+b2 3 bytes, key 1, len 64 = aa65cf292e7df1f7439b350072d55485083ccf55b149a400c8c0548233f46447d9f95242a31bf783081c997a6c26e086bc8c0f363dd0c03e8f8edfae0c4aa5ca
+b2 63 bytes, key 0, len 64 = a47bd910668d886e4e96a9f1d16874b13f4933c8068c6da892313dae237c91d4e593397b9daa64c12ca036e3cbd60f3c92c39c733da2af4dff8b7f6d7fd246a0
+b2 64 bytes, key 0, len 64 = 3bf7bbcfaff76857fe2dab9f6d4acd650e161cec5ffec2192f31b62df6b4504409884d5024a994bd1f96ecf7e5b2e36a638e30ad3a0f50f63378f3e213f19656
+b2 127 bytes, key 0, len 64 = 0340c24e5210be02d98efa5aef158d99b8e48aff746c20cac474b5731cd02591aed2ca9d44ab3bd0704be8d8cc0050312b495f9034c4ea010abad0c982a38c78
+b2 128 bytes, key 0, len 64 = 7a45aecee744e04c4660e7536e72e5d36803370c194ac1ffa13860f1b86d980b2241647defb22ab43f0c9fb00af5fd9e6a4a1adfa292e1ceb48cf0a442bc43a1
+b2 129 bytes, key 0, len 64 = 61863e4a8b04753e7f248667b4f0530b56c4532790df15371f749b6a13cb9836d1eb4e090c9b5ddd69b755965350fc6ece22d231505502f6c2b94ab9c2bb0383
+b2 255 bytes, key 0, len 64 = 0a874f9e3e498d5cb4d7c2478e945bbfee4eb88b484388c24b243efd0b0ab0970b9dd97793004f368e15c4c5ce12913cd80f805265d73a2a272d36ba756c42fb
+b2 256 bytes, key 0, len 64 = ec9c6b301a6c98946d742a74710e658f0243e0e6d3525f4afa94dfc2395456fa54ebe5ef0f413b5a9abfe6501dabb4b9a0fbca164d6cd80b1e79dbbed8d4202e
+b2 257 bytes, key 0, len 64 = 3b7a1177a9552fa18b8f4e599c29fbdb779bfba3b5427a16211797740d5848e11b534d5c4083bcea7c16c2b82e69b8856e321747d85dd5e88f76e4f43e638762
+b2 1000 bytes, key 0, len 64 = 794944975f208b2103e295833060c82b42587328d63604095224c225ab0bac2521ae384e3062f8e3fd64622b107c25c8b3308ca29a113cb51086361849a597b9
+b2 64 bytes, key 64, len 64 = e77f405b0aca81cab7fbb8e9128b2186a0fba280aeb3446420caff63bc98753089e5bbcef4d9c6ce9b1d6e686850105259228bf39261f2c6359c78de8845f0a8
+b2 255 bytes, key 64, len 64 = 142709d62e28fcccd0af97fad0f8465b971e82201dc51070faa0372aa43e92484be1c1e73ba10906d5d1853db6a4106e0a7bf9800d373d6dee2d46d62ef2a461
+b2 3 bytes, key 128, len 64 = 46d9371a7a8d378241c0ec68371ed0864b3e5b88180a8ced636026222b23081aa206b775bd6de78d30f0c5830823379eebab002f2735119c51ffb5d77b0ed8b3
+b2 3 bytes, key 129, len 64 = ! AssertionError
+b2 3 bytes, key 0, len 0 = ! AssertionError
+b2 3 bytes, key 0, len 65 = ! AssertionError
+== BLAKE2b incremental
+new s = ok
+up s +1 = ok
+up s +2 = ok
+up s +3 = ok
+dig s = 71e84026babe7dcdb41da3e08b268c1efa8c042761cfab5df1f73d86a06a8d19d45b8fcd4c58ef760d8f90e920bf7e7efefc692daadb645ffc3bfc141647b966
+b2 6 bytes, key 0, len 64 = 71e84026babe7dcdb41da3e08b268c1efa8c042761cfab5df1f73d86a06a8d19d45b8fcd4c58ef760d8f90e920bf7e7efefc692daadb645ffc3bfc141647b966
+new s = ok
+up s +127 = ok
+up s +1 = ok
+dig s = d6d10d9bc8cabf2c07b45ac55deadb8368c9a945b59c97490392a5d3d886bf3396cf2876c0c7151c930326080250b2791d7fb8e9d9ed20f2835ebd5409398179
+b2 128 bytes, key 0, len 64 = d6d10d9bc8cabf2c07b45ac55deadb8368c9a945b59c97490392a5d3d886bf3396cf2876c0c7151c930326080250b2791d7fb8e9d9ed20f2835ebd5409398179
+new s = ok
+up s +128 = ok
+dig s = ebd47d229de9a1520e08bd3c43f4fa481275e0b0dd905e984c932fbdf4be5b2fbc1e2da7ff5d4777a18c74ddef35349f22b5ca276105df4b222b19a279351e23
+b2 128 bytes, key 0, len 64 = ebd47d229de9a1520e08bd3c43f4fa481275e0b0dd905e984c932fbdf4be5b2fbc1e2da7ff5d4777a18c74ddef35349f22b5ca276105df4b222b19a279351e23
+new s = ok
+up s +128 = ok
+up s +1 = ok
+dig s = 8c005282244a3e2c559711127e23034f7bc2897dcb834fd4ad9b7714f9526313596e3289cd925856af4fdd120c0ba929d26a042b66c837117f001b543dc29b36
+b2 129 bytes, key 0, len 64 = 8c005282244a3e2c559711127e23034f7bc2897dcb834fd4ad9b7714f9526313596e3289cd925856af4fdd120c0ba929d26a042b66c837117f001b543dc29b36
+new s = ok
+up s +64 = ok
+up s +64 = ok
+up s +64 = ok
+dig s = d3f72c8073ad0eb8a368c21124970ce8beb3a4cee4c7698854a11d801e2d7074283dc5f1ce32405f29aa64b77e61ef503c9da1bfcc1e34d80d3890423816c103
+b2 192 bytes, key 0, len 64 = d3f72c8073ad0eb8a368c21124970ce8beb3a4cee4c7698854a11d801e2d7074283dc5f1ce32405f29aa64b77e61ef503c9da1bfcc1e34d80d3890423816c103
+new s = ok
+up s +129 = ok
+up s +127 = ok
+up s +128 = ok
+dig s = 98e1c2116e63f0e0129a688cfe3b9eae8e3a50b1a92e8a82251ffcca7343c4d9afdfddac48ec4e4a72803d24e84a5dded2e89fb326fb7722bca12c5de0053762
+b2 384 bytes, key 0, len 64 = 98e1c2116e63f0e0129a688cfe3b9eae8e3a50b1a92e8a82251ffcca7343c4d9afdfddac48ec4e4a72803d24e84a5dded2e89fb326fb7722bca12c5de0053762
+new s = ok
+up s +200 = ok
+up s +56 = ok
+dig s = c7451c2464a0c7156e8f55697ed8a19384640e1c7cdb395488ec0c5384d63283741e22b4e0b81e07c93411df77de7156c2966f9915f2cfa4d92ac005fb094c8b
+b2 256 bytes, key 0, len 64 = c7451c2464a0c7156e8f55697ed8a19384640e1c7cdb395488ec0c5384d63283741e22b4e0b81e07c93411df77de7156c2966f9915f2cfa4d92ac005fb094c8b
+new s = ok
+up s +0 = ok
+up s +0 = ok
+up s +128 = ok
+up s +0 = ok
+dig s = 2a5b7e170c9a4aefbe5ad10b489f0b70c1052dc8954460e3a3e4316a7389331360cf6c83b6026865e1cf23558dc914550b7740fbfd0d477f6dc998560dacec34
+b2 128 bytes, key 0, len 64 = 2a5b7e170c9a4aefbe5ad10b489f0b70c1052dc8954460e3a3e4316a7389331360cf6c83b6026865e1cf23558dc914550b7740fbfd0d477f6dc998560dacec34
+new k = ok
+up k +7 = ok
+dig k = 7ecf6bd285d66fd58659b99a39f92e7ec04e6d49
+dig k = 7ecf6bd285d66fd58659b99a39f92e7ec04e6d49
+up k +4 = ! AssertionError
+new z = ! AssertionError
+== BLAKE2b chains from argon2pure's tests
+chain keyed = ce91a1c91d8865a36c090c576a3f99d2b5e3e29cd17b35fdb919bf1ee640f5b12285d26e9727b48c4004624b83d6bdea3e3354e491e2ffb40b1517cc39ba9b97
+chain unkeyed = fbf206a49876bb827af18cd6ddacb72ad017570984126d184138ac7a0463592587b66c9f380ce661861be15d19d5b8a15ad165126a007819f00db0148e71ca39
+chain various = e2cb742f0045a56dee6db055645020bc5243e8f929c82a4195fed39fd7a9c5b197247fb6f4a346bf0d97dde730b9325677ac24e5752ad49d3fd80083d4cc57
+== Argon2's variable-length hash H'
+hp 1 = e3
+hp 4 = 785eed78
+hp 32 = 668616ce62e3871d75e94cb8e51e02bec2728826fc41e8a73329d42f8f36a64f
+hp 63 = c36bf4940028e98db5ced7a8219d83c1967f5074728c2335129457c48636478300389462da3e34a6dacb192328d7a85cff0bda620ff9ef2369a916daa0a39e
+hp 64 = 83282bdd25d07b4c815c8676d56c2978ba5b6dfba96ec67c154829213ec50c8f6581d44a1af4100a5a1ab767fe58f05bc434b4ffc9deefc5a36b958d10475429
+hp 65 = 339ae0af9609bb08b50c63edda48f5feb1010af624465efa5a92a320d0e8c1f15c50030612022b67cd0d7142d10e66e595f6d983efe918ebf38d0fa1408c5a0051
+hp 96 = f627be3b476965fe15c679956f9f8c9953e18482528b6582b4e3715e85b5557006a2e645f9dff4e3a95f7a7591d6068ab52546a582f7a83a1e2c8d050a38e5b9d9a6960142c0b7764becf16189407eca94a0e418df5f825095fa802f23202ff5
+hp 128 = 7f24ec81aaa6f700666d36c26bfde94ec7473a451ed9a1e41fa25d3cbdd400f5d1cf89329259638fd51edc73f24d2028c13f12e4f4d8b27c38d95646e1f8237235cf5f3044a5edf3815e7737349636f22966ebfae085335df0f82dae7dc4896d47a6fef85ce64ccf51db2327fdfd838fc1478c2ef89921acd4194670446811ae
+hp 129 = 129 bytes, fnv 219f25d0, starts 3e0a40ec8c767274f001a5b3fcd28fc0
+hp 1024 = 1024 bytes, fnv 9097a9d1, starts 702fcc425e9547330d2abf0950e0dc9e
+hp 72 = 906f3255cf91dc0af4da3697e8d7f1e5e1898157e63cd3e5c5de65a52130e486134b8c5598b255b83a48ac1826fc4107f60bd5adaee8660aa92df8612817463d0f15a00ba0e5fde5
+== A login service's password store
+policy = argon2id t=1 m=8 p=1
+pepper = 17 bytes
+reg alice = $argon2id$v=19$m=8,t=1,p=1$I0xG+dPnGZhex4dgDspq/w$xriRqgIbjCuvv/nzZMdcgwNWlwMCeTaweUPvm8USTHs
+reg bob = $argon2id$v=19$m=8,t=1,p=1$uQ1XljSlopUX8eeME1NctA$eckA1rX8Cn63XnPv4TbbGjTAAuvDMY6CYs5n7xpsQAw
+reg carol = $argon2id$v=19$m=8,t=1,p=1$3ZM+/pYGlKpZ3B7eDhoSNQ$NsT1izCbz9KeQ+sPtgrPhtwZ6RIon4dftqHOPijRspk
+reg dave = $argon2id$v=19$m=8,t=1,p=1$4AoXLxEbZ1v2Sr/MOwJKTg$JtPiVROz5uRd6clmNrh1TZUV4Nn/JWutdw5wMBNG9/w
+reg alice: already registered
+login alice: ok
+login alice: denied
+login bob: denied
+login mallory: no such user
+save users.db: 4 users, 397 bytes, fnv c1be1b0c
+drop: 0 users
+login carol: no such user
+load users.db: 4 users
+login carol: ok
+== The policy is raised and logins rehash
+policy = argon2id t=2 m=16 p=2
+login alice: ok, rehashed to $argon2id$v=19$m=16,t=2,p=2$9385ML6pIz2WiZCacbNzxQ$QaUY6pjLHhjIh2cUNJablp9jI1dwd2v/XyUcCFBTZP4
+login alice: ok
+login bob: denied
+login bob: ok, rehashed to $argon2id$v=19$m=16,t=2,p=2$opDVMp6x+E5F8xlbl9Q3DA$VfBuW7e+Xed83OyMWjaUS21VbOLMVQKmmGVwc/Dd/gg
+reg erin = $argon2id$v=19$m=16,t=2,p=2$4b58C1JiGxt4ag7rcba3Jw$XRXte6MzQIWrBZksaV0D/K3gA+RPBbenQ5YOWrG5SX0
+reg frank = $argon2id$v=19$m=16,t=2,p=2$BGYiETTLOApScANvIvmhfg$EHR52AahlFMp6rnu+8bTeT3+zCNv4aWV0QHLiHzbeGg
+forget dave: 5 users left
+login dave: no such user
+save users.db: 5 users, 501 bytes, fnv 02a965d8
+drop: 0 users
+load users.db: 5 users
+login alice: ok
+login bob: ok
+login carol: ok, rehashed to $argon2id$v=19$m=16,t=2,p=2$lmjsWoWCMaqkvt/z8RGFFg$CQ50i3OwdHGIyC5k3tLdxZhDUHQ/ORmq5Baiog5dDdI
+login dave: no such user
+login erin: ok
+login frank: ok
+== A new pepper locks out every old hash
+pepper = 19 bytes
+login erin: denied
+pepper = 17 bytes
+login erin: ok
+== Hashes from elsewhere
+policy = argon2i t=1 m=8 p=1
+pepper = 0 bytes
+check: ok, needs rehash
+check: denied
+check: denied
+check: denied
+check: ! bad hash: not a PHC string
+check: ! bad hash: unknown type 'argon2x'
+check: ! bad hash: bad version '20'
+check: ! bad hash: bad parameters 't=1,m=16,p=2'
+check: ! bad hash: expected 6 fields, found 5
+check: ! bad hash: bad salt
+check: ! bad hash: bad hash
+check: ! Argon2ParameterError: memory_cost can't be less than 8 times the number of lanes
+check: ! bad hash: bad hash
+check: ! bad hash: bad parameters 'm=016,t=1,p=2'
