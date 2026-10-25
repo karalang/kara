@@ -8083,7 +8083,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
 /// A client request's parts, owned, for a helper thread to send
 /// (`mir_http.rs`): `op` 0 a `GET` of the URL `a`, 1 a `POST` of `a` with
 /// body `b`, 2 the request builder `handle`, whose entry this takes.
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", unix))]
 pub(crate) struct HttpJob {
     method: String,
     url: String,
@@ -8098,7 +8098,7 @@ pub(crate) struct HttpJob {
 /// # Safety
 /// `a` / `b` point at `a_len` / `b_len` readable bytes, or are null with a
 /// zero length.
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", unix))]
 pub(crate) unsafe fn http_job(
     op: i32,
     a: *const u8,
@@ -8144,7 +8144,7 @@ pub(crate) unsafe fn http_job(
 }
 
 /// Sends `job`, as the client calls do.
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", unix))]
 pub(crate) fn http_run(job: HttpJob) -> Result<HttpFetched, String> {
     http_fetch_blocking(
         &job.method,
