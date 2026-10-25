@@ -13728,6 +13728,61 @@ fn a_shared_value_cannot_be_sent_on_a_channel_whose_element_the_send_pins() {
 }
 
 #[test]
+fn a_package_diagnostic_names_its_places_by_file_line_and_offset() {
+    // B-2026-10-25-35: a package is checked as its combined source, and a
+    // diagnostic of it shows the files' places: the line a message names
+    // (`moved at line 4:17`, main.kara's own, not the combined text's 10),
+    // a snippet gutter of one width, and a `--output=json` edit in another
+    // module carrying that module's `file` and its offset there.
+    let (dir, _) = fixture("package-diagnostic-places", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"fq\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/ast.kara"),
+        "pub struct Box2 {\n    pub s: String,\n}\npub fn eat(b: own Box2) -> i64 {\n    b.s.len()\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "import ast.{Box2, eat};\nfn main() {\n    let b = Box2 { s: \"ab\" };\n    \
+         println(eat(b));\n    println(eat(b));\n}\n",
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains(
+            "src/main.kara:5:17: value 'b' moved here, used again here (moved at line 4:17)"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("\n  |\n5 |     println(eat(b));\n  |"),
+        "{text}"
+    );
+    let out = karac()
+        .args(["check", "--output=json"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let json = String::from_utf8_lossy(&out.stdout);
+    assert!(json.contains("(moved at line 4:17)"), "{json}");
+    assert!(
+        json.contains("\"replacement\":{\"offset\":0,\"length\":0,\"text\":\"#[derive(Clone)]\\n\",\"file\":\"src/ast.kara\"}"),
+        "{json}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

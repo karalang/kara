@@ -78,25 +78,42 @@ impl Amalgam {
     /// its snippet's line gutter name the file and line it came from.
     pub fn remap_text(&self, name: &str, block: &str) -> String {
         let mut out = String::with_capacity(block.len());
-        let mut gutter: Option<(usize, usize)> = None;
-        for (i, line) in block.split_inclusive('\n').enumerate() {
-            if i == 0 {
-                out.push_str(&self.remap_header(name, line));
-                continue;
-            }
-            // A snippet line: `<n> | text`, or `<pad> | carets`.
+        // A snippet line: `<n> | text`, or `<pad> | carets`; the bare rows
+        // before the first numbered one take its width too.
+        let numbered = |line: &str| {
             let trimmed = line.trim_start();
             let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
-            if digits > 0 && trimmed[digits..].starts_with(" |") {
-                let n: usize = trimmed[..digits].parse().unwrap_or(0);
-                if let Some((_, l)) = self.locate(n) {
-                    let indent = &line[..line.len() - trimmed.len()];
-                    gutter = Some((digits, l.to_string().len()));
-                    out.push_str(indent);
-                    out.push_str(&l.to_string());
-                    out.push_str(&trimmed[digits..]);
-                    continue;
-                }
+            (digits > 0 && trimmed[digits..].starts_with(" |"))
+                .then(|| trimmed[..digits].parse::<usize>().ok())
+                .flatten()
+                .and_then(|n| Some((digits, self.locate(n)?.1)))
+        };
+        let mut gutter: Option<(usize, usize)> = block
+            .split_inclusive('\n')
+            .skip(1)
+            .find_map(numbered)
+            .map(|(digits, l)| (digits, l.to_string().len()));
+        let mut file = None;
+        for (i, line) in block.split_inclusive('\n').enumerate() {
+            if i == 0 {
+                let header = self.remap_header(name, line);
+                file = self.header_file(name, line).map(str::to_string);
+                out.push_str(&self.remap_message_lines(file.as_deref(), &header));
+                continue;
+            }
+            if let Some((digits, l)) = numbered(line) {
+                let trimmed = line.trim_start();
+                let indent = &line[..line.len() - trimmed.len()];
+                gutter = Some((digits, l.to_string().len()));
+                out.push_str(indent);
+                out.push_str(&l.to_string());
+                out.push_str(&trimmed[digits..]);
+                continue;
+            }
+            // A `help:` / `note:` line can name a place too.
+            if !line.trim_start().starts_with('|') {
+                out.push_str(&self.remap_message_lines(file.as_deref(), line));
+                continue;
             }
             match gutter {
                 // Re-pad the bare gutter rows to the new number's width.
@@ -107,6 +124,41 @@ impl Amalgam {
                 _ => out.push_str(line),
             }
         }
+        out
+    }
+
+    /// The file a rendered diagnostic's `name:L:C` header places it in.
+    fn header_file(&self, name: &str, line: &str) -> Option<&str> {
+        let rest = &line[line.find(&format!("{name}:"))? + name.len() + 1..];
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        Some(self.locate(rest[..digits].parse().ok()?)?.0)
+    }
+
+    /// Each `line L` (or `line L:C`) a message names, a line of the
+    /// combined text, as the line of the file it came from: `line l` in
+    /// `file` itself, `file:l` in another (`moved at line 10:17` is
+    /// main.kara's line 4, B-2026-10-25-35).
+    fn remap_message_lines(&self, file: Option<&str>, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(at) = rest.find("line ") {
+            let after = &rest[at + 5..];
+            let digits = after.chars().take_while(char::is_ascii_digit).count();
+            let word_start = at == 0 || !rest[..at].ends_with(|c: char| c.is_alphanumeric());
+            let place = after[..digits]
+                .parse()
+                .ok()
+                .filter(|_| digits > 0 && word_start)
+                .and_then(|n: usize| self.locate(n));
+            out.push_str(&rest[..at]);
+            match place {
+                Some((f, l)) if Some(f) == file => out.push_str(&format!("line {l}")),
+                Some((f, l)) if f != "<generated>" => out.push_str(&format!("{f}:{l}")),
+                _ => out.push_str(&rest[at..at + 5 + digits]),
+            }
+            rest = &after[digits..];
+        }
+        out.push_str(rest);
         out
     }
 
@@ -132,6 +184,13 @@ impl Amalgam {
     /// `name` takes the file and line its `line` came from, and every
     /// `offset` names a byte of that file.
     pub fn remap_json(&self, name: &str, v: &mut serde_json::Value) {
+        self.remap_json_in(name, None, v);
+    }
+
+    /// [`Self::remap_json`] under the diagnostic whose file is `file`: a
+    /// message names its places by that file's lines, and an edit
+    /// (`offset`) in another module carries that module's `file`.
+    fn remap_json_in(&self, name: &str, file: Option<&str>, v: &mut serde_json::Value) {
         match v {
             serde_json::Value::Object(map) => {
                 if map.get("file").and_then(|f| f.as_str()) == Some(name) {
@@ -145,18 +204,32 @@ impl Amalgam {
                         map.insert("line".into(), l.into());
                     }
                 }
+                let here = map
+                    .get("file")
+                    .and_then(|f| f.as_str())
+                    .map(str::to_string)
+                    .or_else(|| file.map(str::to_string));
+                for key in ["message", "description"] {
+                    if let Some(m) = map.get(key).and_then(|m| m.as_str()) {
+                        let m = self.remap_message_lines(here.as_deref(), m);
+                        map.insert(key.into(), m.into());
+                    }
+                }
                 if let Some(off) = map.get("offset").and_then(|o| o.as_u64()) {
-                    if let Some((_, o)) = self.locate_offset(off as usize) {
+                    if let Some((f, o)) = self.locate_offset(off as usize) {
+                        if !map.contains_key("file") && here.as_deref() != Some(f) {
+                            map.insert("file".into(), f.into());
+                        }
                         map.insert("offset".into(), o.into());
                     }
                 }
                 for (_, child) in map.iter_mut() {
-                    self.remap_json(name, child);
+                    self.remap_json_in(name, here.as_deref(), child);
                 }
             }
             serde_json::Value::Array(items) => {
                 for item in items {
-                    self.remap_json(name, item);
+                    self.remap_json_in(name, file, item);
                 }
             }
             _ => {}
