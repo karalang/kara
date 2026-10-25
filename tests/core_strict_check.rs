@@ -13610,6 +13610,59 @@ fn a_bare_use_of_a_variant_named_like_a_library_item_is_the_variant() {
 }
 
 #[test]
+fn a_function_a_package_module_imports_shadows_the_library_function_of_its_name() {
+    // B-2026-10-25-34: `import ast.{take}` binds the module's `take`, not
+    // `std.mem`'s generic `take(mut ref T) -> T`, in the importing module's
+    // own check as in the package's combined source, under its name, an
+    // alias and a wildcard alike.
+    let (dir, _) = fixture("imported-fn-shadows-library", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"fq\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/ast.kara"),
+        "pub struct Box2 {\n    pub s: String,\n}\npub fn take(b: own Box2) -> String {\n    b.s\n}\n",
+    )
+    .unwrap();
+    for (import, call, want) in [
+        ("import ast.{Box2, take};", "take", "2\n"),
+        ("import ast.{Box2, take as grab};", "grab", "2\n"),
+        ("import ast.*;", "take", "2\n"),
+    ] {
+        std::fs::write(
+            dir.join("src/main.kara"),
+            format!(
+                "{import}\nfn main() {{\n    let b = Box2 {{ s: \"ab\" }};\n    \
+                 println({call}(b).len());\n}}\n"
+            ),
+        )
+        .unwrap();
+        for args in [&["check"][..], &["check", "src/main.kara"][..]] {
+            let out = karac().args(args).current_dir(&dir).output().unwrap();
+            assert!(
+                out.status.success(),
+                "{import} {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let out = karac()
+            .args(["run", "src/main.kara"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{import}: {out:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

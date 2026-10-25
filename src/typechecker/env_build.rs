@@ -543,6 +543,7 @@ impl<'a> super::TypeChecker<'a> {
         // the struct itself is registered only under the bound name, so an
         // origin-keyed impl alone leaves `Widget` method-less.
         let mut imported_impls: Vec<crate::ast::ImplBlock> = Vec::new();
+        let mut imported_fns: Vec<String> = Vec::new();
         for item in &self.program.items {
             let Item::Import(imp) = item else { continue };
             for ii in &imp.items {
@@ -559,6 +560,18 @@ impl<'a> super::TypeChecker<'a> {
                     continue;
                 };
                 let origin_module = tree.module(origin_id);
+                // A function imported from a module of the package binds its
+                // name here, over the baked library function of that name
+                // (`import ast.{take}` is not `std.mem`'s generic `take`), as
+                // it does in the package's combined source (B-2026-10-25-34).
+                if !origin_module.is_synthetic
+                    && origin_module
+                        .items
+                        .iter()
+                        .any(|it| matches!(it, Item::Function(f) if f.name == origin_name))
+                {
+                    imported_fns.push(ii.alias.clone().unwrap_or_else(|| ii.name.clone()));
+                }
                 if let Some(vis) = find_item_visibility(origin_module, &origin_name) {
                     let bound = ii.alias.clone().unwrap_or_else(|| ii.name.clone());
                     // B-2026-07-29-10: an ALIASED trait import needs its
@@ -693,6 +706,16 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             })
             .collect();
+        for name in imported_fns {
+            let local = self
+                .program
+                .items
+                .iter()
+                .any(|it| matches!(it, Item::Function(f) if f.name == name));
+            if !local {
+                self.env.functions.remove(&name);
+            }
+        }
         for (bound_name, item, origin_path) in imported_items {
             if local_type_names.contains(&bound_name) {
                 // A real local definition shadows the import.
