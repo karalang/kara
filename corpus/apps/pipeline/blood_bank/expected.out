@@ -1,0 +1,57 @@
+NOR donors: 2,400 rows, 63,150 bytes, fnv a6ce83ad
+NOR stock: 260 rows, 5,202 bytes, fnv 18487e82
+NOR visits: 493 rows, 12,835 bytes, fnv 8e8a38a8
+NOR tests: 493 rows, 7,335 bytes, fnv 55f22943
+NOR orders: 184 rows, 5,441 bytes, fnv fdfbea49
+SOU donors: 2,900 rows, 76,277 bytes, fnv ca9046d7
+SOU stock: 300 rows, 5,989 bytes, fnv d5cf2c01
+SOU visits: 590 rows, 15,382 bytes, fnv d6e5d2b2
+SOU tests: 590 rows, 8,801 bytes, fnv 2ae09729
+SOU orders: 231 rows, 6,839 bytes, fnv 96237f21
+EAS donors: 1,800 rows, 47,324 bytes, fnv 0e1cc3a4
+EAS stock: 200 rows, 3,997 bytes, fnv c241cecc
+EAS visits: 388 rows, 10,090 bytes, fnv 55be0431
+EAS tests: 388 rows, 5,757 bytes, fnv 19ee3937
+EAS orders: 157 rows, 4,642 bytes, fnv e0e646b2
+WES donors: 2,100 rows, 55,309 bytes, fnv b5dd5048
+WES stock: 220 rows, 4,402 bytes, fnv 5d318448
+WES visits: 425 rows, 11,064 bytes, fnv d7374de5
+WES tests: 425 rows, 6,306 bytes, fnv b2b71d90
+WES orders: 164 rows, 4,843 bytes, fnv b34fe5bc
+NOR_visits.bad line 41: no donor 199999
+SOU_tests.bad line 31: bad HIV result 'X'
+EAS_orders.csv line 2: hospital EAS-H2 is not at WES
+parsed files match the built ones: true
+NOR issues: 449 rows, 15,491 bytes, fnv d425318f
+NOR inventory: 504 rows, 10,962 bytes, fnv e3331c75
+SOU issues: 595 rows, 20,647 bytes, fnv 0ded3af0
+SOU inventory: 571 rows, 12,337 bytes, fnv fad30d91
+EAS issues: 401 rows, 13,852 bytes, fnv bff7afc0
+EAS inventory: 374 rows, 8,101 bytes, fnv 9ae11ad3
+WES issues: 428 rows, 14,765 bytes, fnv deef09cc
+WES inventory: 414 rows, 8,980 bytes, fnv bd94c88d
+NOR collections: 493 visits, 350 donations (287 whole blood, 63 apheresis), 143 deferred (49 too soon, 47 low hemoglobin, 23 age, 12 weight, 12 earlier deferral); by day 45 56 47 53 47 51 51
+SOU collections: 590 visits, 438 donations (357 whole blood, 81 apheresis), 152 deferred (62 too soon, 53 low hemoglobin, 13 age, 16 weight, 8 earlier deferral); by day 72 64 66 64 60 57 55
+EAS collections: 388 visits, 294 donations (241 whole blood, 53 apheresis), 94 deferred (35 too soon, 30 low hemoglobin, 13 age, 7 weight, 9 earlier deferral); by day 46 43 46 43 40 40 36
+WES collections: 425 visits, 325 donations (260 whole blood, 65 apheresis), 100 deferred (39 too soon, 38 low hemoglobin, 12 age, 3 weight, 8 earlier deferral); by day 56 46 43 54 46 39 41
+NOR testing: 350 tested, 6 reactive (HBV 2, HCV 1, HIV 0, syphilis 3), 2 failed ABO confirmation; 6 donors deferred for good, 22 components discarded
+SOU testing: 438 tested, 4 reactive (HBV 1, HCV 0, HIV 1, syphilis 2), 1 failed ABO confirmation; 4 donors deferred for good, 14 components discarded
+EAS testing: 294 tested, 2 reactive (HBV 1, HCV 0, HIV 0, syphilis 1), 4 failed ABO confirmation; 2 donors deferred for good, 18 components discarded
+WES testing: 325 tested, 4 reactive (HBV 1, HCV 2, HIV 0, syphilis 1), 0 failed ABO confirmation; 4 donors deferred for good, 11 components discarded
+NOR components: 281 red cells, 281 plasma, 50 platelet pools from 281 buffy coats (81 unpooled), 104 apheresis platelets; 23 expired (red cells 0, platelets 23, plasma 0)
+SOU components: 353 red cells, 353 plasma, 70 platelet pools from 353 buffy coats (73 unpooled), 146 apheresis platelets; 56 expired (red cells 0, platelets 56, plasma 0)
+EAS components: 235 red cells, 235 plasma, 45 platelet pools from 235 buffy coats (55 unpooled), 87 apheresis platelets; 27 expired (red cells 0, platelets 27, plasma 0)
+WES components: 257 red cells, 257 plasma, 44 platelet pools from 257 buffy coats (81 unpooled), 116 apheresis platelets; 52 expired (red cells 1, platelets 51, plasma 0)
+NOR hospitals: 184 orders for 475 units, 449 issued (29 substituted, 3 Rh override), 26 short (red cells 26, platelets 0, plasma 0); NOR-H1 153/159, NOR-H2 184/196, NOR-H3 112/120
+SOU hospitals: 231 orders for 610 units, 595 issued (27 substituted, 0 Rh override), 15 short (red cells 15, platelets 0, plasma 0); SOU-H1 136/136, SOU-H2 143/146, SOU-H3 163/172, SOU-H4 153/156
+EAS hospitals: 157 orders for 415 units, 401 issued (10 substituted, 0 Rh override), 14 short (red cells 14, platelets 0, plasma 0); EAS-H1 194/198, EAS-H2 207/217
+WES hospitals: 164 orders for 428 units, 428 issued (10 substituted, 0 Rh override), 0 short (red cells 0, platelets 0, plasma 0); WES-H1 178/178, WES-H2 114/114, WES-H3 136/136
+NOR inventory: red cells O- 3, O+ 16, A- 18, A+ 59, B- 4, B+ 8, AB- 1, AB+ 6; 99 platelets, 290 plasma; 56 expire within 3 days
+SOU inventory: red cells O- 1, O+ 74, A- 22, A+ 22, B- 4, B+ 5, AB- 0, AB+ 7; 130 platelets, 306 plasma; 74 expire within 3 days
+EAS inventory: red cells O- 7, O+ 10, A- 11, A+ 38, B- 3, B+ 4, AB- 1, AB+ 0; 77 platelets, 223 plasma; 43 expire within 3 days
+WES inventory: red cells O- 5, O+ 32, A- 5, A+ 25, B- 6, B+ 5, AB- 0, AB+ 0; 91 platelets, 245 plasma; 53 expire within 3 days
+NOR reserve: asked for 26 O- red cells, sent 26, 0 not covered; 19 left in the reserve
+SOU reserve: asked for 15 O- red cells, sent 15, 0 not covered; 4 left in the reserve
+EAS reserve: asked for 14 O- red cells, sent 4, 10 not covered; 0 left in the reserve
+WES reserve: asked for 0 O- red cells, sent 0, 0 not covered; 0 left in the reserve
+reserve.log: 4 entries, 46 bytes, fnv 08860e08

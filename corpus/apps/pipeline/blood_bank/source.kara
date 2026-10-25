@@ -1,0 +1,1393 @@
+// pipeline/blood_bank
+//
+// A week at a regional blood service's four donation centres. For each
+// centre it builds the donor registry (group, birth year, weight, the last
+// whole blood and apheresis donations, a deferral), the opening stock of
+// red cells, platelets and plasma, the week's donor visits, the lab's
+// screening results for each visit, and the hospitals' orders. It writes
+// them as CSV, reads them back and parses them with the checks the
+// centre's system makes, then closes the week day by day: expired units
+// leave the shelf, yesterday's tested units join it, each visit is checked
+// (an earlier deferral, age, weight, hemoglobin, the interval since the
+// last donation) and becomes a donation, each donation's screens and ABO
+// confirmation release or discard its components (a whole blood donation
+// gives red cells, plasma and a buffy coat, four buffy coats of a group
+// pool into platelets, an apheresis donation gives one or two platelet
+// units), and the day's orders are filled, urgent first, with the
+// compatible unit that serves the fewest other groups and expires soonest.
+// The issues and the closing inventory are written and read back, and five
+// reports per centre follow: collections, testing, components, hospitals
+// and inventory. Then the national reserve of O-negative red cells covers
+// the centres' red cell shortfalls in the order they ask.
+//
+// The builds, the writes, the reads, the parses, the week closes, the
+// issue and inventory files and the reports are each a group of statements
+// that do not depend on each other (a stmt-par app). The reserve covers
+// from what the centres before have left, so the four centres have to
+// draw in order.
+
+const MASK32: i64 = 4294967295;
+const DAYS: i64 = 7;
+const YEAR: i64 = 2026;
+const GROUPS: Array[Str, 8] = ["O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+"];
+// how common each group is, per thousand donors and per thousand patients
+const SHARE: Array[i64, 8] = [70, 380, 60, 340, 20, 90, 10, 30];
+// the ABO antigens on the red cells of each group: A is 1, B is 2
+const ANTIGENS: Array[i64, 8] = [0, 0, 1, 1, 2, 2, 3, 3];
+const COMPONENTS: Array[Str, 3] = ["RBC", "PLT", "FFP"];
+const NAMES: Array[Str, 3] = ["red cells", "platelets", "plasma"];
+// days a component keeps from the day it is collected
+const SHELF: Array[i64, 3] = [42, 5, 365];
+// whole blood is not taken within WB_GAP days of the last whole blood
+// donation, or within APH_GAP of the last apheresis; apheresis not within
+// APH_GAP of the last apheresis, or APH_AFTER_WB of whole blood
+const WB_GAP: i64 = 56;
+const APH_GAP: i64 = 7;
+const APH_AFTER_WB: i64 = 28;
+const MIN_HB: i64 = 125;
+const MIN_WEIGHT: i64 = 50;
+// donors of at least this weight give a double apheresis collection
+const SPLIT_WEIGHT: i64 = 70;
+const POOL: i64 = 4;
+const FOREVER: i64 = 10000;
+const REASONS: Array[Str, 5] = ["earlier deferral", "age", "weight", "low hemoglobin", "too soon"];
+const MARKERS: Array[Str, 4] = ["HBV", "HCV", "HIV", "syphilis"];
+// reactive results per ten thousand tests, by marker
+const REACTIVE: Array[i64, 4] = [40, 30, 20, 60];
+// the national reserve of O-negative red cells for the week: it covers the
+// centres' red cell shortfalls in the order they ask, from what is left
+const RESERVE: i64 = 45;
+
+struct Site {
+    code: String,
+    digit: i64,
+    seed: i64,
+    donors: i64,
+    visits: i64,
+    hospitals: i64,
+    stock: i64,
+    orders: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Donor {
+    did: i64,
+    group: i64,
+    born: i64,
+    weight: i64,
+    last_wb: i64,
+    last_aph: i64,
+    deferred: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Unit {
+    uid: String,
+    comp: i64,
+    group: i64,
+    collected: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Visit {
+    vno: i64,
+    day: i64,
+    minute: i64,
+    did: i64,
+    kind: String,
+    hb: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Test {
+    vno: i64,
+    results: Vec[bool],
+    typed: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Order {
+    ono: i64,
+    day: i64,
+    hospital: String,
+    comp: i64,
+    group: i64,
+    units: i64,
+    urgent: bool,
+}
+
+// a unit on the shelf, or gone from it (issued or expired)
+#[derive(Clone)]
+struct Stock {
+    uid: String,
+    serial: i64,
+    comp: i64,
+    group: i64,
+    collected: i64,
+    exp: i64,
+    gone: bool,
+}
+
+struct Issue {
+    uid: String,
+    ono: i64,
+    day: i64,
+    hospital: String,
+    comp: i64,
+    unit_group: i64,
+    patient_group: i64,
+    exp: i64,
+}
+
+struct Week {
+    made: i64,
+    stock: Vec[Stock],
+    pending: Vec[Stock],
+    produced: Vec[i64],
+    expired: Vec[i64],
+    deferrals: Vec[i64],
+    by_day: Vec[i64],
+    visits: i64,
+    wb: i64,
+    aph: i64,
+    reactive: Vec[i64],
+    reactive_donations: i64,
+    abo: i64,
+    barred: i64,
+    discarded: i64,
+    buffy: i64,
+    unpooled: i64,
+    pools: i64,
+    aph_units: i64,
+    orders: i64,
+    asked: i64,
+    issued: i64,
+    substituted: i64,
+    rh_override: i64,
+    short: Vec[i64],
+    hosp_asked: Vec[i64],
+    hosp_issued: Vec[i64],
+    issues: Vec[Issue],
+}
+
+struct Reserve {
+    left: i64,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+// ------------------------------------------------------------ helpers
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn plural(n: i64, word: ref String) -> String {
+    let s = if n == 1 { "" } else { "s" };
+    f"{group3(n)} {word}{s}"
+}
+
+fn clock(m: i64) -> String {
+    f"{m / 60:02}:{m % 60:02}"
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 8 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+// HH:MM as a minute of the day, or None.
+fn time_of(t: ref String) -> Option[i64] {
+    if t.len() != 5 or t.substring(2, 3) != ":" or not is_digits(t.substring(0, 2)) or not is_digits(t.substring(3, 5)) {
+        return None;
+    }
+    let h = to_int(t.substring(0, 2));
+    let m = to_int(t.substring(3, 5));
+    if h > 23 or m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+// "-" for never, or a day before the week: "-N" for N days before it, or "0"
+fn past_day(t: ref String) -> Option[i64] {
+    if t == "-" {
+        return Some(-FOREVER);
+    }
+    if t == "0" {
+        return Some(0);
+    }
+    if not t.starts_with("-") {
+        return None;
+    }
+    match small_int(t.substring(1, t.len()), 1, 9999) {
+        Some(v) => Some(-v),
+        None => None,
+    }
+}
+
+fn show_past(d: i64) -> String {
+    if d == -FOREVER { "-".to_string() } else { f"{d}" }
+}
+
+fn file_line(name: ref String, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+fn group_of(name: ref String) -> i64 {
+    for g in 0..8 {
+        if name == GROUPS[g] {
+            return g;
+        }
+    }
+    -1
+}
+
+fn comp_of(name: ref String) -> i64 {
+    for c in 0..3 {
+        if name == COMPONENTS[c] {
+            return c;
+        }
+    }
+    -1
+}
+
+fn pick_group(r: i64) -> i64 {
+    let mut p = r % 1000;
+    for g in 0..8 {
+        if p < SHARE[g] {
+            return g;
+        }
+        p -= SHARE[g];
+    }
+    7
+}
+
+fn rh(g: i64) -> i64 {
+    g % 2
+}
+
+// Whether a unit of group d may go to a patient of group r.
+fn compatible(comp: i64, d: i64, r: i64, any_rh: bool) -> bool {
+    if comp == 0 {
+        return (ANTIGENS[d] & (3 - ANTIGENS[r])) == 0 and (any_rh or rh(d) <= rh(r));
+    }
+    if comp == 2 {
+        return (ANTIGENS[r] & (3 - ANTIGENS[d])) == 0;
+    }
+    true
+}
+
+// How many patient groups a unit of group d can serve: the lower, the
+// sooner it is used, so the universal units are kept for those who need them.
+fn reach(comp: i64, d: i64) -> i64 {
+    let mut n = 0;
+    for r in 0..8 {
+        if compatible(comp, d, r, false) {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn hospital_code(site: ref Site, h: i64) -> String {
+    f"{site.code}-H{h + 1}"
+}
+
+fn unit_id(site: ref Site, serial: i64) -> String {
+    f"U{site.digit}{serial:06}"
+}
+
+// ------------------------------------------------------------ building
+
+fn build_donors(site: ref Site) -> Vec[Donor] {
+    let mut out: Vec[Donor] = Vec.new();
+    for k in 0..site.donors {
+        let r = mix(site.seed, k, 11);
+        let q = mix(site.seed, k, 12);
+        let mut born = 1956 + r % 53;
+        if (r >> 8) % 80 == 0 {
+            born = 2009;
+        } else if (r >> 8) % 80 == 1 {
+            born = 1952;
+        }
+        let weight = 48 + (r >> 12) % 70;
+        let mut last_wb = -FOREVER;
+        if q % 100 < 60 {
+            last_wb = -(1 + (q >> 8) % 700);
+        }
+        let mut last_aph = -FOREVER;
+        if (q >> 16) % 100 < 15 {
+            last_aph = -(1 + (q >> 20) % 60);
+        }
+        let mut deferred = 0;
+        if (r >> 20) % 100 < 3 {
+            deferred = 1 + (q >> 4) % 20;
+        }
+        out.push(Donor {
+            did: site.digit * 100000 + 1 + k,
+            group: pick_group(mix(site.seed, k, 13)),
+            born: born,
+            weight: weight,
+            last_wb: last_wb,
+            last_aph: last_aph,
+            deferred: deferred,
+        });
+    }
+    out
+}
+
+fn build_stock(site: ref Site) -> Vec[Unit] {
+    let ages = [41, 5, 300];
+    let mut out: Vec[Unit] = Vec.new();
+    for k in 0..site.stock {
+        let r = mix(site.seed, k, 21);
+        let p = r % 100;
+        let comp = if p < 60 { 0 } else if p < 75 { 1 } else { 2 };
+        let age = (r >> 8) % ages[comp];
+        out.push(Unit { uid: unit_id(site, k + 1), comp: comp, group: pick_group(mix(site.seed, k, 22)), collected: -age });
+    }
+    out
+}
+
+struct Arrival {
+    minute: i64,
+    j: i64,
+    did: i64,
+    kind: String,
+    hb: i64,
+}
+
+fn build_visits(site: ref Site, donors: ref Vec[Donor]) -> Vec[Visit] {
+    let mut out: Vec[Visit] = Vec.new();
+    let mut n = 0;
+    for d in 1..DAYS + 1 {
+        let count = site.visits + mix(site.seed, d, 31) % 11 - 5;
+        let mut day: Vec[Arrival] = Vec.new();
+        for j in 0..count {
+            let r = mix(site.seed, d * 1000 + j, 32);
+            let k = r % donors.len();
+            let kind = if (r >> 20) % 100 < 18 { "APH" } else { "WB" };
+            day.push(Arrival {
+                minute: 480 + (r >> 8) % 720,
+                j: j,
+                did: donors[k].did,
+                kind: kind.to_string(),
+                hb: 120 + mix(site.seed, d * 1000 + j, 33) % 55,
+            });
+        }
+        day.sort_by(|a, b| if a.minute != b.minute { a.minute.cmp(b.minute) } else { a.j.cmp(b.j) });
+        for a in day {
+            n += 1;
+            out.push(Visit { vno: n, day: d, minute: a.minute, did: a.did, kind: a.kind.clone(), hb: a.hb });
+        }
+    }
+    out
+}
+
+fn build_tests(site: ref Site, visits: ref Vec[Visit], donors: ref Vec[Donor]) -> Vec[Test] {
+    let by_id = donor_index(donors);
+    let mut out: Vec[Test] = Vec.new();
+    for v in visits {
+        let r = mix(site.seed, v.vno, 41);
+        let mut results: Vec[bool] = Vec.new();
+        for m in 0..4 {
+            let q = mix(site.seed, v.vno * 4 + m, 42);
+            results.push(q % 10000 < REACTIVE[m]);
+        }
+        let mut g = donors[by_id.get(v.did) ?? 0].group;
+        if (r >> 8) % 1000 < 5 {
+            g = (g + 1 + r % 7) % 8;
+        }
+        out.push(Test { vno: v.vno, results: results, typed: g });
+    }
+    out
+}
+
+fn build_orders(site: ref Site) -> Vec[Order] {
+    let spread = [5, 2, 4];
+    let mut out: Vec[Order] = Vec.new();
+    let mut n = 0;
+    for d in 1..DAYS + 1 {
+        let count = site.orders + mix(site.seed, d, 51) % 5;
+        for j in 0..count {
+            let r = mix(site.seed, d * 1000 + j, 52);
+            let p = r % 100;
+            let comp = if p < 60 { 0 } else if p < 80 { 1 } else { 2 };
+            n += 1;
+            out.push(Order {
+                ono: n,
+                day: d,
+                hospital: hospital_code(site, (r >> 12) % site.hospitals),
+                comp: comp,
+                group: pick_group(mix(site.seed, d * 1000 + j, 53)),
+                units: 1 + (r >> 8) % spread[comp],
+                urgent: (r >> 20) % 100 < 15,
+            });
+        }
+    }
+    out
+}
+
+fn donor_index(donors: ref Vec[Donor]) -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    for k in 0..donors.len() as i64 {
+        m.insert(donors[k].did, k);
+    }
+    m
+}
+
+// ------------------------------------------------------------ files
+
+fn donor_header() -> String {
+    "donor,group,born,weight,last_whole_blood,last_apheresis,deferred_until".to_string()
+}
+
+fn stock_header() -> String {
+    "unit,component,group,collected".to_string()
+}
+
+fn visit_header() -> String {
+    "visit,day,time,donor,kind,hemoglobin".to_string()
+}
+
+fn test_header() -> String {
+    "visit,hbv,hcv,hiv,syphilis,abo".to_string()
+}
+
+fn order_header() -> String {
+    "order,day,hospital,component,group,units,priority".to_string()
+}
+
+fn issue_header() -> String {
+    "unit,order,day,hospital,component,unit_group,patient_group,expires".to_string()
+}
+
+fn inventory_header() -> String {
+    "unit,component,group,collected,expires".to_string()
+}
+
+fn encode_donors(donors: ref Vec[Donor]) -> String {
+    let mut out = f"{donor_header()}\n";
+    for d in donors {
+        let deferred = if d.deferred == 0 { "-".to_string() } else { f"{d.deferred}" };
+        out.push_str(f"{d.did},{GROUPS[d.group]},{d.born},{d.weight},{show_past(d.last_wb)},{show_past(d.last_aph)},{deferred}\n");
+    }
+    out
+}
+
+fn encode_stock(units: ref Vec[Unit]) -> String {
+    let mut out = f"{stock_header()}\n";
+    for u in units {
+        out.push_str(f"{u.uid},{COMPONENTS[u.comp]},{GROUPS[u.group]},{u.collected}\n");
+    }
+    out
+}
+
+fn encode_visits(visits: ref Vec[Visit]) -> String {
+    let mut out = f"{visit_header()}\n";
+    for v in visits {
+        out.push_str(f"{v.vno},{v.day},{clock(v.minute)},{v.did},{v.kind},{v.hb}\n");
+    }
+    out
+}
+
+fn encode_tests(tests: ref Vec[Test]) -> String {
+    let mut out = f"{test_header()}\n";
+    for t in tests {
+        let mut marks: Vec[String] = Vec.new();
+        for x in t.results {
+            marks.push(if x { "R".to_string() } else { "N".to_string() });
+        }
+        out.push_str(f"{t.vno},{marks.join(",")},{GROUPS[t.typed]}\n");
+    }
+    out
+}
+
+fn encode_orders(orders: ref Vec[Order]) -> String {
+    let mut out = f"{order_header()}\n";
+    for o in orders {
+        let priority = if o.urgent { "URGENT" } else { "ROUTINE" };
+        out.push_str(f"{o.ono},{o.day},{o.hospital},{COMPONENTS[o.comp]},{GROUPS[o.group]},{o.units},{priority}\n");
+    }
+    out
+}
+
+fn encode_issues(w: ref Week) -> String {
+    let mut out = f"{issue_header()}\n";
+    for i in w.issues {
+        out.push_str(f"{i.uid},{i.ono},{i.day},{i.hospital},{COMPONENTS[i.comp]},{GROUPS[i.unit_group]},{GROUPS[i.patient_group]},{i.exp}\n");
+    }
+    out
+}
+
+fn encode_inventory(w: ref Week) -> String {
+    let mut out = f"{inventory_header()}\n";
+    for s in w.stock {
+        if not s.gone {
+            out.push_str(f"{s.uid},{COMPONENTS[s.comp]},{GROUPS[s.group]},{s.collected},{s.exp}\n");
+        }
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn fields_of(path: ref String, n: i64, line: ref String, want: i64) -> Result[Vec[String], BatchError] {
+    let f = split_on(line, ",");
+    if f.len() as i64 != want {
+        return Err(bad(f"{path} line {n}: expected {want} fields, found {f.len()}"));
+    }
+    Ok(f)
+}
+
+fn parse_donors(path: ref String, site: ref Site, text: ref String) -> Result[Vec[Donor], BatchError] {
+    let mut out: Vec[Donor] = Vec.new();
+    let mut seen: Set[i64] = Set.new();
+    let mut n = 1;
+    for line in body_lines(path, text, donor_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 7)?;
+        let did = if f[0].len() == 6 { small_int(f[0], 0, 999999) } else { None };
+        let did = match did {
+            Some(v) => {
+                if v / 100000 != site.digit {
+                    return Err(bad(f"{path} line {n}: bad donor id '{f[0]}'"));
+                }
+                v
+            }
+            None => return Err(bad(f"{path} line {n}: bad donor id '{f[0]}'")),
+        };
+        if seen.contains(did) {
+            return Err(bad(f"{path} line {n}: donor {did} twice"));
+        }
+        seen.insert(did);
+        let g = group_of(f[1]);
+        if g < 0 {
+            return Err(bad(f"{path} line {n}: bad group '{f[1]}'"));
+        }
+        let born = if f[2].len() == 4 { small_int(f[2], 1900, YEAR) } else { None };
+        let born = match born {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad birth year '{f[2]}'")),
+        };
+        let weight = match small_int(f[3], 30, 250) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad weight '{f[3]}'")),
+        };
+        let last_wb = match past_day(f[4]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad last donation '{f[4]}'")),
+        };
+        let last_aph = match past_day(f[5]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad last apheresis '{f[5]}'")),
+        };
+        let mut deferred = 0;
+        if f[6] != "-" {
+            deferred = match small_int(f[6], 1, 9999) {
+                Some(v) => v,
+                None => return Err(bad(f"{path} line {n}: bad deferral '{f[6]}'")),
+            };
+        }
+        out.push(Donor { did: did, group: g, born: born, weight: weight, last_wb: last_wb, last_aph: last_aph, deferred: deferred });
+    }
+    Ok(out)
+}
+
+fn parse_stock(path: ref String, site: ref Site, text: ref String) -> Result[Vec[Unit], BatchError] {
+    let mut out: Vec[Unit] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    let mut n = 1;
+    for line in body_lines(path, text, stock_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 4)?;
+        let u = ref f[0];
+        if u.len() != 8 or u.substring(0, 1) != "U" or not is_digits(u.substring(1, 8)) or to_int(u.substring(1, 2)) != site.digit {
+            return Err(bad(f"{path} line {n}: bad unit '{u}'"));
+        }
+        if seen.contains(u) {
+            return Err(bad(f"{path} line {n}: unit {u} twice"));
+        }
+        seen.insert(u.clone());
+        let c = comp_of(f[1]);
+        if c < 0 {
+            return Err(bad(f"{path} line {n}: bad component '{f[1]}'"));
+        }
+        let g = group_of(f[2]);
+        if g < 0 {
+            return Err(bad(f"{path} line {n}: bad group '{f[2]}'"));
+        }
+        let col = match past_day(f[3]) {
+            Some(v) => v,
+            None => -FOREVER,
+        };
+        if col == -FOREVER {
+            return Err(bad(f"{path} line {n}: bad collection day '{f[3]}'"));
+        }
+        if col + SHELF[c] <= 0 {
+            return Err(bad(f"{path} line {n}: unit {u} expired before the week"));
+        }
+        out.push(Unit { uid: u.clone(), comp: c, group: g, collected: col });
+    }
+    Ok(out)
+}
+
+fn parse_visits(path: ref String, site: ref Site, donors: ref Vec[Donor], text: ref String) -> Result[Vec[Visit], BatchError] {
+    let ids = donor_index(donors);
+    let mut out: Vec[Visit] = Vec.new();
+    let mut n = 1;
+    let mut last = 0;
+    for line in body_lines(path, text, visit_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 6)?;
+        if f[0] != f"{n - 1}" {
+            return Err(bad(f"{path} line {n}: visit '{f[0]}' out of order"));
+        }
+        let day = match small_int(f[1], 1, DAYS) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad day '{f[1]}'")),
+        };
+        let minute = match time_of(f[2]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad time '{f[2]}'")),
+        };
+        if day * 1440 + minute < last {
+            return Err(bad(f"{path} line {n}: time goes backwards"));
+        }
+        last = day * 1440 + minute;
+        let did = match small_int(f[3], 0, 999999) {
+            Some(v) => v,
+            None => -1,
+        };
+        if did < 0 or not ids.contains_key(did) {
+            return Err(bad(f"{path} line {n}: no donor {f[3]}"));
+        }
+        if f[4] != "WB" and f[4] != "APH" {
+            return Err(bad(f"{path} line {n}: bad kind '{f[4]}'"));
+        }
+        let hb = match small_int(f[5], 50, 250) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad hemoglobin '{f[5]}'")),
+        };
+        out.push(Visit { vno: n - 1, day: day, minute: minute, did: did, kind: f[4].clone(), hb: hb });
+    }
+    Ok(out)
+}
+
+fn parse_tests(path: ref String, site: ref Site, visits: ref Vec[Visit], text: ref String) -> Result[Vec[Test], BatchError] {
+    let mut out: Vec[Test] = Vec.new();
+    let mut n = 1;
+    for line in body_lines(path, text, test_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 6)?;
+        if n - 1 > visits.len() or f[0] != f"{n - 1}" {
+            return Err(bad(f"{path} line {n}: no visit '{f[0]}'"));
+        }
+        let mut results: Vec[bool] = Vec.new();
+        for m in 0..4 {
+            let x = ref f[1 + m];
+            if x != "R" and x != "N" {
+                return Err(bad(f"{path} line {n}: bad {MARKERS[m]} result '{x}'"));
+            }
+            results.push(x == "R");
+        }
+        let g = group_of(f[5]);
+        if g < 0 {
+            return Err(bad(f"{path} line {n}: bad group '{f[5]}'"));
+        }
+        out.push(Test { vno: n - 1, results: results, typed: g });
+    }
+    if out.len() != visits.len() {
+        return Err(bad(f"{path}: {out.len()} results for {visits.len()} visits"));
+    }
+    Ok(out)
+}
+
+fn parse_orders(path: ref String, site: ref Site, text: ref String) -> Result[Vec[Order], BatchError] {
+    let mut out: Vec[Order] = Vec.new();
+    let mut n = 1;
+    let mut last = 1;
+    for line in body_lines(path, text, order_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 7)?;
+        if f[0] != f"{n - 1}" {
+            return Err(bad(f"{path} line {n}: order '{f[0]}' out of order"));
+        }
+        let day = match small_int(f[1], 1, DAYS) {
+            Some(v) => v,
+            None => -1,
+        };
+        if day < last {
+            return Err(bad(f"{path} line {n}: bad day '{f[1]}'"));
+        }
+        last = day;
+        let mut ok = false;
+        for h in 0..site.hospitals {
+            if f[2] == hospital_code(site, h) {
+                ok = true;
+            }
+        }
+        if not ok {
+            return Err(bad(f"{path} line {n}: hospital {f[2]} is not at {site.code}"));
+        }
+        let c = comp_of(f[3]);
+        if c < 0 {
+            return Err(bad(f"{path} line {n}: bad component '{f[3]}'"));
+        }
+        let g = group_of(f[4]);
+        if g < 0 {
+            return Err(bad(f"{path} line {n}: bad group '{f[4]}'"));
+        }
+        let units = match small_int(f[5], 1, 20) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad units '{f[5]}'")),
+        };
+        if f[6] != "ROUTINE" and f[6] != "URGENT" {
+            return Err(bad(f"{path} line {n}: bad priority '{f[6]}'"));
+        }
+        out.push(Order { ono: n - 1, day: day, hospital: f[2].clone(), comp: c, group: g, units: units, urgent: f[6] == "URGENT" });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the week
+
+fn new_unit(site: ref Site, w: mut ref Week, comp: i64, group: i64, day: i64) {
+    w.made += 1;
+    w.pending.push(Stock { uid: unit_id(site, w.made), serial: w.made, comp: comp, group: group, collected: day, exp: day + SHELF[comp], gone: false });
+    w.produced[comp] += 1;
+}
+
+// The reason a donor may not give today, or -1.
+fn eligible(dn: ref Donor, v: ref Visit) -> i64 {
+    let d = v.day;
+    if dn.deferred > 0 and d < dn.deferred {
+        return 0;
+    }
+    let age = YEAR - dn.born;
+    if age < 18 or age > 70 {
+        return 1;
+    }
+    if dn.weight < MIN_WEIGHT {
+        return 2;
+    }
+    if v.hb < MIN_HB {
+        return 3;
+    }
+    if v.kind == "WB" {
+        if d - dn.last_wb < WB_GAP or d - dn.last_aph < APH_GAP {
+            return 4;
+        }
+    } else if d - dn.last_aph < APH_GAP or d - dn.last_wb < APH_AFTER_WB {
+        return 4;
+    }
+    -1
+}
+
+// The shelf's best unit for a patient: the patient's own group first, then
+// the unit that serves the fewest groups (for platelets, the right Rh), then
+// the one that expires first, then the oldest number.
+fn pick(w: ref Week, comp: i64, group: i64, any_rh: bool) -> i64 {
+    let mut best = -1;
+    let mut bk = [0, 0, 0, 0];
+    for i in 0..w.stock.len() {
+        let s = ref w.stock[i];
+        if s.gone or s.comp != comp or not compatible(comp, s.group, group, any_rh) {
+            continue;
+        }
+        let first = if s.group == group { 0 } else { 1 };
+        let second = if comp == 1 {
+            if rh(s.group) > rh(group) { 1 } else { 0 }
+        } else {
+            reach(comp, s.group)
+        };
+        let k = [first, second, s.exp, s.serial];
+        let mut better = best < 0;
+        if not better {
+            let mut j = 0;
+            while j < 4 and k[j] == bk[j] {
+                j += 1;
+            }
+            better = j < 4 and k[j] < bk[j];
+        }
+        if better {
+            best = i;
+            bk = k;
+        }
+    }
+    best
+}
+
+fn release(w: mut ref Week) {
+    for p in w.pending {
+        w.stock.push(p.clone());
+    }
+    w.pending = Vec.new();
+}
+
+fn close_week(site: ref Site, donors: ref Vec[Donor], units: ref Vec[Unit], visits: ref Vec[Visit], tests: ref Vec[Test], orders: ref Vec[Order]) -> Week {
+    let mut w = Week {
+        made: units.len(),
+        stock: Vec.new(),
+        pending: Vec.new(),
+        produced: Vec.filled(3, 0),
+        expired: Vec.filled(3, 0),
+        deferrals: Vec.filled(5, 0),
+        by_day: Vec.filled(DAYS, 0),
+        visits: 0,
+        wb: 0,
+        aph: 0,
+        reactive: Vec.filled(4, 0),
+        reactive_donations: 0,
+        abo: 0,
+        barred: 0,
+        discarded: 0,
+        buffy: 0,
+        unpooled: 0,
+        pools: 0,
+        aph_units: 0,
+        orders: 0,
+        asked: 0,
+        issued: 0,
+        substituted: 0,
+        rh_override: 0,
+        short: Vec.filled(3, 0),
+        hosp_asked: Vec.filled(site.hospitals, 0),
+        hosp_issued: Vec.filled(site.hospitals, 0),
+        issues: Vec.new(),
+    };
+    for u in units {
+        w.stock.push(Stock { uid: u.uid.clone(), serial: to_int(u.uid.substring(2, 8)), comp: u.comp, group: u.group, collected: u.collected, exp: u.collected + SHELF[u.comp], gone: false });
+    }
+    let dmap = donor_index(donors);
+    let mut ds = donors.clone();
+    let mut vi = 0;
+    let mut oi = 0;
+    for day in 1..DAYS + 1 {
+        for i in 0..w.stock.len() {
+            if not w.stock[i].gone and w.stock[i].exp <= day {
+                w.stock[i].gone = true;
+                w.expired[w.stock[i].comp] += 1;
+            }
+        }
+        release(mut w);
+        let mut coats = Vec.filled(8, 0);
+        while vi < visits.len() and visits[vi].day == day {
+            let v = ref visits[vi];
+            let t = ref tests[vi];
+            vi += 1;
+            w.visits += 1;
+            let k = dmap.get(v.did) ?? 0;
+            let why = eligible(ds[k], v);
+            if why >= 0 {
+                w.deferrals[why] += 1;
+                continue;
+            }
+            w.by_day[day - 1] += 1;
+            if v.kind == "WB" {
+                w.wb += 1;
+                ds[k].last_wb = day;
+            } else {
+                w.aph += 1;
+                ds[k].last_aph = day;
+            }
+            let n_units = if v.kind == "WB" { 3 } else if ds[k].weight >= SPLIT_WEIGHT { 2 } else { 1 };
+            if t.results.iter().any(|x| *x) {
+                w.reactive_donations += 1;
+                for m in 0..4 {
+                    if t.results[m] {
+                        w.reactive[m] += 1;
+                    }
+                }
+                ds[k].deferred = FOREVER;
+                w.barred += 1;
+                w.discarded += n_units;
+                continue;
+            }
+            let g = ds[k].group;
+            if t.typed != g {
+                w.abo += 1;
+                w.discarded += n_units;
+                continue;
+            }
+            if v.kind == "WB" {
+                new_unit(site, mut w, 0, g, day);
+                new_unit(site, mut w, 2, g, day);
+                coats[g] += 1;
+                w.buffy += 1;
+            } else {
+                for _ in 0..n_units {
+                    new_unit(site, mut w, 1, g, day);
+                    w.aph_units += 1;
+                }
+            }
+        }
+        for g in 0..8 {
+            while coats[g] >= POOL {
+                coats[g] -= POOL;
+                new_unit(site, mut w, 1, g, day);
+                w.pools += 1;
+            }
+            w.unpooled += coats[g];
+        }
+        let mut todays: Vec[Order] = Vec.new();
+        while oi < orders.len() and orders[oi].day == day {
+            todays.push(orders[oi].clone());
+            oi += 1;
+        }
+        todays.sort_by(|a, b| if a.urgent != b.urgent { if a.urgent { Ordering.Less } else { Ordering.Greater } } else { a.ono.cmp(b.ono) });
+        for o in todays {
+            w.orders += 1;
+            w.asked += o.units;
+            let h = to_int(o.hospital.substring(site.code.len() + 2, o.hospital.len())) - 1;
+            w.hosp_asked[h] += o.units;
+            for _ in 0..o.units {
+                let mut s = pick(w, o.comp, o.group, false);
+                if s < 0 and o.comp == 0 and o.urgent and rh(o.group) == 0 {
+                    s = pick(w, o.comp, o.group, true);
+                    if s >= 0 {
+                        w.rh_override += 1;
+                    }
+                }
+                if s < 0 {
+                    w.short[o.comp] += 1;
+                    continue;
+                }
+                w.stock[s].gone = true;
+                w.issued += 1;
+                w.hosp_issued[h] += 1;
+                if w.stock[s].group != o.group {
+                    w.substituted += 1;
+                }
+                let unit = ref w.stock[s];
+                let issue = Issue { uid: unit.uid.clone(), ono: o.ono, day: day, hospital: o.hospital.clone(), comp: o.comp, unit_group: unit.group, patient_group: o.group, exp: unit.exp };
+                w.issues.push(issue);
+            }
+        }
+    }
+    release(mut w);
+    w
+}
+
+// ------------------------------------------------------------ reports
+
+fn sum_of(v: ref Vec[i64]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t += x;
+    }
+    t
+}
+
+fn collection_report(site: ref Site, w: ref Week) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for r in [4, 3, 1, 2, 0] {
+        parts.push(f"{w.deferrals[r]} {REASONS[r]}");
+    }
+    let days: Vec[String] = w.by_day.iter().map(|x| f"{x}").collect();
+    f"{site.code} collections: {group3(w.visits)} visits, {group3(w.wb + w.aph)} donations ({group3(w.wb)} whole blood, {group3(w.aph)} apheresis), {group3(sum_of(w.deferrals))} deferred ({parts.join(", ")}); by day {days.join(" ")}"
+}
+
+fn testing_report(site: ref Site, w: ref Week) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for m in 0..4 {
+        parts.push(f"{MARKERS[m]} {w.reactive[m]}");
+    }
+    f"{site.code} testing: {group3(w.wb + w.aph)} tested, {w.reactive_donations} reactive ({parts.join(", ")}), {w.abo} failed ABO confirmation; {plural(w.barred, "donor")} deferred for good, {plural(w.discarded, "component")} discarded"
+}
+
+fn component_report(site: ref Site, w: ref Week) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for c in 0..3 {
+        parts.push(f"{NAMES[c]} {w.expired[c]}");
+    }
+    f"{site.code} components: {group3(w.produced[0])} red cells, {group3(w.produced[2])} plasma, {group3(w.pools)} platelet pools from {group3(w.buffy)} buffy coats ({w.unpooled} unpooled), {group3(w.aph_units)} apheresis platelets; {group3(sum_of(w.expired))} expired ({parts.join(", ")})"
+}
+
+fn hospital_report(site: ref Site, w: ref Week) -> String {
+    let mut hs: Vec[String] = Vec.new();
+    for h in 0..site.hospitals {
+        hs.push(f"{hospital_code(site, h)} {w.hosp_issued[h]}/{w.hosp_asked[h]}");
+    }
+    let mut short: Vec[String] = Vec.new();
+    for c in 0..3 {
+        short.push(f"{NAMES[c]} {w.short[c]}");
+    }
+    f"{site.code} hospitals: {group3(w.orders)} orders for {group3(w.asked)} units, {group3(w.issued)} issued ({w.substituted} substituted, {w.rh_override} Rh override), {sum_of(w.short)} short ({short.join(", ")}); {hs.join(", ")}"
+}
+
+fn inventory_report(site: ref Site, w: ref Week) -> String {
+    let mut rbc = Vec.filled(8, 0);
+    let mut plt = 0;
+    let mut ffp = 0;
+    let mut soon = 0;
+    for s in w.stock {
+        if s.gone {
+            continue;
+        }
+        if s.comp == 0 {
+            rbc[s.group] += 1;
+        } else if s.comp == 1 {
+            plt += 1;
+        } else {
+            ffp += 1;
+        }
+        if s.exp <= DAYS + 3 {
+            soon += 1;
+        }
+    }
+    let mut cells: Vec[String] = Vec.new();
+    for g in 0..8 {
+        cells.push(f"{GROUPS[g]} {rbc[g]}");
+    }
+    f"{site.code} inventory: red cells {cells.join(", ")}; {plt} platelets, {group3(ffp)} plasma; {soon} expire within 3 days"
+}
+
+// ------------------------------------------------------------ the reserve
+
+// A centre asks for its red cell shortfall in O-negative units; the reserve
+// sends what it has left.
+fn draw(reserve: mut ref Reserve, site: ref Site, w: ref Week) -> String {
+    let asked = w.short[0];
+    let sent = asked.min(reserve.left);
+    reserve.left -= sent;
+    reserve.log.push(f"{site.code},{asked},{sent},{reserve.left}");
+    f"{site.code} reserve: asked for {asked} O- red cells, sent {sent}, {asked - sent} not covered; {reserve.left} left in the reserve"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let nor = Site { code: "NOR", digit: 1, seed: 8101, donors: 2400, visits: 70, hospitals: 3, stock: 260, orders: 24 };
+    let sou = Site { code: "SOU", digit: 2, seed: 8202, donors: 2900, visits: 85, hospitals: 4, stock: 300, orders: 30 };
+    let eas = Site { code: "EAS", digit: 3, seed: 8303, donors: 1800, visits: 55, hospitals: 2, stock: 200, orders: 21 };
+    let wes = Site { code: "WES", digit: 4, seed: 8404, donors: 2100, visits: 60, hospitals: 3, stock: 220, orders: 22 };
+
+    // Four registries, opening stocks and order books, then four weeks of
+    // visits over each centre's own donors and four sets of lab results.
+    let d1 = build_donors(nor);
+    let d2 = build_donors(sou);
+    let d3 = build_donors(eas);
+    let d4 = build_donors(wes);
+    let s1 = build_stock(nor);
+    let s2 = build_stock(sou);
+    let s3 = build_stock(eas);
+    let s4 = build_stock(wes);
+    let o1 = build_orders(nor);
+    let o2 = build_orders(sou);
+    let o3 = build_orders(eas);
+    let o4 = build_orders(wes);
+    let v1 = build_visits(nor, d1);
+    let v2 = build_visits(sou, d2);
+    let v3 = build_visits(eas, d3);
+    let v4 = build_visits(wes, d4);
+    let t1 = build_tests(nor, v1, d1);
+    let t2 = build_tests(sou, v2, d2);
+    let t3 = build_tests(eas, v3, d3);
+    let t4 = build_tests(wes, v4, d4);
+
+    // Twenty writes.
+    let w1 = fs.write("NOR_donors.csv", encode_donors(d1));
+    let w2 = fs.write("NOR_stock.csv", encode_stock(s1));
+    let w3 = fs.write("NOR_visits.csv", encode_visits(v1));
+    let w4 = fs.write("NOR_tests.csv", encode_tests(t1));
+    let w5 = fs.write("NOR_orders.csv", encode_orders(o1));
+    let w6 = fs.write("SOU_donors.csv", encode_donors(d2));
+    let w7 = fs.write("SOU_stock.csv", encode_stock(s2));
+    let w8 = fs.write("SOU_visits.csv", encode_visits(v2));
+    let w9 = fs.write("SOU_tests.csv", encode_tests(t2));
+    let w10 = fs.write("SOU_orders.csv", encode_orders(o2));
+    let w11 = fs.write("EAS_donors.csv", encode_donors(d3));
+    let w12 = fs.write("EAS_stock.csv", encode_stock(s3));
+    let w13 = fs.write("EAS_visits.csv", encode_visits(v3));
+    let w14 = fs.write("EAS_tests.csv", encode_tests(t3));
+    let w15 = fs.write("EAS_orders.csv", encode_orders(o3));
+    let w16 = fs.write("WES_donors.csv", encode_donors(d4));
+    let w17 = fs.write("WES_stock.csv", encode_stock(s4));
+    let w18 = fs.write("WES_visits.csv", encode_visits(v4));
+    let w19 = fs.write("WES_tests.csv", encode_tests(t4));
+    let w20 = fs.write("WES_orders.csv", encode_orders(o4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() or w9.is_err() or w10.is_err()
+        or w11.is_err() or w12.is_err() or w13.is_err() or w14.is_err() or w15.is_err() or w16.is_err() or w17.is_err() or w18.is_err() or w19.is_err() or w20.is_err() {
+        return Err(bad("could not write the week's files"));
+    }
+
+    // A copy of NOR's visits naming a donor it does not have, and of SOU's
+    // lab results with an HIV result that is neither R nor N.
+    let whole = read_text("NOR_visits.csv")?;
+    if fs.write("NOR_visits.bad", damage(whole, 40, 3, "199999")).is_err() {
+        return Err(bad("could not write NOR_visits.bad"));
+    }
+    let whole2 = read_text("SOU_tests.csv")?;
+    if fs.write("SOU_tests.bad", damage(whole2, 30, 3, "X")).is_err() {
+        return Err(bad("could not write SOU_tests.bad"));
+    }
+
+    // Twenty reads.
+    let x1 = read_text("NOR_donors.csv")?;
+    let y1 = read_text("NOR_stock.csv")?;
+    let z1 = read_text("NOR_visits.csv")?;
+    let r1 = read_text("NOR_tests.csv")?;
+    let q1 = read_text("NOR_orders.csv")?;
+    let x2 = read_text("SOU_donors.csv")?;
+    let y2 = read_text("SOU_stock.csv")?;
+    let z2 = read_text("SOU_visits.csv")?;
+    let r2 = read_text("SOU_tests.csv")?;
+    let q2 = read_text("SOU_orders.csv")?;
+    let x3 = read_text("EAS_donors.csv")?;
+    let y3 = read_text("EAS_stock.csv")?;
+    let z3 = read_text("EAS_visits.csv")?;
+    let r3 = read_text("EAS_tests.csv")?;
+    let q3 = read_text("EAS_orders.csv")?;
+    let x4 = read_text("WES_donors.csv")?;
+    let y4 = read_text("WES_stock.csv")?;
+    let z4 = read_text("WES_visits.csv")?;
+    let r4 = read_text("WES_tests.csv")?;
+    let q4 = read_text("WES_orders.csv")?;
+    println(file_line("NOR donors", x1));
+    println(file_line("NOR stock", y1));
+    println(file_line("NOR visits", z1));
+    println(file_line("NOR tests", r1));
+    println(file_line("NOR orders", q1));
+    println(file_line("SOU donors", x2));
+    println(file_line("SOU stock", y2));
+    println(file_line("SOU visits", z2));
+    println(file_line("SOU tests", r2));
+    println(file_line("SOU orders", q2));
+    println(file_line("EAS donors", x3));
+    println(file_line("EAS stock", y3));
+    println(file_line("EAS visits", z3));
+    println(file_line("EAS tests", r3));
+    println(file_line("EAS orders", q3));
+    println(file_line("WES donors", x4));
+    println(file_line("WES stock", y4));
+    println(file_line("WES visits", z4));
+    println(file_line("WES tests", r4));
+    println(file_line("WES orders", q4));
+
+    // Four registries, four stocks and four order books, then four visit
+    // files, which need the registry, then four sets of results, which
+    // need the visits. Each can fail with `?`, so a parallel run has to
+    // report the first failure in source order.
+    let pd1 = parse_donors("NOR_donors.csv", nor, x1)?;
+    let pd2 = parse_donors("SOU_donors.csv", sou, x2)?;
+    let pd3 = parse_donors("EAS_donors.csv", eas, x3)?;
+    let pd4 = parse_donors("WES_donors.csv", wes, x4)?;
+    let ps1 = parse_stock("NOR_stock.csv", nor, y1)?;
+    let ps2 = parse_stock("SOU_stock.csv", sou, y2)?;
+    let ps3 = parse_stock("EAS_stock.csv", eas, y3)?;
+    let ps4 = parse_stock("WES_stock.csv", wes, y4)?;
+    let po1 = parse_orders("NOR_orders.csv", nor, q1)?;
+    let po2 = parse_orders("SOU_orders.csv", sou, q2)?;
+    let po3 = parse_orders("EAS_orders.csv", eas, q3)?;
+    let po4 = parse_orders("WES_orders.csv", wes, q4)?;
+    let pv1 = parse_visits("NOR_visits.csv", nor, pd1, z1)?;
+    let pv2 = parse_visits("SOU_visits.csv", sou, pd2, z2)?;
+    let pv3 = parse_visits("EAS_visits.csv", eas, pd3, z3)?;
+    let pv4 = parse_visits("WES_visits.csv", wes, pd4, z4)?;
+    let pt1 = parse_tests("NOR_tests.csv", nor, pv1, r1)?;
+    let pt2 = parse_tests("SOU_tests.csv", sou, pv2, r2)?;
+    let pt3 = parse_tests("EAS_tests.csv", eas, pv3, r3)?;
+    let pt4 = parse_tests("WES_tests.csv", wes, pv4, r4)?;
+    match parse_visits("NOR_visits.bad", nor, pd1, read_text("NOR_visits.bad")?) {
+        Ok(_) => println("NOR_visits.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_tests("SOU_tests.bad", sou, pv2, read_text("SOU_tests.bad")?) {
+        Ok(_) => println("SOU_tests.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_orders("EAS_orders.csv", wes, q3) {
+        Ok(_) => println("EAS_orders.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = pd1 == d1 and pd2 == d2 and pd3 == d3 and pd4 == d4 and ps1 == s1 and ps2 == s2 and ps3 == s3 and ps4 == s4
+        and pv1 == v1 and pv2 == v2 and pv3 == v3 and pv4 == v4 and pt1 == t1 and pt2 == t2 and pt3 == t3 and pt4 == t4
+        and po1 == o1 and po2 == o2 and po3 == o3 and po4 == o4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four week closes, the hot group.
+    let m1 = close_week(nor, pd1, ps1, pv1, pt1, po1);
+    let m2 = close_week(sou, pd2, ps2, pv2, pt2, po2);
+    let m3 = close_week(eas, pd3, ps3, pv3, pt3, po3);
+    let m4 = close_week(wes, pd4, ps4, pv4, pt4, po4);
+
+    // The issues and the closing inventory, written and read back.
+    let e1 = fs.write("NOR_issues.csv", encode_issues(m1));
+    let e2 = fs.write("NOR_inventory.csv", encode_inventory(m1));
+    let e3 = fs.write("SOU_issues.csv", encode_issues(m2));
+    let e4 = fs.write("SOU_inventory.csv", encode_inventory(m2));
+    let e5 = fs.write("EAS_issues.csv", encode_issues(m3));
+    let e6 = fs.write("EAS_inventory.csv", encode_inventory(m3));
+    let e7 = fs.write("WES_issues.csv", encode_issues(m4));
+    let e8 = fs.write("WES_inventory.csv", encode_inventory(m4));
+    if e1.is_err() or e2.is_err() or e3.is_err() or e4.is_err() or e5.is_err() or e6.is_err() or e7.is_err() or e8.is_err() {
+        return Err(bad("could not write the issues"));
+    }
+    let i1 = read_text("NOR_issues.csv")?;
+    let n1 = read_text("NOR_inventory.csv")?;
+    let i2 = read_text("SOU_issues.csv")?;
+    let n2 = read_text("SOU_inventory.csv")?;
+    let i3 = read_text("EAS_issues.csv")?;
+    let n3 = read_text("EAS_inventory.csv")?;
+    let i4 = read_text("WES_issues.csv")?;
+    let n4 = read_text("WES_inventory.csv")?;
+    println(file_line("NOR issues", i1));
+    println(file_line("NOR inventory", n1));
+    println(file_line("SOU issues", i2));
+    println(file_line("SOU inventory", n2));
+    println(file_line("EAS issues", i3));
+    println(file_line("EAS inventory", n3));
+    println(file_line("WES issues", i4));
+    println(file_line("WES inventory", n4));
+
+    // Reports that only read what came before.
+    let c1 = collection_report(nor, m1);
+    let c2 = collection_report(sou, m2);
+    let c3 = collection_report(eas, m3);
+    let c4 = collection_report(wes, m4);
+    let l1 = testing_report(nor, m1);
+    let l2 = testing_report(sou, m2);
+    let l3 = testing_report(eas, m3);
+    let l4 = testing_report(wes, m4);
+    let k1 = component_report(nor, m1);
+    let k2 = component_report(sou, m2);
+    let k3 = component_report(eas, m3);
+    let k4 = component_report(wes, m4);
+    let h1 = hospital_report(nor, m1);
+    let h2 = hospital_report(sou, m2);
+    let h3 = hospital_report(eas, m3);
+    let h4 = hospital_report(wes, m4);
+    let b1 = inventory_report(nor, m1);
+    let b2 = inventory_report(sou, m2);
+    let b3 = inventory_report(eas, m3);
+    let b4 = inventory_report(wes, m4);
+    for line in [c1, c2, c3, c4, l1, l2, l3, l4, k1, k2, k3, k4, h1, h2, h3, h4, b1, b2, b3, b4] {
+        println(line);
+    }
+
+    // The reserve covers from what the centres before have left, so the
+    // centres draw in order.
+    let mut reserve = Reserve { left: RESERVE, log: Vec.new() };
+    println(draw(mut reserve, nor, m1));
+    println(draw(mut reserve, sou, m2));
+    println(draw(mut reserve, eas, m3));
+    println(draw(mut reserve, wes, m4));
+    if fs.write("reserve.log", f"{reserve.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write reserve.log"));
+    }
+    let back = read_text("reserve.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"reserve.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for code in ["NOR", "SOU", "EAS", "WES"] {
+        for name in ["donors", "stock", "visits", "tests", "orders", "issues", "inventory"] {
+            let _ = fs.remove_file(f"{code}_{name}.csv");
+        }
+    }
+    for p in ["NOR_visits.bad", "SOU_tests.bad", "reserve.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"blood_bank failed: {e.describe()}"),
+    }
+}
