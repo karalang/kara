@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 33 |
-| false-positive | 30 |
+| diagnostics | 34 |
+| false-positive | 32 |
 | missing-feature | 26 |
 | perf | 10 |
 | miscompile | 8 |
@@ -73,11 +73,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 52 |
+| typecheck | 54 |
 | mir | 25 |
 | codegen | 22 |
 | interp | 17 |
-| cli | 14 |
+| cli | 15 |
 | ownership | 11 |
 | runtime | 8 |
 | mir-llvm | 7 |
@@ -147,6 +147,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-30 | 2026-10-25 | mir | low | A `?` chain that crosses a task boundary prints the frames left on the exiting thread instead of design.md's `Error return trace: unavailable (the ? chain was split across parallel tasks)`; waits on M4 item 10's pool | — |
 | B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher reaches v2 only as a fixed walk key on an annotated `let`: a user `BuildHasher`'s build/write/finish never run, FxBuildHasher hashes with the default, and a hasher named on a struct field, parameter, return type or turbofish is dropped | — |
 | B-2026-10-25-32 | 2026-10-25 | typecheck+mir | medium | A method call on a value of an associated type of a generic bound (`let h = b.build(); h.finish()` with `B: BuildHasher`) passes `karac check` but the MIR build fails: "a type that failed to check is not lowered yet" | — |
+| B-2026-10-25-33 | 2026-10-25 | typecheck | medium | `karac check` refuses a bare use of a program's own variant named like a `std.regex` / `std.json` item (a pattern `Match(n)` on `enum E { Match(i64) }`) as an unimported use of the library item, and `karac fix` adds an `import std.regex.{Match};` | — |
+| B-2026-10-25-34 | 2026-10-25 | typecheck | high | In a package, a function a module imports from a sibling (`import ast.{take}`) is typed as the library's generic `take(mut ref T) -> T` in the importing module's per-module check when the library has a function of that name, so `karac check`, `karac run` and `karac build` refuse a correct call `take(b)` with three invented errors | — |
+| B-2026-10-25-35 | 2026-10-25 | cli | medium | A package's v2 check reports places in the combined source inside its diagnostics: a move-after-use message names the combined line (`moved at line 10:17` for main.kara:4:17), the snippet's gutter is misaligned, and the `--output=json` `replacement` is an offset into the combined text (here a `#[derive(Clone)]` at offset 0, which is the first module's, under `file: src/main.kara`) | — |
 
 ### Fixed
 
