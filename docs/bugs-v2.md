@@ -142,7 +142,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-41 | 2026-10-25 | runtime+interp | medium | Server.serve/serve_tls/serve_ws/serve_ws_tls serve connections one at a time; a stalled handshake or request blocks the accept loop | — |
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
 | B-2026-10-25-45 | 2026-10-25 | mir | low | A `weak T` local (`let w: weak N = a;`) passes `karac check` but every MIR backend refuses it: "a type that failed to check is not lowered yet" at its first use | — |
-| B-2026-10-25-46 | 2026-10-25 | typecheck | medium | A `ref` to a `shared` enum IMPORTED from another module is still refused in a package ("expected 'E', found 'ref E'"): B-2026-10-25-12's fix covers a lone file, not the package check's per-module typecheck | — |
+| B-2026-10-25-46 | 2026-10-25 | typecheck | medium | In a package of several modules, the package check's per-module typecheck refuses what the v2 check of the combined source accepts, and its refusal stands: a `ref` to an IMPORTED `shared` enum ("expected 'E', found 'ref E'", which B-2026-10-25-12 fixed for a lone file) and `f64.parse(s).ok()` ("no method 'ok' on type 'Option'": it types `parse` as returning `Option`, not docs/library/core-types.md's `Result`) | — |
 
 ### Fixed
 
