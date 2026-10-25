@@ -6126,6 +6126,19 @@ impl<'a> TypeChecker<'a> {
     fn reads_as_value(&self, t: &Type) -> bool {
         match t {
             Type::Shared(_) => true,
+            // A `shared` / `sync` enum, or a generic `shared` struct, is a
+            // handle spelled `Type::Named` (B-2026-10-25-12).
+            Type::Named { name, .. }
+                if self
+                    .env
+                    .structs
+                    .get(name)
+                    .map(|i| i.is_shared || i.is_par)
+                    .or_else(|| self.env.enums.get(name).map(|i| i.is_shared || i.is_par))
+                    .unwrap_or(false) =>
+            {
+                true
+            }
             Type::Tuple(ts) => ts.iter().all(|t| self.reads_as_value(t)),
             Type::Named { name, args } if name == "Option" => {
                 args.iter().all(|t| self.reads_as_value(t))

@@ -13871,6 +13871,31 @@ fn a_sync_type_holds_only_cross_task_fields_and_counts_as_a_handle() {
 }
 
 #[test]
+fn a_ref_to_a_shared_or_sync_enum_reads_as_the_handle() {
+    // B-2026-10-25-12: a `ref` to a handle reads as a counted copy of it
+    // (core-semantics §6.1) in an argument, a constructor and a `return`.
+    // A `shared` struct always did; a `shared` / `sync` enum is spelled
+    // `Named`, not `Shared`, and was refused with "expected 'E', found
+    // 'ref E'" (or, for `sync`, as a move out of a borrow).
+    for decl in ["shared", "sync"] {
+        accepted_and_runs(
+            &format!("ref-to-a-{decl}-enum-reads-as-the-handle"),
+            &format!(
+                "{decl} enum E {{\n    A(i64),\n    B,\n}}\n{decl} struct S {{\n    n: i64,\n}}\n\
+                 fn size(e: E) -> i64 {{\n    match e {{\n        E.A(n) => n,\n        E.B => 0,\n    }}\n}}\n\
+                 fn first(v: ref Vec[E]) -> Option[E] {{\n    for e in v {{\n        return Some(e);\n    }}\n    None\n}}\n\
+                 fn first_s(v: ref Vec[S]) -> Option[S] {{\n    for s in v {{\n        return Some(s);\n    }}\n    None\n}}\n\
+                 fn main() {{\n    let v = Vec[E.A(4), E.B];\n    let r = ref v[0];\n    let mut t = 0;\n    \
+                 for e in v.iter() {{\n        t = t + size(e);\n    }}\n    let w = Vec[S {{ n: 3 }}];\n    \
+                 let k = match first(v) {{\n        Some(e) => size(e),\n        None => -1,\n    }};\n    \
+                 println(f\"{{size(r)}} {{t}} {{k}} {{first_s(w).unwrap().n}}\");\n}}\n"
+            ),
+            "4 4 4 3\n",
+        );
+    }
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

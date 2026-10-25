@@ -6454,7 +6454,8 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn copy_is_only_an_rc_retain(&self, ty: &Type) -> bool {
         match ty {
             Type::Shared(_) => true,
-            Type::Named { name, args } if self.name_is_shared_decl(name) => {
+            // A `sync` enum is as counted as a `shared` one (B-2026-10-25-12).
+            Type::Named { name, args } if self.name_is_rc_backed_decl(name) => {
                 let _ = args;
                 true
             }
