@@ -6,7 +6,7 @@
 //! backend, so an atomic's operations are plain loads and stores.
 
 use inkwell::values::{IntValue, PointerValue};
-use inkwell::IntPredicate;
+use inkwell::{AtomicOrdering, AtomicRMWBinOp, IntPredicate};
 
 use super::callable::Callee;
 use super::{Cx, R};
@@ -269,28 +269,58 @@ impl<'ctx> Cx<'ctx, '_> {
         let Some(Cell::Inline(t)) = library_cell(self.tys, ct) else {
             return Ok(None);
         };
+        // Every operation is sequentially consistent (concurrency.md
+        // "Atomics"); a trailing ordering argument is the deprecated form
+        // and only ever as strong.
+        let seq = AtomicOrdering::SequentiallyConsistent;
+        let width = self.llvm_ty(t)?.into_int_type();
+        let align = width.get_bit_width().div_ceil(8);
         match (method, &args[1..]) {
-            ("load" | "into_inner", [..]) => {
+            ("into_inner", [..]) => {
                 let d = self.place_ptr(dest)?;
                 self.copy(d, cell, t)?;
+            }
+            ("load", [..]) => {
+                let v = self.atomic_load(cell, t)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, v.into())?;
             }
             ("get_mut", []) => {
                 let d = self.place_ptr(dest)?;
                 self.store(d, cell.into())?;
             }
-            ("store", [v, ..]) => self.store_operand(cell, v)?,
+            ("store", [v, ..]) => {
+                let v = self.operand_scalar(v)?;
+                let i = self.builder.build_store(cell, v).map_err(e)?;
+                i.set_alignment(align).map_err(e)?;
+                i.set_atomic_ordering(seq).map_err(e)?;
+            }
             ("swap", [v, ..]) => {
+                let v = self.operand_scalar(v)?.into_int_value();
+                let old = self
+                    .builder
+                    .build_atomicrmw(AtomicRMWBinOp::Xchg, cell, v, seq)
+                    .map_err(e)?;
                 let d = self.place_ptr(dest)?;
-                self.copy(d, cell, t)?;
-                self.store_operand(cell, v)?;
+                self.store(d, old.into())?;
             }
             ("compare_exchange" | "compare_exchange_weak", [x, v, ..]) => {
-                let old = self.load(cell, t)?.into_int_value();
                 let want = self.operand_scalar(x)?.into_int_value();
+                let new = self.operand_scalar(v)?.into_int_value();
+                let r = self
+                    .builder
+                    .build_cmpxchg(cell, want, new, seq, seq)
+                    .map_err(e)?;
+                let old = self
+                    .builder
+                    .build_extract_value(r, 0, "")
+                    .map_err(e)?
+                    .into_int_value();
                 let same = self
                     .builder
-                    .build_int_compare(IntPredicate::EQ, old, want, "")
-                    .map_err(e)?;
+                    .build_extract_value(r, 1, "")
+                    .map_err(e)?
+                    .into_int_value();
                 let d = self.place_ptr(dest)?;
                 let (ok, er) = (self.variant_of(dty, "Ok")?, self.variant_of(dty, "Err")?);
                 self.store_tag(d, dty, er)?;
@@ -299,12 +329,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ok_off = self.field_offset(dty, Some(ok), 0)?;
                 self.if_then(same, |cx| {
                     cx.store_tag(d, dty, ok)?;
-                    cx.store(cx.offset(d, ok_off)?, old.into())?;
-                    cx.store_operand(cell, v)
+                    cx.store(cx.offset(d, ok_off)?, old.into())
                 })?;
             }
             (m, [v, ..]) if m.starts_with("fetch_") => {
-                let old = self.load(cell, t)?.into_int_value();
                 let rhs = self.operand_scalar(v)?.into_int_value();
                 let signed = matches!(
                     self.tys.kind(t),
@@ -317,22 +345,94 @@ impl<'ctx> Cx<'ctx, '_> {
                             | IntTy::Isize
                     )
                 );
-                let Some(new) = self.fetch_op(&m["fetch_".len()..], old, rhs, signed)? else {
-                    return Ok(None);
+                let bool = matches!(self.tys.kind(t), TyKind::Bool);
+                let op = &m["fetch_".len()..];
+                let rmw = match (op, signed) {
+                    ("add", _) => Some(AtomicRMWBinOp::Add),
+                    ("sub", _) => Some(AtomicRMWBinOp::Sub),
+                    ("and", _) => Some(AtomicRMWBinOp::And),
+                    ("or", _) => Some(AtomicRMWBinOp::Or),
+                    ("xor", _) => Some(AtomicRMWBinOp::Xor),
+                    // A bool's nand is masked back to one bit below.
+                    ("nand", _) if !bool => Some(AtomicRMWBinOp::Nand),
+                    ("max", true) => Some(AtomicRMWBinOp::Max),
+                    ("max", false) => Some(AtomicRMWBinOp::UMax),
+                    ("min", true) => Some(AtomicRMWBinOp::Min),
+                    ("min", false) => Some(AtomicRMWBinOp::UMin),
+                    _ => None,
                 };
-                let new = if matches!(self.tys.kind(t), TyKind::Bool) {
-                    let one = new.get_type().const_int(1, false);
-                    self.builder.build_and(new, one, "").map_err(e)?
-                } else {
-                    new
+                let old = match rmw {
+                    Some(rmw) => self
+                        .builder
+                        .build_atomicrmw(rmw, cell, rhs, seq)
+                        .map_err(e)?,
+                    None => {
+                        // A compare-and-swap loop over the plain update.
+                        let f = self.cur_fn()?;
+                        let (top, done) = (
+                            self.llcx.append_basic_block(f, "atomic.update"),
+                            self.llcx.append_basic_block(f, "atomic.updated"),
+                        );
+                        let first = self.atomic_load(cell, t)?;
+                        let from = self.builder.get_insert_block().ok_or("no block")?;
+                        self.builder.build_unconditional_branch(top).map_err(e)?;
+                        self.builder.position_at_end(top);
+                        let phi = self.builder.build_phi(width, "").map_err(e)?;
+                        let old = phi.as_basic_value().into_int_value();
+                        let Some(new) = self.fetch_op(op, old, rhs, signed)? else {
+                            return Ok(None);
+                        };
+                        let new = if bool {
+                            let one = new.get_type().const_int(1, false);
+                            self.builder.build_and(new, one, "").map_err(e)?
+                        } else {
+                            new
+                        };
+                        let r = self
+                            .builder
+                            .build_cmpxchg(cell, old, new, seq, seq)
+                            .map_err(e)?;
+                        let seen = self
+                            .builder
+                            .build_extract_value(r, 0, "")
+                            .map_err(e)?
+                            .into_int_value();
+                        let swapped = self
+                            .builder
+                            .build_extract_value(r, 1, "")
+                            .map_err(e)?
+                            .into_int_value();
+                        let again = self.builder.get_insert_block().ok_or("no block")?;
+                        phi.add_incoming(&[(&first, from), (&seen, again)]);
+                        self.builder
+                            .build_conditional_branch(swapped, done, top)
+                            .map_err(e)?;
+                        self.builder.position_at_end(done);
+                        old
+                    }
                 };
                 let d = self.place_ptr(dest)?;
                 self.store(d, old.into())?;
-                self.store(cell, new.into())?;
             }
             _ => return Ok(None),
         }
         Ok(Some(()))
+    }
+
+    /// The sequentially consistent load of the `Atomic[T]` cell at `cell`.
+    fn atomic_load(&self, cell: PointerValue<'ctx>, t: Ty) -> R<IntValue<'ctx>> {
+        let width = self.llvm_ty(t)?.into_int_type();
+        let v = self
+            .builder
+            .build_load(width, cell, "")
+            .map_err(e)?
+            .into_int_value();
+        let i = v.as_instruction().ok_or("a load")?;
+        i.set_alignment(width.get_bit_width().div_ceil(8))
+            .map_err(e)?;
+        i.set_atomic_ordering(AtomicOrdering::SequentiallyConsistent)
+            .map_err(e)?;
+        Ok(v)
     }
 
     fn fetch_op(

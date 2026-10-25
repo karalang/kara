@@ -726,11 +726,11 @@ impl<'ctx> Cx<'ctx, '_> {
             .map_err(|e| e.to_string())?;
         self.builder.position_at_end(top);
         let b = self.load_ptr(cur)?;
-        // Hold a weak count across the drop: the body may hold the last
-        // weak handle to its own box, whose release must not free it.
+        // The weak count the strong handles held together keeps the box
+        // through the drop, so the body may release the last weak handle
+        // to its own box without freeing it.
         let atomic = self.atomic_counts(ty);
         let wp = self.offset(b, 8)?;
-        self.add_count(wp, true, atomic)?;
         if self.adt_has_drop_body(a)? {
             // The body takes a reference to a handle, as every read
             // through one does: a handle on `b`.
@@ -826,14 +826,13 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_not(empty, "")
             .map_err(|e| e.to_string())?;
         self.if_then(some, |cx| {
+            // While a strong handle lives the weak count is at least the
+            // one they hold together, so it reaches 0 only once the body
+            // is dropped: no read of the strong count, which another
+            // thread's last release could race.
             let wp = cx.offset(b, 8)?;
             let left = cx.add_count(wp, false, atomic)?;
-            let strong = cx.load_count(b, atomic)?;
-            let both = cx
-                .builder
-                .build_or(left, strong, "")
-                .map_err(|e| e.to_string())?;
-            let dead = cx.is_zero(both)?;
+            let dead = cx.is_zero(left)?;
             cx.if_then(dead, |cx| cx.free(b))
         })?;
         debug_assert_eq!(SHARED_COUNTS, 16);
@@ -1381,10 +1380,12 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
         // `Option[Node]` is a bare pointer: `None` is null.
         assert!(layout::null_niche(&l.tys, next_ty).is_some());
 
+        // `weak` counts the weak handles; the strong ones hold one more
+        // weak count together.
         let new_box = |strong: u64, weak: u64| {
             let b = alloc((body + size) as usize);
             put(b, 0, strong);
-            put(b, 8, weak);
+            put(b, 8, weak + 1);
             let name = string_at(unsafe { b.add((body + off(&l, node, None, 0)) as usize) });
             put(b, body + off(&l, node, None, 1), 0);
             (b, name)

@@ -794,13 +794,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let up = self.builder.build_int_add(n, self.i64(1), "").map_err(e)?;
         let r = self
             .builder
-            .build_cmpxchg(
-                h,
-                n,
-                up,
-                AtomicOrdering::Monotonic,
-                AtomicOrdering::Monotonic,
-            )
+            .build_cmpxchg(h, n, up, AtomicOrdering::Acquire, AtomicOrdering::Monotonic)
             .map_err(e)?;
         let swapped = self
             .builder
@@ -1480,8 +1474,10 @@ impl<'ctx> Cx<'ctx, '_> {
                     .ok_or("malloc returns nothing")?
                     .into_pointer_value();
                 self.builder.build_store(h, self.i64(1)).map_err(e)?;
+                // The strong handles together hold one weak count, given
+                // back once the body is dropped ([`Cx::release_last`]).
                 let w = self.offset(h, 8)?;
-                self.builder.build_store(w, self.i64(0)).map_err(e)?;
+                self.builder.build_store(w, self.i64(1)).map_err(e)?;
                 let b = self.offset(h, off)?;
                 self.fill_adt(b, *sty, variant.0, ops)?;
                 self.store(dst, h.into())

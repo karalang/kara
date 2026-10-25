@@ -2,8 +2,11 @@
 //! M4 item 10a): a `sync struct` / `sync enum` handle's strong and weak
 //! counts change by atomic read-modify-write, and a weak upgrade checks
 //! liveness and raises the count in one compare-and-swap, while a plain
-//! `shared` type keeps its plain loads and stores. Each program prints the
-//! same on the interpreter, built, and under ASan.
+//! `shared` type keeps its plain loads and stores. The strong handles of
+//! every `shared` box hold one weak count together (item 10a-2), so a weak
+//! release never reads the strong count, and `Atomic[T]` is sequentially
+//! consistent atomics (item 10a-3). Each program prints the same on the
+//! interpreter, built, and under ASan.
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -273,4 +276,106 @@ fn mir_sync_counts_only_sync_types_count_atomically() {
         .replace("sync struct", "shared struct")
         .replace("sync enum", "shared enum");
     assert_eq!(atomics(&ir_of("ir", "plain", &plain)), 0);
+}
+
+/// The weak count the strong handles hold together: a weak handle released
+/// while its object lives, one to the object itself in its own field (read
+/// in its `Drop` body as gone), one that outlives it, and a long chain
+/// released by the loop.
+#[test]
+fn mir_sync_counts_weak_handles_around_the_last_release() {
+    let src = r#"shared struct N {
+    id: i64,
+    mut me: weak N,
+    mut next: Option[N],
+}
+
+impl Drop for N {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} self alive {self.me.is_some()}");
+    }
+}
+
+struct Watch {
+    of: weak N,
+}
+
+fn main() {
+    let w = {
+        let a = N { id: 1, me: Option.None, next: Option.None };
+        a.me = a;
+        {
+            let early = Watch { of: a };
+            println(f"early {early.of.is_some()}");
+        }
+        {
+            let mut head = N { id: 2, me: Option.None, next: Option.None };
+            for i in 3..6 {
+                head = N { id: i, me: Option.None, next: Option.Some(head) };
+            }
+            println(f"chain head {head.id}");
+        }
+        Watch { of: a }
+    };
+    println(f"after {w.of.is_some()}");
+}
+"#;
+    let want = "early true\nchain head 5\ndrop 5 self alive false\ndrop 4 self alive false\ndrop 3 self alive false\ndrop 2 self alive false\ndrop 1 self alive false\nafter false\n";
+    assert_eq!(stdout_on_both("weak", src), want);
+    if let Some(out) = asan_stdout("weak", src) {
+        assert_eq!(out, want);
+    }
+}
+
+const ATOMICS: &str = r#"import std.sync.{Atomic};
+
+sync struct Stats {
+    n: Atomic[i64],
+    u: Atomic[u32],
+    flag: Atomic[bool],
+}
+
+fn bump(s: Stats, k: i64) -> i64 {
+    sleep_ms(5);
+    s.n.fetch_add(k)
+}
+
+fn main() {
+    let s = Stats { n: Atomic.new(10), u: Atomic.new(4_u32), flag: Atomic.new(false) };
+    println(f"{s.n.fetch_add(5)} {s.n.load()}");
+    println(f"{s.n.fetch_sub(20)} {s.n.load()}");
+    println(f"{s.n.swap(7)} {s.n.load()}");
+    match s.n.compare_exchange(7, 9) { Ok(p) => println(f"ok {p}"), Err(a) => println(f"err {a}") }
+    match s.n.compare_exchange(7, 11) { Ok(p) => println(f"ok {p}"), Err(a) => println(f"err {a}") }
+    println(f"{s.u.fetch_sub(5_u32)} {s.u.load()}");
+    s.flag.store(true);
+    println(f"{s.flag.load()} {s.flag.swap(false)} {s.flag.load()}");
+    match s.flag.compare_exchange(false, true) { Ok(p) => println(f"ok {p}"), Err(a) => println(f"err {a}") }
+    let g = TaskGroup.new();
+    let a = { let c = s.clone(); g.spawn(|| bump(c, 100)) };
+    let b = { let c = s.clone(); g.spawn(|| bump(c, 1000)) };
+    let _ = a.join() + b.join();
+    println(f"end {s.n.load()}");
+}
+"#;
+
+/// Every `Atomic[T]` method on `i64`, `u32` and `bool`, and two tasks
+/// adding to one counter.
+#[test]
+fn mir_sync_counts_atomic_methods() {
+    let want =
+        "10 15\n15 -5\n-5 7\nok 7\nerr 9\n4 4294967295\ntrue true false\nok false\nend 1109\n";
+    assert_eq!(stdout_on_both("atomics", ATOMICS), want);
+    if let Some(out) = asan_stdout("atomics", ATOMICS) {
+        assert_eq!(out, want);
+    }
+}
+
+/// `Atomic[T]` loads and stores are atomic instructions, not plain ones.
+#[test]
+fn mir_sync_counts_atomic_cells_are_atomic_instructions() {
+    let ir = ir_of("atomic-ir", "a", ATOMICS);
+    assert!(ir.contains("load atomic i64"), "no atomic load");
+    assert!(ir.contains("store atomic i8"), "no atomic bool store");
+    assert!(ir.contains("atomicrmw xchg"), "no atomic swap");
 }
