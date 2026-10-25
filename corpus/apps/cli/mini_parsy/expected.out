@@ -1,0 +1,945 @@
+== 1 string parse 'x'
+  'x'
+== 2 string parse 'y'
+  ! ParseError: expected 'x' at 0:0
+== 3 string parse ''
+  ! ParseError: expected 'x' at 0:0
+== 4 string parse 'xx'
+  ! ParseError: expected 'EOF' at 0:1
+== 5 string_lower parse 'x'
+  'x'
+== 6 string_lower parse 'X'
+  'x'
+== 7 string_lower parse 'y'
+  ! ParseError: expected 'x' at 0:0
+== 8 string_cat parse 'cat'
+  'Cat'
+== 9 string_cat parse 'CAT'
+  'Cat'
+== 10 string_cat parse 'CaT'
+  'Cat'
+== 11 string_cat parse 'dog'
+  ! ParseError: expected 'Cat' at 0:0
+== 12 string_cat parse 'Ca'
+  ! ParseError: expected 'Cat' at 0:0
+== 13 regex_digit parse '1'
+  '1'
+== 14 regex_digit parse '4'
+  '4'
+== 15 regex_digit parse 'x'
+  ! ParseError: expected '[0-9]' at 0:0
+== 16 regex_digit parse ''
+  ! ParseError: expected '[0-9]' at 0:0
+== 17 regex_group parse 'a1b'
+  '1'
+== 18 regex_group parse 'x'
+  ! ParseError: expected 'a([0-9])b' at 0:0
+== 19 regex_group parse 'a12b'
+  ! ParseError: expected 'a([0-9])b' at 0:0
+== 20 regex_name parse 'a1b'
+  '1'
+== 21 regex_name parse 'x'
+  ! ParseError: expected 'a(?P<name>[0-9])b' at 0:0
+== 22 regex_tuple parse 'a1b2c'
+  ('1', '2')
+== 23 regex_tuple parse 'x'
+  ! ParseError: expected 'a([0-9])b([0-9])c' at 0:0
+== 24 regex_tuple parse 'a1b2'
+  ! ParseError: expected 'a([0-9])b([0-9])c' at 0:0
+== 25 regex_optional_group parse '12.5'
+  ('12', '5')
+== 26 regex_optional_group parse '12'
+  ('12', None)
+== 27 regex_optional_group parse '12.'
+  ! ParseError: expected 'EOF' at 0:2
+== 28 regex_optional_group partial '12.'
+  (('12', None), '.')
+== 29 regex_optional_group partial '3.14.15'
+  (('3', '14'), '.15')
+== 30 regex_flags parse 'SELECT name'
+  'name'
+== 31 regex_flags parse 'select  id'
+  'id'
+== 32 regex_flags parse 'Select'
+  ! ParseError: expected 'select\\s+(\\w+)' at 0:0
+== 33 regex_flags parse 'update x'
+  ! ParseError: expected 'select\\s+(\\w+)' at 0:0
+== 34 then parse 'xy'
+  'y'
+== 35 then parse 'y'
+  ! ParseError: expected 'x' at 0:0
+== 36 then parse 'z'
+  ! ParseError: expected 'x' at 0:0
+== 37 then parse 'x'
+  ! ParseError: expected 'y' at 0:1
+== 38 bind parse 'xy'
+  'y'
+== 39 bind parse 'x'
+  ! ParseError: expected 'y' at 0:1
+== 40 bind parse 'xz'
+  ! ParseError: expected 'y' at 0:1
+== 41 bind_double parse 'aa'
+  'aa'
+== 42 bind_double parse 'ab'
+  ! ParseError: expected 'a' at 0:1
+== 43 bind_double parse 'zz'
+  'zz'
+== 44 bind_double parse '1'
+  ! ParseError: expected '[a-z]' at 0:0
+== 45 map parse '7'
+  7
+== 46 map parse 'x'
+  ! ParseError: expected 'a digit' at 0:0
+== 47 combine parse '1A'
+  ('1', 'A')
+== 48 combine parse 'A1'
+  ! ParseError: expected 'a digit' at 0:0
+== 49 combine_dict_date parse '05042003'
+  datetime.date(2003, 4, 5)
+== 50 combine_dict_date parse '29022024'
+  datetime.date(2024, 2, 29)
+== 51 combine_dict_date parse '0504200'
+  ! ParseError: expected '[0-9]{4}' at 0:4
+== 52 combine_dict_pair parse 'ABC123'
+  Pair(word='ABC', number=123)
+== 53 combine_dict_pair parse 'ABC'
+  ! ParseError: expected '[0-9]+' at 0:3
+== 54 combine_dict_pair parse 'abc123'
+  ! ParseError: expected '[A-Z]+' at 0:0
+== 55 combine_dict_none parse 'ABC   123'
+  Pair(word='ABC', number=123)
+== 56 combine_dict_none parse 'ABC123'
+  ! ParseError: expected '\\s+' at 0:3
+== 57 combine_dict_underscore parse 'ABC   123'
+  Pair(word='ABC', number=123)
+== 58 combine_dict_underscore parse 'ABC \t\n 7'
+  Pair(word='ABC', number=7)
+== 59 concat parse ''
+  ''
+== 60 concat parse 'abc'
+  'abc'
+== 61 concat parse 'ab1'
+  ! ParseError: expected one of 'EOF', 'a letter' at 0:2
+== 62 generate parse 'xy'
+  3
+== 63 generate parse 'x'
+  ! ParseError: expected 'y' at 0:1
+== 64 generate parse 'yx'
+  ! ParseError: expected 'x' at 0:0
+== 65 generate_parser parse 'xy'
+  'y'
+== 66 generate_parser parse 'xx'
+  ! ParseError: expected 'y' at 0:1
+== 67 mark parse 'asdf\nqwer\n'
+  [((0, 0), ['a', 's', 'd', 'f'], (0, 4)), ((1, 0), ['q', 'w', 'e', 'r'], (1, 4))]
+== 68 mark parse 'a\n\nbc\n'
+  [((0, 0), ['a'], (0, 1)), ((1, 0), [], (1, 0)), ((2, 0), ['b', 'c'], (2, 2))]
+== 69 mark parse 'ab\ncd'
+  ! ParseError: expected one of '\n', 'a letter' at 1:2
+== 70 tag parse 'this,is,a,list'
+  [('word', 'this'), ('word', 'is'), ('word', 'a'), ('word', 'list')]
+== 71 tag parse ''
+  [('word', '')]
+== 72 tag parse 'one,,two'
+  [('word', 'one'), ('word', ''), ('word', 'two')]
+== 73 tag_dict parse 'Hello'
+  {'first_letter': 'H', 'remainder': 'ello'}
+== 74 tag_dict parse 'H'
+  {'first_letter': 'H', 'remainder': ''}
+== 75 tag_dict parse ''
+  ! ParseError: expected 'a letter' at 0:0
+== 76 generate_desc parse 't'
+  None
+== 77 generate_desc parse 'x'
+  ! ParseError: expected 'a thing' at 0:0
+== 78 generate_no_desc parse 'ab'
+  None
+== 79 generate_no_desc parse 'ax'
+  ! ParseError: expected 'b' at 0:1
+== 80 generate_no_desc parse ''
+  ! ParseError: expected 'a' at 0:0
+== 81 abc parse 'a'
+  'a'
+== 82 abc parse 'b'
+  'b'
+== 83 abc parse 'c'
+  'c'
+== 84 abc parse 'd'
+  ! ParseError: expected one of 'a', 'b', 'c' at 0:0
+== 85 abc parse ''
+  ! ParseError: expected one of 'a', 'b', 'c' at 0:0
+== 86 backtrack parse 'z'
+  'z'
+== 87 backtrack parse 'xq'
+  'xq'
+== 88 backtrack parse 'w'
+  ! ParseError: expected one of 'x', 'xq', 'z' at 0:0
+== 89 or parse 'x'
+  'x'
+== 90 or parse 'y'
+  'y'
+== 91 or parse 'z'
+  ! ParseError: expected one of 'x', 'y' at 0:0
+== 92 or_then parse '\\y'
+  'y'
+== 93 or_then parse 'z'
+  'z'
+== 94 or_then parse '\\z'
+  ! ParseError: expected 'y' at 0:1
+== 95 or_then parse '\\'
+  ! ParseError: expected 'y' at 0:1
+== 96 many parse 'x'
+  ['x']
+== 97 many parse 'xyz'
+  ['x', 'y', 'z']
+== 98 many parse ''
+  []
+== 99 many parse '1'
+  ! ParseError: expected one of 'EOF', 'a letter' at 0:0
+== 100 many parse 'ab1'
+  ! ParseError: expected one of 'EOF', 'a letter' at 0:2
+== 101 many_then parse 'y'
+  'y'
+== 102 many_then parse 'xy'
+  'y'
+== 103 many_then parse 'xxxxxy'
+  'y'
+== 104 many_then parse 'xxx'
+  ! ParseError: expected one of 'x', 'y' at 0:3
+== 105 times0 parse ''
+  []
+== 106 times0 parse 'x'
+  ! ParseError: expected 'EOF' at 0:0
+== 107 times3 parse 'xyz'
+  ['x', 'y', 'z']
+== 108 times3 parse 'xy'
+  ! ParseError: expected 'a letter' at 0:2
+== 109 times3 parse 'xyzw'
+  ! ParseError: expected 'EOF' at 0:3
+== 110 times3_then parse 'xyz1'
+  '1'
+== 111 times3_then parse 'xy1'
+  ! ParseError: expected 'a letter' at 0:2
+== 112 times3_then parse 'xyz'
+  ! ParseError: expected 'a digit' at 0:3
+== 113 times3_then parse 'xyzw'
+  ! ParseError: expected 'a digit' at 0:3
+== 114 times2_4 parse 'xy'
+  ['x', 'y']
+== 115 times2_4 parse 'xyz'
+  ['x', 'y', 'z']
+== 116 times2_4 parse 'xyzw'
+  ['x', 'y', 'z', 'w']
+== 117 times2_4 parse 'x'
+  ! ParseError: expected 'a letter' at 0:1
+== 118 times2_4 parse 'xyzwv'
+  ! ParseError: expected 'EOF' at 0:4
+== 119 times2_4_then parse 'xy1'
+  '1'
+== 120 times2_4_then parse 'xyz1'
+  '1'
+== 121 times2_4_then parse 'xyzw1'
+  '1'
+== 122 times2_4_then parse 'xy'
+  ! ParseError: expected one of 'a digit', 'a letter' at 0:2
+== 123 times2_4_then parse 'xyzw'
+  ! ParseError: expected 'a digit' at 0:4
+== 124 times2_4_then parse 'xyzwv1'
+  ! ParseError: expected 'a digit' at 0:4
+== 125 times2_4_then parse 'x1'
+  ! ParseError: expected 'a letter' at 0:1
+== 126 at_most parse ''
+  []
+== 127 at_most parse 'ab'
+  ['ab']
+== 128 at_most parse 'abab'
+  ['ab', 'ab']
+== 129 at_most parse 'ababab'
+  ! ParseError: expected 'EOF' at 0:4
+== 130 at_most parse 'aba'
+  ! ParseError: expected one of 'EOF', 'ab' at 0:2
+== 131 at_least parse 'abab'
+  ['ab', 'ab']
+== 132 at_least parse 'ababab'
+  ['ab', 'ab', 'ab']
+== 133 at_least parse 'ab'
+  ! ParseError: expected 'ab' at 0:2
+== 134 at_least parse ''
+  ! ParseError: expected 'ab' at 0:0
+== 135 until partial 'ssssx'
+  (['s', 's', 's', 's'], 'x')
+== 136 until partial 'ssssxy'
+  (['s', 's', 's', 's'], 'xy')
+== 137 until partial 'xxx'
+  ([], 'xxx')
+== 138 until partial 'ssssy'
+  ! ParseError: expected 'did not find other parser' at 0:4
+== 139 until partial 'xssssxy'
+  ([], 'xssssxy')
+== 140 until parse 'ssssy'
+  ! ParseError: expected 'did not find other parser' at 0:4
+== 141 until parse 'xssssxy'
+  ! ParseError: expected 'EOF' at 0:0
+== 142 until_seq parse 'ssssx'
+  [['s', 's', 's', 's'], 'x']
+== 143 until_seq partial 'ssssxy'
+  ([['s', 's', 's', 's'], 'x'], 'y')
+== 144 until_then parse 'ssssx'
+  'x'
+== 145 until_then partial 'ssssxy'
+  ('x', 'y')
+== 146 until_any partial 'xxxx'
+  ([], 'xxxx')
+== 147 until_any partial 'abcx'
+  (['a', 'b', 'c'], 'x')
+== 148 until_any partial 'abc'
+  ! ParseError: expected 'did not find other parser' at 0:3
+== 149 until_consume parse 'ssssx'
+  ['s', 's', 's', 's', 'x']
+== 150 until_consume parse 'ssssy'
+  ! ParseError: expected 'did not find other parser' at 0:4
+== 151 until_consume parse 'xssssxy'
+  ! ParseError: expected 'EOF' at 0:1
+== 152 until_consume partial 'ssssxy'
+  (['s', 's', 's', 's', 'x'], 'y')
+== 153 until_consume partial 'xxx'
+  (['x'], 'xx')
+== 154 until_min partial 'sssx'
+  (['s', 's', 's'], 'x')
+== 155 until_min partial 'sssssx'
+  (['s', 's', 's', 's', 's'], 'x')
+== 156 until_min partial 'ssx'
+  ! ParseError: expected 'at least 3 items; got 2 item(s)' at 0:2
+== 157 until_min partial 'x'
+  ! ParseError: expected 'at least 3 items; got 0 item(s)' at 0:0
+== 158 until_max partial 'ssx'
+  (['s', 's'], 'x')
+== 159 until_max partial 'sssx'
+  (['s', 's', 's'], 'x')
+== 160 until_max partial 'ssssx'
+  ! ParseError: expected 'at most 3 items' at 0:3
+== 161 until_max partial 'x'
+  ([], 'x')
+== 162 until_min_max partial 'sssx'
+  (['s', 's', 's'], 'x')
+== 163 until_min_max partial 'sssssx'
+  (['s', 's', 's', 's', 's'], 'x')
+== 164 until_min_max partial 'ssx'
+  ! ParseError: expected 'at least 3 items; got 2 item(s)' at 0:2
+== 165 until_min_max partial 'ssssssx'
+  ! ParseError: expected 'at most 5 items' at 0:5
+== 166 optional parse 'a'
+  'a'
+== 167 optional parse ''
+  None
+== 168 optional parse 'b'
+  ! ParseError: expected one of 'EOF', 'a' at 0:0
+== 169 optional_b parse 'a'
+  'a'
+== 170 optional_b parse ''
+  'b'
+== 171 optional_b parse 'aa'
+  ! ParseError: expected 'EOF' at 0:1
+== 172 sep_by parse '1,2,3,4'
+  [1, 2, 3, 4]
+== 173 sep_by parse '9,0,4,7'
+  [9, 0, 4, 7]
+== 174 sep_by parse '3,7'
+  [3, 7]
+== 175 sep_by parse '8'
+  [8]
+== 176 sep_by parse ''
+  []
+== 177 sep_by parse '8,'
+  ! ParseError: expected 'a digit' at 0:2
+== 178 sep_by parse ',9'
+  ! ParseError: expected one of 'EOF', 'a digit' at 0:0
+== 179 sep_by parse '82'
+  ! ParseError: expected one of ',', 'EOF' at 0:1
+== 180 sep_by parse '7.6'
+  ! ParseError: expected one of ',', 'EOF' at 0:1
+== 181 sep_by_2_4 parse '1,2,3,4'
+  [1, 2, 3, 4]
+== 182 sep_by_2_4 parse '3,7'
+  [3, 7]
+== 183 sep_by_2_4 parse '8'
+  ! ParseError: expected ',' at 0:1
+== 184 sep_by_2_4 parse ''
+  ! ParseError: expected 'a digit' at 0:0
+== 185 sep_by_2_4 parse '8,'
+  ! ParseError: expected 'a digit' at 0:2
+== 186 sep_by_2_4 parse ',9'
+  ! ParseError: expected 'a digit' at 0:0
+== 187 sep_by_2_4 parse '82'
+  ! ParseError: expected ',' at 0:1
+== 188 sep_by_2_4 parse '7.6'
+  ! ParseError: expected ',' at 0:1
+== 189 sep_by_2_4 parse '1,2,3,4,5'
+  ! ParseError: expected 'EOF' at 0:7
+== 190 sep_by_max0 parse ''
+  []
+== 191 sep_by_max0 parse '1'
+  ! ParseError: expected 'EOF' at 0:0
+== 192 add parse 'a1'
+  'a1'
+== 193 add parse 'ab'
+  ! ParseError: expected 'a digit' at 0:1
+== 194 add parse '1a'
+  ! ParseError: expected 'a letter' at 0:0
+== 195 add_lists parse 'ab1'
+  ['a', 'b', '1']
+== 196 add_lists parse 'ab123'
+  ['a', 'b', '1', '2', '3']
+== 197 add_lists parse 'ab1234'
+  ! ParseError: expected 'EOF' at 0:5
+== 198 add_lists parse 'a1'
+  ! ParseError: expected 'a letter' at 0:1
+== 199 multiply parse 'abc'
+  ['a', 'b', 'c']
+== 200 multiply parse 'ab'
+  ! ParseError: expected 'a letter' at 0:2
+== 201 multiply parse 'abcd'
+  ! ParseError: expected 'EOF' at 0:3
+== 202 multiply_range parse 'a'
+  ['a']
+== 203 multiply_range parse 'ab'
+  ['a', 'b']
+== 204 multiply_range parse 'abc'
+  ! ParseError: expected 'EOF' at 0:2
+== 205 multiply_range parse ''
+  ! ParseError: expected 'a letter' at 0:0
+== 206 alt_empty parse ''
+  ! ParseError: expected '<empty alt>' at 0:0
+== 207 alt_empty parse 'a'
+  ! ParseError: expected '<empty alt>' at 0:0
+== 208 alt parse 'a'
+  'a'
+== 209 alt parse '1'
+  '1'
+== 210 alt parse '.'
+  ! ParseError: expected one of 'a digit', 'a letter' at 0:0
+== 211 seq_empty parse ''
+  []
+== 212 seq_empty parse 'a'
+  ! ParseError: expected 'EOF' at 0:0
+== 213 seq1 parse 'a'
+  ['a']
+== 214 seq1 parse '1'
+  ! ParseError: expected 'a letter' at 0:0
+== 215 seq2 parse 'a1'
+  ['a', '1']
+== 216 seq2 parse '1a'
+  ! ParseError: expected 'a letter' at 0:0
+== 217 seq2 parse 'a'
+  ! ParseError: expected 'a digit' at 0:1
+== 218 seq_kw parse 'Jane Smith'
+  {'first_name': 'Jane', 'last_name': 'Smith'}
+== 219 seq_kw parse 'Jane'
+  ! ParseError: expected '\\s+' at 0:4
+== 220 seq_kw parse 'Jane  Smith  '
+  ! ParseError: expected 'EOF' at 0:11
+== 221 seq_kw_a parse 'a'
+  {'a': 'a'}
+== 222 seq_kw_a parse 'b'
+  ! ParseError: expected 'a' at 0:0
+== 223 ascii parse 'a'
+  'a'
+== 224 ascii parse '☺'
+  ! ParseError: expected 'ascii character' at 0:0
+== 225 ascii parse ''
+  ! ParseError: expected 'ascii character' at 0:0
+== 226 ascii parse '~'
+  '~'
+== 227 char_from parse 'a'
+  'a'
+== 228 char_from parse 'b'
+  'b'
+== 229 char_from parse 'x'
+  ! ParseError: expected '[ab]' at 0:0
+== 230 char_from parse 'ab'
+  ! ParseError: expected 'EOF' at 0:1
+== 231 titles parse 'Mr'
+  'Mr'
+== 232 titles parse 'Mr.'
+  'Mr.'
+== 233 titles parse 'Mrs'
+  'Mrs'
+== 234 titles parse 'Mrs.'
+  'Mrs.'
+== 235 titles parse 'foo'
+  ! ParseError: expected one of 'Mr', 'Mr.', 'Mrs', 'Mrs.' at 0:0
+== 236 titles parse 'M'
+  ! ParseError: expected one of 'Mr', 'Mr.', 'Mrs', 'Mrs.' at 0:0
+== 237 titles_hyde parse 'Mr. Hyde'
+  'Mr. Hyde'
+== 238 titles_hyde parse 'Mrs Hyde'
+  'Mrs Hyde'
+== 239 titles_hyde parse 'Mr  Hyde'
+  ! ParseError: expected ' Hyde' at 0:2
+== 240 titles_lower parse 'mr'
+  'Mr'
+== 241 titles_lower parse 'mr.'
+  'Mr.'
+== 242 titles_lower parse 'MR'
+  'Mr'
+== 243 titles_lower parse 'MR.'
+  'Mr.'
+== 244 titles_lower parse 'mRS.'
+  'Mrs.'
+== 245 titles_lower parse 'ms'
+  ! ParseError: expected one of 'Mr', 'Mr.', 'Mrs', 'Mrs.' at 0:0
+== 246 peek_any partial 'abc'
+  ('a', 'abc')
+== 247 peek_any partial ''
+  ! ParseError: expected 'any character' at 0:0
+== 248 peek_digit parse 'a'
+  ! ParseError: expected 'a digit' at 0:0
+== 249 peek_digit parse '1'
+  ! ParseError: expected 'EOF' at 0:0
+== 250 peek_digit parse ''
+  ! ParseError: expected 'a digit' at 0:0
+== 251 any_char parse 'x'
+  'x'
+== 252 any_char parse '\n'
+  '\n'
+== 253 any_char parse ''
+  ! ParseError: expected 'any character' at 0:0
+== 254 any_char parse '中'
+  '中'
+== 255 whitespace parse '\n'
+  '\n'
+== 256 whitespace parse ' '
+  ' '
+== 257 whitespace parse ' \t\r\n\x0b\x0c'
+  ' \t\r\n\x0b\x0c'
+== 258 whitespace parse 'x'
+  ! ParseError: expected '\\s+' at 0:0
+== 259 whitespace parse '\u3000\xa0'
+  '\u3000\xa0'
+== 260 letter parse 'a'
+  'a'
+== 261 letter parse '1'
+  ! ParseError: expected 'a letter' at 0:0
+== 262 letter parse 'é'
+  'é'
+== 263 letter parse 'Ω'
+  'Ω'
+== 264 letter parse '中'
+  '中'
+== 265 letter parse '_'
+  ! ParseError: expected 'a letter' at 0:0
+== 266 digit parse '¹'
+  '¹'
+== 267 digit parse '2'
+  '2'
+== 268 digit parse 'x'
+  ! ParseError: expected 'a digit' at 0:0
+== 269 digit parse '٣'
+  '٣'
+== 270 digit parse '①'
+  '①'
+== 271 digit parse '½'
+  ! ParseError: expected 'a digit' at 0:0
+== 272 decimal parse '9876543210'
+  '9876543210'
+== 273 decimal parse '¹'
+  ! ParseError: expected '[0123456789]' at 0:0
+== 274 decimal parse '٣1'
+  ! ParseError: expected '[0123456789]' at 0:0
+== 275 decimal parse '12a'
+  ! ParseError: expected one of 'EOF', '[0123456789]' at 0:2
+== 276 line_info parse 'AB\nCD'
+  [('A', (0, 0)), ('B', (0, 1)), ('\n', (0, 2)), ('C', (1, 0)), ('D', (1, 1))]
+== 277 line_info parse '\n\nx'
+  [('\n', (0, 0)), ('\n', (1, 0)), ('x', (2, 0))]
+== 278 line_info parse ''
+  []
+== 279 index tokens ['A', 'B']
+  [('A', 0), ('B', 1)]
+== 280 index tokens ['A', 'B', 'C', 'D']
+  [('A', 0), ('B', 1), ('C', 2), ('D', 3)]
+== 281 index tokens []
+  []
+== 282 index parse 'abc'
+  [('a', 0), ('b', 1), ('c', 2)]
+== 283 index parse 'ab1'
+  ! ParseError: expected one of 'EOF', 'a letter' at 0:2
+== 284 should_fail parse 'a'
+  'a'
+== 285 should_fail parse 'abc'
+  'abc'
+== 286 should_fail parse 'a10'
+  'a10'
+== 287 should_fail parse ''
+  ''
+== 288 should_fail parse '8'
+  ! ParseError: expected 'not a digit' at 0:0
+== 289 should_fail parse '8ab'
+  ! ParseError: expected 'not a digit' at 0:0
+== 290 should_fail_value parse ''
+  Result(status=False, index=-1, value=None, furthest=0, expected=frozenset({'a digit'}))
+== 291 enum_pet parse 'cat'
+  <Pet.CAT: 'cat'>
+== 292 enum_pet parse 'dog'
+  <Pet.DOG: 'dog'>
+== 293 enum_pet parse 'foo'
+  ! ParseError: expected one of 'cat', 'caterpillar', 'dog' at 0:0
+== 294 enum_pet parse 'caterpillar'
+  <Pet.CATERPILLAR: 'caterpillar'>
+== 295 enum_pet parse 'Cat'
+  ! ParseError: expected one of 'cat', 'caterpillar', 'dog' at 0:0
+== 296 enum_position parse '1'
+  <Position.FIRST: 1>
+== 297 enum_position parse '2'
+  <Position.SECOND: 2>
+== 298 enum_position parse '12'
+  <Position.TWELFTH: 12>
+== 299 enum_position parse '3'
+  ! ParseError: expected one of '1', '12', '2' at 0:0
+== 300 enum_pet_lower parse 'cat'
+  <Pet.CAT: 'cat'>
+== 301 enum_pet_lower parse 'CAT'
+  <Pet.CAT: 'cat'>
+== 302 enum_pet_lower parse 'Dog'
+  <Pet.DOG: 'dog'>
+== 303 enum_pet_lower parse 'CATERPILLAR'
+  <Pet.CATERPILLAR: 'caterpillar'>
+== 304 eof parse 'a'
+  'a'
+== 305 eof parse 'ab'
+  ! ParseError: expected 'EOF' at 0:1
+== 306 eof parse ''
+  ! ParseError: expected 'a' at 0:0
+== 307 start_stop tokens [START]
+  [START]
+== 308 start_stop tokens [STOP]
+  [STOP]
+== 309 start_stop tokens [START, 'hello']
+  ! ParseError: expected one of 'EOF', 'START/STOP' at 1
+== 310 start_stop tokens [START, STOP, START]
+  [START, STOP, START]
+== 311 start_stop tokens []
+  []
+== 312 match_start tokens [START]
+  START
+== 313 match_start tokens []
+  ! ParseError: expected 'START' at 0
+== 314 match_start tokens [STOP]
+  ! ParseError: expected 'START' at 0
+== 315 match_start_default tokens ['x']
+  'x'
+== 316 match_start_default tokens ['y']
+  ! ParseError: expected 'x' at 0
+== 317 match_start_default parse 'x'
+  'x'
+== 318 match_start_default parse 'y'
+  ! ParseError: expected 'x' at 0:0
+== 319 bracketed tokens [START, 'hello', 1, 2, 'goodbye', STOP]
+  ['hello', 1, 2, 'goodbye']
+== 320 bracketed tokens [START, STOP]
+  []
+== 321 bracketed tokens [START, 'hello']
+  ! ParseError: expected one of 'STOP', 'not START/STOP' at 2
+== 322 bracketed tokens ['hello', STOP]
+  ! ParseError: expected 'START' at 0
+== 323 bracketed tokens [START, STOP, STOP]
+  ! ParseError: expected 'EOF' at 2
+== 324 forward parse '(0 1 (2 3))'
+  [0, 1, [2, 3]]
+== 325 forward parse '7'
+  7
+== 326 forward parse '()'
+  []
+== 327 forward parse '(1 (2 (3 (4))))'
+  [1, [2, [3, [4]]]]
+== 328 forward parse '(1  2)'
+  ! ParseError: expected one of '(', '[0-9]+' at 0:3
+== 329 forward parse '(1 2'
+  ! ParseError: expected one of ' ', ')' at 0:4
+== 330 forward_az parse 'Z'
+  'Z'
+== 331 forward_az parse 'AZ'
+  'AZ'
+== 332 forward_az parse 'AAAAAZ'
+  'AAAAAZ'
+== 333 forward_az parse 'A'
+  ! ParseError: expected one of 'A', 'Z' at 0:1
+== 334 forward_az parse 'B'
+  ! ParseError: expected one of 'A', 'Z' at 0:0
+== 335 forward_az partial 'AAZXX'
+  ('AAZ', 'XX')
+== 336 forward_unset parse '()'
+  ! ValueError: You must use 'become' before attempting to call `parse` or `parse_partial`
+== 337 forward_unset partial '()'
+  ! ValueError: You must use 'become' before attempting to call `parse` or `parse_partial`
+== 338 become twice
+  'X'
+  ! AttributeError: 'Parser' object has no attribute 'become'
+== 339 line_info_at('abc\ndef', 0)
+  (0, 0)
+== 340 line_info_at('abc\ndef', 2)
+  (0, 2)
+== 341 line_info_at('abc\ndef', 3)
+  (0, 3)
+== 342 line_info_at('abc\ndef', 4)
+  (1, 0)
+== 343 line_info_at('abc\ndef', 7)
+  (1, 3)
+== 344 line_info_at('abc\ndef', 8)
+  ! ValueError: invalid index
+== 345 line_info_at('\n\n', 2)
+  (2, 0)
+== 346 line_info_at('', 0)
+  (0, 0)
+== 347 json parse <153 characters>
+  {'int': 1.0, 'string': 'hello', 'a list': [1.0, 2.0, 3.0], 'escapes': '\n ⓒ', 'nested': {'x': 'y'}, 'other': [True, False, None]}
+== 348 json parse '[]'
+  []
+== 349 json parse '  {}  '
+  {}
+== 350 json parse '[1.5, -0.25, 1e3, 2E-2, 0, -0]'
+  [1.5, -0.25, 1000.0, 0.02, 0.0, -0.0]
+== 351 json parse '{"a": [1, 2,]}'
+  ! ParseError: expected one of '"', '-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][+-]?[0-9]+)?', '[', 'false', 'null', 'true', '{' at 0:12
+== 352 json parse '{"a" 1}'
+  ! ParseError: expected ':' at 0:5
+== 353 json parse '"unterminated'
+  ! ParseError: expected one of '"', '[^"\\\\]+', '\\' at 0:13
+== 354 json parse '["\\"\\\\\\/\\b\\f\\r\\t"]'
+  ['"\\/\x08\x0c\r\t']
+== 355 json parse '["caf\\u00e9", "\\u4e2d\\u6587"]'
+  ['café', '中文']
+== 356 json parse '["bad \\q escape"]'
+  ! ParseError: expected one of '"', '/', '\\', 'b', 'f', 'n', 'r', 't', 'u[0-9a-fA-F]{4}' at 0:7
+== 357 json parse '{"dup": 1, "dup": 2}'
+  {'dup': 2.0}
+== 358 json parse '[[[[[]]]]]'
+  [[[[[]]]]]
+== 359 json parse 'tru'
+  ! ParseError: expected one of '"', '-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][+-]?[0-9]+)?', '[', 'false', 'null', 'true', '{' at 0:0
+== 360 json parse '01'
+  ! ParseError: expected 'EOF' at 0:1
+== 361 json parse @api_response.json
+  {'id': 'evt_1Q9xK2', 'type': 'invoice.paid', 'created': 1729814400.0, 'livemode': False, 'data': {'object': {'amount_due': 4250.0, 'amount_paid': 4250.0, 'currency': 'eur', 'customer_name': 'Zoë Maïtre', 'discount': None, 'lines': [{'description': 'Pro plan × 2', 'amount': 3800.0, 'tax_rate': 0.19}, {'description': 'Extra seat', 'amount': 450.0, 'tax_rate': 0.19}], 'metadata': {'order': 'A-1043', 'note': 'Thanks! "Rush" shipping\n'}, 'paid': True}}, 'request': {'id': None, 'idempotency_key': '6b7f1d2e-1c9a-4d1a-9f2e-3a4b5c6d7e8f'}}
+== 362 json parse @package.json
+  {'name': 'kitchen-display', 'version': '2.4.1', 'private': True, 'scripts': {'build': 'tsc -p .', 'test': 'node --test test/', 'lint': 'eslint src/ --max-warnings=0'}, 'engines': {'node': '>=20.11'}, 'dependencies': {'fastify': '^4.28.1', 'pino': '~9.3.2', 'zod': '3.23.8'}, 'files': ['dist/', 'README.md'], 'workspaces': []}
+== 363 json parse @broken.json
+  ! ParseError: expected one of ',', '}' at 6:4
+== 364 json parse @deep.json
+  [[[[[[[[[[[[1.0, [2.5, 'three']]]]]]]]]]]]]
+== 365 sexpr parse '(1 2 3)'
+  [[1, 2, 3]]
+== 366 sexpr parse "'foo '(bar baz)"
+  [['quote', 'foo'], ['quote', ['bar', 'baz']]]
+== 367 sexpr parse "''foo"
+  [['quote', ['quote', 'foo']]]
+== 368 sexpr parse '#t #f'
+  [True, False]
+== 369 sexpr parse <152 characters>
+  [['foo', 'bar']]
+== 370 sexpr parse '(define (square x) (* x x))'
+  ! ParseError: expected one of "'", '#f', '#t', ';.*', 'EOF', '[\\d\\w_-]+', '\\d+', '\\s+', 'a form' at 0:0
+== 371 sexpr parse '(1 2'
+  ! ParseError: expected one of "'", '#f', '#t', ';.*', 'EOF', '[\\d\\w_-]+', '\\d+', '\\s+', 'a form' at 0:0
+== 372 sexpr parse ')'
+  ! ParseError: expected one of "'", '#f', '#t', ';.*', 'EOF', '[\\d\\w_-]+', '\\d+', '\\s+', 'a form' at 0:0
+== 373 sexpr parse ''
+  []
+== 374 sexpr parse @config.scm
+  [['project', 'blinky', ['version', 3, 1], ['target', ['quote', 'cortex-m4']], ['debug', False], ['flags', ['opt', 2], ['warn', 'all'], ['lto', True]], ['sources', ['quote', 'main'], ['quote', 'led'], ['quote', 'timer']]]]
+== 375 select parse "SELECT thing, stuff, 123, 'hello' FROM my_table WHERE id = 1;"
+  Select(columns=[Field(name='thing'), Field(name='stuff'), Number(value=123), String(value='hello')], table=Table(name='my_table'), where=Comparison(left=Field(name='id'), operator=<Operator.EQ: '='>, right=Number(value=1)))
+== 376 select parse 'SELECT 1 FROM x;'
+  Select(columns=[Number(value=1)], table=Table(name='x'), where=None)
+== 377 select parse 'SELECT name,email FROM users WHERE age >= 21 ;'
+  Select(columns=[Field(name='name'), Field(name='email')], table=Table(name='users'), where=Comparison(left=Field(name='age'), operator=<Operator.GTE: '>='>, right=Number(value=21)))
+== 378 select parse 'SELECT a FROM t WHERE b <= -5;'
+  Select(columns=[Field(name='a')], table=Table(name='t'), where=Comparison(left=Field(name='b'), operator=<Operator.LTE: '<='>, right=Number(value=-5)))
+== 379 select parse "SELECT a FROM t WHERE 'x' < y;"
+  Select(columns=[Field(name='a')], table=Table(name='t'), where=Comparison(left=String(value='x'), operator=<Operator.LT: '<'>, right=Field(name='y')))
+== 380 select parse 'SELECT FROM t;'
+  ! ParseError: expected one of ',', 'FROM' at 0:12
+== 381 select parse 'SELECT a FROM t WHERE b != 1;'
+  ! ParseError: expected one of '<', '<=', '=', '>', '>=' at 0:24
+== 382 select parse 'SELECT a, FROM t;'
+  ! ParseError: expected one of ',', 'FROM' at 0:15
+== 383 select parse 'select a from t;'
+  ! ParseError: expected 'SELECT' at 0:0
+== 384 select parse "SELECT 'it''s' FROM t;"
+  ! ParseError: expected one of ',', '\\s+' at 0:11
+== 385 logo pipe 'fd 1\nbk 2\nrt 90\n'
+  tokens ['fd', 1, '\n', 'bk', 2, '\n', 'rt', 90, '\n']
+  [Forward(1), Backward(2), Right(90)]
+== 386 logo pipe '  fd 10\n  lt 45 \nfd 3'
+  ! ParseError: expected '\n' at 2:0
+== 387 logo pipe @square.logo
+  tokens ['fd', 100, '\n', 'rt', 90, '\n', 'fd', 100, '\n', 'rt', 90, '\n', 'fd', 100, '\n', 'rt', 90, '\n', 'fd', 100, '\n', 'rt', 90, '\n']
+  [Forward(100), Right(90), Forward(100), Right(90), Forward(100), Right(90), Forward(100), Right(90)]
+== 388 logo pipe 'fd x\n'
+  ! ParseError: expected '[0-9]+' at 0:3
+== 389 logo pipe 'fd 1\nup 2\n'
+  ! ParseError: expected one of 'EOF', 'bk', 'fd', 'lt', 'rt' at 1:0
+== 390 logo pipe 'fd 1 bk 2\n'
+  ! ParseError: expected '\n' at 0:5
+== 391 eval pipe '1 + 2'
+  tokens [1, '+', 2]
+  3
+== 392 eval pipe '2 * (3 + 4)'
+  tokens [2, '*', '(', 3, '+', 4, ')']
+  14
+== 393 eval pipe '7 / 2'
+  tokens [7, '/', 2]
+  3.5
+== 394 eval pipe '1 / 3'
+  tokens [1, '/', 3]
+  0.3333333333333333
+== 395 eval pipe '-3 + +4'
+  tokens ['-', 3, '+', '+', 4]
+  1
+== 396 eval pipe '10 - 2 - 3'
+  tokens [10, '-', 2, '-', 3]
+  5
+== 397 eval pipe '2 * 3.5 - .5'
+  tokens [2, '*', 3.5, '-', 0.5]
+  6.5
+== 398 eval pipe '((1))'
+  tokens ['(', '(', 1, ')', ')']
+  1
+== 399 eval pipe '1 +'
+  tokens [1, '+']
+  ! ParseError: expected one of '(', '+', '-', 'number' at 2
+== 400 eval pipe '(1 + 2'
+  tokens ['(', 1, '+', 2]
+  ! ParseError: expected one of ')', '*', '+', '-', '/' at 4
+== 401 eval pipe '1 2'
+  tokens [1, 2]
+  ! ParseError: expected one of '*', '+', '-', '/', 'EOF' at 1
+== 402 eval pipe '4 / 8 * 2 + 0.125'
+  tokens [4, '/', 8, '*', 2, '+', 0.125]
+  1.125
+== 403 eval pipe '1 $ 2'
+  ! ParseError: expected one of '.', 'EOF', '[()*/+-]', 'a digit' at 0:2
+== 404 ini parse @settings.ini
+  {'': [(2, 'name', 'kitchen-display'), (3, 'debug', 'false')], 'server': [(6, 'host', '0.0.0.0'), (7, 'port', '8080'), (8, 'banner', 'Welcome; please wait')], 'database': [(11, 'url', 'postgres://kds:kds@db.internal:5432/kds'), (12, 'pool.size', '10'), (13, 'timeout', '2.5')]}
+== 405 ini parse @service.conf
+  {'': [], 'unit': [(2, 'description', 'orders worker'), (3, 'after', 'network.target')], 'service': [(6, 'restart', 'on-failure')]}
+== 406 ini parse @bad_section.ini
+  ! ParseError: expected ']' at 2:7
+== 407 ini parse @bad_line.ini
+  ! ParseError: expected '[=:]' at 2:4
+== 408 ini parse ''
+  {'': []}
+== 409 ini parse 'a=1'
+  {'': [(1, 'a', '1')]}
+== 410 ini parse '[s]\n'
+  {'': [], 's': []}
+== 411 ini parse '[ s ] \nk : v ; note\n'
+  {'': [], 's': [(2, 'k', 'v')]}
+== 412 access_log lines @access.log
+  line 1:
+    {'addr': '203.0.113.7', 'ident': '-', 'user': None, 'time': (9, <Month.MAR: 'Mar'>, 2024, '17:42:05', '+0000'), 'request': {'method': 'GET', 'target': '/menu', 'version': '1.1'}, 'status': 200, 'bytes': 5120, 'referer': None, 'agent': 'curl/8.5.0'}
+  line 2:
+    {'addr': '198.51.100.23', 'ident': '-', 'user': 'ana', 'time': (9, <Month.MAR: 'Mar'>, 2024, '17:42:06', '+0000'), 'request': {'method': 'POST', 'target': '/orders', 'version': '1.1'}, 'status': 201, 'bytes': 312, 'referer': 'https://cafe.example/menu', 'agent': 'Mozilla/5.0 (X11; Linux x86_64)'}
+  line 3:
+    {'addr': '192.0.2.44', 'ident': '-', 'user': None, 'time': (9, <Month.MAR: 'Mar'>, 2024, '17:42:09', '+0100'), 'request': {'method': 'GET', 'target': '/static/app.js', 'version': '2.0'}, 'status': 304, 'bytes': 0, 'referer': 'https://cafe.example/', 'agent': 'Mozilla/5.0 \\"quoted\\"'}
+  line 4:
+    {'addr': '203.0.113.9', 'ident': '-', 'user': None, 'time': (10, <Month.MAR: 'Mar'>, 2024, '00:00:01', '+0000'), 'request': {'raw': '\\x16\\x03\\x01'}, 'status': 400, 'bytes': 157, 'referer': None, 'agent': '-'}
+  line 5:
+    ! ParseError: expected one of 'Apr', 'Aug', 'Dec', 'Feb', 'Jan', 'Jul', 'Jun', 'Mar', 'May', 'Nov', 'Oct', 'Sep' at 0:20
+  line 6:
+    {'addr': '10.0.0.5', 'ident': '-', 'user': 'bob', 'time': (31, <Month.DEC: 'Dec'>, 2024, '23:59:59', '-0500'), 'request': {'method': 'DELETE', 'target': '/orders/1043', 'version': '1.1'}, 'status': 204, 'bytes': 0, 'referer': None, 'agent': 'kds-cli/2.4'}
+  line 7:
+    ! ParseError: expected '[1-5][0-9]{2}' at 0:61
+== 413 csv parse @report.csv
+  [['region', 'quarter', 'revenue', 'note'], ['north', 'Q1', '1200', ''], ['south', 'Q1', '980', 'late, but closed'], ['east', 'Q2', '1525', 'said "final"'], ['west', 'Q2', '0', 'multi\nline']]
+== 414 csv parse @crlf.csv
+  [['id', 'name'], ['1', 'Ada'], ['2', 'Grace\r\nHopper']]
+== 415 csv parse 'a,b\n1,2'
+  [['a', 'b'], ['1', '2']]
+== 416 csv parse 'a,b\n1,2\n'
+  [['a', 'b'], ['1', '2']]
+== 417 csv parse ''
+  [['']]
+== 418 csv parse '"x"y"'
+  ! ParseError: expected one of ',', 'EOF', '\\r?\\n' at 0:3
+== 419 csv parse '"open'
+  ! ParseError: expected one of '""', '"', '[^"]+' at 0:5
+== 420 csv parse 'a,"b\nc",d'
+  [['a', 'b\nc', 'd']]
+== 421 csv parse ',,\n,'
+  [['', '', ''], ['', '']]
+== 422 http_request parse @get.http
+  Request(method='GET', target='/api/orders?status=open&limit=20', version=(1, 1), headers=[('host', 'kds.example'), ('accept', 'application/json'), ('user-agent', 'kds-cli/2.4'), ('x-request-id', '7f3a')])
+== 423 http_request parse @post.http
+  Request(method='POST', target='/api/orders', version=(1, 1), headers=[('host', 'kds.example'), ('content-type', 'application/json'), ('content-length', '27'), ('authorization', 'Bearer test-token-not-real')])
+== 424 http_request parse @folded.http
+  ! ParseError: expected one of "[!#$%&'*+.^_`|~0-9A-Za-z-]+", '\r\n' at 3:0
+== 425 http_request parse @no_blank.http
+  ! ParseError: expected one of "[!#$%&'*+.^_`|~0-9A-Za-z-]+", '\r\n' at 2:0
+== 426 http_request parse 'GET / HTTP/1.1\r\n\r\n'
+  Request(method='GET', target='/', version=(1, 1), headers=[])
+== 427 http_request parse 'GET  / HTTP/1.1\r\n\r\n'
+  ! ParseError: expected 'a request target' at 0:4
+== 428 http_request parse 'get /x HTTP/2.0\r\n\r\n'
+  Request(method='get', target='/x', version=(2, 0), headers=[])
+== 429 http_request parse 'GET /x HTTP/1\r\n\r\n'
+  ! ParseError: expected '.' at 0:13
+== 430 semver_range parse '>=1.2.3 <2.0.0'
+  [[(<Op.GE: '>='>, (1, 2, 3)), (<Op.LT: '<'>, (2, 0, 0))]]
+== 431 semver_range parse '^1.2.3 || ~2.4'
+  [[(<Op.CARET: '^'>, (1, 2, 3))], [(<Op.TILDE: '~'>, (2, 4, 'x'))]]
+== 432 semver_range parse '1.x'
+  [[(<Op.EQ: '='>, (1, 'x', 'x'))]]
+== 433 semver_range parse '1.2.3 - 2.3.4'
+  [('range', (1, 2, 3), (2, 3, 4))]
+== 434 semver_range parse '*'
+  [[(<Op.EQ: '='>, ('x', 'x', 'x'))]]
+== 435 semver_range parse '=1.0.0-beta.2'
+  [[(<Op.EQ: '='>, (1, 0, 0, 'beta.2'))]]
+== 436 semver_range parse '>= 1.2 <=1.9 || 3'
+  [[(<Op.GE: '>='>, (1, 2, 'x')), (<Op.LE: '<='>, (1, 9, 'x'))], [(<Op.EQ: '='>, (3, 'x', 'x'))]]
+== 437 semver_range parse '  ^0.0.1  '
+  [[(<Op.CARET: '^'>, (0, 0, 1))]]
+== 438 semver_range parse '>=01.2'
+  ! ParseError: expected one of '-', '.', 'EOF', '\\s*\\|\\|\\s*', '\\s+' at 0:3
+== 439 semver_range parse '1.2.3 -'
+  ! ParseError: expected one of '0|[1-9][0-9]*', '<', '<=', '=', '>', '>=', 'EOF', '[xX*]', '^', '~' at 0:6
+== 440 semver_range parse ''
+  ! ParseError: expected one of '0|[1-9][0-9]*', '<', '<=', '=', '>', '>=', '[xX*]', '^', '~' at 0:0
+== 441 semver_range parse '~1.2.3-rc.1 || >2 <3 || 4.x.x'
+  [[(<Op.TILDE: '~'>, (1, 2, 3, 'rc.1'))], [(<Op.GT: '>'>, (2, 'x', 'x')), (<Op.LT: '<'>, (3, 'x', 'x'))], [(<Op.EQ: '='>, (4, 'x', 'x'))]]
+== 442 query pipe 'status:open'
+  tokens [('WORD', 'status'), (':',), ('WORD', 'open')]
+  ('field', 'status', ':', 'open')
+== 443 query pipe 'status:open AND owner:bob'
+  tokens [('WORD', 'status'), (':',), ('WORD', 'open'), ('AND',), ('WORD', 'owner'), (':',), ('WORD', 'bob')]
+  ('and', [('field', 'status', ':', 'open'), ('field', 'owner', ':', 'bob')])
+== 444 query pipe 'status:open owner:bob OR priority>2'
+  tokens [('WORD', 'status'), (':',), ('WORD', 'open'), ('WORD', 'owner'), (':',), ('WORD', 'bob'), ('OR',), ('WORD', 'priority'), ('>',), ('NUM', 2)]
+  ('or', [('and', [('field', 'status', ':', 'open'), ('field', 'owner', ':', 'bob')]), ('field', 'priority', '>', 2)])
+== 445 query pipe 'NOT (label:"needs review" OR label:wip) -draft'
+  tokens [('NOT',), ('(',), ('WORD', 'label'), (':',), ('PHRASE', 'needs review'), ('OR',), ('WORD', 'label'), (':',), ('WORD', 'wip'), (')',), ('-',), ('WORD', 'draft')]
+  ('and', [('not', ('or', [('field', 'label', ':', 'needs review'), ('field', 'label', ':', 'wip')])), ('not', ('term', 'draft'))])
+== 446 query pipe 'title:"disk full" AND (host:db-1 OR host:db-2) AND age<=30'
+  tokens [('WORD', 'title'), (':',), ('PHRASE', 'disk full'), ('AND',), ('(',), ('WORD', 'host'), (':',), ('WORD', 'db-1'), ('OR',), ('WORD', 'host'), (':',), ('WORD', 'db-2'), (')',), ('AND',), ('WORD', 'age'), ('<=',), ('NUM', 30)]
+  ('and', [('field', 'title', ':', 'disk full'), ('or', [('field', 'host', ':', 'db-1'), ('field', 'host', ':', 'db-2')]), ('field', 'age', '<=', 30)])
+== 447 query pipe 'printer jam'
+  tokens [('WORD', 'printer'), ('WORD', 'jam')]
+  ('and', [('term', 'printer'), ('term', 'jam')])
+== 448 query pipe '(a OR b'
+  tokens [('(',), ('WORD', 'a'), ('OR',), ('WORD', 'b')]
+  ! ParseError: expected one of '(', ')', '-', ':', '<', '<=', '>', '>=', 'AND', 'NOT', 'NUM', 'OR', 'PHRASE', 'WORD' at 4
+== 449 query pipe 'status:'
+  tokens [('WORD', 'status'), (':',)]
+  ! ParseError: expected one of 'NUM', 'PHRASE', 'WORD' at 2
+== 450 query pipe 'AND x'
+  tokens [('AND',), ('WORD', 'x')]
+  ! ParseError: expected one of '(', '-', 'NOT', 'NUM', 'PHRASE', 'WORD' at 0
+== 451 query pipe 'size>=-5 NOT NOT x'
+  tokens [('WORD', 'size'), ('>=',), ('NUM', -5), ('NOT',), ('NOT',), ('WORD', 'x')]
+  ('and', [('field', 'size', '>=', -5), ('not', ('not', ('term', 'x')))])
+== 452 query pipe 'owner:alice @mention'
+  ! ParseError: expected one of 'EOF', 'a token' at 0:12
+== 453 query pipe ''
+  tokens []
+  ! ParseError: expected one of '(', '-', 'NOT', 'NUM', 'PHRASE', 'WORD' at 0

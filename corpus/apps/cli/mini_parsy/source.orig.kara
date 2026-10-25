@@ -1,0 +1,4931 @@
+// mini_parsy: parsy 2.2, the parser combinator library for Python, and
+// the grammars a program writes with it. A parser wraps a function from a
+// stream and an index to a result; the combinators build new parsers from
+// old ones (seq, alt, times, until, sep_by, bind, map, combine_dict,
+// generate, forward declarations, the operators + * | >> <<), and the
+// primitives match strings, regular expressions, characters and items of
+// a token list. Results carry the furthest failure seen and what was
+// expected there, which is how parsy builds its error messages.
+//
+// Values are Python's: a parser can produce any object, so they are a
+// `Val`, printed as Python's repr prints them. Regular expressions are
+// compiled and matched by mini_re (Python's `re`, ported from _parser.py
+// and sre), which this program includes below; text is handled as code
+// points, as Python's str is.
+//
+// The jobs come from data/jobs.txt: parsy's own tests, its examples (JSON,
+// S-expressions, SQL SELECT, a Logo lexer and parser, a calculator over
+// tokens), and parsers for an INI file, nginx's access log, RFC 4180 CSV,
+// an HTTP/1.1 request head, npm version ranges and a search query
+// language with a lexer and a parser over its tokens.
+
+// ============================================================ mini_re
+// ------------------------------------------------------------ errors
+
+struct ReErr {
+    kind: String,
+    msg: String,
+    pos: i64,
+}
+
+fn re_error(msg: own String, pos: i64) -> ReErr {
+    ReErr { kind: "error".to_string(), msg: msg, pos: pos }
+}
+
+fn other_error(kind: Str, msg: own String) -> ReErr {
+    ReErr { kind: kind.to_string(), msg: msg, pos: -1 }
+}
+
+fn err_text(e: ref ReErr) -> String {
+    if e.kind == "error" {
+        if e.pos >= 0 {
+            return f"error: {e.msg} at position {e.pos}";
+        }
+        return f"error: {e.msg}";
+    }
+    f"{e.kind}: {e.msg}"
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+fn is_word(c: i64, ascii: bool) -> bool {
+    if c < 0x80 {
+        return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+    }
+    if ascii {
+        return false;
+    }
+    match as_char(c) {
+        Some(ch) => ch.is_alphanumeric(),
+        None => false,
+    }
+}
+
+fn lower(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 65 and c <= 90 { c + 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_lowercase() as u32 as i64,
+        None => c,
+    }
+}
+
+fn upper(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 97 and c <= 122 { c - 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_uppercase() as u32 as i64,
+        None => c,
+    }
+}
+
+// ------------------------------------------------------- parsed form
+
+// The categories of \d \D \s \S \w \W.
+fn cat_digit() -> i64 { 0 }
+fn cat_not_digit() -> i64 { 1 }
+fn cat_space() -> i64 { 2 }
+fn cat_not_space() -> i64 { 3 }
+fn cat_word() -> i64 { 4 }
+fn cat_not_word() -> i64 { 5 }
+
+// The positions ^ $ \A \Z \b \B and the forms the compiler turns them
+// into under MULTILINE.
+fn at_beginning() -> i64 { 0 }
+fn at_beginning_line() -> i64 { 1 }
+fn at_beginning_string() -> i64 { 2 }
+fn at_end() -> i64 { 3 }
+fn at_end_line() -> i64 { 4 }
+fn at_end_string() -> i64 { 5 }
+fn at_boundary() -> i64 { 6 }
+fn at_non_boundary() -> i64 { 7 }
+
+#[derive(Clone)]
+enum Item {
+    Lit(i64),
+    Range(i64, i64),
+    Cat(i64),
+}
+
+enum Node {
+    Lit(i64),
+    NotLit(i64),
+    Any,
+    In(Vec[Item], bool),
+    At(i64),
+    Branch(Vec[Vec[Node]]),
+    // group (0: none), flags turned on, flags turned off, contents
+    Group(i64, i64, i64, Vec[Node]),
+    // 0 greedy, 1 lazy, 2 possessive; min; max; the item repeated
+    Repeat(i64, i64, i64, Vec[Node]),
+    Atomic(Vec[Node]),
+    // direction (1 ahead, -1 behind), negative, contents
+    Assert(i64, bool, Vec[Node]),
+    GroupRef(i64),
+    // group, yes branch, no branch
+    Exists(i64, Vec[Node], Vec[Node]),
+    Failure,
+}
+
+fn is_repeat(n: ref Node) -> bool {
+    match n {
+        Node.Repeat(_, _, _, _) => true,
+        _ => false,
+    }
+}
+
+fn is_at(n: ref Node) -> bool {
+    match n {
+        Node.At(_) => true,
+        _ => false,
+    }
+}
+
+fn flag_i() -> i64 { 2 }
+fn flag_l() -> i64 { 4 }
+fn flag_m() -> i64 { 8 }
+fn flag_s() -> i64 { 16 }
+fn flag_u() -> i64 { 32 }
+fn flag_x() -> i64 { 64 }
+fn flag_a() -> i64 { 256 }
+fn type_flags() -> i64 { 4 | 32 | 256 }
+fn maxrepeat() -> i64 { 4294967295 }
+fn maxgroups() -> i64 { 1073741823 }
+fn maxwidth() -> i64 { 1 << 62 }
+
+fn flag_value(c: i64) -> i64 {
+    match c {
+        105 => 2,
+        76 => 4,
+        109 => 8,
+        115 => 16,
+        120 => 64,
+        97 => 256,
+        117 => 32,
+        _ => 0,
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+// One token: nothing at the end of the pattern (n 0), a character (n 1),
+// or a backslash and the character after it (n 2).
+#[derive(Copy, Clone)]
+struct T {
+    n: i64,
+    a: i64,
+    b: i64,
+}
+
+fn tok_none() -> T {
+    T { n: 0, a: 0, b: 0 }
+}
+
+fn tok_is(t: T, c: i64) -> bool {
+    t.n == 1 and t.a == c
+}
+
+fn tok_text(t: T) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    if t.n >= 1 {
+        v.push(t.a);
+    }
+    if t.n == 2 {
+        v.push(t.b);
+    }
+    v
+}
+
+fn is_ascii_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_hex(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_oct(c: i64) -> bool {
+    c >= 48 and c <= 55
+}
+
+fn is_dec(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn digits_value(s: ref Vec[i64], start: i64, base: i64) -> i64 {
+    let mut v = 0;
+    let mut i = start;
+    while i < s.len() {
+        let c = s[i];
+        let d = if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 };
+        v = v * base + d;
+        i += 1;
+    }
+    v
+}
+
+// str.isidentifier, near enough: a letter or underscore, then letters,
+// digits and underscores.
+fn is_identifier(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < name.len() {
+        let c = name[i];
+        let ok = if c == 95 {
+            true
+        } else if i == 0 {
+            match as_char(c) {
+                Some(ch) => ch.is_alphabetic(),
+                None => false,
+            }
+        } else {
+            is_word(c, false)
+        };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_ascii_decimal(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    for c in name {
+        if not is_dec(c) {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tokenizer {
+    s: Vec[i64],
+    index: i64,
+    next: T,
+}
+
+impl Tokenizer {
+    fn advance(mut ref self) -> Result[(), ReErr] {
+        let index = self.index;
+        if index >= self.s.len() {
+            self.next = tok_none();
+            return Ok(());
+        }
+        let c = self.s[index];
+        if c == 92 {
+            if index + 1 >= self.s.len() {
+                return Err(re_error("bad escape (end of pattern)".to_string(), self.s.len() - 1));
+            }
+            self.next = T { n: 2, a: 92, b: self.s[index + 1] };
+            self.index = index + 2;
+        } else {
+            self.next = T { n: 1, a: c, b: 0 };
+            self.index = index + 1;
+        }
+        Ok(())
+    }
+
+    fn get(mut ref self) -> Result[T, ReErr] {
+        let t = self.next;
+        self.advance()?;
+        Ok(t)
+    }
+
+    fn take(mut ref self, c: i64) -> Result[bool, ReErr] {
+        if tok_is(self.next, c) {
+            self.advance()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn tell(ref self) -> i64 {
+        self.index - self.next.n
+    }
+
+    fn seek(mut ref self, index: i64) -> Result[(), ReErr] {
+        self.index = index;
+        self.advance()
+    }
+
+    fn error(ref self, msg: own String, offset: i64) -> ReErr {
+        re_error(msg, self.tell() - offset)
+    }
+
+    // getwhile: up to n characters of a kind (0 octal, 1 decimal, 2 hex).
+    fn getwhile(mut ref self, n: i64, kind: i64, out: mut ref Vec[i64]) -> Result[(), ReErr] {
+        let mut k = 0;
+        while k < n {
+            let t = self.next;
+            if t.n != 1 {
+                break;
+            }
+            let ok = if kind == 0 { is_oct(t.a) } else if kind == 1 { is_dec(t.a) } else { is_hex(t.a) };
+            if not ok {
+                break;
+            }
+            out.push(t.a);
+            self.advance()?;
+            k += 1;
+        }
+        Ok(())
+    }
+
+    fn getuntil(mut ref self, terminator: i64, name: Str) -> Result[Vec[i64], ReErr] {
+        let mut result: Vec[i64] = Vec.new();
+        loop {
+            let c = self.next;
+            self.advance()?;
+            if c.n == 0 {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 0));
+                }
+                let term = to_string(vec_of(terminator));
+                return Err(self.error(f"missing {term}, unterminated name", result.len()));
+            }
+            if tok_is(c, terminator) {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 1));
+                }
+                break;
+            }
+            push_all(mut result, tok_text(c));
+        }
+        Ok(result)
+    }
+
+    fn checkgroupname(ref self, name: ref Vec[i64], offset: i64) -> Result[(), ReErr] {
+        if not is_identifier(name) {
+            return Err(self.error(f"bad character in group name {repr_of(name)}", name.len() + offset));
+        }
+        Ok(())
+    }
+}
+
+fn vec_of(c: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(c);
+    v
+}
+
+fn new_tokenizer(s: ref Vec[i64]) -> Result[Tokenizer, ReErr] {
+    let mut t = Tokenizer { s: s.clone(), index: 0, next: tok_none() };
+    t.advance()?;
+    Ok(t)
+}
+
+// ------------------------------------------------------------ parser
+
+#[derive(Clone)]
+struct Width {
+    lo: i64,
+    hi: i64,
+}
+
+struct ParseState {
+    flags: i64,
+    names: Vec[(Vec[i64], i64)],
+    // per group: whether it is closed, and its width
+    closed: Vec[bool],
+    widths: Vec[Width],
+    lookbehind_groups: i64,
+    // conditional references by number, in order: (group, position)
+    refpos: Vec[(i64, i64)],
+}
+
+impl ParseState {
+    fn groups(ref self) -> i64 {
+        self.closed.len()
+    }
+
+    fn group_of(ref self, name: ref Vec[i64]) -> i64 {
+        for (n, g) in self.names.iter() {
+            if same(n, name) {
+                return *g;
+            }
+        }
+        -1
+    }
+
+    fn checkgroup(ref self, gid: i64) -> bool {
+        gid < self.groups() and self.closed[gid]
+    }
+
+    fn checklookbehindgroup(ref self, gid: i64, src: ref Tokenizer) -> Result[(), ReErr] {
+        if self.lookbehind_groups >= 0 {
+            if not self.checkgroup(gid) {
+                return Err(src.error("cannot refer to an open group".to_string(), 0));
+            }
+            if gid >= self.lookbehind_groups {
+                return Err(src.error("cannot refer to group defined in the same lookbehind subpattern".to_string(), 0));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn add_width(a: i64, b: i64) -> i64 {
+    if a >= maxwidth() - b { maxwidth() } else { a + b }
+}
+
+fn mul_width(a: i64, n: i64) -> i64 {
+    if a == 0 or n == 0 {
+        0
+    } else if a >= maxwidth() / n {
+        maxwidth()
+    } else {
+        a * n
+    }
+}
+
+// SubPattern.getwidth.
+fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
+    let mut lo = 0;
+    let mut hi = 0;
+    for n in p.iter() {
+        match n {
+            Node.Branch(items) => {
+                let mut i = maxwidth();
+                let mut j = 0;
+                for item in items.iter() {
+                    let w = width_of(widths, item);
+                    if w.lo < i {
+                        i = w.lo;
+                    }
+                    if w.hi > j {
+                        j = w.hi;
+                    }
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Atomic(body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Group(_, _, _, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Repeat(_, min, max, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, mul_width(w.lo, *min));
+                if *max == maxrepeat() and w.hi > 0 {
+                    hi = maxwidth();
+                } else {
+                    hi = add_width(hi, mul_width(w.hi, *max));
+                }
+            }
+            Node.GroupRef(g) => {
+                let w = ref widths[*g];
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Exists(_, yes, no) => {
+                let wy = width_of(widths, yes);
+                let mut i = wy.lo;
+                let mut j = wy.hi;
+                if no.len() > 0 {
+                    let wn = width_of(widths, no);
+                    if wn.lo < i {
+                        i = wn.lo;
+                    }
+                    if wn.hi > j {
+                        j = wn.hi;
+                    }
+                } else {
+                    i = 0;
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Lit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.NotLit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.Any => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.In(_, _) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            _ => {}
+        }
+    }
+    Width { lo: lo, hi: hi }
+}
+
+fn category_of(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        100 => 0,
+        68 => 1,
+        115 => 2,
+        83 => 3,
+        119 => 4,
+        87 => 5,
+        _ => -1,
+    }
+}
+
+fn escape_value(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        97 => 7,
+        98 => 8,
+        102 => 12,
+        110 => 10,
+        114 => 13,
+        116 => 9,
+        118 => 11,
+        92 => 92,
+        _ => -1,
+    }
+}
+
+// \x, \u and \U: the escape text so far, and the code point.
+fn hex_escape(src: mut ref Tokenizer, t: T, esc: mut ref Vec[i64]) -> Result[i64, ReErr] {
+    let n = if t.b == 120 { 2 } else if t.b == 117 { 4 } else { 8 };
+    src.getwhile(n, 2, mut esc)?;
+    if esc.len() != n + 2 {
+        return Err(src.error(f"incomplete escape {to_string(esc)}", esc.len()));
+    }
+    let c = digits_value(esc, 2, 16);
+    if c > 0x10FFFF {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(c)
+}
+
+// _class_escape: an escape inside [...], a literal or a category.
+fn class_escape(src: mut ref Tokenizer, t: T) -> Result[Item, ReErr] {
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Item.Lit(e));
+    }
+    let cat = category_of(t);
+    if cat >= 0 {
+        return Ok(Item.Cat(cat));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Item.Lit(v));
+    }
+    if is_oct(c) {
+        src.getwhile(2, 0, mut esc)?;
+        let v = digits_value(esc, 1, 8);
+        if v > 0o377 {
+            return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+        }
+        return Ok(Item.Lit(v));
+    }
+    if is_dec(c) or is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Item.Lit(c))
+}
+
+// _escape: an escape outside a set.
+fn escape(src: mut ref Tokenizer, t: T, st: ref ParseState) -> Result[Node, ReErr] {
+    let cat = category_of(t);
+    if cat >= 0 {
+        let mut items: Vec[Item] = Vec.new();
+        items.push(Item.Cat(cat));
+        return Ok(Node.In(items, false));
+    }
+    match t.b {
+        65 => return Ok(Node.At(at_beginning_string())),
+        98 => return Ok(Node.At(at_boundary())),
+        66 => return Ok(Node.At(at_non_boundary())),
+        90 => return Ok(Node.At(at_end_string())),
+        _ => {}
+    }
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Node.Lit(e));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Node.Lit(v));
+    }
+    if c == 48 {
+        src.getwhile(2, 0, mut esc)?;
+        return Ok(Node.Lit(digits_value(esc, 1, 8)));
+    }
+    if is_dec(c) {
+        // an octal escape or a group reference
+        let nt = src.next;
+        if nt.n == 1 and is_dec(nt.a) {
+            esc.push(nt.a);
+            src.advance()?;
+            let nt2 = src.next;
+            if is_oct(esc[1]) and is_oct(esc[2]) and nt2.n == 1 and is_oct(nt2.a) {
+                esc.push(nt2.a);
+                src.advance()?;
+                let v = digits_value(esc, 1, 8);
+                if v > 0o377 {
+                    return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+                }
+                return Ok(Node.Lit(v));
+            }
+        }
+        let group = digits_value(esc, 1, 10);
+        if group < st.groups() {
+            if not st.checkgroup(group) {
+                return Err(src.error("cannot refer to an open group".to_string(), esc.len()));
+            }
+            st.checklookbehindgroup(group, src)?;
+            return Ok(Node.GroupRef(group));
+        }
+        return Err(src.error(f"invalid group reference {group}", esc.len() - 1));
+    }
+    if is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Node.Lit(c))
+}
+
+fn parse_sub(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64) -> Result[Vec[Node], ReErr] {
+    let mut items: Vec[Vec[Node]] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let first = nested == 0 and items.len() == 0;
+        let item = parse_seq(mut src, mut st, verbose, nested + 1, first)?;
+        items.push(item);
+        if not src.take(124)? {
+            break;
+        }
+        if nested == 0 {
+            verbose = (st.flags & flag_x()) != 0;
+        }
+    }
+    if items.len() == 1 {
+        return Ok(items.pop().unwrap());
+    }
+    let mut out: Vec[Node] = Vec.new();
+    out.push(Node.Branch(items));
+    Ok(out)
+}
+
+// _parse_flags: None (as Err-free Ok(None)) for global flags, else the
+// flags turned on and off.
+fn parse_flags(src: mut ref Tokenizer, st: mut ref ParseState, first_char: T) -> Result[Option[(i64, i64)], ReErr] {
+    let mut ch = first_char;
+    let mut add = 0;
+    let mut del = 0;
+    if not tok_is(ch, 45) {
+        loop {
+            let flag = flag_value(ch.a);
+            if ch.a == 76 {
+                return Err(src.error("bad inline flags: cannot use 'L' flag with a str pattern".to_string(), 0));
+            }
+            add = add | flag;
+            if (flag & type_flags()) != 0 and (add & type_flags()) != flag {
+                return Err(src.error("bad inline flags: flags 'a', 'u' and 'L' are incompatible".to_string(), 0));
+            }
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing -, : or )".to_string(), 0));
+            }
+            if tok_is(ch, 41) or tok_is(ch, 45) or tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing -, : or )" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if tok_is(ch, 41) {
+        st.flags = st.flags | add;
+        return Ok(None);
+    }
+    if tok_is(ch, 45) {
+        ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("missing flag".to_string(), 0));
+        }
+        if ch.n != 1 or flag_value(ch.a) == 0 {
+            let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing flag" };
+            return Err(src.error(msg.to_string(), ch.n));
+        }
+        loop {
+            let flag = flag_value(ch.a);
+            if (flag & type_flags()) != 0 {
+                return Err(src.error("bad inline flags: cannot turn off flags 'a', 'u' and 'L'".to_string(), 0));
+            }
+            del = del | flag;
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing :".to_string(), 0));
+            }
+            if tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing :" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if (add & del) != 0 {
+        return Err(src.error("bad inline flags: flag turned on and off".to_string(), 1));
+    }
+    Ok(Some((add, del)))
+}
+
+fn is_alpha(c: i64) -> bool {
+    match as_char(c) {
+        Some(ch) => ch.is_alphabetic(),
+        None => false,
+    }
+}
+
+fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr] {
+    let here = src.tell() - 1;
+    let mut set: Vec[Item] = Vec.new();
+    let negate = src.take(94)?;
+    loop {
+        let this = src.get()?;
+        if this.n == 0 {
+            return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+        }
+        if tok_is(this, 93) and set.len() > 0 {
+            break;
+        }
+        let code1 = if this.n == 2 { class_escape(mut src, this)? } else { Item.Lit(this.a) };
+        if src.take(45)? {
+            let that = src.get()?;
+            if that.n == 0 {
+                return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+            }
+            if tok_is(that, 93) {
+                set.push(code1);
+                set.push(Item.Lit(45));
+                break;
+            }
+            let code2 = if that.n == 2 { class_escape(mut src, that)? } else { Item.Lit(that.a) };
+            let text = f"{to_string(tok_text(this))}-{to_string(tok_text(that))}";
+            let offset = this.n + 1 + that.n;
+            let lo = match code1 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            let hi = match code2 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            if lo < 0 or hi < 0 or hi < lo {
+                return Err(src.error(f"bad character range {text}", offset));
+            }
+            set.push(Item.Range(lo, hi));
+        } else {
+            set.push(code1);
+        }
+    }
+    if set.len() == 1 {
+        let only = ref set[0];
+        if let Item.Lit(c) = only {
+            if negate {
+                out.push(Node.NotLit(*c));
+            } else {
+                out.push(Node.Lit(*c));
+            }
+            return Ok(());
+        }
+    }
+    out.push(Node.In(set, negate));
+    Ok(())
+}
+
+// The quantifier just read (its first character is `this`), applied to
+// the last item. Returns false when `{` turned out to be a literal.
+fn parse_repeat(src: mut ref Tokenizer, this: T, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let here = src.tell();
+    let mut min = 0;
+    let mut max = maxrepeat();
+    if tok_is(this, 63) {
+        max = 1;
+    } else if tok_is(this, 43) {
+        min = 1;
+    } else if tok_is(this, 123) {
+        if tok_is(src.next, 125) {
+            out.push(Node.Lit(123));
+            return Ok(false);
+        }
+        let mut lo: Vec[i64] = Vec.new();
+        let mut hi: Vec[i64] = Vec.new();
+        while src.next.n == 1 and is_dec(src.next.a) {
+            lo.push(src.get()?.a);
+        }
+        if src.take(44)? {
+            while src.next.n == 1 and is_dec(src.next.a) {
+                hi.push(src.get()?.a);
+            }
+        } else {
+            hi = lo.clone();
+        }
+        if not src.take(125)? {
+            out.push(Node.Lit(123));
+            src.seek(here)?;
+            return Ok(false);
+        }
+        if lo.len() > 0 {
+            if lo.len() > 10 or digits_value(lo, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            min = digits_value(lo, 0, 10);
+        }
+        if hi.len() > 0 {
+            if hi.len() > 10 or digits_value(hi, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            max = digits_value(hi, 0, 10);
+            if max < min {
+                return Err(src.error("min repeat greater than max repeat".to_string(), src.tell() - here));
+            }
+        }
+    }
+    if out.len() == 0 or is_at(out[out.len() - 1]) {
+        return Err(src.error("nothing to repeat".to_string(), src.tell() - here + 1));
+    }
+    if is_repeat(out[out.len() - 1]) {
+        return Err(src.error("multiple repeat".to_string(), src.tell() - here + 1));
+    }
+    let last = out.pop().unwrap();
+    let mut body: Vec[Node] = Vec.new();
+    match last {
+        Node.Group(0, 0, 0, p) => body = p,
+        other => body.push(other),
+    }
+    let kind = if src.take(63)? { 1 } else if src.take(43)? { 2 } else { 0 };
+    out.push(Node.Repeat(kind, min, max, body));
+    Ok(true)
+}
+
+fn parse_seq(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64, first: bool) -> Result[Vec[Node], ReErr] {
+    let mut out: Vec[Node] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let this = src.next;
+        if this.n == 0 or tok_is(this, 124) or tok_is(this, 41) {
+            break;
+        }
+        src.advance()?;
+        if verbose {
+            if this.n == 1 and (this.a == 32 or (this.a >= 9 and this.a <= 13)) {
+                continue;
+            }
+            if tok_is(this, 35) {
+                loop {
+                    let t = src.get()?;
+                    if t.n == 0 or tok_is(t, 10) {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        if this.n == 2 {
+            let node = escape(mut src, this, st)?;
+            out.push(node);
+            continue;
+        }
+        let c = this.a;
+        if c == 91 {
+            parse_set(mut src, mut out)?;
+        } else if c == 42 or c == 43 or c == 63 or c == 123 {
+            parse_repeat(mut src, this, mut out)?;
+        } else if c == 46 {
+            out.push(Node.Any);
+        } else if c == 94 {
+            out.push(Node.At(at_beginning()));
+        } else if c == 36 {
+            out.push(Node.At(at_end()));
+        } else if c == 40 {
+            if parse_group(mut src, mut st, mut verbose, nested, first, mut out)? {
+                continue;
+            }
+        } else {
+            out.push(Node.Lit(c));
+        }
+    }
+    Ok(out)
+}
+
+// `(` and what follows. Returns true for a construct that adds nothing
+// (a comment, global flags).
+fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref bool, nested: i64, first: bool, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let start = src.tell() - 1;
+    let mut capture = true;
+    let mut atomic = false;
+    let mut name: Vec[i64] = Vec.new();
+    let mut named = false;
+    let mut add = 0;
+    let mut del = 0;
+    if src.take(63)? {
+        let ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("unexpected end of pattern".to_string(), 0));
+        }
+        if tok_is(ch, 80) {
+            if src.take(60)? {
+                name = src.getuntil(62, "group name")?;
+                src.checkgroupname(name, 1)?;
+                named = true;
+            } else if src.take(61)? {
+                let ref_name = src.getuntil(41, "group name")?;
+                src.checkgroupname(ref_name, 1)?;
+                let gid = st.group_of(ref_name);
+                if gid < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(ref_name)}", ref_name.len() + 1));
+                }
+                if not st.checkgroup(gid) {
+                    return Err(src.error("cannot refer to an open group".to_string(), ref_name.len() + 1));
+                }
+                st.checklookbehindgroup(gid, src)?;
+                out.push(Node.GroupRef(gid));
+                return Ok(true);
+            } else {
+                let c2 = src.get()?;
+                if c2.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                return Err(src.error(f"unknown extension ?P{to_string(tok_text(c2))}", c2.n + 2));
+            }
+        } else if tok_is(ch, 58) {
+            capture = false;
+        } else if tok_is(ch, 35) {
+            loop {
+                if src.next.n == 0 {
+                    return Err(src.error("missing ), unterminated comment".to_string(), src.tell() - start));
+                }
+                if tok_is(src.get()?, 41) {
+                    break;
+                }
+            }
+            return Ok(true);
+        } else if tok_is(ch, 61) or tok_is(ch, 33) or tok_is(ch, 60) {
+            let mut kind = ch;
+            let mut dir = 1;
+            let mut outer_lookbehind = 0;
+            if tok_is(ch, 60) {
+                kind = src.get()?;
+                if kind.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                if not (tok_is(kind, 61) or tok_is(kind, 33)) {
+                    return Err(src.error(f"unknown extension ?<{to_string(tok_text(kind))}", kind.n + 2));
+                }
+                dir = -1;
+                outer_lookbehind = st.lookbehind_groups;
+                if outer_lookbehind < 0 {
+                    st.lookbehind_groups = st.groups();
+                }
+            }
+            let p = parse_sub(mut src, mut st, *verbose, nested + 1)?;
+            if dir < 0 and outer_lookbehind < 0 {
+                st.lookbehind_groups = -1;
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            if tok_is(kind, 61) {
+                out.push(Node.Assert(dir, false, p));
+            } else if p.len() > 0 {
+                out.push(Node.Assert(dir, true, p));
+            } else {
+                out.push(Node.Failure);
+            }
+            return Ok(true);
+        } else if tok_is(ch, 40) {
+            let condname = src.getuntil(41, "group name")?;
+            let mut condgroup = 0;
+            if not is_ascii_decimal(condname) {
+                src.checkgroupname(condname, 1)?;
+                condgroup = st.group_of(condname);
+                if condgroup < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(condname)}", condname.len() + 1));
+                }
+            } else {
+                if condname.len() > 10 {
+                    return Err(src.error(f"invalid group reference {to_string(condname)}", condname.len() + 1));
+                }
+                condgroup = digits_value(condname, 0, 10);
+                if condgroup == 0 {
+                    return Err(src.error("bad group number".to_string(), condname.len() + 1));
+                }
+                if condgroup >= maxgroups() {
+                    return Err(src.error(f"invalid group reference {condgroup}", condname.len() + 1));
+                }
+                let mut seen = false;
+                for (g, _) in st.refpos.iter() {
+                    if *g == condgroup {
+                        seen = true;
+                    }
+                }
+                if not seen {
+                    st.refpos.push((condgroup, src.tell() - condname.len() - 1));
+                }
+            }
+            st.checklookbehindgroup(condgroup, src)?;
+            let yes = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+            let mut no: Vec[Node] = Vec.new();
+            if src.take(124)? {
+                no = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+                if tok_is(src.next, 124) {
+                    return Err(src.error("conditional backref with more than two branches".to_string(), 0));
+                }
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            out.push(Node.Exists(condgroup, yes, no));
+            return Ok(true);
+        } else if tok_is(ch, 62) {
+            capture = false;
+            atomic = true;
+        } else if (ch.n == 1 and flag_value(ch.a) != 0) or tok_is(ch, 45) {
+            match parse_flags(mut src, mut st, ch)? {
+                None => {
+                    if not first or out.len() > 0 {
+                        return Err(src.error("global flags not at the start of the expression".to_string(), src.tell() - start));
+                    }
+                    *verbose = (st.flags & flag_x()) != 0;
+                    return Ok(true);
+                }
+                Some((a, d)) => {
+                    add = a;
+                    del = d;
+                    capture = false;
+                }
+            }
+        } else {
+            return Err(src.error(f"unknown extension ?{to_string(tok_text(ch))}", ch.n + 1));
+        }
+    }
+    let mut group = 0;
+    if capture {
+        group = st.groups();
+        st.closed.push(false);
+        st.widths.push(Width { lo: 0, hi: 0 });
+        if named {
+            let was = st.group_of(name);
+            if was >= 0 {
+                return Err(src.error(f"redefinition of group name {repr_of(name)} as group {group}; was group {was}", name.len() + 1));
+            }
+            st.names.push((name.clone(), group));
+        }
+    }
+    let sub_verbose = (*verbose or (add & flag_x()) != 0) and (del & flag_x()) == 0;
+    let p = parse_sub(mut src, mut st, sub_verbose, nested + 1)?;
+    if not src.take(41)? {
+        return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+    }
+    if group > 0 {
+        let w = width_of(st.widths, p);
+        st.widths[group] = w;
+        st.closed[group] = true;
+    }
+    if atomic {
+        out.push(Node.Atomic(p));
+    } else {
+        out.push(Node.Group(group, add, del, p));
+    }
+    Ok(false)
+}
+
+struct Parsed {
+    nodes: Vec[Node],
+    flags: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+    widths: Vec[Width],
+}
+
+fn parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
+    let mut src = new_tokenizer(pattern)?;
+    let mut st = ParseState {
+        flags: flags,
+        names: Vec.new(),
+        closed: Vec.new(),
+        widths: Vec.new(),
+        lookbehind_groups: -1,
+        refpos: Vec.new(),
+    };
+    // group 0 is the whole match
+    st.closed.push(true);
+    st.widths.push(Width { lo: 0, hi: 0 });
+    let nodes = parse_sub(mut src, mut st, (flags & flag_x()) != 0, 0)?;
+    if (st.flags & flag_a()) != 0 and (st.flags & flag_u()) != 0 {
+        return Err(other_error("ValueError", "ASCII and UNICODE flags are incompatible".to_string()));
+    }
+    if src.next.n != 0 {
+        return Err(src.error("unbalanced parenthesis".to_string(), 0));
+    }
+    for (g, pos) in st.refpos.iter() {
+        if *g >= st.groups() {
+            return Err(re_error(f"invalid group reference {*g}", *pos));
+        }
+    }
+    let groups = st.groups() - 1;
+    Ok(Parsed { nodes: nodes, flags: st.flags, groups: groups, names: st.names, widths: st.widths })
+}
+
+// ---------------------------------------------------------- compiler
+
+enum Op {
+    // character (lowered when case-insensitive), case-insensitive, ASCII
+    Lit(i64, bool, bool),
+    NotLit(i64, bool, bool),
+    Any,
+    AnyAll,
+    // set, case-insensitive, ASCII-only categories
+    In(i64, bool, bool),
+    // anchor kind, ASCII-only word boundary
+    At(i64, bool),
+    Mark(i64),
+    Split(i64, i64),
+    Jmp(i64),
+    // repeat register, the Until it starts at
+    RepInit(i64, i64),
+    // register, min, max, greedy, body, exit
+    Until(i64, i64, i64, bool, i64, i64),
+    Ref(i64, bool, bool),
+    // lookbehind width (-1 for lookahead), negative, sub-program, next
+    Look(i64, bool, i64, i64),
+    Atomic(i64, i64),
+    Exists(i64, i64),
+    Fail,
+    Succeed,
+    Match,
+}
+
+struct Program {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+}
+
+struct CharSet {
+    items: Vec[Item],
+    negate: bool,
+}
+
+fn combine(flags: i64, add: i64, del: i64) -> i64 {
+    let mut f = flags;
+    if (add & type_flags()) != 0 {
+        f = f & (0x7FFFFFFF ^ type_flags());
+    }
+    (f | add) & (0x7FFFFFFF ^ del)
+}
+
+struct Compiler {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+}
+
+impl Compiler {
+    fn emit(mut ref self, op: own Op) -> i64 {
+        self.ops.push(op);
+        self.ops.len() - 1
+    }
+
+    fn here(ref self) -> i64 {
+        self.ops.len()
+    }
+
+    fn compile(mut ref self, p: ref Parsed, nodes: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let icase = (flags & flag_i()) != 0;
+        let ascii = (flags & flag_a()) != 0;
+        for n in nodes.iter() {
+            match n {
+                Node.Lit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.Lit(v, icase, ascii));
+                }
+                Node.NotLit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.NotLit(v, icase, ascii));
+                }
+                Node.Any => {
+                    if (flags & flag_s()) != 0 {
+                        self.emit(Op.AnyAll);
+                    } else {
+                        self.emit(Op.Any);
+                    }
+                }
+                Node.In(items, negate) => {
+                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    let idx = self.sets.len() - 1;
+                    self.emit(Op.In(idx, icase, ascii));
+                }
+                Node.At(kind) => {
+                    let mut k = *kind;
+                    if (flags & flag_m()) != 0 {
+                        if k == at_beginning() {
+                            k = at_beginning_line();
+                        } else if k == at_end() {
+                            k = at_end_line();
+                        }
+                    }
+                    self.emit(Op.At(k, ascii));
+                }
+                Node.Branch(items) => {
+                    let mut ends: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < items.len() {
+                        if i + 1 < items.len() {
+                            let split = self.emit(Op.Fail);
+                            self.compile(p, items[i], flags)?;
+                            ends.push(self.emit(Op.Fail));
+                            let next = self.here();
+                            self.ops[split] = Op.Split(split + 1, next);
+                        } else {
+                            self.compile(p, items[i], flags)?;
+                        }
+                        i += 1;
+                    }
+                    let end = self.here();
+                    for at in ends {
+                        self.ops[at] = Op.Jmp(end);
+                    }
+                }
+                Node.Group(g, add, off, body) => {
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g));
+                    }
+                    self.compile(p, body, combine(flags, *add, *off))?;
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g + 1));
+                    }
+                }
+                Node.Repeat(kind, min, max, body) => {
+                    if *kind == 2 {
+                        let at = self.emit(Op.Fail);
+                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.emit(Op.Succeed);
+                        let next = self.here();
+                        self.ops[at] = Op.Atomic(at + 1, next);
+                    } else {
+                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                    }
+                }
+                Node.Atomic(body) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Atomic(at + 1, next);
+                }
+                Node.Assert(dir, negative, body) => {
+                    let mut width = -1;
+                    if *dir < 0 {
+                        let w = width_of(p.widths, body);
+                        if w.lo != w.hi {
+                            return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
+                        }
+                        width = w.lo;
+                    }
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                }
+                Node.GroupRef(g) => {
+                    self.emit(Op.Ref(*g, icase, ascii));
+                }
+                Node.Exists(g, yes, no) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, yes, flags)?;
+                    if no.len() > 0 {
+                        let jump = self.emit(Op.Fail);
+                        let no_pc = self.here();
+                        self.compile(p, no, flags)?;
+                        let end = self.here();
+                        self.ops[jump] = Op.Jmp(end);
+                        self.ops[at] = Op.Exists(*g, no_pc);
+                    } else {
+                        let end = self.here();
+                        self.ops[at] = Op.Exists(*g, end);
+                    }
+                }
+                Node.Failure => {
+                    self.emit(Op.Fail);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_repeat(mut ref self, p: ref Parsed, min: i64, max: i64, greedy: bool, body: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let r = self.repeats;
+        self.repeats += 1;
+        let init = self.emit(Op.Fail);
+        self.compile(p, body, flags)?;
+        let until = self.emit(Op.Fail);
+        self.ops[init] = Op.RepInit(r, until);
+        self.ops[until] = Op.Until(r, min, max, greedy, init + 1, until + 1);
+        Ok(())
+    }
+}
+
+fn compile(pattern: ref Vec[i64], flags: i64) -> Result[Program, ReErr] {
+    let p = parse(pattern, flags)?;
+    let mut c = Compiler { ops: Vec.new(), sets: Vec.new(), repeats: 0 };
+    c.compile(p, p.nodes, p.flags)?;
+    c.emit(Op.Match);
+    Ok(Program { ops: c.ops, sets: c.sets, repeats: c.repeats, groups: p.groups, names: p.names })
+}
+
+// ----------------------------------------------------------- matcher
+
+struct Undo {
+    kind: i64,
+    idx: i64,
+    old: i64,
+}
+
+struct Choice {
+    pc: i64,
+    pos: i64,
+    trail: i64,
+    // 0: resume at pc; 1: a lazy repeat's Until, after its tail failed
+    mode: i64,
+}
+
+struct Matcher {
+    s: Vec[i64],
+    marks: Vec[i64],
+    counts: Vec[i64],
+    lasts: Vec[i64],
+    lastindex: i64,
+    trail: Vec[Undo],
+    start: i64,
+    must_advance: bool,
+    match_all: bool,
+}
+
+impl Matcher {
+    fn set_mark(mut ref self, slot: i64, v: i64) {
+        self.trail.push(Undo { kind: 0, idx: slot, old: self.marks[slot] });
+        self.marks[slot] = v;
+    }
+
+    fn set_count(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 1, idx: r, old: self.counts[r] });
+        self.counts[r] = v;
+    }
+
+    fn set_last(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 2, idx: r, old: self.lasts[r] });
+        self.lasts[r] = v;
+    }
+
+    fn set_lastindex(mut ref self, v: i64) {
+        self.trail.push(Undo { kind: 3, idx: 0, old: self.lastindex });
+        self.lastindex = v;
+    }
+
+    fn undo_to(mut ref self, len: i64) {
+        while self.trail.len() > len {
+            let u = self.trail.pop().unwrap();
+            if u.kind == 0 {
+                self.marks[u.idx] = u.old;
+            } else if u.kind == 1 {
+                self.counts[u.idx] = u.old;
+            } else if u.kind == 2 {
+                self.lasts[u.idx] = u.old;
+            } else {
+                self.lastindex = u.old;
+            }
+        }
+    }
+
+    // A group that has both marks, the end not before the start.
+    fn group_span(ref self, g: i64) -> (i64, i64) {
+        let a = self.marks[2 * g];
+        let b = self.marks[2 * g + 1];
+        if a < 0 or b < 0 or b < a {
+            return (-1, -1);
+        }
+        (a, b)
+    }
+
+    fn at(ref self, kind: i64, ascii: bool, pos: i64) -> bool {
+        let n = self.s.len();
+        if kind == 0 or kind == 2 {
+            return pos == 0;
+        }
+        if kind == 1 {
+            return pos == 0 or self.s[pos - 1] == 10;
+        }
+        if kind == 3 {
+            return pos == n or (pos == n - 1 and self.s[pos] == 10);
+        }
+        if kind == 4 {
+            return pos == n or self.s[pos] == 10;
+        }
+        if kind == 5 {
+            return pos == n;
+        }
+        if n == 0 {
+            return false;
+        }
+        let before = pos > 0 and is_word(self.s[pos - 1], ascii);
+        let after = pos < n and is_word(self.s[pos], ascii);
+        if kind == 6 { before != after } else { before == after }
+    }
+
+    // Runs the program from pc at pos, backtracking through its own
+    // choices only. Returns where it succeeded, or -1.
+    fn run(mut ref self, prog: ref Program, pc0: i64, pos0: i64, top: bool) -> i64 {
+        let base = self.trail.len();
+        let mut choices: Vec[Choice] = Vec.new();
+        let mut pc = pc0;
+        let mut pos = pos0;
+        let mut mode = 0;
+        loop {
+            let mut ok = true;
+            let op = ref prog.ops[pc];
+            if mode == 1 {
+                // a lazy repeat whose tail failed: try one more item
+                mode = 0;
+                ok = false;
+                if let Op.Until(r, _, max, _, body, _) = op {
+                    let count = self.counts[*r] + 1;
+                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
+                        self.set_count(*r, count);
+                        self.set_last(*r, pos);
+                        pc = *body;
+                        ok = true;
+                    }
+                }
+                if ok {
+                    continue;
+                }
+            } else {
+                match op {
+                    Op.Lit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.NotLit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Any => {
+                        if pos < self.s.len() and self.s[pos] != 10 {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.AnyAll => {
+                        if pos < self.s.len() {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.In(set, icase, ascii) => {
+                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.At(kind, ascii) => {
+                        if self.at(*kind, *ascii, pos) {
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Mark(slot) => {
+                        self.set_mark(*slot, pos);
+                        if (*slot & 1) == 1 {
+                            self.set_lastindex(*slot / 2);
+                        }
+                        pc += 1;
+                    }
+                    Op.Split(a, b) => {
+                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = *a;
+                    }
+                    Op.Jmp(a) => pc = *a,
+                    Op.RepInit(r, until) => {
+                        self.set_count(*r, -1);
+                        self.set_last(*r, -1);
+                        pc = *until;
+                    }
+                    Op.Until(r, min, max, greedy, body, exit) => {
+                        let count = self.counts[*r] + 1;
+                        if count < *min {
+                            self.set_count(*r, count);
+                            pc = *body;
+                        } else if *greedy {
+                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
+                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(*r, count);
+                                self.set_last(*r, pos);
+                                pc = *body;
+                            } else {
+                                pc = *exit;
+                            }
+                        } else {
+                            choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
+                            pc = *exit;
+                        }
+                    }
+                    Op.Ref(g, icase, ascii) => {
+                        let (a, b) = self.group_span(*g);
+                        if a < 0 {
+                            ok = false;
+                        } else {
+                            let len = b - a;
+                            if pos + len > self.s.len() {
+                                ok = false;
+                            } else {
+                                let mut k = 0;
+                                while k < len {
+                                    let x = self.s[a + k];
+                                    let y = self.s[pos + k];
+                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    if not eq {
+                                        ok = false;
+                                        break;
+                                    }
+                                    k += 1;
+                                }
+                                if ok {
+                                    pos += len;
+                                    pc += 1;
+                                }
+                            }
+                        }
+                    }
+                    Op.Look(width, negative, sub, next) => {
+                        let mark = self.trail.len();
+                        let from = if *width < 0 { pos } else { pos - *width };
+                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
+                        if *negative {
+                            self.undo_to(mark);
+                            if found {
+                                ok = false;
+                            } else {
+                                pc = *next;
+                            }
+                        } else if found {
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Atomic(sub, next) => {
+                        let end = self.run(prog, *sub, pos, false);
+                        if end >= 0 {
+                            pos = end;
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Exists(g, no) => {
+                        let (a, _) = self.group_span(*g);
+                        if a >= 0 {
+                            pc += 1;
+                        } else {
+                            pc = *no;
+                        }
+                    }
+                    Op.Fail => ok = false,
+                    Op.Succeed => return pos,
+                    Op.Match => {
+                        if top and ((self.match_all and pos != self.s.len()) or (self.must_advance and pos == self.start)) {
+                            ok = false;
+                        } else {
+                            return pos;
+                        }
+                    }
+                }
+            }
+            if not ok {
+                match choices.pop() {
+                    Some(ch) => {
+                        self.undo_to(ch.trail);
+                        pc = ch.pc;
+                        pos = ch.pos;
+                        mode = ch.mode;
+                    }
+                    None => {
+                        self.undo_to(base);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
+    for item in set.items.iter() {
+        let hit = match item {
+            Item.Lit(l) => c == *l,
+            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Cat(k) => {
+                let kind = *k;
+                if kind == 0 {
+                    if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
+                } else if kind == 1 {
+                    if ascii { not (c >= 48 and c <= 57) } else { not is_decimal(c) }
+                } else if kind == 2 {
+                    is_space(c, ascii)
+                } else if kind == 3 {
+                    not is_space(c, ascii)
+                } else if kind == 4 {
+                    is_word(c, ascii)
+                } else {
+                    not is_word(c, ascii)
+                }
+            }
+        };
+        if hit {
+            return true;
+        }
+    }
+    false
+}
+
+// Under IGNORECASE sre lowercases the set when it compiles it and tests
+// the lowercased character; a character is in the lowered set if it, or
+// its uppercase, is in the set and lowers to it.
+fn in_set(set: ref CharSet, c: i64, icase: bool, ascii: bool) -> bool {
+    let mut hit = false;
+    if icase {
+        let lo = lower(c, ascii);
+        if lower(lo, ascii) == lo and in_items(set, lo, ascii) {
+            hit = true;
+        }
+        let up = upper(lo, ascii);
+        if not hit and lower(up, ascii) == lo and in_items(set, up, ascii) {
+            hit = true;
+        }
+    } else {
+        hit = in_items(set, c, ascii);
+    }
+    hit != set.negate
+}
+
+// ------------------------------------------------------- the module
+
+struct Found {
+    start: i64,
+    end: i64,
+    // group spans, (-1, -1) when a group did not take part
+    spans: Vec[(i64, i64)],
+    lastindex: i64,
+}
+
+fn new_matcher(prog: ref Program, s: ref Vec[i64]) -> Matcher {
+    let mut marks: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 2 * (prog.groups + 1) {
+        marks.push(-1);
+        k += 1;
+    }
+    let mut counts: Vec[i64] = Vec.new();
+    let mut lasts: Vec[i64] = Vec.new();
+    k = 0;
+    while k < prog.repeats {
+        counts.push(-1);
+        lasts.push(-1);
+        k += 1;
+    }
+    Matcher {
+        s: s.clone(),
+        marks: marks,
+        counts: counts,
+        lasts: lasts,
+        lastindex: -1,
+        trail: Vec.new(),
+        start: 0,
+        must_advance: false,
+        match_all: false,
+    }
+}
+
+// sre_search from `from` (or one attempt there for match and
+// fullmatch: mode 1 and 2).
+fn find(m: mut ref Matcher, prog: ref Program, from: i64, must_advance: bool, mode: i64) -> Option[Found] {
+    let mut start = from;
+    while start <= m.s.len() {
+        let mut k = 0;
+        while k < m.marks.len() {
+            m.marks[k] = -1;
+            k += 1;
+        }
+        m.lastindex = -1;
+        m.trail.clear();
+        m.start = start;
+        m.must_advance = must_advance and start == from;
+        m.match_all = mode == 2;
+        let end = m.run(prog, 0, start, true);
+        if end >= 0 {
+            let mut spans: Vec[(i64, i64)] = Vec.new();
+            let mut g = 1;
+            while g <= prog.groups {
+                spans.push(m.group_span(g));
+                g += 1;
+            }
+            return Some(Found { start: start, end: end, spans: spans, lastindex: m.lastindex });
+        }
+        if mode != 0 {
+            return None;
+        }
+        start += 1;
+    }
+    None
+}
+
+// All the matches finditer gives: each search starts where the last
+// match ended, and must move on past an empty one.
+fn all_matches(prog: ref Program, s: ref Vec[i64], limit: i64) -> Vec[Found] {
+    let mut m = new_matcher(prog, s);
+    let mut out: Vec[Found] = Vec.new();
+    let mut pos = 0;
+    let mut must_advance = false;
+    while pos <= s.len() and (limit == 0 or out.len() < limit) {
+        match find(mut m, prog, pos, must_advance, 0) {
+            Some(found) => {
+                must_advance = found.end == found.start;
+                pos = found.end;
+                out.push(found);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+
+// ============================================================ parsy
+
+// ------------------------------------------------------------ values
+
+// A Python value, as parsers produce them and the grammars build them.
+shared enum Val {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(Vec[i64]),
+    List(Vec[Val]),
+    Tuple(Vec[Val]),
+    Dict(Vec[(Val, Val)]),
+    FrozenSet(Vec[Val]),
+    // a dataclass or a namedtuple: `Name(field=value, ...)`
+    Record(String, Vec[(String, Val)]),
+    // an object that prints as a call: `datetime.date(2003, 4, 5)`, `Forward(10)`
+    Call(String, Vec[Val]),
+    // an enum member, with its class, name and value: `<Pet.CAT: 'cat'>`
+    Member(String, String, Val),
+    // an opaque object that prints as its name and is equal only to itself
+    Marker(String),
+}
+
+fn pystr(t: Str) -> Val {
+    Val.Str(codepoints(t.bytes()))
+}
+
+fn pychar(c: i64) -> Val {
+    Val.Str(Vec[c])
+}
+
+fn tuple2(a: Val, b: Val) -> Val {
+    Val.Tuple(Vec[a, b])
+}
+
+fn text_of(v: ref Val) -> Vec[i64] {
+    match v {
+        Val.Str(t) => t.clone(),
+        _ => panic(f"expected a str, found {repr(v)}"),
+    }
+}
+
+// The elements of a list or a tuple.
+fn elems(v: ref Val) -> Vec[Val] {
+    match v {
+        Val.List(xs) => xs.clone(),
+        Val.Tuple(xs) => xs.clone(),
+        _ => panic(f"expected a sequence, found {repr(v)}"),
+    }
+}
+
+fn at(v: ref Val, i: i64) -> Val {
+    let xs = elems(v);
+    if i < 0 { xs[xs.len() + i] } else { xs[i] }
+}
+
+fn repr_into(v: ref Val, out: mut ref Vec[i64]) {
+    match v {
+        Val.Nil => push_ascii(mut out, "None"),
+        Val.Bool(b) => push_ascii(mut out, if b { "True" } else { "False" }),
+        Val.Int(n) => push_ascii(mut out, f"{n}"),
+        Val.Float(x) => push_ascii(mut out, f"{x}"),
+        Val.Str(t) => str_repr(t, mut out),
+        Val.List(xs) => {
+            out.push(91);
+            seq_into(xs, mut out);
+            out.push(93);
+        }
+        Val.Tuple(xs) => {
+            out.push(40);
+            seq_into(xs, mut out);
+            if xs.len() == 1 {
+                out.push(44);
+            }
+            out.push(41);
+        }
+        Val.Dict(kv) => {
+            out.push(123);
+            let mut k = 0;
+            while k < kv.len() {
+                if k > 0 {
+                    push_ascii(mut out, ", ");
+                }
+                let (key, value) = ref kv[k];
+                repr_into(key, mut out);
+                push_ascii(mut out, ": ");
+                repr_into(value, mut out);
+                k += 1;
+            }
+            out.push(125);
+        }
+        Val.FrozenSet(xs) => {
+            push_ascii(mut out, "frozenset(");
+            if xs.len() > 0 {
+                out.push(123);
+                seq_into(xs, mut out);
+                out.push(125);
+            }
+            out.push(41);
+        }
+        Val.Record(name, fields) => {
+            push_ascii(mut out, name);
+            out.push(40);
+            let mut k = 0;
+            while k < fields.len() {
+                if k > 0 {
+                    push_ascii(mut out, ", ");
+                }
+                let (field, value) = ref fields[k];
+                push_ascii(mut out, field);
+                out.push(61);
+                repr_into(value, mut out);
+                k += 1;
+            }
+            out.push(41);
+        }
+        Val.Call(name, args) => {
+            push_ascii(mut out, name);
+            out.push(40);
+            seq_into(args, mut out);
+            out.push(41);
+        }
+        Val.Member(cls, name, value) => {
+            push_ascii(mut out, f"<{cls}.{name}: ");
+            repr_into(value, mut out);
+            out.push(62);
+        }
+        Val.Marker(name) => push_ascii(mut out, name),
+    }
+}
+
+fn seq_into(xs: ref Vec[Val], out: mut ref Vec[i64]) {
+    let mut k = 0;
+    while k < xs.len() {
+        if k > 0 {
+            push_ascii(mut out, ", ");
+        }
+        repr_into(xs[k], mut out);
+        k += 1;
+    }
+}
+
+fn repr(v: ref Val) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    repr_into(v, mut out);
+    to_string(out)
+}
+
+// str(): a str is its own text, anything else its repr.
+fn py_str(v: ref Val) -> String {
+    match v {
+        Val.Str(t) => to_string(t),
+        _ => repr(v),
+    }
+}
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Nil => false,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
+        Val.Float(x) => x != 0.0,
+        Val.Str(t) => t.len() > 0,
+        Val.List(xs) => xs.len() > 0,
+        Val.Tuple(xs) => xs.len() > 0,
+        Val.Dict(kv) => kv.len() > 0,
+        Val.FrozenSet(xs) => xs.len() > 0,
+        _ => true,
+    }
+}
+
+fn number_of(v: ref Val) -> Option[f64] {
+    match v {
+        Val.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        Val.Int(n) => Some(n as f64),
+        Val.Float(x) => Some(x),
+        _ => None,
+    }
+}
+
+fn all_eq(a: ref Vec[Val], b: ref Vec[Val]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < a.len() {
+        if not py_eq(a[k], b[k]) {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn lookup(kv: ref Vec[(Val, Val)], key: ref Val) -> Option[Val] {
+    for (k, v) in kv {
+        if py_eq(k, key) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+// Python's ==.
+fn py_eq(a: ref Val, b: ref Val) -> bool {
+    match (number_of(a), number_of(b)) {
+        (Some(x), Some(y)) => {
+            return match (a, b) {
+                (Val.Int(m), Val.Int(n)) => m == n,
+                _ => x == y,
+            };
+        }
+        _ => {}
+    }
+    match a {
+        Val.Nil => match b {
+            Val.Nil => true,
+            _ => false,
+        },
+        Val.Str(s) => match b {
+            Val.Str(t) => same(s, t),
+            _ => false,
+        },
+        Val.List(xs) => match b {
+            Val.List(ys) => all_eq(xs, ys),
+            _ => false,
+        },
+        Val.Tuple(xs) => match b {
+            Val.Tuple(ys) => all_eq(xs, ys),
+            _ => false,
+        },
+        Val.Dict(kv) => match b {
+            Val.Dict(lw) => {
+                if kv.len() != lw.len() {
+                    return false;
+                }
+                for (k, v) in kv {
+                    match lookup(lw, k) {
+                        Some(w) => {
+                            if not py_eq(v, w) {
+                                return false;
+                            }
+                        }
+                        None => return false,
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        Val.FrozenSet(xs) => match b {
+            Val.FrozenSet(ys) => xs.len() == ys.len() and xs.iter().all(|x| ys.iter().any(|y| py_eq(x, y))),
+            _ => false,
+        },
+        Val.Record(n, fs) => match b {
+            Val.Record(m, gs) => {
+                if n != m or fs.len() != gs.len() {
+                    return false;
+                }
+                let mut k = 0;
+                while k < fs.len() {
+                    let (f, x) = ref fs[k];
+                    let (g, y) = ref gs[k];
+                    if f != g or not py_eq(x, y) {
+                        return false;
+                    }
+                    k += 1;
+                }
+                true
+            }
+            _ => false,
+        },
+        Val.Call(n, xs) => match b {
+            Val.Call(m, ys) => n == m and all_eq(xs, ys),
+            _ => false,
+        },
+        Val.Member(c, n, _) => match b {
+            Val.Member(d, m, _) => c == d and n == m,
+            _ => false,
+        },
+        Val.Marker(n) => match b {
+            Val.Marker(m) => n == m,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+// `x in [a, b, ...]`
+fn py_in(x: ref Val, options: ref Vec[Val]) -> bool {
+    options.iter().any(|o| py_eq(o, x))
+}
+
+// operator.add
+fn py_add(a: ref Val, b: ref Val) -> Val {
+    match (a, b) {
+        (Val.Str(s), Val.Str(t)) => {
+            let mut u = s.clone();
+            push_all(mut u, t);
+            Val.Str(u)
+        }
+        (Val.List(xs), Val.List(ys)) => {
+            let mut zs = xs.clone();
+            for y in ys {
+                zs.push(y);
+            }
+            Val.List(zs)
+        }
+        (Val.Tuple(xs), Val.Tuple(ys)) => {
+            let mut zs = xs.clone();
+            for y in ys {
+                zs.push(y);
+            }
+            Val.Tuple(zs)
+        }
+        _ => arith("+", a, b),
+    }
+}
+
+// + - * / on ints and floats, as Python does them: / always gives a float.
+fn arith(op: Str, a: ref Val, b: ref Val) -> Val {
+    match (a, b) {
+        (Val.Int(m), Val.Int(n)) => {
+            if op == "+" {
+                return Val.Int(m + n);
+            } else if op == "-" {
+                return Val.Int(m - n);
+            } else if op == "*" {
+                return Val.Int(m * n);
+            }
+        }
+        _ => {}
+    }
+    let x = number_of(a).expect("a number");
+    let y = number_of(b).expect("a number");
+    if op == "+" {
+        Val.Float(x + y)
+    } else if op == "-" {
+        Val.Float(x - y)
+    } else if op == "*" {
+        Val.Float(x * y)
+    } else {
+        Val.Float(x / y)
+    }
+}
+
+fn negate(v: ref Val) -> Val {
+    match v {
+        Val.Int(n) => Val.Int(-n),
+        Val.Float(x) => Val.Float(-x),
+        _ => panic(f"bad operand type for unary -: {repr(v)}"),
+    }
+}
+
+// dict(v), from a dict or a sequence of pairs; a repeated key keeps its
+// first place and takes the last value.
+fn dict_items(v: ref Val) -> Vec[(Val, Val)] {
+    let pairs: Vec[(Val, Val)] = match v {
+        Val.Dict(kv) => kv.clone(),
+        _ => {
+            let mut ps: Vec[(Val, Val)] = Vec.new();
+            for p in elems(v) {
+                let kv = elems(p);
+                ps.push((kv[0], kv[1]));
+            }
+            ps
+        }
+    };
+    let mut out: Vec[(Val, Val)] = Vec.new();
+    for (k, x) in pairs {
+        let mut found = false;
+        let mut i = 0;
+        while i < out.len() {
+            if py_eq(out[i].0, k) {
+                out[i] = (k, x);
+                found = true;
+                break;
+            }
+            i += 1;
+        }
+        if not found {
+            out.push((k, x));
+        }
+    }
+    out
+}
+
+fn to_dict(v: ref Val) -> Val {
+    Val.Dict(dict_items(v))
+}
+
+fn to_tuple(v: ref Val) -> Val {
+    Val.Tuple(elems(v))
+}
+
+// "".join(v)
+fn join(v: ref Val) -> Val {
+    let mut out: Vec[i64] = Vec.new();
+    for x in elems(v) {
+        push_all(mut out, text_of(x));
+    }
+    Val.Str(out)
+}
+
+// int(s) for a str of decimal digits with an optional sign.
+fn int_of(v: ref Val) -> Val {
+    let t = text_of(v);
+    let mut n = 0;
+    let mut k = 0;
+    let mut neg = false;
+    if t.len() > 0 and (t[0] == 45 or t[0] == 43) {
+        neg = t[0] == 45;
+        k = 1;
+    }
+    if k >= t.len() {
+        panic(f"invalid literal for int() with base 10: {repr(v)}");
+    }
+    while k < t.len() {
+        if t[k] < 48 or t[k] > 57 {
+            panic(f"invalid literal for int() with base 10: {repr(v)}");
+        }
+        n = n * 10 + (t[k] - 48);
+        k += 1;
+    }
+    Val.Int(if neg { -n } else { n })
+}
+
+fn float_of(v: ref Val) -> Val {
+    match f64.parse(to_string(text_of(v))) {
+        Ok(x) => Val.Float(x),
+        Err(_) => panic(f"could not convert string to float: {repr(v)}"),
+    }
+}
+
+fn lower_text(t: ref Vec[i64]) -> Vec[i64] {
+    t.iter().map(|c| lower(*c, false)).collect()
+}
+
+fn upper_text(t: ref Vec[i64]) -> Vec[i64] {
+    t.iter().map(|c| upper(*c, false)).collect()
+}
+
+// str.rstrip(chars), or of whitespace when chars is empty
+fn rstrip(t: ref Vec[i64], chars: Str) -> Vec[i64] {
+    let strip = codepoints(chars.bytes());
+    let mut end = t.len();
+    while end > 0 {
+        let c = t[end - 1];
+        let gone = if strip.len() == 0 { is_space(c, false) } else { strip.contains(c) };
+        if not gone {
+            break;
+        }
+        end -= 1;
+    }
+    slice(t, 0, end)
+}
+
+// ------------------------------------------------------------ streams and results
+
+// What a parser reads: a str, as code points, or a list of tokens. The id
+// tells one stream from another for the regex parsers' matchers.
+struct Stream {
+    id: i64,
+    is_text: bool,
+    chars: Vec[i64],
+    items: Vec[Val],
+}
+
+fn text_stream(id: i64, chars: own Vec[i64]) -> Stream {
+    Stream { id: id, is_text: true, chars: chars, items: Vec.new() }
+}
+
+fn token_stream(id: i64, items: own Vec[Val]) -> Stream {
+    Stream { id: id, is_text: false, chars: Vec.new(), items: items }
+}
+
+impl Stream {
+    fn len(self) -> i64 {
+        if self.is_text { self.chars.len() } else { self.items.len() }
+    }
+
+    // stream[i]: a one-character str, or the token
+    fn item(self, i: i64) -> Val {
+        if self.is_text { pychar(self.chars[i]) } else { self.items[i] }
+    }
+
+    // stream[i:]
+    fn rest(self, i: i64) -> Val {
+        if self.is_text {
+            Val.Str(slice(self.chars, i, self.chars.len()))
+        } else {
+            Val.List(self.items[i..self.items.len()].to_vec())
+        }
+    }
+}
+
+// parsy's Result.
+struct Res {
+    status: bool,
+    index: i64,
+    value: Val,
+    furthest: i64,
+    expected: Vec[String],
+}
+
+impl Res {
+    fn success(index: i64, value: Val) -> Res {
+        Res { status: true, index: index, value: value, furthest: -1, expected: Vec.new() }
+    }
+
+    fn failure(index: i64, expected: own String) -> Res {
+        Res { status: false, index: -1, value: Val.Nil, furthest: index, expected: Vec[expected] }
+    }
+
+    // the furthest failure of self and other
+    fn aggregate(own self, other: own Option[Res]) -> Res {
+        let o = match other {
+            None => return self,
+            Some(o) => o,
+        };
+        if self.furthest > o.furthest {
+            self
+        } else if self.furthest == o.furthest {
+            let mut expected = self.expected;
+            for e in o.expected {
+                if not expected.contains(e) {
+                    expected.push(e.clone());
+                }
+            }
+            Res { status: self.status, index: self.index, value: self.value, furthest: self.furthest, expected: expected }
+        } else {
+            Res { status: self.status, index: self.index, value: self.value, furthest: o.furthest, expected: o.expected }
+        }
+    }
+
+    // the Result object itself as a value, as should_fail produces it
+    fn as_val(self) -> Val {
+        let set: Vec[Val] = self.expected.iter().map(|e| pystr(e)).collect();
+        Val.Record("Result".to_string(), Vec[
+            ("status".to_string(), Val.Bool(self.status)),
+            ("index".to_string(), Val.Int(self.index)),
+            ("value".to_string(), self.value),
+            ("furthest".to_string(), Val.Int(self.furthest)),
+            ("expected".to_string(), Val.FrozenSet(set)),
+        ])
+    }
+}
+
+// An exception that reaches the caller: ParseError, or the ValueError and
+// AttributeError of a forward declaration used wrongly.
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn line_info_at(chars: ref Vec[i64], index: i64) -> Result[(i64, i64), PyErr] {
+    if index > chars.len() {
+        return Err(PyErr { kind: "ValueError".to_string(), msg: "invalid index".to_string() });
+    }
+    let mut line = 0;
+    let mut last_nl = -1;
+    let mut k = 0;
+    while k < index {
+        if chars[k] == 10 {
+            line += 1;
+            last_nl = k;
+        }
+        k += 1;
+    }
+    Ok((line, index - (last_nl + 1)))
+}
+
+fn parse_error(expected: ref Vec[String], s: ref Stream, index: i64) -> PyErr {
+    let mut reprs: Vec[Vec[i64]] = Vec.new();
+    for e in expected {
+        let mut out: Vec[i64] = Vec.new();
+        str_repr(codepoints(e.bytes()), mut out);
+        reprs.push(out);
+    }
+    reprs.sort();
+    let names: Vec[String] = reprs.iter().map(|r| to_string(r)).collect();
+    // a list of tokens has no lines: the position is the index
+    let where = if s.is_text {
+        match line_info_at(s.chars, index) {
+            Ok((line, col)) => f"{line}:{col}",
+            Err(_) => f"{index}",
+        }
+    } else {
+        f"{index}"
+    };
+    let msg = if names.len() == 1 {
+        f"expected {names[0]} at {where}"
+    } else {
+        f"expected one of {names.join(", ")} at {where}"
+    };
+    PyErr { kind: "ParseError".to_string(), msg: msg }
+}
+
+// ------------------------------------------------------------ the parser
+
+// A parser wraps a function of the stream and an index. A forward
+// declaration has none until `become` gives it the parser to stand for.
+shared struct Parser {
+    run: Fn(ref Stream, i64) -> Res,
+    forward: bool,
+    mut target: Option[Parser],
+}
+
+fn new_parser(run: escaping Fn(ref Stream, i64) -> Res) -> Parser {
+    Parser { run: run, forward: false, target: None }
+}
+
+const INF: i64 = 9223372036854775807;
+
+impl Parser {
+    fn call(self, s: ref Stream, index: i64) -> Res {
+        match self.target {
+            Some(t) => t.call(s, index),
+            None => (self.run)(s, index),
+        }
+    }
+
+    fn unbound(self) -> bool {
+        self.forward and self.target.is_none()
+    }
+
+    // Parses the whole stream.
+    fn parse(self, s: ref Stream) -> Result[Val, PyErr] {
+        if self.unbound() {
+            return Err(must_become());
+        }
+        let (value, _) = (self << eof()).parse_partial(s)?;
+        Ok(value)
+    }
+
+    // Parses the longest prefix it can, and gives the rest back.
+    fn parse_partial(self, s: ref Stream) -> Result[(Val, Val), PyErr] {
+        if self.unbound() {
+            return Err(must_become());
+        }
+        let result = self.call(s, 0);
+        if result.status {
+            Ok((result.value, s.rest(result.index)))
+        } else {
+            Err(parse_error(result.expected, s, result.furthest))
+        }
+    }
+
+    // forward_declaration.become: after it the declaration is the other
+    // parser, which has no `become` of its own.
+    fn become(self, other: Parser) -> Result[(), PyErr] {
+        if not self.unbound() {
+            return Err(PyErr { kind: "AttributeError".to_string(), msg: "'Parser' object has no attribute 'become'".to_string() });
+        }
+        self.target = Some(other);
+        Ok(())
+    }
+
+    fn bind(self, bind_fn: escaping Fn(Val) -> Parser) -> Parser {
+        let me = self;
+        new_parser(|s, index| {
+            let result = me.call(s, index);
+            if result.status {
+                let next_parser = bind_fn(result.value);
+                let at = result.index;
+                next_parser.call(s, at).aggregate(Some(result))
+            } else {
+                result
+            }
+        })
+    }
+
+    fn map(self, map_function: escaping Fn(Val) -> Val) -> Parser {
+        self.bind(|res| success(map_function(res)))
+    }
+
+    // fn(*res)
+    fn combine(self, combine_fn: escaping Fn(Vec[Val]) -> Val) -> Parser {
+        self.bind(|res| success(combine_fn(elems(res))))
+    }
+
+    // fn(**dict(res)), leaving out None keys and keys starting with _
+    fn combine_dict(self, combine_fn: escaping Fn(Vec[(String, Val)]) -> Val) -> Parser {
+        self.bind(|res| {
+            let mut kwargs: Vec[(String, Val)] = Vec.new();
+            for (k, v) in dict_items(res) {
+                match k {
+                    Val.Nil => {}
+                    Val.Str(t) => {
+                        if t.len() == 0 or t[0] != 95 {
+                            kwargs.push((to_string(t), v));
+                        }
+                    }
+                    _ => panic(f"keywords must be strings, found {repr(k)}"),
+                }
+            }
+            success(combine_fn(kwargs))
+        })
+    }
+
+    fn concat(self) -> Parser {
+        self.map(|v| join(v))
+    }
+
+    fn then(self, other: Parser) -> Parser {
+        seq(Vec[self, other]).combine(|r| r[1])
+    }
+
+    fn skip(self, other: Parser) -> Parser {
+        seq(Vec[self, other]).combine(|r| r[0])
+    }
+
+    fn result(self, value: Val) -> Parser {
+        self >> success(value)
+    }
+
+    fn many(self) -> Parser {
+        self.times(0, INF)
+    }
+
+    fn times_n(self, n: i64) -> Parser {
+        self.times(n, n)
+    }
+
+    fn times(self, min: i64, max: i64) -> Parser {
+        let me = self;
+        new_parser(|s, index| {
+            let mut values: Vec[Val] = Vec.new();
+            let mut times = 0;
+            let mut at = index;
+            let mut result: Option[Res] = None;
+            while times < max {
+                let r = me.call(s, at).aggregate(result);
+                if r.status {
+                    values.push(r.value);
+                    at = r.index;
+                    times += 1;
+                    result = Some(r);
+                } else if times >= min {
+                    result = Some(r);
+                    break;
+                } else {
+                    return r;
+                }
+            }
+            Res.success(at, Val.List(values)).aggregate(result)
+        })
+    }
+
+    fn at_most(self, n: i64) -> Parser {
+        self.times(0, n)
+    }
+
+    fn at_least(self, n: i64) -> Parser {
+        self.times_n(n) + self.many()
+    }
+
+    fn optional(self) -> Parser {
+        self.optional_or(Val.Nil)
+    }
+
+    fn optional_or(self, default: Val) -> Parser {
+        self.times(0, 1).map(|v| if truthy(v) { at(v, 0) } else { default })
+    }
+
+    fn until(self, other: Parser, min: i64, max: i64, consume_other: bool) -> Parser {
+        let me = self;
+        new_parser(|s, index| {
+            let mut values: Vec[Val] = Vec.new();
+            let mut times = 0;
+            let mut at = index;
+            loop {
+                // try parser first
+                let res = other.call(s, at);
+                if res.status and times >= min {
+                    if consume_other {
+                        // consume other
+                        values.push(res.value);
+                        at = res.index;
+                    }
+                    return Res.success(at, Val.List(values));
+                }
+                // exceeded max?
+                if times >= max {
+                    // return failure, it matched parser more than max times
+                    return Res.failure(at, f"at most {max} items");
+                }
+                // failed, try parser
+                let result = me.call(s, at);
+                if result.status {
+                    // consume
+                    values.push(result.value);
+                    at = result.index;
+                    times += 1;
+                } else if times >= min {
+                    // return failure, parser is not followed by other
+                    return Res.failure(at, "did not find other parser".to_string());
+                } else {
+                    // return failure, it did not match parser at least min times
+                    return Res.failure(at, f"at least {min} items; got {times} item(s)");
+                }
+            }
+        })
+    }
+
+    fn sep_by(self, sep: Parser) -> Parser {
+        self.sep_by_range(sep, 0, INF)
+    }
+
+    fn sep_by_range(self, sep: Parser, min: i64, max: i64) -> Parser {
+        let zero_times = success(Val.List(Vec.new()));
+        if max == 0 {
+            return zero_times;
+        }
+        let res = self.times_n(1) + (sep >> self).times(min - 1, if max == INF { INF } else { max - 1 });
+        if min == 0 {
+            return res | zero_times;
+        }
+        res
+    }
+
+    fn desc(self, description: Str) -> Parser {
+        let me = self;
+        let what = description.to_string();
+        new_parser(|s, index| {
+            let result = me.call(s, index);
+            if result.status {
+                result
+            } else {
+                Res.failure(index, what.clone())
+            }
+        })
+    }
+
+    // ((start_row, start_column), value, (end_row, end_column))
+    fn mark(self) -> Parser {
+        let me = self;
+        generate(|g| {
+            let start = g.take(line_info())?;
+            let body = g.take(me)?;
+            let end = g.take(line_info())?;
+            Some(Out.Value(Val.Tuple(Vec[start, body, end])))
+        })
+    }
+
+    fn tag(self, name: Val) -> Parser {
+        self.map(|v| tuple2(name, v))
+    }
+
+    // a negative lookahead
+    fn should_fail(self, description: Str) -> Parser {
+        let me = self;
+        let what = description.to_string();
+        new_parser(|s, index| {
+            let res = me.call(s, index);
+            if res.status {
+                return Res.failure(index, what.clone());
+            }
+            Res.success(index, res.as_val())
+        })
+    }
+}
+
+impl Add for Parser {
+    type Output = Parser;
+    fn add(self, other: Parser) -> Parser {
+        seq(Vec[self, other]).combine(|r| py_add(r[0], r[1]))
+    }
+}
+
+impl Mul[i64] for Parser {
+    type Output = Parser;
+    fn mul(self, n: i64) -> Parser {
+        self.times_n(n)
+    }
+}
+
+impl Mul[Range[i64]] for Parser {
+    type Output = Parser;
+    fn mul(self, r: Range[i64]) -> Parser {
+        self.times(r.start, r.end - 1)
+    }
+}
+
+impl BitOr for Parser {
+    type Output = Parser;
+    fn bitor(self, other: Parser) -> Parser {
+        alt(Vec[self, other])
+    }
+}
+
+impl Shr for Parser {
+    type Output = Parser;
+    fn shr(self, other: Parser) -> Parser {
+        self.then(other)
+    }
+}
+
+impl Shl for Parser {
+    type Output = Parser;
+    fn shl(self, other: Parser) -> Parser {
+        self.skip(other)
+    }
+}
+
+fn must_become() -> PyErr {
+    PyErr { kind: "ValueError".to_string(), msg: "You must use 'become' before attempting to call `parse` or `parse_partial`".to_string() }
+}
+
+fn forward_declaration() -> Parser {
+    Parser {
+        run: |_, _| panic("'forward_declaration' object has no attribute 'wrapped_fn'"),
+        forward: true,
+        target: None,
+    }
+}
+
+// Tries each parser in turn.
+fn alt(parsers: own Vec[Parser]) -> Parser {
+    if parsers.len() == 0 {
+        return fail("<empty alt>");
+    }
+    new_parser(|s, index| {
+        let mut result: Option[Res] = None;
+        for parser in parsers {
+            let r = parser.call(s, index).aggregate(result);
+            if r.status {
+                return r;
+            }
+            result = Some(r);
+        }
+        result.expect("at least one parser")
+    })
+}
+
+// Runs each parser in turn and collects their values in a list.
+fn seq(parsers: own Vec[Parser]) -> Parser {
+    if parsers.len() == 0 {
+        return success(Val.List(Vec.new()));
+    }
+    new_parser(|s, index| {
+        let mut result: Option[Res] = None;
+        let mut values: Vec[Val] = Vec.new();
+        let mut at = index;
+        for parser in parsers {
+            let r = parser.call(s, at).aggregate(result);
+            if not r.status {
+                return r;
+            }
+            at = r.index;
+            values.push(r.value);
+            result = Some(r);
+        }
+        Res.success(at, Val.List(values)).aggregate(result)
+    })
+}
+
+// seq(name=parser, ...): the values in a dict.
+fn seq_kw(parsers: own Vec[(Str, Parser)]) -> Parser {
+    if parsers.len() == 0 {
+        return success(Val.List(Vec.new()));
+    }
+    let named: Vec[(Val, Parser)] = parsers.into_iter().map(|(n, p)| (pystr(n), p)).collect();
+    new_parser(|s, index| {
+        let mut result: Option[Res] = None;
+        let mut values: Vec[(Val, Val)] = Vec.new();
+        let mut at = index;
+        for (name, parser) in named {
+            let r = parser.call(s, at).aggregate(result);
+            if not r.status {
+                return r;
+            }
+            at = r.index;
+            values.push((name, r.value));
+            result = Some(r);
+        }
+        Res.success(at, Val.Dict(values)).aggregate(result)
+    })
+}
+
+// What a generator body hands back at its end: a value, or a parser to
+// run in its place.
+enum Out {
+    Value(Val),
+    Then(Parser),
+}
+
+// A generator body's view of the parse. `g.take(p)?` is `yield p`: the
+// value when p matches, and the end of the body when it does not.
+struct Gen {
+    s: ref Stream,
+    index: i64,
+    result: Option[Res],
+}
+
+impl Gen {
+    fn take(mut ref self, next_parser: Parser) -> Option[Val] {
+        let r = next_parser.call(self.s, self.index).aggregate(self.result.take());
+        if not r.status {
+            self.result = Some(r);
+            return None;
+        }
+        let value = r.value;
+        self.index = r.index;
+        self.result = Some(r);
+        Some(value)
+    }
+}
+
+// @generate
+fn generate(body: escaping Fn(mut ref Gen) -> Option[Out]) -> Parser {
+    new_parser(|s, index| {
+        let mut g = Gen { s: s, index: index, result: None };
+        match body(mut g) {
+            None => g.result.expect("a failed yield"),
+            Some(Out.Value(v)) => Res.success(g.index, v).aggregate(g.result),
+            Some(Out.Then(p)) => p.call(s, g.index).aggregate(g.result),
+        }
+    })
+}
+
+// @generate("description")
+fn generate_desc(description: Str, body: escaping Fn(mut ref Gen) -> Option[Out]) -> Parser {
+    generate(body).desc(description)
+}
+
+fn index() -> Parser {
+    new_parser(|_, index| Res.success(index, Val.Int(index)))
+}
+
+fn line_info() -> Parser {
+    new_parser(|s, index| {
+        if not s.is_text {
+            panic("list.count() takes exactly one argument (3 given)");
+        }
+        match line_info_at(s.chars, index) {
+            Ok((line, col)) => Res.success(index, tuple2(Val.Int(line), Val.Int(col))),
+            Err(e) => panic(e.msg),
+        }
+    })
+}
+
+fn success(value: Val) -> Parser {
+    new_parser(|_, index| Res.success(index, value))
+}
+
+fn fail(expected: Str) -> Parser {
+    let what = expected.to_string();
+    new_parser(|_, index| Res.failure(index, what.clone()))
+}
+
+// A function from text to text, which several parsers can share.
+shared struct Transform {
+    apply: Fn(ref Vec[i64]) -> Vec[i64],
+}
+
+fn noop() -> Transform {
+    Transform { apply: |t| t.clone() }
+}
+
+fn lowercase() -> Transform {
+    Transform { apply: |t| lower_text(t) }
+}
+
+fn string(expected: Str) -> Parser {
+    string_t(expected, noop())
+}
+
+// string(s, transform=...): the transform is applied to both the expected
+// string and the text it is tested against.
+fn string_t(expected: Str, transform: Transform) -> Parser {
+    string_text(codepoints(expected.bytes()), transform)
+}
+
+fn string_text(expected: own Vec[i64], transform: Transform) -> Parser {
+    let slen = expected.len();
+    let transformed = (transform.apply)(expected);
+    let what = to_string(expected);
+    new_parser(|s, index| {
+        if s.is_text {
+            let end = if index + slen < s.chars.len() { index + slen } else { s.chars.len() };
+            if same((transform.apply)(slice(s.chars, index, end)), transformed) {
+                return Res.success(index + slen, Val.Str(expected.clone()));
+            }
+        }
+        Res.failure(index, what.clone())
+    })
+}
+
+// re.Match.group(*group)
+enum Group {
+    Num(i64),
+    Name(String),
+    Several(Vec[i64]),
+}
+
+// A regex parser's matcher, kept from one call to the next on the same
+// stream so the text is copied in once.
+shared struct Matching {
+    mut stream: i64,
+    mut m: Matcher,
+}
+
+fn regex(exp: Str) -> Parser {
+    regex_g(exp, 0, Group.Num(0))
+}
+
+fn regex_g(exp: Str, flags: i64, group: own Group) -> Parser {
+    let pattern = codepoints(exp.bytes());
+    let prog = match compile(pattern, flags) {
+        Ok(p) => p,
+        Err(e) => panic(f"re.{err_text(e)}"),
+    };
+    let what = exp.to_string();
+    let empty: Vec[i64] = Vec.new();
+    let cache = Matching { stream: -1, m: new_matcher(prog, empty) };
+    new_parser(|s, index| {
+        if not s.is_text {
+            panic("cannot use a string pattern on a list");
+        }
+        if cache.stream != s.id {
+            cache.m = new_matcher(prog, s.chars);
+            cache.stream = s.id;
+        }
+        match find(mut cache.m, prog, index, false, 1) {
+            Some(found) => {
+                let value = match group {
+                    Group.Num(g) => group_val(prog, s.chars, found, g),
+                    Group.Name(name) => group_val(prog, s.chars, found, group_number(prog, name)),
+                    Group.Several(gs) => Val.Tuple(gs.iter().map(|g| group_val(prog, s.chars, found, *g)).collect()),
+                };
+                Res.success(found.end, value)
+            }
+            None => Res.failure(index, what.clone()),
+        }
+    })
+}
+
+fn group_number(prog: ref Program, name: ref String) -> i64 {
+    let want = codepoints(name.bytes());
+    for (n, g) in prog.names {
+        if same(n, want) {
+            return g;
+        }
+    }
+    panic(f"no such group {name}")
+}
+
+fn group_val(prog: ref Program, s: ref Vec[i64], m: ref Found, g: i64) -> Val {
+    let (a, b) = if g == 0 { (m.start, m.end) } else { m.spans[g - 1] };
+    if a < 0 { Val.Nil } else { Val.Str(slice(s, a, b)) }
+}
+
+// Tests one item of the stream (a character of a str) with func.
+fn test_item(func: escaping Fn(Val) -> bool, description: Str) -> Parser {
+    let what = description.to_string();
+    new_parser(|s, index| {
+        if index < s.len() {
+            let item = s.item(index);
+            if func(item) {
+                return Res.success(index + 1, item);
+            }
+        }
+        Res.failure(index, what.clone())
+    })
+}
+
+fn test_char(func: escaping Fn(Val) -> bool, description: Str) -> Parser {
+    test_item(func, description)
+}
+
+fn match_item(item: Val) -> Parser {
+    let description = py_str(item);
+    match_item_desc(item, description)
+}
+
+fn match_item_desc(item: Val, description: Str) -> Parser {
+    test_item(|i| py_eq(item, i), description)
+}
+
+// The longest strings are tried first, so overlapping ones work.
+fn string_from(strings: own Vec[Str], transform: Transform) -> Parser {
+    let mut sorted: Vec[Vec[i64]] = strings.iter().map(|s| codepoints(s.bytes())).collect();
+    sorted.sort_by(|a, b| b.len().cmp(a.len()));
+    alt(sorted.into_iter().map(|s| string_text(s, transform)).collect())
+}
+
+fn char_from(chars: Str) -> Parser {
+    let set = codepoints(chars.bytes());
+    let description = f"[{chars}]";
+    test_char(|c| {
+        let t = text_of(c);
+        t.len() == 1 and set.contains(t[0])
+    }, description)
+}
+
+// A lookahead: parses without consuming.
+fn peek(parser: Parser) -> Parser {
+    new_parser(|s, index| {
+        let result = parser.call(s, index);
+        if result.status {
+            Res.success(index, result.value)
+        } else {
+            result
+        }
+    })
+}
+
+fn any_char() -> Parser {
+    test_char(|_| true, "any character")
+}
+
+fn whitespace() -> Parser {
+    regex("\\s+")
+}
+
+// str.isalpha
+fn letter() -> Parser {
+    test_char(|c| {
+        let t = text_of(c);
+        t.len() > 0 and t.iter().all(|x| match as_char(*x) {
+            Some(ch) => ch.is_alphabetic(),
+            None => false,
+        })
+    }, "a letter")
+}
+
+// str.isdigit: the decimal digits, and the digits that are not decimal
+// (superscripts, circled digits and the like).
+fn is_digit(c: i64) -> bool {
+    if is_decimal(c) {
+        return true;
+    }
+    let ranges = [(0xB2, 0xB3), (0xB9, 0xB9), (0x1369, 0x1371), (0x19DA, 0x19DA), (0x2070, 0x2070), (0x2074, 0x2079), (0x2080, 0x2089), (0x2460, 0x2468), (0x2474, 0x247C), (0x2488, 0x2490), (0x24EA, 0x24EA), (0x24F5, 0x24FD), (0x24FF, 0x24FF), (0x2776, 0x277E), (0x2780, 0x2788), (0x278A, 0x2792), (0x10A40, 0x10A43), (0x10E60, 0x10E68), (0x11052, 0x1105A), (0x1F100, 0x1F10A)];
+    for (lo, hi) in ranges {
+        if c >= lo and c <= hi {
+            return true;
+        }
+    }
+    false
+}
+
+fn digit() -> Parser {
+    test_char(|c| {
+        let t = text_of(c);
+        t.len() > 0 and t.iter().all(|x| is_digit(*x))
+    }, "a digit")
+}
+
+fn decimal_digit() -> Parser {
+    char_from("0123456789")
+}
+
+fn eof() -> Parser {
+    new_parser(|s, index| {
+        if index >= s.len() {
+            Res.success(index, Val.Nil)
+        } else {
+            Res.failure(index, "EOF".to_string())
+        }
+    })
+}
+
+// An enum class: its name and its members' names and values.
+struct EnumClass {
+    name: String,
+    members: Vec[(String, Val)],
+}
+
+fn member(cls: ref EnumClass, name: Str) -> Val {
+    for (n, v) in cls.members {
+        if n == name {
+            return Val.Member(cls.name.clone(), n.clone(), v);
+        }
+    }
+    panic(f"{cls.name} has no member {name}")
+}
+
+// Parses the members' values (as str() writes them) to the members.
+fn from_enum(cls: ref EnumClass, transform: Transform) -> Parser {
+    let mut items: Vec[(Vec[i64], Val)] = Vec.new();
+    for (n, v) in cls.members {
+        items.push((codepoints(py_str(v).bytes()), Val.Member(cls.name.clone(), n.clone(), v)));
+    }
+    items.sort_by(|a, b| b.0.len().cmp(a.0.len()));
+    alt(items.into_iter().map(|(value, m)| string_text(value, transform).result(m)).collect())
+}
+
+
+// ============================================================ the grammars
+
+// A grammar's top parser and its forward declarations. A forward
+// declaration that becomes a parser naming it again closes a cycle of
+// handles, so dropping the grammar undoes each `become`.
+struct Grammar {
+    root: Parser,
+    forwards: Vec[Parser],
+}
+
+impl Drop for Grammar {
+    fn drop(mut ref self) {
+        for f in self.forwards {
+            f.target = None;
+        }
+    }
+}
+
+fn plain(p: Parser) -> Grammar {
+    Grammar { root: p, forwards: Vec.new() }
+}
+
+fn recursive(p: Parser, forwards: own Vec[Parser]) -> Grammar {
+    Grammar { root: p, forwards: forwards }
+}
+
+fn become_or_panic(f: Parser, p: Parser) {
+    if let Err(e) = f.become(p) {
+        panic(e.msg);
+    }
+}
+
+fn kwarg(kwargs: ref Vec[(String, Val)], name: Str) -> Val {
+    for (k, v) in kwargs {
+        if k == name {
+            return v;
+        }
+    }
+    panic(f"missing required argument: '{name}'")
+}
+
+// A dataclass or namedtuple built from keyword arguments, in its fields' order.
+fn record(name: Str, fields: ref Vec[Str], kwargs: ref Vec[(String, Val)]) -> Val {
+    let mut out: Vec[(String, Val)] = Vec.new();
+    for f in fields {
+        out.push((f.to_string(), kwarg(kwargs, f)));
+    }
+    Val.Record(name.to_string(), out)
+}
+
+fn record1(name: Str, field: Str, v: Val) -> Val {
+    Val.Record(name.to_string(), Vec[(field.to_string(), v)])
+}
+
+fn enum_class(name: Str, members: ref Vec[(Str, Val)]) -> EnumClass {
+    EnumClass { name: name.to_string(), members: members.iter().map(|(n, v)| (n.to_string(), v)).collect() }
+}
+
+fn pet() -> EnumClass {
+    enum_class("Pet", Vec[("CAT", pystr("cat")), ("DOG", pystr("dog")), ("CATERPILLAR", pystr("caterpillar"))])
+}
+
+fn position() -> EnumClass {
+    enum_class("Position", Vec[("FIRST", Val.Int(1)), ("SECOND", Val.Int(2)), ("TWELFTH", Val.Int(12))])
+}
+
+fn operator_enum() -> EnumClass {
+    enum_class("Operator", Vec[("EQ", pystr("=")), ("LT", pystr("<")), ("GT", pystr(">")), ("LTE", pystr("<=")), ("GTE", pystr(">="))])
+}
+
+fn month_enum() -> EnumClass {
+    let names = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    let values = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let mut members: Vec[(Str, Val)] = Vec.new();
+    for k in 0..12 {
+        members.push((names[k], pystr(values[k])));
+    }
+    enum_class("Month", members)
+}
+
+fn op_enum() -> EnumClass {
+    enum_class("Op", Vec[("GE", pystr(">=")), ("LE", pystr("<=")), ("GT", pystr(">")), ("LT", pystr("<")), ("EQ", pystr("=")), ("CARET", pystr("^")), ("TILDE", pystr("~"))])
+}
+
+fn start() -> Val {
+    Val.Marker("START".to_string())
+}
+
+fn stop() -> Val {
+    Val.Marker("STOP".to_string())
+}
+
+const RE_I: i64 = 2;
+const RE_M: i64 = 8;
+
+// ------------------------------------------------------------ parsy's examples
+
+// examples/json.py
+fn json_grammar() -> Grammar {
+    let ws = regex("\\s*");
+    let lbrace = string("{") << ws;
+    let rbrace = string("}") << ws;
+    let lbrack = string("[") << ws;
+    let rbrack = string("]") << ws;
+    let colon = string(":") << ws;
+    let comma = string(",") << ws;
+    let truth = (string("true") << ws).result(Val.Bool(true));
+    let falsity = (string("false") << ws).result(Val.Bool(false));
+    let null = (string("null") << ws).result(Val.Nil);
+    let number = (regex("-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][+-]?[0-9]+)?") << ws).map(|v| float_of(v));
+    let string_part = regex("[^\"\\\\]+");
+    let string_esc = string("\\")
+        >> (string("\\")
+            | string("/")
+            | string("\"")
+            | string("b").result(pychar(8))
+            | string("f").result(pychar(12))
+            | string("n").result(pychar(10))
+            | string("r").result(pychar(13))
+            | string("t").result(pychar(9))
+            | regex("u[0-9a-fA-F]{4}").map(|s| {
+                let t = text_of(s);
+                let mut n = 0;
+                for k in 1..t.len() {
+                    let c = t[k];
+                    n = n * 16 + if c <= 57 { c - 48 } else if c <= 70 { c - 55 } else { c - 87 };
+                }
+                pychar(n)
+            }));
+    let quoted = (string("\"") >> (string_part | string_esc).many().concat() << string("\"")) << ws;
+    let json_value = forward_declaration();
+    let object_pair = seq(Vec[quoted << colon, json_value]).map(|v| to_tuple(v));
+    let json_object = lbrace >> object_pair.sep_by(comma).map(|v| to_dict(v)) << rbrace;
+    let array = lbrack >> json_value.sep_by(comma) << rbrack;
+    become_or_panic(json_value, quoted | number | json_object | array | truth | falsity | null);
+    recursive(ws >> json_value, Vec[json_value])
+}
+
+// tests/test_sexpr.py. `expr` is a forward declaration here, since a
+// generator body in Python can name a parser defined after it.
+fn sexpr_grammar() -> Grammar {
+    let ws = regex_g("\\s+", RE_M, Group.Num(0));
+    let comment = regex(";.*");
+    let ignore = (ws | comment).many();
+    let lparen = string("(") << ignore;
+    let rparen = string(")") << ignore;
+    let number = (regex("\\d+") << ignore).map(|v| int_of(v));
+    let symbol = regex("[\\d\\w_-]+") << ignore;
+    let truth = (string("#t") << ignore).result(Val.Bool(true));
+    let falsity = (string("#f") << ignore).result(Val.Bool(false));
+    let atom = truth | falsity | number | symbol;
+    let expr = forward_declaration();
+    let form = generate_desc("a form", |g| {
+        g.take(lparen)?;
+        let els = g.take(expr.many())?;
+        g.take(rparen)?;
+        Some(Out.Value(els))
+    });
+    let quote = generate(|g| {
+        g.take(string("'"))?;
+        let e = g.take(expr)?;
+        Some(Out.Value(Val.List(Vec[pystr("quote"), e])))
+    });
+    become_or_panic(expr, form | quote | atom);
+    recursive(ignore >> expr.many(), Vec[expr])
+}
+
+// examples/sql_select.py
+fn select_grammar() -> Grammar {
+    let number_literal = regex("-?[0-9]+").map(|v| int_of(v)).map(|v| record1("Number", "value", v));
+    let string_literal = regex("'[^']*'").map(|s| {
+        let t = text_of(s);
+        record1("String", "value", Val.Str(slice(t, 1, t.len() - 1)))
+    });
+    let identifier = regex("[a-zA-Z][a-zA-Z0-9_]*");
+    let field = identifier.map(|v| record1("Field", "name", v));
+    let table = identifier.map(|v| record1("Table", "name", v));
+    let space = regex("\\s+");
+    let padding = regex("\\s*");
+    let column_expr = field | string_literal | number_literal;
+    let operator = from_enum(operator_enum(), noop());
+    let comparison = seq_kw(Vec[
+        ("left", column_expr << padding),
+        ("operator", operator),
+        ("right", padding >> column_expr),
+    ]).combine_dict(|kw| record("Comparison", Vec["left", "operator", "right"], kw));
+    let select = string("SELECT");
+    let from = string("FROM");
+    let where_ = string("WHERE");
+    plain(seq_kw(Vec[
+        ("_select", select + space),
+        ("columns", column_expr.sep_by_range(padding + string(",") + padding, 1, INF)),
+        ("_from", space + from + space),
+        ("table", table),
+        ("where", (space >> where_ >> space >> comparison).optional()),
+        ("_end", padding + string(";")),
+    ]).combine_dict(|kw| record("Select", Vec["columns", "table", "where"], kw)))
+}
+
+// examples/simple_logo_lexer.py
+fn logo_lexer() -> Grammar {
+    let command = string_from(Vec["fd", "bk", "rt", "lt"], noop());
+    let number = regex("[0-9]+").map(|v| int_of(v));
+    let optional_whitespace = regex("\\s*");
+    let eol = string("\n");
+    let line = seq(Vec[
+        optional_whitespace >> command,
+        whitespace() >> number,
+        (eof() | eol | (whitespace() >> eol)).result(pystr("\n")),
+    ]);
+    // sum(ls, [])
+    plain(line.many().map(|ls| {
+        let mut out: Vec[Val] = Vec.new();
+        for l in elems(ls) {
+            for x in elems(l) {
+                out.push(x);
+            }
+        }
+        Val.List(out)
+    }))
+}
+
+// examples/simple_logo_parser.py
+fn logo_program() -> Grammar {
+    let statement = generate(|g| {
+        let cmd_name = g.take(test_item(|i| py_in(i, Vec[pystr("fd"), pystr("bk"), pystr("rt"), pystr("lt")]), "command"))?;
+        let parameter = g.take(test_item(|i| match i {
+            Val.Int(_) => true,
+            _ => false,
+        }, "number"))?;
+        g.take(match_item(pystr("\n")))?;
+        let name = to_string(text_of(cmd_name));
+        let class = if name == "fd" { "Forward" } else if name == "bk" { "Backward" } else if name == "rt" { "Right" } else { "Left" };
+        Some(Out.Value(Val.Call(class.to_string(), Vec[parameter])))
+    });
+    plain(statement.many())
+}
+
+// examples/simple_eval.py: the lexer
+fn eval_lexer() -> Grammar {
+    let ws = regex("\\s*");
+    let integer = digit().at_least(1).concat().map(|v| int_of(v));
+    let float_ = (digit().many() + string(".").result(Val.List(Vec[pystr(".")])) + digit().many()).concat().map(|v| float_of(v));
+    plain(ws >> ((float_ | integer | regex("[()*/+-]")) << ws).many())
+}
+
+fn is_op(v: ref Val, op: Str) -> bool {
+    py_eq(v, pystr(op))
+}
+
+// examples/simple_eval.py: parses and evaluates the tokens at once.
+fn eval_tokens() -> Grammar {
+    let lparen = match_item(pystr("("));
+    let rparen = match_item(pystr(")"));
+    let expr = forward_declaration();
+    let number = generate(|g| {
+        let sign = g.take(match_item(pystr("+")) | match_item(pystr("-")) | success(pystr("+")))?;
+        let value = g.take(test_item(|x| match x {
+            Val.Int(_) => true,
+            Val.Float(_) => true,
+            _ => false,
+        }, "number"))?;
+        Some(Out.Value(if is_op(sign, "+") { value } else { negate(value) }))
+    });
+    let simple = (lparen >> expr << rparen) | number;
+    let multiplicative = generate(|g| {
+        let mut res = g.take(simple)?;
+        let op = match_item(pystr("*")) | match_item(pystr("/"));
+        loop {
+            let operation = g.take(op | success(pystr("")))?;
+            if not truthy(operation) {
+                break;
+            }
+            let operand = g.take(simple)?;
+            if is_op(operation, "*") {
+                res = arith("*", res, operand);
+            } else if is_op(operation, "/") {
+                res = arith("/", res, operand);
+            }
+        }
+        Some(Out.Value(res))
+    });
+    let additive = generate(|g| {
+        let mut res = g.take(multiplicative)?;
+        let sign = match_item(pystr("+")) | match_item(pystr("-"));
+        loop {
+            let operation = g.take(sign | success(pystr("")))?;
+            if not truthy(operation) {
+                break;
+            }
+            let operand = g.take(multiplicative)?;
+            if is_op(operation, "+") {
+                res = arith("+", res, operand);
+            } else if is_op(operation, "-") {
+                res = arith("-", res, operand);
+            }
+        }
+        Some(Out.Value(res))
+    });
+    become_or_panic(expr, additive);
+    recursive(expr, Vec[expr])
+}
+
+// ------------------------------------------------------------ real-world parsers
+
+// An INI-style settings file: sections, `key = value` and `key: value`,
+// comments, blank lines and quoted values. Each setting is marked with the
+// line it starts on.
+fn ini_grammar() -> Grammar {
+    let hspace = regex("[ \\t]*");
+    let eol = regex("[ \\t]*(\\r?\\n|$)");
+    let comment = regex("[ \\t]*[#;][^\\n]*") << eol;
+    let blank = regex("[ \\t]*\\r?\\n");
+    let skip = (comment | blank).many();
+    let name = regex("[A-Za-z0-9_.-]+");
+    let section = string("[") >> hspace >> name << hspace << string("]") << eol;
+    let quoted = string("\"") >> regex("[^\"\\r\\n]*") << string("\"");
+    let bare = regex("[^\\r\\n#;]*").map(|s| Val.Str(rstrip(text_of(s), "")));
+    let tail = regex("[ \\t]*([#;][^\\n]*)?") << eol;
+    let setting = seq(Vec[hspace >> name << hspace << char_from("=:") << hspace, (quoted | bare) << tail])
+        .mark()
+        .map(|m| {
+            let start = at(m, 0);
+            let kv = at(m, 1);
+            Val.Tuple(Vec[arith("+", at(start, 0), Val.Int(1)), at(kv, 0), at(kv, 1)])
+        });
+    let body = (setting << skip).many();
+    let sect = seq(Vec[section << skip, body]);
+    plain(seq(Vec[skip >> body, sect.many()]).combine(|r| {
+        let mut pairs: Vec[Val] = Vec[tuple2(pystr(""), r[0])];
+        for s in elems(r[1]) {
+            pairs.push(s);
+        }
+        to_dict(Val.List(pairs))
+    }) << eof())
+}
+
+// One line of nginx's combined log format.
+fn access_log_grammar() -> Grammar {
+    let sp = string(" ");
+    let field = regex("[^ ]+");
+    let quoted = string("\"") >> regex("([^\"\\\\]|\\\\.)*") << string("\"");
+    let month = from_enum(month_enum(), noop());
+    let when = seq(Vec[
+        string("[") >> regex("[0-9]{2}").map(|v| int_of(v)),
+        string("/") >> month,
+        string("/") >> regex("[0-9]{4}").map(|v| int_of(v)),
+        string(":") >> regex("[0-9]{2}:[0-9]{2}:[0-9]{2}"),
+        sp >> regex("[+-][0-9]{4}") << string("]"),
+    ]).map(|v| to_tuple(v));
+    let request = seq_kw(Vec[
+        ("method", regex("[A-Z]+") << sp),
+        ("target", regex("[^ ]+") << sp),
+        ("version", string("HTTP/") >> regex("[0-9]\\.[0-9]")),
+    ]) | regex("[^\"]*").map(|s| Val.Dict(Vec[(pystr("raw"), s)]));
+    let size = string("-").result(Val.Int(0)) | regex("[0-9]+").map(|v| int_of(v));
+    plain(seq_kw(Vec[
+        ("addr", field << sp),
+        ("ident", field << sp),
+        ("user", (string("-").result(Val.Nil) | field) << sp),
+        ("time", when << sp),
+        ("request", string("\"") >> request << string("\"") << sp),
+        ("status", regex("[1-5][0-9]{2}").map(|v| int_of(v)) << sp),
+        ("bytes", size << sp),
+        ("referer", quoted.map(|s| if is_op(s, "-") { Val.Nil } else { s }) << sp),
+        ("agent", quoted),
+    ]))
+}
+
+// RFC 4180 CSV: quoted fields with doubled quotes and line breaks inside,
+// CRLF or LF records, an optional final line break.
+fn csv_grammar() -> Grammar {
+    let dquote = string("\"");
+    let escaped = dquote >> (regex("[^\"]+") | string("\"\"").result(pystr("\""))).many().concat() << dquote;
+    let plain_field = regex("[^,\"\\r\\n]*");
+    let fld = escaped | plain_field;
+    let record = fld.sep_by_range(string(","), 1, INF);
+    let newline = regex("\\r?\\n");
+    // a final line break would read as one more record holding one empty field
+    plain((record.sep_by(newline) << eof()).map(|rows| {
+        let rs = elems(rows);
+        if rs.len() > 1 and py_eq(rs[rs.len() - 1], Val.List(Vec[pystr("")])) {
+            Val.List(rs[0..rs.len() - 1].to_vec())
+        } else {
+            rows
+        }
+    }))
+}
+
+// An HTTP/1.1 request head (RFC 9112): the request line, header fields
+// with optional whitespace (obsolete line folding is refused), and the
+// blank line.
+fn http_request_grammar() -> Grammar {
+    let crlf = string("\r\n");
+    let token = regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+");
+    let method = token.desc("a method");
+    let target = regex("[^ \\r\\n]+").desc("a request target");
+    let version = string("HTTP/") >> seq(Vec[regex("[0-9]").map(|v| int_of(v)) << string("."), regex("[0-9]").map(|v| int_of(v))]).map(|v| to_tuple(v));
+    let ows = regex("[ \\t]*");
+    let value = regex("[^\\r\\n]*").map(|s| Val.Str(rstrip(text_of(s), " \t")));
+    let header = seq(Vec[token.map(|s| Val.Str(lower_text(text_of(s)))) << string(":") << ows, value << crlf]).map(|v| to_tuple(v));
+    plain(seq_kw(Vec[
+        ("method", method << string(" ")),
+        ("target", target << string(" ")),
+        ("version", version << crlf),
+        ("headers", header.many()),
+        ("_end", crlf),
+    ]).combine_dict(|kw| record("Request", Vec["method", "target", "version", "headers"], kw)))
+}
+
+// npm-style version ranges: comparators joined by spaces, sets joined by
+// `||`, carets and tildes, x-ranges and hyphen ranges.
+fn semver_range_grammar() -> Grammar {
+    let num = regex("0|[1-9][0-9]*").map(|v| int_of(v));
+    let part = num | char_from("xX*").result(pystr("x"));
+    let pre = (string("-") >> regex("[0-9A-Za-z.-]+")).optional();
+    let version = seq(Vec[
+        part,
+        (string(".") >> part).optional_or(pystr("x")),
+        (string(".") >> part).optional_or(pystr("x")),
+    ]).map(|v| to_tuple(v));
+    let full = seq(Vec[version, pre]).combine(|r| {
+        if truthy(r[1]) { py_add(r[0], Val.Tuple(Vec[r[1]])) } else { py_add(r[0], Val.Tuple(Vec.new())) }
+    });
+    let ops = op_enum();
+    let op = from_enum(ops, noop());
+    let comparator = seq(Vec[op.optional_or(member(ops, "EQ")) << regex("\\s*"), full]).map(|v| to_tuple(v));
+    let hyphen = seq(Vec[full << regex("\\s+-\\s+"), full]).combine(|r| Val.Tuple(Vec[pystr("range"), r[0], r[1]]));
+    let clause = hyphen | comparator.sep_by_range(regex("\\s+"), 1, INF);
+    plain(regex("\\s*") >> clause.sep_by_range(regex("\\s*\\|\\|\\s*"), 1, INF) << regex("\\s*"))
+}
+
+// A search query language, first the lexer that makes the tokens ...
+fn query_lexer() -> Grammar {
+    let ws = regex("\\s*");
+    let word = regex("[A-Za-z_][A-Za-z0-9_.-]*").map(|w| {
+        let up = Val.Str(upper_text(text_of(w)));
+        if py_in(up, Vec[pystr("AND"), pystr("OR"), pystr("NOT")]) {
+            Val.Tuple(Vec[up])
+        } else {
+            tuple2(pystr("WORD"), w)
+        }
+    });
+    let numb = regex("-?[0-9]+").map(|s| tuple2(pystr("NUM"), int_of(s)));
+    let phrase = (string("\"") >> regex("[^\"]*") << string("\"")).map(|s| tuple2(pystr("PHRASE"), s));
+    let punct = string_from(Vec["(", ")", ":", ">=", "<=", ">", "<", "-"], noop()).map(|s| Val.Tuple(Vec[s]));
+    let token = (word | numb | phrase | punct).desc("a token");
+    plain(ws >> (token << ws).many() << eof())
+}
+
+fn tok(kind: Str) -> Parser {
+    let want = pystr(kind);
+    test_item(|t| py_eq(at(t, 0), want), kind)
+}
+
+// ... then the parser over the token list, with NOT before AND before OR,
+// parentheses, field:value terms, phrases and comparisons.
+fn query_parser() -> Grammar {
+    let expr = forward_declaration();
+    let value = (tok("WORD") | tok("PHRASE") | tok("NUM")).map(|t| at(t, 1));
+    let compare = seq(Vec[
+        tok("WORD").map(|t| at(t, 1)),
+        (tok(":") | tok(">=") | tok("<=") | tok(">") | tok("<")).map(|t| at(t, 0)),
+        value,
+    ]).combine(|r| Val.Tuple(Vec[pystr("field"), r[0], r[1], r[2]]));
+    let term = compare | value.map(|v| tuple2(pystr("term"), v));
+    let group = tok("(") >> expr << tok(")");
+    let unary = generate(|g| {
+        let negs = g.take((tok("NOT") | tok("-")).many())?;
+        let mut node = g.take(group | term)?;
+        for _ in elems(negs) {
+            node = tuple2(pystr("not"), node);
+        }
+        Some(Out.Value(node))
+    });
+    let conj = generate(|g| {
+        let first = g.take(unary)?;
+        let rest = g.take((tok("AND").optional() >> unary).many())?;
+        if not truthy(rest) {
+            return Some(Out.Value(first));
+        }
+        Some(Out.Value(tuple2(pystr("and"), py_add(Val.List(Vec[first]), rest))))
+    });
+    let disj = generate(|g| {
+        let first = g.take(conj)?;
+        let rest = g.take((tok("OR") >> conj).many())?;
+        if not truthy(rest) {
+            return Some(Out.Value(first));
+        }
+        Some(Out.Value(tuple2(pystr("or"), py_add(Val.List(Vec[first]), rest))))
+    });
+    become_or_panic(expr, disj);
+    recursive(expr, Vec[expr])
+}
+
+// ------------------------------------------------------------ the registry
+
+fn generated_xy(last: Val) -> Parser {
+    generate(|g| {
+        g.take(string("x"))?;
+        g.take(string("y"))?;
+        Some(Out.Value(last))
+    })
+}
+
+fn build(name: ref String) -> Grammar {
+    let n = name.as_str();
+    if n == "string" {
+        plain(string("x"))
+    } else if n == "string_lower" {
+        plain(string_t("x", lowercase()))
+    } else if n == "string_cat" {
+        plain(string_t("Cat", lowercase()))
+    } else if n == "regex_digit" {
+        plain(regex("[0-9]"))
+    } else if n == "regex_group" {
+        plain(regex_g("a([0-9])b", 0, Group.Num(1)))
+    } else if n == "regex_name" {
+        plain(regex_g("a(?P<name>[0-9])b", 0, Group.Name("name".to_string())))
+    } else if n == "regex_tuple" {
+        plain(regex_g("a([0-9])b([0-9])c", 0, Group.Several(Vec[1, 2])))
+    } else if n == "regex_optional_group" {
+        plain(regex_g("(\\d+)(?:\\.(\\d+))?", 0, Group.Several(Vec[1, 2])))
+    } else if n == "regex_flags" {
+        plain(regex_g("select\\s+(\\w+)", RE_I, Group.Num(1)))
+    } else if n == "then" {
+        plain(string("x") >> string("y"))
+    } else if n == "bind" {
+        plain(string("x").bind(|_| string("y")))
+    } else if n == "bind_double" {
+        // a letter, then the same letter again
+        plain(regex("[a-z]").bind(|c| string_text(text_of(c), noop()).result(py_add(c, c))))
+    } else if n == "map" {
+        plain(digit().map(|v| int_of(v)))
+    } else if n == "combine" {
+        plain(seq(Vec[digit(), letter()]).combine(|r| tuple2(r[0], r[1])))
+    } else if n == "combine_dict_date" {
+        plain(seq(Vec[
+            regex("[0-9]{2}").map(|v| int_of(v)).tag(pystr("day")),
+            regex("[0-9]{2}").map(|v| int_of(v)).tag(pystr("month")),
+            regex("[0-9]{4}").map(|v| int_of(v)).tag(pystr("year")),
+        ]).map(|v| to_dict(v)).combine_dict(|kw| Val.Call("datetime.date".to_string(), Vec[kwarg(kw, "year"), kwarg(kw, "month"), kwarg(kw, "day")])))
+    } else if n == "combine_dict_pair" {
+        plain(seq(Vec[
+            regex("[A-Z]+").tag(pystr("word")),
+            regex("[0-9]+").map(|v| int_of(v)).tag(pystr("number")),
+        ]).combine_dict(|kw| record("Pair", Vec["word", "number"], kw)))
+    } else if n == "combine_dict_none" {
+        plain(seq(Vec[
+            regex("[A-Z]+").tag(pystr("word")),
+            whitespace().tag(Val.Nil),
+            regex("[0-9]+").map(|v| int_of(v)).tag(pystr("number")),
+        ]).combine_dict(|kw| record("Pair", Vec["word", "number"], kw)))
+    } else if n == "combine_dict_underscore" {
+        plain(seq(Vec[
+            regex("[A-Z]+").tag(pystr("word")),
+            whitespace().tag(pystr("_whitespace")),
+            regex("[0-9]+").map(|v| int_of(v)).tag(pystr("number")),
+        ]).combine_dict(|kw| record("Pair", Vec["word", "number"], kw)))
+    } else if n == "concat" {
+        plain(letter().many().concat())
+    } else if n == "generate" {
+        plain(generated_xy(Val.Int(3)))
+    } else if n == "generate_parser" {
+        plain(generate(|g| {
+            g.take(string("x"))?;
+            Some(Out.Then(string("y")))
+        }))
+    } else if n == "mark" {
+        plain((letter().many().mark() << string("\n")).many())
+    } else if n == "tag" {
+        plain(letter().many().concat().tag(pystr("word")).sep_by(string(",")))
+    } else if n == "tag_dict" {
+        plain(seq(Vec[letter().tag(pystr("first_letter")), letter().many().concat().tag(pystr("remainder"))]).map(|v| to_dict(v)))
+    } else if n == "generate_desc" {
+        plain(generate_desc("a thing", |g| {
+            g.take(string("t"))?;
+            Some(Out.Value(Val.Nil))
+        }))
+    } else if n == "generate_no_desc" {
+        plain(generate(|g| {
+            g.take(string("a"))?;
+            g.take(string("b"))?;
+            Some(Out.Value(Val.Nil))
+        }))
+    } else if n == "abc" {
+        plain(string("a") | string("b") | string("c"))
+    } else if n == "backtrack" {
+        plain(generated_xy(pystr("never")) | string("z") | string("xq"))
+    } else if n == "or" {
+        plain(string("x") | string("y"))
+    } else if n == "or_then" {
+        plain((string("\\") >> string("y")) | string("z"))
+    } else if n == "many" {
+        plain(letter().many())
+    } else if n == "many_then" {
+        plain(string("x").many() >> string("y"))
+    } else if n == "times0" {
+        plain(letter().times_n(0))
+    } else if n == "times3" {
+        plain(letter().times_n(3))
+    } else if n == "times3_then" {
+        plain(letter().times_n(3) >> digit())
+    } else if n == "times2_4" {
+        plain(letter().times(2, 4))
+    } else if n == "times2_4_then" {
+        plain(letter().times(2, 4) >> digit())
+    } else if n == "at_most" {
+        plain(string("ab").at_most(2))
+    } else if n == "at_least" {
+        plain(string("ab").at_least(2))
+    } else if n == "until" {
+        plain(string("s").until(string("x"), 0, INF, false))
+    } else if n == "until_seq" {
+        plain(seq(Vec[string("s").until(string("x"), 0, INF, false), string("x")]))
+    } else if n == "until_then" {
+        plain(string("s").until(string("x"), 0, INF, false).then(string("x")))
+    } else if n == "until_any" {
+        plain(regex(".").until(string("x"), 0, INF, false))
+    } else if n == "until_consume" {
+        plain(string("s").until(string("x"), 0, INF, true))
+    } else if n == "until_min" {
+        plain(string("s").until(string("x"), 3, INF, false))
+    } else if n == "until_max" {
+        plain(string("s").until(string("x"), 0, 3, false))
+    } else if n == "until_min_max" {
+        plain(string("s").until(string("x"), 3, 5, false))
+    } else if n == "optional" {
+        plain(string("a").optional())
+    } else if n == "optional_b" {
+        plain(string("a").optional_or(pystr("b")))
+    } else if n == "sep_by" {
+        plain(digit().map(|v| int_of(v)).sep_by(string(",")))
+    } else if n == "sep_by_2_4" {
+        plain(digit().map(|v| int_of(v)).sep_by_range(string(","), 2, 4))
+    } else if n == "sep_by_max0" {
+        plain(digit().sep_by_range(string(","), 0, 0))
+    } else if n == "add" {
+        plain(letter() + digit())
+    } else if n == "add_lists" {
+        plain(letter().times_n(2) + digit().times(1, 3))
+    } else if n == "multiply" {
+        plain(letter() * 3)
+    } else if n == "multiply_range" {
+        plain(letter() * (1..3))
+    } else if n == "alt_empty" {
+        plain(alt(Vec.new()))
+    } else if n == "alt" {
+        plain(alt(Vec[letter(), digit()]))
+    } else if n == "seq_empty" {
+        plain(seq(Vec.new()))
+    } else if n == "seq1" {
+        plain(seq(Vec[letter()]))
+    } else if n == "seq2" {
+        plain(seq(Vec[letter(), digit()]))
+    } else if n == "seq_kw" {
+        plain(seq_kw(Vec[("first_name", regex("\\S+") << whitespace()), ("last_name", regex("\\S+"))]))
+    } else if n == "seq_kw_a" {
+        plain(seq_kw(Vec[("a", string("a"))]))
+    } else if n == "ascii" {
+        plain(test_char(|c| text_of(c)[0] < 128, "ascii character"))
+    } else if n == "char_from" {
+        plain(char_from("ab"))
+    } else if n == "titles" {
+        plain(string_from(Vec["Mr", "Mr.", "Mrs", "Mrs."], noop()))
+    } else if n == "titles_hyde" {
+        plain(string_from(Vec["Mr", "Mr.", "Mrs", "Mrs."], noop()) + string(" Hyde"))
+    } else if n == "titles_lower" {
+        plain(string_from(Vec["Mr", "Mr.", "Mrs", "Mrs."], lowercase()))
+    } else if n == "peek_any" {
+        plain(peek(any_char()))
+    } else if n == "peek_digit" {
+        plain(peek(digit()))
+    } else if n == "any_char" {
+        plain(any_char())
+    } else if n == "whitespace" {
+        plain(whitespace())
+    } else if n == "letter" {
+        plain(letter())
+    } else if n == "digit" {
+        plain(digit())
+    } else if n == "decimal" {
+        plain(decimal_digit().at_least(1).concat())
+    } else if n == "line_info" {
+        plain(generate(|g| {
+            let i = g.take(line_info())?;
+            let l = g.take(any_char())?;
+            Some(Out.Value(tuple2(l, i)))
+        }).many())
+    } else if n == "index" {
+        plain(generate(|g| {
+            let i = g.take(index())?;
+            let l = g.take(letter())?;
+            Some(Out.Value(tuple2(l, i)))
+        }).many())
+    } else if n == "should_fail" {
+        plain(digit().should_fail("not a digit") >> regex(".*"))
+    } else if n == "should_fail_value" {
+        plain(digit().should_fail("not a digit"))
+    } else if n == "enum_pet" {
+        plain(from_enum(pet(), noop()))
+    } else if n == "enum_position" {
+        plain(from_enum(position(), noop()))
+    } else if n == "enum_pet_lower" {
+        plain(from_enum(pet(), lowercase()))
+    } else if n == "eof" {
+        plain(string("a") << eof())
+    } else if n == "start_stop" {
+        plain(test_item(|i| py_in(i, Vec[start(), stop()]), "START/STOP").many())
+    } else if n == "match_start" {
+        plain(match_item_desc(start(), "START"))
+    } else if n == "match_start_default" {
+        plain(match_item(pystr("x")))
+    } else if n == "bracketed" {
+        let other = test_item(|i| not py_in(i, Vec[start(), stop()]), "not START/STOP");
+        plain(match_item(start()) >> other.many() << match_item(stop()))
+    } else if n == "forward" {
+        let expr = forward_declaration();
+        let simple = regex("[0-9]+").map(|v| int_of(v));
+        let group = string("(") >> expr.sep_by(string(" ")) << string(")");
+        become_or_panic(expr, simple | group);
+        recursive(expr, Vec[expr])
+    } else if n == "forward_az" {
+        let expr = forward_declaration();
+        become_or_panic(expr, string("A") + expr | string("Z"));
+        recursive(expr, Vec[expr])
+    } else if n == "forward_unset" {
+        plain(forward_declaration())
+    } else if n == "json" {
+        json_grammar()
+    } else if n == "sexpr" {
+        sexpr_grammar()
+    } else if n == "select" {
+        select_grammar()
+    } else if n == "logo_lexer" {
+        logo_lexer()
+    } else if n == "logo_program" {
+        logo_program()
+    } else if n == "eval_lexer" {
+        eval_lexer()
+    } else if n == "eval_tokens" {
+        eval_tokens()
+    } else if n == "ini" {
+        ini_grammar()
+    } else if n == "access_log" {
+        access_log_grammar()
+    } else if n == "csv" {
+        csv_grammar()
+    } else if n == "http_request" {
+        http_request_grammar()
+    } else if n == "semver_range" {
+        semver_range_grammar()
+    } else if n == "query_lexer" {
+        query_lexer()
+    } else if n == "query_parser" {
+        query_parser()
+    } else {
+        panic(f"no grammar {name}")
+    }
+}
+
+// ============================================================ the jobs
+
+fn unesc(s: ref String) -> Vec[i64] {
+    let t = codepoints(s.bytes());
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < t.len() {
+        let c = t[i];
+        if c != 92 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let n = t[i + 1];
+        if n == 110 {
+            out.push(10);
+        } else if n == 116 {
+            out.push(9);
+        } else if n == 114 {
+            out.push(13);
+        } else if n == 92 {
+            out.push(92);
+        } else if n == 120 {
+            // \x{hex}
+            let mut j = i + 3;
+            let mut v = 0;
+            while t[j] != 125 {
+                let d = t[j];
+                v = v * 16 + if d <= 57 { d - 48 } else if d <= 70 { d - 55 } else { d - 87 };
+                j += 1;
+            }
+            out.push(v);
+            i = j + 1;
+            continue;
+        }
+        i += 2;
+    }
+    out
+}
+
+fn tokens_of(spec: ref String) -> Vec[Val] {
+    let mut out: Vec[Val] = Vec.new();
+    if spec.len() == 0 {
+        return out;
+    }
+    for t in spec.split("|") {
+        if t == "START" {
+            out.push(start());
+        } else if t == "STOP" {
+            out.push(stop());
+        } else if t.starts_with("#") {
+            out.push(int_of(pystr(t[1..t.len()])));
+        } else {
+            out.push(Val.Str(unesc(t.to_string())));
+        }
+    }
+    out
+}
+
+fn shown(text: ref Vec[i64]) -> String {
+    let r = repr_of(text);
+    if codepoints(r.bytes()).len() > 70 {
+        return f"<{text.len()} characters>";
+    }
+    r
+}
+
+fn outcome(r: Result[Val, PyErr]) -> String {
+    match r {
+        Ok(v) => f"  {repr(v)}",
+        Err(e) => f"  ! {e.kind}: {e.msg}",
+    }
+}
+
+fn outcome_partial(r: Result[(Val, Val), PyErr]) -> String {
+    match r {
+        Ok((v, rest)) => f"  {repr(tuple2(v, rest))}",
+        Err(e) => f"  ! {e.kind}: {e.msg}",
+    }
+}
+
+fn read_doc(name: Str) -> Vec[i64] {
+    match fs.read_to_string(f"data/docs/{name}") {
+        Ok(t) => codepoints(t.bytes()),
+        Err(e) => panic(f"cannot read {name}: {e}"),
+    }
+}
+
+// Each stream gets its own id.
+struct Runner {
+    next_id: i64,
+}
+
+impl Runner {
+    fn text(mut ref self, chars: own Vec[i64]) -> Stream {
+        self.next_id += 1;
+        text_stream(self.next_id, chars)
+    }
+
+    fn tokens(mut ref self, items: own Vec[Val]) -> Stream {
+        self.next_id += 1;
+        token_stream(self.next_id, items)
+    }
+
+    fn run(mut ref self, n: i64, name: ref String, mode: ref String, arg: ref String) {
+        if mode == "tokens" {
+            let stream = self.tokens(tokens_of(arg));
+            println(f"== {n} {name} tokens {repr(Val.List(stream.items.clone()))}");
+            let g = build(name);
+            println(outcome(g.root.parse(stream)));
+            return;
+        }
+        if mode == "lineinfo" {
+            let cut = arg.rfind(" ").expect("a space");
+            let text = unesc(arg[0..cut].to_string());
+            let idx = arg[cut + 1..arg.len()].to_string();
+            println(f"== {n} line_info_at({repr_of(text)}, {idx})");
+            let at_index = match int_of(pystr(idx)) {
+                Val.Int(k) => k,
+                _ => 0,
+            };
+            println(outcome(match line_info_at(text, at_index) {
+                Ok((line, col)) => Ok(tuple2(Val.Int(line), Val.Int(col))),
+                Err(e) => Err(e),
+            }));
+            return;
+        }
+        if mode == "become_twice" {
+            println(f"== {n} become twice");
+            let dec = build("forward_unset".to_string());
+            let other = string("X");
+            become_or_panic(dec.root, other);
+            let stream = self.text(codepoints("X".bytes()));
+            println(outcome(dec.root.parse(stream)));
+            println(outcome(match dec.root.become(other) {
+                Ok(()) => Ok(Val.Nil),
+                Err(e) => Err(e),
+            }));
+            // `become` gave the declaration a parser that does not name it
+            return;
+        }
+        let from_doc = arg.starts_with("@");
+        let text = if from_doc { read_doc(arg[1..arg.len()]) } else { unesc(arg) };
+        let label = if from_doc { arg.clone() } else { shown(text) };
+        println(f"== {n} {name} {mode} {label}");
+        if mode == "parse" {
+            let g = build(name);
+            let stream = self.text(text);
+            println(outcome(g.root.parse(stream)));
+        } else if mode == "partial" {
+            let g = build(name);
+            let stream = self.text(text);
+            println(outcome_partial(g.root.parse_partial(stream)));
+        } else if mode == "lines" {
+            let g = build(name);
+            let mut k = 0;
+            let mut startpos = 0;
+            while startpos <= text.len() {
+                let mut end = startpos;
+                while end < text.len() and text[end] != 10 {
+                    end += 1;
+                }
+                k += 1;
+                if end > startpos {
+                    println(f"  line {k}:");
+                    let stream = self.text(slice(text, startpos, end));
+                    println(f"  {outcome(g.root.parse(stream))}");
+                }
+                startpos = end + 1;
+            }
+        } else if mode == "pipe" {
+            let (lexer, parser) = if name == "logo" {
+                ("logo_lexer", "logo_program")
+            } else if name == "eval" {
+                ("eval_lexer", "eval_tokens")
+            } else {
+                ("query_lexer", "query_parser")
+            };
+            let lex = build(lexer.to_string());
+            let stream = self.text(text);
+            match lex.root.parse(stream) {
+                Ok(toks) => {
+                    println(f"  tokens {repr(toks)}");
+                    let g = build(parser.to_string());
+                    let tstream = self.tokens(elems(toks));
+                    println(outcome(g.root.parse(tstream)));
+                }
+                Err(e) => println(f"  ! {e.kind}: {e.msg}"),
+            }
+        } else {
+            panic(f"unknown mode {mode}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ data files
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/docs".to_string()) {
+        return Err(f"cannot create data/docs: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let mut runner = Runner { next_id: 0 };
+    let mut n = 0;
+    for line in jobs.lines() {
+        if line.trim().len() == 0 {
+            continue;
+        }
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        n += 1;
+        let arg = if f.len() > 2 { f[2].clone() } else { String.new() };
+        runner.run(n, f[0], f[1], arg);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("203.0.113.7 - - [09/Mar/2024:17:42:05 +0000] \"GET /menu HTTP/1.1\" 200 5120 \"-\" \"curl/8.5.0\"\n");
+    t.push_str("198.51.100.23 - ana [09/Mar/2024:17:42:06 +0000] \"POST /orders HTTP/1.1\" 201 312 \"https://cafe.example/menu\" \"Mozilla/5.0 (X11; Linux x86_64)\"\n");
+    t.push_str("192.0.2.44 - - [09/Mar/2024:17:42:09 +0100] \"GET /static/app.js HTTP/2.0\" 304 - \"https://cafe.example/\" \"Mozilla/5.0 \\\"quoted\\\"\"\n");
+    t.push_str("203.0.113.9 - - [10/Mar/2024:00:00:01 +0000] \"\\x16\\x03\\x01\" 400 157 \"-\" \"-\"\n");
+    t.push_str("203.0.113.9 - - [10/Foo/2024:00:00:01 +0000] \"GET / HTTP/1.1\" 200 1 \"-\" \"-\"\n");
+    t.push_str("10.0.0.5 - bob [31/Dec/2024:23:59:59 -0500] \"DELETE /orders/1043 HTTP/1.1\" 204 0 \"-\" \"kds-cli/2.4\"\n");
+    t.push_str("10.0.0.5 - bob [31/Dec/2024:23:59:59 -0500] \"GET / HTTP/1.1\" 999 0 \"-\" \"x\"\n");
+    v.push(DataFile { path: "docs/access.log".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"id\": \"evt_1Q9xK2\",\n");
+    t.push_str("  \"type\": \"invoice.paid\",\n");
+    t.push_str("  \"created\": 1729814400,\n");
+    t.push_str("  \"livemode\": false,\n");
+    t.push_str("  \"data\": {\n");
+    t.push_str("    \"object\": {\n");
+    t.push_str("      \"amount_due\": 4250,\n");
+    t.push_str("      \"amount_paid\": 4250,\n");
+    t.push_str("      \"currency\": \"eur\",\n");
+    t.push_str("      \"customer_name\": \"Zo\\u00eb Ma\\u00eftre\",\n");
+    t.push_str("      \"discount\": null,\n");
+    t.push_str("      \"lines\": [\n");
+    t.push_str("        {\"description\": \"Pro plan \\u00d7 2\", \"amount\": 3800, \"tax_rate\": 0.19},\n");
+    t.push_str("        {\"description\": \"Extra seat\", \"amount\": 450, \"tax_rate\": 0.19}\n");
+    t.push_str("      ],\n");
+    t.push_str("      \"metadata\": {\"order\": \"A-1043\", \"note\": \"Thanks! \\\"Rush\\\" shipping\\n\"},\n");
+    t.push_str("      \"paid\": true\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"request\": {\"id\": null, \"idempotency_key\": \"6b7f1d2e-1c9a-4d1a-9f2e-3a4b5c6d7e8f\"}\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "docs/api_response.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[server]\n");
+    t.push_str("host = a\n");
+    t.push_str("port\n");
+    v.push(DataFile { path: "docs/bad_line.ini".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("name = x\n");
+    t.push_str("\n");
+    t.push_str("[server\n");
+    t.push_str("port = 1\n");
+    v.push(DataFile { path: "docs/bad_section.ini".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"orders-api\",\n");
+    t.push_str("  \"replicas\": 3,\n");
+    t.push_str("  \"env\": {\n");
+    t.push_str("    \"PORT\": \"8080\",\n");
+    t.push_str("    \"LOG_LEVEL\": \"info\"\n");
+    t.push_str("    \"REGION\": \"eu-west-1\"\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "docs/broken.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("; build configuration for the firmware\n");
+    t.push_str("(project blinky\n");
+    t.push_str("  (version 3 1)\n");
+    t.push_str("  (target 'cortex-m4)\n");
+    t.push_str("  (debug #f)\n");
+    t.push_str("  ; flags passed to the compiler\n");
+    t.push_str("  (flags (opt 2) (warn all) (lto #t))\n");
+    t.push_str("  (sources 'main 'led 'timer))\n");
+    v.push(DataFile { path: "docs/config.scm".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,name\r\n");
+    t.push_str("1,Ada\r\n");
+    t.push_str("2,\"Grace\r\n");
+    t.push_str("Hopper\"\r\n");
+    v.push(DataFile { path: "docs/crlf.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[[[[[[[[[[[[1, [2.5, \"three\"]]]]]]]]]]]]]\n");
+    v.push(DataFile { path: "docs/deep.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: kds.example\r\n");
+    t.push_str("X-Long: part one\r\n");
+    t.push_str(" part two\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "docs/folded.http".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("GET /api/orders?status=open&limit=20 HTTP/1.1\r\n");
+    t.push_str("Host: kds.example\r\n");
+    t.push_str("Accept: application/json\r\n");
+    t.push_str("User-Agent: kds-cli/2.4  \r\n");
+    t.push_str("X-Request-Id:7f3a\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "docs/get.http".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: kds.example\r\n");
+    v.push(DataFile { path: "docs/no_blank.http".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"kitchen-display\",\n");
+    t.push_str("  \"version\": \"2.4.1\",\n");
+    t.push_str("  \"private\": true,\n");
+    t.push_str("  \"scripts\": {\n");
+    t.push_str("    \"build\": \"tsc -p .\",\n");
+    t.push_str("    \"test\": \"node --test test/\",\n");
+    t.push_str("    \"lint\": \"eslint src/ --max-warnings=0\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"engines\": {\"node\": \">=20.11\"},\n");
+    t.push_str("  \"dependencies\": {\n");
+    t.push_str("    \"fastify\": \"^4.28.1\",\n");
+    t.push_str("    \"pino\": \"~9.3.2\",\n");
+    t.push_str("    \"zod\": \"3.23.8\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"files\": [\"dist/\", \"README.md\"],\n");
+    t.push_str("  \"workspaces\": []\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "docs/package.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("POST /api/orders HTTP/1.1\r\n");
+    t.push_str("Host: kds.example\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 27\r\n");
+    t.push_str("Authorization: Bearer test-token-not-real\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "docs/post.http".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("region,quarter,revenue,note\n");
+    t.push_str("north,Q1,1200,\n");
+    t.push_str("south,Q1,980,\"late, but closed\"\n");
+    t.push_str("east,Q2,1525,\"said \"\"final\"\"\"\n");
+    t.push_str("west,Q2,0,\"multi\n");
+    t.push_str("line\"\n");
+    v.push(DataFile { path: "docs/report.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[unit]\r\n");
+    t.push_str("description = orders worker\r\n");
+    t.push_str("after = network.target\r\n");
+    t.push_str("\r\n");
+    t.push_str("[service]\r\n");
+    t.push_str("restart: on-failure\r\n");
+    v.push(DataFile { path: "docs/service.conf".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# kitchen display service\n");
+    t.push_str("name = kitchen-display\n");
+    t.push_str("debug: false\n");
+    t.push_str("\n");
+    t.push_str("[server]\n");
+    t.push_str("host = 0.0.0.0\n");
+    t.push_str("port = 8080   ; the public port\n");
+    t.push_str("banner = \"Welcome; please wait\"  # quoted\n");
+    t.push_str("\n");
+    t.push_str("[database]\n");
+    t.push_str("url = postgres://kds:kds@db.internal:5432/kds\n");
+    t.push_str("pool.size = 10\n");
+    t.push_str("  timeout = 2.5\n");
+    t.push_str("\n");
+    t.push_str("; trailing comment\n");
+    v.push(DataFile { path: "docs/settings.ini".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("fd 100\n");
+    t.push_str("rt 90\n");
+    t.push_str("fd 100\n");
+    t.push_str("rt 90\n");
+    t.push_str("fd 100\n");
+    t.push_str("rt 90\n");
+    t.push_str("fd 100\n");
+    t.push_str("rt 90\n");
+    v.push(DataFile { path: "docs/square.logo".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("string\tparse\tx\n");
+    t.push_str("string\tparse\ty\n");
+    t.push_str("string\tparse\t\n");
+    t.push_str("string\tparse\txx\n");
+    t.push_str("string_lower\tparse\tx\n");
+    t.push_str("string_lower\tparse\tX\n");
+    t.push_str("string_lower\tparse\ty\n");
+    t.push_str("string_cat\tparse\tcat\n");
+    t.push_str("string_cat\tparse\tCAT\n");
+    t.push_str("string_cat\tparse\tCaT\n");
+    t.push_str("string_cat\tparse\tdog\n");
+    t.push_str("string_cat\tparse\tCa\n");
+    t.push_str("regex_digit\tparse\t1\n");
+    t.push_str("regex_digit\tparse\t4\n");
+    t.push_str("regex_digit\tparse\tx\n");
+    t.push_str("regex_digit\tparse\t\n");
+    t.push_str("regex_group\tparse\ta1b\n");
+    t.push_str("regex_group\tparse\tx\n");
+    t.push_str("regex_group\tparse\ta12b\n");
+    t.push_str("regex_name\tparse\ta1b\n");
+    t.push_str("regex_name\tparse\tx\n");
+    t.push_str("regex_tuple\tparse\ta1b2c\n");
+    t.push_str("regex_tuple\tparse\tx\n");
+    t.push_str("regex_tuple\tparse\ta1b2\n");
+    t.push_str("regex_optional_group\tparse\t12.5\n");
+    t.push_str("regex_optional_group\tparse\t12\n");
+    t.push_str("regex_optional_group\tparse\t12.\n");
+    t.push_str("regex_optional_group\tpartial\t12.\n");
+    t.push_str("regex_optional_group\tpartial\t3.14.15\n");
+    t.push_str("regex_flags\tparse\tSELECT name\n");
+    t.push_str("regex_flags\tparse\tselect  id\n");
+    t.push_str("regex_flags\tparse\tSelect\n");
+    t.push_str("regex_flags\tparse\tupdate x\n");
+    t.push_str("then\tparse\txy\n");
+    t.push_str("then\tparse\ty\n");
+    t.push_str("then\tparse\tz\n");
+    t.push_str("then\tparse\tx\n");
+    t.push_str("bind\tparse\txy\n");
+    t.push_str("bind\tparse\tx\n");
+    t.push_str("bind\tparse\txz\n");
+    t.push_str("bind_double\tparse\taa\n");
+    t.push_str("bind_double\tparse\tab\n");
+    t.push_str("bind_double\tparse\tzz\n");
+    t.push_str("bind_double\tparse\t1\n");
+    t.push_str("map\tparse\t7\n");
+    t.push_str("map\tparse\tx\n");
+    t.push_str("combine\tparse\t1A\n");
+    t.push_str("combine\tparse\tA1\n");
+    t.push_str("combine_dict_date\tparse\t05042003\n");
+    t.push_str("combine_dict_date\tparse\t29022024\n");
+    t.push_str("combine_dict_date\tparse\t0504200\n");
+    t.push_str("combine_dict_pair\tparse\tABC123\n");
+    t.push_str("combine_dict_pair\tparse\tABC\n");
+    t.push_str("combine_dict_pair\tparse\tabc123\n");
+    t.push_str("combine_dict_none\tparse\tABC   123\n");
+    t.push_str("combine_dict_none\tparse\tABC123\n");
+    t.push_str("combine_dict_underscore\tparse\tABC   123\n");
+    t.push_str("combine_dict_underscore\tparse\tABC \\t\\n 7\n");
+    t.push_str("concat\tparse\t\n");
+    t.push_str("concat\tparse\tabc\n");
+    t.push_str("concat\tparse\tab1\n");
+    t.push_str("generate\tparse\txy\n");
+    t.push_str("generate\tparse\tx\n");
+    t.push_str("generate\tparse\tyx\n");
+    t.push_str("generate_parser\tparse\txy\n");
+    t.push_str("generate_parser\tparse\txx\n");
+    t.push_str("mark\tparse\tasdf\\nqwer\\n\n");
+    t.push_str("mark\tparse\ta\\n\\nbc\\n\n");
+    t.push_str("mark\tparse\tab\\ncd\n");
+    t.push_str("tag\tparse\tthis,is,a,list\n");
+    t.push_str("tag\tparse\t\n");
+    t.push_str("tag\tparse\tone,,two\n");
+    t.push_str("tag_dict\tparse\tHello\n");
+    t.push_str("tag_dict\tparse\tH\n");
+    t.push_str("tag_dict\tparse\t\n");
+    t.push_str("generate_desc\tparse\tt\n");
+    t.push_str("generate_desc\tparse\tx\n");
+    t.push_str("generate_no_desc\tparse\tab\n");
+    t.push_str("generate_no_desc\tparse\tax\n");
+    t.push_str("generate_no_desc\tparse\t\n");
+    t.push_str("abc\tparse\ta\n");
+    t.push_str("abc\tparse\tb\n");
+    t.push_str("abc\tparse\tc\n");
+    t.push_str("abc\tparse\td\n");
+    t.push_str("abc\tparse\t\n");
+    t.push_str("backtrack\tparse\tz\n");
+    t.push_str("backtrack\tparse\txq\n");
+    t.push_str("backtrack\tparse\tw\n");
+    t.push_str("or\tparse\tx\n");
+    t.push_str("or\tparse\ty\n");
+    t.push_str("or\tparse\tz\n");
+    t.push_str("or_then\tparse\t\\\\y\n");
+    t.push_str("or_then\tparse\tz\n");
+    t.push_str("or_then\tparse\t\\\\z\n");
+    t.push_str("or_then\tparse\t\\\\\n");
+    t.push_str("many\tparse\tx\n");
+    t.push_str("many\tparse\txyz\n");
+    t.push_str("many\tparse\t\n");
+    t.push_str("many\tparse\t1\n");
+    t.push_str("many\tparse\tab1\n");
+    t.push_str("many_then\tparse\ty\n");
+    t.push_str("many_then\tparse\txy\n");
+    t.push_str("many_then\tparse\txxxxxy\n");
+    t.push_str("many_then\tparse\txxx\n");
+    t.push_str("times0\tparse\t\n");
+    t.push_str("times0\tparse\tx\n");
+    t.push_str("times3\tparse\txyz\n");
+    t.push_str("times3\tparse\txy\n");
+    t.push_str("times3\tparse\txyzw\n");
+    t.push_str("times3_then\tparse\txyz1\n");
+    t.push_str("times3_then\tparse\txy1\n");
+    t.push_str("times3_then\tparse\txyz\n");
+    t.push_str("times3_then\tparse\txyzw\n");
+    t.push_str("times2_4\tparse\txy\n");
+    t.push_str("times2_4\tparse\txyz\n");
+    t.push_str("times2_4\tparse\txyzw\n");
+    t.push_str("times2_4\tparse\tx\n");
+    t.push_str("times2_4\tparse\txyzwv\n");
+    t.push_str("times2_4_then\tparse\txy1\n");
+    t.push_str("times2_4_then\tparse\txyz1\n");
+    t.push_str("times2_4_then\tparse\txyzw1\n");
+    t.push_str("times2_4_then\tparse\txy\n");
+    t.push_str("times2_4_then\tparse\txyzw\n");
+    t.push_str("times2_4_then\tparse\txyzwv1\n");
+    t.push_str("times2_4_then\tparse\tx1\n");
+    t.push_str("at_most\tparse\t\n");
+    t.push_str("at_most\tparse\tab\n");
+    t.push_str("at_most\tparse\tabab\n");
+    t.push_str("at_most\tparse\tababab\n");
+    t.push_str("at_most\tparse\taba\n");
+    t.push_str("at_least\tparse\tabab\n");
+    t.push_str("at_least\tparse\tababab\n");
+    t.push_str("at_least\tparse\tab\n");
+    t.push_str("at_least\tparse\t\n");
+    t.push_str("until\tpartial\tssssx\n");
+    t.push_str("until\tpartial\tssssxy\n");
+    t.push_str("until\tpartial\txxx\n");
+    t.push_str("until\tpartial\tssssy\n");
+    t.push_str("until\tpartial\txssssxy\n");
+    t.push_str("until\tparse\tssssy\n");
+    t.push_str("until\tparse\txssssxy\n");
+    t.push_str("until_seq\tparse\tssssx\n");
+    t.push_str("until_seq\tpartial\tssssxy\n");
+    t.push_str("until_then\tparse\tssssx\n");
+    t.push_str("until_then\tpartial\tssssxy\n");
+    t.push_str("until_any\tpartial\txxxx\n");
+    t.push_str("until_any\tpartial\tabcx\n");
+    t.push_str("until_any\tpartial\tabc\n");
+    t.push_str("until_consume\tparse\tssssx\n");
+    t.push_str("until_consume\tparse\tssssy\n");
+    t.push_str("until_consume\tparse\txssssxy\n");
+    t.push_str("until_consume\tpartial\tssssxy\n");
+    t.push_str("until_consume\tpartial\txxx\n");
+    t.push_str("until_min\tpartial\tsssx\n");
+    t.push_str("until_min\tpartial\tsssssx\n");
+    t.push_str("until_min\tpartial\tssx\n");
+    t.push_str("until_min\tpartial\tx\n");
+    t.push_str("until_max\tpartial\tssx\n");
+    t.push_str("until_max\tpartial\tsssx\n");
+    t.push_str("until_max\tpartial\tssssx\n");
+    t.push_str("until_max\tpartial\tx\n");
+    t.push_str("until_min_max\tpartial\tsssx\n");
+    t.push_str("until_min_max\tpartial\tsssssx\n");
+    t.push_str("until_min_max\tpartial\tssx\n");
+    t.push_str("until_min_max\tpartial\tssssssx\n");
+    t.push_str("optional\tparse\ta\n");
+    t.push_str("optional\tparse\t\n");
+    t.push_str("optional\tparse\tb\n");
+    t.push_str("optional_b\tparse\ta\n");
+    t.push_str("optional_b\tparse\t\n");
+    t.push_str("optional_b\tparse\taa\n");
+    t.push_str("sep_by\tparse\t1,2,3,4\n");
+    t.push_str("sep_by\tparse\t9,0,4,7\n");
+    t.push_str("sep_by\tparse\t3,7\n");
+    t.push_str("sep_by\tparse\t8\n");
+    t.push_str("sep_by\tparse\t\n");
+    t.push_str("sep_by\tparse\t8,\n");
+    t.push_str("sep_by\tparse\t,9\n");
+    t.push_str("sep_by\tparse\t82\n");
+    t.push_str("sep_by\tparse\t7.6\n");
+    t.push_str("sep_by_2_4\tparse\t1,2,3,4\n");
+    t.push_str("sep_by_2_4\tparse\t3,7\n");
+    t.push_str("sep_by_2_4\tparse\t8\n");
+    t.push_str("sep_by_2_4\tparse\t\n");
+    t.push_str("sep_by_2_4\tparse\t8,\n");
+    t.push_str("sep_by_2_4\tparse\t,9\n");
+    t.push_str("sep_by_2_4\tparse\t82\n");
+    t.push_str("sep_by_2_4\tparse\t7.6\n");
+    t.push_str("sep_by_2_4\tparse\t1,2,3,4,5\n");
+    t.push_str("sep_by_max0\tparse\t\n");
+    t.push_str("sep_by_max0\tparse\t1\n");
+    t.push_str("add\tparse\ta1\n");
+    t.push_str("add\tparse\tab\n");
+    t.push_str("add\tparse\t1a\n");
+    t.push_str("add_lists\tparse\tab1\n");
+    t.push_str("add_lists\tparse\tab123\n");
+    t.push_str("add_lists\tparse\tab1234\n");
+    t.push_str("add_lists\tparse\ta1\n");
+    t.push_str("multiply\tparse\tabc\n");
+    t.push_str("multiply\tparse\tab\n");
+    t.push_str("multiply\tparse\tabcd\n");
+    t.push_str("multiply_range\tparse\ta\n");
+    t.push_str("multiply_range\tparse\tab\n");
+    t.push_str("multiply_range\tparse\tabc\n");
+    t.push_str("multiply_range\tparse\t\n");
+    t.push_str("alt_empty\tparse\t\n");
+    t.push_str("alt_empty\tparse\ta\n");
+    t.push_str("alt\tparse\ta\n");
+    t.push_str("alt\tparse\t1\n");
+    t.push_str("alt\tparse\t.\n");
+    t.push_str("seq_empty\tparse\t\n");
+    t.push_str("seq_empty\tparse\ta\n");
+    t.push_str("seq1\tparse\ta\n");
+    t.push_str("seq1\tparse\t1\n");
+    t.push_str("seq2\tparse\ta1\n");
+    t.push_str("seq2\tparse\t1a\n");
+    t.push_str("seq2\tparse\ta\n");
+    t.push_str("seq_kw\tparse\tJane Smith\n");
+    t.push_str("seq_kw\tparse\tJane\n");
+    t.push_str("seq_kw\tparse\tJane  Smith  \n");
+    t.push_str("seq_kw_a\tparse\ta\n");
+    t.push_str("seq_kw_a\tparse\tb\n");
+    t.push_str("ascii\tparse\ta\n");
+    t.push_str("ascii\tparse\t\\x{263a}\n");
+    t.push_str("ascii\tparse\t\n");
+    t.push_str("ascii\tparse\t~\n");
+    t.push_str("char_from\tparse\ta\n");
+    t.push_str("char_from\tparse\tb\n");
+    t.push_str("char_from\tparse\tx\n");
+    t.push_str("char_from\tparse\tab\n");
+    t.push_str("titles\tparse\tMr\n");
+    t.push_str("titles\tparse\tMr.\n");
+    t.push_str("titles\tparse\tMrs\n");
+    t.push_str("titles\tparse\tMrs.\n");
+    t.push_str("titles\tparse\tfoo\n");
+    t.push_str("titles\tparse\tM\n");
+    t.push_str("titles_hyde\tparse\tMr. Hyde\n");
+    t.push_str("titles_hyde\tparse\tMrs Hyde\n");
+    t.push_str("titles_hyde\tparse\tMr  Hyde\n");
+    t.push_str("titles_lower\tparse\tmr\n");
+    t.push_str("titles_lower\tparse\tmr.\n");
+    t.push_str("titles_lower\tparse\tMR\n");
+    t.push_str("titles_lower\tparse\tMR.\n");
+    t.push_str("titles_lower\tparse\tmRS.\n");
+    t.push_str("titles_lower\tparse\tms\n");
+    t.push_str("peek_any\tpartial\tabc\n");
+    t.push_str("peek_any\tpartial\t\n");
+    t.push_str("peek_digit\tparse\ta\n");
+    t.push_str("peek_digit\tparse\t1\n");
+    t.push_str("peek_digit\tparse\t\n");
+    t.push_str("any_char\tparse\tx\n");
+    t.push_str("any_char\tparse\t\\n\n");
+    t.push_str("any_char\tparse\t\n");
+    t.push_str("any_char\tparse\t\\x{4e2d}\n");
+    t.push_str("whitespace\tparse\t\\n\n");
+    t.push_str("whitespace\tparse\t \n");
+    t.push_str("whitespace\tparse\t \\t\\r\\n\\x{b}\\x{c}\n");
+    t.push_str("whitespace\tparse\tx\n");
+    t.push_str("whitespace\tparse\t\\x{3000}\\x{a0}\n");
+    t.push_str("letter\tparse\ta\n");
+    t.push_str("letter\tparse\t1\n");
+    t.push_str("letter\tparse\t\\x{e9}\n");
+    t.push_str("letter\tparse\t\\x{3a9}\n");
+    t.push_str("letter\tparse\t\\x{4e2d}\n");
+    t.push_str("letter\tparse\t_\n");
+    t.push_str("digit\tparse\t\\x{b9}\n");
+    t.push_str("digit\tparse\t2\n");
+    t.push_str("digit\tparse\tx\n");
+    t.push_str("digit\tparse\t\\x{663}\n");
+    t.push_str("digit\tparse\t\\x{2460}\n");
+    t.push_str("digit\tparse\t\\x{bd}\n");
+    t.push_str("decimal\tparse\t9876543210\n");
+    t.push_str("decimal\tparse\t\\x{b9}\n");
+    t.push_str("decimal\tparse\t\\x{663}1\n");
+    t.push_str("decimal\tparse\t12a\n");
+    t.push_str("line_info\tparse\tAB\\nCD\n");
+    t.push_str("line_info\tparse\t\\n\\nx\n");
+    t.push_str("line_info\tparse\t\n");
+    t.push_str("index\ttokens\tA|B\n");
+    t.push_str("index\ttokens\tA|B|C|D\n");
+    t.push_str("index\ttokens\t\n");
+    t.push_str("index\tparse\tabc\n");
+    t.push_str("index\tparse\tab1\n");
+    t.push_str("should_fail\tparse\ta\n");
+    t.push_str("should_fail\tparse\tabc\n");
+    t.push_str("should_fail\tparse\ta10\n");
+    t.push_str("should_fail\tparse\t\n");
+    t.push_str("should_fail\tparse\t8\n");
+    t.push_str("should_fail\tparse\t8ab\n");
+    t.push_str("should_fail_value\tparse\t\n");
+    t.push_str("enum_pet\tparse\tcat\n");
+    t.push_str("enum_pet\tparse\tdog\n");
+    t.push_str("enum_pet\tparse\tfoo\n");
+    t.push_str("enum_pet\tparse\tcaterpillar\n");
+    t.push_str("enum_pet\tparse\tCat\n");
+    t.push_str("enum_position\tparse\t1\n");
+    t.push_str("enum_position\tparse\t2\n");
+    t.push_str("enum_position\tparse\t12\n");
+    t.push_str("enum_position\tparse\t3\n");
+    t.push_str("enum_pet_lower\tparse\tcat\n");
+    t.push_str("enum_pet_lower\tparse\tCAT\n");
+    t.push_str("enum_pet_lower\tparse\tDog\n");
+    t.push_str("enum_pet_lower\tparse\tCATERPILLAR\n");
+    t.push_str("eof\tparse\ta\n");
+    t.push_str("eof\tparse\tab\n");
+    t.push_str("eof\tparse\t\n");
+    t.push_str("start_stop\ttokens\tSTART\n");
+    t.push_str("start_stop\ttokens\tSTOP\n");
+    t.push_str("start_stop\ttokens\tSTART|hello\n");
+    t.push_str("start_stop\ttokens\tSTART|STOP|START\n");
+    t.push_str("start_stop\ttokens\t\n");
+    t.push_str("match_start\ttokens\tSTART\n");
+    t.push_str("match_start\ttokens\t\n");
+    t.push_str("match_start\ttokens\tSTOP\n");
+    t.push_str("match_start_default\ttokens\tx\n");
+    t.push_str("match_start_default\ttokens\ty\n");
+    t.push_str("match_start_default\tparse\tx\n");
+    t.push_str("match_start_default\tparse\ty\n");
+    t.push_str("bracketed\ttokens\tSTART|hello|#1|#2|goodbye|STOP\n");
+    t.push_str("bracketed\ttokens\tSTART|STOP\n");
+    t.push_str("bracketed\ttokens\tSTART|hello\n");
+    t.push_str("bracketed\ttokens\thello|STOP\n");
+    t.push_str("bracketed\ttokens\tSTART|STOP|STOP\n");
+    t.push_str("forward\tparse\t(0 1 (2 3))\n");
+    t.push_str("forward\tparse\t7\n");
+    t.push_str("forward\tparse\t()\n");
+    t.push_str("forward\tparse\t(1 (2 (3 (4))))\n");
+    t.push_str("forward\tparse\t(1  2)\n");
+    t.push_str("forward\tparse\t(1 2\n");
+    t.push_str("forward_az\tparse\tZ\n");
+    t.push_str("forward_az\tparse\tAZ\n");
+    t.push_str("forward_az\tparse\tAAAAAZ\n");
+    t.push_str("forward_az\tparse\tA\n");
+    t.push_str("forward_az\tparse\tB\n");
+    t.push_str("forward_az\tpartial\tAAZXX\n");
+    t.push_str("forward_unset\tparse\t()\n");
+    t.push_str("forward_unset\tpartial\t()\n");
+    t.push_str("forward_unset\tbecome_twice\t\n");
+    t.push_str("line_info\tlineinfo\tabc\\ndef 0\n");
+    t.push_str("line_info\tlineinfo\tabc\\ndef 2\n");
+    t.push_str("line_info\tlineinfo\tabc\\ndef 3\n");
+    t.push_str("line_info\tlineinfo\tabc\\ndef 4\n");
+    t.push_str("line_info\tlineinfo\tabc\\ndef 7\n");
+    t.push_str("line_info\tlineinfo\tabc\\ndef 8\n");
+    t.push_str("line_info\tlineinfo\t\\n\\n 2\n");
+    t.push_str("line_info\tlineinfo\t 0\n");
+    t.push_str("json\tparse\t{\\n    \"int\": 1,\\n    \"string\": \"hello\",\\n    \"a list\": [1, 2, 3],\\n    \"escapes\": \"\\\\n \\\\u24D2\",\\n    \"nested\": {\"x\": \"y\"},\\n    \"other\": [true, false, null]\\n}\\n\n");
+    t.push_str("json\tparse\t[]\n");
+    t.push_str("json\tparse\t  {}  \n");
+    t.push_str("json\tparse\t[1.5, -0.25, 1e3, 2E-2, 0, -0]\n");
+    t.push_str("json\tparse\t{\"a\": [1, 2,]}\n");
+    t.push_str("json\tparse\t{\"a\" 1}\n");
+    t.push_str("json\tparse\t\"unterminated\n");
+    t.push_str("json\tparse\t[\"\\\\\"\\\\\\\\\\\\/\\\\b\\\\f\\\\r\\\\t\"]\n");
+    t.push_str("json\tparse\t[\"caf\\\\u00e9\", \"\\\\u4e2d\\\\u6587\"]\n");
+    t.push_str("json\tparse\t[\"bad \\\\q escape\"]\n");
+    t.push_str("json\tparse\t{\"dup\": 1, \"dup\": 2}\n");
+    t.push_str("json\tparse\t[[[[[]]]]]\n");
+    t.push_str("json\tparse\ttru\n");
+    t.push_str("json\tparse\t01\n");
+    t.push_str("json\tparse\t@api_response.json\n");
+    t.push_str("json\tparse\t@package.json\n");
+    t.push_str("json\tparse\t@broken.json\n");
+    t.push_str("json\tparse\t@deep.json\n");
+    t.push_str("sexpr\tparse\t(1 2 3)\n");
+    t.push_str("sexpr\tparse\t'foo '(bar baz)\n");
+    t.push_str("sexpr\tparse\t''foo\n");
+    t.push_str("sexpr\tparse\t#t #f\n");
+    t.push_str("sexpr\tparse\t\\n            ; a program with a comment\\n            (           foo ; that's a foo\\n            bar )\\n            ; some comments at the end\\n            \n");
+    t.push_str("sexpr\tparse\t(define (square x) (* x x))\n");
+    t.push_str("sexpr\tparse\t(1 2\n");
+    t.push_str("sexpr\tparse\t)\n");
+    t.push_str("sexpr\tparse\t\n");
+    t.push_str("sexpr\tparse\t@config.scm\n");
+    t.push_str("select\tparse\tSELECT thing, stuff, 123, 'hello' FROM my_table WHERE id = 1;\n");
+    t.push_str("select\tparse\tSELECT 1 FROM x;\n");
+    t.push_str("select\tparse\tSELECT name,email FROM users WHERE age >= 21 ;\n");
+    t.push_str("select\tparse\tSELECT a FROM t WHERE b <= -5;\n");
+    t.push_str("select\tparse\tSELECT a FROM t WHERE 'x' < y;\n");
+    t.push_str("select\tparse\tSELECT FROM t;\n");
+    t.push_str("select\tparse\tSELECT a FROM t WHERE b != 1;\n");
+    t.push_str("select\tparse\tSELECT a, FROM t;\n");
+    t.push_str("select\tparse\tselect a from t;\n");
+    t.push_str("select\tparse\tSELECT 'it''s' FROM t;\n");
+    t.push_str("logo\tpipe\tfd 1\\nbk 2\\nrt 90\\n\n");
+    t.push_str("logo\tpipe\t  fd 10\\n  lt 45 \\nfd 3\n");
+    t.push_str("logo\tpipe\t@square.logo\n");
+    t.push_str("logo\tpipe\tfd x\\n\n");
+    t.push_str("logo\tpipe\tfd 1\\nup 2\\n\n");
+    t.push_str("logo\tpipe\tfd 1 bk 2\\n\n");
+    t.push_str("eval\tpipe\t1 + 2\n");
+    t.push_str("eval\tpipe\t2 * (3 + 4)\n");
+    t.push_str("eval\tpipe\t7 / 2\n");
+    t.push_str("eval\tpipe\t1 / 3\n");
+    t.push_str("eval\tpipe\t-3 + +4\n");
+    t.push_str("eval\tpipe\t10 - 2 - 3\n");
+    t.push_str("eval\tpipe\t2 * 3.5 - .5\n");
+    t.push_str("eval\tpipe\t((1))\n");
+    t.push_str("eval\tpipe\t1 +\n");
+    t.push_str("eval\tpipe\t(1 + 2\n");
+    t.push_str("eval\tpipe\t1 2\n");
+    t.push_str("eval\tpipe\t4 / 8 * 2 + 0.125\n");
+    t.push_str("eval\tpipe\t1 $ 2\n");
+    t.push_str("ini\tparse\t@settings.ini\n");
+    t.push_str("ini\tparse\t@service.conf\n");
+    t.push_str("ini\tparse\t@bad_section.ini\n");
+    t.push_str("ini\tparse\t@bad_line.ini\n");
+    t.push_str("ini\tparse\t\n");
+    t.push_str("ini\tparse\ta=1\n");
+    t.push_str("ini\tparse\t[s]\\n\n");
+    t.push_str("ini\tparse\t[ s ] \\nk : v ; note\\n\n");
+    t.push_str("access_log\tlines\t@access.log\n");
+    t.push_str("csv\tparse\t@report.csv\n");
+    t.push_str("csv\tparse\t@crlf.csv\n");
+    t.push_str("csv\tparse\ta,b\\n1,2\n");
+    t.push_str("csv\tparse\ta,b\\n1,2\\n\n");
+    t.push_str("csv\tparse\t\n");
+    t.push_str("csv\tparse\t\"x\"y\"\n");
+    t.push_str("csv\tparse\t\"open\n");
+    t.push_str("csv\tparse\ta,\"b\\nc\",d\n");
+    t.push_str("csv\tparse\t,,\\n,\n");
+    t.push_str("http_request\tparse\t@get.http\n");
+    t.push_str("http_request\tparse\t@post.http\n");
+    t.push_str("http_request\tparse\t@folded.http\n");
+    t.push_str("http_request\tparse\t@no_blank.http\n");
+    t.push_str("http_request\tparse\tGET / HTTP/1.1\\r\\n\\r\\n\n");
+    t.push_str("http_request\tparse\tGET  / HTTP/1.1\\r\\n\\r\\n\n");
+    t.push_str("http_request\tparse\tget /x HTTP/2.0\\r\\n\\r\\n\n");
+    t.push_str("http_request\tparse\tGET /x HTTP/1\\r\\n\\r\\n\n");
+    t.push_str("semver_range\tparse\t>=1.2.3 <2.0.0\n");
+    t.push_str("semver_range\tparse\t^1.2.3 || ~2.4\n");
+    t.push_str("semver_range\tparse\t1.x\n");
+    t.push_str("semver_range\tparse\t1.2.3 - 2.3.4\n");
+    t.push_str("semver_range\tparse\t*\n");
+    t.push_str("semver_range\tparse\t=1.0.0-beta.2\n");
+    t.push_str("semver_range\tparse\t>= 1.2 <=1.9 || 3\n");
+    t.push_str("semver_range\tparse\t  ^0.0.1  \n");
+    t.push_str("semver_range\tparse\t>=01.2\n");
+    t.push_str("semver_range\tparse\t1.2.3 -\n");
+    t.push_str("semver_range\tparse\t\n");
+    t.push_str("semver_range\tparse\t~1.2.3-rc.1 || >2 <3 || 4.x.x\n");
+    t.push_str("query\tpipe\tstatus:open\n");
+    t.push_str("query\tpipe\tstatus:open AND owner:bob\n");
+    t.push_str("query\tpipe\tstatus:open owner:bob OR priority>2\n");
+    t.push_str("query\tpipe\tNOT (label:\"needs review\" OR label:wip) -draft\n");
+    t.push_str("query\tpipe\ttitle:\"disk full\" AND (host:db-1 OR host:db-2) AND age<=30\n");
+    t.push_str("query\tpipe\tprinter jam\n");
+    t.push_str("query\tpipe\t(a OR b\n");
+    t.push_str("query\tpipe\tstatus:\n");
+    t.push_str("query\tpipe\tAND x\n");
+    t.push_str("query\tpipe\tsize>=-5 NOT NOT x\n");
+    t.push_str("query\tpipe\towner:alice @mention\n");
+    t.push_str("query\tpipe\t\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), body: t });
+}
