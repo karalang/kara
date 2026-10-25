@@ -383,6 +383,7 @@ fn lower_program_inner<'a>(
         closures: FxHashMap::default(),
         closure_exprs: FxHashMap::default(),
         par_task_exprs: FxHashMap::default(),
+        isolating_task_exprs: FxHashMap::default(),
         par_for_task_exprs: FxHashMap::default(),
         counted_whiles: FxHashMap::default(),
         auto_par_wides: FxHashMap::default(),
@@ -907,6 +908,9 @@ struct Lcx<'a> {
     closure_exprs: FxHashMap<DefId, &'a Expr>,
     /// The closure each `par` branch runs as, by the branch's node.
     par_task_exprs: FxHashMap<NodeId, &'a Expr>,
+    /// The closure an isolating `spawn` of a function value runs as, by
+    /// the value's node.
+    isolating_task_exprs: FxHashMap<NodeId, &'a Expr>,
     /// The closure `|| { body }` a `par for` iteration runs as, by body.
     par_for_task_exprs: FxHashMap<*const Block, &'a Expr>,
     /// Each `while`'s counting shape, by the loop's node, or `None` when
@@ -19071,12 +19075,6 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// as a `return` or `?` in it leaves it. A panic in the task is the
     /// `Err` its handle holds instead.
     fn isolating_spawn(&mut self, object: &'a Expr, f: &'a CallArg, dest: Place) -> R<()> {
-        if !matches!(f.value.kind, ExprKind::Closure { .. }) {
-            return self.unsupported(
-                f.value.span,
-                "an isolating group's `spawn` of other than a closure written there",
-            );
-        }
         let Some(group_ty) = self.library_struct("TaskGroup", &[]) else {
             return self.unsupported(f.value.span, "`spawn` without the library's `TaskGroup`");
         };
@@ -19095,16 +19093,73 @@ impl<'l, 'a> Bx<'l, 'a> {
         let p = self.expr_place(object, false)?;
         let (p, _) = self.strip_refs(p);
         let gr = self.ref_to(p.field(0, group_ty), group_ty);
+        let task = match f.value.kind {
+            ExprKind::Closure { .. } => &f.value,
+            _ => self.isolating_task_expr(&f.value, vt),
+        };
         self.closure_task = true;
         self.closure_ret = Some((tt, Some(ok)));
         self.closure_exit = Some((vt, ok));
-        let made = self.closure_value(&f.value);
+        let made = self.closure_value(task);
         self.closure_task = false;
         self.closure_ret = None;
         self.closure_exit = None;
         let (c, _) = made?;
         self.call_native("TaskGroup.spawn", vec![gr, c], dest);
         Ok(())
+    }
+
+    /// The closure `own || f()` an isolating group's `spawn(f)` of a
+    /// function value runs as, `f`'s value of type `vt` (B-2026-10-25-22):
+    /// the value moves in, as the spawn takes it. One per call, kept for
+    /// every instance lowered.
+    fn isolating_task_expr(&mut self, f: &'a Expr, vt: Ty) -> &'a Expr {
+        if let Some(&t) = self.lcx.isolating_task_exprs.get(&f.id) {
+            return t;
+        }
+        let call = NodeId(self.lcx.next_synthetic_node);
+        let id = NodeId(self.lcx.next_synthetic_node - 1);
+        self.lcx.next_synthetic_node -= 2;
+        self.lcx.node_types.insert(call, vt);
+        // A function by name is called directly, so a panic in it reaches
+        // the task as any call's does; other values, and a generic
+        // function's instance, are called through.
+        let named = match self.lcx.res.get(&f.id) {
+            Some(&Res::Def(d)) => self.lcx.fns.get(&d).filter(|i| {
+                i.f.generic_params
+                    .as_ref()
+                    .is_none_or(|g| g.params.is_empty())
+            }),
+            _ => None,
+        };
+        let callee = match (named, self.lcx.res.get(&f.id)) {
+            (Some(_), Some(&Res::Def(d))) => Callee::Def(d),
+            _ => Callee::Value,
+        };
+        let substs = self.tys().tcx().empty_list();
+        self.lcx.calls.insert(call, ResolvedCall { callee, substs });
+        if let Some(&ft) = self.lcx.node_types.get(&f.id) {
+            self.lcx.node_types.insert(id, ft);
+        }
+        let t: &'a Expr = Box::leak(Box::new(Expr {
+            kind: ExprKind::Closure {
+                params: Vec::new(),
+                capture_mode: Some(ast::CaptureMode::Own),
+                prefix_span: None,
+                body: Box::new(Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(f.clone()),
+                        args: Vec::new(),
+                    },
+                    span: f.span,
+                    id: call,
+                }),
+            },
+            span: f.span,
+            id,
+        }));
+        self.lcx.isolating_task_exprs.insert(f.id, t);
+        t
     }
 
     /// The environment argument for calling the closure value `p` (of type

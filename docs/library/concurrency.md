@@ -156,7 +156,7 @@ impl[T] TaskHandle[T] {
   - Its `spawn` returns `TaskHandle[Result[T, TaskFailed]]`: `Ok` of the task's value (a `return` or `?` in the task leaves with its own value, so in `Ok`), or `Err`. `TaskFailed` is `Panicked { message, location }` or `Cancelled`, so `join` on a cancelled task of the group returns `Err(Cancelled)` rather than panicking.
   - A task that panics is torn down as a cancelled task is: its drops, `defer`s and `errdefer`s run (an `errdefer(e)` is skipped), and the groups it made are cancelled. Nothing is printed; the handle carries the message and the place, `file:line:column`. The group's other tasks run on.
   - Only the group's own tasks are isolated. A panic in `main`, in an ordinary group's task or in a `par` branch, a task of an isolating group's task included, ends the process.
-  - On the MIR interpreter (`karac __mir-run`, the corpus's `mir-interp` backend) today; the compiled backend follows (M4 item 9). `spawn` takes a closure written at the call; a named function is refused at build for now (B-2026-10-25-22).
+  - On the MIR interpreter (`karac __mir-run`, the corpus's `mir-interp` backend) today; the compiled backend follows (M4 item 9). `spawn` takes a closure or a function value, as `TaskGroup.spawn` does.
 
 An accept loop, one task per connection, at most 1000 at a time:
 
