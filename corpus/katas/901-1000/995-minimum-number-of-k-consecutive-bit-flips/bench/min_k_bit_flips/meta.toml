@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/995-minimum-number-of-k-consecutive-bit-flips/bench/min_k_bit_flips.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
-bucket = "e-differs:stdout"
-classified_with = "291d01b36"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 995 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "cf03c579f"
 extracted_src = "c2ff58dd"
