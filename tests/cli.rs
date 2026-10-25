@@ -7464,7 +7464,6 @@ fn test_test_failure_emits_left_right_and_location() {
 }
 
 #[test]
-#[ignore = "B-2026-10-25-23: v2 does not mark a panic inside a contract predicate"]
 fn test_test_failure_emits_contract_fault_category() {
     // phase-9 step 7: a `test_fail` event carries a typed `category` field for
     // contract faults — `contract_violated` (false predicate) vs

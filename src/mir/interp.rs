@@ -686,6 +686,7 @@ fn run_with(
         tracing_min: 0,
         debug_render: false,
         panic_message: None,
+        contract_depth: 0,
         abort_reported: false,
         panic_info: None,
         inline_tasks: Vec::new(),
@@ -1134,6 +1135,9 @@ struct Interp<'a> {
     debug_render: bool,
     /// `panic(msg)`'s message, shown when the run aborts.
     panic_message: Option<String>,
+    /// How many `requires` / `ensures` predicates are being evaluated: an
+    /// abort raised above 0 is the predicate's panic (B-2026-10-25-23).
+    contract_depth: u32,
     /// Whether an abort has been reported on stderr: the innermost frame
     /// reports it, where it happened.
     abort_reported: bool,
@@ -1950,6 +1954,14 @@ impl<'a> Interp<'a> {
             }
             ("panic_message", "") => {
                 self.panic_message = Some(self.show(&args, arg_tys)?);
+                Ok(Value::Unit)
+            }
+            ("contract_enter", "") => {
+                self.contract_depth += 1;
+                Ok(Value::Unit)
+            }
+            ("contract_exit", "") => {
+                self.contract_depth = self.contract_depth.saturating_sub(1);
                 Ok(Value::Unit)
             }
             // `forget(value)` takes the value and runs no drop for it, so
@@ -6463,10 +6475,10 @@ impl<'a> Interp<'a> {
             Err(Stop::Abort(reason)) if exit => {
                 let fresh = self.panic_slot().is_some_and(|p| p.is_none());
                 if fresh {
-                    let message = match (self.panic_message.take(), &reason) {
-                        (Some(m), _) => m,
-                        (None, r) => abort_text(r).to_string(),
-                    };
+                    let message = self.abort_message(&reason);
+                    // The task's frames, and any predicate among them, are
+                    // gone.
+                    self.contract_depth = 0;
                     let (file, line) = source_at(span.line);
                     let location = format!("{file}:{line}:{}", span.column);
                     if let Some(p) = self.panic_slot() {
@@ -10893,10 +10905,7 @@ impl<'a> Interp<'a> {
         if let Stop::Abort(reason) = &s {
             if !self.abort_reported && !in_library {
                 self.abort_reported = true;
-                let msg = match self.panic_message.take() {
-                    Some(m) => m,
-                    None => abort_text(reason).to_string(),
-                };
+                let msg = self.abort_message(reason);
                 let (file, line) = source_at(span.line);
                 let at = format!("{file}:{line}:{}", span.column);
                 self.write_out(
@@ -10907,6 +10916,22 @@ impl<'a> Interp<'a> {
             }
         }
         s
+    }
+
+    /// The message of an abort for `reason`: the panic's own, or the
+    /// reason's text, marked when it was raised while a contract predicate
+    /// was being evaluated, in it or in a function it calls (design.md §
+    /// Contracts rule 2, B-2026-10-25-23).
+    fn abort_message(&mut self, reason: &AbortReason) -> String {
+        let msg = match self.panic_message.take() {
+            Some(m) => m,
+            None => abort_text(reason).to_string(),
+        };
+        if self.contract_depth > 0 {
+            format!("contract predicate panicked: {msg}")
+        } else {
+            msg
+        }
     }
 
     /// The program's `#[panic_handler]`, once, after the panic record

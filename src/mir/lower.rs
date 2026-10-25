@@ -666,10 +666,12 @@ fn refs_only_receiver(tys: &TyInterner, t: Ty) -> bool {
 
 /// The natives the builder calls by bare name rather than through a
 /// definition.
-const BUILDER_NATIVES: [&str; 5] = [
+const BUILDER_NATIVES: [&str; 7] = [
     "format",
     "format_spec",
     "panic_message",
+    "contract_enter",
+    "contract_exit",
     "dbg",
     "debug_string",
 ];
@@ -4231,9 +4233,17 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn contract_check_here(&mut self, c: &'a Expr, what: &str) -> R<()> {
         let bool_t = self.tys().bool();
         let v = self.temp(bool_t);
+        // An abort while the predicate runs, in it or in a function it
+        // calls, is the predicate's panic rather than a violation (design.md
+        // § Contracts rule 2).
+        let unit = self.tys().unit();
+        let l = self.temp(unit);
+        self.call_native("contract_enter", Vec::new(), Place::local(l));
         self.push_scope();
         self.expr_into(c, Place::local(v))?;
         self.pop_scope()?;
+        let l = self.temp(unit);
+        self.call_native("contract_exit", Vec::new(), Place::local(l));
         let bad = self.b.new_block();
         let ok = self.b.new_block();
         self.goto_with(
@@ -4244,7 +4254,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             bad,
         );
         let msg = self.static_str(&format!("contract violated: {what} clause"));
-        let unit = self.tys().unit();
         let l = self.temp(unit);
         self.call_native("panic_message", vec![msg], Place::local(l));
         self.diverge(TerminatorKind::Abort {

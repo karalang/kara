@@ -2490,6 +2490,17 @@ pub(crate) fn deadlock(what: &str) -> ! {
     karac_mir_exit(101)
 }
 
+/// An abort's message, marked when it was raised while a contract
+/// predicate was being evaluated, in it or in a function it calls
+/// (design.md § Contracts rule 2, B-2026-10-25-23).
+fn abort_message(msg: String) -> String {
+    if crate::in_contract_predicate() {
+        format!("contract predicate panicked: {msg}")
+    } else {
+        msg
+    }
+}
+
 /// A runtime error: the message on standard error, then exit 101.
 ///
 /// # Safety
@@ -2500,10 +2511,10 @@ pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: u64) -> ! {
     if !panic_begins() {
         karac_mir_exit(101)
     }
-    // SAFETY: the caller's contract.
-    let msg = PANIC
-        .with(|p| p.borrow_mut().take())
-        .unwrap_or_else(|| String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned());
+    let msg = abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
+        // SAFETY: the caller's contract.
+        String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned()
+    }));
     write(true, format!("runtime error: {msg}\n").as_bytes());
     run_panic_handler(&msg, "");
     karac_mir_exit(101)
@@ -2527,10 +2538,10 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     if !panic_begins() {
         karac_mir_exit(101)
     }
-    // SAFETY: the caller's contract.
-    let msg = PANIC
-        .with(|p| p.borrow_mut().take())
-        .unwrap_or_else(|| String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned());
+    let msg = abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
+        // SAFETY: the caller's contract.
+        String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned()
+    }));
     // SAFETY: the caller's contract.
     let at = String::from_utf8_lossy(unsafe { bytes(at, at_len) });
     let report = if at.is_empty() {

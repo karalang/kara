@@ -1232,6 +1232,12 @@ pub extern "C" fn karac_runtime_enter_predicate() {
     CONTRACT_PREDICATE_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
 }
 
+/// Whether this thread is evaluating a contract predicate, for the MIR
+/// backend's abort report (B-2026-10-25-23).
+pub(crate) fn in_contract_predicate() -> bool {
+    CONTRACT_PREDICATE_DEPTH.with(|d| d.get() > 0)
+}
+
 /// Leave a contract-predicate evaluation context (decrement the depth).
 /// Saturating so an unbalanced exit can never underflow.
 #[no_mangle]

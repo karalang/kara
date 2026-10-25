@@ -719,6 +719,18 @@ impl<'ctx> Cx<'ctx, '_> {
                 let ms = self.int_arg(&args[0])?;
                 self.rt("sleep_ms", &[ms.into()])
             }
+            // The bracket around a `requires` / `ensures` predicate, which
+            // an abort inside it reads (B-2026-10-25-23).
+            ("contract_enter" | "contract_exit", "") => {
+                let name = if base == "contract_enter" {
+                    "karac_runtime_enter_predicate"
+                } else {
+                    "karac_runtime_exit_predicate"
+                };
+                let f = self.extern_fn(name, self.llcx.void_type().fn_type(&[], false));
+                self.builder.build_call(f, &[], "").map_err(e)?;
+                Ok(())
+            }
             ("panic_message", "") => {
                 self.rt("fmt_begin", &[])?;
                 self.fmt_args(args)?;
