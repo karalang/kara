@@ -96,7 +96,8 @@ All three were my mistakes, and `karac check` named each:
 - `m.get(k).copied().unwrap_or(0)` (twice) is `no method 'copied' on type
   'Option'`. Kāra's `Option[ref V]` has `.cloned()`, and for a `Copy`
   value the library's idiom is `m.get(k) ?? 0`, which the code uses now.
-  The message names neither, filed as B-2026-10-24-26.
+  The message named neither, filed as B-2026-10-24-26; Thread A fixed it
+  (kara 8e4b5d5263), so it now names both and `karac fix` writes `.cloned()`.
 
 After those edits it matched the mirror on the first run under the MIR
 interpreter, the LLVM backend, the ASan build and the native binary, with

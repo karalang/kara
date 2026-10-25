@@ -88,7 +88,9 @@ escapes (`foo\:bar`, `\-scan`), terms that match nothing with and without
 One, kara ledger row B-2026-10-24-42: `s.as_bytes()` on a `String`, at 13
 places, is a bare `no method 'as_bytes' on type 'String'` with no note or
 fix-it, though the method is `bytes()` and the typechecker's CStr table
-accepts `as_bytes`. The calls read `.bytes().to_vec()`.
+accepts `as_bytes`. The calls read `.bytes().to_vec()`, which is the
+library's method. Thread A fixed the row (kara 4f6892cea5): the message
+now names `bytes()` and `karac fix` rewrites the call.
 
 The rest of what `karac check` raised was mine: `K1` and `B` as constant
 names (a one-letter name is Type-class, as the message says; now

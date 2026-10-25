@@ -87,8 +87,8 @@ One, filed as B-2026-10-24-25: inside a method that writes `self`, a bare
 `karac check` refuses `self.pos += …` in the loop body (E0516). The
 checker resolves a name it cannot find among the locals to `self`
 (`root_of` in `src/typechecker/core_ref_write.rs`). The same loop in a
-free function, or over `PUNCT.iter()`, passes; the port uses `.iter()`
-with a comment naming the row.
+free function, or over `PUNCT.iter()`, passes. The port used `.iter()`
+until Thread A fixed the row (kara f0ada4a3b1); it is the bare loop again.
 
 `karac check` also found two of my mistakes: `for bs in
 get_array(...)` borrows each element, so moving one out takes

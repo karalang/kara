@@ -1810,9 +1810,7 @@ impl Lexer {
             self.pos += 2;
             return self.create(Tk.Dot, "?.".to_string());
         }
-        // .iter(): a bare `for` over the const is taken to borrow self
-        // (B-2026-10-24-25).
-        for p in PUNCT.iter() {
+        for p in PUNCT {
             if self.at(self.pos, p) {
                 let len = p.chars().count() as i64;
                 self.pos += len;
