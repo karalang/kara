@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 31 |
+| diagnostics | 32 |
 | false-positive | 28 |
 | missing-feature | 19 |
 | perf | 10 |
 | miscompile | 8 |
+| soundness | 6 |
 | run-vs-build | 6 |
-| soundness | 5 |
 | other | 2 |
 | codegen-gap | 2 |
 
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 19 |
 | interp | 16 |
 | cli | 13 |
-| ownership | 8 |
+| ownership | 10 |
 | runtime | 8 |
 | mir-llvm | 6 |
 | parser | 5 |
@@ -142,9 +142,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-13 | 2026-10-25 | typecheck | medium | The closure-kind walker calls three uses that move nothing a consume, so the closure is `OnceFn` and refused for an `Fn` slot: a capture passed to a user METHOD's parameter (bare or `ref`), a captured `shared` handle used as a value, and a `match` on a captured place whose arms bind nothing by move | — |
 | B-2026-10-25-14 | 2026-10-25 | ownership | low | `karac check` reports a capture of an ESCAPING closure as moved by its first use inside the body: two `size(prog)` calls (`p: ref Prog`) in one escaping closure are 'value prog moved here, used again here', while both MIR backends accept the program and print the right answer | — |
 | B-2026-10-25-15 | 2026-10-25 | ownership | low | The E0500 fix-it on a struct whose `Vec` element type is all-`Copy` inserts `#[derive(Copy)]` on the ELEMENT type ('add #[derive(Copy)] to Op ... so prog is copied'), which leaves the struct move-only; `karac fix` applies it and the same error remains | — |
-| B-2026-10-25-16 | 2026-10-25 | mir | medium | The MIR move check treats a `shared` handle captured by an ESCAPING closure as moved, so a second closure over it, or any later use, is 'use of _1, which may have been moved'; `karac check` accepts (handles count, §6.1 / §9.1) | — |
-| B-2026-10-25-17 | 2026-10-25 | mir+mir-llvm | high | A closure passed to a user function's `escaping` parameter that captures a BARE (borrowed) parameter of non-Copy type, or a field of one, captures it by reference: the closure outlives the frame, so build prints a wrong answer, `karac run` another, ASan reports a use-after-free and `__mir-run` stops; `karac check` accepts | — |
 | B-2026-10-25-18 | 2026-10-25 | mir | low | v2 project build (`karac build` with no file) does not print the legacy project-build reports (discovered modules, JSON output with resolve diagnostics, entry/src-dir refusals, manifest build target, wasm platform module, panic=unwind refusal) or the dependency summary; 12 cli tests ignored | — |
+| B-2026-10-25-19 | 2026-10-25 | ownership | low | `karac fix` applies both the `: Str` fix-it on a string-literal `let` (B-2026-10-24-33) and the ownership pass's `.clone()` fix-it for a 'moved' error on the same binding, and the combined result fails check: `Str.clone()` is a `String`, and the move only existed while the binding was a `String` | — |
+| B-2026-10-25-20 | 2026-10-25 | ownership | high | `karac check` accepts an ESCAPING closure that uses a bare (borrowed) non-Copy, non-handle parameter as a whole (`new_op(|x| x + size(p))`, `p: P` with a `String` field): the closure can neither move it out of the borrow nor outlive it, so v2 captures the reference and it dangles | — |
 
 ### Fixed
 
@@ -211,6 +211,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-42 | typecheck | low | `s.as_bytes()` on a `String` is a bare E0236 `no method 'as_bytes' on type 'String'` with no note and no fix-it, though `String.bytes()` is the metho… | 4f6892cea5 |
 | B-2026-10-24-43 | cli | medium | A package with more than one module cannot name a v2-only library item (`WsMessage`, `TlsFailure`): its per-module package check resolves against the… | 3c10118a4d |
 | B-2026-10-25-2 | mir-llvm | medium | A built program dies with exit 141 (SIGPIPE) when it writes to a child's stdin after the child exits; the MIR interpreter returns an error from the s… | e09926a988 |
+| B-2026-10-25-16 | mir | medium | The MIR move check treats a `shared` handle captured by an ESCAPING closure as moved, so a second closure over it, or any later use, is 'use of _1, w… | f6b4ec231b |
+| B-2026-10-25-17 | mir+mir-llvm | high | A closure passed to a user function's `escaping` parameter that captures a BARE (borrowed) parameter of non-Copy type, or a field of one, captures it… | f6b4ec231b |
 
 </details>
 
