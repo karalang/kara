@@ -248,7 +248,7 @@ fn fix_it_help_text_renders_per_variant() {
         .contains("Arc"));
     assert!(CrossTaskUnsafeFixIt::SharedToPar
         .help_text("Hub")
-        .contains("par"));
+        .contains("sync"));
     assert!(CrossTaskUnsafeFixIt::OnceCellToLock
         .help_text("OnceCell[i64]")
         .contains("OnceLock"));

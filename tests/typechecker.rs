@@ -31023,8 +31023,8 @@ fn spawn_capturing_shared_struct_rejected_with_par_fix_it() {
         cross_task.message,
     );
     assert!(
-        cross_task.message.contains("`par`"),
-        "fix-it text should suggest the `par` form, got: {}",
+        cross_task.message.contains("`sync`"),
+        "fix-it text should suggest the `sync` form, got: {}",
         cross_task.message,
     );
 }
@@ -31422,8 +31422,8 @@ fn channel_send_shared_struct_element_rejected() {
         cross_task.message,
     );
     assert!(
-        cross_task.message.contains("`par`"),
-        "shared-struct fix-it should suggest the `par` form, got: {}",
+        cross_task.message.contains("`sync`"),
+        "shared-struct fix-it should suggest the `sync` form, got: {}",
         cross_task.message,
     );
 }
@@ -31502,8 +31502,8 @@ fn with_provider_shared_struct_provider_rejected() {
         cross_task.message,
     );
     assert!(
-        cross_task.message.contains("`par`"),
-        "shared-struct fix-it should suggest the `par` form, got: {}",
+        cross_task.message.contains("`sync`"),
+        "shared-struct fix-it should suggest the `sync` form, got: {}",
         cross_task.message,
     );
 }
@@ -31715,7 +31715,7 @@ fn cross_task_diagnostic_renders_error_note_help_lines() {
     );
     // Line 3 — help line with the fix-it.
     assert!(
-        lines[2].starts_with("help: ") && lines[2].contains("`par`"),
+        lines[2].starts_with("help: ") && lines[2].contains("`sync`"),
         "help line malformed: {}",
         lines[2]
     );

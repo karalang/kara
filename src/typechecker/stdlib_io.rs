@@ -626,6 +626,22 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The cross-task check of a channel's element, once the sent value
+    /// has pinned an element its construction left open; an element known
+    /// before the send was checked then.
+    fn check_pinned_channel_elem(&mut self, elem: &Type, span: &Span) {
+        if !matches!(elem, Type::TypeVar(_)) {
+            return;
+        }
+        let pinned = resolve_type_var_top(elem, &self.env.substitutions);
+        if matches!(pinned, Type::TypeVar(_) | Type::Error) {
+            return;
+        }
+        if let Err(path) = is_cross_task_safe_with(&pinned, &self.env.structs, &self.env.enums) {
+            self.emit_cross_task_unsafe_value("value sent across a channel", &pinned, &path, span);
+        }
+    }
+
     /// The per-method body of [`infer_channel_method`], split out so the
     /// caller can re-record the (now-pinned) element type afterwards.
     fn infer_channel_method_arm(
@@ -719,6 +735,10 @@ impl<'a> super::TypeChecker<'a> {
                             self.check_assignable(&elem, &at, arg.value.span);
                         }
                     }
+                    // An element the channel's construction left open
+                    // (`let (tx, rx) = channel(4)`) is the sent value's
+                    // type, pinned just now: check it too (B-2026-10-25-37).
+                    self.check_pinned_channel_elem(&elem, span);
                     // The MIR pipeline has the spec's `send`
                     // (docs/library/concurrency.md § Channels;
                     // B-2026-10-15-11): a departed receiver hands the value
@@ -1081,6 +1101,10 @@ impl<'a> super::TypeChecker<'a> {
                             self.check_assignable(&elem, &at, arg.value.span);
                         }
                     }
+                    // An element the channel's construction left open
+                    // (`let (tx, rx) = channel(4)`) is the sent value's
+                    // type, pinned just now: check it too (B-2026-10-25-37).
+                    self.check_pinned_channel_elem(&elem, span);
                     // RE-RESOLVE, because `try_send` is the only channel
                     // method that both PINS the element from its argument and
                     // RETURNS a type mentioning it. On an unannotated

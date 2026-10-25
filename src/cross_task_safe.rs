@@ -109,7 +109,7 @@ impl CrossTaskUnsafeFixIt {
                 unsafe_leaf
             ),
             CrossTaskUnsafeFixIt::SharedToPar => format!(
-                "replace `{}` with the `par` form of the same type to allow cross-task sharing",
+                "declare `{}` as a `sync` type to allow cross-task sharing",
                 unsafe_leaf
             ),
             CrossTaskUnsafeFixIt::OnceCellToLock => format!(

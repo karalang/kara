@@ -13701,6 +13701,33 @@ fn a_method_on_an_associated_type_of_a_bound_takes_the_trait_declared_bounds() {
 }
 
 #[test]
+fn a_shared_value_cannot_be_sent_on_a_channel_whose_element_the_send_pins() {
+    // B-2026-10-25-37: `Sender.send` carries the CrossTask bound (design.md
+    // § CrossTask), so a plain `shared` value is refused at a send whose
+    // channel left its element open (`channel(4)`), as at one whose element
+    // was written; a `sync` value and a plain owned struct are sent.
+    let program = |decl: &str| {
+        format!(
+            "{decl} struct Counter {{\n    n: i64,\n}}\nfn main() {{\n    \
+             let (tx, rx) = channel(4);\n    let _ = tx.send(Counter {{ n: 1 }});\n    \
+             println(rx.recv().unwrap().n);\n}}\n"
+        )
+    };
+    rejected_with(
+        "shared-sent-on-a-channel",
+        &program("shared"),
+        "value sent across a channel (type `Counter`) cannot cross a task boundary",
+    );
+    rejected_with(
+        "shared-sent-on-a-channel-help",
+        &program("shared"),
+        "help: declare `Counter` as a `sync` type",
+    );
+    accepted_and_runs("sync-sent-on-a-channel", &program("sync"), "1\n");
+    accepted_and_runs("plain-sent-on-a-channel", program("").trim_start(), "1\n");
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is
