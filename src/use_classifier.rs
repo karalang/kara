@@ -1055,7 +1055,12 @@ impl<'a> UseClassifier<'a> {
                         .get(&object.id)
                         .map(|(t, _)| t)
                         .or_else(|| self.tc.expr_types.get(&SpanKey::from_span(&object.span)))
-                        .is_some_and(|t| {
+                        .is_some_and(|mut t| {
+                            // A borrow is copied, but the method takes what it
+                            // points at (B-2026-10-25-25).
+                            while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                                t = inner;
+                            }
                             self.is_copy_type(t)
                                 || type_counts_or_copies(
                                     t,

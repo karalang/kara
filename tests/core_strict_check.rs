@@ -13374,6 +13374,55 @@ fn a_package_check_refuses_what_the_v2_check_of_its_combined_source_does() {
 }
 
 #[test]
+fn an_own_self_method_on_a_borrowed_receiver_is_a_move_out_of_the_borrow() {
+    // B-2026-10-25-25: a method taking `own self` (`unwrap`, a user `take`)
+    // called on a borrowed receiver, a `ref` parameter, a bare one (D5) or
+    // a bare `for` element of one, moves out of the borrow (core-semantics
+    // §3.7), as the MIR builder refuses it; the fix calls it on a copy. A
+    // `Copy` receiver behind the borrow is copied and stays legal.
+    let shapes = [
+        (
+            "ref-param",
+            "fn f(o: ref Option[String]) -> i64 {\n    o.unwrap().len()\n}\n",
+            "o.clone().unwrap()",
+        ),
+        (
+            "bare-param",
+            "fn f(o: Option[String]) -> i64 {\n    o.unwrap().len()\n}\n",
+            "o.clone().unwrap()",
+        ),
+        (
+            "for-over-param",
+            "fn f(v: Vec[Option[String]]) -> i64 {\n    let mut n = 0;\n    \
+             for o in v {\n        n += o.unwrap().len();\n    }\n    n\n}\n",
+            "o.clone().unwrap()",
+        ),
+        (
+            "user-method",
+            "#[derive(Clone)]\nstruct S { s: String }\nimpl S {\n    \
+             fn take(own self) -> String {\n        self.s\n    }\n}\n\
+             fn f(x: ref S) -> i64 {\n    x.take().len()\n}\n",
+            "x.clone().take()",
+        ),
+    ];
+    for (tag, f, edit) in shapes {
+        let src = format!("{f}fn main() {{\n    println(\"x\");\n}}\n");
+        rejected_then_fixed_by(
+            &format!("own-self-borrowed-{tag}"),
+            &src,
+            "cannot move a non-`Copy` value out of a borrowed place: this method takes `self` by value",
+            edit,
+        );
+    }
+    accepted_and_runs(
+        "own-self-borrowed-copy",
+        "fn f(o: ref Option[i64]) -> i64 {\n    o.unwrap()\n}\nfn main() {\n    \
+         let o = Some(4);\n    println(f\"{f(o)} {o.is_some()}\");\n}\n",
+        "4 true\n",
+    );
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is
