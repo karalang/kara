@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 10 |
 | miscompile | 7 |
 | soundness | 5 |
-| run-vs-build | 4 |
+| run-vs-build | 5 |
 | other | 2 |
 | codegen-gap | 2 |
 
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 11 |
 | runtime | 8 |
 | ownership | 6 |
-| mir-llvm | 4 |
+| mir-llvm | 5 |
 | parser | 4 |
 | other | 2 |
 | resolver | 1 |
@@ -134,6 +134,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-38 | 2026-10-24 | cli | low | `karac fix` still answers E_INDEX_MOVE_NON_COPY on a DESTRUCTURING `let (a, b) = cases[i];` (both parts only read) with `.clone()`, a deep copy of the element, instead of the `ref cases[i]` borrow the message lists first; B-2026-10-24-18's borrow fix covers only a plain `let t = v[i];` | — |
 | B-2026-10-24-43 | 2026-10-24 | cli | medium | A package with more than one module cannot name a v2-only library item (`WsMessage`, `TlsFailure`): its per-module package check resolves against the legacy library registrations, so `karac check` AND `karac build` refuse it (`undefined type 'WsMessage'`), though the same code in a lone `src/main.kara` checks and builds | — |
 | B-2026-10-25-1 | 2026-10-25 | interp+mir-llvm | low | Indexing a `Map` with a missing key (`m[k]`, `m[k] -= 1`) stops with `runtime error: explicit panic` under `__mir-run` and `__mir-llvm-run`, a message that names no key and reads as if the program had called `panic`, where an out-of-range `Vec` index says `index out of bounds` | — |
+| B-2026-10-25-2 | 2026-10-25 | mir-llvm | medium | A built program dies with exit 141 (SIGPIPE) when it writes to a child's stdin after the child exits; the MIR interpreter returns an error from the same write | — |
 
 ### Fixed
 

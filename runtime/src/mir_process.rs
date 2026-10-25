@@ -22,6 +22,30 @@ enum StdioCfg {
     Err(Option<ChildStderr>),
 }
 
+/// Ignores `SIGPIPE`, once, before the first child with a piped stdin
+/// starts. A write to that pipe after the child exits then fails with
+/// `BrokenPipe`, as it does on the MIR interpreter, where Rust's own start
+/// up ignores the signal; a compiled `main` skips that start up, so the
+/// write killed the program (exit 141). The child gets the default back
+/// (std's `Command` resets it before `exec`).
+fn ignore_sigpipe() {
+    #[cfg(unix)]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            extern "C" {
+                fn signal(sig: i32, handler: usize) -> usize;
+            }
+            const SIGPIPE: i32 = 13;
+            const SIG_IGN: usize = 1;
+            // SAFETY: setting a disposition, with no handler to run.
+            unsafe {
+                signal(SIGPIPE, SIG_IGN);
+            }
+        });
+    }
+}
+
 /// A spawned child, and the descriptor its `wait` readiness loop waits on
 /// ([`karac_mir_child`] op 8): -2 until asked, -1 when there is none.
 /// `child` is `None` once `wait_with_output` took it.
@@ -314,9 +338,12 @@ pub unsafe extern "C" fn karac_mir_command(
         // SAFETY: the caller's contract.
         cmd.current_dir(unsafe { text(dir) });
     }
+    let mut stdin_piped = false;
     for i in 0..3 {
         // SAFETY: `stdio` holds three handles.
         let h = unsafe { *stdio.add(i) };
+        // SAFETY: a non-null entry is a live `Stdio`.
+        let piped = !h.is_null() && matches!(unsafe { &*h.cast::<StdioCfg>() }, StdioCfg::Piped);
         let cfg = if !h.is_null() {
             // SAFETY: a non-null entry is a live `Stdio`.
             match unsafe { to_std(h) } {
@@ -331,6 +358,7 @@ pub unsafe extern "C" fn karac_mir_command(
         } else {
             std::process::Stdio::piped()
         };
+        stdin_piped |= i == 0 && piped;
         match i {
             0 => cmd.stdin(cfg),
             1 => cmd.stdout(cfg),
@@ -340,6 +368,9 @@ pub unsafe extern "C" fn karac_mir_command(
     // The child writes to the same streams, so what the program printed
     // before it goes out first (docs/library/io.md § Buffering).
     crate::mir::out_flush();
+    if stdin_piped {
+        ignore_sigpipe();
+    }
     let res = cmd.spawn().and_then(|child| {
         if output == 0 {
             #[cfg(all(feature = "net", unix))]
