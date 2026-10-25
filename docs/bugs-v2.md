@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 10 |
 | soundness | 9 |
 | miscompile | 8 |
-| run-vs-build | 6 |
+| run-vs-build | 7 |
 | other | 2 |
 | codegen-gap | 2 |
 | crash | 1 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 56 |
-| mir | 27 |
+| mir | 28 |
 | codegen | 22 |
 | interp | 19 |
 | cli | 16 |
@@ -147,6 +147,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-42 | 2026-10-25 | typecheck | medium | A `sync struct` field of a plain `shared` type is accepted, so a `shared` handle reaches another task inside a `sync` value | — |
 | B-2026-10-25-43 | 2026-10-25 | ownership | medium | A self-referential `sync enum` (`sync enum Tree { Leaf(i64), Pair(Tree, Tree) }`) is refused as an ownership cycle, where the `shared enum` twin is accepted | — |
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
+| B-2026-10-25-45 | 2026-10-25 | mir | low | A `weak T` local (`let w: weak N = a;`) passes `karac check` but every MIR backend refuses it: "a type that failed to check is not lowered yet" at its first use | — |
 
 ### Fixed
 
