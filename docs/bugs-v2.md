@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 34 |
+| diagnostics | 36 |
 | false-positive | 34 |
-| missing-feature | 26 |
+| missing-feature | 27 |
 | perf | 10 |
 | miscompile | 8 |
 | soundness | 8 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 55 |
 | mir | 26 |
 | codegen | 22 |
-| interp | 17 |
+| interp | 19 |
 | cli | 16 |
 | ownership | 11 |
-| runtime | 8 |
+| runtime | 9 |
 | mir-llvm | 7 |
 | parser | 6 |
 | other | 2 |
-| resolver | 1 |
+| resolver | 2 |
+| effect | 2 |
 | lexer | 1 |
-| effect | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-25). Do not edit this block by hand; edit the ledger and regenerate._
@@ -149,6 +149,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-36 | 2026-10-25 | mir | medium | A match-arm binding moved into a `TaskGroup.spawn` closure that passes it to a function value (`Some(s) => { g.spawn(|| f(s)); }`, `f` an `own Fn(own String)` parameter) checks clean, but the MIR build refuses it: `cannot move a non-Copy value out of a borrowed place` | — |
 | B-2026-10-25-37 | 2026-10-25 | typecheck | medium | `tx.send(v)` accepts a plain `shared` value (a `channel(4)` of a `shared struct`), so a `shared` handle can reach another task through a channel; and the TaskGroup E_NOT_CROSS_TASK help still says "the `par` form" where Amendment 6 named it `sync` | — |
 | B-2026-10-25-38 | 2026-10-25 | cli | medium | In a package, a module's own function named like a library function (`pub fn take(b: own Box2)` in ast.kara) captures that name in every other module through the combined source, so a module that never imports it and calls `std.mem`'s `take(mut x)` is refused with `expected 'Box2', found 'i64'` | — |
+| B-2026-10-25-39 | 2026-10-25 | interp | low | A panic raised in a library body inside an isolating task (`i64.parse(s).unwrap()` on `Err`, `none.unwrap()`) records a line of the appended library as `TaskFailed.Panicked`'s `location` on mir-interp (`main.kara:320:23`), where the built binary and the process-ending report name the program's call (`main.kara:2:13`) | — |
+| B-2026-10-25-40 | 2026-10-25 | resolver+effect | low | A channel operation's effect cannot be declared: the effect checker charges a stored callback that receives on a channel with `receives(Channel)` and asks the slot's clause for it, but a clause naming `receives(Channel)` is refused by the resolver (`'Channel' is not an effect resource (it is a prelude type or trait)`) | — |
+| B-2026-10-25-41 | 2026-10-25 | runtime+interp | medium | Server.serve/serve_tls/serve_ws/serve_ws_tls serve connections one at a time; a stalled handshake or request blocks the accept loop | — |
 
 ### Fixed
 
