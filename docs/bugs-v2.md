@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 33 |
 | false-positive | 30 |
-| missing-feature | 22 |
+| missing-feature | 24 |
 | perf | 10 |
 | miscompile | 8 |
 | soundness | 7 |
@@ -74,8 +74,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 51 |
+| mir | 23 |
 | codegen | 22 |
-| mir | 21 |
 | interp | 17 |
 | cli | 14 |
 | ownership | 11 |
@@ -128,7 +128,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-31 | 2026-10-24 | parser | low | A reserved keyword (`and`) bound by a `for` loop, or as a match-arm pattern, gets the right "reserved keyword" error and then cascade errors: `Expected expression, found RightBrace` and, for the loop, a false `file contains both top-level statements and an explicit fn main()` that points at a statement inside `main` | — |
 | B-2026-10-24-38 | 2026-10-24 | cli | low | `karac fix` still answers E_INDEX_MOVE_NON_COPY on a DESTRUCTURING `let (a, b) = cases[i];` (both parts only read) with `.clone()`, a deep copy of the element, instead of the `ref cases[i]` borrow the message lists first; B-2026-10-24-18's borrow fix covers only a plain `let t = v[i];` | — |
 | B-2026-10-25-1 | 2026-10-25 | interp+mir-llvm | low | Indexing a `Map` with a missing key (`m[k]`, `m[k] -= 1`) stops with `runtime error: explicit panic` under `__mir-run` and `__mir-llvm-run`, a message that names no key and reads as if the program had called `panic`, where an out-of-range `Vec` index says `index out of bounds` | — |
-| B-2026-10-25-3 | 2026-10-25 | mir | low | v2 prints no error return trace for a `?` chain: `main` returning a propagated `Err` prints `Error: e` alone on both backends, and a panic's trace is only its own location, though design.md § Error return traces records each `?` site on the way (2 cli tests ignored) | — |
 | B-2026-10-25-6 | 2026-10-25 | typecheck | medium | An array or `Vec` literal whose elements carry unsolved inference variables is refused by `karac check`: `[Vec.new(), Vec.new()]` as `expected 'Vec[?T0]', found 'Vec[?T1]'`, and `[None, Some(1)]` as `cannot infer type parameter 'T'`. Later elements are compared with the first without unifying, while `[Some(1), None]` and an `if`/`else` join of the same values pass | — |
 | B-2026-10-25-7 | 2026-10-25 | typecheck | low | E0516 on `self.m(self.f)`, where `m` takes `mut ref self` and `f` is passed to a `ref` parameter, names the method call as the place of the shared borrow (`the borrow is taken at 16:9`, the same span the error points at) instead of the argument `self.f`, and offers no fix, though `.clone()` on the argument is the mechanical one when the field's type is Clone | — |
 | B-2026-10-25-8 | 2026-10-25 | parser | low | `Ok(mut b) => b.final()` in a match arm gets only prose ("rebind it where it is used: `let mut b = b;`") and no machine-applicable fix, so `karac fix` leaves it, though the edit is mechanical | — |
@@ -146,6 +145,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-26 | 2026-10-25 | cli | medium | `karac fix` on a file of a package fixes it as a single file: it cannot see the package's other modules, so a resolver 'did you mean' rewrites a correct name to an unrelated one (`Enum(n)` -> `Env(n)` in a `match` on an imported enum) in a program `karac check` and `karac run` accept | — |
 | B-2026-10-25-27 | 2026-10-25 | parser | medium | A function type's effect clause holds one effect: `Fn(A) -> R with writes(Stdout), receives(Channel), blocks` does not parse in a struct field (the comma ends the field), in parentheses, or in a `type` alias, so a stored callback that does two kinds of effect cannot be declared | — |
 | B-2026-10-25-28 | 2026-10-25 | typecheck | low | A spawned closure that moves one half of a destructured tuple into an array literal (`group.spawn(|| count([rx]))` after `let (tx, rx) = channel(1)`) makes the checker treat the other half as borrowed by the task: a later `let _ = tx;` is refused with `tx is moved while a task of group borrows it` | — |
+| B-2026-10-25-29 | 2026-10-25 | mir | low | The error return trace's JSON frames carry `file`, `line` and `column` but not design.md's `expr` (the `?` expression's text) or `context` (a `.context()` message), on both v2 executors | — |
+| B-2026-10-25-30 | 2026-10-25 | mir | low | A `?` chain that crosses a task boundary prints the frames left on the exiting thread instead of design.md's `Error return trace: unavailable (the ? chain was split across parallel tasks)`; waits on M4 item 10's pool | — |
 
 ### Fixed
 
@@ -214,6 +215,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-42 | typecheck | low | `s.as_bytes()` on a `String` is a bare E0236 `no method 'as_bytes' on type 'String'` with no note and no fix-it, though `String.bytes()` is the metho… | 4f6892cea5 |
 | B-2026-10-24-43 | cli | medium | A package with more than one module cannot name a v2-only library item (`WsMessage`, `TlsFailure`): its per-module package check resolves against the… | 3c10118a4d |
 | B-2026-10-25-2 | mir-llvm | medium | A built program dies with exit 141 (SIGPIPE) when it writes to a child's stdin after the child exits; the MIR interpreter returns an error from the s… | e09926a988 |
+| B-2026-10-25-3 | mir | low | v2 prints no error return trace for a `?` chain: `main` returning a propagated `Err` prints `Error: e` alone on both backends, and a panic's trace is… | f2ff086fc1 |
 | B-2026-10-25-4 | cli | medium | A package with more than one module is checked without D5: its per-module passes and late phases read a bare parameter as owned, so the check in fron… | f36a5e4595 |
 | B-2026-10-25-5 | cli | medium | `karac check` on a package with more than one module runs only the module-aware package check, not the v2 check of the combined source that `karac ru… | 3baf757f4d |
 | B-2026-10-25-16 | mir | medium | The MIR move check treats a `shared` handle captured by an ESCAPING closure as moved, so a second closure over it, or any later use, is 'use of _1, w… | f6b4ec231b |
