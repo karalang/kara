@@ -1142,14 +1142,16 @@ impl<'ctx> Cx<'ctx, '_> {
             // `limit`, which a spawn waits on under the executor
             // (B-2026-10-15-30); a plain spawn runs its task to completion,
             // so none waits on it there.
-            ("TaskGroup", "new", [] | [_]) => {
+            // An isolating group (core-semantics §11.12) is the one group
+            // it holds, which the runtime marks as taking its tasks' panics.
+            ("TaskGroup", "new" | "isolating", [] | [_]) => {
                 let limit = match args {
                     [l] => self.int_arg(l)?,
                     _ => self.i64(i64::MAX as u64),
                 };
                 let p = self.ptr_ty();
                 let f = self.extern_fn(
-                    "karac_mir_group_new",
+                    &format!("karac_mir_group_{method}"),
                     p.fn_type(&[self.llcx.i64_type().into()], false),
                 );
                 let g = self
@@ -1158,7 +1160,10 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?
                     .try_as_basic_value()
                     .unwrap_basic();
-                let d = self.place_ptr(dest)?;
+                let mut d = self.place_ptr(dest)?;
+                if method == "isolating" {
+                    d = self.offset(d, self.field_offset(dty, None, 0)?)?;
+                }
                 self.store(d, g)?;
             }
             // `end` waits in its readiness loop; the drop frees the group.

@@ -325,6 +325,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_io_again,
         mir_task::karac_mir_ready_group,
         mir_task::karac_mir_group_new,
+        mir_task::karac_mir_group_isolating,
         mir_task::karac_mir_group_drop,
         mir_task::karac_mir_group_cancel,
         mir_task::karac_mir_group_deadline,
@@ -409,6 +410,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_panic_set,
         mir::karac_mir_abort,
         mir::karac_mir_abort_at,
+        mir::karac_mir_panic_at,
+        mir::karac_mir_task_failure,
         mir::karac_mir_error_trace_push,
         mir::karac_mir_error_trace_clear,
         mir::karac_mir_error_trace_print,
@@ -1238,6 +1241,13 @@ thread_local! {
 #[no_mangle]
 pub extern "C" fn karac_runtime_enter_predicate() {
     CONTRACT_PREDICATE_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+}
+
+/// Leaves every contract predicate this thread is evaluating, for a panic
+/// a task of an isolating group took (core-semantics §11.12): the frames
+/// that evaluated them are gone.
+pub(crate) fn leave_predicates() {
+    CONTRACT_PREDICATE_DEPTH.with(|d| d.set(0));
 }
 
 /// Whether this thread is evaluating a contract predicate, for the MIR

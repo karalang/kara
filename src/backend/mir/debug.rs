@@ -298,7 +298,10 @@ impl<'ctx> Cx<'ctx, '_> {
                     ..
                 } => {
                     if let ConstKind::FnDef(inst) = &c.kind {
-                        aborts = self.may_abort(&inst.name);
+                        // In a program with an isolating group, an `Abort`
+                        // is a call of `__panic` (core-semantics §11.12).
+                        aborts =
+                            inst.name == crate::mir::coroutine::PANIC || self.may_abort(&inst.name);
                     }
                 }
                 _ => {}

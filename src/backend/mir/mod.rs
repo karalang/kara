@@ -189,6 +189,14 @@ pub struct Cx<'ctx, 'p> {
     /// Whether the program calls suspending functions through values
     /// (`callable.rs`), once asked.
     dyn_fns: Option<bool>,
+    /// Whether the program makes an isolating group (core-semantics
+    /// §11.12), once asked.
+    isolating: Option<bool>,
+    /// While a native call with a cancel exit is lowered in a program that
+    /// makes an isolating group: the block the call returns to, which a
+    /// panic the running task takes inside the native jumps to, to leave
+    /// by that exit (`body.rs`'s `abort_with`).
+    contain_to: Option<inkwell::basic_block::BasicBlock<'ctx>>,
     /// Bodies declared and not lowered yet.
     todo: Vec<&'p Body>,
     /// The bodies already put on `todo`.
@@ -244,6 +252,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             keys: key::Keys::default(),
             shims: callable::Shims::default(),
             dyn_fns: None,
+            isolating: None,
+            contain_to: None,
             todo: Vec::new(),
             scheduled: std::collections::HashSet::new(),
             vfns: HashMap::new(),

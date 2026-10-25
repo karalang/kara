@@ -677,7 +677,7 @@ Pin: `par_error_runs_siblings`.
 - Everywhere else (`par {}`, `par for`, an ordinary `TaskGroup` and `main`), a panic still ends the process as §10.2 says.
 - A server writes one isolating group per accept loop, so a bad request ends its own connection's task, not the server.
 - In a program that makes an isolating group, every call that may panic gets the same exit a cancel point has, and the teardown leaves by it. A call that cannot panic (by the effects analysis) needs none.
-- As of 2026-10-25 this runs on the MIR interpreter (c2f859dacc); `karac build` refuses `TaskGroup.isolating` until the compiled half of M4 item 9 lands.
+- As of 2026-10-25 this runs on the MIR interpreter (c2f859dacc) and in built binaries (M4 item 9's compiled half). A panic inside a library native's work (a bounds check, a comparator `sort_by` calls) ends the native there, and its call leaves by the exit.
 
 ---
 

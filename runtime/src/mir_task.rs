@@ -112,6 +112,8 @@ struct Group {
     owner: u64,
     /// When it is cancelled (`with_deadline`, §11.10).
     deadline: Option<Instant>,
+    /// It contains its tasks' panics (`TaskGroup.isolating`, §11.12).
+    isolating: bool,
 }
 
 struct Task {
@@ -218,6 +220,10 @@ struct Exec {
     /// Called with a task's id when it ends, returned or torn down
     /// ([`on_task_end`]).
     hooks: Vec<fn(u64)>,
+    /// The panics of the tasks of isolating groups that panicked (§11.12),
+    /// by task id: the message and the location, which the task's handle
+    /// takes once its frame has left by its exits ([`task_failure`]).
+    panics: HashMap<u64, (String, String)>,
 }
 
 impl Exec {
@@ -335,10 +341,89 @@ pub extern "C" fn karac_mir_group_new(limit: i64) -> *mut u8 {
             dropped: false,
             owner: e.cur.map_or(0, |c| c.id),
             deadline: None,
+            isolating: false,
         }));
         let id = e.group_ids;
         e.groups.insert(id, g);
         g as *mut u8
+    })
+}
+
+/// `TaskGroup.isolating(limit: n)` (core-semantics §11.12): a group as
+/// `karac_mir_group_new` makes one, whose tasks' panics end the task, not
+/// the process.
+#[no_mangle]
+pub extern "C" fn karac_mir_group_isolating(limit: i64) -> *mut u8 {
+    let g = karac_mir_group_new(limit);
+    // SAFETY: just made, and live.
+    unsafe { (*(g as *mut Group)).isolating = true };
+    g
+}
+
+/// A panic (core-semantics §11.12): when the running task is a task of an
+/// isolating group, it takes the panic. The first panic's `message()` and
+/// `location` are recorded for its handle, the groups the task made are
+/// cancelled, as for a cancelled task (§11.9), and its frame chain leaves
+/// by its cancel exits, as a teardown does; answers true. A panic while
+/// one unwinds keeps the first. Anywhere else answers false, and the
+/// caller ends the process.
+pub(crate) fn contain_panic(message: impl FnOnce() -> String, location: &str) -> bool {
+    let Some(id) = EXEC.with(|e| {
+        let e = e.borrow();
+        let c = e.cur?;
+        // SAFETY: a group outlives its tasks.
+        (!c.group.is_null() && unsafe { (*c.group).isolating }).then_some(c.id)
+    }) else {
+        return false;
+    };
+    let fresh = EXEC.with(|e| !e.borrow().panics.contains_key(&id));
+    if fresh {
+        let message = message();
+        EXEC.with(|e| {
+            e.borrow_mut()
+                .panics
+                .insert(id, (message, location.to_string()))
+        });
+        let mut owned: Vec<(u64, *mut Group)> = EXEC.with(|e| {
+            e.borrow()
+                .groups
+                .iter()
+                // SAFETY: a registered group is live.
+                .filter(|(_, &g)| unsafe { (*g).owner } == id)
+                .map(|(&gid, &g)| (gid, g))
+                .collect()
+        });
+        owned.sort_by_key(|&(gid, _)| gid);
+        for (_, g) in owned {
+            cancel_where(|c| c.group == g);
+        }
+    }
+    EXEC.with(|e| {
+        if let Some(c) = e.borrow_mut().cur.as_mut() {
+            c.unwind = true;
+        }
+    });
+    true
+}
+
+/// Why the running task, whose frame left by its cancel exits, gave no
+/// value: 0 when it is no task of an isolating group, 1 when it was
+/// cancelled, and 2 when it panicked, with the panic's message and
+/// location, taken (§11.12).
+pub(crate) fn task_failure() -> (u8, Option<(String, String)>) {
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let Some(c) = e.cur else {
+            return (0, None);
+        };
+        // SAFETY: a group outlives its tasks.
+        if c.group.is_null() || !unsafe { (*c.group).isolating } {
+            return (0, None);
+        }
+        match e.panics.remove(&c.id) {
+            Some(p) => (2, Some(p)),
+            None => (1, None),
+        }
     })
 }
 
@@ -434,6 +519,7 @@ fn task_done(t: &Task) {
         }
     }
     bump();
+    EXEC.with(|e| e.borrow_mut().panics.remove(&t.id));
     let hooks = EXEC.with(|e| e.borrow().hooks.clone());
     for h in hooks {
         h(t.id);

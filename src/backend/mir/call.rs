@@ -12,7 +12,10 @@ use inkwell::IntPredicate;
 use super::{Cx, R};
 use crate::mir::interp::split_method;
 use crate::mir::ty::{IntTy, IntrinsicTy};
-use crate::mir::{BasicBlock, Const, ConstKind, Operand, Place, Ty, TyKind};
+use crate::mir::{
+    coroutine, AbortReason, BasicBlock, Const, ConstKind, Operand, Place, TerminatorKind, Ty,
+    TyKind,
+};
 use crate::token::Span;
 
 fn e<T: ToString>(x: T) -> String {
@@ -38,7 +41,19 @@ impl<'ctx> Cx<'ctx, '_> {
                 } else if let Some(sig) = program.externs.get(&inst.name) {
                     self.foreign_call(&inst.name, sig, args, dest)?;
                 } else {
-                    self.native(&inst.name, args, dest)?;
+                    // A panic inside it, in a task of an isolating group,
+                    // leaves by the call's cancel exit (§11.12).
+                    let exit = match target {
+                        Some(t) if self.isolating() => {
+                            let body = self.cur()?;
+                            coroutine::has_cancel_exit(body, t).then(|| self.blocks[t.index()])
+                        }
+                        _ => None,
+                    };
+                    let outer = std::mem::replace(&mut self.contain_to, exit);
+                    let r = self.native(&inst.name, args, dest);
+                    self.contain_to = outer;
+                    r?;
                 }
             }
             _ => self.call_value(func, args, dest)?,
@@ -51,6 +66,30 @@ impl<'ctx> Cx<'ctx, '_> {
             None => self.builder.build_unreachable().map_err(e)?,
         };
         Ok(())
+    }
+
+    /// Whether the program makes an isolating group (core-semantics §11.12),
+    /// whose tasks take their panics.
+    pub(super) fn isolating(&mut self) -> bool {
+        if self.isolating.is_none() {
+            let any = self.program.bodies.values().any(|b| {
+                b.blocks.iter().any(|d| {
+                    matches!(&d.terminator.kind, TerminatorKind::Call {
+                        func: Operand::Const(Const { kind: ConstKind::FnDef(i), .. }),
+                        ..
+                    } if i.name == coroutine::ISOLATING)
+                })
+            });
+            self.isolating = Some(any);
+        }
+        self.isolating == Some(true)
+    }
+
+    /// The block a panic inside the native being lowered leaves to, when
+    /// it is in this function ([`Cx::contain_to`]).
+    pub(super) fn contain_block(&self) -> Option<inkwell::basic_block::BasicBlock<'ctx>> {
+        let here = self.builder.get_insert_block()?.get_parent();
+        self.contain_to.filter(|b| b.get_parent() == here)
     }
 
     /// A temporary in the entry block that can hold a `ty`.
@@ -693,6 +732,23 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.fn_value_native(base == "__fn_start", args, dest)
             }
             ("__frame_start", "") => self.frame_start(args, dest),
+            // An `Abort` in a program with an isolating group: a task of
+            // one takes it, and the call's cancel exit leaves; anywhere
+            // else it aborts, as the `Abort` would have (§11.12).
+            ("__panic", "") => {
+                let code = match args {
+                    [Operand::Const(Const {
+                        kind: ConstKind::Scalar(n),
+                        ..
+                    })] => *n as i128,
+                    _ => return Err("__panic takes a constant reason".into()),
+                };
+                let reason = AbortReason::from_code(code)
+                    .ok_or_else(|| format!("__panic of reason {code}"))?;
+                let (s, n) = self.str_const(Self::abort_text(&reason))?;
+                let (at, at_n) = self.abort_site()?;
+                self.rt("panic_at", &[s.into(), n.into(), at.into(), at_n.into()])
+            }
             ("__unwind", "") => {
                 let on = self.operand_scalar(&args[0])?.into_int_value();
                 let on = self

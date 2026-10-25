@@ -98,14 +98,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 ..
             } => self.call(func, args, destination, *target)?,
             TerminatorKind::Abort { reason } => {
-                let msg = match reason {
-                    AbortReason::Panic => "explicit panic",
-                    AbortReason::Overflow => "integer overflow",
-                    AbortReason::DivByZero => "division by zero",
-                    AbortReason::BoundsCheck => "index out of bounds",
-                    AbortReason::UnreachableArm => "entered unreachable code",
-                };
-                self.abort_with(msg)?;
+                self.abort_with(Self::abort_text(reason))?;
             }
             TerminatorKind::Unreachable => {
                 self.builder.build_unreachable().map_err(e)?;
@@ -115,13 +108,35 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
+    /// What an abort for `reason` reports when no message was given.
+    pub(super) fn abort_text(reason: &AbortReason) -> &'static str {
+        match reason {
+            AbortReason::Panic => "explicit panic",
+            AbortReason::Overflow => "integer overflow",
+            AbortReason::DivByZero => "division by zero",
+            AbortReason::BoundsCheck => "index out of bounds",
+            AbortReason::UnreachableArm => "entered unreachable code",
+        }
+    }
+
     /// `karac_mir_abort_at(msg, at)`, which does not return: `msg` (or a
     /// `panic`'s own message), at the place `debug.rs` names. The function
     /// has one such call per message, which each site jumps to with its
     /// place, so an overflow check costs a branch where it is rather than
     /// a call (and a function full of them stays small enough to inline).
+    ///
+    /// Inside a native call with a cancel exit, in a program that makes an
+    /// isolating group, it is `karac_mir_panic_at` instead, which returns
+    /// when a task of one takes the panic: the native's work ends there,
+    /// and the call's cancel exit leaves (core-semantics §11.12).
     pub(super) fn abort_with(&mut self, msg: &str) -> R<()> {
         let (at, at_n) = self.abort_site()?;
+        if let Some(exit) = self.contain_block() {
+            let (s, n) = self.str_const(msg)?;
+            self.rt("panic_at", &[s.into(), n.into(), at.into(), at_n.into()])?;
+            self.builder.build_unconditional_branch(exit).map_err(e)?;
+            return Ok(());
+        }
         let here = self.builder.get_insert_block().ok_or("no block")?;
         // Shims and helpers are built outside `lower_body`, so a block is
         // shared only within the function it was made in.

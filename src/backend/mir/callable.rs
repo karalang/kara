@@ -479,7 +479,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     vals.push(q.into());
                 }
                 self.builder.build_call(f, &vals, "").map_err(e)?;
-                Ok(())
+                self.leave_if_panicked()
             }
             Callee::Erased { at, ty, consume } => {
                 let TyKind::Fn { params, .. } = self.tys.kind(*ty) else {
@@ -502,9 +502,27 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.builder
                     .build_indirect_call(fn_ty, code, &vals, "")
                     .map_err(e)?;
-                Ok(())
+                self.leave_if_panicked()
             }
         }
+    }
+
+    /// After a native calls a function value, in a task of an isolating
+    /// group: a panic the value's frame left by (its cancel exits ran) ends
+    /// the native's work too, and the native's call leaves by its own exit
+    /// (core-semantics §11.12; [`Cx::contain_to`]).
+    fn leave_if_panicked(&mut self) -> R<()> {
+        let Some(exit) = self.contain_block() else {
+            return Ok(());
+        };
+        let f = self.cur_fn()?;
+        let on = self.llcx.append_basic_block(f, "called");
+        let unwinding = self.rt_flag("unwinding", &[])?;
+        self.builder
+            .build_conditional_branch(unwinding, exit, on)
+            .map_err(e)?;
+        self.builder.position_at_end(on);
+        Ok(())
     }
 
     /// A `Call` whose function is a place or a non-`FnDef` operand.

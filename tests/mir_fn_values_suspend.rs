@@ -293,8 +293,7 @@ fn main() {
 
 /// A panic inside a function value called from a task of an isolating
 /// group ends that task alone: the value's frame and the task's locals
-/// drop, its handle holds the panic, and the other task finishes. Only
-/// the interpreter runs isolating groups so far (M4 item 9).
+/// drop, its handle holds the panic, and the other task finishes.
 #[test]
 fn mir_fn_value_panics_in_an_isolating_task() {
     let src = r#"
@@ -346,7 +345,7 @@ fn main() {
 }
 "#;
     assert_eq!(
-        stdout_on_interp("isolating", src),
+        stdout_on_both("isolating", src),
         "drop boom\ndrop task\na panicked: bad value\nb 7\n"
     );
 }

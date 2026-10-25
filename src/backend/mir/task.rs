@@ -251,6 +251,20 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(d, block.into())
     }
 
+    /// The `Err` variant of a task's result `held` and its `TaskFailed`
+    /// type, when `held` is `Result[V, TaskFailed]`, as the result of an
+    /// isolating group's task is (core-semantics §11.12).
+    fn failure_shape(&self, held: Ty) -> Option<(u32, Ty)> {
+        let (adt, _) = self.tys.tcx().adt_of(held)?;
+        if adt.name != "Result" {
+            return None;
+        }
+        let ev = self.variant_of(held, "Err").ok()?;
+        let failed = self.tys.field_ty(held, Some(ev), 0)?;
+        let (f, _) = self.tys.tcx().adt_of(failed)?;
+        (f.name == "TaskFailed").then_some((ev, failed))
+    }
+
     /// The frame type the resume body `resume` takes, and the `T` of the
     /// `Poll[T]` it returns.
     pub(super) fn task_types(&self, resume: &str) -> R<(Ty, Ty)> {
@@ -355,8 +369,45 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 cx.free(b)?;
                 cx.builder.build_unconditional_branch(end).map_err(e)?;
-                // Torn down, it left no result.
+                // Torn down, it left no result; a task of an isolating group
+                // gives its handle the `Err` of its panic, or `Cancelled`
+                // (core-semantics §11.12).
                 cx.builder.position_at_end(cancelled);
+                let failure = match cx.failure_shape(held) {
+                    Some(s) if cx.isolating() => Some(s),
+                    _ => None,
+                };
+                if let Some((ev, failed)) = failure {
+                    let errp = cx.offset(v, cx.field_offset(held, Some(ev), 0)?)?;
+                    let pv = cx.variant_of(failed, "Panicked")?;
+                    let cv = cx.variant_of(failed, "Cancelled")?;
+                    let mp = cx.offset(errp, cx.field_offset(failed, Some(pv), 0)?)?;
+                    let lp = cx.offset(errp, cx.field_offset(failed, Some(pv), 1)?)?;
+                    let why = cx.rt_int("task_failure", &[mp.into(), lp.into()], 8)?;
+                    let (panicked, stopped, plain) = (
+                        cx.llcx.append_basic_block(f, "failed.panicked"),
+                        cx.llcx.append_basic_block(f, "failed.cancelled"),
+                        cx.llcx.append_basic_block(f, "cancelled.plain"),
+                    );
+                    let i8t = cx.llcx.i8_type();
+                    cx.builder
+                        .build_switch(
+                            why,
+                            plain,
+                            &[
+                                (i8t.const_int(1, false), stopped),
+                                (i8t.const_int(2, false), panicked),
+                            ],
+                        )
+                        .map_err(e)?;
+                    for (block, variant) in [(panicked, pv), (stopped, cv)] {
+                        cx.builder.position_at_end(block);
+                        cx.store_tag(errp, failed, variant)?;
+                        cx.store_tag(v, held, ev)?;
+                        cx.builder.build_unconditional_branch(returned).map_err(e)?;
+                    }
+                    cx.builder.position_at_end(plain);
+                }
                 let mark = cx.llcx.append_basic_block(f, "cancelled.mark");
                 cx.builder
                     .build_conditional_branch(detached, gone, mark)

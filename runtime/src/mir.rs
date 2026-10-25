@@ -2668,6 +2668,53 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     karac_mir_exit(101)
 }
 
+/// A panic in a program with an isolating group (core-semantics §11.12):
+/// a task of one takes it, and the call returns, for the caller to leave
+/// by its cancel exits; anywhere else it is `karac_mir_abort_at`'s.
+///
+/// # Safety
+/// As [`karac_mir_abort_at`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_panic_at(ptr: *const u8, len: u64, at: *const u8, at_len: u64) {
+    // SAFETY: the caller's contract.
+    let place = String::from_utf8_lossy(unsafe { bytes(at, at_len as usize) }).into_owned();
+    let message = || {
+        abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
+            // SAFETY: the caller's contract.
+            String::from_utf8_lossy(unsafe { bytes(ptr, len as usize) }).into_owned()
+        }))
+    };
+    if crate::mir_task::contain_panic(message, &place) {
+        // The task's frames, and any contract predicate among them, are
+        // gone; a later panic's own message is its own.
+        PANIC.with(|p| p.borrow_mut().take());
+        crate::leave_predicates();
+        return;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { karac_mir_abort_at(ptr, len, at, at_len) }
+}
+
+/// `karac_mir_task_failure(message, location)`, in a task's poll once its
+/// frame left by its cancel exits: [`crate::mir_task::task_failure`]'s
+/// answer, with a panic's message and location written as `String`s at
+/// `message` and `location` (left alone otherwise).
+///
+/// # Safety
+/// `message` and `location` are writable for a `String` each.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_task_failure(message: *mut RawVec, location: *mut RawVec) -> u8 {
+    let (why, panic) = crate::mir_task::task_failure();
+    if let Some((m, l)) = panic {
+        // SAFETY: the caller's contract.
+        unsafe {
+            string_of(message, m.as_bytes());
+            string_of(location, l.as_bytes());
+        }
+    }
+    why
+}
+
 /// A string in Rust's `Debug` form (`"a\n"`), for `dbg`.
 ///
 /// # Safety
