@@ -193,8 +193,24 @@ pub(super) fn package_source(
     output: OutputMode,
     cmd: &str,
 ) -> Option<super::project_v2::Amalgam> {
-    super::project_v2::package_tree(filename, no_manifest, false)
-        .map(|(root, tree)| combine(&root, &tree, output, cmd))
+    let (root, tree) = super::project_v2::package_tree(filename, no_manifest, false)?;
+    if tree.modules.iter().filter(|m| !m.is_synthetic).count() > 1 {
+        return Some(combine(&root, &tree, output, cmd));
+    }
+    refuse_lone_package_imports(&root, output);
+    None
+}
+
+/// A package's only module runs and builds as a lone file, whose check binds
+/// a package import without asking whether the module exists. The package
+/// check does ask, so an import it refuses is refused here too, as it is in
+/// a package of several modules (B-2026-10-25-18).
+pub(super) fn refuse_lone_package_imports(root: &std::path::Path, output: OutputMode) {
+    if let Some(pc) = super::run_check_cmds::package_check_refusal(root) {
+        if !pc.refuses_only_by_type() {
+            super::run_check_cmds::render_package_refusal(&pc, output);
+        }
+    }
 }
 
 /// The package at `root` as one source, after the package-wide check, which

@@ -3655,7 +3655,6 @@ fn test_check_standalone_script_is_unaffected() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_lists_discovered_modules() {
     let tmp = scratch_project("lists-modules");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5556,7 +5555,6 @@ fn test_user_drop_on_aggregate_field_run_build_parity() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_rejects_panic_unwind() {
     // phase-8 `panic = "unwind" | "abort"` slice 2: the v1 backend is
     // abort-only, so an explicit `[profile] panic = "unwind"` must fail the
@@ -5648,12 +5646,14 @@ fn test_build_project_resolves_imported_type_associated_fn() {
     );
 }
 
+#[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
-fn test_single_file_build_refuses_package_member() {
+fn test_single_file_build_of_a_package_member_builds_the_package() {
     // B-2026-07-08-19: `karac build <pkg>/src/main.kara` (single-file) silently
-    // dropped the package's sibling modules and emitted a truncated binary.
-    // It must now refuse with actionable guidance pointing at project mode.
+    // dropped the package's sibling modules and emitted a truncated binary, so
+    // legacy refused it. The v2 build builds the package a member file belongs
+    // to (project mode, src/cli/build_v2.rs), so the binary has every module
+    // and the refusal is gone (B-2026-10-25-18).
     let tmp = scratch_project("pkg-member-refusal");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/helper.kara"), "pub fn help() -> i64 { 7 }\n");
@@ -5661,22 +5661,27 @@ fn test_single_file_build_refuses_package_member() {
         &tmp.join("src/main.kara"),
         "import helper.{help};\nfn main() { println(help()); }\n",
     );
-    // Invoke single-file build by naming the file explicitly.
+    let exe = tmp.join("member-built");
     let out = karac_bin()
         .arg("build")
         .arg(tmp.join("src/main.kara"))
+        .arg("-o")
+        .arg(&exe)
         .output()
         .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    // Only a failed link may skip (no runtime archive in this checkout).
+    if !out.status.success()
+        && stderr.contains("link")
+        && common::link_or_skip(Err(stderr.clone())).is_none()
+    {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "member build failed: {stderr}");
+    let ran = std::process::Command::new(&exe).output().unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
-    assert!(
-        !out.status.success(),
-        "single-file build of a package member should fail, not silently succeed",
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("source file of the package") && stderr.contains("karac build"),
-        "expected a package-member refusal message, got: {stderr}"
-    );
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "7\n");
 }
 
 /// Project-mode platform-suffix selection must follow the `--target`, not the
@@ -5825,7 +5830,6 @@ fn project_check_honours_the_singular_target_flag() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn project_build_wasm_target_selects_wasm_platform_module() {
     let tmp = scratch_project("wasm-platform-select");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5839,7 +5843,7 @@ fn project_build_wasm_target_selects_wasm_platform_module() {
 
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["build", "--target=wasm_browser"])
+        .args(["build", "--target=wasm_wasi"])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -5884,7 +5888,6 @@ fn test_build_project_rejects_mod_kara() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_missing_src_dir_fails() {
     let tmp = scratch_project("no-src");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5898,7 +5901,6 @@ fn test_build_project_missing_src_dir_fails() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_json_output() {
     let tmp = scratch_project("json");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5946,7 +5948,6 @@ fn test_build_project_surfaces_per_file_parse_errors() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_requires_entry_file() {
     let tmp = scratch_project("no-entry");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5964,7 +5965,6 @@ fn test_build_project_requires_entry_file() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_empty_src_dir_fails() {
     let tmp = scratch_project("empty-src");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -7304,7 +7304,6 @@ fn test_build_project_surfaces_unknown_item_e0225() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_json_includes_resolve_diagnostics() {
     let tmp = scratch_project("json-resolve");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -15838,7 +15837,10 @@ fn test_build_target_empty_value_diagnostic() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
+#[cfg_attr(
+    not(all(target_os = "macos", target_arch = "x86_64")),
+    ignore = "v2 gap after M3: the v2 build refuses a cross `[build].target` by name (B-2026-10-23-16); on an x86_64 macOS host the target is the host"
+)]
 fn test_build_target_from_manifest_build_section() {
     // With no --target flag, `[build].target` from the manifest selects
     // the active triple. Pins that the manifest fallback is honored.
@@ -23229,7 +23231,6 @@ mathx = { path = "../mathx" }
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not print the dependency summary, B-2026-10-25-18"]
 fn test_xpkg_import_typechecks_and_builds() {
     let tmp = xpkg_fixture("xpkg-build");
     let out = karac_bin()
@@ -23379,7 +23380,6 @@ fn test_xpkg_binary_dep_rejected() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not print the dependency summary, B-2026-10-25-18"]
 fn test_xpkg_transitive_path_dep_resolves() {
     let tmp = xpkg_fixture("xpkg-transitive");
     // mathx itself depends on basep; app only declares mathx.

@@ -56,13 +56,16 @@ fn ran(exe: &Path) -> String {
     text(&out.stdout)
 }
 
-/// A build that succeeded: `Built: <exe>` with the llvm feature, the
-/// check-only note without it.
+/// A build that succeeded: `Built: <exe>` with the llvm feature (after a
+/// package's summary), the check-only note without it.
 fn built(out: &Output) {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     if LLVM {
         assert!(
-            text(&out.stdout).starts_with("Built: "),
+            text(&out.stdout)
+                .lines()
+                .last()
+                .is_some_and(|l| l.starts_with("Built: ")),
             "{}",
             text(&out.stdout)
         );
@@ -107,8 +110,10 @@ fn build_v2_builds_a_package() {
     let dir = package("pkg", UTIL);
     let out = karac(&dir, &["build"]);
     built(&out);
+    // The package's summary, as the legacy build printed it (B-2026-10-25-18).
     assert!(
-        !text(&out.stdout).contains("project: pkg"),
+        text(&out.stdout).starts_with("project: pkg\n")
+            && text(&out.stdout).contains("modules: 2\n"),
         "{}",
         text(&out.stdout)
     );
@@ -156,11 +161,6 @@ fn build_v2_install_builds_on_v2() {
         .unwrap();
     if LLVM {
         assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-        assert!(
-            !text(&out.stdout).contains("project: pkg"),
-            "{}",
-            text(&out.stdout)
-        );
         assert_eq!(ran(&root.join("pkg")), "42\n");
     }
 }

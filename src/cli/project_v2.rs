@@ -1001,9 +1001,9 @@ fn rename(t: &Ident, flat: &str) -> Edit {
     }
 }
 
-/// The package `filename` belongs to, when it has more than one module and
-/// `filename` is one of them: its root and module tree. `with_tests` merges
-/// each module's `_test.kara` companion into it.
+/// The package `filename` belongs to, when `filename` is one of its modules:
+/// its root and module tree. `with_tests` merges each module's `_test.kara`
+/// companion into it.
 pub(super) fn package_tree(
     filename: &str,
     no_manifest: bool,
@@ -1035,9 +1035,6 @@ pub(super) fn package_tree(
         return None;
     }
     let tree = built.tree;
-    if tree.modules.iter().filter(|m| !m.is_synthetic).count() <= 1 {
-        return None;
-    }
     let in_tree = tree.modules.iter().filter(|m| !m.is_synthetic).any(|m| {
         std::fs::canonicalize(&m.file)
             .map(|p| p == entry)

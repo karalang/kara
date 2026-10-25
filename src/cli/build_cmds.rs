@@ -1268,9 +1268,11 @@ pub(super) struct PackageCheck {
 impl PackageCheck {
     /// `src/main.kara`, when it is the package's only module: `karac build`
     /// then builds it as a lone file, against the v2 library it appends, so
-    /// `karac check` checks it the same way (B-2026-10-24-39).
+    /// `karac check` checks it the same way (B-2026-10-24-39). Not when the
+    /// package check refuses one of its imports (an unknown module), which
+    /// the lone file's check cannot see (B-2026-10-25-18).
     pub(super) fn lone_entry(&self, root: &std::path::Path) -> Option<std::path::PathBuf> {
-        if !self.parse_errors.is_empty() {
+        if !self.refuses_only_by_type() {
             return None;
         }
         let mut modules = self.tree.modules.iter().filter(|m| !m.is_synthetic);

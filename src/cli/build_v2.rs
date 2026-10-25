@@ -52,7 +52,7 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
     let exe = a
         .out_path
         .map_or_else(|| format!("{stem}{}", exe_suffix(&a)), str::to_string);
-    build(filename, project, manifest.as_ref(), a, &exe);
+    build(filename, project, manifest.as_ref(), a, &exe, None);
 }
 
 /// `karac build` with no file on v2: the package in the current directory,
@@ -75,23 +75,32 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         process::exit(1);
     }
     let host = crate::build_cache::host_target_triple();
-    let mf = manifest::merge_target_overlay(&raw, Some(host.as_str()));
+    // `[build].target` stands in for `--target` (the dependency overlay
+    // follows it); a cross target is refused by name, as the flag's is
+    // (B-2026-10-23-16).
+    if let Some(t) = raw
+        .build_default_target
+        .as_deref()
+        .filter(|_| a.target.is_none())
+    {
+        if t != "native" && t != host {
+            fail_with(
+                &format!("error: the v2 build does not honour `[build].target = \"{t}\"` yet"),
+                output,
+            );
+            process::exit(1);
+        }
+    }
+    let overlay = if is_wasm_wasi(&a) {
+        "wasm32-wasip1".to_string()
+    } else {
+        host
+    };
+    let mf = manifest::merge_target_overlay(&raw, Some(overlay.as_str()));
     if output == OutputMode::Text {
         for w in &mf.warnings {
             eprintln!("warning[manifest]: {}", w.message);
         }
-    }
-    let entry = root.join("src").join("main.kara");
-    if !entry.is_file() {
-        fail_with(
-            &format!(
-                "error: the v2 build makes an executable from src/main.kara, and {} has none; \
-                 v2 does not build a library package yet",
-                root.display()
-            ),
-            output,
-        );
-        process::exit(1);
     }
     #[cfg(feature = "llvm")]
     if !set_wasm_target(&a) {
@@ -128,7 +137,12 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     } else {
         None
     };
-    let walk = WalkerOpts::default();
+    // The walk follows the build target: a wasm build takes the `_wasm`
+    // platform modules.
+    let walk = WalkerOpts {
+        target: walk_platform_for_target(a.target.unwrap_or("native")),
+        ..WalkerOpts::default()
+    };
     let walked = walker::walk_project(&root, walk).unwrap_or_else(|e| {
         emit_walker_error(&e, output);
         process::exit(1);
@@ -143,12 +157,40 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
                 emit_build_tree_error(&e, output);
                 process::exit(1);
             });
+    // A missing `src/`, an empty one, or one with no entry file was refused
+    // by the walk and the tree; a library package is the gap left.
+    let entry = root.join("src").join("main.kara");
+    if walked.entry != walker::EntryKind::Bin {
+        fail_with(
+            &format!(
+                "error: the v2 build makes an executable from src/main.kara, and {} has none; \
+                 v2 does not build a library package yet",
+                root.display()
+            ),
+            output,
+        );
+        process::exit(1);
+    }
+    let summary = ProjectSummary {
+        name: &mf.name,
+        edition: &mf.edition,
+        root: &root,
+        walked: &walked,
+        platform: walk.target,
+        deps: &deps,
+    };
+    if output == OutputMode::Text {
+        summary.print();
+    }
     let filename = super::project_v2::shown(&entry);
     // One module is a lone file; anything else (a parse error included,
     // which the package check reports) is the package.
     let project = (!tree.parse_errors.is_empty()
         || tree.tree.modules.iter().filter(|m| !m.is_synthetic).count() > 1)
         .then(|| super::run_v2::combine(&root, &tree.tree, output, "build"));
+    if project.is_none() {
+        super::run_v2::refuse_lone_package_imports(&root, output);
+    }
     let exe = a.out_path.map_or_else(
         || {
             let name = format!("{}{}", mf.name, exe_suffix(&a));
@@ -156,7 +198,8 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         },
         str::to_string,
     );
-    build(&filename, project, Some(&mf), a, &exe);
+    let fields = (output == OutputMode::Json).then(|| summary.json_fields());
+    build(&filename, project, Some(&mf), a, &exe, fields.as_deref());
 }
 
 /// `--target=wasm_wasi`: a plain wasm32-wasip1 module, linked against
@@ -297,17 +340,120 @@ fn apply_cpu(
     );
 }
 
+/// What a package build reports before it builds: the package, its entry,
+/// the modules the walk found (with each one's platform) and the
+/// dependencies' packages.
+struct ProjectSummary<'a> {
+    name: &'a str,
+    edition: &'a str,
+    root: &'a std::path::Path,
+    walked: &'a walker::WalkResult,
+    platform: walker::Platform,
+    deps: &'a [module::DepPackageWalk],
+}
+
+impl ProjectSummary<'_> {
+    fn module_path(m: &walker::WalkedModule) -> String {
+        m.path.join(".")
+    }
+
+    fn entry(&self) -> &'static str {
+        match self.walked.entry {
+            walker::EntryKind::Bin => "bin",
+            walker::EntryKind::Lib => "lib",
+            walker::EntryKind::None => "none",
+        }
+    }
+
+    fn print(&self) {
+        println!("project: {}", self.name);
+        println!("edition: {}", self.edition);
+        println!("root:    {}", self.root.display());
+        println!("target:  {}", self.platform.as_suffix());
+        println!("entry:   {}", self.entry());
+        println!("modules: {}", self.walked.modules.len());
+        for m in &self.walked.modules {
+            let path = match Self::module_path(m) {
+                p if p.is_empty() => "<crate root>".to_string(),
+                p => p,
+            };
+            let plat = m
+                .platform
+                .map_or(String::new(), |p| format!(" [{}]", p.as_suffix()));
+            println!("  {path}{plat}  {}", m.file.display());
+        }
+        if !self.deps.is_empty() {
+            let modules: usize = self.deps.iter().map(|d| d.walked.modules.len()).sum();
+            println!(
+                "deps:    {} package(s), {modules} module(s)",
+                self.deps.len()
+            );
+            for d in self.deps {
+                println!("  {}  {}", d.name, d.walked.src_dir.display());
+            }
+        }
+    }
+
+    /// The summary's fields of the `--output=json` document.
+    fn json_fields(&self) -> String {
+        let modules = self
+            .walked
+            .modules
+            .iter()
+            .map(|m| {
+                let role = match m.role {
+                    walker::ModuleRole::Ordinary => "ordinary",
+                    walker::ModuleRole::Entry => "entry",
+                    walker::ModuleRole::Test => "test",
+                };
+                let platform = m
+                    .platform
+                    .map_or("null".to_string(), |p| json_string(p.as_suffix()));
+                format!(
+                    "{{\"path\":{},\"role\":{},\"platform\":{platform},\"file\":{}}}",
+                    json_string(&Self::module_path(m)),
+                    json_string(role),
+                    json_string(&m.file.display().to_string()),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "\"project\":{},\"edition\":{},\"root\":{},\"target\":{},\"entry\":{},\"modules\":[{modules}],\"diagnostics\":[],",
+            json_string(self.name),
+            json_string(self.edition),
+            json_string(&self.root.display().to_string()),
+            json_string(self.platform.as_suffix()),
+            json_string(self.entry()),
+        )
+    }
+}
+
 /// Check, build and link the program into `exe`. `KARAC_MIR_OPT=<0..3>` sets
 /// the IR optimisation level (2 by default); `KARAC_MIR_LL=<path>` keeps a
-/// copy of the IR.
+/// copy of the IR. `fields` are a package build's summary, for the
+/// `--output=json` document.
 fn build(
     filename: &str,
     project: Option<super::project_v2::Amalgam>,
     manifest: Option<&manifest::Manifest>,
     a: BuildArgs,
     exe: &str,
+    fields: Option<&str>,
 ) {
     let output = a.output;
+    // The backend is abort-only: a panic never unwinds (B-2026-10-25-18).
+    if manifest
+        .is_some_and(|m| m.profile_config.panic_strategy() == manifest::PanicStrategy::Unwind)
+    {
+        fail_with(
+            "error: `panic = \"unwind\"` is not supported: the backend is abort-only, so \
+             a panic never unwinds; remove the `[profile] panic` key or set \
+             `panic = \"abort\"`",
+            output,
+        );
+        process::exit(1);
+    }
     if a.release {
         // `dbg()`, contracts and the error return trace are stripped from
         // release builds (design.md § `dbg()`, § Contracts, § Error return
@@ -383,11 +529,20 @@ fn build(
         }
         match output {
             OutputMode::Text => println!("Built: {exe}"),
-            _ => println!("{{\"status\":\"ok\",\"output\":{}}}", json_string(exe)),
+            _ => println!(
+                "{{\"status\":\"ok\",{}\"output\":{}}}",
+                fields.unwrap_or(""),
+                json_string(exe)
+            ),
         }
     }
     // Without the llvm feature there is no code generator: the check above
     // is the whole build, as on the legacy path.
+    // A package build's document still reports the package.
+    #[cfg(not(feature = "llvm"))]
+    if let Some(f) = fields {
+        println!("{{\"status\":\"ok\",{}}}", f.trim_end_matches(','));
+    }
     #[cfg(not(feature = "llvm"))]
     eprintln!(
         "note: karac build requires the llvm feature; {filename} type-checked but no \
