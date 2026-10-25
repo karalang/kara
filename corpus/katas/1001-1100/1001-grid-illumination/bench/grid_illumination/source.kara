@@ -1,0 +1,97 @@
+// Benchmark: LeetCode #1001 Grid Illumination -- the ★ arm, counts per
+// line in hash maps, on grids of 10^9 by 10^9 with 20000 lamps and 20000
+// queries, LeetCode's largest. Mirrors grid_illumination.c, .rs, .py and
+// go-seq/.
+
+fn grid_illumination(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut on: Set[i64] = Set.new();
+    let mut rows: Map[i64, i64] = Map.new();
+    let mut cols: Map[i64, i64] = Map.new();
+    let mut diags: Map[i64, i64] = Map.new();
+    let mut antis: Map[i64, i64] = Map.new();
+    for lamp in lamps.iter() {
+        let (r, c) = (lamp[0], lamp[1]);
+        if not on.contains(r * n + c) {
+            on.insert(r * n + c);
+            *rows.entry(r).or_insert(0) += 1;
+            *cols.entry(c).or_insert(0) += 1;
+            *diags.entry(r - c).or_insert(0) += 1;
+            *antis.entry(r + c).or_insert(0) += 1;
+        }
+    }
+    let mut ans: Vec[i64] = Vec.new();
+    for q in queries.iter() {
+        let (r, c) = (q[0], q[1]);
+        let lit = rows.get(r).unwrap_or(0) > 0 or cols.get(c).unwrap_or(0) > 0 or diags.get(r - c).unwrap_or(0) > 0 or antis.get(r + c).unwrap_or(0) > 0;
+        ans.push(if lit { 1 } else { 0 });
+        for i in r - 1..r + 2 {
+            for j in c - 1..c + 2 {
+                if i >= 0 and i < n and j >= 0 and j < n and on.contains(i * n + j) {
+                    on.remove(i * n + j);
+                    *rows.entry(i).or_insert(0) -= 1;
+                    *cols.entry(j).or_insert(0) -= 1;
+                    *diags.entry(i - j).or_insert(0) -= 1;
+                    *antis.entry(i + j).or_insert(0) -= 1;
+                }
+            }
+        }
+    }
+    ans
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn big_random(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    hi * 32768 + next_random(mut seed)
+}
+
+fn main() {
+    let rounds = 1;
+    let n = 1000000000;
+    let mut seed = 1001;
+    // 20 cases, each with 20000 lamps in a window of 100000 by 100000
+    // cells at a random place in the grid, and 20000 queries, half of them
+    // anywhere in the window and half on or beside a random lamp
+    let mut all_lamps: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut all_queries: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..20 {
+        let top = 1 + big_random(mut seed) % (n - 100002);
+        let left = 1 + big_random(mut seed) % (n - 100002);
+        let mut lamps: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..20000 {
+            let r = top + big_random(mut seed) % 100000;
+            let c = left + big_random(mut seed) % 100000;
+            lamps.push(vec![r, c]);
+        }
+        let mut queries: Vec[Vec[i64]] = Vec.new();
+        for q in 0..20000 {
+            if q % 2 == 0 {
+                let r = top + big_random(mut seed) % 100000;
+                let c = left + big_random(mut seed) % 100000;
+                queries.push(vec![r, c]);
+            } else {
+                let lamp = lamps[next_random(mut seed) % 20000].clone();
+                let r = lamp[0] + next_random(mut seed) % 3 - 1;
+                queries.push(vec![r, lamp[1] + next_random(mut seed) % 3 - 1]);
+            }
+        }
+        all_lamps.push(lamps);
+        all_queries.push(queries);
+    }
+    let mut lit = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let k = (r + i) % 20;
+            for a in grid_illumination(n, all_lamps[k], all_queries[k]).iter() {
+                lit += *a;
+                check = (check * 31 + *a + 1) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over 20 grids of 20000 lamps and 20000 queries: {lit} lit, checksum {check}");
+}

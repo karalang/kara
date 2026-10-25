@@ -1,0 +1,460 @@
+// LeetCode #1001: Grid Illumination -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random grids.
+
+// ---- star ----
+
+// LeetCode #1001: Grid Illumination -- counts per line
+//
+// A cell is lit when some lamp shares its row, its column, its diagonal
+// (row less column) or its anti-diagonal (row plus column). Four maps
+// count the lamps on each line, and a set holds the lamps that are on,
+// so a repeated lamp counts once. A query reads four counts, then turns
+// off each lamp in the 3 by 3 block around it, taking it off all four
+// counts. O(lamps + queries).
+
+fn star_grid_illumination(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut on: Set[i64] = Set.new();
+    let mut rows: Map[i64, i64] = Map.new();
+    let mut cols: Map[i64, i64] = Map.new();
+    let mut diags: Map[i64, i64] = Map.new();
+    let mut antis: Map[i64, i64] = Map.new();
+    for lamp in lamps.iter() {
+        let (r, c) = (lamp[0], lamp[1]);
+        if not on.contains(r * n + c) {
+            on.insert(r * n + c);
+            *rows.entry(r).or_insert(0) += 1;
+            *cols.entry(c).or_insert(0) += 1;
+            *diags.entry(r - c).or_insert(0) += 1;
+            *antis.entry(r + c).or_insert(0) += 1;
+        }
+    }
+    let mut ans: Vec[i64] = Vec.new();
+    for q in queries.iter() {
+        let (r, c) = (q[0], q[1]);
+        let lit = rows.get(r).unwrap_or(0) > 0 or cols.get(c).unwrap_or(0) > 0 or diags.get(r - c).unwrap_or(0) > 0 or antis.get(r + c).unwrap_or(0) > 0;
+        ans.push(if lit { 1 } else { 0 });
+        for i in r - 1..r + 2 {
+            for j in c - 1..c + 2 {
+                if i >= 0 and i < n and j >= 0 and j < n and on.contains(i * n + j) {
+                    on.remove(i * n + j);
+                    *rows.entry(i).or_insert(0) -= 1;
+                    *cols.entry(j).or_insert(0) -= 1;
+                    *diags.entry(i - j).or_insert(0) -= 1;
+                    *antis.entry(i + j).or_insert(0) -= 1;
+                }
+            }
+        }
+    }
+    ans
+}
+
+// ---- sorted ----
+
+// LeetCode #1001: Grid Illumination -- ordered maps
+//
+// The counts per line as ★ keeps them, in `SortedMap`s, with the lamps
+// that are on in a `SortedSet`; a line whose count falls to 0 leaves its
+// map, so a cell is lit exactly when one of its four lines is a key.
+// O((lamps + queries) log lamps).
+
+fn sorted_add(m: mut ref SortedMap[i64, i64], key: i64, d: i64) {
+    let now = match m.get(key) {
+        Some(v) => *v + d,
+        None => d,
+    };
+    if now == 0 {
+        m.remove(key);
+    } else {
+        m.insert(key, now);
+    }
+}
+
+fn sorted_grid_illumination(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut on: SortedSet[i64] = SortedSet.new();
+    let mut rows: SortedMap[i64, i64] = SortedMap.new();
+    let mut cols: SortedMap[i64, i64] = SortedMap.new();
+    let mut diags: SortedMap[i64, i64] = SortedMap.new();
+    let mut antis: SortedMap[i64, i64] = SortedMap.new();
+    for lamp in lamps.iter() {
+        let (r, c) = (lamp[0], lamp[1]);
+        if not on.contains(r * n + c) {
+            on.insert(r * n + c);
+            sorted_add(mut rows, r, 1);
+            sorted_add(mut cols, c, 1);
+            sorted_add(mut diags, r - c, 1);
+            sorted_add(mut antis, r + c, 1);
+        }
+    }
+    let mut ans: Vec[i64] = Vec.new();
+    for q in queries.iter() {
+        let (r, c) = (q[0], q[1]);
+        if rows.contains_key(r) or cols.contains_key(c) or diags.contains_key(r - c) or antis.contains_key(r + c) {
+            ans.push(1);
+        } else {
+            ans.push(0);
+        }
+        for i in (r - 1).max(0)..(r + 2).min(n) {
+            for j in (c - 1).max(0)..(c + 2).min(n) {
+                if on.contains(i * n + j) {
+                    on.remove(i * n + j);
+                    sorted_add(mut rows, i, -1);
+                    sorted_add(mut cols, j, -1);
+                    sorted_add(mut diags, i - j, -1);
+                    sorted_add(mut antis, i + j, -1);
+                }
+            }
+        }
+    }
+    ans
+}
+
+// ---- brute ----
+
+// LeetCode #1001: Grid Illumination -- every lamp asked
+//
+// The lamps, each as one number r n + c, sorted with repeats dropped, so
+// each lamp is listed once, and a flag for each saying it is on. A query
+// asks every lamp still on whether it shares a line with the cell, then
+// turns off every lamp within one step of it either way. O(queries x
+// lamps).
+
+fn brute_grid_illumination(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut keys: Vec[i64] = lamps.iter().map(|l| l[0] * n + l[1]).collect();
+    keys.sort();
+    keys.dedup();
+    let mut on: Vec[bool] = Vec.filled(keys.len(), true);
+    let mut ans: Vec[i64] = Vec.new();
+    for q in queries.iter() {
+        let (r, c) = (q[0], q[1]);
+        let mut lit = 0;
+        for k in 0..keys.len() {
+            let (lr, lc) = (keys[k] / n, keys[k] % n);
+            if on[k] and (lr == r or lc == c or lr - lc == r - c or lr + lc == r + c) {
+                lit = 1;
+                break;
+            }
+        }
+        ans.push(lit);
+        for k in 0..keys.len() {
+            let (lr, lc) = (keys[k] / n, keys[k] % n);
+            if (lr - r).abs() <= 1 and (lc - c).abs() <= 1 {
+                on[k] = false;
+            }
+        }
+    }
+    ans
+}
+
+// ---- lines ----
+
+// LeetCode #1001: Grid Illumination -- one map for every line
+//
+// All four kinds of line count their lamps in a single `Map`, each line
+// keyed by its kind and its number: rows, columns, diagonals and
+// anti-diagonals in four separate ranges of keys. A second `Map` says
+// how many times each lamp was listed, and its lines count it once.
+// O(lamps + queries).
+
+// the key of line `value` of kind `kind`, 0 to 3; a diagonal's value can
+// be as low as -(n - 1)
+fn lines_line(kind: i64, value: i64) -> i64 {
+    kind * 4000000000 + value + 2000000000
+}
+
+fn lines_bump(count: mut ref Map[i64, i64], r: i64, c: i64, d: i64) {
+    *count.entry(lines_line(0, r)).or_insert(0) += d;
+    *count.entry(lines_line(1, c)).or_insert(0) += d;
+    *count.entry(lines_line(2, r - c)).or_insert(0) += d;
+    *count.entry(lines_line(3, r + c)).or_insert(0) += d;
+}
+
+fn lines_grid_illumination(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut listed: Map[i64, i64] = Map.new();
+    let mut count: Map[i64, i64] = Map.new();
+    for lamp in lamps.iter() {
+        let times = listed.entry(lamp[0] * n + lamp[1]).or_insert(0);
+        *times += 1;
+        if *times == 1 {
+            lines_bump(mut count, lamp[0], lamp[1], 1);
+        }
+    }
+    let mut ans: Vec[i64] = Vec.new();
+    for q in queries.iter() {
+        let (r, c) = (q[0], q[1]);
+        let mut lit = 0;
+        for (kind, value) in [(0, r), (1, c), (2, r - c), (3, r + c)].iter() {
+            if count.get(lines_line(*kind, *value)).unwrap_or(0) > 0 {
+                lit = 1;
+            }
+        }
+        ans.push(lit);
+        for i in r - 1..r + 2 {
+            for j in c - 1..c + 2 {
+                if i >= 0 and i < n and j >= 0 and j < n and listed.contains_key(i * n + j) {
+                    listed.remove(i * n + j);
+                    lines_bump(mut count, i, j, -1);
+                }
+            }
+        }
+    }
+    ans
+}
+
+// ---- compress ----
+
+// LeetCode #1001: Grid Illumination -- sorted lists and binary search
+//
+// No hashing: the distinct lamps, as numbers r n + c, form a sorted list
+// with an on flag each, and the rows, columns, diagonals and
+// anti-diagonals that hold lamps form four more sorted lists, each with
+// a count beside it. A binary search finds a line's place, or none when
+// no lamp was ever on it. O((lamps + queries) log lamps).
+
+// the place of x in the sorted list, or -1
+fn compress_place(sorted: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < sorted.len() and sorted[lo] == x { lo } else { -1 }
+}
+
+fn compress_distinct(xs: own Vec[i64]) -> Vec[i64] {
+    let mut xs = xs;
+    xs.sort();
+    xs.dedup();
+    xs
+}
+
+fn compress_grid_illumination(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let keys = compress_distinct(lamps.iter().map(|l| l[0] * n + l[1]).collect());
+    let mut on: Vec[bool] = Vec.filled(keys.len(), true);
+    // lines[0..4]: rows, columns, diagonals, anti-diagonals
+    let mut lines: Vec[Vec[i64]] = Vec.new();
+    lines.push(compress_distinct(keys.iter().map(|k| *k / n).collect()));
+    lines.push(compress_distinct(keys.iter().map(|k| *k % n).collect()));
+    lines.push(compress_distinct(keys.iter().map(|k| *k / n - *k % n).collect()));
+    lines.push(compress_distinct(keys.iter().map(|k| *k / n + *k % n).collect()));
+    let mut counts: Vec[Vec[i64]] = lines.iter().map(|l| Vec.filled(l.len(), 0)).collect();
+    for k in keys.iter() {
+        let (r, c) = (*k / n, *k % n);
+        let values = [r, c, r - c, r + c];
+        for t in 0..4 {
+            let at = compress_place(lines[t], values[t]);
+            counts[t][at] += 1;
+        }
+    }
+    let mut ans: Vec[i64] = Vec.new();
+    for q in queries.iter() {
+        let (r, c) = (q[0], q[1]);
+        let values = [r, c, r - c, r + c];
+        let mut lit = 0;
+        for t in 0..4 {
+            let at = compress_place(lines[t], values[t]);
+            if at >= 0 and counts[t][at] > 0 {
+                lit = 1;
+            }
+        }
+        ans.push(lit);
+        for i in r - 1..r + 2 {
+            for j in c - 1..c + 2 {
+                if i >= 0 and i < n and j >= 0 and j < n {
+                    let at = compress_place(keys, i * n + j);
+                    if at >= 0 and on[at] {
+                        on[at] = false;
+                        let near = [i, j, i - j, i + j];
+                        for t in 0..4 {
+                            let p = compress_place(lines[t], near[t]);
+                            counts[t][p] -= 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ans
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random number from 0 to m - 1, for m up to 2^30
+fn big_random(m: i64, seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    (hi * 32768 + next_random(mut seed)) % m
+}
+
+// a grid of n from lo to hi, and lamps and queries in a random window of
+// up to `wide` by `wide` cells somewhere in it, so that they share lines
+fn random_case(lo: i64, hi: i64, wide: i64, most: i64, seed: mut ref i64) -> (i64, Vec[Vec[i64]], Vec[Vec[i64]]) {
+    let n = lo + big_random(hi - lo + 1, mut seed);
+    let w = n.min(1 + next_random(mut seed) % wide);
+    let top = big_random(n - w + 1, mut seed);
+    let left = big_random(n - w + 1, mut seed);
+    let mut lamps: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..next_random(mut seed) % (most + 1) {
+        let r = top + next_random(mut seed) % w;
+        lamps.push(vec![r, left + next_random(mut seed) % w]);
+    }
+    let mut queries: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..1 + next_random(mut seed) % most {
+        let r = top + next_random(mut seed) % w;
+        queries.push(vec![r, left + next_random(mut seed) % w]);
+    }
+    (n, lamps, queries)
+}
+
+fn arm(a: i64, n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    if a == 0 {
+        star_grid_illumination(n, lamps, queries)
+    } else if a == 1 {
+        sorted_grid_illumination(n, lamps, queries)
+    } else if a == 2 {
+        brute_grid_illumination(n, lamps, queries)
+    } else if a == 3 {
+        lines_grid_illumination(n, lamps, queries)
+    } else {
+        compress_grid_illumination(n, lamps, queries)
+    }
+}
+
+// The statement read literally, on the grid itself: every lamp turned
+// on in its cell; for each query, the cell is lit when a lamp that is
+// on shares its row, its column, its diagonal or its anti-diagonal, and
+// then every lamp in the cell and the eight around it is turned off.
+fn literal(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut grid: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..n {
+        grid.push(Vec.filled(n, false));
+    }
+    for lamp in lamps.iter() {
+        grid[lamp[0]][lamp[1]] = true;
+    }
+    let mut ans: Vec[i64] = Vec.new();
+    for q in queries.iter() {
+        let (r, c) = (q[0], q[1]);
+        let mut lit = 0;
+        for i in 0..n {
+            for j in 0..n {
+                if grid[i][j] and (i == r or j == c or i - j == r - c or i + j == r + c) {
+                    lit = 1;
+                }
+            }
+        }
+        ans.push(lit);
+        for i in 0..n {
+            for j in 0..n {
+                if (i - r).abs() <= 1 and (j - c).abs() <= 1 {
+                    grid[i][j] = false;
+                }
+            }
+        }
+    }
+    ans
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn swapped(cells: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    cells.iter().map(|x| vec![x[1], x[0]]).collect()
+}
+
+fn mirrored(n: i64, cells: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    cells.iter().map(|x| vec![x[0], n - 1 - x[1]]).collect()
+}
+
+fn properties(tally: mut ref Tally, n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]], small: bool) -> Vec[i64] {
+    let truth = if small { literal(n, lamps, queries) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, n, lamps, queries));
+    }
+    let mut twice = lamps.clone();
+    for lamp in lamps.iter() {
+        twice.push(lamp.clone());
+    }
+    let half = (queries.len() + 1) / 2;
+    let first: Vec[Vec[i64]] = (0..half).map(|i| queries[i].clone()).collect();
+    for a in 0..5 {
+        let g = got[a].clone();
+        // P1: the statement's answer, on the first 3000 grids
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: the grid transposed gives the same answers
+        check(mut tally, 2, arm(a, n, swapped(lamps), swapped(queries)) == g);
+        // P3: the grid mirrored left to right gives the same answers
+        check(mut tally, 3, arm(a, n, mirrored(n, lamps), mirrored(n, queries)) == g);
+        // P4: every lamp listed twice gives the same answers
+        check(mut tally, 4, arm(a, n, twice, queries) == g);
+        // P5: the first half of the queries give the first half of the
+        // answers
+        let part = arm(a, n, lamps, first);
+        let want: Vec[i64] = (0..half).map(|i| g[i]).collect();
+        check(mut tally, 5, part == want);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != a and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 1001;
+    let mut asked = 0;
+    let mut lit = 0;
+    let mut check_sum = 0;
+    // 3000 grids of up to 8 by 8 with up to 10 lamps and queries against
+    // the statement, then 200 of up to 10^9 by 10^9 with up to 100, in a
+    // window of up to 30 by 30
+    for c in 0..3200 {
+        let small = c < 3000;
+        let (n, lamps, queries) = if small { random_case(1, 8, 8, 10, mut seed) } else { random_case(1000, 1000000000, 30, 100, mut seed) };
+        asked += queries.len();
+        let got = properties(mut tally, n, lamps, queries, small);
+        for a in got.iter() {
+            lit += *a;
+            check_sum = (check_sum * 31 + *a + 1) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 grids, {asked} queries: {lit} lit, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

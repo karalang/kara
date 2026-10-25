@@ -1,0 +1,141 @@
+// LeetCode #1001: Grid Illumination -- ordered maps
+//
+// The counts per line as ★ keeps them, in `SortedMap`s, with the lamps
+// that are on in a `SortedSet`; a line whose count falls to 0 leaves its
+// map, so a cell is lit exactly when one of its four lines is a key.
+// O((lamps + queries) log lamps).
+
+fn add(m: mut ref SortedMap[i64, i64], key: i64, d: i64) {
+    let now = match m.get(key) {
+        Some(v) => *v + d,
+        None => d,
+    };
+    if now == 0 {
+        m.remove(key);
+    } else {
+        m.insert(key, now);
+    }
+}
+
+fn grid_illumination(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut on: SortedSet[i64] = SortedSet.new();
+    let mut rows: SortedMap[i64, i64] = SortedMap.new();
+    let mut cols: SortedMap[i64, i64] = SortedMap.new();
+    let mut diags: SortedMap[i64, i64] = SortedMap.new();
+    let mut antis: SortedMap[i64, i64] = SortedMap.new();
+    for lamp in lamps.iter() {
+        let (r, c) = (lamp[0], lamp[1]);
+        if not on.contains(r * n + c) {
+            on.insert(r * n + c);
+            add(mut rows, r, 1);
+            add(mut cols, c, 1);
+            add(mut diags, r - c, 1);
+            add(mut antis, r + c, 1);
+        }
+    }
+    let mut ans: Vec[i64] = Vec.new();
+    for q in queries.iter() {
+        let (r, c) = (q[0], q[1]);
+        if rows.contains_key(r) or cols.contains_key(c) or diags.contains_key(r - c) or antis.contains_key(r + c) {
+            ans.push(1);
+        } else {
+            ans.push(0);
+        }
+        for i in (r - 1).max(0)..(r + 2).min(n) {
+            for j in (c - 1).max(0)..(c + 2).min(n) {
+                if on.contains(i * n + j) {
+                    on.remove(i * n + j);
+                    add(mut rows, i, -1);
+                    add(mut cols, j, -1);
+                    add(mut diags, i - j, -1);
+                    add(mut antis, i + j, -1);
+                }
+            }
+        }
+    }
+    ans
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random number from 0 to m - 1, for m up to 2^30
+fn big_random(m: i64, seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    (hi * 32768 + next_random(mut seed)) % m
+}
+
+// a grid of n from lo to hi, and lamps and queries in a random window of
+// up to `wide` by `wide` cells somewhere in it, so that they share lines
+fn random_case(lo: i64, hi: i64, wide: i64, most: i64, seed: mut ref i64) -> (i64, Vec[Vec[i64]], Vec[Vec[i64]]) {
+    let n = lo + big_random(hi - lo + 1, mut seed);
+    let w = n.min(1 + next_random(mut seed) % wide);
+    let top = big_random(n - w + 1, mut seed);
+    let left = big_random(n - w + 1, mut seed);
+    let mut lamps: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..next_random(mut seed) % (most + 1) {
+        let r = top + next_random(mut seed) % w;
+        lamps.push(vec![r, left + next_random(mut seed) % w]);
+    }
+    let mut queries: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..1 + next_random(mut seed) % most {
+        let r = top + next_random(mut seed) % w;
+        queries.push(vec![r, left + next_random(mut seed) % w]);
+    }
+    (n, lamps, queries)
+}
+
+fn text(rows: ref Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = rows.iter().map(|row| {
+        let xs: Vec[String] = row.iter().map(|x| f"{x}").collect();
+        "[" + xs.join(",") + "]"
+    }).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(i64, Vec[Vec[i64]], Vec[Vec[i64]])] = vec![
+        (5, vec![vec![0, 0], vec![4, 4]], vec![vec![1, 1], vec![1, 0]]),
+        (5, vec![vec![0, 0], vec![4, 4]], vec![vec![1, 1], vec![1, 1]]),
+        (5, vec![vec![0, 0], vec![0, 4]], vec![vec![0, 4], vec![0, 1], vec![1, 4]]),
+        (1, vec![vec![0, 0]], vec![vec![0, 0], vec![0, 0]]),
+        (3, Vec.new(), vec![vec![1, 1]]),
+        (3, vec![vec![1, 1], vec![1, 1]], vec![vec![0, 0], vec![2, 2], vec![0, 0]]),
+        (4, vec![vec![0, 0]], vec![vec![3, 3], vec![2, 1], vec![1, 1], vec![3, 3]]),
+        (4, vec![vec![0, 3], vec![3, 0]], vec![vec![1, 2], vec![2, 2], vec![3, 3]]),
+        (6, vec![vec![2, 2], vec![2, 4], vec![4, 2]], vec![vec![3, 3], vec![0, 0], vec![5, 5]]),
+        (1000000000, vec![vec![0, 0], vec![999999999, 999999999]], vec![vec![500000000, 500000000], vec![999999998, 999999998], vec![999999999, 0]]),
+    ];
+    for (n, lamps, queries) in cases.iter() {
+        let ans = grid_illumination(*n, lamps, queries);
+        let xs: Vec[String] = ans.iter().map(|x| f"{x}").collect();
+        println(f"n = {n}, lamps = {text(lamps)}, queries = {text(queries)} -> [{xs.join(",")}]");
+    }
+    let mut seed = 1001;
+    let groups: Vec[(i64, i64, i64, i64, i64)] = vec![
+        (300, 1, 6, 6, 6),
+        (3000, 1, 30, 30, 40),
+        (300, 1000000, 1000000000, 30, 200),
+        (2, 50, 50, 50, 2000),
+        (2, 1000000000, 1000000000, 100, 2000),
+    ];
+    for (count, lo, hi, wide, most) in groups.iter() {
+        let mut lit = 0;
+        let mut asked = 0;
+        let mut check = 0;
+        for _ in 0..*count {
+            let (n, lamps, queries) = random_case(*lo, *hi, *wide, *most, mut seed);
+            for a in grid_illumination(n, lamps, queries).iter() {
+                lit += *a;
+                check = (check * 31 + *a + 1) % 1000000007;
+            }
+            asked += queries.len();
+        }
+        println(f"{count} random grids, {asked} queries: {lit} lit, checksum {check}");
+    }
+}

@@ -1,0 +1,15 @@
+n = 5, lamps = [[0,0],[4,4]], queries = [[1,1],[1,0]] -> [1,0]
+n = 5, lamps = [[0,0],[4,4]], queries = [[1,1],[1,1]] -> [1,1]
+n = 5, lamps = [[0,0],[0,4]], queries = [[0,4],[0,1],[1,4]] -> [1,1,0]
+n = 1, lamps = [[0,0]], queries = [[0,0],[0,0]] -> [1,0]
+n = 3, lamps = [], queries = [[1,1]] -> [0]
+n = 3, lamps = [[1,1],[1,1]], queries = [[0,0],[2,2],[0,0]] -> [1,0,0]
+n = 4, lamps = [[0,0]], queries = [[3,3],[2,1],[1,1],[3,3]] -> [1,0,1,0]
+n = 4, lamps = [[0,3],[3,0]], queries = [[1,2],[2,2],[3,3]] -> [1,0,1]
+n = 6, lamps = [[2,2],[2,4],[4,2]], queries = [[3,3],[0,0],[5,5]] -> [1,0,0]
+n = 1000000000, lamps = [[0,0],[999999999,999999999]], queries = [[500000000,500000000],[999999998,999999998],[999999999,0]] -> [1,1,1]
+300 random grids, 1090 queries: 384 lit, checksum 949272397
+3000 random grids, 60655 queries: 33540 lit, checksum 502673352
+300 random grids, 29124 queries: 16112 lit, checksum 493380594
+2 random grids, 2568 queries: 191 lit, checksum 102222178
+2 random grids, 3148 queries: 1732 lit, checksum 109984458

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1001-grid-illumination/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map", "lib:set", "lib:sortedmap", "lib:sortedset"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "846eb3434"
+extracted_src = "9fc184bb"
