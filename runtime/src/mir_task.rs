@@ -561,7 +561,7 @@ pub extern "C" fn karac_mir_io_again() -> u8 {
 
 /// Keeps `fd`, the socket of a connect under way, on the running task: the
 /// `connect` it retries ends that connect ([`take_inflight`]).
-#[cfg_attr(not(feature = "net"), allow(dead_code))]
+#[cfg_attr(not(all(feature = "net", unix)), allow(dead_code))]
 pub(crate) fn set_inflight(fd: i32) {
     EXEC.with(|e| {
         if let Some(cur) = e.borrow_mut().cur.as_mut() {
@@ -571,7 +571,7 @@ pub(crate) fn set_inflight(fd: i32) {
 }
 
 /// The socket of the running task's connect under way, taken.
-#[cfg_attr(not(feature = "net"), allow(dead_code))]
+#[cfg_attr(not(all(feature = "net", unix)), allow(dead_code))]
 pub(crate) fn take_inflight() -> Option<i32> {
     EXEC.with(|e| e.borrow_mut().cur.as_mut().and_then(|c| c.inflight.take()))
 }
