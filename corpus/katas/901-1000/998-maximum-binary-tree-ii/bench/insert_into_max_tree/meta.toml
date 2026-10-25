@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/998-maximum-binary-tree-ii/bench/insert_into_max_tree.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 998 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "c32332f58"
+classified_with = "25b4b11f9"
 extracted_src = "10c196f8"
