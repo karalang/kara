@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/1001-1100/1003-check-if-word-is-valid-after-substitutions/bench/is_valid.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1003 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "b869f1ec1"
+classified_with = "5b66ebfaf"
 extracted_src = "da651725"
