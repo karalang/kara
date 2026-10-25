@@ -1,0 +1,2430 @@
+// cli/mini_simplefix
+//
+// A port of simplefix 1.0.17 (MIT; David Arnold), the FIX protocol library:
+// FixMessage with its header insertion, its value and tag conversions, the
+// cooked encode that places BeginString, BodyLength, MsgType and CheckSum,
+// the raw encode, to_string, get and remove of repeating fields, the
+// multiset comparison, append_string(s), append_data, and the UTC
+// timestamp, time-only and time-zone appenders with their range checks;
+// FixParser with its streaming buffer, the raw data fields and their
+// length tags, stop tags and stop bytes, the empty value, missing and
+// stripped BeginString settings, and its errors; and pretty_print.
+// On top of it sits what a broker runs on FIX: a venue with two clients,
+// logons, sequence numbers, heartbeats and test requests, lost and garbled
+// messages answered with resend requests and gap fills, a cut link that
+// times out, an order book with price-time matching, cancels, execution
+// reports, and the session log written to a file and parsed back.
+//
+// The jobs are in jobs_text(), generated from data/jobs.txt; oracle.py
+// plays the same jobs through the vendored simplefix.
+
+const HB: i64 = 30;
+const MASK32: i64 = 4294967295;
+
+enum Fail {
+    Value(String),
+    Index,
+    UnicodeDecode(String),
+    TagNotNumber(String),
+    RawLengthNotNumber(String),
+    FieldOrder,
+    IncompleteTag(String),
+    EmptyValue(String),
+    ParserConfig(String),
+}
+
+impl Fail {
+    fn describe(ref self) -> String {
+        match self {
+            Fail.Value(msg) => f"! ValueError: {msg}",
+            Fail.Index => "! IndexError".to_string(),
+            Fail.UnicodeDecode(msg) => f"! UnicodeDecodeError: {msg}",
+            Fail.TagNotNumber(msg) => f"! TagNotNumberError: {msg}",
+            Fail.RawLengthNotNumber(msg) => f"! RawLengthNotNumberError: {msg}",
+            Fail.FieldOrder => "! FieldOrderError".to_string(),
+            Fail.IncompleteTag(msg) => f"! IncompleteTagError: {msg}",
+            Fail.EmptyValue(msg) => f"! EmptyValueError: {msg}",
+            Fail.ParserConfig(msg) => f"! ParserConfigError: {msg}",
+        }
+    }
+}
+
+// A Python value handed to the library: None, bytes, str or int. A str is
+// kept as its code points, all below 256 in these jobs.
+enum Val {
+    Nil,
+    B(Vec[u8]),
+    S(Vec[u8]),
+    I(i64),
+}
+
+fn is_nil(v: ref Val) -> bool {
+    match v {
+        Val.Nil => true,
+        _ => false,
+    }
+}
+
+fn ival(v: ref Val) -> i64 {
+    match v {
+        Val.I(n) => n,
+        _ => 0,
+    }
+}
+
+fn vbytes(v: ref Val) -> Vec[u8] {
+    match v {
+        Val.B(b) => b.clone(),
+        Val.S(b) => b.clone(),
+        _ => Vec.new(),
+    }
+}
+
+// ------------------------------------------------------------ bytes
+
+fn bs(text: ref String) -> Vec[u8] {
+    text.bytes().to_vec()
+}
+
+fn dec(n: i64) -> Vec[u8] {
+    bs(f"{n}")
+}
+
+fn latin(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for c in b {
+        out.push(c as char);
+    }
+    out
+}
+
+fn push_all(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for c in b {
+        out.push(c);
+    }
+}
+
+fn cut(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let n = b.len();
+    let end = if to < n { to } else { n };
+    if from >= end {
+        return Vec.new();
+    }
+    b[from..end].to_vec()
+}
+
+fn find(hay: ref Vec[u8], needle: ref Vec[u8], from: i64) -> i64 {
+    let n = hay.len();
+    let k = needle.len();
+    let mut i = from;
+    while i + k <= n {
+        let mut j = 0;
+        while j < k and hay[i + j] == needle[j] {
+            j += 1;
+        }
+        if j == k {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn rfind(hay: ref Vec[u8], needle: ref Vec[u8]) -> i64 {
+    let k = needle.len();
+    let mut i = hay.len() - k;
+    while i >= 0 {
+        let mut j = 0;
+        while j < k and hay[i + j] == needle[j] {
+            j += 1;
+        }
+        if j == k {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn hex2(c: i64) -> String {
+    f"{c:02x}"
+}
+
+// repr() of a bytes object, or of a str when is_str
+fn py_repr(b: ref Vec[u8], is_str: bool) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in b {
+        if c == 39u8 {
+            has_single = true;
+        }
+        if c == 34u8 {
+            has_double = true;
+        }
+    }
+    let quote: u8 = if has_single and not has_double { 34u8 } else { 39u8 };
+    let mut out = if is_str { String.new() } else { "b".to_string() };
+    out.push(quote as char);
+    for c in b {
+        let n = c as i64;
+        if c == quote or n == 92 {
+            out.push('\\');
+            out.push(c as char);
+        } else if n == 9 {
+            out.push_str("\\t");
+        } else if n == 10 {
+            out.push_str("\\n");
+        } else if n == 13 {
+            out.push_str("\\r");
+        } else if n < 32 or n == 127 or (not is_str and n > 127) or (is_str and n > 127 and n < 161) {
+            out.push_str(f"\\x{hex2(n)}");
+        } else {
+            out.push(c as char);
+        }
+    }
+    out.push(quote as char);
+    out
+}
+
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    py_repr(b, false)
+}
+
+fn is_space(c: i64, is_str: bool) -> bool {
+    c == 32 or (c >= 9 and c <= 13) or (is_str and c >= 28 and c <= 31)
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+// Python's int() of a str or bytes in base 10: surrounding whitespace, a
+// sign, and single underscores between digits.
+fn py_int(text: ref Vec[u8], is_str: bool) -> Result[i64, String] {
+    let bad = f"invalid literal for int() with base 10: {py_repr(text, is_str)}";
+    let mut lo = 0;
+    let mut hi = text.len();
+    while lo < hi and is_space(text[lo] as i64, is_str) {
+        lo += 1;
+    }
+    while hi > lo and is_space(text[hi - 1] as i64, is_str) {
+        hi -= 1;
+    }
+    let mut neg = false;
+    if lo < hi and (text[lo] == 43u8 or text[lo] == 45u8) {
+        neg = text[lo] == 45u8;
+        lo += 1;
+    }
+    if lo >= hi {
+        return Err(bad);
+    }
+    let mut v = 0;
+    let mut digits = 0;
+    let mut prev_digit = false;
+    let mut i = lo;
+    while i < hi {
+        let c = text[i] as i64;
+        if is_digit(c) {
+            digits += 1;
+            if digits > 18 {
+                return Err("int too large for this port".to_string());
+            }
+            v = v * 10 + (c - 48);
+            prev_digit = true;
+        } else if c == 95 and prev_digit and i + 1 < hi and is_digit(text[i + 1] as i64) {
+            prev_digit = false;
+        } else {
+            return Err(bad);
+        }
+        i += 1;
+    }
+    Ok(if neg { -v } else { v })
+}
+
+fn int_of(v: ref Val) -> Result[i64, Fail] {
+    match v {
+        Val.I(n) => Ok(n),
+        Val.B(b) => match py_int(b, false) {
+            Ok(n) => Ok(n),
+            Err(msg) => Err(Fail.Value(msg)),
+        },
+        Val.S(b) => match py_int(b, true) {
+            Ok(n) => Ok(n),
+            Err(msg) => Err(Fail.Value(msg)),
+        },
+        Val.Nil => Err(Fail.Value("int() of None".to_string())),
+    }
+}
+
+// int() of a field value the venue wrote itself
+fn int_b(b: ref Vec[u8]) -> i64 {
+    py_int(b, false) ?? 0
+}
+
+// fix_val: bytes as they are, a str as UTF-8, a number as its digits
+fn fix_val(v: ref Val) -> Vec[u8] {
+    match v {
+        Val.B(b) => b.clone(),
+        Val.S(b) => {
+            let mut out: Vec[u8] = Vec.new();
+            for c in b {
+                let n = c as i64;
+                if n < 128 {
+                    out.push(c);
+                } else {
+                    out.push((192 + n / 64) as u8);
+                    out.push((128 + n % 64) as u8);
+                }
+            }
+            out
+        }
+        Val.I(n) => dec(n),
+        Val.Nil => Vec.new(),
+    }
+}
+
+// fix_tag: a number as its digits, bytes and str as they are
+fn fix_tag(v: ref Val) -> Vec[u8] {
+    match v {
+        Val.I(n) => dec(n),
+        Val.B(b) => b.clone(),
+        Val.S(b) => b.clone(),
+        Val.Nil => Vec.new(),
+    }
+}
+
+fn pretty_print(buf: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in buf {
+        out.push(if c == 1u8 { 124u8 } else { c });
+    }
+    out
+}
+
+fn ascii_decode(b: ref Vec[u8]) -> Result[String, Fail] {
+    let mut i = 0;
+    while i < b.len() {
+        let n = b[i] as i64;
+        if n >= 128 {
+            return Err(Fail.UnicodeDecode(f"'ascii' codec can't decode byte 0x{hex2(n)} in position {i}: ordinal not in range(128)"));
+        }
+        i += 1;
+    }
+    Ok(latin(b))
+}
+
+fn fnv(data: ref Vec[u8]) -> i64 {
+    let mut h = 2166136261;
+    for c in data {
+        h = ((h ^ (c as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+// ------------------------------------------------------------ time
+
+#[derive(Clone)]
+struct Stamp {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+}
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+// datetime.utcfromtimestamp for a non-negative count of microseconds
+fn stamp_of(total_us: i64) -> Stamp {
+    let secs = total_us / 1000000;
+    let us = total_us % 1000000;
+    let days = secs / 86400;
+    let rem = secs % 86400;
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + (if m <= 2 { 1 } else { 0 });
+    Stamp { y: y, mo: m, d: d, h: rem / 3600, mi: rem % 3600 / 60, s: rem % 60, us: us }
+}
+
+fn epoch_us(t: ref Stamp) -> i64 {
+    ((days_from_civil(t.y, t.mo, t.d) * 86400 + t.h * 3600 + t.mi * 60 + t.s) * 1000000) + t.us
+}
+
+fn fmt_date(t: ref Stamp) -> String {
+    f"{t.y:04}{t.mo:02}{t.d:02}-{t.h:02}:{t.mi:02}:{t.s:02}"
+}
+
+fn fmt_time(t: ref Stamp) -> String {
+    f"{t.h:02}:{t.mi:02}:{t.s:02}"
+}
+
+fn tz_offset_string(offset: ref Val) -> Result[String, Fail] {
+    let io = int_of(offset)?;
+    if io == 0 {
+        return Ok("Z".to_string());
+    }
+    if io < -1439 or io > 1439 {
+        return Err(Fail.Value(f"Timezone `offset` ({io}) out of allowed range -1439 to +1439 minutes"));
+    }
+    let m = io.abs() % 60;
+    // int(io / 60) truncates toward zero
+    let q = io.abs() / 60;
+    let sign = if io < 0 and q > 0 { "-" } else { "+" };
+    if m == 0 {
+        Ok(f"{sign}{q:02}")
+    } else {
+        Ok(f"{sign}{q:02}:{m:02}")
+    }
+}
+
+fn precision_error() -> Fail {
+    Fail.Value("Precision should be one of 0, 3 or 6 digits".to_string())
+}
+
+// ------------------------------------------------------------ FixMessage
+
+#[derive(Clone)]
+struct Pair {
+    tag: Vec[u8],
+    val: Vec[u8],
+}
+
+#[derive(Clone)]
+struct FixMessage {
+    begin_string: Option[Vec[u8]],
+    message_type: Option[Vec[u8]],
+    pairs: Vec[Pair],
+    header_index: i64,
+}
+
+impl FixMessage {
+    fn new() -> FixMessage {
+        FixMessage { begin_string: None, message_type: None, pairs: Vec.new(), header_index: 0 }
+    }
+
+    fn count(ref self) -> i64 {
+        self.pairs.len()
+    }
+
+    // append_pair once the tag has been read as a number
+    fn put(mut ref self, tag: own Vec[u8], tag_int: i64, val: own Vec[u8], header: bool) {
+        if tag_int == 8 {
+            self.begin_string = Some(val.clone());
+        }
+        if tag_int == 35 {
+            self.message_type = Some(val.clone());
+        }
+        let p = Pair { tag: tag, val: val };
+        if header {
+            self.pairs.insert(self.header_index, p);
+            self.header_index += 1;
+        } else {
+            self.pairs.push(p);
+        }
+    }
+
+    fn append_pair(mut ref self, tag: ref Val, value: ref Val, header: bool) -> Result[(), Fail] {
+        if is_nil(tag) or is_nil(value) {
+            return Ok(());
+        }
+        let t = int_of(tag)?;
+        self.put(fix_tag(tag), t, fix_val(value), header);
+        Ok(())
+    }
+
+    fn add(mut ref self, tag: i64, val: own Vec[u8], header: bool) {
+        self.put(dec(tag), tag, val, header);
+    }
+
+    fn append_time(mut ref self, tag: ref Val, t: ref Stamp, precision: i64, header: bool) -> Result[(), Fail] {
+        let mut s = fmt_date(t);
+        if precision == 3 {
+            s.push_str(f".{t.us / 1000:03}");
+        } else if precision == 6 {
+            s.push_str(f".{t.us:06}");
+        } else if precision != 0 {
+            return Err(precision_error());
+        }
+        self.append_pair(tag, Val.S(bs(s)), header)
+    }
+
+    fn append_utc_datetime(mut ref self, tag: ref Val, with_date: bool, t: ref Stamp, precision: i64, header: bool) -> Result[(), Fail] {
+        let base = if with_date { fmt_date(t) } else { fmt_time(t) };
+        let s = if precision == 0 {
+            base
+        } else if precision == 3 {
+            f"{base}.{t.us / 1000:03}"
+        } else if precision == 6 {
+            f"{base}.{t.us:06}"
+        } else {
+            return Err(precision_error());
+        };
+        self.append_pair(tag, Val.S(bs(s)), header)
+    }
+
+    fn append_utc_timestamp(mut ref self, tag: ref Val, t: ref Stamp, precision: i64, header: bool) -> Result[(), Fail] {
+        self.append_utc_datetime(tag, true, t, precision, header)
+    }
+
+    fn append_utc_time_only(mut ref self, tag: ref Val, t: ref Stamp, precision: i64) -> Result[(), Fail] {
+        self.append_utc_datetime(tag, false, t, precision, false)
+    }
+
+    fn append_utc_time_only_parts(mut ref self, tag: ref Val, h: ref Val, m: ref Val, s: ref Val, ms: ref Val, us: ref Val) -> Result[(), Fail] {
+        let ih = int_of(h)?;
+        if ih < 0 or ih > 23 {
+            return Err(Fail.Value(f"Hour value `h` ({ih}) out of range 0 to 23"));
+        }
+        let im = int_of(m)?;
+        if im < 0 or im > 59 {
+            return Err(Fail.Value(f"Minute value `m` ({im}) out of range 0 to 59"));
+        }
+        let isec = int_of(s)?;
+        if isec < 0 or isec > 60 {
+            return Err(Fail.Value(f"Seconds value `s` ({isec}) out of range 0 to 60"));
+        }
+        let mut v = f"{ih:02}:{im:02}:{isec:02}";
+        if not is_nil(ms) {
+            let ims = int_of(ms)?;
+            if ims < 0 or ims > 999 {
+                return Err(Fail.Value(f"Milliseconds value `ms` ({ims}) out of range 0 to 999"));
+            }
+            v.push_str(f".{ims:03}");
+            if not is_nil(us) {
+                let ius = int_of(us)?;
+                if ius < 0 or ius > 999 {
+                    return Err(Fail.Value(f"Microseconds value `us` ({ius}) out of range 0 to 999"));
+                }
+                v.push_str(f"{ius:03}");
+            }
+        }
+        self.append_pair(tag, Val.S(bs(v)), false)
+    }
+
+    fn append_tz_time_only_parts(mut ref self, tag: ref Val, h: ref Val, m: ref Val, s: ref Val, ms: ref Val, us: ref Val, offset: ref Val) -> Result[(), Fail] {
+        let ih = int_of(h)?;
+        if ih < 0 or ih > 23 {
+            return Err(Fail.Value(f"Hour value `h` ({ih}) out of range 0 to 23"));
+        }
+        let im = int_of(m)?;
+        if im < 0 or im > 59 {
+            return Err(Fail.Value(f"Minute value `m` ({im}) out of range 0 to 59"));
+        }
+        let mut v = f"{ih:02}:{im:02}";
+        if not is_nil(s) {
+            let isec = int_of(s)?;
+            if isec < 0 or isec > 60 {
+                return Err(Fail.Value(f"Seconds value `s` ({isec}) out of range 0 to 60"));
+            }
+            v.push_str(f":{isec:02}");
+            if not is_nil(ms) {
+                let ims = int_of(ms)?;
+                if ims < 0 or ims > 999 {
+                    return Err(Fail.Value(f"Milliseconds value `ms` ({ims}) out of range 0 to 999"));
+                }
+                v.push_str(f".{ims:03}");
+                if not is_nil(us) {
+                    let ius = int_of(us)?;
+                    if ius < 0 or ius > 999 {
+                        return Err(Fail.Value(f"Microseconds value `us` ({ius}) out of range 0 to 999"));
+                    }
+                    v.push_str(f"{ius:03}");
+                }
+            }
+        }
+        v.push_str(tz_offset_string(offset)?);
+        self.append_pair(tag, Val.S(bs(v)), false)
+    }
+
+    fn append_string(mut ref self, field: ref Vec[u8], header: bool) -> Result[(), Fail] {
+        let mut eq = -1;
+        let mut i = 0;
+        while i < field.len() {
+            if field[i] == 61u8 {
+                eq = i;
+                break;
+            }
+            i += 1;
+        }
+        if eq < 0 {
+            return Err(Fail.Value("Field missing '=' separator.".to_string()));
+        }
+        let tag_int = match py_int(cut(field, 0, eq), true) {
+            Ok(n) => n,
+            Err(_) => return Err(Fail.Value("Tag value must be an integer".to_string())),
+        };
+        self.append_pair(Val.I(tag_int), Val.S(cut(field, eq + 1, field.len())), header)
+    }
+
+    fn append_data(mut ref self, len_tag: ref Val, val_tag: ref Val, data: ref Vec[u8], header: bool) -> Result[(), Fail] {
+        self.append_pair(len_tag, Val.I(data.len()), header)?;
+        self.append_pair(val_tag, Val.B(data.clone()), header)
+    }
+
+    fn get(ref self, tag: ref Val, nth: ref Val) -> Result[Option[Vec[u8]], Fail] {
+        let t = fix_tag(tag);
+        let mut n = int_of(nth)?;
+        for p in self.pairs {
+            if p.tag == t {
+                n -= 1;
+                if n == 0 {
+                    return Ok(Some(p.val.clone()));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    // get(tag) for a tag number
+    fn field(ref self, tag: i64) -> Option[Vec[u8]] {
+        let t = dec(tag);
+        for p in self.pairs {
+            if p.tag == t {
+                return Some(p.val.clone());
+            }
+        }
+        None
+    }
+
+    fn text(ref self, tag: i64) -> String {
+        match self.field(tag) {
+            Some(b) => latin(b),
+            None => String.new(),
+        }
+    }
+
+    fn remove(mut ref self, tag: ref Val, nth: ref Val) -> Result[Option[Vec[u8]], Fail] {
+        let t = fix_tag(tag);
+        let mut n = int_of(nth)?;
+        let mut i = 0;
+        while i < self.pairs.len() {
+            if self.pairs[i].tag == t {
+                n -= 1;
+                if n == 0 {
+                    let v = self.pairs[i].val.clone();
+                    self.pairs.remove(i);
+                    return Ok(Some(v));
+                }
+            }
+            i += 1;
+        }
+        Ok(None)
+    }
+
+    fn encode(ref self, raw: bool) -> Result[Vec[u8], Fail] {
+        let mut buf: Vec[u8] = Vec.new();
+        if raw {
+            for p in self.pairs {
+                push_all(mut buf, p.tag);
+                buf.push(61u8);
+                push_all(mut buf, p.val);
+                buf.push(1u8);
+            }
+            return Ok(buf);
+        }
+        for p in self.pairs {
+            let t = py_int(p.tag, false) ?? -1;
+            if t == 8 or t == 9 or t == 35 or t == 10 {
+                continue;
+            }
+            push_all(mut buf, p.tag);
+            buf.push(61u8);
+            push_all(mut buf, p.val);
+            buf.push(1u8);
+        }
+        let mtype = match self.message_type {
+            Some(t) => t.clone(),
+            None => return Err(Fail.Value("No message type set".to_string())),
+        };
+        let mut body = bs("35=");
+        push_all(mut body, mtype);
+        body.push(1u8);
+        push_all(mut body, buf);
+        let body_length = body.len();
+        let begin = match self.begin_string {
+            Some(b) => b.clone(),
+            None => Vec.new(),
+        };
+        if begin.len() == 0 {
+            return Err(Fail.Value("No begin string set".to_string()));
+        }
+        let mut out = bs("8=");
+        push_all(mut out, begin);
+        out.push(1u8);
+        push_all(mut out, bs("9="));
+        push_all(mut out, dec(body_length));
+        out.push(1u8);
+        push_all(mut out, body);
+        let mut checksum = 0;
+        for c in out {
+            checksum += c as i64;
+        }
+        let sum = checksum % 256;
+        push_all(mut out, bs(f"10={sum:03}"));
+        out.push(1u8);
+        Ok(out)
+    }
+
+    fn to_string(ref self, separator: ref Vec[u8]) -> Result[String, Fail] {
+        let mut s = String.new();
+        for p in self.pairs {
+            if s.len() > 0 {
+                s.push_str(latin(separator));
+            }
+            s.push_str(ascii_decode(p.tag)?);
+            s.push('=');
+            s.push_str(ascii_decode(p.val)?);
+        }
+        Ok(s)
+    }
+
+    // __eq__: the same pairs, in any order
+    fn equals(ref self, other: ref FixMessage) -> bool {
+        if self.pairs.len() != other.pairs.len() {
+            return false;
+        }
+        let mut tmp: Vec[Pair] = self.pairs.clone();
+        for p in other.pairs {
+            let mut found = -1;
+            let mut i = 0;
+            while i < tmp.len() {
+                if tmp[i].tag == p.tag and tmp[i].val == p.val {
+                    found = i;
+                    break;
+                }
+                i += 1;
+            }
+            if found < 0 {
+                return false;
+            }
+            tmp.remove(found);
+        }
+        true
+    }
+
+    // __getitem__
+    fn item(ref self, index: i64) -> Result[String, Fail] {
+        if index >= self.pairs.len() {
+            return Err(Fail.Index);
+        }
+        let p = ref self.pairs[index];
+        let t = py_int(p.tag, false) ?? 0;
+        Ok(f"({t}, {bytes_repr(p.val)})")
+    }
+
+    // __contains__
+    fn has(ref self, item: ref Val) -> bool {
+        let needle = fix_tag(item);
+        for p in self.pairs {
+            if p.tag == needle {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// ------------------------------------------------------------ FixParser
+
+struct PPair {
+    tag: i64,
+    val: Vec[u8],
+}
+
+// RAW_DATA, as defined in FIX.5.0sp2 ep228: (length tag, data tag)
+fn raw_data() -> Vec[i64] {
+    [90, 91, 93, 89, 95, 96, 212, 213, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 360, 361,
+     362, 363, 364, 365, 445, 446, 618, 619, 621, 622, 1277, 1278, 1280, 1281, 1282, 1283, 1397, 1398,
+     1401, 1402, 1403, 1404, 1468, 1469, 1525, 1527, 1578, 1579, 1620, 1621, 1664, 1665, 1678, 1697,
+     1733, 1734, 2072, 2073, 2074, 2075, 2179, 2180, 2111, 2112, 2287, 2288, 2351, 2352, 2372, 2371,
+     2481, 2482, 2494, 2493, 2522, 2521, 2637, 2638, 2651, 2652, 2665, 2666, 40004, 40005, 40008, 40009,
+     40978, 40979, 40980, 40981, 40982, 40983, 40984, 40985, 40986, 40987, 40988, 40989, 41083, 41084,
+     41101, 41101, 41107, 41108, 41256, 41257, 41320, 41321, 41324, 41325, 41458, 41459, 41476, 41477,
+     41482, 41483, 41653, 41654, 41710, 41711, 41806, 41807, 41811, 41812, 41873, 41874, 41969, 41970,
+     42025, 42026, 42171, 42172].to_vec()
+}
+
+struct FixParser {
+    raw_len_tags: Vec[i64],
+    raw_data_tags: Vec[i64],
+    // the buffer is buf[off..]: dropping bytes from its head moves off
+    buf: Vec[u8],
+    off: i64,
+    pairs: Vec[PPair],
+    raw_len: i64,
+    stop_tag: Option[i64],
+    stop_byte: Option[i64],
+    allow_missing_begin_string: bool,
+    allow_empty_values: bool,
+    strip_fields_before_begin_string: bool,
+}
+
+fn new_parser(allow_empty_values: bool, allow_missing_begin_string: bool, strip: bool, stop_tag: i64, stop_byte: Option[i64]) -> Result[FixParser, Fail] {
+    let table = raw_data();
+    let mut lens: Vec[i64] = Vec.new();
+    let mut datas: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < table.len() {
+        lens.push(table[i]);
+        datas.push(table[i + 1]);
+        i += 2;
+    }
+    if allow_missing_begin_string and strip {
+        return Err(Fail.ParserConfig("Can't set 'allow_missing_begin_string' and 'strip_fields_before_begin_string' simultaneously.".to_string()));
+    }
+    Ok(FixParser {
+        raw_len_tags: lens,
+        raw_data_tags: datas,
+        buf: Vec.new(),
+        off: 0,
+        pairs: Vec.new(),
+        raw_len: 0,
+        stop_tag: Some(stop_tag),
+        stop_byte: stop_byte,
+        allow_missing_begin_string: allow_missing_begin_string,
+        allow_empty_values: allow_empty_values,
+        strip_fields_before_begin_string: strip,
+    })
+}
+
+fn default_parser() -> FixParser {
+    match new_parser(false, false, true, 10, None) {
+        Ok(p) => p,
+        Err(_) => panic("the default parser settings are valid"),
+    }
+}
+
+fn position(v: ref Vec[i64], x: i64) -> i64 {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == x {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+impl FixParser {
+    fn blen(ref self) -> i64 {
+        self.buf.len() - self.off
+    }
+
+    fn at(ref self, i: i64) -> i64 {
+        self.buf[self.off + i] as i64
+    }
+
+    fn slice(ref self, from: i64, to: i64) -> Vec[u8] {
+        cut(self.buf, self.off + from, self.off + to)
+    }
+
+    // self.buf = self.buf[n:]
+    fn advance(mut ref self, n: i64) {
+        let end = self.off + n;
+        self.off = if end < self.buf.len() { end } else { self.buf.len() };
+    }
+
+    fn set_message_terminator(mut ref self, tag: Option[i64], byte: Option[i64]) -> Result[(), Fail] {
+        match tag {
+            Some(t) => {
+                if byte.is_some() {
+                    return Err(Fail.Value("Only supply one of 'tag' or 'char'.".to_string()));
+                }
+                self.stop_tag = Some(t);
+                self.stop_byte = None;
+            }
+            None => {
+                self.stop_tag = None;
+                self.stop_byte = byte;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_raw(mut ref self, length_tag: i64, value_tag: i64) {
+        self.raw_len_tags.push(length_tag);
+        self.raw_data_tags.push(value_tag);
+    }
+
+    fn remove_raw(mut ref self, length_tag: i64, value_tag: i64) -> Result[(), Fail] {
+        let i = position(self.raw_len_tags, length_tag);
+        if i < 0 {
+            return Err(Fail.Value("list.remove(x): x not in list".to_string()));
+        }
+        self.raw_len_tags.remove(i);
+        let j = position(self.raw_data_tags, value_tag);
+        if j < 0 {
+            return Err(Fail.Value("list.remove(x): x not in list".to_string()));
+        }
+        self.raw_data_tags.remove(j);
+        Ok(())
+    }
+
+    fn reset(mut ref self) {
+        self.buf = Vec.new();
+        self.off = 0;
+        self.pairs = Vec.new();
+        self.raw_len = 0;
+    }
+
+    fn append_buffer(mut ref self, data: ref Vec[u8]) {
+        if self.off > 0 {
+            self.buf = cut(self.buf, self.off, self.buf.len());
+            self.off = 0;
+        }
+        push_all(mut self.buf, data);
+    }
+
+    fn get_buffer(ref self) -> Vec[u8] {
+        self.slice(0, self.blen())
+    }
+
+    fn get_message(mut ref self) -> Result[Option[FixMessage], Fail] {
+        let mut start = 0;
+        let mut point = 0;
+        let mut tag = 0;
+        let mut in_tag = true;
+        let mut eom = false;
+        let stop_byte = self.stop_byte ?? -1;
+        let stop_tag = self.stop_tag;
+        while point < self.blen() {
+            let b = self.at(point);
+            if in_tag {
+                if b == 61 {
+                    let tag_string = self.slice(start, point);
+                    point += 1;
+                    tag = match py_int(tag_string, false) {
+                        Ok(n) => n,
+                        Err(msg) => return Err(Fail.TagNotNumber(msg)),
+                    };
+                    if self.raw_data_tags.contains(tag) and self.raw_len > 0 {
+                        if self.raw_len > self.blen() - point {
+                            break;
+                        }
+                        let value = self.slice(point, point + self.raw_len);
+                        self.advance(point + self.raw_len + 1);
+                        self.raw_len = 0;
+                        point = 0;
+                        self.pairs.push(PPair { tag: tag, val: value });
+                        in_tag = true;
+                    } else {
+                        in_tag = false;
+                    }
+                    start = point;
+                    continue;
+                } else if b == stop_byte {
+                    if point != 0 {
+                        return Err(Fail.IncompleteTag(bytes_repr(self.slice(0, point))));
+                    }
+                    eom = true;
+                    self.advance(1);
+                    break;
+                }
+            } else {
+                if b == 1 or b == stop_byte {
+                    let value = self.slice(start, point);
+                    if not self.allow_empty_values and value.len() == 0 {
+                        return Err(Fail.EmptyValue(f"{tag}"));
+                    }
+                    self.pairs.push(PPair { tag: tag, val: value.clone() });
+                    self.advance(point + 1);
+                    if b == stop_byte {
+                        eom = true;
+                        break;
+                    }
+                    if stop_tag == Some(tag) {
+                        break;
+                    }
+                    if self.raw_len_tags.contains(tag) {
+                        self.raw_len = match py_int(value, false) {
+                            Ok(n) => n,
+                            Err(msg) => return Err(Fail.RawLengthNotNumber(msg)),
+                        };
+                    }
+                    point = 0;
+                    start = point;
+                    in_tag = true;
+                    continue;
+                }
+            }
+            point += 1;
+        }
+        if self.pairs.len() == 0 {
+            return Ok(None);
+        }
+        if self.strip_fields_before_begin_string {
+            while self.pairs.len() > 0 and self.pairs[0].tag != 8 {
+                self.pairs.remove(0);
+            }
+            if self.pairs.len() == 0 {
+                return Ok(None);
+            }
+        }
+        if not self.allow_missing_begin_string and self.pairs[0].tag != 8 {
+            return Err(Fail.FieldOrder);
+        }
+        let last = self.pairs[self.pairs.len() - 1].tag;
+        if not eom and stop_tag != Some(last) {
+            return Ok(None);
+        }
+        let mut m = FixMessage.new();
+        for p in self.pairs {
+            m.add(p.tag, p.val.clone(), false);
+        }
+        self.pairs = Vec.new();
+        Ok(Some(m))
+    }
+}
+
+fn shown(m: ref Option[FixMessage]) -> String {
+    match m {
+        None => "None".to_string(),
+        Some(msg) => match msg.to_string(bs("|")) {
+            Ok(s) => s,
+            Err(e) => e.describe(),
+        },
+    }
+}
+
+// ------------------------------------------------------------ the venue
+
+const SYMBOLS: Array[Str, 2] = ["IBM", "MSFT"];
+
+#[derive(Clone)]
+struct Field {
+    tag: i64,
+    val: Vec[u8],
+}
+
+fn fs_(tag: i64, text: ref String) -> Field {
+    Field { tag: tag, val: bs(text) }
+}
+
+fn fi(tag: i64, n: i64) -> Field {
+    Field { tag: tag, val: dec(n) }
+}
+
+#[derive(Clone)]
+struct Sent {
+    mtype: String,
+    fields: Vec[Field],
+    orig: String,
+}
+
+struct Session {
+    me: String,
+    them: String,
+    out_seq: i64,
+    in_seq: i64,
+    sent: Vec[Sent],
+    up: bool,
+    last_tx: i64,
+    last_rx: i64,
+    test_out: Option[String],
+    test_at: i64,
+    tests: i64,
+    resend_pending: bool,
+    parser: FixParser,
+    n_tx: i64,
+    n_rx: i64,
+    gaps: i64,
+    resends: i64,
+    dups: i64,
+    garbled: i64,
+    ignored: i64,
+}
+
+fn new_session(me: ref String, them: ref String) -> Session {
+    Session {
+        me: me.clone(),
+        them: them.clone(),
+        out_seq: 1,
+        in_seq: 1,
+        sent: Vec.new(),
+        up: false,
+        last_tx: 0,
+        last_rx: 0,
+        test_out: None,
+        test_at: 0,
+        tests: 0,
+        resend_pending: false,
+        parser: default_parser(),
+        n_tx: 0,
+        n_rx: 0,
+        gaps: 0,
+        resends: 0,
+        dups: 0,
+        garbled: 0,
+        ignored: 0,
+    }
+}
+
+struct Link {
+    from: String,
+    to: String,
+    drop: i64,
+    cut: bool,
+    garble: bool,
+    chunk: i64,
+}
+
+#[derive(Clone)]
+struct Order {
+    oid: String,
+    client: String,
+    clordid: String,
+    sym: String,
+    side: String,
+    qty: i64,
+    typ: String,
+    px: Option[i64],
+    cum: i64,
+    leaves: i64,
+    value: i64,
+    status: String,
+    seq: i64,
+}
+
+struct Queued {
+    me: String,
+    them: String,
+    raw: Vec[u8],
+}
+
+#[derive(Clone)]
+struct Row {
+    key: String,
+    status: String,
+    cum: String,
+    leaves: String,
+    avg: String,
+    text: String,
+}
+
+struct Placed {
+    clordid: String,
+    sym: String,
+    side: String,
+}
+
+struct Level {
+    px: i64,
+    seq: i64,
+    idx: i64,
+}
+
+// A price with up to two decimals, in cents, or None.
+fn cents(text: ref Option[Vec[u8]]) -> Option[i64] {
+    let t = match text {
+        Some(b) => b.clone(),
+        None => return None,
+    };
+    let dot = position_u8(t, 46u8);
+    let whole = if dot < 0 { t.clone() } else { cut(t, 0, dot) };
+    let frac = if dot < 0 { Vec.new() } else { cut(t, dot + 1, t.len()) };
+    if not all_digits(whole) or frac.len() > 2 or (frac.len() > 0 and not all_digits(frac)) {
+        return None;
+    }
+    let mut f2 = frac.clone();
+    while f2.len() < 2 {
+        f2.push(48u8);
+    }
+    Some(int_b(whole) * 100 + int_b(f2))
+}
+
+fn position_u8(b: ref Vec[u8], x: u8) -> i64 {
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == x {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// bytes.isdigit()
+fn all_digits(b: ref Vec[u8]) -> bool {
+    if b.len() == 0 {
+        return false;
+    }
+    for c in b {
+        if not is_digit(c as i64) {
+            return false;
+        }
+    }
+    true
+}
+
+fn px(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn avg_px(value: i64, qty: i64) -> String {
+    if qty == 0 {
+        return "0".to_string();
+    }
+    let v = value * 100 / qty;
+    f"{v / 10000}.{v % 10000:04}"
+}
+
+fn is_session_type(t: ref String) -> bool {
+    t == "A" or t == "0" or t == "1" or t == "2" or t == "4" or t == "5"
+}
+
+fn sym_index(sym: ref String) -> i64 {
+    let mut i = 0;
+    while i < 2 {
+        if SYMBOLS[i] == sym {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn client_index(name: ref String) -> i64 {
+    if name == "CLIENT1" { 0 } else { 1 }
+}
+
+fn report_fields(o: ref Order, exec_id: i64, exec_type: ref String, extra: ref Vec[Field]) -> Vec[Field] {
+    let mut fields: Vec[Field] = Vec.new();
+    fields.push(fs_(37, o.oid));
+    fields.push(fs_(11, o.clordid));
+    fields.push(fs_(17, f"E{exec_id}"));
+    fields.push(fs_(150, exec_type));
+    fields.push(fs_(39, o.status));
+    fields.push(fs_(55, o.sym));
+    fields.push(fs_(54, o.side));
+    fields.push(fi(38, o.qty));
+    match o.px {
+        Some(p) => fields.push(fs_(44, px(p))),
+        None => {}
+    }
+    for f in extra {
+        fields.push(f.clone());
+    }
+    fields.push(fi(14, o.cum));
+    fields.push(fi(151, o.leaves));
+    fields.push(fs_(6, avg_px(o.value, o.cum)));
+    fields
+}
+
+struct Venue {
+    clock: i64,
+    base_us: i64,
+    sessions: Vec[Session],
+    links: Vec[Link],
+    queue: Vec[Queued],
+    qhead: i64,
+    log: Vec[Vec[u8]],
+    orders: Vec[Order],
+    books: Vec[Vec[i64]],
+    next_order: i64,
+    next_exec: i64,
+    arrivals: i64,
+    views: Vec[Vec[Row]],
+    placed: Vec[Vec[Placed]],
+}
+
+fn new_venue() -> Venue {
+    let mut sessions: Vec[Session] = Vec.new();
+    let mut links: Vec[Link] = Vec.new();
+    let broker = "BROKER".to_string();
+    for c in ["CLIENT1", "CLIENT2"] {
+        let c = c.to_string();
+        sessions.push(new_session(c, broker));
+        sessions.push(new_session(broker, c));
+        links.push(Link { from: c.clone(), to: broker.clone(), drop: 0, cut: false, garble: false, chunk: 0 });
+        links.push(Link { from: broker.clone(), to: c.clone(), drop: 0, cut: false, garble: false, chunk: 0 });
+    }
+    let base = Stamp { y: 2026, mo: 10, d: 23, h: 13, mi: 30, s: 0, us: 0 };
+    Venue {
+        clock: 0,
+        base_us: epoch_us(base),
+        sessions: sessions,
+        links: links,
+        queue: Vec.new(),
+        qhead: 0,
+        log: Vec.new(),
+        orders: Vec.new(),
+        books: Vec[Vec.new(), Vec.new()],
+        next_order: 1,
+        next_exec: 1,
+        arrivals: 0,
+        views: Vec[Vec.new(), Vec.new()],
+        placed: Vec[Vec.new(), Vec.new()],
+    }
+}
+
+impl Venue {
+    fn sess(ref self, me: ref String, them: ref String) -> i64 {
+        let mut i = 0;
+        while i < self.sessions.len() {
+            if self.sessions[i].me == me and self.sessions[i].them == them {
+                return i;
+            }
+            i += 1;
+        }
+        panic(f"no session {me}{them}")
+    }
+
+    fn link(ref self, from: ref String, to: ref String) -> i64 {
+        let mut i = 0;
+        while i < self.links.len() {
+            if self.links[i].from == from and self.links[i].to == to {
+                return i;
+            }
+            i += 1;
+        }
+        panic(f"no link {from}{to}")
+    }
+
+    fn stamp(ref self) -> Stamp {
+        stamp_of(self.base_us + self.clock * 1000)
+    }
+
+    // ---- sending
+
+    fn build(ref self, si: i64, mtype: ref String, fields: ref Vec[Field], seq: i64, poss_dup: bool, orig: ref String) -> FixMessage {
+        let s = ref self.sessions[si];
+        let mut m = FixMessage.new();
+        m.add(8, bs("FIX.4.4"), false);
+        m.add(35, bs(mtype), false);
+        m.add(49, bs(s.me), true);
+        m.add(56, bs(s.them), true);
+        m.add(34, dec(seq), true);
+        if poss_dup {
+            m.add(43, bs("Y"), true);
+            m.add(122, bs(orig), true);
+        }
+        let t = self.stamp();
+        let stamped = m.append_utc_timestamp(Val.I(52), t, 3, true);
+        if stamped.is_err() {
+            panic("precision 3 is valid");
+        }
+        for f in fields {
+            m.add(f.tag, f.val.clone(), false);
+        }
+        m
+    }
+
+    fn send(mut ref self, me: ref String, them: ref String, mtype: ref String, fields: own Vec[Field]) {
+        let si = self.sess(me, them);
+        self.clock += 1;
+        let seq = self.sessions[si].out_seq;
+        self.sessions[si].out_seq += 1;
+        let m = self.build(si, mtype, fields, seq, false, "");
+        let orig = m.text(52);
+        self.sessions[si].sent.push(Sent { mtype: mtype.clone(), fields: fields, orig: orig });
+        self.transmit(si, m);
+    }
+
+    fn resend(mut ref self, si: i64, seq: i64, mtype: ref String, fields: ref Vec[Field], orig: ref String) {
+        self.clock += 1;
+        let m = self.build(si, mtype, fields, seq, true, orig);
+        self.transmit(si, m);
+    }
+
+    fn transmit(mut ref self, si: i64, m: ref FixMessage) {
+        let mut raw = match m.encode(false) {
+            Ok(r) => r,
+            Err(_) => panic("venue messages encode"),
+        };
+        self.sessions[si].last_tx = self.clock;
+        self.sessions[si].n_tx += 1;
+        self.log.push(raw.clone());
+        let me = self.sessions[si].me.clone();
+        let them = self.sessions[si].them.clone();
+        let li = self.link(me, them);
+        let mut note = "";
+        if self.links[li].cut {
+            note = " (lost: link cut)";
+        } else if self.links[li].drop > 0 {
+            self.links[li].drop -= 1;
+            note = " (lost)";
+        } else if self.links[li].garble {
+            self.links[li].garble = false;
+            let k = rfind(raw, bs("10="));
+            let bad = (int_b(cut(raw, k + 3, k + 6)) + 1) % 256;
+            let mut garbled = cut(raw, 0, k + 3);
+            push_all(mut garbled, bs(f"{bad:03}"));
+            push_all(mut garbled, cut(raw, k + 6, raw.len()));
+            raw = garbled;
+            note = " (garbled)";
+        }
+        let t = self.stamp();
+        println(f"  {t.h:02}:{t.mi:02}:{t.s:02}.{t.us / 1000:03} {me}>{them} {latin(pretty_print(raw))}{note}");
+        if note != "" and note != " (garbled)" {
+            return;
+        }
+        self.queue.push(Queued { me: them, them: me, raw: raw });
+    }
+
+    fn run(mut ref self) {
+        let sizes = [7, 19, 64, 3, 200];
+        while self.qhead < self.queue.len() {
+            let q = ref self.queue[self.qhead];
+            let me = q.me.clone();
+            let them = q.them.clone();
+            let raw = q.raw.clone();
+            self.qhead += 1;
+            let si = self.sess(me, them);
+            let li = self.link(them, me);
+            let mut point = 0;
+            while point < raw.len() {
+                let n = sizes[self.links[li].chunk % 5];
+                self.links[li].chunk += 1;
+                self.sessions[si].parser.append_buffer(cut(raw, point, point + n));
+                point += n;
+                loop {
+                    let got = match self.sessions[si].parser.get_message() {
+                        Ok(m) => m,
+                        Err(e) => panic(e.describe()),
+                    };
+                    match got {
+                        Some(m) => self.receive(si, m),
+                        None => break,
+                    }
+                }
+            }
+        }
+        self.queue = Vec.new();
+        self.qhead = 0;
+    }
+
+    // ---- receiving
+
+    fn say(ref self, si: i64, text: ref String) {
+        println(f"  {self.sessions[si].me}: {text}");
+    }
+
+    fn disconnect(mut ref self, si: i64, why: ref String) {
+        self.say(si, f"disconnected from {self.sessions[si].them} ({why})");
+        self.sessions[si].up = false;
+        self.sessions[si].parser.reset();
+        self.sessions[si].test_out = None;
+        self.sessions[si].resend_pending = false;
+    }
+
+    fn receive(mut ref self, si: i64, m: ref FixMessage) {
+        let raw = match m.encode(true) {
+            Ok(r) => r,
+            Err(_) => Vec.new(),
+        };
+        let k = rfind(raw, bs("10="));
+        let mut total = 0;
+        for c in cut(raw, 0, k) {
+            total += c as i64;
+        }
+        total = total % 256;
+        let start = find(raw, [1u8].to_vec(), find(raw, bs("9="), 0)) + 1;
+        let length = k - start;
+        let checksum = m.field(10) ?? Vec.new();
+        let body_length = m.field(9) ?? Vec.new();
+        if int_b(checksum) != total or int_b(body_length) != length {
+            self.sessions[si].garbled += 1;
+            let them = self.sessions[si].them.clone();
+            self.say(si, f"ignored a garbled message from {them} (CheckSum {latin(checksum)}, computed {total:03}; BodyLength {latin(body_length)}, counted {length})");
+            return;
+        }
+        self.sessions[si].last_rx = self.clock;
+        self.sessions[si].n_rx += 1;
+        let mtype = m.text(35);
+        let seq = int_b(m.field(34) ?? Vec.new());
+        let dup = m.text(43) == "Y";
+        let me = self.sessions[si].me.clone();
+        let them = self.sessions[si].them.clone();
+        if not self.sessions[si].up and mtype != "A" {
+            self.sessions[si].ignored += 1;
+            self.say(si, f"not logged on; ignored {mtype} {seq}");
+            return;
+        }
+        if mtype == "A" {
+            if not self.sessions[si].up {
+                self.sessions[si].up = true;
+                self.say(si, f"logged on with {them} (their seq {seq}, expected {self.sessions[si].in_seq})");
+                if me == "BROKER" {
+                    self.send(me, them, "A", [fs_(98, "0"), fi(108, HB)].to_vec());
+                }
+            }
+            if seq < self.sessions[si].in_seq {
+                let text = f"MsgSeqNum too low, expecting {self.sessions[si].in_seq} but received {seq}";
+                self.send(me, them, "5", [fs_(58, text)].to_vec());
+                self.disconnect(si, "sequence too low");
+                return;
+            }
+        }
+        if seq < self.sessions[si].in_seq {
+            if dup {
+                self.sessions[si].dups += 1;
+                self.say(si, f"ignored duplicate {mtype} {seq}");
+                return;
+            }
+            let text = f"MsgSeqNum too low, expecting {self.sessions[si].in_seq} but received {seq}";
+            self.send(me, them, "5", [fs_(58, text)].to_vec());
+            self.disconnect(si, "sequence too low");
+            return;
+        }
+        if seq > self.sessions[si].in_seq {
+            self.sessions[si].gaps += 1;
+            if mtype == "2" {
+                // a resend request is answered even when it is ahead of
+                // the sequence, or both ends would wait for each other
+                self.replay(si, int_b(m.field(7) ?? Vec.new()), int_b(m.field(16) ?? Vec.new()));
+            }
+            let expected = self.sessions[si].in_seq;
+            if self.sessions[si].resend_pending {
+                self.say(si, f"gap: expected {expected}, got {mtype} {seq}; resend already asked");
+            } else {
+                self.say(si, f"gap: expected {expected}, got {mtype} {seq}; asking for a resend");
+                self.sessions[si].resend_pending = true;
+                self.send(me, them, "2", [fi(7, expected), fi(16, 0)].to_vec());
+            }
+            return;
+        }
+        self.sessions[si].resend_pending = false;
+        if mtype == "4" {
+            let new = int_b(m.field(36) ?? Vec.new());
+            self.say(si, f"gap filled from {seq} to {new}");
+            self.sessions[si].in_seq = new;
+            return;
+        }
+        self.sessions[si].in_seq += 1;
+        if mtype == "A" {
+            return;
+        }
+        if mtype == "0" {
+            match self.sessions[si].test_out {
+                Some(t) => {
+                    if m.text(112) == t {
+                        let t = t.clone();
+                        self.say(si, f"test request {t} answered");
+                        self.sessions[si].test_out = None;
+                    }
+                }
+                None => {}
+            }
+            return;
+        }
+        if mtype == "1" {
+            let id = m.field(112) ?? Vec.new();
+            self.send(me, them, "0", [Field { tag: 112, val: id }].to_vec());
+            return;
+        }
+        if mtype == "2" {
+            self.replay(si, int_b(m.field(7) ?? Vec.new()), int_b(m.field(16) ?? Vec.new()));
+            return;
+        }
+        if mtype == "5" {
+            if me == "BROKER" {
+                self.send(me, them, "5", [fs_(58, "Goodbye")].to_vec());
+            }
+            self.disconnect(si, f"logout: {m.text(58)}");
+            return;
+        }
+        if mtype == "3" {
+            self.say(si, f"session reject of {m.text(45)}: tag {m.text(371)}, reason {m.text(373)}, {m.text(58)}");
+            return;
+        }
+        if me == "BROKER" {
+            self.business(si, m, seq);
+        } else {
+            self.client(si, m);
+        }
+    }
+
+    fn replay(mut ref self, si: i64, begin: i64, end: i64) {
+        let last = if end == 0 { self.sessions[si].out_seq - 1 } else { end };
+        self.sessions[si].resends += 1;
+        self.say(si, f"resending {begin} to {last} to {self.sessions[si].them}");
+        let mut gap_seq = -1;
+        let mut gap_orig = String.new();
+        let mut seq = begin;
+        while seq <= last {
+            let sent = self.sessions[si].sent[seq - 1].clone();
+            if is_session_type(sent.mtype) {
+                if gap_seq < 0 {
+                    gap_seq = seq;
+                    gap_orig = sent.orig.clone();
+                }
+                seq += 1;
+                continue;
+            }
+            if gap_seq >= 0 {
+                self.resend(si, gap_seq, "4", [fs_(123, "Y"), fi(36, seq)].to_vec(), gap_orig);
+                gap_seq = -1;
+            }
+            self.resend(si, seq, sent.mtype, sent.fields, sent.orig);
+            seq += 1;
+        }
+        if gap_seq >= 0 {
+            self.resend(si, gap_seq, "4", [fs_(123, "Y"), fi(36, last + 1)].to_vec(), gap_orig);
+        }
+    }
+
+    // ---- the broker
+
+    fn report(mut ref self, o: ref Order, exec_type: ref String, extra: Vec[Field]) {
+        let fields = report_fields(o, self.next_exec, exec_type, extra);
+        self.next_exec += 1;
+        self.send("BROKER", o.client, "8", fields);
+    }
+
+    fn report_at(mut ref self, oi: i64, exec_type: ref String, extra: Vec[Field]) {
+        let fields = report_fields(self.orders[oi], self.next_exec, exec_type, extra);
+        self.next_exec += 1;
+        let client = self.orders[oi].client.clone();
+        self.send("BROKER", client, "8", fields);
+    }
+
+    fn reject_missing(mut ref self, si: i64, m: ref FixMessage, seq: i64, tags: Vec[i64]) -> bool {
+        for tag in tags {
+            if m.field(tag).is_none() {
+                let them = self.sessions[si].them.clone();
+                self.send("BROKER", them, "3", [fi(45, seq), fi(371, tag), fi(373, 1), fs_(58, "Required tag missing")].to_vec());
+                return true;
+            }
+        }
+        false
+    }
+
+    fn business(mut ref self, si: i64, m: ref FixMessage, seq: i64) {
+        let mtype = m.text(35);
+        if mtype == "D" {
+            if self.reject_missing(si, m, seq, [11, 55, 54, 38, 40].to_vec()) {
+                return;
+            }
+            self.new_order(si, m);
+        } else if mtype == "F" {
+            if self.reject_missing(si, m, seq, [11, 41, 55, 54].to_vec()) {
+                return;
+            }
+            self.cancel(si, m);
+        } else {
+            let them = self.sessions[si].them.clone();
+            self.send("BROKER", them, "3", [fi(45, seq), fs_(372, mtype), fi(373, 11), fs_(58, "Invalid MsgType")].to_vec());
+        }
+    }
+
+    fn new_order(mut ref self, si: i64, m: ref FixMessage) {
+        let q = m.field(38) ?? Vec.new();
+        let typ = m.text(40);
+        let mut o = Order {
+            oid: f"O{self.next_order}",
+            client: self.sessions[si].them.clone(),
+            clordid: m.text(11),
+            sym: m.text(55),
+            side: m.text(54),
+            qty: if all_digits(q) { int_b(q) } else { 0 },
+            typ: typ.clone(),
+            px: if typ == "2" { cents(m.field(44)) } else { None },
+            cum: 0,
+            leaves: 0,
+            value: 0,
+            status: "0".to_string(),
+            seq: self.arrivals,
+        };
+        self.arrivals += 1;
+        let mut why = String.new();
+        if sym_index(o.sym) < 0 {
+            why = f"Unknown symbol '{o.sym}'";
+        } else if o.side != "1" and o.side != "2" {
+            why = f"Bad side '{o.side}'";
+        } else if o.qty <= 0 {
+            why = f"Bad quantity '{latin(q)}'";
+        } else if o.typ != "1" and o.typ != "2" {
+            why = f"Unsupported order type '{o.typ}'";
+        } else if o.typ == "2" and m.field(44).is_none() {
+            why = "Limit order without a price".to_string();
+        } else if o.typ == "2" and o.px.is_none() {
+            why = f"Bad price '{m.text(44)}'";
+        } else {
+            for x in self.orders {
+                if x.client == o.client and x.clordid == o.clordid {
+                    why = f"Duplicate ClOrdID '{o.clordid}'";
+                    break;
+                }
+            }
+        }
+        if why != "" {
+            o.oid = "NONE".to_string();
+            o.status = "8".to_string();
+            self.report(o, "8", [fs_(58, why)].to_vec());
+            return;
+        }
+        self.next_order += 1;
+        o.leaves = o.qty;
+        let bk = sym_index(o.sym);
+        self.orders.push(o);
+        let oi = self.orders.len() - 1;
+        self.report_at(oi, "0", Vec.new());
+        while self.orders[oi].leaves > 0 {
+            let mut best = -1;
+            for r in self.books[bk] {
+                if self.orders[r].side != self.orders[oi].side and (best < 0 or self.better(r, best)) {
+                    best = r;
+                }
+            }
+            if best < 0 {
+                break;
+            }
+            let best_px = self.orders[best].px ?? 0;
+            match self.orders[oi].px {
+                Some(limit) => {
+                    let side = ref self.orders[oi].side;
+                    if (side == "1" and best_px > limit) or (side == "2" and best_px < limit) {
+                        break;
+                    }
+                }
+                None => {}
+            }
+            let a = self.orders[oi].leaves;
+            let b = self.orders[best].leaves;
+            let fill = if a < b { a } else { b };
+            for x in [best, oi] {
+                self.orders[x].cum += fill;
+                self.orders[x].leaves -= fill;
+                self.orders[x].value += fill * best_px;
+                self.orders[x].status = if self.orders[x].leaves == 0 { "2".to_string() } else { "1".to_string() };
+            }
+            self.report_at(best, "F", [fi(32, fill), fs_(31, px(best_px))].to_vec());
+            self.report_at(oi, "F", [fi(32, fill), fs_(31, px(best_px))].to_vec());
+            if self.orders[best].leaves == 0 {
+                let at = position(self.books[bk], best);
+                self.books[bk].remove(at);
+            }
+        }
+        if self.orders[oi].leaves > 0 {
+            if self.orders[oi].px.is_none() {
+                self.orders[oi].status = "4".to_string();
+                let left = self.orders[oi].leaves;
+                self.orders[oi].leaves = 0;
+                self.report_at(oi, "4", [fs_(58, f"No liquidity for {left}")].to_vec());
+            } else {
+                self.books[bk].push(oi);
+            }
+        }
+    }
+
+    fn better(ref self, ai: i64, bi: i64) -> bool {
+        let a = ref self.orders[ai];
+        let b = ref self.orders[bi];
+        let apx = a.px ?? 0;
+        let bpx = b.px ?? 0;
+        if apx != bpx {
+            return if a.side == "2" { apx < bpx } else { apx > bpx };
+        }
+        a.seq < b.seq
+    }
+
+    fn cancel(mut ref self, si: i64, m: ref FixMessage) {
+        let orig = m.text(41);
+        let clid = m.text(11);
+        let them = self.sessions[si].them.clone();
+        let mut found = -1;
+        let mut i = 0;
+        while i < self.orders.len() {
+            if self.orders[i].client == them and self.orders[i].clordid == orig {
+                found = i;
+            }
+            i += 1;
+        }
+        if found < 0 or self.orders[found].leaves == 0 {
+            let known = found >= 0;
+            let oid = if known { self.orders[found].oid.clone() } else { "NONE".to_string() };
+            let status = if known { self.orders[found].status.clone() } else { "8".to_string() };
+            let fields = [fs_(37, oid), fs_(11, clid), fs_(41, orig), fs_(39, status), fi(434, 1),
+                          fi(102, if known { 0 } else { 1 }),
+                          fs_(58, if known { "Too late to cancel" } else { "Unknown order" })].to_vec();
+            self.send("BROKER", them, "9", fields);
+            return;
+        }
+        let bk = sym_index(self.orders[found].sym);
+        let at = position(self.books[bk], found);
+        self.books[bk].remove(at);
+        self.orders[found].status = "4".to_string();
+        let left = self.orders[found].leaves;
+        self.orders[found].leaves = 0;
+        self.orders[found].clordid = clid;
+        self.report_at(found, "4", [fs_(41, orig), fs_(58, f"Cancelled {left}")].to_vec());
+    }
+
+    // ---- the clients
+
+    fn client(mut ref self, si: i64, m: ref FixMessage) {
+        let mtype = m.text(35);
+        let ci = client_index(self.sessions[si].me);
+        if mtype == "8" {
+            let key = f"{m.text(11)} {m.text(37)}";
+            let row = Row { key: key.clone(), status: m.text(39), cum: m.text(14), leaves: m.text(151), avg: m.text(6), text: m.text(58) };
+            let view = mut ref self.views[ci];
+            let mut at = -1;
+            let mut k = 0;
+            while k < view.len() {
+                if view[k].key == key {
+                    at = k;
+                    break;
+                }
+                k += 1;
+            }
+            if at >= 0 {
+                view[at] = row;
+            } else {
+                view.push(row);
+            }
+            if m.field(41).is_some() {
+                let old = f"{m.text(41)} {m.text(37)}";
+                let mut k = 0;
+                while k < view.len() {
+                    if view[k].key == old {
+                        view[k].status = "4".to_string();
+                        view[k].leaves = "0".to_string();
+                        view[k].text = f"cancelled as {m.text(11)}";
+                    }
+                    k += 1;
+                }
+            }
+        } else if mtype == "9" {
+            let row = Row { key: f"{m.text(11)} {m.text(37)}", status: "cancel rejected".to_string(), cum: "-".to_string(), leaves: "-".to_string(), avg: "-".to_string(), text: m.text(58) };
+            self.views[ci].push(row);
+        }
+    }
+
+    // ---- steps
+
+    fn step(mut ref self, toks: ref Vec[String]) {
+        let op = toks[0].clone();
+        if op == "logon" {
+            self.send(toks[1], "BROKER", "A", [fs_(98, "0"), fi(108, HB)].to_vec());
+        } else if op == "order" or op == "cancel" or op == "bare" {
+            let si = self.sess(toks[1], "BROKER");
+            if not self.sessions[si].up {
+                println(f"  {toks[1]}: not logged on; {op} {toks[2]} not sent");
+                return;
+            }
+            let ci = client_index(toks[1]);
+            if op == "order" {
+                let mut fields = [fs_(11, toks[2]), fs_(55, toks[4]), fs_(54, toks[3]), fs_(38, toks[5]), fs_(40, toks[6])].to_vec();
+                if toks.len() > 7 {
+                    fields.push(fs_(44, toks[7]));
+                }
+                self.placed[ci].push(Placed { clordid: toks[2].clone(), sym: toks[4].clone(), side: toks[3].clone() });
+                self.send(toks[1], "BROKER", "D", fields);
+            } else if op == "cancel" {
+                let mut sym = "MSFT".to_string();
+                let mut side = "1".to_string();
+                for row in self.placed[ci] {
+                    if row.clordid == toks[3] {
+                        sym = row.sym.clone();
+                        side = row.side.clone();
+                    }
+                }
+                let fields = [fs_(11, toks[2]), fs_(41, toks[3]), fs_(55, sym), fs_(54, side)].to_vec();
+                self.send(toks[1], "BROKER", "F", fields);
+            } else {
+                let mut fields: Vec[Field] = Vec.new();
+                let mut i = 3;
+                while i < toks.len() {
+                    let t = bs(toks[i]);
+                    let eq = position_u8(t, 61u8);
+                    fields.push(Field { tag: int_b(cut(t, 0, eq)), val: cut(t, eq + 1, t.len()) });
+                    i += 1;
+                }
+                self.send(toks[1], "BROKER", toks[2], fields);
+            }
+        } else if op == "logout" {
+            self.send(toks[1], "BROKER", "5", [fs_(58, "End of day")].to_vec());
+        } else if op == "drop" {
+            let li = self.link(toks[1], toks[2]);
+            self.links[li].drop += int_b(bs(toks[3]));
+            println(f"  the link {toks[1]}>{toks[2]} will lose {toks[3]}");
+        } else if op == "garble" {
+            let li = self.link(toks[1], toks[2]);
+            self.links[li].garble = true;
+            println(f"  the link {toks[1]}>{toks[2]} will garble the next message");
+        } else if op == "cut" or op == "heal" {
+            let a = self.link(toks[1], "BROKER");
+            let b = self.link("BROKER", toks[1]);
+            self.links[a].cut = op == "cut";
+            self.links[b].cut = op == "cut";
+            println(f"  the link to {toks[1]} is {if op == "cut" { "cut" } else { "back" }}");
+        } else if op == "tick" {
+            let n = int_b(bs(toks[1]));
+            for _ in 0..n {
+                self.clock += 1000 - self.clock % 1000;
+                let mut si = 0;
+                while si < self.sessions.len() {
+                    if not self.sessions[si].up {
+                        si += 1;
+                        continue;
+                    }
+                    let me = self.sessions[si].me.clone();
+                    let them = self.sessions[si].them.clone();
+                    let waiting = self.sessions[si].test_out.clone();
+                    match waiting {
+                        Some(ref t) => {
+                            if self.clock - self.sessions[si].test_at >= HB * 1000 {
+                                self.send(me, them, "5", [fs_(58, f"No answer to test request {t}")].to_vec());
+                                self.disconnect(si, "heartbeat timeout");
+                                si += 1;
+                                continue;
+                            }
+                        }
+                        None => {}
+                    }
+                    if waiting.is_none() and self.clock - self.sessions[si].last_rx >= (HB + HB / 5) * 1000 {
+                        self.sessions[si].tests += 1;
+                        let id = f"{me}-T{self.sessions[si].tests}";
+                        self.sessions[si].test_out = Some(id.clone());
+                        self.sessions[si].test_at = self.clock;
+                        self.send(me, them, "1", [fs_(112, id)].to_vec());
+                    } else if self.clock - self.sessions[si].last_tx >= HB * 1000 {
+                        self.send(me, them, "0", Vec.new());
+                    }
+                    self.run();
+                    si += 1;
+                }
+            }
+        } else if op == "book" {
+            let bk = sym_index(toks[1]);
+            let mut bids: Vec[Level] = Vec.new();
+            let mut asks: Vec[Level] = Vec.new();
+            for oi in self.books[bk] {
+                let o = ref self.orders[oi];
+                let level = Level { px: o.px ?? 0, seq: o.seq, idx: oi };
+                if o.side == "1" {
+                    bids.push(level);
+                } else if o.side == "2" {
+                    asks.push(level);
+                }
+            }
+            bids.sort_by(|a, b| if a.px != b.px { b.px.cmp(a.px) } else { a.seq.cmp(b.seq) });
+            asks.sort_by(|a, b| if a.px != b.px { a.px.cmp(b.px) } else { a.seq.cmp(b.seq) });
+            println(f"  {toks[1]} book: bids {self.levels(bids)}; asks {self.levels(asks)}");
+        } else if op == "orders" {
+            let ci = client_index(toks[1]);
+            for row in self.views[ci] {
+                let text = if row.text != "" { f"; {row.text}" } else { String.new() };
+                println(f"  {toks[1]} {row.key}: status {row.status}, filled {row.cum}, open {row.leaves}, avg {row.avg}{text}");
+            }
+        } else if op == "stats" {
+            for s in self.sessions {
+                let state = if s.up { "up" } else { "down" };
+                println(f"  {s.me}>{s.them}: {state}, sent {s.n_tx} (next {s.out_seq}), received {s.n_rx} (next {s.in_seq}), gaps {s.gaps}, resends {s.resends}, duplicates {s.dups}, garbled {s.garbled}, ignored {s.ignored}");
+            }
+        } else if op == "log" {
+            self.read_log();
+        }
+        if op != "tick" {
+            self.run();
+        }
+    }
+
+    fn levels(ref self, ls: ref Vec[Level]) -> String {
+        if ls.len() == 0 {
+            return "none".to_string();
+        }
+        let mut out = String.new();
+        for l in ls {
+            if out.len() > 0 {
+                out.push_str(", ");
+            }
+            let o = ref self.orders[l.idx];
+            out.push_str(f"{o.leaves}@{px(l.px)} {o.clordid}");
+        }
+        out
+    }
+
+    fn read_log(ref self) {
+        let mut all: Vec[u8] = Vec.new();
+        for raw in self.log {
+            push_all(mut all, raw);
+            all.push(10u8);
+        }
+        let _ = fs.write_bytes("fix.log", all);
+        let data = match fs.read_bytes("fix.log") {
+            Ok(d) => d,
+            Err(_) => Vec.new(),
+        };
+        let mut p = match new_parser(false, false, true, 10, Some(10)) {
+            Ok(p) => p,
+            Err(_) => panic("the log parser settings are valid"),
+        };
+        p.append_buffer(data);
+        let mut first = 0;
+        loop {
+            match p.get_message() {
+                Ok(Some(_)) => first += 1,
+                _ => break,
+            }
+        }
+        println(f"  fix.log read until the first None: {first} message, {p.blen()} bytes left");
+        p.reset();
+        p.append_buffer(data);
+        let mut types: Vec[String] = Vec.new();
+        let mut counts: Vec[i64] = Vec.new();
+        let mut bad = 0;
+        let mut n = 0;
+        let mut nones = 0;
+        while p.blen() > 0 {
+            let got = match p.get_message() {
+                Ok(m) => m,
+                Err(e) => panic(e.describe()),
+            };
+            let m = match got {
+                Some(m) => m,
+                None => {
+                    nones += 1;
+                    continue;
+                }
+            };
+            n += 1;
+            let t = m.text(35);
+            let at = position_s(types, t);
+            if at < 0 {
+                types.push(t);
+                counts.push(1);
+            } else {
+                counts[at] += 1;
+            }
+            let raw = match m.encode(true) {
+                Ok(r) => r,
+                Err(_) => Vec.new(),
+            };
+            let k = rfind(raw, bs("10="));
+            let mut sum = 0;
+            for c in cut(raw, 0, k) {
+                sum += c as i64;
+            }
+            if int_b(m.field(10) ?? Vec.new()) != sum % 256 {
+                bad += 1;
+            }
+        }
+        let mut sorted = types.clone();
+        sorted.sort();
+        let mut by_type = String.new();
+        for t in sorted {
+            if by_type.len() > 0 {
+                by_type.push(' ');
+            }
+            by_type.push_str(f"{t}:{counts[position_s(types, t)]}");
+        }
+        println(f"  fix.log read until the buffer is empty: {n} messages and {nones} Nones, {data.len()} bytes, fnv {fnv(data):08x}; by type {by_type}; {bad} bad checksums");
+        let _ = fs.remove_file("fix.log");
+    }
+}
+
+fn position_s(v: ref Vec[String], x: ref String) -> i64 {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == x {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn hexval(c: u8) -> i64 {
+    let n = c as i64;
+    if n >= 48 and n <= 57 {
+        n - 48
+    } else if n >= 97 and n <= 102 {
+        n - 87
+    } else {
+        n - 55
+    }
+}
+
+// ~XX escapes in a job token
+fn unesc_bytes(text: ref String) -> Vec[u8] {
+    let raw = bs(text);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == 126u8 {
+            out.push((hexval(raw[i + 1]) * 16 + hexval(raw[i + 2])) as u8);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn num(text: ref String) -> i64 {
+    match py_int(bs(text), true) {
+        Ok(n) => n,
+        Err(msg) => panic(msg),
+    }
+}
+
+fn value(tok: ref String) -> Val {
+    if tok == "-" {
+        Val.Nil
+    } else if tok.starts_with("b:") {
+        Val.B(unesc_bytes(tok.substring(2)))
+    } else if tok.starts_with("s:") {
+        Val.S(unesc_bytes(tok.substring(2)))
+    } else if tok.starts_with("i:") {
+        Val.I(num(tok.substring(2)))
+    } else {
+        panic(f"bad value {tok}")
+    }
+}
+
+fn when(tok: ref String) -> Stamp {
+    let s = tok.substring(2);
+    if tok.starts_with("D:") {
+        let b = bs(s);
+        let part = |from: i64, to: i64| int_b(cut(b, from, to));
+        Stamp { y: part(0, 4), mo: part(5, 7), d: part(8, 10), h: part(11, 13), mi: part(14, 16), s: part(17, 19), us: part(20, 26) }
+    } else {
+        let b = bs(s);
+        let dot = position_u8(b, 46u8);
+        stamp_of(int_b(cut(b, 0, dot)) * 1000000 + int_b(cut(b, dot + 1, b.len())))
+    }
+}
+
+fn tf(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn opt_repr(v: ref Option[Vec[u8]]) -> String {
+    match v {
+        Some(b) => bytes_repr(b),
+        None => "None".to_string(),
+    }
+}
+
+struct State {
+    msg_names: Vec[String],
+    msgs: Vec[FixMessage],
+    parser_names: Vec[String],
+    parsers: Vec[FixParser],
+    venue: Venue,
+}
+
+fn msg_at(st: ref State, name: ref String) -> i64 {
+    let i = position_s(st.msg_names, name);
+    if i < 0 {
+        panic(f"no message {name}");
+    }
+    i
+}
+
+fn parser_at(st: ref State, name: ref String) -> i64 {
+    let i = position_s(st.parser_names, name);
+    if i < 0 {
+        panic(f"no parser {name}");
+    }
+    i
+}
+
+fn nth_of(toks: ref Vec[String]) -> Val {
+    if toks.len() > 3 { value(toks[3]) } else { Val.I(1) }
+}
+
+fn do_step(st: mut ref State, toks: ref Vec[String], line: ref String) -> Result[(), Fail] {
+    let op = toks[0].clone();
+    if op == "new" {
+        let i = position_s(st.msg_names, toks[1]);
+        if i < 0 {
+            st.msg_names.push(toks[1].clone());
+            st.msgs.push(FixMessage.new());
+        } else {
+            st.msgs[i] = FixMessage.new();
+        }
+    } else if op == "pair" {
+        let i = msg_at(st, toks[1]);
+        st.msgs[i].append_pair(value(toks[2]), value(toks[3]), toks.len() > 4)?;
+    } else if op == "str" {
+        let i = msg_at(st, toks[1]);
+        st.msgs[i].append_string(vbytes(value(toks[2])), false)?;
+    } else if op == "strs" {
+        let i = msg_at(st, toks[1]);
+        let mut k = 2;
+        while k < toks.len() {
+            st.msgs[i].append_string(vbytes(value(toks[k])), false)?;
+            k += 1;
+        }
+    } else if op == "data" {
+        let i = msg_at(st, toks[1]);
+        st.msgs[i].append_data(value(toks[2]), value(toks[3]), vbytes(value(toks[4])), toks.len() > 5)?;
+    } else if op == "utc" {
+        let i = msg_at(st, toks[1]);
+        st.msgs[i].append_utc_timestamp(value(toks[2]), when(toks[3]), ival(value(toks[4])), toks.len() > 5)?;
+    } else if op == "utct" {
+        let i = msg_at(st, toks[1]);
+        st.msgs[i].append_utc_time_only(value(toks[2]), when(toks[3]), ival(value(toks[4])))?;
+    } else if op == "atime" {
+        let i = msg_at(st, toks[1]);
+        st.msgs[i].append_time(value(toks[2]), when(toks[3]), ival(value(toks[4])), false)?;
+    } else if op == "utcp" {
+        let i = msg_at(st, toks[1]);
+        st.msgs[i].append_utc_time_only_parts(value(toks[2]), value(toks[3]), value(toks[4]), value(toks[5]), value(toks[6]), value(toks[7]))?;
+    } else if op == "tzp" {
+        let i = msg_at(st, toks[1]);
+        st.msgs[i].append_tz_time_only_parts(value(toks[2]), value(toks[3]), value(toks[4]), value(toks[5]), value(toks[6]), value(toks[7]), value(toks[8]))?;
+    } else if op == "get" {
+        let i = msg_at(st, toks[1]);
+        let got = st.msgs[i].get(value(toks[2]), nth_of(toks))?;
+        println(f"{line} = {opt_repr(got)}");
+    } else if op == "rm" {
+        let i = msg_at(st, toks[1]);
+        let got = st.msgs[i].remove(value(toks[2]), nth_of(toks))?;
+        println(f"{line} = {opt_repr(got)}");
+    } else if op == "has" {
+        let i = msg_at(st, toks[1]);
+        println(f"{line} = {tf(st.msgs[i].has(value(toks[2])))}");
+    } else if op == "count" {
+        let i = msg_at(st, toks[1]);
+        println(f"{line} = {st.msgs[i].count()}");
+    } else if op == "item" {
+        let i = msg_at(st, toks[1]);
+        let item = st.msgs[i].item(ival(value(toks[2])))?;
+        println(f"{line} = {item}");
+    } else if op == "eq" {
+        let a = msg_at(st, toks[1]);
+        let b = msg_at(st, toks[2]);
+        println(f"{line} = {tf(st.msgs[a].equals(st.msgs[b]))}");
+    } else if op == "enc" {
+        let i = msg_at(st, toks[1]);
+        let raw = st.msgs[i].encode(toks.len() > 2)?;
+        println(f"{line} = {bytes_repr(pretty_print(raw))}");
+    } else if op == "show" {
+        let i = msg_at(st, toks[1]);
+        let sep = if toks.len() > 2 { vbytes(value(toks[2])) } else { bs("|") };
+        let text = st.msgs[i].to_string(sep)?;
+        println(f"{line} = {text}");
+    } else if op == "parser" {
+        let mut empty = false;
+        let mut missing = false;
+        let mut strip = true;
+        let mut stop_tag = 10;
+        let mut stop_byte: Option[i64] = None;
+        let mut k = 2;
+        while k < toks.len() {
+            let t = ref toks[k];
+            let eq = position_u8(bs(t), 61u8);
+            let key = latin(cut(bs(t), 0, eq));
+            let v = t.substring(eq + 1);
+            if key == "empty" {
+                empty = v == "1";
+            } else if key == "missing" {
+                missing = v == "1";
+            } else if key == "strip" {
+                strip = v == "1";
+            } else if key == "stop_tag" {
+                stop_tag = num(v);
+            } else if key == "stop_byte" {
+                stop_byte = Some(vbytes(value(v))[0] as i64);
+            }
+            k += 1;
+        }
+        let p = new_parser(empty, missing, strip, stop_tag, stop_byte)?;
+        let i = position_s(st.parser_names, toks[1]);
+        if i < 0 {
+            st.parser_names.push(toks[1].clone());
+            st.parsers.push(p);
+        } else {
+            st.parsers[i] = p;
+        }
+    } else if op == "feed" {
+        let i = parser_at(st, toks[1]);
+        st.parsers[i].append_buffer(vbytes(value(toks[2])));
+    } else if op == "next" {
+        let i = parser_at(st, toks[1]);
+        let m = st.parsers[i].get_message()?;
+        println(f"{line} = {shown(m)}");
+    } else if op == "drain" {
+        let i = parser_at(st, toks[1]);
+        loop {
+            let m = st.parsers[i].get_message()?;
+            println(f"{line} = {shown(m)}");
+            if m.is_none() {
+                break;
+            }
+        }
+    } else if op == "buf" {
+        let i = parser_at(st, toks[1]);
+        println(f"{line} = {bytes_repr(st.parsers[i].get_buffer())}");
+    } else if op == "reset" {
+        let i = parser_at(st, toks[1]);
+        st.parsers[i].reset();
+    } else if op == "addraw" {
+        let i = parser_at(st, toks[1]);
+        st.parsers[i].add_raw(ival(value(toks[2])), ival(value(toks[3])));
+    } else if op == "rmraw" {
+        let i = parser_at(st, toks[1]);
+        st.parsers[i].remove_raw(ival(value(toks[2])), ival(value(toks[3])))?;
+    } else if op == "set" {
+        let i = parser_at(st, toks[1]);
+        let v = value(toks[3]);
+        let what = ref toks[2];
+        if what == "stop_tag" {
+            st.parsers[i].stop_tag = Some(ival(v));
+        } else if what == "stop_byte" {
+            st.parsers[i].stop_byte = Some(vbytes(v)[0] as i64);
+        } else if what == "empty" {
+            st.parsers[i].allow_empty_values = ival(v) == 1;
+        } else if what == "missing" {
+            st.parsers[i].allow_missing_begin_string = ival(v) == 1;
+        } else {
+            st.parsers[i].strip_fields_before_begin_string = ival(v) == 1;
+        }
+    } else if op == "term" {
+        let i = parser_at(st, toks[1]);
+        let a = ref toks[2];
+        if a == "both" {
+            st.parsers[i].set_message_terminator(Some(10), Some(10))?;
+        } else if a == "none" {
+            st.parsers[i].set_message_terminator(None, None)?;
+        } else if a.starts_with("tag=") {
+            st.parsers[i].set_message_terminator(Some(num(a.substring(4))), None)?;
+        } else {
+            st.parsers[i].set_message_terminator(None, Some(vbytes(value(a.substring(5)))[0] as i64))?;
+        }
+    } else if op == "pipe" {
+        let mi = msg_at(st, toks[1]);
+        let pi = parser_at(st, toks[2]);
+        let mut sizes: Vec[i64] = Vec.new();
+        for x in toks[3].split(",") {
+            sizes.push(num(x.to_string()));
+        }
+        let buf = st.msgs[mi].encode(false)?;
+        let mut point = 0;
+        let mut k = 0;
+        let mut got = 0;
+        while point < buf.len() {
+            let n = sizes[k % sizes.len()];
+            k += 1;
+            st.parsers[pi].append_buffer(cut(buf, point, point + n));
+            point += n;
+            loop {
+                let r = st.parsers[pi].get_message()?;
+                match r {
+                    Some(_) => {
+                        got += 1;
+                        let at = if point < buf.len() { point } else { buf.len() };
+                        println(f"{line} @{at} = {shown(r)}");
+                    }
+                    None => break,
+                }
+            }
+        }
+        println(f"{line}: {buf.len()} bytes in {k} chunks, {got} messages, {bytes_repr(st.parsers[pi].get_buffer())} left");
+    } else if op == "pretty" {
+        println(f"{line} = {bytes_repr(pretty_print(vbytes(value(toks[1]))))}");
+    } else {
+        panic(f"bad step {line}");
+    }
+    Ok(())
+}
+
+fn is_venue_op(op: ref String) -> bool {
+    op == "logon" or op == "order" or op == "cancel" or op == "bare" or op == "logout" or op == "drop"
+        or op == "garble" or op == "cut" or op == "heal" or op == "tick" or op == "book" or op == "orders"
+        or op == "stats" or op == "log"
+}
+
+fn run_step(st: mut ref State, line: ref String) {
+    let mut toks: Vec[String] = Vec.new();
+    for t in line.split(" ") {
+        toks.push(t.to_string());
+    }
+    let op = toks[0].clone();
+    if op == "venue" {
+        st.venue = new_venue();
+        println(f"venue: BROKER with CLIENT1 and CLIENT2, heartbeat {HB} s, symbols IBM MSFT");
+        return;
+    }
+    if is_venue_op(op) {
+        println(line);
+        st.venue.step(toks);
+        return;
+    }
+    match do_step(mut st, toks, line) {
+        Ok(_) => {}
+        Err(e) => println(f"{line} = {e.describe()}"),
+    }
+}
+
+fn main() {
+    let text = unesc(jobs_text());
+    let mut st = State {
+        msg_names: Vec.new(),
+        msgs: Vec.new(),
+        parser_names: Vec.new(),
+        parsers: Vec.new(),
+        venue: new_venue(),
+    };
+    for line in text.split("\n") {
+        let line = line.to_string();
+        if line == "" {
+            continue;
+        }
+        if line.starts_with("job ") {
+            st.msg_names = Vec.new();
+            st.msgs = Vec.new();
+            st.parser_names = Vec.new();
+            st.parsers = Vec.new();
+            println(f"== {line.substring(4)}");
+            continue;
+        }
+        run_step(mut st, line);
+    }
+}
+
+// The ~ escapes gen_kara.py writes for characters a string literal treats
+// specially.
+fn unesc(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < cs.len() as i64 {
+        if cs[i] == '~' and i + 1 < cs.len() as i64 {
+            let c = cs[i + 1];
+            out.push(if c == 't' { '~' } else if c == 'b' { '\\' } else if c == 'q' { '"' } else if c == 'o' { '{' } else { '}' });
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("job Building a message: append_pair, the header and the values\nnew m\npair m i:8 s:FIX.4.2\npair m i:35 s:D\npair m i:29 s:A\npair m i:11 i:12345\npair m s:55 s:IBM\npair m s:035 s:F\npair m s:~t2056 s:Y\npair m b:44 b:101.25\npair m i:49 s:SENDER h\npair m i:56 s:TARGET h\npair m - s:ignored\npair m i:58 -\npair m s:abc s:x\npair m s:1~t5f0 s:underscore\npair m s:~t2b7 s:plus\nshow m\nshow m s:,~t20\ncount m\nenc m\nenc m raw\nget m i:35\nget m s:035\nget m i:56\nget m i:1\nhas m i:44\nhas m s:44\nhas m i:45\nitem m i:0\nitem m i:2\nitem m i:40\njob append_string and append_strings\nnew m\nstr m s:8=FIX.4.4\nstr m s:35=8\nstr m s:58=a=b=c\nstrs m s:1=ACCT s:21=1 s:207=XNYS\nstr m s:no-equals\nstr m s:x=1\nstr m s:~t20~t207=Y\nstr m s:10=\nshow m\nenc m\nenc m raw\njob Repeating fields: get and remove the nth\nnew m\npair m i:8 s:FIX.4.4\npair m i:35 s:W\npair m i:268 i:3\npair m i:269 s:0\npair m i:270 s:99.50\npair m i:271 s:1200\npair m i:269 s:1\npair m i:270 s:99.75\npair m i:271 s:900\npair m i:269 s:2\npair m i:270 s:99.60\npair m i:271 s:300\nget m i:270\nget m i:270 i:2\nget m i:270 i:3\nget m i:270 i:4\nget m i:270 i:0\nrm m i:270 i:2\nget m i:270 i:2\nrm m i:270 i:9\nrm m s:269\ncount m\nshow m\nenc m\njob encode(): BodyLength, CheckSum and the field order\nnew m\npair m i:10 s:999\npair m i:9 s:999\npair m i:58 s:checksum~t20and~t20length~t20first\npair m i:35 s:0\npair m i:8 s:FIX.4.4\nenc m\nenc m raw\nnew e\nenc e\nenc e raw\nnew n35\npair n35 i:8 s:FIX.4.2\nenc n35\nnew n8\npair n8 i:35 s:D\nenc n8\nnew n9\npair n9 i:8 b:\npair n9 i:35 s:0\nenc n9\nnew big\npair big i:8 s:FIXT.1.1\npair big i:35 s:AE\npair big i:1128 s:9\npair big i:58 s:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nenc big\njob Raw data fields\n");
+    s.push_str("new m\npair m i:8 s:FIX.4.2\npair m i:35 s:D\ndata m i:95 i:96 b:raw~t01data\npair m i:20000 s:private~t20tag\ndata m i:354 i:355 b:~te2~t82~tac~t20100 h\nenc m\nget m i:96\nget m i:355\nshow m\nparser p\npipe m p 7\nparser q\naddraw q i:5001 i:5002\nnew r\npair r i:8 s:FIX.4.2\npair r i:35 s:D\ndata r i:5001 i:5002 b:raw~t015000=1\npair r i:20000 s:private~t20tag\npipe r q 1000\nrmraw q i:5001 i:5002\npipe r q 1000\nrmraw q i:5001 i:5002\naddraw q i:5001 i:5002\nrmraw q i:95 i:96\npipe m q 1000\njob Comparing messages\nnew a\npair a i:8 s:FIX.4.2\npair a i:35 s:D\npair a i:29 s:A\nnew b\npair b i:35 s:D\npair b i:29 s:A\npair b i:8 s:FIX.4.2\neq a b\nnew c\npair c i:8 s:FIX.4.2\npair c i:35 s:D\npair c i:29 s:B\neq a c\npair b i:30 s:B\neq a b\neq b a\nnew d\npair d i:8 s:FIX.4.2\npair d i:35 s:D\npair d i:29 s:A\npair d i:29 s:A\nnew e\npair e i:8 s:FIX.4.2\npair e i:35 s:D\npair e i:29 s:A\npair e i:8 s:FIX.4.2\neq d e\neq d d\nnew f\npair f s:08 s:FIX.4.2\npair f i:35 s:D\npair f i:29 s:A\neq a f\njob Timestamps\nnew t\npair t i:8 s:FIX.4.4\npair t i:35 s:0\nutc t i:52 D:2026-10-23T13:30:05.123456 i:3 h\nutc t i:60 D:2026-10-23T13:30:05.123456 i:6\nutc t i:60 D:2026-10-23T13:30:05.123456 i:0\nutc t i:60 D:2024-02-29T23:59:59.999999 i:3\nutc t i:60 D:2026-10-23T13:30:05.000000 i:2\nutc t i:60 F:1700000000.250000 i:3\nutc t i:60 F:1700000000.015625 i:6\nutc t i:60 F:0.500000 i:6\nutc t i:60 F:951782400.000000 i:0\nutc t i:60 F:4102444799.000000 i:0\nutct t i:273 D:2026-10-23T09:05:01.002003 i:3\nutct t i:273 D:2026-10-23T09:05:01.002003 i:6\nutct t i:273 F:1700000000.125000 i:0\nutct t i:273 D:2026-10-23T09:05:01.002003 i:9\natime t i:52 D:2026-10-23T13:30:05.123456 i:3\natime t i:52 D:2026-10-23T13:30:05.123456 i:6\natime t i:52 D:2026-10-23T13:30:05.123456 i:0\natime t i:52 F:1700000000.500000 i:3\natime t i:52 D:2026-10-23T13:30:05.123456 i:1\nshow t\nnew p\npair p i:8 s:FIX.4.4\nutcp p i:273 i:15 i:51 i:12 - -\nutcp p i:273 i:15 i:51 i:12 i:933 -\nutcp p i:273 i:15 i:51 i:12 i:933 i:458\n");
+    s.push_str("utcp p i:273 i:15 i:51 i:60 - i:7\nutcp p i:273 s:7 s:8 s:9 s:10 s:11\nutcp p i:273 i:24 i:0 i:0 - -\nutcp p i:273 i:-1 i:0 i:0 - -\nutcp p i:273 i:0 i:60 i:0 - -\nutcp p i:273 i:0 i:0 i:61 - -\nutcp p i:273 i:0 i:0 i:0 i:1000 -\nutcp p i:273 i:0 i:0 i:0 i:1 i:1000\nutcp p i:273 s:x i:0 i:0 - -\ntzp p i:1079 i:15 i:51 - - - i:240\ntzp p i:1079 i:15 i:51 - - - i:270\ntzp p i:1079 i:15 i:51 i:12 - - i:270\ntzp p i:1079 i:15 i:51 i:12 i:933 - i:270\ntzp p i:1079 i:15 i:51 i:12 i:933 i:458 i:270\ntzp p i:1079 i:15 i:51 i:12 i:933 i:458 i:150\ntzp p i:1079 i:15 i:51 i:12 i:933 i:458 i:-150\ntzp p i:1079 i:15 i:51 - - - i:-90\ntzp p i:1079 i:15 i:51 - - - i:-30\ntzp p i:1079 i:15 i:51 - - - i:-60\ntzp p i:1079 i:15 i:51 - - - i:0\ntzp p i:1079 i:15 i:51 - - - i:1439\ntzp p i:1079 i:15 i:51 - - - i:-1439\ntzp p i:1079 i:15 i:51 - - - i:1440\ntzp p i:1079 i:15 i:51 - - - i:-1440\ntzp p i:1079 i:15 i:51 - i:5 - i:60\ntzp p i:1079 i:24 i:0 - - - i:0\ntzp p i:1079 i:0 i:60 - - - i:0\ntzp p i:1079 i:0 i:0 i:61 - - i:0\ntzp p i:1079 i:0 i:0 i:0 i:1000 - i:0\ntzp p i:1079 i:0 i:0 i:0 i:0 i:1000 i:0\nshow p\njob Parsing: whole messages, fragments and the buffer\nparser p\nnext p\nfeed p b:8=FIX.4.2~t019=\nnext p\nbuf p\nfeed p b:5~t0135=0~t0110=161~t01\nnext p\nbuf p\nnew m\npair m i:8 s:FIX.4.4\npair m i:35 s:D\npair m i:49 s:BUYSIDE\npair m i:56 s:BROKER\npair m i:34 i:12\npair m i:11 s:ORD-0007\npair m i:55 s:MSFT\npair m i:54 s:1\npair m i:38 s:500\npair m i:40 s:2\npair m i:44 s:412.35\npipe m p 1\npipe m p 2\npipe m p 3\npipe m p 5,1\npipe m p 17\npipe m p 64\npipe m p 1000\nfeed p b:8=FIX.4.2~t019=5~t0135=0~t0110=161~t01~t028=FIX.4.2~t019=5~t0135=1~t01112=X~t0110=000~t01\ndrain p\nbuf p\nreset p\nbuf p\njob Parsing: junk, empty values and bad tags\nparser p\nfeed p b:1=2~t013=4~t018=FIX.4.2~t019=5~t0135=0~t0110=161~t01\nnext p\nfeed p b:1=2~t013=4~t015=6~t01\nnext p\nbuf p\nparser e empty=1\nfeed e b:8=FIX.4.2~t019=9~t0135=D~t0129=~t0110=098~t01\nnext e\nparser f\nfeed f b:8=FIX.4.2~t019=9~t0135=D~t0129=~t0110=098~t01\n");
+    s.push_str("next f\nparser g\nfeed g b:8=FIX.4.2~t019=10~t0135=D~t01xx=A~t0110=203~t01\nnext g\nparser h\nfeed h b:8=FIX.4.2~t01~t2012~t20=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t01+12=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t01-12=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t011_2=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t011__2=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t01_12=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t01012=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t01=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t011.5=v~t0110=000~t01\nnext h\nparser h\nfeed h b:8=FIX.4.2~t010x1f=v~t0110=000~t01\nnext h\nparser k\nfeed k b:8=FIX.4.2~t0195=xx~t0196=data~t0110=000~t01\nnext k\nparser k2\nfeed k2 b:8=FIX.4.2~t0195=~t205~t20~t0196=dat~t01a~t0110=000~t01\nnext k2\nparser k3\nfeed k3 b:8=FIX.4.2~t0195=-1~t0196=data~t0110=000~t01\nnext k3\nparser k4\nfeed k4 b:8=FIX.4.2~t0195=0~t0196=da=ta~t0110=000~t01\nnext k4\nparser z\nfeed z b:9=5~t0135=0~t0110=161~t01\nnext z\nparser y missing=1 strip=0\nfeed y b:35=d~t015799=00000000~t01980=A~t0155=ESM9~t0148=736~t0110=000~t01\nnext y\nparser x missing=1\nparser w strip=0\nfeed w b:1=2~t018=FIX.4.2~t0135=0~t0110=000~t01\nnext w\nparser v\nfeed v b:8=FIX.4.2~t0134=4294967295~t0110=0~t01\nnext v\nparser v\nfeed v b:8=FIX.4.2~t0134=18446744073709551616~t0110=0~t01\nnext v\nparser v\nfeed v b:8=FIX.4.2~t0134=0~t0110=0~t01\nnext v\njob Parsing: stop tags and stop bytes\nnew m\npair m i:8 s:FIX.4.2\npair m i:35 s:D\npair m i:29 s:A\npair m i:20000 s:xxx\npair m i:10 s:000\nparser p stop_tag=20000\npipe m p 1000\nparser p2\nset p2 stop_tag i:20000\npipe m p2 9\nparser p3\nterm p3 tag=20000\npipe m p3 1000\nparser n stop_byte=b:~t0a\nfeed n b:8=FIX.4.2~t0135=d~t0134=1~t01369=XX~t01~t0a8=FIX.4.2~t0135=d~t0134=2~t01369=XX~t01~t0a8=FIX.4.2~t0135=d~t0134=3~t01369=XX~t01~t0a\ndrain n\nparser n2 stop_byte=b:~t0a\nfeed n2 b:8=FIX.4.2~t0135=d~t0134=4~t01369=XX~t0a8=FIX.4.2~t0135=d~t0134=5~t01369=XX~t0a8=FIX.4.2~t0135=d~t0134=6~t01369=XX~t0a\n");
+    s.push_str("drain n2\nparser n3\nterm n3 char=b:~t0a\nfeed n3 b:8=FIX.4.2~t0135=d~t0134=4~t01369=XX~t0a8=FIX.4.2~t0135=d~t0134=5~t01369=XX~t0a8=FIX.4.2~t0135=d~t0134=6~t01369=XX~t0a\ndrain n3\nparser n4\nset n4 stop_byte b:~t0a\nfeed n4 b:8=FIX.4.2~t0135=0~t0112~t0a8=FIX.4.2~t01\nnext n4\nbuf n4\nparser n5\nterm n5 both\nterm n5 none\nfeed n5 b:8=FIX.4.2~t0135=0~t0110=000~t01\nnext n5\nset n5 stop_tag i:10\nnext n5\nparser n6 stop_byte=b:|\nfeed n6 b:8=FIX.4.2|35=0|9=0|8=FIX.4.4~t0135=1~t01|\ndrain n6\npretty b:8=FIX.4.4~t019=5~t0135=0~t0110=163~t01\npretty b:no~t20separators\njob Parsing: a split execution report with XML data\nparser p\nfeed p b:8=FIX.4.2~t019=606~t0135=n~t0134=18~t01369=XX~t0152=XXXXXXXX-XX:XX:XX.XXX~t0143=Y~t0149=CME~t0150=G~t0156=XXXXXXX~t0157=NULL~t01122=XXXXXXXX-XX:XX:XX.XXX~t01143=XX~t01212=481~t01213=<RTRF>8=FIX.4\nfeed p b:.2~t019=XXX~t0135=8~t0134=2087~t01369=2122~t0152=XXXXXXXX-XX:XX:XX.XXX~t0149=CME~t0150=G~t0156=XXXXXXX~t0157=XXXXXXXXXX~t01143=XXXXX~t011=XXXXXXXX~t016=X~t0111=XXXXX~t0114=XX~t0117=XXXXXXXXXXXXXXXXXXXXXXX~t0120=X~t0131=XXXXXX~t0132=X~t0137=XXXXXXXXXXXX~t0138=XXX~t0139=X~t0140=X~t0141=X~t0144=XXXXXX~t0148=XXXXXX~t0154=X~t0155=XX~t0159=X~t0160=XXXXXXXX-XX:XX:XX.XXX~t0175=XXXXXXXX~t01107=XXXX~t01150=X~t01151=XX~t01167=FUT~t01337=TRADE~t01375=CME000A~t01432=XXXXXXXX~t01442=1~t01527=XXXXXXXXXXXXXXXXXXXXXXXX~t011028=Y~t011057=Y~t015979=XXXXXXXXXXXXXXXXXXX~t019717=XXXXX~t0137711=XXXXXX~t0110=171~t01</RTRF>~t0110=169~t01\nnext p\nparser q\nfeed q b:8=FIX.4.2~t019=606~t0135=n~t0134=18~t01369=XX~t0152=XXXXXXXX-XX:XX:XX.XXX~t0143=Y~t0149=CME~t0150=G~t0156=XXXXXXX~t0157=NULL~t01122=XXXXXXXX-XX:XX:XX.XXX~t01143=XX~t01212=481~t01213=<RTRF>8=FIX.4\nnext q\nfeed q b:.2~t019=XXX~t0135=8~t0134=2087~t01369=2122~t0152=XXXXXXXX-XX:XX:XX.XXX~t0149=CME~t0150=G~t0156=XXXXXXX~t0157=XXXXXXXXXX~t01143=XXXXX~t011=XXXXXXXX~t016=X~t0111=XXXXX~t0114=XX~t0117=XXXXXXXXXXXXXXXXXXXXXXX~t0120=X~t0131=XXXXXX~t0132=X~t0137=XXXXXXXXXXXX~t0138=XXX~t0139=X~t0140=X~t0141=X~t0144=XXXXXX~t0148=XXXXXX~t0154=X~t0155=XX~t0159=X~t0160=XXXXXXXX-XX:XX:XX.XXX~t0175=XXXXXXXX~t01107=XXXX~t01150=X~t01151=XX~t01167=FUT~t01337=TRADE~t01375=CME000A~t01432=XXXXXXXX~t01442=1~t01527=XXXXXXXXXXXXXXXXXXXXXXXX~t011028=Y~t011057=Y~t015979=XXXXXXXXXXXXXXXXXXX~t019717=XXXXX~t0137711=XXXXXX~t0110=171~t01</RTRF>~t0110=169~t01\n");
+    s.push_str("next q\nparser r\nfeed r b:8=FIX.4.2~t019=606~t0135=n~t0134=18~t01369=XX~t0152=XXXXXXXX-XX:XX:XX.XXX~t0143=Y~t0149=CME~t0150=G~t0156=XXXXXXX~t0157=NULL~t01122=XXXXXXXX-XX:XX:XX.XXX~t0114\nnext r\nfeed r b:3=XX~t01212=481~t01213=<RTRF>8=FIX.4\nnext r\nfeed r b:.2~t019=XXX~t0135=8~t0134=2087~t01369=2122~t0152=XXXXXXXX-XX:XX:XX.XXX~t0149=CME~t0150=G~t0156=XXXXXXX~t0157=XXXXXXXXXX~t01143=XXX\nnext r\nfeed r b:XX~t011=XXXXXXXX~t016=X~t0111=XXXXX~t0114=XX~t0117=XXXXXXXXXXXXXXXXXXXXXXX~t0120=X~t0131=XXXXXX~t0132=X~t0137=XXXXXXXXXXXX~t0138=XXX~t0139=X~t0140=X~t0141=X~t0144=XXXXXX~t0148=XXXXXX~t0154=X~t0155=XX~t0159=X~t0160=XXXXXXXX-XX:XX:XX.XXX~t0175=XXXXXXXX~t01107=XXXX~t01150=X~t01151=XX~t01167=FUT~t01337=TRADE~t01375=CME000A~t01432=XXXXXXXX~t01442=1~t01527=XXXXXXXXXXXXXXXXXXXXXXXX~t011028=Y~t011057=Y~t015979=XXXXXXXXXXXXXXXXXXX~t019717=XXXXX~t0137711=XXXXXX~t0110=171~t01</RTRF>~t0110=169~t01\nnext r\nbuf r\njob A trading day: logons, orders and fills\nvenue\nlogon CLIENT1\nlogon CLIENT2\norder CLIENT1 C1-1 2 MSFT 500 2 412.50\norder CLIENT1 C1-2 2 MSFT 300 2 412.75\norder CLIENT2 C2-1 1 MSFT 200 2 412.40\norder CLIENT2 C2-2 1 MSFT 600 2 412.80\norder CLIENT1 C1-3 1 IBM 100 1\norder CLIENT2 C2-3 2 IBM 250 2 186.10\norder CLIENT1 C1-4 1 IBM 400 1\norder CLIENT1 C1-5 1 TSLA 10 2 250.00\norder CLIENT1 C1-6 1 MSFT 0 2 410.00\norder CLIENT2 C2-1 1 MSFT 10 2 410.00\norder CLIENT2 C2-4 2 MSFT 10 2\norder CLIENT2 C2-5 2 MSFT 10 2 41x.00\nbare CLIENT2 D 11=C2-6 55=MSFT 38=100 40=2 44=413.00\norder CLIENT2 C2-7 2 MSFT 150 2 413.00\norder CLIENT1 C1-7 1 MSFT 100 2 411.00\nbook MSFT\nbook IBM\ncancel CLIENT2 C2-8 C2-7\ncancel CLIENT2 C2-9 C2-7\ncancel CLIENT1 C1-8 C1-1\ncancel CLIENT1 C1-9 C1-99\ntick 65\norders CLIENT1\norders CLIENT2\nstats\njob Lost messages: resend requests, gap fills and duplicates\ndrop CLIENT1 BROKER 2\norder CLIENT1 C1-10 2 IBM 50 2 187.00\norder CLIENT1 C1-11 2 IBM 60 2 187.20\norder CLIENT1 C1-12 1 IBM 30 2 187.20\nbook IBM\ndrop BROKER CLIENT2 1\norder CLIENT2 C2-10 1 IBM 80 2 187.20\n");
+    s.push_str("tick 31\ngarble CLIENT2 BROKER\norder CLIENT2 C2-11 2 MSFT 40 2 412.90\ntick 31\norders CLIENT1\norders CLIENT2\nstats\njob A cut link: test requests, a timeout and recovery at the next logon\ncut CLIENT2\norder CLIENT2 C2-12 1 MSFT 70 2 412.90\norder CLIENT1 C1-13 2 MSFT 90 2 412.60\ntick 75\nheal CLIENT2\ntick 5\nlogon CLIENT2\norder CLIENT2 C2-13 1 MSFT 20 1\nbook MSFT\ntick 31\nlogout CLIENT1\nlogout CLIENT2\norder CLIENT1 C1-14 1 MSFT 5 1\norders CLIENT1\norders CLIENT2\nstats\nlog\n");
+    s
+}
