@@ -1,0 +1,18 @@
+nums = [1, 2, 1, 2, 3], k = 2 -> 7
+nums = [1, 2, 1, 3, 4], k = 3 -> 3
+nums = [1], k = 1 -> 1
+nums = [1, 1, 1, 1], k = 1 -> 10
+nums = [1, 2, 3, 4], k = 4 -> 1
+nums = [1, 1, 2], k = 3 -> 0
+nums = [1, 2, 1, 2, 1], k = 2 -> 10
+nums = [2, 1, 1, 1, 2], k = 1 -> 8
+nums = [1, 2, 3, 1, 2, 3], k = 3 -> 10
+nums = [3, 3, 1, 3, 2, 3, 1], k = 2 -> 9
+20000 different numbers, k = 1 -> 20000
+20000 different numbers, k = 20000 -> 1
+20000 ones, k = 1 -> 200010000
+1 to 100 repeated to 20000 numbers, k = 50 -> 19951
+300 random arrays of up to 8 numbers below 4: 1398 numbers, 1584 subarrays, checksum 933377882
+3000 random arrays of up to 60 numbers below 11: 91456 numbers, 189447 subarrays, checksum 35111356
+300 random arrays of up to 1000 numbers below 31: 151641 numbers, 2001150 subarrays, checksum 891554537
+3 random arrays of up to 20000 numbers below 201: 60000 numbers, 112046 subarrays, checksum 39345599

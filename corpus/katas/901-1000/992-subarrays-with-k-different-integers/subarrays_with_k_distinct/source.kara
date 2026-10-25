@@ -1,0 +1,101 @@
+// LeetCode #992: Subarrays with K Different Integers -- at most k, less
+// at most k - 1
+//
+// Exactly k different values is at most k but not at most k - 1, so
+// the answer is a difference of two counts that a sliding window
+// finds easily: for each right end, the window keeps the shortest
+// left cut with at most k different values, counted in an array
+// indexed by value, and every left end from there to the right end
+// starts a subarray with at most k. O(n).
+
+fn at_most(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(nums.len() + 1, 0);
+    let mut distinct = 0;
+    let mut left = 0;
+    let mut total = 0;
+    for right in 0..nums.len() {
+        if count[nums[right]] == 0 {
+            distinct += 1;
+        }
+        count[nums[right]] += 1;
+        while distinct > k {
+            count[nums[left]] -= 1;
+            if count[nums[left]] == 0 {
+                distinct -= 1;
+            }
+            left += 1;
+        }
+        total += right - left + 1;
+    }
+    total
+}
+
+fn subarrays_with_k_distinct(nums: Vec[i64], k: i64) -> i64 {
+    at_most(nums, k) - at_most(nums, k - 1)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shown(nums: ref Vec[i64]) -> String {
+    if nums.len() > 12 {
+        f"{nums.len()} numbers"
+    } else {
+        let parts: Vec[String] = nums.iter().map(|x| f"{x}").collect();
+        "[" + parts.join(", ") + "]"
+    }
+}
+
+fn main() {
+    let n = 20000;
+    // LeetCode's two examples, then a few more
+    let cases: Vec[(Vec[i64], i64)] = vec![
+        (vec![1, 2, 1, 2, 3], 2),
+        (vec![1, 2, 1, 3, 4], 3),
+        (vec![1], 1),
+        (vec![1, 1, 1, 1], 1),
+        (vec![1, 2, 3, 4], 4),
+        (vec![1, 1, 2], 3),
+        (vec![1, 2, 1, 2, 1], 2),
+        (vec![2, 1, 1, 1, 2], 1),
+        (vec![1, 2, 3, 1, 2, 3], 3),
+        (vec![3, 3, 1, 3, 2, 3, 1], 2),
+    ];
+    for (nums, k) in cases.iter() {
+        println(f"nums = {shown(nums)}, k = {k} -> {subarrays_with_k_distinct(nums, k)}");
+    }
+    let distinct: Vec[i64] = (0..n).map(|i| i + 1).collect();
+    println(f"20000 different numbers, k = 1 -> {subarrays_with_k_distinct(distinct, 1)}");
+    println(f"20000 different numbers, k = 20000 -> {subarrays_with_k_distinct(distinct, 20000)}");
+    let ones: Vec[i64] = Vec.filled(n, 1);
+    println(f"20000 ones, k = 1 -> {subarrays_with_k_distinct(ones, 1)}");
+    let cycle: Vec[i64] = (0..n).map(|i| i % 100 + 1).collect();
+    println(f"1 to 100 repeated to 20000 numbers, k = 50 -> {subarrays_with_k_distinct(cycle, 50)}");
+    // random arrays: 300 of up to 8 numbers below 4, 3000 of up to 60
+    // below 11, 300 of up to 1000 below 31, and three of LeetCode's
+    // longest, 20000, below 201
+    let mut seed = 992;
+    for (count, most, values) in vec![(300, 8, 3), (3000, 60, 10), (300, 1000, 30), (3, 20000, 200)] {
+        let mut total = 0;
+        let mut found = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let m = if count == 3 { most } else { 1 + next_random(mut seed) % most };
+            let top = if values < m { values } else { m };
+            let mut nums: Vec[i64] = Vec.new();
+            for _ in 0..m {
+                nums.push(1 + next_random(mut seed) % top);
+            }
+            let k = 1 + next_random(mut seed) % top;
+            let got = subarrays_with_k_distinct(nums, k);
+            total += m;
+            found += got;
+            check = (check * 31 + got + 1) % 1000000007;
+        }
+        println(f"{count} random arrays of up to {most} numbers below {values + 1}: {total} numbers, {found} subarrays, checksum {check}");
+    }
+}

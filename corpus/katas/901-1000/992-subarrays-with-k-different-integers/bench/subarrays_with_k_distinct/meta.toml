@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/992-subarrays-with-k-different-integers/bench/subarrays_with_k_distinct.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "aba3bc606"
+extracted_src = "943b1aa2"

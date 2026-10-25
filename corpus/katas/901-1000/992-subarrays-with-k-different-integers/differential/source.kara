@@ -1,0 +1,363 @@
+// LeetCode #992: Subarrays with K Different Integers -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random arrays.
+
+// ---- star ----
+
+fn star_at_most(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(nums.len() + 1, 0);
+    let mut distinct = 0;
+    let mut left = 0;
+    let mut total = 0;
+    for right in 0..nums.len() {
+        if count[nums[right]] == 0 {
+            distinct += 1;
+        }
+        count[nums[right]] += 1;
+        while distinct > k {
+            count[nums[left]] -= 1;
+            if count[nums[left]] == 0 {
+                distinct -= 1;
+            }
+            left += 1;
+        }
+        total += right - left + 1;
+    }
+    total
+}
+
+fn star_subarrays_with_k_distinct(nums: Vec[i64], k: i64) -> i64 {
+    star_at_most(nums, k) - star_at_most(nums, k - 1)
+}
+
+// ---- two_left ----
+
+fn two_left_subarrays_with_k_distinct(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut far_count: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut near_count: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut far_distinct = 0;
+    let mut near_distinct = 0;
+    let mut far = 0;
+    let mut near = 0;
+    let mut total = 0;
+    for r in 0..n {
+        let v = nums[r];
+        if far_count[v] == 0 {
+            far_distinct += 1;
+        }
+        far_count[v] += 1;
+        if near_count[v] == 0 {
+            near_distinct += 1;
+        }
+        near_count[v] += 1;
+        while far_distinct > k {
+            far_count[nums[far]] -= 1;
+            if far_count[nums[far]] == 0 {
+                far_distinct -= 1;
+            }
+            far += 1;
+        }
+        while near_distinct >= k {
+            near_count[nums[near]] -= 1;
+            if near_count[nums[near]] == 0 {
+                near_distinct -= 1;
+            }
+            near += 1;
+        }
+        total += near - far;
+    }
+    total
+}
+
+// ---- map ----
+
+fn map_within(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    let mut left = 0;
+    let mut total = 0;
+    for right in 0..nums.len() {
+        *seen.entry(nums[right]).or_insert(0) += 1;
+        while seen.len() > k {
+            let v = nums[left];
+            seen[v] -= 1;
+            if seen[v] == 0 {
+                seen.remove(v);
+            }
+            left += 1;
+        }
+        total += right - left + 1;
+    }
+    total
+}
+
+fn map_subarrays_with_k_distinct(nums: Vec[i64], k: i64) -> i64 {
+    map_within(nums, k) - map_within(nums, k - 1)
+}
+
+// ---- fenwick ----
+
+fn fenwick_fen_add(tree: mut ref Vec[i64], at: i64, by: i64) {
+    let mut i = at + 1;
+    while i < tree.len() {
+        tree[i] += by;
+        i += i & -i;
+    }
+}
+
+// the place of the j-th mark from the left (j from 1), or -1
+fn fenwick_fen_kth(tree: ref Vec[i64], j: i64) -> i64 {
+    let mut pos = 0;
+    let mut rest = j;
+    let mut step = 1;
+    while step * 2 < tree.len() {
+        step *= 2;
+    }
+    while step > 0 {
+        if pos + step < tree.len() and tree[pos + step] < rest {
+            pos += step;
+            rest -= tree[pos];
+        }
+        step /= 2;
+    }
+    if pos < tree.len() - 1 { pos } else { -1 }
+}
+
+fn fenwick_subarrays_with_k_distinct(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut tree: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut last: Vec[i64] = Vec.filled(n + 1, -1);
+    let mut marks = 0;
+    let mut total = 0;
+    for r in 0..n {
+        let v = nums[r];
+        if last[v] >= 0 {
+            fenwick_fen_add(mut tree, last[v], -1);
+        } else {
+            marks += 1;
+        }
+        last[v] = r;
+        fenwick_fen_add(mut tree, r, 1);
+        if marks >= k {
+            // the k-th mark from the right is the (marks - k + 1)-th
+            // from the left, and the one before it the (marks - k)-th
+            let kth = fenwick_fen_kth(tree, marks - k + 1);
+            let before = if marks > k { fenwick_fen_kth(tree, marks - k) } else { -1 };
+            total += kth - before;
+        }
+    }
+    total
+}
+
+// ---- from_right ----
+
+fn from_right_subarrays_with_k_distinct(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut close_count: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut open_count: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut close_distinct = 0;
+    let mut open_distinct = 0;
+    // the windows are [l, close] and [l, open], both shrunk from the
+    // right; close and open count down from n - 1
+    let mut close = n - 1;
+    let mut open = n - 1;
+    let mut total = 0;
+    let mut l = n - 1;
+    while l >= 0 {
+        let v = nums[l];
+        if close_count[v] == 0 {
+            close_distinct += 1;
+        }
+        close_count[v] += 1;
+        if open_count[v] == 0 {
+            open_distinct += 1;
+        }
+        open_count[v] += 1;
+        // close: the last right end with at most k - 1 different values
+        while close >= l and close_distinct >= k {
+            close_count[nums[close]] -= 1;
+            if close_count[nums[close]] == 0 {
+                close_distinct -= 1;
+            }
+            close -= 1;
+        }
+        // open: the last right end with at most k different values
+        while open >= l and open_distinct > k {
+            open_count[nums[open]] -= 1;
+            if open_count[nums[open]] == 0 {
+                open_distinct -= 1;
+            }
+            open -= 1;
+        }
+        total += open - close;
+        l -= 1;
+    }
+    total
+}
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(a: i64, nums: ref Vec[i64], k: i64) -> i64 {
+    if a == 0 {
+        star_subarrays_with_k_distinct(nums, k)
+    } else if a == 1 {
+        two_left_subarrays_with_k_distinct(nums, k)
+    } else if a == 2 {
+        map_subarrays_with_k_distinct(nums, k)
+    } else if a == 3 {
+        fenwick_subarrays_with_k_distinct(nums, k)
+    } else {
+        from_right_subarrays_with_k_distinct(nums, k)
+    }
+}
+
+// the number of different values in nums[from..to]
+fn different(nums: ref Vec[i64], from: i64, to: i64) -> i64 {
+    let mut seen: Vec[i64] = Vec.new();
+    for i in from..to {
+        if not seen.contains(nums[i]) {
+            seen.push(nums[i]);
+        }
+    }
+    seen.len()
+}
+
+// The statement read literally: every contiguous subarray, with its
+// different values counted afresh, and those with exactly k counted.
+fn literal(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut good = 0;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() + 1 {
+            if different(nums, i, j) == k {
+                good += 1;
+            }
+        }
+    }
+    good
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, nums: ref Vec[i64], k: i64, small: bool, seed: mut ref i64) -> i64 {
+    let n = nums.len();
+    let truth = if small { literal(nums, k) } else { -1 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, nums, k));
+    }
+    let backwards: Vec[i64] = nums.iter().rev().map(|x| *x).collect();
+    // the values renamed by a random permutation of 1 to n
+    let mut to: Vec[i64] = (0..n + 1).collect();
+    for i in 1..n + 1 {
+        let j = i + next_random(mut seed) % (n + 1 - i);
+        let t = to[i];
+        to[i] = to[j];
+        to[j] = t;
+    }
+    let renamed: Vec[i64] = nums.iter().map(|x| to[*x]).collect();
+    let d = different(nums, 0, n);
+    // a value not in nums, n + 1, put at the end; the subarrays it
+    // ends are the suffixes of nums, the empty one too, with k - 1
+    // different values
+    let mut longer = nums.clone();
+    longer.push(n + 1);
+    let mut ending = 0;
+    let mut seen: Vec[bool] = Vec.filled(n + 2, false);
+    let mut suffix_different = 0;
+    if k == 1 {
+        ending += 1;
+    }
+    let mut l = n - 1;
+    while l >= 0 {
+        if not seen[nums[l]] {
+            seen[nums[l]] = true;
+            suffix_different += 1;
+        }
+        if suffix_different == k - 1 {
+            ending += 1;
+        }
+        l -= 1;
+    }
+    for a in 0..5 {
+        let g = got[a];
+        // P1: the statement's answer, on the first 3000 arrays
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: the array reversed gives the same count
+        check(mut tally, 2, arm(a, backwards, k) == g);
+        // P3: the values renamed by a permutation give the same count
+        check(mut tally, 3, arm(a, renamed, k) == g);
+        // P4: over k from 1 to the number of different values, the
+        // counts add up to every subarray, n (n + 1) / 2
+        let mut all = 0;
+        for j in 1..d + 1 {
+            all += arm(a, nums, j);
+        }
+        check(mut tally, 4, all == n * (n + 1) / 2);
+        // P5: a new value at the end adds the subarrays it ends
+        check(mut tally, 5, arm(a, longer, k) == g + ending);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != a and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 992;
+    let mut total = 0;
+    let mut found = 0;
+    let mut check_sum = 0;
+    // 3000 arrays of up to 10 numbers below 5 against the statement,
+    // then 200 of up to 300 below 31 and below 101 in turn
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most = if small { 10 } else { 300 };
+        let values = if small { 4 } else if c % 2 == 0 { 30 } else { 100 };
+        let m = 1 + next_random(mut seed) % most;
+        let top = if values < m { values } else { m };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..m {
+            nums.push(1 + next_random(mut seed) % top);
+        }
+        let k = 1 + next_random(mut seed) % top;
+        let got = properties(mut tally, nums, k, small, mut seed);
+        total += m;
+        found += got;
+        check_sum = (check_sum * 31 + got + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 arrays of {total} numbers: {found} subarrays, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
