@@ -18685,6 +18685,55 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
             let (ft, op) = match cm {
+                // An escaping closure outlives the frame, so it holds a
+                // counted copy of a handle (§6.1, §9.3), the caller's
+                // staying usable, and a `Copy` value behind a borrowed
+                // parameter rather than the borrow.
+                CapMode::Value if escapes => {
+                    let (mut p, mut it) = (place.clone(), t);
+                    while let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(it) {
+                        p = p.project(ProjElem::Deref);
+                        it = inner;
+                    }
+                    if self.is_handle(it) || self.is_handle_aggregate(it) {
+                        let l = self.temp(it);
+                        self.count_copy(p, it, Place::local(l));
+                        (it, Operand::Move(Place::local(l)))
+                    } else if it != t && self.is_copy(it) {
+                        (it, Operand::Copy(p))
+                    } else if let Some(names) = (it != t)
+                        .then(|| self.disjoint_fields(body, sym, it))
+                        .flatten()
+                        .filter(|ns| {
+                            ns.iter().all(|&(_, _, ft)| {
+                                self.is_copy(ft)
+                                    || self.is_handle(ft)
+                                    || self.is_handle_aggregate(ft)
+                            })
+                        })
+                    {
+                        // A borrowed value that cannot move out: the
+                        // closure takes the `Copy` and handle fields it
+                        // uses, one by one (§9.1).
+                        for (name, idx, ft) in names {
+                            let fp = p.clone().field(idx, ft);
+                            let op = if self.is_copy(ft) {
+                                Operand::Copy(fp)
+                            } else {
+                                let l = self.temp(ft);
+                                self.count_copy(fp, ft, Place::local(l));
+                                Operand::Move(Place::local(l))
+                            };
+                            caps.push((sym, CapMode::Value, ft));
+                            fields.push(Some(name));
+                            lent.push(false);
+                            ops.push(op);
+                        }
+                        continue;
+                    } else {
+                        (t, self.use_place(place, t))
+                    }
+                }
                 CapMode::Value => (t, self.use_place(place, t)),
                 CapMode::Ref | CapMode::Mut => {
                     let mutable = cm == CapMode::Mut;
