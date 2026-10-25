@@ -2665,7 +2665,7 @@ impl Parser {
     }
 
     fn bind(self, bind_fn: escaping Fn(Val) -> Parser) -> Parser {
-        let me = self.clone();
+        let me = self;
         new_parser(|s, index| {
             let result = me.call(s, index);
             if result.status {
@@ -2731,7 +2731,7 @@ impl Parser {
     }
 
     fn times(self, min: i64, max: i64) -> Parser {
-        let me = self.clone();
+        let me = self;
         new_parser(|s, index| {
             let mut values: Vec[Val] = Vec.new();
             let mut times = 0;
@@ -2767,12 +2767,12 @@ impl Parser {
         self.optional_or(Val.Nil)
     }
 
-    fn optional_or(self, default: own Val) -> Parser {
+    fn optional_or(self, default: Val) -> Parser {
         self.times(0, 1).map(|v| if truthy(v) { at(v, 0) } else { default.clone() })
     }
 
-    fn until(self, other: own Parser, min: i64, max: i64, consume_other: bool) -> Parser {
-        let me = self.clone();
+    fn until(self, other: Parser, min: i64, max: i64, consume_other: bool) -> Parser {
+        let me = self;
         new_parser(|s, index| {
             let mut values: Vec[Val] = Vec.new();
             let mut times = 0;
@@ -2828,7 +2828,7 @@ impl Parser {
     }
 
     fn desc(self, description: Str) -> Parser {
-        let me = self.clone();
+        let me = self;
         let what = description.to_string();
         new_parser(|s, index| {
             let result = me.call(s, index);
@@ -2842,7 +2842,7 @@ impl Parser {
 
     // ((start_row, start_column), value, (end_row, end_column))
     fn mark(self) -> Parser {
-        let me = self.clone();
+        let me = self;
         generate(|g| {
             let start = g.take(line_info())?;
             let body = g.take(me.clone())?;
@@ -2851,13 +2851,13 @@ impl Parser {
         })
     }
 
-    fn tag(self, name: own Val) -> Parser {
+    fn tag(self, name: Val) -> Parser {
         self.map(|v| tuple2(name, v))
     }
 
     // a negative lookahead
     fn should_fail(self, description: Str) -> Parser {
-        let me = self.clone();
+        let me = self;
         let what = description.to_string();
         new_parser(|s, index| {
             let res = me.call(s, index);
@@ -3048,7 +3048,7 @@ fn line_info() -> Parser {
     })
 }
 
-fn success(value: own Val) -> Parser {
+fn success(value: Val) -> Parser {
     new_parser(|_, index| Res.success(index, value.clone()))
 }
 
@@ -3080,7 +3080,7 @@ fn string_t(expected: Str, transform: Transform) -> Parser {
     string_text(codepoints(expected.bytes()), transform)
 }
 
-fn string_text(expected: own Vec[i64], transform: own Transform) -> Parser {
+fn string_text(expected: own Vec[i64], transform: Transform) -> Parser {
     let slen = expected.len();
     let transformed = (transform.apply)(expected);
     let what = to_string(expected);
@@ -3191,12 +3191,12 @@ fn match_item(item: Val) -> Parser {
     match_item_desc(item, description)
 }
 
-fn match_item_desc(item: own Val, description: Str) -> Parser {
+fn match_item_desc(item: Val, description: Str) -> Parser {
     test_item(|i| py_eq(item, i), description)
 }
 
 // The longest strings are tried first, so overlapping ones work.
-fn string_from(strings: own Vec[Str], transform: own Transform) -> Parser {
+fn string_from(strings: own Vec[Str], transform: Transform) -> Parser {
     let mut sorted: Vec[Vec[i64]] = strings.iter().map(|s| codepoints(s.bytes())).collect();
     sorted.sort_by(|a, b| b.len().cmp(a.len()));
     alt(sorted.into_iter().map(|s| string_text(s, transform.clone())).collect())
@@ -3212,7 +3212,7 @@ fn char_from(chars: Str) -> Parser {
 }
 
 // A lookahead: parses without consuming.
-fn peek(parser: own Parser) -> Parser {
+fn peek(parser: Parser) -> Parser {
     new_parser(|s, index| {
         let result = parser.call(s, index);
         if result.status {
@@ -3294,7 +3294,7 @@ fn member(cls: ref EnumClass, name: Str) -> Val {
 }
 
 // Parses the members' values (as str() writes them) to the members.
-fn from_enum(cls: ref EnumClass, transform: own Transform) -> Parser {
+fn from_enum(cls: ref EnumClass, transform: Transform) -> Parser {
     let mut items: Vec[(Vec[i64], Val)] = Vec.new();
     for (n, v) in cls.members {
         items.push((codepoints(py_str(v).bytes()), Val.Member(cls.name.clone(), n.clone(), v)));
@@ -3456,17 +3456,15 @@ fn sexpr_grammar() -> Grammar {
     let falsity = (string("#f") << ignore).result(Val.Bool(false));
     let atom = truth | falsity | number | symbol;
     let expr = forward_declaration();
-    let in_form = expr.clone();
     let form = generate_desc("a form", |g| {
         g.take(lparen.clone())?;
-        let els = g.take(in_form.many())?;
+        let els = g.take(expr.many())?;
         g.take(rparen.clone())?;
         Some(Out.Value(els))
     });
-    let in_quote = expr.clone();
     let quote = generate(|g| {
         g.take(string("'"))?;
-        let e = g.take(in_quote.clone())?;
+        let e = g.take(expr.clone())?;
         Some(Out.Value(Val.List(Vec[pystr("quote"), e])))
     });
     become_or_panic(expr, form | quote | atom);
@@ -3803,7 +3801,7 @@ fn query_parser() -> Grammar {
 
 // ------------------------------------------------------------ the registry
 
-fn generated_xy(last: own Val) -> Parser {
+fn generated_xy(last: Val) -> Parser {
     generate(|g| {
         g.take(string("x"))?;
         g.take(string("y"))?;

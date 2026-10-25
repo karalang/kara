@@ -102,15 +102,20 @@ open). Both of those were dropped. The rest were by hand:
   the cache, and a `search` method on it does the update.
 
 Then check was clean, and the MIR interpreter stopped: a captured forward
-declaration was moved by the first of two closures (B-2026-10-25-16,
-open), so each closure now captures its own `.clone()`. After that every
-job crashed on the compiled backends and the interpreter called a
-reference dangling: a closure stored in a parser captured the borrowed
-parameter it read by reference (B-2026-10-25-17, open, high). Ten
-parameters that the parsers keep are now `own`, and six `let me = self;`
-are `self.clone()`. Then it matched the oracle under the MIR interpreter,
-the LLVM backend, the ASan build and the native binary, with nothing on
-stderr.
+declaration was moved by the first of two closures (B-2026-10-25-16), so
+each closure captured its own `.clone()`. After that every job crashed on
+the compiled backends and the interpreter called a reference dangling: a
+closure stored in a parser captured the borrowed parameter it read by
+reference (B-2026-10-25-17, high). Ten parameters that the parsers keep
+became `own`, and six `let me = self;` became `self.clone()`. Then it
+matched the oracle under the MIR interpreter, the LLVM backend, the ASan
+build and the native binary, with nothing on stderr.
+
+Kara fixed both rows in f6b4ec231b, so those edits are reverted: the two
+closures capture the forward declaration itself, the ten parameters
+borrow again and the six are `let me = self;`. It still matches the
+oracle on all four backends with nothing on stderr (a debug `karac`
+built at 11956dad75).
 
 Later `karac fix` dropped 95 `*`s on `Copy` parts bound out of borrowed
 values, which are copies rather than views (kara B-2026-10-24-36); the
