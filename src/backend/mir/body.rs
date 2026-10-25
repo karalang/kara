@@ -8,7 +8,7 @@
 use inkwell::module::Linkage;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValue, BasicValueEnum, IntValue, PointerValue};
-use inkwell::{FloatPredicate, IntPredicate};
+use inkwell::{AtomicOrdering, AtomicRMWBinOp, FloatPredicate, IntPredicate};
 
 use super::{Cx, R};
 use crate::mir::layout::{self, SHARED_COUNTS};
@@ -541,7 +541,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let pty = self.place_type(place)?;
                 let p = self.place_ptr(place)?;
                 let h = self.load_ptr(p)?;
-                self.retain(h)?;
+                self.retain(h, self.atomic_counts(pty))?;
                 self.copy(dst, p, pty)
             }
             Rvalue::BinaryOp(op, a, b) => {
@@ -679,12 +679,148 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
-    /// `strong += 1` on the `shared` box `h`.
-    pub(super) fn retain(&self, h: PointerValue<'ctx>) -> R<()> {
-        let n = self.load_i64(h)?;
-        let n = self.builder.build_int_add(n, self.i64(1), "").map_err(e)?;
-        self.builder.build_store(h, n).map_err(e)?;
+    /// `strong += 1` on the `shared` box `h`, atomically when `atomic`
+    /// ([`Cx::atomic_counts`]).
+    pub(super) fn retain(&self, h: PointerValue<'ctx>, atomic: bool) -> R<()> {
+        self.add_count(h, true, atomic)?;
         Ok(())
+    }
+
+    /// Whether the box a handle of type `ty` points at is counted
+    /// atomically: a `sync` type's is (core-semantics §6.3), as a task on
+    /// another thread may hold one. `ty` is the `shared` or `weak` handle,
+    /// behind any references, or an `Option` of one.
+    pub(super) fn atomic_counts(&self, ty: Ty) -> bool {
+        let mut t = ty;
+        loop {
+            match self.tys.kind(t) {
+                TyKind::Ref(i) | TyKind::MutRef(i) | TyKind::Weak(i) => t = i,
+                TyKind::Shared(a) => return self.tys.adt(a).sync,
+                TyKind::Adt(_) => match self.tys.tcx().adt_of(t) {
+                    Some((adt, args)) if adt.name == "Option" && !args.is_empty() => t = args[0],
+                    _ => return false,
+                },
+                _ => return false,
+            }
+        }
+    }
+
+    /// `*w += 1` (`up`) or `*w -= 1` on the count word `w` of a box,
+    /// atomically when `atomic`; answers the count after. An atomic
+    /// decrement is acquire-release, so the drop that follows the last
+    /// one sees every write made through the other handles.
+    pub(super) fn add_count(
+        &self,
+        w: PointerValue<'ctx>,
+        up: bool,
+        atomic: bool,
+    ) -> R<IntValue<'ctx>> {
+        let one = self.i64(1);
+        if atomic {
+            let (op, order) = if up {
+                (AtomicRMWBinOp::Add, AtomicOrdering::Monotonic)
+            } else {
+                (AtomicRMWBinOp::Sub, AtomicOrdering::AcquireRelease)
+            };
+            let old = self.builder.build_atomicrmw(op, w, one, order).map_err(e)?;
+            return if up {
+                self.builder.build_int_add(old, one, "count")
+            } else {
+                self.builder.build_int_sub(old, one, "count")
+            }
+            .map_err(e);
+        }
+        let n = self.load_i64(w)?;
+        let n = if up {
+            self.builder.build_int_add(n, one, "count")
+        } else {
+            self.builder.build_int_sub(n, one, "count")
+        }
+        .map_err(e)?;
+        self.builder.build_store(w, n).map_err(e)?;
+        Ok(n)
+    }
+
+    /// The count word at `w`, read atomically when `atomic`.
+    pub(super) fn load_count(&self, w: PointerValue<'ctx>, atomic: bool) -> R<IntValue<'ctx>> {
+        let n = self
+            .builder
+            .build_load(self.llcx.i64_type(), w, "count")
+            .map_err(e)?
+            .into_int_value();
+        let i = n.as_instruction().ok_or("a load")?;
+        i.set_alignment(8).map_err(e)?;
+        if atomic {
+            i.set_atomic_ordering(AtomicOrdering::Acquire).map_err(e)?;
+        }
+        Ok(n)
+    }
+
+    /// `strong += 1` on the box `h` when its object still lives (its strong
+    /// count is not 0), as upgrading a `weak` handle does; answers whether
+    /// it did. Atomically, the count is read and raised in one step, so an
+    /// object another thread is dropping is never raised.
+    pub(super) fn retain_if_alive(
+        &mut self,
+        h: PointerValue<'ctx>,
+        atomic: bool,
+    ) -> R<IntValue<'ctx>> {
+        if !atomic {
+            let n = self.load_i64(h)?;
+            let alive = self
+                .builder
+                .build_int_compare(IntPredicate::NE, n, self.i64(0), "")
+                .map_err(e)?;
+            self.if_then(alive, |cx| cx.retain(h, false))?;
+            return Ok(alive);
+        }
+        let f = self.cur_fn()?;
+        let (top, try_raise, done) = (
+            self.llcx.append_basic_block(f, "upgrade"),
+            self.llcx.append_basic_block(f, "upgrade.raise"),
+            self.llcx.append_basic_block(f, "upgraded"),
+        );
+        self.builder.build_unconditional_branch(top).map_err(e)?;
+        self.builder.position_at_end(top);
+        let n = self.load_count(h, true)?;
+        let alive = self
+            .builder
+            .build_int_compare(IntPredicate::NE, n, self.i64(0), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(alive, try_raise, done)
+            .map_err(e)?;
+        self.builder.position_at_end(try_raise);
+        let up = self.builder.build_int_add(n, self.i64(1), "").map_err(e)?;
+        let r = self
+            .builder
+            .build_cmpxchg(
+                h,
+                n,
+                up,
+                AtomicOrdering::Monotonic,
+                AtomicOrdering::Monotonic,
+            )
+            .map_err(e)?;
+        let swapped = self
+            .builder
+            .build_extract_value(r, 1, "swapped")
+            .map_err(e)?
+            .into_int_value();
+        let raised = self.builder.get_insert_block().ok_or("no block")?;
+        self.builder
+            .build_conditional_branch(swapped, done, top)
+            .map_err(e)?;
+        self.builder.position_at_end(done);
+        let phi = self
+            .builder
+            .build_phi(self.llcx.bool_type(), "alive")
+            .map_err(e)?;
+        phi.add_incoming(&[
+            (&self.llcx.bool_type().const_zero(), top),
+            (&self.llcx.bool_type().const_all_ones(), raised),
+        ]);
+        Ok(phi.as_basic_value().into_int_value())
     }
 
     /// `op` on the scalar `x` of type `at`.
@@ -1069,12 +1205,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 // or `ref Option[shared T]` reaches: one more weak count;
                 // nothing gives the empty (null) weak handle.
                 let h = self.handle_behind(a)?;
+                let atomic = self.atomic_counts(from);
                 let live = self.builder.build_is_not_null(h, "").map_err(e)?;
                 self.if_then(live, |cx| {
                     let w = cx.offset(h, 8)?;
-                    let n = cx.load_i64(w)?;
-                    let n = cx.builder.build_int_add(n, cx.i64(1), "").map_err(e)?;
-                    cx.builder.build_store(w, n).map_err(e)?;
+                    cx.add_count(w, true, atomic)?;
                     Ok(())
                 })?;
                 return self.store(dst, h.into());
@@ -1231,16 +1366,12 @@ impl<'ctx> Cx<'ctx, '_> {
             .ok_or("an upgrade's Option has no Some")? as u32;
         let none = 1 - some;
         let h = self.handle_behind(a)?;
+        let atomic = self.atomic_counts(to);
         self.store_tag(dst, to, none)?;
         let live = self.builder.build_is_not_null(h, "").map_err(e)?;
         self.if_then(live, |cx| {
-            let n = cx.load_i64(h)?;
-            let alive = cx
-                .builder
-                .build_int_compare(IntPredicate::NE, n, cx.i64(0), "")
-                .map_err(e)?;
+            let alive = cx.retain_if_alive(h, atomic)?;
             cx.if_then(alive, |cx| {
-                cx.retain(h)?;
                 cx.store_tag(dst, to, some)?;
                 let off =
                     layout::field_offset(cx.tys, to, Some(some), 0).ok_or("Some has no field")?;

@@ -175,18 +175,18 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             TyKind::Shared(_) => {
                 let h = self.load_ptr(src)?;
-                self.retain(h)?;
+                self.retain(h, self.atomic_counts(ty))?;
                 self.store(dst, h.into())
             }
             TyKind::Weak(_) => {
                 let h = self.load_ptr(src)?;
                 self.store(dst, h.into())?;
                 let some = self.builder.build_is_not_null(h, "").map_err(e)?;
+                let atomic = self.atomic_counts(ty);
                 self.if_then(some, |cx| {
                     let wp = cx.offset(h, 8)?;
-                    let w = cx.load_i64(wp)?;
-                    let w = cx.builder.build_int_add(w, cx.i64(1), "").map_err(e)?;
-                    cx.store(wp, w.into())
+                    cx.add_count(wp, true, atomic)?;
+                    Ok(())
                 })
             }
             TyKind::Adt(_) => self.clone_adt(dst, src, ty),

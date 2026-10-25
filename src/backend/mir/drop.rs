@@ -279,7 +279,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.drop_fields(p, ty)
             }
             TyKind::Shared(a) => self.release(p, ty, a),
-            TyKind::Weak(_) => self.release_weak(p),
+            TyKind::Weak(_) => self.release_weak(p, self.atomic_counts(ty)),
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
                 for i in (0..ts.len()).rev() {
                     if self.tys.needs_drop(ts[i]) {
@@ -698,14 +698,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// ([`Cx::release_last`]) runs when this was the last strong handle.
     fn release(&mut self, p: PointerValue<'ctx>, ty: Ty, _a: AdtId) -> R<()> {
         let b = self.load_ptr(p)?;
-        let strong = self.load_i64(b)?;
-        let left = self
-            .builder
-            .build_int_sub(strong, self.i64(1), "strong")
-            .map_err(|e| e.to_string())?;
-        self.builder
-            .build_store(b, left)
-            .map_err(|e| e.to_string())?;
+        let left = self.add_count(b, false, self.atomic_counts(ty))?;
         let last = self.is_zero(left)?;
         let f = self.last_fn(ty);
         self.if_then(last, |cx| {
@@ -735,15 +728,9 @@ impl<'ctx> Cx<'ctx, '_> {
         let b = self.load_ptr(cur)?;
         // Hold a weak count across the drop: the body may hold the last
         // weak handle to its own box, whose release must not free it.
+        let atomic = self.atomic_counts(ty);
         let wp = self.offset(b, 8)?;
-        let w = self.load_i64(wp)?;
-        let held = self
-            .builder
-            .build_int_add(w, self.i64(1), "")
-            .map_err(|e| e.to_string())?;
-        self.builder
-            .build_store(wp, held)
-            .map_err(|e| e.to_string())?;
+        self.add_count(wp, true, atomic)?;
         if self.adt_has_drop_body(a)? {
             // The body takes a reference to a handle, as every read
             // through one does: a handle on `b`.
@@ -764,14 +751,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 None
             }
         };
-        let weak = self.load_i64(wp)?;
-        let weak = self
-            .builder
-            .build_int_sub(weak, self.i64(1), "")
-            .map_err(|e| e.to_string())?;
-        self.builder
-            .build_store(wp, weak)
-            .map_err(|e| e.to_string())?;
+        let weak = self.add_count(wp, false, atomic)?;
         let no_weak = self.is_zero(weak)?;
         self.if_then(no_weak, |cx| cx.free(b))?;
         if let Some(next) = next {
@@ -789,14 +769,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 .build_conditional_branch(some, more, done)
                 .map_err(|e| e.to_string())?;
             self.builder.position_at_end(more);
-            let strong = self.load_i64(next)?;
-            let left = self
-                .builder
-                .build_int_sub(strong, self.i64(1), "strong")
-                .map_err(|e| e.to_string())?;
-            self.builder
-                .build_store(next, left)
-                .map_err(|e| e.to_string())?;
+            let left = self.add_count(next, false, atomic)?;
             self.store(cur, next.into())?;
             let last = self.is_zero(left)?;
             self.builder
@@ -841,8 +814,8 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(found)
     }
 
-    /// Drops the `weak` handle at `p`.
-    fn release_weak(&mut self, p: PointerValue<'ctx>) -> R<()> {
+    /// Drops the `weak` handle at `p`, its counts atomic when `atomic`.
+    fn release_weak(&mut self, p: PointerValue<'ctx>, atomic: bool) -> R<()> {
         let b = self.load_ptr(p)?;
         let empty = self
             .builder
@@ -854,15 +827,8 @@ impl<'ctx> Cx<'ctx, '_> {
             .map_err(|e| e.to_string())?;
         self.if_then(some, |cx| {
             let wp = cx.offset(b, 8)?;
-            let weak = cx.load_i64(wp)?;
-            let left = cx
-                .builder
-                .build_int_sub(weak, cx.i64(1), "weak")
-                .map_err(|e| e.to_string())?;
-            cx.builder
-                .build_store(wp, left)
-                .map_err(|e| e.to_string())?;
-            let strong = cx.load_i64(b)?;
+            let left = cx.add_count(wp, false, atomic)?;
+            let strong = cx.load_count(b, atomic)?;
             let both = cx
                 .builder
                 .build_or(left, strong, "")

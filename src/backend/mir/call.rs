@@ -466,15 +466,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 let (_, none) = self.option_variants(dty)?;
                 self.store_tag(d, dty, none)?;
                 let h = self.load_ptr(at)?;
+                let atomic = self.atomic_counts(pt);
                 let set = self.builder.build_is_not_null(h, "").map_err(e)?;
                 self.if_then(set, |cx| {
-                    let n = cx.load_i64(h)?;
-                    let alive = cx
-                        .builder
-                        .build_int_compare(IntPredicate::NE, n, cx.i64(0), "")
-                        .map_err(e)?;
+                    let alive = cx.retain_if_alive(h, atomic)?;
                     cx.if_then(alive, |cx| {
-                        cx.retain(h)?;
                         cx.store_tag(d, dty, some)?;
                         cx.store(q, h.into())
                     })
