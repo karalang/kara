@@ -468,6 +468,10 @@ pub fn has_source_map() -> bool {
     SOURCE_MAP.get().is_some()
 }
 
+/// Marks a task's panic place as a library body's, which the program's call
+/// into it replaces (`Interp::contain`).
+const LIBRARY_PLACE: char = '\u{1}';
+
 /// The file and line a source line names: through the line map when one
 /// was set, otherwise the program's file name (`<unknown>` when unnamed).
 pub fn source_at(line: usize) -> (&'static str, usize) {
@@ -6530,6 +6534,11 @@ impl<'a> Interp<'a> {
 
     /// `Err(TaskFailed.Panicked { message, location })` (§11.12).
     fn panicked_value(&mut self, message: String, location: String) -> Value {
+        // A library place no call of the program's replaced is kept.
+        let location = match location.strip_prefix(LIBRARY_PLACE) {
+            Some(place) => place.to_string(),
+            None => location,
+        };
         let message = self.alloc_box("String", Value::Str(message));
         let location = self.alloc_box("String", Value::Str(location));
         Value::Variant(1, vec![Value::Variant(0, vec![message, location])])
@@ -6590,6 +6599,22 @@ impl<'a> Interp<'a> {
         };
         let exit = matches!(kind, TerminatorKind::Call { .. })
             && coroutine::has_cancel_exit(body, *target);
+        let in_library = self
+            .program
+            .user_source_len
+            .is_some_and(|n| span.offset >= n);
+        // A panic recorded in a library body (`unwrap`'s `panic`) is placed
+        // at the program's call into it, the first call of the program's
+        // own the unwinding passes, as `report_abort` places a process-
+        // ending one (B-2026-10-25-39).
+        if !in_library && matches!(kind, TerminatorKind::Call { .. }) && self.panic_unwinding() {
+            let (file, line) = source_at(span.line);
+            if let Some(Some((_, location))) = self.panic_slot() {
+                if location.starts_with(LIBRARY_PLACE) {
+                    *location = format!("{file}:{line}:{}", span.column);
+                }
+            }
+        }
         match next {
             Err(Stop::Abort(reason)) if exit => {
                 let fresh = self.panic_slot().is_some_and(|p| p.is_none());
@@ -6599,7 +6624,10 @@ impl<'a> Interp<'a> {
                     // gone.
                     self.contract_depth = 0;
                     let (file, line) = source_at(span.line);
-                    let location = format!("{file}:{line}:{}", span.column);
+                    let mut location = format!("{file}:{line}:{}", span.column);
+                    if in_library {
+                        location.insert(0, LIBRARY_PLACE);
+                    }
                     if let Some(p) = self.panic_slot() {
                         *p = Some((message, location));
                     }
