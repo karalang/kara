@@ -2842,19 +2842,6 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
         ),
     );
 
-    // RAII-across-yield phase (phase 6 line 31 slice 1)
-    emit_jsonl_event("phase_start", "\"phase\":\"raii_check\"");
-    pipeline.raii_check();
-    pipeline.drop_library_diagnostics();
-    let raii_errors = pipeline.raii_errors.as_ref().map_or(0, |r| r.len());
-    emit_jsonl_event(
-        "phase_complete",
-        &format!(
-            "\"phase\":\"raii_check\",\"errors\":{},\"warnings\":0,\"notes\":0",
-            raii_errors
-        ),
-    );
-
     // `#[require_simd]` guarantee phase (phase-7-codegen.md line 308 slice 5a)
     emit_jsonl_event("phase_start", "\"phase\":\"simd_check\"");
     pipeline.simd_check();
@@ -2875,7 +2862,6 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
         + effect_errors
         + ownership_errors
         + escape_errors
-        + raii_errors
         + simd_errors
         + comptime_errors;
     let effects = program_effects_json(pipeline);

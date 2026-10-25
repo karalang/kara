@@ -32,12 +32,14 @@ struct Response {
     headers: Vec[(String, String)],
 }
 
-// The service's state, built in `main` and passed to every request
-// (design.md § Constants: Kāra has no mutable globals).
-struct Links {
-    targets: Map[String, String],
-    hits: Map[String, i64],
-    seq: i64,
+// The service's state, built in `main` and shared by every request
+// (design.md § Constants: Kāra has no mutable globals). The server answers
+// its connections concurrently, so the handler is an `Fn` that reaches
+// the state through a `shared` handle (core-semantics §9.6).
+shared struct Links {
+    mut targets: Map[String, String],
+    mut hits: Map[String, i64],
+    mut seq: i64,
 }
 
 const CODE_ALPHABET: Str = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -84,7 +86,7 @@ fn text(status: i64, body: own String) -> Response {
     Response { status: status, body: body, headers: no_headers() }
 }
 
-fn handle(links: mut ref Links, req: Request) -> Response {
+fn handle(links: Links, req: Request) -> Response {
     let path = req.path();
     let method = req.method();
 
@@ -142,6 +144,6 @@ fn handle(links: mut ref Links, req: Request) -> Response {
 
 fn main() {
     println("shortener listening on 127.0.0.1:8080");
-    let mut links = Links { targets: Map.new(), hits: Map.new(), seq: 0 };
-    let _ = Server.serve("127.0.0.1:8080", |req| handle(mut links, req));
+    let links = Links { targets: Map.new(), hits: Map.new(), seq: 0 };
+    let _ = Server.serve("127.0.0.1:8080", |req| handle(links, req));
 }

@@ -19246,17 +19246,14 @@ fn uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// The abort tier of the same decision: RAII-across-yield violations
-/// break execution-soundness/teardown guarantees (like provider escape),
-/// so they abort `karac run` rather than warn. This gate existed in
-/// `cmd_run` but was vacuously green before the run-leniency slice —
-/// `raii_across_yield_check` keys off `Program.state_struct_layouts` /
-/// `yield_points`, which only `Pipeline::effectcheck` populates, and
-/// `cmd_run` never invoked it. This pins the gate's liveness.
+/// A `shared` value held across a network call runs: `E_RAII_ACROSS_YIELD`
+/// is withdrawn (core-semantics §11.9: a task is torn down at its wait,
+/// so no rule restricts what is held across one). This program was the
+/// pin of the refusal, `run_raii_across_yield_violation_aborts`.
 #[test]
-fn run_raii_across_yield_violation_aborts() {
+fn run_holds_a_shared_value_across_a_network_call() {
     let tmp = std::env::temp_dir().join(format!(
-        "karac-cli-run-raii-abort-{}-{}",
+        "karac-cli-run-shared-across-call-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -19264,7 +19261,7 @@ fn run_raii_across_yield_violation_aborts() {
             .unwrap_or(0),
     ));
     std::fs::create_dir_all(&tmp).unwrap();
-    let path = tmp.join("raiirun.kara");
+    let path = tmp.join("held.kara");
     let src = r#"
 shared struct Hub {
     id: i64,
@@ -19280,29 +19277,26 @@ fn driver(h: Hub) {
 fn main() {
     let h = Hub { id: 1 };
     driver(h);
-    println("should not print");
+    println(f"ran past the call with hub {h.id}");
 }
 "#;
     std::fs::write(&path, src).unwrap();
 
-    let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success(),
-        "RAII-across-yield must abort `karac run`; stdout={stdout} stderr={stderr}",
-    );
-    assert!(
-        stderr.contains("error[E_RAII_ACROSS_YIELD]"),
-        "abort should carry the RAII diagnostic: {stderr}",
-    );
-    assert!(
-        !stdout.contains("should not print"),
-        "the program must not execute past the RAII gate: {stdout}",
-    );
+    for cmd in ["check", "run"] {
+        let out = karac_bin()
+            .args([cmd, path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "`karac {cmd}`: stdout={stdout} stderr={stderr}"
+        );
+        if cmd == "run" {
+            assert_eq!(stdout, "ran past the call with hub 1\n");
+        }
+    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

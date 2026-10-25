@@ -1,9 +1,10 @@
-//! A blocking HTTP/1.1 server, one request at a time: `Server.serve` on the
-//! MIR backends. The MIR interpreter (`src/mir/interp.rs`) and the compiled
-//! backend's runtime (`runtime/src/mir_io.rs`, which includes this file by
-//! `#[path]`, as it does `format_spec.rs`) share it, so a request parses and
-//! a response is written the same way on both. Plain `std`, no `karac`
-//! types.
+//! HTTP/1.1 requests and responses for the servers of the MIR backends
+//! (runtime/stdlib/source/http_server.kara): parsing a request off the
+//! bytes a connection has sent, and a response's bytes. The MIR
+//! interpreter (`src/mir/interp.rs`) and the compiled backend's runtime
+//! (`runtime/src/mir_io.rs`, which includes this file by `#[path]`, as it
+//! does `format_spec.rs`) share it, so a request parses and a response is
+//! written the same way on both. Plain `std`, no `karac` types.
 //!
 //! The semantics follow the legacy runtime's server (`serve_request` in
 //! `runtime/src/lib.rs`): the query is split on `&` and each part on its
@@ -11,9 +12,6 @@
 //! `application/json`. A connection is kept for the next request until the
 //! client closes it or asks to (`Connection: close`, or HTTP/1.0 without
 //! `keep-alive`).
-
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 
 /// Header (or query) pairs, in the order they came.
 pub type Headers = Vec<(String, String)>;
@@ -61,6 +59,11 @@ impl Request {
     pub fn body_text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
     }
+
+    /// Whether the connection stays open for the next request.
+    pub fn keep_alive(&self) -> bool {
+        self.keep_alive
+    }
 }
 
 /// `+` is a space and `%XX` the byte it names; a malformed escape stays as
@@ -85,68 +88,6 @@ fn form_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-/// A bound listener and the connection it is serving.
-pub struct Server {
-    listener: TcpListener,
-    /// The connection, and the bytes read off it past the last request.
-    conn: Option<(TcpStream, Vec<u8>)>,
-    keep_alive: bool,
-}
-
-impl Server {
-    /// Binds `addr`, an IP literal and a port. Returns the server and the
-    /// port it listens on (which the caller prints as `BOUND_PORT=<n>`, as
-    /// the legacy runtime does), or the `HttpError` message.
-    pub fn bind(addr: &str) -> Result<(Server, u16), String> {
-        let fail = |e: &dyn std::fmt::Display| format!("{addr}: bind failed: {e}");
-        let at: std::net::SocketAddr = addr.parse().map_err(|e| fail(&e))?;
-        let listener = TcpListener::bind(at).map_err(|e| fail(&e))?;
-        let port = listener.local_addr().map_err(|e| fail(&e))?.port();
-        let server = Server {
-            listener,
-            conn: None,
-            keep_alive: false,
-        };
-        Ok((server, port))
-    }
-
-    /// The next request, from the open connection or, once that ends, from
-    /// the next one accepted. A connection that sends something unreadable
-    /// is dropped; only a failing `accept` is an error, its `HttpError`
-    /// message returned.
-    pub fn accept_request(&mut self) -> Result<Request, String> {
-        let fail = |e: std::io::Error| format!("accept failed: {e}");
-        loop {
-            if self.conn.is_none() {
-                let (s, _) = self.listener.accept().map_err(fail)?;
-                self.conn = Some((s, Vec::new()));
-            }
-            let Some((s, buf)) = self.conn.as_mut() else {
-                continue;
-            };
-            match read_request(s, buf) {
-                Ok(Some(req)) => {
-                    self.keep_alive = req.keep_alive;
-                    return Ok(req);
-                }
-                _ => self.conn = None,
-            }
-        }
-    }
-
-    /// Answers the request [`Self::accept_request`] returned last.
-    pub fn respond(&mut self, status: i64, body: &[u8], headers: &[(String, String)]) {
-        let Some((w, _)) = self.conn.as_mut() else {
-            return;
-        };
-        let wire = response_bytes(status, body, headers, self.keep_alive);
-        let sent = w.write_all(&wire).and_then(|()| w.flush());
-        if sent.is_err() || !self.keep_alive {
-            self.conn = None;
-        }
-    }
 }
 
 /// A response's bytes: the status line, `headers` (with a JSON
@@ -336,7 +277,8 @@ impl<'a> Lines<'a> {
 
 /// Reads one request from `r`, blocking, with the bytes after it left in
 /// `buf` for the next; `None` when the client closed the connection first.
-fn read_request(r: &mut impl Read, buf: &mut Vec<u8>) -> std::io::Result<Option<Request>> {
+#[cfg(test)]
+fn read_request(r: &mut impl std::io::Read, buf: &mut Vec<u8>) -> std::io::Result<Option<Request>> {
     let bad = |what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_string());
     let mut eof = false;
     loop {

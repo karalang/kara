@@ -1030,10 +1030,7 @@ fn http_server_natives_match_the_interpreter() {
     let dir = Scratch::new("serve");
     let karac = env!("CARGO_BIN_EXE_karac");
     let (unbound, built) = interp_and_build(dir.path(), SERVE_UNBOUND);
-    assert_eq!(
-        unbound,
-        "serve: 999.0.0.1:0: bind failed: invalid socket address syntax\n"
-    );
+    assert_eq!(unbound, "serve: 999.0.0.1:0: bind failed: invalid input\n");
     if let Some(built) = built {
         assert_eq!(built, unbound);
     }

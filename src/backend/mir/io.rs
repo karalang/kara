@@ -12,7 +12,6 @@
 use inkwell::values::{BasicMetadataValueEnum, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
-use super::callable::Callee;
 use super::{Cx, R};
 use crate::mir::ty::IntrinsicTy;
 use crate::mir::{Operand, Place, Ty, TyKind};
@@ -103,10 +102,14 @@ impl<'ctx> Cx<'ctx, '_> {
             ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
                 self.crypto_native(base, method, args, dest)
             }
-            ("Server", "serve") => self.serve_native(args, dest).map(Some),
-            ("Server", "serve_static") => self.serve_static_native(args, dest).map(Some),
             ("Server", "__install") => self.http_install_native(args, dest).map(Some),
             ("Server", "__wire") => self.http_wire_native(args, dest).map(Some),
+            ("Server", "__wire_fixed") => self.http_wire_fixed_native(args, dest).map(Some),
+            ("Server", "__keep_alive") => {
+                let keep = self.rt_named("karac_mir_http_keep_alive", &[], 8)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, keep.into()).map(Some)
+            }
             ("Request", _) => self.request_native(method, args, dest),
             ("Clock", "now" | "monotonic_ns" | "wall_ns") => {
                 let i64t = self.llcx.i64_type();
@@ -1546,144 +1549,6 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
-    /// `Server.serve(addr, handler)`: binds through `karac_mir_http_bind`,
-    /// then answers each request `karac_mir_http_next` waits for with the
-    /// handler's `Response` until the server can accept no more, which is
-    /// the `Err` it returns (as is a failed bind). The `Response` is read by
-    /// field name, so a program's own `Response` with `headers: Vec[(String,
-    /// String)]` sets headers.
-    fn serve_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
-        let ptr = self.ptr_ty();
-        let i64t = self.llcx.i64_type();
-        let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
-        let (a, an) = self.str_parts(&args[0])?;
-        let msg = self.temp(string, "serve.msg")?;
-        let bind = self.extern_fn(
-            "karac_mir_http_bind",
-            ptr.fn_type(&[ptr.into(), i64t.into(), ptr.into()], false),
-        );
-        let server = self
-            .builder
-            .build_call(bind, &[a.into(), an.into(), msg.into()], "")
-            .map_err(e)?
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
-        self.drop_moved(&args[..1])?;
-
-        let c = self.callee_by_ref(&args[1])?;
-        let want = match &c {
-            Callee::Body { name, env } => {
-                self.program.bodies[name].locals[1 + usize::from(env.is_some())].ty
-            }
-            Callee::Erased { ty, .. } => match self.tys.kind(*ty) {
-                TyKind::Fn { params, .. } if !params.is_empty() => params[0],
-                _ => return Err("Server.serve with a handler taking no Request".into()),
-            },
-        };
-        let req_ty = match self.tys.kind(want) {
-            TyKind::Ref(i) | TyKind::MutRef(i) => i,
-            _ => want,
-        };
-        let req = self.temp(req_ty, "serve.req")?;
-        let rt = self.callee_ret(&c)?;
-        let resp = self.temp(rt, "serve.resp")?;
-        let TyKind::Adt(adt) = self.tys.kind(rt) else {
-            return Err("Server.serve with a handler returning no Response".into());
-        };
-        let names: Vec<String> = self.tys.adt(adt).variants[0]
-            .fields
-            .iter()
-            .map(|(n, _)| n.clone())
-            .collect();
-        let at = |n: &str| names.iter().position(|f| f == n).map(|k| k as u32);
-        let status_k = at("status").ok_or("a Response without a `status`")?;
-        let (body_k, headers_k) = (at("body"), at("headers"));
-
-        let f = self.cur_fn()?;
-        let head = self.llcx.append_basic_block(f, "serve.next");
-        let each = self.llcx.append_basic_block(f, "serve.answer");
-        let done = self.llcx.append_basic_block(f, "serve.done");
-        let failed = self.builder.build_is_null(server, "").map_err(e)?;
-        self.builder
-            .build_conditional_branch(failed, done, head)
-            .map_err(e)?;
-        self.builder.position_at_end(head);
-        let got = self.rt_named("karac_mir_http_next", &[server.into(), msg.into()], 32)?;
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::NE, got, self.llcx.i32_type().const_zero(), "")
-            .map_err(e)?;
-        self.builder
-            .build_conditional_branch(more, each, done)
-            .map_err(e)?;
-
-        self.builder.position_at_end(each);
-        self.call_callee(&c, resp, &[(req, req_ty)])?;
-        let status = self.load_i64(self.offset(resp, self.field_offset(rt, None, status_k)?)?)?;
-        // A `String` and a `Vec` both start with their buffer and length.
-        let parts = |k: Option<u32>| -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
-            match k {
-                Some(k) => {
-                    let p = self.offset(resp, self.field_offset(rt, None, k)?)?;
-                    Ok((self.load_ptr(p)?, self.load_i64(self.offset(p, 8)?)?))
-                }
-                None => Ok((ptr.const_null(), self.i64(0))),
-            }
-        };
-        let (b, bn) = parts(body_k)?;
-        let (h, hn) = parts(headers_k)?;
-        let respond = self.extern_fn(
-            "karac_mir_http_respond",
-            self.llcx.void_type().fn_type(
-                &[
-                    ptr.into(),
-                    i64t.into(),
-                    ptr.into(),
-                    i64t.into(),
-                    ptr.into(),
-                    i64t.into(),
-                ],
-                false,
-            ),
-        );
-        self.builder
-            .build_call(
-                respond,
-                &[
-                    server.into(),
-                    status.into(),
-                    b.into(),
-                    bn.into(),
-                    h.into(),
-                    hn.into(),
-                ],
-                "",
-            )
-            .map_err(e)?;
-        self.call_glue(resp, rt)?;
-        self.builder.build_unconditional_branch(head).map_err(e)?;
-
-        self.builder.position_at_end(done);
-        if !Self::consumes(&c) {
-            self.drop_moved(&args[1..])?;
-        }
-        let dty = self.place_type(dest)?;
-        let d = self.place_ptr(dest)?;
-        let erv = self.variant_of(dty, "Err")?;
-        let et = self
-            .tys
-            .field_ty(dty, Some(erv), 0)
-            .ok_or("Result.Err has no payload")?;
-        self.store_tag(d, dty, erv)?;
-        let er = self.offset(d, self.field_offset(dty, Some(erv), 0)?)?;
-        self.copy(
-            self.offset(er, self.field_offset(et, None, 0)?)?,
-            msg,
-            string,
-        )
-    }
-
     /// `Server.__install(buf, eof)` (runtime/stdlib/source/http_server.kara):
     /// the request at the start of `buf` made the current one, through
     /// `karac_mir_http_install`, as the interpreter's.
@@ -1703,9 +1568,9 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(d, used.into())
     }
 
-    /// `Server.__wire(resp)`: the response's bytes, which close the
-    /// connection, as a `Vec[u8]`, reading `resp`'s fields by name as
-    /// [`Self::serve_native`] does.
+    /// `Server.__wire(resp)`: the response's bytes, as a `Vec[u8]`, reading
+    /// `resp`'s fields by name, so a program's own `Response` with
+    /// `headers: Vec[(String, String)]` sets headers.
     fn http_wire_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
         let ptr = self.ptr_ty();
         let i64t = self.llcx.i64_type();
@@ -1772,92 +1637,45 @@ impl<'ctx> Cx<'ctx, '_> {
         self.drop_moved(args)
     }
 
-    /// `Server.serve_static(addr, body)`: `serve` with a 200 and `body` as
-    /// every answer, as the interpreter's.
-    fn serve_static_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+    /// `Server.__wire_fixed(body)`: a 200 with `body`'s bytes, through
+    /// `karac_mir_http_wire` as [`Self::http_wire_native`]'s.
+    fn http_wire_fixed_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
         let ptr = self.ptr_ty();
+        let (b, bn) = self.str_parts(&args[0])?;
+        let d = self.place_ptr(dest)?;
         let i64t = self.llcx.i64_type();
-        let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
-        let (a, an) = self.str_parts(&args[0])?;
-        let (b, bn) = self.str_parts(&args[1])?;
-        let msg = self.temp(string, "serve.msg")?;
-        let bind = self.extern_fn(
-            "karac_mir_http_bind",
-            ptr.fn_type(&[ptr.into(), i64t.into(), ptr.into()], false),
-        );
-        let server = self
-            .builder
-            .build_call(bind, &[a.into(), an.into(), msg.into()], "")
-            .map_err(e)?
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
-        let f = self.cur_fn()?;
-        let head = self.llcx.append_basic_block(f, "serve.next");
-        let each = self.llcx.append_basic_block(f, "serve.answer");
-        let done = self.llcx.append_basic_block(f, "serve.done");
-        let failed = self.builder.build_is_null(server, "").map_err(e)?;
-        self.builder
-            .build_conditional_branch(failed, done, head)
-            .map_err(e)?;
-        self.builder.position_at_end(head);
-        let got = self.rt_named("karac_mir_http_next", &[server.into(), msg.into()], 32)?;
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::NE, got, self.llcx.i32_type().const_zero(), "")
-            .map_err(e)?;
-        self.builder
-            .build_conditional_branch(more, each, done)
-            .map_err(e)?;
-        self.builder.position_at_end(each);
-        let respond = self.extern_fn(
-            "karac_mir_http_respond",
+        let wire = self.extern_fn(
+            "karac_mir_http_wire",
             self.llcx.void_type().fn_type(
                 &[
-                    ptr.into(),
                     i64t.into(),
                     ptr.into(),
                     i64t.into(),
                     ptr.into(),
                     i64t.into(),
+                    ptr.into(),
                 ],
                 false,
             ),
         );
         self.builder
             .build_call(
-                respond,
+                wire,
                 &[
-                    server.into(),
                     self.i64(200).into(),
                     b.into(),
                     bn.into(),
                     ptr.const_null().into(),
                     self.i64(0).into(),
+                    d.into(),
                 ],
                 "",
             )
             .map_err(e)?;
-        self.builder.build_unconditional_branch(head).map_err(e)?;
-        self.builder.position_at_end(done);
-        self.drop_moved(args)?;
-        let dty = self.place_type(dest)?;
-        let d = self.place_ptr(dest)?;
-        let erv = self.variant_of(dty, "Err")?;
-        let et = self
-            .tys
-            .field_ty(dty, Some(erv), 0)
-            .ok_or("Result.Err has no payload")?;
-        self.store_tag(d, dty, erv)?;
-        let er = self.offset(d, self.field_offset(dty, Some(erv), 0)?)?;
-        self.copy(
-            self.offset(er, self.field_offset(et, None, 0)?)?,
-            msg,
-            string,
-        )
+        self.drop_moved(args)
     }
 
-    /// `Request`'s methods, on the request `Server.serve` is answering,
+    /// `Request`'s methods, on the request the running task is answering,
     /// through `karac_mir_http_request(op, name, len, out)`.
     fn request_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
         let op: u64 = match method {

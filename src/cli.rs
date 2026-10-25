@@ -1038,14 +1038,10 @@ struct Pipeline {
     ownership: Option<OwnershipCheckResult>,
     concurrency: Option<ConcurrencyAnalysis>,
     provider_escape: Option<Vec<crate::provider_escape::EscapeError>>,
-    /// Phase 6 line 31 slice 1: RAII-across-yield rejections for the
-    /// network-event-loop state-machine transform. One error per
-    /// (binding × function) pair where a non-cancel-safe binding lives
-    /// across at least one yield point in a network-boundary function's
-    /// body. Populated by [`Pipeline::raii_check`] after `effectcheck`
-    /// (depends on `state_struct_layouts` + `yield_points`); merged into
-    /// the final error count + diagnostic output alongside the other
-    /// post-typecheck checkers.
+    /// RAII-across-yield rejections (`E_RAII_ACROSS_YIELD`). The rule is
+    /// withdrawn (core-semantics §11.9: a task is torn down at its wait,
+    /// so no rule restricts what is held across one), and no pass fills
+    /// this any more; it goes with src/raii_check.rs.
     raii_errors: Option<Vec<crate::raii_check::RaiiAcrossYieldError>>,
     /// Phase-7-codegen.md line 308 slice 5a: `#[require_simd]` violations —
     /// one per `Vector[T, N]` op that would scalarize on the target inside a
@@ -2188,24 +2184,6 @@ impl Pipeline {
         self.provider_escape = Some(errors);
     }
 
-    /// Phase 6 line 31 slice 1: run the RAII-across-yield check. Depends
-    /// on `effectcheck` having populated `Program.state_struct_layouts` +
-    /// `Program.yield_points` (slices 4 + 2 under line 26) and on
-    /// `typecheck` having populated `struct_info` / `enum_info` for
-    /// classifying surface type names as shared. With parse errors the
-    /// check is a no-op (the layouts are empty and the typecheck index
-    /// is missing); with typecheck errors but no parse errors, the
-    /// check still runs against whatever made it into the layouts.
-    fn raii_check(&mut self) {
-        if self.has_parse_errors() {
-            return;
-        }
-        self.raii_errors = Some(crate::raii_across_yield_check(
-            &self.parsed.program,
-            self.typed.as_ref(),
-        ));
-    }
-
     /// `#[require_simd]` guarantee (phase-7-codegen.md line 308 slice 5a).
     /// Pure post-typecheck analysis over `expr_types` — no LLVM backend
     /// needed, so it runs on the `check` path too (not just `build`),
@@ -2242,7 +2220,6 @@ impl Pipeline {
         // The paths that read it (build, run, query, `--concurrency-report`)
         // run it themselves.
         self.provider_escape_check();
-        self.raii_check();
         self.simd_check();
         self.drop_library_diagnostics();
         crate::mir::lower::phase_time("check rest", t);

@@ -50,12 +50,14 @@ struct Todo {
     completed: bool,
 }
 
-struct Store {
-    todos: Vec[Todo],
-    next_id: i64,
+// Shared by every request: the server answers its connections
+// concurrently, so the handler is an `Fn` (core-semantics §9.6).
+shared struct Store {
+    mut todos: Vec[Todo],
+    mut next_id: i64,
 }
 
-fn seed_initial_todos(store: mut ref Store) {
+fn seed_initial_todos(store: Store) {
     store.todos.push(Todo { id: 1, title: "Learn Kāra", completed: false });
     store.todos.push(Todo { id: 2, title: "Write a kata", completed: true });
     store.todos.push(Todo { id: 3, title: "Ship Slice 4", completed: false });
@@ -139,7 +141,7 @@ fn bad_request(msg: own String) -> Response {
     Response { status: 400, body: msg }
 }
 
-fn handle(store: mut ref Store, req: Request) -> Response {
+fn handle(store: Store, req: Request) -> Response {
     let m: String = req.method();
     let p: String = req.path();
 
@@ -297,7 +299,7 @@ fn handle(store: mut ref Store, req: Request) -> Response {
 }
 
 fn main() {
-    let mut store = Store { todos: Vec.new(), next_id: 1 };
-    seed_initial_todos(mut store);
-    let _ = Server.serve("127.0.0.1:8080", |req| handle(mut store, req));
+    let store = Store { todos: Vec.new(), next_id: 1 };
+    seed_initial_todos(store);
+    let _ = Server.serve("127.0.0.1:8080", |req| handle(store, req));
 }

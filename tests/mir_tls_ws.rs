@@ -544,20 +544,45 @@ fn main() {
 }
 "#;
 
-/// The response to `request` over a fresh TLS connection, read to the
-/// server's close: its head's status line and the headers named, and its
-/// body.
+/// One response off `s`: its head and its body, read to its
+/// `content-length`, since the server keeps the connection; the error's
+/// kind when `s` ends or fails first.
+fn response<S: Read>(s: &mut S) -> Result<(String, String), std::io::ErrorKind> {
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match s.read(&mut byte) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof),
+            Ok(_) => head.push(byte[0]),
+            Err(e) => return Err(e.kind()),
+        }
+    }
+    let head = String::from_utf8(head).unwrap();
+    let len = head
+        .lines()
+        .find_map(|l| {
+            l.to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(|n| n.trim().parse::<usize>().unwrap())
+        })
+        .unwrap_or(0);
+    let mut body = vec![0u8; len];
+    s.read_exact(&mut body).map_err(|e| e.kind())?;
+    Ok((
+        head.trim_end().to_string(),
+        String::from_utf8(body).unwrap(),
+    ))
+}
+
+/// The response to `request` over a fresh TLS connection: its head's
+/// status line and the headers named, and its body.
 fn https(port: u16, config: &Arc<rustls::ClientConfig>, request: &str) -> String {
     let mut s = tls_stream(port, config);
     s.write_all(request.as_bytes()).unwrap();
-    let mut answer = Vec::new();
-    match s.read_to_end(&mut answer) {
-        Ok(_) => {}
-        Err(e) if answer.is_empty() => return format!("no answer ({:?})\n", e.kind()),
-        Err(e) => panic!("{e}"),
-    }
-    let answer = String::from_utf8(answer).unwrap();
-    let (head, body) = answer.split_once("\r\n\r\n").unwrap();
+    let (head, body) = match response(&mut s) {
+        Ok(r) => r,
+        Err(kind) => return format!("no answer ({kind:?})\n"),
+    };
     let mut lines = head.lines();
     let mut t = lines.next().unwrap().to_string();
     for l in lines {
@@ -610,11 +635,11 @@ fn mir_serve_tls_answers_https_requests() {
     );
     assert_eq!(
         transcript,
-        "HTTP/1.1 200 OK | content-type: text/plain | x-served: tls | content-length: 25 \
-         | connection: close\nyou asked /a/b x=1;y=two;\n\
+        "HTTP/1.1 200 OK | content-type: text/plain | x-served: tls | content-length: 25\n\
+         you asked /a/b x=1;y=two;\n\
          plain answer is an alert true\n\
          HTTP/1.1 404 Not Found | content-type: text/plain | x-served: tls \
-         | content-length: 19 | connection: close\nyou asked /missing \n\
+         | content-length: 19\nyou asked /missing \n\
          no answer (UnexpectedEof)\n"
     );
 }
@@ -675,15 +700,13 @@ fn main() {
 }
 "#;
 
-/// The status line, and body, of `request` sent over `s`, read to the
-/// server's close.
+/// The status line, and body, of `request` sent over `s`.
 fn http_over<S: Read + Write>(mut s: S, request: &str) -> String {
     s.write_all(request.as_bytes()).unwrap();
-    let mut answer = Vec::new();
-    let _ = s.read_to_end(&mut answer);
-    let answer = String::from_utf8(answer).unwrap();
-    let (head, body) = answer.split_once("\r\n\r\n").unwrap_or((&answer, ""));
-    format!("{} [{body}]\n", head.lines().next().unwrap_or("nothing"))
+    match response(&mut s) {
+        Ok((head, body)) => format!("{} [{body}]\n", head.lines().next().unwrap()),
+        Err(kind) => format!("no answer ({kind:?})\n"),
+    }
 }
 
 /// Two sessions at once, with plain requests served while both are open,
@@ -751,4 +774,105 @@ fn mir_serve_ws_tls_upgrades_while_serving() {
     let (out, transcript) = on_both("serve-ws-tls", &src, serve_ws_tls_client);
     assert_eq!(out, SERVE_WS_OUT);
     assert_eq!(transcript, SERVE_WS_TRANSCRIPT);
+}
+
+/// `Server.serve` answers each connection in a task of its own, keeping it
+/// for the client's next request (B-2026-10-25-41): a client that stalls
+/// halfway through a request holds up no other, a handler that panics ends
+/// only its own connection, and a connection is kept until the client asks
+/// it closed.
+const SERVE_SRC: &str = r#"
+import std.process.{exit};
+
+fn route(req: Request) -> Response {
+    let path = req.path();
+    println(f"request {path}");
+    if path == "/boom" {
+        let none: Option[i64] = None;
+        println(f"unreachable {none.unwrap()}");
+    }
+    if path == "/stop" {
+        exit(0);
+    }
+    Response { status: 200, body: f"you asked {path}" }
+}
+
+fn main() {
+    match Server.serve("127.0.0.1:0".to_string(), route) {
+        Ok(()) => println("served"),
+        Err(e) => println(f"failed: {e.message}"),
+    }
+}
+"#;
+
+/// Each response's status line, its `connection` header when it has one,
+/// and its body.
+fn ask(s: &mut std::net::TcpStream, request: &str) -> String {
+    s.write_all(request.as_bytes()).unwrap();
+    match response(s) {
+        Ok((head, body)) => {
+            let mut lines = head.lines();
+            let mut t = lines.next().unwrap().to_string();
+            for l in lines {
+                let lower = l.to_ascii_lowercase();
+                if lower.starts_with("connection:") {
+                    t.push_str(&format!(" | {lower}"));
+                }
+            }
+            format!("{t} [{body}]\n")
+        }
+        Err(kind) => format!("no answer ({kind:?})\n"),
+    }
+}
+
+fn serve_client(ports: &Ports, _config: &Arc<rustls::ClientConfig>) -> String {
+    let port = ports.next();
+    let get = |path: &str| format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
+    let mut t = String::new();
+    // Two requests on one connection, the second pipelined behind a third.
+    let mut kept = tcp(port);
+    t.push_str(&ask(&mut kept, &get("/a")));
+    t.push_str(&ask(&mut kept, &format!("{}{}", get("/b"), get("/c"))));
+    t.push_str(&response(&mut kept).map_or("none".into(), |(_, b)| format!("then [{b}]\n")));
+    // A request that stops halfway holds only its own connection.
+    let mut stalled = tcp(port);
+    stalled.write_all(b"GET /slow HT").unwrap();
+    t.push_str(&ask(&mut tcp(port), &get("/d")));
+    // A handler's panic ends its own connection and no other.
+    t.push_str(&ask(&mut tcp(port), &get("/boom")));
+    t.push_str(&ask(&mut kept, &get("/e")));
+    // A client that asks the connection closed has it closed.
+    let mut closing = tcp(port);
+    t.push_str(&ask(
+        &mut closing,
+        "GET /f HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    ));
+    let mut rest = Vec::new();
+    t.push_str(&format!(
+        "then {:?}\n",
+        closing.read_to_end(&mut rest).map(|_| rest.len())
+    ));
+    t.push_str(&ask(&mut tcp(port), "GET /g HTTP/1.0\r\n\r\n"));
+    t.push_str(&ask(&mut stalled, "TP/1.1\r\nHost: x\r\n\r\n"));
+    t.push_str(&ask(&mut tcp(port), &get("/stop")));
+    t
+}
+
+#[test]
+fn mir_serve_answers_connections_concurrently_with_keep_alive() {
+    let (out, transcript) = on_both("serve", SERVE_SRC, serve_client);
+    assert_eq!(
+        out,
+        "request /a\nrequest /b\nrequest /c\nrequest /d\nrequest /boom\nrequest /e\n\
+         request /f\nrequest /g\nrequest /slow\nrequest /stop\n"
+    );
+    assert_eq!(
+        transcript,
+        "HTTP/1.1 200 OK [you asked /a]\nHTTP/1.1 200 OK [you asked /b]\n\
+         then [you asked /c]\nHTTP/1.1 200 OK [you asked /d]\n\
+         no answer (UnexpectedEof)\nHTTP/1.1 200 OK [you asked /e]\n\
+         HTTP/1.1 200 OK | connection: close [you asked /f]\nthen Ok(0)\n\
+         HTTP/1.1 200 OK | connection: close [you asked /g]\n\
+         HTTP/1.1 200 OK [you asked /slow]\nno answer (UnexpectedEof)\n"
+    );
 }

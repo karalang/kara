@@ -20929,6 +20929,8 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &[
             "WebSocket",
             "WsMessage",
+            "Server.serve",
+            "Server.serve_static",
             "serve_tls",
             "serve_ws",
             "serve_ws_tls",
@@ -20936,11 +20938,17 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &["WebSocket"],
     ),
     (
-        // `Server.serve_tls` / `serve_ws` / `serve_ws_tls`, Kāra over the
-        // listeners and websocket.kara, which `NET_WORDS` and the entry
-        // above bring along. It declares all of `Server`.
+        // The servers (`Server.serve`, `serve_tls`, `serve_ws`, ...), Kāra
+        // over the listeners and websocket.kara, which `NET_WORDS` and the
+        // entry above bring along. It declares all of `Server`.
         include_str!("../../runtime/stdlib/source/http_server.kara"),
-        &["serve_tls", "serve_ws", "serve_ws_tls"],
+        &[
+            "Server.serve",
+            "Server.serve_static",
+            "serve_tls",
+            "serve_ws",
+            "serve_ws_tls",
+        ],
         &["Server"],
     ),
     (
@@ -21050,9 +21058,18 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
     ),
     (
         // `TaskGroup.isolating` (§11.12), which `with_deadline`'s source
-        // names.
+        // and the servers' (http_server.kara) name.
         include_str!("../../runtime/stdlib/source/isolating.kara"),
-        &["isolating", "IsolatingGroup", "with_deadline"],
+        &[
+            "isolating",
+            "IsolatingGroup",
+            "with_deadline",
+            "Server.serve",
+            "Server.serve_static",
+            "serve_tls",
+            "serve_ws",
+            "serve_ws_tls",
+        ],
         &[],
     ),
 ];
@@ -21090,7 +21107,9 @@ const NET_WORDS: &[&str] = &[
     "TlsFailure",
     "WebSocket",
     "WsMessage",
-    // The servers over TLS and WebSocket (source/http_server.kara).
+    // The servers (source/http_server.kara).
+    "Server.serve",
+    "Server.serve_static",
     "serve_tls",
     "serve_ws",
     "serve_ws_tls",

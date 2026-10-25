@@ -1174,100 +1174,53 @@ pub unsafe extern "C" fn karac_mir_ws_accept_key(p: *const u8, n: i64, out: *mut
     unsafe { string_of(out, accept.as_bytes()) };
 }
 
-// `Server.serve` on the MIR backend: the blocking one-request-at-a-time
-// server the MIR interpreter runs too (`src/http1.rs`, shared by `#[path]`).
+// The servers' requests and responses on the MIR backend (`src/http1.rs`,
+// shared by `#[path]` with the MIR interpreter).
 #[cfg(feature = "net")]
 #[path = "../../src/http1.rs"]
+#[allow(dead_code)] // the interpreter's half: `body_text`, a bad request's reason
 mod http1;
 
 #[cfg(feature = "net")]
 thread_local! {
-    /// The request the handler is answering, which `Request`'s methods read.
-    static MIR_REQUEST: std::cell::RefCell<http1::Request> = Default::default();
+    /// The request each task's handler is answering, by task id (0 outside
+    /// the executor), which `Request`'s methods read: a server answers each
+    /// connection in a task of its own (B-2026-10-25-41).
+    static MIR_REQUESTS: std::cell::RefCell<std::collections::HashMap<u64, http1::Request>> =
+        Default::default();
 }
 
-/// Binds `addr` for `Server.serve`: the server, printing `BOUND_PORT=<n>`
-/// on stderr first, where a test harness reads it and the program's own
-/// output does not carry it (B-2026-10-15-69), or null with the
-/// `HttpError` message as a `String` at `msg`.
-///
-/// # Safety
-///
-/// `addr` describes `len` readable bytes and `msg` is writable for a
-/// `String`.
+/// The running task's key in [`MIR_REQUESTS`].
 #[cfg(feature = "net")]
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_http_bind(
-    addr: *const u8,
-    len: u64,
-    msg: *mut RawVec,
-) -> *mut http1::Server {
-    let len = len as usize;
-    // SAFETY: the caller's contract.
-    let addr = unsafe { bytes_at(addr, len) };
-    match http1::Server::bind(&String::from_utf8_lossy(addr)) {
-        Ok((server, port)) => {
-            eprintln!("BOUND_PORT={port}");
-            Box::into_raw(Box::new(server))
-        }
-        Err(m) => {
-            // SAFETY: the caller's contract.
-            unsafe { string_of(msg, m.as_bytes()) };
-            std::ptr::null_mut()
-        }
+fn request_key() -> u64 {
+    crate::mir_task::current_task().unwrap_or(0)
+}
+
+/// Makes `req` the running task's request, forgotten when the task ends.
+#[cfg(feature = "net")]
+fn set_request(req: http1::Request) {
+    thread_local! {
+        static HOOKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
-}
-
-/// Waits for the next request and makes it the one `Request`'s methods
-/// read: 1, or 0 with the `HttpError` message as a `String` at `msg`, when
-/// the server can accept no more. A server that fails is freed.
-///
-/// # Safety
-///
-/// `server` came from [`karac_mir_http_bind`] and has not failed, and `msg`
-/// is writable for a `String`.
-#[cfg(feature = "net")]
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_http_next(server: *mut http1::Server, msg: *mut RawVec) -> i32 {
-    // SAFETY: the caller's contract.
-    match unsafe { (*server).accept_request() } {
-        Ok(req) => {
-            MIR_REQUEST.with(|r| *r.borrow_mut() = req);
-            1
-        }
-        Err(m) => {
-            // SAFETY: the caller's contract; nothing uses the server again.
-            unsafe {
-                string_of(msg, m.as_bytes());
-                drop(Box::from_raw(server));
-            }
-            0
-        }
+    let key = request_key();
+    // Each executor's own tasks end on its thread.
+    if key != 0 && !HOOKED.with(|h| h.replace(true)) {
+        crate::mir_task::on_task_end(|task| {
+            MIR_REQUESTS.with(|r| r.borrow_mut().remove(&task));
+        });
     }
+    MIR_REQUESTS.with(|r| r.borrow_mut().insert(key, req));
 }
 
-/// Answers the current request with `status`, the body's bytes and
-/// `headers` pairs of `String`s (`headers_len` of them; null for none).
-///
-/// # Safety
-///
-/// `server` came from [`karac_mir_http_bind`], `body` describes `body_len`
-/// readable bytes, and `headers` holds `headers_len` `(String, String)`s.
+/// `f` of the running task's request, or of an empty one before it has
+/// one.
 #[cfg(feature = "net")]
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_http_respond(
-    server: *mut http1::Server,
-    status: i64,
-    body: *const u8,
-    body_len: u64,
-    headers: *const RawVec,
-    headers_len: u64,
-) {
-    let body_len = body_len as usize;
-    // SAFETY: the caller's contract.
-    let pairs = unsafe { header_pairs(headers, headers_len as usize) };
-    // SAFETY: the caller's contract.
-    unsafe { (*server).respond(status, bytes_at(body, body_len), &pairs) };
+fn with_request<T>(f: impl FnOnce(&http1::Request) -> T) -> T {
+    let key = request_key();
+    MIR_REQUESTS.with(|r| match r.borrow().get(&key) {
+        Some(req) => f(req),
+        None => f(&http1::Request::default()),
+    })
 }
 
 /// `Server.__install(buf, eof)` for the servers in
@@ -1286,7 +1239,7 @@ pub unsafe extern "C" fn karac_mir_http_install(p: *const u8, n: i64, eof: i32) 
     let buf = unsafe { buf_bytes(p, n.max(0) as usize) };
     match http1::parse_request(buf, eof != 0) {
         http1::Parse::Done(req, used) => {
-            MIR_REQUEST.with(|r| *r.borrow_mut() = req);
+            set_request(req);
             used as i64
         }
         http1::Parse::More => 0,
@@ -1294,9 +1247,9 @@ pub unsafe extern "C" fn karac_mir_http_install(p: *const u8, n: i64, eof: i32) 
     }
 }
 
-/// `Server.__wire(resp)`: the bytes of a response with `status`, the body's
-/// bytes and `headers` pairs of `String`s, which closes the connection, as
-/// a `Vec[u8]` at `out`.
+/// `Server.__wire(resp)`: the bytes of a response to the current request
+/// with `status`, the body's bytes and `headers` pairs of `String`s, which
+/// keeps the connection as the request asks, as a `Vec[u8]` at `out`.
 ///
 /// # Safety
 ///
@@ -1316,9 +1269,22 @@ pub unsafe extern "C" fn karac_mir_http_wire(
     let pairs = unsafe { header_pairs(headers, headers_len as usize) };
     // SAFETY: the caller's contract.
     let body = unsafe { bytes_at(body, body_len as usize) };
-    let wire = http1::response_bytes(status, body, &pairs, false);
+    let wire = http1::response_bytes(
+        status,
+        body,
+        &pairs,
+        with_request(http1::Request::keep_alive),
+    );
     // SAFETY: the caller's contract; a `Vec[u8]` is laid out as a `String`.
     unsafe { string_of(out, &wire) };
+}
+
+/// `Server.__keep_alive()`: 1 when the current request keeps its
+/// connection open for the next one, else 0.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub extern "C" fn karac_mir_http_keep_alive() -> u8 {
+    u8::from(with_request(http1::Request::keep_alive))
 }
 
 /// The `n` `(String, String)` pairs at `headers`.
@@ -1362,8 +1328,7 @@ pub unsafe extern "C" fn karac_mir_http_request(
     out: *mut RawVec,
 ) -> i32 {
     let name_len = name_len as usize;
-    MIR_REQUEST.with(|r| {
-        let r = r.borrow();
+    with_request(|r| {
         // SAFETY: the caller's contract.
         unsafe {
             match op {

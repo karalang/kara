@@ -799,7 +799,7 @@ These additions to the v1 tooling contract ([design.md §17](design.md#17-toolin
 
 - **Error return traces exclude `Cancelled`.** See [Cooperative Cancellation](#cooperative-cancellation).
 - **Provider stack in the panic record.** The active `with_provider` bindings at panic time: for each provider-rooted resource, which provider value was bound and at which `with_provider` site. Lets crash analyzers see which provider configuration produced the failure.
-- **`karac run` stops on execution-soundness violations.** Provider-rooted resource escape (E0600) and RAII-across-yield (`E_RAII_ACROSS_YIELD`) exit 1 before execution, same as `check`/`build`.
+- **`karac run` stops on execution-soundness violations.** Provider-rooted resource escape (E0600) exits 1 before execution, same as `check`/`build`. (RAII-across-yield, `E_RAII_ACROSS_YIELD`, is withdrawn: a task is torn down at its wait, core-semantics §11.9.)
 
 ### Effect Variables for Stored Callbacks
 

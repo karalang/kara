@@ -13,5 +13,5 @@ fn driver(h: Hub) {
 fn main() {
     let h = Hub { id: 1 };
     driver(h);
-    println("should not print");
+    println(f"ran past the call with hub {h.id}");
 }

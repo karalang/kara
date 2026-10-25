@@ -1,16 +1,18 @@
 // runtime/stdlib/source/http_server.kara
 //
-// `Server.serve_tls`, `Server.serve_ws` and `Server.serve_ws_tls` on the
-// v2 pipeline (M4 item 8), as docs/library/io.md § HTTP server describes
-// them. The MIR pipeline appends this file, with net.kara and
-// websocket.kara, to a program that names one of the three
-// (`BAKED_SOURCES` in src/mir/lower.rs). It is Kāra over the listeners and
-// streams, so its waits suspend in a task as theirs do; only parsing a
-// request into the `Request` the handler reads, and writing a `Response`
-// out, are native, shared with `serve` (src/http1.rs).
+// `Server.serve`, `serve_static`, `serve_tls`, `serve_ws` and
+// `serve_ws_tls` on the v2 pipeline, as docs/library/io.md § HTTP server
+// describes them. The MIR pipeline appends this file, with net.kara and
+// websocket.kara, to a program that names one of them (`BAKED_SOURCES` in
+// src/mir/lower.rs). It is Kāra over the listeners and streams, so its
+// waits suspend in a task as theirs do; only parsing a request into the
+// `Request` the handler reads, and writing a `Response` out, are native
+// (src/http1.rs).
 //
-// It declares the whole of `Server`, so `serve` and `serve_static` stay
-// the natives they are in runtime/stdlib/http.kara.
+// Each connection is a task of an isolating group (core-semantics §11.12),
+// kept for the requests that follow while the client asks to keep it: a
+// connection that stalls holds only its own task, and a handler that
+// panics ends only its own connection (B-2026-10-25-41).
 
 struct Server { }
 
@@ -43,15 +45,27 @@ impl HttpListener {
 }
 
 impl Server {
+    // Answers every request with a 200 and `body`.
     #[unstable(note: "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers")]
-    #[compiler_builtin]
-    fn serve_static(addr: own String, body: own String) -> Result[(), HttpError] {
-        Err(HttpError { message: "" })
+    fn serve_static(addr: own String, body: own String) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        match TcpListener.bind(addr) {
+            Ok(l) => {
+                let l = HttpListener.Plain(l);
+                Server.__announce(l);
+                let group = TaskGroup.new();
+                let accepting = group.spawn(|| Server.__fixed_connections(l, body));
+                accepting.join()
+            }
+            Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
+        }
     }
 
-    #[compiler_builtin]
-    fn serve(addr: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) {
-        Err(HttpError { message: "" })
+    // Answers each request with `handler`'s response.
+    fn serve(addr: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        match TcpListener.bind(addr) {
+            Ok(l) => Server.__serve(HttpListener.Plain(l), handler, Server.__no_session, false),
+            Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
+        }
     }
 
     // `serve` over TLS, with the certificate chain `cert_pem` and the
@@ -59,18 +73,18 @@ impl Server {
     // A connection whose handshake fails is dropped.
     fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         match TlsListener.bind_tls(addr, cert_pem, key_pem) {
-            Ok(l) => Server.__serve(HttpListener.Tls(l), handler),
+            Ok(l) => Server.__serve(HttpListener.Tls(l), handler, Server.__no_session, false),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
         }
     }
 
     // `serve`, where a handler that answers a WebSocket handshake request
     // with status 101 upgrades the connection: the server sends the
-    // handshake's own 101 and runs `ws_handler` on the connection as a
-    // task of its own, while it goes on serving requests.
+    // handshake's own 101 and runs `ws_handler` on the connection, in the
+    // connection's task.
     fn serve_ws(addr: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         match TcpListener.bind(addr) {
-            Ok(l) => Server.__upgrading(HttpListener.Plain(l), handler, ws_handler),
+            Ok(l) => Server.__serve(HttpListener.Plain(l), handler, ws_handler, true),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
         }
     }
@@ -78,106 +92,138 @@ impl Server {
     // `serve_ws` over TLS.
     fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         match TlsListener.bind_tls(addr, cert_pem, key_pem) {
-            Ok(l) => Server.__upgrading(HttpListener.Tls(l), handler, ws_handler),
+            Ok(l) => Server.__serve(HttpListener.Tls(l), handler, ws_handler, true),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
         }
     }
 
-    // Serves each connection `l` accepts, one at a time.
-    fn __serve(l: own HttpListener, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
-        Server.__announce(l);
-        loop {
-            match l.accept() {
-                Ok(conn) => {
-                    let _ = Server.__exchange(conn, handler, false);
-                }
-                Err(NetError.Interrupted) => {}
-                Err(e) => return Err(Server.__failed("accept failed", e)),
-            }
-        }
-    }
-
-    // `__serve` with upgrades. The accept loop is a task of its own, so the
-    // sessions' tasks run while it waits.
-    fn __upgrading(l: own HttpListener, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    // Serves the connections `l` accepts. The accept loop is a task of its
+    // own, so the connections' tasks run while it waits.
+    fn __serve(l: own HttpListener, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket), upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         Server.__announce(l);
         let group = TaskGroup.new();
-        let accepting = group.spawn(|| Server.__sessions(l, handler, ws_handler));
+        let accepting = group.spawn(|| Server.__connections(l, handler, ws_handler, upgrades));
         accepting.join()
     }
 
-    fn __sessions(l: own HttpListener, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
-        let sessions = TaskGroup.new();
+    fn __connections(l: own HttpListener, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket), upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        let connections = TaskGroup.isolating();
         loop {
             let conn = match l.accept() {
                 Ok(conn) => conn,
                 Err(NetError.Interrupted) => continue,
                 Err(e) => return Err(Server.__failed("accept failed", e)),
             };
-            let ws = match Server.__exchange(conn, handler, true) {
-                Some(ws) => ws,
-                None => continue,
-            };
-            let _ = sessions.spawn(|| ws_handler(ws));
+            let _ = connections.spawn(|| Server.__connection(conn, handler, ws_handler, upgrades));
         }
     }
 
-    // Reads one request off `conn` and answers it with `handler`'s
-    // response; the connection then closes. With `upgrades`, a 101 to a
+    fn __fixed_connections(l: own HttpListener, body: own String) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        let connections = TaskGroup.isolating();
+        loop {
+            let conn = match l.accept() {
+                Ok(conn) => conn,
+                Err(NetError.Interrupted) => continue,
+                Err(e) => return Err(Server.__failed("accept failed", e)),
+            };
+            let _ = connections.spawn(|| Server.__fixed_connection(conn, body));
+        }
+    }
+
+    // Answers the requests `conn` sends with `handler`'s responses, until
+    // the client closes it or asks to. With `upgrades`, a 101 to a
     // WebSocket handshake request is the upgrade instead: the connection,
-    // past the request, is the `WebSocket` returned.
-    fn __exchange(conn: own WsConn, handler: Fn(Request) -> Response, upgrades: bool) -> Option[WebSocket] with sends(Network) receives(Network) blocks suspends {
+    // past the request, goes to `ws_handler` as a `WebSocket`.
+    fn __connection(conn: own WsConn, handler: Fn(Request) -> Response, ws_handler: Fn(own WebSocket), upgrades: bool) with sends(Network) receives(Network) blocks suspends {
         let mut buf: Vec[u8] = Vec.new();
+        loop {
+            let used = Server.__next(conn, mut buf);
+            if used < 0 {
+                return;
+            }
+            let req = Request { };
+            let key = if upgrades { Server.__handshake_key(req) } else { None };
+            let resp = handler(req);
+            if resp.status == 101 {
+                match key {
+                    Some(key) => {
+                        let accept = WebSocket.__accept_key(key);
+                        let reply = f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n";
+                        match conn.write_all(reply.bytes()) {
+                            Ok(_) => {}
+                            Err(_) => return,
+                        }
+                        let rest = buf.split_off(used);
+                        ws_handler(WebSocket {
+                            conn: conn,
+                            buf: rest,
+                            frag_op: 0,
+                            frag: Vec.new(),
+                            closed: false,
+                            close_code: None,
+                            close_sent: false,
+                        });
+                        return;
+                    }
+                    None => {}
+                }
+            }
+            let keep = Server.__keep_alive();
+            match conn.write_all(Server.__wire(resp)) {
+                Ok(_) => {}
+                Err(_) => return,
+            }
+            if not keep {
+                let _ = conn.shutdown_write();
+                return;
+            }
+            buf = buf.split_off(used);
+        }
+    }
+
+    // `__connection` with a 200 and `body` as every answer.
+    fn __fixed_connection(conn: own WsConn, body: String) with sends(Network) receives(Network) blocks suspends {
+        let mut buf: Vec[u8] = Vec.new();
+        loop {
+            let used = Server.__next(conn, mut buf);
+            if used < 0 {
+                return;
+            }
+            let keep = Server.__keep_alive();
+            match conn.write_all(Server.__wire_fixed(body)) {
+                Ok(_) => {}
+                Err(_) => return,
+            }
+            if not keep {
+                let _ = conn.shutdown_write();
+                return;
+            }
+            buf = buf.split_off(used);
+        }
+    }
+
+    // Reads off `conn` until `buf` starts with a whole request, and makes
+    // it the current one: the bytes it took, or -1 when the connection
+    // holds no more requests.
+    fn __next(conn: WsConn, buf: mut ref Vec[u8]) -> i64 with sends(Network) receives(Network) blocks suspends {
         let mut chunk = [0u8; 8192];
-        let mut used = Server.__install(buf, false);
+        let mut used = Server.__install(buf.as_slice(), false);
         while used == 0 {
             match conn.read(mut chunk) {
-                Ok(0) => used = Server.__install(buf, true),
+                Ok(0) => used = Server.__install(buf.as_slice(), true),
                 Ok(n) => {
                     buf.extend_from_slice(chunk[0..n]);
-                    used = Server.__install(buf, false);
+                    used = Server.__install(buf.as_slice(), false);
                 }
                 Err(NetError.Interrupted) => {}
-                Err(_) => return None,
+                Err(_) => return -1,
             }
         }
-        if used < 0 {
-            return None;
-        }
-        let req = Request { };
-        let resp = handler(req);
-        if upgrades and resp.status == 101 {
-            match Server.__handshake_key(req) {
-                Some(key) => {
-                    let accept = WebSocket.__accept_key(key);
-                    let reply = f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n";
-                    match conn.write_all(reply.bytes()) {
-                        Ok(_) => {}
-                        Err(_) => return None,
-                    }
-                    let rest = buf.split_off(used);
-                    return Some(WebSocket {
-                        conn: conn,
-                        buf: rest,
-                        frag_op: 0,
-                        frag: Vec.new(),
-                        closed: false,
-                        close_code: None,
-                        close_sent: false,
-                    });
-                }
-                None => {}
-            }
-        }
-        let wire = Server.__wire(resp);
-        match conn.write_all(wire) {
-            Ok(_) => {
-                let _ = conn.shutdown_write();
-            }
-            Err(_) => {}
-        }
-        None
+        used
     }
+
+    // The session of a server that does not upgrade, which never runs.
+    fn __no_session(ws: own WebSocket) {}
 
     // The client's key when `req` is a WebSocket opening handshake (RFC
     // 6455 §4.2.1): a GET asking to upgrade to `websocket`, with a key.
@@ -219,20 +265,31 @@ impl Server {
         HttpError { message: f"{what}: {why}" }
     }
 
-    // Makes the request at the start of `buf` the one `Request`'s methods
-    // read: the bytes it took, 0 when `buf` holds no whole request yet
-    // (and `eof` says more may come), or -1 when the connection holds no
-    // request.
+    // Makes the request at the start of `buf` the running task's current
+    // one, which `Request`'s methods read: the bytes it took, 0 when `buf`
+    // holds no whole request yet (and `eof` says more may come), or -1 when
+    // the connection holds no request.
     #[compiler_builtin]
     fn __install(buf: Slice[u8], eof: bool) -> i64 {
         -1
     }
 
-    // `resp` as the bytes of an HTTP/1.1 response that closes the
-    // connection, with its headers when its type has them, as `serve`
-    // writes it.
+    // Whether the current request keeps its connection open for the next.
+    #[compiler_builtin]
+    fn __keep_alive() -> bool {
+        false
+    }
+
+    // `resp` as the bytes of an HTTP/1.1 response to the current request,
+    // with its headers when its type has them.
     #[compiler_builtin]
     fn __wire(resp: Response) -> Vec[u8] {
+        Vec.new()
+    }
+
+    // A 200 with `body`, as `__wire` writes it.
+    #[compiler_builtin]
+    fn __wire_fixed(body: Str) -> Vec[u8] {
         Vec.new()
     }
 }

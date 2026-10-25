@@ -714,7 +714,7 @@ fn run_with(
         http_builders: Vec::new(),
         http_headers: rustc_hash::FxHashMap::default(),
         http_bodies: rustc_hash::FxHashMap::default(),
-        http_request: crate::http1::Request::default(),
+        http_requests: rustc_hash::FxHashMap::default(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -1198,9 +1198,10 @@ struct Interp<'a> {
     /// A client response's body bytes, by the body's `String` box: what
     /// `Response.bytes()` returns, which the lossy `String` cannot hold.
     http_bodies: rustc_hash::FxHashMap<AllocId, Vec<u8>>,
-    /// The request a `Server.serve` handler is answering, which `Request`'s
-    /// methods read.
-    http_request: crate::http1::Request,
+    /// The request each task's handler is answering, by task (the root's
+    /// at 0), which `Request`'s methods read: a server answers each
+    /// connection in a task of its own (B-2026-10-25-41).
+    http_requests: rustc_hash::FxHashMap<usize, crate::http1::Request>,
 }
 
 /// Where a native copy of interpreter values came from: `count` scalars of
@@ -2234,9 +2235,8 @@ impl<'a> Interp<'a> {
             ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
                 self.crypto_method(name, method, args)
             }
-            ("Server", "serve" | "serve_static" | "__install" | "__wire") | ("Request", _) => {
-                self.http_server_method(name, base, method, args, arg_tys, ret)
-            }
+            ("Server", "__install" | "__wire" | "__wire_fixed" | "__keep_alive")
+            | ("Request", _) => self.http_server_method(name, base, method, args, arg_tys, ret),
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
             ("Vec", "from_array") => {
                 let [Value::Agg(elems)] = args.as_slice() else {
@@ -6650,10 +6650,15 @@ impl<'a> Interp<'a> {
                 Ok(Some(*target))
             }
             Ok(Some(b)) if !exit && self.panic_unwinding() => {
+                // A nested coroutine's poll (`G#resume`) answers `Ready`
+                // as it leaves, and its caller reaches its own exit past
+                // that answer, so the unwinding goes on through it.
                 let unwinds = matches!(
                     kind,
                     TerminatorKind::Call { func, .. }
-                        if matches!(coroutine::direct_callee(func), Some(coroutine::UNWIND | coroutine::UNWINDING))
+                        if coroutine::direct_callee(func).is_some_and(|f| {
+                            matches!(f, coroutine::UNWIND | coroutine::UNWINDING) || f.ends_with("#resume")
+                        })
                 );
                 if unwinds {
                     return Ok(Some(b));
@@ -6743,6 +6748,7 @@ impl<'a> Interp<'a> {
         resume: &str,
         v: Value,
     ) -> R<()> {
+        self.http_requests.remove(&t);
         if self.tasks[t].unwind {
             self.free_slot(slot);
             let task = &mut self.tasks[t];
@@ -14086,11 +14092,25 @@ impl<'a> Interp<'a> {
         self.variant_named(ret, None, "Err", vec![Value::Agg(vec![message])])
     }
 
-    /// `Server.serve` and `Request`'s methods, over the blocking
-    /// one-request-at-a-time server of `crate::http1`, which the compiled
-    /// backend's runtime runs too. `serve` answers until it can accept no
-    /// more; a `Request` is empty, its methods reading the request being
-    /// answered.
+    /// The running task's request: the one its server read last, or an
+    /// empty one before that.
+    fn served(&mut self) -> &crate::http1::Request {
+        self.http_requests.entry(self.cur_task).or_default()
+    }
+
+    /// `bytes` as a `Vec[u8]`.
+    fn bytes_box(&mut self, bytes: Vec<u8>) -> Value {
+        let elems = bytes
+            .into_iter()
+            .map(|b| Value::Int(i128::from(b)))
+            .collect();
+        self.alloc_box("Vec[u8]", Value::Agg(elems))
+    }
+
+    /// The natives of the servers in runtime/stdlib/source/http_server.kara
+    /// and `Request`'s methods, over `crate::http1`, which the compiled
+    /// backend's runtime uses too. A `Request` is empty, its methods
+    /// reading the request the running task is answering.
     fn http_server_method(
         &mut self,
         name: &str,
@@ -14124,113 +14144,6 @@ impl<'a> Interp<'a> {
             me.alloc_box(&vname, Value::Agg(elems))
         };
         match (base, method) {
-            // The fixed-body responder: every request gets a 200 and `body`.
-            ("Server", "serve_static") => {
-                let addr = text_of(self, 0)?;
-                let body = text_of(self, 1)?;
-                let mut server = match crate::http1::Server::bind(&addr) {
-                    Ok((server, port)) => {
-                        self.write_out(true, &format!("BOUND_PORT={port}\n"));
-                        server
-                    }
-                    Err(message) => return self.http_error(message, ret),
-                };
-                let message = loop {
-                    if let Err(message) = server.accept_request() {
-                        break message;
-                    }
-                    server.respond(200, body.as_bytes(), &[]);
-                };
-                self.http_error(message, ret)
-            }
-            ("Server", "serve") => {
-                let (Some(f), Some(&fty)) = (args.get(1), arg_tys.get(1)) else {
-                    return err(format!("{name} takes an address and a handler"));
-                };
-                let addr = text_of(self, 0)?;
-                // A `Fn` value is called through a reference to it, kept in
-                // a scratch slot; a function item or closure is held.
-                let program: &'a Program = self.program;
-                let mut handler = match f {
-                    Value::Erased { body, env } => {
-                        let body = program
-                            .bodies
-                            .get(body)
-                            .ok_or_else(|| Stop::Error(format!("{name}: no body for {body}")))?;
-                        let slot = self.alloc(HeapObj {
-                            count: 1,
-                            weak: 0,
-                            value: f.clone(),
-                        });
-                        Err((slot, body, usize::from(env.is_some())))
-                    }
-                    _ => Ok(self.hold_callee(f.clone(), fty, name)?),
-                };
-                let release = |me: &mut Self, handler: Result<Callee<'a>, _>| -> R<()> {
-                    match handler {
-                        Ok(callee) => me.release_callee(callee, fty),
-                        Err((slot, _, _)) => {
-                            let f = std::mem::replace(&mut me.live(slot)?.value, Value::Uninit);
-                            me.free_slot(slot);
-                            me.drop_value(f, fty)
-                        }
-                    }
-                };
-                let mut server = match crate::http1::Server::bind(&addr) {
-                    Ok((server, port)) => {
-                        // On stderr, for a test harness, as the compiled
-                        // runtime prints it (B-2026-10-15-69).
-                        self.write_out(true, &format!("BOUND_PORT={port}\n"));
-                        server
-                    }
-                    Err(message) => {
-                        release(self, handler)?;
-                        return self.http_error(message, ret);
-                    }
-                };
-                let rty = match &handler {
-                    Ok(callee) => callee.body.return_ty(),
-                    Err((_, body, _)) => body.return_ty(),
-                };
-                let message = loop {
-                    match server.accept_request() {
-                        Ok(req) => self.http_request = req,
-                        Err(message) => break message,
-                    }
-                    // The handler gets the (empty) request by reference or
-                    // by value, as its parameter says.
-                    let slot = self.alloc(HeapObj {
-                        count: 1,
-                        weak: 0,
-                        value: Value::Agg(Vec::new()),
-                    });
-                    let req = Value::Ref(Addr {
-                        root: Root::Heap(slot),
-                        path: Path::new(),
-                    });
-                    let resp = match &mut handler {
-                        Ok(callee) => self.call_callee(callee, vec![req]),
-                        Err((f, body, skip)) => {
-                            let by_ref = body.locals.get(*skip + 1).is_some_and(|l| {
-                                matches!(self.tys.kind(l.ty), TyKind::Ref(_) | TyKind::MutRef(_))
-                            });
-                            let arg = if by_ref { req } else { Value::Agg(Vec::new()) };
-                            let at = Value::Ref(Addr {
-                                root: Root::Heap(*f),
-                                path: Path::new(),
-                            });
-                            self.call_erased(at, vec![arg])
-                        }
-                    };
-                    self.free_slot(slot);
-                    let resp = resp?;
-                    let (status, body, headers) = self.response_parts(&resp, rty, name)?;
-                    self.drop_value(resp, rty)?;
-                    server.respond(status, body.as_bytes(), &headers);
-                };
-                release(self, handler)?;
-                self.http_error(message, ret)
-            }
             // The servers in runtime/stdlib/source/http_server.kara: the
             // request at the start of a connection's bytes, made the one
             // `Request`'s methods read, and a response's bytes.
@@ -14239,7 +14152,7 @@ impl<'a> Interp<'a> {
                 let eof = matches!(args.get(1), Some(Value::Bool(true)));
                 let used = match crate::http1::parse_request(&bytes, eof) {
                     crate::http1::Parse::Done(req, used) => {
-                        self.http_request = req;
+                        self.http_requests.insert(self.cur_task, req);
                         used as i128
                     }
                     crate::http1::Parse::More => 0,
@@ -14251,37 +14164,41 @@ impl<'a> Interp<'a> {
                 let rty = self.deref_ty(arg_tys.first().copied(), name)?;
                 let resp = self.through_refs(&args[0])?;
                 let (status, body, headers) = self.response_parts(&resp, rty, name)?;
-                let wire = crate::http1::response_bytes(status, body.as_bytes(), &headers, false);
-                let elems = wire
-                    .into_iter()
-                    .map(|b| Value::Int(i128::from(b)))
-                    .collect();
-                Ok(self.alloc_box("Vec[u8]", Value::Agg(elems)))
+                let keep = self.served().keep_alive();
+                let wire = crate::http1::response_bytes(status, body.as_bytes(), &headers, keep);
+                Ok(self.bytes_box(wire))
             }
+            ("Server", "__wire_fixed") => {
+                let body = self.string_at(&args[0])?;
+                let keep = self.served().keep_alive();
+                let wire = crate::http1::response_bytes(200, body.as_bytes(), &[], keep);
+                Ok(self.bytes_box(wire))
+            }
+            ("Server", "__keep_alive") => Ok(Value::Bool(self.served().keep_alive())),
             ("Request", "path") => {
-                let text = self.http_request.path().to_string();
+                let text = self.served().path().to_string();
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("Request", "method") => {
-                let text = self.http_request.method.clone();
+                let text = self.served().method.clone();
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("Request", "body") => {
-                let text = self.http_request.body_text();
+                let text = self.served().body_text();
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("Request", "header") if args.len() == 2 => {
                 let want = text_of(self, 1)?;
-                let found = self.http_request.header(&want).map(str::to_string);
+                let found = self.served().header(&want).map(str::to_string);
                 let found = found.map(|v| self.alloc_box("String", Value::Str(v)));
                 self.option(ret, found)
             }
             ("Request", "headers") => {
-                let all = self.http_request.headers.clone();
+                let all = self.served().headers.clone();
                 Ok(pairs(self, all))
             }
             ("Request", "query") => {
-                let all = self.http_request.query();
+                let all = self.served().query();
                 Ok(pairs(self, all))
             }
             _ => err(format!("call of unknown function {name}")),

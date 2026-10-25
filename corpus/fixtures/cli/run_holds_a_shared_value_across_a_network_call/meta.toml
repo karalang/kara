@@ -1,0 +1,13 @@
+source = "tests/cli.rs::run_holds_a_shared_value_across_a_network_call"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "a"
+expected_from = "oracle"
+rules = []
+backends = []
+env = {}
+note = "flipped from run_raii_across_yield_violation_aborts: E_RAII_ACROSS_YIELD is withdrawn (core-semantics §11.9), so the program runs; expected.out is its test's literal; there is no legacy record (the legacy compiler went at M3)"
+extracted_src = "f9543811"
+model_src = "f9543811"
