@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 21 |
 | perf | 10 |
 | miscompile | 8 |
-| soundness | 6 |
+| soundness | 7 |
 | run-vs-build | 6 |
 | other | 2 |
 | codegen-gap | 2 |
@@ -73,12 +73,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 49 |
+| typecheck | 50 |
 | codegen | 22 |
 | mir | 21 |
 | interp | 17 |
 | cli | 13 |
-| ownership | 10 |
+| ownership | 11 |
 | runtime | 8 |
 | mir-llvm | 6 |
 | parser | 5 |
@@ -130,7 +130,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-38 | 2026-10-24 | cli | low | `karac fix` still answers E_INDEX_MOVE_NON_COPY on a DESTRUCTURING `let (a, b) = cases[i];` (both parts only read) with `.clone()`, a deep copy of the element, instead of the `ref cases[i]` borrow the message lists first; B-2026-10-24-18's borrow fix covers only a plain `let t = v[i];` | — |
 | B-2026-10-25-1 | 2026-10-25 | interp+mir-llvm | low | Indexing a `Map` with a missing key (`m[k]`, `m[k] -= 1`) stops with `runtime error: explicit panic` under `__mir-run` and `__mir-llvm-run`, a message that names no key and reads as if the program had called `panic`, where an out-of-range `Vec` index says `index out of bounds` | — |
 | B-2026-10-25-3 | 2026-10-25 | mir | low | v2 prints no error return trace for a `?` chain: `main` returning a propagated `Err` prints `Error: e` alone on both backends, and a panic's trace is only its own location, though design.md § Error return traces records each `?` site on the way (2 cli tests ignored) | — |
-| B-2026-10-25-5 | 2026-10-25 | cli | medium | `karac check` on a package with more than one module runs only the module-aware package check, not the v2 check of the combined source that `karac run` and `karac build` run after it, so check passes a package that run and build refuse (examples/db_pipeline: `All checks passed.`, but `karac run` refuses `cannot move 'row'` at src/db.kara:105:64) | — |
 | B-2026-10-25-6 | 2026-10-25 | typecheck | medium | An array or `Vec` literal whose elements carry unsolved inference variables is refused by `karac check`: `[Vec.new(), Vec.new()]` as `expected 'Vec[?T0]', found 'Vec[?T1]'`, and `[None, Some(1)]` as `cannot infer type parameter 'T'`. Later elements are compared with the first without unifying, while `[Some(1), None]` and an `if`/`else` join of the same values pass | — |
 | B-2026-10-25-7 | 2026-10-25 | typecheck | low | E0516 on `self.m(self.f)`, where `m` takes `mut ref self` and `f` is passed to a `ref` parameter, names the method call as the place of the shared borrow (`the borrow is taken at 16:9`, the same span the error points at) instead of the argument `self.f`, and offers no fix, though `.clone()` on the argument is the mechanical one when the field's type is Clone | — |
 | B-2026-10-25-8 | 2026-10-25 | parser | low | `Ok(mut b) => b.final()` in a match arm gets only prose ("rebind it where it is used: `let mut b = b;`") and no machine-applicable fix, so `karac fix` leaves it, though the edit is mechanical | — |
@@ -147,6 +146,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-22 | 2026-10-25 | mir | low | `IsolatingGroup.spawn` of a named function (`g.spawn(work)`) is refused at build with `an isolating group's spawn of other than a closure written there is not lowered yet`; `karac check` accepts it | — |
 | B-2026-10-25-23 | 2026-10-25 | mir | low | v2 does not mark a panic raised while a `requires`/`ensures` predicate is evaluated (inline or in a callee) as `contract predicate panicked: ..`, so `karac test` reports it with no `contract_predicate_panicked` category (1 cli test ignored) | — |
 | B-2026-10-25-24 | 2026-10-25 | typecheck | medium | `karac check` accepts `with_provider[Clock](FakeClock {..}, ..)` and `Clock.now()` when the program redeclares `effect resource Clock;` and `FakeClock` implements no `ClockProvider` (only an inherent `now`); the same program without the redeclaration, and a trait-less user resource of any other name, are refused per §14.1, and the MIR builder stops on it | — |
+| B-2026-10-25-25 | 2026-10-25 | typecheck+ownership | medium | `karac check` accepts a move out of a bare `for` element when the collection is a bare (borrowed) parameter: `fn total(v: Vec[Option[String]]) -> i64 { for o in v { n += o.unwrap().len(); } }` checks, though the same loop over `v: own Vec[...]` is refused (E0515 'a bare `for` borrows it, and this method takes `self` by value') and `karac run` refuses it at MIR build | — |
 
 ### Fixed
 
@@ -215,6 +215,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-43 | cli | medium | A package with more than one module cannot name a v2-only library item (`WsMessage`, `TlsFailure`): its per-module package check resolves against the… | 3c10118a4d |
 | B-2026-10-25-2 | mir-llvm | medium | A built program dies with exit 141 (SIGPIPE) when it writes to a child's stdin after the child exits; the MIR interpreter returns an error from the s… | e09926a988 |
 | B-2026-10-25-4 | cli | medium | A package with more than one module is checked without D5: its per-module passes and late phases read a bare parameter as owned, so the check in fron… | f36a5e4595 |
+| B-2026-10-25-5 | cli | medium | `karac check` on a package with more than one module runs only the module-aware package check, not the v2 check of the combined source that `karac ru… | 3baf757f4d |
 | B-2026-10-25-16 | mir | medium | The MIR move check treats a `shared` handle captured by an ESCAPING closure as moved, so a second closure over it, or any later use, is 'use of _1, w… | f6b4ec231b |
 | B-2026-10-25-17 | mir+mir-llvm | high | A closure passed to a user function's `escaping` parameter that captures a BARE (borrowed) parameter of non-Copy type, or a field of one, captures it… | f6b4ec231b |
 | B-2026-10-25-21 | interp | medium | On the MIR interpreter, a group's deadline never tears down the task that ran last before it fired: that task is marked cancelled but stays parked, a… | c2f859dacc |
