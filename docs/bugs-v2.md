@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| false-positive | 37 |
 | diagnostics | 36 |
-| false-positive | 36 |
-| missing-feature | 28 |
+| missing-feature | 29 |
 | perf | 10 |
-| soundness | 9 |
+| soundness | 10 |
 | miscompile | 8 |
 | run-vs-build | 7 |
-| other | 2 |
+| other | 3 |
 | codegen-gap | 2 |
 | crash | 1 |
 
@@ -73,8 +73,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 57 |
-| mir | 28 |
+| typecheck | 60 |
+| mir | 29 |
 | codegen | 22 |
 | interp | 19 |
 | cli | 16 |
@@ -139,10 +139,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-30 | 2026-10-25 | mir | low | A `?` chain that crosses a task boundary prints the frames left on the exiting thread instead of design.md's `Error return trace: unavailable (the ? chain was split across parallel tasks)`; waits on M4 item 10's pool | — |
 | B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher reaches v2 only as a fixed walk key, on an annotated `let` or a plain struct's field (built in its literal or assigned): a user `BuildHasher`'s build/write/finish never run, FxBuildHasher hashes with the default, and a hasher named on a `shared` struct's field, a parameter, a return type or a turbofish is dropped | — |
 | B-2026-10-25-40 | 2026-10-25 | resolver+effect | low | A channel operation's effect cannot be declared: the effect checker charges a stored callback that receives on a channel with `receives(Channel)` and asks the slot's clause for it, but a clause naming `receives(Channel)` is refused by the resolver (`'Channel' is not an effect resource (it is a prelude type or trait)`) | — |
-| B-2026-10-25-41 | 2026-10-25 | runtime+interp | medium | Server.serve/serve_tls/serve_ws/serve_ws_tls serve connections one at a time; a stalled handshake or request blocks the accept loop | — |
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
 | B-2026-10-25-45 | 2026-10-25 | mir | low | A `weak T` local (`let w: weak N = a;`) passes `karac check` but every MIR backend refuses it: "a type that failed to check is not lowered yet" at its first use | — |
 | B-2026-10-25-46 | 2026-10-25 | typecheck | medium | In a package of several modules, the package check's per-module typecheck refuses what the v2 check of the combined source accepts, and its refusal stands: a `ref` to an IMPORTED `shared` enum ("expected 'E', found 'ref E'", which B-2026-10-25-12 fixed for a lone file) and `f64.parse(s).ok()` ("no method 'ok' on type 'Option'": it types `parse` as returning `Option`, not docs/library/core-types.md's `Result`) | — |
+| B-2026-10-25-47 | 2026-10-25 | typecheck | low | A `mut ref Vec[T]` binding passed to a `Slice[T]` parameter is refused (`expected 'Slice[u8]', found 'mut ref Vec[u8]'`), though design.md's call-boundary coercion admits a Vec place | — |
+| B-2026-10-25-48 | 2026-10-25 | mir | medium | A capturing closure passed as `Server.serve`'s handler is called with its `Request` moved, not borrowed, so library code that reads the request after `handler(req)` fails the move check; a function handler is borrowed | — |
+| B-2026-10-25-49 | 2026-10-25 | typecheck | medium | The §9.6 kind check is skipped for an associated-function call: a MutFn closure passed where `own Fn` is declared (`Runner.apply(|k| note(mut t, k))`, `Server.serve(.., |req| handle(mut store, req))`) checks clean, while the same as a free function is refused | — |
+| B-2026-10-25-50 | 2026-10-25 | typecheck | low | The withdrawn RAII-across-yield pass is dead code: src/raii_check.rs, lib.rs's `raii_across_yield_check`, the `raii_errors` consumers in src/cli.rs / src/cli/diag_json.rs and the `#[cancel_unsafe_until]` attribute surface remain after the pipeline stopped running it | — |
 
 ### Fixed
 
@@ -238,6 +241,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-37 | typecheck | medium | `tx.send(v)` accepts a plain `shared` value (a `channel(4)` of a `shared struct`), so a `shared` handle can reach another task through a channel; and… | 34730a91fa |
 | B-2026-10-25-38 | cli | medium | In a package, a module's own function named like a library function (`pub fn take(b: own Box2)` in ast.kara) captures that name in every other module… | c164118d19 |
 | B-2026-10-25-39 | interp | low | A panic raised in a library body inside an isolating task (`i64.parse(s).unwrap()` on `Err`, `none.unwrap()`) records a line of the appended library… | 37712078bc |
+| B-2026-10-25-41 | runtime+interp | medium | Server.serve/serve_tls/serve_ws/serve_ws_tls serve connections one at a time; a stalled handshake or request blocks the accept loop (fixed with keep-… | 581bf59ec2 |
 | B-2026-10-25-42 | typecheck | medium | A `sync struct` field of a plain `shared` type is accepted, so a `shared` handle reaches another task inside a `sync` value | fc4f4e7adb |
 | B-2026-10-25-43 | ownership | medium | A self-referential `sync enum` (`sync enum Tree { Leaf(i64), Pair(Tree, Tree) }`) is refused as an ownership cycle, where the `shared enum` twin is a… | fc4f4e7adb |
 
