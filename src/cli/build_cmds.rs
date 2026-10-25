@@ -1295,6 +1295,25 @@ impl PackageCheck {
             && self.resolve_errors.iter().all(|m| m.errors.is_empty())
     }
 
+    /// B-2026-10-25-46: what is left of a type or late-phase refusal once
+    /// the v2 check of the package's combined source has passed. That check
+    /// makes every refusal the module boundaries do not carry, so a
+    /// per-module typecheck, or the flattened late phases, differing from it
+    /// on any other rule (a `ref` to an imported `shared` enum, `f64.parse`
+    /// typed `Option`) would refuse a package a lone file of the same text
+    /// passes. Only the boundary rules' refusals stay.
+    pub(super) fn past_the_v2_check(&mut self) {
+        if !self.refuses_only_by_type() {
+            return;
+        }
+        for m in &mut self.type_errors {
+            m.errors
+                .retain(|e| type_error_is_a_module_boundary_rule(&e.kind));
+        }
+        self.type_errors.retain(|m| !m.errors.is_empty());
+        self.late_failure = None;
+    }
+
     /// The machine-applicable resolve fixes of the module at `file`, as
     /// offsets into that file's text: its single edits, then its multi-edit
     /// envelopes.
@@ -1437,6 +1456,22 @@ pub(super) fn package_check(
     build_target: &str,
 ) -> Result<PackageCheck, String> {
     package_check_on(root, lint_overrides, walk_platform_for_target(build_target))
+}
+
+/// A type refusal only a module-aware check makes: a private field read
+/// from another module, a private type in a public signature, and a
+/// `#[non_exhaustive]` type matched or built from another package. The
+/// combined source has one scope and one package, so its check cannot see
+/// them (B-2026-10-25-46).
+fn type_error_is_a_module_boundary_rule(kind: &crate::typechecker::TypeErrorKind) -> bool {
+    use crate::typechecker::TypeErrorKind as K;
+    matches!(
+        kind,
+        K::PrivateTypeInPublicSignature
+            | K::NonExhaustiveCrossPackageLiteral
+            | K::NonExhaustiveCrossPackageMatch
+            | K::NonExhaustiveCrossPackagePattern
+    )
 }
 
 /// [`package_check`] with the OS platform named explicitly rather than derived

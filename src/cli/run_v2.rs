@@ -231,7 +231,13 @@ pub(super) fn combine(
         Some(pc) if !pc.refuses_only_by_type() => {
             super::run_check_cmds::render_package_refusal(&pc, output)
         }
-        refusal => refusal,
+        // The v2 check runs before it is reported (B-2026-10-25-46).
+        refusal => refusal
+            .map(|mut pc| {
+                pc.past_the_v2_check();
+                pc
+            })
+            .filter(|pc| pc.has_errors()),
     };
     let mut a = super::project_v2::source_files(tree, false)
         .and_then(|files| super::project_v2::amalgamate(tree, &files, |_, _| Vec::new(), ""))

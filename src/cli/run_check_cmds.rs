@@ -718,7 +718,7 @@ pub(super) fn cmd_check_project(
     let platform = platforms
         .and_then(|p| p.first().copied())
         .unwrap_or_else(|| super::build_cmds::walk_platform_for_target(build_target));
-    let pc = match super::build_cmds::package_check_on(&root, &lints, platform) {
+    let mut pc = match super::build_cmds::package_check_on(&root, &lints, platform) {
         Ok(pc) => pc,
         Err(e) => {
             emit_build_error(&e, output);
@@ -758,6 +758,7 @@ pub(super) fn cmd_check_project(
                     lints.clone(),
                     output,
                 );
+                pc.past_the_v2_check();
             }
             // A package `run` and `build` cannot combine, they refuse, and
             // so does `check`.

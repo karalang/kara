@@ -14018,6 +14018,67 @@ fn a_conflict_with_an_argument_borrow_names_the_argument_and_clones_it() {
 }
 
 #[test]
+fn a_package_is_refused_by_its_modules_only_at_a_module_boundary() {
+    // B-2026-10-25-46: past the v2 check of a package's combined source,
+    // the per-module typecheck refuses only what a module boundary carries.
+    // A `ref` to an imported `shared` enum and `f64.parse(..).ok()` check and
+    // run as they do in a lone file; a private field read from another
+    // module is still refused.
+    let (dir, _) = fixture("package-boundary-refusals", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"pb\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/ast.kara"),
+        "pub shared enum E {\n    A(i64),\n    B,\n}\npub struct P {\n    secret: i64,\n}\n\
+         pub fn mk() -> P {\n    P { secret: 1 }\n}\n",
+    )
+    .unwrap();
+    let main = |tail: &str| {
+        format!(
+            "import ast.{{E, P, mk}};\nfn size(e: E) -> i64 {{\n    match e {{\n        E.A(n) => n,\n        \
+             E.B => 0,\n    }}\n}}\nfn main() {{\n    let v = Vec[E.A(4), E.B];\n    let r = ref v[0];\n    \
+             let x = f64.parse(\"1.5\").ok().unwrap_or(0.0);\n    let p: P = mk();\n    \
+             println(f\"{{size(r)}} {{x}}\");\n{tail}}}\n"
+        )
+    };
+    std::fs::write(dir.join("src/main.kara"), main("")).unwrap();
+    let check = karac().arg("check").current_dir(&dir).output().unwrap();
+    assert!(
+        check.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let run = karac()
+        .args(["run", "src/main.kara"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "4 1.5\n",
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    std::fs::write(dir.join("src/main.kara"), main("    println(p.secret);\n")).unwrap();
+    let check = karac().arg("check").current_dir(&dir).output().unwrap();
+    let out = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(
+        !check.status.success() && out.contains("private field 'secret' of struct 'P'"),
+        "{out}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is
