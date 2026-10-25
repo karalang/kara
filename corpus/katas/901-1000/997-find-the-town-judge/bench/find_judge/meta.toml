@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/997-find-the-town-judge/bench/find_judge.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "8b0834631"
+extracted_src = "8596f5cb"

@@ -1,0 +1,69 @@
+// Benchmark: LeetCode #997 Find the Town Judge -- the ★ arm, one score
+// per person, on random towns of 1000 people and 10000 trusts,
+// LeetCode's largest. Mirrors find_judge.c, .rs, .py and go-seq/.
+
+fn find_judge(n: i64, trust: ref Vec[Vec[i64]]) -> i64 {
+    let mut score: Vec[i64] = Vec.filled(n + 1, 0);
+    for t in trust.iter() {
+        score[t[0]] -= 1;
+        score[t[1]] += 1;
+    }
+    for person in 1..n + 1 {
+        if score[person] == n - 1 {
+            return person;
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 1000 people and 10000 different trusts: in even towns 999 of them are
+// everyone else trusting a judge, and the rest are at random
+fn random_town(a: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut pairs: Vec[Vec[i64]] = Vec.new();
+    let mut seen: Vec[bool] = Vec.filled(2000 * 1001, false);
+    let mut judge = 0;
+    if a % 2 == 0 {
+        judge = 1 + next_random(mut seed) % 1000;
+        for p in 1..1001 {
+            if p != judge {
+                seen[p * 2000 + judge] = true;
+                pairs.push(vec![p, judge]);
+            }
+        }
+    }
+    while pairs.len() < 10000 {
+        let x = 1 + next_random(mut seed) % 1000;
+        let y = 1 + next_random(mut seed) % 1000;
+        if x != y and x != judge and not seen[x * 2000 + y] {
+            seen[x * 2000 + y] = true;
+            pairs.push(vec![x, y]);
+        }
+    }
+    pairs
+}
+
+fn main() {
+    let rounds = 1000;
+    let mut seed = 997;
+    let mut towns: Vec[Vec[Vec[i64]]] = Vec.new();
+    for a in 0..20 {
+        towns.push(random_town(a, mut seed));
+    }
+    let mut judges = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let got = find_judge(1000, towns[(r + i) % 20]);
+            if got > 0 {
+                judges += 1;
+            }
+            check = (check * 31 + got + 2) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 20 towns of 1000 people: {judges} judges, checksum {check}");
+}

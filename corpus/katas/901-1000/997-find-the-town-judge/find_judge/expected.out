@@ -1,0 +1,18 @@
+n = 2, trust = [[1,2]] -> 2
+n = 3, trust = [[1,3],[2,3]] -> 3
+n = 3, trust = [[1,3],[2,3],[3,1]] -> -1
+n = 1, trust = [] -> 1
+n = 2, trust = [] -> -1
+n = 2, trust = [[1,2],[2,1]] -> -1
+n = 4, trust = [[1,3],[1,4],[2,3],[2,4],[4,3]] -> 3
+n = 3, trust = [[1,2],[2,3]] -> -1
+n = 4, trust = [[1,4],[2,4]] -> -1
+n = 3, trust = [[1,2],[3,2],[1,3]] -> 2
+1000 people, all trusting 500: 500
+1000 people, all trusting 500, and 500 trusting 1: -1
+1000 people, no trust: -1
+1000 people, all but person 1000 trusting 500: -1
+1000 people in a ring of trust: -1
+300 random towns of 770 people: 166 judges, checksum 608560800
+3000 random towns of 47180 people: 1107 judges, checksum 704920651
+300 random towns of 147248 people: 94 judges, checksum 220998902
