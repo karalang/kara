@@ -1,0 +1,18 @@
+nums = [1,17,8] -> 2
+nums = [2,2,2] -> 1
+nums = [0] -> 1
+nums = [1,3] -> 2
+nums = [2,2,3] -> 0
+nums = [0,0,0,1,1] -> 6
+nums = [1,8,17,19,6] -> 2
+nums = [10,6,3,15,1] -> 10
+nums = [0,1,0,1,0] -> 6
+nums = [1000000000,1000000000] -> 0
+twelve 2s: 1
+twelve 0s: 1
+the first twelve triangular numbers: 12
+six 0s and six 1s: 7
+twelve values that never pair: 0
+300 random arrays of 766 values: 364 squareful permutations, checksum 528957256
+3000 random arrays of 13785 values: 7096 squareful permutations, checksum 664962041
+300 random arrays of 1929 values: 3764 squareful permutations, checksum 62671693

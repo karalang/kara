@@ -1,0 +1,87 @@
+// Benchmark: LeetCode #996 Number of Squareful Arrays -- the ★ arm,
+// backtracking over the sorted values, on random arrays of 12 values,
+// LeetCode's largest. Mirrors num_squareful_perms.c, .rs, .py and
+// go-seq/.
+
+fn is_square(s: i64) -> bool {
+    let mut r = (s as f64).sqrt() as i64;
+    while r * r > s {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= s {
+        r += 1;
+    }
+    r * r == s
+}
+
+fn place(a: ref Vec[i64], used: mut ref Vec[bool], depth: i64, last: i64) -> i64 {
+    let n = a.len();
+    if depth == n {
+        return 1;
+    }
+    let mut count = 0;
+    for i in 0..n {
+        if used[i] {
+            continue;
+        }
+        if i > 0 and a[i] == a[i - 1] and not used[i - 1] {
+            continue;
+        }
+        if depth > 0 and not is_square(last + a[i]) {
+            continue;
+        }
+        used[i] = true;
+        count += place(a, mut used, depth + 1, a[i]);
+        used[i] = false;
+    }
+    count
+}
+
+fn num_squareful_perms(nums: ref Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut used: Vec[bool] = Vec.filled(a.len(), false);
+    place(a, mut used, 0, 0)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 12 values below 50, each making a square with the one before
+fn random_walk(seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = vec![next_random(mut seed) % 50];
+    for _ in 1..12 {
+        let v = nums[nums.len() - 1];
+        let mut options: Vec[i64] = Vec.new();
+        let mut r = 0;
+        while r * r < v + 50 {
+            if r * r >= v {
+                options.push(r * r - v);
+            }
+            r += 1;
+        }
+        nums.push(options[next_random(mut seed) % options.len()]);
+    }
+    nums
+}
+
+fn main() {
+    let rounds = 300;
+    let mut seed = 996;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..20 {
+        arrays.push(random_walk(mut seed));
+    }
+    let mut found = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let got = num_squareful_perms(arrays[(r + i) % 20]);
+            found += got;
+            check = (check * 31 + got + 1) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 20 arrays of 12 values: {found} squareful permutations, checksum {check}");
+}

@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/996-number-of-squareful-arrays/bench/num_squareful_perms.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "afae7e78d"
+extracted_src = "2d2af3a2"

@@ -1,0 +1,505 @@
+// LeetCode #996: Number of Squareful Arrays -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random arrays.
+
+// ---- star ----
+
+fn star_is_square(s: i64) -> bool {
+    let mut r = (s as f64).sqrt() as i64;
+    while r * r > s {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= s {
+        r += 1;
+    }
+    r * r == s
+}
+
+// The squareful orders of the unused values after `last`, placed from
+// position depth on.
+fn star_place(a: ref Vec[i64], used: mut ref Vec[bool], depth: i64, last: i64) -> i64 {
+    let n = a.len();
+    if depth == n {
+        return 1;
+    }
+    let mut count = 0;
+    for i in 0..n {
+        if used[i] {
+            continue;
+        }
+        // of equal values, take the first one not yet used
+        if i > 0 and a[i] == a[i - 1] and not used[i - 1] {
+            continue;
+        }
+        if depth > 0 and not star_is_square(last + a[i]) {
+            continue;
+        }
+        used[i] = true;
+        count += star_place(a, mut used, depth + 1, a[i]);
+        used[i] = false;
+    }
+    count
+}
+
+fn star_num_squareful_perms(nums: ref Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut used: Vec[bool] = Vec.filled(a.len(), false);
+    star_place(a, mut used, 0, 0)
+}
+
+// ---- counts ----
+
+fn counts_is_square(s: i64) -> bool {
+    let mut r = (s as f64).sqrt() as i64;
+    while r * r > s {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= s {
+        r += 1;
+    }
+    r * r == s
+}
+
+// The squareful orders of what is left in `left` after the value at
+// place last of vals, or of all of it when last is -1.
+fn counts_extend(ok: ref Vec[Vec[bool]], left: mut ref Vec[i64], last: i64, more: i64) -> i64 {
+    if more == 0 {
+        return 1;
+    }
+    let mut count = 0;
+    for j in 0..left.len() {
+        if left[j] > 0 and (last < 0 or ok[last][j]) {
+            left[j] -= 1;
+            count += counts_extend(ok, mut left, j, more - 1);
+            left[j] += 1;
+        }
+    }
+    count
+}
+
+fn counts_num_squareful_perms(nums: ref Vec[i64]) -> i64 {
+    // how often each value comes, and which two values make a square
+    let mut times: Map[i64, i64] = Map.new();
+    for v in nums.iter() {
+        *times.entry(*v).or_insert(0) += 1;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    for (v, c) in times.iter() {
+        vals.push(*v);
+        left.push(*c);
+    }
+    let mut ok: Vec[Vec[bool]] = Vec.new();
+    for i in 0..vals.len() {
+        let mut row: Vec[bool] = Vec.new();
+        for j in 0..vals.len() {
+            row.push(counts_is_square(vals[i] + vals[j]));
+        }
+        ok.push(row);
+    }
+    counts_extend(ok, mut left, -1, nums.len())
+}
+
+// ---- paths ----
+
+fn paths_is_square(s: i64) -> bool {
+    let mut r = (s as f64).sqrt() as i64;
+    while r * r > s {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= s {
+        r += 1;
+    }
+    r * r == s
+}
+
+fn paths_num_squareful_perms(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let full = (1 << n) - 1;
+    // ways[mask * n + last]: orders of the places in mask, each pair of
+    // neighbours a square, ending at place last
+    let mut ways: Vec[i64] = Vec.filled((full + 1) * n, 0);
+    for i in 0..n {
+        ways[(1 << i) * n + i] = 1;
+    }
+    for mask in 1..full + 1 {
+        for last in 0..n {
+            let w = ways[mask * n + last];
+            if w == 0 {
+                continue;
+            }
+            for i in 0..n {
+                if mask & (1 << i) == 0 and paths_is_square(nums[last] + nums[i]) {
+                    ways[(mask | (1 << i)) * n + i] += w;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for last in 0..n {
+        total += ways[full * n + last];
+    }
+    // equal values in each other's places give the same array
+    for i in 0..n {
+        let mut same = 0;
+        for j in 0..i + 1 {
+            if nums[j] == nums[i] {
+                same += 1;
+            }
+        }
+        total /= same;
+    }
+    total
+}
+
+// ---- memo ----
+
+fn memo_is_square(s: i64) -> bool {
+    let mut r = (s as f64).sqrt() as i64;
+    while r * r > s {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= s {
+        r += 1;
+    }
+    r * r == s
+}
+
+// The squareful orders of the values whose counts the code holds, after
+// the value at place last, or -1 for none; memoized on code and last.
+fn memo_orders(vals: ref Vec[i64], left: mut ref Vec[i64], base: ref Vec[i64], code: i64, last: i64, more: i64, memo: mut ref Map[i64, i64]) -> i64 {
+    if more == 0 {
+        return 1;
+    }
+    let key = code * (vals.len() + 1) + last + 1;
+    if memo.contains_key(key) {
+        return memo[key];
+    }
+    let mut count = 0;
+    for j in 0..vals.len() {
+        if left[j] > 0 and (last < 0 or memo_is_square(vals[last] + vals[j])) {
+            left[j] -= 1;
+            count += memo_orders(vals, mut left, base, code - base[j], j, more - 1, mut memo);
+            left[j] += 1;
+        }
+    }
+    memo.insert(key, count);
+    count
+}
+
+fn memo_num_squareful_perms(nums: ref Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut vals: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    for v in a.iter() {
+        if vals.len() > 0 and vals[vals.len() - 1] == *v {
+            let k = left.len() - 1;
+            left[k] += 1;
+        } else {
+            vals.push(*v);
+            left.push(1);
+        }
+    }
+    // the counts left, as one number in a mixed radix
+    let mut base: Vec[i64] = Vec.new();
+    let mut code = 0;
+    let mut b = 1;
+    for c in left.iter() {
+        base.push(b);
+        code += *c * b;
+        b *= *c + 1;
+    }
+    let mut memo: Map[i64, i64] = Map.new();
+    memo_orders(vals, mut left, base, code, -1, nums.len(), mut memo)
+}
+
+// ---- canon ----
+
+fn canon_is_square(s: i64) -> bool {
+    let mut r = (s as f64).sqrt() as i64;
+    while r * r > s {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= s {
+        r += 1;
+    }
+    r * r == s
+}
+
+fn canon_num_squareful_perms(nums: ref Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let full = (1 << n) - 1;
+    // ways[mask * n + last]: orders of the places in mask ending at place
+    // last, where equal values are always used in the order they sit, so
+    // each array is counted once
+    let mut ways: Vec[i64] = Vec.filled((full + 1) * n, 0);
+    for i in 0..n {
+        if i == 0 or a[i] != a[i - 1] {
+            ways[(1 << i) * n + i] = 1;
+        }
+    }
+    for mask in 1..full + 1 {
+        for last in 0..n {
+            let w = ways[mask * n + last];
+            if w == 0 {
+                continue;
+            }
+            for i in 0..n {
+                if mask & (1 << i) != 0 {
+                    continue;
+                }
+                if i > 0 and a[i] == a[i - 1] and mask & (1 << (i - 1)) == 0 {
+                    continue;
+                }
+                if canon_is_square(a[last] + a[i]) {
+                    ways[(mask | (1 << i)) * n + i] += w;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for last in 0..n {
+        total += ways[full * n + last];
+    }
+    total
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn square(s: i64) -> bool {
+    let mut r = 0;
+    while r * r < s {
+        r += 1;
+    }
+    r * r == s
+}
+
+// n values below pool: at random, or as a walk where each value makes a
+// square with the one before, when one can
+fn random_values(n: i64, pool: i64, walk: bool, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = vec![next_random(mut seed) % pool];
+    for _ in 1..n {
+        let v = nums[nums.len() - 1];
+        let mut options: Vec[i64] = Vec.new();
+        let mut r = 0;
+        while r * r < v + pool {
+            if r * r >= v {
+                options.push(r * r - v);
+            }
+            r += 1;
+        }
+        if walk and options.len() > 0 {
+            nums.push(options[next_random(mut seed) % options.len()]);
+        } else {
+            nums.push(next_random(mut seed) % pool);
+        }
+    }
+    nums
+}
+
+fn arm(k: i64, nums: ref Vec[i64]) -> i64 {
+    if k == 0 {
+        star_num_squareful_perms(nums)
+    } else if k == 1 {
+        counts_num_squareful_perms(nums)
+    } else if k == 2 {
+        paths_num_squareful_perms(nums)
+    } else if k == 3 {
+        memo_num_squareful_perms(nums)
+    } else {
+        canon_num_squareful_perms(nums)
+    }
+}
+
+// every order of the places from depth on, the arrays they give kept in
+// `seen` when every two neighbours make a square
+fn every_order(nums: ref Vec[i64], order: mut ref Vec[i64], used: mut ref Vec[bool], seen: mut ref Set[String]) {
+    let n = nums.len();
+    if order.len() == n {
+        let mut text = String.new();
+        let mut good = true;
+        for i in 0..n {
+            text = text + f"{nums[order[i]]},";
+            if i > 0 and not square(nums[order[i - 1]] + nums[order[i]]) {
+                good = false;
+            }
+        }
+        if good {
+            seen.insert(text);
+        }
+        return;
+    }
+    for i in 0..n {
+        if not used[i] {
+            used[i] = true;
+            order.push(i);
+            every_order(nums, mut order, mut used, mut seen);
+            order.pop();
+            used[i] = false;
+        }
+    }
+}
+
+// The statement read literally: every permutation of the array, two
+// counted as one when they give the same values in the same places,
+// and those whose neighbours all make squares counted.
+fn literal(nums: ref Vec[i64]) -> i64 {
+    let mut seen: Set[String] = Set.new();
+    let mut order: Vec[i64] = Vec.new();
+    let mut used: Vec[bool] = Vec.filled(nums.len(), false);
+    every_order(nums, mut order, mut used, mut seen);
+    seen.len()
+}
+
+// Whether every two places are joined by a chain of neighbours that
+// make squares.
+fn joined(nums: ref Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    seen[0] = true;
+    let mut stack: Vec[i64] = vec![0];
+    let mut reached = 1;
+    while let Some(i) = stack.pop() {
+        for j in 0..n {
+            if not seen[j] and square(nums[i] + nums[j]) {
+                seen[j] = true;
+                reached += 1;
+                stack.push(j);
+            }
+        }
+    }
+    reached == n
+}
+
+// n! over the factorial of each value's number of copies: how many
+// different arrays the values make
+fn arrangements(nums: ref Vec[i64]) -> i64 {
+    let mut total = 1;
+    for i in 0..nums.len() {
+        let mut same = 0;
+        for j in 0..i + 1 {
+            if nums[j] == nums[i] {
+                same += 1;
+            }
+        }
+        total = total * (i + 1) / same;
+    }
+    total
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, nums: ref Vec[i64], small: bool, seed: mut ref i64) -> i64 {
+    let n = nums.len();
+    let truth = if small { literal(nums) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, nums));
+    }
+    // the same values shuffled
+    let mut shuffled = nums.clone();
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = shuffled[i];
+        shuffled[i] = shuffled[j];
+        shuffled[j] = t;
+        i -= 1;
+    }
+    let scaled: Vec[i64] = nums.iter().map(|v| *v * 4).collect();
+    // a value that makes a square with none of them put at the end
+    let mut x = 2;
+    loop {
+        let mut pairs = false;
+        for v in nums.iter() {
+            if square(x + *v) {
+                pairs = true;
+            }
+        }
+        if not pairs {
+            break;
+        }
+        x += 1;
+    }
+    let mut stranger = nums.clone();
+    stranger.push(x);
+    let whole = joined(nums);
+    let most = arrangements(nums);
+    for k in 0..5 {
+        let g = got[k];
+        // P1: the statement's answer, on the first 3000 arrays
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: the same values in another order give the same answer
+        check(mut tally, 2, arm(k, shuffled) == g);
+        // P3: every value times 4 gives the same answer
+        check(mut tally, 3, arm(k, scaled) == g);
+        // P4: a value that pairs with none of them makes it 0
+        check(mut tally, 4, arm(k, stranger) == 0);
+        // P5: 0 when the pairs that make squares do not join every
+        // place; otherwise at most the number of different arrays
+        check(mut tally, 5, if whole { g >= 0 and g <= most } else { g == 0 });
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 996;
+    let mut values = 0;
+    let mut found = 0;
+    let mut check_sum = 0;
+    // 3000 arrays of up to 6 values below 30 against the statement, then
+    // 200 of up to 8 values below 60
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = 1 + next_random(mut seed) % (if small { 6 } else { 8 });
+        let walk = next_random(mut seed) % 2 == 0;
+        let nums = random_values(n, if small { 30 } else { 60 }, walk, mut seed);
+        values += n;
+        let got = properties(mut tally, nums, small, mut seed);
+        found += got;
+        check_sum = (check_sum * 31 + got + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 arrays of {values} values: {found} squareful permutations, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

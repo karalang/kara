@@ -1,0 +1,140 @@
+// LeetCode #996: Number of Squareful Arrays -- canonical paths
+//
+// The table over sets of places and the place last used, built mask by
+// mask, but a place may only be added when every equal value sitting
+// before it in the sorted array is already used. Each array then has
+// exactly one order of places, so nothing needs dividing. O(2^n n^2).
+
+fn is_square(s: i64) -> bool {
+    let mut r = (s as f64).sqrt() as i64;
+    while r * r > s {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= s {
+        r += 1;
+    }
+    r * r == s
+}
+
+fn num_squareful_perms(nums: ref Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let full = (1 << n) - 1;
+    // ways[mask * n + last]: orders of the places in mask ending at place
+    // last, where equal values are always used in the order they sit, so
+    // each array is counted once
+    let mut ways: Vec[i64] = Vec.filled((full + 1) * n, 0);
+    for i in 0..n {
+        if i == 0 or a[i] != a[i - 1] {
+            ways[(1 << i) * n + i] = 1;
+        }
+    }
+    for mask in 1..full + 1 {
+        for last in 0..n {
+            let w = ways[mask * n + last];
+            if w == 0 {
+                continue;
+            }
+            for i in 0..n {
+                if mask & (1 << i) != 0 {
+                    continue;
+                }
+                if i > 0 and a[i] == a[i - 1] and mask & (1 << (i - 1)) == 0 {
+                    continue;
+                }
+                if is_square(a[last] + a[i]) {
+                    ways[(mask | (1 << i)) * n + i] += w;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for last in 0..n {
+        total += ways[full * n + last];
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n values below pool: at random, or as a walk where each value makes a
+// square with the one before, when one can
+fn random_values(n: i64, pool: i64, walk: bool, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = vec![next_random(mut seed) % pool];
+    for _ in 1..n {
+        let v = nums[nums.len() - 1];
+        let mut options: Vec[i64] = Vec.new();
+        let mut r = 0;
+        while r * r < v + pool {
+            if r * r >= v {
+                options.push(r * r - v);
+            }
+            r += 1;
+        }
+        if walk and options.len() > 0 {
+            nums.push(options[next_random(mut seed) % options.len()]);
+        } else {
+            nums.push(next_random(mut seed) % pool);
+        }
+    }
+    nums
+}
+
+fn values_text(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|v| f"{v}").collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let cases: Vec[Vec[i64]] = vec![
+        vec![1, 17, 8],
+        vec![2, 2, 2],
+        vec![0],
+        vec![1, 3],
+        vec![2, 2, 3],
+        vec![0, 0, 0, 1, 1],
+        vec![1, 8, 17, 19, 6],
+        vec![10, 6, 3, 15, 1],
+        vec![0, 1, 0, 1, 0],
+        vec![1000000000, 1000000000],
+    ];
+    for nums in cases.iter() {
+        println(f"nums = {values_text(nums)} -> {num_squareful_perms(nums)}");
+    }
+    println(f"twelve 2s: {num_squareful_perms(Vec.filled(12, 2))}");
+    println(f"twelve 0s: {num_squareful_perms(Vec.filled(12, 0))}");
+    let triangular: Vec[i64] = (1..13).map(|t| t * (t + 1) / 2).collect();
+    println(f"the first twelve triangular numbers: {num_squareful_perms(triangular)}");
+    let mut halves: Vec[i64] = Vec.filled(6, 0);
+    for _ in 0..6 {
+        halves.push(1);
+    }
+    println(f"six 0s and six 1s: {num_squareful_perms(halves)}");
+    let apart: Vec[i64] = (0..12).map(|i| 3 * i + 2).collect();
+    println(f"twelve values that never pair: {num_squareful_perms(apart)}");
+    // random arrays: half random values below pool, half a random walk
+    // where each value makes a square with the one before, when one can
+    let mut seed = 996;
+    for (count, most, pool) in vec![(300, 4, 20), (3000, 8, 50), (300, 12, 30)] {
+        let mut values = 0;
+        let mut found = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = 1 + next_random(mut seed) % most;
+            let walk = next_random(mut seed) % 2 == 0;
+            let nums = random_values(n, pool, walk, mut seed);
+            values += n;
+            let got = num_squareful_perms(nums);
+            found += got;
+            check = (check * 31 + got + 1) % 1000000007;
+        }
+        println(f"{count} random arrays of {values} values: {found} squareful permutations, checksum {check}");
+    }
+}
