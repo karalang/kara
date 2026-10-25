@@ -1,0 +1,1252 @@
+// pipeline/grain_intake
+//
+// A farmers' grain co-op's harvest week at four country elevators. For
+// each elevator it builds the growers (members of the co-op or not), the
+// bins (corn, soybeans and wheat, each with its capacity and what it held
+// before the week), the forward contracts the growers sold (a crop,
+// bushels, a price and the days they may be delivered on) and the week's
+// scale tickets (a truck's gross and tare weights and the sample's
+// moisture, test weight, foreign material and damage). It writes them as
+// CSV, reads them back and parses them with the checks the co-op's scale
+// house software makes, then closes the week: each ticket is docked for
+// foreign material, shrunk for moisture, graded, put in a bin (or on the
+// ground pile, or turned away when there is no room), and settled against
+// the grower's open contracts and then at the day's spot price, less
+// drying, discounts, fees and the checkoff. Each elevator's settlements
+// and grower statements are written and read back, and five reports per
+// elevator follow: intake, grades, bins, settlement and contracts. Then
+// the railroad's hopper cars for the week go to the elevators in the
+// order they ask.
+//
+// The builds, the writes, the reads, the parses, the week closes, the
+// settlement files and the reports are each a group of statements that
+// do not depend on each other (a stmt-par app). The railroad grants cars
+// from what the elevators before have left, so the four elevators have
+// to ask in order.
+
+const MASK32: i64 = 4294967295;
+const N_GROWERS: i64 = 80;
+const N_TICKETS: i64 = 420;
+const DAYS: i64 = 7;
+const CROPS: Array[Str, 3] = ["CORN", "SOY", "WHEAT"];
+const CROP_WORDS: Array[Str, 3] = ["corn", "soy", "wheat"];
+// pounds in a bushel
+const LB_PER_BU: Array[i64, 3] = [56, 60, 60];
+// moisture in tenths of a percent: the base the co-op pays on, and the
+// most it takes
+const BASE_MOIST: Array[i64, 3] = [150, 130, 135];
+const MAX_MOIST: Array[i64, 3] = [300, 180, 200];
+// shrink in hundredths of a percent for each tenth of a point over the
+// base, plus the handling shrink on any grain that is dried
+const SHRINK: Array[i64, 3] = [14, 13, 13];
+const HANDLING: i64 = 50;
+// drying, in tenths of a cent a bushel for each half point over the base
+const DRY_RATE: Array[i64, 3] = [25, 30, 30];
+// foreign material over the limit is docked from the weight
+const FM_LIMIT: Array[i64, 3] = [30, 20, 10];
+// discounts in cents a bushel for each point (or part) of damage over the
+// limit and each pound (or part) of test weight under the minimum
+const DMG_LIMIT: Array[i64, 3] = [50, 30, 40];
+const DMG_RATE: Array[i64, 3] = [3, 4, 5];
+const TW_MIN: Array[i64, 3] = [540, 540, 580];
+const TW_RATE: Array[i64, 3] = [2, 3, 3];
+// The US grade: the first grade whose test weight minimum, damage limit
+// and foreign material limit the grain meets; past grade 5 it is sample
+// grade, at a further discount. By crop, then grade.
+const GRADE_TW: Array[i64, 15] = [560, 540, 520, 490, 460, 560, 540, 520, 490, 460, 600, 580, 560, 540, 510];
+const GRADE_DMG: Array[i64, 15] = [30, 50, 70, 100, 150, 20, 30, 50, 80, 120, 20, 40, 70, 100, 150];
+const GRADE_FM: Array[i64, 15] = [20, 30, 40, 50, 70, 10, 20, 30, 50, 70, 4, 7, 13, 30, 50];
+const SAMPLE_GRADE: i64 = 6;
+const SAMPLE_DISC: i64 = 20;
+// The checkoff: tenths of a cent a bushel for corn and wheat, and for
+// soybeans hundredths of a percent of the value.
+const CHECKOFF: Array[i64, 3] = [10, 50, 20];
+const NONMEMBER_FEE: i64 = 3;
+// the board price in cents a bushel, by crop, then day
+const BOARD: Array[i64, 21] = [
+    412, 418, 409, 421, 426, 419, 415,
+    1012, 1020, 1004, 998, 1011, 1026, 1018,
+    548, 552, 561, 557, 549, 544, 553,
+];
+// bins a crop
+const BINS: Array[i64, 3] = [5, 3, 2];
+const FIRST: Array[Str, 24] = ["Ada", "Bert", "Cora", "Dale", "Edna", "Floyd", "Gail", "Hank", "Ida", "Jules", "Kurt",
+    "Lena", "Mabel", "Ned", "Opal", "Pete", "Ray", "Ruth", "Stan", "Tess", "Vern", "Walt",
+    "Wilma", "Zeke"];
+const LAST: Array[Str, 24] = ["Anders", "Brandt", "Carlson", "Dahl", "Ekstrom", "Fenske", "Gruber", "Halvorsen", "Iverson",
+    "Jansen", "Kohler", "Lund", "Meyer", "Nygaard", "Olson", "Peterson", "Quam", "Reimer",
+    "Schultz", "Thorson", "Ulrich", "Vogel", "Wagner", "Zimmer"];
+// The railroad's hopper cars for the week, granted in the order the
+// elevators ask.
+const RAIL_CARS: i64 = 70;
+const CAR_BU: i64 = 3500;
+
+struct Elevator {
+    code: Str,
+    // the first digit of its grower, contract and ticket numbers
+    digit: i64,
+    seed: i64,
+    // its basis: cents under the board
+    under: i64,
+    // tenths of a point added to its corn's moisture
+    wet: i64,
+    // the percent of its tickets and contracts that are corn, and soybeans
+    corn: i64,
+    soy: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Grower {
+    gid: i64,
+    last: String,
+    first: String,
+    member: bool,
+}
+
+#[derive(Clone, PartialEq)]
+struct Bin {
+    bin: String,
+    crop: String,
+    // whole bushels
+    capacity: i64,
+    start: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Contract {
+    cid: i64,
+    gid: i64,
+    crop: i64,
+    bushels: i64,
+    // cents a bushel
+    price: i64,
+    from_day: i64,
+    to_day: i64,
+}
+
+// A scale ticket: weights in pounds, the sample's moisture, test weight,
+// foreign material and damage in tenths.
+#[derive(Clone, PartialEq)]
+struct Ticket {
+    tno: i64,
+    gid: i64,
+    crop: i64,
+    truck: String,
+    day: i64,
+    gross: i64,
+    tare: i64,
+    moist: i64,
+    tw: i64,
+    fm: i64,
+    dmg: i64,
+}
+
+// What the week's close made of an elevator's tickets. Bushels are in
+// hundredths, money in cents.
+struct Intake {
+    // by bin: what it holds
+    fill: Vec[i64],
+    // by contract: the bushels delivered on it
+    delivered: Vec[i64],
+    // by ticket: 0 taken, 1 too wet, 2 turned away for room
+    status: Vec[i64],
+    net: Vec[i64],
+    bu: Vec[i64],
+    grade: Vec[i64],
+    // the bin index, or -1 for the ground pile
+    bin: Vec[i64],
+    con_bu: Vec[i64],
+    con_value: Vec[i64],
+    spot_bu: Vec[i64],
+    spot_value: Vec[i64],
+    dry: Vec[i64],
+    disc: Vec[i64],
+    fee: Vec[i64],
+    checkoff: Vec[i64],
+    pay: Vec[i64],
+    // corn on the ground
+    pile: i64,
+    // by grower: pay, tickets, bushels by crop (three to a grower),
+    // value and deductions
+    g_pay: Vec[i64],
+    g_tickets: Vec[i64],
+    g_bu: Vec[i64],
+    g_gross: Vec[i64],
+    g_ded: Vec[i64],
+}
+
+struct Rail {
+    cars: i64,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+// ------------------------------------------------------------ helpers
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    f"${group3(c / 100)}.{c % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn bushels(v: i64) -> String {
+    f"{group3(v / 100)}.{v % 100:02}"
+}
+
+fn tenths(v: i64) -> String {
+    f"{v / 10}.{v % 10}"
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 6 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+// A number with exactly `places` decimals, scaled to an integer, or None.
+fn decimal_of(t: ref String, places: i64) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != places + 1 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 3 {
+        return None;
+    }
+    let mut scale = 1;
+    for _ in 0..places {
+        scale *= 10;
+    }
+    Some(to_int(a) * scale + to_int(b))
+}
+
+fn name_ok(t: ref String) -> bool {
+    t.len() > 0 and t.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+fn file_line(name: ref String, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+fn crop_of(name: ref String) -> i64 {
+    for c in 0..3 {
+        if name == CROPS[c] {
+            return c;
+        }
+    }
+    -1
+}
+
+fn spot(elev: ref Elevator, crop: i64, day: i64) -> i64 {
+    BOARD[crop * DAYS + day - 1] - elev.under
+}
+
+fn grade_of(crop: i64, tw: i64, dmg: i64, fm: i64) -> i64 {
+    for g in 0..5 {
+        let k = crop * 5 + g;
+        if tw >= GRADE_TW[k] and dmg <= GRADE_DMG[k] and fm <= GRADE_FM[k] {
+            return g + 1;
+        }
+    }
+    SAMPLE_GRADE
+}
+
+fn grade_name(g: i64) -> String {
+    if g == SAMPLE_GRADE { "S".to_string() } else { f"{g}" }
+}
+
+fn yes_no(b: bool) -> String {
+    if b { "Y".to_string() } else { "N".to_string() }
+}
+
+fn grower_index(growers: ref Vec[Grower]) -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    for i in 0..growers.len() as i64 {
+        m.insert(growers[i].gid, i);
+    }
+    m
+}
+
+// ------------------------------------------------------------ building
+
+fn build_growers(elev: ref Elevator) -> Vec[Grower] {
+    let mut out: Vec[Grower] = Vec.new();
+    for k in 0..N_GROWERS {
+        let r = mix(elev.seed, k, 11);
+        out.push(Grower {
+            gid: elev.digit * 1000 + k + 1,
+            last: LAST[mix(elev.seed, k, 12) % 24].to_string(),
+            first: FIRST[mix(elev.seed, k, 13) % 24].to_string(),
+            member: r % 100 < 85,
+        });
+    }
+    out
+}
+
+fn build_bins(elev: ref Elevator) -> Vec[Bin] {
+    let mut out: Vec[Bin] = Vec.new();
+    let mut n = 0;
+    for c in 0..3 {
+        for _ in 0..BINS[c] {
+            let r = mix(elev.seed, n, 21);
+            let capacity = (20 + r % 31) * 1000;
+            let start = capacity * ((r >> 8) % 30) / 100;
+            let number = n + 1;
+            out.push(Bin { bin: f"{elev.code}-B{number:02}", crop: CROPS[c].to_string(), capacity: capacity, start: start });
+            n += 1;
+        }
+    }
+    out
+}
+
+fn crop_pick(elev: ref Elevator, r: i64) -> i64 {
+    let p = r % 100;
+    if p < elev.corn {
+        return 0;
+    }
+    if p < elev.corn + elev.soy {
+        return 1;
+    }
+    2
+}
+
+fn build_contracts(elev: ref Elevator, growers: ref Vec[Grower]) -> Vec[Contract] {
+    let mut out: Vec[Contract] = Vec.new();
+    let mut n = 0;
+    for k in 0..growers.len() as i64 {
+        let r = mix(elev.seed, k, 31);
+        for j in 0..r % 4 {
+            let q = mix(elev.seed, k * 8 + j, 32);
+            let crop = crop_pick(elev, q);
+            let from_day = 1 + (q >> 8) % 3;
+            let to_day = min2(DAYS, from_day + 2 + (q >> 10) % 4);
+            let price = BOARD[crop * DAYS] - elev.under + (q >> 13) % 41 - 20;
+            out.push(Contract {
+                cid: elev.digit * 10000 + n + 1,
+                gid: growers[k].gid,
+                crop: crop,
+                bushels: 500 + ((q >> 18) % 9) * 250,
+                price: price,
+                from_day: from_day,
+                to_day: to_day,
+            });
+            n += 1;
+        }
+    }
+    out
+}
+
+fn build_tickets(elev: ref Elevator, growers: ref Vec[Grower]) -> Vec[Ticket] {
+    let mut out: Vec[Ticket] = Vec.new();
+    for n in 0..N_TICKETS {
+        let r = mix(elev.seed, n, 41);
+        let q = mix(elev.seed, n, 42);
+        let g = ref growers[mix(elev.seed, n, 43) % N_GROWERS];
+        let crop = crop_pick(elev, q);
+        let mut tare = 28000 + r % 4000;
+        let mut net = 44000 + (r >> 8) % 12000;
+        if (r >> 4) % 100 < 15 {
+            // a straight truck
+            tare = 12000 + r % 3000;
+            net = 16000 + (r >> 8) % 8000;
+        }
+        let mut moist = 0;
+        let mut tw = 0;
+        let mut fm = 0;
+        if crop == 0 {
+            moist = 140 + (q >> 8) % 120 + elev.wet;
+            if (q >> 24) % 50 == 0 {
+                moist = 305 + (q >> 8) % 40;
+            }
+            tw = 500 + (q >> 16) % 80;
+            fm = (q >> 4) % 45;
+        } else if crop == 1 {
+            moist = 100 + (q >> 8) % 85 + elev.wet / 3;
+            tw = 520 + (q >> 16) % 60;
+            fm = (q >> 4) % 35;
+        } else {
+            moist = 110 + (q >> 8) % 75;
+            tw = 560 + (q >> 16) % 60;
+            fm = (q >> 4) % 20;
+        }
+        let d = mix(elev.seed, n, 44);
+        let dmg = d % 50 + if (d >> 16) % 10 == 0 { (d >> 8) % 70 } else { 0 };
+        out.push(Ticket {
+            tno: elev.digit * 100000 + 1001 + n,
+            gid: g.gid,
+            crop: crop,
+            truck: f"T{100 + (r >> 20) % 900}",
+            day: 1 + n * DAYS / N_TICKETS,
+            gross: tare + net,
+            tare: tare,
+            moist: moist,
+            tw: tw,
+            fm: fm,
+            dmg: dmg,
+        });
+    }
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn grower_header() -> String {
+    "grower,last,first,member".to_string()
+}
+
+fn bin_header() -> String {
+    "bin,crop,capacity_bu,start_bu".to_string()
+}
+
+fn contract_header() -> String {
+    "contract,grower,crop,bushels,price,from_day,to_day".to_string()
+}
+
+fn ticket_header() -> String {
+    "ticket,grower,crop,truck,day,gross_lb,tare_lb,moisture,test_weight,fm,damage".to_string()
+}
+
+fn encode_growers(growers: ref Vec[Grower]) -> String {
+    let mut out = f"{grower_header()}\n";
+    for g in growers {
+        out.push_str(f"{g.gid},{g.last},{g.first},{yes_no(g.member)}\n");
+    }
+    out
+}
+
+fn encode_bins(bins: ref Vec[Bin]) -> String {
+    let mut out = f"{bin_header()}\n";
+    for b in bins {
+        out.push_str(f"{b.bin},{b.crop},{b.capacity},{b.start}\n");
+    }
+    out
+}
+
+fn encode_contracts(contracts: ref Vec[Contract]) -> String {
+    let mut out = f"{contract_header()}\n";
+    for c in contracts {
+        out.push_str(f"{c.cid},{c.gid},{CROPS[c.crop]},{c.bushels},{dollars(c.price)},{c.from_day},{c.to_day}\n");
+    }
+    out
+}
+
+fn encode_tickets(tickets: ref Vec[Ticket]) -> String {
+    let mut out = f"{ticket_header()}\n";
+    for t in tickets {
+        out.push_str(f"{t.tno},{t.gid},{CROPS[t.crop]},{t.truck},{t.day},{t.gross},{t.tare},{tenths(t.moist)},{tenths(t.tw)},{tenths(t.fm)},{tenths(t.dmg)}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn fields_of(path: ref String, n: i64, line: ref String, want: i64) -> Result[Vec[String], BatchError] {
+    let f = split_on(line, ",");
+    if f.len() as i64 != want {
+        return Err(bad(f"{path} line {n}: expected {want} fields, found {f.len()}"));
+    }
+    Ok(f)
+}
+
+fn int_field(path: ref String, n: i64, what: Str, t: ref String, lo: i64, hi: i64) -> Result[i64, BatchError] {
+    match small_int(t, lo, hi) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn tenths_field(path: ref String, n: i64, what: Str, t: ref String, lo: i64, hi: i64) -> Result[i64, BatchError] {
+    match decimal_of(t, 1) {
+        Some(v) if v >= lo and v <= hi => Ok(v),
+        _ => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn crop_field(path: ref String, n: i64, t: ref String) -> Result[i64, BatchError] {
+    let c = crop_of(t);
+    if c < 0 {
+        return Err(bad(f"{path} line {n}: bad crop '{t}'"));
+    }
+    Ok(c)
+}
+
+fn parse_growers(path: ref String, elev: ref Elevator, text: ref String) -> Result[Vec[Grower], BatchError] {
+    let body = body_lines(path, text, grower_header())?;
+    let mut out: Vec[Grower] = Vec.new();
+    let mut seen: Set[i64] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 4)?;
+        let gid = match small_int(f[0], 1000, 9999) {
+            Some(v) if f[0].len() == 4 => v,
+            _ => return Err(bad(f"{path} line {n}: bad grower '{f[0]}'")),
+        };
+        if gid / 1000 != elev.digit {
+            return Err(bad(f"{path} line {n}: grower {gid} is not at {elev.code}"));
+        }
+        if seen.contains(gid) {
+            return Err(bad(f"{path} line {n}: grower {gid} appears twice"));
+        }
+        seen.insert(gid);
+        if not name_ok(f[1]) or not name_ok(f[2]) {
+            return Err(bad(f"{path} line {n}: bad name '{f[2]} {f[1]}'"));
+        }
+        if f[3] != "Y" and f[3] != "N" {
+            return Err(bad(f"{path} line {n}: bad member '{f[3]}'"));
+        }
+        out.push(Grower { gid: gid, last: f[1].clone(), first: f[2].clone(), member: f[3] == "Y" });
+    }
+    Ok(out)
+}
+
+fn bin_id_ok(t: ref String) -> bool {
+    t.len() == 7 and t.substring(3, 5) == "-B" and is_digits(t.substring(5, 7)) and t.substring(0, 3).chars().all(|c| c.is_ascii_uppercase())
+}
+
+fn parse_bins(path: ref String, elev: ref Elevator, text: ref String) -> Result[Vec[Bin], BatchError] {
+    let body = body_lines(path, text, bin_header())?;
+    let mut out: Vec[Bin] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 4)?;
+        let b = f[0].clone();
+        if not bin_id_ok(b) {
+            return Err(bad(f"{path} line {n}: bad bin '{b}'"));
+        }
+        if b.substring(0, 3) != elev.code {
+            return Err(bad(f"{path} line {n}: bin {b} is not at {elev.code}"));
+        }
+        if seen.contains(b) {
+            return Err(bad(f"{path} line {n}: bin {b} appears twice"));
+        }
+        seen.insert(b.clone());
+        crop_field(path, n, f[1])?;
+        let capacity = int_field(path, n, "capacity", f[2], 1, 999999)?;
+        let start = int_field(path, n, "start", f[3], 0, 999999)?;
+        if start > capacity {
+            return Err(bad(f"{path} line {n}: bin {b} starts over its capacity"));
+        }
+        out.push(Bin { bin: b, crop: f[1].clone(), capacity: capacity, start: start });
+    }
+    Ok(out)
+}
+
+fn parse_contracts(path: ref String, elev: ref Elevator, growers: ref Vec[Grower], text: ref String) -> Result[Vec[Contract], BatchError] {
+    let body = body_lines(path, text, contract_header())?;
+    let ids = grower_index(growers);
+    let mut out: Vec[Contract] = Vec.new();
+    let mut seen: Set[i64] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 7)?;
+        let cid = match small_int(f[0], 10000, 99999) {
+            Some(v) if f[0].len() == 5 => v,
+            _ => return Err(bad(f"{path} line {n}: bad contract '{f[0]}'")),
+        };
+        if cid / 10000 != elev.digit {
+            return Err(bad(f"{path} line {n}: contract {cid} is not at {elev.code}"));
+        }
+        if seen.contains(cid) {
+            return Err(bad(f"{path} line {n}: contract {cid} appears twice"));
+        }
+        seen.insert(cid);
+        let gid = match small_int(f[1], 0, 9999) {
+            Some(v) if ids.contains_key(v) => v,
+            _ => return Err(bad(f"{path} line {n}: no grower '{f[1]}'")),
+        };
+        let crop = crop_field(path, n, f[2])?;
+        let bu = int_field(path, n, "bushels", f[3], 1, 999999)?;
+        let price = match decimal_of(f[4], 2) {
+            Some(v) if v >= 100 and v <= 3000 => v,
+            _ => return Err(bad(f"{path} line {n}: bad price '{f[4]}'")),
+        };
+        let from_day = int_field(path, n, "from_day", f[5], 1, DAYS)?;
+        let to_day = int_field(path, n, "to_day", f[6], from_day, DAYS)?;
+        out.push(Contract { cid: cid, gid: gid, crop: crop, bushels: bu, price: price, from_day: from_day, to_day: to_day });
+    }
+    Ok(out)
+}
+
+fn parse_tickets(path: ref String, elev: ref Elevator, growers: ref Vec[Grower], text: ref String) -> Result[Vec[Ticket], BatchError] {
+    let body = body_lines(path, text, ticket_header())?;
+    let ids = grower_index(growers);
+    let mut out: Vec[Ticket] = Vec.new();
+    let mut last = 0;
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 11)?;
+        let tno = match small_int(f[0], 100000, 999999) {
+            Some(v) if f[0].len() == 6 => v,
+            _ => return Err(bad(f"{path} line {n}: bad ticket '{f[0]}'")),
+        };
+        if tno / 100000 != elev.digit {
+            return Err(bad(f"{path} line {n}: ticket {tno} is not at {elev.code}"));
+        }
+        if tno <= last {
+            return Err(bad(f"{path} line {n}: ticket {tno} is out of order"));
+        }
+        last = tno;
+        let gid = match small_int(f[1], 0, 9999) {
+            Some(v) if ids.contains_key(v) => v,
+            _ => return Err(bad(f"{path} line {n}: no grower '{f[1]}'")),
+        };
+        let crop = crop_field(path, n, f[2])?;
+        let truck = f[3].clone();
+        if truck.len() < 2 or truck.substring(0, 1) != "T" or not is_digits(truck.substring(1, truck.len())) {
+            return Err(bad(f"{path} line {n}: bad truck '{truck}'"));
+        }
+        let day = int_field(path, n, "day", f[4], 1, DAYS)?;
+        let gross = int_field(path, n, "gross", f[5], 1, 199999)?;
+        let tare = int_field(path, n, "tare", f[6], 1, 199999)?;
+        if tare >= gross {
+            return Err(bad(f"{path} line {n}: ticket {tno} has tare {group3(tare)} lb over gross {group3(gross)} lb"));
+        }
+        let moist = tenths_field(path, n, "moisture", f[7], 0, 400)?;
+        let tw = tenths_field(path, n, "test weight", f[8], 300, 700)?;
+        let fm = tenths_field(path, n, "fm", f[9], 0, 300)?;
+        let dmg = tenths_field(path, n, "damage", f[10], 0, 500)?;
+        out.push(Ticket { tno: tno, gid: gid, crop: crop, truck: truck, day: day, gross: gross, tare: tare, moist: moist, tw: tw, fm: fm, dmg: dmg });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the intake
+
+// Grade, shrink, bin and settle every ticket, in ticket order: each takes
+// the bin room and the contract bushels the ones before it left.
+fn close_week(elev: ref Elevator, growers: ref Vec[Grower], bins: ref Vec[Bin], contracts: ref Vec[Contract], tickets: ref Vec[Ticket]) -> Intake {
+    let gidx = grower_index(growers);
+    let mut fill: Vec[i64] = Vec.new();
+    for b in bins {
+        fill.push(b.start * 100);
+    }
+    let mut delivered: Vec[i64] = Vec.filled(contracts.len(), 0);
+    let mut by_grower: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..growers.len() as i64 {
+        by_grower.push(Vec.new());
+    }
+    for c in 0..contracts.len() as i64 {
+        let gi = gidx.get(contracts[c].gid) ?? 0;
+        by_grower[gi].push(c);
+    }
+    let ng = growers.len();
+    let mut m = Intake {
+        fill: Vec.new(), delivered: Vec.new(), status: Vec.new(), net: Vec.new(), bu: Vec.new(), grade: Vec.new(),
+        bin: Vec.new(), con_bu: Vec.new(), con_value: Vec.new(), spot_bu: Vec.new(), spot_value: Vec.new(),
+        dry: Vec.new(), disc: Vec.new(), fee: Vec.new(), checkoff: Vec.new(), pay: Vec.new(), pile: 0,
+        g_pay: Vec.filled(ng, 0), g_tickets: Vec.filled(ng, 0), g_bu: Vec.filled(ng * 3, 0),
+        g_gross: Vec.filled(ng, 0), g_ded: Vec.filled(ng, 0),
+    };
+    for t in tickets {
+        let c = t.crop;
+        let gi = gidx.get(t.gid) ?? 0;
+        let net = t.gross - t.tare;
+        m.net.push(net);
+        let dock = if t.fm > FM_LIMIT[c] { net * (t.fm - FM_LIMIT[c]) / 1000 } else { 0 };
+        let clean = net - dock;
+        let over = if t.moist > BASE_MOIST[c] { t.moist - BASE_MOIST[c] } else { 0 };
+        let shrink = if over > 0 { over * SHRINK[c] + HANDLING } else { 0 };
+        let dry_lb = clean - clean * shrink / 10000;
+        let bu = dry_lb * 100 / LB_PER_BU[c];
+        let grade = grade_of(c, t.tw, t.dmg, t.fm);
+        let mut status = 0;
+        let mut place = -1;
+        if t.moist > MAX_MOIST[c] {
+            status = 1;
+        } else {
+            for b in 0..bins.len() as i64 {
+                if bins[b].crop == CROPS[c] and fill[b] + bu <= bins[b].capacity * 100 {
+                    place = b;
+                    break;
+                }
+            }
+            if place >= 0 {
+                fill[place] += bu;
+            } else if c == 0 {
+                m.pile += bu;
+            } else {
+                status = 2;
+            }
+        }
+        m.status.push(status);
+        m.grade.push(grade);
+        m.bin.push(place);
+        if status != 0 {
+            m.bu.push(0);
+            m.con_bu.push(0);
+            m.con_value.push(0);
+            m.spot_bu.push(0);
+            m.spot_value.push(0);
+            m.dry.push(0);
+            m.disc.push(0);
+            m.fee.push(0);
+            m.checkoff.push(0);
+            m.pay.push(0);
+            continue;
+        }
+        m.bu.push(bu);
+        let mut left = bu;
+        let mut con_bu = 0;
+        let mut con_value = 0;
+        for k in by_grower[gi] {
+            let ct = ref contracts[k];
+            if ct.crop != c or t.day < ct.from_day or t.day > ct.to_day {
+                continue;
+            }
+            let open_bu = ct.bushels * 100 - delivered[k];
+            if open_bu <= 0 or left == 0 {
+                continue;
+            }
+            let take = min2(left, open_bu);
+            delivered[k] += take;
+            con_bu += take;
+            con_value += take * ct.price / 100;
+            left -= take;
+        }
+        let spot_value = left * spot(elev, c, t.day) / 100;
+        let halfpts = (over + 4) / 5;
+        let dry = bu * halfpts * DRY_RATE[c] / 1000;
+        let mut per_bu = 0;
+        if t.tw < TW_MIN[c] {
+            per_bu += (TW_MIN[c] - t.tw + 9) / 10 * TW_RATE[c];
+        }
+        if t.dmg > DMG_LIMIT[c] {
+            per_bu += (t.dmg - DMG_LIMIT[c] + 9) / 10 * DMG_RATE[c];
+        }
+        if grade == SAMPLE_GRADE {
+            per_bu += SAMPLE_DISC;
+        }
+        let disc = bu * per_bu / 100;
+        let fee = if growers[gi].member { 0 } else { bu * NONMEMBER_FEE / 100 };
+        let value = con_value + spot_value;
+        let checkoff = if c == 1 { value * CHECKOFF[c] / 10000 } else { bu * CHECKOFF[c] / 1000 };
+        let pay = value - dry - disc - fee - checkoff;
+        m.con_bu.push(con_bu);
+        m.con_value.push(con_value);
+        m.spot_bu.push(left);
+        m.spot_value.push(spot_value);
+        m.dry.push(dry);
+        m.disc.push(disc);
+        m.fee.push(fee);
+        m.checkoff.push(checkoff);
+        m.pay.push(pay);
+        m.g_pay[gi] += pay;
+        m.g_tickets[gi] += 1;
+        m.g_bu[gi * 3 + c] += bu;
+        m.g_gross[gi] += value;
+        m.g_ded[gi] += dry + disc + fee + checkoff;
+    }
+    m.fill = fill;
+    m.delivered = delivered;
+    m
+}
+
+fn status_word(s: i64) -> String {
+    if s == 1 {
+        "too wet".to_string()
+    } else if s == 2 {
+        "no room".to_string()
+    } else {
+        String.new()
+    }
+}
+
+fn encode_settlements(bins: ref Vec[Bin], tickets: ref Vec[Ticket], m: ref Intake) -> String {
+    let mut out = "ticket,grower,crop,day,net_lb,dry_bu,grade,bin,contract_bu,spot_bu,value,drying,discounts,fees,checkoff,pay\n".to_string();
+    for i in 0..tickets.len() as i64 {
+        let t = ref tickets[i];
+        if m.status[i] != 0 {
+            out.push_str(f"{t.tno},{t.gid},{CROPS[t.crop]},{t.day},{m.net[i]},{status_word(m.status[i])},,,,,,,,,,\n");
+            continue;
+        }
+        let place = if m.bin[i] < 0 { "PILE".to_string() } else { bins[m.bin[i]].bin.clone() };
+        out.push_str(f"{t.tno},{t.gid},{CROPS[t.crop]},{t.day},{m.net[i]},{bushels(m.bu[i])},{grade_name(m.grade[i])},{place},{bushels(m.con_bu[i])},{bushels(m.spot_bu[i])},{dollars(m.con_value[i] + m.spot_value[i])},{dollars(m.dry[i])},{dollars(m.disc[i])},{dollars(m.fee[i])},{dollars(m.checkoff[i])},{dollars(m.pay[i])}\n");
+    }
+    out
+}
+
+fn encode_statements(growers: ref Vec[Grower], m: ref Intake) -> String {
+    let mut out = "grower,name,member,tickets,corn_bu,soy_bu,wheat_bu,value,deductions,pay\n".to_string();
+    for i in 0..growers.len() as i64 {
+        let g = ref growers[i];
+        if m.g_tickets[i] == 0 {
+            continue;
+        }
+        out.push_str(f"{g.gid},{g.first} {g.last},{yes_no(g.member)},{m.g_tickets[i]},{bushels(m.g_bu[i * 3])},{bushels(m.g_bu[i * 3 + 1])},{bushels(m.g_bu[i * 3 + 2])},{dollars(m.g_gross[i])},{dollars(m.g_ded[i])},{dollars(m.g_pay[i])}\n");
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn intake_report(elev: ref Elevator, tickets: ref Vec[Ticket], m: ref Intake) -> String {
+    let mut taken = 0;
+    let mut wet = 0;
+    let mut room = 0;
+    let mut bu: Vec[i64] = Vec.filled(3, 0);
+    let mut moist: Vec[i64] = Vec.filled(3, 0);
+    let mut count: Vec[i64] = Vec.filled(3, 0);
+    for i in 0..tickets.len() as i64 {
+        let t = ref tickets[i];
+        if m.status[i] == 1 {
+            wet += 1;
+        } else if m.status[i] == 2 {
+            room += 1;
+        } else {
+            taken += 1;
+            bu[t.crop] += m.bu[i];
+            moist[t.crop] += t.moist;
+            count[t.crop] += 1;
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for c in 0..3 {
+        let mean = if count[c] > 0 { moist[c] / count[c] } else { 0 };
+        parts.push(f"{CROP_WORDS[c]} {bushels(bu[c])} bu at {tenths(mean)}%");
+    }
+    f"{elev.code} intake: {tickets.len()} tickets, {taken} taken, {wet} too wet, {room} turned away for room; {parts.join(", ")}"
+}
+
+fn grade_report(elev: ref Elevator, tickets: ref Vec[Ticket], m: ref Intake) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for c in 0..3 {
+        let mut counts: Vec[i64] = Vec.filled(7, 0);
+        for i in 0..tickets.len() as i64 {
+            if tickets[i].crop == c and m.status[i] == 0 {
+                counts[m.grade[i]] += 1;
+            }
+        }
+        let mut cells: Vec[String] = Vec.new();
+        for g in 1..7 {
+            if counts[g] > 0 {
+                cells.push(f"{grade_name(g)}:{counts[g]}");
+            }
+        }
+        parts.push(f"{CROPS[c]} {cells.join(" ")}");
+    }
+    let mut worst = -1;
+    for i in 0..tickets.len() as i64 {
+        if m.status[i] == 0 and (worst < 0 or tickets[i].dmg > tickets[worst].dmg) {
+            worst = i;
+        }
+    }
+    let w = ref tickets[worst];
+    f"{elev.code} grades: {parts.join("; ")}; worst damage ticket {w.tno} ({CROPS[w.crop]}, {tenths(w.dmg)}%)"
+}
+
+fn bin_report(elev: ref Elevator, bins: ref Vec[Bin], m: ref Intake) -> String {
+    let mut cells: Vec[String] = Vec.new();
+    let mut full = 0;
+    for b in 0..bins.len() as i64 {
+        let pct = m.fill[b] * 1000 / (bins[b].capacity * 100);
+        if pct >= 950 {
+            full += 1;
+        }
+        cells.push(f"{bins[b].bin.substring(4, 7)} {bins[b].crop} {tenths(pct)}%");
+    }
+    f"{elev.code} bins: {cells.join(", ")}; {full} at 95% or more; ground pile {bushels(m.pile)} bu"
+}
+
+fn settle_report(elev: ref Elevator, tickets: ref Vec[Ticket], m: ref Intake) -> String {
+    let mut value = 0;
+    let mut dry = 0;
+    let mut disc = 0;
+    let mut fee = 0;
+    let mut checkoff = 0;
+    let mut pay = 0;
+    let mut con_bu = 0;
+    let mut con_value = 0;
+    let mut spot_bu = 0;
+    let mut spot_value = 0;
+    for i in 0..tickets.len() as i64 {
+        if m.status[i] != 0 {
+            continue;
+        }
+        value += m.con_value[i] + m.spot_value[i];
+        dry += m.dry[i];
+        disc += m.disc[i];
+        fee += m.fee[i];
+        checkoff += m.checkoff[i];
+        pay += m.pay[i];
+        con_bu += m.con_bu[i];
+        con_value += m.con_value[i];
+        spot_bu += m.spot_bu[i];
+        spot_value += m.spot_value[i];
+    }
+    let con_avg = if con_bu > 0 { con_value * 100 / con_bu } else { 0 };
+    let spot_avg = if spot_bu > 0 { spot_value * 100 / spot_bu } else { 0 };
+    f"{elev.code} settlement: {money(value)} value, {money(dry)} drying, {money(disc)} discounts, {money(fee)} fees, {money(checkoff)} checkoff, {money(pay)} paid; {bushels(con_bu)} bu on contract at ${dollars(con_avg)}, {bushels(spot_bu)} bu at spot at ${dollars(spot_avg)}"
+}
+
+fn contract_report(elev: ref Elevator, growers: ref Vec[Grower], contracts: ref Vec[Contract], m: ref Intake) -> String {
+    let mut filled = 0;
+    let mut part = 0;
+    let mut none = 0;
+    let mut short = 0;
+    for k in 0..contracts.len() as i64 {
+        let want = contracts[k].bushels * 100;
+        if m.delivered[k] == want {
+            filled += 1;
+        } else if m.delivered[k] > 0 {
+            part += 1;
+        } else {
+            none += 1;
+        }
+        short += want - m.delivered[k];
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..growers.len() as i64 {
+        order.push(i);
+    }
+    order.sort_by(|a, b| if m.g_pay[a] != m.g_pay[b] { m.g_pay[b].cmp(m.g_pay[a]) } else { growers[a].gid.cmp(growers[b].gid) });
+    let mut top: Vec[String] = Vec.new();
+    for i in order[0..3] {
+        top.push(f"{growers[i].first} {growers[i].last} {money(m.g_pay[i])}");
+    }
+    f"{elev.code} contracts: {contracts.len()} written, {filled} filled, {part} partly, {none} untouched, {bushels(short)} bu short; top growers {top.join(", ")}"
+}
+
+// ------------------------------------------------------------ rail
+
+// An elevator ships its ground pile and its soybeans, and asks for the
+// cars that takes; the railroad grants what it has left.
+fn ask_rail(rail: mut ref Rail, elev: ref Elevator, tickets: ref Vec[Ticket], m: ref Intake) -> String {
+    let mut ship = m.pile;
+    for i in 0..tickets.len() as i64 {
+        if m.status[i] == 0 and tickets[i].crop == 1 {
+            ship += m.bu[i];
+        }
+    }
+    let car = CAR_BU * 100;
+    let asked = (ship + car - 1) / car;
+    let granted = min2(asked, rail.cars);
+    rail.cars -= granted;
+    let shipped = min2(ship, granted * car);
+    rail.log.push(f"{elev.code},{asked},{granted},{bushels(shipped)},{bushels(ship - shipped)},{rail.cars}");
+    f"{elev.code} rail: asked {asked} cars, granted {granted}, {bushels(shipped)} bu shipped, {bushels(ship - shipped)} bu held; {rail.cars} cars left"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let ash = Elevator { code: "ASH", digit: 1, seed: 9101, under: 32, wet: 0, corn: 60, soy: 30 };
+    let bel = Elevator { code: "BEL", digit: 2, seed: 9202, under: 28, wet: 15, corn: 50, soy: 40 };
+    let clr = Elevator { code: "CLR", digit: 3, seed: 9303, under: 41, wet: 25, corn: 70, soy: 20 };
+    let dun = Elevator { code: "DUN", digit: 4, seed: 9404, under: 36, wet: 5, corn: 45, soy: 35 };
+
+    // Four grower lists and four sets of bins, then four contract books
+    // and four weeks of tickets, each over its own elevator's growers.
+    let g1 = build_growers(ash);
+    let g2 = build_growers(bel);
+    let g3 = build_growers(clr);
+    let g4 = build_growers(dun);
+    let b1 = build_bins(ash);
+    let b2 = build_bins(bel);
+    let b3 = build_bins(clr);
+    let b4 = build_bins(dun);
+    let c1 = build_contracts(ash, g1);
+    let c2 = build_contracts(bel, g2);
+    let c3 = build_contracts(clr, g3);
+    let c4 = build_contracts(dun, g4);
+    let t1 = build_tickets(ash, g1);
+    let t2 = build_tickets(bel, g2);
+    let t3 = build_tickets(clr, g3);
+    let t4 = build_tickets(dun, g4);
+
+    // Sixteen writes.
+    let w1 = fs.write("ASH_growers.csv", encode_growers(g1));
+    let w2 = fs.write("ASH_bins.csv", encode_bins(b1));
+    let w3 = fs.write("ASH_contracts.csv", encode_contracts(c1));
+    let w4 = fs.write("ASH_tickets.csv", encode_tickets(t1));
+    let w5 = fs.write("BEL_growers.csv", encode_growers(g2));
+    let w6 = fs.write("BEL_bins.csv", encode_bins(b2));
+    let w7 = fs.write("BEL_contracts.csv", encode_contracts(c2));
+    let w8 = fs.write("BEL_tickets.csv", encode_tickets(t2));
+    let w9 = fs.write("CLR_growers.csv", encode_growers(g3));
+    let w10 = fs.write("CLR_bins.csv", encode_bins(b3));
+    let w11 = fs.write("CLR_contracts.csv", encode_contracts(c3));
+    let w12 = fs.write("CLR_tickets.csv", encode_tickets(t3));
+    let w13 = fs.write("DUN_growers.csv", encode_growers(g4));
+    let w14 = fs.write("DUN_bins.csv", encode_bins(b4));
+    let w15 = fs.write("DUN_contracts.csv", encode_contracts(c4));
+    let w16 = fs.write("DUN_tickets.csv", encode_tickets(t4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() or w9.is_err() or w10.is_err() or w11.is_err() or w12.is_err() or w13.is_err() or w14.is_err() or w15.is_err() or w16.is_err() {
+        return Err(bad("could not write the week's files"));
+    }
+
+    // A copy of ASH's tickets with a tare over the gross, and of CLR's
+    // contracts with a grower it does not have.
+    let whole = read_text("ASH_tickets.csv")?;
+    if fs.write("ASH_tickets.bad", damage(whole, 40, 6, "90000")).is_err() {
+        return Err(bad("could not write ASH_tickets.bad"));
+    }
+    let whole2 = read_text("CLR_contracts.csv")?;
+    if fs.write("CLR_contracts.bad", damage(whole2, 30, 1, "3999")).is_err() {
+        return Err(bad("could not write CLR_contracts.bad"));
+    }
+
+    // Sixteen reads.
+    let x1 = read_text("ASH_growers.csv")?;
+    let y1 = read_text("ASH_bins.csv")?;
+    let z1 = read_text("ASH_contracts.csv")?;
+    let v1 = read_text("ASH_tickets.csv")?;
+    let x2 = read_text("BEL_growers.csv")?;
+    let y2 = read_text("BEL_bins.csv")?;
+    let z2 = read_text("BEL_contracts.csv")?;
+    let v2 = read_text("BEL_tickets.csv")?;
+    let x3 = read_text("CLR_growers.csv")?;
+    let y3 = read_text("CLR_bins.csv")?;
+    let z3 = read_text("CLR_contracts.csv")?;
+    let v3 = read_text("CLR_tickets.csv")?;
+    let x4 = read_text("DUN_growers.csv")?;
+    let y4 = read_text("DUN_bins.csv")?;
+    let z4 = read_text("DUN_contracts.csv")?;
+    let v4 = read_text("DUN_tickets.csv")?;
+    println(file_line("ASH growers", x1));
+    println(file_line("ASH bins", y1));
+    println(file_line("ASH contracts", z1));
+    println(file_line("ASH tickets", v1));
+    println(file_line("BEL growers", x2));
+    println(file_line("BEL bins", y2));
+    println(file_line("BEL contracts", z2));
+    println(file_line("BEL tickets", v2));
+    println(file_line("CLR growers", x3));
+    println(file_line("CLR bins", y3));
+    println(file_line("CLR contracts", z3));
+    println(file_line("CLR tickets", v3));
+    println(file_line("DUN growers", x4));
+    println(file_line("DUN bins", y4));
+    println(file_line("DUN contracts", z4));
+    println(file_line("DUN tickets", v4));
+
+    // Four grower files and four bin files, then four contract files and
+    // four ticket files, which need the growers. Each can fail with `?`,
+    // so a parallel run has to report the first failure in source order.
+    let pg1 = parse_growers("ASH_growers.csv", ash, x1)?;
+    let pg2 = parse_growers("BEL_growers.csv", bel, x2)?;
+    let pg3 = parse_growers("CLR_growers.csv", clr, x3)?;
+    let pg4 = parse_growers("DUN_growers.csv", dun, x4)?;
+    let pb1 = parse_bins("ASH_bins.csv", ash, y1)?;
+    let pb2 = parse_bins("BEL_bins.csv", bel, y2)?;
+    let pb3 = parse_bins("CLR_bins.csv", clr, y3)?;
+    let pb4 = parse_bins("DUN_bins.csv", dun, y4)?;
+    let pc1 = parse_contracts("ASH_contracts.csv", ash, pg1, z1)?;
+    let pc2 = parse_contracts("BEL_contracts.csv", bel, pg2, z2)?;
+    let pc3 = parse_contracts("CLR_contracts.csv", clr, pg3, z3)?;
+    let pc4 = parse_contracts("DUN_contracts.csv", dun, pg4, z4)?;
+    let pt1 = parse_tickets("ASH_tickets.csv", ash, pg1, v1)?;
+    let pt2 = parse_tickets("BEL_tickets.csv", bel, pg2, v2)?;
+    let pt3 = parse_tickets("CLR_tickets.csv", clr, pg3, v3)?;
+    let pt4 = parse_tickets("DUN_tickets.csv", dun, pg4, v4)?;
+    match parse_tickets("ASH_tickets.bad", ash, pg1, read_text("ASH_tickets.bad")?) {
+        Ok(_) => println("ASH_tickets.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_contracts("CLR_contracts.bad", clr, pg3, read_text("CLR_contracts.bad")?) {
+        Ok(_) => println("CLR_contracts.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_bins("DUN_bins.csv", bel, y4) {
+        Ok(_) => println("DUN_bins.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = pg1 == g1 and pg2 == g2 and pg3 == g3 and pg4 == g4 and pb1 == b1 and pb2 == b2 and pb3 == b3 and pb4 == b4 and pc1 == c1 and pc2 == c2 and pc3 == c3 and pc4 == c4 and pt1 == t1 and pt2 == t2 and pt3 == t3 and pt4 == t4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four week closes, the hot group.
+    let m1 = close_week(ash, pg1, pb1, pc1, pt1);
+    let m2 = close_week(bel, pg2, pb2, pc2, pt2);
+    let m3 = close_week(clr, pg3, pb3, pc3, pt3);
+    let m4 = close_week(dun, pg4, pb4, pc4, pt4);
+
+    // The settlements and grower statements, written and read back.
+    let r1 = fs.write("ASH_settlements.csv", encode_settlements(pb1, pt1, m1));
+    let r2 = fs.write("BEL_settlements.csv", encode_settlements(pb2, pt2, m2));
+    let r3 = fs.write("CLR_settlements.csv", encode_settlements(pb3, pt3, m3));
+    let r4 = fs.write("DUN_settlements.csv", encode_settlements(pb4, pt4, m4));
+    let r5 = fs.write("ASH_statements.csv", encode_statements(pg1, m1));
+    let r6 = fs.write("BEL_statements.csv", encode_statements(pg2, m2));
+    let r7 = fs.write("CLR_statements.csv", encode_statements(pg3, m3));
+    let r8 = fs.write("DUN_statements.csv", encode_statements(pg4, m4));
+    if r1.is_err() or r2.is_err() or r3.is_err() or r4.is_err() or r5.is_err() or r6.is_err() or r7.is_err() or r8.is_err() {
+        return Err(bad("could not write the settlements"));
+    }
+    let s1 = read_text("ASH_settlements.csv")?;
+    let e1 = read_text("ASH_statements.csv")?;
+    let s2 = read_text("BEL_settlements.csv")?;
+    let e2 = read_text("BEL_statements.csv")?;
+    let s3 = read_text("CLR_settlements.csv")?;
+    let e3 = read_text("CLR_statements.csv")?;
+    let s4 = read_text("DUN_settlements.csv")?;
+    let e4 = read_text("DUN_statements.csv")?;
+    println(file_line("ASH settlements", s1));
+    println(file_line("ASH statements", e1));
+    println(file_line("BEL settlements", s2));
+    println(file_line("BEL statements", e2));
+    println(file_line("CLR settlements", s3));
+    println(file_line("CLR statements", e3));
+    println(file_line("DUN settlements", s4));
+    println(file_line("DUN statements", e4));
+
+    // Reports that only read what came before.
+    let i1 = intake_report(ash, pt1, m1);
+    let i2 = intake_report(bel, pt2, m2);
+    let i3 = intake_report(clr, pt3, m3);
+    let i4 = intake_report(dun, pt4, m4);
+    let q1 = grade_report(ash, pt1, m1);
+    let q2 = grade_report(bel, pt2, m2);
+    let q3 = grade_report(clr, pt3, m3);
+    let q4 = grade_report(dun, pt4, m4);
+    let n1 = bin_report(ash, pb1, m1);
+    let n2 = bin_report(bel, pb2, m2);
+    let n3 = bin_report(clr, pb3, m3);
+    let n4 = bin_report(dun, pb4, m4);
+    let a1 = settle_report(ash, pt1, m1);
+    let a2 = settle_report(bel, pt2, m2);
+    let a3 = settle_report(clr, pt3, m3);
+    let a4 = settle_report(dun, pt4, m4);
+    let k1 = contract_report(ash, pg1, pc1, m1);
+    let k2 = contract_report(bel, pg2, pc2, m2);
+    let k3 = contract_report(clr, pg3, pc3, m3);
+    let k4 = contract_report(dun, pg4, pc4, m4);
+    for line in [i1, i2, i3, i4, q1, q2, q3, q4, n1, n2, n3, n4, a1, a2, a3, a4, k1, k2, k3, k4] {
+        println(line);
+    }
+
+    // The railroad grants cars from what the elevators before have left,
+    // so the elevators ask in order.
+    let mut rail = Rail { cars: RAIL_CARS, log: Vec.new() };
+    println(ask_rail(mut rail, ash, pt1, m1));
+    println(ask_rail(mut rail, bel, pt2, m2));
+    println(ask_rail(mut rail, clr, pt3, m3));
+    println(ask_rail(mut rail, dun, pt4, m4));
+    if fs.write("rail.log", f"{rail.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write rail.log"));
+    }
+    let back = read_text("rail.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"rail.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["ASH_growers.csv", "ASH_bins.csv", "ASH_contracts.csv", "ASH_tickets.csv", "BEL_growers.csv", "BEL_bins.csv",
+              "BEL_contracts.csv", "BEL_tickets.csv", "CLR_growers.csv", "CLR_bins.csv", "CLR_contracts.csv", "CLR_tickets.csv",
+              "DUN_growers.csv", "DUN_bins.csv", "DUN_contracts.csv", "DUN_tickets.csv", "ASH_tickets.bad", "CLR_contracts.bad",
+              "rail.log", "ASH_settlements.csv", "BEL_settlements.csv", "CLR_settlements.csv", "DUN_settlements.csv",
+              "ASH_statements.csv", "BEL_statements.csv", "CLR_statements.csv", "DUN_statements.csv"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"grain_intake failed: {e.describe()}"),
+    }
+}

@@ -1,0 +1,53 @@
+ASH growers: 80 rows, 1,560 bytes, fnv bde45566
+ASH bins: 10 rows, 267 bytes, fnv 0de5f6b9
+ASH contracts: 114 rows, 3,422 bytes, fnv 666022d0
+ASH tickets: 420 rows, 22,682 bytes, fnv b000d265
+BEL growers: 80 rows, 1,562 bytes, fnv a5fc2f88
+BEL bins: 10 rows, 269 bytes, fnv b2052815
+BEL contracts: 142 rows, 4,230 bytes, fnv b1ce1682
+BEL tickets: 420 rows, 22,641 bytes, fnv c057f970
+CLR growers: 80 rows, 1,563 bytes, fnv 6b7a5bfb
+CLR bins: 10 rows, 270 bytes, fnv 0b703579
+CLR contracts: 121 rows, 3,648 bytes, fnv 49537c66
+CLR tickets: 420 rows, 22,705 bytes, fnv 17c56e4c
+DUN growers: 80 rows, 1,529 bytes, fnv 46ae95f7
+DUN bins: 10 rows, 269 bytes, fnv 352c2b60
+DUN contracts: 123 rows, 3,686 bytes, fnv 83934761
+DUN tickets: 420 rows, 22,695 bytes, fnv 444bb605
+ASH_tickets.bad line 41: ticket 101040 has tare 90,000 lb over gross 80,422 lb
+CLR_contracts.bad line 31: no grower '3999'
+DUN_bins.csv line 2: bin DUN-B01 is not at BEL
+parsed files match the built ones: true
+ASH settlements: 420 rows, 37,476 bytes, fnv afbdf3e3
+ASH statements: 80 rows, 5,511 bytes, fnv e46abbd6
+BEL settlements: 420 rows, 36,328 bytes, fnv 8ec526b8
+BEL statements: 79 rows, 5,440 bytes, fnv 6cfd7e8e
+CLR settlements: 420 rows, 37,646 bytes, fnv 51a790d1
+CLR statements: 79 rows, 5,436 bytes, fnv 89703e77
+DUN settlements: 420 rows, 37,072 bytes, fnv b8e14bee
+DUN statements: 79 rows, 5,456 bytes, fnv 54c5d152
+ASH intake: 420 tickets, 394 taken, 12 too wet, 14 turned away for room; corn 191,503.01 bu at 19.9%, soy 72,608.64 bu at 13.5%, wheat 29,394.26 bu at 15.0%
+BEL intake: 420 tickets, 368 taken, 19 too wet, 33 turned away for room; corn 154,808.36 bu at 21.5%, soy 88,795.18 bu at 14.5%, wheat 28,382.51 bu at 14.7%
+CLR intake: 420 tickets, 400 taken, 20 too wet, 0 turned away for room; corn 208,598.97 bu at 22.2%, soy 60,530.29 bu at 14.0%, wheat 27,543.50 bu at 14.4%
+DUN intake: 420 tickets, 383 taken, 16 too wet, 21 turned away for room; corn 143,261.69 bu at 20.6%, soy 85,655.40 bu at 14.0%, wheat 55,701.28 bu at 14.8%
+ASH grades: CORN 1:19 2:74 3:71 4:96 5:1; SOY 2:15 3:62 4:17 5:1; WHEAT 1:1 2:4 3:21 4:12; worst damage ticket 101338 (SOY, 11.2%)
+BEL grades: CORN 1:13 2:60 3:57 4:78 5:2; SOY 1:4 2:22 3:65 4:22 5:4; WHEAT 1:1 2:9 3:15 4:16; worst damage ticket 201101 (SOY, 10.8%)
+CLR grades: CORN 1:19 2:82 3:76 4:105; SOY 1:4 2:15 3:51 4:7 5:2; WHEAT 1:1 2:6 3:20 4:11 5:1; worst damage ticket 301304 (WHEAT, 10.4%)
+DUN grades: CORN 1:11 2:43 3:68 4:67 5:2; SOY 1:5 2:19 3:79 4:12 5:1; WHEAT 1:1 2:22 3:34 4:18 5:1; worst damage ticket 401007 (CORN, 11.2%)
+ASH bins: B01 CORN 99.4%, B02 CORN 99.6%, B03 CORN 99.9%, B04 CORN 99.7%, B05 CORN 99.9%, B06 SOY 99.9%, B07 SOY 99.3%, B08 SOY 99.3%, B09 WHEAT 93.4%, B10 WHEAT 0.0%; 8 at 95% or more; ground pile 30,261.19 bu
+BEL bins: B01 CORN 99.7%, B02 CORN 99.9%, B03 CORN 99.6%, B04 CORN 99.9%, B05 CORN 99.8%, B06 SOY 99.3%, B07 SOY 99.9%, B08 SOY 99.9%, B09 WHEAT 81.1%, B10 WHEAT 27.0%; 8 at 95% or more; ground pile 2,167.90 bu
+CLR bins: B01 CORN 99.8%, B02 CORN 99.6%, B03 CORN 99.6%, B04 CORN 99.5%, B05 CORN 99.2%, B06 SOY 99.7%, B07 SOY 92.8%, B08 SOY 19.0%, B09 WHEAT 98.9%, B10 WHEAT 17.4%; 7 at 95% or more; ground pile 83,250.75 bu
+DUN bins: B01 CORN 99.8%, B02 CORN 99.3%, B03 CORN 99.4%, B04 CORN 99.9%, B05 CORN 99.1%, B06 SOY 99.4%, B07 SOY 99.9%, B08 SOY 99.4%, B09 WHEAT 99.3%, B10 WHEAT 91.7%; 9 at 95% or more; ground pile 9,702.50 bu
+ASH settlement: $1,598,397.48 value, $57,779.42 drying, $11,256.69 discounts, $1,300.28 fees, $6,059.92 checkoff, $1,522,001.17 paid; 88,561.25 bu on contract at $5.27, 204,944.66 bu at spot at $5.51
+BEL settlement: $1,621,871.47 value, $64,123.82 drying, $10,656.23 discounts, $1,105.84 fees, $6,481.08 checkoff, $1,539,504.50 paid; 78,052.21 bu on contract at $6.23, 193,933.84 bu at spot at $5.85
+CLR settlement: $1,509,877.84 value, $83,251.09 drying, $10,446.99 discounts, $1,701.33 fees, $5,573.78 checkoff, $1,408,904.65 paid; 79,104.31 bu on contract at $4.51, 217,568.45 bu at spot at $5.29
+DUN settlement: $1,667,968.64 value, $54,784.00 drying, $9,395.37 discounts, $1,116.35 fees, $6,725.64 checkoff, $1,595,947.28 paid; 73,727.84 bu on contract at $6.05, 210,890.53 bu at spot at $5.79
+ASH contracts: 114 written, 39 filled, 44 partly, 31 untouched, 78,688.75 bu short; top growers Wilma Brandt $48,763.04, Ida Reimer $40,276.49, Stan Anders $39,994.43
+BEL contracts: 142 written, 32 filled, 46 partly, 64 untouched, 135,447.79 bu short; top growers Bert Carlson $57,177.58, Ned Zimmer $45,271.16, Zeke Iverson $42,423.78
+CLR contracts: 121 written, 32 filled, 43 partly, 46 untouched, 114,145.69 bu short; top growers Wilma Reimer $39,883.53, Stan Kohler $38,282.00, Tess Kohler $34,802.26
+DUN contracts: 123 written, 37 filled, 36 partly, 50 untouched, 107,272.16 bu short; top growers Edna Zimmer $50,002.32, Opal Schultz $39,429.44, Kurt Brandt $37,436.08
+ASH rail: asked 30 cars, granted 30, 102,869.83 bu shipped, 0.00 bu held; 40 cars left
+BEL rail: asked 26 cars, granted 26, 90,963.08 bu shipped, 0.00 bu held; 14 cars left
+CLR rail: asked 42 cars, granted 14, 49,000.00 bu shipped, 94,781.04 bu held; 0 cars left
+DUN rail: asked 28 cars, granted 0, 0.00 bu shipped, 95,357.90 bu held; 0 cars left
+rail.log: 4 entries, 115 bytes, fnv d3a61b56
