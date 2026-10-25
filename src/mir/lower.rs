@@ -15201,8 +15201,21 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// An argument for a parameter of type `pt`: borrowed when the
-    /// parameter is a reference and the argument is not.
+    /// parameter is a reference and the argument is not. What it pushes,
+    /// the borrow included, carries `a`'s span, so a borrow conflict names
+    /// the argument, not the call (B-2026-10-25-7).
     fn arg_operand(&mut self, a: &'a Expr, pt: Ty) -> R<Operand> {
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: a.span,
+            ..outer
+        });
+        let r = self.arg_operand_here(a, pt);
+        self.b.set_source_info(outer);
+        r
+    }
+
+    fn arg_operand_here(&mut self, a: &'a Expr, pt: Ty) -> R<Operand> {
         let tcx = self.tys().tcx();
         let borrow = match tcx.kind(pt) {
             HK::Ref(_) => Some(BorrowKind::Shared),

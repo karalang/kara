@@ -13990,6 +13990,34 @@ fn a_usize_cast_of_an_i64_length_is_dropped_and_a_usize_length_needs_its_as() {
 }
 
 #[test]
+fn a_conflict_with_an_argument_borrow_names_the_argument_and_clones_it() {
+    // B-2026-10-25-7: in `self.note(self.look)`, with `note(mut ref self,
+    // t: ref Tok)`, the shared borrow is the argument, so E0516 names its
+    // place (14:19), not the call's, and `karac fix` clones a `Clone`
+    // argument so the call borrows a temporary.
+    let src = "#[derive(Clone)]\nstruct Tok {\n    v: String,\n}\nstruct P {\n    look: Tok,\n    log: Vec[String],\n}\n\
+               impl P {\n    fn note(mut ref self, t: ref Tok) {\n        self.log.push(t.v.clone());\n    }\n    \
+               fn run(mut ref self) {\n        self.note(self.look);\n    }\n}\n\
+               fn main() {\n    let mut p = P { look: Tok { v: \"a\".to_string() }, log: Vec.new() };\n    \
+               p.run();\n    println(p.log.len());\n}\n";
+    rejected_then_fixed_by(
+        "argument-borrow-clone",
+        src,
+        "still borrowed (the borrow is taken at 14:19)",
+        "self.note(self.look.clone());",
+    );
+    // A `let` whose initializer returns the argument's borrow still gets
+    // the held-borrow fix, the initializer read out.
+    rejected_then_fixed_by(
+        "argument-borrow-held-by-a-let",
+        "fn first(v: ref Vec[i64]) -> ref i64 {\n    v.get(0).unwrap()\n}\nfn main() {\n    let mut v = Vec[1];\n    \
+         let h = first(v);\n    v.push(2);\n    println(h);\n}\n",
+        "`h` still holds a borrow of it, taken at 6:19",
+        "let h = *first(v);",
+    );
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

@@ -2082,6 +2082,7 @@ impl Pipeline {
             let class = crate::typechecker::class_for_type_error_kind(&kind);
             let fix_it = if e.code == "E0516" && self.renames.is_empty() {
                 held_borrow_copy_fix(&src, typed, &e)
+                    .or_else(|| arg_borrow_clone_fix(&src, typed, &e))
             } else {
                 None
             };
@@ -3087,7 +3088,17 @@ fn held_borrow_copy_fix(
         .take(line.checked_sub(1)?)
         .map(str::len)
         .sum();
-    let offset = line_start + column.checked_sub(1)?;
+    let loan = line_start + column.checked_sub(1)?;
+    // The borrow may be an argument of the initializer (`let h =
+    // first(v);`, B-2026-10-25-7), so the initializer starts after the
+    // line's `let .. =` when it has one, else at the borrow.
+    let let_head =
+        regex::Regex::new(r"^\s*let\s+(mut\s+)?[A-Za-z_]\w*(\s*:[^=;]*)?\s*=\s*").unwrap();
+    let offset = src
+        .get(line_start..loan)
+        .and_then(|h| let_head.find(h))
+        .map_or(loan, |m| line_start + m.end());
+    let column = offset - line_start + 1;
     // The initializer: the widest typed expression starting at the borrow
     // and ending at the statement's `;`.
     let (len, ty) = typed
@@ -3154,6 +3165,55 @@ fn held_borrow_copy_fix(
         },
         _ => None,
     }
+}
+
+/// B-2026-10-25-7: the machine-applicable repair for an E0516 whose borrow
+/// is an argument, `self.note(self.look)` with `note(mut ref self, t: ref
+/// Tok)`: the argument is cloned, so the call borrows a temporary and the
+/// place is free for the conflicting borrow. Only an argument whose type has
+/// a `.clone()` (the method-side predicate, `clonable_expr_spans`).
+fn arg_borrow_clone_fix(
+    src: &str,
+    typed: &crate::typechecker::TypeCheckResult,
+    e: &crate::mir::BorrowError,
+) -> Option<crate::typechecker::FixIt> {
+    use crate::typechecker::types::Type;
+    if e.holder.is_some() {
+        return None;
+    }
+    let (line, column) = e.loan_at?;
+    let line_start: usize = src
+        .split_inclusive('\n')
+        .take(line.checked_sub(1)?)
+        .map(str::len)
+        .sum();
+    let offset = line_start + column.checked_sub(1)?;
+    // The argument: the widest typed expression starting at the borrow that
+    // ends at its `,` or `)`.
+    let (key, ty) = typed
+        .expr_types
+        .iter()
+        .filter(|(k, _)| {
+            k.0 == offset
+                && k.1 > 0
+                && src
+                    .get(offset + k.1..)
+                    .is_some_and(|r| r.trim_start().starts_with([',', ')']))
+        })
+        .max_by_key(|(k, _)| k.1)?;
+    if matches!(ty, Type::Ref(_) | Type::MutRef(_)) || !typed.clonable_expr_spans.contains(key) {
+        return None;
+    }
+    let end = offset + key.1;
+    Some(crate::typechecker::FixIt {
+        span: crate::token::Span {
+            offset: end,
+            length: 0,
+            line,
+            column: column + key.1,
+        },
+        replacement: ".clone()".to_string(),
+    })
 }
 
 fn mir_check_message(e: &crate::mir::BorrowError) -> String {
