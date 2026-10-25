@@ -96,7 +96,8 @@ An exception prints as `error <Class>: <message>`, and the job goes on.
   binds each byte list with its type before building the tuple.
 - **B-2026-10-23-8.** `karac check` accepted `*o` on a String bound by
   `for (o, a) in option_strings()`, and the MIR front ends refused it. The
-  port compares `o` without the `*`, which both accept.
+  port compares `o` without the `*`, which both accept. Fixed in kara
+  d5513133a7, where both spellings pass.
 
 ## Scope
 

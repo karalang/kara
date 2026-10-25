@@ -92,7 +92,8 @@ An exception prints as `error <Class>: <message>`, and the job goes on.
 - **B-2026-10-23-8.** `karac check` accepted `*f` on a String bound by
   `if let Some(f) = g` inside `for g in all` over a `Vec[Option[String]]`,
   and `*t` inside `for (a, b, t) in texts`, and the MIR front ends refused
-  both. The port compares without the `*`, which both accept.
+  both. The port compares without the `*`, which both accept. Fixed in kara
+  d5513133a7, where both spellings pass.
 
 The argparse model's action names are `String` rather than `Str`. That is
 not a gap: a struct that can hold a view, passed as `mut ref`, may take in

@@ -98,7 +98,8 @@ borrowed struct, then `match s { Seg.Code(v) => cws.push(*v), ... }`,
 passes `karac check`, and every MIR front end refuses the `*` because it
 types `v` as `i64`. Over a `ref Vec[Seg]` parameter, both sides accept
 `*v`. The port drops the `*` at that one site. This is the third shape of
-kara `B-2026-10-23-8`, which now records it.
+kara `B-2026-10-23-8`, which now records it. It is fixed in kara
+d5513133a7, so both spellings now pass; the port keeps the plain `v`.
 
 Apart from that, `karac check` refused `gen` as a variable name (it is
 reserved) and reported ten ownership errors, which `#[derive(Copy)]` on
