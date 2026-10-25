@@ -1,0 +1,16 @@
+words = ["bella","label","roller"] -> ["e","l","l"]
+words = ["cool","lock","cook"] -> ["c","o"]
+words = ["a"] -> ["a"]
+words = ["abc","def"] -> []
+words = ["aaaa","aa","aaa"] -> ["a","a"]
+words = ["zyx","xyz","yzx"] -> ["x","y","z"]
+words = ["abcdefghijklmnopqrstuvwxyz","zyxwvutsrqponmlkjihgfedcba"] -> ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
+words = ["ab","ba","ab","bab","c"] -> []
+words = ["mississippi","missouri","simple"] -> ["i","m","s"]
+words = ["leetcode","codeleet","tecodele","elee"] -> ["e","e","e","l"]
+100 words of 100 letters -> 100 common letters "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+100 words of 100 letters -> 0 common letters ""
+100 words of 100 letters -> 78 common letters "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqqrrrssstttuuuvvvwwwxxxyyyzzz"
+300 random lists of 590 words: 599 common letters, checksum 515945664
+3000 random lists of 16542 words: 10684 common letters, checksum 327247552
+300 random lists of 14287 words: 746 common letters, checksum 440573981

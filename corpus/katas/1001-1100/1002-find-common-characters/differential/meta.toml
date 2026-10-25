@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1002-find-common-characters/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it"
+bucket = "timeout"
+classified_with = "11956dad7"
+extracted_src = "540995bb"

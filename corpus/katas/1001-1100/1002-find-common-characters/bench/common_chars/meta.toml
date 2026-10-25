@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/1001-1100/1002-find-common-characters/bench/common_chars.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "11956dad7"
+extracted_src = "416972b1"

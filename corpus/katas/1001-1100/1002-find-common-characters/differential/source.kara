@@ -1,0 +1,372 @@
+// LeetCode #1002: Find Common Characters -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random lists of words.
+
+// ---- star ----
+
+// LeetCode #1002: Find Common Characters -- the least count of each letter
+//
+// A letter shows up in every word as often as it does in the word that
+// holds it least, so the answer holds each of the 26 letters that many
+// times. One count of 26 per word, and a running least over the words.
+// O(total length + 26 words).
+fn star_common_chars(words: ref Vec[String]) -> Vec[String] {
+    let mut least: Vec[i64] = Vec.filled(26, 1000);
+    for word in words.iter() {
+        let mut count: Vec[i64] = Vec.filled(26, 0);
+        for c in word.chars() {
+            count[(c as i64) - ('a' as i64)] += 1;
+        }
+        for i in 0..26 {
+            least[i] = least[i].min(count[i]);
+        }
+    }
+    let mut ans: Vec[String] = Vec.new();
+    for i in 0..26 {
+        for _ in 0..least[i] {
+            ans.push(f"{((i + ('a' as i64)) as u8) as char}");
+        }
+    }
+    ans
+}
+
+// ---- sorted ----
+
+// LeetCode #1002: Find Common Characters -- sorted words merged
+//
+// Each word's letters sorted, then the answer so far merged with each
+// next word in turn, two places walking up the two sorted lists and a
+// letter kept when both hold it, so a letter is kept as often as the
+// fewer of them holds it. O(total length x log length).
+fn sorted_sorted_letters(word: ref String) -> Vec[char] {
+    let mut xs: Vec[char] = word.chars().collect();
+    xs.sort();
+    xs
+}
+
+fn sorted_common_chars(words: ref Vec[String]) -> Vec[String] {
+    let mut common = sorted_sorted_letters(words[0]);
+    for w in 1..words.len() {
+        let next = sorted_sorted_letters(words[w]);
+        let mut kept: Vec[char] = Vec.new();
+        let mut i = 0;
+        let mut j = 0;
+        while i < common.len() and j < next.len() {
+            if common[i] == next[j] {
+                kept.push(common[i]);
+                i += 1;
+                j += 1;
+            } else if common[i] < next[j] {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+        common = kept;
+    }
+    common.iter().map(|c| f"{c}").collect()
+}
+
+// ---- remove ----
+
+// LeetCode #1002: Find Common Characters -- letters struck out
+//
+// The answer so far starts as the first word's letters. Against each
+// next word, each of its letters is looked for among that word's
+// letters not yet struck out; found, it stays and the match is struck
+// out, so it cannot be matched twice; not found, it goes. O(words x
+// length^2).
+fn remove_common_chars(words: ref Vec[String]) -> Vec[String] {
+    let mut common: Vec[char] = words[0].chars().collect();
+    for w in 1..words.len() {
+        let mut rest: Vec[char] = words[w].chars().collect();
+        let mut kept: Vec[char] = Vec.new();
+        for c in common.iter() {
+            let mut k = 0;
+            while k < rest.len() and rest[k] != *c {
+                k += 1;
+            }
+            if k < rest.len() {
+                rest.remove(k);
+                kept.push(*c);
+            }
+        }
+        common = kept;
+    }
+    common.iter().map(|c| f"{c}").collect()
+}
+
+// ---- letters ----
+
+// LeetCode #1002: Find Common Characters -- letter by letter
+//
+// For each letter of the alphabet in turn, how many times each word
+// holds it, counted by a filter over the word, and the least of those
+// over the words is how many times it goes in the answer. O(26 x total
+// length).
+fn letters_times_in(word: ref String, letter: char) -> i64 {
+    word.chars().filter(|x| x == letter).count()
+}
+
+fn letters_common_chars(words: ref Vec[String]) -> Vec[String] {
+    let mut ans: Vec[String] = Vec.new();
+    for i in 0..26 {
+        let letter = ((97 + i) as u8) as char;
+        let mut least = letters_times_in(words[0], letter);
+        for word in words.iter() {
+            least = least.min(letters_times_in(word, letter));
+        }
+        for _ in 0..least {
+            ans.push(f"{letter}");
+        }
+    }
+    ans
+}
+
+// ---- maps ----
+
+// LeetCode #1002: Find Common Characters -- maps of counts
+//
+// The first word's letters counted in a `Map`; each next word counted
+// in a `Map` of its own, and the answer's map cut down to the letters
+// both hold, each at the smaller count. The answer comes out in the
+// map's own order, which the problem allows. O(total length).
+fn maps_counts(word: ref String) -> Map[char, i64] {
+    let mut m: Map[char, i64] = Map.new();
+    for c in word.chars() {
+        *m.entry(c).or_insert(0) += 1;
+    }
+    m
+}
+
+fn maps_common_chars(words: ref Vec[String]) -> Vec[String] {
+    let mut common = maps_counts(words[0]);
+    for w in 1..words.len() {
+        let next = maps_counts(words[w]);
+        let mut kept: Map[char, i64] = Map.new();
+        for (c, k) in common.iter() {
+            let there = next.get(*c).unwrap_or(0);
+            if there > 0 {
+                kept.insert(*c, (*k).min(there));
+            }
+        }
+        common = kept;
+    }
+    let mut ans: Vec[String] = Vec.new();
+    for (c, k) in common.iter() {
+        for _ in 0..*k {
+            ans.push(f"{c}");
+        }
+    }
+    ans
+}
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// up to `most` words of up to `longest` letters, the letters drawn from
+// the first `letters` of the alphabet, at least 1 of each
+fn random_words(most: i64, longest: i64, letters: i64, seed: mut ref i64) -> Vec[String] {
+    let count = 1 + next_random(mut seed) % most;
+    let alphabet = 1 + next_random(mut seed) % letters;
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let mut word = String.new();
+        for _ in 0..1 + next_random(mut seed) % longest {
+            word.push_str(f"{((97 + next_random(mut seed) % alphabet) as u8) as char}");
+        }
+        words.push(word);
+    }
+    words
+}
+
+fn arm(a: i64, words: ref Vec[String]) -> Vec[String] {
+    let mut ans = if a == 0 {
+        star_common_chars(words)
+    } else if a == 1 {
+        sorted_common_chars(words)
+    } else if a == 2 {
+        remove_common_chars(words)
+    } else if a == 3 {
+        letters_common_chars(words)
+    } else {
+        maps_common_chars(words)
+    };
+    ans.sort();
+    ans
+}
+
+// how many times `c` is in `word`
+fn occurrences(word: ref String, c: char) -> i64 {
+    let mut k = 0;
+    for x in word.chars() {
+        if x == c {
+            k += 1;
+        }
+    }
+    k
+}
+
+// The statement read literally: a character shows up in all strings,
+// duplicates included, when every word holds it; its k-th time in the
+// first word is in the answer when every word holds it at least k
+// times.
+fn literal(words: ref Vec[String]) -> Vec[String] {
+    let mut ans: Vec[String] = Vec.new();
+    let first: Vec[char] = words[0].chars().collect();
+    for i in 0..first.len() {
+        let c = first[i];
+        let mut k = 0;
+        for j in 0..i + 1 {
+            if first[j] == c {
+                k += 1;
+            }
+        }
+        let mut everywhere = true;
+        for word in words.iter() {
+            if occurrences(word, c) < k {
+                everywhere = false;
+            }
+        }
+        if everywhere {
+            ans.push(f"{c}");
+        }
+    }
+    ans.sort();
+    ans
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn shuffled_chars(xs: ref Vec[char], seed: mut ref i64) -> Vec[char] {
+    let mut ys = xs.clone();
+    let mut i = ys.len();
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        let t = ys[i];
+        ys[i] = ys[j];
+        ys[j] = t;
+    }
+    ys
+}
+
+fn properties(tally: mut ref Tally, words: ref Vec[String], small: bool, seed: mut ref i64) -> Vec[String] {
+    let truth = if small { literal(words) } else { Vec.new() };
+    let mut got: Vec[Vec[String]] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, words));
+    }
+    // the words in a random order
+    let mut order: Vec[String] = words.clone();
+    let mut i = order.len();
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        let t = order[i].clone();
+        order[i] = order[j].clone();
+        order[j] = t;
+    }
+    // each word's letters in a random order
+    let mut mixed: Vec[String] = Vec.new();
+    for word in words.iter() {
+        let xs: Vec[char] = word.chars().collect();
+        let s: String = shuffled_chars(xs, mut seed).iter().collect();
+        mixed.push(s);
+    }
+    // a random relabelling of the alphabet
+    let alphabet: Vec[char] = (0..26).map(|i| ((97 + i) as u8) as char).collect();
+    let image = shuffled_chars(alphabet, mut seed);
+    let relabelled: Vec[String] = words.iter().map(|w| {
+        let s: String = w.chars().map(|c| image[(c as i64) - 97]).collect();
+        s
+    }).collect();
+    for a in 0..5 {
+        let g = got[a].clone();
+        // P1: the statement's answer, on the first 3000 lists
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: the words in another order give the same answer
+        check(mut tally, 2, arm(a, order) == g);
+        // P3: each word's letters in another order give the same answer
+        check(mut tally, 3, arm(a, mixed) == g);
+        // P4: a word added that holds the answer, and then the last word's
+        // letters up to 100 in all, gives the same answer
+        let mut extra = g.join("");
+        for c in words[words.len() - 1].chars() {
+            if extra.len() < 100 {
+                extra.push_str(f"{c}");
+            }
+        }
+        let mut more = words.clone();
+        more.push(extra);
+        check(mut tally, 4, arm(a, more) == g);
+        // P5: the alphabet relabelled relabels the answer
+        let mut want: Vec[String] = g.iter().map(|s| {
+            let t: String = s.chars().map(|c| image[(c as i64) - 97]).collect();
+            t
+        }).collect();
+        want.sort();
+        check(mut tally, 5, arm(a, relabelled) == want);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != a and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 1002;
+    let mut total = 0;
+    let mut found = 0;
+    let mut check_sum = 0;
+    // 3000 lists of up to 6 words of up to 8 letters from up to 4 against
+    // the statement, then 200 of up to 100 words of up to 100 letters
+    // from up to 8
+    for c in 0..3200 {
+        let small = c < 3000;
+        let words = if small { random_words(6, 8, 4, mut seed) } else { random_words(100, 100, 8, mut seed) };
+        total += words.len();
+        let got = properties(mut tally, words, small, mut seed);
+        found += got.len();
+        for s in got.iter() {
+            for ch in s.chars() {
+                check_sum = (check_sum * 31 + (ch as i64)) % 1000000007;
+            }
+        }
+        check_sum = (check_sum * 31 + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 lists of {total} words: {found} common letters, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
