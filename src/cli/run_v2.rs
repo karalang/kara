@@ -149,6 +149,9 @@ pub(super) fn check_v2(
         }
         process::exit(1);
     }
+    if let Some(pc) = project.and_then(|a| a.refusal.as_ref()) {
+        super::run_check_cmds::render_package_refusal(pc, output);
+    }
     if output == OutputMode::Text {
         // Warnings only: the check passed.
         print_diagnostics(&pipeline, project);
@@ -188,10 +191,22 @@ pub(super) fn combine(
     output: OutputMode,
     cmd: &str,
 ) -> super::project_v2::Amalgam {
-    gate_run_on_package_check(root, output);
-    super::project_v2::source_files(tree, false)
+    // A refusal the module boundaries carry (a parse error, a cycle, an
+    // import the resolver refuses) is the package's alone. A type or
+    // late-phase one the v2 check of the combined source makes as well, and
+    // renders against the package's files with its snippets and fixes, so
+    // that check reports it first (B-2026-10-25-4).
+    let refusal = match super::run_check_cmds::package_check_refusal(root) {
+        Some(pc) if !pc.refuses_only_by_type() => {
+            super::run_check_cmds::render_package_refusal(&pc, output)
+        }
+        refusal => refusal,
+    };
+    let mut a = super::project_v2::source_files(tree, false)
         .and_then(|files| super::project_v2::amalgamate(tree, &files, |_, _| Vec::new(), ""))
-        .unwrap_or_else(|e| refused_project(&e, output, cmd))
+        .unwrap_or_else(|e| refused_project(&e, output, cmd));
+    a.refusal = refusal;
+    a
 }
 
 /// The package cannot be combined into one source: a compile error naming

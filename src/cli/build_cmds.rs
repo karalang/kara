@@ -598,6 +598,50 @@ pub(super) struct ModuleResolveErrors {
 /// `run` / `build` checks it against their methods. `None` when a module
 /// cannot be read or the combined text does not parse; the passes then run
 /// as before.
+/// D5 (core-semantics §4.1) over a package: every module's bare parameters
+/// borrow, as `Pipeline::resolve_phase` rewrites a lone file's, so the
+/// per-module passes and the flattened late phases read a call the way the
+/// v2 check of the combined source does (B-2026-10-25-4). The rewrite reads
+/// the package whole: an impl in one module borrows where its trait in
+/// another does, and a `Copy` type declared in any module, or in the
+/// library, copies.
+fn borrow_bare_params_of(tree: &mut ProgramTree, lib: Option<&PackageLibrary>) {
+    if !crate::d5_params::on() || std::env::var_os("KARAC_D5_MIGRATE").is_some() {
+        return;
+    }
+    let mut lens = Vec::new();
+    let mut items = Vec::new();
+    for m in tree.modules.iter_mut().filter(|m| !m.is_synthetic) {
+        lens.push(m.items.len());
+        items.append(&mut m.items);
+    }
+    let user = items.len();
+    if let Some(lib) = lib {
+        items.extend(
+            lib.items
+                .iter()
+                .filter(|it| matches!(it, Item::StructDef(_) | Item::EnumDef(_)))
+                .cloned(),
+        );
+    }
+    let mut program = Program {
+        items,
+        ..Program::default()
+    };
+    crate::d5_params::borrow_bare_params(&mut program);
+    let mut items = program.items;
+    items.truncate(user);
+    let mut items = items.into_iter();
+    for (m, len) in tree
+        .modules
+        .iter_mut()
+        .filter(|m| !m.is_synthetic)
+        .zip(lens)
+    {
+        m.items = items.by_ref().take(len).collect();
+    }
+}
+
 pub(super) struct PackageLibrary {
     items: Vec<Item>,
     start: usize,
@@ -1226,6 +1270,15 @@ impl PackageCheck {
 
     /// Any error-severity diagnostic, in any module. Warnings are excluded —
     /// they do not gate an exit status.
+    /// Whether every refusal is a type-check or late-phase one, which the v2
+    /// check of the package's combined source makes as well: no parse error,
+    /// cycle or resolve error, the refusals only the module boundaries carry.
+    pub(super) fn refuses_only_by_type(&self) -> bool {
+        self.parse_errors.is_empty()
+            && self.cycles.is_empty()
+            && self.resolve_errors.iter().all(|m| m.errors.is_empty())
+    }
+
     pub(super) fn has_errors(&self) -> bool {
         !self.parse_errors.is_empty()
             || !self.cycles.is_empty()
@@ -1357,9 +1410,12 @@ pub(super) fn package_check_on(
     platform: walker::Platform,
 ) -> Result<PackageCheck, String> {
     // Every caller is `karac check` or the gate in front of `karac run`,
-    // both v2 commands, so `ref` takes any named place (B-2026-10-22-28).
+    // both v2 commands, so `ref` takes any named place (B-2026-10-22-28),
+    // and each module is checked by the v2 core rules over its D5-rewritten
+    // items, as the combined source is behind it (B-2026-10-25-4).
     let lint_overrides = &crate::lints::CliLintOverrides {
         core_places: true,
+        strict_core: true,
         ..lint_overrides.clone()
     };
     let walk_opts = WalkerOpts {
@@ -1374,13 +1430,17 @@ pub(super) fn package_check_on(
     let built =
         module::build_program_tree_with_deps(&walked, &dep_walks, module::BuildTreeOpts::default())
             .map_err(|e| format!("{e}"))?;
-    let BuildTreeOk { tree, parse_errors } = built;
+    let BuildTreeOk {
+        mut tree,
+        parse_errors,
+    } = built;
     let cycles = module::detect_cycles(&tree);
     // Ordering mirrors `cmd_build_project` exactly, including the skips: a
     // half-parsed or cyclic tree cascades spurious E0112/E0113s, and a
     // half-resolved one cascades type errors. Answering differently here would
     // reintroduce the very divergence this function exists to remove.
     let lib = PackageLibrary::of(&tree);
+    borrow_bare_params_of(&mut tree, lib.as_ref());
     let resolve_errors = if parse_errors.is_empty() && cycles.is_empty() {
         resolve_modules(&tree, lib.as_ref())
     } else {

@@ -339,9 +339,10 @@ fn run_v2_runs_a_package_and_names_its_files() {
     }
 }
 
-/// An error only the v2 rules see (the package-wide check before them is
-/// legacy's) names its module's file and line, in the text header, the
-/// snippet's gutter, and the JSON diagnostic.
+/// An error of the v2 rules names its module's file and line, in the text
+/// header, the snippet's gutter, and the JSON diagnostic: the package-wide
+/// check sees it too, and leaves a type refusal to the v2 check of the
+/// combined source, which renders it (B-2026-10-25-4).
 #[test]
 fn run_v2_package_diagnostics_name_their_file() {
     let util = format!("{PKG_UTIL}\npub fn keep(v: Vec[i64]) -> Vec[i64] {{\n    v\n}}\n");

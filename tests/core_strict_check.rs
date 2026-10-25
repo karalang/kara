@@ -13259,6 +13259,61 @@ fn a_package_with_two_modules_is_checked_against_the_v2_library() {
 }
 
 #[test]
+fn a_package_with_two_modules_reads_a_bare_parameter_as_a_borrow() {
+    // B-2026-10-25-4: the per-module passes and the flattened late phases of
+    // a package with more than one module read a bare parameter the way a
+    // lone file does (D5, core-semantics §4.1): a call into another module
+    // borrows its argument, so the caller uses it again, and a callee that
+    // gives its bare parameter away is refused in its own file.
+    let (dir, _) = fixture("two-modules-d5", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let util = "pub fn len_of(s: String) -> i64 {\n    s.len()\n}\n";
+    std::fs::write(dir.join("src/util.kara"), util).unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "import util.{len_of};\nfn main() {\n    let v = vec![\"ab\".to_string()];\n    \
+         let mut t = 0;\n    for x in v { t += len_of(x); }\n    \
+         let s = \"abc\".to_string();\n    t += len_of(s);\n    println(f\"{t} {s}\");\n}\n",
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "check must pass: {err}");
+    let out = karac()
+        .args(["run", "src/main.kara"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "5 abc\n",
+        "run: {:?}",
+        out
+    );
+    std::fs::write(
+        dir.join("src/util.kara"),
+        format!("{util}pub fn keep(s: String) -> String {{\n    s\n}}\n"),
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "giving a bare parameter away must fail: {err}"
+    );
+    assert!(
+        err.contains("util.kara:5:5"),
+        "names the callee's file: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

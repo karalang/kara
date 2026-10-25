@@ -7135,7 +7135,9 @@ fn test_build_project_late_phase_diagnostic_includes_file_context() {
     // build diagnostic surfaces `src/helper.kara` in the error
     // output. Use-after-move fires only in the ownership pass,
     // which runs over the super-program — typecheck-per-module
-    // upstream lets the program through.
+    // upstream lets the program through. The parameter is `own`: a bare
+    // one borrows (D5), and a call does not move its argument
+    // (B-2026-10-25-4).
     let tmp = scratch_project("late-phase-file-context");
     write(
         &tmp.join("kara.toml"),
@@ -7149,7 +7151,7 @@ fn test_build_project_late_phase_diagnostic_includes_file_context() {
     write(
         &tmp.join("src/helper.kara"),
         "struct Data { value: i64 }\n\
-         fn consume(d: Data) -> i64 { d.value }\n\
+         fn consume(d: own Data) -> i64 { d.value }\n\
          pub fn bad() -> i64 {\n\
              let d = Data { value: 7 };\n\
              let a = consume(d);\n\
@@ -30133,10 +30135,12 @@ fn test_check_project_reports_the_multi_file_effect_error_build_reports() {
 fn test_check_project_reports_the_multi_file_ownership_error_build_reports() {
     // The ownership half of the same gap — a use-after-move across the
     // flattened unit. Filed as an effect bug; the ownership pass was skipped
-    // by the same early return.
+    // by the same early return. `take` owns its parameter: a bare one
+    // borrows (D5), so the second call would not be a use after a move
+    // (B-2026-10-25-4).
     let tmp = scratch_effect_package(
         "check-multifile-ownership",
-        "fn take(v: Vec[i64]) -> i64 { return v.len(); }\n\n\
+        "fn take(v: own Vec[i64]) -> i64 { return v.len(); }\n\n\
          pub fn run() -> i64 with allocates(Heap) {\n\
          \x20   let mut v: Vec[i64] = Vec.new();\n\
          \x20   v.push(1);\n\

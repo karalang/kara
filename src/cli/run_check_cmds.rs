@@ -149,7 +149,13 @@ pub(super) fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::Dep
 ///
 /// Diagnostics are rendered exactly as the build renders them, so the two
 /// commands are quotable against each other.
-pub(super) fn gate_run_on_package_check(root: &std::path::Path, output: OutputMode) {
+///
+/// This returns the refusal, for [`render_package_refusal`]; a refusal the v2
+/// check of the combined source makes too is left to that check
+/// (`run_v2::combine`, B-2026-10-25-4).
+pub(super) fn package_check_refusal(
+    root: &std::path::Path,
+) -> Option<super::build_cmds::PackageCheck> {
     let mut lints = crate::lints::CliLintOverrides::default();
     if let Ok(mf) = manifest::load_from_root(root) {
         lints.apply_manifest_lints(&mf.lints);
@@ -158,13 +164,16 @@ pub(super) fn gate_run_on_package_check(root: &std::path::Path, output: OutputMo
     // surface its own diagnostic against the entry file, and this gate exists
     // to add errors the run path cannot see, never to invent a new way for
     // `karac run` to fail on a package the build handles.
-    let Ok(pc) = super::build_cmds::package_check(root, &lints, crate::target::active_target())
-    else {
-        return;
-    };
-    if !pc.has_errors() {
-        return;
-    }
+    let pc = super::build_cmds::package_check(root, &lints, crate::target::active_target()).ok()?;
+    pc.has_errors().then_some(pc)
+}
+
+/// Render a refusing [`package_check_refusal`] as the build renders it, and
+/// exit 1.
+pub(super) fn render_package_refusal(
+    pc: &super::build_cmds::PackageCheck,
+    output: OutputMode,
+) -> ! {
     match output {
         OutputMode::Json => {
             let mut diags: Vec<String> = Vec::new();

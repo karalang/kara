@@ -35,6 +35,10 @@ pub(super) struct Amalgam {
     pub lines: Vec<(usize, String, usize)>,
     /// `(first combined byte, byte length, file)` for each copied file.
     bytes: Vec<(usize, usize, String)>,
+    /// The package's module-aware check refused it by a type or late-phase
+    /// rule: the v2 check of this source reports the refusal if it makes it
+    /// too, and this is reported if it does not.
+    pub refusal: Option<super::build_cmds::PackageCheck>,
 }
 
 impl Amalgam {
@@ -415,7 +419,12 @@ pub(super) fn amalgamate(
     // The tail maps to no file: its lines keep their combined numbers.
     lines.push((line, String::from("<generated>"), line));
     text.push_str(tail);
-    Ok(Amalgam { text, lines, bytes })
+    Ok(Amalgam {
+        text,
+        lines,
+        bytes,
+        refusal: None,
+    })
 }
 
 /// A file's path as reports show it: relative to the working directory when
