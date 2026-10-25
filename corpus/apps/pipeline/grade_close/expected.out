@@ -1,0 +1,67 @@
+NHS students: 240 rows, 8,171 bytes, fnv 9bc5e43e
+NHS sections: 46 rows, 2,853 bytes, fnv a0e29da3
+NHS scores: 1,286 rows, 57,931 bytes, fnv 5dca8290
+EHS students: 240 rows, 8,235 bytes, fnv ad521e7e
+EHS sections: 46 rows, 2,839 bytes, fnv 3b408a3d
+EHS scores: 1,243 rows, 56,440 bytes, fnv dea48027
+SHS students: 240 rows, 8,202 bytes, fnv 888bb922
+SHS sections: 46 rows, 2,858 bytes, fnv 6b6460db
+SHS scores: 1,202 rows, 53,675 bytes, fnv 3f707e12
+WHS students: 240 rows, 8,221 bytes, fnv 8fe6ebf6
+WHS sections: 46 rows, 2,838 bytes, fnv 288ba047
+WHS scores: 1,179 rows, 53,317 bytes, fnv 47a8fad1
+NHS_students.bad line 41: bad grade '13'
+SHS_scores.bad line 201: bad h3 '11' (out of 10)
+WHS_sections.csv line 2: section WHS100 is not at EHS
+parsed files match the built ones: true
+NHS report cards: 1,286 rows, 42,130 bytes, fnv bbc439ba
+NHS GPAs: 240 rows, 6,462 bytes, fnv 78129ce1
+EHS report cards: 1,243 rows, 40,825 bytes, fnv 9cc68083
+EHS GPAs: 240 rows, 6,459 bytes, fnv 19beced8
+SHS report cards: 1,202 rows, 39,533 bytes, fnv 0f18b9c4
+SHS GPAs: 240 rows, 6,455 bytes, fnv 9016193a
+WHS report cards: 1,179 rows, 38,814 bytes, fnv 4788861a
+WHS GPAs: 240 rows, 6,460 bytes, fnv 82b04b20
+NHS grades: 1,286 section grades: A 60, A- 80, B+ 96, B 145, B- 108, C+ 109, C 145, C- 127, D+ 110, D 148, D- 64, F 91, I 3; 82 NC
+EHS grades: 1,243 section grades: A 120, A- 92, B+ 87, B 135, B- 96, C+ 97, C 135, C- 123, D+ 105, D 111, D- 65, F 74, I 3; 46 NC
+SHS grades: 1,202 section grades: A 17, A- 42, B+ 59, B 125, B- 124, C+ 105, C 136, C- 112, D+ 89, D 110, D- 89, F 188, I 6; 144 NC
+WHS grades: 1,179 section grades: A 87, A- 83, B+ 90, B 110, B- 72, C+ 97, C 124, C- 110, D+ 104, D 123, D- 83, F 93, I 3; 103 NC
+NHS sections: 46, 4 curved (average +4.0), lowest NHS108 English 10 61.6%, highest NHS125 English 12 87.6%
+NHS most Fs: NHS108 English 10 (N. Patel) 15 of 34, NHS110 Geometry (G. Haddad) 9 of 34, NHS124 English 12 (Q. Delgado) 9 of 34
+EHS sections: 46, 2 curved (average +8.0), lowest EHS118 Algebra 2 63.4%, highest EHS101 English 9 91.7%
+EHS most Fs: EHS118 Algebra 2 (H. Delgado) 12 of 34, EHS145 Computer Science (R. Zhou) 12 of 40, EHS137 Studio Art (O. Nakamura) 11 of 40
+SHS sections: 46, 8 curved (average +6.8), lowest SHS100 English 9 61.7%, highest SHS140 Physical Education 86.2%
+SHS most Fs: SHS137 Studio Art (M. Haddad) 17 of 40, SHS100 English 9 (W. Moreau) 14 of 34, SHS115 US History (I. Ueda) 14 of 34
+WHS sections: 46, 2 curved (average +1.5), lowest WHS112 Chemistry 62.8%, highest WHS105 Biology 92.6%
+WHS most Fs: WHS145 Computer Science (T. Bishop) 10 of 40, WHS108 English 10 (K. Kato) 9 of 33, WHS142 Physical Education (E. Zhou) 9 of 40
+NHS honor roll: 28 high honors, 40 honors (by grade 9: 8/9, 10: 4/5, 11: 5/15, 12: 11/11); top term Finley Moreau 4.43, Quinn Zhou 4.41, Blake Rossi 4.41
+EHS honor roll: 37 high honors, 43 honors (by grade 9: 12/6, 10: 10/6, 11: 7/19, 12: 8/12); top term Oakley Lindqvist 4.85, Oakley Zhou 4.75, Finley Silva 4.66
+SHS honor roll: 7 high honors, 36 honors (by grade 9: 0/2, 10: 2/7, 11: 4/13, 12: 1/14); top term Oakley Quispe 4.28, Devon Jensen 4.26, Taylor Eze 4.24
+WHS honor roll: 42 high honors, 32 honors (by grade 9: 12/6, 10: 10/8, 11: 7/8, 12: 13/10); top term Blake Eze 4.68, Oakley Ivanova 4.68, Morgan Ueda 4.67
+NHS at risk: 24 with two or more Fs, 16 over 15 absences; seniors short of 22.0 credits: 7: 112030 (19.5), 112034 (21.0), 112051 (19.0), 112053 (21.0), 112054 (21.0), 112055 (21.0), 112058 (21.0)
+EHS at risk: 21 with two or more Fs, 9 over 15 absences; seniors short of 22.0 credits: 3: 212002 (21.0), 212026 (20.0), 212039 (21.0)
+SHS at risk: 49 with two or more Fs, 29 over 15 absences; seniors short of 22.0 credits: 9: 312017 (21.0), 312018 (21.0), 312023 (21.0), 312035 (21.0), 312036 (21.0), 312042 (19.0), 312044 (19.5), 312055 (20.5), 312060 (21.5)
+WHS at risk: 24 with two or more Fs, 20 over 15 absences; seniors short of 22.0 credits: 6: 412001 (21.0), 412010 (21.0), 412028 (21.0), 412034 (21.0), 412052 (21.0), 412059 (21.0)
+NHS class of 2027: valedictorian Jordan Okafor 4.15, salutatorian Finley Moreau 4.09, third Harper Ueda 4.07
+EHS class of 2027: valedictorian Gray Tanaka 4.22, salutatorian Yael Eze 4.17, third Indy Eze 4.13
+SHS class of 2027: valedictorian Finley Abara 4.16, salutatorian Vale Jensen 4.16, third Noel Zhou 3.98
+WHS class of 2027: valedictorian Taylor Jensen 4.31, salutatorian Vale Ueda 4.20, third Morgan Ueda 4.15
+NHS scholarship: Jordan Okafor (4.15) $5,000.00
+NHS scholarship: Finley Moreau (4.09) $5,000.00
+NHS scholarship: Harper Ueda (4.07) $5,000.00
+NHS scholarship: Noel Okafor (3.94) $3,000.00
+NHS scholarship: Yael Jensen (3.88) $3,000.00
+NHS scholarships: 5 nominated, $21,000.00 paid, 0 unpaid, $39,000.00 left in the fund
+EHS scholarship: Gray Tanaka (4.22) $5,000.00
+EHS scholarship: Yael Eze (4.17) $5,000.00
+EHS scholarship: Indy Eze (4.13) $5,000.00
+EHS scholarship: Avery Kato (4.01) $5,000.00
+EHS scholarship: Riley Moreau (3.97) $3,000.00
+EHS scholarships: 5 nominated, $23,000.00 paid, 0 unpaid, $16,000.00 left in the fund
+SHS scholarship: Finley Abara (4.16) $5,000.00
+SHS scholarship: Vale Jensen (4.16) $5,000.00
+SHS scholarship: Noel Zhou (3.98) $3,000.00
+SHS scholarship: Casey Abara (3.93) $3,000.00
+SHS scholarships: 5 nominated, $16,000.00 paid, 1 unpaid, $0.00 left in the fund
+WHS scholarships: 5 nominated, $0.00 paid, 5 unpaid, $0.00 left in the fund
+awards.log: 20 entries, 750 bytes, fnv 74d47333

@@ -1,0 +1,1320 @@
+// pipeline/grade_close
+//
+// A school district's spring term close at four high schools. For each
+// school it builds the students (grade, absences, the credits and GPA
+// they bring from earlier terms), the sections (core courses a grade, in
+// a regular and an honors or AP section, and electives; each with its
+// teacher, period, credits, category weights, dropped homeworks and
+// test curve) and the gradebook (each student's six homeworks, three
+// quizzes, two tests and final in each of their sections, with missing
+// and excused work). It writes them as CSV, reads them back and parses
+// them with the checks the district's student information system makes,
+// then closes the term: curves each section's tests, grades every
+// student in every section, takes away the credit of students absent
+// too often, and computes term, weighted and cumulative GPAs. Each
+// school's report cards and GPAs are written and read back, and five
+// reports per school follow: grades, sections, the honor roll, students
+// at risk, and the senior class rank. Then the district's scholarship
+// fund pays each school's nominees until it runs out.
+//
+// The builds, the writes, the reads, the parses, the term closes, the
+// report-card files and the reports are each a group of statements that
+// do not depend on each other (a stmt-par app). The fund pays the
+// schools that nominate first, so the four schools have to nominate in
+// order.
+
+const MASK32: i64 = 4294967295;
+const PER_GRADE: i64 = 60;
+const GRADES: Array[i64, 4] = [9, 10, 11, 12];
+// The core subjects: a course a grade, two sections each, the second
+// honors in grades 9 and 10 and AP in 11 and 12.
+const CORE: Array[Str, 4] = ["ENG", "MATH", "SCI", "HIST"];
+// by subject, then grade
+const CORE_TITLES: Array[Str, 16] = [
+    "English 9", "English 10", "English 11", "English 12",
+    "Algebra 1", "Geometry", "Algebra 2", "Precalculus",
+    "Biology", "Chemistry", "Physics", "Environmental Science",
+    "World History", "US History", "Government", "Economics",
+];
+// The electives, any grade, with their credits in tenths and sections.
+const EL_CODE: Array[Str, 5] = ["SPAN", "FREN", "ART", "PE", "CS"];
+const EL_TITLE: Array[Str, 5] = ["Spanish", "French", "Studio Art", "Physical Education", "Computer Science"];
+const EL_CREDITS: Array[i64, 5] = [10, 10, 5, 5, 10];
+const EL_SECTIONS: Array[i64, 5] = [3, 2, 3, 4, 2];
+const N_ELECTIVES: i64 = 5;
+const CORE_CAP: i64 = 34;
+const ELECTIVE_CAP: i64 = 40;
+const PERIODS: i64 = 7;
+// Gradebook columns: six homeworks out of 10, three quizzes out of 20,
+// two tests out of 100 and a final out of 150.
+const N_ITEMS: i64 = 12;
+const ITEMS: Array[Str, 12] = ["h1", "h2", "h3", "h4", "h5", "h6", "q1", "q2", "q3", "t1", "t2", "final"];
+const ITEM_MAX: Array[i64, 12] = [10, 10, 10, 10, 10, 10, 20, 20, 20, 100, 100, 150];
+const ITEM_CAT: Array[i64, 12] = [0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 3];
+// Four weight templates for homework, quizzes, tests and the final.
+const WEIGHTS: Array[i64, 16] = [30, 20, 30, 20, 20, 20, 40, 20, 25, 15, 35, 25, 40, 10, 30, 20];
+// Letters with their cut-offs and grade points in hundredths; index 12
+// is an incomplete.
+const LETTERS: Array[Str, 13] = ["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F", "I"];
+const CUTS: Array[i64, 12] = [93, 90, 87, 83, 80, 77, 73, 70, 67, 63, 60, 0];
+const POINTS: Array[i64, 12] = [400, 370, 330, 300, 270, 230, 200, 170, 130, 100, 70, 0];
+const LETTER_F: i64 = 11;
+const LETTER_I: i64 = 12;
+const MAX_ABSENCES: i64 = 15;
+const GRAD_CREDITS: i64 = 220;
+const FIRST: Array[Str, 24] = ["Avery", "Blake", "Casey", "Devon", "Elliot", "Finley", "Gray", "Harper", "Indy", "Jordan", "Kai",
+    "Logan", "Morgan", "Noel", "Oakley", "Parker", "Quinn", "Riley", "Sage", "Taylor", "Umi", "Vale",
+    "Wren", "Yael"];
+const LAST: Array[Str, 24] = ["Abara", "Bishop", "Chen", "Delgado", "Eze", "Fischer", "Garcia", "Haddad", "Ivanova", "Jensen",
+    "Kato", "Lindqvist", "Moreau", "Nakamura", "Okafor", "Patel", "Quispe", "Rossi", "Silva", "Tanaka",
+    "Ueda", "Varga", "Walsh", "Zhou"];
+// The district's scholarship fund, in cents: each school nominates up to
+// five seniors, and the fund pays them in the order they are nominated.
+const FUND: i64 = 6000000;
+const AWARD_TOP: i64 = 500000;
+const AWARD: i64 = 300000;
+const AWARD_MIN: i64 = 100000;
+const MAX_NOMINEES: i64 = 5;
+const NOMINEE_GPA: i64 = 350;
+
+struct School {
+    code: Str,
+    // the first digit of its student ids
+    digit: i64,
+    seed: i64,
+    // added to every student's ability
+    abil: i64,
+    // the chance in a thousand that an item is missing, before the
+    // student's own
+    miss: i64,
+    // the chance in a hundred that a student is chronically absent
+    absent: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Student {
+    sid: i64,
+    last: String,
+    first: String,
+    grade: i64,
+    absences: i64,
+    // credits in tenths, GPA in hundredths
+    prior_cr: i64,
+    prior_gpa: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Section {
+    sec: String,
+    course: String,
+    title: String,
+    teacher: String,
+    period: i64,
+    // REG, HON or AP
+    level: String,
+    // in tenths
+    credits: i64,
+    // weights for homework, quizzes, tests and the final
+    w: Vec[i64],
+    // how many of the lowest homeworks are dropped
+    drop: i64,
+    // the test mean, in percent, the teacher curves up to, or 0
+    curve: i64,
+}
+
+// One student's gradebook row in one section: points, -1 missing, -2
+// excused.
+#[derive(Clone, PartialEq)]
+struct Row {
+    sid: i64,
+    sec: String,
+    scores: Vec[i64],
+}
+
+// What the term close made of a school's gradebook.
+struct Term {
+    // by section: the points added to each of its tests
+    bump: Vec[i64],
+    // by row: the section and student indexes, the percent (-1 for an
+    // incomplete), the letter index and the credits earned
+    sec_of: Vec[i64],
+    st_of: Vec[i64],
+    pct: Vec[i64],
+    letter: Vec[i64],
+    earned: Vec[i64],
+    nc: Vec[bool],
+    // by student: their rows, GPAs in hundredths, credits in tenths and
+    // their Fs
+    rows_of: Vec[Vec[i64]],
+    term_gpa: Vec[i64],
+    term_wgpa: Vec[i64],
+    cum_wgpa: Vec[i64],
+    total_cr: Vec[i64],
+    fails: Vec[i64],
+}
+
+struct Fund {
+    left: i64,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+// ------------------------------------------------------------ helpers
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    f"${group3(c / 100)}.{c % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn hundredths(v: i64) -> String {
+    f"{v / 100}.{v % 100:02}"
+}
+
+fn tenths(v: i64) -> String {
+    f"{v / 10}.{v % 10}"
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn max2(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 6 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+// A number with exactly `places` decimals, scaled to an integer, or None.
+fn decimal_of(t: ref String, places: i64) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != places + 1 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 3 {
+        return None;
+    }
+    let mut scale = 1;
+    for _ in 0..places {
+        scale *= 10;
+    }
+    Some(to_int(a) * scale + to_int(b))
+}
+
+fn name_ok(t: ref String) -> bool {
+    t.len() > 0 and t.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+fn file_line(name: ref String, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+fn avg_tenths(total: i64, n: i64) -> String {
+    if n == 0 {
+        return "0.0".to_string();
+    }
+    tenths(total * 10 / n)
+}
+
+fn bonus_of(level: ref String) -> i64 {
+    if level == "HON" {
+        50
+    } else if level == "AP" {
+        100
+    } else {
+        0
+    }
+}
+
+fn level_ok(level: ref String) -> bool {
+    level == "REG" or level == "HON" or level == "AP"
+}
+
+fn letter_of(pct: i64) -> i64 {
+    for i in 0..12 {
+        if pct >= CUTS[i] {
+            return i;
+        }
+    }
+    LETTER_F
+}
+
+fn student_index(students: ref Vec[Student]) -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    for i in 0..students.len() as i64 {
+        m.insert(students[i].sid, i);
+    }
+    m
+}
+
+fn section_index(sections: ref Vec[Section]) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    for i in 0..sections.len() as i64 {
+        m.insert(sections[i].sec.clone(), i);
+    }
+    m
+}
+
+// ------------------------------------------------------------ building
+
+fn new_section(school: ref School, n: i64, course: ref String, title: ref String, level: ref String, credits: i64) -> Section {
+    let r = mix(school.seed, n, 11);
+    let initial = LAST[mix(school.seed, n, 12) % 24].substring(0, 1);
+    let teacher = f"{initial}. {LAST[mix(school.seed, n, 13) % 24]}";
+    let t = r % 4;
+    let mut w: Vec[i64] = Vec.new();
+    for c in 0..4 {
+        w.push(WEIGHTS[t * 4 + c]);
+    }
+    let curve = if (r >> 8) % 10 < 3 { 75 } else { 0 };
+    Section {
+        sec: f"{school.code}{100 + n}",
+        course: course.clone(),
+        title: title.clone(),
+        teacher: teacher,
+        period: 1 + (r >> 12) % PERIODS,
+        level: level.clone(),
+        credits: credits,
+        w: w,
+        drop: (r >> 4) % 3,
+        curve: curve,
+    }
+}
+
+fn build_sections(school: ref School) -> Vec[Section] {
+    let mut out: Vec[Section] = Vec.new();
+    let mut n = 0;
+    for g in 0..4 {
+        for s in 0..4 {
+            for j in 0..2 {
+                let level = if j == 0 { "REG" } else if g < 2 { "HON" } else { "AP" };
+                out.push(new_section(school, n, f"{CORE[s]}{GRADES[g]}", CORE_TITLES[s * 4 + g], level, 10));
+                n += 1;
+            }
+        }
+    }
+    for e in 0..N_ELECTIVES {
+        for _ in 0..EL_SECTIONS[e] {
+            out.push(new_section(school, n, EL_CODE[e], EL_TITLE[e], "REG", EL_CREDITS[e]));
+            n += 1;
+        }
+    }
+    out
+}
+
+fn build_students(school: ref School) -> Vec[Student] {
+    let mut out: Vec[Student] = Vec.new();
+    for g in 0..4 {
+        let grade = GRADES[g];
+        for k in 0..PER_GRADE {
+            let i = g * 100 + k;
+            let r = mix(school.seed, i, 21);
+            let sid = school.digit * 100000 + grade * 1000 + k + 1;
+            let absences = if r % 100 < school.absent { 16 + (r >> 8) % 15 } else { (r >> 8) % 11 };
+            let mut prior_cr = (grade - 9) * 60 + 30;
+            if (r >> 12) % 4 == 0 {
+                prior_cr -= 5 * ((r >> 14) % 5);
+            }
+            out.push(Student {
+                sid: sid,
+                last: LAST[mix(school.seed, i, 22) % 24].to_string(),
+                first: FIRST[mix(school.seed, i, 23) % 24].to_string(),
+                grade: grade,
+                absences: absences,
+                prior_cr: prior_cr,
+                prior_gpa: 150 + (r >> 17) % 290,
+            });
+        }
+    }
+    out
+}
+
+fn ability_of(school: ref School, i: i64) -> i64 {
+    63 + mix(school.seed, i, 31) % 36 + school.abil
+}
+
+// Each student's schedule and gradebook rows: the four core subjects of
+// their grade (the advanced section first for the strongest students),
+// then two electives, each in a period still free and a section not full.
+fn build_rows(school: ref School, students: ref Vec[Student], sections: ref Vec[Section]) -> Vec[Row] {
+    let mut out: Vec[Row] = Vec.new();
+    let mut count: Vec[i64] = Vec.filled(sections.len(), 0);
+    for i in 0..students.len() as i64 {
+        let g = students[i].grade - 9;
+        let a = ability_of(school, i);
+        let mut used: Vec[bool] = Vec.filled(PERIODS + 1, false);
+        let mut mine: Vec[i64] = Vec.new();
+        for s in 0..4 {
+            let base = (g * 4 + s) * 2;
+            let pref = if a >= 85 { [base + 1, base] } else { [base, base + 1] };
+            for k in pref {
+                let p = sections[k].period;
+                if not used[p] and count[k] < CORE_CAP {
+                    used[p] = true;
+                    count[k] += 1;
+                    mine.push(k);
+                    break;
+                }
+            }
+        }
+        let mut taken = 0;
+        let first = mix(school.seed, i, 32) % N_ELECTIVES;
+        for e in 0..N_ELECTIVES {
+            if taken == 2 {
+                break;
+            }
+            let course = EL_CODE[(first + e) % N_ELECTIVES];
+            for k in 32..sections.len() as i64 {
+                let p = sections[k].period;
+                if sections[k].course == course and not used[p] and count[k] < ELECTIVE_CAP {
+                    used[p] = true;
+                    count[k] += 1;
+                    mine.push(k);
+                    taken += 1;
+                    break;
+                }
+            }
+        }
+        mine.sort_by(|x, y| sections[x].period.cmp(sections[y].period));
+        let miss = school.miss + mix(school.seed, i, 33) % 60;
+        for k in mine {
+            let ease = mix(school.seed, k, 34) % 11 - 5;
+            let mut scores: Vec[i64] = Vec.new();
+            for t in 0..N_ITEMS {
+                let r = mix(school.seed * 7 + i, k * 16 + t, 35);
+                if t == 11 and r % 1000 < 4 {
+                    scores.push(-2);
+                } else if r % 1000 < miss and t < 9 {
+                    scores.push(-1);
+                } else if t < 11 and r % 1000 >= 996 {
+                    scores.push(-2);
+                } else {
+                    let mut p = a + ease + (r >> 10) % 25 - 12;
+                    if ITEM_CAT[t] >= 2 {
+                        p -= 6;
+                    }
+                    p = max2(0, min2(100, p));
+                    scores.push(ITEM_MAX[t] * p / 100);
+                }
+            }
+            out.push(Row { sid: students[i].sid, sec: sections[k].sec.clone(), scores: scores });
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn student_header() -> String {
+    "student,last,first,grade,absences,prior_credits,prior_gpa".to_string()
+}
+
+fn section_header() -> String {
+    "section,course,title,teacher,period,level,credits,w_hw,w_quiz,w_test,w_final,drop,curve".to_string()
+}
+
+fn score_header() -> String {
+    f"student,section,{ITEMS.join(",")}"
+}
+
+fn encode_students(students: ref Vec[Student]) -> String {
+    let mut out = f"{student_header()}\n";
+    for s in students {
+        out.push_str(f"{s.sid},{s.last},{s.first},{s.grade},{s.absences},{tenths(s.prior_cr)},{hundredths(s.prior_gpa)}\n");
+    }
+    out
+}
+
+fn encode_sections(sections: ref Vec[Section]) -> String {
+    let mut out = f"{section_header()}\n";
+    for c in sections {
+        out.push_str(f"{c.sec},{c.course},{c.title},{c.teacher},{c.period},{c.level},{tenths(c.credits)},{c.w[0]},{c.w[1]},{c.w[2]},{c.w[3]},{c.drop},{c.curve}\n");
+    }
+    out
+}
+
+fn score_text(v: i64) -> String {
+    if v == -1 {
+        return "M".to_string();
+    }
+    if v == -2 {
+        return "X".to_string();
+    }
+    f"{v}"
+}
+
+fn encode_rows(rows: ref Vec[Row]) -> String {
+    let mut out = f"{score_header()}\n";
+    for r in rows {
+        let cells: Vec[String] = r.scores.iter().map(|v| score_text(v)).collect();
+        out.push_str(f"{r.sid},{r.sec},{cells.join(",")}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn fields_of(path: ref String, n: i64, line: ref String, want: i64) -> Result[Vec[String], BatchError] {
+    let f = split_on(line, ",");
+    if f.len() as i64 != want {
+        return Err(bad(f"{path} line {n}: expected {want} fields, found {f.len()}"));
+    }
+    Ok(f)
+}
+
+fn int_field(path: ref String, n: i64, what: Str, t: ref String, lo: i64, hi: i64) -> Result[i64, BatchError] {
+    match small_int(t, lo, hi) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn parse_students(path: ref String, school: ref School, text: ref String) -> Result[Vec[Student], BatchError] {
+    let body = body_lines(path, text, student_header())?;
+    let mut out: Vec[Student] = Vec.new();
+    let mut seen: Set[i64] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 7)?;
+        let sid = match small_int(f[0], 100000, 999999) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad student '{f[0]}'")),
+        };
+        if f[0].len() != 6 {
+            return Err(bad(f"{path} line {n}: bad student '{f[0]}'"));
+        }
+        if sid / 100000 != school.digit {
+            return Err(bad(f"{path} line {n}: student {sid} is not at {school.code}"));
+        }
+        if seen.contains(sid) {
+            return Err(bad(f"{path} line {n}: student {sid} appears twice"));
+        }
+        seen.insert(sid);
+        if not name_ok(f[1]) or not name_ok(f[2]) {
+            return Err(bad(f"{path} line {n}: bad name '{f[2]} {f[1]}'"));
+        }
+        let grade = int_field(path, n, "grade", f[3], 9, 12)?;
+        if sid / 1000 % 100 != grade {
+            return Err(bad(f"{path} line {n}: student {sid} is not in grade {grade}"));
+        }
+        let absences = int_field(path, n, "absences", f[4], 0, 180)?;
+        let cr = match decimal_of(f[5], 1) {
+            Some(v) if v <= 400 => v,
+            _ => return Err(bad(f"{path} line {n}: bad prior credits '{f[5]}'")),
+        };
+        let gpa = match decimal_of(f[6], 2) {
+            Some(v) if v <= 500 => v,
+            _ => return Err(bad(f"{path} line {n}: bad prior GPA '{f[6]}'")),
+        };
+        out.push(Student { sid: sid, last: f[1].clone(), first: f[2].clone(), grade: grade, absences: absences, prior_cr: cr, prior_gpa: gpa });
+    }
+    Ok(out)
+}
+
+fn course_ok(course: ref String) -> bool {
+    for s in CORE {
+        for g in GRADES {
+            if course == f"{s}{g}" {
+                return true;
+            }
+        }
+    }
+    for e in EL_CODE {
+        if course == e {
+            return true;
+        }
+    }
+    false
+}
+
+fn parse_sections(path: ref String, school: ref School, text: ref String) -> Result[Vec[Section], BatchError] {
+    let body = body_lines(path, text, section_header())?;
+    let mut out: Vec[Section] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 13)?;
+        let sec = f[0].clone();
+        if sec.len() != 6 or not is_digits(sec.substring(3, 6)) or not sec.substring(0, 1).chars().all(|c| c.is_ascii_uppercase()) {
+            return Err(bad(f"{path} line {n}: bad section '{sec}'"));
+        }
+        if sec.substring(0, 3) != school.code {
+            return Err(bad(f"{path} line {n}: section {sec} is not at {school.code}"));
+        }
+        if seen.contains(sec) {
+            return Err(bad(f"{path} line {n}: section {sec} appears twice"));
+        }
+        seen.insert(sec.clone());
+        if not course_ok(f[1]) {
+            return Err(bad(f"{path} line {n}: bad course '{f[1]}'"));
+        }
+        if f[2].len() == 0 or f[3].len() == 0 {
+            return Err(bad(f"{path} line {n}: section {sec} has no title or teacher"));
+        }
+        let period = int_field(path, n, "period", f[4], 1, PERIODS)?;
+        if not level_ok(f[5]) {
+            return Err(bad(f"{path} line {n}: bad level '{f[5]}'"));
+        }
+        let credits = match decimal_of(f[6], 1) {
+            Some(v) if v == 5 or v == 10 => v,
+            _ => return Err(bad(f"{path} line {n}: bad credits '{f[6]}'")),
+        };
+        let mut w: Vec[i64] = Vec.new();
+        let mut sum = 0;
+        for c in 0..4 {
+            let v = int_field(path, n, "weight", f[7 + c], 0, 100)?;
+            w.push(v);
+            sum += v;
+        }
+        if sum != 100 {
+            return Err(bad(f"{path} line {n}: the weights of {sec} add up to {sum}"));
+        }
+        let drop = int_field(path, n, "drop", f[11], 0, 5)?;
+        let curve = int_field(path, n, "curve", f[12], 0, 100)?;
+        out.push(Section { sec: sec, course: f[1].clone(), title: f[2].clone(), teacher: f[3].clone(), period: period, level: f[5].clone(), credits: credits, w: w, drop: drop, curve: curve });
+    }
+    Ok(out)
+}
+
+fn parse_rows(path: ref String, students: ref Vec[Student], sections: ref Vec[Section], text: ref String) -> Result[Vec[Row], BatchError] {
+    let body = body_lines(path, text, score_header())?;
+    let by_id = student_index(students);
+    let by_sec = section_index(sections);
+    let mut out: Vec[Row] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    let mut periods: Set[String] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 2 + N_ITEMS)?;
+        let sid = match small_int(f[0], 0, 999999) {
+            Some(v) if by_id.contains_key(v) => v,
+            _ => return Err(bad(f"{path} line {n}: no student '{f[0]}'")),
+        };
+        let c = by_sec.get(f[1]) ?? -1;
+        if c < 0 {
+            return Err(bad(f"{path} line {n}: no section '{f[1]}'"));
+        }
+        let pair = f"{sid}/{f[1]}";
+        if seen.contains(pair) {
+            return Err(bad(f"{path} line {n}: student {sid} is in {f[1]} twice"));
+        }
+        seen.insert(pair);
+        let p = sections[c].period;
+        let slot = f"{sid}/{p}";
+        if periods.contains(slot) {
+            return Err(bad(f"{path} line {n}: student {sid} has two sections in period {p}"));
+        }
+        periods.insert(slot);
+        let mut scores: Vec[i64] = Vec.new();
+        for t in 0..N_ITEMS {
+            let v = f[2 + t];
+            if v == "M" {
+                scores.push(-1);
+            } else if v == "X" {
+                scores.push(-2);
+            } else {
+                match small_int(v, 0, 999) {
+                    Some(x) if x <= ITEM_MAX[t] => scores.push(x),
+                    _ => return Err(bad(f"{path} line {n}: bad {ITEMS[t]} '{v}' (out of {ITEM_MAX[t]})")),
+                }
+            }
+        }
+        out.push(Row { sid: sid, sec: f[1].clone(), scores: scores });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the term close
+
+// The points a section's tests are curved by: up to the teacher's mean,
+// over the tests that were taken.
+fn curve_of(sec: ref Section, c: i64, rows: ref Vec[Row], sec_of: ref Vec[i64]) -> i64 {
+    if sec.curve == 0 {
+        return 0;
+    }
+    let mut got = 0;
+    let mut out_of = 0;
+    for j in 0..rows.len() as i64 {
+        if sec_of[j] == c {
+            for t in [9, 10] {
+                if rows[j].scores[t] >= 0 {
+                    got += rows[j].scores[t];
+                    out_of += ITEM_MAX[t];
+                }
+            }
+        }
+    }
+    if out_of == 0 {
+        return 0;
+    }
+    let mean = got * 100 / out_of;
+    if mean < sec.curve { sec.curve - mean } else { 0 }
+}
+
+// A row's weighted percent: missing work counts zero, excused work is
+// left out, the lowest homeworks are dropped, the tests are curved, and
+// a category with nothing left gives its weight to the others.
+fn percent_of(row: ref Row, sec: ref Section, bump: i64) -> i64 {
+    let mut pts: Vec[Vec[i64]] = [Vec.new(), Vec.new(), Vec.new(), Vec.new()].to_vec();
+    let mut outs: Vec[i64] = [0, 0, 0, 0].to_vec();
+    for t in 0..N_ITEMS {
+        let mut v = row.scores[t];
+        if v == -2 {
+            continue;
+        }
+        let c = ITEM_CAT[t];
+        if v == -1 {
+            v = 0;
+        } else if c == 2 {
+            v = min2(ITEM_MAX[t], v + bump);
+        }
+        pts[c].push(v);
+        outs[c] += ITEM_MAX[t];
+    }
+    pts[0].sort();
+    let drop = min2(sec.drop, max2(0, pts[0].len() as i64 - 1));
+    let hw: Vec[i64] = pts[0][drop..].to_vec();
+    outs[0] = 10 * hw.len() as i64;
+    pts[0] = hw;
+    let mut num = 0;
+    let mut den = 0;
+    for c in 0..4 {
+        if pts[c].len() == 0 or sec.w[c] == 0 {
+            continue;
+        }
+        let mut p = 0;
+        for v in pts[c] {
+            p += v;
+        }
+        num += sec.w[c] * (p * 10000 / outs[c]);
+        den += sec.w[c];
+    }
+    let v = num / den;
+    (v + 50) / 100
+}
+
+fn close_term(students: ref Vec[Student], sections: ref Vec[Section], rows: ref Vec[Row]) -> Term {
+    let by_id = student_index(students);
+    let by_sec = section_index(sections);
+    let mut sec_of: Vec[i64] = Vec.new();
+    let mut st_of: Vec[i64] = Vec.new();
+    for r in rows {
+        sec_of.push(by_sec.get(r.sec) ?? -1);
+        st_of.push(by_id.get(r.sid) ?? -1);
+    }
+    let mut bump: Vec[i64] = Vec.new();
+    for c in 0..sections.len() as i64 {
+        bump.push(curve_of(sections[c], c, rows, sec_of));
+    }
+    let mut pct: Vec[i64] = Vec.new();
+    let mut letter: Vec[i64] = Vec.new();
+    let mut earned: Vec[i64] = Vec.new();
+    let mut nc: Vec[bool] = Vec.new();
+    for j in 0..rows.len() as i64 {
+        let sec = ref sections[sec_of[j]];
+        if rows[j].scores[11] == -2 {
+            pct.push(-1);
+            letter.push(LETTER_I);
+            earned.push(0);
+            nc.push(false);
+            continue;
+        }
+        let p = percent_of(rows[j], sec, bump[sec_of[j]]);
+        let li = letter_of(p);
+        let lost = students[st_of[j]].absences > MAX_ABSENCES;
+        pct.push(p);
+        letter.push(li);
+        nc.push(lost);
+        earned.push(if lost or li == LETTER_F { 0 } else { sec.credits });
+    }
+    let mut rows_of: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..students.len() as i64 {
+        rows_of.push(Vec.new());
+    }
+    for j in 0..rows.len() as i64 {
+        rows_of[st_of[j]].push(j);
+    }
+    let mut term_gpa: Vec[i64] = Vec.new();
+    let mut term_wgpa: Vec[i64] = Vec.new();
+    let mut cum_wgpa: Vec[i64] = Vec.new();
+    let mut total_cr: Vec[i64] = Vec.new();
+    let mut fails: Vec[i64] = Vec.new();
+    for i in 0..students.len() as i64 {
+        let st = ref students[i];
+        let mut qp = 0;
+        let mut wqp = 0;
+        let mut cr = 0;
+        let mut got = 0;
+        let mut fs_count = 0;
+        for j in rows_of[i] {
+            let li = letter[j];
+            got += earned[j];
+            if li == LETTER_I {
+                continue;
+            }
+            let sec = ref sections[sec_of[j]];
+            let gp = POINTS[li];
+            let wgp = gp + if gp >= 200 { bonus_of(sec.level) } else { 0 };
+            qp += gp * sec.credits;
+            wqp += wgp * sec.credits;
+            cr += sec.credits;
+            if li == LETTER_F {
+                fs_count += 1;
+            }
+        }
+        term_gpa.push(if cr > 0 { (2 * qp + cr) / (2 * cr) } else { 0 });
+        term_wgpa.push(if cr > 0 { (2 * wqp + cr) / (2 * cr) } else { 0 });
+        let all_cr = st.prior_cr + cr;
+        let all_qp = st.prior_gpa * st.prior_cr + wqp;
+        cum_wgpa.push((2 * all_qp + all_cr) / (2 * all_cr));
+        total_cr.push(st.prior_cr + got);
+        fails.push(fs_count);
+    }
+    Term {
+        bump: bump,
+        sec_of: sec_of,
+        st_of: st_of,
+        pct: pct,
+        letter: letter,
+        earned: earned,
+        nc: nc,
+        rows_of: rows_of,
+        term_gpa: term_gpa,
+        term_wgpa: term_wgpa,
+        cum_wgpa: cum_wgpa,
+        total_cr: total_cr,
+        fails: fails,
+    }
+}
+
+fn encode_cards(sections: ref Vec[Section], rows: ref Vec[Row], term: ref Term) -> String {
+    let mut out = "student,section,course,level,percent,letter,credits\n".to_string();
+    for j in 0..rows.len() as i64 {
+        let sec = ref sections[term.sec_of[j]];
+        let pct = if term.pct[j] < 0 { "-".to_string() } else { f"{term.pct[j]}" };
+        let credits = if term.nc[j] { "NC".to_string() } else { tenths(term.earned[j]) };
+        out.push_str(f"{rows[j].sid},{rows[j].sec},{sec.course},{sec.level},{pct},{LETTERS[term.letter[j]]},{credits}\n");
+    }
+    out
+}
+
+fn encode_gpas(students: ref Vec[Student], term: ref Term) -> String {
+    let mut out = "student,term_gpa,weighted,cumulative,credits\n".to_string();
+    for i in 0..students.len() as i64 {
+        out.push_str(f"{students[i].sid},{hundredths(term.term_gpa[i])},{hundredths(term.term_wgpa[i])},{hundredths(term.cum_wgpa[i])},{tenths(term.total_cr[i])}\n");
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn grade_report(school: ref School, rows: ref Vec[Row], term: ref Term) -> String {
+    let mut counts: Vec[i64] = Vec.filled(13, 0);
+    let mut nc = 0;
+    for j in 0..rows.len() as i64 {
+        counts[term.letter[j]] += 1;
+        if term.nc[j] {
+            nc += 1;
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..13 {
+        parts.push(f"{LETTERS[i]} {counts[i]}");
+    }
+    f"{school.code} grades: {group3(rows.len() as i64)} section grades: {parts.join(", ")}; {nc} NC"
+}
+
+fn section_report(school: ref School, sections: ref Vec[Section], rows: ref Vec[Row], term: ref Term) -> Vec[String] {
+    let ns = sections.len() as i64;
+    let mut total: Vec[i64] = Vec.filled(ns, 0);
+    let mut n: Vec[i64] = Vec.filled(ns, 0);
+    let mut fails: Vec[i64] = Vec.filled(ns, 0);
+    for j in 0..rows.len() as i64 {
+        let c = term.sec_of[j];
+        if term.pct[j] >= 0 {
+            total[c] += term.pct[j];
+            n[c] += 1;
+        }
+        if term.letter[j] == LETTER_F {
+            fails[c] += 1;
+        }
+    }
+    let mut curved = 0;
+    let mut bumps = 0;
+    for c in 0..ns {
+        if term.bump[c] > 0 {
+            curved += 1;
+            bumps += term.bump[c];
+        }
+    }
+    let mut lo = -1;
+    let mut hi = -1;
+    for c in 0..ns {
+        if n[c] == 0 {
+            continue;
+        }
+        if lo < 0 or total[c] * n[lo] < total[lo] * n[c] {
+            lo = c;
+        }
+        if hi < 0 or total[c] * n[hi] > total[hi] * n[c] {
+            hi = c;
+        }
+    }
+    let mut worst: Vec[i64] = (0..ns).collect();
+    worst.sort_by(|a, b| if fails[a] != fails[b] { fails[b].cmp(fails[a]) } else { a.cmp(b) });
+    let mut lines: Vec[String] = Vec.new();
+    let l = ref sections[lo];
+    let h = ref sections[hi];
+    lines.push(f"{school.code} sections: {ns}, {curved} curved (average +{avg_tenths(bumps, curved)}), lowest {l.sec} {l.title} {avg_tenths(total[lo], n[lo])}%, highest {h.sec} {h.title} {avg_tenths(total[hi], n[hi])}%");
+    let mut parts: Vec[String] = Vec.new();
+    for k in 0..3 {
+        let c = worst[k];
+        parts.push(f"{sections[c].sec} {sections[c].title} ({sections[c].teacher}) {fails[c]} of {n[c]}");
+    }
+    lines.push(f"{school.code} most Fs: {parts.join(", ")}");
+    lines
+}
+
+fn honor_report(school: ref School, students: ref Vec[Student], term: ref Term) -> String {
+    let mut high: Vec[i64] = Vec.filled(4, 0);
+    let mut hon: Vec[i64] = Vec.filled(4, 0);
+    for i in 0..students.len() as i64 {
+        if term.rows_of[i].len() == 0 {
+            continue;
+        }
+        let mut worst = 0;
+        for j in term.rows_of[i] {
+            worst = max2(worst, term.letter[j]);
+        }
+        if worst == LETTER_I {
+            continue;
+        }
+        let g = students[i].grade - 9;
+        if term.term_wgpa[i] >= 375 and worst <= 3 {
+            high[g] += 1;
+        } else if term.term_wgpa[i] >= 325 and worst <= 6 {
+            hon[g] += 1;
+        }
+    }
+    let mut by: Vec[String] = Vec.new();
+    let mut nh = 0;
+    let mut nn = 0;
+    for g in 0..4 {
+        by.push(f"{GRADES[g]}: {high[g]}/{hon[g]}");
+        nh += high[g];
+        nn += hon[g];
+    }
+    let mut top: Vec[i64] = (0..students.len() as i64).collect();
+    top.sort_by(|a, b| if term.term_wgpa[a] != term.term_wgpa[b] { term.term_wgpa[b].cmp(term.term_wgpa[a]) } else { students[a].sid.cmp(students[b].sid) });
+    let mut names: Vec[String] = Vec.new();
+    for k in 0..3 {
+        let i = top[k];
+        names.push(f"{students[i].first} {students[i].last} {hundredths(term.term_wgpa[i])}");
+    }
+    f"{school.code} honor roll: {nh} high honors, {nn} honors (by grade {by.join(", ")}); top term {names.join(", ")}"
+}
+
+fn risk_report(school: ref School, students: ref Vec[Student], term: ref Term) -> String {
+    let mut two_f = 0;
+    let mut nc = 0;
+    let mut short: Vec[String] = Vec.new();
+    for i in 0..students.len() as i64 {
+        if term.fails[i] >= 2 {
+            two_f += 1;
+        }
+        if students[i].absences > MAX_ABSENCES {
+            nc += 1;
+        }
+        if students[i].grade == 12 and term.total_cr[i] < GRAD_CREDITS {
+            short.push(f"{students[i].sid} ({tenths(term.total_cr[i])})");
+        }
+    }
+    let ids = if short.len() == 0 { "none".to_string() } else { short.join(", ") };
+    f"{school.code} at risk: {two_f} with two or more Fs, {nc} over {MAX_ABSENCES} absences; seniors short of {tenths(GRAD_CREDITS)} credits: {short.len()}: {ids}"
+}
+
+// The seniors by cumulative weighted GPA, then student id.
+fn rank_order(students: ref Vec[Student], term: ref Term) -> Vec[i64] {
+    let mut seniors: Vec[i64] = Vec.new();
+    for i in 0..students.len() as i64 {
+        if students[i].grade == 12 {
+            seniors.push(i);
+        }
+    }
+    seniors.sort_by(|a, b| if term.cum_wgpa[a] != term.cum_wgpa[b] { term.cum_wgpa[b].cmp(term.cum_wgpa[a]) } else { students[a].sid.cmp(students[b].sid) });
+    seniors
+}
+
+fn rank_report(school: ref School, students: ref Vec[Student], term: ref Term) -> String {
+    let order = rank_order(students, term);
+    let titles = ["valedictorian", "salutatorian", "third"];
+    let mut parts: Vec[String] = Vec.new();
+    for k in 0..3 {
+        let i = order[k];
+        parts.push(f"{titles[k]} {students[i].first} {students[i].last} {hundredths(term.cum_wgpa[i])}");
+    }
+    f"{school.code} class of 2027: {parts.join(", ")}"
+}
+
+// A school's nominees, its top seniors with no F, no incomplete and the
+// credits to graduate, paid from what the fund has left.
+fn nominate(fund: mut ref Fund, school: ref School, students: ref Vec[Student], term: ref Term) -> Vec[String] {
+    let mut picks: Vec[i64] = Vec.new();
+    for i in rank_order(students, term) {
+        if picks.len() as i64 == MAX_NOMINEES {
+            break;
+        }
+        if term.cum_wgpa[i] < NOMINEE_GPA or term.fails[i] > 0 or term.total_cr[i] < GRAD_CREDITS {
+            continue;
+        }
+        let mut incomplete = false;
+        for j in term.rows_of[i] {
+            if term.letter[j] == LETTER_I {
+                incomplete = true;
+            }
+        }
+        if incomplete {
+            continue;
+        }
+        picks.push(i);
+    }
+    let mut lines: Vec[String] = Vec.new();
+    let mut paid = 0;
+    let mut unpaid = 0;
+    for i in picks {
+        let st = ref students[i];
+        let want = if term.cum_wgpa[i] >= 400 { AWARD_TOP } else { AWARD };
+        let amount = min2(want, fund.left);
+        if amount < AWARD_MIN {
+            unpaid += 1;
+            fund.log.push(f"{school.code},{st.sid},{st.first} {st.last},0.00,{dollars(fund.left)}");
+            continue;
+        }
+        fund.left -= amount;
+        paid += amount;
+        fund.log.push(f"{school.code},{st.sid},{st.first} {st.last},{dollars(amount)},{dollars(fund.left)}");
+        lines.push(f"{school.code} scholarship: {st.first} {st.last} ({hundredths(term.cum_wgpa[i])}) {money(amount)}");
+    }
+    lines.push(f"{school.code} scholarships: {picks.len()} nominated, {money(paid)} paid, {unpaid} unpaid, {money(fund.left)} left in the fund");
+    lines
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let nhs = School { code: "NHS", digit: 1, seed: 8101, abil: 0, miss: 20, absent: 6 };
+    let ehs = School { code: "EHS", digit: 2, seed: 8202, abil: 3, miss: 15, absent: 4 };
+    let shs = School { code: "SHS", digit: 3, seed: 8303, abil: -4, miss: 40, absent: 10 };
+    let whs = School { code: "WHS", digit: 4, seed: 8404, abil: 1, miss: 25, absent: 7 };
+
+    // Four course catalogs and four student bodies, then four gradebooks,
+    // each over its own school's.
+    let c1 = build_sections(nhs);
+    let c2 = build_sections(ehs);
+    let c3 = build_sections(shs);
+    let c4 = build_sections(whs);
+    let s1 = build_students(nhs);
+    let s2 = build_students(ehs);
+    let s3 = build_students(shs);
+    let s4 = build_students(whs);
+    let b1 = build_rows(nhs, s1, c1);
+    let b2 = build_rows(ehs, s2, c2);
+    let b3 = build_rows(shs, s3, c3);
+    let b4 = build_rows(whs, s4, c4);
+
+    // Twelve writes.
+    let w1 = fs.write("NHS_students.csv", encode_students(s1));
+    let w2 = fs.write("NHS_sections.csv", encode_sections(c1));
+    let w3 = fs.write("NHS_scores.csv", encode_rows(b1));
+    let w4 = fs.write("EHS_students.csv", encode_students(s2));
+    let w5 = fs.write("EHS_sections.csv", encode_sections(c2));
+    let w6 = fs.write("EHS_scores.csv", encode_rows(b2));
+    let w7 = fs.write("SHS_students.csv", encode_students(s3));
+    let w8 = fs.write("SHS_sections.csv", encode_sections(c3));
+    let w9 = fs.write("SHS_scores.csv", encode_rows(b3));
+    let w10 = fs.write("WHS_students.csv", encode_students(s4));
+    let w11 = fs.write("WHS_sections.csv", encode_sections(c4));
+    let w12 = fs.write("WHS_scores.csv", encode_rows(b4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() or w9.is_err() or w10.is_err() or w11.is_err() or w12.is_err() {
+        return Err(bad("could not write the term's files"));
+    }
+
+    // A copy of NHS's students with a thirteenth grader, and of SHS's
+    // gradebook with 11 points on a homework out of 10.
+    let whole = read_text("NHS_students.csv")?;
+    if fs.write("NHS_students.bad", damage(whole, 40, 3, "13")).is_err() {
+        return Err(bad("could not write NHS_students.bad"));
+    }
+    let whole2 = read_text("SHS_scores.csv")?;
+    if fs.write("SHS_scores.bad", damage(whole2, 200, 4, "11")).is_err() {
+        return Err(bad("could not write SHS_scores.bad"));
+    }
+
+    // Twelve reads.
+    let t1 = read_text("NHS_students.csv")?;
+    let u1 = read_text("NHS_sections.csv")?;
+    let v1 = read_text("NHS_scores.csv")?;
+    let t2 = read_text("EHS_students.csv")?;
+    let u2 = read_text("EHS_sections.csv")?;
+    let v2 = read_text("EHS_scores.csv")?;
+    let t3 = read_text("SHS_students.csv")?;
+    let u3 = read_text("SHS_sections.csv")?;
+    let v3 = read_text("SHS_scores.csv")?;
+    let t4 = read_text("WHS_students.csv")?;
+    let u4 = read_text("WHS_sections.csv")?;
+    let v4 = read_text("WHS_scores.csv")?;
+    println(file_line("NHS students", t1));
+    println(file_line("NHS sections", u1));
+    println(file_line("NHS scores", v1));
+    println(file_line("EHS students", t2));
+    println(file_line("EHS sections", u2));
+    println(file_line("EHS scores", v2));
+    println(file_line("SHS students", t3));
+    println(file_line("SHS sections", u3));
+    println(file_line("SHS scores", v3));
+    println(file_line("WHS students", t4));
+    println(file_line("WHS sections", u4));
+    println(file_line("WHS scores", v4));
+
+    // Four student files and four section files, then four gradebooks,
+    // which need both. Each can fail with `?`, so a parallel run has to
+    // report the first failure in source order.
+    let p1 = parse_students("NHS_students.csv", nhs, t1)?;
+    let p2 = parse_students("EHS_students.csv", ehs, t2)?;
+    let p3 = parse_students("SHS_students.csv", shs, t3)?;
+    let p4 = parse_students("WHS_students.csv", whs, t4)?;
+    let k1 = parse_sections("NHS_sections.csv", nhs, u1)?;
+    let k2 = parse_sections("EHS_sections.csv", ehs, u2)?;
+    let k3 = parse_sections("SHS_sections.csv", shs, u3)?;
+    let k4 = parse_sections("WHS_sections.csv", whs, u4)?;
+    let g1 = parse_rows("NHS_scores.csv", p1, k1, v1)?;
+    let g2 = parse_rows("EHS_scores.csv", p2, k2, v2)?;
+    let g3 = parse_rows("SHS_scores.csv", p3, k3, v3)?;
+    let g4 = parse_rows("WHS_scores.csv", p4, k4, v4)?;
+    match parse_students("NHS_students.bad", nhs, read_text("NHS_students.bad")?) {
+        Ok(_) => println("NHS_students.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_rows("SHS_scores.bad", p3, k3, read_text("SHS_scores.bad")?) {
+        Ok(_) => println("SHS_scores.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_sections("WHS_sections.csv", ehs, u4) {
+        Ok(_) => println("WHS_sections.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = p1 == s1 and p2 == s2 and p3 == s3 and p4 == s4 and k1 == c1 and k2 == c2 and k3 == c3 and k4 == c4 and g1 == b1 and g2 == b2 and g3 == b3 and g4 == b4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four term closes, the hot group.
+    let m1 = close_term(p1, k1, g1);
+    let m2 = close_term(p2, k2, g2);
+    let m3 = close_term(p3, k3, g3);
+    let m4 = close_term(p4, k4, g4);
+
+    // The report cards and GPAs, written and read back.
+    let r1 = fs.write("NHS_cards.csv", encode_cards(k1, g1, m1));
+    let r2 = fs.write("EHS_cards.csv", encode_cards(k2, g2, m2));
+    let r3 = fs.write("SHS_cards.csv", encode_cards(k3, g3, m3));
+    let r4 = fs.write("WHS_cards.csv", encode_cards(k4, g4, m4));
+    let r5 = fs.write("NHS_gpa.csv", encode_gpas(p1, m1));
+    let r6 = fs.write("EHS_gpa.csv", encode_gpas(p2, m2));
+    let r7 = fs.write("SHS_gpa.csv", encode_gpas(p3, m3));
+    let r8 = fs.write("WHS_gpa.csv", encode_gpas(p4, m4));
+    if r1.is_err() or r2.is_err() or r3.is_err() or r4.is_err() or r5.is_err() or r6.is_err() or r7.is_err() or r8.is_err() {
+        return Err(bad("could not write the report cards"));
+    }
+    let x1 = read_text("NHS_cards.csv")?;
+    let y1 = read_text("NHS_gpa.csv")?;
+    let x2 = read_text("EHS_cards.csv")?;
+    let y2 = read_text("EHS_gpa.csv")?;
+    let x3 = read_text("SHS_cards.csv")?;
+    let y3 = read_text("SHS_gpa.csv")?;
+    let x4 = read_text("WHS_cards.csv")?;
+    let y4 = read_text("WHS_gpa.csv")?;
+    println(file_line("NHS report cards", x1));
+    println(file_line("NHS GPAs", y1));
+    println(file_line("EHS report cards", x2));
+    println(file_line("EHS GPAs", y2));
+    println(file_line("SHS report cards", x3));
+    println(file_line("SHS GPAs", y3));
+    println(file_line("WHS report cards", x4));
+    println(file_line("WHS GPAs", y4));
+
+    // Reports that only read what came before.
+    let o1 = grade_report(nhs, g1, m1);
+    let o2 = grade_report(ehs, g2, m2);
+    let o3 = grade_report(shs, g3, m3);
+    let o4 = grade_report(whs, g4, m4);
+    let q1 = section_report(nhs, k1, g1, m1);
+    let q2 = section_report(ehs, k2, g2, m2);
+    let q3 = section_report(shs, k3, g3, m3);
+    let q4 = section_report(whs, k4, g4, m4);
+    let h1 = honor_report(nhs, p1, m1);
+    let h2 = honor_report(ehs, p2, m2);
+    let h3 = honor_report(shs, p3, m3);
+    let h4 = honor_report(whs, p4, m4);
+    let a1 = risk_report(nhs, p1, m1);
+    let a2 = risk_report(ehs, p2, m2);
+    let a3 = risk_report(shs, p3, m3);
+    let a4 = risk_report(whs, p4, m4);
+    let n1 = rank_report(nhs, p1, m1);
+    let n2 = rank_report(ehs, p2, m2);
+    let n3 = rank_report(shs, p3, m3);
+    let n4 = rank_report(whs, p4, m4);
+    for line in [o1, o2, o3, o4] {
+        println(line);
+    }
+    for lines in [q1, q2, q3, q4] {
+        for line in lines {
+            println(line);
+        }
+    }
+    for line in [h1, h2, h3, h4, a1, a2, a3, a4, n1, n2, n3, n4] {
+        println(line);
+    }
+
+    // The fund pays the schools that nominate first, so the schools
+    // nominate in order.
+    let mut fund = Fund { left: FUND, log: Vec.new() };
+    for line in nominate(mut fund, nhs, p1, m1) {
+        println(line);
+    }
+    for line in nominate(mut fund, ehs, p2, m2) {
+        println(line);
+    }
+    for line in nominate(mut fund, shs, p3, m3) {
+        println(line);
+    }
+    for line in nominate(mut fund, whs, p4, m4) {
+        println(line);
+    }
+    if fs.write("awards.log", f"{fund.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write awards.log"));
+    }
+    let back = read_text("awards.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"awards.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["NHS_students.csv", "NHS_sections.csv", "NHS_scores.csv", "EHS_students.csv", "EHS_sections.csv", "EHS_scores.csv",
+              "SHS_students.csv", "SHS_sections.csv", "SHS_scores.csv", "WHS_students.csv", "WHS_sections.csv", "WHS_scores.csv",
+              "NHS_students.bad", "SHS_scores.bad", "awards.log", "NHS_cards.csv", "EHS_cards.csv", "SHS_cards.csv", "WHS_cards.csv",
+              "NHS_gpa.csv", "EHS_gpa.csv", "SHS_gpa.csv", "WHS_gpa.csv"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"grade_close failed: {e.describe()}"),
+    }
+}
