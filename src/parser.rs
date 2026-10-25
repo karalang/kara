@@ -376,6 +376,11 @@ pub struct Parser {
     /// (Rust's `let (mut a, b)`) is then answered with the Kāra spelling
     /// and a fix that moves it there (B-2026-10-14-57).
     pub(crate) let_pattern: Option<(usize, bool)>,
+    /// Each `mut` reported inside a pattern outside a `let`: the report's
+    /// key, the edit deleting the `mut`, and the name. The arm, `if let`,
+    /// `while let` or `for` that parsed the pattern turns them into a fix
+    /// once its body is parsed (B-2026-10-25-8).
+    pub(crate) pattern_muts: Vec<(crate::resolver::SpanKey, crate::resolver::TextEdit, String)>,
     /// Offsets of the `!`s already reported as a Rust macro call. Two
     /// recognizers see the same `!` when recovery re-parses it (`expect` and
     /// the prefix parser), and each reported it (B-2026-10-20-5).
@@ -459,6 +464,7 @@ impl Parser {
             fix_edits: FxHashMap::default(),
             fix_diffs: FxHashMap::default(),
             let_pattern: None,
+            pattern_muts: Vec::new(),
             macro_bangs_reported: rustc_hash::FxHashSet::default(),
         }
     }

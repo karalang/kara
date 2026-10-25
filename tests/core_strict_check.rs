@@ -13916,6 +13916,40 @@ fn a_slice_where_a_vec_is_wanted_is_fixed_with_to_vec() {
 }
 
 #[test]
+fn a_mut_inside_an_arm_or_loop_pattern_is_fixed_by_a_rebinding() {
+    // B-2026-10-25-8: `mut` inside a pattern outside a `let` is fixed by
+    // deleting it and opening the body with `let mut x = x;`. An expression
+    // arm body becomes a block; a block body takes the `let` on its own line.
+    let counter = "struct Counter {\n    n: i64,\n}\nimpl Counter {\n    fn bump(mut ref self) -> i64 {\n        \
+                   self.n += 1;\n        self.n\n    }\n}\nfn make() -> Result[Counter, String] {\n    \
+                   Ok(Counter { n: 0 })\n}\n";
+    rejected_then_fixed_by(
+        "mut-in-a-match-arm",
+        &format!(
+            "{counter}fn main() {{\n    match make() {{\n        Ok(mut c) => println(f\"{{c.bump()}}\"),\n        \
+             Err(e) => println(e),\n    }}\n}}\n"
+        ),
+        "`mut c` inside a pattern is Rust syntax",
+        "Ok(c) => { let mut c = c; println(f\"{c.bump()}\") },",
+    );
+    rejected_then_fixed_by(
+        "mut-in-an-if-let",
+        &format!(
+            "{counter}fn main() {{\n    if let Ok(mut c) = make() {{\n        println(f\"{{c.bump()}}\");\n    }}\n}}\n"
+        ),
+        "`mut c` inside a pattern is Rust syntax",
+        "if let Ok(c) = make() {\n        let mut c = c;\n        println(",
+    );
+    rejected_then_fixed_by(
+        "mut-in-a-for-pair",
+        "fn main() {\n    let v = Vec[(1, 2)];\n    for (mut a, mut b) in v {\n        a += 1;\n        b += 1;\n        \
+         println(f\"{a} {b}\");\n    }\n}\n",
+        "`mut a` inside a pattern is Rust syntax",
+        "for (a, b) in v {\n        let mut a = a;\n        let mut b = b;\n        a += 1;",
+    );
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

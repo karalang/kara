@@ -2055,10 +2055,13 @@ impl super::Parser {
         // if let pattern = value { ... }
         if self.check(&Token::Let) {
             self.advance();
+            let m0 = self.pattern_muts.len();
             let pattern = self.parse_pattern()?;
+            let muts = self.take_pattern_muts(m0);
             self.expect(&Token::Equal)?;
             let value = self.parse_condition_expr()?;
             let then_block = self.parse_block()?;
+            self.fix_pattern_muts(muts, then_block.span, true);
             let else_branch = if self.eat(&Token::Else) {
                 if self.check(&Token::If) {
                     Some(Box::new(self.parse_if_expr()?))
@@ -2125,7 +2128,9 @@ impl super::Parser {
         let mut arms = Vec::new();
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
             let arm_start = self.current_span();
+            let m0 = self.pattern_muts.len();
             let pattern = self.parse_pattern()?;
+            let muts = self.take_pattern_muts(m0);
 
             let guard = if self.eat(&Token::If) {
                 Some(self.parse_expression()?)
@@ -2147,6 +2152,7 @@ impl super::Parser {
                 let expr = self.parse_expression()?;
                 self.recover_assignment_arm_body(expr)
             };
+            self.fix_pattern_muts(muts, body.span, body_is_block);
 
             arms.push(MatchArm {
                 pattern,
@@ -2296,10 +2302,13 @@ impl super::Parser {
         // while let pattern = expr { ... }
         if self.check(&Token::Let) {
             self.advance();
+            let m0 = self.pattern_muts.len();
             let pattern = self.parse_pattern()?;
+            let muts = self.take_pattern_muts(m0);
             self.expect(&Token::Equal)?;
             let value = self.parse_condition_expr()?;
             let body = self.parse_block()?;
+            self.fix_pattern_muts(muts, body.span, true);
             if label.is_some() {
                 self.loop_labels.pop();
             }
@@ -2383,10 +2392,13 @@ impl super::Parser {
         if let Some(ref l) = label {
             self.loop_labels.push((l.clone(), LabelKind::Loop));
         }
+        let m0 = self.pattern_muts.len();
         let pattern = self.parse_pattern()?;
+        let muts = self.take_pattern_muts(m0);
         self.expect(&Token::In)?;
         let iterable = self.parse_condition_expr()?;
         let body = self.parse_block()?;
+        self.fix_pattern_muts(muts, body.span, true);
         if label.is_some() {
             self.loop_labels.pop();
         }

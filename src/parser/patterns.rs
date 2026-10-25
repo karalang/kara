@@ -18,6 +18,67 @@ use crate::token::{IntSuffix, Token};
 use super::{starts_upper, ParseError};
 
 impl super::Parser {
+    /// The `mut`s reported inside the pattern just parsed, from `from` on.
+    pub(crate) fn take_pattern_muts(
+        &mut self,
+        from: usize,
+    ) -> Vec<(crate::resolver::SpanKey, crate::resolver::TextEdit, String)> {
+        let from = from.min(self.pattern_muts.len());
+        self.pattern_muts.drain(from..).collect()
+    }
+
+    /// B-2026-10-25-8 — the fix for `mut` inside the pattern of an arm,
+    /// `if let`, `while let` or `for`: delete each `mut` and open the body
+    /// with `let mut x = x;`, wrapping an expression body in a block. The
+    /// whole edit rides on the first report, so the rest carry none.
+    pub(crate) fn fix_pattern_muts(
+        &mut self,
+        muts: Vec<(crate::resolver::SpanKey, crate::resolver::TextEdit, String)>,
+        body: crate::token::Span,
+        is_block: bool,
+    ) {
+        let Some(key) = muts.first().map(|(k, _, _)| *k) else {
+            return;
+        };
+        let at = body.offset;
+        // A block whose first statement starts a new line takes each `let`
+        // on a line of its own at that statement's indent.
+        let first = self
+            .tokens
+            .iter()
+            .find(|t| t.span.offset > at)
+            .filter(|t| is_block && t.span.line > body.line && t.token != Token::RightBrace);
+        let sep = match first {
+            Some(t) => format!("\n{}", " ".repeat(t.span.column.saturating_sub(1))),
+            None => " ".to_string(),
+        };
+        let lets: String = muts
+            .iter()
+            .map(|(_, _, n)| format!("{sep}let mut {n} = {n};"))
+            .collect();
+        let mut edits: Vec<crate::resolver::TextEdit> =
+            muts.into_iter().map(|(_, e, _)| e).collect();
+        if is_block {
+            edits.push(crate::resolver::TextEdit {
+                offset: at + 1,
+                length: 0,
+                replacement: lets,
+            });
+        } else {
+            edits.push(crate::resolver::TextEdit {
+                offset: at,
+                length: 0,
+                replacement: format!("{{{lets} "),
+            });
+            edits.push(crate::resolver::TextEdit {
+                offset: at + body.length,
+                length: 0,
+                replacement: " }".to_string(),
+            });
+        }
+        self.fix_diffs.insert(key, edits);
+    }
+
     // ── Patterns ─────────────────────────────────────────────────
 
     // Depth-guarded shell: pattern nesting (tuple / variant destructuring)
@@ -150,11 +211,18 @@ impl super::Parser {
                         self.fix_diffs
                             .insert(crate::resolver::SpanKey::from_span(&mut_span), edits);
                     }
-                    None => self.error(&format!(
-                        "`mut {name}` inside a pattern is Rust syntax -- Kāra has no `mut` \
-                         in a pattern here; rebind it where it is used: \
-                         `let mut {name} = {name};`"
-                    )),
+                    None => {
+                        self.error(&format!(
+                            "`mut {name}` inside a pattern is Rust syntax -- Kāra has no `mut` \
+                             in a pattern here; rebind it where it is used: \
+                             `let mut {name} = {name};`"
+                        ));
+                        self.pattern_muts.push((
+                            crate::resolver::SpanKey::from_span(&mut_span),
+                            drop_mut,
+                            name,
+                        ));
+                    }
                 }
                 self.advance();
                 self.parse_single_pattern()
