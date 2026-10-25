@@ -59,12 +59,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 25 |
-| false-positive | 22 |
+| false-positive | 23 |
 | missing-feature | 18 |
 | perf | 10 |
 | miscompile | 7 |
+| run-vs-build | 6 |
 | soundness | 5 |
-| run-vs-build | 5 |
 | other | 2 |
 | codegen-gap | 2 |
 
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen | 22 |
 | interp | 16 |
 | mir | 16 |
-| cli | 11 |
+| cli | 13 |
 | runtime | 8 |
 | ownership | 6 |
 | mir-llvm | 5 |
@@ -131,9 +131,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-31 | 2026-10-24 | parser | low | A reserved keyword (`and`) bound by a `for` loop, or as a match-arm pattern, gets the right "reserved keyword" error and then cascade errors: `Expected expression, found RightBrace` and, for the loop, a false `file contains both top-level statements and an explicit fn main()` that points at a statement inside `main` | — |
 | B-2026-10-24-36 | 2026-10-24 | typecheck+mir | low | A `Copy` binding destructured from a borrowed value takes `*` inconsistently: `karac check` refuses `*w` after `let (_, w) = q.front().unwrap()` or `let (v, i) = it.next().unwrap()` (right, per core-semantics §4.6/§5.10) but accepts `*s` after `while let Some((s, _)) = q.front()`, `*a` after `if let Some((a, _)) = q.front()` and `*index` after `for (val, index) in queries.iter()`, and every MIR front end accepts all of them | — |
 | B-2026-10-24-38 | 2026-10-24 | cli | low | `karac fix` still answers E_INDEX_MOVE_NON_COPY on a DESTRUCTURING `let (a, b) = cases[i];` (both parts only read) with `.clone()`, a deep copy of the element, instead of the `ref cases[i]` borrow the message lists first; B-2026-10-24-18's borrow fix covers only a plain `let t = v[i];` | — |
-| B-2026-10-24-43 | 2026-10-24 | cli | medium | A package with more than one module cannot name a v2-only library item (`WsMessage`, `TlsFailure`): its per-module package check resolves against the legacy library registrations, so `karac check` AND `karac build` refuse it (`undefined type 'WsMessage'`), though the same code in a lone `src/main.kara` checks and builds | — |
 | B-2026-10-25-1 | 2026-10-25 | interp+mir-llvm | low | Indexing a `Map` with a missing key (`m[k]`, `m[k] -= 1`) stops with `runtime error: explicit panic` under `__mir-run` and `__mir-llvm-run`, a message that names no key and reads as if the program had called `panic`, where an out-of-range `Vec` index says `index out of bounds` | — |
 | B-2026-10-25-3 | 2026-10-25 | mir | low | v2 prints no error return trace for a `?` chain: `main` returning a propagated `Err` prints `Error: e` alone on both backends, and a panic's trace is only its own location, though design.md § Error return traces records each `?` site on the way (2 cli tests ignored) | — |
+| B-2026-10-25-4 | 2026-10-25 | cli | medium | A package with more than one module is checked without D5: its per-module passes and late phases read a bare parameter as owned, so the check in front of `karac run` / `karac build` refuses a call a lone file accepts (`value 's' moved here, used again here` after passing `s` to a bare `String` parameter) | — |
+| B-2026-10-25-5 | 2026-10-25 | cli | medium | `karac check` on a package with more than one module runs only the module-aware package check, not the v2 check of the combined source that `karac run` and `karac build` run after it, so check passes a package that run and build refuse (examples/db_pipeline: `All checks passed.`, but `karac run` refuses `cannot move 'row'` at src/db.kara:105:64) | — |
 
 ### Fixed
 
@@ -195,6 +196,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-40 | typecheck | low | `karac check` says `CODES.find(s)` MOVES its String argument when the receiver is a `const` Str (`const CODES: Str = "LRI";`), so a later use of `s`… | be69aae3e9 |
 | B-2026-10-24-41 | effect | medium | `karac check` accepts a public function that reads a socket under `with sends(Network) receives(Network)`: the library's socket, TLS, UDP, WebSocket… | 86104518db |
 | B-2026-10-24-42 | typecheck | low | `s.as_bytes()` on a `String` is a bare E0236 `no method 'as_bytes' on type 'String'` with no note and no fix-it, though `String.bytes()` is the metho… | 4f6892cea5 |
+| B-2026-10-24-43 | cli | medium | A package with more than one module cannot name a v2-only library item (`WsMessage`, `TlsFailure`): its per-module package check resolves against the… | 3c10118a4d |
 | B-2026-10-25-2 | mir-llvm | medium | A built program dies with exit 141 (SIGPIPE) when it writes to a child's stdin after the child exits; the MIR interpreter returns an error from the s… | e09926a988 |
 
 </details>
