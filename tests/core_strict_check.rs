@@ -13785,6 +13785,49 @@ fn a_package_diagnostic_names_its_places_by_file_line_and_offset() {
 }
 
 #[test]
+fn a_package_function_named_like_a_library_function_leaves_other_modules_the_library_one() {
+    // B-2026-10-25-38: a module's own `take` is that module's, and its
+    // importers', in the package's combined source; a module that does not
+    // import it still calls `std.mem`'s `take`, as a lone file does.
+    let (dir, _) = fixture("package-fn-named-like-library", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"fq\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/ast.kara"),
+        "pub struct Box2 {\n    pub s: String,\n}\npub fn take(b: own Box2) -> String {\n    b.s\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/util.kara"),
+        "import ast.{Box2, take};\npub fn size() -> i64 {\n    take(Box2 { s: \"abc\" }).len()\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "import util.{size};\nfn main() {\n    let mut x = 5;\n    let y = take(mut x);\n    \
+         println(f\"{x} {y} {size()}\");\n}\n",
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac()
+        .args(["run", "src/main.kara"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "0 5 3\n", "{out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

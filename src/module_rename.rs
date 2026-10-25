@@ -133,9 +133,25 @@ pub fn plan(tree: &ProgramTree) -> FlatRenames {
             declared_by.entry(name.as_str()).or_default().push(id);
         }
     }
+    // A function a module other than the root declares under a library
+    // function's name collides with the library: in the flat unit it would
+    // take the name from every module that means the library's (a `take`
+    // in ast.kara read by main.kara's `take(mut x)`, B-2026-10-25-38).
+    let library = library_function_names();
     let mut colliding: Vec<&str> = declared_by
         .iter()
-        .filter(|(_, mods)| mods.len() > 1)
+        .filter(|(name, mods)| {
+            mods.len() > 1
+                || library.contains(**name)
+                    && mods.iter().any(|&id| {
+                        id != tree.root
+                            && tree
+                                .module(id)
+                                .items
+                                .iter()
+                                .any(|it| matches!(it, Item::Function(f) if f.name == **name))
+                    })
+        })
         .map(|(name, _)| *name)
         .collect();
     colliding.sort_unstable();
@@ -169,6 +185,31 @@ pub fn plan(tree: &ProgramTree) -> FlatRenames {
         }
     }
     renames
+}
+
+/// The top-level functions of the library a program is compiled with: the
+/// baked stdlib and the library source v2 appends.
+fn library_function_names() -> &'static HashSet<String> {
+    static NAMES: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(|| {
+        let functions = |items: &[Item]| -> Vec<String> {
+            items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::Function(f) => Some(f.name.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut names: HashSet<String> = crate::prelude::STDLIB_PROGRAMS
+            .iter()
+            .flat_map(|(_, p)| functions(&p.items))
+            .collect();
+        for (_, src) in crate::prelude::LIBRARY_SOURCES {
+            names.extend(functions(&crate::parse(src).program.items));
+        }
+        names
+    });
+    &NAMES
 }
 
 /// Does `m` declare `name` in a position where the identifier IS the linkage?
