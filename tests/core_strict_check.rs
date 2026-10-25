@@ -13314,6 +13314,66 @@ fn a_package_with_two_modules_reads_a_bare_parameter_as_a_borrow() {
 }
 
 #[test]
+fn a_package_check_refuses_what_the_v2_check_of_its_combined_source_does() {
+    // B-2026-10-25-5: `karac check` on a package with more than one module
+    // also runs the v2 check of the combined source that `karac run` and
+    // `karac build` run, so a refusal only that check makes (a library
+    // method taking `own self` on a bare `for` element) fails check too,
+    // named by its module's file in text and JSON alike.
+    let (dir, _) = fixture("two-modules-combined-check", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/util.kara"),
+        "pub fn total(v: own Vec[Option[String]]) -> i64 {\n    let mut n = 0;\n    \
+         for o in v {\n        n += o.unwrap().len();\n    }\n    n\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "import util.{total};\nfn main() {\n    let v = vec![Some(\"ab\".to_string())];\n    \
+         println(f\"{total(v)}\");\n}\n",
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).replace('\\', "/");
+    assert!(!out.status.success(), "check must fail as run does: {err}");
+    assert!(
+        err.contains("src/util.kara:4:14: cannot move a `for` element"),
+        "{err}"
+    );
+    let out = karac()
+        .args(["check", "--output=json"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let json = String::from_utf8_lossy(&out.stdout).replace("\\\\", "/");
+    assert!(!out.status.success(), "{json}");
+    assert!(
+        json.contains("\"file\":\"src/util.kara\",\"line\":4,\"column\":14"),
+        "{json}"
+    );
+    std::fs::write(
+        dir.join("src/util.kara"),
+        "pub fn total(v: own Vec[Option[String]]) -> i64 {\n    let mut n = 0;\n    \
+         for o in v.into_iter() {\n        n += o.unwrap().len();\n    }\n    n\n}\n",
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("All checks passed."));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

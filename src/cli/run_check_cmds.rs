@@ -738,6 +738,33 @@ pub(super) fn cmd_check_project(
         );
         return;
     }
+    // `run` and `build` check the package's combined source by the v2 rules
+    // after this check, so `check` does too, and reports what they would
+    // (B-2026-10-25-5). A type or late-phase refusal here is the v2 check's
+    // to report first, as in `run_v2::combine`; a parse, cycle or resolve
+    // one is the package's alone, and leaves nothing to combine.
+    if pc.refuses_only_by_type() {
+        let entry = &pc.tree.modules[pc.tree.root as usize].file;
+        let filename = super::project_v2::shown(entry);
+        match super::project_v2::source_files(&pc.tree, false).and_then(|files| {
+            super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "")
+        }) {
+            Ok(a) => {
+                super::run_v2::check_v2_or_exit(
+                    &filename,
+                    &a.text,
+                    Some(&a),
+                    Some(&mf),
+                    lints.clone(),
+                    output,
+                );
+            }
+            // A package `run` and `build` cannot combine, they refuse, and
+            // so does `check`.
+            Err(e) if !pc.has_errors() => super::run_v2::refused_project(&e, output, "check"),
+            Err(_) => {}
+        }
+    }
     let errors = pc.error_count();
     match output {
         OutputMode::Json => {

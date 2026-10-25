@@ -104,6 +104,27 @@ pub(super) fn check_v2(
     lint_overrides: crate::lints::CliLintOverrides,
     output: OutputMode,
 ) {
+    let pipeline = check_v2_or_exit(filename, source, project, manifest, lint_overrides, output);
+    if let Some(pc) = project.and_then(|a| a.refusal.as_ref()) {
+        super::run_check_cmds::render_package_refusal(pc, output);
+    }
+    if output == OutputMode::Text {
+        // Warnings only: the check passed.
+        print_diagnostics(&pipeline, project);
+    }
+}
+
+/// [`check_v2`]'s check: an error fails the command with exit 1, its
+/// diagnostics naming the package's files; a passing check's pipeline is
+/// returned with its warnings unprinted.
+pub(super) fn check_v2_or_exit(
+    filename: &str,
+    source: &str,
+    project: Option<&super::project_v2::Amalgam>,
+    manifest: Option<&manifest::Manifest>,
+    lint_overrides: crate::lints::CliLintOverrides,
+    output: OutputMode,
+) -> Pipeline {
     let mut lint_overrides = lint_overrides;
     if let Some(m) = manifest {
         lint_overrides.apply_manifest_lints(&m.lints);
@@ -149,13 +170,7 @@ pub(super) fn check_v2(
         }
         process::exit(1);
     }
-    if let Some(pc) = project.and_then(|a| a.refusal.as_ref()) {
-        super::run_check_cmds::render_package_refusal(pc, output);
-    }
-    if output == OutputMode::Text {
-        // Warnings only: the check passed.
-        print_diagnostics(&pipeline, project);
-    }
+    pipeline
 }
 
 /// The text diagnostics, their places mapped back to the package's files
@@ -211,7 +226,7 @@ pub(super) fn combine(
 
 /// The package cannot be combined into one source: a compile error naming
 /// why, exit 1.
-fn refused_project(e: &str, output: OutputMode, cmd: &str) -> ! {
+pub(super) fn refused_project(e: &str, output: OutputMode, cmd: &str) -> ! {
     let e = format!("error[project]: `karac {cmd}`: {e}");
     match output {
         OutputMode::Text => eprintln!("{e}"),
