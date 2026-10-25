@@ -59,8 +59,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 32 |
-| false-positive | 28 |
-| missing-feature | 20 |
+| false-positive | 29 |
+| missing-feature | 21 |
 | perf | 10 |
 | miscompile | 8 |
 | soundness | 6 |
@@ -73,9 +73,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 48 |
+| typecheck | 49 |
 | codegen | 22 |
-| mir | 20 |
+| mir | 21 |
 | interp | 17 |
 | cli | 13 |
 | ownership | 10 |
@@ -146,6 +146,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-19 | 2026-10-25 | ownership | low | `karac fix` applies both the `: Str` fix-it on a string-literal `let` (B-2026-10-24-33) and the ownership pass's `.clone()` fix-it for a 'moved' error on the same binding, and the combined result fails check: `Str.clone()` is a `String`, and the move only existed while the binding was a `String` | — |
 | B-2026-10-25-20 | 2026-10-25 | ownership | high | `karac check` accepts an ESCAPING closure that uses a bare (borrowed) non-Copy, non-handle parameter as a whole (`new_op(|x| x + size(p))`, `p: P` with a `String` field): the closure can neither move it out of the borrow nor outlive it, so v2 captures the reference and it dangles | — |
 | B-2026-10-25-22 | 2026-10-25 | mir | low | `IsolatingGroup.spawn` of a named function (`g.spawn(work)`) is refused at build with `an isolating group's spawn of other than a closure written there is not lowered yet`; `karac check` accepts it | — |
+| B-2026-10-25-23 | 2026-10-25 | mir | low | v2 does not mark a panic raised while a `requires`/`ensures` predicate is evaluated (inline or in a callee) as `contract predicate panicked: ..`, so `karac test` reports it with no `contract_predicate_panicked` category (1 cli test ignored) | — |
+| B-2026-10-25-24 | 2026-10-25 | typecheck | medium | `karac check` accepts `with_provider[Clock](FakeClock {..}, ..)` and `Clock.now()` when the program redeclares `effect resource Clock;` and `FakeClock` implements no `ClockProvider` (only an inherent `now`); the same program without the redeclaration, and a trait-less user resource of any other name, are refused per §14.1, and the MIR builder stops on it | — |
 
 ### Fixed
 

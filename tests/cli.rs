@@ -7429,7 +7429,6 @@ fn test_test_all_passing() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not report this yet"]
 fn test_test_failure_emits_left_right_and_location() {
     let tmp = scratch_project("test-failure-detail");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -7465,7 +7464,7 @@ fn test_test_failure_emits_left_right_and_location() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not report this yet"]
+#[ignore = "B-2026-10-25-23: v2 does not mark a panic inside a contract predicate"]
 fn test_test_failure_emits_contract_fault_category() {
     // phase-9 step 7: a `test_fail` event carries a typed `category` field for
     // contract faults — `contract_violated` (false predicate) vs
@@ -7582,7 +7581,6 @@ fn test_test_jit_all_passing() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not report this yet"]
 fn test_test_jit_failure_emits_left_right_and_location() {
     let tmp = scratch_project("test-jit-failure-detail");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -7769,7 +7767,6 @@ fn test_jit_batch_runner_continues_after_failing_tests() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not report this yet"]
 fn test_jit_skeleton_path_links_real_bodies_not_stubs() {
     // Incremental-typecheck slice: a no-fixture test's per-test `main` module
     // is built from the module's *signature-only skeleton* (helper bodies
@@ -7797,7 +7794,7 @@ fn test_jit_skeleton_path_links_real_bodies_not_stubs() {
          enum Shape { Dot, Box(i64, i64) }\n\
          fn area(s: Shape) -> i64 { match s { Shape.Dot => 0, Shape.Box(w, h) => w * h } }\n\
          fn triple(n: i64) -> i64 { n * 3 }\n\
-         fn pick[T](a: T, b: T) -> T { a }\n\
+         fn pick[T](a: own T, b: own T) -> T { a }\n\
          test \"free fn body\" { assert_eq(triple(7), 21) }\n\
          test \"method body\" { let p = Point.new(3, 4); assert_eq(p.sum(), 7) }\n\
          test \"enum match body\" { assert_eq(area(Shape.Box(3, 4)), 12) }\n\
@@ -7934,7 +7931,6 @@ fn test_test_compile_error_exits_nonzero_without_summary() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not report this yet"]
 fn test_test_test_only_module_with_no_production_sibling() {
     // A `_test.kara` file with no production sibling — design.md § Three-
     // level visibility says it shares the directory of the module it would
@@ -8793,7 +8789,6 @@ fn test_test_block_form_all_passing() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not report this yet"]
 fn test_test_block_form_failure_surfaces_case_name() {
     let tmp = scratch_project("test-block-failure");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -8922,7 +8917,6 @@ fn test_test_block_form_requires_skips_when_env_var_unset() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not run this provider fixture yet"]
 fn test_test_block_form_with_provider_fixture_is_recognized() {
     // Block-form cases can stack `#[with_provider(R, ctor)]`
     // attributes the same way `fn test_*` does. The fixture
@@ -8935,7 +8929,7 @@ fn test_test_block_form_with_provider_fixture_is_recognized() {
         &tmp.join("src/main.kara"),
         "fn main() {}\n\
          shared struct FakeClock { value: i64 }\n\
-         impl FakeClock {\n    fn now(self) -> i64 { self.value }\n}\n",
+         impl ClockProvider for FakeClock {\n    fn now(ref self) -> i64 { self.value }\n}\n",
     );
     write(
         &tmp.join("src/main_test.kara"),
@@ -9296,9 +9290,8 @@ fn with_provider_project(tag: &str, test_attrs_and_body: &str) -> std::path::Pat
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "effect resource Clock;\n\
-         struct FakeClock { t: i64 }\n\
-         impl FakeClock { fn now(self) -> i64 { self.t } }\n\
+        "struct FakeClock { t: i64 }\n\
+         impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }\n\
          fn main() {}\n",
     );
     write(&tmp.join("src/main_test.kara"), test_attrs_and_body);
@@ -9306,7 +9299,6 @@ fn with_provider_project(tag: &str, test_attrs_and_body: &str) -> std::path::Pat
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not run this provider fixture yet"]
 fn test_with_provider_fixture_pushes_frame_for_test() {
     let body = "#[with_provider(Clock, FakeClock { t: 42 })]\n\
                 test \"reads injected clock\" {\n\
@@ -9372,26 +9364,22 @@ fn test_with_provider_constructor_failure_emits_structured_fail() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not run this provider fixture yet"]
-fn test_with_provider_trait_less_user_resource_fixture_dispatches() {
-    // A *trait-less* user resource (`effect resource Foo;`, no provider trait)
-    // used as a fixture. Its dispatch is module-local (no canonical method
-    // order — derived per module from the override type's inherent impl), so
-    // the per-test JIT path must run this module in FULL mode (the persistent-
-    // module cache would split the `with_provider` site from the `Foo.val()`
-    // call site and drop the override → `Foo.val()` returned 0). Two fixtures
-    // exercise the multi-resource path. Both lanes (JIT-default under
-    // lljit_prototype, interpreter under plain --features llvm) must pass.
+fn test_with_provider_user_resource_fixtures_dispatch() {
+    // Two user resources, each bound by a provider trait (core semantics
+    // §14.1; a bare `effect resource Foo;` cannot be bound, see the refusal
+    // test below), used as fixtures: the first a struct literal, the second
+    // a constructor call. Each resource call reaches its own provider.
     let tmp = scratch_project("test-with-provider-traitless-user");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "effect resource FooA;\n\
-         effect resource FooB;\n\
+        "trait Val { fn val(ref self) -> i64; }\n\
+         effect resource FooA: Val;\n\
+         effect resource FooB: Val;\n\
          struct ProvA { v: i64 }\n\
-         impl ProvA { fn val(self) -> i64 { self.v } }\n\
+         impl Val for ProvA { fn val(ref self) -> i64 { self.v } }\n\
          struct ProvB { v: i64 }\n\
-         impl ProvB { fn val(self) -> i64 { self.v } }\n\
+         impl Val for ProvB { fn val(ref self) -> i64 { self.v } }\n\
          fn make_b() -> ProvB { ProvB { v: 20 } }\n\
          fn main() {}\n",
     );
@@ -9417,25 +9405,55 @@ fn test_with_provider_trait_less_user_resource_fixture_dispatches() {
     );
 }
 
+/// A user resource with no provider trait cannot be bound (core semantics
+/// §14.1), so a fixture binding one is refused, naming the missing bound.
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not run this provider fixture yet"]
+fn test_with_provider_fixture_of_a_trait_less_resource_is_refused() {
+    let tmp = scratch_project("test-with-provider-traitless-refused");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "effect resource Foo;\n\
+         struct Prov { v: i64 }\n\
+         impl Prov { fn val(ref self) -> i64 { self.v } }\n\
+         fn main() {}\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "#[with_provider(Foo, Prov { v: 10 })]\n\
+         test \"trait-less\" {\n\
+             assert_eq(Foo.val(), 10);\n\
+         }\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected a refusal; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("declares no provider trait"),
+        "the refusal should name the missing bound; stdout:\n{stdout}"
+    );
+}
+
+#[test]
 fn test_with_provider_second_constructor_failure_names_that_resource() {
-    // Two trait-less user-resource fixtures: the FIRST ctor succeeds, the
-    // SECOND faults. The fail event must name the *second* resource (FooB) in
-    // `provider_construction_failed` — proving (a) multi-fixture trait-less
-    // dispatch codegens at all (full mode + call-ctor type inference), and
-    // (b) the marker-count → fixture-index recovery picks the right resource.
-    // Both lanes agree (the interpreter stops at the first failing ctor).
+    // Two user-resource fixtures: the FIRST ctor succeeds, the SECOND
+    // faults. The fail event must name the *second* resource (FooB) in
+    // `provider_construction_failed`.
     let tmp = scratch_project("test-with-provider-2nd-ctor-fail");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "effect resource FooA;\n\
-         effect resource FooB;\n\
+        "trait Val { fn val(ref self) -> i64; }\n\
+         effect resource FooA: Val;\n\
+         effect resource FooB: Val;\n\
          struct ProvA { v: i64 }\n\
-         impl ProvA { fn val(self) -> i64 { self.v } }\n\
+         impl Val for ProvA { fn val(ref self) -> i64 { self.v } }\n\
          struct ProvB { v: i64 }\n\
-         impl ProvB { fn val(self) -> i64 { self.v } }\n\
+         impl Val for ProvB { fn val(ref self) -> i64 { self.v } }\n\
          fn boom_b() -> ProvB { unreachable() }\n\
          fn main() {}\n",
     );
@@ -9503,7 +9521,6 @@ fn test_with_provider_and_requires_conflict_rejected_at_discovery() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not run this provider fixture yet"]
 fn test_with_provider_fail_event_grows_providers_field() {
     // The test body fails; the `test_fail` event should carry a
     // `providers` array listing the active fixtures. Passing tests stay
@@ -9529,7 +9546,6 @@ fn test_with_provider_fail_event_grows_providers_field() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not run this provider fixture yet"]
 fn test_multiple_with_provider_attributes_all_active_in_body() {
     // Two `#[with_provider]` attributes — both providers visible inside
     // the test body. Source order is outer-to-inner per spec.
@@ -9537,12 +9553,12 @@ fn test_multiple_with_provider_attributes_all_active_in_body() {
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "effect resource Clock;\n\
-         effect resource AuditLog;\n\
+        "trait Audit { fn count(ref self) -> i64; }\n\
+         effect resource AuditLog: Audit;\n\
          struct FakeClock { t: i64 }\n\
-         impl FakeClock { fn now(self) -> i64 { self.t } }\n\
+         impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }\n\
          struct FakeLog { n: i64 }\n\
-         impl FakeLog { fn count(self) -> i64 { self.n } }\n\
+         impl Audit for FakeLog { fn count(ref self) -> i64 { self.n } }\n\
          fn main() {}\n",
     );
     write(
@@ -9571,7 +9587,6 @@ fn test_multiple_with_provider_attributes_all_active_in_body() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not run this provider fixture yet"]
 fn test_with_provider_frame_popped_between_tests() {
     // Test A uses `#[with_provider(Clock, ...)]` to install a FakeClock
     // returning a fixed value; test B has no fixture. After A exits, its
@@ -9583,7 +9598,7 @@ fn test_with_provider_frame_popped_between_tests() {
     write(
         &tmp.join("src/main.kara"),
         "struct FakeClock { t: i64 }\n\
-         impl FakeClock { fn now(self) -> i64 { self.t } }\n\
+         impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }\n\
          fn main() {}\n",
     );
     write(
@@ -9609,7 +9624,6 @@ fn test_with_provider_frame_popped_between_tests() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: `karac test` on v2 does not run this provider fixture yet"]
 fn test_with_provider_overrides_builtin_primitive_clock() {
     // CR-C coverage slot: `#[with_provider(Clock, ...)]` overrides the
     // ambient default provider for the test's duration. Built-in
@@ -9623,7 +9637,7 @@ fn test_with_provider_overrides_builtin_primitive_clock() {
     write(
         &tmp.join("src/main.kara"),
         "struct FakeClock { t: i64 }\n\
-         impl FakeClock { fn now(self) -> i64 { self.t } }\n\
+         impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }\n\
          fn main() {}\n",
     );
     write(

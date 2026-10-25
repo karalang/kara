@@ -245,7 +245,9 @@ pub(super) fn source_files(
         }
         let mut paths = vec![m.file.as_path()];
         if with_tests {
-            if let Some(t) = &m.test_file {
+            // A test file with no production sibling is the module's own
+            // file as well as its companion.
+            if let Some(t) = m.test_file.as_ref().filter(|t| **t != m.file) {
                 paths.push(t.as_path());
             }
         }
