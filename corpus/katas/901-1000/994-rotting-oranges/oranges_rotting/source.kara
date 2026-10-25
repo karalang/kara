@@ -1,0 +1,154 @@
+// LeetCode #994: Rotting Oranges -- breadth-first from every rotten one
+//
+// Every rotten orange goes into one queue at minute 0; each orange taken
+// off the queue rots its fresh neighbours a minute later and queues
+// them, so oranges leave the queue in the order they rot and the last
+// one's minute is the answer, unless a fresh orange is left. O(mn).
+
+fn oranges_rotting(grid: ref Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut g = grid.clone();
+    let mut queue: VecDeque[(i64, i64, i64)] = VecDeque.new();
+    let mut fresh = 0;
+    for r in 0..m {
+        for c in 0..n {
+            if g[r][c] == 2 {
+                queue.push_back((r, c, 0));
+            } else if g[r][c] == 1 {
+                fresh += 1;
+            }
+        }
+    }
+    let steps = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let mut minutes = 0;
+    while let Some((r, c, t)) = queue.pop_front() {
+        minutes = t;
+        for (dr, dc) in steps.iter() {
+            let nr = r + *dr;
+            let nc = c + *dc;
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and g[nr][nc] == 1 {
+                g[nr][nc] = 2;
+                fresh -= 1;
+                queue.push_back((nr, nc, t + 1));
+            }
+        }
+    }
+    if fresh > 0 { -1 } else { minutes }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// m by n cells, each up to most: empty 2 in 16, rotten 1 in 16, fresh
+// the rest.
+fn random_grid(most: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let m = 1 + next_random(mut seed) % most;
+    let n = 1 + next_random(mut seed) % most;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let k = next_random(mut seed) % 16;
+            row.push(if k < 2 { 0 } else if k == 2 { 2 } else { 1 });
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn grid_text(grid: ref Vec[Vec[i64]]) -> String {
+    let rows: Vec[String] = grid.iter().map(|row| {
+        let cells: Vec[String] = row.iter().map(|v| f"{v}").collect();
+        "[" + cells.join(",") + "]"
+    }).collect();
+    "[" + rows.join(",") + "]"
+}
+
+fn filled(v: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..10 {
+        grid.push(Vec.filled(10, v));
+    }
+    grid
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![2, 1, 1], vec![1, 1, 0], vec![0, 1, 1]],
+        vec![vec![2, 1, 1], vec![0, 1, 1], vec![1, 0, 1]],
+        vec![vec![0, 2]],
+        vec![vec![0]],
+        vec![vec![1]],
+        vec![vec![2]],
+        vec![vec![2, 1, 1], vec![1, 1, 1], vec![0, 1, 2]],
+        vec![vec![1, 2, 1, 1, 2, 1, 1]],
+        vec![vec![2], vec![1], vec![1], vec![1], vec![1]],
+        vec![vec![1, 1, 0], vec![0, 0, 0], vec![0, 1, 2]],
+    ];
+    for grid in cases.iter() {
+        println(f"grid = {grid_text(grid)} -> {oranges_rotting(grid)}");
+    }
+    let mut corner = filled(1);
+    corner[0][0] = 2;
+    println(f"10 by 10, all fresh but a rotten corner: {oranges_rotting(corner)}");
+    let mut middle = filled(1);
+    middle[4][4] = 2;
+    println(f"10 by 10, all fresh but a rotten middle: {oranges_rotting(middle)}");
+    println(f"10 by 10, all fresh: {oranges_rotting(filled(1))}");
+    // even rows full, each odd row one orange at alternate ends
+    let mut snake = filled(0);
+    for r in 0..10 {
+        for c in 0..10 {
+            if r % 2 == 0 {
+                snake[r][c] = 1;
+            }
+        }
+    }
+    let mut r = 1;
+    while r < 10 {
+        if r % 4 == 1 {
+            snake[r][9] = 1;
+        } else {
+            snake[r][0] = 1;
+        }
+        r += 2;
+    }
+    snake[0][0] = 2;
+    println(f"10 by 10, a winding path of 55 oranges: {oranges_rotting(snake)}");
+    let mut board = filled(0);
+    for r in 0..10 {
+        for c in 0..10 {
+            if (r + c) % 2 == 0 {
+                board[r][c] = 1;
+            }
+        }
+    }
+    board[0][0] = 2;
+    println(f"10 by 10, a checkerboard: {oranges_rotting(board)}");
+    // random grids: 300 of up to 3 by 3, 3000 of up to 10 by 10
+    let mut seed = 994;
+    for (count, most) in vec![(300, 3), (3000, 10)] {
+        let mut cells = 0;
+        let mut stuck = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let grid = random_grid(most, mut seed);
+            cells += grid.len() * grid[0].len();
+            let got = oranges_rotting(grid);
+            if got < 0 {
+                stuck += 1;
+            } else {
+                total += got;
+            }
+            check = (check * 31 + got + 2) % 1000000007;
+        }
+        println(f"{count} random grids of {cells} cells: {stuck} never rot, {total} minutes, checksum {check}");
+    }
+}

@@ -1,0 +1,17 @@
+grid = [[2,1,1],[1,1,0],[0,1,1]] -> 4
+grid = [[2,1,1],[0,1,1],[1,0,1]] -> -1
+grid = [[0,2]] -> 0
+grid = [[0]] -> 0
+grid = [[1]] -> -1
+grid = [[2]] -> 0
+grid = [[2,1,1],[1,1,1],[0,1,2]] -> 2
+grid = [[1,2,1,1,2,1,1]] -> 2
+grid = [[2],[1],[1],[1],[1]] -> 4
+grid = [[1,1,0],[0,0,0],[0,1,2]] -> -1
+10 by 10, all fresh but a rotten corner: 18
+10 by 10, all fresh but a rotten middle: 10
+10 by 10, all fresh: -1
+10 by 10, a winding path of 55 oranges: 54
+10 by 10, a checkerboard: -1
+300 random grids of 1288 cells: 232 never rot, 151 minutes, checksum 962666927
+3000 random grids of 91505 cells: 1201 never rot, 10799 minutes, checksum 435509014

@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/994-rotting-oranges/bench/oranges_rotting.kara"
+dedup_of = []
+tags = ["lib:vecdeque", "bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "3bd568bbf"
+extracted_src = "8400d770"
