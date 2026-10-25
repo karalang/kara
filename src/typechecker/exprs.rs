@@ -2530,11 +2530,7 @@ impl<'a> super::TypeChecker<'a> {
                         };
                         if matches_expected {
                             let cap_ty = self.infer_expr(&args[0].value);
-                            self.check_assignable(
-                                &Type::Int(IntSize::I64),
-                                &cap_ty,
-                                args[0].value.span,
-                            );
+                            self.check_i64_arg(&args[0].value, &cap_ty);
                             self.record_expr_type(&expr.span, expected);
                             return expected.clone();
                         }
@@ -2558,11 +2554,7 @@ impl<'a> super::TypeChecker<'a> {
                         let coll = segments[0].as_str();
                         if Self::try_with_capacity_result_matches(coll, expected) {
                             let cap_ty = self.infer_expr(&args[0].value);
-                            self.check_assignable(
-                                &Type::Int(IntSize::I64),
-                                &cap_ty,
-                                args[0].value.span,
-                            );
+                            self.check_i64_arg(&args[0].value, &cap_ty);
                             self.record_expr_type(&expr.span, expected);
                             return expected.clone();
                         }
@@ -2608,11 +2600,7 @@ impl<'a> super::TypeChecker<'a> {
                         {
                             if name == "Vec" && type_args.len() == 1 {
                                 let n_ty = self.infer_expr(&args[0].value);
-                                self.check_assignable(
-                                    &Type::Int(IntSize::I64),
-                                    &n_ty,
-                                    args[0].value.span,
-                                );
+                                self.check_i64_arg(&args[0].value, &n_ty);
                                 let f_ty = Type::Function {
                                     params: vec![Type::Int(IntSize::I64)],
                                     return_type: Box::new(type_args[0].clone()),
@@ -2635,11 +2623,7 @@ impl<'a> super::TypeChecker<'a> {
                         {
                             if name == "Vec" && type_args.len() == 1 {
                                 let n_ty = self.infer_expr(&args[0].value);
-                                self.check_assignable(
-                                    &Type::Int(IntSize::I64),
-                                    &n_ty,
-                                    args[0].value.span,
-                                );
+                                self.check_i64_arg(&args[0].value, &n_ty);
                                 // Push the inner element type into the
                                 // fill arg so a nested `Vec.new()` /
                                 // `Vec.with_capacity(n)` constructor at
@@ -7829,6 +7813,17 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// An `i64` length or capacity argument of a library constructor
+    /// (`Vec.filled`, `Vec.with_capacity`, ..): assignable, and an integer
+    /// that would change sign needs its `as` as at a user call
+    /// (B-2026-10-25-11).
+    pub(super) fn check_i64_arg(&mut self, arg: &Expr, actual: &Type) {
+        let want = Type::Int(IntSize::I64);
+        if self.check_assignable(&want, actual, arg.span) {
+            self.check_int_widening_coercion(arg, &want, actual);
+        }
+    }
+
     /// B-2026-07-09-7 variable half (design decision (B)): reject an implicit
     /// NARROWING or SIGN-CHANGING integer coercion at a check-mode boundary
     /// (`let`/arg/return/struct-field — every position funnels through
@@ -7874,6 +7869,20 @@ impl<'a> super::TypeChecker<'a> {
         }
         if int_coercion_is_widening(&source, &target) {
             return;
+        }
+        if target == Type::Int(IntSize::I64) {
+            if let Some(fix) = self.usize_cast_of_an_i64(expr) {
+                self.type_error_with_fix_it(
+                    "implicit coercion from 'usize' to 'i64' would change sign — sizes, \
+                     lengths and indices are `i64` in Kāra (`usize` is for FFI), so drop \
+                     the `as usize`"
+                        .to_string(),
+                    expr.span,
+                    TypeErrorKind::TypeMismatch,
+                    fix,
+                );
+                return;
+            }
         }
         self.type_error(
             format!(

@@ -200,8 +200,8 @@ struct Gf {
 
 fn gf_new(primitive: i64, size: i64) -> Gf {
     let order = size - 1;
-    let mut exp: Vec[i64] = Vec.filled((2 * order) as usize, 0);
-    let mut log: Vec[i64] = Vec.filled(size as usize, 0);
+    let mut exp: Vec[i64] = Vec.filled((2 * order), 0);
+    let mut log: Vec[i64] = Vec.filled(size, 0);
     let mut x: i64 = 1;
     for i in 0..order {
         exp[i] = x;
@@ -739,8 +739,8 @@ fn dm_high_level(p: ref Vec[i64], eci: i64) -> Vec[i64] {
     let n = p.len() as i64;
     let cols = (n + 1) * 3;
     let total = 4 * cols;
-    let mut dp: Vec[i64] = Vec.filled(total as usize, DM_INF);
-    let mut prev: Vec[i64] = Vec.filled(total as usize, -1);
+    let mut dp: Vec[i64] = Vec.filled(total, DM_INF);
+    let mut prev: Vec[i64] = Vec.filled(total, -1);
     let eci_cost: i64 = if eci >= 0 { 6 } else { 0 };
     for m in 0..4 {
         dp[m * cols] = eci_cost + dm_header(m);
@@ -1134,7 +1134,7 @@ fn place_standard(pl: mut ref Placer, r: i64, c: i64) {
 
 // DataMatrixPlacer: the diagonal snake over the mapping matrix.
 fn dm_place(cws: ref Vec[i64], rows: i64, cols: i64) -> Vec[i64] {
-    let mut pl = Placer { m: Vec.filled((rows * cols) as usize, -1), rows: rows, cols: cols, next: 0, cws: cws.clone() };
+    let mut pl = Placer { m: Vec.filled((rows * cols), -1), rows: rows, cols: cols, next: 0, cws: cws.clone() };
     let mut row: i64 = 4;
     let mut col: i64 = 0;
     loop {
@@ -1229,7 +1229,7 @@ fn dm_render(code: ref DmCode, qz: i64) -> Grid {
     let b = 1 + qz;
     let w = gw + 2 * b;
     let h = nrows + 2 * b;
-    let mut m: Vec[i64] = Vec.filled((w * h) as usize, 0);
+    let mut m: Vec[i64] = Vec.filled((w * h), 0);
     for r in 0..nrows {
         for c in 0..gw {
             m[(r + b) * w + c + b] = gapped[r * gw + c];
@@ -1427,13 +1427,13 @@ fn az_high_level(p: ref Vec[i64], eci: i64) -> Vec[i64] {
     let total = 5 * w;
     let mut d = AzDp {
         n: n,
-        dp: Vec.filled(total as usize, AZ_INF),
-        prev: Vec.filled(total as usize, -1),
-        ecount: Vec.filled(total as usize, 0),
-        ev: Vec.filled((total * 3) as usize, 0),
-        ew: Vec.filled((total * 3) as usize, 0),
-        bstart: Vec.filled(total as usize, -1),
-        bend: Vec.filled(total as usize, -1),
+        dp: Vec.filled(total, AZ_INF),
+        prev: Vec.filled(total, -1),
+        ecount: Vec.filled(total, 0),
+        ev: Vec.filled((total * 3), 0),
+        ew: Vec.filled((total * 3), 0),
+        bstart: Vec.filled(total, -1),
+        bend: Vec.filled(total, -1),
     };
     // The ECI prologue: P/S, FLG(n), then n digits.
     let mut eci_em: Vec[(i64, i64)] = Vec.new();
@@ -1453,9 +1453,9 @@ fn az_high_level(p: ref Vec[i64], eci: i64) -> Vec[i64] {
     d.dp[0] = eci_cost;
     // Byte-run windows for the byte-capable modes U, L, M: the start term
     // dp - 8*start, and a monotonic deque per length regime.
-    let mut term: Vec[i64] = Vec.filled((3 * w) as usize, 0);
-    let mut has_term: Vec[bool] = Vec.filled((3 * w) as usize, false);
-    let mut wbuf: Vec[i64] = Vec.filled((6 * w) as usize, 0);
+    let mut term: Vec[i64] = Vec.filled((3 * w), 0);
+    let mut has_term: Vec[bool] = Vec.filled((3 * w), false);
+    let mut wbuf: Vec[i64] = Vec.filled((6 * w), 0);
     let mut whead: Vec[i64] = Vec.filled(6, 0);
     let mut wtail: Vec[i64] = Vec.filled(6, 0);
     for pos in 0..n + 1 {
@@ -1927,7 +1927,7 @@ fn az_build(sz: ref AzSize, all_cws: ref Vec[i64], mode: ref Vec[i64]) -> Vec[i6
     let core: i64 = if sz.compact { 11 } else { 15 };
     let f: i64 = if sz.compact { 4 } else { 6 };
     let cs = (size - core) / 2;
-    let mut m: Vec[i64] = Vec.filled((size * size) as usize, 0);
+    let mut m: Vec[i64] = Vec.filled((size * size), 0);
     if not sz.compact {
         let ctr = (size - 1) / 2;
         for r in 0..size {
@@ -2014,7 +2014,7 @@ fn az_data(text: ref String, enc: ref String) -> Result[Payload, String] {
 fn az_ascii(code: ref AzCode, qz: i64) -> String {
     let size = code.sz.size;
     let w = size + 2 * qz;
-    let mut m: Vec[i64] = Vec.filled((w * w) as usize, 0);
+    let mut m: Vec[i64] = Vec.filled((w * w), 0);
     for r in 0..size {
         for c in 0..size {
             m[(r + qz) * w + c + qz] = code.m[r * size + c];

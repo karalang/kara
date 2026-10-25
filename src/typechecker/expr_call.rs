@@ -43,7 +43,7 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         }
         let n_ty = self.infer_expr(&args[0].value);
-        self.check_assignable(&Type::Int(IntSize::I64), &n_ty, args[0].value.span);
+        self.check_i64_arg(&args[0].value, &n_ty);
         let literal = super::TypeChecker::unsuffixed_int_literal_value(&args[0].value);
         let len = match (expected, literal) {
             (Some((_, n)), Some(k)) if k != n as i128 => {
@@ -971,7 +971,7 @@ impl<'a> super::TypeChecker<'a> {
                 // `Channel.new()`'s does: one fresh variable links the two
                 // ends, so a later `send` or `recv` pins it.
                 let cap_ty = self.infer_expr(&cap.value);
-                self.check_assignable(&Type::Int(IntSize::I64), &cap_ty, cap.value.span);
+                self.check_i64_arg(&cap.value, &cap_ty);
                 let elem = self.env.fresh_type_var();
                 let end = |name: &str| Type::Named {
                     name: name.to_string(),
@@ -1868,7 +1868,7 @@ impl<'a> super::TypeChecker<'a> {
                     // rejected outright, anything else is left to the runtime,
                     // which clamps rather than trusting the value.
                     let cap_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &cap_ty, args[0].value.span);
+                    self.check_i64_arg(&args[0].value, &cap_ty);
                     // A negative literal is `Unary { Neg, Integer }`, not an
                     // `Integer` with a negative value — checking only the
                     // latter let `Channel.bounded(-1)` through the contract
@@ -1917,7 +1917,7 @@ impl<'a> super::TypeChecker<'a> {
                 && args.len() == 2
             {
                 let n_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(&Type::Int(IntSize::I64), &n_ty, args[0].value.span);
+                self.check_i64_arg(&args[0].value, &n_ty);
                 let elem_ty = self.infer_expr(&args[1].value);
                 let ty = Type::Named {
                     name: "Vec".to_string(),
@@ -1967,7 +1967,7 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Error;
                 }
                 let n_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(&Type::Int(IntSize::I64), &n_ty, args[0].value.span);
+                self.check_i64_arg(&args[0].value, &n_ty);
                 let idx_ty = Type::Int(IntSize::I64);
                 if matches!(&args[1].value.kind, ExprKind::Closure { .. }) {
                     self.closure_param_seeds.insert(
@@ -2101,7 +2101,7 @@ impl<'a> super::TypeChecker<'a> {
                 let collection = segments[0].as_str();
                 if collection == "Vec" || collection == "VecDeque" {
                     let cap_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &cap_ty, args[0].value.span);
+                    self.check_i64_arg(&args[0].value, &cap_ty);
                     let ty = Type::Named {
                         name: collection.to_string(),
                         args: vec![self.env.fresh_type_var()],
@@ -2111,7 +2111,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if collection == "String" {
                     let cap_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &cap_ty, args[0].value.span);
+                    self.check_i64_arg(&args[0].value, &cap_ty);
                     self.record_expr_type(span, &Type::Str);
                     return Type::Str;
                 }

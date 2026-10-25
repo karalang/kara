@@ -123,6 +123,55 @@ fn int_cast_preserves_all_values(src: &Type, dst: &Type) -> bool {
 /// `s.len() as i64` casts the call). A `Binary` operand can never qualify
 /// even with a known extent: its parens are span-transparent, so the
 /// insertion would land INSIDE them and cast only the last term.
+impl super::TypeChecker<'_> {
+    /// B-2026-10-25-10 — `e` is `x as usize` over an `i64` `x`. Sizes,
+    /// lengths and indices are `i64` in Kāra (design.md §5; `usize` is for
+    /// FFI), so the cast is Rust's `len()`-is-`usize` habit and deleting it
+    /// is the fix. `None` unless the cast's operand ends where a fix can find.
+    pub(super) fn usize_cast_of_an_i64(&self, e: &Expr) -> Option<FixIt> {
+        let ExprKind::Cast {
+            expr: inner,
+            ty: cast_ty,
+        } = &e.kind
+        else {
+            return None;
+        };
+        let ty = |x: &Expr| {
+            self.expr_types.get(&SpanKey::from_span(&x.span)).map(|t| {
+                match resolve_type_var_top(t, &self.env.substitutions) {
+                    Type::Ref(t) | Type::MutRef(t) => *t,
+                    t => t,
+                }
+            })
+        };
+        if ty(e) != Some(Type::UInt(UIntSize::Usize)) || ty(inner) != Some(Type::Int(IntSize::I64))
+        {
+            return None;
+        }
+        let to = e.span.offset + e.span.length;
+        let from = match appended_cast_end_offset(inner) {
+            Some(from) => from,
+            // `(a * b) as usize`: the operand's span stops inside its
+            // parentheses. Written `) as usize`, the edit keeps the `)`.
+            None => {
+                let end = inner.span.offset + inner.span.length;
+                (cast_ty.span.offset == end + ") as ".len()
+                    && cast_ty.span.offset + cast_ty.span.length == to)
+                    .then_some(end + 1)?
+            }
+        };
+        (to > from).then(|| FixIt {
+            span: Span {
+                line: e.span.line,
+                column: e.span.column,
+                offset: from,
+                length: to - from,
+            },
+            replacement: String::new(),
+        })
+    }
+}
+
 pub(super) fn appended_cast_end_offset(expr: &Expr) -> Option<usize> {
     match &expr.kind {
         ExprKind::Identifier(_)
@@ -3623,16 +3672,40 @@ impl<'a> super::TypeChecker<'a> {
                                         ),
                                     }
                                 }
-                                None => self.type_error(
-                                    format!(
-                                        "cannot mix integer types '{l_disp}' and '{r_disp}' in \
-                                         arithmetic — they must match; cast explicitly with \
-                                         `as`, choosing the direction deliberately: neither \
-                                         type can represent every value of the other"
-                                    ),
-                                    right.span,
-                                    TypeErrorKind::TypeMismatch,
-                                ),
+                                None => {
+                                    let i64_ty = Type::Int(IntSize::I64);
+                                    let drop_cast = if left_ty == i64_ty {
+                                        self.usize_cast_of_an_i64(right)
+                                    } else if right_ty == i64_ty {
+                                        self.usize_cast_of_an_i64(left)
+                                    } else {
+                                        None
+                                    };
+                                    match drop_cast {
+                                        Some(fix) => self.type_error_with_fix_it(
+                                            format!(
+                                                "cannot mix integer types '{l_disp}' and \
+                                                 '{r_disp}' in arithmetic — sizes, lengths and \
+                                                 indices are `i64` in Kāra (`usize` is for \
+                                                 FFI), so drop the `as usize`"
+                                            ),
+                                            right.span,
+                                            TypeErrorKind::TypeMismatch,
+                                            fix,
+                                        ),
+                                        None => self.type_error(
+                                            format!(
+                                                "cannot mix integer types '{l_disp}' and \
+                                                 '{r_disp}' in arithmetic — they must match; \
+                                                 cast explicitly with `as`, choosing the \
+                                                 direction deliberately: neither type can \
+                                                 represent every value of the other"
+                                            ),
+                                            right.span,
+                                            TypeErrorKind::TypeMismatch,
+                                        ),
+                                    }
+                                }
                             }
                         }
                     } else if (left_is_int && matches!(right_ty, Type::Float(_)))

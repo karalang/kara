@@ -13950,6 +13950,46 @@ fn a_mut_inside_an_arm_or_loop_pattern_is_fixed_by_a_rebinding() {
 }
 
 #[test]
+fn a_usize_cast_of_an_i64_length_is_dropped_and_a_usize_length_needs_its_as() {
+    // B-2026-10-25-10: lengths are `i64` (design.md §5), so `x as usize`
+    // over an `i64`, met by an `i64` operand or slot, is Rust's habit and
+    // `karac fix` deletes the cast.
+    rejected_then_fixed_by(
+        "usize-cast-in-arithmetic",
+        "const DAYS: i64 = 7;\nfn main() {\n    let v: Vec[i64] = Vec.new();\n    let nc = v.len();\n    \
+         let a = nc * DAYS as usize;\n    println(f\"{a}\");\n}\n",
+        "sizes, lengths and indices are `i64` in Kāra (`usize` is for FFI), so drop the `as usize`",
+        "let a = nc * DAYS;",
+    );
+    rejected_then_fixed_by(
+        "usize-cast-as-a-length",
+        "fn main() {\n    let v: Vec[i64] = Vec.new();\n    let b: Vec[i64] = Vec.filled(v.len() as usize, 0);\n    \
+         println(f\"{b.len()}\");\n}\n",
+        "drop the `as usize`",
+        "Vec.filled(v.len(), 0)",
+    );
+    // B-2026-10-25-11: a `usize` length of `Vec.filled` or
+    // `Vec.with_capacity` changes sign as it would at a user call.
+    for (tag, call) in [
+        ("filled", "let a: Vec[i64] = Vec.filled(n, 0);"),
+        ("filled-synth", "let a = Vec.filled(n, 0);"),
+        ("with-capacity", "let a: Vec[i64] = Vec.with_capacity(n);"),
+    ] {
+        let (dir, path) = fixture(
+            &format!("usize-length-{tag}"),
+            &format!("fn main() {{\n    let n: usize = 5;\n    {call}\n    println(f\"{{a.len()}}\");\n}}\n"),
+        );
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success() && err.contains("implicit coercion from 'usize' to 'i64'"),
+            "{tag}: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is
