@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/901-1000/993-cousins-in-binary-tree/bench/is_cousins.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 993 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "6b161e479"
+classified_with = "48461e707"
 extracted_src = "a4778f55"
