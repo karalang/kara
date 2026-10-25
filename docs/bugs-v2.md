@@ -144,7 +144,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-19 | 2026-10-25 | ownership | low | `karac fix` applies both the `: Str` fix-it on a string-literal `let` (B-2026-10-24-33) and the ownership pass's `.clone()` fix-it for a 'moved' error on the same binding, and the combined result fails check: `Str.clone()` is a `String`, and the move only existed while the binding was a `String` | — |
 | B-2026-10-25-20 | 2026-10-25 | ownership | high | `karac check` accepts an ESCAPING closure that uses a bare (borrowed) non-Copy, non-handle parameter as a whole (`new_op(|x| x + size(p))`, `p: P` with a `String` field): the closure can neither move it out of the borrow nor outlive it, so v2 captures the reference and it dangles | — |
 | B-2026-10-25-22 | 2026-10-25 | mir | low | `IsolatingGroup.spawn` of a named function (`g.spawn(work)`) is refused at build with `an isolating group's spawn of other than a closure written there is not lowered yet`; `karac check` accepts it | — |
-| B-2026-10-25-23 | 2026-10-25 | mir | low | v2 does not mark a panic raised while a `requires`/`ensures` predicate is evaluated (inline or in a callee) as `contract predicate panicked: ..`, so `karac test` reports it with no `contract_predicate_panicked` category (1 cli test ignored) | — |
 | B-2026-10-25-24 | 2026-10-25 | typecheck | medium | `karac check` accepts `with_provider[Clock](FakeClock {..}, ..)` and `Clock.now()` when the program redeclares `effect resource Clock;` and `FakeClock` implements no `ClockProvider` (only an inherent `now`); the same program without the redeclaration, and a trait-less user resource of any other name, are refused per §14.1, and the MIR builder stops on it | — |
 | B-2026-10-25-25 | 2026-10-25 | typecheck+ownership | medium | `karac check` accepts a move out of a bare `for` element when the collection is a bare (borrowed) parameter: `fn total(v: Vec[Option[String]]) -> i64 { for o in v { n += o.unwrap().len(); } }` checks, though the same loop over `v: own Vec[...]` is refused (E0515 'a bare `for` borrows it, and this method takes `self` by value') and `karac run` refuses it at MIR build | — |
 
@@ -219,6 +218,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-16 | mir | medium | The MIR move check treats a `shared` handle captured by an ESCAPING closure as moved, so a second closure over it, or any later use, is 'use of _1, w… | f6b4ec231b |
 | B-2026-10-25-17 | mir+mir-llvm | high | A closure passed to a user function's `escaping` parameter that captures a BARE (borrowed) parameter of non-Copy type, or a field of one, captures it… | f6b4ec231b |
 | B-2026-10-25-21 | interp | medium | On the MIR interpreter, a group's deadline never tears down the task that ran last before it fired: that task is marked cancelled but stays parked, a… | c2f859dacc |
+| B-2026-10-25-23 | mir | low | v2 does not mark a panic raised while a `requires`/`ensures` predicate is evaluated (inline or in a callee) as `contract predicate panicked: ..`, so… | f82c28e5e9 |
 
 </details>
 
