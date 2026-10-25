@@ -10,14 +10,22 @@
 //! same byte length and keeps every newline, so columns and byte offsets
 //! inside a file survive too.
 //!
-//! What one flat scope cannot express is refused by name: two modules
-//! declaring the same top-level name, an import that renames (`as`), an
-//! import that names a module rather than items in it, and a module-level
-//! inner attribute (`#![..]`) in any file but the first.
+//! Names the flat scope cannot hold as written are rewritten in the copy
+//! (B-2026-10-23-14): an import that renames (`open as make`) has the
+//! file's uses of `make` read `open`; an import of a module as a whole
+//! (`import db.connection;`) has its qualified uses (`connection.open`) lose
+//! the qualifier; and two modules declaring the same top-level name have
+//! the one that gives it up, and its importers, use the name
+//! `module_rename::plan` mints, as does a member a module binding reaches
+//! (`conn.open`) when the file has something else named `open`. A rewrite pads with spaces when the new name
+//! is shorter, so only a longer name moves the columns after it on its line.
+//! A module-level inner attribute (`#![..]`) in any file but the first is
+//! refused by name.
 
 use super::*;
 use crate::ast::{ImportDecl, Item};
 use crate::module::ProgramTree;
+use std::collections::HashMap;
 
 /// The combined source of a package, and where each of its lines came from.
 pub(super) struct Amalgam {
@@ -277,38 +285,58 @@ pub(super) fn amalgamate(
     mut extra: impl FnMut(usize, &SourceFile<'_>) -> Vec<Edit>,
     tail: &str,
 ) -> Result<Amalgam, String> {
-    if !crate::module_rename::plan(tree).is_empty() {
-        return Err(
-            "two modules of this package declare the same top-level name (or an import \
-             renames one), which v2 project mode does not combine yet"
-                .into(),
-        );
-    }
+    let quals_of: Vec<Vec<(String, Vec<String>)>> = files
+        .iter()
+        .map(|f| {
+            f.items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Import(imp) => match import_kind(tree, f.module, imp) {
+                        Kind::ModuleImport(modules) => Some(modules),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .flatten()
+                .collect()
+        })
+        .collect();
+    let renames = Flat::new(tree, crate::module_rename::plan(tree), files, &quals_of);
     let mut header: Vec<(String, String, usize)> = Vec::new();
     let mut seen_std: std::collections::HashSet<(Vec<String>, String)> = Default::default();
     let mut bodies: Vec<String> = Vec::new();
     for (index, f) in files.iter().enumerate() {
         let mut edits = Vec::new();
+        // The names this file's text must read differently in the flat
+        // scope: its own renamed declarations, and what it imports under
+        // another name or from a module that renamed it.
+        let mut subst: HashMap<String, String> = renames.renamed_in(f.module.id).collect();
+        // What a wildcard import brings in under a name its module gave up,
+        // unless the file declares or names that item itself.
+        let mut wild: Vec<(String, String)> = Vec::new();
+        // Module names this file uses as qualifiers, with each module's path.
+        let quals = &quals_of[index];
         for item in &f.items {
             let Item::Import(imp) = item else { continue };
             let end = statement_end(&f.text, imp);
             match import_kind(tree, f.module, imp) {
-                Kind::Project => edits.push(blank(&f.text, imp.span.offset, end)),
-                Kind::ModuleImport(name) => {
-                    return Err(format!(
-                        "{}:{}: `import` of the module `{name}` as a whole; v2 project mode \
-                         combines the package into one scope, so import the items it uses",
-                        f.path.display(),
-                        imp.span.line
-                    ))
+                Kind::Project(target) => {
+                    for it in &imp.items {
+                        let bound = it.alias.as_ref().unwrap_or(&it.name);
+                        let flat = target
+                            .and_then(|t| flat_item(tree, &renames, t, &it.name, 8))
+                            .unwrap_or_else(|| it.name.clone());
+                        if *bound != flat {
+                            subst.insert(bound.clone(), flat);
+                        }
+                    }
+                    if let Some(t) = target.filter(|_| imp.is_wildcard) {
+                        wild.extend(renames.renamed_in(t));
+                    }
+                    edits.push(blank(&f.text, statement_start(&f.text, imp), end));
                 }
-                Kind::Renamed(name) => {
-                    return Err(format!(
-                        "{}:{}: `{name} as ..` renames an import, which v2 project mode \
-                         does not combine yet",
-                        f.path.display(),
-                        imp.span.line
-                    ))
+                Kind::ModuleImport(_) => {
+                    edits.push(blank(&f.text, statement_start(&f.text, imp), end));
                 }
                 Kind::Other => {
                     // A `std` (or unknown) import moves to the header, once.
@@ -337,7 +365,15 @@ pub(super) fn amalgamate(
                     if let Some(line) = line {
                         header.push((line, shown(f.path), imp.span.line));
                     }
-                    edits.push(blank(&f.text, imp.span.offset, end));
+                    edits.push(blank(&f.text, statement_start(&f.text, imp), end));
+                }
+            }
+        }
+        if !wild.is_empty() {
+            let own = crate::import_alias::declared_names(&f.items);
+            for (name, flat) in wild {
+                if !own.contains(&name) {
+                    subst.entry(name).or_insert(flat);
                 }
             }
         }
@@ -348,6 +384,9 @@ pub(super) fn amalgamate(
                 edits.push(blank(&f.text, at, at + line.trim_end_matches('\n').len()));
             }
             at += line.len();
+        }
+        if !subst.is_empty() || !quals.is_empty() {
+            edits.extend(flat_names(tree, &renames, f, &subst, quals)?);
         }
         edits.extend(extra(index, f));
         bodies.push(apply(&f.text, edits)?);
@@ -414,6 +453,19 @@ fn apply(src: &str, mut edits: Vec<Edit>) -> Result<String, String> {
     Ok(out)
 }
 
+/// Where an import statement starts: its span, after the `pub` of a
+/// re-export, which the span leaves out.
+fn statement_start(src: &str, imp: &ImportDecl) -> usize {
+    let start = imp.span.offset.min(src.len());
+    let before = src[..start].trim_end();
+    match before.strip_suffix("pub") {
+        Some(rest) if imp.is_pub && !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_') => {
+            rest.len()
+        }
+        _ => start,
+    }
+}
+
 /// Where an import statement ends: its span, and the `;` after it.
 fn statement_end(src: &str, imp: &ImportDecl) -> usize {
     let end = (imp.span.offset + imp.span.length).min(src.len());
@@ -427,12 +479,12 @@ fn statement_end(src: &str, imp: &ImportDecl) -> usize {
 }
 
 enum Kind {
-    /// Items of one of the package's own modules: blanked.
-    Project,
-    /// A module as a whole, used qualified: refused.
-    ModuleImport(String),
-    /// `name as alias` from a package module: refused.
-    Renamed(String),
+    /// Items of one of the package's own modules (that module, when the
+    /// tree has it): blanked, a renamed one's uses rewritten.
+    Project(Option<crate::module::ModuleId>),
+    /// Modules as a whole, each as the name it binds and its path: blanked,
+    /// their qualified uses unqualified.
+    ModuleImport(Vec<(String, Vec<String>)>),
     /// `std`, or a path the checker reports.
     Other,
 }
@@ -456,20 +508,403 @@ fn import_kind(tree: &ProgramTree, m: &crate::module::Module, imp: &ImportDecl) 
                 .lookup(path)
                 .is_none_or(|id| !tree.modules[id].is_synthetic)
     };
-    for it in &imp.items {
-        let mut full = imp.path.clone();
-        full.push(it.name.clone());
-        if own(&full) {
-            return Kind::ModuleImport(full.join("."));
-        }
+    let modules: Vec<(String, Vec<String>)> = imp
+        .items
+        .iter()
+        .filter_map(|it| {
+            let mut full = imp.path.clone();
+            full.push(it.name.clone());
+            own(&full).then(|| (it.alias.clone().unwrap_or_else(|| it.name.clone()), full))
+        })
+        .collect();
+    if !modules.is_empty() {
+        return Kind::ModuleImport(modules);
     }
     if !own(&imp.path) {
         return Kind::Other;
     }
-    if let Some(it) = imp.items.iter().find(|it| it.alias.is_some()) {
-        return Kind::Renamed(it.name.clone());
+    Kind::Project(module_id(tree, m, &imp.path))
+}
+
+/// The package module at `path` as `m`'s imports write it.
+fn module_id(
+    tree: &ProgramTree,
+    m: &crate::module::Module,
+    path: &[String],
+) -> Option<crate::module::ModuleId> {
+    tree.graph.lookup(path).or_else(|| {
+        let mut full = vec![m.package.clone()?];
+        full.extend_from_slice(path);
+        tree.graph.lookup(&full)
+    })
+}
+
+/// What every renamed item is called in the flat scope: the names
+/// `module_rename::plan` mints for colliding declarations, and the ones a
+/// contested member reached through a module binding takes.
+///
+/// A member is contested when the file that writes `conn.open` also has
+/// something else under `open` (a local, its own item, another import):
+/// unqualified, the use would bind to that instead. Legacy's module-binding
+/// desugar reached such a member under an alias; here the member's module
+/// gives the name up, as a collision would make it.
+struct Flat {
+    plan: crate::module_rename::FlatRenames,
+    extra: HashMap<crate::module::ModuleId, HashMap<String, String>>,
+}
+
+impl Flat {
+    fn new(
+        tree: &ProgramTree,
+        plan: crate::module_rename::FlatRenames,
+        files: &[SourceFile<'_>],
+        quals_of: &[Vec<(String, Vec<String>)>],
+    ) -> Flat {
+        let mut flat = Flat {
+            plan,
+            extra: HashMap::new(),
+        };
+        let mut taken: Option<std::collections::HashSet<String>> = None;
+        for (f, quals) in files.iter().zip(quals_of) {
+            if quals.is_empty() {
+                continue;
+            }
+            let bound = crate::import_alias::bound_value_names(&mut f.items.clone());
+            let quals = live_qualifiers(quals, &bound);
+            let mut toks = Vec::new();
+            idents(&f.text, 0, &mut toks);
+            let uses = qualified_uses(tree, f, &toks, &quals);
+            if uses.iter().all(|u| u.member.is_none()) {
+                continue;
+            }
+            // Every name the file's text answers to besides its qualified uses.
+            let mut names = bound;
+            names.extend(crate::import_alias::declared_names(&f.items));
+            for item in &f.items {
+                let Item::Import(imp) = item else { continue };
+                match import_kind(tree, f.module, imp) {
+                    Kind::Project(target) => {
+                        for it in &imp.items {
+                            names.insert(
+                                target
+                                    .and_then(|t| flat_item(tree, &flat, t, &it.name, 8))
+                                    .unwrap_or_else(|| it.name.clone()),
+                            );
+                        }
+                        if let Some(t) = target.filter(|_| imp.is_wildcard) {
+                            for n in crate::import_alias::declared_names(&tree.modules[t].items) {
+                                names.insert(flat.get(t, &n).cloned().unwrap_or(n));
+                            }
+                        }
+                    }
+                    Kind::Other => {
+                        names.extend(
+                            imp.items
+                                .iter()
+                                .map(|it| it.alias.clone().unwrap_or_else(|| it.name.clone())),
+                        );
+                    }
+                    Kind::ModuleImport(_) => {}
+                }
+            }
+            for u in &uses {
+                let (Some(m), Some(member)) = (u.module, u.member) else {
+                    continue;
+                };
+                let Some((origin, name)) = origin(tree, m, &toks[member].name, 8) else {
+                    continue;
+                };
+                if !names.contains(&name) || flat.get(origin, &name).is_some() {
+                    continue;
+                }
+                let module = &tree.modules[origin];
+                // The root keeps its names, and a linkage name or one the
+                // module also binds as a local cannot be rewritten, as in
+                // `module_rename::plan`.
+                if origin == tree.root
+                    || crate::module_rename::name_is_linkage(module, &name)
+                    || crate::import_alias::local_value_bindings(&mut module.items.clone())
+                        .contains(&name)
+                {
+                    continue;
+                }
+                let taken = taken.get_or_insert_with(|| {
+                    let mut taken: std::collections::HashSet<String> = tree
+                        .modules
+                        .iter()
+                        .flat_map(|m| crate::import_alias::declared_names(&m.items))
+                        .collect();
+                    for m in &tree.modules {
+                        taken.extend(flat.plan.renamed_in(m.id).map(|(_, b)| b.clone()));
+                    }
+                    taken
+                });
+                let fresh = crate::module_rename::qualified_name(&name, &module.path, taken);
+                flat.extra.entry(origin).or_default().insert(name, fresh);
+            }
+        }
+        flat
     }
-    Kind::Project
+
+    fn get(&self, m: crate::module::ModuleId, name: &str) -> Option<&String> {
+        self.extra
+            .get(&m)
+            .and_then(|x| x.get(name))
+            .or_else(|| self.plan.flat_name(m, name))
+    }
+
+    /// Every name module `m` gave up, with the name it takes instead.
+    fn renamed_in(
+        &self,
+        m: crate::module::ModuleId,
+    ) -> impl Iterator<Item = (String, String)> + '_ {
+        self.plan
+            .renamed_in(m)
+            .chain(self.extra.get(&m).into_iter().flatten())
+            .map(|(a, b)| (a.clone(), b.clone()))
+    }
+}
+
+/// The module that declares the item module `m` offers as `name`, and the
+/// name it declares it under: `m` itself, or, for a `pub import`
+/// re-export, the re-exported item's, followed `depth` deep.
+fn origin(
+    tree: &ProgramTree,
+    m: crate::module::ModuleId,
+    name: &str,
+    depth: u32,
+) -> Option<(crate::module::ModuleId, String)> {
+    let module = &tree.modules[m];
+    if crate::import_alias::declared_names(&module.items).contains(name) {
+        return Some((m, name.to_string()));
+    }
+    if depth == 0 {
+        return None;
+    }
+    module
+        .imports
+        .iter()
+        .filter(|imp| imp.is_pub)
+        .find_map(|imp| {
+            let it = imp
+                .items
+                .iter()
+                .find(|it| it.alias.as_deref().unwrap_or(&it.name) == name)?;
+            origin(
+                tree,
+                module_id(tree, module, &imp.path)?,
+                &it.name,
+                depth - 1,
+            )
+        })
+}
+
+/// The flat name of the item module `m` offers as `name`: its own, or, for
+/// a `pub import` re-export, the re-exported item's, followed `depth` deep.
+fn flat_item(
+    tree: &ProgramTree,
+    renames: &Flat,
+    m: crate::module::ModuleId,
+    name: &str,
+    depth: u32,
+) -> Option<String> {
+    if let Some(flat) = renames.get(m, name) {
+        return Some(flat.clone());
+    }
+    let module = &tree.modules[m];
+    if depth == 0 || crate::import_alias::declared_names(&module.items).contains(name) {
+        return None;
+    }
+    module
+        .imports
+        .iter()
+        .filter(|imp| imp.is_pub)
+        .find_map(|imp| {
+            let it = imp
+                .items
+                .iter()
+                .find(|it| it.alias.as_deref().unwrap_or(&it.name) == name)?;
+            let from = module_id(tree, module, &imp.path)?;
+            Some(
+                flat_item(tree, renames, from, &it.name, depth - 1)
+                    .unwrap_or_else(|| it.name.clone()),
+            )
+        })
+}
+
+/// An identifier token of a file, with what is written on either side.
+struct Ident {
+    offset: usize,
+    name: String,
+    /// Written after a `.`: a field, a method or a later path segment.
+    after_dot: bool,
+    /// Written before a `.`.
+    before_dot: bool,
+    /// Written before a single `:`: a field, a parameter or a label.
+    before_colon: bool,
+    /// Written after `const` or `let`: the name a declaration binds.
+    declared: bool,
+}
+
+/// Every identifier token of `src`, an f-string's holes included, with
+/// offsets from `base`.
+fn idents(src: &str, base: usize, out: &mut Vec<Ident>) {
+    use crate::token::{InterpolationPart, Token};
+    let mut lexer = crate::lexer::Lexer::new(src);
+    let mut toks = Vec::new();
+    loop {
+        let t = lexer.next_token();
+        if t.token == Token::EOF {
+            break;
+        }
+        toks.push(t);
+    }
+    for (i, t) in toks.iter().enumerate() {
+        match &t.token {
+            Token::Identifier { name, raw: false } => out.push(Ident {
+                offset: base + t.span.offset,
+                name: name.clone(),
+                after_dot: i > 0 && toks[i - 1].token == Token::Dot,
+                before_dot: toks.get(i + 1).is_some_and(|n| n.token == Token::Dot),
+                before_colon: toks.get(i + 1).is_some_and(|n| n.token == Token::Colon),
+                declared: i > 0 && matches!(toks[i - 1].token, Token::Const | Token::Let),
+            }),
+            Token::InterpolatedStringLiteral(parts) => {
+                for p in parts {
+                    if let InterpolationPart::Expr { raw, offset, .. } = p {
+                        idents(raw, *offset, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The module imports of a file that are qualifiers in its text: those it
+/// does not also bind as a value, as the legacy merge's rewrite deferred
+/// to them, so `connection.v` on a local `connection` is a field access.
+fn live_qualifiers<'q>(
+    quals: &'q [(String, Vec<String>)],
+    bound: &std::collections::HashSet<String>,
+) -> Vec<&'q (String, Vec<String>)> {
+    quals.iter().filter(|(q, _)| !bound.contains(q)).collect()
+}
+
+/// A use of a module binding as a qualifier (`connection.open`,
+/// `db.connection.open`).
+struct Qualified {
+    /// The first token of the qualifier.
+    first: usize,
+    /// Where the `.` before the member ends.
+    end: usize,
+    /// The module the qualifier chain names.
+    module: Option<crate::module::ModuleId>,
+    /// The member's token.
+    member: Option<usize>,
+}
+
+/// Every qualified use of `quals` in `toks`, in order.
+fn qualified_uses(
+    tree: &ProgramTree,
+    f: &SourceFile<'_>,
+    toks: &[Ident],
+    quals: &[&(String, Vec<String>)],
+) -> Vec<Qualified> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        let t = &toks[i];
+        i += 1;
+        if t.after_dot || !t.before_dot {
+            continue;
+        }
+        let Some((_, path)) = quals.iter().find(|(q, _)| *q == t.name) else {
+            continue;
+        };
+        let first = i - 1;
+        // `q.` and each submodule after it, up to the item.
+        let mut path = path.clone();
+        let mut end = t.offset + t.name.len();
+        while let Some(n) = toks.get(i).filter(|n| n.after_dot && n.before_dot) {
+            let mut sub = path.clone();
+            sub.push(n.name.clone());
+            if module_id(tree, f.module, &sub).is_none() {
+                break;
+            }
+            path = sub;
+            end = n.offset + n.name.len();
+            i += 1;
+        }
+        let end = f.text[end..].find('.').map_or(end, |d| end + d + 1);
+        let member = toks.get(i).filter(|n| n.after_dot).map(|_| i);
+        if member.is_some() {
+            i += 1;
+        }
+        out.push(Qualified {
+            first,
+            end,
+            module: module_id(tree, f.module, &path),
+            member,
+        });
+    }
+    out
+}
+
+/// The edits that make `f`'s text name items as the flat scope does: each
+/// use of a name in `subst` reads its flat name, and each use of a module
+/// in `quals` as a qualifier loses it, its member taking the member's flat
+/// name. A name the file also binds as a local keeps its spelling.
+fn flat_names(
+    tree: &ProgramTree,
+    renames: &Flat,
+    f: &SourceFile<'_>,
+    subst: &HashMap<String, String>,
+    quals: &[(String, Vec<String>)],
+) -> Result<Vec<Edit>, String> {
+    let mut items = f.items.clone();
+    let bound = crate::import_alias::bound_value_names(&mut items);
+    let locals = crate::import_alias::local_value_bindings(&mut items);
+    let quals = live_qualifiers(quals, &bound);
+    let mut toks = Vec::new();
+    idents(&f.text, 0, &mut toks);
+    let mut edits = Vec::new();
+    let mut skip = vec![false; toks.len()];
+    for u in qualified_uses(tree, f, &toks, &quals) {
+        edits.push(blank(&f.text, toks[u.first].offset, u.end));
+        skip[u.first..u.member.map_or(u.first + 1, |m| m + 1)].fill(true);
+        let (Some(m), Some(member)) = (u.module, u.member) else {
+            continue;
+        };
+        let n = &toks[member];
+        if let Some(flat) = flat_item(tree, renames, m, &n.name, 8) {
+            if flat != n.name {
+                edits.push(rename(n, &flat));
+            }
+        }
+    }
+    for (t, _) in toks.iter().zip(&skip).filter(|(_, s)| !**s) {
+        if t.after_dot || (t.before_colon && !t.declared) || locals.contains(&t.name) {
+            continue;
+        }
+        if let Some(flat) = subst.get(&t.name) {
+            edits.push(rename(t, flat));
+        }
+    }
+    Ok(edits)
+}
+
+/// `t` spelled `flat`, padded to its length when `flat` is shorter.
+fn rename(t: &Ident, flat: &str) -> Edit {
+    let mut text = flat.to_string();
+    if text.len() < t.name.len() {
+        text.push_str(&" ".repeat(t.name.len() - text.len()));
+    }
+    Edit {
+        start: t.offset,
+        end: t.offset + t.name.len(),
+        text,
+    }
 }
 
 /// The package `filename` belongs to, when it has more than one module and

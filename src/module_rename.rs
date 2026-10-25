@@ -76,6 +76,17 @@ impl FlatRenames {
         self.per_module.get(&id)?.get(name)
     }
 
+    /// What `name`, declared by module `id`, is called in the flat unit, for
+    /// a name it gave up (v2 project mode's text rewrite).
+    pub fn flat_name(&self, id: ModuleId, name: &str) -> Option<&String> {
+        self.get(id, name)
+    }
+
+    /// Every name module `id` gave up, with the name it takes instead.
+    pub fn renamed_in(&self, id: ModuleId) -> impl Iterator<Item = (&String, &String)> {
+        self.per_module.get(&id).into_iter().flatten()
+    }
+
     /// No module had to give up a name — the state every program that already
     /// worked is in, and the one in which flattening copies items unchanged.
     pub fn is_empty(&self) -> bool {
@@ -175,7 +186,7 @@ pub fn plan(tree: &ProgramTree) -> FlatRenames {
 ///   `#[unsafe(no_mangle)]` vs ABI defines as "use the Kāra identifier as-is;
 ///   disable name mangling". `declare_function` already records it as the
 ///   opt-out "future mangling passes" should honour — this is one.
-fn name_is_linkage(m: &module::Module, name: &str) -> bool {
+pub(crate) fn name_is_linkage(m: &module::Module, name: &str) -> bool {
     m.items.iter().any(|it| match it {
         Item::ExternFunction(f) => f.name == name,
         Item::ExternBlock(b) => b.items.iter().any(|i| match i {
@@ -197,18 +208,23 @@ fn has_no_mangle(attributes: &[Attribute]) -> bool {
 ///
 /// `alpha`'s `common` becomes `common__alpha`, `db.conn`'s becomes
 /// `common__db_conn`. The suffix goes last so the leading character — which
-/// carries Kāra's Value-vs-Type naming class — is preserved. A derived name
+/// carries Kāra's Value-vs-Type naming class — is preserved, and takes a
+/// Const-class name's case (`LIMIT__ALPHA`). A derived name
 /// that is somehow taken gets a numeric tail rather than silently colliding.
 ///
 /// Shared with `module_binding`, which needs the same "this name, from that
 /// module" spelling for a contested member alias. One formula so the two
 /// cannot drift into two conventions.
 pub(crate) fn qualified_name(name: &str, path: &[String], taken: &mut HashSet<String>) -> String {
-    let suffix = if path.is_empty() {
+    let mut suffix = if path.is_empty() {
         "root".to_string()
     } else {
         path.join("_")
     };
+    // A Const-class name keeps its class only with every letter uppercase.
+    if crate::lexer::classify_ident(name) == crate::lexer::IdentClass::Const {
+        suffix = suffix.to_uppercase();
+    }
     let base = format!("{name}__{suffix}");
     let mut candidate = base.clone();
     let mut n = 2;

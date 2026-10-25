@@ -3226,7 +3226,6 @@ fn test_run_package_member_refuses_a_private_cross_directory_import() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_run_package_member_still_runs_a_sound_package() {
     // The gate must not become a blanket refusal: `karac run src/main.kara` is
     // the documented way to run a package, and single-file `karac build`'s own
@@ -3299,7 +3298,6 @@ fn test_check_with_no_file_checks_the_whole_package() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a renaming import (`as`)"]
 fn test_run_package_member_honours_an_aliased_import() {
     // B-2026-08-20-20: `karac run` executes a merged super-program that drops
     // the `import` declarations, and the ALIAS binding went with them — `P`
@@ -3401,7 +3399,6 @@ fn test_module_cycle_diagnostic_names_the_files_on_the_cycle() {
 // named), and `check` passed the same program.
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_module_binding_import_reaches_the_module_s_items() {
     let tmp = scratch_module_package(
         "modbind-basic",
@@ -3439,7 +3436,6 @@ fn test_module_binding_import_reaches_the_module_s_items() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_module_binding_import_reaches_a_type_in_a_signature() {
     // `connection.Connection` in a `pub fn` return type — the type position,
     // which the expression rewrite alone would not cover.
@@ -3467,7 +3463,6 @@ fn test_module_binding_import_reaches_a_type_in_a_signature() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_module_binding_import_reaches_a_nested_module() {
     // `import db;` binds the top-level module, so its sub-module is reached
     // through it: `db.connection.open(9)`. Two levels — the desugar iterates
@@ -3553,7 +3548,6 @@ fn test_module_binding_import_enforces_visibility() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_module_binding_import_defers_to_a_local_of_the_same_name() {
     // The shadow guard: a module never has a binding rewritten when it also
     // binds that name as a value, because `connection.id` is then an
@@ -3582,7 +3576,6 @@ fn test_module_binding_import_defers_to_a_local_of_the_same_name() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_module_binding_alongside_an_explicit_item_import_of_the_same_name() {
     // The synthesized import must not collide with one the file already
     // wrote. `import db.connection;` + `import db.connection.open;` reaches
@@ -3612,7 +3605,6 @@ fn test_module_binding_alongside_an_explicit_item_import_of_the_same_name() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_unused_module_binding_import_is_accepted() {
     // Nothing is reached through the binding, so nothing is synthesized —
     // and the declaration still resolves on its own terms.
@@ -7074,7 +7066,6 @@ fn test_build_project_codegen_three_module_chain_runs() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode does not combine two modules' same-named items yet"]
 fn test_build_project_codegen_cross_module_collision_resolves_to_both_items() {
     // This test used to pin the OPPOSITE outcome. Cross-module name
     // disambiguation was deferred to v2 (the Theme 4 plan revision), so a
@@ -24838,7 +24829,6 @@ fn test_run_jit_env_args_matches_interp() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a renaming import (`as`)"]
 fn test_build_project_accepts_aliased_type_and_trait_imports() {
     // B-2026-07-29-14 / -22 / -23. Three stacked defects made `import … as …`
     // unusable in a multi-module package, each failing somewhere different:
@@ -24904,7 +24894,6 @@ fn test_build_project_accepts_aliased_type_and_trait_imports() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a renaming import (`as`)"]
 fn test_build_project_alias_rewrite_yields_to_a_shadowing_local() {
     // B-2026-07-29-23 guard. Rewriting a bare `Identifier` is only safe
     // because an alias the module binds as a VALUE anywhere is dropped from
@@ -26083,7 +26072,6 @@ fn test_ambiguous_wildcard_import_reports_e0124_at_the_use_site() {
 /// other module's copy prints the other number.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode does not combine two modules' same-named items yet"]
 fn test_same_named_items_in_two_modules_run_on_every_surface() {
     struct Case {
         tag: &'static str,
@@ -26185,7 +26173,6 @@ fn test_same_named_items_in_two_modules_run_on_every_surface() {
 /// declaring module's copy, which is the one that moved.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_a_renamed_item_is_still_reachable_through_every_import_form() {
     let tmp = scratch_project("module-collision-imports");
     write(&tmp.join("kara.toml"), "[package]\nname = \"coll\"\n");
@@ -26336,7 +26323,6 @@ fn module_binding_surfaces(tag: &str, main: &str) -> (bool, Vec<(String, String)
 /// import in the second.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_a_contested_module_binding_member_is_not_captured() {
     let cases = [
         (
@@ -26378,7 +26364,6 @@ fn test_a_contested_module_binding_member_is_not_captured() {
 /// a different module. Types collide exactly as functions do.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_a_contested_module_binding_member_still_resolves() {
     let cases = [
         (
@@ -26426,7 +26411,6 @@ fn test_a_contested_module_binding_member_still_resolves() {
 /// written for, and the one every existing module-binding program is in.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_an_uncontested_module_binding_member_keeps_the_bare_name() {
     let (checked, outs) = module_binding_surfaces(
         "uncontested",
@@ -26444,7 +26428,6 @@ fn test_an_uncontested_module_binding_member_keeps_the_bare_name() {
 /// reach an `open`, so both are aliased.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 project mode refuses a whole-module `import`"]
 fn test_a_contested_member_reached_through_a_binding_chain() {
     let tmp = scratch_project("module-binding-chain");
     write(&tmp.join("kara.toml"), "[package]\nname = \"mb\"\n");

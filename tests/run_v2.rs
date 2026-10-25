@@ -361,9 +361,10 @@ fn run_v2_package_diagnostics_name_their_file() {
     assert_eq!(out.status.code(), Some(1));
 }
 
-/// What one flat scope cannot say is refused by name.
+/// An import that renames runs as the name it binds (B-2026-10-23-14; it
+/// was refused by name).
 #[test]
-fn run_v2_package_refuses_a_renaming_import() {
+fn run_v2_package_runs_a_renaming_import() {
     let main = PKG_MAIN
         .replace(
             "import util.{double, Pt, pick};",
@@ -371,9 +372,16 @@ fn run_v2_package_refuses_a_renaming_import() {
         )
         .replace("double(p.x)", "twice(p.x)");
     let dir = package("alias", &[("main.kara", &main), ("util.kara", PKG_UTIL)]);
-    let out = karac_in(&dir, &["run", "src/main.kara"]);
-    let err = text(&out.stderr);
-    assert!(err.contains("error[project]"), "{err}");
-    assert!(err.contains("`double as ..` renames an import"), "{err}");
-    assert_eq!(out.status.code(), Some(1));
+    for lane in LANES {
+        let mut args = lane.to_vec();
+        args.push("src/main.kara");
+        let out = karac_in(&dir, &args);
+        let err = slashed(&text(&out.stderr));
+        assert_eq!(text(&out.stdout), "4 3\n5\n", "{lane:?}: {err}");
+        assert!(
+            err.contains("[src/main.kara:10] p.x + 1 = 3"),
+            "{lane:?}: {err}"
+        );
+        assert_eq!(out.status.code(), Some(101), "{lane:?}");
+    }
 }
