@@ -2483,7 +2483,7 @@ impl<'a> OwnershipChecker<'a> {
 
                     // Find span for the type that starts the cycle
                     let span = self.find_type_span(node);
-                    let all_shared = cycle.iter().all(|n| self.is_shared_type(n));
+                    let all_shared = cycle.iter().all(|n| self.is_counted_type(n));
                     // A shared-type cycle whose participants include an enum with a
                     // *base* variant — one that introduces no edge back into the
                     // cycle (`Num(i64)` in `shared enum Expr { Num(i64), Add(Expr,
@@ -2522,7 +2522,7 @@ impl<'a> OwnershipChecker<'a> {
                     // payload). A cycle with NO base escape (`shared struct A { b:
                     // B }` / `struct B { a: A }`) stays an error: it has no
                     // termination and forces an infinite/leaking structure.
-                    let any_shared = cycle.iter().any(|n| self.is_shared_type(n));
+                    let any_shared = cycle.iter().any(|n| self.is_counted_type(n));
                     let breakable = any_shared && self.cycle_has_base_escape(&cycle);
                     if breakable {
                         continue;
@@ -2766,6 +2766,19 @@ impl<'a> OwnershipChecker<'a> {
     }
 
     /// Look up whether a named struct/enum is declared as `shared`.
+    /// Whether a named struct/enum is a counted handle, `shared` or `sync`:
+    /// either is a fixed-size pointer, so either breaks a type's size
+    /// recursion (a `sync enum Tree { Leaf(i64), Pair(Tree, Tree) }` is a
+    /// finite tree, as its `shared` twin is, B-2026-10-25-43).
+    fn is_counted_type(&self, name: &str) -> bool {
+        let r = &self.typecheck_result;
+        r.struct_info
+            .get(name)
+            .map(|i| i.is_shared || i.is_par)
+            .or_else(|| r.enum_info.get(name).map(|i| i.is_shared || i.is_par))
+            .unwrap_or(false)
+    }
+
     fn is_shared_type(&self, name: &str) -> bool {
         if let Some(info) = self.typecheck_result.struct_info.get(name) {
             return info.is_shared;

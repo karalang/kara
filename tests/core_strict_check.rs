@@ -13828,6 +13828,49 @@ fn a_package_function_named_like_a_library_function_leaves_other_modules_the_lib
 }
 
 #[test]
+fn a_sync_type_holds_only_cross_task_fields_and_counts_as_a_handle() {
+    // B-2026-10-25-42: every task sees a `sync` value, so each of its
+    // fields and payloads is `CrossTask` (core-semantics §6): a plain
+    // `shared` one is refused at the field, a `sync` one is held.
+    // B-2026-10-25-43: a `sync` type is a counted handle like a `shared`
+    // one, so a self-referential `sync enum` with a base case is a finite
+    // tree, not an ownership cycle.
+    let holder = |decl: &str| {
+        format!(
+            "{decl} struct Plain {{\n    n: i64,\n}}\nsync struct Holder {{\n    p: Plain,\n}}\n\
+             fn read(h: Holder) -> i64 {{\n    let q = h.p.clone();\n    q.n\n}}\n\
+             fn main() {{\n    let h = Holder {{ p: Plain {{ n: 1 }} }};\n    let g = TaskGroup.new();\n    \
+             let t = {{\n        let h1 = h.clone();\n        g.spawn(|| read(h1))\n    }};\n    \
+             println(f\"{{t.join()}} {{h.p.n}}\");\n}}\n"
+        )
+    };
+    rejected_with(
+        "sync-field-of-a-shared-type",
+        &holder("shared"),
+        "field `p` of `sync struct Holder` (type `Plain`) cannot cross a task boundary",
+    );
+    accepted_and_runs("sync-field-of-a-sync-type", &holder("sync"), "1 1\n");
+    for (tag, payload) in [("tuple", "A(Plain)"), ("struct", "A { p: Plain }")] {
+        rejected_with(
+            &format!("sync-enum-payload-{tag}"),
+            &format!(
+                "shared struct Plain {{\n    n: i64,\n}}\nsync enum E {{\n    {payload},\n    C(i64),\n}}\n\
+                 fn main() {{}}\n"
+            ),
+            "of `sync enum E` (type `Plain`) cannot cross a task boundary",
+        );
+    }
+    accepted_and_runs(
+        "sync-enum-tree",
+        "sync enum Tree {\n    Leaf(i64),\n    Pair(Tree, Tree),\n}\nfn sum(t: Tree) -> i64 {\n    \
+         match t {\n        Leaf(n) => n,\n        Pair(a, b) => sum(a) + sum(b),\n    }\n}\n\
+         fn main() {\n    let t = Tree.Pair(Tree.Leaf(1), Tree.Pair(Tree.Leaf(2), Tree.Leaf(3)));\n    \
+         println(sum(t));\n}\n",
+        "6\n",
+    );
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

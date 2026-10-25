@@ -195,6 +195,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_repr_transparent_struct(s, &gp);
                     if s.is_par {
                         self.check_par_field_constraints("struct", &s.name, &s.fields);
+                        let fields: Vec<_> =
+                            s.fields.iter().map(|f| (f.name.clone(), &f.ty)).collect();
+                        self.check_sync_fields_cross_task("struct", &s.name, s.span, &fields, &gp);
                     }
                 }
                 Item::EnumDef(e) => {
@@ -206,10 +209,26 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_enum_discriminants(e);
                     self.record_enum_discriminant_surface(e);
                     if e.is_par {
+                        let gp = Self::generic_param_names(&e.generic_params);
                         for v in &e.variants {
-                            if let VariantKind::Struct(fields) = &v.kind {
-                                self.check_par_field_constraints("enum", &e.name, fields);
-                            }
+                            let payload: Vec<_> = match &v.kind {
+                                VariantKind::Struct(fields) => {
+                                    self.check_par_field_constraints("enum", &e.name, fields);
+                                    fields
+                                        .iter()
+                                        .map(|f| (format!("{}.{}", v.name, f.name), &f.ty))
+                                        .collect()
+                                }
+                                VariantKind::Tuple(ts) => ts
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, t)| (format!("{}.{i}", v.name), t))
+                                    .collect(),
+                                VariantKind::Unit => Vec::new(),
+                            };
+                            self.check_sync_fields_cross_task(
+                                "enum", &e.name, e.span, &payload, &gp,
+                            );
                         }
                     }
                 }
@@ -3205,6 +3224,43 @@ impl<'a> super::TypeChecker<'a> {
                 span,
                 TypeErrorKind::ParFieldNotConcurrent,
             );
+        }
+    }
+
+    /// A `sync` type is visible to every task, so each field it holds must be
+    /// `CrossTask` (core-semantics §6): a plain `shared` handle in a
+    /// `sync struct Holder { p: Plain }` would cross with it, its count
+    /// non-atomic (B-2026-10-25-42). `OnceCell` has its own error in
+    /// [`Self::check_par_field_constraints`]. The library's own types are
+    /// not re-checked.
+    fn check_sync_fields_cross_task(
+        &mut self,
+        kind: &str,
+        type_name: &str,
+        decl: Span,
+        fields: &[(String, &TypeExpr)],
+        gp: &[String],
+    ) {
+        if decl.offset >= self.program.library_start.unwrap_or(usize::MAX) {
+            return;
+        }
+        for (field, ty_expr) in fields {
+            if Self::type_expr_mentions_type(ty_expr, "OnceCell") {
+                continue;
+            }
+            let ty = self.lower_type_expr(ty_expr, gp);
+            if let Err(path) = crate::cross_task_safe::is_cross_task_safe_with(
+                &ty,
+                &self.env.structs,
+                &self.env.enums,
+            ) {
+                self.emit_cross_task_unsafe_value(
+                    &format!("field `{field}` of `sync {kind} {type_name}`"),
+                    &ty,
+                    &path,
+                    &ty_expr.span,
+                );
+            }
         }
     }
 
