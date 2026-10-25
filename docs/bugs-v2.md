@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 30 |
-| false-positive | 24 |
-| missing-feature | 18 |
+| diagnostics | 31 |
+| false-positive | 28 |
+| missing-feature | 19 |
 | perf | 10 |
-| miscompile | 7 |
+| miscompile | 8 |
 | run-vs-build | 6 |
 | soundness | 5 |
 | other | 2 |
@@ -72,14 +72,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 46 |
+| typecheck | 48 |
 | codegen | 22 |
+| mir | 19 |
 | interp | 16 |
-| mir | 16 |
 | cli | 13 |
+| ownership | 8 |
 | runtime | 8 |
-| ownership | 6 |
-| mir-llvm | 5 |
+| mir-llvm | 6 |
 | parser | 5 |
 | other | 2 |
 | resolver | 1 |
@@ -110,7 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-22-36 | 2026-10-22 | interp+codegen | medium | MIR builder gaps from the legacy test programs: raw pointer methods and `ptr.null`/`dangling`/`is_null` (M3, needed for FFI), associated functions and comparison methods on primitives (`i64.zero()`, `impl i64 { fn two }`, `a.lt(b)` on u8/bool), collection literals typed `VecDeque` or nested, indexing by a let-bound range, an uppercase local binding (`let F = Foo {..}; F.value`), literal patterns (negative, float, string inside `Option`), and a tail of single constructs | — |
 | B-2026-10-22-43 | 2026-10-22 | typecheck | low | E0517 prints a MIR temporary instead of the source place: `let g = v[0];` over a `Vec[Fn(i64) -> i64]` reports "move of (*_7) through a shared reference"; a user-facing message must name the source place (`v[0]`) | — |
 | B-2026-10-23-4 | 2026-10-23 | interp+codegen | low | Float Display breaks an exact tie between two equally short decimals away from zero, where Python's repr keeps the even last digit: -75455689800034.625 prints -75455689800034.63 on every v2 backend and in `--interp`, Python prints -75455689800034.62; library/core-types.md § Printing says only "the shortest digits that read back", so which of the two is unspecified | — |
-| B-2026-10-23-14 | 2026-10-23 | cli | medium | v2 project mode (`karac build`/`run`/`test` with no file) refuses a whole-module `import` and a renaming `import ... as`, does not combine two modules' same-named items, and does not print the dependency summary or the legacy project-build reports; 19 cli tests ignored at the M3 deletion | — |
 | B-2026-10-23-15 | 2026-10-23 | cli | medium | `karac test` on v2 does not run the provider fixtures (`#[with_provider]` variants) of 8 cli tests and does not report what 6 more pin (legacy test-runner output); ignored at the M3 deletion | — |
 | B-2026-10-23-16 | 2026-10-23 | cli | low | The v2 build ignores `--monomorphization-budget`, `--enable-hot-swap` and a cross `--target`, and its `--output=json` carries no typecheck warnings; 10 cli tests ignored at the M3 deletion | — |
 | B-2026-10-23-17 | 2026-10-23 | mir-llvm | medium | The v2 wasm build prints a whole float with a trailing `.` (`3.` where native prints `3`) and does not lower the `report` native; 8 wasm tests ignored at the M3 deletion | — |
@@ -140,6 +139,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-9 | 2026-10-25 | typecheck | low | `expected 'Vec[u8]', found 'Slice[u8]'` (or `'ref Vec[u8]'`) on `s.bytes()` carries no fix, though `.to_vec()` (Slice's own way back, B-2026-08-14-20) is the mechanical one | — |
 | B-2026-10-25-10 | 2026-10-25 | typecheck | low | `cannot mix integer types 'i64' and 'usize'` on `n * DAYS as usize` (n a `len()`) tells the writer to add an `as` cast, though the cast is the error: lengths are `i64` (design.md §5) and dropping `as usize` is the machine fix | — |
 | B-2026-10-25-11 | 2026-10-25 | typecheck | low | `Vec.filled(n, v)` and `Vec.with_capacity(n)` accept a `usize` length with no error, though passing the same `usize` to a user function's `i64` parameter is refused as a coercion that may change sign | — |
+| B-2026-10-25-12 | 2026-10-25 | typecheck | medium | A `ref` to a `shared enum` cannot be used as a handle: returning it, wrapping it in `Some`, or passing it to a bare parameter is refused ('expected E, found ref E'), though the same code over a `shared struct` checks and core-semantics §4.1/§6.1 allow it | — |
+| B-2026-10-25-13 | 2026-10-25 | typecheck | medium | The closure-kind walker calls three uses that move nothing a consume, so the closure is `OnceFn` and refused for an `Fn` slot: a capture passed to a user METHOD's parameter (bare or `ref`), a captured `shared` handle used as a value, and a `match` on a captured place whose arms bind nothing by move | — |
+| B-2026-10-25-14 | 2026-10-25 | ownership | low | `karac check` reports a capture of an ESCAPING closure as moved by its first use inside the body: two `size(prog)` calls (`p: ref Prog`) in one escaping closure are 'value prog moved here, used again here', while both MIR backends accept the program and print the right answer | — |
+| B-2026-10-25-15 | 2026-10-25 | ownership | low | The E0500 fix-it on a struct whose `Vec` element type is all-`Copy` inserts `#[derive(Copy)]` on the ELEMENT type ('add #[derive(Copy)] to Op ... so prog is copied'), which leaves the struct move-only; `karac fix` applies it and the same error remains | — |
+| B-2026-10-25-16 | 2026-10-25 | mir | medium | The MIR move check treats a `shared` handle captured by an ESCAPING closure as moved, so a second closure over it, or any later use, is 'use of _1, which may have been moved'; `karac check` accepts (handles count, §6.1 / §9.1) | — |
+| B-2026-10-25-17 | 2026-10-25 | mir+mir-llvm | high | A closure passed to a user function's `escaping` parameter that captures a BARE (borrowed) parameter of non-Copy type, or a field of one, captures it by reference: the closure outlives the frame, so build prints a wrong answer, `karac run` another, ASan reports a use-after-free and `__mir-run` stops; `karac check` accepts | — |
+| B-2026-10-25-18 | 2026-10-25 | mir | low | v2 project build (`karac build` with no file) does not print the legacy project-build reports (discovered modules, JSON output with resolve diagnostics, entry/src-dir refusals, manifest build target, wasm platform module, panic=unwind refusal) or the dependency summary; 12 cli tests ignored | — |
 
 ### Fixed
 
@@ -172,6 +178,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-23-10 | typecheck | low | A top-level `fn todo(..)` (likewise `unreachable`, `panic`, and `ref_eq`, which is checked against the prelude intrinsic) is accepted but never calle… | a10f2705e6 |
 | B-2026-10-23-12 | typecheck | medium | `karac check` accepts a `Map` whose value type defaulted to `i64` (`let mut m = Map.new(); m.insert(5, 9)`) where `Map[i64, u64]` is wanted as a stru… | a10f2705e6 |
 | B-2026-10-23-13 | codegen | low | (NOT SMALL, kata thread 2026-10-24: 3.4x on kata 951's tuple match of two Option[shared] params, 1.31 s vs 0.39 s for nested matches) A `match` on a… | a97412f163 |
+| B-2026-10-23-14 | cli | medium | v2 project mode (`karac build`/`run`/`test` with no file) refuses a whole-module `import` and a renaming `import .. | 45b9315c99 |
 | B-2026-10-23-18 | mir | low | v2 renders runtime faults differently from the pinned output: a `main` error goes through Debug instead of its `Display` impl, a panic has no `panick… | 0bb0c20d38 |
 | B-2026-10-23-19 | mir | medium | `karac run --interp` (the MIR interpreter) iterates a `Map`/`Set` in the same order on every run and ignores `KARAC_HASH_SEED`, unlike the compiled b… | e6d5b77c68 |
 | B-2026-10-24-3 | interp+codegen | high | `v.push(m.get(k).unwrap())` into a `Vec[i64]` stores the ADDRESS of the map's value, not the value: on mir-llvm and `karac build --mir` the element p… | bd015b5c7c |

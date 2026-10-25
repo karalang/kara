@@ -3655,7 +3655,7 @@ fn test_check_standalone_script_is_unaffected() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_lists_discovered_modules() {
     let tmp = scratch_project("lists-modules");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5556,7 +5556,7 @@ fn test_user_drop_on_aggregate_field_run_build_parity() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_rejects_panic_unwind() {
     // phase-8 `panic = "unwind" | "abort"` slice 2: the v1 backend is
     // abort-only, so an explicit `[profile] panic = "unwind"` must fail the
@@ -5649,7 +5649,7 @@ fn test_build_project_resolves_imported_type_associated_fn() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_single_file_build_refuses_package_member() {
     // B-2026-07-08-19: `karac build <pkg>/src/main.kara` (single-file) silently
     // dropped the package's sibling modules and emitted a truncated binary.
@@ -5825,7 +5825,7 @@ fn project_check_honours_the_singular_target_flag() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn project_build_wasm_target_selects_wasm_platform_module() {
     let tmp = scratch_project("wasm-platform-select");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5884,7 +5884,7 @@ fn test_build_project_rejects_mod_kara() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_missing_src_dir_fails() {
     let tmp = scratch_project("no-src");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5898,7 +5898,7 @@ fn test_build_project_missing_src_dir_fails() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_json_output() {
     let tmp = scratch_project("json");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5946,7 +5946,7 @@ fn test_build_project_surfaces_per_file_parse_errors() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_requires_entry_file() {
     let tmp = scratch_project("no-entry");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -5964,7 +5964,7 @@ fn test_build_project_requires_entry_file() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_empty_src_dir_fails() {
     let tmp = scratch_project("empty-src");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -7302,7 +7302,7 @@ fn test_build_project_surfaces_unknown_item_e0225() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_project_json_includes_resolve_diagnostics() {
     let tmp = scratch_project("json-resolve");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -15823,7 +15823,7 @@ fn test_build_target_empty_value_diagnostic() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output)"]
+#[ignore = "v2 gap after M3: the v2 project build does not report this yet (legacy project-build output), B-2026-10-25-18"]
 fn test_build_target_from_manifest_build_section() {
     // With no --target flag, `[build].target` from the manifest selects
     // the active triple. Pins that the manifest fallback is honored.
@@ -23214,7 +23214,7 @@ mathx = { path = "../mathx" }
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not print the dependency summary"]
+#[ignore = "v2 gap after M3: the v2 project build does not print the dependency summary, B-2026-10-25-18"]
 fn test_xpkg_import_typechecks_and_builds() {
     let tmp = xpkg_fixture("xpkg-build");
     let out = karac_bin()
@@ -23364,7 +23364,7 @@ fn test_xpkg_binary_dep_rejected() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 project build does not print the dependency summary"]
+#[ignore = "v2 gap after M3: the v2 project build does not print the dependency summary, B-2026-10-25-18"]
 fn test_xpkg_transitive_path_dep_resolves() {
     let tmp = xpkg_fixture("xpkg-transitive");
     // mathx itself depends on basep; app only declares mathx.
