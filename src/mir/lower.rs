@@ -18501,12 +18501,34 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let builtin = self.task_moves
                     && matches!(callee.kind, ExprKind::Path { .. })
                     && def.is_none_or(|d| !self.lcx.fns.contains_key(&d));
+                // A call through a function value (`f(s)`, `f: Fn(own
+                // String)`) takes what its type's parameters own
+                // (B-2026-10-25-36).
+                let value_params = match def {
+                    None => self.lcx.node_types.get(&callee.id).and_then(|&t| {
+                        let (_, t) = self.strip_ty_full(t);
+                        match self.tys().tcx().kind(t) {
+                            HK::Fn { params, .. } => Some(self.tys().tcx().list(params)),
+                            _ => None,
+                        }
+                    }),
+                    Some(_) => None,
+                };
                 go(callee, false, out);
                 for (i, a) in args.iter().enumerate() {
                     let owned = variant
                         || builtin
                         || (binds && i == 0)
-                        || def.is_some_and(|d| self.owned_param(d, i));
+                        || def.is_some_and(|d| self.owned_param(d, i))
+                        || value_params
+                            .as_ref()
+                            .and_then(|ps| ps.get(i))
+                            .is_some_and(|&p| {
+                                !matches!(
+                                    self.tys().tcx().kind(p),
+                                    HK::Ref(_) | HK::MutRef(_) | HK::Slice { .. }
+                                )
+                            });
                     // `f(mut x)` lends the capture mutably.
                     if a.mut_marker {
                         self.note_assigned(&a.value, caps);

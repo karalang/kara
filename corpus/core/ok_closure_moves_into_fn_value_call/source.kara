@@ -1,0 +1,59 @@
+// A closure that passes a capture to a function value moves the capture
+// in when the value's type owns that parameter (core-semantics §9.1),
+// whether the capture is a `let`, a match-arm binding, or goes to a task
+// (§9.5). One that only lends it leaves the capture usable (B-2026-10-25-36).
+fn size(s: own String) -> i64 {
+    s.len()
+}
+
+fn look(s: String) -> i64 {
+    s.len()
+}
+
+fn get(i: i64) -> Option[String] {
+    if i == 1 { None } else { Some(f"v{i}x") }
+}
+
+fn spawned(f: own Fn(own String) -> i64) -> i64 {
+    let mut g = TaskGroup.new();
+    let mut hs: Vec[TaskHandle[i64]] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        match get(i) {
+            Some(s) => {
+                hs.push(g.spawn(|| f(s)));
+            }
+            None => println("none"),
+        }
+        i += 1;
+    }
+    let mut total = 0;
+    for h in hs.into_iter() {
+        total += h.join();
+    }
+    total
+}
+
+fn called(f: own Fn(own String) -> i64) -> i64 {
+    match get(4) {
+        Some(s) => {
+            let c = || f(s);
+            c()
+        }
+        None => 0,
+    }
+}
+
+fn lent(f: own Fn(String) -> i64) -> i64 {
+    let s = f"abc";
+    let c = || f(s);
+    let n = c() + c();
+    println(s);
+    n
+}
+
+fn main() {
+    println(spawned(size));
+    println(called(size));
+    println(lent(look));
+}

@@ -2087,6 +2087,11 @@ fn main() -> () {
         }
         let mut program = parsed.program;
         crate::prepare_for_resolve(&mut program);
+        // D5, as `karac check` reads the pin: a bare parameter borrows, of a
+        // function and of a function type alike.
+        if crate::d5_params::on() {
+            crate::d5_params::borrow_bare_params(&mut program);
+        }
         let r = crate::resolve(&program);
         if !r.errors.is_empty() {
             return Err("resolve".into());

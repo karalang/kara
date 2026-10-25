@@ -1,0 +1,11 @@
+source = "corpus/core/ok_closure_moves_into_fn_value_call"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "concurrency"]
+class = "a"
+expected_from = "spec"
+rules = ["9.1", "9.5"]
+backends = []
+env = {}
+note = "B-2026-10-25-36: a capture passed to a function value whose type owns the parameter moves into the closure (match-arm binding, let, task). Expected output worked by hand from core-semantics §9.1/§9.5."
