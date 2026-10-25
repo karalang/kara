@@ -1321,7 +1321,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("TaskHandle", "join", [h]) => {
                 let (cell, _) = self.cell_arg(h)?;
                 let block = self.load_ptr(cell)?;
-                let state = self.load_i64(block)?;
+                let state = self.load_count(block, true)?;
                 let ok = self
                     .builder
                     .build_int_compare(
@@ -1342,7 +1342,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("TaskHandle", "try_join", [h]) => {
                 let (cell, _) = self.cell_arg(h)?;
                 let block = self.load_ptr(cell)?;
-                let state = self.load_i64(block)?;
+                let state = self.load_count(block, true)?;
                 let cancelled = self
                     .builder
                     .build_int_compare(

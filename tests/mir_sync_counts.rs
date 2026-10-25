@@ -379,3 +379,34 @@ fn mir_sync_counts_atomic_cells_are_atomic_instructions() {
     assert!(ir.contains("store atomic i8"), "no atomic bool store");
     assert!(ir.contains("atomicrmw xchg"), "no atomic swap");
 }
+
+/// A task handle's block goes to exactly one side (M4 item 10b-1): the
+/// handle frees it after the task finished, the task after the handle
+/// dropped while it ran, and a join takes the result; the state word's
+/// mark and detach are one atomic exchange each.
+#[test]
+fn mir_sync_counts_task_handles_free_their_block_once() {
+    let src = r#"struct Noisy { name: String }
+impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+fn make(n: own String, ms: i64) -> Noisy { sleep_ms(ms); Noisy { name: n } }
+fn main() {
+    let g = TaskGroup.new();
+    {
+        let _early = g.spawn(|| make("detached-running", 30));
+    }
+    let done = g.spawn(|| make("joined", 1));
+    let late = g.spawn(|| make("dropped-after-done", 1));
+    sleep_ms(10);
+    println(f"got {done.join().name}");
+    {
+        let _l = late;
+    }
+    println("end");
+}
+"#;
+    let want = "got joined\ndrop joined\ndrop dropped-after-done\nend\ndrop detached-running\n";
+    assert_eq!(stdout_on_both("handles-once", src), want);
+    if let Some(out) = asan_stdout("handles-once", src) {
+        assert_eq!(out, want);
+    }
+}

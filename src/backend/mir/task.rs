@@ -8,10 +8,13 @@
 //! resumes its frame once; when the frame returns, it stores the result and
 //! marks the block done, or, detached, drops the result and frees the
 //! block. A frame that returned by its cancel exits (core-semantics §11.9)
-//! has no result: the block is marked cancelled, or, detached, freed.
+//! has no result: the block is marked cancelled, or, detached, freed. The
+//! task's mark and the handle's detach are atomic exchanges on the state
+//! word, so exactly one side frees the block when they race on two threads
+//! (M4 item 10).
 
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
-use inkwell::IntPredicate;
+use inkwell::{AtomicOrdering, AtomicRMWBinOp, IntPredicate};
 
 use super::callable::Shim;
 use super::{Cx, R};
@@ -37,6 +40,25 @@ impl<'ctx> Cx<'ctx, '_> {
     pub(super) fn task_result_offset(&self, held: Ty) -> R<u64> {
         let align = self.layout(held)?.align.max(1);
         Ok(8u64.div_ceil(align) * align)
+    }
+
+    /// Stores `state` (`DONE` or `CANCELLED`) in the handle block `b`'s
+    /// state word, as one atomic exchange with the handle's drop (another
+    /// thread's, under the pool); answers whether the handle had already
+    /// dropped (`DETACHED`), which gives the block to the task.
+    fn mark_handle(&self, b: PointerValue<'ctx>, state: u64) -> R<IntValue<'ctx>> {
+        let old = self
+            .builder
+            .build_atomicrmw(
+                AtomicRMWBinOp::Xchg,
+                b,
+                self.i64(state),
+                AtomicOrdering::AcquireRelease,
+            )
+            .map_err(e)?;
+        self.builder
+            .build_int_compare(IntPredicate::EQ, old, self.i64(DETACHED), "detached")
+            .map_err(e)
     }
 
     /// The str constant an operand is.
@@ -69,7 +91,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("TaskHandle", "join" | "try_join", [h, ..]) => {
                 let (cell, _) = self.cell_arg(h)?;
                 let block = self.load_ptr(cell)?;
-                let state = self.load_i64(block)?;
+                let state = self.load_count(block, true)?;
                 let done = self
                     .builder
                     .build_int_compare(IntPredicate::NE, state, self.i64(RUNNING), "")
@@ -336,16 +358,10 @@ impl<'ctx> Cx<'ctx, '_> {
             let (_, held) = self.task_types(resume)?;
             self.if_then(ready, |cx| {
                 let v = cx.offset(ret, cx.field_offset(poll_ty, Some(0), 0)?)?;
-                let state = cx.load_i64(b)?;
-                let detached = cx
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, state, cx.i64(DETACHED), "")
-                    .map_err(e)?;
                 let torn = cx.rt_flag("unwinding", &[])?;
                 let f = cx.cur_fn()?;
-                let (returned, keep, drop, cancelled, gone, end) = (
+                let (returned, drop, cancelled, gone, end) = (
                     cx.llcx.append_basic_block(f, "returned"),
-                    cx.llcx.append_basic_block(f, "keep"),
                     cx.llcx.append_basic_block(f, "detached"),
                     cx.llcx.append_basic_block(f, "cancelled"),
                     cx.llcx.append_basic_block(f, "cancelled.gone"),
@@ -354,18 +370,22 @@ impl<'ctx> Cx<'ctx, '_> {
                 cx.builder
                     .build_conditional_branch(torn, cancelled, returned)
                     .map_err(e)?;
+                // The result goes in the block, then the state word says
+                // so in one exchange: a handle that dropped first (it left
+                // `DETACHED`) gave the block to the task, which drops the
+                // result and frees it; otherwise the handle's drop or join
+                // takes it.
                 cx.builder.position_at_end(returned);
-                cx.builder
-                    .build_conditional_branch(detached, drop, keep)
-                    .map_err(e)?;
-                cx.builder.position_at_end(keep);
                 let off = cx.task_result_offset(held)?;
-                cx.copy(cx.offset(b, off)?, v, held)?;
-                cx.store(b, cx.i64(DONE).into())?;
-                cx.builder.build_unconditional_branch(end).map_err(e)?;
+                let at = cx.offset(b, off)?;
+                cx.copy(at, v, held)?;
+                let detached = cx.mark_handle(b, DONE)?;
+                cx.builder
+                    .build_conditional_branch(detached, drop, end)
+                    .map_err(e)?;
                 cx.builder.position_at_end(drop);
                 if cx.tys.needs_drop(held) {
-                    cx.call_glue(v, held)?;
+                    cx.call_glue(at, held)?;
                 }
                 cx.free(b)?;
                 cx.builder.build_unconditional_branch(end).map_err(e)?;
@@ -408,13 +428,10 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                     cx.builder.position_at_end(plain);
                 }
-                let mark = cx.llcx.append_basic_block(f, "cancelled.mark");
+                let detached = cx.mark_handle(b, CANCELLED)?;
                 cx.builder
-                    .build_conditional_branch(detached, gone, mark)
+                    .build_conditional_branch(detached, gone, end)
                     .map_err(e)?;
-                cx.builder.position_at_end(mark);
-                cx.store(b, cx.i64(CANCELLED).into())?;
-                cx.builder.build_unconditional_branch(end).map_err(e)?;
                 cx.builder.position_at_end(gone);
                 cx.free(b)?;
                 cx.builder.build_unconditional_branch(end).map_err(e)?;

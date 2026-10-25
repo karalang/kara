@@ -31,7 +31,7 @@ use std::collections::HashMap;
 
 use inkwell::module::Linkage;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
-use inkwell::IntPredicate;
+use inkwell::{AtomicOrdering, IntPredicate};
 
 use super::{Cx, R};
 use crate::mir::coroutine;
@@ -369,29 +369,36 @@ impl<'ctx> Cx<'ctx, '_> {
                     .and_then(|(_, args)| args.first().copied())
                     .ok_or("a TaskHandle has no result type")?;
                 self.if_then(some, |cx| {
-                    let state = cx.load_i64(h)?;
-                    let running = cx
+                    // Detach while the task runs, in one compare-and-swap
+                    // with the task's mark; a task that already finished
+                    // left the block to the handle.
+                    let r = cx
                         .builder
-                        .build_int_compare(
-                            IntPredicate::EQ,
-                            state,
+                        .build_cmpxchg(
+                            h,
                             cx.i64(super::task::RUNNING),
-                            "",
+                            cx.i64(super::task::DETACHED),
+                            AtomicOrdering::AcquireRelease,
+                            AtomicOrdering::Acquire,
                         )
                         .map_err(|e| e.to_string())?;
+                    let state = cx
+                        .builder
+                        .build_extract_value(r, 0, "")
+                        .map_err(|e| e.to_string())?
+                        .into_int_value();
+                    let running = cx
+                        .builder
+                        .build_extract_value(r, 1, "")
+                        .map_err(|e| e.to_string())?
+                        .into_int_value();
                     let f = cx.cur_fn()?;
-                    let (detach, done, end) = (
-                        cx.llcx.append_basic_block(f, "detach"),
+                    let (done, end) = (
                         cx.llcx.append_basic_block(f, "done"),
                         cx.llcx.append_basic_block(f, "dropped"),
                     );
                     cx.builder
-                        .build_conditional_branch(running, detach, done)
-                        .map_err(|e| e.to_string())?;
-                    cx.builder.position_at_end(detach);
-                    cx.store(h, cx.i64(super::task::DETACHED).into())?;
-                    cx.builder
-                        .build_unconditional_branch(end)
+                        .build_conditional_branch(running, end, done)
                         .map_err(|e| e.to_string())?;
                     cx.builder.position_at_end(done);
                     // A cancelled task left no result.
