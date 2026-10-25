@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 34 |
-| false-positive | 32 |
+| false-positive | 33 |
 | missing-feature | 26 |
 | perf | 10 |
 | miscompile | 8 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 54 |
-| mir | 25 |
+| mir | 26 |
 | codegen | 22 |
 | interp | 17 |
 | cli | 15 |
@@ -147,6 +147,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-32 | 2026-10-25 | typecheck+mir | medium | A method call on a value of an associated type of a generic bound (`let h = b.build(); h.finish()` with `B: BuildHasher`) passes `karac check` but the MIR build fails: "a type that failed to check is not lowered yet" | — |
 | B-2026-10-25-34 | 2026-10-25 | typecheck | high | In a package, a function a module imports from a sibling (`import ast.{take}`) is typed as the library's generic `take(mut ref T) -> T` in the importing module's per-module check when the library has a function of that name, so `karac check`, `karac run` and `karac build` refuse a correct call `take(b)` with three invented errors | — |
 | B-2026-10-25-35 | 2026-10-25 | cli | medium | A package's v2 check reports places in the combined source inside its diagnostics: a move-after-use message names the combined line (`moved at line 10:17` for main.kara:4:17), the snippet's gutter is misaligned, and the `--output=json` `replacement` is an offset into the combined text (here a `#[derive(Clone)]` at offset 0, which is the first module's, under `file: src/main.kara`) | — |
+| B-2026-10-25-36 | 2026-10-25 | mir | medium | A match-arm binding moved into a `TaskGroup.spawn` closure that passes it to a function value (`Some(s) => { g.spawn(|| f(s)); }`, `f` an `own Fn(own String)` parameter) checks clean, but the MIR build refuses it: `cannot move a non-Copy value out of a borrowed place` | — |
 
 ### Fixed
 
