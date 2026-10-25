@@ -1577,6 +1577,12 @@ impl<'a> Lcx<'a> {
         };
         let fn_params = self.fn_param_tys.get(name).cloned().unwrap_or_default();
         let mut bx = Bx::new(self, instance, ret, args.to_vec());
+        if name == "main" {
+            // `main`'s `Err(e)` exit writes `e` through its `Display`
+            // (core-semantics §10.3), which the backends call like a
+            // nested one (B-2026-10-23-18).
+            bx.queue_nested_displays(ret);
+        }
         bx.lower_fn(f, impl_target, &fn_params);
         let (body, errors) = bx.finish();
         self.errors.extend(errors);
@@ -4022,7 +4028,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(());
         }
         for r in &f.requires {
-            self.contract_check(r)?;
+            self.contract_check(r, "requires")?;
         }
         let mut olds = Vec::new();
         for clause in &f.ensures {
@@ -4058,8 +4064,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
-    /// Aborts unless the contract condition `c` holds (a panic: exit 101).
-    fn contract_check(&mut self, c: &'a Expr) -> R<()> {
+    /// Aborts unless the contract condition `c` holds (a panic: exit 101),
+    /// with the `contract violated: <what> clause` message at `c`
+    /// (B-2026-10-23-18).
+    fn contract_check(&mut self, c: &'a Expr, what: &str) -> R<()> {
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: c.span,
+            ..outer
+        });
+        let r = self.contract_check_here(c, what);
+        self.b.set_source_info(outer);
+        r
+    }
+
+    fn contract_check_here(&mut self, c: &'a Expr, what: &str) -> R<()> {
         let bool_t = self.tys().bool();
         let v = self.temp(bool_t);
         self.push_scope();
@@ -4074,6 +4093,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             bad,
         );
+        let msg = self.static_str(&format!("contract violated: {what} clause"));
+        let unit = self.tys().unit();
+        let l = self.temp(unit);
+        self.call_native("panic_message", vec![msg], Place::local(l));
         self.diverge(TerminatorKind::Abort {
             reason: AbortReason::Panic,
         });
@@ -11778,7 +11801,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// none (core semantics §11.7).
     fn return_exit(&mut self) -> R<()> {
         for clause in self.ensures {
-            self.contract_check(&clause.body)?;
+            self.contract_check(&clause.body, "ensures")?;
         }
         let has_errdefer = self
             .scopes

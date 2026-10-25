@@ -5249,12 +5249,12 @@ fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
 /// way. The literal is then pinned so a regression that breaks all three
 /// identically is still distinguishable from one that makes them disagree.
 ///
-/// Both failure shapes are covered (`Err` and `None`) plus the two-phase LIFO
-/// ordering, since a fix that fired the errdefers in declaration order, or
-/// after the defers, would satisfy a single-block test.
+/// Both failure shapes are covered (`Err` and `None`) plus the ordering: the
+/// errdefers run in their LIFO places among the defers (core-semantics §7.7),
+/// which a fix that fired them in declaration order, or as a group before or
+/// after the defers, would break.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 runs a tail `Err`'s errdefers and defers in a different order"]
 fn test_errdefer_tail_error_exit_parity_across_backends() {
     let tmp = scratch_project("errdefer-tail-parity");
     let src = "fn res() -> Result[i64, String] {\n\
@@ -5317,12 +5317,14 @@ fn test_errdefer_tail_error_exit_parity_across_backends() {
         assert_eq!(&i, a, "interp/AOT parity for errdefer on a tail error exit");
     }
 
-    // (2) WHICH behaviour they agreed on: errdefer group first in LIFO, then
-    // the drop+defer drain in LIFO; `None` fires it too; `Ok` does not.
+    // (2) WHICH behaviour they agreed on: the errdefers share the one LIFO
+    // with the defers (core-semantics §7.7, which flips the legacy pin of
+    // every errdefer before every defer; B-2026-10-23-18); `None` fires it
+    // too; `Ok` does not.
     assert_eq!(
-        i, "e2\ne1\nd2\nd1\neo\ndone\n",
-        "tail `Err` must fire both errdefers LIFO before the defers, tail `None` \
-         must fire its own, and tail `Ok` must fire none"
+        i, "e2\nd2\ne1\nd1\neo\ndone\n",
+        "tail `Err` must fire its errdefers in their LIFO places among the \
+         defers, tail `None` must fire its own, and tail `Ok` must fire none"
     );
     assert!(
         !i.contains("NEVER"),
@@ -6209,7 +6211,6 @@ fn test_interp_panic_goes_to_stderr_and_exits_101() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 renders a panic without the legacy `panicked` line"]
 fn test_jit_panic_goes_to_stderr_and_exits_101() {
     let dir = panic_program_dir("jit", PANIC_SRC);
     let out = karac_bin()
@@ -6228,12 +6229,14 @@ fn test_jit_panic_goes_to_stderr_and_exits_101() {
         Some(101),
         "a panic exits 101 under the JIT — stderr={stderr:?}"
     );
+    // The record's text may change freely (design.md § Panic record); the
+    // stream and the code are the contract. v2 opens it `runtime error:`.
     assert!(
-        stderr.contains("panic at "),
+        stderr.contains("runtime error: "),
         "the JIT panic line belongs on stderr, got stderr={stderr:?} stdout={stdout:?}"
     );
     assert!(
-        !stdout.contains("panic at "),
+        !stdout.contains("runtime error: "),
         "the panic must not land in the program's data stream, got stdout={stdout:?}"
     );
     assert_eq!(
@@ -6245,7 +6248,6 @@ fn test_jit_panic_goes_to_stderr_and_exits_101() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 renders a panic without the legacy `panicked` line"]
 fn test_aot_panic_goes_to_stderr_and_exits_101() {
     let dir = panic_program_dir("aot", PANIC_SRC);
     let build = karac_bin()
@@ -6275,12 +6277,14 @@ fn test_aot_panic_goes_to_stderr_and_exits_101() {
         Some(101),
         "a panic exits 101 in a built binary — stderr={stderr:?}"
     );
+    // The record's text may change freely (design.md § Panic record); the
+    // stream and the code are the contract. v2 opens it `runtime error:`.
     assert!(
-        stderr.contains("panic at "),
+        stderr.contains("runtime error: "),
         "the panic line belongs on stderr, got stderr={stderr:?} stdout={stdout:?}"
     );
     assert!(
-        !stdout.contains("panic at "),
+        !stdout.contains("runtime error: "),
         "the panic must not land in the program's data stream, got stdout={stdout:?}"
     );
     assert_eq!(
@@ -6321,7 +6325,6 @@ fn test_main_returning_err_still_exits_1_not_101() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 reports a contract violation as an explicit panic, without its message"]
 fn test_build_release_strips_contracts_e2e() {
     use std::io::Write;
     // `checked(5)` violates `requires x > 100`. A debug build aborts at
@@ -6400,7 +6403,6 @@ fn main() { println(checked(5)); }
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 reports a contract violation as an explicit panic, without its message"]
 fn test_build_release_project_mode_strips_contracts_e2e() {
     // Same debug-vs-release contrast as the single-file E2E, but through the
     // project-mode path (`cmd_build_project` → `run_multi_file_codegen` →
@@ -8399,7 +8401,6 @@ fn test_run_derive_message_repeated_string_and_map_roundtrip() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 `karac run` reports this runtime fault differently"]
 fn test_run_contract_violation_prints_message_and_exits_nonzero() {
     let path = write_run_temp(
         "contract",
@@ -8460,7 +8461,6 @@ fn test_run_index_oob_prints_message_and_exits_nonzero() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 `karac run` reports this runtime fault differently"]
 fn test_run_runtime_error_json_envelope() {
     let path = write_run_temp(
         "json",
@@ -27639,7 +27639,6 @@ fn main() {
 /// Pinning the compiled halves is what this fix is responsible for.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 renders a `main` error through Debug, not its `Display` impl"]
 fn test_main_result_err_exit_renders_every_payload_word() {
     let tmp = scratch_project("main-result-wide-err");
     let src = r#"struct Wide { a: i64, b: i64, c: i64, d: i64 }
@@ -27755,7 +27754,6 @@ fn main() -> Result[(), AllocError] {
 /// (tag + 3) reproduces it too, since the tag consumes a word.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 renders a `main` error through Debug, not its `Display` impl"]
 fn test_main_question_mark_err_renders_every_payload_word() {
     let tmp = scratch_project("main-q-wide-err");
     let src = r#"struct Wide { a: i64, b: i64, c: i64, d: i64 }
@@ -27833,7 +27831,6 @@ fn main() -> Result[(), Wide] {
 /// promise for all three backends.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 renders a `main` error through Debug, not its `Display` impl"]
 fn test_main_result_err_uses_display_impl_on_every_backend() {
     for (label, src, want) in [
         (
@@ -27940,7 +27937,6 @@ fn test_main_result_err_uses_display_impl_on_every_backend() {
 /// documents for `Map`/`Set` tests, here inside the compiler's own renderer.
 /// Four fields make an accidental pass vanishingly unlikely (1/24 per run).
 #[test]
-#[ignore = "v2 gap after M3: v2 `karac run` reports this runtime fault differently"]
 fn test_main_result_err_render_is_deterministic_across_runs() {
     let tmp = scratch_project("main-err-deterministic");
     write(
@@ -28998,14 +28994,13 @@ fn main() {
 /// hardcoded string — the bar is that the join transports the diagnostic, not
 /// that it invents a par-specific rendering.
 #[test]
-#[ignore = "v2 gap after M3: v2 `karac run` reports this runtime fault differently"]
 fn test_par_branch_runtime_error_fails_the_run() {
     let tmp = scratch_project("par-branch-error-exit-status");
     std::fs::write(
         tmp.join("par.kara"),
         "fn boom(n: i64) -> i64 { if n == 1 { panic(\"branch died\") } n * 2 }\n\
          fn main() {\n\
-             let (a, b) = par { let a = boom(0); let b = boom(1); (a, b) };\n\
+             let (a, b) = par { boom(0), boom(1) };\n\
              println(f\"joined {a} {b}\");\n\
          }\n",
     )
@@ -29020,7 +29015,7 @@ fn test_par_branch_runtime_error_fails_the_run() {
         tmp.join("clean.kara"),
         "fn ok(n: i64) -> i64 { n * 2 }\n\
          fn main() {\n\
-             let (a, b) = par { let a = ok(1); let b = ok(2); (a, b) };\n\
+             let (a, b) = par { ok(1), ok(2) };\n\
              println(f\"joined {a} {b}\");\n\
          }\n",
     )
