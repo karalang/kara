@@ -30,7 +30,8 @@ pub fn is_import_required(name: &str) -> bool {
 /// the same fix-it, which adds all the missing imports after the program's
 /// last import (or above its first item), so `karac fix` applies them in one
 /// pass. A program's own item or enum variant of the same name is not a use,
-/// and neither is a field or method of that name.
+/// nor a bare use of such a variant's name (a pattern `Match(n)`), and
+/// neither is a field or method of that name.
 pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
     let parsed = crate::parse(src);
     let mut declared: HashSet<String> = HashSet::new();
@@ -96,9 +97,14 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
             Token::Import => in_import = true,
             Token::Semicolon => in_import = false,
             Token::Identifier { name, raw: false } if !in_import => {
+                // A bare use of a variant's name is the variant (a pattern
+                // `Match(n)`, a constructor), unless a path goes on from it.
+                let bare_variant = variants.iter().any(|(_, v)| v == name)
+                    && tokens.get(i + 1).is_none_or(|n| n.token != Token::Dot);
                 if i > 0 && tokens[i - 1].token == Token::Dot
                     || declared.contains(name)
                     || variant_names.contains(&t.span.offset)
+                    || bare_variant
                 {
                     continue;
                 }

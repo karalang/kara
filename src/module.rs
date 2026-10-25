@@ -81,6 +81,11 @@ pub struct Module {
     /// resolver reads this field to enforce cross-package visibility (only
     /// `pub` items are importable from another package).
     pub package: Option<String>,
+    /// What every span offset of `items` adds to its offset in `file`: each
+    /// module's spans are rebased into a disjoint range of the tree (#46), so
+    /// an edit a diagnostic carries is an offset into the file only after
+    /// this is taken off. `0` for the first module and synthetic ones.
+    pub span_base: usize,
 }
 
 /// Directed importer → importee edges plus a path-to-id index.
@@ -482,6 +487,7 @@ pub fn build_program_tree_with_deps(
                 test_items_start,
                 test_file,
                 package: None,
+                span_base: 0,
             };
             if is_entry && module.path.is_empty() {
                 root = Some(id);
@@ -505,6 +511,7 @@ pub fn build_program_tree_with_deps(
                 test_items_start: None,
                 test_file: None,
                 package: None,
+                span_base: 0,
             };
             if is_entry && module.path.is_empty() {
                 root = Some(id);
@@ -599,6 +606,7 @@ pub fn build_program_tree_with_deps(
                     test_items_start: None,
                     test_file: None,
                     package: Some(dep.name.clone()),
+                    span_base: 0,
                 };
                 by_path.entry(module.path.clone()).or_insert(id);
                 modules.push(module);
@@ -623,6 +631,7 @@ pub fn build_program_tree_with_deps(
         test_items_start: None,
         test_file: None,
         package: None,
+        span_base: 0,
     };
     by_path
         .entry(prelude_module.path.clone())
@@ -649,6 +658,7 @@ pub fn build_program_tree_with_deps(
             test_items_start: None,
             test_file: None,
             package: None,
+            span_base: 0,
         };
         by_path.entry(module.path.clone()).or_insert(id);
         modules.push(module);
@@ -714,6 +724,7 @@ pub fn build_program_tree_with_deps(
             continue;
         }
         let mut max_end = span_base;
+        m.span_base = span_base;
         for item in &mut m.items {
             crate::span_visitor::visit_item_spans_mut(item, &mut |s| {
                 s.offset += span_base;
@@ -1793,6 +1804,7 @@ mod tests {
             test_items_start: None,
             test_file: None,
             package: None,
+            span_base: 0,
         }
     }
 

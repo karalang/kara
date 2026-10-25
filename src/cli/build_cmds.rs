@@ -749,6 +749,20 @@ pub(super) fn resolve_modules(
         result
             .errors
             .retain(|e| !PackageLibrary::holds(lib, e.span.offset));
+        // A fix's edit is an offset into the module's FILE, which is what a
+        // reader of the replacement applies it to (B-2026-10-25-26); the
+        // spans it was computed from are rebased into the tree's range.
+        let to_file = |e: &mut crate::resolver::TextEdit| {
+            e.offset = e.offset.saturating_sub(m.span_base);
+        };
+        for e in &mut result.errors {
+            if let Some(r) = e.replacement.as_deref_mut() {
+                to_file(r);
+            }
+        }
+        for edits in result.error_fix_diffs.values_mut() {
+            edits.iter_mut().for_each(to_file);
+        }
         if !result.errors.is_empty() {
             out.push(ModuleResolveErrors {
                 file: m.file.clone(),
@@ -1277,6 +1291,34 @@ impl PackageCheck {
         self.parse_errors.is_empty()
             && self.cycles.is_empty()
             && self.resolve_errors.iter().all(|m| m.errors.is_empty())
+    }
+
+    /// The machine-applicable resolve fixes of the module at `file`, as
+    /// offsets into that file's text: its single edits, then its multi-edit
+    /// envelopes.
+    pub(super) fn resolve_fixes_of(
+        &self,
+        file: &std::path::Path,
+    ) -> (
+        Vec<crate::resolver::TextEdit>,
+        Vec<Vec<crate::resolver::TextEdit>>,
+    ) {
+        let same =
+            |p: &std::path::Path| match (std::fs::canonicalize(p), std::fs::canonicalize(file)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => p == file,
+            };
+        let mut singles = Vec::new();
+        let mut groups = Vec::new();
+        for m in self.resolve_errors.iter().filter(|m| same(&m.file)) {
+            singles.extend(
+                m.errors
+                    .iter()
+                    .filter_map(|e| e.replacement.as_deref().cloned()),
+            );
+            groups.extend(m.fix_diffs.values().cloned());
+        }
+        (singles, groups)
     }
 
     pub(super) fn has_errors(&self) -> bool {

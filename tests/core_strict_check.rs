@@ -13525,6 +13525,97 @@ fn a_program_cannot_redeclare_a_library_resource() {
 }
 
 #[test]
+fn karac_fix_on_a_package_module_fixes_it_from_the_package_view() {
+    // B-2026-10-25-26: `karac fix` on a module of a package reads it the way
+    // `karac check` and `karac run` do, through the package, not as a lone
+    // file that cannot see the enum it imports and so "corrects" its
+    // variant `Enum` to the library's `Env`. A misspelt name gets the
+    // package's own `did you mean`, whose edit (in `--output=json` too) is an
+    // offset into the file; a fix the package's combined check offers lands
+    // in the module it edits and is applied by a fix of that module only.
+    let (dir, _) = fixture("fix-package-module", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"fp\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/ast.kara"),
+        "pub enum Item {\n    Struct(i64),\n    Enum(i64),\n}\npub struct Tag {\n    pub s: String,\n}\n\
+         pub fn keep(t: Tag) -> Tag {\n    t\n}\n",
+    )
+    .unwrap();
+    let main = "import ast.{Item, Tag, keep};\nfn f(it: Item) -> i64 {\n    match it {\n        \
+                Struct(n) => n,\n        Enum(n) => n + 1,\n    }\n}\n\
+                fn main() {\n    println(f(Itme.Enum(3)));\n    println(keep(Tag { s: \"a\" }).s);\n}\n";
+    std::fs::write(dir.join("src/main.kara"), main).unwrap();
+    let json = karac()
+        .args(["check", "--output=json", "src/main.kara"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let json = String::from_utf8_lossy(&json.stdout);
+    let at = main.find("Itme").unwrap();
+    assert!(
+        json.contains(&format!(
+            "\"replacement\":{{\"offset\":{at},\"length\":4,\"text\":\"Item\"}}"
+        )),
+        "{json}"
+    );
+    let fix = |file: &str| {
+        karac()
+            .args(["fix", file])
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+    };
+    fix("src/main.kara");
+    let fixed = std::fs::read_to_string(dir.join("src/main.kara")).unwrap();
+    assert_eq!(fixed, main.replace("Itme", "Item"));
+    // The move out of `keep`'s borrowed parameter is `ast.kara`'s to fix.
+    fix("src/main.kara");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src/main.kara")).unwrap(),
+        fixed
+    );
+    fix("src/ast.kara");
+    let ast = std::fs::read_to_string(dir.join("src/ast.kara")).unwrap();
+    assert!(ast.contains("pub fn keep(t: own Tag) -> Tag {"), "{ast}");
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac()
+        .args(["run", "src/main.kara"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "4\na\n", "{out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_bare_use_of_a_variant_named_like_a_library_item_is_the_variant() {
+    // B-2026-10-25-33: a program's variant `Match` used bare (a pattern
+    // `Match(n)`) is the variant, not a use of `std.regex`'s `Match` that
+    // needs an import; a path on from the name still is one.
+    accepted_and_runs(
+        "bare-variant-named-match",
+        "enum E {\n    Match(i64),\n    Other,\n}\nfn f(e: E) -> i64 {\n    match e {\n        \
+         Match(n) => n,\n        Other => 0,\n    }\n}\nfn main() {\n    println(f(E.Match(2)));\n}\n",
+        "2\n",
+    );
+    rejected_with(
+        "unimported-regex-beside-a-variant",
+        "enum E {\n    Regex,\n}\nfn main() {\n    let r = Regex.new(\"a\");\n    println(r.is_ok());\n}\n",
+        "`Regex` is in the library module `std.regex`",
+    );
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

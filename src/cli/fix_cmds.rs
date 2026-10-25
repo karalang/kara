@@ -134,85 +134,13 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
             }
             process::exit(1);
         }
+    } else if let Some(member) = package_member_fixes(filename, &source) {
+        // A module of a package is fixed from the package's view of it,
+        // as `karac check` and `karac run` read it (B-2026-10-25-26).
+        fixes = member;
     } else {
         pipeline.run_all_checks();
-        if let Some(ref r) = pipeline.resolved {
-            fixes.singles(
-                r.errors
-                    .iter()
-                    .filter_map(|e| e.replacement.as_deref().cloned()),
-            );
-            // Multi-edit envelopes (B-2026-07-31-33). A rename that has to
-            // touch use sites as well as the declaration cannot fit the
-            // single-edit `replacement` slot, so it lands here instead —
-            // and only here, so applying just `replacement` can never leave
-            // a half-renamed program behind.
-            fixes.groups(r.error_fix_diffs.values());
-        }
-        if let Some(ref ef) = pipeline.effects {
-            fixes.singles(
-                ef.errors
-                    .iter()
-                    .filter_map(|e| e.replacement.as_deref().cloned()),
-            );
-        }
-        if let Some(ref o) = pipeline.ownership {
-            fixes.singles(
-                o.errors
-                    .iter()
-                    .filter_map(|e| e.replacement.as_deref().cloned()),
-            );
-            fixes.singles(
-                o.notes
-                    .iter()
-                    .filter_map(|e| e.replacement.as_deref().cloned()),
-            );
-            // Multi-edit `fix_diff` envelopes (B-2026-07-06-4). The
-            // `ConcurrentSharedStruct` / `ConcurrentPlainStruct`
-            // diagnostics carry a full machine-applicable migration
-            // (`sync struct` keyword insert + per-mut-field `Mutex[T]`
-            // wraps) in `error_fix_diffs`, keyed by the diagnostic's
-            // primary span. `collect_diagnostics` already emits these as
-            // a top-level `"fix_diff":[...]` array to JSON, but until now
-            // `cmd_fix` collected only each error's single-edit
-            // `.replacement` — so `karac fix` applied nothing for these
-            // two even though the JSON advertised a fix. Flatten every
-            // envelope's edits in here; the descending-offset sort +
-            // overlap dedup below applies them safely alongside the
-            // single-edit replacements.
-            fixes.groups(o.error_fix_diffs.values());
-        }
-        if let Some(ref t) = pipeline.typed {
-            // Typecheck fix-its (e.g. E0205 missing-match-arm insertion, the
-            // `#[non_exhaustive]` cross-package wildcard) use FixIt{span,
-            // replacement}; convert to the TextEdit offset/length form.
-            fixes.singles(t.errors.iter().filter_map(|e| {
-                e.fix_it.as_ref().map(|f| {
-                    let mut edit = crate::resolver::TextEdit {
-                        offset: f.span.offset,
-                        length: f.span.length,
-                        replacement: f.replacement.clone(),
-                    };
-                    absorb_separator_before_semicolon(&source, &mut edit);
-                    edit
-                })
-            }));
-            fixes.groups(t.error_fix_diffs.values());
-            // WARNINGS carry fix-its too, and until B-2026-08-03-9's
-            // `map_value_clone_reinsert` there was no producer, so this channel
-            // went unread — a warning could advertise a machine-applicable fix
-            // in `--output=json` that `karac fix` then declined to apply. A
-            // warning's fix is by definition optional-but-safe (the code
-            // already compiles and is correct), which is exactly what `fix` is
-            // for.
-            fixes.singles(t.warnings.iter().filter_map(|e| {
-                e.fix_it.as_ref().map(|f| crate::resolver::TextEdit {
-                    offset: f.span.offset,
-                    length: f.span.length,
-                    replacement: f.replacement.clone(),
-                })
-            }));
-        }
+        collect_fixes(&pipeline, &source, &mut fixes);
     }
 
     // D5 migration (`docs/core-semantics.md` §4.1): with `KARAC_D5_MIGRATE`
@@ -378,6 +306,202 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     println!("applied {applied} fix(es) to {filename}");
 }
 
+/// The machine-applicable edits every phase of a checked `pipeline` offers,
+/// as offsets into `source`, the text it checked.
+fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
+    if let Some(ref r) = pipeline.resolved {
+        fixes.anchored(
+            r.errors
+                .iter()
+                .filter_map(|e| Some((e.span.offset, e.replacement.as_deref().cloned()?))),
+        );
+        // Multi-edit envelopes (B-2026-07-31-33). A rename that has to
+        // touch use sites as well as the declaration cannot fit the
+        // single-edit `replacement` slot, so it lands here instead —
+        // and only here, so applying just `replacement` can never leave
+        // a half-renamed program behind.
+        fixes.anchored_groups(&r.error_fix_diffs);
+    }
+    if let Some(ref ef) = pipeline.effects {
+        fixes.anchored(
+            ef.errors
+                .iter()
+                .filter_map(|e| Some((e.span.offset, e.replacement.as_deref().cloned()?))),
+        );
+    }
+    if let Some(ref o) = pipeline.ownership {
+        fixes.anchored(
+            o.errors
+                .iter()
+                .filter_map(|e| Some((e.span.offset, e.replacement.as_deref().cloned()?))),
+        );
+        fixes.anchored(
+            o.notes
+                .iter()
+                .filter_map(|e| Some((e.span.offset, e.replacement.as_deref().cloned()?))),
+        );
+        // Multi-edit `fix_diff` envelopes (B-2026-07-06-4). The
+        // `ConcurrentSharedStruct` / `ConcurrentPlainStruct`
+        // diagnostics carry a full machine-applicable migration
+        // (`sync struct` keyword insert + per-mut-field `Mutex[T]`
+        // wraps) in `error_fix_diffs`, keyed by the diagnostic's
+        // primary span. `collect_diagnostics` already emits these as
+        // a top-level `"fix_diff":[...]` array to JSON, but until now
+        // `cmd_fix` collected only each error's single-edit
+        // `.replacement` — so `karac fix` applied nothing for these
+        // two even though the JSON advertised a fix. Flatten every
+        // envelope's edits in here; the descending-offset sort +
+        // overlap dedup below applies them safely alongside the
+        // single-edit replacements.
+        fixes.anchored_groups(&o.error_fix_diffs);
+    }
+    if let Some(ref t) = pipeline.typed {
+        // Typecheck fix-its (e.g. E0205 missing-match-arm insertion, the
+        // `#[non_exhaustive]` cross-package wildcard) use FixIt{span,
+        // replacement}; convert to the TextEdit offset/length form.
+        fixes.anchored(t.errors.iter().filter_map(|e| {
+            e.fix_it.as_ref().map(|f| {
+                let mut edit = crate::resolver::TextEdit {
+                    offset: f.span.offset,
+                    length: f.span.length,
+                    replacement: f.replacement.clone(),
+                };
+                absorb_separator_before_semicolon(source, &mut edit);
+                (e.span.offset, edit)
+            })
+        }));
+        fixes.anchored_groups(&t.error_fix_diffs);
+        // WARNINGS carry fix-its too, and until B-2026-08-03-9's
+        // `map_value_clone_reinsert` there was no producer, so this channel
+        // went unread — a warning could advertise a machine-applicable fix
+        // in `--output=json` that `karac fix` then declined to apply. A
+        // warning's fix is by definition optional-but-safe (the code
+        // already compiles and is correct), which is exactly what `fix` is
+        // for.
+        fixes.anchored(t.warnings.iter().filter_map(|e| {
+            e.fix_it.as_ref().map(|f| {
+                let edit = crate::resolver::TextEdit {
+                    offset: f.span.offset,
+                    length: f.span.length,
+                    replacement: f.replacement.clone(),
+                };
+                (e.span.offset, edit)
+            })
+        }));
+    }
+}
+
+/// The fixes for `filename` when it is a module of a package, from the
+/// package's view of it rather than the file alone, which cannot see the
+/// sibling modules it imports and so offers a `did you mean` for every name
+/// they declare (B-2026-10-25-26). A resolve refusal is the package's own,
+/// so its fixes are the module's; otherwise the fixes are those of the v2
+/// check of the package's combined source that `karac check` and `karac run`
+/// make, mapped back to this file. A fix that lands in another module, or
+/// where the copy's offsets are not the file's, is left for a `karac fix` of
+/// that file; an import is added only to the module whose use asks for it. `None` when the file is no package's module, the package is a
+/// lone `src/main.kara`, or no package view can be formed: the file is then
+/// fixed on its own, as before.
+fn package_member_fixes(filename: &str, source: &str) -> Option<FixSet> {
+    if std::env::var_os("KARAC_D5_MIGRATE").is_some() {
+        return None;
+    }
+    let root = super::run_check_cmds::package_root_of_member(filename)?;
+    let mf = manifest::load_from_root(&root).ok();
+    let mut lints = crate::lints::CliLintOverrides::default();
+    if let Some(m) = &mf {
+        lints.apply_manifest_lints(&m.lints);
+    }
+    let platform = super::build_cmds::walk_platform_for_target(crate::target::active_target());
+    let pc = super::build_cmds::package_check_on(&root, &lints, platform).ok()?;
+    if pc.lone_entry(&root).is_some() || !pc.parse_errors.is_empty() {
+        return None;
+    }
+    let this = std::path::Path::new(filename);
+    let mut fixes = FixSet::default();
+    if !pc.refuses_only_by_type() {
+        let (singles, groups) = pc.resolve_fixes_of(this);
+        fixes.singles(singles);
+        fixes.groups(groups.iter());
+        return Some(fixes);
+    }
+    let files = super::project_v2::source_files(&pc.tree, false).ok()?;
+    let a = super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "").ok()?;
+    let entry = super::project_v2::shown(&pc.tree.modules[pc.tree.root].file);
+    let mut pipeline = Pipeline::new(&entry, &a.text)
+        .with_lint_overrides(lints)
+        .strict_core()
+        .with_library();
+    if let Some(m) = &mf {
+        pipeline.profile = m.profile;
+        pipeline.profile_config = m.profile_config.clone();
+    }
+    pipeline.run_all_checks();
+    let mut all = FixSet::default();
+    collect_fixes(&pipeline, &a.text, &mut all);
+
+    let canonical = std::fs::canonicalize(this).ok()?;
+    let is_this = |file: &str| std::fs::canonicalize(file).is_ok_and(|f| f == canonical);
+    // The edit at the same place in this file, when it lands inside the
+    // file's copy and the copy there reads as the file does.
+    let exact = files
+        .iter()
+        .find(|f| std::fs::canonicalize(f.path).is_ok_and(|p| p == canonical))
+        .and_then(|f| a.copied_len(&super::project_v2::shown(f.path)))
+        == Some(source.len());
+    let map = |e: &crate::resolver::TextEdit| {
+        let (file, offset) = a.locate_offset(e.offset)?;
+        let end = offset.checked_add(e.length)?;
+        (exact
+            && is_this(file)
+            && a.text.get(e.offset..e.offset + e.length) == source.get(offset..end))
+        .then(|| crate::resolver::TextEdit {
+            offset,
+            length: e.length,
+            replacement: e.replacement.clone(),
+        })
+    };
+    let mut elsewhere = std::collections::BTreeSet::new();
+    let mut ids: Vec<usize> = all.edits.iter().map(|(id, _)| *id).collect();
+    ids.dedup();
+    for id in ids {
+        let group: Vec<_> = all
+            .edits
+            .iter()
+            .filter(|(i, _)| *i == id)
+            .map(|(_, e)| e)
+            .collect();
+        // A fix whose edits all land here is this file's, wherever its
+        // diagnostic is (a `#[derive]` on a struct declared here that a use
+        // in another module asks for), except an import: the module that
+        // uses the item imports it, and the combined text adds it at its
+        // top, which is the first file's.
+        let imports = group
+            .iter()
+            .all(|e| e.replacement.trim_start().starts_with("import "));
+        let ours = !imports
+            || all
+                .anchors
+                .get(&id)
+                .is_none_or(|at| a.locate_offset(*at).is_some_and(|(file, _)| is_this(file)));
+        match group.iter().map(|e| map(e)).collect::<Option<Vec<_>>>() {
+            Some(mapped) if ours => fixes.groups([&mapped]),
+            _ => {
+                elsewhere.insert(id);
+            }
+        }
+    }
+    if !elsewhere.is_empty() {
+        eprintln!(
+            "note: {} fix(es) of the package at `{}` lie outside {filename}; run `karac fix` \
+             on the file each names",
+            elsewhere.len(),
+            root.display(),
+        );
+    }
+    Some(fixes)
+}
+
 /// The fixes `karac fix` collects, each edit tagged with the fix it belongs
 /// to so a multi-edit envelope is kept or dropped whole.
 /// The parser recovers a Rust-style `!x` as `not x` before any type is
@@ -435,9 +559,29 @@ fn complement_integer_bangs(filename: &str, source: &str, fixes: &mut FixSet) {
 struct FixSet {
     edits: Vec<(usize, crate::resolver::TextEdit)>,
     next: usize,
+    /// The offset of the diagnostic each fix answers, where it is known:
+    /// a package member keeps only the fixes for its own diagnostics.
+    anchors: std::collections::HashMap<usize, usize>,
 }
 
 impl FixSet {
+    fn anchored(&mut self, edits: impl IntoIterator<Item = (usize, crate::resolver::TextEdit)>) {
+        for (at, e) in edits {
+            self.anchors.insert(self.next, at);
+            self.singles([e]);
+        }
+    }
+
+    fn anchored_groups(
+        &mut self,
+        groups: &rustc_hash::FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    ) {
+        for (key, g) in groups {
+            self.anchors.insert(self.next, key.0);
+            self.groups([g]);
+        }
+    }
+
     fn singles(&mut self, edits: impl IntoIterator<Item = crate::resolver::TextEdit>) {
         for e in edits {
             self.edits.push((self.next, e));

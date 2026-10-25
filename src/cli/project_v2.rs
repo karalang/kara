@@ -58,6 +58,16 @@ impl Amalgam {
             .map(|(first, _, file)| (file.as_str(), offset - first))
     }
 
+    /// How many bytes of the combined text were copied from `file`. When
+    /// that is the file's own length, every offset into its copy is the same
+    /// offset into the file: no rename in it took more room than the name.
+    pub fn copied_len(&self, file: &str) -> Option<usize> {
+        self.bytes
+            .iter()
+            .find(|(_, _, f)| f == file)
+            .map(|(_, len, _)| *len)
+    }
+
     /// Hand the line map to the MIR interpreter and to codegen, which report
     /// a fault's or a `dbg`'s place through it.
     pub fn install(&self) {
