@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 10189 / 10359 = 98.4%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8212 / 8343 = 98.4%.
-- Every classified non-deferred program (context): 16774 / 17886 = 93.8%.
-- Bench variants (outside the gate): 279 / 978 = 28.5%; timeouts 621.
+- Every classified non-deferred program (context): 16775 / 17886 = 93.8%.
+- Bench variants (outside the gate): 280 / 978 = 28.6%; timeouts 620.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5395 / 5411 = 99.7%; failing mir-gap 16.
 - Deferred (class d): 751; outside the slice (`post-m1:*`): 1138.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -63,7 +63,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (4465): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4466): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -3991,6 +3991,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/801-900/900-rle-iterator/rle_iterator_prefix`
 - `katas/801-900/900-rle-iterator/rle_iterator_recursive`
 - `katas/801-900/900-rle-iterator/rle_iterator_stack`
+- `katas/901-1000/1000-minimum-cost-to-merge-stones/bench/merge_stones`
 - `katas/901-1000/1000-minimum-cost-to-merge-stones/differential`
 - `katas/901-1000/1000-minimum-cost-to-merge-stones/merge_stones`
 - `katas/901-1000/1000-minimum-cost-to-merge-stones/merge_stones_memo`
