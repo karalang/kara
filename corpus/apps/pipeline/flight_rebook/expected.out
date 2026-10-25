@@ -1,0 +1,63 @@
+ORD flights: 70 rows, 3,159 bytes, fnv 8754567b
+ORD pnrs: 3,997 rows, 130,474 bytes, fnv da37cab8
+ORD events: 28 rows, 508 bytes, fnv f6634944
+DEN flights: 70 rows, 3,189 bytes, fnv b533abbb
+DEN pnrs: 4,659 rows, 152,163 bytes, fnv 2060f447
+DEN events: 34 rows, 612 bytes, fnv cc9d6c0b
+ATL flights: 70 rows, 3,181 bytes, fnv 0912b5bb
+ATL pnrs: 4,237 rows, 138,342 bytes, fnv 7e07381e
+ATL events: 48 rows, 912 bytes, fnv 376dd170
+JFK flights: 68 rows, 3,091 bytes, fnv 2e3cf129
+JFK pnrs: 4,471 rows, 146,078 bytes, fnv a137fe2a
+JFK events: 32 rows, 590 bytes, fnv e049d77e
+ORD_pnrs.bad line 301: bad party '5'
+ATL_events.bad line 6: bad event 'DLA'
+JFK_flights.csv line 2: flight NS4000 does not touch DEN
+parsed files match the built ones: true
+ORD rebookings: 667 rows, 31,311 bytes, fnv 504522e1
+DEN rebookings: 906 rows, 40,667 bytes, fnv bba03d24
+ATL rebookings: 298 rows, 14,427 bytes, fnv 0d4f01a2
+JFK rebookings: 661 rows, 31,008 bytes, fnv 7bb993b8
+ORD ops: 70 flights, 10 cancelled (WX 10), 18 delayed, 58 min average delay, worst NS1013 BOS-ORD 13:05 +135
+DEN ops: 70 flights, 11 cancelled (WX 9, MX 1, CREW 1), 23 delayed, 43 min average delay, worst NS2050 DEN-MCI 06:40 +110
+ATL ops: 70 flights, 4 cancelled (ATC 4), 44 delayed, 124 min average delay, worst NS3005 BNA-ATL 12:40 +205
+JFK ops: 68 flights, 8 cancelled (WX 5, MX 3), 24 delayed, 72 min average delay, worst NS4056 JFK-MIA 18:00 +180
+ORD disrupted: 667 PNRs, 1,147 passengers: 356 on cancelled flights, 284 with a cancelled inbound, 27 missed connections
+  passengers: 82 same day (0 kept their outbound, 63 downgraded), 436 next day, 629 stranded
+  PLT: 139 passengers, 28% same day, 69% next day, 2% stranded
+  GLD: 125 passengers, 9% same day, 79% next day, 11% stranded
+  SIL: 226 passengers, 3% same day, 60% next day, 35% stranded
+  no tier: 657 passengers, 3% same day, 15% next day, 80% stranded
+DEN disrupted: 906 PNRs, 1,569 passengers: 626 on cancelled flights, 222 with a cancelled inbound, 58 missed connections
+  passengers: 570 same day (0 kept their outbound, 32 downgraded), 337 next day, 662 stranded
+  PLT: 178 passengers, 91% same day, 8% next day, 0% stranded
+  GLD: 175 passengers, 76% same day, 23% next day, 0% stranded
+  SIL: 323 passengers, 34% same day, 41% next day, 23% stranded
+  no tier: 893 passengers, 18% same day, 16% next day, 65% stranded
+ATL disrupted: 298 PNRs, 525 passengers: 130 on cancelled flights, 112 with a cancelled inbound, 56 missed connections
+  passengers: 99 same day (0 kept their outbound, 19 downgraded), 196 next day, 230 stranded
+  PLT: 53 passengers, 77% same day, 22% next day, 0% stranded
+  GLD: 92 passengers, 38% same day, 61% next day, 0% stranded
+  SIL: 115 passengers, 7% same day, 75% next day, 16% stranded
+  no tier: 265 passengers, 5% same day, 15% next day, 79% stranded
+JFK disrupted: 661 PNRs, 1,130 passengers: 162 on cancelled flights, 493 with a cancelled inbound, 6 missed connections
+  passengers: 99 same day (2 kept their outbound, 37 downgraded), 295 next day, 736 stranded
+  PLT: 126 passengers, 26% same day, 73% next day, 0% stranded
+  GLD: 130 passengers, 20% same day, 60% next day, 19% stranded
+  SIL: 255 passengers, 12% same day, 25% next day, 61% stranded
+  no tier: 619 passengers, 0% same day, 9% next day, 89% stranded
+ORD loads: 85.8% of 8,344 seats on 60 flights flown, 4 full, emptiest NS1056 ORD-MCI 44/76; tomorrow 478 of 844 open seats taken
+DEN loads: 90.5% of 9,506 seats on 59 flights flown, 11 full, emptiest NS2032 DEN-CLT 118/166; tomorrow 344 of 782 open seats taken
+ATL loads: 87.1% of 9,566 seats on 66 flights flown, 2 full, emptiest NS3044 ATL-LAS 110/150; tomorrow 196 of 869 open seats taken
+JFK loads: 87.0% of 9,440 seats on 60 flights flown, 4 full, emptiest NS4076 JFK-RDU 122/190; tomorrow 316 of 759 open seats taken
+ORD care: meals $11,100.00 (471 vouchers), hotels $15,707.00 (113 rooms), credits $148,474.46, refunds $58,834.00, downgrade refunds $12,137.98, bonus miles 2,015,000
+DEN care: meals $20,490.00 (771 vouchers), hotels $8,201.00 (59 rooms), credits $214,581.54, refunds $67,784.20, downgrade refunds $6,874.56, bonus miles 2,655,000
+ATL care: meals $39,045.00 (2,470 vouchers), hotels $8,618.00 (62 rooms), credits $245,819.85, refunds $21,224.40, downgrade refunds $3,215.52, bonus miles 990,000
+JFK care: meals $18,300.00 (914 vouchers), hotels $4,309.00 (31 rooms), credits $131,096.96, refunds $87,328.77, downgrade refunds $7,278.99, bonus miles 1,910,000
+ORD spares: N801NS to PHX at 07:00 tomorrow, 109 of 109 stranded passengers, $13,325.79 in refunds saved
+ORD spares: N802NS to BNA at 07:00 tomorrow, 102 of 102 stranded passengers, $8,964.60 in refunds saved
+DEN spares: N803NS to SFO at 07:00 tomorrow, 150 of 213 stranded passengers, $17,715.67 in refunds saved
+DEN spares: N804NS to BNA at 07:00 tomorrow, 80 of 80 stranded passengers, $12,682.65 in refunds saved
+ATL spares: none left for BNA (60 stranded), SEA (57 stranded)
+JFK spares: none left for STL (128 stranded), AUS (59 stranded)
+spares.log: 261 entries, 6,264 bytes, fnv e99490f4

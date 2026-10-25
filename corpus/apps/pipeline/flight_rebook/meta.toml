@@ -1,0 +1,10 @@
+source = "kara-katas/apps/pipeline/flight_rebook/flight_rebook.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+expected_from = "mirror"
+rules = []
+backends = []
+env = {}
+extracted_src = "3aea71bf"

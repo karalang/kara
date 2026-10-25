@@ -1,0 +1,1570 @@
+// pipeline/flight_rebook
+//
+// An airline's day of irregular operations at four hubs: thunderstorms at
+// ORD in the afternoon, snow at DEN in the morning, an air traffic
+// control program at ATL from 11:00 to 20:00, and wind at JFK in the
+// evening. For each hub it builds the day's schedule (flights out to ten
+// cities and back, with each aircraft's business and economy seats and
+// the seats still open on tomorrow's same flight), the passenger records
+// (parties of one to four, local or connecting through the hub, business
+// or economy, flexible or basic fares, elite tiers) and the operations
+// center's events (cancellations and delays, with their reasons). It
+// writes them as CSV, reads them back and parses them with the checks the
+// airline's systems make, then rebooks every disrupted passenger: highest
+// tier first, each party kept together on the earliest arrival that
+// works, in the booked cabin today, in economy today, on tomorrow's
+// flights, or not at all. Each hub's rebookings are written for the gate
+// agents, and four reports per hub follow: operations, outcomes by tier,
+// loads, and the care owed (meals, hotels, credits, refunds, miles). Then
+// the operations center's four spare aircraft fly extra sections tomorrow
+// morning for the hubs' worst-stranded destinations.
+//
+// The builds, the writes, the reads, the parses, the rebookings, the
+// rebooking files and the reports are each a group of statements that
+// do not depend on each other (a stmt-par app). The spares go to the
+// hubs that ask first, so the four hubs have to ask in order.
+
+const MASK32: i64 = 4294967295;
+// The minimum connecting time at a hub, in minutes.
+const MCT: i64 = 45;
+const LOC_ALPHA: Str = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const CITIES: Array[Str, 24] = ["AUS", "BNA", "BOS", "CLT", "DCA", "DFW", "DTW", "IAH", "LAS", "LAX", "LGA", "MCI",
+    "MCO", "MIA", "MSP", "PDX", "PHX", "RDU", "SAN", "SEA", "SFO", "SLC", "STL", "TPA"];
+const N_CITIES: i64 = 10;
+// Aircraft types with their business and economy seats.
+const AC_NAME: Array[Str, 5] = ["E175", "A220", "A320", "737-800", "A321"];
+const AC_J: Array[i64, 5] = [12, 12, 12, 16, 20];
+const AC_Y: Array[i64, 5] = [64, 118, 138, 150, 170];
+const TIERS: Array[Str, 4] = ["-", "SIL", "GLD", "PLT"];
+const REASONS: Array[Str, 4] = ["WX", "ATC", "MX", "CREW"];
+const CAUSES: Array[Str, 3] = ["cancelled", "inbound cancelled", "missed connection"];
+const OUTCOMES: Array[Str, 4] = ["", "same day", "next day", "stranded"];
+const CABIN_NAMES: Array[Str, 2] = ["business", "economy"];
+// What the airline owes, in cents: meal vouchers a passenger for a wait
+// of two hours and of five, a hotel room for two, travel credits by
+// cabin for arriving three or six hours late or the next day, and bonus
+// miles by tier.
+const MEAL: i64 = 1500;
+const MEAL_LONG: i64 = 3000;
+const HOTEL: i64 = 13900;
+const CREDIT_LO: Array[i64, 2] = [20000, 10000];
+const CREDIT_HI: Array[i64, 2] = [40000, 25000];
+const MILES: Array[i64, 4] = [0, 0, 5000, 10000];
+// The operations center's spare aircraft, each an extra economy section
+// tomorrow at 07:00 for a destination with enough stranded passengers.
+const SPARES: Array[Str, 4] = ["N801NS", "N802NS", "N803NS", "N804NS"];
+const SPARE_SEATS: i64 = 150;
+const MIN_SECTION: i64 = 25;
+const MAX_PER_HUB: i64 = 2;
+
+struct Hub {
+    code: Str,
+    // flight numbers start here
+    base: i64,
+    seed: i64,
+    // the weather window, in minutes after midnight, the chance in a
+    // hundred that a flight in it is cancelled, and its delays
+    ws: i64,
+    we: i64,
+    cnx: i64,
+    dmin: i64,
+    dmax: i64,
+    reason: Str,
+    // outside the window: the chance in a hundred of a short delay, and
+    // in a thousand of a maintenance cancellation
+    bg: i64,
+    mx: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Flight {
+    fid: String,
+    orig: String,
+    dest: String,
+    // minutes after midnight
+    dep: i64,
+    arr: i64,
+    ac: String,
+    seats_j: i64,
+    seats_y: i64,
+    // seats still open on tomorrow's same flight
+    open_j: i64,
+    open_y: i64,
+}
+
+impl Flight {
+    fn seats(ref self, cabin: i64) -> i64 {
+        if cabin == 0 { self.seats_j } else { self.seats_y }
+    }
+
+    fn open(ref self, cabin: i64) -> i64 {
+        if cabin == 0 { self.open_j } else { self.open_y }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct Pnr {
+    loc: String,
+    party: i64,
+    // J or Y
+    cabin: String,
+    // F flexible or B basic
+    fare: String,
+    tier: String,
+    // the party's fares, in cents
+    amount: i64,
+    // flight ids, or -
+    inb: String,
+    outb: String,
+}
+
+#[derive(Clone, PartialEq)]
+struct Event {
+    fid: String,
+    // CNX or DLY
+    kind: String,
+    minutes: i64,
+    reason: String,
+}
+
+// What the day did to a hub's flights and passengers, by flight and by
+// passenger record.
+struct Day {
+    cnx: Vec[bool],
+    delay: Vec[i64],
+    reason: Vec[String],
+    // seats left by day (0 today, 1 tomorrow), flight and cabin, at
+    // (day * flights + flight) * 2 + cabin
+    seats: Vec[i64],
+    nf: i64,
+    leg_in: Vec[i64],
+    leg_out: Vec[i64],
+    // -1 not disrupted, else an index into CAUSES
+    cause: Vec[i64],
+    // 0 not disrupted, 1 same day, 2 next day, 3 stranded
+    outcome: Vec[i64],
+    new_in: Vec[i64],
+    in_day: Vec[i64],
+    new_out: Vec[i64],
+    out_day: Vec[i64],
+    down: Vec[bool],
+    kept: Vec[bool],
+    arrive: Vec[i64],
+    first_dep: Vec[i64],
+    // the disrupted records in the order they were rebooked
+    order: Vec[i64],
+}
+
+struct Pool {
+    left: i64,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+// ------------------------------------------------------------ helpers
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn max2(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// Dollars with exactly two decimals, as cents, or None.
+fn cents_of(t: ref String) -> Option[i64] {
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 7 {
+        return None;
+    }
+    Some(to_int(a) * 100 + to_int(b))
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 6 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+fn hhmm(t: i64) -> String {
+    f"{t / 60:02}:{t % 60:02}"
+}
+
+// A time today, or tomorrow with +1.
+fn clock(t: i64) -> String {
+    if t >= 1440 {
+        return f"{hhmm(t - 1440)}+1";
+    }
+    hhmm(t)
+}
+
+// An HH:MM time as minutes after midnight, or None.
+fn time_of(t: ref String) -> Option[i64] {
+    if t.len() != 5 or t.substring(2, 3) != ":" {
+        return None;
+    }
+    let a = t.substring(0, 2);
+    let b = t.substring(3, 5);
+    if not (is_digits(a) and is_digits(b)) {
+        return None;
+    }
+    let h = to_int(a);
+    let m = to_int(b);
+    if h > 23 or m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+fn pct(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        return 0;
+    }
+    a * 100 / b
+}
+
+// a / b as a percentage with one decimal.
+fn tenths(a: i64, b: i64) -> String {
+    let v = a * 1000 / b;
+    f"{v / 10}.{v % 10}"
+}
+
+fn city_ok(t: ref String) -> bool {
+    t.len() == 3 and t.chars().all(|c| c.is_ascii_uppercase())
+}
+
+fn tier_index(t: ref String) -> i64 {
+    for i in 0..4 {
+        if t == TIERS[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn reason_index(t: ref String) -> i64 {
+    for i in 0..4 {
+        if t == REASONS[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn cabin_of(t: ref String) -> i64 {
+    if t == "J" { 0 } else { 1 }
+}
+
+fn file_line(name: ref String, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+// Each flight's index by its id.
+fn flight_index(flights: ref Vec[Flight]) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    for i in 0..flights.len() {
+        m.insert(flights[i].fid.clone(), i as i64);
+    }
+    m
+}
+
+// ------------------------------------------------------------ building
+
+// The hub's ten cities, in alphabetical order.
+fn cities_of(hub: ref Hub) -> Vec[String] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..24 {
+        order.push(i);
+    }
+    order.sort_by(|a, b| if mix(hub.seed, a, 1) != mix(hub.seed, b, 1) { mix(hub.seed, a, 1).cmp(mix(hub.seed, b, 1)) } else { a.cmp(b) });
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..N_CITIES {
+        out.push(CITIES[order[k]].to_string());
+    }
+    out.sort();
+    out
+}
+
+// Minutes in the air between the hub and its k-th city.
+fn block_of(hub: ref Hub, k: i64) -> i64 {
+    (55 + mix(hub.seed, k, 2) % 276) / 5 * 5
+}
+
+fn aircraft_of(hub: ref Hub, block: i64, num: i64) -> i64 {
+    let r = mix(hub.seed, num, 3);
+    if block < 100 {
+        return r % 2;
+    }
+    if block < 200 {
+        return 1 + r % 3;
+    }
+    2 + r % 3
+}
+
+fn new_flight(hub: ref Hub, num: i64, orig: ref String, dest: ref String, dep: i64, arr: i64, a: i64) -> Flight {
+    Flight {
+        fid: f"NS{num}",
+        orig: orig.clone(),
+        dest: dest.clone(),
+        dep: dep,
+        arr: arr,
+        ac: AC_NAME[a].to_string(),
+        seats_j: AC_J[a],
+        seats_y: AC_Y[a],
+        open_j: mix(hub.seed, num, 7) % 3,
+        open_y: 3 + mix(hub.seed, num, 8) % 16,
+    }
+}
+
+// Three or four round trips a day to each city: out of the hub between
+// 06:00 and 21:00, back so that each lands between 06:30 and 23:00.
+fn build_flights(hub: ref Hub) -> Vec[Flight] {
+    let mut out: Vec[Flight] = Vec.new();
+    let cities = cities_of(hub);
+    let home = hub.code.to_string();
+    for k in 0..N_CITIES {
+        let city = cities[k].clone();
+        let block = block_of(hub, k);
+        let freq = 3 + mix(hub.seed, k, 4) % 2;
+        let span_end = min2(1260, 1380 - block);
+        let step = (span_end - 360) / freq / 5 * 5;
+        let start = max2(390, block + 300);
+        let step2 = (1380 - start) / freq / 5 * 5;
+        for j in 0..freq {
+            let num = hub.base + k * 10 + j * 2;
+            let dep = 360 + j * step + (mix(hub.seed, k * 8 + j, 5) % (step / 2 + 1)) / 5 * 5;
+            out.push(new_flight(hub, num, home, city, dep, dep + block, aircraft_of(hub, block, num)));
+            let arr = start + j * step2 + (mix(hub.seed, k * 8 + j, 6) % (step2 / 2 + 1)) / 5 * 5;
+            out.push(new_flight(hub, num + 1, city, home, arr - block, arr, aircraft_of(hub, block, num + 1)));
+        }
+    }
+    out
+}
+
+fn party_of(r: i64) -> i64 {
+    let x = r % 100;
+    if x < 52 {
+        return 1;
+    }
+    if x < 80 {
+        return 2;
+    }
+    if x < 92 {
+        return 3;
+    }
+    4
+}
+
+// Six characters of the record locator alphabet; n times an odd number
+// modulo 2^30 never repeats.
+fn locator(hub_index: i64, n: i64) -> String {
+    let mut x = ((hub_index * 200000 + n) * 387420489 + 12345) & 1073741823;
+    let mut s = String.new();
+    for _ in 0..6 {
+        let c = (x % 32) as i64;
+        s = f"{LOC_ALPHA.substring(c, c + 1)}{s}";
+        x = x / 32;
+    }
+    s
+}
+
+fn make_pnr(hub_index: i64, n: i64, r: i64, party: i64, cabin: i64, blocks: i64, inb: ref String, outb: ref String) -> Pnr {
+    let mut t = (r / 7) % 100;
+    if cabin == 0 {
+        t += 15;
+    }
+    let tier = if t >= 94 { 3 } else if t >= 82 { 2 } else if t >= 60 { 1 } else { 0 };
+    let basic = cabin == 1 and (r / 13) % 10 < 3;
+    let mut y = 4900 + blocks * 23 + (r / 17) % 6000;
+    if basic {
+        y = y * 70 / 100;
+    }
+    if cabin == 0 {
+        y = y * 35 / 10;
+    }
+    Pnr {
+        loc: locator(hub_index, n),
+        party: party,
+        cabin: if cabin == 0 { "J".to_string() } else { "Y".to_string() },
+        fare: if basic { "B".to_string() } else { "F".to_string() },
+        tier: TIERS[tier].to_string(),
+        amount: y * party,
+        inb: inb.clone(),
+        outb: outb.clone(),
+    }
+}
+
+fn block_time(f: ref Flight) -> i64 {
+    f.arr - f.dep
+}
+
+// Fill each flight to its load: on every flight out of the hub, about
+// 45% of the seats go to parties connecting from an inbound flight that
+// lands one to four hours before it, the rest to local parties; then
+// every inbound flight's seats left go to parties ending at the hub.
+fn build_pnrs(hub_index: i64, hub: ref Hub, flights: ref Vec[Flight]) -> Vec[Pnr] {
+    let nf = flights.len() as i64;
+    let mut left: Vec[i64] = Vec.new();
+    for f in 0..nf {
+        let fl = ref flights[f];
+        left.push(fl.seats_j * (60 + mix(hub.seed, f, 9) % 41) / 100);
+        left.push(fl.seats_y * (78 + mix(hub.seed, f, 10) % 21) / 100);
+    }
+    let mut out: Vec[Pnr] = Vec.new();
+    let mut n = 0;
+    for o in 0..nf {
+        let fo = ref flights[o];
+        if fo.orig != hub.code {
+            continue;
+        }
+        let goal = (left[o * 2] + left[o * 2 + 1]) * 45 / 100;
+        let mut placed = 0;
+        let mut attempt = 0;
+        while placed < goal and attempt < 60 {
+            let r = mix(hub.seed, o * 1000 + attempt, 11);
+            attempt += 1;
+            let cabin = if (r / 100) % 9 == 0 { 0 } else { 1 };
+            let party = min2(party_of(r), left[o * 2 + cabin]);
+            if party == 0 {
+                continue;
+            }
+            let mut cands: Vec[i64] = Vec.new();
+            for i in 0..nf {
+                let fi = ref flights[i];
+                if fi.dest == hub.code and fi.orig != fo.dest and fi.arr + MCT <= fo.dep and fi.arr >= fo.dep - 240 and left[i * 2 + cabin] >= party {
+                    cands.push(i);
+                }
+            }
+            if cands.len() == 0 {
+                continue;
+            }
+            let i = cands[(r / 1000) % (cands.len() as i64)];
+            out.push(make_pnr(hub_index, n, r, party, cabin, block_time(flights[i]) + block_time(fo), flights[i].fid, fo.fid));
+            n += 1;
+            left[o * 2 + cabin] -= party;
+            left[i * 2 + cabin] -= party;
+            placed += party;
+        }
+        for cabin in 0..2 {
+            while left[o * 2 + cabin] > 0 {
+                let r = mix(hub.seed, o * 1000 + attempt, 12);
+                attempt += 1;
+                let party = min2(party_of(r), left[o * 2 + cabin]);
+                out.push(make_pnr(hub_index, n, r, party, cabin, block_time(fo), "-", fo.fid));
+                n += 1;
+                left[o * 2 + cabin] -= party;
+            }
+        }
+    }
+    for i in 0..nf {
+        let fi = ref flights[i];
+        if fi.dest != hub.code {
+            continue;
+        }
+        let mut attempt = 0;
+        for cabin in 0..2 {
+            while left[i * 2 + cabin] > 0 {
+                let r = mix(hub.seed, i * 1000 + attempt, 13);
+                attempt += 1;
+                let party = min2(party_of(r), left[i * 2 + cabin]);
+                out.push(make_pnr(hub_index, n, r, party, cabin, block_time(fi), fi.fid, "-"));
+                n += 1;
+                left[i * 2 + cabin] -= party;
+            }
+        }
+    }
+    out
+}
+
+// The weather window cancels or delays what leaves or lands in it; the
+// rest of the day has maintenance cancellations, crews that do not make
+// it to an outstation, and short delays.
+fn build_events(hub: ref Hub, flights: ref Vec[Flight]) -> Vec[Event] {
+    let mut out: Vec[Event] = Vec.new();
+    for f in 0..flights.len() as i64 {
+        let fl = ref flights[f];
+        let at = if fl.orig == hub.code { fl.dep } else { fl.arr };
+        let r = mix(hub.seed, f, 14);
+        if hub.ws <= at and at <= hub.we {
+            if r % 100 < hub.cnx {
+                out.push(Event { fid: fl.fid.clone(), kind: "CNX".to_string(), minutes: 0, reason: hub.reason.to_string() });
+            } else {
+                let d = hub.dmin + (r / 100) % (hub.dmax - hub.dmin + 1);
+                out.push(Event { fid: fl.fid.clone(), kind: "DLY".to_string(), minutes: d / 5 * 5, reason: hub.reason.to_string() });
+            }
+        } else if r % 1000 < hub.mx {
+            out.push(Event { fid: fl.fid.clone(), kind: "CNX".to_string(), minutes: 0, reason: "MX".to_string() });
+        } else if fl.dest == hub.code and (r / 1000) % 100 < 3 {
+            out.push(Event { fid: fl.fid.clone(), kind: "CNX".to_string(), minutes: 0, reason: "CREW".to_string() });
+        } else if (r / 7) % 100 < hub.bg {
+            let d = 10 + (r / 701) % 51;
+            out.push(Event { fid: fl.fid.clone(), kind: "DLY".to_string(), minutes: d / 5 * 5, reason: REASONS[1 + (r / 31) % 3].to_string() });
+        }
+    }
+    out
+}
+
+fn flight_header() -> String {
+    "flight,origin,dest,dep,arr,aircraft,seats_j,seats_y,open_j,open_y".to_string()
+}
+
+fn pnr_header() -> String {
+    "pnr,party,cabin,fare,tier,amount,inbound,outbound".to_string()
+}
+
+fn event_header() -> String {
+    "flight,event,minutes,reason".to_string()
+}
+
+fn encode_flights(flights: ref Vec[Flight]) -> String {
+    let mut out = f"{flight_header()}\n";
+    for f in flights {
+        out.push_str(f"{f.fid},{f.orig},{f.dest},{hhmm(f.dep)},{hhmm(f.arr)},{f.ac},{f.seats_j},{f.seats_y},{f.open_j},{f.open_y}\n");
+    }
+    out
+}
+
+fn encode_pnrs(pnrs: ref Vec[Pnr]) -> String {
+    let mut out = f"{pnr_header()}\n";
+    for p in pnrs {
+        out.push_str(f"{p.loc},{p.party},{p.cabin},{p.fare},{p.tier},{dollars(p.amount)},{p.inb},{p.outb}\n");
+    }
+    out
+}
+
+fn encode_events(events: ref Vec[Event]) -> String {
+    let mut out = f"{event_header()}\n";
+    for e in events {
+        out.push_str(f"{e.fid},{e.kind},{e.minutes},{e.reason}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn fields_of(path: ref String, n: i64, line: ref String, want: i64) -> Result[Vec[String], BatchError] {
+    let f = split_on(line, ",");
+    if f.len() as i64 != want {
+        return Err(bad(f"{path} line {n}: expected {want} fields, found {f.len()}"));
+    }
+    Ok(f)
+}
+
+fn int_field(path: ref String, n: i64, what: Str, t: ref String, lo: i64, hi: i64) -> Result[i64, BatchError] {
+    match small_int(t, lo, hi) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn time_field(path: ref String, n: i64, what: Str, t: ref String) -> Result[i64, BatchError] {
+    match time_of(t) {
+        Some(v) => Ok(v),
+        None => Err(bad(f"{path} line {n}: bad {what} '{t}'")),
+    }
+}
+
+fn flight_id_ok(t: ref String) -> bool {
+    t.len() == 6 and t.starts_with("NS") and is_digits(t.substring(2, 6))
+}
+
+fn aircraft_ok(t: ref String) -> bool {
+    for a in AC_NAME {
+        if t == a {
+            return true;
+        }
+    }
+    false
+}
+
+fn parse_flights(path: ref String, hub: ref Hub, text: ref String) -> Result[Vec[Flight], BatchError] {
+    let body = body_lines(path, text, flight_header())?;
+    let mut out: Vec[Flight] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 10)?;
+        if not flight_id_ok(f[0]) {
+            return Err(bad(f"{path} line {n}: bad flight '{f[0]}'"));
+        }
+        if seen.contains(f[0]) {
+            return Err(bad(f"{path} line {n}: flight {f[0]} appears twice"));
+        }
+        seen.insert(f[0].clone());
+        if not city_ok(f[1]) or not city_ok(f[2]) or f[1] == f[2] {
+            return Err(bad(f"{path} line {n}: bad route '{f[1]}-{f[2]}'"));
+        }
+        if f[1] != hub.code and f[2] != hub.code {
+            return Err(bad(f"{path} line {n}: flight {f[0]} does not touch {hub.code}"));
+        }
+        let dep = time_field(path, n, "departure", f[3])?;
+        let arr = time_field(path, n, "arrival", f[4])?;
+        if arr <= dep {
+            return Err(bad(f"{path} line {n}: flight {f[0]} arrives before it leaves"));
+        }
+        if not aircraft_ok(f[5]) {
+            return Err(bad(f"{path} line {n}: bad aircraft '{f[5]}'"));
+        }
+        let sj = int_field(path, n, "business seats", f[6], 0, 400)?;
+        let sy = int_field(path, n, "economy seats", f[7], 1, 400)?;
+        let oj = int_field(path, n, "open business seats", f[8], 0, sj)?;
+        let oy = int_field(path, n, "open economy seats", f[9], 0, sy)?;
+        out.push(Flight {
+            fid: f[0].clone(),
+            orig: f[1].clone(),
+            dest: f[2].clone(),
+            dep: dep,
+            arr: arr,
+            ac: f[5].clone(),
+            seats_j: sj,
+            seats_y: sy,
+            open_j: oj,
+            open_y: oy,
+        });
+    }
+    Ok(out)
+}
+
+fn loc_ok(t: ref String) -> bool {
+    t.len() == 6 and t.chars().all(|c| LOC_ALPHA.contains(c.to_string()))
+}
+
+fn parse_pnrs(path: ref String, hub: ref Hub, flights: ref Vec[Flight], text: ref String) -> Result[Vec[Pnr], BatchError] {
+    let body = body_lines(path, text, pnr_header())?;
+    let index = flight_index(flights);
+    let mut out: Vec[Pnr] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    let mut booked: Vec[i64] = Vec.filled(flights.len() * 2, 0);
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 8)?;
+        if not loc_ok(f[0]) {
+            return Err(bad(f"{path} line {n}: bad record locator '{f[0]}'"));
+        }
+        if seen.contains(f[0]) {
+            return Err(bad(f"{path} line {n}: record locator {f[0]} appears twice"));
+        }
+        seen.insert(f[0].clone());
+        let party = int_field(path, n, "party", f[1], 1, 4)?;
+        if f[2] != "J" and f[2] != "Y" {
+            return Err(bad(f"{path} line {n}: bad cabin '{f[2]}'"));
+        }
+        let cabin = cabin_of(f[2]);
+        if f[3] != "F" and f[3] != "B" {
+            return Err(bad(f"{path} line {n}: bad fare '{f[3]}'"));
+        }
+        if f[3] == "B" and cabin == 0 {
+            return Err(bad(f"{path} line {n}: a basic fare in business"));
+        }
+        if tier_index(f[4]) < 0 {
+            return Err(bad(f"{path} line {n}: bad tier '{f[4]}'"));
+        }
+        let amount = match cents_of(f[5]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad amount '{f[5]}'")),
+        };
+        let mut legs: Vec[i64] = Vec.new();
+        for side in 0..2 {
+            let t = ref f[6 + side];
+            if t == "-" {
+                legs.push(-1);
+                continue;
+            }
+            let i = index.get(t) ?? -1;
+            if i < 0 {
+                return Err(bad(f"{path} line {n}: flight {t} is not in the schedule"));
+            }
+            if side == 0 and flights[i].dest != hub.code {
+                return Err(bad(f"{path} line {n}: flight {t} does not arrive at {hub.code}"));
+            }
+            if side == 1 and flights[i].orig != hub.code {
+                return Err(bad(f"{path} line {n}: flight {t} does not leave {hub.code}"));
+            }
+            legs.push(i);
+        }
+        if legs[0] < 0 and legs[1] < 0 {
+            return Err(bad(f"{path} line {n}: no flights"));
+        }
+        if legs[0] >= 0 and legs[1] >= 0 {
+            let a = ref flights[legs[0]];
+            let b = ref flights[legs[1]];
+            if a.orig == b.dest {
+                return Err(bad(f"{path} line {n}: {a.fid} and {b.fid} go back where they started"));
+            }
+            if a.arr + MCT > b.dep {
+                return Err(bad(f"{path} line {n}: the connection from {a.fid} to {b.fid} is under {MCT} minutes"));
+            }
+        }
+        for i in legs {
+            if i >= 0 {
+                booked[i * 2 + cabin] += party;
+                if booked[i * 2 + cabin] > flights[i].seats(cabin) {
+                    return Err(bad(f"{path} line {n}: flight {flights[i].fid} is oversold in {CABIN_NAMES[cabin]}"));
+                }
+            }
+        }
+        out.push(Pnr {
+            loc: f[0].clone(),
+            party: party,
+            cabin: f[2].clone(),
+            fare: f[3].clone(),
+            tier: f[4].clone(),
+            amount: amount,
+            inb: f[6].clone(),
+            outb: f[7].clone(),
+        });
+    }
+    Ok(out)
+}
+
+fn parse_events(path: ref String, flights: ref Vec[Flight], text: ref String) -> Result[Vec[Event], BatchError] {
+    let body = body_lines(path, text, event_header())?;
+    let index = flight_index(flights);
+    let mut out: Vec[Event] = Vec.new();
+    let mut last = String.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 4)?;
+        if not index.contains_key(f[0]) {
+            return Err(bad(f"{path} line {n}: flight {f[0]} is not in the schedule"));
+        }
+        if f[0] <= last {
+            return Err(bad(f"{path} line {n}: flight {f[0]} is out of order"));
+        }
+        last = f[0].clone();
+        if f[1] != "CNX" and f[1] != "DLY" {
+            return Err(bad(f"{path} line {n}: bad event '{f[1]}'"));
+        }
+        let m = int_field(path, n, "minutes", f[2], 0, 720)?;
+        if f[1] == "CNX" and m != 0 {
+            return Err(bad(f"{path} line {n}: a cancellation with a delay"));
+        }
+        if f[1] == "DLY" and m == 0 {
+            return Err(bad(f"{path} line {n}: a delay of no minutes"));
+        }
+        if reason_index(f[3]) < 0 {
+            return Err(bad(f"{path} line {n}: bad reason '{f[3]}'"));
+        }
+        out.push(Event { fid: f[0].clone(), kind: f[1].clone(), minutes: m, reason: f[3].clone() });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ rebooking
+
+fn eff_dep(day: ref Day, flights: ref Vec[Flight], f: i64, d: i64) -> i64 {
+    if d == 0 {
+        return flights[f].dep + day.delay[f];
+    }
+    1440 + flights[f].dep
+}
+
+fn eff_arr(day: ref Day, flights: ref Vec[Flight], f: i64, d: i64) -> i64 {
+    if d == 0 {
+        return flights[f].arr + day.delay[f];
+    }
+    1440 + flights[f].arr
+}
+
+fn seat_at(day: ref Day, d: i64, f: i64, cabin: i64) -> i64 {
+    (d * day.nf + f) * 2 + cabin
+}
+
+// The earliest arrival on a flight from orig to dest that leaves at or
+// after ready with room for the party: today in the booked cabin, today
+// in economy, tomorrow in the booked cabin, tomorrow in economy. Returns
+// (flight, day, cabin), or flight -1.
+fn search(day: ref Day, flights: ref Vec[Flight], orig: ref String, dest: ref String, ready: i64, party: i64, cabin: i64) -> (i64, i64, i64) {
+    for d in 0..2 {
+        for cb in cabin..2 {
+            let mut best = -1;
+            let mut best_arr = 0;
+            for f in 0..day.nf {
+                if flights[f].orig != orig or flights[f].dest != dest {
+                    continue;
+                }
+                if d == 0 and day.cnx[f] {
+                    continue;
+                }
+                if eff_dep(day, flights, f, d) < ready {
+                    continue;
+                }
+                if day.seats[seat_at(day, d, f, cb)] < party {
+                    continue;
+                }
+                let a = eff_arr(day, flights, f, d);
+                if best < 0 or a < best_arr {
+                    best = f;
+                    best_arr = a;
+                }
+            }
+            if best >= 0 {
+                return (best, d, cb);
+            }
+        }
+    }
+    (-1, 0, 0)
+}
+
+fn new_day(flights: ref Vec[Flight]) -> Day {
+    let nf = flights.len() as i64;
+    let mut seats: Vec[i64] = Vec.new();
+    for f in flights {
+        seats.push(f.seats_j);
+        seats.push(f.seats_y);
+    }
+    for f in flights {
+        seats.push(f.open_j);
+        seats.push(f.open_y);
+    }
+    Day {
+        cnx: Vec.filled(nf, false),
+        delay: Vec.filled(nf, 0),
+        reason: Vec.filled(nf, String.new()),
+        seats: seats,
+        nf: nf,
+        leg_in: Vec.new(),
+        leg_out: Vec.new(),
+        cause: Vec.new(),
+        outcome: Vec.new(),
+        new_in: Vec.new(),
+        in_day: Vec.new(),
+        new_out: Vec.new(),
+        out_day: Vec.new(),
+        down: Vec.new(),
+        kept: Vec.new(),
+        arrive: Vec.new(),
+        first_dep: Vec.new(),
+        order: Vec.new(),
+    }
+}
+
+// Apply the events, find every disrupted record, and rebook them in
+// priority order: tier, then business before economy, flexible before
+// basic, then booking order. A segment that still works is kept; a seat
+// given up goes back for the records after it.
+fn rebook(hub: ref Hub, flights: ref Vec[Flight], pnrs: ref Vec[Pnr], events: ref Vec[Event]) -> Day {
+    let index = flight_index(flights);
+    let mut day = new_day(flights);
+    for e in events {
+        let f = index.get(e.fid) ?? -1;
+        day.reason[f] = e.reason.clone();
+        if e.kind == "CNX" {
+            day.cnx[f] = true;
+        } else {
+            day.delay[f] = e.minutes;
+        }
+    }
+    for p in pnrs {
+        let cabin = cabin_of(p.cabin);
+        let li = if p.inb != "-" { index.get(p.inb) ?? -1 } else { -1 };
+        let lo = if p.outb != "-" { index.get(p.outb) ?? -1 } else { -1 };
+        day.leg_in.push(li);
+        day.leg_out.push(lo);
+        if li >= 0 {
+            let at = seat_at(day, 0, li, cabin);
+            day.seats[at] -= p.party;
+        }
+        if lo >= 0 {
+            let at = seat_at(day, 0, lo, cabin);
+            day.seats[at] -= p.party;
+        }
+        let mut cause = -1;
+        if li >= 0 and day.cnx[li] {
+            cause = 1;
+        } else if lo >= 0 and day.cnx[lo] {
+            cause = 0;
+        } else if li >= 0 and lo >= 0 and eff_arr(day, flights, li, 0) + MCT > eff_dep(day, flights, lo, 0) {
+            cause = 2;
+        }
+        day.cause.push(cause);
+        day.outcome.push(0);
+        day.new_in.push(li);
+        day.in_day.push(0);
+        day.new_out.push(lo);
+        day.out_day.push(0);
+        day.down.push(false);
+        day.kept.push(false);
+        let first = if li >= 0 { li } else { lo };
+        day.first_dep.push(eff_dep(day, flights, first, 0));
+        let last = if lo >= 0 { lo } else { li };
+        day.arrive.push(eff_arr(day, flights, last, 0));
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for j in 0..pnrs.len() as i64 {
+        if day.cause[j] >= 0 {
+            order.push(j);
+        }
+    }
+    order.sort_by(|a, b| {
+        let ta = tier_index(pnrs[a].tier);
+        let tb = tier_index(pnrs[b].tier);
+        if ta != tb {
+            return tb.cmp(ta);
+        }
+        let ca = cabin_of(pnrs[a].cabin);
+        let cb = cabin_of(pnrs[b].cabin);
+        if ca != cb {
+            return ca.cmp(cb);
+        }
+        if pnrs[a].fare != pnrs[b].fare {
+            return pnrs[b].fare.cmp(pnrs[a].fare);
+        }
+        a.cmp(b)
+    });
+    for j in order {
+        let p = ref pnrs[j];
+        let cabin = cabin_of(p.cabin);
+        let li = day.leg_in[j];
+        let lo = day.leg_out[j];
+        let mut ready = 0;
+        let mut ok = true;
+        let mut first = -1;
+        if li >= 0 {
+            if day.cnx[li] {
+                let (f, d, cb) = search(day, flights, flights[li].orig, hub.code.to_string(), flights[li].dep, p.party, cabin);
+                if f < 0 {
+                    ok = false;
+                } else {
+                    day.new_in[j] = f;
+                    day.in_day[j] = d;
+                    let at = seat_at(day, d, f, cb);
+                    day.seats[at] -= p.party;
+                    if cb != cabin {
+                        day.down[j] = true;
+                    }
+                    ready = eff_arr(day, flights, f, d) + MCT;
+                    first = eff_dep(day, flights, f, d);
+                    if lo < 0 {
+                        day.arrive[j] = eff_arr(day, flights, f, d);
+                    }
+                }
+            } else {
+                ready = eff_arr(day, flights, li, 0) + MCT;
+                first = eff_dep(day, flights, li, 0);
+            }
+        } else {
+            ready = flights[lo].dep;
+        }
+        if ok and lo >= 0 {
+            if not day.cnx[lo] and eff_dep(day, flights, lo, 0) >= ready {
+                day.kept[j] = true;
+                if first < 0 {
+                    first = eff_dep(day, flights, lo, 0);
+                }
+            } else {
+                if not day.cnx[lo] {
+                    let at = seat_at(day, 0, lo, cabin);
+                    day.seats[at] += p.party;
+                }
+                let (f, d, cb) = search(day, flights, hub.code.to_string(), flights[lo].dest, ready, p.party, cabin);
+                if f < 0 {
+                    ok = false;
+                    // The new inbound seat goes back too.
+                    if li >= 0 and day.cnx[li] {
+                        let was = if day.down[j] { 1 } else { cabin };
+                        let at = seat_at(day, day.in_day[j], day.new_in[j], was);
+                        day.seats[at] += p.party;
+                        day.down[j] = false;
+                    }
+                } else {
+                    day.new_out[j] = f;
+                    day.out_day[j] = d;
+                    let at = seat_at(day, d, f, cb);
+                    day.seats[at] -= p.party;
+                    if cb != cabin {
+                        day.down[j] = true;
+                    }
+                    day.arrive[j] = eff_arr(day, flights, f, d);
+                    if first < 0 {
+                        first = eff_dep(day, flights, f, d);
+                    }
+                }
+            }
+        }
+        if not ok {
+            day.outcome[j] = 3;
+            day.new_in[j] = if li >= 0 and day.cnx[li] { -1 } else { li };
+            day.new_out[j] = -1;
+            continue;
+        }
+        day.first_dep[j] = first;
+        day.outcome[j] = if day.in_day[j] == 1 or day.out_day[j] == 1 { 2 } else { 1 };
+    }
+    day.order = order;
+    day
+}
+
+fn leg_text(flights: ref Vec[Flight], f: i64, d: i64, orig: i64) -> String {
+    if orig < 0 {
+        return "-".to_string();
+    }
+    if f < 0 {
+        return "none".to_string();
+    }
+    if d == 1 {
+        return f"{flights[f].fid}+1";
+    }
+    flights[f].fid.clone()
+}
+
+// The gate agents' file: every disrupted record in the order it was
+// rebooked, with its new flights.
+fn encode_rebook(flights: ref Vec[Flight], pnrs: ref Vec[Pnr], day: ref Day) -> String {
+    let mut out = "pnr,cause,outcome,inbound,outbound,cabin,arrival\n".to_string();
+    for j in day.order {
+        let p = ref pnrs[j];
+        let a = leg_text(flights, day.new_in[j], day.in_day[j], day.leg_in[j]);
+        let b = leg_text(flights, day.new_out[j], day.out_day[j], day.leg_out[j]);
+        let cabin = if day.down[j] { "Y".to_string() } else { p.cabin.clone() };
+        let arr = if day.outcome[j] == 3 { "-".to_string() } else { clock(day.arrive[j]) };
+        out.push_str(f"{p.loc},{CAUSES[day.cause[j]]},{OUTCOMES[day.outcome[j]]},{a},{b},{cabin},{arr}\n");
+    }
+    out
+}
+
+// ------------------------------------------------------------ reports
+
+fn ops_report(hub: ref Hub, flights: ref Vec[Flight], day: ref Day) -> String {
+    let n = flights.len() as i64;
+    let mut c = 0;
+    let mut by = [0, 0, 0, 0];
+    let mut d = 0;
+    let mut total = 0;
+    let mut worst = -1;
+    for f in 0..n {
+        if day.cnx[f] {
+            c += 1;
+            by[reason_index(day.reason[f])] += 1;
+        } else if day.delay[f] > 0 {
+            d += 1;
+            total += day.delay[f];
+            if worst < 0 or day.delay[f] > day.delay[worst] {
+                worst = f;
+            }
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for r in 0..4 {
+        if by[r] > 0 {
+            parts.push(f"{REASONS[r]} {by[r]}");
+        }
+    }
+    let mut s = f"{hub.code} ops: {n} flights, {c} cancelled";
+    if c > 0 {
+        s.push_str(f" ({parts.join(", ")})");
+    }
+    s.push_str(f", {d} delayed, {total / max2(d, 1)} min average delay");
+    if worst >= 0 {
+        let fl = ref flights[worst];
+        s.push_str(f", worst {fl.fid} {fl.orig}-{fl.dest} {hhmm(fl.dep)} +{day.delay[worst]}");
+    }
+    s
+}
+
+fn rebook_report(hub: ref Hub, pnrs: ref Vec[Pnr], day: ref Day) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    let mut n = [0, 0, 0];
+    let mut pax = 0;
+    for j in day.order {
+        n[day.cause[j]] += 1;
+        pax += pnrs[j].party;
+    }
+    lines.push(f"{hub.code} disrupted: {group3(day.order.len() as i64)} PNRs, {group3(pax)} passengers: {n[0]} on cancelled flights, {n[1]} with a cancelled inbound, {n[2]} missed connections");
+    let mut out = [0, 0, 0, 0];
+    let mut kept = 0;
+    let mut down = 0;
+    for j in day.order {
+        out[day.outcome[j]] += pnrs[j].party;
+        if day.kept[j] {
+            kept += pnrs[j].party;
+        }
+        if day.down[j] {
+            down += pnrs[j].party;
+        }
+    }
+    lines.push(f"  passengers: {group3(out[1])} same day ({kept} kept their outbound, {down} downgraded), {group3(out[2])} next day, {group3(out[3])} stranded");
+    for k in 0..4 {
+        let t = 3 - k;
+        let mut tot = 0;
+        let mut o = [0, 0, 0, 0];
+        for j in day.order {
+            if pnrs[j].tier == TIERS[t] {
+                tot += pnrs[j].party;
+                o[day.outcome[j]] += pnrs[j].party;
+            }
+        }
+        if tot > 0 {
+            let name = if t == 0 { "no tier" } else { TIERS[t] };
+            lines.push(f"  {name}: {tot} passengers, {pct(o[1], tot)}% same day, {pct(o[2], tot)}% next day, {pct(o[3], tot)}% stranded");
+        }
+    }
+    lines
+}
+
+fn load_report(hub: ref Hub, flights: ref Vec[Flight], day: ref Day) -> String {
+    let mut cap = 0;
+    let mut booked = 0;
+    let mut flown = 0;
+    let mut full = 0;
+    let mut low = -1;
+    let mut low_b = 0;
+    for f in 0..day.nf {
+        if day.cnx[f] {
+            continue;
+        }
+        flown += 1;
+        let c = flights[f].seats_j + flights[f].seats_y;
+        let b = c - day.seats[seat_at(day, 0, f, 0)] - day.seats[seat_at(day, 0, f, 1)];
+        cap += c;
+        booked += b;
+        if b == c {
+            full += 1;
+        }
+        if low < 0 or b * (flights[low].seats_j + flights[low].seats_y) < low_b * c {
+            low = f;
+            low_b = b;
+        }
+    }
+    let mut open = 0;
+    let mut taken = 0;
+    for f in 0..day.nf {
+        let o = flights[f].open_j + flights[f].open_y;
+        open += o;
+        taken += o - day.seats[seat_at(day, 1, f, 0)] - day.seats[seat_at(day, 1, f, 1)];
+    }
+    let fl = ref flights[low];
+    f"{hub.code} loads: {tenths(booked, cap)}% of {group3(cap)} seats on {flown} flights flown, {full} full, emptiest {fl.fid} {fl.orig}-{fl.dest} {low_b}/{fl.seats_j + fl.seats_y}; tomorrow {taken} of {open} open seats taken"
+}
+
+fn care_report(hub: ref Hub, flights: ref Vec[Flight], pnrs: ref Vec[Pnr], day: ref Day) -> String {
+    let mut meals = 0;
+    let mut meal_n = 0;
+    let mut rooms = 0;
+    let mut credits = 0;
+    let mut refunds = 0;
+    let mut downs = 0;
+    let mut miles = 0;
+    for j in 0..pnrs.len() as i64 {
+        let p = ref pnrs[j];
+        let cabin = cabin_of(p.cabin);
+        let oc = day.outcome[j];
+        let li = day.leg_in[j];
+        let lo = day.leg_out[j];
+        if day.cause[j] >= 0 {
+            miles += MILES[tier_index(p.tier)] * p.party;
+        }
+        if oc == 3 {
+            if p.fare == "F" {
+                refunds += p.amount;
+            } else {
+                credits += p.amount;
+            }
+            continue;
+        }
+        let first = if li >= 0 { li } else { lo };
+        let wait = day.first_dep[j] - flights[first].dep;
+        if wait >= 300 {
+            meals += MEAL_LONG * p.party;
+            meal_n += p.party;
+        } else if wait >= 120 {
+            meals += MEAL * p.party;
+            meal_n += p.party;
+        }
+        // A night at the hub: in today, out tomorrow.
+        if lo >= 0 and day.out_day[j] == 1 and day.in_day[j] == 0 and li >= 0 {
+            rooms += (p.party + 1) / 2;
+        }
+        let last = if lo >= 0 { lo } else { li };
+        let late = day.arrive[j] - flights[last].arr;
+        if oc == 2 or late >= 360 {
+            credits += CREDIT_HI[cabin] * p.party;
+        } else if late >= 180 {
+            credits += CREDIT_LO[cabin] * p.party;
+        }
+        if day.down[j] {
+            downs += p.amount * 40 / 100;
+        }
+    }
+    f"{hub.code} care: meals {money(meals)} ({group3(meal_n)} vouchers), hotels {money(rooms * HOTEL)} ({rooms} rooms), credits {money(credits)}, refunds {money(refunds)}, downgrade refunds {money(downs)}, bonus miles {group3(miles)}"
+}
+
+// ------------------------------------------------------------ spares
+
+// A hub's two destinations with the most stranded passengers, if they
+// have at least MIN_SECTION, each get an extra section while spares last.
+fn ask_spares(pool: mut ref Pool, hub: ref Hub, flights: ref Vec[Flight], pnrs: ref Vec[Pnr], day: ref Day) -> Vec[String] {
+    let mut dests: Vec[String] = Vec.new();
+    let mut pax: Vec[i64] = Vec.new();
+    for j in day.order {
+        if day.outcome[j] == 3 and day.leg_out[j] >= 0 {
+            let d = ref flights[day.leg_out[j]].dest;
+            let mut at = -1;
+            for k in 0..dests.len() as i64 {
+                if dests[k] == d {
+                    at = k;
+                }
+            }
+            if at < 0 {
+                dests.push(d.clone());
+                pax.push(0);
+                at = dests.len() as i64 - 1;
+            }
+            pax[at] += pnrs[j].party;
+        }
+    }
+    let mut want: Vec[i64] = Vec.new();
+    for k in 0..dests.len() as i64 {
+        if pax[k] >= MIN_SECTION {
+            want.push(k);
+        }
+    }
+    want.sort_by(|a, b| if pax[a] != pax[b] { pax[b].cmp(pax[a]) } else { dests[a].cmp(dests[b]) });
+    let mut lines: Vec[String] = Vec.new();
+    if want.len() == 0 {
+        lines.push(f"{hub.code} spares: no destination has {MIN_SECTION} stranded passengers");
+        return lines;
+    }
+    let mut unserved: Vec[String] = Vec.new();
+    for w in 0..min2(MAX_PER_HUB, want.len() as i64) {
+        let k = want[w];
+        let dest = ref dests[k];
+        if pool.left == 0 {
+            unserved.push(f"{dest} ({pax[k]} stranded)");
+            continue;
+        }
+        let tail = SPARES[4 - pool.left];
+        pool.left -= 1;
+        let mut seats = SPARE_SEATS;
+        let mut boarded = 0;
+        let mut saved = 0;
+        for j in day.order {
+            let p = ref pnrs[j];
+            if day.outcome[j] != 3 or day.leg_out[j] < 0 or flights[day.leg_out[j]].dest != dest {
+                continue;
+            }
+            if p.party > seats {
+                continue;
+            }
+            seats -= p.party;
+            boarded += p.party;
+            if p.fare == "F" {
+                saved += p.amount;
+            }
+            pool.log.push(f"{tail},{hub.code},{dest},{p.loc},{p.party}");
+        }
+        lines.push(f"{hub.code} spares: {tail} to {dest} at 07:00 tomorrow, {boarded} of {pax[k]} stranded passengers, {money(saved)} in refunds saved");
+    }
+    if unserved.len() > 0 {
+        lines.push(f"{hub.code} spares: none left for {unserved.join(", ")}");
+    }
+    lines
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let ord = Hub { code: "ORD", base: 1000, seed: 7101, ws: 840, we: 1080, cnx: 35, dmin: 20, dmax: 150, reason: "WX", bg: 18, mx: 6 };
+    let den = Hub { code: "DEN", base: 2000, seed: 7202, ws: 360, we: 630, cnx: 45, dmin: 20, dmax: 120, reason: "WX", bg: 15, mx: 6 };
+    let atl = Hub { code: "ATL", base: 3000, seed: 7303, ws: 660, we: 1200, cnx: 12, dmin: 45, dmax: 210, reason: "ATC", bg: 20, mx: 6 };
+    let jfk = Hub { code: "JFK", base: 4000, seed: 7404, ws: 960, we: 1290, cnx: 25, dmin: 20, dmax: 180, reason: "WX", bg: 22, mx: 30 };
+
+    // Four schedules, then four sets of bookings and four event files.
+    let s1 = build_flights(ord);
+    let s2 = build_flights(den);
+    let s3 = build_flights(atl);
+    let s4 = build_flights(jfk);
+    let b1 = build_pnrs(0, ord, s1);
+    let b2 = build_pnrs(1, den, s2);
+    let b3 = build_pnrs(2, atl, s3);
+    let b4 = build_pnrs(3, jfk, s4);
+    let e1 = build_events(ord, s1);
+    let e2 = build_events(den, s2);
+    let e3 = build_events(atl, s3);
+    let e4 = build_events(jfk, s4);
+
+    // Twelve writes.
+    let w1 = fs.write("ORD_flights.csv", encode_flights(s1));
+    let w2 = fs.write("ORD_pnrs.csv", encode_pnrs(b1));
+    let w3 = fs.write("ORD_events.csv", encode_events(e1));
+    let w4 = fs.write("DEN_flights.csv", encode_flights(s2));
+    let w5 = fs.write("DEN_pnrs.csv", encode_pnrs(b2));
+    let w6 = fs.write("DEN_events.csv", encode_events(e2));
+    let w7 = fs.write("ATL_flights.csv", encode_flights(s3));
+    let w8 = fs.write("ATL_pnrs.csv", encode_pnrs(b3));
+    let w9 = fs.write("ATL_events.csv", encode_events(e3));
+    let w10 = fs.write("JFK_flights.csv", encode_flights(s4));
+    let w11 = fs.write("JFK_pnrs.csv", encode_pnrs(b4));
+    let w12 = fs.write("JFK_events.csv", encode_events(e4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() or w9.is_err() or w10.is_err() or w11.is_err() or w12.is_err() {
+        return Err(bad("could not write the day's files"));
+    }
+
+    // A copy of ORD's bookings with a party of five, and of ATL's events
+    // with a misspelled event.
+    let whole = read_text("ORD_pnrs.csv")?;
+    if fs.write("ORD_pnrs.bad", damage(whole, 300, 1, "5")).is_err() {
+        return Err(bad("could not write ORD_pnrs.bad"));
+    }
+    let whole2 = read_text("ATL_events.csv")?;
+    if fs.write("ATL_events.bad", damage(whole2, 5, 1, "DLA")).is_err() {
+        return Err(bad("could not write ATL_events.bad"));
+    }
+
+    // Twelve reads.
+    let t1 = read_text("ORD_flights.csv")?;
+    let u1 = read_text("ORD_pnrs.csv")?;
+    let v1 = read_text("ORD_events.csv")?;
+    let t2 = read_text("DEN_flights.csv")?;
+    let u2 = read_text("DEN_pnrs.csv")?;
+    let v2 = read_text("DEN_events.csv")?;
+    let t3 = read_text("ATL_flights.csv")?;
+    let u3 = read_text("ATL_pnrs.csv")?;
+    let v3 = read_text("ATL_events.csv")?;
+    let t4 = read_text("JFK_flights.csv")?;
+    let u4 = read_text("JFK_pnrs.csv")?;
+    let v4 = read_text("JFK_events.csv")?;
+    println(file_line("ORD flights", t1));
+    println(file_line("ORD pnrs", u1));
+    println(file_line("ORD events", v1));
+    println(file_line("DEN flights", t2));
+    println(file_line("DEN pnrs", u2));
+    println(file_line("DEN events", v2));
+    println(file_line("ATL flights", t3));
+    println(file_line("ATL pnrs", u3));
+    println(file_line("ATL events", v3));
+    println(file_line("JFK flights", t4));
+    println(file_line("JFK pnrs", u4));
+    println(file_line("JFK events", v4));
+
+    // Four schedules, then four sets of bookings and four event files,
+    // which need their schedule. Each can fail with `?`, so a parallel
+    // run has to report the first failure in source order.
+    let f1 = parse_flights("ORD_flights.csv", ord, t1)?;
+    let f2 = parse_flights("DEN_flights.csv", den, t2)?;
+    let f3 = parse_flights("ATL_flights.csv", atl, t3)?;
+    let f4 = parse_flights("JFK_flights.csv", jfk, t4)?;
+    let p1 = parse_pnrs("ORD_pnrs.csv", ord, f1, u1)?;
+    let p2 = parse_pnrs("DEN_pnrs.csv", den, f2, u2)?;
+    let p3 = parse_pnrs("ATL_pnrs.csv", atl, f3, u3)?;
+    let p4 = parse_pnrs("JFK_pnrs.csv", jfk, f4, u4)?;
+    let g1 = parse_events("ORD_events.csv", f1, v1)?;
+    let g2 = parse_events("DEN_events.csv", f2, v2)?;
+    let g3 = parse_events("ATL_events.csv", f3, v3)?;
+    let g4 = parse_events("JFK_events.csv", f4, v4)?;
+    match parse_pnrs("ORD_pnrs.bad", ord, f1, read_text("ORD_pnrs.bad")?) {
+        Ok(_) => println("ORD_pnrs.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_events("ATL_events.bad", f3, read_text("ATL_events.bad")?) {
+        Ok(_) => println("ATL_events.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_flights("JFK_flights.csv", den, t4) {
+        Ok(_) => println("JFK_flights.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = f1 == s1 and f2 == s2 and f3 == s3 and f4 == s4 and p1 == b1 and p2 == b2 and p3 == b3 and p4 == b4 and g1 == e1 and g2 == e2 and g3 == e3 and g4 == e4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four rebookings, the hot group.
+    let d1 = rebook(ord, f1, p1, g1);
+    let d2 = rebook(den, f2, p2, g2);
+    let d3 = rebook(atl, f3, p3, g3);
+    let d4 = rebook(jfk, f4, p4, g4);
+
+    // The gate agents' files, written and read back.
+    let r1 = fs.write("ORD_rebook.csv", encode_rebook(f1, p1, d1));
+    let r2 = fs.write("DEN_rebook.csv", encode_rebook(f2, p2, d2));
+    let r3 = fs.write("ATL_rebook.csv", encode_rebook(f3, p3, d3));
+    let r4 = fs.write("JFK_rebook.csv", encode_rebook(f4, p4, d4));
+    if r1.is_err() or r2.is_err() or r3.is_err() or r4.is_err() {
+        return Err(bad("could not write the rebooking files"));
+    }
+    let k1 = read_text("ORD_rebook.csv")?;
+    let k2 = read_text("DEN_rebook.csv")?;
+    let k3 = read_text("ATL_rebook.csv")?;
+    let k4 = read_text("JFK_rebook.csv")?;
+    println(file_line("ORD rebookings", k1));
+    println(file_line("DEN rebookings", k2));
+    println(file_line("ATL rebookings", k3));
+    println(file_line("JFK rebookings", k4));
+
+    // Reports that only read what came before.
+    let o1 = ops_report(ord, f1, d1);
+    let o2 = ops_report(den, f2, d2);
+    let o3 = ops_report(atl, f3, d3);
+    let o4 = ops_report(jfk, f4, d4);
+    let q1 = rebook_report(ord, p1, d1);
+    let q2 = rebook_report(den, p2, d2);
+    let q3 = rebook_report(atl, p3, d3);
+    let q4 = rebook_report(jfk, p4, d4);
+    let l1 = load_report(ord, f1, d1);
+    let l2 = load_report(den, f2, d2);
+    let l3 = load_report(atl, f3, d3);
+    let l4 = load_report(jfk, f4, d4);
+    let c1 = care_report(ord, f1, p1, d1);
+    let c2 = care_report(den, f2, p2, d2);
+    let c3 = care_report(atl, f3, p3, d3);
+    let c4 = care_report(jfk, f4, p4, d4);
+    for line in [o1, o2, o3, o4] {
+        println(line);
+    }
+    for lines in [q1, q2, q3, q4] {
+        for line in lines {
+            println(line);
+        }
+    }
+    for line in [l1, l2, l3, l4, c1, c2, c3, c4] {
+        println(line);
+    }
+
+    // The spares go to the hubs that ask first, so the hubs ask in order.
+    let mut pool = Pool { left: 4, log: Vec.new() };
+    for line in ask_spares(mut pool, ord, f1, p1, d1) {
+        println(line);
+    }
+    for line in ask_spares(mut pool, den, f2, p2, d2) {
+        println(line);
+    }
+    for line in ask_spares(mut pool, atl, f3, p3, d3) {
+        println(line);
+    }
+    for line in ask_spares(mut pool, jfk, f4, p4, d4) {
+        println(line);
+    }
+    if fs.write("spares.log", f"{pool.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write spares.log"));
+    }
+    let back = read_text("spares.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"spares.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["ORD_flights.csv", "ORD_pnrs.csv", "ORD_events.csv", "DEN_flights.csv", "DEN_pnrs.csv", "DEN_events.csv",
+              "ATL_flights.csv", "ATL_pnrs.csv", "ATL_events.csv", "JFK_flights.csv", "JFK_pnrs.csv", "JFK_events.csv",
+              "ORD_pnrs.bad", "ATL_events.bad", "spares.log", "ORD_rebook.csv", "DEN_rebook.csv", "ATL_rebook.csv", "JFK_rebook.csv"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"flight_rebook failed: {e.describe()}"),
+    }
+}
