@@ -105,6 +105,8 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("Server", "serve") => self.serve_native(args, dest).map(Some),
             ("Server", "serve_static") => self.serve_static_native(args, dest).map(Some),
+            ("Server", "__install") => self.http_install_native(args, dest).map(Some),
+            ("Server", "__wire") => self.http_wire_native(args, dest).map(Some),
             ("Request", _) => self.request_native(method, args, dest),
             ("Clock", "now" | "monotonic_ns" | "wall_ns") => {
                 let i64t = self.llcx.i64_type();
@@ -1680,6 +1682,94 @@ impl<'ctx> Cx<'ctx, '_> {
             msg,
             string,
         )
+    }
+
+    /// `Server.__install(buf, eof)` (runtime/stdlib/source/http_server.kara):
+    /// the request at the start of `buf` made the current one, through
+    /// `karac_mir_http_install`, as the interpreter's.
+    fn http_install_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let (p, n) = self.view_of(&args[0])?;
+        let eof = self.operand_scalar(&args[1])?.into_int_value();
+        let eof = self
+            .builder
+            .build_int_z_extend_or_bit_cast(eof, self.llcx.i32_type(), "eof")
+            .map_err(e)?;
+        let used = self.rt_named(
+            "karac_mir_http_install",
+            &[p.into(), n.into(), eof.into()],
+            64,
+        )?;
+        let d = self.place_ptr(dest)?;
+        self.store(d, used.into())
+    }
+
+    /// `Server.__wire(resp)`: the response's bytes, which close the
+    /// connection, as a `Vec[u8]`, reading `resp`'s fields by name as
+    /// [`Self::serve_native`] does.
+    fn http_wire_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let ptr = self.ptr_ty();
+        let i64t = self.llcx.i64_type();
+        let aty = self.operand_type(&args[0])?;
+        let mut at = self.operand_ptr(&args[0])?;
+        let rt = match self.tys.kind(aty) {
+            TyKind::Ref(i) | TyKind::MutRef(i) => {
+                at = self.load_ptr(at)?;
+                i
+            }
+            _ => aty,
+        };
+        let TyKind::Adt(adt) = self.tys.kind(rt) else {
+            return Err("Server.__wire of no Response".into());
+        };
+        let names: Vec<String> = self.tys.adt(adt).variants[0]
+            .fields
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect();
+        let field = |n: &str| names.iter().position(|f| f == n).map(|k| k as u32);
+        let status_k = field("status").ok_or("a Response without a `status`")?;
+        let status = self.load_i64(self.offset(at, self.field_offset(rt, None, status_k)?)?)?;
+        let parts = |k: Option<u32>| -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
+            match k {
+                Some(k) => {
+                    let p = self.offset(at, self.field_offset(rt, None, k)?)?;
+                    Ok((self.load_ptr(p)?, self.load_i64(self.offset(p, 8)?)?))
+                }
+                None => Ok((ptr.const_null(), self.i64(0))),
+            }
+        };
+        let (b, bn) = parts(field("body"))?;
+        let (h, hn) = parts(field("headers"))?;
+        let d = self.place_ptr(dest)?;
+        let wire = self.extern_fn(
+            "karac_mir_http_wire",
+            self.llcx.void_type().fn_type(
+                &[
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                ],
+                false,
+            ),
+        );
+        self.builder
+            .build_call(
+                wire,
+                &[
+                    status.into(),
+                    b.into(),
+                    bn.into(),
+                    h.into(),
+                    hn.into(),
+                    d.into(),
+                ],
+                "",
+            )
+            .map_err(e)?;
+        self.drop_moved(args)
     }
 
     /// `Server.serve_static(addr, body)`: `serve` with a 200 and `body` as

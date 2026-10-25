@@ -190,7 +190,7 @@ Both are prelude types. `IoError` covers the standard streams and files; `VarErr
 
 ## Networking
 
-`std.net` has TCP and UDP sockets, a TLS server and a WebSocket server (below), and there is an HTTP client, which speaks HTTPS. HTTP servers over TLS or WebSocket (`Server.serve_tls`, `Server.serve_ws`) come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
+`std.net` has TCP and UDP sockets, a TLS server and a WebSocket server (below). There is an HTTP server, which also serves HTTPS and upgrades to WebSocket, and an HTTP client, which speaks HTTPS.
 
 ```kara
 impl TcpListener {
@@ -308,6 +308,36 @@ A `WebSocket` is the server end of an RFC 6455 connection. `accept` takes the ne
 The sends write one unfragmented frame each; a server's frames are not masked. A send after the connection has closed fails with `Protocol`. `send_ping` takes at most 125 bytes, and its pong comes back through `recv`. `close(code)` sends the close frame with `code` (1000 is a normal close), then reads until the peer's close frame, dropping any messages before it, or until the peer drops the connection; `set_read_timeout` bounds that wait, as it bounds `recv`. Dropping a `WebSocket` without `close` closes the connection without a close frame.
 
 `recv` and the sends take the `WebSocket` mutably, so one task cannot receive while another sends on the same connection; splitting a connection into its two halves comes later.
+
+### HTTP server
+
+```kara
+impl Server {
+    fn serve(addr: String, handler: Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network)
+    fn serve_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve_ws(addr: String, handler: Fn(Request) -> Response, ws_handler: Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve_ws_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response, ws_handler: Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+}
+
+impl Request {
+    fn method(self) -> String
+    fn path(self) -> String
+    fn query(self) -> Vec[(String, String)]
+    fn header(self, name: String) -> Option[String]
+    fn headers(self) -> Vec[(String, String)]
+    fn body(self) -> String
+}
+
+struct Response { status: i64, body: String }
+```
+
+Each server binds `addr` and answers every request with what `handler` returns for it; it returns only when binding or accepting fails, with that `HttpError`. It prints `BOUND_PORT=<n>` on standard error once it is bound, so a test harness that bound port 0 can find it. A program may declare its own `Response` as `struct Response { status: i64, body: String, headers: Vec[(String, String)] }` to send headers. A response gets a JSON `content-type` when its headers give none, and its body's `content-length` in place of any they give. `header` compares names without case.
+
+Requests are served one at a time, in the order their connections arrive. `serve` keeps a connection open while the client asks to. The other three answer one request per connection, with `connection: close`, so a client that holds its connection open cannot hold up the others.
+
+`serve_tls` serves HTTPS with the certificate chain `cert_pem` and the private key `key_pem`, PEM text as `TlsListener.bind_tls` takes them. A certificate or key that does not parse fails the bind with `invalid input`, and a connection whose handshake fails is dropped.
+
+`serve_ws` adds WebSocket. When `handler` answers status 101 to a request that is a WebSocket opening handshake (a `GET` with `Upgrade: websocket` and a `Sec-WebSocket-Key`), the server sends the handshake's own 101, not the handler's response, and runs `ws_handler` on the upgraded connection as a task of its own; the bytes the client sent after the request are its first frames. The server goes on serving requests while the sessions run: the accept loop and each session are tasks, so one waiting does not hold up the others ([core semantics §11.8](../core-semantics.md)). A 101 to a request that is not a handshake is sent as it is, and any other status to a handshake is sent normally. The connection closes when `ws_handler` drops its `WebSocket`. `serve_ws_tls` is `serve_ws` over TLS, as `serve_tls` is `serve`'s.
 
 ### HTTP client
 

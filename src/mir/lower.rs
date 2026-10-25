@@ -20832,8 +20832,22 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         // The WebSocket server, Kāra over net.kara's streams, which
         // `NET_WORDS` brings along.
         include_str!("../../runtime/stdlib/source/websocket.kara"),
-        &["WebSocket", "WsMessage"],
+        &[
+            "WebSocket",
+            "WsMessage",
+            "serve_tls",
+            "serve_ws",
+            "serve_ws_tls",
+        ],
         &["WebSocket"],
+    ),
+    (
+        // `Server.serve_tls` / `serve_ws` / `serve_ws_tls`, Kāra over the
+        // listeners and websocket.kara, which `NET_WORDS` and the entry
+        // above bring along. It declares all of `Server`.
+        include_str!("../../runtime/stdlib/source/http_server.kara"),
+        &["serve_tls", "serve_ws", "serve_ws_tls"],
+        &["Server"],
     ),
     (
         // The program-rooted resources' default providers (§14.7,
@@ -20982,6 +20996,10 @@ const NET_WORDS: &[&str] = &[
     "TlsFailure",
     "WebSocket",
     "WsMessage",
+    // The servers over TLS and WebSocket (source/http_server.kara).
+    "serve_tls",
+    "serve_ws",
+    "serve_ws_tls",
 ];
 
 /// Whether `src` uses `std.process`, `std.net`, `std.regex` or `Json` as

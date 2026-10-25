@@ -1,0 +1,238 @@
+// runtime/stdlib/source/http_server.kara
+//
+// `Server.serve_tls`, `Server.serve_ws` and `Server.serve_ws_tls` on the
+// v2 pipeline (M4 item 8), as docs/library/io.md § HTTP server describes
+// them. The MIR pipeline appends this file, with net.kara and
+// websocket.kara, to a program that names one of the three
+// (`BAKED_SOURCES` in src/mir/lower.rs). It is Kāra over the listeners and
+// streams, so its waits suspend in a task as theirs do; only parsing a
+// request into the `Request` the handler reads, and writing a `Response`
+// out, are native, shared with `serve` (src/http1.rs).
+//
+// It declares the whole of `Server`, so `serve` and `serve_static` stay
+// the natives they are in runtime/stdlib/http.kara.
+
+struct Server { }
+
+// What the servers accept connections on.
+enum HttpListener {
+    Plain(TcpListener),
+    Tls(TlsListener),
+}
+
+impl HttpListener {
+    fn accept(ref self) -> Result[WsConn, NetError] with sends(Network) receives(Network) blocks suspends {
+        match self {
+            HttpListener.Plain(l) => match l.accept() {
+                Ok(s) => Ok(WsConn.Plain(s)),
+                Err(e) => Err(e),
+            },
+            HttpListener.Tls(l) => match l.accept() {
+                Ok(s) => Ok(WsConn.Tls(s)),
+                Err(e) => Err(e),
+            },
+        }
+    }
+
+    fn local_addr(ref self) -> Result[String, NetError] {
+        match self {
+            HttpListener.Plain(l) => l.local_addr(),
+            HttpListener.Tls(l) => l.local_addr(),
+        }
+    }
+}
+
+impl Server {
+    #[unstable(note: "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers")]
+    #[compiler_builtin]
+    fn serve_static(addr: own String, body: own String) -> Result[(), HttpError] {
+        Err(HttpError { message: "" })
+    }
+
+    #[compiler_builtin]
+    fn serve(addr: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) {
+        Err(HttpError { message: "" })
+    }
+
+    // `serve` over TLS, with the certificate chain `cert_pem` and the
+    // private key `key_pem` (PEM text, as `TlsListener.bind_tls` takes).
+    // A connection whose handshake fails is dropped.
+    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        match TlsListener.bind_tls(addr, cert_pem, key_pem) {
+            Ok(l) => Server.__serve(HttpListener.Tls(l), handler),
+            Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
+        }
+    }
+
+    // `serve`, where a handler that answers a WebSocket handshake request
+    // with status 101 upgrades the connection: the server sends the
+    // handshake's own 101 and runs `ws_handler` on the connection as a
+    // task of its own, while it goes on serving requests.
+    fn serve_ws(addr: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        match TcpListener.bind(addr) {
+            Ok(l) => Server.__upgrading(HttpListener.Plain(l), handler, ws_handler),
+            Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
+        }
+    }
+
+    // `serve_ws` over TLS.
+    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        match TlsListener.bind_tls(addr, cert_pem, key_pem) {
+            Ok(l) => Server.__upgrading(HttpListener.Tls(l), handler, ws_handler),
+            Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
+        }
+    }
+
+    // Serves each connection `l` accepts, one at a time.
+    fn __serve(l: own HttpListener, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        Server.__announce(l);
+        loop {
+            match l.accept() {
+                Ok(conn) => {
+                    let _ = Server.__exchange(conn, handler, false);
+                }
+                Err(NetError.Interrupted) => {}
+                Err(e) => return Err(Server.__failed("accept failed", e)),
+            }
+        }
+    }
+
+    // `__serve` with upgrades. The accept loop is a task of its own, so the
+    // sessions' tasks run while it waits.
+    fn __upgrading(l: own HttpListener, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        Server.__announce(l);
+        let group = TaskGroup.new();
+        let accepting = group.spawn(|| Server.__sessions(l, handler, ws_handler));
+        accepting.join()
+    }
+
+    fn __sessions(l: own HttpListener, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+        let sessions = TaskGroup.new();
+        loop {
+            let conn = match l.accept() {
+                Ok(conn) => conn,
+                Err(NetError.Interrupted) => continue,
+                Err(e) => return Err(Server.__failed("accept failed", e)),
+            };
+            let ws = match Server.__exchange(conn, handler, true) {
+                Some(ws) => ws,
+                None => continue,
+            };
+            let _ = sessions.spawn(|| ws_handler(ws));
+        }
+    }
+
+    // Reads one request off `conn` and answers it with `handler`'s
+    // response; the connection then closes. With `upgrades`, a 101 to a
+    // WebSocket handshake request is the upgrade instead: the connection,
+    // past the request, is the `WebSocket` returned.
+    fn __exchange(conn: own WsConn, handler: Fn(Request) -> Response, upgrades: bool) -> Option[WebSocket] with sends(Network) receives(Network) blocks suspends {
+        let mut buf: Vec[u8] = Vec.new();
+        let mut chunk = [0u8; 8192];
+        let mut used = Server.__install(buf, false);
+        while used == 0 {
+            match conn.read(mut chunk) {
+                Ok(0) => used = Server.__install(buf, true),
+                Ok(n) => {
+                    buf.extend_from_slice(chunk[0..n]);
+                    used = Server.__install(buf, false);
+                }
+                Err(NetError.Interrupted) => {}
+                Err(_) => return None,
+            }
+        }
+        if used < 0 {
+            return None;
+        }
+        let req = Request { };
+        let resp = handler(req);
+        if upgrades and resp.status == 101 {
+            match Server.__handshake_key(req) {
+                Some(key) => {
+                    let accept = WebSocket.__accept_key(key);
+                    let reply = f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n";
+                    match conn.write_all(reply.bytes()) {
+                        Ok(_) => {}
+                        Err(_) => return None,
+                    }
+                    let rest = buf.split_off(used);
+                    return Some(WebSocket {
+                        conn: conn,
+                        buf: rest,
+                        frag_op: 0,
+                        frag: Vec.new(),
+                        closed: false,
+                        close_code: None,
+                        close_sent: false,
+                    });
+                }
+                None => {}
+            }
+        }
+        let wire = Server.__wire(resp);
+        match conn.write_all(wire) {
+            Ok(_) => {
+                let _ = conn.shutdown_write();
+            }
+            Err(_) => {}
+        }
+        None
+    }
+
+    // The client's key when `req` is a WebSocket opening handshake (RFC
+    // 6455 §4.2.1): a GET asking to upgrade to `websocket`, with a key.
+    fn __handshake_key(req: Request) -> Option[String] {
+        let upgrade = match req.header("upgrade".to_string()) {
+            Some(v) => v.to_lowercase().contains("websocket"),
+            None => false,
+        };
+        if not upgrade or req.method() != "GET" {
+            return None;
+        }
+        req.header("sec-websocket-key".to_string())
+    }
+
+    // `BOUND_PORT=<n>` on stderr, as `serve` prints it for a test harness.
+    fn __announce(l: HttpListener) {
+        match l.local_addr() {
+            Ok(a) => match a.rsplit_once(":") {
+                Some((_, port)) => eprintln(f"BOUND_PORT={port}"),
+                None => {}
+            },
+            Err(_) => {}
+        }
+    }
+
+    fn __failed(what: Str, e: NetError) -> HttpError {
+        let why = match e {
+            NetError.Interrupted => "interrupted".to_string(),
+            NetError.Other(code) => f"os error {code}",
+            NetError.AddrInUse => "address in use".to_string(),
+            NetError.ConnectionRefused => "connection refused".to_string(),
+            NetError.PermissionDenied => "permission denied".to_string(),
+            NetError.TimedOut => "timed out".to_string(),
+            NetError.WouldBlock => "would block".to_string(),
+            NetError.InvalidInput => "invalid input".to_string(),
+            NetError.Tls(_) => "TLS failure".to_string(),
+            NetError.Protocol => "protocol error".to_string(),
+        };
+        HttpError { message: f"{what}: {why}" }
+    }
+
+    // Makes the request at the start of `buf` the one `Request`'s methods
+    // read: the bytes it took, 0 when `buf` holds no whole request yet
+    // (and `eof` says more may come), or -1 when the connection holds no
+    // request.
+    #[compiler_builtin]
+    fn __install(buf: Slice[u8], eof: bool) -> i64 {
+        -1
+    }
+
+    // `resp` as the bytes of an HTTP/1.1 response that closes the
+    // connection, with its headers when its type has them, as `serve`
+    // writes it.
+    #[compiler_builtin]
+    fn __wire(resp: Response) -> Vec[u8] {
+        Vec.new()
+    }
+}

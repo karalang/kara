@@ -1,5 +1,7 @@
-//! The TLS server (`TlsListener` / `TlsStream`) and the WebSocket server
-//! (`WebSocket`, `WsMessage`), M4 item 8, on both MIR backends: each
+//! The TLS server (`TlsListener` / `TlsStream`), the WebSocket server
+//! (`WebSocket`, `WsMessage`) and the HTTP servers over them
+//! (`Server.serve_tls`, `serve_ws`, `serve_ws_tls`), M4 item 8, on both
+//! MIR backends: each
 //! program serves a client this file drives (rustls for TLS, the frames of
 //! `karac::ws_frame` for WebSocket), and the interpreter and the built
 //! binary must print the same and send the client the same.
@@ -498,4 +500,255 @@ fn mir_websocket_server_over_tcp_and_tls() {
          HTTP/1.1 400 Bad Request\n\
          accept true\ntext echo secure\nclose 1000\n"
     );
+}
+
+/// The HTTP servers over TLS and WebSocket (`Server.serve_tls`,
+/// `serve_ws`, `serve_ws_tls`, runtime/stdlib/source/http_server.kara). A
+/// server never returns, so each program ends itself with `exit`, which
+/// flushes what it printed.
+const SERVE_TLS_SRC: &str = r#"
+import std.process.{exit};
+
+struct Response { status: i64, body: String, headers: Vec[(String, String)] }
+
+fn route(req: Request) -> Response {
+    let path = req.path();
+    if path == "/stop" {
+        println("stopping");
+        exit(0);
+    }
+    println(f"{req.method()} {path} {req.body()}");
+    let q = req.query();
+    let mut shown = String.new();
+    for (k, v) in q {
+        shown.push_str(f"{k}={v};");
+    }
+    Response {
+        status: if path == "/missing" { 404 } else { 200 },
+        body: f"you asked {path} {shown}",
+        headers: vec![("content-type".to_string(), "text/plain".to_string()), ("x-served".to_string(), "tls".to_string())],
+    }
+}
+
+fn main() {
+    let cert = fs.read_to_string("DIR/cert.pem").unwrap();
+    let key = fs.read_to_string("DIR/key.pem").unwrap();
+    match Server.serve_tls("127.0.0.1:0".to_string(), "not a certificate".to_string(), key.clone(), route) {
+        Ok(()) => println("bad cert served"),
+        Err(e) => println(f"bad cert: {e.message}"),
+    }
+    match Server.serve_tls("127.0.0.1:0".to_string(), cert, key, route) {
+        Ok(()) => println("served"),
+        Err(e) => println(f"failed: {e.message}"),
+    }
+}
+"#;
+
+/// The response to `request` over a fresh TLS connection, read to the
+/// server's close: its head's status line and the headers named, and its
+/// body.
+fn https(port: u16, config: &Arc<rustls::ClientConfig>, request: &str) -> String {
+    let mut s = tls_stream(port, config);
+    s.write_all(request.as_bytes()).unwrap();
+    let mut answer = Vec::new();
+    match s.read_to_end(&mut answer) {
+        Ok(_) => {}
+        Err(e) if answer.is_empty() => return format!("no answer ({:?})\n", e.kind()),
+        Err(e) => panic!("{e}"),
+    }
+    let answer = String::from_utf8(answer).unwrap();
+    let (head, body) = answer.split_once("\r\n\r\n").unwrap();
+    let mut lines = head.lines();
+    let mut t = lines.next().unwrap().to_string();
+    for l in lines {
+        let lower = l.to_ascii_lowercase();
+        if ["content-type", "x-served", "connection", "content-length"]
+            .iter()
+            .any(|h| lower.starts_with(&format!("{h}:")))
+        {
+            t.push_str(&format!(" | {lower}"));
+        }
+    }
+    format!("{t}\n{body}\n")
+}
+
+fn serve_tls_client(ports: &Ports, config: &Arc<rustls::ClientConfig>) -> String {
+    // The bad certificate's bind announces nothing.
+    let port = ports.next();
+    let mut t = https(
+        port,
+        config,
+        "GET /a/b?x=1&y=two HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    // A client that speaks plain text is dropped, and the server goes on.
+    let mut p = tcp(port);
+    p.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    let mut first = [0u8; 1];
+    let _ = p.read_exact(&mut first);
+    t.push_str(&format!("plain answer is an alert {}\n", first[0] == 21));
+    drop(p);
+    t.push_str(&https(
+        port,
+        config,
+        "POST /missing HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\ndata",
+    ));
+    t.push_str(&https(
+        port,
+        config,
+        "GET /stop HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    ));
+    t
+}
+
+#[test]
+fn mir_serve_tls_answers_https_requests() {
+    let (out, transcript) = on_both("serve-tls", SERVE_TLS_SRC, serve_tls_client);
+    assert_eq!(
+        out,
+        "bad cert: 127.0.0.1:0: bind failed: invalid input\n\
+         GET /a/b \nPOST /missing data\nstopping\n"
+    );
+    assert_eq!(
+        transcript,
+        "HTTP/1.1 200 OK | content-type: text/plain | x-served: tls | content-length: 25 \
+         | connection: close\nyou asked /a/b x=1;y=two;\n\
+         plain answer is an alert true\n\
+         HTTP/1.1 404 Not Found | content-type: text/plain | x-served: tls \
+         | content-length: 19 | connection: close\nyou asked /missing \n\
+         no answer (UnexpectedEof)\n"
+    );
+}
+
+const SERVE_WS_SRC: &str = r#"
+import std.process.{exit};
+
+fn route(req: Request) -> Response {
+    let path = req.path();
+    println(f"request {path}");
+    match path.as_str() {
+        "/chat" => Response { status: 101, body: "unused".to_string() },
+        "/health" => Response { status: 200, body: "ok".to_string() },
+        _ => Response { status: 404, body: "nope".to_string() },
+    }
+}
+
+fn chat(ws: own WebSocket) {
+    let mut ws = ws;
+    loop {
+        match ws.recv() {
+            Ok(WsMessage.Text(t)) => {
+                println(f"text {t}");
+                if t == "bye" {
+                    println(f"close {ws.close(1000u16).is_ok()}");
+                    exit(0);
+                }
+                let _ = ws.send_text(f"echo {t}");
+            }
+            Ok(WsMessage.Close(c)) => {
+                match c {
+                    Some(n) => println(f"closed {n}"),
+                    None => println("closed"),
+                }
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                println("error");
+                break;
+            }
+        }
+    }
+}
+
+fn main() {
+    let cert = fs.read_to_string("DIR/cert.pem").unwrap();
+    let key = fs.read_to_string("DIR/key.pem").unwrap();
+    let r = if "MODE" == "tls" {
+        Server.serve_ws_tls("127.0.0.1:0".to_string(), cert, key, route, chat)
+    } else {
+        Server.serve_ws("127.0.0.1:0".to_string(), route, chat)
+    };
+    match r {
+        Ok(()) => println("served"),
+        Err(e) => println(f"failed: {e.message}"),
+    }
+}
+"#;
+
+/// The status line, and body, of `request` sent over `s`, read to the
+/// server's close.
+fn http_over<S: Read + Write>(mut s: S, request: &str) -> String {
+    s.write_all(request.as_bytes()).unwrap();
+    let mut answer = Vec::new();
+    let _ = s.read_to_end(&mut answer);
+    let answer = String::from_utf8(answer).unwrap();
+    let (head, body) = answer.split_once("\r\n\r\n").unwrap_or((&answer, ""));
+    format!("{} [{body}]\n", head.lines().next().unwrap_or("nothing"))
+}
+
+/// Two sessions at once, with plain requests served while both are open,
+/// over `connect`'s streams.
+fn upgrades<S: Read + Write>(connect: &dyn Fn() -> S) -> String {
+    let mut t = String::new();
+    let mut one = Ws::open(connect(), &mut t);
+    let mut two = Ws::open(connect(), &mut t);
+    t.push_str(&http_over(
+        connect(),
+        "GET /health HTTP/1.1\r\nHost: x\r\n\r\n",
+    ));
+    two.send(true, Opcode::Text, b"two");
+    two.recv(&mut t);
+    one.send(true, Opcode::Text, b"one");
+    one.recv(&mut t);
+    two.send(true, Opcode::Close, &1001u16.to_be_bytes());
+    two.recv(&mut t);
+    drop(two);
+    // A 101 to a request that is no handshake is sent as it is, and a
+    // handshake the handler refuses gets the handler's answer.
+    t.push_str(&http_over(
+        connect(),
+        "GET /chat HTTP/1.1\r\nHost: x\r\n\r\n",
+    ));
+    t.push_str(&http_over(
+        connect(),
+        "GET /elsewhere HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+    ));
+    one.send(true, Opcode::Text, b"bye");
+    one.recv(&mut t);
+    one.send(true, Opcode::Close, &1000u16.to_be_bytes());
+    t
+}
+
+fn serve_ws_client(ports: &Ports, _config: &Arc<rustls::ClientConfig>) -> String {
+    let port = ports.next();
+    upgrades(&|| tcp(port))
+}
+
+fn serve_ws_tls_client(ports: &Ports, config: &Arc<rustls::ClientConfig>) -> String {
+    let port = ports.next();
+    upgrades(&|| tls_stream(port, config))
+}
+
+const SERVE_WS_OUT: &str = "request /chat\nrequest /chat\nrequest /health\ntext two\ntext one\n\
+     closed 1001\nrequest /chat\nrequest /elsewhere\ntext bye\nclose true\n";
+
+const SERVE_WS_TRANSCRIPT: &str = "accept true\naccept true\nHTTP/1.1 200 OK [ok]\n\
+     text echo two\ntext echo one\nclose 1001\n\
+     HTTP/1.1 101 Switching Protocols [unused]\nHTTP/1.1 404 Not Found [nope]\nclose 1000\n";
+
+#[test]
+fn mir_serve_ws_upgrades_while_serving() {
+    let src = SERVE_WS_SRC.replace("MODE", "plain");
+    let (out, transcript) = on_both("serve-ws", &src, serve_ws_client);
+    assert_eq!(out, SERVE_WS_OUT);
+    assert_eq!(transcript, SERVE_WS_TRANSCRIPT);
+}
+
+#[test]
+fn mir_serve_ws_tls_upgrades_while_serving() {
+    let src = SERVE_WS_SRC.replace("MODE", "tls");
+    let (out, transcript) = on_both("serve-ws-tls", &src, serve_ws_tls_client);
+    assert_eq!(out, SERVE_WS_OUT);
+    assert_eq!(transcript, SERVE_WS_TRANSCRIPT);
 }

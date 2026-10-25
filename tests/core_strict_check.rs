@@ -10206,32 +10206,26 @@ fn a_tuple_literal_takes_str_from_its_slot() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// B-2026-10-20-8 (review/PLAN_AMENDMENT_2026-10-19.md, "TLS and
+/// review/PLAN_AMENDMENT_2026-10-19.md ("TLS and
 /// WebSocket"): the servers built on the TLS server and WebSocket
-/// (`Server.serve_tls`, `Server.serve_ws`) keep their M4a placement, so
-/// `karac check` refuses them with a code naming M4a. `TlsListener` and
-/// `WebSocket` themselves came with M4 item 8 and check clean, as does a
-/// program's own `WebSocket` type.
+/// (`Server.serve_tls`, `serve_ws`, `serve_ws_tls`) kept their M4a
+/// placement, refused by `karac check`, until M4 item 8 put them on v2
+/// (runtime/stdlib/source/http_server.kara). They check clean now, with a
+/// closure or a function as the handler, as do `TlsListener`, `WebSocket`
+/// and a program's own `WebSocket` type.
 #[test]
-fn the_tls_and_websocket_servers_wait_for_m4a() {
-    let tag = "m4a-serve-tls";
-    let call = "let _r = Server.serve_tls(\"127.0.0.1:0\".to_string(), \"c\".to_string(), \"k\".to_string(), |req| Response { status: 200, body: req.path() });";
-    let (dir, path) = fixture(tag, &format!("fn main() {{\n    {call}\n}}\n"));
-    let out = karac()
-        .arg("check")
-        .arg("--output=json")
-        .arg(&path)
-        .output()
-        .unwrap();
-    let json =
-        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "{tag}: check must reject: {json}");
-    assert!(
-        json.contains("\"code\":\"E_DEFERRED_M4A\""),
-        "{tag}: {json}"
+fn the_tls_and_websocket_servers_check_clean() {
+    accepted(
+        "m4a-serve-tls",
+        "fn main() {\n    let _r = Server.serve_tls(\"127.0.0.1:0\".to_string(), \"c\".to_string(), \"k\".to_string(), |req| Response { status: 200, body: req.path() });\n}\n",
     );
-    assert!(json.contains("services track (M4a"), "{tag}: {json}");
-    let _ = std::fs::remove_dir_all(&dir);
+    accepted(
+        "m4a-serve-ws",
+        "fn route(req: Request) -> Response { Response { status: 101, body: req.path() } }\n\
+         fn on_ws(ws: own WebSocket) { let mut ws = ws; let _ = ws.send_text(\"hi\"); }\n\
+         fn main() {\n    let _a = Server.serve_ws(\"127.0.0.1:0\".to_string(), route, on_ws);\n    \
+         let _b = Server.serve_ws_tls(\"127.0.0.1:0\".to_string(), \"c\".to_string(), \"k\".to_string(), route, on_ws);\n}\n",
+    );
     accepted(
         "m4-websocket-accept",
         "fn main() {\n    let l = TcpListener.bind(\"127.0.0.1:0\").unwrap();\n    let _w = WebSocket.accept(l);\n}\n",

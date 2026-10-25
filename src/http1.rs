@@ -141,31 +141,44 @@ impl Server {
         let Some((w, _)) = self.conn.as_mut() else {
             return;
         };
-        let mut head = format!("HTTP/1.1 {status} {}\r\n", reason(status));
-        let mut typed = false;
-        for (k, v) in headers {
-            if k.eq_ignore_ascii_case("content-length") {
-                continue;
-            }
-            typed |= k.eq_ignore_ascii_case("content-type");
-            head.push_str(&format!("{k}: {v}\r\n"));
-        }
-        if !typed {
-            head.push_str("content-type: application/json\r\n");
-        }
-        head.push_str(&format!("content-length: {}\r\n", body.len()));
-        if !self.keep_alive {
-            head.push_str("connection: close\r\n");
-        }
-        head.push_str("\r\n");
-        let sent = w
-            .write_all(head.as_bytes())
-            .and_then(|()| w.write_all(body))
-            .and_then(|()| w.flush());
+        let wire = response_bytes(status, body, headers, self.keep_alive);
+        let sent = w.write_all(&wire).and_then(|()| w.flush());
         if sent.is_err() || !self.keep_alive {
             self.conn = None;
         }
     }
+}
+
+/// A response's bytes: the status line, `headers` (with a JSON
+/// `content-type` when they give none, and the body's `content-length` in
+/// place of any they give), `connection: close` unless `keep_alive`, and
+/// the body.
+pub fn response_bytes(
+    status: i64,
+    body: &[u8],
+    headers: &[(String, String)],
+    keep_alive: bool,
+) -> Vec<u8> {
+    let mut head = format!("HTTP/1.1 {status} {}\r\n", reason(status));
+    let mut typed = false;
+    for (k, v) in headers {
+        if k.eq_ignore_ascii_case("content-length") {
+            continue;
+        }
+        typed |= k.eq_ignore_ascii_case("content-type");
+        head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    if !typed {
+        head.push_str("content-type: application/json\r\n");
+    }
+    head.push_str(&format!("content-length: {}\r\n", body.len()));
+    if !keep_alive {
+        head.push_str("connection: close\r\n");
+    }
+    head.push_str("\r\n");
+    let mut wire = head.into_bytes();
+    wire.extend_from_slice(body);
+    wire
 }
 
 /// What the bytes read so far off a connection hold of its next request.
@@ -352,6 +365,7 @@ fn read_request(r: &mut impl Read, buf: &mut Vec<u8>) -> std::io::Result<Option<
 /// The reason phrase for `status`.
 fn reason(status: i64) -> &'static str {
     match status {
+        101 => "Switching Protocols",
         200 => "OK",
         201 => "Created",
         202 => "Accepted",

@@ -465,9 +465,8 @@ fn lib_test_body() -> String {
 /// a `/ws` WebSocket echo route (the handler's `Response { status:
 /// 101 }` is the upgrade signal — the runtime completes the RFC
 /// 6455 handshake and runs `on_ws` on the upgraded connection),
-/// 404 fall-through for unknown paths. Effects declared
-/// (`sends(Network) receives(Network)`) so the program
-/// effectchecks cleanly.
+/// 404 fall-through for unknown paths. `main` is private, so its
+/// effects are inferred and it carries no clause.
 ///
 /// The "listening" announcement is emitted through `std.tracing`'s
 /// `StdoutExporter` (a structured `LogEvent.info`), so a fresh project
@@ -493,34 +492,41 @@ fn backend_main_body() -> String {
      // listens until the process is killed.\n\
      \n\
      fn handle(req: Request) -> Response {\n    \
-     match req.path() {\n        \
+     match req.path().as_str() {\n        \
      \"/health\" => Response { status: 200, body: \"ok\" },\n        \
      \"/ws\" => Response { status: 101, body: \"\" },\n        \
      _ => Response { status: 404, body: \"not found\" },\n    \
      }\n\
      }\n\
      \n\
-     fn on_ws(ws: WebSocket) {\n    \
-     let mut buf: Array[u8, 4096] = [0u8; 4096];\n    \
+     fn on_ws(ws: own WebSocket) {\n    \
+     let mut ws = ws;\n    \
      loop {\n        \
-     match ws.recv_text(mut buf) {\n            \
-     Result.Ok(n) => {\n                \
-     if n == 0 { break; }\n                \
-     match ws.send_text(buf[0..n]) {\n                    \
-     Result.Ok(_) => {}\n                    \
-     Result.Err(_) => { break; }\n                \
+     match ws.recv() {\n            \
+     Ok(WsMessage.Text(t)) => {\n                \
+     if ws.send_text(t).is_err() {\n                    \
+     break;\n                \
      }\n            \
      }\n            \
-     Result.Err(_) => { break; }\n        \
+     Ok(WsMessage.Binary(b)) => {\n                \
+     if ws.send_binary(b).is_err() {\n                    \
+     break;\n                \
+     }\n            \
+     }\n            \
+     Ok(WsMessage.Close(_)) => break,\n            \
+     Ok(_) => {}\n            \
+     Err(_) => break,\n        \
      }\n    \
      }\n\
      }\n\
      \n\
-     fn main() with sends(Network) receives(Network) {\n    \
-     let addr: String = \"127.0.0.1:8080\";\n    \
+     fn main() {\n    \
      let tracer = StdoutExporter {};\n    \
      tracer.export_event(LogEvent.info(\"Listening on http://127.0.0.1:8080\"));\n    \
-     let _result = Server.serve_ws(addr, handle, on_ws);\n\
+     match Server.serve_ws(\"127.0.0.1:8080\".to_string(), handle, on_ws) {\n        \
+     Ok(()) => {}\n        \
+     Err(e) => println(f\"server failed: {e.message}\"),\n    \
+     }\n\
      }\n"
     .to_string()
 }
@@ -656,7 +662,7 @@ mod tests {
             "backend main must wire the /ws 101 arm; body was:\n{body}"
         );
         assert!(
-            body.contains("fn on_ws(ws: WebSocket)"),
+            body.contains("fn on_ws(ws: own WebSocket)"),
             "backend main must define the on_ws handler; body was:\n{body}"
         );
         // Manual dispatch on req.path() per v1 routing answer (line 15).
@@ -669,12 +675,8 @@ mod tests {
             body.contains("\"/health\""),
             "backend main must wire a /health route; body was:\n{body}"
         );
-        // Effect declarations — Server.serve carries sends/receives(Network),
-        // so main must declare them or effectcheck will reject the call.
-        assert!(
-            body.contains("sends(Network)") && body.contains("receives(Network)"),
-            "backend main must declare sends(Network) receives(Network); body was:\n{body}"
-        );
+        // No effect clause: `main` is private, so its effects (the
+        // server's network sends, receives and waits) are inferred.
         // std.tracing emission idiom — the startup announcement goes
         // through StdoutExporter.export_event(LogEvent.info(...)), not a
         // bare println, so new projects see the tracing surface day one.

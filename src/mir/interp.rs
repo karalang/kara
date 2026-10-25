@@ -2227,7 +2227,7 @@ impl<'a> Interp<'a> {
             ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
                 self.crypto_method(name, method, args)
             }
-            ("Server", "serve" | "serve_static") | ("Request", _) => {
+            ("Server", "serve" | "serve_static" | "__install" | "__wire") | ("Request", _) => {
                 self.http_server_method(name, base, method, args, arg_tys, ret)
             }
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
@@ -14199,6 +14199,33 @@ impl<'a> Interp<'a> {
                 };
                 release(self, handler)?;
                 self.http_error(message, ret)
+            }
+            // The servers in runtime/stdlib/source/http_server.kara: the
+            // request at the start of a connection's bytes, made the one
+            // `Request`'s methods read, and a response's bytes.
+            ("Server", "__install") => {
+                let bytes = self.bytes_of_view(&args[0], name)?;
+                let eof = matches!(args.get(1), Some(Value::Bool(true)));
+                let used = match crate::http1::parse_request(&bytes, eof) {
+                    crate::http1::Parse::Done(req, used) => {
+                        self.http_request = req;
+                        used as i128
+                    }
+                    crate::http1::Parse::More => 0,
+                    crate::http1::Parse::Closed | crate::http1::Parse::Bad(_) => -1,
+                };
+                Ok(Value::Int(used))
+            }
+            ("Server", "__wire") => {
+                let rty = self.deref_ty(arg_tys.first().copied(), name)?;
+                let resp = self.through_refs(&args[0])?;
+                let (status, body, headers) = self.response_parts(&resp, rty, name)?;
+                let wire = crate::http1::response_bytes(status, body.as_bytes(), &headers, false);
+                let elems = wire
+                    .into_iter()
+                    .map(|b| Value::Int(i128::from(b)))
+                    .collect();
+                Ok(self.alloc_box("Vec[u8]", Value::Agg(elems)))
             }
             ("Request", "path") => {
                 let text = self.http_request.path().to_string();

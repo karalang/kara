@@ -1264,9 +1264,72 @@ pub unsafe extern "C" fn karac_mir_http_respond(
     headers_len: u64,
 ) {
     let body_len = body_len as usize;
-    let headers_len = headers_len as usize;
-    let mut pairs = Vec::with_capacity(headers_len);
-    for i in 0..headers_len {
+    // SAFETY: the caller's contract.
+    let pairs = unsafe { header_pairs(headers, headers_len as usize) };
+    // SAFETY: the caller's contract.
+    unsafe { (*server).respond(status, bytes_at(body, body_len), &pairs) };
+}
+
+/// `Server.__install(buf, eof)` for the servers in
+/// runtime/stdlib/source/http_server.kara: makes the request at the start
+/// of the `n` bytes at `p` the current one, and returns the bytes it took;
+/// 0 when they hold no whole request yet and `eof` is 0, or -1 when the
+/// connection holds no request.
+///
+/// # Safety
+///
+/// `p` describes `n` readable bytes.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_install(p: *const u8, n: i64, eof: i32) -> i64 {
+    // SAFETY: the caller's contract.
+    let buf = unsafe { buf_bytes(p, n.max(0) as usize) };
+    match http1::parse_request(buf, eof != 0) {
+        http1::Parse::Done(req, used) => {
+            MIR_REQUEST.with(|r| *r.borrow_mut() = req);
+            used as i64
+        }
+        http1::Parse::More => 0,
+        http1::Parse::Closed | http1::Parse::Bad(_) => -1,
+    }
+}
+
+/// `Server.__wire(resp)`: the bytes of a response with `status`, the body's
+/// bytes and `headers` pairs of `String`s, which closes the connection, as
+/// a `Vec[u8]` at `out`.
+///
+/// # Safety
+///
+/// `body` describes `body_len` readable bytes, `headers` holds
+/// `headers_len` `(String, String)`s, and `out` is writable for a `Vec`.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_wire(
+    status: i64,
+    body: *const u8,
+    body_len: u64,
+    headers: *const RawVec,
+    headers_len: u64,
+    out: *mut RawVec,
+) {
+    // SAFETY: the caller's contract.
+    let pairs = unsafe { header_pairs(headers, headers_len as usize) };
+    // SAFETY: the caller's contract.
+    let body = unsafe { bytes_at(body, body_len as usize) };
+    let wire = http1::response_bytes(status, body, &pairs, false);
+    // SAFETY: the caller's contract; a `Vec[u8]` is laid out as a `String`.
+    unsafe { string_of(out, &wire) };
+}
+
+/// The `n` `(String, String)` pairs at `headers`.
+///
+/// # Safety
+///
+/// `headers` holds `n` `(String, String)`s, or `n` is 0.
+#[cfg(feature = "net")]
+unsafe fn header_pairs(headers: *const RawVec, n: usize) -> Vec<(String, String)> {
+    let mut pairs = Vec::with_capacity(n);
+    for i in 0..n {
         // SAFETY: the caller's contract: two `String`s per pair.
         let (k, v) = unsafe {
             let k = &*headers.add(2 * i);
@@ -1278,8 +1341,7 @@ pub unsafe extern "C" fn karac_mir_http_respond(
             String::from_utf8_lossy(v).into_owned(),
         ));
     }
-    // SAFETY: the caller's contract.
-    unsafe { (*server).respond(status, bytes_at(body, body_len), &pairs) };
+    pairs
 }
 
 /// `Request`'s methods, on the current request: `op` 0 `path`, 1 `method`

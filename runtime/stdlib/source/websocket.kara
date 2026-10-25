@@ -46,6 +46,13 @@ impl WsConn {
             WsConn.Tls(s) => s.set_read_timeout(ms),
         }
     }
+
+    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) blocks {
+        match self {
+            WsConn.Plain(s) => s.shutdown_write(),
+            WsConn.Tls(s) => s.shutdown_write(),
+        }
+    }
 }
 
 // What the bytes received so far hold: not yet a whole frame, a frame (its

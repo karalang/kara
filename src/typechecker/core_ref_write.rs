@@ -132,10 +132,8 @@ struct Walk<'t, 'a> {
     kind_errors: Vec<(Span, String)>,
     /// Removed capture prefixes, with the edit that deletes each (§9.6).
     prefix_errors: Vec<(Span, String, FixIt)>,
-    /// Calls into a library surface placed in M4a (B-2026-10-20-8).
-    m4a_calls: Vec<(Span, String)>,
     /// `Server.serve*` calls whose handler's `Response` is misshaped: a type
-    /// mismatch, not an M4a deferral.
+    /// mismatch.
     handler_shapes: Vec<(Span, String)>,
     /// Calls of removed library functions (§11.7).
     removed_calls: Vec<(Span, String)>,
@@ -314,7 +312,6 @@ impl<'a> TypeChecker<'a> {
             prefix_errors: Vec::new(),
             once_calls: FxHashSet::default(),
             removed_calls: Vec::new(),
-            m4a_calls: Vec::new(),
             handler_shapes: Vec::new(),
             written_pattern_bindings: FxHashSet::default(),
             pattern_read_only: FxHashMap::default(),
@@ -425,7 +422,6 @@ impl<'a> TypeChecker<'a> {
         let once_calls = w.once_calls;
         let read_conflicts = w.read_conflicts;
         let removed_calls = w.removed_calls;
-        let m4a_calls = w.m4a_calls;
         let handler_shapes = w.handler_shapes;
         // A binding the fix makes `ref` that its arm writes through must be
         // `mut ref` instead (B-2026-10-18-28).
@@ -437,9 +433,6 @@ impl<'a> TypeChecker<'a> {
         }
         for (span, message) in removed_calls {
             self.type_error(message, span, TypeErrorKind::RemovedInCore);
-        }
-        for (span, message) in m4a_calls {
-            self.type_error(message, span, TypeErrorKind::DeferredToM4a);
         }
         for (span, message) in handler_shapes {
             self.type_error(message, span, TypeErrorKind::TypeMismatch);
@@ -1130,10 +1123,10 @@ impl Walk<'_, '_> {
             }
             ExprKind::MethodCall { object, method, .. }
                 if matches!(&object.kind, ExprKind::Identifier(ty)
-                    if self.check_m4a_call(e, ty, method)) => {}
+                    if self.check_library_call(e, ty, method)) => {}
             ExprKind::Call { callee, .. }
                 if matches!(&callee.kind, ExprKind::Path { segments, .. }
-                    if segments.len() == 2 && self.check_m4a_call(e, &segments[0], &segments[1])) =>
+                    if segments.len() == 2 && self.check_library_call(e, &segments[0], &segments[1])) =>
                 {}
             ExprKind::MethodCall { object, method, .. }
                 if self.method_writes_receiver(e, object, method) =>
@@ -1358,23 +1351,17 @@ impl Walk<'_, '_> {
         }
     }
 
-    /// B-2026-10-20-8: the HTTP servers over TLS and WebSocket
-    /// (`Server.serve_tls`, `Server.serve_ws`, `Server.serve_ws_tls`) keep
-    /// their services-track (M4a) placement (docs/library/io.md), and the
-    /// v2 backends do not run them, so the check refuses each entry point
-    /// rather than let a program reach an internal MIR error. `TlsListener`
-    /// and `WebSocket` themselves run on v2 (M4 item 8). Records the call
-    /// and returns false, so the walk goes on as for any other call.
-    fn check_m4a_call(&mut self, call: &Expr, ty: &str, method: &str) -> bool {
+    /// A call of a library entry point the check has more to say about: a
+    /// `Server.serve*` handler's `Response` shape, and the removed
+    /// namespaces. Returns false, so the walk goes on as for any other
+    /// call.
+    fn check_library_call(&mut self, call: &Expr, ty: &str, method: &str) -> bool {
         if ty == "Server" && method.starts_with("serve") && method != "serve_static" {
             self.check_handler_response(call, method);
         }
-        let what = match (ty, method) {
-            ("Server", "serve_tls") => "the TLS server",
-            ("Server", "serve_ws" | "serve_ws_tls") => "WebSocket",
-            ("Base64" | "Hex" | "Url" | "Stats", _) => "",
-            _ => return false,
-        };
+        if !matches!(ty, "Base64" | "Hex" | "Url" | "Stats") {
+            return false;
+        }
         // A local of that name, or a program's own type, is not the library's.
         if self.lookup(ty).is_some()
             || self.tc.program.items.iter().any(|it| match it {
@@ -1385,18 +1372,7 @@ impl Walk<'_, '_> {
         {
             return false;
         }
-        if what.is_empty() {
-            self.check_removed_namespace(call, ty, method);
-            return false;
-        }
-        self.m4a_calls.push((
-            call.span,
-            format!(
-                "`{ty}.{method}` is not available yet: {what} comes with the services \
-                 track (M4a, docs/library/io.md), and until then `karac check` refuses \
-                 it. Plain TCP (`std.net`) and the HTTPS client are available now"
-            ),
-        ));
+        self.check_removed_namespace(call, ty, method);
         false
     }
 

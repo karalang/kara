@@ -616,13 +616,16 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_io_forget,
         mir_sock::karac_mir_sock_close,
     );
-    // `Server.serve` and `Request` on the MIR backend (`src/http1.rs`).
+    // `Server.serve` and `Request` on the MIR backend (`src/http1.rs`), and
+    // the natives of the servers in runtime/stdlib/source/http_server.kara.
     #[cfg(feature = "net")]
     keep!(
         mir_io::karac_mir_http_bind,
         mir_io::karac_mir_http_next,
         mir_io::karac_mir_http_respond,
         mir_io::karac_mir_http_request,
+        mir_io::karac_mir_http_install,
+        mir_io::karac_mir_http_wire,
     );
     // `std.crypto`'s digests on the MIR backend (full archive only).
     #[cfg(feature = "tls")]

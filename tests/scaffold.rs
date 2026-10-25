@@ -470,25 +470,18 @@ fn backend_main_kara_typechecks_cleanly() {
         "backend main.kara parse errors: {:?}",
         parsed.errors
     );
-    let resolved = karac::resolve(&parsed.program);
+    // The v2 check, which reads the library the build appends
+    // (runtime/stdlib/source/http_server.kara for `Server.serve_ws`).
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("check")
+        .arg(scratch.root().join("src/main.kara"))
+        .output()
+        .expect("spawn karac check");
     assert!(
-        resolved.errors.is_empty(),
-        "backend main.kara resolve errors: {:?}",
-        resolved.errors
-    );
-    let typed = karac::typecheck(&parsed.program, &resolved);
-    assert!(
-        typed.errors.is_empty(),
-        "backend main.kara typecheck errors: {:?}",
-        typed.errors
-    );
-    // Also verify effect-checking succeeds — Server.serve declares
-    // sends(Network) receives(Network) and main must propagate them.
-    let effect_result = karac::effectcheck(&parsed.program);
-    assert!(
-        effect_result.errors.is_empty(),
-        "backend main.kara effectcheck errors: {:?}",
-        effect_result.errors
+        out.status.success(),
+        "backend main.kara does not check:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -515,7 +508,6 @@ fn backend_main_test_kara_parses_and_typechecks() {
 /// `backend_main_kara_typechecks_cleanly` covers) but fail codegen.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the backend scaffold calls `Server.serve_ws`, which comes with the services track (M4a)"]
 fn backend_main_kara_codegens_to_executable() {
     use std::process::Command;
     // Locate the runtime archive — same convention as
