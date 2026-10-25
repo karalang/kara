@@ -1610,6 +1610,21 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Whether the appended Kāra library declares a top-level `name`.
+    pub(crate) fn library_declares(&self, name: &str) -> bool {
+        use crate::ast::Item;
+        let Some(start) = self.program.library_start else {
+            return false;
+        };
+        self.program.items.iter().any(|item| match item {
+            Item::Function(f) => f.span.offset >= start && f.name == name,
+            Item::StructDef(s) => s.span.offset >= start && s.name == name,
+            Item::EnumDef(e) => e.span.offset >= start && e.name == name,
+            Item::TraitDef(t) => t.span.offset >= start && t.name == name,
+            _ => false,
+        })
+    }
+
     /// B-2026-08-02-6 — a builtin function referenced outside call position.
     ///
     /// The message names the correct call form rather than saying only what is

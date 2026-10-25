@@ -215,6 +215,7 @@ pub(super) fn run_multi_file_late_phases(
     tree: &ProgramTree,
     package_name: &str,
     core_places: bool,
+    lib: Option<&PackageLibrary>,
 ) -> Result<Pipeline, MultiFileLateFailure> {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -289,9 +290,10 @@ pub(super) fn run_multi_file_late_phases(
     }
     crate::prelude::dedup_spliced_items(&mut super_items);
 
-    let super_program = Program {
-        items: super_items,
-        ..Program::default()
+    let super_program = PackageLibrary::program(lib, &super_items);
+    let library_fns = match lib {
+        Some(lib) => library_fn_names(&super_program, lib.start),
+        None => std::collections::HashSet::new(),
     };
 
     // 3. Drive the rest of the pipeline by hand-constructing a Pipeline
@@ -338,7 +340,7 @@ pub(super) fn run_multi_file_late_phases(
         // move included, so it needs no strict mode for C1.
         strict_core: false,
         library_len: None,
-        library_fns: std::collections::HashSet::new(),
+        library_fns,
         renames: Vec::new(),
         gated_imports: Vec::new(),
         user_source: None,
@@ -346,6 +348,7 @@ pub(super) fn run_multi_file_late_phases(
         library_pruned: None,
     };
     pipeline.resolve();
+    PackageLibrary::drop_diagnostics(lib, &mut pipeline);
     if pipeline.has_resolve_errors() {
         return Err(MultiFileLateFailure {
             phase: "resolve".to_string(),
@@ -354,6 +357,7 @@ pub(super) fn run_multi_file_late_phases(
         });
     }
     pipeline.typecheck();
+    PackageLibrary::drop_diagnostics(lib, &mut pipeline);
     if pipeline
         .typed
         .as_ref()
@@ -367,6 +371,7 @@ pub(super) fn run_multi_file_late_phases(
     }
     pipeline.lower();
     pipeline.effectcheck();
+    PackageLibrary::drop_diagnostics(lib, &mut pipeline);
     // Note-severity findings must not fail a multi-file build. This gate used
     // to test `!e.errors.is_empty()` with NO filtering at all, so it would
     // have failed on an `FfiLintHint` too — latent since the hint existed,
@@ -392,6 +397,7 @@ pub(super) fn run_multi_file_late_phases(
     // place is lent, and a bare one is the error).
     pipeline.strict_core = core_places;
     pipeline.ownershipcheck();
+    PackageLibrary::drop_diagnostics(lib, &mut pipeline);
     if pipeline
         .ownership
         .as_ref()
@@ -404,6 +410,7 @@ pub(super) fn run_multi_file_late_phases(
         });
     }
     pipeline.concurrencycheck();
+    PackageLibrary::drop_diagnostics(lib, &mut pipeline);
     if pipeline.has_fatal_errors() {
         return Err(MultiFileLateFailure {
             phase: "checks".to_string(),
@@ -580,7 +587,105 @@ pub(super) struct ModuleResolveErrors {
 /// Run the resolver per module with the full `ProgramTree` attached so
 /// cross-module imports can be validated. Returns only modules that produced
 /// errors — a module with a clean resolve contributes nothing.
-pub(super) fn resolve_modules(tree: &ProgramTree) -> Vec<ModuleResolveErrors> {
+/// The Kāra library a package's modules are checked against, as
+/// [`Pipeline::with_library`] appends it to a lone file (B-2026-10-24-43):
+/// the items the package can reach, their bodies emptied, every one at an
+/// offset from `start` on, past any module's own text. Without it a
+/// package's per-module passes knew only the checker's built-in names, so a
+/// v2-only item (`WsMessage`, `std.process.Command`) was undefined in a
+/// package and fine in a lone file. The passes check the package against
+/// the items' declarations; the check of the combined source in front of
+/// `run` / `build` checks it against their methods. `None` when a module
+/// cannot be read or the combined text does not parse; the passes then run
+/// as before.
+pub(super) struct PackageLibrary {
+    items: Vec<Item>,
+    start: usize,
+}
+
+impl PackageLibrary {
+    pub(super) fn of(tree: &ProgramTree) -> Option<Self> {
+        let mut src = String::new();
+        for m in tree.modules.iter().filter(|m| !m.is_synthetic) {
+            src.push_str(&std::fs::read_to_string(&m.file).ok()?);
+            src.push('\n');
+        }
+        let user_items = crate::parse(&src).program.items.len();
+        let (text, start) = crate::mir::lower::library_source(&src);
+        let mut parsed = crate::parse(&text);
+        if !parsed.errors.is_empty() || parsed.program.items.len() < user_items {
+            return None;
+        }
+        let program = &mut parsed.program;
+        if crate::mir::library_prune::enabled() {
+            crate::mir::library_prune::prune(program, &text, start);
+        }
+        crate::mir::lower::mark_library_builtins(program, start);
+        library_closures_take_their_callers_effects(program, start);
+        let end = crate::mir::lower::library_sources_end(start);
+        crate::mir::lower::library_bodies_unchecked(program, start..end);
+        let mut items = std::mem::take(&mut program.items).split_off(user_items);
+        // A module's own type named like one the compiler spells (`Range`)
+        // keeps its name in the module, so the library's goes.
+        let ours: std::collections::HashSet<String> = tree
+            .modules
+            .iter()
+            .filter(|m| !m.is_synthetic)
+            .flat_map(|m| m.items.iter().filter_map(type_item_name))
+            .collect();
+        items.retain(|it| match it {
+            Item::ImplBlock(b) => !matches!(&b.target_type.kind,
+                crate::ast::TypeKind::Path(p) if p.segments.last().is_some_and(|n| ours.contains(n))),
+            _ => type_item_name(it).is_none_or(|n| !ours.contains(&n)),
+        });
+        Some(PackageLibrary { items, start })
+    }
+
+    /// One module's items with the library after them.
+    pub(super) fn program(lib: Option<&Self>, items: &[Item]) -> Program {
+        let mut items = items.to_vec();
+        let library_start = lib.map(|lib| {
+            items.extend(lib.items.iter().cloned());
+            lib.start
+        });
+        Program {
+            items,
+            library_start,
+            ..Program::default()
+        }
+    }
+
+    /// Drop the diagnostics inside the library from a late phase. The
+    /// pipeline is not put in library mode (`library_len`): a package's
+    /// passes check it against the built-in methods, as before, and the v2
+    /// check of its combined source in front of `run` / `build` is the one
+    /// against the library's.
+    fn drop_diagnostics(lib: Option<&Self>, pipeline: &mut Pipeline) {
+        if let Some(lib) = lib {
+            pipeline.library_len = Some(lib.start);
+            pipeline.drop_library_diagnostics();
+            pipeline.library_len = None;
+        }
+    }
+
+    /// Whether a diagnostic at `offset` lies in the library.
+    pub(super) fn holds(lib: Option<&Self>, offset: usize) -> bool {
+        lib.is_some_and(|lib| offset >= lib.start)
+    }
+}
+
+fn type_item_name(it: &Item) -> Option<String> {
+    match it {
+        Item::StructDef(s) => Some(s.name.clone()),
+        Item::EnumDef(e) => Some(e.name.clone()),
+        _ => None,
+    }
+}
+
+pub(super) fn resolve_modules(
+    tree: &ProgramTree,
+    lib: Option<&PackageLibrary>,
+) -> Vec<ModuleResolveErrors> {
     let mut out = Vec::new();
     for (id, m) in tree.modules.iter().enumerate() {
         // Compiler-injected modules (CR-24 slice 8: `std.prelude` placeholder)
@@ -592,14 +697,14 @@ pub(super) fn resolve_modules(tree: &ProgramTree) -> Vec<ModuleResolveErrors> {
         // Resolver still takes a `&Program`, so wrap the module's items
         // in a freshly-owned `Program` view. Clone cost is negligible next
         // to the resolver pass itself.
-        let program = Program {
-            items: m.items.clone(),
-            ..Program::default()
-        };
-        let result = Resolver::new(&program)
+        let program = PackageLibrary::program(lib, &m.items);
+        let mut result = Resolver::new(&program)
             .with_tree(tree, id as ModuleId)
             .with_test_file(m.is_test_file)
             .resolve();
+        result
+            .errors
+            .retain(|e| !PackageLibrary::holds(lib, e.span.offset));
         if !result.errors.is_empty() {
             out.push(ModuleResolveErrors {
                 file: m.file.clone(),
@@ -875,6 +980,7 @@ pub(super) struct ModuleTypeDiagnostics {
 pub(super) fn typecheck_modules(
     tree: &ProgramTree,
     lint_overrides: &crate::lints::CliLintOverrides,
+    lib: Option<&PackageLibrary>,
 ) -> ModuleTypeDiagnostics {
     let mut out = Vec::new();
     let mut warn_out = Vec::new();
@@ -885,17 +991,17 @@ pub(super) fn typecheck_modules(
         if m.is_synthetic {
             continue;
         }
-        let program = Program {
-            items: m.items.clone(),
-            ..Program::default()
-        };
+        let program = PackageLibrary::program(lib, &m.items);
         let resolved = Resolver::new(&program)
             .with_tree(tree, id as ModuleId)
             .resolve();
-        let result = crate::typechecker::TypeChecker::new(&program, &resolved)
+        let mut result = crate::typechecker::TypeChecker::new(&program, &resolved)
             .with_tree(tree, id as ModuleId)
             .with_cli_lint_overrides(lint_overrides.clone())
             .check();
+        let in_lib = |e: &crate::typechecker::TypeError| PackageLibrary::holds(lib, e.span.offset);
+        result.errors.retain(|e| !in_lib(e));
+        result.warnings.retain(|e| !in_lib(e));
         // B-2026-08-18-19 — the warnings used to be DROPPED here: `result`
         // carries them and only `.errors` was read, so a project build was
         // structurally incapable of reporting `deprecated` no matter what the
@@ -1274,13 +1380,14 @@ pub(super) fn package_check_on(
     // half-parsed or cyclic tree cascades spurious E0112/E0113s, and a
     // half-resolved one cascades type errors. Answering differently here would
     // reintroduce the very divergence this function exists to remove.
+    let lib = PackageLibrary::of(&tree);
     let resolve_errors = if parse_errors.is_empty() && cycles.is_empty() {
-        resolve_modules(&tree)
+        resolve_modules(&tree, lib.as_ref())
     } else {
         Vec::new()
     };
     let diags = if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
-        typecheck_modules(&tree, lint_overrides)
+        typecheck_modules(&tree, lint_overrides, lib.as_ref())
     } else {
         ModuleTypeDiagnostics {
             errors: Vec::new(),
@@ -1302,7 +1409,13 @@ pub(super) fn package_check_on(
         let package_name = crate::manifest::load_from_cwd(root)
             .map(|(_, m)| m.name)
             .unwrap_or_else(|_| "package".to_string());
-        run_multi_file_late_phases(&tree, &package_name, lint_overrides.core_places).err()
+        run_multi_file_late_phases(
+            &tree,
+            &package_name,
+            lint_overrides.core_places,
+            lib.as_ref(),
+        )
+        .err()
     } else {
         None
     };

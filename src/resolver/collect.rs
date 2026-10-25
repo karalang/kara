@@ -2039,8 +2039,14 @@ impl<'a> super::Resolver<'a> {
 
             let binds_submodule = tree.graph.by_path.contains_key(&full);
             let binds_item = !binds_submodule && module_exposes_name(tree, &imp.path, &item.name);
+            // A package checked against the Kāra library imports the
+            // library's items as a lone file does (B-2026-10-24-43).
+            let binds_library = !binds_submodule
+                && !binds_item
+                && imp.path.first().is_some_and(|s| s == "std")
+                && self.library_declares(&item.name);
 
-            if !binds_submodule && !binds_item {
+            if !binds_submodule && !binds_item && !binds_library {
                 // Phase-10 `#[target(...)]`: the item exists in source but
                 // was filtered for the current compilation target — answer
                 // with the targeted diagnostic instead of unknown-item +

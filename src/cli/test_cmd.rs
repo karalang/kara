@@ -546,7 +546,7 @@ pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
     let cycles = module::detect_cycles(&tree);
 
     let resolve_errors: Vec<ModuleResolveErrors> = if parse_errors.is_empty() && cycles.is_empty() {
-        resolve_modules(&tree)
+        resolve_modules(&tree, None)
     } else {
         Vec::new()
     };
@@ -560,7 +560,7 @@ pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
     module_lint_overrides.core_places = core_places;
     let type_errors: Vec<ModuleTypeErrors> =
         if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
-            typecheck_modules(&tree, &module_lint_overrides).errors
+            typecheck_modules(&tree, &module_lint_overrides, None).errors
         } else {
             Vec::new()
         };

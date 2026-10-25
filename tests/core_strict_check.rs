@@ -13203,3 +13203,55 @@ fn as_bytes_on_a_string_names_bytes_and_fixes_to_it() {
         "2 121\n",
     );
 }
+
+#[test]
+fn a_package_with_two_modules_is_checked_against_the_v2_library() {
+    // B-2026-10-24-43: a package with more than one module is checked module
+    // by module, and each module now sees the v2 library a lone file is
+    // checked against, so a v2-only item (`WsMessage`, `std.process`'s
+    // `Command`) resolves in `karac check` and in the check in front of
+    // `karac run`, while a misspelled one is still an error in its own file.
+    let (dir, _) = fixture("two-modules-v2-library", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let util = "import std.process.{Command};\npub fn two() -> i64 {\n    \
+                let _c = Command.new(\"echo\");\n    2\n}\n";
+    std::fs::write(dir.join("src/util.kara"), util).unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "import util.{two};\nfn main() {\n    let m: Option[WsMessage] = None;\n    \
+         println(f\"{m.is_none()} {two()}\");\n}\n",
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "check must pass: {err}");
+    let out = karac()
+        .args(["run", "src/main.kara"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "true 2\n",
+        "run: {:?}",
+        out
+    );
+    std::fs::write(
+        dir.join("src/util.kara"),
+        util.replace("Command.new", "Comand.new"),
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a misspelled item must fail: {err}");
+    assert!(
+        err.contains("util.kara:3:14"),
+        "names the module's file: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
