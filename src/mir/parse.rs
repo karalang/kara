@@ -362,6 +362,7 @@ impl Parser {
             has_drop_impl,
             is_copy,
             user: false,
+            sync: false,
         });
         debug_assert_eq!(got, id);
         self.adts.push(got);

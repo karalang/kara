@@ -114,6 +114,9 @@ pub enum ReduceOp {
 pub enum Refusal {
     /// A branch has an unknown effect (D6); the reason names it.
     Unknown(String),
+    /// A branch uses a value that may not enter a task (core §11.3): the
+    /// reason names it and what it reaches.
+    Crossing(String),
     /// Two branches, or two iterations, must keep their order.
     Conflict(ParConflict),
     /// Statement `second` uses `local`, which statement `first` binds.
@@ -291,6 +294,7 @@ pub(super) fn verdict(
     sites: &[Site],
     origins: &Origins,
     cost: &Cost,
+    tys: &TyInterner,
 ) -> AutoParVerdict {
     let at: BTreeMap<BasicBlock, &EffectSet> =
         sites.iter().map(|s| (s.block, &s.effects)).collect();
@@ -419,6 +423,22 @@ pub(super) fn verdict(
             effect,
         })
     };
+    // A value a branch takes from outside it that may not enter a task:
+    // a written `par` refuses it at check (E_NOT_CROSS_TASK), so the
+    // compiler never moves one into a task on its own.
+    let crossing: Vec<Option<String>> = touched
+        .iter()
+        .map(|t| {
+            t.iter().find_map(|a| {
+                let d = body.locals.get(a.place.local.index())?;
+                let why = tys.tcx().task_blocker(d.ty)?;
+                Some(format!(
+                    "{} reaches {why}",
+                    place_name(body, &Place::local(a.place.local))
+                ))
+            })
+        })
+        .collect();
     let alias = |a: &Key, b: &Key| origins.may_alias(a, b);
     let conflict = |touched: &[Vec<PlaceAccess>], i: usize, j: usize| {
         effect_conflict(&sides, i, j, &alias)
@@ -435,6 +455,8 @@ pub(super) fn verdict(
         ParKind::For { .. } => {
             let verdict = if let Some(why) = &unknown[0] {
                 Err(Refusal::Unknown(why.clone()))
+            } else if let Some(why) = &crossing[0] {
+                Err(Refusal::Crossing(why.clone()))
             } else if breaks || returns[0] {
                 Err(Refusal::Exit)
             } else {
@@ -520,6 +542,8 @@ pub(super) fn verdict(
                 }
                 if let Some(u) = u {
                     first_refusal.get_or_insert(Refusal::Unknown(u.clone()));
+                } else if let Some(c) = &crossing[k] {
+                    first_refusal.get_or_insert(Refusal::Crossing(c.clone()));
                 } else {
                     cur.push(k);
                 }
@@ -1084,6 +1108,58 @@ fn main() {
             matches!(only(&v, "main").verdict, Err(Refusal::Unknown(_))),
             "{v:#?}"
         );
+    }
+
+    /// A loop that reads a plain `shared` handle from outside, directly or
+    /// through a struct holding one, stays in order, as a written `par`
+    /// refuses it (E_NOT_CROSS_TASK); a `sync` handle may cross.
+    #[test]
+    fn auto_par_shared_handle_stays_in_order() {
+        let crossing = |src: &str| match &only(&written(src), "main").verdict {
+            Err(Refusal::Crossing(why)) => Some(why.clone()),
+            Ok(_) => None,
+            other => panic!("{other:?}"),
+        };
+        let shared = crossing(
+            "shared struct Counter { mut n: i64 }
+fn main() {
+    let c = Counter { n: 3 };
+    let mut s = 0;
+    par for i in 0..10 { s = s + i * c.n; }
+    println(s);
+}
+",
+        );
+        assert_eq!(
+            shared.as_deref(),
+            Some("c reaches the `shared` type `Counter`")
+        );
+        let held = crossing(
+            "shared struct Counter { mut n: i64 }
+struct Holder { c: Counter, k: i64 }
+fn main() {
+    let h = Holder { c: Counter { n: 2 }, k: 1 };
+    let mut s = 0;
+    par for i in 0..10 { s = s + i * h.k; }
+    println(s);
+}
+",
+        );
+        assert_eq!(
+            held.as_deref(),
+            Some("h reaches the `shared` type `Counter`")
+        );
+        let sync = crossing(
+            "sync struct Total { n: i64 }
+fn main() {
+    let c = Total { n: 3 };
+    let mut s = 0;
+    par for i in 0..10 { s = s + i * c.n; }
+    println(s);
+}
+",
+        );
+        assert_eq!(sync, None);
     }
 
     /// A loop that can `break` stays in order, reduction or not: the

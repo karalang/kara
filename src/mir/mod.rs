@@ -77,6 +77,7 @@ mod tests {
             has_drop_impl: true,
             is_copy: false,
             user: false,
+            sync: false,
         });
         let rt = tys.intern(TyKind::Adt(r));
         let e = tys.add_adt(AdtDef {
@@ -96,6 +97,7 @@ mod tests {
             has_drop_impl: false,
             is_copy: false,
             user: false,
+            sync: false,
         });
         let et = tys.intern(TyKind::Adt(e));
         (tys, i64t, rt, et)
@@ -315,6 +317,7 @@ fn eat(_1: R, _2: bool) -> () {
             has_drop_impl: false,
             is_copy: false,
             user: false,
+            sync: false,
         });
         let st = tys.intern(TyKind::Shared(s));
         let body = one_block(&mut tys, &[("n", st)], i64t, |b, a, bb| {

@@ -2261,6 +2261,8 @@ impl<'a> Lcx<'a> {
                 .display_styles
                 .insert(AdtId(def.0), interp::DisplayStyle::Redacted);
         }
+        let sync = tc.struct_info.get(&name).is_some_and(|s| s.is_par)
+            || tc.enum_info.get(&name).is_some_and(|e| e.is_par);
         self.tys.tcx().add_adt_def(AdtDef {
             def,
             name: name.clone(),
@@ -2269,6 +2271,7 @@ impl<'a> Lcx<'a> {
             has_drop_impl,
             is_copy: copy || (is_enum && matches!(name.as_str(), "Option" | "Result")),
             user,
+            sync,
         });
         if has_drop_impl {
             let drop_fn = self

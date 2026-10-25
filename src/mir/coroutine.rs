@@ -1492,6 +1492,7 @@ fn poll_of(tys: &TyInterner, polls: &mut BTreeMap<Ty, Ty>, t: Ty) -> Ty {
         has_drop_impl: false,
         is_copy: false,
         user: false,
+        sync: false,
     });
     let p = tys.intern(TyKind::Adt(id));
     polls.insert(t, p);
@@ -1644,6 +1645,7 @@ pub fn transform_from(
             has_drop_impl: false,
             is_copy: false,
             user: false,
+            sync: false,
         });
         frames.insert(
             n.to_string(),

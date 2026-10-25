@@ -909,6 +909,7 @@ mod tests {
                 has_drop_impl: true,
                 is_copy: false,
                 user: false,
+                sync: false,
             });
             let rt = tys.intern(TyKind::Adt(r));
             let rref = tys.intern(TyKind::MutRef(rt));
@@ -1313,6 +1314,7 @@ mod tests {
             has_drop_impl: false,
             is_copy: false,
             user: false,
+            sync: false,
         });
         let et = w.tys.intern(TyKind::Adt(ea));
         let usize_t = w.tys.int(IntTy::Usize);
@@ -1610,6 +1612,7 @@ mod tests {
             has_drop_impl: false,
             is_copy: false,
             user: false,
+            sync: false,
         });
         let pair_r = w.tys.tcx().adt(DefId(3), &[rt]);
         let mut b = BodyBuilder::new(inst("main"), w.unit);

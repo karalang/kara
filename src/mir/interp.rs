@@ -16360,6 +16360,7 @@ fn main() -> () {
             has_drop_impl: true,
             is_copy: false,
             user: false,
+            sync: false,
         });
         let rt = tys.intern(TyKind::Adt(r));
         let rref = tys.intern(TyKind::MutRef(rt));
@@ -16627,6 +16628,7 @@ exit main
             has_drop_impl: false,
             is_copy: false,
             user: false,
+            sync: false,
         });
         w.tys.intern(TyKind::Shared(n))
     }

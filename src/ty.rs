@@ -28,7 +28,7 @@
 
 use std::cell::RefCell;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ids::DefId;
 use crate::intern::{Interner, Symbol};
@@ -272,6 +272,10 @@ pub struct AdtDef {
     /// Declared in the user's program, so a library type's name means
     /// nothing here: a user `struct Pool` is not the library's `Pool`.
     pub user: bool,
+    /// A `sync struct` / `sync enum` (core semantics §6.3): its handle is
+    /// counted atomically and may cross into a task, where a plain
+    /// `shared` one never does.
+    pub sync: bool,
 }
 
 impl AdtDef {
@@ -782,6 +786,59 @@ impl TyCtxt {
     /// The registered definition of `def`, if any.
     pub fn adt_def(&self, def: DefId) -> Option<std::rc::Rc<AdtDef>> {
         self.adts.borrow().get(&def).cloned()
+    }
+
+    /// Why a value of `ty` may not enter a task (core semantics §11.3,
+    /// design.md § Structured Concurrency): the first thing it reaches,
+    /// through fields, arguments and borrows, that is a plain `shared`
+    /// handle, a `OnceCell` or a raw pointer. `None` when it may.
+    pub fn task_blocker(&self, ty: Ty) -> Option<String> {
+        fn go(tcx: &TyCtxt, ty: Ty, seen: &mut FxHashSet<Ty>) -> Option<String> {
+            if !seen.insert(ty) {
+                return None;
+            }
+            let fields = |def: DefId, args: TyList, seen: &mut FxHashSet<Ty>| {
+                let adt = tcx.adt_def(def)?;
+                let args = tcx.list(args);
+                adt.variants
+                    .iter()
+                    .flat_map(|v| &v.fields)
+                    .find_map(|(_, f)| go(tcx, tcx.subst(*f, &args, &[]), seen))
+            };
+            match tcx.kind(ty) {
+                TyKind::Shared { def, args } => match tcx.adt_def(def) {
+                    Some(adt) if adt.sync => fields(def, args, seen),
+                    Some(adt) => Some(format!("the `shared` type `{}`", adt.name)),
+                    None => Some("a `shared` handle".to_string()),
+                },
+                TyKind::Adt { def, args } => {
+                    if tcx
+                        .adt_def(def)
+                        .is_some_and(|a| a.library_name() == Some("OnceCell"))
+                    {
+                        return Some("a `OnceCell`".to_string());
+                    }
+                    tcx.list(args)
+                        .into_iter()
+                        .find_map(|t| go(tcx, t, seen))
+                        .or_else(|| fields(def, args, seen))
+                }
+                TyKind::RawPtr { .. } => Some("a raw pointer".to_string()),
+                TyKind::Tuple(list)
+                | TyKind::Intrinsic { args: list, .. }
+                | TyKind::Closure { captures: list, .. } => {
+                    tcx.list(list).into_iter().find_map(|t| go(tcx, t, seen))
+                }
+                TyKind::Array { elem: t, .. }
+                | TyKind::Vector { elem: t, .. }
+                | TyKind::Slice { elem: t, .. }
+                | TyKind::Ref(t)
+                | TyKind::MutRef(t)
+                | TyKind::Weak(t) => go(tcx, t, seen),
+                _ => None,
+            }
+        }
+        go(self, ty, &mut FxHashSet::default())
     }
 
     /// The ADT definition and instance arguments behind an `Adt` or `Shared`
@@ -1308,6 +1365,7 @@ mod tests {
             has_drop_impl: false,
             is_copy: false,
             user: false,
+            sync: false,
         });
         let of_int = tcx.adt(DefId(2), &[tcx.i64()]);
         let of_str = tcx.adt(DefId(2), &[tcx.str()]);

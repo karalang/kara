@@ -412,6 +412,7 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
                     &report.sites[*name],
                     &origins[i],
                     &cost,
+                    a.tys,
                 ));
             }
         }
