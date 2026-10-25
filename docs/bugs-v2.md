@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 32 |
+| diagnostics | 33 |
 | false-positive | 29 |
 | missing-feature | 21 |
 | perf | 10 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen | 22 |
 | mir | 21 |
 | interp | 17 |
-| cli | 13 |
+| cli | 14 |
 | ownership | 11 |
 | runtime | 8 |
 | mir-llvm | 6 |
@@ -146,6 +146,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-22 | 2026-10-25 | mir | low | `IsolatingGroup.spawn` of a named function (`g.spawn(work)`) is refused at build with `an isolating group's spawn of other than a closure written there is not lowered yet`; `karac check` accepts it | — |
 | B-2026-10-25-24 | 2026-10-25 | typecheck | medium | `karac check` accepts `with_provider[Clock](FakeClock {..}, ..)` and `Clock.now()` when the program redeclares `effect resource Clock;` and `FakeClock` implements no `ClockProvider` (only an inherent `now`); the same program without the redeclaration, and a trait-less user resource of any other name, are refused per §14.1, and the MIR builder stops on it | — |
 | B-2026-10-25-25 | 2026-10-25 | typecheck+ownership | medium | `karac check` accepts a move out of a bare `for` element when the collection is a bare (borrowed) parameter: `fn total(v: Vec[Option[String]]) -> i64 { for o in v { n += o.unwrap().len(); } }` checks, though the same loop over `v: own Vec[...]` is refused (E0515 'a bare `for` borrows it, and this method takes `self` by value') and `karac run` refuses it at MIR build | — |
+| B-2026-10-25-26 | 2026-10-25 | cli | medium | `karac fix` on a file of a package fixes it as a single file: it cannot see the package's other modules, so a resolver 'did you mean' rewrites a correct name to an unrelated one (`Enum(n)` -> `Env(n)` in a `match` on an imported enum) in a program `karac check` and `karac run` accept | — |
 
 ### Fixed
 
