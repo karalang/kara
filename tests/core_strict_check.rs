@@ -13471,6 +13471,60 @@ fn an_escaping_closure_cannot_capture_a_non_copy_place_behind_a_borrow() {
 }
 
 #[test]
+fn a_program_cannot_redeclare_a_library_resource() {
+    // B-2026-10-25-24: `Clock`, `Env` and `RandomSource` are declared by the
+    // library with their provider traits (core-semantics §14.1, §14.7), so a
+    // program's own `effect resource Clock;` is refused rather than
+    // shadowing the library's and skipping the provider checks; `karac fix`
+    // deletes it, and the provider bound with `with_provider` must then
+    // implement `ClockProvider`.
+    let body = "struct FakeClock {\n    t: i64,\n}\n{impl}\
+                fn main() {\n    with_provider[Clock](FakeClock { t: 42 }, || {\n        \
+                println(Clock.now());\n    });\n}\n";
+    let with_trait = body.replace(
+        "{impl}",
+        "impl ClockProvider for FakeClock {\n    fn now(ref self) -> i64 {\n        self.t\n    }\n}\n",
+    );
+    let inherent = body.replace(
+        "{impl}",
+        "impl FakeClock {\n    fn now(ref self) -> i64 {\n        self.t\n    }\n}\n",
+    );
+    let declared = "`Clock` is declared by the library, as `effect resource Clock: ClockProvider`";
+    rejected_with(
+        "redeclared-resource-inherent",
+        &format!("effect resource Clock;\n{inherent}"),
+        declared,
+    );
+    rejected_with(
+        "redeclared-resource-inherent-provider",
+        &format!("effect resource Clock;\n{inherent}"),
+        "does not implement `ClockProvider`",
+    );
+    let (dir, path) = fixture(
+        "redeclared-resource-fix",
+        &format!("effect resource Clock;\n{with_trait}"),
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains(declared), "{err}");
+    karac().arg("fix").arg(&path).output().unwrap();
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !fixed.contains("effect resource"),
+        "fix must delete it: {fixed}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    accepted_and_runs("redeclared-resource-fixed", &fixed, "42\n");
+    for (name, t) in [("Env", "EnvProvider"), ("RandomSource", "RandomProvider")] {
+        rejected_with(
+            &format!("redeclared-resource-{name}"),
+            &format!("effect resource {name};\nfn main() {{}}\n"),
+            &format!("`{name}` is declared by the library, as `effect resource {name}: {t}`"),
+        );
+    }
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

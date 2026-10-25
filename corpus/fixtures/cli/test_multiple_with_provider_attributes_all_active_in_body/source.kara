@@ -1,7 +1,7 @@
-effect resource Clock;
-effect resource AuditLog;
+trait Audit { fn count(ref self) -> i64; }
+effect resource AuditLog: Audit;
 struct FakeClock { t: i64 }
-impl FakeClock { fn now(self) -> i64 { self.t } }
+impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }
 struct FakeLog { n: i64 }
-impl FakeLog { fn count(self) -> i64 { self.n } }
+impl Audit for FakeLog { fn count(ref self) -> i64 { self.n } }
 fn main() {}

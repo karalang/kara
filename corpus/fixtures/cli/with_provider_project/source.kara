@@ -1,4 +1,3 @@
-effect resource Clock;
 struct FakeClock { t: i64 }
-impl FakeClock { fn now(self) -> i64 { self.t } }
+impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }
 fn main() {}

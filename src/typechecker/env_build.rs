@@ -190,6 +190,33 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Item::DistinctType(d) => self.env_add_distinct_type(d),
                 Item::EffectResource(r) => {
+                    // v2 core §14.1, §14.7: `Env`, `Clock` and `RandomSource`
+                    // are the library's, bound and called through its
+                    // provider traits; a program's own declaration of one
+                    // shadowed it with a resource no check or build could
+                    // bind (B-2026-10-25-24).
+                    if self.cli_lint_overrides.strict_core
+                        && r.span.offset < self.program.library_start.unwrap_or(usize::MAX)
+                    {
+                        if let Some(t) = crate::typechecker::library_provider_trait(&r.name) {
+                            self.type_error_with_fix_it(
+                                format!(
+                                    "`{0}` is declared by the library, as `effect resource \
+                                     {0}: {t}` with a default provider (core-semantics.md \
+                                     §14.1, §14.7): delete this declaration, and implement \
+                                     `{t}` for a provider bound with `with_provider[{0}]`",
+                                    r.name
+                                ),
+                                r.span,
+                                TypeErrorKind::TypeMismatch,
+                                super::FixIt {
+                                    span: r.span,
+                                    replacement: String::new(),
+                                },
+                            );
+                            continue;
+                        }
+                    }
                     self.user_effect_resources
                         .insert(r.name.clone(), r.provider_bounds.clone());
                     if let Some(k) = &r.key_param {
