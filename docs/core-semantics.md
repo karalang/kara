@@ -672,11 +672,12 @@ Pin: `par_error_runs_siblings`.
 **11.12 Task failure: isolating groups.**
 - `TaskGroup.isolating(; limit: i64 = i64.MAX) -> IsolatingGroup` makes a group that contains its tasks' panics. It has `TaskGroup`'s methods, except that `spawn` returns `TaskHandle[Result[T, TaskFailed]]`, so `join` on its tasks returns `Result[T, TaskFailed]`.
   - `TaskFailed` is `Panicked { message, location }` or `Cancelled`. On an ordinary group, `TaskHandle.try_join(own self) -> Result[T, TaskFailed]` gives the same view, where only `Cancelled` can occur.
-  - A task that panics in such a group is torn down like a cancelled task (§11.9): its drops, `defer`s and `errdefer`s run, and its handle holds `Err(Panicked { .. })`.
+  - A task that panics in such a group is torn down like a cancelled task (§11.9): its drops, `defer`s and plain `errdefer`s run, an `errdefer(e)` is skipped, the groups the task made are cancelled, and its handle holds `Err(Panicked { .. })`. Pinned by `corpus/core/isolating_panic_ends_its_task`.
   - The group's other tasks run on.
 - Everywhere else (`par {}`, `par for`, an ordinary `TaskGroup` and `main`), a panic still ends the process as §10.2 says.
 - A server writes one isolating group per accept loop, so a bad request ends its own connection's task, not the server.
-- The unwind slot every MIR `Call` and `Drop` already carries (always `Abort` in v1) is what the teardown uses.
+- In a program that makes an isolating group, every call that may panic gets the same exit a cancel point has, and the teardown leaves by it. A call that cannot panic (by the effects analysis) needs none.
+- As of 2026-10-25 this runs on the MIR interpreter (c2f859dacc); `karac build` refuses `TaskGroup.isolating` until the compiled half of M4 item 9 lands.
 
 ---
 
