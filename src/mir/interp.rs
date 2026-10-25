@@ -688,6 +688,7 @@ fn run_with(
         table_key_ty: Default::default(),
         walk_perm: (0, 1, 0),
         table_holes: Default::default(),
+        unkeyed_tables: Default::default(),
         deque_front: Default::default(),
         flags: Vec::new(),
         resumes: 0,
@@ -1019,6 +1020,10 @@ struct Interp<'a> {
     /// remove costs O(1) on average (B-2026-10-12-4). Every reader of a
     /// table's entries goes through [`Interp::table_slots`] or skips these.
     table_holes: rustc_hash::FxHashMap<AllocId, Holes>,
+    /// The hashed tables whose type names a hasher (`Map[K, V,
+    /// FxBuildHasher]`, a user `BuildHasher`): they walk in an order no
+    /// process key moves (B-2026-10-24-29).
+    unkeyed_tables: rustc_hash::FxHashSet<AllocId>,
     /// Per `VecDeque`, the empty slots before its front: `pop_front` leaves
     /// one, `push_front` fills one (making room for as many as the deque
     /// holds when there is none), so both ends cost O(1) on average
@@ -1104,7 +1109,8 @@ struct Interp<'a> {
     /// the type's own `cmp` (B-2026-10-06-109), or a `u128` key unsigned
     /// (B-2026-10-19-22).
     table_key_ty: rustc_hash::FxHashMap<AllocId, Ty>,
-    /// The last [`karac_hash::walk_perm`] asked for, as `(n, a, c)`: a
+    /// The last [`karac_hash::walk_perm`] asked for, as `(n, a, c)`, with
+    /// `n`'s top bit set for an unkeyed table's: a
     /// walk asks it on every step, for the same `n`.
     walk_perm: (u64, u64, u64),
     /// The borrow flags currently held, by field address.
@@ -2043,6 +2049,16 @@ impl<'a> Interp<'a> {
             }
             // A `?` returned its error: record the site, as `line` and
             // `col` in the checked source (B-2026-10-25-3).
+            // A table whose type names a hasher walks in an order no
+            // process key moves (B-2026-10-24-29).
+            ("table_unkeyed", "") => {
+                let [v] = args.as_slice() else {
+                    return err("table_unkeyed takes a table");
+                };
+                let id = self.box_behind(v)?;
+                self.unkeyed_tables.insert(id);
+                Ok(v.clone())
+            }
             ("error_trace_push", "") => {
                 let [Value::Int(line), Value::Int(col)] = args.as_slice() else {
                     return err("error_trace_push takes a line and a column");
@@ -8894,7 +8910,7 @@ impl<'a> Interp<'a> {
             return Ok(slots);
         }
         let n = slots.len() as u64;
-        let (a, c) = self.walk_perm(n);
+        let (a, c) = self.walk_perm(id, n);
         Ok((0..n)
             .map(|i| slots[karac_hash::walk_index(i, n, a, c) as usize])
             .collect())
@@ -8914,15 +8930,23 @@ impl<'a> Interp<'a> {
         if sorted || !(0..n as i128).contains(&i) {
             return self.table_slot(id, i);
         }
-        let (a, c) = self.walk_perm(n);
+        let (a, c) = self.walk_perm(id, n);
         self.table_slot(id, karac_hash::walk_index(i as u64, n, a, c) as i128)
     }
 
-    /// [`karac_hash::walk_perm`]`(n)`, remembered for the last `n`.
-    fn walk_perm(&mut self, n: u64) -> (u64, u64) {
-        if self.walk_perm.0 != n {
-            let (a, c) = karac_hash::walk_perm(n);
-            self.walk_perm = (n, a, c);
+    /// [`karac_hash::walk_perm`]`(n)` for table `id`, or for one in
+    /// [`Interp::unkeyed_tables`] its fixed-key form, which
+    /// `runtime/src/mir_map.rs` walks too; remembered for the last `n`.
+    fn walk_perm(&mut self, id: AllocId, n: u64) -> (u64, u64) {
+        let unkeyed = self.unkeyed_tables.contains(&id);
+        let key = n | (u64::from(unkeyed) << 63);
+        if self.walk_perm.0 != key {
+            let (a, c) = if unkeyed {
+                karac_hash::walk_perm_by(n, karac_hash::hash_u64_unkeyed)
+            } else {
+                karac_hash::walk_perm(n)
+            };
+            self.walk_perm = (key, a, c);
         }
         (self.walk_perm.1, self.walk_perm.2)
     }
@@ -9178,6 +9202,15 @@ impl<'a> Interp<'a> {
     /// types: scalars and `Copy` aggregates copy, a `String` or `Vec`
     /// gets a new allocation with its contents cloned. A user type that
     /// is not `Copy` needs its own `Clone` body, which is a call in MIR.
+    /// A clone `c` of table `id` walks as `id` does.
+    fn clone_unkeyed(&mut self, id: AllocId, c: &Value) -> R<()> {
+        if self.unkeyed_tables.contains(&id) {
+            let c = self.box_behind(c)?;
+            self.unkeyed_tables.insert(c);
+        }
+        Ok(())
+    }
+
     fn clone_value(&mut self, v: &Value, ty: Ty) -> R<Value> {
         if self.tys.is_copy(ty) {
             return Ok(v.clone());
@@ -9242,7 +9275,9 @@ impl<'a> Interp<'a> {
                     out.push(Value::Agg(vec![ck, cv]));
                 }
                 let name = self.tys.display(ty);
-                Ok(self.alloc_box(&name, Value::Agg(out)))
+                let c = self.alloc_box(&name, Value::Agg(out));
+                self.clone_unkeyed(id, &c)?;
+                Ok(c)
             }
             (TyKind::Intrinsic(IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e)), _) => {
                 let id = self.box_behind(v)?;
@@ -9252,7 +9287,9 @@ impl<'a> Interp<'a> {
                     out.push(self.clone_value(x, e)?);
                 }
                 let name = self.tys.display(ty);
-                Ok(self.alloc_box(&name, Value::Agg(out)))
+                let c = self.alloc_box(&name, Value::Agg(out));
+                self.clone_unkeyed(id, &c)?;
+                Ok(c)
             }
             // A user `Clone` body, at any depth (a `Vec` of a type with
             // one): lowering queued it (B-2026-10-06-112).
@@ -12866,6 +12903,7 @@ impl<'a> Interp<'a> {
     fn free_slot(&mut self, id: AllocId) {
         self.key_index.remove(&id);
         self.table_holes.remove(&id);
+        self.unkeyed_tables.remove(&id);
         self.deque_front.remove(&id);
         self.caps.remove(&id);
         self.http_headers.remove(&id);

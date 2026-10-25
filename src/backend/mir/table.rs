@@ -584,8 +584,11 @@ impl<'ctx> Cx<'ctx, '_> {
         let t = self
             .table_of(ty)
             .ok_or_else(|| format!("`{}` is not a table", self.tys.display(ty)))?;
-        self.store(dst, self.ptr_ty().const_null().into())?;
         let h = self.load_ptr(src)?;
+        // A table that walks unkeyed has a clone that does too.
+        let size = self.i64(self.layout(t.entry)?.size.max(1));
+        let like = self.mrt_ptr("map_like", &[h.into(), size.into()])?;
+        self.store(dst, like.into())?;
         let n = self.table_len(h)?;
         let tmp = self.temp(t.entry, "entry")?;
         self.count_loop(n, |cx, i| {

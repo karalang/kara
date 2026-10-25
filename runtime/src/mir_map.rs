@@ -69,6 +69,10 @@ pub struct MirMap {
     /// moves none. One word, so a reader racing another reader of the same
     /// table sees a whole pair or none.
     pair: std::sync::atomic::AtomicU64,
+    /// The table's type names a hasher (`Map[K, V, FxBuildHasher]`, a
+    /// user `BuildHasher`): it walks in an order no process key moves
+    /// ([`karac_mir_map_unkeyed`], B-2026-10-24-29).
+    unkeyed: bool,
 }
 
 const NO_PAIR: u64 = u64::MAX;
@@ -204,6 +208,8 @@ impl MirMap {
         if self.perm_len.load(Acquire) != n {
             let (a, c) = if self.hashes.is_empty() {
                 (1, 0)
+            } else if self.unkeyed {
+                karac_hash::walk_perm_by(n as u64, karac_hash::hash_u64_unkeyed)
             } else {
                 karac_hash::walk_perm(n as u64)
             };
@@ -533,6 +539,67 @@ pub unsafe extern "C" fn karac_mir_map_insert_hv(
     }
 }
 
+/// A new table with no entries, of `entry_size`-byte entries.
+fn empty(entry_size: usize) -> *mut MirMap {
+    Box::into_raw(Box::new(MirMap {
+        buf: std::ptr::null_mut(),
+        entry_size,
+        slots: 0,
+        holes: 0,
+        cells: std::ptr::null(),
+        ncells: 0,
+        perm_len: std::sync::atomic::AtomicUsize::new(usize::MAX),
+        perm_a: std::sync::atomic::AtomicUsize::new(1),
+        perm_c: std::sync::atomic::AtomicUsize::new(0),
+        cap: 0,
+        hashes: Vec::new(),
+        index: Vec::new(),
+        index_used: 0,
+        dead: Vec::new(),
+        live: Vec::new(),
+        pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
+        unkeyed: false,
+    }))
+}
+
+/// The table at `h` (null for one that never held an entry), made to walk
+/// in an order no process key moves, because its type names a hasher
+/// (`Map[K, V, FxBuildHasher]`, a user `BuildHasher`): the walk's `(a, c)`
+/// come from a fixed key, not the process's (collections.md § Hashing,
+/// B-2026-10-24-29). Returns the table, created when `h` is null.
+///
+/// # Safety
+/// `h` is null or a live table of `entry_size`-byte entries.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_unkeyed(h: *mut MirMap, entry_size: u64) -> *mut MirMap {
+    let h = if h.is_null() {
+        empty(entry_size as usize)
+    } else {
+        h
+    };
+    // SAFETY: the caller's contract.
+    let m = unsafe { &mut *h };
+    m.unkeyed = true;
+    m.perm_len
+        .store(usize::MAX, std::sync::atomic::Ordering::Release);
+    h
+}
+
+/// The table a clone of `h` starts as: null, or an empty one that walks
+/// as `h` does when `h` is [`karac_mir_map_unkeyed`].
+///
+/// # Safety
+/// `h` is null or a live table of `entry_size`-byte entries.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_like(h: *const MirMap, entry_size: u64) -> *mut MirMap {
+    // SAFETY: the caller's contract.
+    if h.is_null() || !unsafe { &*h }.unkeyed {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: a fresh table.
+    unsafe { karac_mir_map_unkeyed(std::ptr::null_mut(), entry_size) }
+}
+
 /// Returns the new entry's slot.
 ///
 /// # Safety
@@ -547,24 +614,7 @@ unsafe fn insert(
     // SAFETY: the caller's contract.
     let m = unsafe {
         if (*hp).is_null() {
-            *hp = Box::into_raw(Box::new(MirMap {
-                buf: std::ptr::null_mut(),
-                entry_size,
-                slots: 0,
-                holes: 0,
-                cells: std::ptr::null(),
-                ncells: 0,
-                perm_len: std::sync::atomic::AtomicUsize::new(usize::MAX),
-                perm_a: std::sync::atomic::AtomicUsize::new(1),
-                perm_c: std::sync::atomic::AtomicUsize::new(0),
-                cap: 0,
-                hashes: Vec::new(),
-                index: Vec::new(),
-                index_used: 0,
-                dead: Vec::new(),
-                live: Vec::new(),
-                pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
-            }));
+            *hp = empty(entry_size);
         }
         &mut **hp
     };

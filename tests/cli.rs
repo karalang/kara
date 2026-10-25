@@ -26891,11 +26891,11 @@ fn stable_hash_digest_does_not_move_with_the_process_hash_seed() {
 /// observable as exactly one thing — the order stops moving — so that is what
 /// is asserted, against the default map in the SAME program as the control.
 ///
-/// Both surfaces, because they select the hasher through different machinery
-/// off one shared table: the interpreter stamps `MapData` at `Map.new()`, and
-/// codegen stores a different synthesized hash function in the control block.
+/// Both surfaces, because they keep the table differently: the interpreter
+/// marks the table it built, and the runtime marks the compiled table
+/// (`karac_mir_map_unkeyed`), both where the annotated `let` binds it
+/// (B-2026-10-24-29).
 #[test]
-#[ignore = "B-2026-10-24-29: MIR maps lose their hasher, so a pinned or user hasher is ignored"]
 fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
     let dir = std::env::temp_dir().join(format!("kara_fxhasher_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
@@ -27010,12 +27010,11 @@ fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
 /// never ran (or degraded to a constant digest) would leave behind. Those two
 /// together are what no single-process assertion can establish.
 ///
-/// Both surfaces, because they reach the user's `build` / `write` / `finish`
-/// through entirely different machinery: codegen emits three direct calls into
-/// the impl's LLVM symbols, and the interpreter drives the same three methods
-/// from a sub-interpreter in `interpreter::user_hasher`.
+/// On v2 a table's walk order does not come from its keys' hashes: a table
+/// that names a hasher walks under a fixed key instead of the process's
+/// (B-2026-10-24-29), so this holds without the user's `build` / `write` /
+/// `finish` running. That they do not run is B-2026-10-25-31.
 #[test]
-#[ignore = "B-2026-10-24-29: MIR maps lose their hasher, so a pinned or user hasher is ignored"]
 fn a_user_written_hasher_fixes_the_order_across_processes_on_both_surfaces() {
     let dir = std::env::temp_dir().join(format!("kara_userhasher_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);

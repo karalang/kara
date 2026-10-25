@@ -1285,6 +1285,8 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // A `?` site's record in the error return trace, a debug aid that
         // only a diagnostic prints (design.md § Error return traces).
         ("error_trace_push" | "error_trace_clear", "") => vec![],
+        // Fixing a new table's walk order where its type names a hasher.
+        ("table_unkeyed", "") => vec![HEAP],
         ("Stdout", "println" | "print" | "flush") => vec![(Writes, "Stdout", None), HEAP],
         ("Stderr", "println" | "print" | "flush") => vec![(Writes, "Stderr", None), HEAP],
         ("format", "") | (_, "to_string") => vec![HEAP],

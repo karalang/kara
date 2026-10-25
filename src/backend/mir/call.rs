@@ -759,6 +759,21 @@ impl<'ctx> Cx<'ctx, '_> {
             // Only a thread with frames has anything to clear, so a `?`
             // that succeeds costs a load, an unordered one that a loop can
             // hoist (B-2026-10-25-3).
+            // A table whose type names a hasher walks in an order no
+            // process key moves (B-2026-10-24-29).
+            ("table_unkeyed", "") if args.len() == 1 => {
+                let t = self.operand_type(&args[0])?;
+                let t = self.table_of(t).ok_or("table_unkeyed takes a table")?;
+                let size = self.i64(self.layout(t.entry)?.size.max(1));
+                let (Operand::Move(p) | Operand::Copy(p)) = &args[0] else {
+                    return Err("table_unkeyed takes a place".into());
+                };
+                let src = self.place_ptr(p)?;
+                let h = self.load_ptr(src)?;
+                let h = self.mrt_ptr("map_unkeyed", &[h.into(), size.into()])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, h.into())
+            }
             ("error_trace_clear", "") => {
                 let live = self.error_trace_live();
                 let n = self

@@ -302,6 +302,7 @@ fn lower_program_inner<'a>(
         tc,
         source,
         user_len,
+        hashers: &program.container_hashers,
         user_types,
         refined: program
             .items
@@ -668,7 +669,7 @@ fn refs_only_receiver(tys: &TyInterner, t: Ty) -> bool {
 
 /// The natives the builder calls by bare name rather than through a
 /// definition.
-const BUILDER_NATIVES: [&str; 9] = [
+const BUILDER_NATIVES: [&str; 10] = [
     "format",
     "format_spec",
     "panic_message",
@@ -676,6 +677,7 @@ const BUILDER_NATIVES: [&str; 9] = [
     "contract_exit",
     "error_trace_push",
     "error_trace_clear",
+    "table_unkeyed",
     "dbg",
     "debug_string",
 ];
@@ -803,6 +805,9 @@ struct Lcx<'a> {
     /// How many leading bytes of `source` are the program's own, the rest
     /// being the appended library's; `None` when it is all the program's.
     user_len: Option<usize>,
+    /// The hasher each `Map[K, V, H]` / `Set[T, H]` type names, by the
+    /// span of its path (the parser takes `H` out of the type).
+    hashers: &'a FxHashMap<SpanKey, crate::hasher_kind::HasherKind>,
     /// The structs and enums the user's program declares, as opposed to
     /// the appended library's (`lower_program_with_library`).
     user_types: FxHashSet<String>,
@@ -4748,6 +4753,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.assign(l, Rvalue::Use(op));
                     } else {
                         self.expr_into(value, Place::local(l))?;
+                    }
+                    if ty.as_ref().is_some_and(|te| self.names_a_hasher(te)) {
+                        self.call_native(
+                            "table_unkeyed",
+                            vec![Operand::Move(Place::local(l))],
+                            Place::local(l),
+                        );
                     }
                     self.pop_scope()?;
                     self.let_scope = outer;
@@ -13607,6 +13619,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
+    }
+
+    /// Whether the `Map` / `Set` type `te` names a hasher other than the
+    /// default: then the table walks in one order in every process
+    /// (`table_unkeyed`, collections.md § Hashing, B-2026-10-24-29).
+    fn names_a_hasher(&self, te: &ast::TypeExpr) -> bool {
+        let ast::TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        self.lcx
+            .hashers
+            .get(&SpanKey::from_span(&p.span))
+            .is_some_and(|h| *h != crate::hasher_kind::HasherKind::default())
     }
 
     /// Whether the `?` at `at` keeps the error return trace (design.md §

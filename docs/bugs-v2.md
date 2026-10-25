@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 33 |
 | false-positive | 30 |
-| missing-feature | 24 |
+| missing-feature | 26 |
 | perf | 10 |
 | miscompile | 8 |
 | soundness | 7 |
@@ -73,14 +73,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 51 |
-| mir | 23 |
+| typecheck | 52 |
+| mir | 25 |
 | codegen | 22 |
 | interp | 17 |
 | cli | 14 |
 | ownership | 11 |
 | runtime | 8 |
-| mir-llvm | 6 |
+| mir-llvm | 7 |
 | parser | 6 |
 | other | 2 |
 | resolver | 1 |
@@ -146,6 +146,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-28 | 2026-10-25 | typecheck | low | A spawned closure that moves one half of a destructured tuple into an array literal (`group.spawn(|| count([rx]))` after `let (tx, rx) = channel(1)`) makes the checker treat the other half as borrowed by the task: a later `let _ = tx;` is refused with `tx is moved while a task of group borrows it` | — |
 | B-2026-10-25-29 | 2026-10-25 | mir | low | The error return trace's JSON frames carry `file`, `line` and `column` but not design.md's `expr` (the `?` expression's text) or `context` (a `.context()` message), on both v2 executors | — |
 | B-2026-10-25-30 | 2026-10-25 | mir | low | A `?` chain that crosses a task boundary prints the frames left on the exiting thread instead of design.md's `Error return trace: unavailable (the ? chain was split across parallel tasks)`; waits on M4 item 10's pool | — |
+| B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher reaches v2 only as a fixed walk key on an annotated `let`: a user `BuildHasher`'s build/write/finish never run, FxBuildHasher hashes with the default, and a hasher named on a struct field, parameter, return type or turbofish is dropped | — |
+| B-2026-10-25-32 | 2026-10-25 | typecheck+mir | medium | A method call on a value of an associated type of a generic bound (`let h = b.build(); h.finish()` with `B: BuildHasher`) passes `karac check` but the MIR build fails: "a type that failed to check is not lowered yet" | — |
 
 ### Fixed
 

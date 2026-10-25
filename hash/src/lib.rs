@@ -282,6 +282,13 @@ pub fn hash_u64(v: u64) -> u64 {
     hash_int_with_key(v, 8, k0, k1)
 }
 
+/// [`hash_u64`] under a fixed key rather than the process's: the digest an
+/// unkeyed table's walk order comes from ([`walk_perm_by`]).
+#[inline]
+pub fn hash_u64_unkeyed(v: u64) -> u64 {
+    hash_int_with_key(v, 8, 0, 0)
+}
+
 /// [`hash_int`] with an explicit key — the pinned-key form the equality test
 /// and the KATs use.
 #[inline]
@@ -437,6 +444,14 @@ impl<const C: usize, const D: usize> State<C, D> {
 /// so a walk visits every entry exactly once. The interpreter and the
 /// runtime both walk through this one function (B-2026-10-23-19).
 pub fn walk_perm(n: u64) -> (u64, u64) {
+    walk_perm_by(n, hash_u64)
+}
+
+/// [`walk_perm`] for a table that names its hasher (`Map[K, V,
+/// FxBuildHasher]`, a user `BuildHasher`): `(a, c)` from that hasher's
+/// digest of two fixed words, so an unkeyed hasher walks in one order in
+/// every process (collections.md § Hashing, B-2026-10-24-29).
+pub fn walk_perm_by(n: u64, hash: impl Fn(u64) -> u64) -> (u64, u64) {
     if n <= 1 {
         return (1, 0);
     }
@@ -446,11 +461,11 @@ pub fn walk_perm(n: u64) -> (u64, u64) {
         }
         x
     };
-    let mut a = (hash_u64(WALK_A) % n).max(1);
+    let mut a = (hash(WALK_A) % n).max(1);
     while gcd(a, n) != 1 {
         a = if a + 1 == n { 1 } else { a + 1 };
     }
-    (a, hash_u64(WALK_C) % n)
+    (a, hash(WALK_C) % n)
 }
 
 /// The live index the `i`th step of a walk over `n` entries visits, under
