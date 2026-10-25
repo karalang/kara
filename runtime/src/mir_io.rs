@@ -980,41 +980,59 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_send(
     let (mut body, mut body_len) = (std::ptr::null_mut::<u8>(), 0i64);
     let (mut msg, mut msg_len) = (std::ptr::null_mut::<u8>(), 0i64);
     let mut headers = 0i64;
+    // Inside a task, the request already went to a helper, which the
+    // task's `__ready` waited for (`mir_http.rs`).
+    #[cfg(unix)]
+    let answered = crate::mir_http::take_answer();
+    #[cfg(not(unix))]
+    let answered = None;
     // SAFETY: the caller's contract, which is each callee's; the out
     // params are locals.
     unsafe {
-        match op {
-            0 => crate::karac_runtime_http_client_get(
-                a,
-                a_len,
+        if let Some(res) = answered {
+            crate::http_deliver(
+                res,
                 &mut st,
                 &mut body,
                 &mut body_len,
                 &mut msg,
                 &mut msg_len,
                 &mut headers,
-            ),
-            1 => crate::karac_runtime_http_client_post(
-                a,
-                a_len,
-                b,
-                b_len,
-                &mut st,
-                &mut body,
-                &mut body_len,
-                &mut msg,
-                &mut msg_len,
-                &mut headers,
-            ),
-            _ => crate::karac_runtime_http_builder_send(
-                handle,
-                &mut st,
-                &mut body,
-                &mut body_len,
-                &mut msg,
-                &mut msg_len,
-                &mut headers,
-            ),
+            );
+        } else {
+            match op {
+                0 => crate::karac_runtime_http_client_get(
+                    a,
+                    a_len,
+                    &mut st,
+                    &mut body,
+                    &mut body_len,
+                    &mut msg,
+                    &mut msg_len,
+                    &mut headers,
+                ),
+                1 => crate::karac_runtime_http_client_post(
+                    a,
+                    a_len,
+                    b,
+                    b_len,
+                    &mut st,
+                    &mut body,
+                    &mut body_len,
+                    &mut msg,
+                    &mut msg_len,
+                    &mut headers,
+                ),
+                _ => crate::karac_runtime_http_builder_send(
+                    handle,
+                    &mut st,
+                    &mut body,
+                    &mut body_len,
+                    &mut msg,
+                    &mut msg_len,
+                    &mut headers,
+                ),
+            }
         }
     }
     // Moves a `malloc`'d buffer from the client into a `String`.

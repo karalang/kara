@@ -267,3 +267,126 @@ fn main() {
         "writing a\nread_to_string [got hi] 6\nwriting b\nread 16 bytes\ndone\n"
     );
 }
+
+/// An HTTP server that answers in pairs: it reads two requests, answers
+/// the second, then the first. A client that holds the one thread while
+/// its request waits never lets the second request start.
+fn pairs_server() -> u16 {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || loop {
+        let mut pair = Vec::new();
+        while pair.len() < 2 {
+            let Ok((mut s, _)) = l.accept() else { return };
+            let mut req = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => req.extend_from_slice(&buf[..n]),
+                }
+            }
+            let line = String::from_utf8_lossy(&req);
+            let path = line
+                .split(' ')
+                .nth(1)
+                .unwrap_or("/")
+                .trim_start_matches('/')
+                .to_string();
+            pair.push((s, path));
+        }
+        for (mut s, path) in pair.into_iter().rev() {
+            let body = format!("answer {path}");
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            drop(s);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    port
+}
+
+/// A task whose HTTP request waits on its answer lets the other tasks run:
+/// the first request's answer comes only once the second, sent by a task
+/// spawned after it, has arrived, through `Client.get` and a built
+/// `RequestBuilder.send`.
+#[test]
+fn mir_tasks_an_http_request_lets_the_next_task_send_its_own() {
+    let port = pairs_server();
+    let src = r#"
+fn fetch(url: own String) {
+    let c = Client.new();
+    match c.get(url) {
+        Ok(r) => println(f"get {r.status()} {r.body()}"),
+        Err(e) => println(f"get failed {e.message()}"),
+    }
+}
+fn built(url: own String) {
+    let c = Client.new();
+    match c.request("GET", url).header("X-Pair", "1").send() {
+        Ok(r) => println(f"send {r.status()} {r.body()}"),
+        Err(e) => println(f"send failed {e.message()}"),
+    }
+}
+fn main() {
+    let mut tg = TaskGroup.new();
+    tg.spawn(|| fetch("http://127.0.0.1:PORT/first"));
+    tg.spawn(|| built("http://127.0.0.1:PORT/second"));
+}
+"#
+    .replace("PORT", &port.to_string());
+    assert_eq!(
+        stdout_on_both("http", &src),
+        "send 200 answer second\nget 200 answer first\n"
+    );
+}
+
+/// An HTTP server that takes each connection and never answers.
+fn silent_server() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = l.accept() {
+            held.push(s);
+        }
+    });
+    port
+}
+
+/// A task cancelled while its HTTP request waits on a helper is torn down
+/// at that wait; the request's answer, which never comes here, is not
+/// waited for.
+#[test]
+fn mir_tasks_a_cancelled_http_request_tears_its_task_down() {
+    let port = silent_server();
+    let src = r#"
+fn fetch(url: own String) -> i64 {
+    let c = Client.new();
+    match c.get(url) {
+        Ok(r) => r.status(),
+        Err(_) => -1,
+    }
+}
+fn main() {
+    let group = TaskGroup.new();
+    let h = group.spawn(|| fetch("http://127.0.0.1:PORT/alone"));
+    sleep_ms(50);
+    println("cancelling");
+    group.cancel();
+    match h.try_join() {
+        Ok(v) => println(f"fetch {v}"),
+        Err(_) => println("fetch cancelled"),
+    }
+}
+"#
+    .replace("PORT", &port.to_string());
+    assert_eq!(
+        stdout_on_both("http-cancel", &src),
+        "cancelling\nfetch cancelled\n"
+    );
+}

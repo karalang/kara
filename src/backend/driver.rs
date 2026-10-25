@@ -1180,6 +1180,8 @@ const TLS_RUNTIME_SYMBOL_MARKERS: &[&str] = &[
     // The TLS server (`runtime/src/mir_tls.rs`), `ready_tls` included.
     "karac_mir_tls",
     "karac_mir_ready_tls",
+    // A client call's readiness in a task (`runtime/src/mir_http.rs`).
+    "karac_mir_ready_http",
 ];
 
 /// Scan `obj_path`'s symbol table (via `nm`) for any reference to a

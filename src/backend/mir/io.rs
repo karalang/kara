@@ -1312,6 +1312,42 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(true)
     }
 
+    /// The request a `Client.get` / `post` or `RequestBuilder.send` with
+    /// `args` makes, as `karac_runtime_http_client_mir_send` takes it: its
+    /// op, the URL and the body, and the builder's handle. `__ready` of the
+    /// call reads it the same way (`task.rs`).
+    #[allow(clippy::type_complexity)]
+    pub(super) fn http_request(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+    ) -> R<(
+        u64,
+        (PointerValue<'ctx>, IntValue<'ctx>),
+        (PointerValue<'ctx>, IntValue<'ctx>),
+        IntValue<'ctx>,
+    )> {
+        let null = self.ptr_ty().const_null();
+        Ok(match (base, method) {
+            ("Client", "get") => (
+                0,
+                self.str_parts(&args[1])?,
+                (null, self.i64(0)),
+                self.i64(0),
+            ),
+            ("Client", _) => {
+                let url = self.str_parts(&args[1])?;
+                (1, url, self.str_parts(&args[2])?, self.i64(0))
+            }
+            _ => {
+                let (at, _) = self.behind_refs(&args[0])?;
+                let h = self.load_i64(at)?;
+                (2, (null, self.i64(0)), (null, self.i64(0)), h)
+            }
+        })
+    }
+
     /// `std.http`'s client: `Client.get` / `post` / `request`, the
     /// `RequestBuilder` chain, and `Response` / `HttpError`'s readers, as the
     /// interpreter's `http_method`. Requests go through the runtime's
@@ -1325,28 +1361,11 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<Option<()>> {
         let i64t = self.llcx.i64_type();
         let ptr = self.ptr_ty();
-        let null = ptr.const_null();
         let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
         match (base, method) {
             ("Client", "new") => {}
             ("Client", "get" | "post") | ("RequestBuilder", "send") => {
-                let (op, (a, an), (b, bn), h) = match (base, method) {
-                    ("Client", "get") => (
-                        0,
-                        self.str_parts(&args[1])?,
-                        (null, self.i64(0)),
-                        self.i64(0),
-                    ),
-                    ("Client", _) => {
-                        let url = self.str_parts(&args[1])?;
-                        (1, url, self.str_parts(&args[2])?, self.i64(0))
-                    }
-                    _ => {
-                        let (at, _) = self.behind_refs(&args[0])?;
-                        let h = self.load_i64(at)?;
-                        (2, (null, self.i64(0)), (null, self.i64(0)), h)
-                    }
-                };
+                let (op, (a, an), (b, bn), h) = self.http_request(base, method, args)?;
                 let status = self.entry_slot(8, "http.status")?;
                 let out = self.temp(string, "http.out")?;
                 let i32t = self.llcx.i32_type();

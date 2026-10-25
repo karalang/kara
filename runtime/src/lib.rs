@@ -147,6 +147,10 @@ pub mod mir_crypto;
 // only.
 #[cfg(all(feature = "tls", unix))]
 pub mod mir_tls;
+// The MIR backend's HTTP client calls parking their task while a helper
+// sends them, full archive only.
+#[cfg(all(feature = "tls", unix))]
+pub mod mir_http;
 // The MIR backend's `std.regex` engine (`karac_regex_mir`), same feature.
 #[cfg(feature = "regex")]
 pub mod mir_regex;
@@ -625,6 +629,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_tls::karac_mir_ready_tls,
         mir_tls::karac_mir_tls_close,
     );
+    // A client call's readiness inside a task (full archive only).
+    #[cfg(all(feature = "tls", unix))]
+    keep!(mir_http::karac_mir_ready_http,);
     // `std.http`'s client on the MIR backend (full archive only).
     #[cfg(feature = "tls")]
     keep!(
@@ -6928,7 +6935,7 @@ unsafe fn write_owned_bytes_into_out_params(
 // request; response bodies are raw bytes (binary-safe — UTF-8
 // reinterpretation happens Kāra-side in `Response.text()`).
 #[cfg(feature = "tls")]
-struct HttpFetched {
+pub(crate) struct HttpFetched {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
@@ -8061,6 +8068,110 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
             &state.headers,
             state.timeout_ms,
         ) {
+            Ok(fetched) => {
+                *out_status = fetched.status as i64;
+                *out_headers_handle = capture_response_headers(&fetched.headers);
+                write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
+            }
+            Err(msg) => {
+                write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+            }
+        }
+    }
+}
+
+/// A client request's parts, owned, for a helper thread to send
+/// (`mir_http.rs`): `op` 0 a `GET` of the URL `a`, 1 a `POST` of `a` with
+/// body `b`, 2 the request builder `handle`, whose entry this takes.
+#[cfg(feature = "tls")]
+pub(crate) struct HttpJob {
+    method: String,
+    url: String,
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+    timeout_ms: i64,
+}
+
+/// The request `karac_runtime_http_client_mir_send`'s arguments name, or
+/// the message its call reports when they name none.
+///
+/// # Safety
+/// `a` / `b` point at `a_len` / `b_len` readable bytes, or are null with a
+/// zero length.
+#[cfg(feature = "tls")]
+pub(crate) unsafe fn http_job(
+    op: i32,
+    a: *const u8,
+    a_len: usize,
+    b: *const u8,
+    b_len: usize,
+    handle: i64,
+) -> Result<HttpJob, String> {
+    let bytes = |p: *const u8, n: usize| -> &[u8] {
+        if p.is_null() || n == 0 {
+            &[]
+        } else {
+            // SAFETY: the caller's contract.
+            unsafe { std::slice::from_raw_parts(p, n) }
+        }
+    };
+    if op == 2 {
+        let state = HTTP_BUILDERS
+            .lock()
+            .ok()
+            .and_then(|mut m| m.remove(&handle))
+            .ok_or_else(|| "unknown request-builder handle".to_string())?;
+        return Ok(HttpJob {
+            method: state.method,
+            url: state.url,
+            body: state.body,
+            headers: state.headers,
+            timeout_ms: state.timeout_ms,
+        });
+    }
+    let url = std::str::from_utf8(bytes(a, a_len)).map_err(|e| e.to_string())?;
+    Ok(HttpJob {
+        method: if op == 0 { "GET" } else { "POST" }.to_string(),
+        url: url.to_string(),
+        body: if op == 0 {
+            Vec::new()
+        } else {
+            bytes(b, b_len).to_vec()
+        },
+        headers: Vec::new(),
+        timeout_ms: 0,
+    })
+}
+
+/// Sends `job`, as the client calls do.
+#[cfg(feature = "tls")]
+pub(crate) fn http_run(job: HttpJob) -> Result<HttpFetched, String> {
+    http_fetch_blocking(
+        &job.method,
+        &job.url,
+        &job.body,
+        &job.headers,
+        job.timeout_ms,
+    )
+}
+
+/// Writes what a request came to into the client calls' out-params.
+///
+/// # Safety
+/// Each pointer is writable for its type.
+#[cfg(feature = "tls")]
+pub(crate) unsafe fn http_deliver(
+    res: Result<HttpFetched, String>,
+    out_status: *mut i64,
+    out_body_ptr: *mut *mut u8,
+    out_body_len: *mut i64,
+    out_err_ptr: *mut *mut u8,
+    out_err_len: *mut i64,
+    out_headers_handle: *mut i64,
+) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        match res {
             Ok(fetched) => {
                 *out_status = fetched.status as i64;
                 *out_headers_handle = capture_response_headers(&fetched.headers);

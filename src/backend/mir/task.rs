@@ -135,6 +135,23 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             // Ready at once, armed, unless the task has a connect under way.
             ("TcpStream", "connect", _) => self.rt_flag("ready_connect", &[])?,
+            // The request goes to a helper; ready once its answer is in
+            // (`runtime/src/mir_http.rs`).
+            ("Client", "get" | "post", _) | ("RequestBuilder", "send", _) => {
+                let (op, (a, an), (b, bn), h) = self.http_request(base, method, rest)?;
+                let i32t = self.llcx.i32_type();
+                self.rt_flag(
+                    "ready_http",
+                    &[
+                        i32t.const_int(op, false).into(),
+                        a.into(),
+                        an.into(),
+                        b.into(),
+                        bn.into(),
+                        h.into(),
+                    ],
+                )?
+            }
             // A value to lend, by the timeout (B-2026-10-21-44).
             ("Pool", "acquire", [p, d, ..]) => {
                 let h = self.pool_handle(p)?;

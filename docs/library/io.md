@@ -1,6 +1,6 @@
 # Input and output
 
-**I/O blocks, and socket waits suspend.** Outside a task, a read or write occupies the calling thread until it completes, so every file and network operation has `blocks`. The socket, TLS and WebSocket waits, `Child.wait` and reads of a child's output pipes also have `suspends`: inside a task, a call that would wait suspends its task, and the program's other tasks run until it can go on ([core semantics §11.8](../core-semantics.md)). File I/O, the HTTP client, writes to a child's stdin and a `BufReader` over a pipe still hold the thread inside a task.
+**I/O blocks, and socket waits suspend.** Outside a task, a read or write occupies the calling thread until it completes, so every file and network operation has `blocks`. The socket, TLS and WebSocket waits, `Child.wait`, reads of a child's output pipes and the HTTP client's requests also have `suspends`: inside a task, a call that would wait suspends its task, and the program's other tasks run until it can go on ([core semantics §11.8](../core-semantics.md)). File I/O, writes to a child's stdin and a `BufReader` over a pipe still hold the thread inside a task.
 
 **Effects.** Each function lists its effects ([design.md §12](../design.md#resources)):
 - **`FileSystem` and `Network` are capabilities**, not conflict keys: `reads(FileSystem)` means "may read files" and `sends(Network)` "may use the network". Path-taking functions such as `fs.write(path, content)` carry `writes(FileSystem)` (and `blocks`, like all I/O) and do not conflict with each other, so two `par` branches that write the same path by name are not detected.
@@ -314,8 +314,8 @@ The sends write one unfragmented frame each; a server's frames are not masked. A
 ```kara
 impl Client {
     fn new() -> Client
-    fn get(self, url: String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks
-    fn post(self, url: String, body: String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks
+    fn get(self, url: String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
+    fn post(self, url: String, body: String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
     fn request(self, method: String, url: String) -> RequestBuilder
 }
 
@@ -323,7 +323,7 @@ impl RequestBuilder {
     fn header(own self, name: String, value: String) -> RequestBuilder
     fn body(own self, b: String) -> RequestBuilder
     fn timeout(own self, ms: i64) -> RequestBuilder
-    fn send(self) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks
+    fn send(self) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
 }
 
 impl Response {
@@ -338,6 +338,8 @@ impl HttpError {
     fn message(self) -> String
 }
 ```
+
+**Inside a task**, `get`, `post` and `send` suspend their task until the answer is in, and the program's other tasks run meanwhile ([core semantics §11.8](../core-semantics.md)). For now each request runs on a helper thread, at most 64 at once; the rest queue, and their tasks stay suspended until a helper is free. A request whose task is cancelled still runs to its end, and its answer is dropped. This is interim: the client will run on the executor's own non-blocking sockets, with no helper.
 
 A URL is `http://` or `https://`. The client follows up to five redirects, and a status outside 2xx is an `Err`. A redirect keeps the request's `Authorization` and `Cookie` headers only while it stays on the original request's origin (scheme, host and port); the first hop anywhere else drops both for the rest of the chain, an `https://` to `http://` downgrade included. `header` compares names without case.
 

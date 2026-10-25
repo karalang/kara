@@ -47,6 +47,8 @@ pub fn suspends_native(name: &str) -> bool {
                 "ChildStdout" | "ChildStderr",
                 "read" | "read_to_end" | "read_to_string"
             )
+            | ("Client", "get" | "post")
+            | ("RequestBuilder", "send")
             | ("Pool", "acquire")
     )
 }
