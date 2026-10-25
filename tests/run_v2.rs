@@ -33,6 +33,11 @@ fn slashed(s: &str) -> String {
     s.replace('\\', "/")
 }
 
+/// JSON output with its Windows separators (`\\` in a JSON string) written as `/`.
+fn json_slashed(s: &str) -> String {
+    s.replace("\\\\", "/")
+}
+
 /// `path` as a JSON string, with Windows separators written as `/`.
 fn json_path(path: &std::path::Path) -> String {
     format!("{:?}", slashed(&path.display().to_string()))
@@ -143,7 +148,7 @@ fn run_v2_json_output_carries_the_runtime_reports() {
         let file = json_path(&err);
         let out = karac(&json, &err);
         assert_eq!(
-            slashed(&text(&out.stdout)),
+            json_slashed(&text(&out.stdout)),
             format!("a=1\n{{\"error\":\"too big\"}}\n{{\"error_return_trace\":[{{\"file\":{file},\"line\":8,\"column\":13}}]}}\n"),
             "{lane:?}"
         );
@@ -153,7 +158,7 @@ fn run_v2_json_output_carries_the_runtime_reports() {
         jsonl.push("--output=jsonl");
         let out = karac(&jsonl, &err);
         assert_eq!(
-            slashed(&text(&out.stdout)),
+            json_slashed(&text(&out.stdout)),
             format!("a=1\n{{\"type\":\"error\",\"message\":\"too big\"}}\n{{\"type\":\"error_return_trace\",\"frames\":[{{\"file\":{file},\"line\":8,\"column\":13}}],\"truncated\":false}}\n"),
             "{lane:?}"
         );
