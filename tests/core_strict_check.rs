@@ -13757,7 +13757,8 @@ fn a_package_diagnostic_names_its_places_by_file_line_and_offset() {
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
-    );
+    )
+    .replace('\\', "/");
     assert!(
         text.contains(
             "src/main.kara:5:17: value 'b' moved here, used again here (moved at line 4:17)"
@@ -13773,7 +13774,8 @@ fn a_package_diagnostic_names_its_places_by_file_line_and_offset() {
         .current_dir(&dir)
         .output()
         .unwrap();
-    let json = String::from_utf8_lossy(&out.stdout);
+    // A Windows separator arrives JSON-escaped, as `\\`.
+    let json = String::from_utf8_lossy(&out.stdout).replace("\\\\", "/");
     assert!(json.contains("(moved at line 4:17)"), "{json}");
     assert!(
         json.contains("\"replacement\":{\"offset\":0,\"length\":0,\"text\":\"#[derive(Clone)]\\n\",\"file\":\"src/ast.kara\"}"),
