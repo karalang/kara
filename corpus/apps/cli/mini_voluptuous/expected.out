@@ -1,0 +1,1018 @@
+job 1 ha_light configs/lights/kitchen.json: valid
+  {'brightness': 180, 'color_temp': 370, 'entity_id': 'light.kitchen_ceiling', 'icon': 'mdi:ceiling-light', 'name': 'Kitchen ceiling', 'platform': 'hue', 'transition': 2.5}
+job 2 ha_light configs/lights/porch.json: valid
+  {'brightness': 255, 'effect': 'colorloop', 'effect_speed': 3, 'name': 'Porch', 'platform': 'mqtt', 'rgb_color': [255, 140, 0], 'transition': 60}
+job 3 ha_light configs/lights/desk.json: 1 error
+  two or more values in the same group of exclusion 'color' @ data[<color>]. Got None
+job 4 ha_light configs/lights/garden.json: 1 error
+  some but not all values in the same group of inclusion 'fx' @ data[<fx>]. Got None
+job 5 ha_light configs/lights/strip.json: 1 error
+  pick one way to give the color @ data[<color>]. Got None
+job 6 ha_light configs/lights/hall.json: 5 errors
+  expected float for dictionary value @ data['transition']. Got 'slow'
+  expected int for dictionary value @ data['brightness']. Got 'dim'
+  expected int for dictionary value @ data['rgb_color']. Got [10, 20, '30']
+  extra keys not allowed @ data['area']. Got 'hallway'
+  extra keys not allowed @ data['colour']. Got 'warm'
+job 7 ha_light configs/lights/bulbs.json: 1 error
+  expected a dictionary. Got [{'platform': 'hue', 'name': 'Bulb'}]
+job 8 ha_light_zigbee configs/lights/kitchen.json: 1 error
+  required key not provided @ data['area']. Got None
+job 9 ha_light_zigbee configs/lights/garden.json: 1 error
+  some but not all values in the same group of inclusion 'fx' @ data[<fx>]. Got None
+job 10 ha_light_zigbee configs/lights/hall.json: 4 errors
+  expected float for dictionary value @ data['transition']. Got 'slow'
+  expected int for dictionary value @ data['brightness']. Got 'dim'
+  expected int for dictionary value @ data['rgb_color']. Got [10, 20, '30']
+  extra keys not allowed @ data['colour']. Got 'warm'
+job 11 ha_light_lenient configs/lights/hall.json: 3 errors
+  expected float for dictionary value @ data['transition']. Got 'slow'
+  expected int for dictionary value @ data['brightness']. Got 'dim'
+  expected int for dictionary value @ data['rgb_color']. Got [10, 20, '30']
+job 12 ha_light_tidy configs/lights/hall.json: 3 errors
+  expected float for dictionary value @ data['transition']. Got 'slow'
+  expected int for dictionary value @ data['brightness']. Got 'dim'
+  expected int for dictionary value @ data['rgb_color']. Got [10, 20, '30']
+job 13 ha_light_lenient configs/lights/kitchen.json: valid
+  {'brightness': 180, 'color_temp': 370, 'entity_id': 'light.kitchen_ceiling', 'icon': 'mdi:ceiling-light', 'name': 'Kitchen ceiling', 'platform': 'hue', 'transition': 2.5}
+job 14 ha_light_tidy configs/lights/kitchen.json: valid
+  {'brightness': 180, 'color_temp': 370, 'entity_id': 'light.kitchen_ceiling', 'icon': 'mdi:ceiling-light', 'name': 'Kitchen ceiling', 'platform': 'hue', 'transition': 2.5}
+job 15 ha_automation configs/automations/lights_at_sunset.json: valid
+  {'action': [{'data': {'brightness': 200}, 'service': 'light.turn_on', 'target': {'entity_id': 'light.porch'}}], 'alias': 'Porch lights at sunset', 'condition': [], 'max': 10, 'mode': 'single', 'trigger': [{'event': 'sunset', 'offset': '-00:30:00', 'platform': 'sun'}]}
+job 16 ha_automation configs/automations/motion.json: valid
+  {'action': [{'data': {}, 'service': 'light.turn_on', 'target': {'area_id': 'hall'}}, {'delay': '00:02:00'}, {'data': {}, 'service': 'light.turn_off', 'target': {'area_id': 'hall'}}], 'alias': 'Hall motion', 'condition': [{'condition': 'state', 'entity_id': 'sun.sun', 'state': 'below_horizon'}], 'max': 10, 'mode': 'restart', 'trigger': [{'entity_id': ['binary_sensor.hall_motion', 'binary_sensor.stairs'], 'platform': 'state', 'to': 'on'}]}
+job 17 ha_automation configs/automations/broken_trigger.json: 1 error
+  for is HH:MM:SS for dictionary value @ data['trigger'][1]['for']. Got '5 minutes'
+job 18 ha_automation configs/automations/no_action.json: 5 errors
+  an automation needs an action for dictionary value @ data['action']. Got []
+  length of value must be at least 1 for dictionary value @ data['alias']. Got ''
+  length of value must be at least 1 for dictionary value @ data['trigger']. Got []
+  value must be at least 1 for dictionary value @ data['max']. Got 0
+  value must be one of ['parallel', 'queued', 'restart', 'single'] for dictionary value @ data['mode']. Got 'sometimes'
+job 19 ha_automation configs/automations/bad_action.json: 5 errors
+  an action is a service call or a delay @ data['action'][0]. Got {'service': 'light turn on'}
+  an action is a service call or a delay @ data['action'][1]. Got {'wait': '00:01:00'}
+  an action is a service call or a delay @ data['action'][2]. Got {'delay': '1m'}
+  expected a list for dictionary value @ data['condition']. Got {'condition': 'time'}
+  expected str for dictionary value @ data['description']. Got 7
+job 20 web_server configs/sites/static.json: valid
+  {'gzip': True, 'host': '0.0.0.0', 'index': 'index.html', 'listen': 8080, 'log_dir': 'data/files/logs', 'root': 'data/files/www', 'upstreams': [{'backup': False, 'name': 'api', 'url': 'http://127.0.0.1:9000', 'weight': 1}], 'workers': 4}
+job 21 web_server configs/sites/tls.json: valid
+  {'gzip': False, 'host': '10.0.0.5', 'index': 'index.html', 'listen': 443, 'public_url': 'https://shop.example.com', 'root': 'data/files/www', 'tls': {'cert': 'data/files/tls/server.pem', 'key': 'data/files/tls/server.key', 'protocols': ['TLSv1.2', 'TLSv1.3']}, 'upstreams': [{'backup': False, 'name': 'app-1', 'url': 'http://10.0.0.11:8000', 'weight': 3}, {'backup': True, 'name': 'app-2', 'url': 'http://10.0.0.12:8000', 'weight': 1}], 'workers': 16}
+job 22 web_server configs/sites/broken.json: 12 errors
+  Not a directory for dictionary value @ data['root']. Got 'data/files/www/index.html'
+  Not a file for dictionary value @ data['tls']['cert']. Got 'data/files/tls/missing.pem'
+  Not a file for dictionary value @ data['tls']['key']. Got 'data/files/tls'
+  does not match regular expression ^[a-z][a-z0-9-]*$ for dictionary value @ data['upstreams'][0]['name']. Got 'App'
+  expected a URL for dictionary value @ data['upstreams'][0]['url']. Got '10.0.0.11:8000'
+  expected a fully qualified domain name URL for dictionary value @ data['public_url']. Got 'http://intranet'
+  expected int for dictionary value @ data['workers']. Got '8'
+  host is an IPv4 address for dictionary value @ data['host']. Got 'localhost'
+  path does not exist for dictionary value @ data['log_dir']. Got 'data/files/missing'
+  value must be at least 1 for dictionary value @ data['upstreams'][0]['weight']. Got 0
+  value must be at most 65535 for dictionary value @ data['listen']. Got 70000
+  value must be one of ['TLSv1.2', 'TLSv1.3'] @ data['tls']['protocols'][2]. Got 'SSLv3'
+job 23 web_server configs/sites/minimal.json: 2 errors
+  required key not provided @ data['host']. Got None
+  required key not provided @ data['upstreams']. Got None
+job 24 web_server configs/sites/empty_upstreams.json: 3 errors
+  expected str for dictionary value @ data['index']. Got None
+  extra keys not allowed @ data['cache']. Got True
+  length of value must be at least 1 for dictionary value @ data['upstreams']. Got []
+job 25 compose configs/compose/shop.json: valid
+  {'services': {'api': {'build': {'context': './api', 'dockerfile': 'Dockerfile.prod'}, 'command': ['gunicorn', 'app:app'], 'depends_on': [], 'environment': {'DATABASE_URL': 'postgres://db/shop', 'DEBUG': False, 'EMPTY': None, 'WORKERS': 4}, 'replicas': 3, 'restart': 'no'}, 'db': {'depends_on': [], 'environment': ['POSTGRES_DB=shop', 'POSTGRES_PASSWORD=not-a-real-password'], 'image': 'postgres:16-alpine', 'restart': 'no'}, 'web': {'depends_on': ['api'], 'image': 'nginx:1.27', 'ports': ['8080:80', 443], 'restart': 'always'}}, 'version': '3.9', 'volumes': {'cache': {'driver': 'local'}, 'dbdata': None, 'uploads': {'driver': 'nfs'}}}
+job 26 compose configs/compose/broken.json: 14 errors
+  does not match regular expression ^[A-Z_][A-Z0-9_]*$ @ data['services']['cron']['environment']['lower_case']. Got 'x'
+  does not match regular expression ^[A-Z_][A-Z0-9_]*=.*$ @ data['services']['proxy']['environment'][1]. Got 'bad'
+  does not match regular expression ^[a-z][a-z0-9_-]*$ @ data['services']['Web']. Got {'image': 'nginx'}
+  expected str for dictionary value @ data['services']['cron']['environment']['OK']. Got [1]
+  expected str for dictionary value @ data['services']['proxy']['command']. Got 5
+  expected str for dictionary value @ data['volumes']['data']['driver']. Got 5
+  extra keys not allowed @ data['services']['proxy']['healthcheck']. Got {'test': 'curl'}
+  give image or build, not both @ data['services']['worker'][<source>]. Got None
+  ports are 8080 or 8080:80 @ data['services']['queue']['ports'][0]. Got '6379'
+  ports are 8080 or 8080:80 @ data['services']['queue']['ports'][1]. Got 6379.5
+  required key not provided @ data['services']['cron']['build']['context']. Got None
+  value must be at most 20 for dictionary value @ data['services']['queue']['replicas']. Got 50
+  value must be one of ['3.8', '3.9'] for dictionary value @ data['version']. Got '2'
+  value must be one of ['always', 'no', 'on-failure', 'unless-stopped'] for dictionary value @ data['services']['queue']['restart']. Got 'sometimes'
+job 27 compose configs/compose/no_services.json: 2 errors
+  expected dict for dictionary value @ data['networks']['back']. Got 'bridge'
+  length of value must be at least 1 for dictionary value @ data['services']. Got {}
+job 28 menu configs/menus/editor.json: valid
+  {'children': [{'action': 'file.new', 'children': [], 'label': 'New', 'shortcut': 'Ctrl+N'}, {'children': [{'action': 'file.open_recent', 'children': [], 'label': 'notes.md'}, {'children': [{'action': 'file.clear_recent', 'children': [], 'label': 'Clear list'}], 'label': 'More'}], 'label': 'Open recent'}, {'action': 'file.save_as', 'children': [], 'label': 'Save as', 'shortcut': 'Ctrl+Shift+S'}], 'label': 'File'}
+job 29 menu configs/menus/broken.json: 1 error
+  does not match regular expression ^(Ctrl|Alt|Shift)(\+(Ctrl|Alt|Shift))*\+[A-Z0-9]$ for dictionary value @ data['children'][0]['shortcut']. Got 'Ctrl+z'
+job 30 feature_flags configs/flags/prod.json: valid
+  {'dark_mode': True, 'fast_cart': True, 'legacy_search': False, 'new_checkout': True}
+job 31 feature_flags configs/flags/broken.json: 1 error
+  expected boolean for dictionary value @ data['dark_mode']. Got 'sometimes'
+job 32 signup configs/signups/batch.json[0]: valid
+  {'birthday': '1990-04-12', 'display_name': 'Ann Lee', 'email': 'ann.lee@example.com', 'newsletter': False, 'password': 'Correct-Horse-9', 'tags': ['python', 'rust'], 'terms': True, 'username': 'ann_lee', 'website': 'https://ann.example.com'}
+job 33 signup configs/signups/batch.json[1]: 5 errors
+  contains duplicate items: ['a'] for dictionary value @ data['tags']. Got ['a', 'A']
+  expected an email address for dictionary value @ data['email']. Got 'bob@example'
+  letters, digits and underscores only for dictionary value @ data['username']. Got 'Bob!'
+  no uppercase letter @ data['password'], no digit @ data['password'], no symbol @ data['password'], shorter than 12 @ data['password'] for dictionary value. Got {'email': 'bob@example', 'username': 'Bob!', 'password': 'password', 'terms': False, 'tags': ['a', 'A']}
+  value was not true for dictionary value @ data['terms']. Got False
+job 34 signup configs/signups/batch.json[2]: 3 errors
+  expected boolean for dictionary value @ data['newsletter']. Got 'nope'
+  length of value must be at least 3 for dictionary value @ data['username']. Got 'cc'
+  value must not be one of ['bot.example', 'spam.example'] for dictionary value @ data['referrer']. Got 'spam.example'
+job 35 signup configs/signups/batch.json[3]: 4 errors
+  length of value must be at most 5 for dictionary value @ data['tags']. Got ['a', 'b', 'c', 'd', 'e', 'f']
+  not a valid value for dictionary value @ data['website']. Got 'dave.example.com'
+  required key not provided @ data['email']. Got None
+  value does not match expected format %Y-%m-%d for dictionary value @ data['birthday']. Got '1977-02-30'
+job 36 signup configs/signups/batch.json[4]: 3 errors
+  expected a list for dictionary value @ data['tags']. Got 'music'
+  expected str for dictionary value @ data['display_name']. Got 5
+  expected string or buffer @ data['password'], expected string or buffer @ data['password'], expected string or buffer @ data['password'], expected string or buffer @ data['password'], shorter than 12 @ data['password'] for dictionary value. Got {'email': 'erin@example.net', 'username': '  erin  ', 'password': 12345678901234, 'terms': True, 'tags': 'music', 'display_name': 5}
+job 37 invoice configs/invoices/2024-00117.json: valid
+  {'currency': 'EUR', 'customer': {'email': 'billing@acme.example', 'name': 'Acme GmbH', 'vat_id': 'DE123456789'}, 'due': '2024-08-01', 'issued': '2024-07-02T09:30:00Z', 'lines': [{'discount': 0.0, 'qty': 3, 'sku': 'ABC-001', 'unit_price': '19.99'}, {'discount': 0.1, 'qty': 1, 'sku': 'XYZ-042', 'unit_price': '250.00'}], 'notes': 'Thank you for your business', 'number': 'INV-2024-00117', 'paid': False, 'total': '29497.00', 'vat_rate': 0.2}
+job 38 invoice configs/invoices/2024-00118.json: 13 errors
+  Precision must be equal to 7, and Scale must be equal to 2 for dictionary value @ data['total']. Got '1234567.891'
+  Scale must be equal to 2 for dictionary value @ data['lines'][0]['unit_price']. Got '19.9'
+  does not match regular expression ^INV-\d{4}-\d{5}$ for dictionary value @ data['number']. Got 'INV-24-118'
+  does not match regular expression ^[A-Z]{2}[0-9A-Z]{8,12}$ for dictionary value @ data['customer']['vat_id']. Got 'de123'
+  does not match regular expression ^[A-Z]{3}-\d{3}$ for dictionary value @ data['lines'][0]['sku']. Got 'ab-1'
+  expected bool for dictionary value @ data['paid']. Got 'no'
+  extra keys not allowed @ data['customer']['phone']. Got '+49 30 1234567'
+  length of value must be at least 1 for dictionary value @ data['customer']['name']. Got ''
+  value does not match expected format %Y-%m-%d for dictionary value @ data['due']. Got '2024-07-32'
+  value does not match expected format %Y-%m-%dT%H:%M:%SZ for dictionary value @ data['issued']. Got '2024-07-02 09:30'
+  value must be at least 1 for dictionary value @ data['lines'][0]['qty']. Got 0
+  value must be higher than 0 for dictionary value @ data['vat_rate']. Got 0
+  value must be one of ['EUR', 'GBP', 'USD'] for dictionary value @ data['currency']. Got 'eur'
+job 39 invoice configs/invoices/2024-00119.json: 4 errors
+  Precision must be equal to 7 for dictionary value @ data['total']. Got '0.00'
+  length of value must be at least 1 for dictionary value @ data['lines']. Got []
+  not a valid value for dictionary value @ data['notes']. Got 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  value must be at most 0.25 for dictionary value @ data['vat_rate']. Got '0.3'
+job 40 sensor_reading configs/sensors/readings.json[0]: valid
+  {'at': '2024-07-02T10:00:00.000000Z', 'battery': 87, 'celsius': 21.5, 'firmware': '1.2.0', 'humidity': 100, 'sensor': 'temp-001'}
+job 41 sensor_reading configs/sensors/readings.json[1]: 2 errors
+  value does not match expected format %Y-%m-%dT%H:%M:%S.%fZ for dictionary value @ data['at']. Got '2024-07-02T10:00:00Z'
+  value must be at most 85 for dictionary value @ data['celsius']. Got 90
+job 42 sensor_reading configs/sensors/readings.json[2]: 3 errors
+  does not match regular expression ^[a-z]+-\d{3}$ for dictionary value @ data['sensor']. Got 'Temp-3'
+  expected float for dictionary value @ data['celsius']. Got 'warm'
+  value must be at most 100 for dictionary value @ data['battery']. Got 101
+job 43 sensor_reading configs/sensors/readings.json[3]: 1 error
+  required key not provided @ data['sensor']. Got None
+job 44 infer configs/lights/kitchen.json
+  {'platform': <class 'str'>, 'name': <class 'str'>, 'brightness': <class 'str'>, 'color_temp': <class 'int'>, 'transition': <class 'str'>, 'entity_id': <class 'str'>, 'friendly_name': <class 'str'>, 'icon': <class 'str'>}
+job 45 inferred configs/lights/porch.json: 4 errors
+  expected str for dictionary value @ data['transition']. Got 90
+  extra keys not allowed @ data['effect']. Got 'colorloop'
+  extra keys not allowed @ data['effect_speed']. Got 3
+  extra keys not allowed @ data['rgb_color']. Got [255, 140, 0]
+job 46 inferred configs/lights/kitchen.json: valid
+  {'brightness': '180', 'color_temp': 370, 'entity_id': 'light.kitchen_ceiling', 'friendly_name': 'Kitchen', 'icon': 'mdi:ceiling-light', 'name': '  Kitchen ceiling ', 'platform': 'hue', 'transition': '2.5'}
+job 47 infer configs/compose/shop.json
+  {'version': <class 'float'>, 'services': {'web': {'image': <class 'str'>, 'ports': [<class 'str'>, <class 'int'>], 'depends_on': [<class 'str'>], 'restart': <class 'str'>}, 'api': {'build': {'context': <class 'str'>, 'dockerfile': <class 'str'>}, 'environment': {'DATABASE_URL': <class 'str'>, 'WORKERS': <class 'int'>, 'DEBUG': <class 'bool'>, 'EMPTY': <class 'NoneType'>}, 'replicas': <class 'str'>, 'command': [<class 'str'>, <class 'str'>]}, 'db': {'image': <class 'str'>, 'environment': [<class 'str'>, <class 'str'>]}}, 'volumes': {'dbdata': <class 'NoneType'>, 'uploads': {'driver': <class 'str'>}, 'cache': <class 'dict'>}}
+job 48 inferred configs/compose/broken.json: 7 errors
+  expected float for dictionary value @ data['version']. Got '2'
+  extra keys not allowed @ data['services']['Web']. Got {'image': 'nginx'}
+  extra keys not allowed @ data['services']['cron']. Got {'build': {'dockerfile': 'Dockerfile'}, 'environment': {'lower_case': 'x', 'OK': [1]}}
+  extra keys not allowed @ data['services']['proxy']. Got {'environment': ['GOOD=1', 'bad'], 'command': 5, 'healthcheck': {'test': 'curl'}}
+  extra keys not allowed @ data['services']['queue']. Got {'image': 'redis:7', 'ports': ['6379', 6379.5], 'restart': 'sometimes', 'replicas': 50}
+  extra keys not allowed @ data['services']['worker']. Got {'image': 'app:latest', 'build': '.'}
+  extra keys not allowed @ data['volumes']['data']. Got {'driver': 5}
+job 49 infer configs/menus/editor.json
+  {'label': <class 'str'>, 'children': [{'label': <class 'str'>, 'action': <class 'str'>, 'shortcut': <class 'str'>}, {'label': <class 'str'>, 'children': [{'label': <class 'str'>, 'action': <class 'str'>}, {'label': <class 'str'>, 'children': [{'label': <class 'str'>, 'action': <class 'str'>}]}]}, {'label': <class 'str'>, 'action': <class 'str'>, 'shortcut': <class 'str'>}]}
+job 50 inferred configs/menus/broken.json: 1 error
+  extra keys not allowed @ data['children'][1]['children']. Got [{'label': '', 'action': 'find'}, {'label': 'Replace', 'children': [{'action': 'edit.replace'}, 'separator']}]
+job 51 u_type_int(5): valid
+  5
+job 52 u_type_int(True): valid
+  True
+job 53 u_type_int(5.0): 1 error
+  expected int. Got 5.0
+job 54 u_type_int('5'): 1 error
+  expected int. Got '5'
+job 55 u_type_int(None): 1 error
+  expected int. Got None
+job 56 u_type_float(2.5): valid
+  2.5
+job 57 u_type_float(2): 1 error
+  expected float. Got 2
+job 58 u_type_float('2.5'): 1 error
+  expected float. Got '2.5'
+job 59 u_type_str('x'): valid
+  'x'
+job 60 u_type_str(1): 1 error
+  expected str. Got 1
+job 61 u_type_str([]): 1 error
+  expected str. Got []
+job 62 u_type_str({}): 1 error
+  expected str. Got {}
+job 63 u_type_object(None): valid
+  None
+job 64 u_type_object([1]): valid
+  [1]
+job 65 u_type_object({'a': 1}): valid
+  {'a': 1}
+job 66 u_literal('on'): valid
+  'on'
+job 67 u_literal('On'): 1 error
+  not a valid value. Got 'On'
+job 68 u_literal(1): 1 error
+  not a valid value. Got 1
+job 69 u_literal_int(1): valid
+  1
+job 70 u_literal_int(1.0): valid
+  1.0
+job 71 u_literal_int(True): valid
+  True
+job 72 u_literal_int('1'): 1 error
+  not a valid value. Got '1'
+job 73 u_literal_int(2): 1 error
+  not a valid value. Got 2
+job 74 u_literal_none(None): valid
+  None
+job 75 u_literal_none(0): 1 error
+  not a valid value. Got 0
+job 76 u_literal_none(''): 1 error
+  not a valid value. Got ''
+job 77 u_list_any([1, 'a', 2]): valid
+  [1, 'a', 2]
+job 78 u_list_any([1, 2.5]): 1 error
+  expected str @ data[1]. Got 2.5
+job 79 u_list_any([]): valid
+  []
+job 80 u_list_any('ab'): 1 error
+  expected a list. Got 'ab'
+job 81 u_list_any([None, None]): 2 errors
+  expected str @ data[0]. Got None
+  expected str @ data[1]. Got None
+job 82 u_list_empty([]): valid
+  []
+job 83 u_list_empty([1, 'a']): 1 error
+  not a valid value @ data[1]['a']. Got None
+job 84 u_list_empty([7]): 1 error
+  not a valid value @ data[7]. Got None
+job 85 u_list_empty({}): 1 error
+  expected a list. Got {}
+job 86 u_list_nested_empty({'x': []}): valid
+  {'x': []}
+job 87 u_list_nested_empty({'x': [1, 2]}): 1 error
+  not a valid value for dictionary value @ data['x']. Got [1, 2]
+job 88 u_list_of_dicts([{'id': 1}, {'id': '2'}, 3]): 1 error
+  expected int for dictionary value @ data[1]['id']. Got '2'
+job 89 u_list_of_dicts([{'id': 1, 'n': 2}]): 1 error
+  extra keys not allowed @ data[0]['n']. Got 2
+job 90 u_typed_keys({'a': 1, 'b': 2}): valid
+  {'a': 1, 'b': 2}
+job 91 u_typed_keys({'a': '1'}): 1 error
+  expected int for dictionary value @ data['a']. Got '1'
+job 92 u_typed_keys({}): 1 error
+  required key not provided @ data[<class 'str'>]. Got None
+job 93 u_match_key({'x-trace': 'on'}): valid
+  {'x-trace': 'on'}
+job 94 u_match_key({'trace': 'on'}): 2 errors
+  does not match regular expression ^x- @ data['trace']. Got 'on'
+  required key not provided @ data[Match('^x-', msg=None)]. Got None
+job 95 u_match_key({}): 1 error
+  required key not provided @ data[Match('^x-', msg=None)]. Got None
+job 96 u_required_all({'a': 1}): valid
+  {'a': 1}
+job 97 u_required_all({}): 1 error
+  required key not provided @ data['a']. Got None
+job 98 u_required_all({'b': 1, 'c': 2}): 1 error
+  required key not provided @ data['a']. Got None
+job 99 u_required_all({'a': 1, 'c': 'x'}): 1 error
+  extra keys not allowed @ data['c']. Got 'x'
+job 100 u_extra({'id': 1, 'x': [1]}): valid
+  {'id': 1, 'x': [1]}
+job 101 u_extra({'id': '1', 'y': 2}): 1 error
+  expected int for dictionary value @ data['id']. Got '1'
+job 102 u_extra_prevent({'id': 1, 'x': 1}): 1 error
+  extra keys not allowed @ data['x']. Got 1
+job 103 u_extra_prevent({'x': 1, 'y': 2}): 2 errors
+  extra keys not allowed @ data['x']. Got 1
+  extra keys not allowed @ data['y']. Got 2
+job 104 u_extra_allow({'id': 1, 'x': 1}): valid
+  {'id': 1, 'x': 1}
+job 105 u_extra_remove({'id': 1, 'x': 1}): valid
+  {'id': 1}
+job 106 u_extra_remove({'id': '1', 'x': 1}): 1 error
+  expected int for dictionary value @ data['id']. Got '1'
+job 107 u_remove_then_type({'x': 1, 'y': 2}): valid
+  {'x': 1, 'y': 2}
+job 108 u_remove_then_type({'x': 'a'}): 1 error
+  expected int for dictionary value @ data['x']. Got 'a'
+job 109 u_remove_then_type({'y': 'b'}): 1 error
+  expected int for dictionary value @ data['y']. Got 'b'
+job 110 u_remove_key({'debug': True, 'name': 'a'}): valid
+  {'name': 'a'}
+job 111 u_remove_key({'debug': 'yes', 'name': 'a'}): 1 error
+  extra keys not allowed @ data['debug']. Got 'yes'
+job 112 u_remove_key({'name': 'a'}): valid
+  {'name': 'a'}
+job 113 u_defaults({}): 1 error
+  expected int for dictionary value @ data['d']. Got None
+job 114 u_defaults({'a': 2, 'b': 'y', 'd': 3}): valid
+  {'a': 2, 'b': 'y', 'c': None, 'd': 3}
+job 115 u_defaults({'c': 5, 'd': 4}): valid
+  {'a': 1, 'b': 'x', 'c': 5, 'd': 4}
+job 116 u_required_msg({}): 1 error
+  a token is required @ data['token']. Got None
+job 117 u_required_msg({'x': 1}): 1 error
+  a token is required @ data['token']. Got None
+job 118 u_required_msg({'token': 5}): 1 error
+  expected str for dictionary value @ data['token']. Got 5
+job 119 u_marker_msg({'port': '80'}): 1 error
+  expected int for dictionary value @ data['port']. Got '80'
+job 120 u_marker_msg({'port': 80}): valid
+  {'port': 80}
+job 121 u_marker_msg({'prot': 80}): 2 errors
+  extra keys not allowed @ data['prot']. Got 80
+  port must be an integer @ data['port']. Got None
+job 122 u_exclusive({'a': 1}): valid
+  {'a': 1}
+job 123 u_exclusive({'a': 1, 'b': 2}): 1 error
+  two or more values in the same group of exclusion 'g' @ data[<g>]. Got None
+job 124 u_exclusive({'a': 1, 'b': 2, 'c': 3, 'd': 4}): 2 errors
+  c or d @ data[<h>]. Got None
+  two or more values in the same group of exclusion 'g' @ data[<g>]. Got None
+job 125 u_exclusive({'c': 1, 'd': 'x'}): 1 error
+  c or d @ data[<h>]. Got None
+job 126 u_inclusive({'password': 'not-a-real-password', 'user': 'u'}): valid
+  {'password': 'not-a-real-password', 'user': 'u'}
+job 127 u_inclusive({'user': 'u'}): 1 error
+  some but not all values in the same group of inclusion 'auth' @ data[<auth>]. Got None
+job 128 u_inclusive({'lat': 1.5}): 1 error
+  give lat and lon together @ data[<pos>]. Got None
+job 129 u_inclusive({'lat': 1.5, 'user': 'u'}): 1 error
+  some but not all values in the same group of inclusion 'auth' @ data[<auth>]. Got None
+job 130 u_inclusive({}): valid
+  {}
+job 131 u_inclusive_default({}): valid
+  {'x': 0, 'y': 0}
+job 132 u_inclusive_default({'x': 3}): 1 error
+  some but not all values in the same group of inclusion 'p' @ data[<p>]. Got None
+job 133 u_inclusive_default({'x': 1, 'y': 2}): valid
+  {'x': 1, 'y': 2}
+job 134 u_nested_dict({'db': {'host': 'h', 'port': 5432}}): valid
+  {'db': {'host': 'h', 'port': 5432}}
+job 135 u_nested_dict({'db': {'host': 1, 'port': 0}}): 2 errors
+  expected str for dictionary value @ data['db']['host']. Got 1
+  value must be at least 1 for dictionary value @ data['db']['port']. Got 0
+job 136 u_nested_dict({'db': 'h:1'}): 1 error
+  expected a dictionary for dictionary value @ data['db']. Got 'h:1'
+job 137 u_nested_dict({'db': {}}): 2 errors
+  required key not provided @ data['db']['host']. Got None
+  required key not provided @ data['db']['port']. Got None
+job 138 u_any(3): valid
+  3
+job 139 u_any('4'): valid
+  4
+job 140 u_any('four'): 1 error
+  expected int. Got 'four'
+job 141 u_any(None): 1 error
+  expected int. Got None
+job 142 u_any_msg(3): valid
+  3
+job 143 u_any_msg(3.5): valid
+  3.5
+job 144 u_any_msg('3'): 1 error
+  a number. Got '3'
+job 145 u_any_deepest({'a': 1}): valid
+  {'a': 1}
+job 146 u_any_deepest({'a': {'b': 2}}): valid
+  {'a': {'b': 2}}
+job 147 u_any_deepest({'a': {'b': 'x'}}): 1 error
+  expected int for dictionary value @ data['a']['b']. Got 'x'
+job 148 u_any_deepest({'a': 'x'}): 1 error
+  expected int for dictionary value @ data['a']. Got 'x'
+job 149 u_any_required({'v': {}}): 1 error
+  required key not provided @ data['v']['x']. Got None
+job 150 u_any_required({'v': {'x': 1}}): valid
+  {'v': {'x': 1}}
+job 151 u_any_not_required({'v': {}}): valid
+  {'v': {}}
+job 152 u_all('  ab '): valid
+  'AB'
+job 153 u_all(' a '): 1 error
+  length of value must be at least 2. Got ' a '
+job 154 u_all(5): 1 error
+  expected str. Got 5
+job 155 u_all_msg(3): valid
+  3
+job 156 u_all_msg(-1): 1 error
+  a count. Got -1
+job 157 u_all_msg('x'): 1 error
+  a count. Got 'x'
+job 158 u_someof_min(5): valid
+  5
+job 159 u_someof_min(15): 1 error
+  value must be at most 9. Got 15
+job 160 u_someof_min(-1): 1 error
+  value must be at least 0. Got -1
+job 161 u_someof_min('x'): 1 error
+  expected int, invalid value or type (must have a partial ordering), invalid value or type (must have a partial ordering). Got 'x'
+job 162 u_someof_max(5): 1 error
+  . Got 5
+job 163 u_someof_max(15): valid
+  15
+job 164 u_someof_in_dict({'pin': '1234'}): valid
+  {'pin': '1234'}
+job 165 u_someof_in_dict({'pin': '12a'}): 1 error
+  length of value must be at least 4 @ data['pin'], does not match regular expression ^\d+$ @ data['pin'] for dictionary value. Got {'pin': '12a'}
+job 166 u_someof_in_dict({'pin': 12}): 1 error
+  invalid value or type @ data['pin'], invalid value or type @ data['pin'], expected string or buffer @ data['pin'] for dictionary value. Got {'pin': 12}
+job 167 u_maybe(None): valid
+  None
+job 168 u_maybe(1): valid
+  1
+job 169 u_maybe('1'): 1 error
+  not a valid value. Got '1'
+job 170 u_maybe_msg({'n': None}): valid
+  {'n': None}
+job 171 u_maybe_msg({'n': 'x'}): 1 error
+  an int or null for dictionary value @ data['n']. Got 'x'
+job 172 u_msg(1): valid
+  1
+job 173 u_msg(0): 1 error
+  a positive int. Got 0
+job 174 u_msg('a'): 1 error
+  a positive int. Got 'a'
+job 175 u_msg_deep({'cfg': {'a': {'b': 'x'}}}): 1 error
+  expected int for dictionary value @ data['cfg']['a']['b']. Got 'x'
+job 176 u_msg_deep({'cfg': {'a': 1}}): 1 error
+  bad cfg for dictionary value @ data['cfg']. Got {'a': 1}
+job 177 u_msg_deep({'cfg': 5}): 1 error
+  bad cfg for dictionary value @ data['cfg']. Got 5
+job 178 u_coerce_int('12'): valid
+  12
+job 179 u_coerce_int(' -7 '): valid
+  -7
+job 180 u_coerce_int('1_000'): valid
+  1000
+job 181 u_coerce_int('3.5'): 1 error
+  expected int. Got '3.5'
+job 182 u_coerce_int(3.9): valid
+  3
+job 183 u_coerce_int(True): valid
+  1
+job 184 u_coerce_int(None): 1 error
+  expected int. Got None
+job 185 u_coerce_int([1]): 1 error
+  expected int. Got [1]
+job 186 u_coerce_int('x'): 1 error
+  expected int. Got 'x'
+job 187 u_coerce_float('2.5'): valid
+  2.5
+job 188 u_coerce_float(' 3 '): valid
+  3.0
+job 189 u_coerce_float('1e3'): valid
+  1000.0
+job 190 u_coerce_float('-.5'): valid
+  -0.5
+job 191 u_coerce_float(4): valid
+  4.0
+job 192 u_coerce_float(False): valid
+  0.0
+job 193 u_coerce_float('two'): 1 error
+  expected float. Got 'two'
+job 194 u_coerce_float(None): 1 error
+  expected float. Got None
+job 195 u_coerce_str(5): valid
+  '5'
+job 196 u_coerce_str(2.5): valid
+  '2.5'
+job 197 u_coerce_str(None): valid
+  'None'
+job 198 u_coerce_str(True): valid
+  'True'
+job 199 u_coerce_str([1, 'a']): valid
+  "[1, 'a']"
+job 200 u_coerce_str({'k': None}): valid
+  "{'k': None}"
+job 201 u_coerce_bool(0): valid
+  False
+job 202 u_coerce_bool(1): valid
+  True
+job 203 u_coerce_bool(''): valid
+  False
+job 204 u_coerce_bool('no'): valid
+  True
+job 205 u_coerce_bool([]): valid
+  False
+job 206 u_coerce_bool(None): valid
+  False
+job 207 u_coerce_msg('1'): valid
+  1
+job 208 u_coerce_msg('1.5'): 1 error
+  whole numbers only. Got '1.5'
+job 209 u_boolean('Yes'): valid
+  True
+job 210 u_boolean('off'): valid
+  False
+job 211 u_boolean('ENABLE'): valid
+  True
+job 212 u_boolean('maybe'): 1 error
+  expected boolean. Got 'maybe'
+job 213 u_boolean(1): valid
+  True
+job 214 u_boolean(0): valid
+  False
+job 215 u_boolean(None): valid
+  False
+job 216 u_boolean([]): valid
+  False
+job 217 u_boolean([0]): valid
+  True
+job 218 u_boolean(2.5): valid
+  True
+job 219 u_istrue(True): valid
+  True
+job 220 u_istrue(1): valid
+  1
+job 221 u_istrue('x'): valid
+  'x'
+job 222 u_istrue([1]): valid
+  [1]
+job 223 u_istrue(0): 1 error
+  value was not true. Got 0
+job 224 u_istrue(''): 1 error
+  value was not true. Got ''
+job 225 u_istrue([]): 1 error
+  value was not true. Got []
+job 226 u_istrue(None): 1 error
+  value was not true. Got None
+job 227 u_isfalse(False): valid
+  False
+job 228 u_isfalse(0): valid
+  0
+job 229 u_isfalse(''): valid
+  ''
+job 230 u_isfalse([]): valid
+  []
+job 231 u_isfalse(None): valid
+  None
+job 232 u_isfalse(1): 1 error
+  value was not false. Got 1
+job 233 u_isfalse('0'): 1 error
+  value was not false. Got '0'
+job 234 u_match('555-1234'): valid
+  '555-1234'
+job 235 u_match('5551234'): 1 error
+  does not match regular expression ^\d{3}-\d{4}$. Got '5551234'
+job 236 u_match(5551234): 1 error
+  expected string or buffer. Got 5551234
+job 237 u_match('555-12345'): 1 error
+  does not match regular expression ^\d{3}-\d{4}$. Got '555-12345'
+job 238 u_match_msg('Abc'): valid
+  'Abc'
+job 239 u_match_msg('ab1'): 1 error
+  letters only. Got 'ab1'
+job 240 u_replace('  many   spaces\there '): valid
+  'many spaces here'
+job 241 u_replace('x'): valid
+  'x'
+job 242 u_replace_groups('2024-07-02 and 2023-01-31'): valid
+  '02/07/2024 and 31/01/2023'
+job 243 u_replace_groups('none'): valid
+  'none'
+job 244 u_replace_named('a=1 b= c=3'): valid
+  '1:a :b 3:c'
+job 245 u_email('ann@example.com'): valid
+  'ann@example.com'
+job 246 u_email('a.b+c@mail.example.org'): valid
+  'a.b+c@mail.example.org'
+job 247 u_email('"odd user"@example.com'): 1 error
+  expected an email address. Got '"odd user"@example.com'
+job 248 u_email('no-at.example.com'): 1 error
+  expected an email address. Got 'no-at.example.com'
+job 249 u_email('two@@example.com'): 1 error
+  expected an email address. Got 'two@@example.com'
+job 250 u_email('a@b'): 1 error
+  expected an email address. Got 'a@b'
+job 251 u_email('a@b.c'): 1 error
+  expected an email address. Got 'a@b.c'
+job 252 u_email('user@[192.168.0.1]'): valid
+  'user@[192.168.0.1]'
+job 253 u_email('user@[300.1.1.1]'): 1 error
+  expected an email address. Got 'user@[300.1.1.1]'
+job 254 u_email('a..b@example.com'): 1 error
+  expected an email address. Got 'a..b@example.com'
+job 255 u_email('.a@example.com'): 1 error
+  expected an email address. Got '.a@example.com'
+job 256 u_email('a@-x.com'): 1 error
+  expected an email address. Got 'a@-x.com'
+job 257 u_email(''): 1 error
+  expected an email address. Got ''
+job 258 u_email('a@example.com.'): valid
+  'a@example.com.'
+job 259 u_email(5): 1 error
+  expected an email address. Got 5
+job 260 u_email('A@EXAMPLE.COM'): valid
+  'A@EXAMPLE.COM'
+job 261 u_email('x@localhost'): 1 error
+  expected an email address. Got 'x@localhost'
+job 262 u_email('x@host-name'): 1 error
+  expected an email address. Got 'x@host-name'
+job 263 u_url('http://example.com'): valid
+  'http://example.com'
+job 264 u_url('https://a.b/c?d#e'): valid
+  'https://a.b/c?d#e'
+job 265 u_url('ftp://files'): valid
+  'ftp://files'
+job 266 u_url('example.com'): 1 error
+  expected a URL. Got 'example.com'
+job 267 u_url('http://'): 1 error
+  expected a URL. Got 'http://'
+job 268 u_url('mailto:a@b.c'): 1 error
+  expected a URL. Got 'mailto:a@b.c'
+job 269 u_url('//example.com/x'): 1 error
+  expected a URL. Got '//example.com/x'
+job 270 u_url('  http://x.y'): valid
+  '  http://x.y'
+job 271 u_url('HTTP://X'): valid
+  'HTTP://X'
+job 272 u_url(5): 1 error
+  expected a URL. Got 5
+job 273 u_url('http:/x'): 1 error
+  expected a URL. Got 'http:/x'
+job 274 u_url('c:\\path'): 1 error
+  expected a URL. Got 'c:\\path'
+job 275 u_url('localhost:8080'): 1 error
+  expected a URL. Got 'localhost:8080'
+job 276 u_url('a1+b.c-d://h'): valid
+  'a1+b.c-d://h'
+job 277 u_fqdnurl('http://example.com'): valid
+  'http://example.com'
+job 278 u_fqdnurl('http://localhost:8080'): 1 error
+  expected a fully qualified domain name URL. Got 'http://localhost:8080'
+job 279 u_fqdnurl('https://a.b'): valid
+  'https://a.b'
+job 280 u_fqdnurl('x'): 1 error
+  expected a fully qualified domain name URL. Got 'x'
+job 281 u_isfile('data/files/tls/server.pem'): valid
+  'data/files/tls/server.pem'
+job 282 u_isfile('data/files/tls'): 1 error
+  Not a file. Got 'data/files/tls'
+job 283 u_isfile('data/files/none.txt'): 1 error
+  Not a file. Got 'data/files/none.txt'
+job 284 u_isfile(''): 1 error
+  Not a file. Got ''
+job 285 u_isfile(None): 1 error
+  Not a file. Got None
+job 286 u_isfile(0): 1 error
+  Not a file. Got 0
+job 287 u_isdir('data/files/www'): valid
+  'data/files/www'
+job 288 u_isdir('data/files/www/index.html'): 1 error
+  Not a directory. Got 'data/files/www/index.html'
+job 289 u_isdir('data/nowhere'): 1 error
+  Not a directory. Got 'data/nowhere'
+job 290 u_isdir(''): 1 error
+  Not a directory. Got ''
+job 291 u_pathexists('data/files/logs'): valid
+  'data/files/logs'
+job 292 u_pathexists('data/files/www/index.html'): valid
+  'data/files/www/index.html'
+job 293 u_pathexists('data/x'): 1 error
+  path does not exist. Got 'data/x'
+job 294 u_pathexists(''): 1 error
+  Not a Path. Got ''
+job 295 u_pathexists(None): 1 error
+  Not a Path. Got None
+job 296 u_isfile_msg('data/files/tls/missing.pem'): 1 error
+  no such certificate. Got 'data/files/tls/missing.pem'
+job 297 u_range(1): valid
+  1
+job 298 u_range(10): valid
+  10
+job 299 u_range(0): 1 error
+  value must be at least 1. Got 0
+job 300 u_range(11): 1 error
+  value must be at most 10. Got 11
+job 301 u_range(5.5): valid
+  5.5
+job 302 u_range('5'): 1 error
+  invalid value or type (must have a partial ordering). Got '5'
+job 303 u_range(None): 1 error
+  invalid value or type (must have a partial ordering). Got None
+job 304 u_range(True): valid
+  True
+job 305 u_range_open(0.5): valid
+  0.5
+job 306 u_range_open(0): 1 error
+  value must be higher than 0. Got 0
+job 307 u_range_open(1): 1 error
+  value must be lower than 1. Got 1
+job 308 u_range_open(-0.0): 1 error
+  value must be higher than 0. Got -0.0
+job 309 u_range_float(0.25): 1 error
+  value must be at least 0.5. Got 0.25
+job 310 u_range_float(3): 1 error
+  value must be at most 2.5. Got 3
+job 311 u_range_float(1): valid
+  1
+job 312 u_range_str('c'): valid
+  'c'
+job 313 u_range_str('a'): 1 error
+  value must be at least b. Got 'a'
+job 314 u_range_str('z'): 1 error
+  value must be at most m. Got 'z'
+job 315 u_range_str(5): 1 error
+  invalid value or type (must have a partial ordering). Got 5
+job 316 u_range_msg(101): 1 error
+  too big. Got 101
+job 317 u_range_msg('x'): 1 error
+  too big. Got 'x'
+job 318 u_clamp(-5): valid
+  0
+job 319 u_clamp(5): valid
+  5
+job 320 u_clamp(15): valid
+  10
+job 321 u_clamp(2.5): valid
+  2.5
+job 322 u_clamp('x'): 1 error
+  invalid value or type (must have a partial ordering). Got 'x'
+job 323 u_clamp_float(0): valid
+  0.5
+job 324 u_clamp_float(1): valid
+  1
+job 325 u_clamp_float(0.25): valid
+  0.5
+job 326 u_length('ab'): valid
+  'ab'
+job 327 u_length('a'): 1 error
+  length of value must be at least 2. Got 'a'
+job 328 u_length('abcde'): 1 error
+  length of value must be at most 4. Got 'abcde'
+job 329 u_length([1, 2]): valid
+  [1, 2]
+job 330 u_length({'a': 1}): 1 error
+  length of value must be at least 2. Got {'a': 1}
+job 331 u_length(5): 1 error
+  invalid value or type. Got 5
+job 332 u_length(None): 1 error
+  invalid value or type. Got None
+job 333 u_length_msg([1, 2]): 1 error
+  one at most. Got [1, 2]
+job 334 u_length_msg(7): 1 error
+  one at most. Got 7
+job 335 u_datetime('2024-07-02T10:20:30.123456Z'): valid
+  '2024-07-02T10:20:30.123456Z'
+job 336 u_datetime('2024-07-02T10:20:30Z'): 1 error
+  value does not match expected format %Y-%m-%dT%H:%M:%S.%fZ. Got '2024-07-02T10:20:30Z'
+job 337 u_datetime('2024-02-30T00:00:00.0Z'): 1 error
+  value does not match expected format %Y-%m-%dT%H:%M:%S.%fZ. Got '2024-02-30T00:00:00.0Z'
+job 338 u_datetime(5): 1 error
+  value does not match expected format %Y-%m-%dT%H:%M:%S.%fZ. Got 5
+job 339 u_datetime_fmt('02/07/2024 09:05'): valid
+  '02/07/2024 09:05'
+job 340 u_datetime_fmt('2/7/2024 9:05'): valid
+  '2/7/2024 9:05'
+job 341 u_datetime_fmt('32/01/2024 00:00'): 1 error
+  value does not match expected format %d/%m/%Y %H:%M. Got '32/01/2024 00:00'
+job 342 u_datetime_fmt('02/07/2024 09:05 '): 1 error
+  value does not match expected format %d/%m/%Y %H:%M. Got '02/07/2024 09:05 '
+job 343 u_date('2024-02-29'): valid
+  '2024-02-29'
+job 344 u_date('2023-02-29'): 1 error
+  value does not match expected format %Y-%m-%d. Got '2023-02-29'
+job 345 u_date('2024-2-9'): valid
+  '2024-2-9'
+job 346 u_date('24-02-01'): 1 error
+  value does not match expected format %Y-%m-%d. Got '24-02-01'
+job 347 u_date(None): 1 error
+  value does not match expected format %Y-%m-%d. Got None
+job 348 u_date_fmt('Jul 02 2024'): valid
+  'Jul 02 2024'
+job 349 u_date_fmt('jul 2 2024'): valid
+  'jul 2 2024'
+job 350 u_date_fmt('July 02 2024'): 1 error
+  like Jul 02 2024. Got 'July 02 2024'
+job 351 u_in('red'): valid
+  'red'
+job 352 u_in('Red'): 1 error
+  value must be one of ['blue', 'green', 'red']. Got 'Red'
+job 353 u_in(1): 1 error
+  value must be one of ['blue', 'green', 'red']. Got 1
+job 354 u_in(None): 1 error
+  value must be one of ['blue', 'green', 'red']. Got None
+job 355 u_in_numbers(1): valid
+  1
+job 356 u_in_numbers(1.0): valid
+  1.0
+job 357 u_in_numbers(True): valid
+  True
+job 358 u_in_numbers(4): 1 error
+  value must be one of [1, 2, 3]. Got 4
+job 359 u_in_mixed('a'): valid
+  'a'
+job 360 u_in_mixed(3): 1 error
+  value must be one of [10, 2, 'a', 'b']. Got 3
+job 361 u_in_msg('b'): 1 error
+  only a. Got 'b'
+job 362 u_notin('ann'): valid
+  'ann'
+job 363 u_notin('root'): 1 error
+  value must not be one of ['admin', 'root']. Got 'root'
+job 364 u_notin(5): valid
+  5
+job 365 u_notin_mixed('x'): 1 error
+  value must not be one of [1, 'x']. Got 'x'
+job 366 u_notin_mixed(2): valid
+  2
+job 367 u_contains(['a', 'b']): valid
+  ['a', 'b']
+job 368 u_contains(['a']): 1 error
+  value is not allowed. Got ['a']
+job 369 u_contains('abc'): valid
+  'abc'
+job 370 u_contains('xyz'): 1 error
+  value is not allowed. Got 'xyz'
+job 371 u_contains({'b': 1}): valid
+  {'b': 1}
+job 372 u_contains(5): 1 error
+  value is not allowed. Got 5
+job 373 u_contains(None): 1 error
+  value is not allowed. Got None
+job 374 u_contains_int([1, 2, 3]): valid
+  [1, 2, 3]
+job 375 u_contains_int([3.0]): valid
+  [3.0]
+job 376 u_contains_int('123'): 1 error
+  value is not allowed. Got '123'
+job 377 u_contains_int({'3': 1}): 1 error
+  value is not allowed. Got {'3': 1}
+job 378 u_exact([1, 'a']): valid
+  [1, 'a']
+job 379 u_exact([1]): 1 error
+  None. Got [1]
+job 380 u_exact([1, 2]): 1 error
+  expected str. Got [1, 2]
+job 381 u_exact(['a', 'b']): 1 error
+  expected int. Got ['a', 'b']
+job 382 u_exact('ab'): 1 error
+  None. Got 'ab'
+job 383 u_exact({'a': 1}): 1 error
+  None. Got {'a': 1}
+job 384 u_exact_msg([1, 2]): 1 error
+  an id and a name. Got [1, 2]
+job 385 u_exact_msg([1]): 1 error
+  an id and a name. Got [1]
+job 386 u_exact_in_dict({'pair': [1, {'k': 'v'}]}): valid
+  {'pair': [1, {'k': 'v'}]}
+job 387 u_exact_in_dict({'pair': [1, {'k': 1}]}): 1 error
+  expected str for dictionary value @ data['pair']['k']. Got None
+job 388 u_exact_in_dict({'pair': ['1', {}]}): 1 error
+  expected int for dictionary value @ data['pair']. Got ['1', {}]
+job 389 u_exact_in_dict({'pair': [1]}): 1 error
+  None for dictionary value @ data['pair']. Got [1]
+job 390 u_unordered(['a', 1]): valid
+  ['a', 1]
+job 391 u_unordered([1, 2]): 1 error
+  Element #1 (2) is not valid against any validator. Got [1, 2]
+job 392 u_unordered([1]): 1 error
+  List lengths differ, value:1 != target:2. Got [1]
+job 393 u_unordered([None, None]): 2 errors
+  Element #0 (None) is not valid against any validator. Got [None, None]
+  Element #1 (None) is not valid against any validator. Got [None, None]
+job 394 u_unordered('ab'): 1 error
+  Value ab is not sequence!. Got 'ab'
+job 395 u_unordered({'a': 1}): 1 error
+  Value {'a': 1} is not sequence!. Got {'a': 1}
+job 396 u_unordered_dicts([{'b': 1}, {'a': 2}]): valid
+  [{'b': 1}, {'a': 2}]
+job 397 u_unordered_dicts([{'a': 1}, {'a': 2}]): 1 error
+  Element #1 ({'a': 2}) is not valid against any validator. Got [{'a': 1}, {'a': 2}]
+job 398 u_unique([1, 2, 3]): valid
+  [1, 2, 3]
+job 399 u_unique([1, 2, 1]): 1 error
+  contains duplicate items: [1]. Got [1, 2, 1]
+job 400 u_unique(['a', 'a', 'a']): 1 error
+  contains duplicate items: ['a']. Got ['a', 'a', 'a']
+job 401 u_unique('abc'): valid
+  'abc'
+job 402 u_unique('hello'): 1 error
+  contains duplicate items: ['l']. Got 'hello'
+job 403 u_unique([1, True]): 1 error
+  contains duplicate items: [True]. Got [1, True]
+job 404 u_unique([{'a': 1}]): 1 error
+  contains unhashable elements: unhashable type: 'dict'. Got [{'a': 1}]
+job 405 u_unique([[1], [1]]): 1 error
+  contains unhashable elements: unhashable type: 'list'. Got [[1], [1]]
+job 406 u_unique(5): 1 error
+  contains unhashable elements: 'int' object is not iterable. Got 5
+job 407 u_unique_msg([1, 1]): 1 error
+  no repeats. Got [1, 1]
+job 408 u_equal('yes'): valid
+  'yes'
+job 409 u_equal('no'): 1 error
+  Values are not equal: value:no != target:yes. Got 'no'
+job 410 u_equal(['yes']): 1 error
+  Values are not equal: value:['yes'] != target:yes. Got ['yes']
+job 411 u_equal_list([1, 'a']): valid
+  [1, 'a']
+job 412 u_equal_list([1.0, 'a']): valid
+  [1.0, 'a']
+job 413 u_equal_list([1]): 1 error
+  Values are not equal: value:[1] != target:[1, 'a']. Got [1]
+job 414 u_number('1234.56'): valid
+  '1234.56'
+job 415 u_number('123.45'): 1 error
+  Precision must be equal to 6. Got '123.45'
+job 416 u_number('1234.5'): 1 error
+  Precision must be equal to 6, and Scale must be equal to 2. Got '1234.5'
+job 417 u_number('12.345'): 1 error
+  Precision must be equal to 6, and Scale must be equal to 2. Got '12.345'
+job 418 u_number('abc'): 1 error
+  Value must be a number enclosed with string. Got 'abc'
+job 419 u_number(' 0012.30 '): 1 error
+  Precision must be equal to 6. Got ' 0012.30 '
+job 420 u_number('1e2'): 1 error
+  Precision must be equal to 6, and Scale must be equal to 2. Got '1e2'
+job 421 u_number(1234): 1 error
+  Precision must be equal to 6, and Scale must be equal to 2. Got 1234
+job 422 u_number_scale('17'): valid
+  '17'
+job 423 u_number_scale('17.0'): 1 error
+  Scale must be equal to 0. Got '17.0'
+job 424 u_number_scale('1E+3'): 1 error
+  Scale must be equal to 0. Got '1E+3'
+job 425 u_number_scale('-0'): valid
+  '-0'
+job 426 u_number_precision('1.23'): valid
+  '1.23'
+job 427 u_number_precision('1.2'): 1 error
+  three digits. Got '1.2'
+job 428 u_number_precision('0.00'): 1 error
+  three digits. Got '0.00'
+job 429 u_strings({'c': 'hELLO wORLD', 'l': 'MiXeD', 's': '\t x \n', 't': "hello o'neil 3rd-place", 'u': 'MiXeD'}): valid
+  {'c': 'Hello world', 'l': 'mixed', 's': 'x', 't': "Hello O'Neil 3Rd-Place", 'u': 'MIXED'}
+job 430 u_strings({'c': True, 'l': 5, 's': 2.5, 't': [1], 'u': None}): valid
+  {'c': 'True', 'l': '5', 's': '2.5', 't': '[1]', 'u': 'NONE'}
+job 431 u_defaultto(None): valid
+  'n/a'
+job 432 u_defaultto('x'): valid
+  'x'
+job 433 u_defaultto(0): 1 error
+  expected str. Got 0
+job 434 u_setto({'v': 'anything'}): valid
+  {'v': 42}
+job 435 u_literal_obj({'mode': 'fast'}): valid
+  {'mode': 'fast'}
+job 436 u_literal_obj({'mode': 'slow'}): 1 error
+  {'mode': 'slow'} not match for {'mode': 'fast'}. Got {'mode': 'slow'}
+job 437 u_literal_obj('fast'): 1 error
+  fast not match for {'mode': 'fast'}. Got 'fast'
+job 438 u_self({'next': {'next': None, 'v': 2}, 'v': 1}): valid
+  {'next': {'next': None, 'v': 2}, 'v': 1}
+job 439 u_self({'next': {'v': '2'}, 'v': 1}): 1 error
+  expected int for dictionary value @ data['next']['v']. Got '2'
+job 440 u_self({'next': {'next': {'w': 3}, 'v': 2}, 'v': 1}): 1 error
+  extra keys not allowed @ data['next']['next']['w']. Got 3
+job 441 u_msg_self({'next': {'v': 2}, 'v': 1}): valid
+  {'next': {'v': 2}, 'v': 1}
+job 442 u_msg_self({'next': {'v': 'x'}, 'v': 1}): 1 error
+  expected int for dictionary value @ data['next']['v']. Got 'x'
+job 443 u_dict_type({'list': [], 'tags': {}}): valid
+  {'list': [], 'tags': {}}
+job 444 u_dict_type({'list': {}, 'tags': []}): 2 errors
+  expected dict for dictionary value @ data['tags']. Got []
+  expected list for dictionary value @ data['list']. Got {}
+job 445 u_not_a_dict([1]): 1 error
+  expected a dictionary. Got [1]
+job 446 u_not_a_dict('a'): 1 error
+  expected a dictionary. Got 'a'
+job 447 u_not_a_dict(None): 1 error
+  expected a dictionary. Got None
+job 448 u_none_value({'a': None}): valid
+  {'a': None}
+job 449 u_none_value({'a': 0}): 1 error
+  not a valid value for dictionary value @ data['a']. Got 0
+job 450 u_any_key({'a': 1, 'b': 2}): valid
+  {'a': 1, 'b': 2}
+job 451 u_any_key({'c': 3}): 1 error
+  not a valid value @ data['c']. Got 3
+job 452 u_any_key_required({}): 1 error
+  required key not provided @ data[Any('a', 'b', msg=None)]. Got None
+job 453 u_any_key_required({'a': 1}): valid
+  {'a': 1}
+job 454 u_list_validator([]): 1 error
+  length of value must be at least 1. Got []
+job 455 u_list_validator([1]): valid
+  [1]
+job 456 u_list_validator(['x']): 1 error
+  expected int @ data[0]. Got 'x'
+job 457 u_list_coerce(['1', 2, 'x', '4']): 1 error
+  expected int @ data[2]. Got 'x'
+job 458 u_list_in_list([[1], [2, 3]]): valid
+  [[1], [2, 3]]
+job 459 u_list_in_list([[1], ['x']]): 1 error
+  expected int @ data[1][0]. Got 'x'
+job 460 u_list_in_list([1]): 1 error
+  expected a list @ data[0]. Got 1
+job 461 u_title_words("the cat's toy"): valid
+  "The Cat's Toy"
+job 462 u_title_words('ACME CO.'): valid
+  'Acme Co.'
