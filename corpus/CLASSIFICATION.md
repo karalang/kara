@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 10195 / 10365 = 98.4%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8214 / 8345 = 98.4%.
-- Every classified non-deferred program (context): 16781 / 17893 = 93.8%.
-- Bench variants (outside the gate): 280 / 979 = 28.6%; timeouts 620.
+- Every classified non-deferred program (context): 16782 / 17893 = 93.8%.
+- Bench variants (outside the gate): 281 / 979 = 28.7%; timeouts 620.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5395 / 5411 = 99.7%; failing mir-gap 16.
 - Deferred (class d): 751; outside the slice (`post-m1:*`): 1138.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -63,7 +63,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (4472): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4473): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -2353,6 +2353,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/ws_framing/test_ir_tcpstream_by_value_param_uses_struct_type`
 - `katas/1-100/50-powx-n/iterative`
 - `katas/1-100/50-powx-n/recursive`
+- `katas/1001-1100/1001-grid-illumination/bench/grid_illumination`
 - `katas/1001-1100/1001-grid-illumination/differential`
 - `katas/1001-1100/1001-grid-illumination/grid_illumination`
 - `katas/1001-1100/1001-grid-illumination/grid_illumination_brute`
