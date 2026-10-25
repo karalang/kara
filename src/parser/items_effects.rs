@@ -219,6 +219,27 @@ impl super::Parser {
         self.parse_effect_list(effect_vars, true)
     }
 
+    /// At a `,` inside a function type's clause (a struct field, a tuple,
+    /// a type argument), whether it separates two effect items rather than
+    /// ending the type: a built-in verb follows with its resource list
+    /// (`, receives(Network)`), or a bare `blocks` / `suspends` / `panics`
+    /// that is not a field's name (`, blocks,`). No field, type or argument
+    /// starts that way (B-2026-10-25-27).
+    fn comma_continues_effect_clause(&self) -> bool {
+        let at = |k: usize| self.tokens.get(self.pos + k).map(|t| &t.token);
+        let Some(Token::Identifier { name, raw: false }) = at(1) else {
+            return false;
+        };
+        if !EFFECT_VERBS.contains(&name.as_str()) {
+            return false;
+        }
+        match at(2) {
+            Some(Token::LeftParen) => true,
+            Some(Token::Colon) => false,
+            _ => matches!(name.as_str(), "blocks" | "suspends" | "panics"),
+        }
+    }
+
     fn is_effect_start(&self) -> bool {
         self.at_kw("with") || self.kw_here().is_some_and(|w| EFFECT_VERBS.contains(&w))
     }
@@ -259,7 +280,10 @@ impl super::Parser {
                     } else {
                         items.push(EffectItem::Group(name));
                     }
-                } else if recover_stray_comma && self.check(&Token::Comma) && !items.is_empty() {
+                } else if self.check(&Token::Comma)
+                    && !items.is_empty()
+                    && (recover_stray_comma || self.comma_continues_effect_clause())
+                {
                     // Common LLM/porting habit: comma-separating effect items
                     // (`with reads(A), reads(B)`). Kāra effect clauses are
                     // space-separated; the stray comma otherwise surfaces as a

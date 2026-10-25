@@ -533,8 +533,10 @@ impl super::Parser {
                             Some(EffectSpec::Polymorphic)
                         } else {
                             let effect_vars: Vec<String> = self.current_effect_vars().to_vec();
-                            // Nested `Fn(...) with E` type: trailing comma is a
-                            // legitimate separator — recovery off (see above).
+                            // Nested `Fn(...) with E` type: a comma after the
+                            // clause separates fields or arguments, so it is
+                            // taken as a stray separator only before another
+                            // verb (`comma_continues_effect_clause`).
                             match self.parse_effect_list(&effect_vars, false) {
                                 Some(effects) => Some(EffectSpec::Specific(effects)),
                                 None => {
