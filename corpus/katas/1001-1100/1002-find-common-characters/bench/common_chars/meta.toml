@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/1001-1100/1002-find-common-characters/bench/common_chars.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["bench"]
 class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1002 bench/); there is no legacy record (the legacy compiler went at M3)"
 bucket = "timeout"
-classified_with = "11956dad7"
+classified_with = "7456c6a69"
 extracted_src = "416972b1"
