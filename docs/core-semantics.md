@@ -648,6 +648,7 @@ Pin: `par_error_runs_siblings`.
   - Cancelling a task cancels the `par`, `par for` and `TaskGroup` scopes running inside it.
 - **When it takes effect.** Only at a suspension point (§11.8), never in pure computation. A task that is already past its last wait completes and keeps its result: completion wins. A loop with no wait inside it cannot be cancelled.
 - **How the task stops: it is torn down at the wait.** The suspended call does not return. The task ends there, as an error exit from every frame on its chain, innermost first: each frame's drops, `defer`s and `errdefer`s run as §7.6 and §7.7 say for a `?` exit. No other code of the task runs after the wait.
+  - An `errdefer` without a binding runs on teardown. An `errdefer(e)` is skipped, because there is no error value for it to name: cleanup that must also run on cancellation goes in a plain `errdefer` or `defer` (review-thread ruling, 2026-10-25).
   - Every suspension point can be cancelled, including `sleep`, `recv`, `join` and a `Mutex` lock, none of which returns a `Result`.
   - A cancelled `par` branch or `TaskGroup` task has no value, and its scope ignores it. `try_join` on its handle returns `Err(Cancelled)`; plain `join` on a cancelled task of an ordinary group panics, since there is no value to return (review-thread ruling).
   - No value of type `Cancelled` reaches the cancelled task's own code, and no library signature changes for cancellation.
