@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 24 |
+| diagnostics | 25 |
 | false-positive | 22 |
 | missing-feature | 17 |
 | perf | 10 |
@@ -74,20 +74,20 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 41 |
 | codegen | 22 |
-| interp | 15 |
+| interp | 16 |
 | mir | 15 |
 | cli | 11 |
 | runtime | 8 |
 | ownership | 6 |
+| mir-llvm | 4 |
 | parser | 4 |
-| mir-llvm | 3 |
 | other | 2 |
 | resolver | 1 |
 | lexer | 1 |
 | effect | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-36 | 2026-10-24 | typecheck+mir | low | A `Copy` binding destructured from a borrowed value takes `*` inconsistently: `karac check` refuses `*w` after `let (_, w) = q.front().unwrap()` or `let (v, i) = it.next().unwrap()` (right, per core-semantics §4.6/§5.10) but accepts `*s` after `while let Some((s, _)) = q.front()`, `*a` after `if let Some((a, _)) = q.front()` and `*index` after `for (val, index) in queries.iter()`, and every MIR front end accepts all of them | — |
 | B-2026-10-24-38 | 2026-10-24 | cli | low | `karac fix` still answers E_INDEX_MOVE_NON_COPY on a DESTRUCTURING `let (a, b) = cases[i];` (both parts only read) with `.clone()`, a deep copy of the element, instead of the `ref cases[i]` borrow the message lists first; B-2026-10-24-18's borrow fix covers only a plain `let t = v[i];` | — |
 | B-2026-10-24-43 | 2026-10-24 | cli | medium | A package with more than one module cannot name a v2-only library item (`WsMessage`, `TlsFailure`): its per-module package check resolves against the legacy library registrations, so `karac check` AND `karac build` refuse it (`undefined type 'WsMessage'`), though the same code in a lone `src/main.kara` checks and builds | — |
+| B-2026-10-25-1 | 2026-10-25 | interp+mir-llvm | low | Indexing a `Map` with a missing key (`m[k]`, `m[k] -= 1`) stops with `runtime error: explicit panic` under `__mir-run` and `__mir-llvm-run`, a message that names no key and reads as if the program had called `panic`, where an out-of-range `Vec` index says `index out of bounds` | — |
 
 ### Fixed
 
