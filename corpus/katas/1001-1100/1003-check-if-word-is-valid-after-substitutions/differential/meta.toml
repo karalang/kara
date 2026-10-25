@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1003-check-if-word-is-valid-after-substitutions/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:set"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "b869f1ec1"
+extracted_src = "9a131a3c"

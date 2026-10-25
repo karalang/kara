@@ -1,0 +1,322 @@
+// LeetCode #1003: Check If Word Is Valid After Substitutions -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random strings.
+
+// ---- star ----
+
+// LeetCode #1003: Check If Word Is Valid After Substitutions -- a stack
+//
+// The last "abc" put in is whole in s, so it can be taken out first, and
+// what is left must be valid too. Reading s left to right onto a stack,
+// an "abc" on top is taken off as soon as its `c` arrives; s is valid
+// exactly when nothing is left. O(n).
+fn star_is_valid(s: ref String) -> bool {
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        stack.push(c);
+        let k = stack.len();
+        if k >= 3 and stack[k - 3] == 'a' and stack[k - 2] == 'b' and stack[k - 1] == 'c' {
+            stack.truncate(k - 3);
+        }
+    }
+    stack.is_empty()
+}
+
+// ---- replace ----
+
+// LeetCode #1003: Check If Word Is Valid After Substitutions -- "abc"
+// taken out until none is left
+//
+// Every "abc" in s is taken out at once, again and again, while that
+// changes anything; s is valid exactly when this ends at the empty
+// string. O(n^2) at worst.
+fn replace_is_valid(s: ref String) -> bool {
+    let mut t = s.clone();
+    loop {
+        let next = t.replace("abc", "");
+        if next.len() == t.len() {
+            break;
+        }
+        t = next;
+    }
+    t.is_empty()
+}
+
+// ---- pieces ----
+
+// LeetCode #1003: Check If Word Is Valid After Substitutions -- pieces
+// waiting for their next letter
+//
+// A stack of the pieces begun and not yet finished, each by the letter
+// it waits for next: an `a` begins a piece waiting for `b`; a `b` must
+// find the top piece waiting for it, which then waits for `c`; a `c`
+// must find the top piece waiting for it, which is finished. s is valid
+// when every letter finds its piece and none is left over. O(n).
+fn pieces_is_valid(s: ref String) -> bool {
+    let mut waiting: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if c == 'a' {
+            waiting.push('b');
+        } else if waiting.is_empty() or waiting[waiting.len() - 1] != c {
+            return false;
+        } else if c == 'b' {
+            let top = waiting.len() - 1;
+            waiting[top] = 'c';
+        } else {
+            waiting.pop();
+        }
+    }
+    waiting.is_empty()
+}
+
+// ---- grammar ----
+
+// LeetCode #1003: Check If Word Is Valid After Substitutions -- a grammar
+//
+// The valid strings are the sequences of pieces `a V b V c`, each V a
+// valid string itself: an inserted "abc" with what was inserted later
+// between its letters. A recursive descent parses such a sequence from
+// the front, and s is valid when it parses all of it. O(n), with
+// recursion as deep as the nesting.
+// the end of the valid string parsed from `i`, or -1
+fn grammar_sequence(xs: ref Vec[char], i: i64) -> i64 {
+    let mut at = i;
+    while at < xs.len() and xs[at] == 'a' {
+        let after_a = grammar_sequence(xs, at + 1);
+        if after_a < 0 or after_a >= xs.len() or xs[after_a] != 'b' {
+            return -1;
+        }
+        let after_b = grammar_sequence(xs, after_a + 1);
+        if after_b < 0 or after_b >= xs.len() or xs[after_b] != 'c' {
+            return -1;
+        }
+        at = after_b + 1;
+    }
+    at
+}
+
+fn grammar_is_valid(s: ref String) -> bool {
+    let xs: Vec[char] = s.chars().collect();
+    grammar_sequence(xs, 0) == xs.len()
+}
+
+// ---- inplace ----
+
+// LeetCode #1003: Check If Word Is Valid After Substitutions -- in place
+//
+// The stack kept in s's own letters: a write place runs behind the read
+// place, each letter is copied down to it, and when the three letters
+// just below the write place spell "abc" the write place steps back
+// over them. s is valid when the write place ends at 0. O(n), no extra
+// list.
+fn inplace_is_valid(s: ref String) -> bool {
+    let mut xs: Vec[char] = s.chars().collect();
+    let mut w = 0;
+    for r in 0..xs.len() {
+        xs[w] = xs[r];
+        w += 1;
+        if w >= 3 and xs[w - 3] == 'a' and xs[w - 2] == 'b' and xs[w - 1] == 'c' {
+            w -= 3;
+        }
+    }
+    w == 0
+}
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// pieces "abc" put in at random places, `most` at most
+fn random_valid(most: i64, seed: mut ref i64) -> Vec[char] {
+    let mut xs: Vec[char] = Vec.new();
+    for _ in 0..1 + next_random(mut seed) % most {
+        let at = next_random(mut seed) % (xs.len() + 1);
+        xs.insert(at, 'c');
+        xs.insert(at, 'b');
+        xs.insert(at, 'a');
+    }
+    xs
+}
+
+// a valid string, then, half the time, spoiled by one random edit: a
+// letter changed, two neighbours swapped, a letter dropped or a letter
+// added
+fn random_string(most: i64, seed: mut ref i64) -> String {
+    let mut xs = random_valid(most, mut seed);
+    let letters = ['a', 'b', 'c'];
+    let edit = next_random(mut seed) % 8;
+    let at = next_random(mut seed) % xs.len();
+    if edit == 0 {
+        xs[at] = letters[(next_random(mut seed) % 2 + 1 + xs[at] as i64 - 97) % 3];
+    } else if edit == 1 and at + 1 < xs.len() {
+        let t = xs[at];
+        xs[at] = xs[at + 1];
+        xs[at + 1] = t;
+    } else if edit == 2 and xs.len() > 1 {
+        xs.remove(at);
+    } else if edit == 3 {
+        xs.insert(at, letters[next_random(mut seed) % 3]);
+    }
+    xs.iter().collect()
+}
+
+// any string of 1 to 12 of the three letters
+fn random_letters(seed: mut ref i64) -> String {
+    let letters = ['a', 'b', 'c'];
+    let n = 1 + next_random(mut seed) % 12;
+    let xs: Vec[char] = (0..n).map(|_| letters[next_random(mut seed) % 3]).collect();
+    xs.iter().collect()
+}
+
+fn arm(a: i64, s: ref String) -> bool {
+    if a == 0 {
+        star_is_valid(s)
+    } else if a == 1 {
+        replace_is_valid(s)
+    } else if a == 2 {
+        pieces_is_valid(s)
+    } else if a == 3 {
+        grammar_is_valid(s)
+    } else {
+        inplace_is_valid(s)
+    }
+}
+
+// The statement read literally: every string t can become, starting
+// from the empty string, by putting "abc" in at any place any number of
+// times, made up to 15 letters; s is valid when it is one of them.
+fn reachable() -> Set[String] {
+    let mut all: Set[String] = Set.new();
+    all.insert(String.new());
+    let mut last: Vec[String] = vec![String.new()];
+    for _ in 0..5 {
+        let mut next: Vec[String] = Vec.new();
+        for t in last.iter() {
+            let xs: Vec[char] = t.chars().collect();
+            for at in 0..xs.len() + 1 {
+                let left: String = xs.iter().take(at).collect();
+                let right: String = xs.iter().skip(at).collect();
+                let u = left + "abc" + right;
+                if not all.contains(u) {
+                    all.insert(u.clone());
+                    next.push(u);
+                }
+            }
+        }
+        last = next;
+    }
+    all
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// every prefix holds at least as many a as b and b as c, and the whole
+// string as many of each
+fn counts_fit(s: ref String) -> bool {
+    let mut a = 0;
+    let mut b = 0;
+    let mut c = 0;
+    for x in s.chars() {
+        if x == 'a' {
+            a += 1;
+        } else if x == 'b' {
+            b += 1;
+        } else {
+            c += 1;
+        }
+        if b > a or c > b {
+            return false;
+        }
+    }
+    a == b and b == c
+}
+
+fn properties(tally: mut ref Tally, s: ref String, truth: Option[bool], seed: mut ref i64) -> bool {
+    let mut got: Vec[bool] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, s));
+    }
+    // "abc" put in at a random place
+    let xs: Vec[char] = s.chars().collect();
+    let at = next_random(mut seed) % (xs.len() + 1);
+    let left: String = xs.iter().take(at).collect();
+    let right: String = xs.iter().skip(at).collect();
+    let inserted = left + "abc" + right;
+    // between two random valid strings
+    let before: String = random_valid(4, mut seed).iter().collect();
+    let after: String = random_valid(4, mut seed).iter().collect();
+    let wrapped = before + s + after;
+    // reversed, with a and c swapped
+    let turned: String = xs.iter().rev().map(|x| if x == 'a' { 'c' } else if x == 'c' { 'a' } else { x }).collect();
+    for a in 0..5 {
+        let g = got[a];
+        // P1: the statement's answer, on the first 3000 strings
+        match truth {
+            Some(t) => check(mut tally, 1, g == t),
+            None => {}
+        }
+        // P2: "abc" put in anywhere gives the same answer
+        check(mut tally, 2, arm(a, inserted) == g);
+        // P3: s between two valid strings gives the same answer
+        check(mut tally, 3, arm(a, wrapped) == g);
+        // P4: s reversed with a and c swapped gives the same answer
+        check(mut tally, 4, arm(a, turned) == g);
+        // P5: valid only when every prefix has a >= b >= c and the whole
+        // has as many of each
+        check(mut tally, 5, not g or counts_fit(s));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != a and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let valid_strings = reachable();
+    let mut seed = 1003;
+    let mut letters = 0;
+    let mut valid = 0;
+    let mut check_sum = 0;
+    // 3000 strings of up to 16 letters against the statement, half of
+    // them made from up to 5 pieces and half any 1 to 12 letters, then
+    // 200 made from up to 200 pieces
+    for c in 0..3200 {
+        let s = if c >= 3000 { random_string(200, mut seed) } else if c % 2 == 0 { random_string(5, mut seed) } else { random_letters(mut seed) };
+        let truth = if c < 3000 { Some(valid_strings.contains(s)) } else { None };
+        letters += s.len();
+        let v = if properties(mut tally, s, truth, mut seed) { 1 } else { 0 };
+        valid += v;
+        check_sum = (check_sum * 31 + v + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 strings of {letters} letters: {valid} valid, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

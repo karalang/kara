@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1003-check-if-word-is-valid-after-substitutions/is_valid_inplace.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "mirror"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the kata's Python mirror, which every arm matches on __mir-run, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "b869f1ec1"
+extracted_src = "726369b5"

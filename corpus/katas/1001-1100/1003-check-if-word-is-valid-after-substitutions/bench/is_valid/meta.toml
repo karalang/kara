@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/1001-1100/1003-check-if-word-is-valid-after-substitutions/bench/is_valid.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "b869f1ec1"
+extracted_src = "da651725"

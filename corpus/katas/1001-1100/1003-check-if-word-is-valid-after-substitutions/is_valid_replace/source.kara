@@ -1,0 +1,92 @@
+// LeetCode #1003: Check If Word Is Valid After Substitutions -- "abc"
+// taken out until none is left
+//
+// Every "abc" in s is taken out at once, again and again, while that
+// changes anything; s is valid exactly when this ends at the empty
+// string. O(n^2) at worst.
+fn is_valid(s: ref String) -> bool {
+    let mut t = s.clone();
+    loop {
+        let next = t.replace("abc", "");
+        if next.len() == t.len() {
+            break;
+        }
+        t = next;
+    }
+    t.is_empty()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a valid string of up to `most` pieces, each "abc" put in at a random
+// place, then, half the time, spoiled by one random edit: a letter
+// changed, two neighbours swapped, a letter dropped or a letter added
+fn random_string(most: i64, seed: mut ref i64) -> String {
+    let mut xs: Vec[char] = Vec.new();
+    for _ in 0..1 + next_random(mut seed) % most {
+        let at = next_random(mut seed) % (xs.len() + 1);
+        xs.insert(at, 'c');
+        xs.insert(at, 'b');
+        xs.insert(at, 'a');
+    }
+    let letters = ['a', 'b', 'c'];
+    let edit = next_random(mut seed) % 8;
+    let at = next_random(mut seed) % xs.len();
+    if edit == 0 {
+        xs[at] = letters[(next_random(mut seed) % 2 + 1 + xs[at] as i64 - 97) % 3];
+    } else if edit == 1 and at + 1 < xs.len() {
+        let t = xs[at];
+        xs[at] = xs[at + 1];
+        xs[at + 1] = t;
+    } else if edit == 2 and xs.len() > 1 {
+        xs.remove(at);
+    } else if edit == 3 {
+        xs.insert(at, letters[next_random(mut seed) % 3]);
+    }
+    xs.iter().collect()
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[String] = vec![
+        "aabcbc", "abcabcababcc", "abccba", "abc", "a", "cba", "aabbcc",
+        "ababcc", "abcabcabc", "abacbc",
+    ].iter().map(|s| s.to_string()).collect();
+    for s in examples.iter() {
+        println(f"s = \"{s}\" -> {is_valid(s)}");
+    }
+    // LeetCode's longest: 6666 pieces, 19998 letters
+    let flat = "abc".repeat(6666);
+    let nested = "a".repeat(6666) + "bc".repeat(6666);
+    let short: String = nested.chars().take(19997).collect();
+    let blocks = "a".repeat(6666) + "b".repeat(6666) + "c".repeat(6666);
+    let large: Vec[(String, String)] = vec![
+        ("abc 6666 times".to_string(), flat),
+        ("a 6666 times, then bc 6666 times".to_string(), nested),
+        ("the same less its last c".to_string(), short),
+        ("a, b and c 6666 times each in turn".to_string(), blocks),
+    ];
+    for (name, s) in large.iter() {
+        println(f"{name} -> {is_valid(s)}");
+    }
+    let mut seed = 1003;
+    let groups: Vec[(i64, i64)] = vec![(300, 4), (3000, 20), (300, 200), (3, 6666)];
+    for (count, most) in groups.iter() {
+        let mut letters = 0;
+        let mut valid = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let s = random_string(most, mut seed);
+            letters += s.len();
+            let v = if is_valid(s) { 1 } else { 0 };
+            valid += v;
+            check = (check * 31 + v + 1) % 1000000007;
+        }
+        println(f"{count} random strings of {letters} letters: {valid} valid, checksum {check}");
+    }
+}

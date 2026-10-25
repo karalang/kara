@@ -1,0 +1,18 @@
+s = "aabcbc" -> true
+s = "abcabcababcc" -> true
+s = "abccba" -> false
+s = "abc" -> true
+s = "a" -> false
+s = "cba" -> false
+s = "aabbcc" -> false
+s = "ababcc" -> true
+s = "abcabcabc" -> true
+s = "abacbc" -> false
+abc 6666 times -> true
+a 6666 times, then bc 6666 times -> true
+the same less its last c -> false
+a, b and c 6666 times each in turn -> false
+300 random strings of 2285 letters: 148 valid, checksum 5618829
+3000 random strings of 94115 letters: 1622 valid, checksum 166401258
+300 random strings of 86128 letters: 163 valid, checksum 443515888
+3 random strings of 28673 letters: 2 valid, checksum 1025
