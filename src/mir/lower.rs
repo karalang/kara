@@ -303,6 +303,26 @@ fn lower_program_inner<'a>(
         source,
         user_len,
         hashers: &program.container_hashers,
+        hashed_fields: program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::StructDef(s) => Some(s),
+                _ => None,
+            })
+            .flat_map(|s| {
+                s.fields
+                    .iter()
+                    .filter(|f| match &f.ty.kind {
+                        ast::TypeKind::Path(p) => program
+                            .container_hashers
+                            .get(&SpanKey::from_span(&p.span))
+                            .is_some_and(|h| *h != crate::hasher_kind::HasherKind::default()),
+                        _ => false,
+                    })
+                    .map(|f| (s.name.clone(), f.name.clone()))
+            })
+            .collect(),
         user_types,
         refined: program
             .items
@@ -808,6 +828,10 @@ struct Lcx<'a> {
     /// The hasher each `Map[K, V, H]` / `Set[T, H]` type names, by the
     /// span of its path (the parser takes `H` out of the type).
     hashers: &'a FxHashMap<SpanKey, crate::hasher_kind::HasherKind>,
+    /// The struct fields whose `Map` / `Set` type names a hasher, as
+    /// (struct, field): a table stored there walks as an annotated `let`'s
+    /// does (B-2026-10-25-31).
+    hashed_fields: FxHashSet<(String, String)>,
     /// The structs and enums the user's program declares, as opposed to
     /// the appended library's (`lower_program_with_library`).
     user_types: FxHashSet<String>,
@@ -5124,7 +5148,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 next,
             );
         }
-        self.assign(place, Rvalue::Use(op));
+        self.assign(place.clone(), Rvalue::Use(op));
+        if let ExprKind::FieldAccess { object, field, .. } = &target.kind {
+            let ot = self.expr_ty(object)?;
+            let (_, ot) = self.strip_ty_full(ot);
+            if self.hashed_field(ot, field).is_some() {
+                self.unkey_table(place);
+            }
+        }
         Ok(())
     }
 
@@ -6911,7 +6942,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 vals.sort_by_key(|(i, _)| *i);
                 let ops = vals.into_iter().map(|(_, o)| o).collect();
                 let kind = self.adt_aggregate(t, variant.unwrap_or(0));
-                self.assign(dest, Rvalue::Aggregate(kind, ops));
+                self.assign(dest.clone(), Rvalue::Aggregate(kind, ops));
+                if variant.is_none() && matches!(self.tys().tcx().kind(t), HK::Adt { .. }) {
+                    for fi in fields {
+                        if let Some(at) = self.hashed_field(t, &fi.name) {
+                            self.unkey_table(dest.field(at.0, at.1));
+                        }
+                    }
+                }
                 Ok(())
             }
             ExprKind::Block(b) => self.block_into(b, dest),
@@ -13627,6 +13665,27 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// Whether the `Map` / `Set` type `te` names a hasher other than the
     /// default: then the table walks in one order in every process
     /// (`table_unkeyed`, collections.md § Hashing, B-2026-10-24-29).
+    /// Field `name` of struct type `t`, as its index and type, when its
+    /// declared type names a hasher (B-2026-10-25-31).
+    fn hashed_field(&self, t: Ty, name: &str) -> Option<(u32, Ty)> {
+        let (adt, _) = self.tys().tcx().adt_of(t)?;
+        if adt.is_enum
+            || !self
+                .lcx
+                .hashed_fields
+                .contains(&(adt.name.clone(), name.to_string()))
+        {
+            return None;
+        }
+        self.field_of(t, None, name)
+    }
+
+    /// Mark the table at `place` as walking under a fixed key, as a table
+    /// whose type names a hasher does (`karac_mir_map_unkeyed`).
+    fn unkey_table(&mut self, place: Place) {
+        self.call_native("table_unkeyed", vec![Operand::Move(place.clone())], place);
+    }
+
     fn names_a_hasher(&self, te: &ast::TypeExpr) -> bool {
         let ast::TypeKind::Path(p) = &te.kind else {
             return false;
