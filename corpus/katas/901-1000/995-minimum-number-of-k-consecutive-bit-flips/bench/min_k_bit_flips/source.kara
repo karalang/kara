@@ -1,0 +1,76 @@
+// Benchmark: LeetCode #995 Minimum Number of K Consecutive Bit Flips --
+// the ★ arm, the greedy with a running parity, on random arrays of
+// 100000 bits, LeetCode's largest. Mirrors min_k_bit_flips.c, .rs, .py
+// and go-seq/.
+
+fn min_k_bit_flips(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut ends: Vec[bool] = Vec.filled(n + 1, false);
+    let mut flipped = false;
+    let mut flips = 0;
+    for i in 0..n {
+        if ends[i] {
+            flipped = not flipped;
+        }
+        if (nums[i] == 1) == flipped {
+            if i + k > n {
+                return -1;
+            }
+            flips += 1;
+            flipped = not flipped;
+            ends[i + k] = true;
+        }
+    }
+    flips
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 50;
+    let mut seed = 995;
+    // ten arrays of random bits and ten of ones put through random flips
+    // of 1 to 100 bits, which can be made all ones again
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut ks: Vec[i64] = Vec.new();
+    for a in 0..20 {
+        let mut nums: Vec[i64] = Vec.new();
+        if a % 2 == 0 {
+            for _ in 0..100000 {
+                nums.push(next_random(mut seed) % 2);
+            }
+            ks.push(1 + next_random(mut seed) % 100);
+        } else {
+            let k = 1 + next_random(mut seed) % 100;
+            nums = Vec.filled(100000, 1);
+            for i in 0..100000 - k + 1 {
+                if next_random(mut seed) % 4 == 0 {
+                    for j in i..i + k {
+                        nums[j] = 1 - nums[j];
+                    }
+                }
+            }
+            ks.push(k);
+        }
+        arrays.push(nums);
+    }
+    let mut stuck = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let a = (r + i) % 20;
+            let got = min_k_bit_flips(arrays[a], ks[a]);
+            if got < 0 {
+                stuck += 1;
+            } else {
+                total += got;
+            }
+            check = (check * 31 + got + 2) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 20 arrays of 100000 bits: {stuck} impossible, {total} flips, checksum {check}");
+}

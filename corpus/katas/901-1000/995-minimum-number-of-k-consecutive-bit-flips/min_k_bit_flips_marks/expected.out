@@ -1,0 +1,20 @@
+nums = [0,1,0], k = 1 -> 2
+nums = [1,1,0], k = 2 -> -1
+nums = [0,0,0,1,0,1,1,0], k = 3 -> 3
+nums = [1], k = 1 -> 0
+nums = [0], k = 1 -> 1
+nums = [0,0], k = 2 -> 1
+nums = [0,1,0], k = 2 -> 2
+nums = [1,0,1], k = 3 -> -1
+nums = [1,1,1,1], k = 3 -> 0
+nums = [0,0,1,1,0,0], k = 2 -> 2
+100000 zeros, k = 1: 100000
+100000 zeros, k = 100000: 1
+100000 zeros, k = 3: -1
+100000 zeros, k = 4: 25000
+0 and 1 in turn, 100000 bits, k = 2: 50000
+0 and 1 in turn, 100000 bits, k = 50000: 50000
+300 random arrays of 1373 bits: 77 impossible, 218 flips, checksum 910955205
+3000 random arrays of 89740 bits: 1228 impossible, 11000 flips, checksum 692253887
+300 random arrays of 153244 bits: 136 impossible, 21883 flips, checksum 791737229
+3 random arrays of 300000 bits: 1 impossible, 50102 flips, checksum 24928837

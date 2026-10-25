@@ -1,0 +1,323 @@
+// LeetCode #995: Minimum Number of K Consecutive Bit Flips -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random arrays.
+
+// ---- star ----
+
+fn star_min_k_bit_flips(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    // ends[j]: a flip that began at j - k stops covering j
+    let mut ends: Vec[bool] = Vec.filled(n + 1, false);
+    let mut flipped = false;
+    let mut flips = 0;
+    for i in 0..n {
+        if ends[i] {
+            flipped = not flipped;
+        }
+        if (nums[i] == 1) == flipped {
+            if i + k > n {
+                return -1;
+            }
+            flips += 1;
+            flipped = not flipped;
+            ends[i + k] = true;
+        }
+    }
+    flips
+}
+
+// ---- diff ----
+
+fn diff_min_k_bit_flips(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    // change[j]: how the number of flips covering j differs from j - 1's
+    let mut change: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut covering = 0;
+    let mut flips = 0;
+    for i in 0..n {
+        covering += change[i];
+        if (nums[i] + covering) % 2 == 0 {
+            if i + k > n {
+                return -1;
+            }
+            flips += 1;
+            covering += 1;
+            change[i + k] -= 1;
+        }
+    }
+    flips
+}
+
+// ---- deque ----
+
+fn deque_min_k_bit_flips(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    // where each flip still covering i began
+    let mut starts: VecDeque[i64] = VecDeque.new();
+    let mut flips = 0;
+    for i in 0..n {
+        while starts.len() > 0 and starts[0] + k <= i {
+            starts.pop_front();
+        }
+        if (nums[i] + starts.len()) % 2 == 0 {
+            if i + k > n {
+                return -1;
+            }
+            flips += 1;
+            starts.push_back(i);
+        }
+    }
+    flips
+}
+
+// ---- marks ----
+
+fn marks_min_k_bit_flips(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    // a copy where 2 is added to each bit a flip starts at, so the start
+    // can be seen again k places later
+    let mut a = nums.clone();
+    let mut flipped = 0;
+    let mut flips = 0;
+    for i in 0..n {
+        if i >= k and a[i - k] > 1 {
+            flipped ^= 1;
+        }
+        if a[i] % 2 == flipped {
+            if i + k > n {
+                return -1;
+            }
+            a[i] += 2;
+            flipped ^= 1;
+            flips += 1;
+        }
+    }
+    flips
+}
+
+// ---- fenwick ----
+
+// add v at place i of a Fenwick tree over places 0 to n
+fn fenwick_fen_add(tree: mut ref Vec[i64], i: i64, v: i64) {
+    let mut j = i + 1;
+    while j < tree.len() {
+        tree[j] += v;
+        j += j & -j;
+    }
+}
+
+// the sum of places 0 to i
+fn fenwick_fen_sum(tree: ref Vec[i64], i: i64) -> i64 {
+    let mut j = i + 1;
+    let mut total = 0;
+    while j > 0 {
+        total += tree[j];
+        j -= j & -j;
+    }
+    total
+}
+
+fn fenwick_min_k_bit_flips(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    // a flip over i to i + k - 1 adds 1 at i and takes 1 off at i + k, so
+    // the sum up to j is the number of flips covering j
+    let mut tree: Vec[i64] = Vec.filled(n + 2, 0);
+    let mut flips = 0;
+    for i in 0..n {
+        if (nums[i] + fenwick_fen_sum(tree, i)) % 2 == 0 {
+            if i + k > n {
+                return -1;
+            }
+            flips += 1;
+            fenwick_fen_add(mut tree, i, 1);
+            fenwick_fen_add(mut tree, i + k, -1);
+        }
+    }
+    flips
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n bits, at random or, half the time, all ones put through random
+// flips of k, so that they can be made all ones again
+fn random_bits(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    if next_random(mut seed) % 2 == 0 {
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 2);
+        }
+    } else {
+        nums = Vec.filled(n, 1);
+        for i in 0..n - k + 1 {
+            if next_random(mut seed) % 4 == 0 {
+                for j in i..i + k {
+                    nums[j] = 1 - nums[j];
+                }
+            }
+        }
+    }
+    nums
+}
+
+fn arm(a: i64, nums: ref Vec[i64], k: i64) -> i64 {
+    if a == 0 {
+        star_min_k_bit_flips(nums, k)
+    } else if a == 1 {
+        diff_min_k_bit_flips(nums, k)
+    } else if a == 2 {
+        deque_min_k_bit_flips(nums, k)
+    } else if a == 3 {
+        marks_min_k_bit_flips(nums, k)
+    } else {
+        fenwick_min_k_bit_flips(nums, k)
+    }
+}
+
+// The statement read literally: the fewest flips of k consecutive bits
+// that leave no 0, by a breadth-first search over all the arrays of n
+// bits, each held as a number; -1 if the search never meets all ones.
+fn literal(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut start = 0;
+    for i in 0..n {
+        start = start * 2 + nums[i];
+    }
+    let goal = (1 << n) - 1;
+    let mut dist: Vec[i64] = Vec.filled(1 << n, -1);
+    dist[start] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(start);
+    while let Some(s) = queue.pop_front() {
+        if s == goal {
+            return dist[s];
+        }
+        for i in 0..n - k + 1 {
+            // the window of k bits starting at bit i from the left
+            let window = ((1 << k) - 1) << (n - k - i);
+            let t = s ^ window;
+            if dist[t] < 0 {
+                dist[t] = dist[s] + 1;
+                queue.push_back(t);
+            }
+        }
+    }
+    -1
+}
+
+fn reversed(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = nums.len() - 1;
+    while i >= 0 {
+        out.push(nums[i]);
+        i -= 1;
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, nums: ref Vec[i64], k: i64, small: bool, seed: mut ref i64) -> i64 {
+    let n = nums.len();
+    let truth = if small { literal(nums, k) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for a in 0..5 {
+        got.push(arm(a, nums, k));
+    }
+    let back = reversed(nums);
+    let mut zeros = 0;
+    for b in nums.iter() {
+        if *b == 0 {
+            zeros += 1;
+        }
+    }
+    // one window of k flipped
+    let mut moved = nums.clone();
+    let at = next_random(mut seed) % (n - k + 1);
+    for j in at..at + k {
+        moved[j] = 1 - moved[j];
+    }
+    // 1 to k ones put in front
+    let mut led: Vec[i64] = Vec.filled(1 + next_random(mut seed) % k, 1);
+    for b in nums.iter() {
+        led.push(*b);
+    }
+    for a in 0..5 {
+        let g = got[a];
+        // P1: the statement's answer, on the first 3000 arrays
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: the array reversed gives the same answer
+        check(mut tally, 2, arm(a, back, k) == g);
+        // P3: with k = 1 the answer is the number of zeros
+        check(mut tally, 3, arm(a, nums, 1) == zeros);
+        // P4: one window flipped moves a possible answer by exactly one
+        // and leaves an impossible one impossible
+        let m = arm(a, moved, k);
+        check(mut tally, 4, if g < 0 { m == -1 } else { m == g + 1 or m == g - 1 });
+        // P5: ones put in front give the same answer
+        check(mut tally, 5, arm(a, led, k) == g);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != a and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 995;
+    let mut bits = 0;
+    let mut stuck = 0;
+    let mut total = 0;
+    let mut check_sum = 0;
+    // 3000 arrays of up to 10 bits against the statement, then 200 of up
+    // to 300 bits
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = 1 + next_random(mut seed) % (if small { 10 } else { 300 });
+        let k = 1 + next_random(mut seed) % (if small { n } else { n.min(30) });
+        let nums = random_bits(n, k, mut seed);
+        bits += n;
+        let got = properties(mut tally, nums, k, small, mut seed);
+        if got < 0 {
+            stuck += 1;
+        } else {
+            total += got;
+        }
+        check_sum = (check_sum * 31 + got + 2) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 arrays of {bits} bits: {stuck} impossible, {total} flips, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/995-minimum-number-of-k-consecutive-bit-flips/bench/min_k_bit_flips.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "e-differs:stdout"
+classified_with = "291d01b36"
+extracted_src = "c2ff58dd"

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/901-1000/995-minimum-number-of-k-consecutive-bit-flips/min_k_bit_flips_diff.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "mirror"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the kata's Python mirror, which every arm matches on __mir-run, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "291d01b36"
+extracted_src = "7ba05572"

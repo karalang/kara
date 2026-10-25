@@ -1,0 +1,105 @@
+// LeetCode #995: Minimum Number of K Consecutive Bit Flips -- parity
+//
+// Flips commute and a second flip of a window undoes the first, so the
+// leftmost 0 can only be cleared by the flip that starts on it: the
+// greedy goes left to right and flips wherever the bit, seen through the
+// flips covering it, is still 0. A running parity says whether it is
+// seen flipped, and a list of where flips stop keeps it right. O(n).
+
+fn min_k_bit_flips(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    // ends[j]: a flip that began at j - k stops covering j
+    let mut ends: Vec[bool] = Vec.filled(n + 1, false);
+    let mut flipped = false;
+    let mut flips = 0;
+    for i in 0..n {
+        if ends[i] {
+            flipped = not flipped;
+        }
+        if (nums[i] == 1) == flipped {
+            if i + k > n {
+                return -1;
+            }
+            flips += 1;
+            flipped = not flipped;
+            ends[i + k] = true;
+        }
+    }
+    flips
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn bits_text(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|b| f"{b}").collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(Vec[i64], i64)] = vec![
+        (vec![0, 1, 0], 1),
+        (vec![1, 1, 0], 2),
+        (vec![0, 0, 0, 1, 0, 1, 1, 0], 3),
+        (vec![1], 1),
+        (vec![0], 1),
+        (vec![0, 0], 2),
+        (vec![0, 1, 0], 2),
+        (vec![1, 0, 1], 3),
+        (vec![1, 1, 1, 1], 3),
+        (vec![0, 0, 1, 1, 0, 0], 2),
+    ];
+    for (nums, k) in cases.iter() {
+        println(f"nums = {bits_text(nums)}, k = {k} -> {min_k_bit_flips(nums, *k)}");
+    }
+    let zeros: Vec[i64] = Vec.filled(100000, 0);
+    println(f"100000 zeros, k = 1: {min_k_bit_flips(zeros, 1)}");
+    println(f"100000 zeros, k = 100000: {min_k_bit_flips(zeros, 100000)}");
+    println(f"100000 zeros, k = 3: {min_k_bit_flips(zeros, 3)}");
+    println(f"100000 zeros, k = 4: {min_k_bit_flips(zeros, 4)}");
+    let alternate: Vec[i64] = (0..100000).map(|i| i % 2).collect();
+    println(f"0 and 1 in turn, 100000 bits, k = 2: {min_k_bit_flips(alternate, 2)}");
+    println(f"0 and 1 in turn, 100000 bits, k = 50000: {min_k_bit_flips(alternate, 50000)}");
+    // random arrays, half of them all ones put through random flips, so
+    // that they can be made all ones again
+    let mut seed = 995;
+    for (count, most) in vec![(300, 8), (3000, 60), (300, 1000), (3, 100000)] {
+        let mut bits = 0;
+        let mut stuck = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = if most == 100000 { most } else { 1 + next_random(mut seed) % most };
+            let k = 1 + next_random(mut seed) % n.min(20);
+            let mut nums: Vec[i64] = Vec.new();
+            if next_random(mut seed) % 2 == 0 {
+                for _ in 0..n {
+                    nums.push(next_random(mut seed) % 2);
+                }
+            } else {
+                nums = Vec.filled(n, 1);
+                for i in 0..n - k + 1 {
+                    if next_random(mut seed) % 4 == 0 {
+                        for j in i..i + k {
+                            nums[j] = 1 - nums[j];
+                        }
+                    }
+                }
+            }
+            bits += n;
+            let got = min_k_bit_flips(nums, k);
+            if got < 0 {
+                stuck += 1;
+            } else {
+                total += got;
+            }
+            check = (check * 31 + got + 2) % 1000000007;
+        }
+        println(f"{count} random arrays of {bits} bits: {stuck} impossible, {total} flips, checksum {check}");
+    }
+}
