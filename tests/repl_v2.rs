@@ -193,12 +193,16 @@ fn karac_repl(args: &[&str], input: &str, legacy_env: bool) -> std::process::Out
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn karac repl");
-    child
+    // A REPL that refuses its arguments exits without reading stdin, so
+    // the write can meet a closed pipe; its exit status is the answer.
+    let wrote = child
         .stdin
         .take()
         .expect("stdin")
-        .write_all(input.as_bytes())
-        .expect("write stdin");
+        .write_all(input.as_bytes());
+    if let Err(e) = wrote {
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "write stdin: {e}");
+    }
     child.wait_with_output().expect("wait karac repl")
 }
 
