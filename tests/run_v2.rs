@@ -149,7 +149,7 @@ fn run_v2_json_output_carries_the_runtime_reports() {
         let out = karac(&json, &err);
         assert_eq!(
             json_slashed(&text(&out.stdout)),
-            format!("a=1\n{{\"error\":\"too big\"}}\n{{\"error_return_trace\":[{{\"file\":{file},\"line\":8,\"column\":13}}]}}\n"),
+            format!("a=1\n{{\"error\":\"too big\"}}\n{{\"error_return_trace\":[{{\"file\":{file},\"line\":8,\"column\":13,\"expr\":\"f(5)?\",\"context\":null}}]}}\n"),
             "{lane:?}"
         );
         assert_eq!(out.status.code(), Some(1), "{lane:?}");
@@ -159,7 +159,7 @@ fn run_v2_json_output_carries_the_runtime_reports() {
         let out = karac(&jsonl, &err);
         assert_eq!(
             json_slashed(&text(&out.stdout)),
-            format!("a=1\n{{\"type\":\"error\",\"message\":\"too big\"}}\n{{\"type\":\"error_return_trace\",\"frames\":[{{\"file\":{file},\"line\":8,\"column\":13}}],\"truncated\":false}}\n"),
+            format!("a=1\n{{\"type\":\"error\",\"message\":\"too big\"}}\n{{\"type\":\"error_return_trace\",\"frames\":[{{\"file\":{file},\"line\":8,\"column\":13,\"expr\":\"f(5)?\",\"context\":null}}],\"truncated\":false}}\n"),
             "{lane:?}"
         );
     }

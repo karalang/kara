@@ -2064,11 +2064,14 @@ impl<'a> Interp<'a> {
                 Ok(v.clone())
             }
             ("error_trace_push", "") => {
-                let [Value::Int(line), Value::Int(col)] = args.as_slice() else {
-                    return err("error_trace_push takes a line and a column");
+                let [Value::Int(line), Value::Int(col), Value::Str(expr)] = args.as_slice() else {
+                    return err("error_trace_push takes a line, a column and the expression");
                 };
                 let (file, line) = source_at(*line as usize);
-                let frame = format!("{file}:{line}:{col}");
+                let frame = match expr.as_str() {
+                    "" => format!("{file}:{line}:{col}"),
+                    e => format!("{file}:{line}:{col}  {e}"),
+                };
                 self.trace_frame(frame);
                 Ok(Value::Unit)
             }

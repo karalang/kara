@@ -1,9 +1,9 @@
 //! The error return trace (design.md § Error return traces): each `?` that
-//! returns an error records its place and each one that succeeds clears
-//! them, and the trace is printed with the diagnostic it belongs to, after
-//! `main`'s `Error: e` or a panic's place, on the interpreter and the
-//! compiled backend alike; `karac build --release` strips it
-//! (B-2026-10-25-3).
+//! returns an error records its place and its text, and each one that
+//! succeeds clears them, and the trace is printed with the diagnostic it
+//! belongs to, after `main`'s `Error: e` or a panic's place, on the
+//! interpreter and the compiled backend alike; `karac build --release`
+//! strips it (B-2026-10-25-3, B-2026-10-25-29).
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -83,7 +83,7 @@ fn mir_error_trace_follows_a_question_chain_out_of_main() {
         "chain",
         CHAIN,
         1,
-        "Error: 7\nError return trace:\n  {f}:3:13\n  {f}:7:13\n  {f}:11:13\n",
+        "Error: 7\nError return trace:\n  {f}:3:13  inner()?\n  {f}:7:13  middle()?\n  {f}:11:13  outer()?\n",
     );
 }
 
@@ -125,7 +125,7 @@ fn main() -> Result[(), i64] {
         "cleared",
         cleared,
         1,
-        "Error: 3\nError return trace:\n  {f}:13:13\n",
+        "Error: 3\nError return trace:\n  {f}:13:13  inner(3)?\n",
     );
 }
 
@@ -146,7 +146,7 @@ fn main() {
         "panic",
         src,
         101,
-        "runtime error: called unwrap() on None\n  at {f}:8:13\nError return trace:\n  {f}:3:13\n  {f}:8:13\n",
+        "runtime error: called unwrap() on None\n  at {f}:8:13\nError return trace:\n  {f}:3:13  inner()?\n  {f}:8:13\n",
     );
 }
 
@@ -166,9 +166,9 @@ fn main() -> Result[(), i64] {
 "#;
     let mut want = String::from("Error: 0\nError return trace:\n");
     for _ in 0..63 {
-        want.push_str("  {f}:3:13\n");
+        want.push_str("  {f}:3:13  down(n - 1)?\n");
     }
-    want.push_str("  {f}:7:13\n  ... (trace truncated, max 64 frames)\n");
+    want.push_str("  {f}:7:13  down(70)?\n  ... (trace truncated, max 64 frames)\n");
     reports_everywhere("deep", src, 1, &want);
 }
 
@@ -180,7 +180,7 @@ fn mir_error_trace_is_stripped_from_a_release_build() {
     for (release, want) in [
         (
             false,
-            "Error: 7\nError return trace:\n  main.kara:3:13\n  main.kara:7:13\n  main.kara:11:13\n",
+            "Error: 7\nError return trace:\n  main.kara:3:13  inner()?\n  main.kara:7:13  middle()?\n  main.kara:11:13  outer()?\n",
         ),
         (true, "Error: 7\n"),
     ] {

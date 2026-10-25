@@ -399,7 +399,8 @@ pub(super) struct RuntimeReports {
     /// after it).
     pub(super) error: Option<String>,
     pub(super) faults: Vec<Fault>,
-    trace: Vec<(String, usize, usize)>,
+    /// Each frame's place and the `?` expression it returned through.
+    trace: Vec<((String, usize, usize), Option<String>)>,
     truncated: bool,
     /// Everything else the program wrote.
     pub(super) passthrough: String,
@@ -412,6 +413,15 @@ fn location(s: &str) -> Option<(String, usize, usize)> {
     let line = parts.next()?.trim().parse().ok()?;
     let file = parts.next()?.to_string();
     Some((file, line, col))
+}
+
+/// `FILE:LINE:COL  EXPR`, a trace frame; a frame from a build without the
+/// expression's text has the place alone.
+fn trace_frame(s: &str) -> Option<((String, usize, usize), Option<String>)> {
+    match s.split_once("  ") {
+        Some((place, expr)) => Some((location(place)?, Some(expr.to_string()))),
+        None => Some((location(s)?, None)),
+    }
 }
 
 impl RuntimeReports {
@@ -446,7 +456,7 @@ impl RuntimeReports {
                 while let Some(l) = lines.get(i).and_then(|l| l.strip_prefix("  ")) {
                     if l.starts_with("... (trace truncated") {
                         r.truncated = true;
-                    } else if let Some(frame) = location(l) {
+                    } else if let Some(frame) = trace_frame(l) {
                         r.trace.push(frame);
                     } else {
                         break;
@@ -486,10 +496,13 @@ impl RuntimeReports {
         let frames = self
             .trace
             .iter()
-            .map(|(file, line, column)| {
+            .map(|((file, line, column), expr)| {
+                // No `.context()` exists in the v2 library yet, so a frame
+                // never carries one.
                 format!(
-                    "{{\"file\":{},\"line\":{line},\"column\":{column}}}",
-                    json_string(file)
+                    "{{\"file\":{},\"line\":{line},\"column\":{column},\"expr\":{},\"context\":null}}",
+                    json_string(file),
+                    expr.as_deref().map_or("null".to_string(), json_string)
                 )
             })
             .collect::<Vec<_>>()

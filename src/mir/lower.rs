@@ -13704,8 +13704,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             && !release_strips("KARAC_STRIP_ERROR_TRACE")
     }
 
-    /// `error_trace_push(line, col)` of the `?` at `at`, on its error path,
-    /// or `error_trace_clear()` on its success path.
+    /// `error_trace_push(line, col, expr)` of the `?` at `at`, on its error
+    /// path, or `error_trace_clear()` on its success path.
     fn error_trace(&mut self, name: &str, at: Span) {
         let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
         let int = |n: usize| {
@@ -13715,7 +13715,17 @@ impl<'l, 'a> Bx<'l, 'a> {
             })
         };
         let args = if name == "error_trace_push" {
-            vec![int(at.line), int(at.column)]
+            // The `?` expression as written, on one line (design.md §
+            // Error return traces' `expr`, B-2026-10-25-29).
+            let expr = self
+                .lcx
+                .source
+                .get(at.offset..at.offset + at.length)
+                .unwrap_or("")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            vec![int(at.line), int(at.column), self.static_str(&expr)]
         } else {
             Vec::new()
         };

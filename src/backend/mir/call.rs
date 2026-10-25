@@ -791,7 +791,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             // A `?`'s record in the error return trace: its place on the
             // error path, a clear on the success path (B-2026-10-25-3).
-            ("error_trace_push", "") if args.len() == 2 => {
+            ("error_trace_push", "") if args.len() == 3 => {
                 let int = |a: &Operand| match a {
                     Operand::Const(Const {
                         kind: ConstKind::Scalar(n),
@@ -804,13 +804,19 @@ impl<'ctx> Cx<'ctx, '_> {
                     column: int(&args[1])?,
                     ..self.site
                 };
-                let (text, len) = self.str_const(&Self::site_text(at))?;
+                // The frame is the place and the `?` expression as written
+                // (B-2026-10-25-29).
+                let frame = match &args[2] {
+                    Operand::Const(Const {
+                        kind: ConstKind::Str(x),
+                        ..
+                    }) if !x.is_empty() => format!("{}  {x}", Self::site_text(at)),
+                    _ => Self::site_text(at),
+                };
+                let (text, len) = self.str_const(&frame)?;
                 let live = self.error_trace_live();
                 self.rt("error_trace_push", &[text.into(), len.into(), live.into()])
             }
-            // Only a thread with frames has anything to clear, so a `?`
-            // that succeeds costs a load, an unordered one that a loop can
-            // hoist (B-2026-10-25-3).
             // A table whose type names a hasher walks in an order no
             // process key moves (B-2026-10-24-29).
             ("table_unkeyed", "") if args.len() == 1 => {
@@ -826,6 +832,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, h.into())
             }
+            // Only a thread with frames has anything to clear, so a `?`
+            // that succeeds costs a load, an unordered one that a loop can
+            // hoist (B-2026-10-25-3).
             ("error_trace_clear", "") => {
                 let live = self.error_trace_live();
                 let n = self
