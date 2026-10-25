@@ -59,11 +59,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 36 |
-| false-positive | 34 |
+| false-positive | 35 |
 | missing-feature | 27 |
 | perf | 10 |
+| soundness | 9 |
 | miscompile | 8 |
-| soundness | 8 |
 | run-vs-build | 6 |
 | other | 2 |
 | codegen-gap | 2 |
@@ -73,12 +73,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 55 |
+| typecheck | 56 |
 | mir | 26 |
 | codegen | 22 |
 | interp | 19 |
 | cli | 16 |
-| ownership | 11 |
+| ownership | 12 |
 | runtime | 9 |
 | mir-llvm | 7 |
 | parser | 6 |
@@ -148,6 +148,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-38 | 2026-10-25 | cli | medium | In a package, a module's own function named like a library function (`pub fn take(b: own Box2)` in ast.kara) captures that name in every other module through the combined source, so a module that never imports it and calls `std.mem`'s `take(mut x)` is refused with `expected 'Box2', found 'i64'` | — |
 | B-2026-10-25-40 | 2026-10-25 | resolver+effect | low | A channel operation's effect cannot be declared: the effect checker charges a stored callback that receives on a channel with `receives(Channel)` and asks the slot's clause for it, but a clause naming `receives(Channel)` is refused by the resolver (`'Channel' is not an effect resource (it is a prelude type or trait)`) | — |
 | B-2026-10-25-41 | 2026-10-25 | runtime+interp | medium | Server.serve/serve_tls/serve_ws/serve_ws_tls serve connections one at a time; a stalled handshake or request blocks the accept loop | — |
+| B-2026-10-25-42 | 2026-10-25 | typecheck | medium | A `sync struct` field of a plain `shared` type is accepted, so a `shared` handle reaches another task inside a `sync` value | — |
+| B-2026-10-25-43 | 2026-10-25 | ownership | medium | A self-referential `sync enum` (`sync enum Tree { Leaf(i64), Pair(Tree, Tree) }`) is refused as an ownership cycle, where the `shared enum` twin is accepted | — |
 
 ### Fixed
 
