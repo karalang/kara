@@ -3786,6 +3786,29 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn diverge(&mut self, kind: TerminatorKind) {
+        // In a program with an isolating group, a panic is a call that a
+        // task of one leaves by its cancel exit (core-semantics §11.12).
+        if let TerminatorKind::Abort { reason } = &kind {
+            let panics = crate::mir::coroutine::PANIC;
+            if !self.in_cancel_exit
+                && self
+                    .lcx
+                    .cancel_at
+                    .as_ref()
+                    .is_some_and(|a| a.contains(panics))
+            {
+                let it = self.tys().tcx().intern(HK::Int(IntSize::I64));
+                let code = Operand::Const(Const {
+                    ty: it,
+                    kind: ConstKind::Scalar(u128::from(reason.code())),
+                });
+                let unit = self.unit();
+                let u = self.temp(unit);
+                self.call_native(panics, vec![code], Place::local(u));
+                self.diverge(TerminatorKind::Unreachable);
+                return;
+            }
+        }
         let next = self.b.new_block();
         self.goto_with(kind, next);
     }
@@ -19034,6 +19057,47 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// `g.spawn(f)` on an `IsolatingGroup` (core-semantics §11.12): a task
+    /// of the group it holds, whose closure is `f` with its value in `Ok`,
+    /// as a `return` or `?` in it leaves it. A panic in the task is the
+    /// `Err` its handle holds instead.
+    fn isolating_spawn(&mut self, object: &'a Expr, f: &'a CallArg, dest: Place) -> R<()> {
+        if !matches!(f.value.kind, ExprKind::Closure { .. }) {
+            return self.unsupported(
+                f.value.span,
+                "an isolating group's `spawn` of other than a closure written there",
+            );
+        }
+        let Some(group_ty) = self.library_struct("TaskGroup", &[]) else {
+            return self.unsupported(f.value.span, "`spawn` without the library's `TaskGroup`");
+        };
+        let ht = self.place_type(&dest);
+        let tt = match self.tys().tcx().kind(ht) {
+            HK::Adt { args, .. } => self.tys().tcx().list(args).first().copied(),
+            _ => None,
+        };
+        let Some((tt, ev)) = tt.and_then(|t| Some((t, self.error_variant(t)?))) else {
+            return self.unsupported(f.value.span, "this isolating task's result type");
+        };
+        let ok = 1 - ev;
+        let Some(vt) = self.tys().tcx().field_ty(tt, Some(ok), 0) else {
+            return self.unsupported(f.value.span, "this isolating task's result type");
+        };
+        let p = self.expr_place(object, false)?;
+        let (p, _) = self.strip_refs(p);
+        let gr = self.ref_to(p.field(0, group_ty), group_ty);
+        self.closure_task = true;
+        self.closure_ret = Some((tt, Some(ok)));
+        self.closure_exit = Some((vt, ok));
+        let made = self.closure_value(&f.value);
+        self.closure_task = false;
+        self.closure_ret = None;
+        self.closure_exit = None;
+        let (c, _) = made?;
+        self.call_native("TaskGroup.spawn", vec![gr, c], dest);
+        Ok(())
+    }
+
     /// The environment argument for calling the closure value `p` (of type
     /// `t`: the closure or a reference to it), as its body takes it.
     fn env_operand(&mut self, span: Span, p: Place, t: Ty) -> R<(Operand, Ty, String)> {
@@ -19732,6 +19796,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         if let ("extend", [src]) = (method, args) {
             if self.extend_from_iterable(object, base, src, dest.clone())? {
                 return Ok(());
+            }
+        }
+        if let ("spawn", [f]) = (method, args) {
+            if self.tys().display(base) == "IsolatingGroup" {
+                return self.isolating_spawn(object, f, dest);
             }
         }
         if let ("discriminant", []) = (method, args) {
@@ -20723,6 +20792,13 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         // `TaskGroup.with_deadline` (§11.10), for the same reason.
         include_str!("../../runtime/stdlib/source/group_deadline.kara"),
         &["with_deadline"],
+        &[],
+    ),
+    (
+        // `TaskGroup.isolating` (§11.12), which `with_deadline`'s source
+        // names.
+        include_str!("../../runtime/stdlib/source/isolating.kara"),
+        &["isolating", "IsolatingGroup", "with_deadline"],
         &[],
     ),
 ];
@@ -21906,6 +21982,52 @@ fn cancel_points(lowered: &Lowered) -> Option<FxHashSet<String>> {
     Some(report.suspending().into_iter().collect())
 }
 
+/// When `lowered` makes an isolating group (core-semantics §11.12): the
+/// calls that may panic, which get a cancel exit when the program is built
+/// again, so that a task of the group leaves by them, and the
+/// [`PANIC`](crate::mir::coroutine::PANIC) native each `Abort` becomes. A
+/// call may panic when its callee's effects say so or are unknown, or, for
+/// a native, when it is handed a function value, which it calls.
+fn panic_points(lowered: &Lowered) -> Option<FxHashSet<String>> {
+    let callees = || {
+        lowered.program.bodies.values().flat_map(|b| {
+            b.blocks
+                .iter()
+                .filter_map(move |bb| match &bb.terminator.kind {
+                    TerminatorKind::Call {
+                        func:
+                            Operand::Const(Const {
+                                kind: ConstKind::FnDef(i),
+                                ..
+                            }),
+                        args,
+                        ..
+                    } => Some((b, i, args)),
+                    _ => None,
+                })
+        })
+    };
+    let isolating = crate::mir::coroutine::ISOLATING;
+    if !callees().any(|(_, i, _)| i.name == isolating) {
+        return None;
+    }
+    let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+    let mut at: FxHashSet<String> = report.panicking().into_iter().collect();
+    at.insert(crate::mir::coroutine::PANIC.to_string());
+    for (body, i, args) in callees() {
+        if i.def != DefId(u32::MAX) || at.contains(&i.name) {
+            continue;
+        }
+        let takes_fn = args
+            .iter()
+            .any(|a| crate::mir::effects::is_fn_value(body, &lowered.tys, a));
+        if takes_fn || crate::mir::effects::native_may_panic(&i.name) {
+            at.insert(i.name.clone());
+        }
+    }
+    Some(at)
+}
+
 /// The back half of [`lower_source_for_checks`]: a program with the library,
 /// already resolved, type-checked and ownership-checked, lowered to MIR,
 /// with §3.7's forbidden moves refused. `karac check` hands it the program
@@ -21948,9 +22070,17 @@ fn lower_typed(
     };
     let mut lowered = lower(hir, None);
     // A program that cancels tasks is built again, now knowing which calls
-    // suspend, so that each gets its cancel exit (core-semantics §11.9).
+    // suspend, so that each gets its cancel exit (core-semantics §11.9),
+    // and one with an isolating group, which calls may panic (§11.12).
     if !check_only && lowered.errors.is_empty() {
-        if let Some(at) = cancel_points(&lowered) {
+        let at = match (cancel_points(&lowered), panic_points(&lowered)) {
+            (Some(mut a), Some(b)) => {
+                a.extend(b);
+                Some(a)
+            }
+            (a, b) => a.or(b),
+        };
+        if let Some(at) = at {
             let hir =
                 crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
             lowered = lower(hir, Some(at));

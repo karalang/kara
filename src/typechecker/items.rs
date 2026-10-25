@@ -1257,8 +1257,13 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let items: &[Item] = &self.program.items;
+        // The appended library's own items hold and return them on purpose
+        // (`IsolatingGroup` holds a `TaskGroup`, §11.12).
+        let library = self.program.library_start.unwrap_or(usize::MAX);
         for item in items {
             match item {
+                Item::StructDef(s) if s.span.offset >= library => {}
+                Item::Function(f) if f.span.offset >= library => {}
                 Item::Function(f) => {
                     let scope = Self::generic_param_names(&f.generic_params);
                     if let Some(ref rt) = f.return_type {

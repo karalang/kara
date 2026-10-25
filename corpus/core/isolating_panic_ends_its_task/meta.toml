@@ -1,0 +1,11 @@
+source = "core-semantics §11.12"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency", "taskgroup", "panic", "drop"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = ["mir-interp"]
+env = {}
+note = "core-semantics §11.12 (M4 item 9): a panic in a task of an isolating group tears that task down (its drops and defers run), its handle holds Err(Panicked { message, location }), and the group's other tasks run on. mir-interp only until the compiled half lands."

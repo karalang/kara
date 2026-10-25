@@ -2173,10 +2173,11 @@ fn main() -> () {
         // Rules checked before MIR: `par` effects and Drop-type moves.
         let not_mir = ["err_par_conflict", "err_partial_move_drop_type"];
         // Pins that call Kāra library functions, which `check_built` does
-        // not append (a `select` desugars to calls into sync.kara). The
-        // build in `built_core_pins_match_their_expected_output` runs them
-        // with the library, through the same move and borrow checks.
-        let needs_library = ["select_source_order"];
+        // not append (a `select` desugars to calls into sync.kara;
+        // `TaskGroup.isolating` is declared in isolating.kara). The build
+        // in `built_core_pins_match_their_expected_output` runs them with
+        // the library, through the same move and borrow checks.
+        let needs_library = ["select_source_order", "isolating_panic_ends_its_task"];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)
             .unwrap()

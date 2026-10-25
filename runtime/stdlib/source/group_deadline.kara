@@ -10,3 +10,10 @@ impl TaskGroup {
         self.__deadline_at(d.__select_at())
     }
 }
+
+impl IsolatingGroup {
+    /// As `TaskGroup.with_deadline` (isolating.kara, §11.12).
+    pub fn with_deadline(own self, d: Duration) -> IsolatingGroup with reads(Clock) {
+        self.__deadline_at(d.__select_at())
+    }
+}

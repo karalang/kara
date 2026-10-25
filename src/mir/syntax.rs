@@ -548,6 +548,32 @@ pub enum AbortReason {
     UnreachableArm,
 }
 
+impl AbortReason {
+    /// The reason as the argument of a `__panic` call
+    /// ([`crate::mir::coroutine::PANIC`]).
+    pub fn code(&self) -> u8 {
+        match self {
+            AbortReason::Panic => 0,
+            AbortReason::Overflow => 1,
+            AbortReason::DivByZero => 2,
+            AbortReason::BoundsCheck => 3,
+            AbortReason::UnreachableArm => 4,
+        }
+    }
+
+    /// The reason a `__panic` call's argument names.
+    pub fn from_code(code: i128) -> Option<AbortReason> {
+        Some(match code {
+            0 => AbortReason::Panic,
+            1 => AbortReason::Overflow,
+            2 => AbortReason::DivByZero,
+            3 => AbortReason::BoundsCheck,
+            4 => AbortReason::UnreachableArm,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Terminator {
     pub kind: TerminatorKind,

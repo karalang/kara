@@ -2006,6 +2006,7 @@ impl<'a> EffectChecker<'a> {
                 "Sender.send",
                 "Receiver.recv",
                 "TaskGroup.spawn",
+                "IsolatingGroup.spawn",
                 "TaskHandle.join",
             ] {
                 keys.push(self.interner.intern(name));

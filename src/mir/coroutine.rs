@@ -80,6 +80,24 @@ pub const UNWINDING: &str = "__unwinding";
 /// See [`CANCELLED`].
 pub const UNWIND: &str = "__unwind";
 
+/// A task of an isolating group ends at a panic (core-semantics §11.12):
+/// in a program that makes one, the MIR builder lowers each `Abort` to a
+/// call of `__panic(code)` ([`crate::mir::syntax::AbortReason::code`])
+/// followed by a cancel exit, and gives every call that may panic one
+/// too. Inside such a task, a panic records the task's failure and leaves
+/// by those exits, as a teardown does; anywhere else `__panic` aborts, as
+/// the `Abort` would have.
+pub const PANIC: &str = "__panic";
+
+/// The native that makes an isolating group (§11.12).
+pub const ISOLATING: &str = "TaskGroup.isolating";
+
+/// Whether the call that continues to `target` in `body` has the cancel
+/// exit the builder puts after a call that may suspend or panic.
+pub fn has_cancel_exit(body: &Body, target: BasicBlock) -> bool {
+    cancel_exit_of(body, target).is_some()
+}
+
 /// The cancel exit the builder put after a call that continues to
 /// `target`: the statements of the edge blocks drop elaboration put
 /// before it, and the exit's first block.
@@ -455,7 +473,7 @@ fn insert_group_ends(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
 }
 
 /// The callee a `Call` names directly, if it names one.
-fn direct_callee(func: &Operand) -> Option<&str> {
+pub fn direct_callee(func: &Operand) -> Option<&str> {
     match func {
         Operand::Const(Const {
             kind: ConstKind::FnDef(inst),
@@ -543,6 +561,11 @@ pub const SPAWN_FRAME: &str = "TaskGroup.spawn_frame";
 /// calls `C(&env)` and then drops `env`.
 pub fn task_name(closure_body: &str) -> String {
     format!("{closure_body}#task")
+}
+
+/// Whether `name` is a task body (`task_name`), or its resume.
+pub fn is_task_body(name: &str) -> bool {
+    name.ends_with("#task") || name.ends_with("#task#resume")
 }
 
 /// The spawned closures of `bodies`, by their bodies' names: each

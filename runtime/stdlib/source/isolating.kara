@@ -1,0 +1,48 @@
+//! Isolating task groups (core-semantics §11.12): a `TaskGroup` whose
+//! tasks' panics end the task, not the process. A task that panics is torn
+//! down as a cancelled one is (§11.9): its drops, `defer`s and `errdefer`s
+//! run, and its handle holds `Err(TaskFailed.Panicked { .. })`. The group's
+//! other tasks run on. Appended to a program that names one, or that
+//! calls `with_deadline`, whose source names it (`BAKED_SOURCES` in
+//! src/mir/lower.rs).
+
+impl TaskGroup {
+    /// A group that contains its tasks' panics. `TaskGroup.isolating(limit:
+    /// n)` is typed as `new`'s limit is, and the native takes the limit as
+    /// its argument.
+    #[compiler_builtin]
+    pub fn isolating() -> IsolatingGroup {
+        IsolatingGroup { group: TaskGroup.new() }
+    }
+}
+
+/// An isolating group: the group it holds, whose drop waits for its tasks.
+pub struct IsolatingGroup {
+    group: TaskGroup,
+}
+
+impl IsolatingGroup {
+    /// As `TaskGroup.spawn`, with the task's value in `Ok`, or its panic in
+    /// `Err`. The MIR builder lowers it to the group's `spawn` of `f` with
+    /// its value wrapped.
+    #[compiler_builtin]
+    pub fn spawn[T](ref self, f: own OnceFn() -> T) -> TaskHandle[Result[T, TaskFailed]] {
+        loop { }
+    }
+
+    /// As `TaskGroup.cancel`.
+    pub fn cancel(ref self) {
+        self.group.cancel()
+    }
+
+    /// The group, cancelled once the monotonic clock reads `at` (ns), for
+    /// `with_deadline` (group_deadline.kara), which takes the `Duration`
+    /// this file cannot name.
+    pub fn __deadline_at(own self, at: i64) -> IsolatingGroup {
+        let IsolatingGroup { group } = self;
+        IsolatingGroup { group: group.__deadline_at(at) }
+    }
+}
+
+// It holds a `TaskGroup`, so it may not escape its scope either.
+impl ScopeLocal for IsolatingGroup {}

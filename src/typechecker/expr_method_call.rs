@@ -1769,12 +1769,9 @@ impl<'a> super::TypeChecker<'a> {
             if let ExprKind::Closure { .. } = &args[0].value.kind {
                 let recv_ty = self.infer_expr(object);
                 if let Type::Named { name, .. } = &recv_ty {
-                    if name == "TaskGroup" {
-                        self.check_cross_task_safe_captures(
-                            &args[0].value,
-                            span,
-                            "TaskGroup.spawn",
-                        );
+                    if name == "TaskGroup" || name == "IsolatingGroup" {
+                        let what = format!("{name}.spawn");
+                        self.check_cross_task_safe_captures(&args[0].value, span, &what);
                     }
                 }
             }

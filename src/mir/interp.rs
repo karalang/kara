@@ -688,6 +688,8 @@ fn run_with(
         panic_message: None,
         abort_reported: false,
         panic_info: None,
+        inline_tasks: Vec::new(),
+        root_unwind: false,
         tracing_sink: None,
         active_spans: Vec::new(),
         interners: Vec::new(),
@@ -1138,6 +1140,13 @@ struct Interp<'a> {
     /// The panic the `#[panic_handler]` is running for, its message and
     /// location; set once, so the handler runs at most once.
     panic_info: Option<(String, String)>,
+    /// A `TaskGroup.spawn` that runs its task in place (no executor), one
+    /// per spawn still running, innermost last: whether its group is
+    /// isolating (§11.12), and the task's panic once it has panicked.
+    inline_tasks: Vec<(bool, Option<(String, String)>)>,
+    /// The root's `__unwind` flag where there is no task table (no
+    /// executor): a task run in place leaves by its cancel exits on it.
+    root_unwind: bool,
     /// The exporter `Log.set_exporter` registered, and its type; `None`
     /// sends events to the default `StdoutExporter`.
     tracing_sink: Option<(Value, Ty)>,
@@ -1743,17 +1752,27 @@ impl<'a> Interp<'a> {
                 }
                 _ => false,
             })),
-            ("__unwinding", "") => Ok(Value::Bool(
-                self.tasks.get(self.cur_task).is_some_and(|t| t.unwind),
-            )),
+            ("__unwinding", "") => Ok(Value::Bool(*self.unwind_flag())),
             ("__unwind", "") => {
-                if let (Some(t), [Value::Bool(on)]) =
-                    (self.tasks.get_mut(self.cur_task), args.as_slice())
-                {
-                    t.unwind = *on;
+                if let [Value::Bool(on)] = args.as_slice() {
+                    *self.unwind_flag() = *on;
                 }
                 Ok(Value::Unit)
             }
+            // An `Abort` in a program with an isolating group: it aborts,
+            // and a task of such a group takes it at this call (§11.12).
+            ("__panic", "") => match args.as_slice() {
+                [Value::Int(code)] => match AbortReason::from_code(*code) {
+                    Some(r) => {
+                        if self.trace {
+                            self.events.push(Event::Abort(r.clone()));
+                        }
+                        Err(Stop::Abort(r))
+                    }
+                    None => err(format!("{name} of reason {code}")),
+                },
+                _ => err(format!("{name} takes a reason")),
+            },
             ("fence" | "compiler_fence", "") => {
                 // One thread runs the program; a fence orders nothing. A
                 // `Relaxed` one is refused, as legacy refuses it.
@@ -2200,6 +2219,7 @@ impl<'a> Interp<'a> {
                     }
                 }
                 let mut out = Vec::with_capacity((*n).max(0) as usize);
+                let mut failed = None;
                 if let Value::Erased { .. } = f {
                     // A `Fn(i64) -> T` value: called through a reference to
                     // it, then dropped.
@@ -2213,7 +2233,13 @@ impl<'a> Interp<'a> {
                         path: Path::new(),
                     });
                     for i in 0..*n {
-                        out.push(self.call_erased(at.clone(), vec![Value::Int(i)])?);
+                        match self.call_erased(at.clone(), vec![Value::Int(i)]) {
+                            Ok(v) => out.push(v),
+                            Err(s) => {
+                                failed = Some(s);
+                                break;
+                            }
+                        }
                     }
                     let f = std::mem::replace(&mut self.live(slot)?.value, Value::Uninit);
                     self.free_slot(slot);
@@ -2221,9 +2247,28 @@ impl<'a> Interp<'a> {
                 } else {
                     let mut callee = self.hold_callee(f.clone(), fty, name)?;
                     for i in 0..*n {
-                        out.push(self.call_callee(&mut callee, vec![Value::Int(i)])?);
+                        match self.call_callee(&mut callee, vec![Value::Int(i)]) {
+                            Ok(v) => out.push(v),
+                            Err(s) => {
+                                failed = Some(s);
+                                break;
+                            }
+                        }
                     }
                     self.release_callee(callee, fty)?;
+                }
+                // A panic in `f` that its task takes (§11.12): the elements
+                // made before it drop.
+                if let Some(s) = failed {
+                    let made = match base {
+                        "Array" => Value::Agg(out),
+                        _ => {
+                            let vname = self.tys.display(ret);
+                            self.alloc_box(&vname, Value::Agg(out))
+                        }
+                    };
+                    self.drop_value(made, ret)?;
+                    return Err(s);
                 }
                 if base == "Array" {
                     return Ok(Value::Agg(out));
@@ -3157,8 +3202,8 @@ impl<'a> Interp<'a> {
                     let o = me.call_callee(&mut f, args)?;
                     me.ordering(&o, ord_ty)
                 });
-                let order = order?;
                 self.release_callee(f, fty)?;
+                let order = order?;
                 self.permute(id, &order)?;
                 Ok(Value::Unit)
             }
@@ -3170,12 +3215,26 @@ impl<'a> Interp<'a> {
                 let key_ty = f.body.return_ty();
                 let mut owned = Vec::with_capacity(n);
                 let mut keys = Vec::with_capacity(n);
+                let mut failed = None;
                 for i in 0..n {
-                    let k = self.call_callee(&mut f, vec![Value::Ref(elem(i))])?;
+                    let k = match self.call_callee(&mut f, vec![Value::Ref(elem(i))]) {
+                        Ok(k) => k,
+                        Err(s) => {
+                            failed = Some(s);
+                            break;
+                        }
+                    };
                     keys.push(self.order_form(&k, key_ty)?);
                     owned.push(k);
                 }
                 self.release_callee(f, fty)?;
+                // A panic in the key function (§11.12): the keys made drop.
+                if let Some(s) = failed {
+                    for k in owned {
+                        self.drop_value(k, key_ty)?;
+                    }
+                    return Err(s);
+                }
                 // A key type with a user `Ord` is ordered by its `cmp`.
                 let order = match self.user_cmp(key_ty) {
                     Some(cmp) => {
@@ -3196,8 +3255,18 @@ impl<'a> Interp<'a> {
                 let n = self.vec_elems(id)?.len();
                 let mut f = self.hold_callee(f.clone(), fty, &name)?;
                 let mut keep = Vec::with_capacity(n);
+                let mut failed = None;
                 for i in 0..n {
-                    let k = self.call_callee(&mut f, vec![Value::Ref(elem(i))])?;
+                    let k = match self.call_callee(&mut f, vec![Value::Ref(elem(i))]) {
+                        Ok(k) => k,
+                        // A panic in the predicate (§11.12): what it kept
+                        // and what it has not seen stay.
+                        Err(s) => {
+                            keep.resize(n, true);
+                            failed = Some(s);
+                            break;
+                        }
+                    };
                     let Value::Bool(k) = k else {
                         return err(format!("{name}: the predicate returned {k:?}"));
                     };
@@ -3213,7 +3282,10 @@ impl<'a> Interp<'a> {
                     .zip(keep)
                     .filter_map(|(x, k)| k.then_some(x))
                     .collect();
-                Ok(Value::Unit)
+                match failed {
+                    Some(s) => Err(s),
+                    None => Ok(Value::Unit),
+                }
             }
             ("dedup", []) => {
                 // A run of equal elements keeps its first; the rest drop in
@@ -3609,7 +3681,13 @@ impl<'a> Interp<'a> {
             };
             all.push(a);
         }
-        self.call(&f.body.instance.name, all)
+        let v = self.call(&f.body.instance.name, all)?;
+        // A closure a native calls that left by its exits for a panic
+        // (§11.12): the native stops, and its call takes the panic.
+        if self.panic_unwinding() {
+            return Err(Stop::Abort(AbortReason::Panic));
+        }
+        Ok(v)
     }
 
     /// Writes a call's result to its destination and goes on to `target`.
@@ -3690,6 +3768,16 @@ impl<'a> Interp<'a> {
     /// says; an environment it only borrowed is dropped once a by-value
     /// call returns.
     fn call_erased(&mut self, f: Value, args: Vec<Value>) -> R<Value> {
+        let v = self.call_erased_here(f, args)?;
+        // As in `call_callee` (§11.12).
+        if self.panic_unwinding() {
+            return Err(Stop::Abort(AbortReason::Panic));
+        }
+        Ok(v)
+    }
+
+    /// [`Interp::call_erased`]'s call.
+    fn call_erased_here(&mut self, f: Value, args: Vec<Value>) -> R<Value> {
         let (f, by_value) = match f {
             Value::Ref(a) => (self.slot(&a)?, false),
             v => (v, true),
@@ -6078,7 +6166,8 @@ impl<'a> Interp<'a> {
         match (base, method) {
             // A group's id; its `limit` matters only under the executor,
             // where a spawn waits for room (B-2026-10-15-30).
-            ("TaskGroup", "new") => {
+            // An isolating group is one that holds such a group (§11.12).
+            ("TaskGroup", "new" | "isolating") => {
                 let limit = match args.first() {
                     Some(Value::Int(n)) => *n,
                     _ => i128::from(i64::MAX),
@@ -6088,8 +6177,13 @@ impl<'a> Interp<'a> {
                     live: 0,
                     owner: self.cur_task,
                     deadline: None,
+                    isolating: method == "isolating",
                 });
-                Ok(Value::Agg(vec![Value::Int(self.groups.len() as i128)]))
+                let g = Value::Agg(vec![Value::Int(self.groups.len() as i128)]);
+                Ok(match method {
+                    "isolating" => Value::Agg(vec![g]),
+                    _ => g,
+                })
             }
             ("TaskGroup", "cancel") => {
                 if let Some(g) = args.first() {
@@ -6116,8 +6210,26 @@ impl<'a> Interp<'a> {
                 let (Some(f), Some(&fty)) = (args.get(1), arg_tys.get(1)) else {
                     return err(format!("{name} takes a closure"));
                 };
+                // Run in place, as a task of its group: an isolating one
+                // takes its panic (§11.12), which leaves it by its exits.
+                let isolating = match args.first() {
+                    Some(g) => {
+                        let g = self.group_id(g)?;
+                        g.checked_sub(1)
+                            .and_then(|g| self.groups.get(g))
+                            .is_some_and(|g| g.isolating)
+                    }
+                    None => false,
+                };
+                self.inline_tasks.push((isolating, None));
                 let mut callee = self.hold_callee(f.clone(), fty, name)?;
                 let v = self.call_callee(&mut callee, Vec::new());
+                let panicked = self.inline_tasks.pop().and_then(|t| t.1);
+                if let Some((message, location)) = panicked {
+                    *self.unwind_flag() = false;
+                    self.release_callee(callee, fty)?;
+                    return Ok(Value::Agg(vec![self.panicked_value(message, location)]));
+                }
                 self.release_callee(callee, fty)?;
                 Ok(Value::Agg(vec![v?]))
             }
@@ -6222,6 +6334,7 @@ impl<'a> Interp<'a> {
             cancelled: false,
             torn: false,
             unwind: false,
+            panicked: None,
         });
         self.spawned.push(self.tasks.len() - 1);
         Ok(Value::Agg(vec![Value::Int(handle as i128), Value::Unit]))
@@ -6246,16 +6359,24 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
-    /// Cancels each group whose deadline has passed (§11.10).
+    /// Cancels each group whose deadline has passed (§11.10). It runs
+    /// between tasks, so no task is the running one: the last to run is
+    /// suspended too, and is torn down now like the rest.
     fn fire_deadlines(&mut self) -> R<()> {
         let now = std::time::Instant::now();
+        let ran = std::mem::replace(&mut self.cur_task, usize::MAX);
+        let mut fired = Ok(());
         for g in 1..=self.groups.len() {
             if self.groups[g - 1].deadline.is_some_and(|at| at <= now) {
                 self.groups[g - 1].deadline = None;
-                self.cancel_group(g)?;
+                fired = self.cancel_group(g);
+                if fired.is_err() {
+                    break;
+                }
             }
         }
-        Ok(())
+        self.cur_task = ran;
+        fired
     }
 
     /// Whether spawned task `t` has returned or been torn down.
@@ -6265,6 +6386,127 @@ impl<'a> Interp<'a> {
             .checked_sub(1)
             .and_then(|h| self.handles.get(h))
             .is_none_or(|h| h.done)
+    }
+
+    /// The running task's `__unwind` flag: its slot's, or the root's where
+    /// there is no task table.
+    fn unwind_flag(&mut self) -> &mut bool {
+        match self.tasks.get_mut(self.cur_task) {
+            Some(t) => &mut t.unwind,
+            None => &mut self.root_unwind,
+        }
+    }
+
+    /// `Err(TaskFailed.Panicked { message, location })` (§11.12).
+    fn panicked_value(&mut self, message: String, location: String) -> Value {
+        let message = self.alloc_box("String", Value::Str(message));
+        let location = self.alloc_box("String", Value::Str(location));
+        Value::Variant(1, vec![Value::Variant(0, vec![message, location])])
+    }
+
+    /// Where the running code's panic goes (§11.12): the task run in place
+    /// that it is inside, or else the running task, when that is a task of
+    /// an isolating group; `None` when the panic ends the process.
+    fn panic_slot(&mut self) -> Option<&mut Option<(String, String)>> {
+        if let Some(t) = self.inline_tasks.last_mut() {
+            return t.0.then_some(&mut t.1);
+        }
+        let t = self.tasks.get(self.cur_task)?;
+        let isolating = t
+            .group
+            .checked_sub(1)
+            .and_then(|g| self.groups.get(g))
+            .is_some_and(|g| g.isolating);
+        if !isolating {
+            return None;
+        }
+        Some(&mut self.tasks[self.cur_task].panicked)
+    }
+
+    /// Whether the running code is leaving by its exits for a panic.
+    #[inline]
+    fn panic_unwinding(&mut self) -> bool {
+        *self.unwind_flag() && self.panic_slot().is_some_and(|p| p.is_some())
+    }
+
+    /// `next`, the outcome of terminator `kind` of `body` at `span`, as a
+    /// task of an isolating group takes it (§11.12). A panic at a call with
+    /// a cancel exit records the task's failure, once, and goes on to the
+    /// exit, which the task leaves by as a teardown does; the groups the
+    /// task made are cancelled first, as for a cancelled task (§11.9). A
+    /// call that returns while a panic unwinds, with no exit to leave by,
+    /// ends the process with that panic instead, as would a panic there.
+    fn contain(
+        &mut self,
+        body: &'a Body,
+        kind: &TerminatorKind,
+        span: crate::token::Span,
+        next: R<Option<BasicBlock>>,
+    ) -> R<Option<BasicBlock>> {
+        // The common case first: no abort, and nothing unwinding.
+        match &next {
+            Err(Stop::Abort(_)) => {}
+            Ok(Some(_)) if self.panic_unwinding() => {}
+            _ => return next,
+        }
+        let (TerminatorKind::Call {
+            target: Some(target),
+            ..
+        }
+        | TerminatorKind::Drop { target, .. }) = kind
+        else {
+            return next;
+        };
+        let exit = matches!(kind, TerminatorKind::Call { .. })
+            && coroutine::has_cancel_exit(body, *target);
+        match next {
+            Err(Stop::Abort(reason)) if exit => {
+                let fresh = self.panic_slot().is_some_and(|p| p.is_none());
+                if fresh {
+                    let message = match (self.panic_message.take(), &reason) {
+                        (Some(m), _) => m,
+                        (None, r) => abort_text(r).to_string(),
+                    };
+                    let (file, line) = source_at(span.line);
+                    let location = format!("{file}:{line}:{}", span.column);
+                    if let Some(p) = self.panic_slot() {
+                        *p = Some((message, location));
+                    }
+                    if self.inline_tasks.is_empty() {
+                        let t = self.cur_task;
+                        let made: Vec<usize> = (1..=self.groups.len())
+                            .filter(|&i| self.groups[i - 1].owner == t)
+                            .collect();
+                        for g in made {
+                            self.cancel_group(g)?;
+                        }
+                    }
+                } else if self.panic_slot().is_none() {
+                    return Err(Stop::Abort(reason));
+                }
+                *self.unwind_flag() = true;
+                Ok(Some(*target))
+            }
+            Ok(Some(b)) if !exit && self.panic_unwinding() => {
+                let unwinds = matches!(
+                    kind,
+                    TerminatorKind::Call { func, .. }
+                        if matches!(coroutine::direct_callee(func), Some(coroutine::UNWIND | coroutine::UNWINDING))
+                );
+                if unwinds {
+                    return Ok(Some(b));
+                }
+                // The task's own body, which called the closure: it drops
+                // the closure and returns, as for a teardown.
+                if coroutine::is_task_body(&body.instance.name) {
+                    return Ok(Some(b));
+                }
+                *self.unwind_flag() = false;
+                self.panic_message = self.panic_slot().and_then(|p| p.take()).map(|p| p.0);
+                Err(Stop::Abort(AbortReason::Panic))
+            }
+            next => next,
+        }
     }
 
     /// Spawned task `t`, suspended, is cancelled (§11.9): the groups it
@@ -6355,9 +6597,31 @@ impl<'a> Interp<'a> {
             if let Some(g) = group.checked_sub(1).and_then(|g| self.groups.get_mut(g)) {
                 g.live -= 1;
             }
-            if let Some(h) = handle.checked_sub(1).and_then(|h| self.handles.get_mut(h)) {
+            // A task of an isolating group gives its handle the `Err` of
+            // its panic, or `Cancelled` (§11.12), unless the handle is gone.
+            let panicked = self.tasks[t].panicked.take();
+            let slot = handle.checked_sub(1).filter(|&h| h < self.handles.len());
+            let isolating = group
+                .checked_sub(1)
+                .and_then(|g| self.groups.get(g))
+                .is_some_and(|g| g.isolating);
+            let kept = slot.is_some_and(|h| !self.handles[h].detached);
+            let failed = match panicked {
+                Some((message, location)) if kept => {
+                    Some(Some(self.panicked_value(message, location)))
+                }
+                Some(_) => Some(None),
+                None if isolating && kept => {
+                    Some(Some(Value::Variant(1, vec![Value::Variant(1, Vec::new())])))
+                }
+                None => None,
+            };
+            if let Some(h) = slot.map(|h| &mut self.handles[h]) {
                 h.done = true;
-                h.cancelled = true;
+                match failed {
+                    Some(v) => h.result = v,
+                    None => h.cancelled = true,
+                }
             }
             return Ok(());
         }
@@ -7258,9 +7522,9 @@ impl<'a> Interp<'a> {
                                 Stop::Error(format!("{name} needs its closure's type"))
                             })?;
                             let mut f = self.hold_callee(val.clone(), fty, name)?;
-                            let v = self.call_callee(&mut f, Vec::new())?;
+                            let v = self.call_callee(&mut f, Vec::new());
                             self.release_callee(f, fty)?;
-                            v
+                            v?
                         } else {
                             val.clone()
                         };
@@ -10570,7 +10834,9 @@ impl<'a> Interp<'a> {
                 }
                 _ => self.terminator(body, &block.terminator.kind, strict),
             };
-            let next = next
+            let span = block.terminator.source_info.span;
+            let next = self
+                .contain(body, &block.terminator.kind, span, next)
                 .map_err(|s| self.report_abort(s, block.terminator.source_info.span))
                 .map_err(|s| locate(s, body, format!("{bb}[term]")))?;
             match next {
@@ -10597,8 +10863,10 @@ impl<'a> Interp<'a> {
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
             self.tick()?;
+            let next = self.terminator(body, &block.terminator.kind, strict);
+            let span = block.terminator.source_info.span;
             let next = self
-                .terminator(body, &block.terminator.kind, strict)
+                .contain(body, &block.terminator.kind, span, next)
                 .map_err(|s| self.report_abort(s, block.terminator.source_info.span))
                 .map_err(|s| locate(s, body, format!("{bb}[term]")))?;
             match next {
@@ -10625,13 +10893,9 @@ impl<'a> Interp<'a> {
         if let Stop::Abort(reason) = &s {
             if !self.abort_reported && !in_library {
                 self.abort_reported = true;
-                let msg = match (self.panic_message.take(), reason) {
-                    (Some(m), _) => m,
-                    (None, AbortReason::Panic) => "explicit panic".to_string(),
-                    (None, AbortReason::Overflow) => "integer overflow".to_string(),
-                    (None, AbortReason::DivByZero) => "division by zero".to_string(),
-                    (None, AbortReason::BoundsCheck) => "index out of bounds".to_string(),
-                    (None, AbortReason::UnreachableArm) => "entered unreachable code".to_string(),
+                let msg = match self.panic_message.take() {
+                    Some(m) => m,
+                    None => abort_text(reason).to_string(),
                 };
                 let (file, line) = source_at(span.line);
                 let at = format!("{file}:{line}:{}", span.column);
@@ -12710,6 +12974,7 @@ impl<'a> Interp<'a> {
             cancelled: false,
             torn: false,
             unwind: false,
+            panicked: None,
         });
         self.run_tasks(entry)
     }
@@ -14805,6 +15070,9 @@ struct TaskSlot {
     torn: bool,
     /// A frame of its chain is leaving by its cancel exit (`__unwind`).
     unwind: bool,
+    /// It panicked in an isolating group (§11.12): the message and the
+    /// location, which its handle holds once it is torn down.
+    panicked: Option<(String, String)>,
 }
 
 /// A spawned task's handle under the executor: its result once the task
@@ -14827,6 +15095,19 @@ struct GroupSlot {
     owner: usize,
     /// When it is cancelled (`with_deadline`, §11.10), until then.
     deadline: Option<std::time::Instant>,
+    /// It contains its tasks' panics (`TaskGroup.isolating`, §11.12).
+    isolating: bool,
+}
+
+/// What an abort for `reason` reports when no message was given.
+fn abort_text(reason: &AbortReason) -> &'static str {
+    match reason {
+        AbortReason::Panic => "explicit panic",
+        AbortReason::Overflow => "integer overflow",
+        AbortReason::DivByZero => "division by zero",
+        AbortReason::BoundsCheck => "index out of bounds",
+        AbortReason::UnreachableArm => "entered unreachable code",
+    }
 }
 
 /// What a parked task waits for: the condition its last `__ready` saw

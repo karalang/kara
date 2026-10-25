@@ -60,13 +60,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 32 |
 | false-positive | 28 |
-| missing-feature | 19 |
+| missing-feature | 20 |
 | perf | 10 |
 | miscompile | 8 |
 | soundness | 6 |
 | run-vs-build | 6 |
 | other | 2 |
 | codegen-gap | 2 |
+| crash | 1 |
 
 ### By surface
 
@@ -74,8 +75,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 48 |
 | codegen | 22 |
-| mir | 19 |
-| interp | 16 |
+| mir | 20 |
+| interp | 17 |
 | cli | 13 |
 | ownership | 10 |
 | runtime | 8 |
@@ -145,6 +146,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-18 | 2026-10-25 | mir | low | v2 project build (`karac build` with no file) does not print the legacy project-build reports (discovered modules, JSON output with resolve diagnostics, entry/src-dir refusals, manifest build target, wasm platform module, panic=unwind refusal) or the dependency summary; 12 cli tests ignored | — |
 | B-2026-10-25-19 | 2026-10-25 | ownership | low | `karac fix` applies both the `: Str` fix-it on a string-literal `let` (B-2026-10-24-33) and the ownership pass's `.clone()` fix-it for a 'moved' error on the same binding, and the combined result fails check: `Str.clone()` is a `String`, and the move only existed while the binding was a `String` | — |
 | B-2026-10-25-20 | 2026-10-25 | ownership | high | `karac check` accepts an ESCAPING closure that uses a bare (borrowed) non-Copy, non-handle parameter as a whole (`new_op(|x| x + size(p))`, `p: P` with a `String` field): the closure can neither move it out of the borrow nor outlive it, so v2 captures the reference and it dangles | — |
+| B-2026-10-25-21 | 2026-10-25 | interp | medium | On the MIR interpreter, a group's deadline never tears down the task that ran last before it fired: that task is marked cancelled but stays parked, and the run stops with a deadlock error | — |
+| B-2026-10-25-22 | 2026-10-25 | mir | low | `IsolatingGroup.spawn` of a named function (`g.spawn(work)`) is refused at build with `an isolating group's spawn of other than a closure written there is not lowered yet`; `karac check` accepts it | — |
 
 ### Fixed
 

@@ -1,0 +1,41 @@
+struct Noisy { name: String }
+
+impl Drop for Noisy {
+    fn drop(mut ref self) {
+        println(f"drop {self.name}");
+    }
+}
+
+fn risky(n: i64) -> i64 {
+    let _g = Noisy { name: f"risky {n}" };
+    if n == 2 {
+        panic("bad request");
+    }
+    n * 10
+}
+
+fn show(name: String, r: Result[i64, TaskFailed]) {
+    match r {
+        Ok(v) => println(f"{name} {v}"),
+        Err(TaskFailed.Panicked { message, location }) => {
+            let at = location.contains(":");
+            println(f"{name} panicked: {message} (located {at})");
+        }
+        Err(TaskFailed.Cancelled) => println(f"{name} cancelled"),
+    }
+}
+
+fn main() {
+    let g = TaskGroup.isolating();
+    let a = g.spawn(|| risky(1));
+    let b = g.spawn(|| {
+        defer println("defer in b");
+        let _h = Noisy { name: "b's own" };
+        risky(2)
+    });
+    let c = g.spawn(|| risky(3));
+    show("a", a.join());
+    show("b", b.join());
+    show("c", c.join());
+    println("main goes on");
+}

@@ -1,0 +1,9 @@
+drop risky 1
+drop risky 2
+drop b's own
+defer in b
+drop risky 3
+a 10
+b panicked: bad request (located true)
+c 30
+main goes on

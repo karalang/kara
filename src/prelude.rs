@@ -396,6 +396,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // handle returned by every `spawn` call. The free-fn `spawn`
     // counterpart lives in `PRELUDE_FUNCTIONS` below.
     "TaskGroup",
+    // A group that contains its tasks' panics (core-semantics §11.12).
+    "IsolatingGroup",
     "TaskHandle",
     // Why a task gave no value: `TaskHandle.try_join`'s error.
     "TaskFailed",
@@ -2201,6 +2203,8 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "Receiver",
             "SendError",
             "TaskGroup",
+            "IsolatingGroup",
+            "TaskFailed",
             "TaskHandle",
             "Mutex",
             "Atomic",

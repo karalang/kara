@@ -839,6 +839,16 @@ impl EffectReport {
             .collect()
     }
 
+    /// The instances that may panic: a `panics` effect, or an unknown one
+    /// (core-semantics §11.12).
+    pub fn panicking(&self) -> BTreeSet<String> {
+        self.summaries
+            .iter()
+            .filter(|(_, s)| s.unknown || s.effects.iter().any(|e| e.verb == Verb::Panics))
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
     /// `{"functions": [{"instance", "effects", "unknown_because", "sites":
     /// [{"block", "effects"}], "par_conflicts": [{"region", "line",
     /// "branches", "first": {"block", "effect"}, "second"}]}]}`, instances
@@ -1223,6 +1233,34 @@ fn refers(tcx: &TyCtxt, ty: Ty, depth: u32) -> bool {
     }
 }
 
+/// Whether the native `name` may panic, by its own effects: it is known to,
+/// or this table does not know it.
+pub fn native_may_panic(name: &str) -> bool {
+    let (base, method) = split_native(name);
+    native_effects(base, method).is_none_or(|t| t.iter().any(|e| e.0 == Verb::Panics))
+}
+
+/// Whether `arg` of a call in `body` is a closure or function (or a
+/// reference to one), which the callee may call.
+pub fn is_fn_value(body: &Body, tys: &TyInterner, arg: &Operand) -> bool {
+    let ty = match arg {
+        Operand::Copy(p) | Operand::Move(p) => match place_ty(body, tys, p) {
+            Ok(pt) => pt.ty,
+            Err(_) => return true,
+        },
+        Operand::Const(c) => c.ty,
+    };
+    let tcx = tys.tcx();
+    let mut t = ty;
+    while let SK::Ref(i) | SK::MutRef(i) = tcx.kind(t) {
+        t = i;
+    }
+    matches!(
+        tcx.kind(t),
+        SK::Closure { .. } | SK::FnDef { .. } | SK::Fn { .. }
+    )
+}
+
 /// What a library native does, by `(type, method)` with the type's
 /// arguments stripped; `None` for a native this table does not know, which
 /// the caller turns into an unknown effect. The `usize` is the argument
@@ -1272,6 +1310,8 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // A task's teardown (core-semantics §11.9): flags of the running
         // task.
         ("__cancelled" | "__unwinding" | "__unwind", "") => vec![],
+        // An `Abort` in a program with an isolating group (§11.12).
+        ("__panic", "") => vec![PANICS],
         ("__select_park", "") => vec![(Blocks, "", None)],
         // The collections the MIR interpreter implements natively: they
         // allocate, and an out-of-range index or a missing key panics.
@@ -1304,7 +1344,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Mutex", "lock" | "try_lock" | "acquire") => vec![(Blocks, "", None)],
         // A group's own natives; `spawn` is charged with its task's effects
         // in `call_effects`.
-        ("TaskGroup", "new" | "end" | "drop" | "cancel" | "__deadline_at") => vec![HEAP],
+        ("TaskGroup", "new" | "isolating" | "end" | "drop" | "cancel" | "__deadline_at") => {
+            vec![HEAP]
+        }
         ("TaskHandle", "join" | "try_join") => vec![(Blocks, "", None)],
         ("Mutex", "release") => vec![],
         // D6: channels and connections key their effects by the endpoint

@@ -916,10 +916,11 @@ impl<'a> super::TypeChecker<'a> {
         // TaskGroup; B-2026-10-15-11): the baked `new()` takes nothing, so
         // the label is typed here, and the natives take the limit as their
         // argument.
+        // `TaskGroup.isolating(limit: n)` (§11.12) the same way.
         if let (ExprKind::Path { segments, .. }, [limit]) = (&callee.kind, args) {
             if segments.len() == 2
                 && segments[0] == "TaskGroup"
-                && segments[1] == "new"
+                && matches!(segments[1].as_str(), "new" | "isolating")
                 && limit.label.as_deref() == Some("limit")
                 && (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
                 && self.env.impls.iter().any(|imp| {
@@ -927,13 +928,18 @@ impl<'a> super::TypeChecker<'a> {
                         && imp.trait_name.is_none()
                         && imp
                             .methods
-                            .get("new")
+                            .get(segments[1].as_str())
                             .is_some_and(|sig| sig.params.is_empty())
                 })
             {
                 self.check_expr(&limit.value, &Type::Int(IntSize::I64));
+                let made = if segments[1] == "new" {
+                    "TaskGroup"
+                } else {
+                    "IsolatingGroup"
+                };
                 let ty = Type::Named {
-                    name: "TaskGroup".to_string(),
+                    name: made.to_string(),
                     args: Vec::new(),
                 };
                 self.record_expr_type(span, &ty);

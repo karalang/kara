@@ -676,10 +676,11 @@ impl<'a> super::TypeChecker<'a> {
                     // hardcoded match here is its v1 mirror at the
                     // call-site dispatch point.
                     if let Type::Named { name, .. } = &elem {
-                        let is_scope_local = name == "TaskGroup"
-                            || (name == "TaskHandle"
-                                && !(self.cli_lint_overrides.strict_core
-                                    || self.library_methods_from_source));
+                        let is_scope_local =
+                            matches!(name.as_str(), "TaskGroup" | "IsolatingGroup")
+                                || (name == "TaskHandle"
+                                    && !(self.cli_lint_overrides.strict_core
+                                        || self.library_methods_from_source));
                         if is_scope_local {
                             self.type_error(
                                 format!(
@@ -1041,7 +1042,7 @@ impl<'a> super::TypeChecker<'a> {
                 // being a laxer door to the same place.
                 "try_send" => {
                     if let Type::Named { name, .. } = &elem {
-                        if name == "TaskGroup"
+                        if matches!(name.as_str(), "TaskGroup" | "IsolatingGroup")
                             || (name == "TaskHandle"
                                 && !(self.cli_lint_overrides.strict_core
                                     || self.library_methods_from_source))

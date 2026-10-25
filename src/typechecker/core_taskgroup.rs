@@ -222,15 +222,17 @@ impl Walk<'_, '_> {
         self.scopes.pop();
     }
 
+    /// `TaskGroup.new()`, or `TaskGroup.isolating()` (§11.12), whose group
+    /// borrows the same way.
     fn is_taskgroup_new(e: &Expr) -> bool {
+        let makes = |m: &str| matches!(m, "new" | "isolating");
         match &e.kind {
             ExprKind::MethodCall { object, method, .. } => {
-                method == "new"
-                    && matches!(&object.kind, ExprKind::Identifier(n) if n == "TaskGroup")
+                makes(method) && matches!(&object.kind, ExprKind::Identifier(n) if n == "TaskGroup")
             }
             ExprKind::Call { callee, .. } => matches!(
                 &callee.kind,
-                ExprKind::Path { segments, .. } if segments.len() == 2 && segments[0] == "TaskGroup" && segments[1] == "new"
+                ExprKind::Path { segments, .. } if segments.len() == 2 && segments[0] == "TaskGroup" && makes(&segments[1])
             ),
             _ => false,
         }
@@ -420,7 +422,7 @@ impl Walk<'_, '_> {
     /// tracked as a group declared before them all, open to the end.
     fn parameter_group(&mut self, name: &str, object: &Expr) -> Option<usize> {
         let (ty, _) = self.node_types.get(&object.id)?;
-        let is_group = |t: &Type| matches!(t, Type::Named { name, .. } if name == "TaskGroup");
+        let is_group = |t: &Type| matches!(t, Type::Named { name, .. } if name == "TaskGroup" || name == "IsolatingGroup");
         let held = match ty {
             Type::Ref(inner) | Type::MutRef(inner) => is_group(inner),
             t => is_group(t),
