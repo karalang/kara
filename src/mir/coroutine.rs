@@ -5,7 +5,7 @@
 //! A suspending call is an ordinary `Call` to every pass before this one, so
 //! the analysis runs on elaborated, borrow-checked bodies and only reads them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map, BTreeMap, BTreeSet};
 
 use crate::ids::{DefId, NodeId};
 
@@ -1018,6 +1018,14 @@ pub fn task_name(closure_body: &str) -> String {
     format!("{closure_body}#task")
 }
 
+/// The task body that runs a spawned closure `C` the spawning body was
+/// handed by reference (`std.time.timeout`'s `f`):
+/// `C#ref#task(env: ref C) -> T` calls `C(env)`, and the closure's owner
+/// drops it.
+fn ref_task_name(closure_body: &str) -> String {
+    format!("{closure_body}#ref#task")
+}
+
 /// Whether `name` is a task body (`task_name`), or its resume.
 pub fn is_task_body(name: &str) -> bool {
     name.ends_with("#task") || name.ends_with("#task#resume")
@@ -1025,8 +1033,10 @@ pub fn is_task_body(name: &str) -> bool {
 
 /// The spawned closures of `bodies`, by their bodies' names: each
 /// `TaskGroup.spawn(g, move c)` whose `c` is made in the same body by a
-/// closure aggregate, with the block of the call and that closure's body.
-fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String)> {
+/// closure aggregate, with the block of the call and that closure's body,
+/// or whose `c` the body was handed, by value or by reference (the last
+/// item says which).
+fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String, bool)> {
     // A closure's body takes its environment first, by reference, or by
     // value when it moves a capture out; the environment's type tells a
     // generic closure's instances apart.
@@ -1063,17 +1073,33 @@ fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String)>
             let TerminatorKind::Call { args, .. } = &b.block(bb).terminator.kind else {
                 continue;
             };
-            let Some(Operand::Move(c)) = args.get(1) else {
+            let Some(Operand::Move(c) | Operand::Copy(c)) = args.get(1) else {
                 continue;
+            };
+            // A closure made here, or one the body was handed (a generic
+            // function's closure parameter, as `std.time.timeout` spawns
+            // its `f`, which arrives by reference): its type names its body
+            // either way.
+            let handed = || match super::place_ty::place_ty(b, tys, c).map(|t| t.ty) {
+                Ok(t) => match tys.kind(t) {
+                    TyKind::Closure(def, _) => Some((def, t, false)),
+                    TyKind::Ref(i) | TyKind::MutRef(i) => match tys.kind(i) {
+                        TyKind::Closure(def, _) => Some((def, i, true)),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                Err(_) => None,
             };
             let closure = c
                 .projection
                 .is_empty()
-                .then(|| made.get(&c.local))
+                .then(|| made.get(&c.local).map(|&(d, env)| (d, env, false)))
                 .flatten()
-                .and_then(|&(d, env)| body_of(d, env));
-            if let Some(cb) = closure {
-                out.push((bi, bb, cb.instance.name.clone()));
+                .or_else(handed)
+                .and_then(|(d, env, by_ref)| Some((body_of(d, env)?, by_ref)));
+            if let Some((cb, by_ref)) = closure {
+                out.push((bi, bb, cb.instance.name.clone(), by_ref));
             }
         }
     }
@@ -1083,14 +1109,24 @@ fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String)>
 /// `C#task`, for the closure body `c` (see `task_name`). A closure that
 /// takes its environment by value (it moves a capture out) is called with
 /// it, and drops it itself: `C#task(env) { _0 = C(move env); return }`.
-fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
+/// A closure `handed` by reference runs as `C#ref#task(env: ref C)`, which
+/// passes the reference on (`ref_task_name`).
+fn task_body(c: &Body, tys: &TyInterner, handed: bool) -> Result<Body, String> {
     let si = SourceInfo {
         span: c.span,
         scope: SourceScope(0),
     };
     let env_ref = c.local(Local(1)).ty;
-    // A closure that mutates a capture takes its environment `mut ref`.
+    if handed && !matches!(tys.kind(env_ref), TyKind::Ref(_) | TyKind::MutRef(_)) {
+        return Err(format!(
+            "{} moves a capture out, so a task cannot run it through the reference it was handed",
+            c.instance.name
+        ));
+    }
+    // A closure that mutates a capture takes its environment `mut ref`;
+    // a handed one's reference is its environment as it is.
     let (env, by_ref, kind) = match tys.kind(env_ref) {
+        _ if handed => (env_ref, false, BorrowKind::Shared),
         TyKind::Ref(t) => (t, true, BorrowKind::Shared),
         TyKind::MutRef(t) => (t, true, BorrowKind::Mut),
         _ => (env_ref, false, BorrowKind::Shared),
@@ -1172,7 +1208,11 @@ fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
         instance: InstanceId {
             def: DefId(0),
             args: vec![],
-            name: task_name(&c.instance.name),
+            name: if handed {
+                ref_task_name(&c.instance.name)
+            } else {
+                task_name(&c.instance.name)
+            },
         },
         locals,
         arg_count: 1,
@@ -1192,18 +1232,25 @@ fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
 /// closure's task body; returns those task bodies, one per spawned closure.
 fn rewrite_spawns(bodies: &mut [Body], tys: &TyInterner) -> Result<Vec<Body>, String> {
     let found = spawns(bodies, tys);
+    let task = |c: &str, handed| {
+        if handed {
+            ref_task_name(c)
+        } else {
+            task_name(c)
+        }
+    };
     let mut tasks: BTreeMap<String, Body> = BTreeMap::new();
-    for (_, _, c) in &found {
-        if !tasks.contains_key(c) {
+    for (_, _, c, handed) in &found {
+        if let btree_map::Entry::Vacant(e) = tasks.entry(task(c, *handed)) {
             let cb = bodies
                 .iter()
                 .find(|b| &b.instance.name == c)
                 .ok_or_else(|| format!("no body for the spawned closure {c}"))?;
-            tasks.insert(c.clone(), task_body(cb, tys)?);
+            e.insert(task_body(cb, tys, *handed)?);
         }
     }
     let str_t = tys.intern(TyKind::Str);
-    for (bi, bb, c) in found {
+    for (bi, bb, c, handed) in found {
         let t = &mut bodies[bi].blocks[bb.index()].terminator.kind;
         let TerminatorKind::Call { func, args, .. } = t else {
             unreachable!("spawns finds calls");
@@ -1220,7 +1267,7 @@ fn rewrite_spawns(bodies: &mut [Body], tys: &TyInterner) -> Result<Vec<Body>, St
             1,
             Operand::Const(Const {
                 ty: str_t,
-                kind: ConstKind::Str(resume_name(&task_name(&c))),
+                kind: ConstKind::Str(resume_name(&task(&c, handed))),
             }),
         );
     }
@@ -1492,7 +1539,10 @@ pub fn transform_from(
     // body.
     let spawned: BTreeSet<String> = bodies
         .iter()
-        .filter(|b| task_names.contains(&task_name(&b.instance.name)))
+        .filter(|b| {
+            task_names.contains(&task_name(&b.instance.name))
+                || task_names.contains(&ref_task_name(&b.instance.name))
+        })
         .map(|b| b.instance.name.clone())
         .collect();
     let direct: BTreeSet<String> = set.difference(&spawned).cloned().collect();
