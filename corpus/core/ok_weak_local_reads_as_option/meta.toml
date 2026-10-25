@@ -1,0 +1,11 @@
+source = "corpus/core/ok_weak_local_reads_as_option"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["weak", "shared"]
+class = "a"
+expected_from = "spec"
+rules = ["6.5"]
+backends = []
+env = {}
+note = "B-2026-10-25-45: a `weak` local or parameter downgrades a strong handle stored into it and reads as `Option[T]`, as a `weak` field does (design.md § Cycles and `weak`). Expected output worked by hand: `gone` holds the only reference to a temporary, so it reads `None`; `depth` walks c -> b -> a."

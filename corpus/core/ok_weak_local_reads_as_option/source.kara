@@ -1,0 +1,47 @@
+// A `weak` local or parameter is storage, as a `weak` field is (design.md
+// § Cycles and `weak`): a strong handle stored into it is downgraded, and a
+// read of it upgrades to `Option[T]`, `None` once the object is gone.
+shared struct Node {
+    id: i64,
+    mut parent: weak Node,
+}
+
+fn id_of(p: weak Node) -> i64 {
+    match p {
+        Some(n) => n.id,
+        None => -1,
+    }
+}
+
+fn depth(n: Node) -> i64 {
+    let mut d = 0;
+    let mut cur: weak Node = n;
+    while let Some(c) = cur {
+        d += 1;
+        cur = c.parent;
+    }
+    d
+}
+
+fn main() {
+    let a = Node { id: 1, parent: None };
+    let w: weak Node = a;
+    println(f"{w.is_some()}");
+    match w {
+        Some(n) => println(n.id),
+        None => println("gone"),
+    }
+    println(id_of(a));
+    println(id_of(w));
+    let b = Node { id: 2, parent: a };
+    let mut v: weak Node = b;
+    println(id_of(v));
+    v = a;
+    if let Some(n) = v {
+        println(n.id + 10);
+    }
+    let gone: weak Node = Node { id: 3, parent: None };
+    println(gone.is_none());
+    let c = Node { id: 4, parent: b };
+    println(depth(c));
+}

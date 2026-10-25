@@ -2863,11 +2863,31 @@ impl<'l, 'a> Bx<'l, 'a> {
         match &e.kind {
             ExprKind::Identifier(_) => {
                 if let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) {
-                    if let Some(&l) = self.locals.get(sym) {
-                        return Ok(self.b.local_ty(l));
-                    }
-                    if let Some(p) = self.captured.get(sym).cloned() {
-                        return Ok(self.place_type(&p));
+                    let t = match (self.locals.get(sym), self.captured.get(sym).cloned()) {
+                        (Some(&l), _) => Some(self.b.local_ty(l)),
+                        (None, Some(p)) => Some(self.place_type(&p)),
+                        (None, None) => None,
+                    };
+                    if let Some(t) = t {
+                        // A `weak` local read as a value (the checker typed
+                        // it an `Option`) is the `Option` of its referent,
+                        // which `expr_place` upgrades it to
+                        // (B-2026-10-25-45).
+                        // A borrowed `weak` parameter reads the same way.
+                        let slot = match self.tys().tcx().kind(t) {
+                            HK::Ref(i) => i,
+                            _ => t,
+                        };
+                        if let (HK::Weak(inner), Some(&read)) =
+                            (self.tys().tcx().kind(slot), self.lcx.node_types.get(&e.id))
+                        {
+                            if !matches!(self.tys().tcx().kind(read), HK::Weak(_)) {
+                                if let Some(o) = self.option_of(inner) {
+                                    return Ok(o);
+                                }
+                            }
+                        }
+                        return Ok(t);
                     }
                 }
             }
@@ -5679,22 +5699,27 @@ impl<'l, 'a> Bx<'l, 'a> {
         // while the object lives, else `None` (design.md, Cycles and
         // `weak`).
         let pt = self.place_type(&p);
-        let HK::Weak(inner) = self.tys().tcx().kind(pt) else {
-            return Ok(p);
+        // A borrowed `weak` parameter is upgraded through its reference
+        // (B-2026-10-25-45).
+        let by_ref = match self.tys().tcx().kind(pt) {
+            HK::Ref(i) if matches!(self.tys().tcx().kind(i), HK::Weak(_)) => true,
+            HK::Weak(_) => false,
+            _ => return Ok(p),
         };
         let ot = self.expr_ty(e)?;
-        if matches!(self.tys().tcx().kind(ot), HK::Weak(_)) {
+        if matches!(self.tys().tcx().kind(ot), HK::Weak(_) | HK::Ref(_)) {
             return Ok(p);
         }
-        let rt = self.tys().tcx().reference(pt, false);
-        let r = self.temp(rt);
-        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
-        let _ = inner;
+        let r = if by_ref {
+            Operand::Copy(p)
+        } else {
+            let rt = self.tys().tcx().reference(pt, false);
+            let r = self.temp(rt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+            Operand::Move(Place::local(r))
+        };
         let l = self.temp(ot);
-        self.assign(
-            l,
-            Rvalue::Cast(CastKind::Upgrade, Operand::Move(Place::local(r)), ot),
-        );
+        self.assign(l, Rvalue::Cast(CastKind::Upgrade, r, ot));
         if self.needs_drop(ot) {
             self.schedule(ScopeEntry::Drop(Place::local(l)));
         }
@@ -6285,6 +6310,22 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `dest = <a counted copy of place>`, for a handle or handle aggregate.
     fn count_copy(&mut self, place: Place, t: Ty, dest: Place) {
+        // A strong handle copied into a `weak` local is a new weak reference
+        // to its object, made through a borrow: no strong count is taken
+        // (B-2026-10-25-45).
+        let dt = self.place_type(&dest);
+        if matches!(self.tys().tcx().kind(dt), HK::Weak(_))
+            && !matches!(self.tys().tcx().kind(t), HK::Weak(_))
+        {
+            let rt = self.tys().tcx().reference(t, false);
+            let r = self.temp(rt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Shared, place));
+            self.assign(
+                dest,
+                Rvalue::Cast(CastKind::Downgrade, Operand::Move(Place::local(r)), dt),
+            );
+            return;
+        }
         if self.is_handle(t) {
             self.assign(dest, Rvalue::Retain(place));
         } else {
@@ -6636,11 +6677,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         // A strong handle or an `Option` of one, made by a call, a
         // constructor or a branch, stored into a `weak` slot: made in a
         // temporary of its own type, then downgraded by `assign` as a
-        // local's handle is (B-2026-10-13-23).
+        // local's handle is (B-2026-10-13-23). A struct literal into a
+        // `weak` local is one too (B-2026-10-25-45).
         if let HK::Weak(_) = self.tys().tcx().kind(self.place_type(&dest)) {
             if matches!(
                 e.kind,
                 ExprKind::Call { .. }
+                    | ExprKind::StructLiteral { .. }
                     | ExprKind::MethodCall { .. }
                     | ExprKind::If { .. }
                     | ExprKind::Match { .. }

@@ -8410,6 +8410,18 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                 }
+                // A `weak` local or parameter is storage, as a `weak` field
+                // is: a read upgrades it to `Option[T]`, and an assignment's
+                // target keeps the slot's type so the store downgrades
+                // (design.md § Cycles and `weak`, B-2026-10-25-45).
+                if !self.assigning_lhs {
+                    if let Type::Weak(inner) = &ty {
+                        return Type::Named {
+                            name: "Option".to_string(),
+                            args: vec![(**inner).clone()],
+                        };
+                    }
+                }
                 ty
             }
             ExprKind::Path {
