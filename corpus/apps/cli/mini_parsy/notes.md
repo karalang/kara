@@ -112,6 +112,10 @@ are `self.clone()`. Then it matched the oracle under the MIR interpreter,
 the LLVM backend, the ASan build and the native binary, with nothing on
 stderr.
 
+Later `karac fix` dropped 95 `*`s on `Copy` parts bound out of borrowed
+values, which are copies rather than views (kara B-2026-10-24-36); the
+output is unchanged.
+
 ## Running
 
 ```
