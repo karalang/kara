@@ -1,0 +1,409 @@
+// LeetCode #998: Maximum Binary Tree II -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random lists.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star ----
+
+// LeetCode #998: Maximum Binary Tree II -- down the right spine
+//
+// A value appended to the list lands after every value already there,
+// so it can only go down the right: if it beats the root it becomes the
+// new root with the whole tree on its left, and otherwise it goes into
+// the root's right subtree, which was built from the values after the
+// root. O(h) for the right spine's length h.
+
+fn star_insert_into_max_tree(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    match root {
+        Some(node) => {
+            if val > node.val {
+                Some(TreeNode { val: val, left: Some(node), right: None })
+            } else {
+                node.right = star_insert_into_max_tree(node.right, val);
+                Some(node)
+            }
+        }
+        None => Some(TreeNode { val: val, left: None, right: None }),
+    }
+}
+
+// ---- walk ----
+
+// LeetCode #998: Maximum Binary Tree II -- a walk down the right spine
+//
+// The new value can only land on the right spine, the chain of right
+// children from the root, whose values fall as it goes down. A loop
+// walks it to the first node smaller than the value, keeping the node
+// above, and splices the value in there with the rest of the spine as
+// its left subtree. O(h) for the right spine's length h.
+
+fn walk_insert_into_max_tree(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: val, left: None, right: None };
+    let top = match root {
+        Some(node) => node,
+        None => return Some(fresh),
+    };
+    if val > top.val {
+        fresh.left = Some(top);
+        return Some(fresh);
+    }
+    // above: the last node on the spine larger than the value
+    let mut above = top;
+    loop {
+        match above.right {
+            Some(next) => {
+                if next.val > val {
+                    above = next;
+                } else {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    fresh.left = above.right;
+    above.right = Some(fresh);
+    Some(top)
+}
+
+// ---- rebuild ----
+
+// LeetCode #998: Maximum Binary Tree II -- the list again, then build
+//
+// A maximum tree read in order gives back the list it was built from,
+// since each root sits between the values before it and after it. Read
+// it out, append the value, and build the tree again by the definition:
+// the largest value of a stretch at the root, the stretch before it on
+// the left and after it on the right. O(n^2) at worst.
+
+fn rebuild_in_order(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(t) = node {
+        rebuild_in_order(t.left, mut out);
+        out.push(t.val);
+        rebuild_in_order(t.right, mut out);
+    }
+}
+
+fn rebuild_grow(b: ref Vec[i64], lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo >= hi {
+        return None;
+    }
+    let mut top = lo;
+    for i in lo + 1..hi {
+        if b[i] > b[top] {
+            top = i;
+        }
+    }
+    Some(TreeNode { val: b[top], left: rebuild_grow(b, lo, top), right: rebuild_grow(b, top + 1, hi) })
+}
+
+fn rebuild_insert_into_max_tree(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    let mut b: Vec[i64] = Vec.new();
+    rebuild_in_order(root, mut b);
+    b.push(val);
+    rebuild_grow(b, 0, b.len())
+}
+
+// ---- stack ----
+
+// LeetCode #998: Maximum Binary Tree II -- the list again, then a stack
+//
+// The tree read in order gives back its list, and a maximum tree can be
+// built from a list in one pass with a stack of falling values: each
+// value takes the smaller values it pops as its left subtree and becomes
+// the right child of the larger value left on top. The list is read out
+// with an explicit stack too, the value appended, and the tree built
+// again. O(n).
+
+fn stack_insert_into_max_tree(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    let mut b: Vec[i64] = Vec.new();
+    let mut pending: Vec[TreeNode] = Vec.new();
+    let mut cur = root;
+    loop {
+        while let Some(t) = cur {
+            pending.push(t);
+            cur = t.left;
+        }
+        match pending.pop() {
+            Some(t) => {
+                b.push(t.val);
+                cur = t.right;
+            }
+            None => break,
+        }
+    }
+    b.push(val);
+    // a stack of nodes whose values fall from the bottom up
+    let mut falling: Vec[TreeNode] = Vec.new();
+    for v in b.iter() {
+        let node = TreeNode { val: *v, left: None, right: None };
+        while falling.len() > 0 and falling[falling.len() - 1].val < *v {
+            node.left = falling.pop();
+        }
+        if falling.len() > 0 {
+            falling[falling.len() - 1].right = Some(node);
+        }
+        falling.push(node);
+    }
+    Some(falling[0].clone())
+}
+
+// ---- spine ----
+
+// LeetCode #998: Maximum Binary Tree II -- binary search on the spine
+//
+// The new value lands on the right spine, whose values fall from the
+// root down. The spine goes into a list, a binary search finds the
+// first node on it smaller than the value, and the value takes that
+// node's place, with that node and what hangs below it as its left
+// subtree. O(h) for the right spine's length h.
+
+fn spine_insert_into_max_tree(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    let mut spine: Vec[TreeNode] = Vec.new();
+    let mut cur = root;
+    while let Some(t) = cur {
+        spine.push(t);
+        cur = t.right;
+    }
+    // the first place on the spine whose value is smaller than val
+    let mut lo = 0;
+    let mut hi = spine.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if spine[mid].val > val {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let fresh = TreeNode { val: val, left: None, right: None };
+    if lo < spine.len() {
+        fresh.left = Some(spine[lo].clone());
+    }
+    if lo == 0 {
+        return Some(fresh);
+    }
+    spine[lo - 1].right = Some(fresh);
+    root
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// the maximum tree of a[lo..hi], to give the arms their input
+fn build(a: ref Vec[i64], lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo >= hi {
+        return None;
+    }
+    let mut m = lo;
+    for i in lo + 1..hi {
+        if a[i] > a[m] {
+            m = i;
+        }
+    }
+    Some(TreeNode { val: a[m], left: build(a, lo, m), right: build(a, m + 1, hi) })
+}
+
+fn level_order(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                out.push(node.val);
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push(0),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == 0 {
+        out.pop();
+    }
+    out
+}
+
+fn height(node: Option[TreeNode]) -> i64 {
+    match node {
+        Some(t) => 1 + height(t.left).max(height(t.right)),
+        None => 0,
+    }
+}
+
+fn values_in_order(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(t) = node {
+        values_in_order(t.left, mut out);
+        out.push(t.val);
+        values_in_order(t.right, mut out);
+    }
+}
+
+// whether every node is larger than its children, and how many nodes
+fn heap(node: Option[TreeNode]) -> (bool, i64) {
+    match node {
+        Some(t) => {
+            let (lok, ln) = heap(t.left);
+            let (rok, rn) = heap(t.right);
+            let mut ok = lok and rok;
+            if let Some(l) = t.left {
+                if l.val >= t.val {
+                    ok = false;
+                }
+            }
+            if let Some(r) = t.right {
+                if r.val >= t.val {
+                    ok = false;
+                }
+            }
+            (ok, ln + rn + 1)
+        }
+        None => (true, 0),
+    }
+}
+
+// The statement read literally: Construct(b) on the list b itself, its
+// largest value at the root, Construct of the values before it on the
+// left and of those after it on the right.
+fn literal_construct(b: ref Vec[i64]) -> Option[TreeNode] {
+    if b.len() == 0 {
+        return None;
+    }
+    let mut i = 0;
+    for j in 1..b.len() {
+        if b[j] > b[i] {
+            i = j;
+        }
+    }
+    let before: Vec[i64] = (0..i).map(|j| b[j]).collect();
+    let after: Vec[i64] = (i + 1..b.len()).map(|j| b[j]).collect();
+    Some(TreeNode { val: b[i], left: literal_construct(before), right: literal_construct(after) })
+}
+
+fn arm(k: i64, root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    if k == 0 {
+        star_insert_into_max_tree(root, val)
+    } else if k == 1 {
+        walk_insert_into_max_tree(root, val)
+    } else if k == 2 {
+        rebuild_insert_into_max_tree(root, val)
+    } else if k == 3 {
+        stack_insert_into_max_tree(root, val)
+    } else {
+        spine_insert_into_max_tree(root, val)
+    }
+}
+
+fn appended(a: ref Vec[i64], val: i64) -> Vec[i64] {
+    let mut b = a.clone();
+    b.push(val);
+    b
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, a: ref Vec[i64], val: i64, second: i64, small: bool) -> Vec[i64] {
+    let b = appended(a, val);
+    let truth = if small { level_order(literal_construct(b)) } else { Vec.new() };
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for k in 0..5 {
+        let t = arm(k, build(a, 0, a.len()), val);
+        got.push(level_order(t));
+        trees.push(t);
+    }
+    // the same list with every value v as 3v + 7, which keeps their order
+    let moved: Vec[i64] = a.iter().map(|v| 3 * *v + 7).collect();
+    let both = level_order(literal_construct(appended(b, second)));
+    for k in 0..5 {
+        let g = got[k].clone();
+        // P1: the statement's answer, on the first 3000 lists
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: read in order, the tree gives back the list with val after it
+        let mut seen: Vec[i64] = Vec.new();
+        values_in_order(trees[k], mut seen);
+        check(mut tally, 2, seen == b);
+        // P3: every node larger than its children, one node more than before
+        let (ok, count) = heap(trees[k]);
+        check(mut tally, 3, ok and count == a.len() + 1);
+        // P4: a second value inserted into the result gives the tree of
+        // the list with both appended
+        let again = arm(k, arm(k, build(a, 0, a.len()), val), second);
+        check(mut tally, 4, level_order(again) == both);
+        // P5: the values moved by 3v + 7 give the same tree, moved
+        let shifted = level_order(arm(k, build(moved, 0, moved.len()), 3 * val + 7));
+        let expect: Vec[i64] = g.iter().map(|v| if *v == 0 { 0 } else { 3 * *v + 7 }).collect();
+        check(mut tally, 5, shifted == expect);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0].clone()
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 998;
+    let mut nodes = 0;
+    let mut heights = 0;
+    let mut check_sum = 0;
+    // 3000 lists of up to 7 values against the statement, then 200 of up
+    // to 98; each with two more values, all different, from 1 to 100
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = 1 + next_random(mut seed) % (if small { 7 } else { 98 });
+        let mut pool: Vec[i64] = (1..101).collect();
+        for i in 0..n + 2 {
+            let j = i + next_random(mut seed) % (100 - i);
+            let t = pool[i];
+            pool[i] = pool[j];
+            pool[j] = t;
+        }
+        let a: Vec[i64] = (0..n).map(|i| pool[i]).collect();
+        let got = properties(mut tally, a, pool[n], pool[n + 1], small);
+        nodes += n + 1;
+        heights += height(literal_construct(appended(a, pool[n])));
+        for v in got.iter() {
+            check_sum = (check_sum * 31 + *v + 1) % 1000000007;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 trees of {nodes} nodes: heights {heights}, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
