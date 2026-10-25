@@ -1,0 +1,393 @@
+// LeetCode #993: Cousins in Binary Tree -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star ----
+
+fn star_is_cousins(root: TreeNode, x: i64, y: i64) -> bool {
+    let mut level: Vec[(TreeNode, i64)] = vec![(root, -1)];
+    while level.len() > 0 {
+        let mut px = -1;
+        let mut py = -1;
+        let mut next: Vec[(TreeNode, i64)] = Vec.new();
+        for (node, parent) in level.iter() {
+            if node.val == x {
+                px = *parent;
+            }
+            if node.val == y {
+                py = *parent;
+            }
+            if let Some(l) = node.left {
+                next.push((l, node.val));
+            }
+            if let Some(r) = node.right {
+                next.push((r, node.val));
+            }
+        }
+        if px >= 0 and py >= 0 {
+            return px != py;
+        }
+        if px >= 0 or py >= 0 {
+            return false;
+        }
+        level = next;
+    }
+    false
+}
+
+// ---- dfs ----
+
+fn dfs_find_both(t: TreeNode, depth: i64, parent: i64, x: i64, y: i64, found: mut ref Vec[i64]) {
+    if t.val == x {
+        found[0] = depth;
+        found[1] = parent;
+    }
+    if t.val == y {
+        found[2] = depth;
+        found[3] = parent;
+    }
+    if let Some(l) = t.left {
+        dfs_find_both(l, depth + 1, t.val, x, y, mut found);
+    }
+    if let Some(r) = t.right {
+        dfs_find_both(r, depth + 1, t.val, x, y, mut found);
+    }
+}
+
+fn dfs_is_cousins(root: TreeNode, x: i64, y: i64) -> bool {
+    // depth and parent of x, then of y
+    let mut found: Vec[i64] = vec![-1, -1, -1, -1];
+    dfs_find_both(root, 0, -1, x, y, mut found);
+    found[0] == found[2] and found[1] != found[3]
+}
+
+// ---- search ----
+
+fn search_depth_of(t: TreeNode, v: i64) -> i64 {
+    if t.val == v {
+        return 0;
+    }
+    if let Some(l) = t.left {
+        let d = search_depth_of(l, v);
+        if d >= 0 {
+            return d + 1;
+        }
+    }
+    if let Some(r) = t.right {
+        let d = search_depth_of(r, v);
+        if d >= 0 {
+            return d + 1;
+        }
+    }
+    -1
+}
+
+// the parent's value, -1 for the root, -2 when v is not below t
+fn search_parent_of(t: TreeNode, v: i64) -> i64 {
+    if t.val == v {
+        return -1;
+    }
+    for child in vec![t.left, t.right] {
+        if let Some(c) = child {
+            if c.val == v {
+                return t.val;
+            }
+            let p = search_parent_of(c, v);
+            if p != -2 {
+                return p;
+            }
+        }
+    }
+    -2
+}
+
+fn search_is_cousins(root: TreeNode, x: i64, y: i64) -> bool {
+    search_depth_of(root, x) == search_depth_of(root, y) and search_parent_of(root, x) != search_parent_of(root, y)
+}
+
+// ---- maps ----
+
+fn maps_is_cousins(root: TreeNode, x: i64, y: i64) -> bool {
+    let mut depth: Map[i64, i64] = Map.new();
+    let mut parent: Map[i64, i64] = Map.new();
+    let mut stack: Vec[(TreeNode, i64, i64)] = vec![(root, 0, -1)];
+    while let Some((t, d, p)) = stack.pop() {
+        depth.insert(t.val, d);
+        parent.insert(t.val, p);
+        if let Some(l) = t.left {
+            stack.push((l, d + 1, t.val));
+        }
+        if let Some(r) = t.right {
+            stack.push((r, d + 1, t.val));
+        }
+    }
+    depth[x] == depth[y] and parent[x] != parent[y]
+}
+
+// ---- siblings ----
+
+fn siblings_is_cousins(root: TreeNode, x: i64, y: i64) -> bool {
+    let mut level: Vec[TreeNode] = vec![root];
+    let mut siblings = false;
+    while level.len() > 0 {
+        let mut has_x = false;
+        let mut has_y = false;
+        for node in level.iter() {
+            if node.val == x {
+                has_x = true;
+            }
+            if node.val == y {
+                has_y = true;
+            }
+        }
+        if has_x and has_y {
+            return not siblings;
+        }
+        if has_x or has_y {
+            return false;
+        }
+        let mut next: Vec[TreeNode] = Vec.new();
+        for node in level.iter() {
+            match (node.left, node.right) {
+                (Some(l), Some(r)) => {
+                    if (l.val == x and r.val == y) or (l.val == y and r.val == x) {
+                        siblings = true;
+                    }
+                    next.push(l);
+                    next.push(r);
+                }
+                (Some(l), None) => next.push(l),
+                (None, Some(r)) => next.push(r),
+                (None, None) => {}
+            }
+        }
+        level = next;
+    }
+    false
+}
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn random_tree(n: i64, seed: mut ref i64) -> TreeNode {
+    let mut vals: Vec[i64] = (1..n + 1).collect();
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = vals[i];
+        vals[i] = vals[j];
+        vals[j] = t;
+        i -= 1;
+    }
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for k in 1..n {
+        attach(root, TreeNode { val: vals[k], left: None, right: None }, mut seed);
+    }
+    root
+}
+
+fn arm(k: i64, root: TreeNode, x: i64, y: i64) -> bool {
+    if k == 0 {
+        star_is_cousins(root, x, y)
+    } else if k == 1 {
+        dfs_is_cousins(root, x, y)
+    } else if k == 2 {
+        search_is_cousins(root, x, y)
+    } else if k == 3 {
+        maps_is_cousins(root, x, y)
+    } else {
+        siblings_is_cousins(root, x, y)
+    }
+}
+
+// Every node listed with the place of its parent in the list, -1 for
+// the root.
+fn listed(root: TreeNode, vals: mut ref Vec[i64], up: mut ref Vec[i64]) {
+    let mut queue: VecDeque[(TreeNode, i64)] = VecDeque.new();
+    queue.push_back((root, -1));
+    while let Some((t, p)) = queue.pop_front() {
+        let me = vals.len();
+        vals.push(t.val);
+        up.push(p);
+        if let Some(l) = t.left {
+            queue.push_back((l, me));
+        }
+        if let Some(r) = t.right {
+            queue.push_back((r, me));
+        }
+    }
+}
+
+fn place_of(vals: ref Vec[i64], v: i64) -> i64 {
+    for i in 0..vals.len() {
+        if vals[i] == v {
+            return i;
+        }
+    }
+    -1
+}
+
+// The statement read literally: the depth of a node is the number of
+// steps up the parents to the root, and two nodes are cousins when
+// their depths are the same and their parents are not.
+fn literal(vals: ref Vec[i64], up: ref Vec[i64], x: i64, y: i64) -> bool {
+    let a = place_of(vals, x);
+    let b = place_of(vals, y);
+    let mut da = 0;
+    let mut at = a;
+    while up[at] >= 0 {
+        da += 1;
+        at = up[at];
+    }
+    let mut db = 0;
+    at = b;
+    while up[at] >= 0 {
+        db += 1;
+        at = up[at];
+    }
+    da == db and up[a] != up[b]
+}
+
+fn mirror(t: TreeNode) -> TreeNode {
+    let l = match t.right {
+        Some(r) => Some(mirror(r)),
+        None => None,
+    };
+    let r = match t.left {
+        Some(x) => Some(mirror(x)),
+        None => None,
+    };
+    TreeNode { val: t.val, left: l, right: r }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, root: TreeNode, n: i64, x: i64, y: i64, small: bool) -> bool {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut up: Vec[i64] = Vec.new();
+    listed(root, mut vals, mut up);
+    let truth = if small { literal(vals, up, x, y) } else { false };
+    let mut got: Vec[bool] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, root, x, y));
+    }
+    let flipped = mirror(root);
+    let raised = TreeNode { val: n + 1, left: Some(root), right: None };
+    // x's parent and x's sibling, when x has them
+    let a = place_of(vals, x);
+    let parent = if up[a] >= 0 { vals[up[a]] } else { -1 };
+    let mut sibling = -1;
+    for i in 0..vals.len() {
+        if i != a and up[i] == up[a] and up[a] >= 0 {
+            sibling = vals[i];
+        }
+    }
+    for k in 0..5 {
+        let g = got[k];
+        // P1: the statement's answer, on the first 3000 trees
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: the question asked the other way round
+        check(mut tally, 2, arm(k, root, y, x) == g);
+        // P3: the mirror image gives the same answer
+        check(mut tally, 3, arm(k, flipped, x, y) == g);
+        // P4: a new root above the tree gives the same answer
+        check(mut tally, 4, arm(k, raised, x, y) == g);
+        // P5: x and its parent, and x and its sibling, are not cousins
+        let not_parent = parent < 0 or not arm(k, root, x, parent);
+        let not_sibling = sibling < 0 or not arm(k, root, x, sibling);
+        check(mut tally, 5, not_parent and not_sibling);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 993;
+    let mut total = 0;
+    let mut found = 0;
+    let mut check_sum = 0;
+    // 3000 trees of 2 to 10 nodes against the statement, then 200 of 2
+    // to 100, a random pair of different values in each
+    for c in 0..3200 {
+        let small = c < 3000;
+        let most = if small { 10 } else { 100 };
+        let n = 2 + next_random(mut seed) % (most - 1);
+        let root = random_tree(n, mut seed);
+        let x = 1 + next_random(mut seed) % n;
+        let mut y = 1 + next_random(mut seed) % (n - 1);
+        if y >= x {
+            y += 1;
+        }
+        let ok = properties(mut tally, root, n, x, y, small);
+        total += n;
+        if ok {
+            found += 1;
+        }
+        check_sum = (check_sum * 31 + if ok { 2 } else { 1 }) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 trees of {total} nodes: {found} cousin pairs, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/993-cousins-in-binary-tree/bench/is_cousins.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "6b161e479"
+extracted_src = "a4778f55"

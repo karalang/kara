@@ -1,0 +1,210 @@
+// LeetCode #993: Cousins in Binary Tree -- maps from a stack walk
+//
+// A walk with its own stack fills two maps, from each value to its
+// depth and to its parent's value, for every node; the answer reads x
+// and y off them. O(n).
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn is_cousins(root: TreeNode, x: i64, y: i64) -> bool {
+    let mut depth: Map[i64, i64] = Map.new();
+    let mut parent: Map[i64, i64] = Map.new();
+    let mut stack: Vec[(TreeNode, i64, i64)] = vec![(root, 0, -1)];
+    while let Some((t, d, p)) = stack.pop() {
+        depth.insert(t.val, d);
+        parent.insert(t.val, p);
+        if let Some(l) = t.left {
+            stack.push((l, d + 1, t.val));
+        }
+        if let Some(r) = t.right {
+            stack.push((r, d + 1, t.val));
+        }
+    }
+    depth[x] == depth[y] and parent[x] != parent[y]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_level_order(vals: ref Vec[Option[i64]]) -> TreeNode {
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    root
+}
+
+// Hang a new node below root, going left or right at random down to the
+// first empty place.
+fn attach(root: TreeNode, node: TreeNode, seed: mut ref i64) {
+    let mut cur = root;
+    loop {
+        if next_random(mut seed) % 2 == 0 {
+            match cur.left {
+                Some(l) => cur = l,
+                None => {
+                    cur.left = Some(node);
+                    return;
+                }
+            }
+        } else {
+            match cur.right {
+                Some(r) => cur = r,
+                None => {
+                    cur.right = Some(node);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// n nodes in a random shape, holding 1 to n in a random order.
+fn random_tree(n: i64, seed: mut ref i64) -> TreeNode {
+    let mut vals: Vec[i64] = (1..n + 1).collect();
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = vals[i];
+        vals[i] = vals[j];
+        vals[j] = t;
+        i -= 1;
+    }
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for k in 1..n {
+        attach(root, TreeNode { val: vals[k], left: None, right: None }, mut seed);
+    }
+    root
+}
+
+// The complete tree of n nodes, node i holding i + 1, its children
+// nodes 2i + 1 and 2i + 2.
+fn complete_tree(n: i64) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for i in 0..n {
+        nodes.push(TreeNode { val: i + 1, left: None, right: None });
+    }
+    for i in 1..n {
+        if i % 2 == 1 {
+            nodes[(i - 1) / 2].left = Some(nodes[i]);
+        } else {
+            nodes[(i - 1) / 2].right = Some(nodes[i]);
+        }
+    }
+    nodes[0]
+}
+
+// A path of n nodes turning left and right in turn, 1 at the root.
+fn path(n: i64) -> TreeNode {
+    let mut t = TreeNode { val: n, left: None, right: None };
+    let mut i = n - 1;
+    while i >= 1 {
+        if i % 2 == 0 {
+            t = TreeNode { val: i, left: None, right: Some(t) };
+        } else {
+            t = TreeNode { val: i, left: Some(t), right: None };
+        }
+        i -= 1;
+    }
+    t
+}
+
+fn level_order_text(vals: ref Vec[Option[i64]]) -> String {
+    let parts: Vec[String] = vals.iter().map(|v| match v {
+        Some(x) => f"{x}",
+        None => "null".to_string(),
+    }).collect();
+    "[" + parts.join(", ") + "]"
+}
+
+fn tf(b: bool) -> String {
+    if b { "true" } else { "false" }
+}
+
+fn all_pairs(root: TreeNode, n: i64) -> i64 {
+    let mut found = 0;
+    for x in 1..n + 1 {
+        for y in x + 1..n + 1 {
+            if is_cousins(root, x, y) {
+                found += 1;
+            }
+        }
+    }
+    found
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let cases: Vec[(Vec[Option[i64]], i64, i64)] = vec![
+        (vec![Some(1), Some(2), Some(3), Some(4)], 4, 3),
+        (vec![Some(1), Some(2), Some(3), None, Some(4), None, Some(5)], 5, 4),
+        (vec![Some(1), Some(2), Some(3), None, Some(4)], 2, 3),
+        (vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)], 4, 6),
+        (vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)], 4, 5),
+        (vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)], 1, 2),
+        (vec![Some(1), Some(2), Some(3), Some(4), None, None, Some(5), Some(6), None, None, Some(7)], 6, 7),
+        (vec![Some(1), Some(2), Some(3), Some(4), None, None, Some(5), Some(6), None, None, Some(7)], 7, 6),
+        (vec![Some(1), Some(2), Some(3), Some(4), None, None, Some(5), Some(6)], 6, 5),
+        (vec![Some(1), Some(2)], 1, 2),
+    ];
+    for (vals, x, y) in cases.iter() {
+        println(f"root = {level_order_text(vals)}, x = {x}, y = {y} -> {tf(is_cousins(from_level_order(vals), *x, *y))}");
+    }
+    println(f"the complete tree of 100 nodes: {all_pairs(complete_tree(100), 100)} of 4950 pairs are cousins");
+    println(f"a zigzag path of 100 nodes: {all_pairs(path(100), 100)} of 4950 pairs are cousins");
+    // random trees: 300 of 2 to 10 nodes and 3000 of 2 to 100, 20 random
+    // pairs each, then every pair in three of LeetCode's largest, 100
+    let mut seed = 993;
+    for (count, most) in vec![(300, 10), (3000, 100)] {
+        let mut nodes = 0;
+        let mut found = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = 2 + next_random(mut seed) % (most - 1);
+            let root = random_tree(n, mut seed);
+            nodes += n;
+            for _ in 0..20 {
+                let x = 1 + next_random(mut seed) % n;
+                let mut y = 1 + next_random(mut seed) % (n - 1);
+                if y >= x {
+                    y += 1;
+                }
+                let ok = is_cousins(root, x, y);
+                if ok {
+                    found += 1;
+                }
+                check = (check * 31 + if ok { 2 } else { 1 }) % 1000000007;
+            }
+        }
+        println(f"{count} random trees of {nodes} nodes, 20 pairs each: {found} cousins, checksum {check}");
+    }
+    for t in 0..3 {
+        let root = random_tree(100, mut seed);
+        println(f"random tree {t + 1} of 100 nodes: {all_pairs(root, 100)} of 4950 pairs are cousins");
+    }
+}

@@ -1,0 +1,17 @@
+root = [1, 2, 3, 4], x = 4, y = 3 -> false
+root = [1, 2, 3, null, 4, null, 5], x = 5, y = 4 -> true
+root = [1, 2, 3, null, 4], x = 2, y = 3 -> false
+root = [1, 2, 3, 4, 5, 6, 7], x = 4, y = 6 -> true
+root = [1, 2, 3, 4, 5, 6, 7], x = 4, y = 5 -> false
+root = [1, 2, 3, 4, 5, 6, 7], x = 1, y = 2 -> false
+root = [1, 2, 3, 4, null, null, 5, 6, null, null, 7], x = 6, y = 7 -> true
+root = [1, 2, 3, 4, null, null, 5, 6, null, null, 7], x = 7, y = 6 -> true
+root = [1, 2, 3, 4, null, null, 5, 6], x = 6, y = 5 -> false
+root = [1, 2], x = 1, y = 2 -> false
+the complete tree of 100 nodes: 1268 of 4950 pairs are cousins
+a zigzag path of 100 nodes: 0 of 4950 pairs are cousins
+300 random trees of 1771 nodes, 20 pairs each: 297 cousins, checksum 309431462
+3000 random trees of 149827 nodes, 20 pairs each: 9611 cousins, checksum 629478812
+random tree 1 of 100 nodes: 877 of 4950 pairs are cousins
+random tree 2 of 100 nodes: 865 of 4950 pairs are cousins
+random tree 3 of 100 nodes: 959 of 4950 pairs are cousins
