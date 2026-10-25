@@ -1,0 +1,1203 @@
+// pipeline/fare_cap
+//
+// A week of smart-card fares at four transit operators: a metro, a bus
+// network, a light rail line and a ferry. For each operator it builds the
+// stations (each in a fare zone), the cards (adult, senior, student or
+// child, with a balance and whether the card loads itself) and the week's
+// taps at the gates, in time order. It writes them as CSV, reads them back
+// and parses them with the checks the fare system's back office makes, then
+// closes the week: each tap-in opens a journey, after a top-up when the
+// balance is under the boarding fare, and each tap-out prices it by the
+// zones crossed, the peak, a transfer and the card's concession, and caps
+// it at the card's day and week caps. A journey with no tap-out is charged
+// the most the operator charges; a tap-out at the same gate within two
+// minutes cancels the journey; a tap-out with no journey open is a stray.
+// Each operator's journeys and card statements are written and read back,
+// and five reports per operator follow: ridership, revenue, caps, stations
+// and balances. Then the region's reduced-fare fund repays the operators'
+// concessions in the order they claim.
+//
+// The builds, the writes, the reads, the parses, the week closes, the
+// journey files and the reports are each a group of statements that do not
+// depend on each other (a stmt-par app). The fund repays from what the
+// operators before have left, so the four operators have to claim in order.
+
+const MASK32: i64 = 4294967295;
+const N_CARDS: i64 = 120;
+const DAYS: i64 = 7;
+const TYPES: Array[Str, 4] = ["ADULT", "SENIOR", "STUDENT", "CHILD"];
+// percent off the fare, by card type
+const OFF: Array[i64, 4] = [0, 50, 30, 75];
+// a card that loads itself adds this when its balance is under the boarding fare
+const AUTOLOAD: i64 = 2000;
+// a card that does not is declined at the gate, and its rider tops it up
+// by this at the machine and taps again
+const TOPUP: i64 = 1000;
+// a tap-in within this many minutes of a tap-out is a transfer
+const TRANSFER_MIN: i64 = 45;
+// a tap-out at the station tapped in at, within this many minutes, cancels
+const CANCEL_MIN: i64 = 2;
+const PLACES: Array[Str, 24] = ["Abbey", "Bridge", "Castle", "Dock", "Elm", "Ferry", "Garden", "Harbor", "Inlet", "Junction",
+    "Kings", "Lake", "Market", "North", "Oak", "Park", "Quay", "River", "South", "Tower",
+    "Union", "Vale", "West", "Yard"];
+// The region's reduced-fare fund for the week: it repays the operators'
+// concessions in the order they claim, from what is left.
+const FUND: i64 = 140000;
+
+struct Operator {
+    code: Str,
+    // the first digit of its card and tap numbers
+    digit: i64,
+    seed: i64,
+    stations: i64,
+    zones: i64,
+    // cents: the boarding fare, and what each zone crossed adds
+    base: i64,
+    per_zone: i64,
+    // the peak fare as a percent of the off-peak one
+    peak: i64,
+    // the adult day and week caps in cents
+    daycap: i64,
+    weekcap: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Station {
+    sid: String,
+    name: String,
+    zone: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Card {
+    cno: i64,
+    ctype: i64,
+    // cents
+    balance: i64,
+    autoload: bool,
+}
+
+// A tap at a gate: the minute of the day, and IN or OUT.
+#[derive(Clone, PartialEq)]
+struct Tap {
+    tid: i64,
+    cno: i64,
+    sid: String,
+    day: i64,
+    minute: i64,
+    kind: String,
+}
+
+// A tap as it is made, before the taps are put in time order.
+struct RawTap {
+    day: i64,
+    minute: i64,
+    cno: i64,
+    seq: i64,
+    sid: String,
+    kind: String,
+}
+
+// What a journey cost, in cents: the fare after the peak and any transfer,
+// the concession, what the caps took off, and what the card was charged.
+struct Journey {
+    card: i64,
+    kind: String,
+    from: String,
+    to: String,
+    day: i64,
+    start: i64,
+    // -1 for a journey with no tap-out
+    end: i64,
+    fare: i64,
+    conc: i64,
+    capped: i64,
+    charged: i64,
+}
+
+// What the week's close made of an operator's taps.
+struct Week {
+    journeys: Vec[Journey],
+    // by card
+    balance: Vec[i64],
+    c_journeys: Vec[i64],
+    c_charged: Vec[i64],
+    c_loads: Vec[i64],
+    c_declined: Vec[i64],
+    c_topups: Vec[i64],
+    // by card, then day
+    day_spent: Vec[i64],
+    week_spent: Vec[i64],
+    // by station: the journeys begun there
+    entries: Vec[i64],
+    orphans: i64,
+    peak_charged: i64,
+    taps: i64,
+}
+
+// The gates' view of each card during the close: the open journey's
+// station (-1 when none), day, minute and whether it is a transfer, and
+// the last tap-out a transfer may follow (day -1 when none).
+struct Gate {
+    o_st: Vec[i64],
+    o_day: Vec[i64],
+    o_min: Vec[i64],
+    o_xfer: Vec[bool],
+    x_day: Vec[i64],
+    x_min: Vec[i64],
+}
+
+struct Fund {
+    left: i64,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+// ------------------------------------------------------------ helpers
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    if c < 0 {
+        return f"-{money(-c)}";
+    }
+    f"${group3(c / 100)}.{c % 100:02}"
+}
+
+fn dollars(c: i64) -> String {
+    if c < 0 {
+        return f"-{dollars(-c)}";
+    }
+    f"{c / 100}.{c % 100:02}"
+}
+
+fn clock(m: i64) -> String {
+    f"{m / 60:02}:{m % 60:02}"
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 8 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+// An amount with exactly two decimals, in cents, or None.
+fn cents_of(text: ref String) -> Option[i64] {
+    let neg = text.starts_with("-");
+    let t = if neg { text.substring(1, text.len()) } else { text.clone() };
+    let dot = match t.find(".") {
+        Some(i) => i,
+        None => return None,
+    };
+    if dot < 1 or t.len() - dot != 3 {
+        return None;
+    }
+    let a = t.substring(0, dot);
+    let b = t.substring(dot + 1, t.len());
+    if not (is_digits(a) and is_digits(b)) or a.len() > 4 {
+        return None;
+    }
+    let v = to_int(a) * 100 + to_int(b);
+    if neg { Some(-v) } else { Some(v) }
+}
+
+// HH:MM as a minute of the day, or None.
+fn time_of(t: ref String) -> Option[i64] {
+    if t.len() != 5 or t.substring(2, 3) != ":" or not is_digits(t.substring(0, 2)) or not is_digits(t.substring(3, 5)) {
+        return None;
+    }
+    let h = to_int(t.substring(0, 2));
+    let m = to_int(t.substring(3, 5));
+    if h > 23 or m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+fn name_ok(t: ref String) -> bool {
+    t.len() > 0 and t.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+fn file_line(name: ref String, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+fn type_of(name: ref String) -> i64 {
+    for t in 0..4 {
+        if name == TYPES[t] {
+            return t;
+        }
+    }
+    -1
+}
+
+fn is_peak(day: i64, minute: i64) -> bool {
+    day <= 5 and ((minute >= 420 and minute < 570) or (minute >= 960 and minute < 1110))
+}
+
+fn with_off(v: i64, ctype: i64) -> i64 {
+    v * (100 - OFF[ctype]) / 100
+}
+
+fn yes_no(b: bool) -> String {
+    if b { "Y".to_string() } else { "N".to_string() }
+}
+
+fn station_index(stations: ref Vec[Station]) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    for s in 0..stations.len() as i64 {
+        m.insert(stations[s].sid.clone(), s);
+    }
+    m
+}
+
+fn card_index(cards: ref Vec[Card]) -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    for k in 0..cards.len() as i64 {
+        m.insert(cards[k].cno, k);
+    }
+    m
+}
+
+// ------------------------------------------------------------ building
+
+fn build_stations(op: ref Operator) -> Vec[Station] {
+    let mut out: Vec[Station] = Vec.new();
+    for k in 0..op.stations {
+        let number = k + 1;
+        out.push(Station {
+            sid: f"{op.code}-{number:02}",
+            name: PLACES[mix(op.seed, k, 11) % 24].to_string(),
+            zone: 1 + k * op.zones / op.stations,
+        });
+    }
+    out
+}
+
+fn build_cards(op: ref Operator) -> Vec[Card] {
+    let mut out: Vec[Card] = Vec.new();
+    for k in 0..N_CARDS {
+        let r = mix(op.seed, k, 21);
+        let p = r % 100;
+        let ctype = if p < 70 { 0 } else if p < 82 { 1 } else if p < 94 { 2 } else { 3 };
+        out.push(Card {
+            cno: op.digit * 10000000 + 1000 + k * 7 + (r >> 20) % 7,
+            ctype: ctype,
+            balance: 500 + (r >> 8) % 5000,
+            autoload: (r >> 12) % 100 < 40,
+        });
+    }
+    out
+}
+
+// A station other than a, picked by r.
+fn other(ns: i64, a: i64, r: i64) -> i64 {
+    (a + 1 + r % (ns - 1)) % ns
+}
+
+fn add_tap(raw: mut ref Vec[RawTap], day: i64, minute: i64, cno: i64, sid: ref String, kind: Str) {
+    let seq = raw.len() as i64;
+    raw.push(RawTap { day: day, minute: minute, cno: cno, seq: seq, sid: sid.clone(), kind: kind.to_string() });
+}
+
+fn build_taps(op: ref Operator, stations: ref Vec[Station], cards: ref Vec[Card]) -> Vec[Tap] {
+    let ns = stations.len() as i64;
+    let mut raw: Vec[RawTap] = Vec.new();
+    for k in 0..cards.len() as i64 {
+        let cno = cards[k].cno;
+        let prof = mix(op.seed, k, 31) % 100;
+        let home = mix(op.seed, k, 32) % ns;
+        let work = other(ns, home, mix(op.seed, k, 33));
+        let mut n = 0;
+        for d in 1..DAYS + 1 {
+            let r = mix(op.seed, k * 8 + d, 35);
+            // each trip: the minute it starts, from, to
+            let mut trips: Vec[(i64, i64, i64)] = Vec.new();
+            if prof < 45 {
+                // a commuter
+                if d <= 5 {
+                    trips.push((420 + r % 150, home, work));
+                    trips.push((960 + (r >> 8) % 150, work, home));
+                } else if (r >> 16) % 100 < 30 {
+                    let a = 600 + (r >> 8) % 240;
+                    let dest = other(ns, home, mix(op.seed, k * 8 + d, 36));
+                    trips.push((a, home, dest));
+                    trips.push((a + 120 + (r >> 20) % 180, dest, home));
+                }
+            } else if prof < 75 {
+                // a regular rider
+                if (r >> 16) % 100 < 60 {
+                    for j in 0..1 + r % 3 {
+                        let q = mix(op.seed, k * 64 + d * 8 + j, 37);
+                        let f = (q >> 8) % ns;
+                        trips.push((360 + j * 360 + q % 240, f, other(ns, f, q >> 12)));
+                    }
+                }
+            } else if (r >> 16) % 100 < 20 {
+                // now and then
+                let q = mix(op.seed, k * 64 + d * 8, 38);
+                let f = (q >> 8) % ns;
+                trips.push((540 + q % 600, f, other(ns, f, q >> 12)));
+            }
+            for trip in trips {
+                let (a, f, t) = trip;
+                let q = mix(op.seed, k * 512 + n, 39);
+                n += 1;
+                let hops = (f - t).abs();
+                let odd = (q >> 8) % 100;
+                if odd < 2 {
+                    // tapped in and straight back out
+                    add_tap(mut raw, d, a, cno, stations[f].sid, "IN");
+                    add_tap(mut raw, d, a + 1 + (q >> 16) % 2, cno, stations[f].sid, "OUT");
+                } else if odd < 5 {
+                    // never tapped out
+                    add_tap(mut raw, d, a, cno, stations[f].sid, "IN");
+                } else if odd >= 85 and hops >= 2 {
+                    // changed at the station halfway
+                    let x = (f + t) / 2;
+                    add_tap(mut raw, d, a, cno, stations[f].sid, "IN");
+                    let m1 = a + 4 + 3 * (f - x).abs();
+                    add_tap(mut raw, d, m1, cno, stations[x].sid, "OUT");
+                    let m2 = m1 + 3 + (q >> 16) % 15;
+                    add_tap(mut raw, d, m2, cno, stations[x].sid, "IN");
+                    add_tap(mut raw, d, m2 + 4 + 3 * (x - t).abs(), cno, stations[t].sid, "OUT");
+                } else {
+                    let end = a + 4 + 3 * hops + q % 5;
+                    add_tap(mut raw, d, a, cno, stations[f].sid, "IN");
+                    add_tap(mut raw, d, end, cno, stations[t].sid, "OUT");
+                    if odd < 7 {
+                        // tapped out a second time
+                        add_tap(mut raw, d, end + 5 + (q >> 16) % 20, cno, stations[t].sid, "OUT");
+                    }
+                }
+            }
+        }
+    }
+    raw.sort_by(|a, b| {
+        if a.day != b.day {
+            a.day.cmp(b.day)
+        } else if a.minute != b.minute {
+            a.minute.cmp(b.minute)
+        } else if a.cno != b.cno {
+            a.cno.cmp(b.cno)
+        } else {
+            a.seq.cmp(b.seq)
+        }
+    });
+    let mut out: Vec[Tap] = Vec.new();
+    for i in 0..raw.len() as i64 {
+        let e = ref raw[i];
+        out.push(Tap { tid: op.digit * 1000000 + i + 1, cno: e.cno, sid: e.sid.clone(), day: e.day, minute: e.minute, kind: e.kind.clone() });
+    }
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn station_header() -> String {
+    "station,name,zone".to_string()
+}
+
+fn card_header() -> String {
+    "card,type,balance,autoload".to_string()
+}
+
+fn tap_header() -> String {
+    "tap,card,station,day,time,kind".to_string()
+}
+
+fn journey_header() -> String {
+    "card,kind,from,to,day,start,end,fare,concession,capped,charged".to_string()
+}
+
+fn statement_header() -> String {
+    "card,type,journeys,charged,autoloads,declined,topups,start_balance,end_balance".to_string()
+}
+
+fn encode_stations(stations: ref Vec[Station]) -> String {
+    let mut out = f"{station_header()}\n";
+    for s in stations {
+        out.push_str(f"{s.sid},{s.name},{s.zone}\n");
+    }
+    out
+}
+
+fn encode_cards(cards: ref Vec[Card]) -> String {
+    let mut out = f"{card_header()}\n";
+    for c in cards {
+        out.push_str(f"{c.cno},{TYPES[c.ctype]},{dollars(c.balance)},{yes_no(c.autoload)}\n");
+    }
+    out
+}
+
+fn encode_taps(taps: ref Vec[Tap]) -> String {
+    let mut out = f"{tap_header()}\n";
+    for t in taps {
+        out.push_str(f"{t.tid},{t.cno},{t.sid},{t.day},{clock(t.minute)},{t.kind}\n");
+    }
+    out
+}
+
+fn encode_journeys(w: ref Week) -> String {
+    let mut out = f"{journey_header()}\n";
+    for j in w.journeys {
+        let end = if j.end < 0 { "-".to_string() } else { clock(j.end) };
+        out.push_str(f"{j.card},{j.kind},{j.from},{j.to},{j.day},{clock(j.start)},{end},{dollars(j.fare)},{dollars(j.conc)},{dollars(j.capped)},{dollars(j.charged)}\n");
+    }
+    out
+}
+
+fn encode_statements(cards: ref Vec[Card], w: ref Week) -> String {
+    let mut out = f"{statement_header()}\n";
+    for k in 0..cards.len() as i64 {
+        let c = ref cards[k];
+        out.push_str(f"{c.cno},{TYPES[c.ctype]},{w.c_journeys[k]},{dollars(w.c_charged[k])},{w.c_loads[k]},{w.c_declined[k]},{w.c_topups[k]},{dollars(c.balance)},{dollars(w.balance[k])}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn fields_of(path: ref String, n: i64, line: ref String, want: i64) -> Result[Vec[String], BatchError] {
+    let f = split_on(line, ",");
+    if f.len() as i64 != want {
+        return Err(bad(f"{path} line {n}: expected {want} fields, found {f.len()}"));
+    }
+    Ok(f)
+}
+
+fn station_id_ok(t: ref String) -> bool {
+    t.len() == 6 and t.substring(3, 4) == "-" and is_digits(t.substring(4, 6)) and t.substring(0, 3).chars().all(|c| c.is_ascii_uppercase())
+}
+
+fn parse_stations(path: ref String, op: ref Operator, text: ref String) -> Result[Vec[Station], BatchError] {
+    let body = body_lines(path, text, station_header())?;
+    let mut out: Vec[Station] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 3)?;
+        let s = f[0].clone();
+        if not station_id_ok(s) {
+            return Err(bad(f"{path} line {n}: bad station '{s}'"));
+        }
+        if s.substring(0, 3) != op.code {
+            return Err(bad(f"{path} line {n}: station {s} is not at {op.code}"));
+        }
+        if seen.contains(s) {
+            return Err(bad(f"{path} line {n}: station {s} appears twice"));
+        }
+        seen.insert(s.clone());
+        if not name_ok(f[1]) {
+            return Err(bad(f"{path} line {n}: bad name '{f[1]}'"));
+        }
+        let zone = match small_int(f[2], 1, op.zones) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad zone '{f[2]}'")),
+        };
+        out.push(Station { sid: s, name: f[1].clone(), zone: zone });
+    }
+    Ok(out)
+}
+
+fn parse_cards(path: ref String, op: ref Operator, text: ref String) -> Result[Vec[Card], BatchError] {
+    let body = body_lines(path, text, card_header())?;
+    let mut out: Vec[Card] = Vec.new();
+    let mut seen: Set[i64] = Set.new();
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 4)?;
+        let cno = match small_int(f[0], 10000000, 99999999) {
+            Some(v) if f[0].len() == 8 => v,
+            _ => return Err(bad(f"{path} line {n}: bad card '{f[0]}'")),
+        };
+        if cno / 10000000 != op.digit {
+            return Err(bad(f"{path} line {n}: card {cno} is not {op.code}'s"));
+        }
+        if seen.contains(cno) {
+            return Err(bad(f"{path} line {n}: card {cno} appears twice"));
+        }
+        seen.insert(cno);
+        let ctype = type_of(f[1]);
+        if ctype < 0 {
+            return Err(bad(f"{path} line {n}: bad type '{f[1]}'"));
+        }
+        let bal = match cents_of(f[2]) {
+            Some(v) if v >= 0 and v <= 99999 => v,
+            _ => return Err(bad(f"{path} line {n}: bad balance '{f[2]}'")),
+        };
+        if f[3] != "Y" and f[3] != "N" {
+            return Err(bad(f"{path} line {n}: bad autoload '{f[3]}'"));
+        }
+        out.push(Card { cno: cno, ctype: ctype, balance: bal, autoload: f[3] == "Y" });
+    }
+    Ok(out)
+}
+
+fn parse_taps(path: ref String, op: ref Operator, stations: ref Vec[Station], cards: ref Vec[Card], text: ref String) -> Result[Vec[Tap], BatchError] {
+    let body = body_lines(path, text, tap_header())?;
+    let sids = station_index(stations);
+    let cnos = card_index(cards);
+    let mut out: Vec[Tap] = Vec.new();
+    let mut last = 0;
+    let mut when = 0;
+    for k in 0..body.len() as i64 {
+        let n = k + 2;
+        let f = fields_of(path, n, body[k], 6)?;
+        let tid = match small_int(f[0], 1000000, 9999999) {
+            Some(v) if f[0].len() == 7 => v,
+            _ => return Err(bad(f"{path} line {n}: bad tap '{f[0]}'")),
+        };
+        if tid / 1000000 != op.digit {
+            return Err(bad(f"{path} line {n}: tap {tid} is not {op.code}'s"));
+        }
+        if tid <= last {
+            return Err(bad(f"{path} line {n}: tap {tid} is out of order"));
+        }
+        last = tid;
+        let cno = match small_int(f[1], 0, 99999999) {
+            Some(v) if cnos.contains_key(v) => v,
+            _ => return Err(bad(f"{path} line {n}: no card '{f[1]}'")),
+        };
+        if not sids.contains_key(f[2]) {
+            return Err(bad(f"{path} line {n}: no station '{f[2]}'"));
+        }
+        let day = match small_int(f[3], 1, DAYS) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad day '{f[3]}'")),
+        };
+        let minute = match time_of(f[4]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad time '{f[4]}'")),
+        };
+        if day * 1440 + minute < when {
+            return Err(bad(f"{path} line {n}: tap {tid} at day {day} {f[4]} is before the tap above it"));
+        }
+        when = day * 1440 + minute;
+        if f[5] != "IN" and f[5] != "OUT" {
+            return Err(bad(f"{path} line {n}: bad kind '{f[5]}'"));
+        }
+        out.push(Tap { tid: tid, cno: cno, sid: f[2].clone(), day: day, minute: minute, kind: f[5].clone() });
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the week
+
+// Charge card k's open journey as one with no tap-out: the most the
+// operator charges, less the concession, outside the caps.
+fn incomplete(op: ref Operator, stations: ref Vec[Station], cards: ref Vec[Card], w: mut ref Week, g: mut ref Gate, k: i64) {
+    let c = ref cards[k];
+    let fare = op.base + op.per_zone * (op.zones - 1);
+    let after = with_off(fare, c.ctype);
+    w.journeys.push(Journey {
+        card: c.cno,
+        kind: "INCOMPLETE".to_string(),
+        from: stations[g.o_st[k]].sid.clone(),
+        to: "-".to_string(),
+        day: g.o_day[k],
+        start: g.o_min[k],
+        end: -1,
+        fare: fare,
+        conc: fare - after,
+        capped: 0,
+        charged: after,
+    });
+    w.balance[k] -= after;
+    w.c_journeys[k] += 1;
+    w.c_charged[k] += after;
+    g.o_st[k] = -1;
+    g.x_day[k] = -1;
+}
+
+fn close_week(op: ref Operator, stations: ref Vec[Station], cards: ref Vec[Card], taps: ref Vec[Tap]) -> Week {
+    let ns = stations.len();
+    let nc = cards.len();
+    let sidx = station_index(stations);
+    let cidx = card_index(cards);
+    let mut balance: Vec[i64] = Vec.new();
+    for c in cards {
+        balance.push(c.balance);
+    }
+    let mut w = Week {
+        journeys: Vec.new(),
+        balance: balance,
+        c_journeys: Vec.filled(nc, 0),
+        c_charged: Vec.filled(nc, 0),
+        c_loads: Vec.filled(nc, 0),
+        c_declined: Vec.filled(nc, 0),
+        c_topups: Vec.filled(nc, 0),
+        day_spent: Vec.filled(nc * DAYS as usize, 0),
+        week_spent: Vec.filled(nc, 0),
+        entries: Vec.filled(ns, 0),
+        orphans: 0,
+        peak_charged: 0,
+        taps: taps.len() as i64,
+    };
+    let mut g = Gate {
+        o_st: Vec.filled(nc, -1),
+        o_day: Vec.filled(nc, 0),
+        o_min: Vec.filled(nc, 0),
+        o_xfer: Vec.filled(nc, false),
+        x_day: Vec.filled(nc, -1),
+        x_min: Vec.filled(nc, 0),
+    };
+    for t in taps {
+        let k = cidx.get(t.cno) ?? 0;
+        let c = ref cards[k];
+        let s = sidx.get(t.sid) ?? 0;
+        if t.kind == "IN" {
+            if g.o_st[k] >= 0 {
+                incomplete(op, stations, cards, mut w, mut g, k);
+            }
+            if w.balance[k] < op.base {
+                if c.autoload {
+                    while w.balance[k] < op.base {
+                        w.balance[k] += AUTOLOAD;
+                        w.c_loads[k] += 1;
+                    }
+                } else {
+                    w.c_declined[k] += 1;
+                    while w.balance[k] < op.base {
+                        w.balance[k] += TOPUP;
+                        w.c_topups[k] += 1;
+                    }
+                }
+            }
+            g.o_st[k] = s;
+            g.o_day[k] = t.day;
+            g.o_min[k] = t.minute;
+            g.o_xfer[k] = g.x_day[k] == t.day and t.minute - g.x_min[k] <= TRANSFER_MIN;
+            w.entries[s] += 1;
+            continue;
+        }
+        if g.o_st[k] >= 0 and g.o_day[k] != t.day {
+            incomplete(op, stations, cards, mut w, mut g, k);
+        }
+        if g.o_st[k] < 0 {
+            w.orphans += 1;
+            continue;
+        }
+        let a = g.o_st[k];
+        if a == s and t.minute - g.o_min[k] <= CANCEL_MIN {
+            w.journeys.push(Journey {
+                card: c.cno,
+                kind: "CANCEL".to_string(),
+                from: stations[a].sid.clone(),
+                to: stations[s].sid.clone(),
+                day: t.day,
+                start: g.o_min[k],
+                end: t.minute,
+                fare: 0,
+                conc: 0,
+                capped: 0,
+                charged: 0,
+            });
+            g.o_st[k] = -1;
+            continue;
+        }
+        let zones = (stations[a].zone - stations[s].zone).abs();
+        let mut fare = op.base + op.per_zone * zones;
+        let at_peak = is_peak(g.o_day[k], g.o_min[k]);
+        if at_peak {
+            fare = fare * op.peak / 100;
+        }
+        let xfer = g.o_xfer[k];
+        if xfer {
+            fare = (fare - op.base).max(0);
+        }
+        let after = with_off(fare, c.ctype);
+        let dcap = with_off(op.daycap, c.ctype);
+        let wcap = with_off(op.weekcap, c.ctype);
+        let slot = k * DAYS + t.day - 1;
+        let room = (dcap - w.day_spent[slot]).min(wcap - w.week_spent[k]).max(0);
+        let charge = after.min(room);
+        w.day_spent[slot] += charge;
+        w.week_spent[k] += charge;
+        w.balance[k] -= charge;
+        w.c_journeys[k] += 1;
+        w.c_charged[k] += charge;
+        if at_peak {
+            w.peak_charged += charge;
+        }
+        w.journeys.push(Journey {
+            card: c.cno,
+            kind: if xfer { "XFER".to_string() } else { "OK".to_string() },
+            from: stations[a].sid.clone(),
+            to: stations[s].sid.clone(),
+            day: t.day,
+            start: g.o_min[k],
+            end: t.minute,
+            fare: fare,
+            conc: fare - after,
+            capped: after - charge,
+            charged: charge,
+        });
+        g.o_st[k] = -1;
+        if xfer {
+            g.x_day[k] = -1;
+        } else {
+            g.x_day[k] = t.day;
+            g.x_min[k] = t.minute;
+        }
+    }
+    for k in 0..nc as i64 {
+        if g.o_st[k] >= 0 {
+            incomplete(op, stations, cards, mut w, mut g, k);
+        }
+    }
+    w
+}
+
+// ------------------------------------------------------------ reports
+
+fn sum_of(v: ref Vec[i64]) -> i64 {
+    let mut s = 0;
+    for x in v {
+        s += x;
+    }
+    s
+}
+
+fn ridership_report(op: ref Operator, w: ref Week) -> String {
+    let mut ok = 0;
+    let mut xfer = 0;
+    let mut cancel = 0;
+    let mut inc = 0;
+    let mut by_day: Vec[i64] = Vec.filled(DAYS as usize, 0);
+    for j in w.journeys {
+        if j.kind == "OK" {
+            ok += 1;
+        } else if j.kind == "XFER" {
+            xfer += 1;
+        } else if j.kind == "CANCEL" {
+            cancel += 1;
+        } else {
+            inc += 1;
+        }
+        if j.kind != "CANCEL" {
+            by_day[j.day - 1] += 1;
+        }
+    }
+    let declined = sum_of(w.c_declined);
+    let journeys = ok + xfer + inc;
+    let days: Vec[String] = by_day.iter().map(|v| f"{v}").collect();
+    f"{op.code} ridership: {group3(w.taps)} taps, {group3(journeys)} journeys ({xfer} transfers), {inc} incomplete, {cancel} cancelled, {w.orphans} stray tap-outs, {declined} declined at the gate; by day {days.join(" ")}"
+}
+
+fn revenue_report(op: ref Operator, w: ref Week) -> String {
+    let mut fares = 0;
+    let mut conc = 0;
+    let mut capped = 0;
+    let mut charged = 0;
+    let mut pen = 0;
+    for j in w.journeys {
+        fares += j.fare;
+        conc += j.conc;
+        capped += j.capped;
+        charged += j.charged;
+        if j.kind == "INCOMPLETE" {
+            pen += j.charged;
+        }
+    }
+    let loads = sum_of(w.c_loads);
+    let topups = sum_of(w.c_topups);
+    let share = if charged > 0 { w.peak_charged * 1000 / charged } else { 0 };
+    f"{op.code} revenue: {money(fares)} at full fare, {money(conc)} concessions, {money(capped)} capped off, {money(charged)} charged ({share / 10}.{share % 10}% at peak, {money(pen)} for incomplete journeys); {loads} autoloads and {topups} top-ups at the machine, {money(loads * AUTOLOAD + topups * TOPUP)} loaded"
+}
+
+fn cap_report(op: ref Operator, cards: ref Vec[Card], w: ref Week) -> String {
+    let mut day_hits = 0;
+    let mut week_hits = 0;
+    for k in 0..cards.len() as i64 {
+        let dcap = with_off(op.daycap, cards[k].ctype);
+        let wcap = with_off(op.weekcap, cards[k].ctype);
+        for d in 0..DAYS {
+            if dcap > 0 and w.day_spent[k * DAYS + d] == dcap {
+                day_hits += 1;
+            }
+        }
+        if wcap > 0 and w.week_spent[k] == wcap {
+            week_hits += 1;
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for k in 0..cards.len() as i64 {
+        order.push(k);
+    }
+    order.sort_by(|a, b| {
+        if w.c_journeys[a] != w.c_journeys[b] {
+            w.c_journeys[b].cmp(w.c_journeys[a])
+        } else if w.c_charged[a] != w.c_charged[b] {
+            w.c_charged[b].cmp(w.c_charged[a])
+        } else {
+            cards[a].cno.cmp(cards[b].cno)
+        }
+    });
+    let mut top: Vec[String] = Vec.new();
+    for k in order[0..3] {
+        top.push(f"{cards[k].cno} {TYPES[cards[k].ctype]} {w.c_journeys[k]} journeys {money(w.c_charged[k])}");
+    }
+    f"{op.code} caps: {day_hits} card-days at the day cap, {week_hits} cards at the week cap; most riding {top.join(", ")}"
+}
+
+fn station_report(op: ref Operator, stations: ref Vec[Station], w: ref Week) -> String {
+    let mut order: Vec[i64] = Vec.new();
+    for s in 0..stations.len() as i64 {
+        order.push(s);
+    }
+    order.sort_by(|a, b| if w.entries[a] != w.entries[b] { w.entries[b].cmp(w.entries[a]) } else { stations[a].sid.cmp(stations[b].sid) });
+    let mut busy: Vec[String] = Vec.new();
+    for s in order[0..3] {
+        busy.push(f"{stations[s].sid} {stations[s].name} {w.entries[s]}");
+    }
+    let sidx = station_index(stations);
+    let mut crossed: Vec[i64] = Vec.filled(op.zones as usize, 0);
+    for j in w.journeys {
+        if j.kind == "OK" or j.kind == "XFER" {
+            let a = sidx.get(j.from) ?? 0;
+            let b = sidx.get(j.to) ?? 0;
+            crossed[(stations[a].zone - stations[b].zone).abs()] += 1;
+        }
+    }
+    let mut cells: Vec[String] = Vec.new();
+    for z in 0..op.zones {
+        cells.push(f"{z}:{crossed[z]}");
+    }
+    f"{op.code} stations: busiest {busy.join(", ")}; journeys by zones crossed {cells.join(" ")}"
+}
+
+fn balance_report(op: ref Operator, cards: ref Vec[Card], w: ref Week) -> String {
+    let mut total = 0;
+    let mut neg = 0;
+    let mut low = 0;
+    for k in 0..cards.len() as i64 {
+        total += w.balance[k];
+        if w.balance[k] < 0 {
+            neg += 1;
+        }
+        if w.balance[k] < w.balance[low] {
+            low = k;
+        }
+    }
+    let mut cells: Vec[String] = Vec.new();
+    for t in 0..4 {
+        let mut n = 0;
+        let mut spent = 0;
+        for k in 0..cards.len() as i64 {
+            if cards[k].ctype == t {
+                n += 1;
+                spent += w.c_charged[k];
+            }
+        }
+        let avg = if n > 0 { spent / n } else { 0 };
+        cells.push(f"{TYPES[t]} {n} at {money(avg)}");
+    }
+    f"{op.code} balances: {money(total)} held, {neg} cards below zero, lowest {cards[low].cno} at {money(w.balance[low])}; average spend {cells.join(", ")}"
+}
+
+// ------------------------------------------------------------ the fund
+
+// An operator claims what its concessions cost it; the fund repays what it
+// has left.
+fn claim(fund: mut ref Fund, op: ref Operator, w: ref Week) -> String {
+    let mut asked = 0;
+    for j in w.journeys {
+        asked += j.conc;
+    }
+    let granted = asked.min(fund.left);
+    fund.left -= granted;
+    fund.log.push(f"{op.code},{dollars(asked)},{dollars(granted)},{dollars(fund.left)}");
+    f"{op.code} subsidy: claimed {money(asked)}, repaid {money(granted)}, {money(asked - granted)} unpaid; {money(fund.left)} left in the fund"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let mtr = Operator { code: "MTR", digit: 1, seed: 7101, stations: 16, zones: 4, base: 250, per_zone: 60, peak: 125, daycap: 900, weekcap: 3600 };
+    let bus = Operator { code: "BUS", digit: 2, seed: 7202, stations: 20, zones: 3, base: 200, per_zone: 0, peak: 100, daycap: 600, weekcap: 2400 };
+    let lrt = Operator { code: "LRT", digit: 3, seed: 7303, stations: 12, zones: 3, base: 225, per_zone: 40, peak: 115, daycap: 800, weekcap: 3200 };
+    let fry = Operator { code: "FRY", digit: 4, seed: 7404, stations: 6, zones: 2, base: 400, per_zone: 150, peak: 100, daycap: 1100, weekcap: 4400 };
+
+    // Four sets of stations and four card books, then four weeks of taps,
+    // each over its own operator's stations and cards.
+    let s1 = build_stations(mtr);
+    let s2 = build_stations(bus);
+    let s3 = build_stations(lrt);
+    let s4 = build_stations(fry);
+    let c1 = build_cards(mtr);
+    let c2 = build_cards(bus);
+    let c3 = build_cards(lrt);
+    let c4 = build_cards(fry);
+    let t1 = build_taps(mtr, s1, c1);
+    let t2 = build_taps(bus, s2, c2);
+    let t3 = build_taps(lrt, s3, c3);
+    let t4 = build_taps(fry, s4, c4);
+
+    // Twelve writes.
+    let w1 = fs.write("MTR_stations.csv", encode_stations(s1));
+    let w2 = fs.write("MTR_cards.csv", encode_cards(c1));
+    let w3 = fs.write("MTR_taps.csv", encode_taps(t1));
+    let w4 = fs.write("BUS_stations.csv", encode_stations(s2));
+    let w5 = fs.write("BUS_cards.csv", encode_cards(c2));
+    let w6 = fs.write("BUS_taps.csv", encode_taps(t2));
+    let w7 = fs.write("LRT_stations.csv", encode_stations(s3));
+    let w8 = fs.write("LRT_cards.csv", encode_cards(c3));
+    let w9 = fs.write("LRT_taps.csv", encode_taps(t3));
+    let w10 = fs.write("FRY_stations.csv", encode_stations(s4));
+    let w11 = fs.write("FRY_cards.csv", encode_cards(c4));
+    let w12 = fs.write("FRY_taps.csv", encode_taps(t4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err() or w9.is_err() or w10.is_err() or w11.is_err() or w12.is_err() {
+        return Err(bad("could not write the week's files"));
+    }
+
+    // A copy of MTR's taps with a station it does not have, and of LRT's
+    // cards with a balance missing a digit.
+    let whole = read_text("MTR_taps.csv")?;
+    if fs.write("MTR_taps.bad", damage(whole, 50, 2, "MTR-99")).is_err() {
+        return Err(bad("could not write MTR_taps.bad"));
+    }
+    let whole2 = read_text("LRT_cards.csv")?;
+    if fs.write("LRT_cards.bad", damage(whole2, 20, 2, "12.5")).is_err() {
+        return Err(bad("could not write LRT_cards.bad"));
+    }
+
+    // Twelve reads.
+    let x1 = read_text("MTR_stations.csv")?;
+    let y1 = read_text("MTR_cards.csv")?;
+    let z1 = read_text("MTR_taps.csv")?;
+    let x2 = read_text("BUS_stations.csv")?;
+    let y2 = read_text("BUS_cards.csv")?;
+    let z2 = read_text("BUS_taps.csv")?;
+    let x3 = read_text("LRT_stations.csv")?;
+    let y3 = read_text("LRT_cards.csv")?;
+    let z3 = read_text("LRT_taps.csv")?;
+    let x4 = read_text("FRY_stations.csv")?;
+    let y4 = read_text("FRY_cards.csv")?;
+    let z4 = read_text("FRY_taps.csv")?;
+    println(file_line("MTR stations", x1));
+    println(file_line("MTR cards", y1));
+    println(file_line("MTR taps", z1));
+    println(file_line("BUS stations", x2));
+    println(file_line("BUS cards", y2));
+    println(file_line("BUS taps", z2));
+    println(file_line("LRT stations", x3));
+    println(file_line("LRT cards", y3));
+    println(file_line("LRT taps", z3));
+    println(file_line("FRY stations", x4));
+    println(file_line("FRY cards", y4));
+    println(file_line("FRY taps", z4));
+
+    // Four station files and four card files, then four tap files, which
+    // need both. Each can fail with `?`, so a parallel run has to report
+    // the first failure in source order.
+    let ps1 = parse_stations("MTR_stations.csv", mtr, x1)?;
+    let ps2 = parse_stations("BUS_stations.csv", bus, x2)?;
+    let ps3 = parse_stations("LRT_stations.csv", lrt, x3)?;
+    let ps4 = parse_stations("FRY_stations.csv", fry, x4)?;
+    let pc1 = parse_cards("MTR_cards.csv", mtr, y1)?;
+    let pc2 = parse_cards("BUS_cards.csv", bus, y2)?;
+    let pc3 = parse_cards("LRT_cards.csv", lrt, y3)?;
+    let pc4 = parse_cards("FRY_cards.csv", fry, y4)?;
+    let pt1 = parse_taps("MTR_taps.csv", mtr, ps1, pc1, z1)?;
+    let pt2 = parse_taps("BUS_taps.csv", bus, ps2, pc2, z2)?;
+    let pt3 = parse_taps("LRT_taps.csv", lrt, ps3, pc3, z3)?;
+    let pt4 = parse_taps("FRY_taps.csv", fry, ps4, pc4, z4)?;
+    match parse_taps("MTR_taps.bad", mtr, ps1, pc1, read_text("MTR_taps.bad")?) {
+        Ok(_) => println("MTR_taps.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_cards("LRT_cards.bad", lrt, read_text("LRT_cards.bad")?) {
+        Ok(_) => println("LRT_cards.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_stations("FRY_stations.csv", bus, x4) {
+        Ok(_) => println("FRY_stations.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = ps1 == s1 and ps2 == s2 and ps3 == s3 and ps4 == s4 and pc1 == c1 and pc2 == c2 and pc3 == c3 and pc4 == c4 and pt1 == t1 and pt2 == t2 and pt3 == t3 and pt4 == t4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four week closes, the hot group.
+    let m1 = close_week(mtr, ps1, pc1, pt1);
+    let m2 = close_week(bus, ps2, pc2, pt2);
+    let m3 = close_week(lrt, ps3, pc3, pt3);
+    let m4 = close_week(fry, ps4, pc4, pt4);
+
+    // The journeys and card statements, written and read back.
+    let r1 = fs.write("MTR_journeys.csv", encode_journeys(m1));
+    let r2 = fs.write("BUS_journeys.csv", encode_journeys(m2));
+    let r3 = fs.write("LRT_journeys.csv", encode_journeys(m3));
+    let r4 = fs.write("FRY_journeys.csv", encode_journeys(m4));
+    let r5 = fs.write("MTR_statements.csv", encode_statements(pc1, m1));
+    let r6 = fs.write("BUS_statements.csv", encode_statements(pc2, m2));
+    let r7 = fs.write("LRT_statements.csv", encode_statements(pc3, m3));
+    let r8 = fs.write("FRY_statements.csv", encode_statements(pc4, m4));
+    if r1.is_err() or r2.is_err() or r3.is_err() or r4.is_err() or r5.is_err() or r6.is_err() or r7.is_err() or r8.is_err() {
+        return Err(bad("could not write the journeys"));
+    }
+    let j1 = read_text("MTR_journeys.csv")?;
+    let e1 = read_text("MTR_statements.csv")?;
+    let j2 = read_text("BUS_journeys.csv")?;
+    let e2 = read_text("BUS_statements.csv")?;
+    let j3 = read_text("LRT_journeys.csv")?;
+    let e3 = read_text("LRT_statements.csv")?;
+    let j4 = read_text("FRY_journeys.csv")?;
+    let e4 = read_text("FRY_statements.csv")?;
+    println(file_line("MTR journeys", j1));
+    println(file_line("MTR statements", e1));
+    println(file_line("BUS journeys", j2));
+    println(file_line("BUS statements", e2));
+    println(file_line("LRT journeys", j3));
+    println(file_line("LRT statements", e3));
+    println(file_line("FRY journeys", j4));
+    println(file_line("FRY statements", e4));
+
+    // Reports that only read what came before.
+    let i1 = ridership_report(mtr, m1);
+    let i2 = ridership_report(bus, m2);
+    let i3 = ridership_report(lrt, m3);
+    let i4 = ridership_report(fry, m4);
+    let v1 = revenue_report(mtr, m1);
+    let v2 = revenue_report(bus, m2);
+    let v3 = revenue_report(lrt, m3);
+    let v4 = revenue_report(fry, m4);
+    let k1 = cap_report(mtr, pc1, m1);
+    let k2 = cap_report(bus, pc2, m2);
+    let k3 = cap_report(lrt, pc3, m3);
+    let k4 = cap_report(fry, pc4, m4);
+    let n1 = station_report(mtr, ps1, m1);
+    let n2 = station_report(bus, ps2, m2);
+    let n3 = station_report(lrt, ps3, m3);
+    let n4 = station_report(fry, ps4, m4);
+    let b1 = balance_report(mtr, pc1, m1);
+    let b2 = balance_report(bus, pc2, m2);
+    let b3 = balance_report(lrt, pc3, m3);
+    let b4 = balance_report(fry, pc4, m4);
+    for line in [i1, i2, i3, i4, v1, v2, v3, v4, k1, k2, k3, k4, n1, n2, n3, n4, b1, b2, b3, b4] {
+        println(line);
+    }
+
+    // The fund repays from what the operators before have left, so the
+    // operators claim in order.
+    let mut fund = Fund { left: FUND, log: Vec.new() };
+    println(claim(mut fund, mtr, m1));
+    println(claim(mut fund, bus, m2));
+    println(claim(mut fund, lrt, m3));
+    println(claim(mut fund, fry, m4));
+    if fs.write("fund.log", f"{fund.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write fund.log"));
+    }
+    let back = read_text("fund.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"fund.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for p in ["MTR_stations.csv", "MTR_cards.csv", "MTR_taps.csv", "BUS_stations.csv", "BUS_cards.csv", "BUS_taps.csv",
+              "LRT_stations.csv", "LRT_cards.csv", "LRT_taps.csv", "FRY_stations.csv", "FRY_cards.csv", "FRY_taps.csv",
+              "MTR_taps.bad", "LRT_cards.bad", "fund.log", "MTR_journeys.csv", "BUS_journeys.csv", "LRT_journeys.csv",
+              "FRY_journeys.csv", "MTR_statements.csv", "BUS_statements.csv", "LRT_statements.csv", "FRY_statements.csv"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"fare_cap failed: {e.describe()}"),
+    }
+}

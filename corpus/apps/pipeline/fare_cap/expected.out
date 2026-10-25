@@ -1,0 +1,49 @@
+MTR stations: 16 rows, 253 bytes, fnv 67a6e620
+MTR cards: 120 rows, 2,806 bytes, fnv bb257173
+MTR taps: 2,131 rows, 75,679 bytes, fnv 988d1cd6
+BUS stations: 20 rows, 326 bytes, fnv a07de213
+BUS cards: 120 rows, 2,829 bytes, fnv 44d4b3e8
+BUS taps: 2,280 rows, 80,960 bytes, fnv 3814b7b3
+LRT stations: 12 rows, 203 bytes, fnv fc05d4b0
+LRT cards: 120 rows, 2,834 bytes, fnv a50eedd5
+LRT taps: 2,192 rows, 77,840 bytes, fnv 19d6bff5
+FRY stations: 6 rows, 108 bytes, fnv 1da72bd0
+FRY cards: 120 rows, 2,805 bytes, fnv 746e61c3
+FRY taps: 2,211 rows, 78,514 bytes, fnv afd864e9
+MTR_taps.bad line 51: no station 'MTR-99'
+LRT_cards.bad line 21: bad balance '12.5'
+FRY_stations.csv line 2: station FRY-01 is not at BUS
+parsed files match the built ones: true
+MTR journeys: 1,068 rows, 64,471 bytes, fnv f53d1a1f
+MTR statements: 120 rows, 4,995 bytes, fnv 15738399
+BUS journeys: 1,151 rows, 69,409 bytes, fnv da381a70
+BUS statements: 120 rows, 5,039 bytes, fnv d003f743
+LRT journeys: 1,103 rows, 66,573 bytes, fnv b771f280
+LRT statements: 120 rows, 5,036 bytes, fnv 65931a87
+FRY journeys: 1,113 rows, 67,136 bytes, fnv 8bd726e1
+FRY statements: 120 rows, 5,013 bytes, fnv 2eececd7
+MTR ridership: 2,131 taps, 1,049 journeys (139 transfers), 26 incomplete, 19 cancelled, 21 stray tap-outs, 40 declined at the gate; by day 183 163 164 194 165 96 84
+BUS ridership: 2,280 taps, 1,138 journeys (136 transfers), 38 incomplete, 13 cancelled, 16 stray tap-outs, 17 declined at the gate; by day 184 169 189 199 179 109 109
+LRT ridership: 2,192 taps, 1,075 journeys (124 transfers), 30 incomplete, 28 cancelled, 16 stray tap-outs, 25 declined at the gate; by day 168 179 180 178 168 108 94
+FRY ridership: 2,211 taps, 1,089 journeys (116 transfers), 35 incomplete, 24 cancelled, 20 stray tap-outs, 76 declined at the gate; by day 184 182 181 160 183 103 96
+MTR revenue: $3,628.31 at full fare, $546.56 concessions, $542.68 capped off, $2,539.07 charged (69.4% at peak, $91.14 for incomplete journeys); 34 autoloads and 40 top-ups at the machine, $1,080.00 loaded
+BUS revenue: $2,004.00 at full fare, $267.40 concessions, $28.60 capped off, $1,708.00 charged (62.8% at peak, $65.50 for incomplete journeys); 6 autoloads and 17 top-ups at the machine, $290.00 loaded
+LRT revenue: $2,749.78 at full fare, $445.55 concessions, $120.95 capped off, $2,183.28 charged (64.7% at peak, $73.60 for incomplete journeys); 14 autoloads and 25 top-ups at the machine, $530.00 loaded
+FRY revenue: $4,772.50 at full fare, $618.41 concessions, $692.99 capped off, $3,461.10 charged (70.7% at peak, $161.41 for incomplete journeys); 55 autoloads and 76 top-ups at the machine, $1,860.00 loaded
+MTR caps: 141 card-days at the day cap, 40 cards at the week cap; most riding 10001624 ADULT 17 journeys $36.00, 10001697 STUDENT 17 journeys $25.20, 10001702 CHILD 17 journeys $9.00
+BUS caps: 53 card-days at the day cap, 21 cards at the week cap; most riding 20001186 ADULT 19 journeys $24.00, 20001517 ADULT 19 journeys $24.00, 20001554 ADULT 17 journeys $26.00
+LRT caps: 26 card-days at the day cap, 28 cards at the week cap; most riding 30001402 ADULT 21 journeys $38.10, 30001091 ADULT 21 journeys $32.00, 30001081 ADULT 20 journeys $32.00
+FRY caps: 162 card-days at the day cap, 56 cards at the week cap; most riding 40001574 CHILD 18 journeys $11.00, 40001356 ADULT 16 journeys $44.00, 40001755 ADULT 16 journeys $44.00
+MTR stations: busiest MTR-09 Bridge 114, MTR-02 North 88, MTR-08 River 72; journeys by zones crossed 0:226 1:416 2:237 3:144
+BUS stations: busiest BUS-07 Abbey 90, BUS-18 Tower 80, BUS-08 Dock 74; journeys by zones crossed 0:431 1:509 2:160
+LRT stations: busiest LRT-05 Yard 125, LRT-09 Kings 120, LRT-07 Ferry 115; journeys by zones crossed 0:347 1:525 2:173
+FRY stations: busiest FRY-04 North 218, FRY-05 Castle 183, FRY-02 South 182; journeys by zones crossed 0:502 1:552
+MTR balances: $1,858.07 held, 0 cards below zero, lowest 10001602 at $0.74; average spend ADULT 85 at $25.52, SENIOR 15 at $9.61, STUDENT 9 at $16.64, CHILD 11 at $6.84
+BUS balances: $2,212.51 held, 0 cards below zero, lowest 20001266 at $0.22; average spend ADULT 82 at $17.07, SENIOR 12 at $6.50, STUDENT 18 at $10.88, CHILD 8 at $4.25
+LRT balances: $2,112.02 held, 0 cards below zero, lowest 30001788 at $1.01; average spend ADULT 75 at $21.86, SENIOR 23 at $10.15, STUDENT 17 at $16.91, CHILD 5 at $4.47
+FRY balances: $1,810.76 held, 0 cards below zero, lowest 40001827 at $1.96; average spend ADULT 88 at $33.95, SENIOR 17 at $14.17, STUDENT 8 at $20.56, CHILD 7 at $9.65
+MTR subsidy: claimed $546.56, repaid $546.56, $0.00 unpaid; $853.44 left in the fund
+BUS subsidy: claimed $267.40, repaid $267.40, $0.00 unpaid; $586.04 left in the fund
+LRT subsidy: claimed $445.55, repaid $445.55, $0.00 unpaid; $140.49 left in the fund
+FRY subsidy: claimed $618.41, repaid $140.49, $477.92 unpaid; $0.00 left in the fund
+fund.log: 4 entries, 98 bytes, fnv 84d3be2e
