@@ -13663,6 +13663,44 @@ fn a_function_a_package_module_imports_shadows_the_library_function_of_its_name(
 }
 
 #[test]
+fn a_method_on_an_associated_type_of_a_bound_takes_the_trait_declared_bounds() {
+    // B-2026-10-25-32: a value of `B.Out` under `B: Mk`, where `trait Mk`
+    // declares `type Out: Fin`, takes `Fin`'s methods, as a where clause's
+    // `B.Out: Fin` already gave them; it checked as Error with no
+    // diagnostic, and the MIR builder stopped on the Error type. A method
+    // no bound declares is refused by name.
+    let program = |call: &str| {
+        format!(
+            "trait Fin {{\n    fn fin(ref self) -> i64;\n}}\ntrait Mk {{\n    type Out: Fin;\n    \
+             fn mk(ref self) -> Self.Out;\n}}\nstruct F {{\n    h: i64,\n}}\n\
+             impl Fin for F {{\n    fn fin(ref self) -> i64 {{\n        self.h\n    }}\n}}\n\
+             struct M {{}}\nimpl Mk for M {{\n    type Out = F;\n    fn mk(ref self) -> F {{\n        \
+             F {{ h: 3 }}\n    }}\n}}\nfn word[B: Mk](b: ref B, w: i64) -> i64 {{\n    \
+             let h = b.mk();\n    h.{call}() + w\n}}\nfn main() {{\n    println(word(M {{}}, 7));\n}}\n"
+        )
+    };
+    accepted_and_runs("projection-declared-bound", &program("fin"), "10\n");
+    rejected_with(
+        "projection-declared-bound-missing",
+        &program("nope"),
+        "no method 'nope' on type parameter 'B.Out'",
+    );
+    accepted_and_runs(
+        "projection-declared-bound-library",
+        "struct Fnv {\n    h: u64,\n}\nimpl Hasher for Fnv {\n    \
+         fn write(mut ref self, bytes: ref Slice[u8]) {\n        \
+         for _ in bytes {\n            self.h = self.h * 31u64 + 1u64;\n        }\n    }\n    \
+         fn finish(ref self) -> u64 {\n        self.h\n    }\n}\nstruct FnvBuild {}\n\
+         impl BuildHasher for FnvBuild {\n    type Hasher = Fnv;\n    \
+         fn build(ref self) -> Fnv {\n        Fnv { h: 1u64 }\n    }\n}\n\
+         fn hasher_word[B: BuildHasher](b: ref B, w: u64) -> u64 {\n    \
+         let mut h = b.build();\n    h.write_u8(2u8);\n    h.finish() + w\n}\n\
+         fn main() {\n    println(hasher_word(FnvBuild {}, 7u64));\n}\n",
+        "39\n",
+    );
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

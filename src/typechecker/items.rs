@@ -2134,6 +2134,16 @@ impl<'a> super::TypeChecker<'a> {
         let saved_proj_bounds = self.enclosing_proj_bounds.clone();
         self.enclosing_proj_bounds
             .extend(Self::collect_proj_bounds(&f.where_clause));
+        // A projection of a bounded parameter takes the bounds its trait
+        // declares (`B.Hasher: Hasher` from `trait BuildHasher { type
+        // Hasher: Hasher; }`) as well as a where clause's, so a method on a
+        // `B.Hasher` value dispatches (B-2026-10-25-32).
+        for (key, bounds) in self.declared_proj_bounds() {
+            self.enclosing_proj_bounds
+                .entry(key)
+                .or_default()
+                .extend(bounds);
+        }
 
         // Collect the DIM params used in shape positions in the signature (and
         // any `const` / `...S` params) so body-level annotations can resolve

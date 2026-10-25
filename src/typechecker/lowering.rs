@@ -1320,6 +1320,36 @@ impl<'a> super::TypeChecker<'a> {
         map
     }
 
+    /// The bounds the traits bounding each enclosing parameter declare on
+    /// their non-generic associated types (`type Hasher: Hasher;`), keyed
+    /// by `(P, Assoc)` as [`Self::collect_proj_bounds`] keys a where
+    /// clause's; a supertrait's declarations count.
+    pub(super) fn declared_proj_bounds(
+        &self,
+    ) -> Vec<((String, String), Vec<crate::ast::TraitBound>)> {
+        let mut out = Vec::new();
+        for (param, bounds) in &self.enclosing_bounds {
+            let mut seen = std::collections::HashSet::new();
+            for b in bounds {
+                let Some(name) = b.path.last() else { continue };
+                for t in self.env.supertrait_closure_traits(name) {
+                    if !seen.insert(t.clone()) {
+                        continue;
+                    }
+                    let Some(info) = self.env.traits.get(&t) else {
+                        continue;
+                    };
+                    for d in &info.assoc_type_decls {
+                        if d.generic_params.is_none() && !d.bounds.is_empty() {
+                            out.push(((param.clone(), d.name.clone()), d.bounds.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The `where P.Assoc: Trait` bounds of a where clause, keyed by
     /// `(P, Assoc)`; see `enclosing_proj_bounds`.
     pub(super) fn collect_proj_bounds(
