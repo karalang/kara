@@ -12,7 +12,8 @@ use inkwell::IntPredicate;
 use super::{Cx, R};
 use crate::mir::interp::split_method;
 use crate::mir::ty::{IntTy, IntrinsicTy};
-use crate::mir::{BasicBlock, ConstKind, Operand, Place, Ty, TyKind};
+use crate::mir::{BasicBlock, Const, ConstKind, Operand, Place, Ty, TyKind};
+use crate::token::Span;
 
 fn e<T: ToString>(x: T) -> String {
     x.to_string()
@@ -735,6 +736,45 @@ impl<'ctx> Cx<'ctx, '_> {
                 let f = self.extern_fn(name, self.llcx.void_type().fn_type(&[], false));
                 self.builder.build_call(f, &[], "").map_err(e)?;
                 Ok(())
+            }
+            // A `?`'s record in the error return trace: its place on the
+            // error path, a clear on the success path (B-2026-10-25-3).
+            ("error_trace_push", "") if args.len() == 2 => {
+                let int = |a: &Operand| match a {
+                    Operand::Const(Const {
+                        kind: ConstKind::Scalar(n),
+                        ..
+                    }) => Ok(*n as usize),
+                    _ => Err("error_trace_push takes a constant place".to_string()),
+                };
+                let at = Span {
+                    line: int(&args[0])?,
+                    column: int(&args[1])?,
+                    ..self.site
+                };
+                let (text, len) = self.str_const(&Self::site_text(at))?;
+                let live = self.error_trace_live();
+                self.rt("error_trace_push", &[text.into(), len.into(), live.into()])
+            }
+            // Only a thread with frames has anything to clear, so a `?`
+            // that succeeds costs a load, an unordered one that a loop can
+            // hoist (B-2026-10-25-3).
+            ("error_trace_clear", "") => {
+                let live = self.error_trace_live();
+                let n = self
+                    .builder
+                    .build_load(self.llcx.i64_type(), live, "trace.live")
+                    .map_err(e)?
+                    .into_int_value();
+                let inst = n.as_instruction().ok_or("a load")?;
+                inst.set_alignment(8).map_err(e)?;
+                inst.set_atomic_ordering(inkwell::AtomicOrdering::Unordered)
+                    .map_err(e)?;
+                let any = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, n, self.i64(0), "")
+                    .map_err(e)?;
+                self.if_then(any, |cx| cx.rt("error_trace_clear", &[live.into()]))
             }
             ("panic_message", "") => {
                 self.rt("fmt_begin", &[])?;

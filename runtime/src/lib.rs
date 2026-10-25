@@ -407,6 +407,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_panic_set,
         mir::karac_mir_abort,
         mir::karac_mir_abort_at,
+        mir::karac_mir_error_trace_push,
+        mir::karac_mir_error_trace_clear,
+        mir::karac_mir_error_trace_print,
         mir::karac_mir_set_panic_handler,
         mir::karac_mir_panic_info,
     );

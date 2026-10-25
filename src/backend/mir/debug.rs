@@ -206,9 +206,24 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// `file:line:col` of `span`.
-    fn site_text(span: Span) -> String {
+    pub(super) fn site_text(span: Span) -> String {
         let (file, line) = crate::mir::interp::source_at(span.line);
         format!("{file}:{line}:{}", span.column)
+    }
+
+    /// The count of threads whose error return trace has frames, which the
+    /// runtime keeps (`karac_mir_error_trace_push`, B-2026-10-25-3).
+    pub(super) fn error_trace_live(&self) -> PointerValue<'ctx> {
+        let name = "karac.trace.live";
+        let g = self.module.get_global(name).unwrap_or_else(|| {
+            let t = self.llcx.i64_type();
+            let g = self.module.add_global(t, None, name);
+            g.set_initializer(&t.const_zero());
+            g.set_linkage(Linkage::Internal);
+            g.set_alignment(8);
+            g
+        });
+        g.as_pointer_value()
     }
 
     /// The globals holding the program's latest call into the library:

@@ -2501,6 +2501,119 @@ fn abort_message(msg: String) -> String {
     }
 }
 
+/// How many frames the error return trace keeps, the most recent ones
+/// (design.md § Error return traces).
+const ERROR_TRACE_DEPTH: usize = 64;
+
+/// The thread's error return trace: the place (`file:line:col`, a string
+/// constant of the program, as its address and length) of each `?` that
+/// returned an error since the last one that succeeded, oldest first; and
+/// whether it dropped its oldest frames to stay [`ERROR_TRACE_DEPTH`] deep.
+struct ErrorTrace {
+    frames: Vec<(usize, usize)>,
+    truncated: bool,
+}
+
+thread_local! {
+    static ERROR_TRACE: RefCell<ErrorTrace> = const {
+        RefCell::new(ErrorTrace {
+            frames: Vec::new(),
+            truncated: false,
+        })
+    };
+}
+
+/// A `?` at `at` returned its error (B-2026-10-25-3). `live` is the
+/// program's count of threads whose trace has frames, which a `?` that
+/// succeeds reads to skip [`karac_mir_error_trace_clear`] when it is 0.
+///
+/// # Safety
+/// `at` is a string constant of the program, readable for `at_len` bytes
+/// for as long as the program runs, and `live` is the program's count, an
+/// aligned `u64` that lives as long.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_error_trace_push(
+    at: *const u8,
+    at_len: u64,
+    live: *const std::sync::atomic::AtomicU64,
+) {
+    ERROR_TRACE.with(|t| {
+        let mut t = t.borrow_mut();
+        if t.frames.is_empty() {
+            // SAFETY: the caller's contract.
+            unsafe { &*live }.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        if t.frames.len() >= ERROR_TRACE_DEPTH {
+            t.frames.remove(0);
+            t.truncated = true;
+        }
+        t.frames.push((at as usize, at_len as usize));
+    });
+}
+
+/// A `?` succeeded: the error, if any, was handled.
+///
+/// # Safety
+/// `live` is as for [`karac_mir_error_trace_push`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_error_trace_clear(live: *const std::sync::atomic::AtomicU64) {
+    ERROR_TRACE.with(|t| {
+        let mut t = t.borrow_mut();
+        if !t.frames.is_empty() {
+            t.frames.clear();
+            t.truncated = false;
+            // SAFETY: the caller's contract.
+            unsafe { &*live }.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+}
+
+/// The error return trace as the diagnostic it goes with prints it, ending
+/// at a panic's own place `last` when there is one, or nothing when it has
+/// no frame (design.md § Error return traces, § Panic record).
+fn error_trace_text(last: Option<&str>) -> String {
+    ERROR_TRACE.with(|t| {
+        let t = t.borrow();
+        let mut frames: Vec<std::borrow::Cow<'_, str>> = t
+            .frames
+            .iter()
+            // SAFETY: `karac_mir_error_trace_push`'s contract.
+            .map(|&(p, n)| String::from_utf8_lossy(unsafe { bytes(p as *const u8, n) }))
+            .collect();
+        let mut truncated = t.truncated;
+        if let Some(at) = last {
+            if frames.len() >= ERROR_TRACE_DEPTH {
+                frames.remove(0);
+                truncated = true;
+            }
+            frames.push(at.into());
+        }
+        if frames.is_empty() {
+            return String::new();
+        }
+        let mut text = String::from("Error return trace:\n");
+        for f in frames {
+            text.push_str(&format!("  {f}\n"));
+        }
+        if truncated {
+            text.push_str(&format!(
+                "  ... (trace truncated, max {ERROR_TRACE_DEPTH} frames)\n"
+            ));
+        }
+        text
+    })
+}
+
+/// After `main` returned an error and `Error: e` was printed: the error
+/// return trace, on standard error.
+#[no_mangle]
+pub extern "C" fn karac_mir_error_trace_print() {
+    let text = error_trace_text(None);
+    if !text.is_empty() {
+        write(true, text.as_bytes());
+    }
+}
+
 /// A runtime error: the message on standard error, then exit 101.
 ///
 /// # Safety
@@ -2547,7 +2660,8 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     let report = if at.is_empty() {
         format!("runtime error: {msg}\n")
     } else {
-        format!("runtime error: {msg}\n  at {at}\nError return trace:\n  {at}\n")
+        let trace = error_trace_text(Some(at.as_ref()));
+        format!("runtime error: {msg}\n  at {at}\n{trace}")
     };
     write(true, report.as_bytes());
     run_panic_handler(&msg, &at);

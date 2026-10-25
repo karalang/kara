@@ -435,6 +435,10 @@ note: raise the limit with `ulimit -s`, or make the recursion iterative.\n";
 /// runner's timeout bounds wall time. `KARAC_MIR_MAX_STEPS` overrides it.
 const MAX_STEPS: u64 = 40_000_000_000;
 
+/// How many frames the error return trace keeps, the most recent ones
+/// (design.md § Error return traces).
+const ERROR_TRACE_DEPTH: usize = 64;
+
 /// The program's file name as `karac __mir-run` was given it, for
 /// `dbg`'s `[file:line]` prefix; `<unknown>` when nothing set it.
 static SOURCE_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -693,6 +697,8 @@ fn run_with(
         debug_render: false,
         panic_message: None,
         contract_depth: 0,
+        error_trace: Vec::new(),
+        error_trace_truncated: false,
         abort_reported: false,
         panic_info: None,
         inline_tasks: Vec::new(),
@@ -1144,6 +1150,12 @@ struct Interp<'a> {
     /// How many `requires` / `ensures` predicates are being evaluated: an
     /// abort raised above 0 is the predicate's panic (B-2026-10-25-23).
     contract_depth: u32,
+    /// The error return trace: the `file:line:col` of each `?` that
+    /// returned an error since the last one that succeeded, oldest first,
+    /// at most [`ERROR_TRACE_DEPTH`] (design.md § Error return traces).
+    error_trace: Vec<String>,
+    /// Whether the trace dropped its oldest frames to stay that deep.
+    error_trace_truncated: bool,
     /// Whether an abort has been reported on stderr: the innermost frame
     /// reports it, where it happened.
     abort_reported: bool,
@@ -1369,6 +1381,13 @@ impl<'a> Interp<'a> {
     }
 
     fn native(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty], ret: Ty) -> R<Value> {
+        // A `?` succeeded: the error, if any, was handled. First, as every
+        // `?` that succeeds calls it (B-2026-10-25-3).
+        if name == "error_trace_clear" {
+            self.error_trace.clear();
+            self.error_trace_truncated = false;
+            return Ok(Value::Unit);
+        }
         let program: &'a Program = self.program;
         if let Some(sig) = program.externs.get(name) {
             return self.foreign_call(name, sig, args);
@@ -2020,6 +2039,17 @@ impl<'a> Interp<'a> {
             }
             ("contract_exit", "") => {
                 self.contract_depth = self.contract_depth.saturating_sub(1);
+                Ok(Value::Unit)
+            }
+            // A `?` returned its error: record the site, as `line` and
+            // `col` in the checked source (B-2026-10-25-3).
+            ("error_trace_push", "") => {
+                let [Value::Int(line), Value::Int(col)] = args.as_slice() else {
+                    return err("error_trace_push takes a line and a column");
+                };
+                let (file, line) = source_at(*line as usize);
+                let frame = format!("{file}:{line}:{col}");
+                self.trace_frame(frame);
                 Ok(Value::Unit)
             }
             // `forget(value)` takes the value and runs no drop for it, so
@@ -10981,14 +11011,51 @@ impl<'a> Interp<'a> {
                 let msg = self.abort_message(reason);
                 let (file, line) = source_at(span.line);
                 let at = format!("{file}:{line}:{}", span.column);
-                self.write_out(
-                    true,
-                    &format!("runtime error: {msg}\n  at {at}\nError return trace:\n  {at}\n"),
-                );
+                let trace = self.error_trace_text(Some(&at));
+                self.write_out(true, &format!("runtime error: {msg}\n  at {at}\n{trace}"));
                 self.run_panic_handler(msg, at);
             }
         }
         s
+    }
+
+    /// One more frame on the error return trace, dropping the oldest when
+    /// it is full.
+    fn trace_frame(&mut self, frame: String) {
+        if self.error_trace.len() >= ERROR_TRACE_DEPTH {
+            self.error_trace.remove(0);
+            self.error_trace_truncated = true;
+        }
+        self.error_trace.push(frame);
+    }
+
+    /// The error return trace as the diagnostic it goes with prints it,
+    /// ending at a panic's own place `last` when there is one, or nothing
+    /// when it has no frame (design.md § Error return traces, § Panic
+    /// record).
+    fn error_trace_text(&self, last: Option<&str>) -> String {
+        let mut frames: Vec<&str> = self.error_trace.iter().map(String::as_str).collect();
+        let mut truncated = self.error_trace_truncated;
+        if let Some(at) = last {
+            if frames.len() >= ERROR_TRACE_DEPTH {
+                frames.remove(0);
+                truncated = true;
+            }
+            frames.push(at);
+        }
+        if frames.is_empty() {
+            return String::new();
+        }
+        let mut t = String::from("Error return trace:\n");
+        for f in frames {
+            t.push_str(&format!("  {f}\n"));
+        }
+        if truncated {
+            t.push_str(&format!(
+                "  ... (trace truncated, max {ERROR_TRACE_DEPTH} frames)\n"
+            ));
+        }
+        t
     }
 
     /// The message of an abort for `reason`: the panic's own, or the
@@ -12924,7 +12991,8 @@ impl<'a> Interp<'a> {
                     return err("Result.Err has no payload");
                 };
                 let text = self.display_typed(&fs[0], et)?;
-                self.write_out(true, &format!("Error: {text}\n"));
+                let trace = self.error_trace_text(None);
+                self.write_out(true, &format!("Error: {text}\n{trace}"));
                 done = Outcome::Exited(1);
             }
         }

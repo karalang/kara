@@ -1282,6 +1282,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // The bracket around a contract predicate only counts how deep the
         // thread is in one (B-2026-10-25-23).
         ("contract_enter" | "contract_exit", "") => vec![],
+        // A `?` site's record in the error return trace, a debug aid that
+        // only a diagnostic prints (design.md § Error return traces).
+        ("error_trace_push" | "error_trace_clear", "") => vec![],
         ("Stdout", "println" | "print" | "flush") => vec![(Writes, "Stdout", None), HEAP],
         ("Stderr", "println" | "print" | "flush") => vec![(Writes, "Stderr", None), HEAP],
         ("format", "") | (_, "to_string") => vec![HEAP],

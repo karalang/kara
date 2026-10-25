@@ -33,6 +33,11 @@ fn slashed(s: &str) -> String {
     s.replace('\\', "/")
 }
 
+/// `path` as a JSON string, with Windows separators written as `/`.
+fn json_path(path: &std::path::Path) -> String {
+    format!("{:?}", slashed(&path.display().to_string()))
+}
+
 /// Both v2 executors: the default, and `--interp`.
 const LANES: [&[&str]; 2] = [&["run"], &["run", "--interp"]];
 
@@ -133,10 +138,13 @@ fn run_v2_json_output_carries_the_runtime_reports() {
         assert_eq!(text(&out.stderr), "", "{lane:?}");
         assert_eq!(out.status.code(), Some(101), "{lane:?}");
 
+        // `main`'s error carries the trace of the `?` that returned it
+        // (design.md § Error return traces, B-2026-10-25-3).
+        let file = json_path(&err);
         let out = karac(&json, &err);
         assert_eq!(
-            text(&out.stdout),
-            "a=1\n{\"error\":\"too big\"}\n",
+            slashed(&text(&out.stdout)),
+            format!("a=1\n{{\"error\":\"too big\"}}\n{{\"error_return_trace\":[{{\"file\":{file},\"line\":8,\"column\":13}}]}}\n"),
             "{lane:?}"
         );
         assert_eq!(out.status.code(), Some(1), "{lane:?}");
@@ -145,8 +153,8 @@ fn run_v2_json_output_carries_the_runtime_reports() {
         jsonl.push("--output=jsonl");
         let out = karac(&jsonl, &err);
         assert_eq!(
-            text(&out.stdout),
-            "a=1\n{\"type\":\"error\",\"message\":\"too big\"}\n",
+            slashed(&text(&out.stdout)),
+            format!("a=1\n{{\"type\":\"error\",\"message\":\"too big\"}}\n{{\"type\":\"error_return_trace\",\"frames\":[{{\"file\":{file},\"line\":8,\"column\":13}}],\"truncated\":false}}\n"),
             "{lane:?}"
         );
     }

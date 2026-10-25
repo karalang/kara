@@ -1171,7 +1171,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             let (s, n) = cx.str_const("Error: ")?;
             cx.rt("fmt_str", &[s.into(), n.into()])?;
             cx.fmt_call(cx.offset(p, off)?, et)?;
-            cx.rt("print_end", &[i32t.const_int(3, false).into()])
+            cx.rt("print_end", &[i32t.const_int(3, false).into()])?;
+            cx.rt("error_trace_print", &[])
         })?;
         self.builder
             .build_int_z_extend(is_err, i32t, "")

@@ -301,6 +301,7 @@ fn lower_program_inner<'a>(
     let mut lcx = Lcx {
         tc,
         source,
+        user_len,
         user_types,
         refined: program
             .items
@@ -667,12 +668,14 @@ fn refs_only_receiver(tys: &TyInterner, t: Ty) -> bool {
 
 /// The natives the builder calls by bare name rather than through a
 /// definition.
-const BUILDER_NATIVES: [&str; 7] = [
+const BUILDER_NATIVES: [&str; 9] = [
     "format",
     "format_spec",
     "panic_message",
     "contract_enter",
     "contract_exit",
+    "error_trace_push",
+    "error_trace_clear",
     "dbg",
     "debug_string",
 ];
@@ -797,6 +800,9 @@ struct Lcx<'a> {
     comptime_eval: bool,
     /// The checked source text, for `dbg(e)`'s rendering of `e`.
     source: &'a str,
+    /// How many leading bytes of `source` are the program's own, the rest
+    /// being the appended library's; `None` when it is all the program's.
+    user_len: Option<usize>,
     /// The structs and enums the user's program declares, as opposed to
     /// the appended library's (`lower_program_with_library`).
     user_types: FxHashSet<String>,
@@ -12173,6 +12179,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             err_bb,
         );
+        let traced = self.traces_question(e.span);
+        if traced {
+            self.error_trace("error_trace_push", e.span);
+        }
         // Error path: rebuild the error in the return type.
         let ret_ty = self.fn_ret_ty();
         let ret = Place::local(Local::RETURN_PLACE);
@@ -12245,6 +12255,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.error_exit(ret, Rvalue::Aggregate(kind, ops))?;
         // Success path: move the payload out.
         self.cur = ok_bb;
+        if traced {
+            self.error_trace("error_trace_clear", e.span);
+        }
         let Some(pt) = self.tys().tcx().field_ty(it, Some(ok), 0) else {
             self.assign(dest, Rvalue::Use(unit_const(self.unit())));
             return Ok(());
@@ -13594,6 +13607,37 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
+    }
+
+    /// Whether the `?` at `at` keeps the error return trace (design.md §
+    /// Error return traces): one in the program's own source, outside a
+    /// release build (B-2026-10-25-3).
+    fn traces_question(&self, at: Span) -> bool {
+        self.lcx.user_len.is_none_or(|n| at.offset < n)
+            && !release_strips("KARAC_STRIP_ERROR_TRACE")
+    }
+
+    /// `error_trace_push(line, col)` of the `?` at `at`, on its error path,
+    /// or `error_trace_clear()` on its success path.
+    fn error_trace(&mut self, name: &str, at: Span) {
+        let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let int = |n: usize| {
+            Operand::Const(Const {
+                ty: i64_t,
+                kind: ConstKind::Scalar(n as u128),
+            })
+        };
+        let args = if name == "error_trace_push" {
+            vec![int(at.line), int(at.column)]
+        } else {
+            Vec::new()
+        };
+        let unit = self.tys().unit();
+        let l = self.temp(unit);
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo { span: at, ..outer });
+        self.call_native(name, args, Place::local(l));
+        self.b.set_source_info(outer);
     }
 
     fn call_native(&mut self, name: &str, args: Vec<Operand>, dest: Place) {
@@ -20496,8 +20540,9 @@ fn returns_from_fn(e: &Expr) -> bool {
 }
 
 /// Whether a release build asked for this debug-only machinery to go:
-/// `KARAC_STRIP_DBG` (`dbg()`) or `KARAC_STRIP_CONTRACTS` (contracts), each
-/// `1` or `true`, as on the legacy backend. `karac build --release` sets both.
+/// `KARAC_STRIP_DBG` (`dbg()`), `KARAC_STRIP_CONTRACTS` (contracts) or
+/// `KARAC_STRIP_ERROR_TRACE` (the error return trace), each `1` or `true`.
+/// `karac build --release` sets all three.
 fn release_strips(var: &str) -> bool {
     matches!(std::env::var(var).as_deref(), Ok("1" | "true"))
 }

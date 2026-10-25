@@ -29332,15 +29332,30 @@ fn test_alloc_error_displays_its_specified_prose_on_every_backend() {
 /// hand-written loop was tried first and was VACUOUS — it neither ended on a
 /// failing `?` nor triggered auto-par, so it printed an empty trace on every
 /// run and would have passed against the unfixed compiler.
+///
+/// The trace goes with the diagnostic (design.md § Error return traces), so
+/// `json.kara`'s `main`, which handles every error with a `match`, prints
+/// none; this `main` runs the same cases and then propagates a failing
+/// parse with `?` (B-2026-10-25-3). Both the default build and one with
+/// `KARAC_AUTO_PAR=1` are held to it.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 does not print an error return trace on this path"]
 fn test_error_return_trace_is_deterministic_across_runs() {
-    let tmp = scratch_project("trace-determinism");
-    write(&tmp.join("m.kara"), include_str!("../examples/json.kara"));
+    for auto_par in ["0", "1"] {
+        error_return_trace_is_deterministic(auto_par);
+    }
+}
+
+#[cfg(feature = "llvm")]
+fn error_return_trace_is_deterministic(auto_par: &str) {
+    let tmp = scratch_project(&format!("trace-determinism-{auto_par}"));
+    let src = include_str!("../examples/json.kara").replace("fn main() {", "fn cases() {");
+    let main = "\nfn main() -> Result[(), String] {\n    cases();\n    let v = parse(\"[1, [2, { \\\"a\\\": tru }]]\")?;\n    println(serialize(v));\n    Ok(())\n}\n";
+    write(&tmp.join("m.kara"), &format!("{src}{main}"));
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "m.kara"])
+        .env("KARAC_AUTO_PAR", auto_par)
         .output();
     let exe = tmp.join("m");
     let ok = built.map(|o| o.status.success()).unwrap_or(false) && exe.exists();
@@ -29363,10 +29378,12 @@ fn test_error_return_trace_is_deterministic_across_runs() {
     let _ = std::fs::remove_dir_all(&tmp);
     let first = &seen[0];
     // The program must actually have propagated something, or this proves
-    // nothing — `json.kara` ends on three failing parses.
+    // nothing: `main` ends on a failing parse, several `?` deep.
+    let frames = first.1.lines().filter(|l| l.starts_with("  ")).count();
     assert!(
-        !first.1.is_empty(),
-        "expected the run to emit a trace or the parallel-task note; got empty stderr"
+        first.1.starts_with("Error: ") && first.1.contains("\nError return trace:\n") && frames > 1,
+        "auto-par {auto_par}: expected `main`'s error with a trace of several frames; got {:?}",
+        first.1
     );
     for (i, run) in seen.iter().enumerate().skip(1) {
         assert_eq!(
@@ -29387,9 +29404,13 @@ fn test_error_return_trace_is_deterministic_across_runs() {
 /// to what `--interp` prints. Determinism alone is satisfiable by printing
 /// nothing, so this pins that the fix did not buy stability by dropping the
 /// diagnostic.
+///
+/// The trace goes with the diagnostic (design.md § Error return traces):
+/// legacy printed it at exit even after `main` handled the error with a
+/// `match`, so `main` now propagates it with `?`, a third frame
+/// (B-2026-10-25-3).
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 does not print an error return trace on this path"]
 fn test_error_return_trace_is_complete_without_the_pool() {
     let tmp = scratch_project("trace-complete");
     let src = r#"fn inner() -> Result[i64, i64] { Err(7_i64) }
@@ -29401,11 +29422,10 @@ fn outer() -> Result[i64, i64] {
     let v = middle()?;
     Ok(v * 2)
 }
-fn main() {
-    match outer() {
-        Ok(v) => println(v),
-        Err(e) => println(e),
-    }
+fn main() -> Result[(), i64] {
+    let v = outer()?;
+    println(v);
+    Ok(())
 }
 "#;
     write(&tmp.join("m.kara"), src);
@@ -29430,10 +29450,10 @@ fn main() {
         err.contains("Error return trace:"),
         "expected a complete trace, got {err:?}"
     );
-    // Two `?` sites propagated, so two frames — not a fragment and not the
-    // parallel-task note.
+    // Three `?` sites propagated, so three frames — not a fragment and not
+    // the parallel-task note.
     let frames = err.lines().filter(|l| l.starts_with("  ")).count();
-    assert_eq!(frames, 2, "expected 2 frames, got {frames} in {err:?}");
+    assert_eq!(frames, 3, "expected 3 frames, got {frames} in {err:?}");
     assert!(
         !err.contains("unavailable"),
         "the sequential path must not take the parallel-task note: {err:?}"
