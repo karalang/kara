@@ -2626,6 +2626,9 @@ struct Bx<'l, 'a> {
     /// `let f = |..| ..` bindings whose closure is later stored where it
     /// escapes, by the binding pattern's id (see `let_closure_escapes`).
     escaping_lets: FxHashSet<NodeId>,
+    /// Closure literals inside the value this body returns (see
+    /// `note_returned_closures`).
+    returned_closures: FxHashSet<NodeId>,
     /// Types for expressions the checker left untyped, taken from where
     /// they are used (`v.push(None)` gives `None` the element type).
     ty_hints: FxHashMap<NodeId, Ty>,
@@ -2717,6 +2720,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_escapes: false,
             pinned: FxHashMap::default(),
             escaping_lets: FxHashSet::default(),
+            returned_closures: FxHashSet::default(),
             assigned_caps: Default::default(),
             task_moves: false,
             outer_fn: None,
@@ -4108,6 +4112,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         let ret = Place::local(Local::RETURN_PLACE);
         self.push_scope();
         self.note_escaping_lets(&f.body);
+        if let Some(e) = &f.body.final_expr {
+            self.note_returned_closures(e);
+        }
         self.block_stmts(&f.body)?;
         match &f.body.final_expr {
             Some(e) => {
@@ -4416,6 +4423,77 @@ impl<'l, 'a> Bx<'l, 'a> {
         let at = format!("{}@{}", self.name, run[0].span.line);
         self.lcx.auto_par_groups.push(at);
         Ok(true)
+    }
+
+    /// Record the closure literals inside the value the body whose tail is
+    /// `e` returns: `(i + 1..n).map(|j| i * 10 + j)` as a closure's result
+    /// holds its closure, which then escapes (core semantics §9.3: "it, or
+    /// a value containing it, is returned") and captures by move, so the
+    /// capture outlives the body's `i` (B-2026-10-20-34). The walk follows
+    /// the value through block, `if` and `match` tails, `return`, literals,
+    /// and calls whose result can hold a function; a call whose result
+    /// cannot (`.sum()`) consumes its closures.
+    fn note_returned_closures(&mut self, e: &Expr) {
+        let tcx = self.tys().tcx();
+        let holds_fn = |t: Ty| {
+            let mut seen = FxHashSet::default();
+            let mut work = vec![t];
+            while let Some(t) = work.pop() {
+                if !seen.insert(t) {
+                    continue;
+                }
+                match tcx.kind(t) {
+                    HK::Fn { .. } => return true,
+                    HK::Ref(x) | HK::MutRef(x) => work.push(x),
+                    HK::Tuple(l) => work.extend(tcx.list(l)),
+                    HK::Array { elem, .. } | HK::Slice { elem, .. } => work.push(elem),
+                    HK::Intrinsic { args, .. } | HK::Adt { args, .. } | HK::Shared { args, .. } => {
+                        work.extend(tcx.list(args))
+                    }
+                    _ => {}
+                }
+            }
+            false
+        };
+        let mut out = FxHashSet::default();
+        let mut work = vec![e];
+        while let Some(e) = work.pop() {
+            match &e.kind {
+                ExprKind::Closure { .. } => {
+                    out.insert(e.id);
+                }
+                ExprKind::Block(b) => work.extend(b.final_expr.as_deref()),
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                }
+                | ExprKind::IfLet {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    work.extend(then_block.final_expr.as_deref());
+                    work.extend(else_branch.as_deref());
+                }
+                ExprKind::Match { arms, .. } => work.extend(arms.iter().map(|a| &a.body)),
+                ExprKind::Return(Some(x)) => work.push(x),
+                ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => work.extend(es),
+                ExprKind::StructLiteral { fields, .. } => {
+                    work.extend(fields.iter().map(|f| &f.value))
+                }
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. }
+                    if self.lcx.node_types.get(&e.id).is_some_and(|&t| holds_fn(t)) =>
+                {
+                    if let ExprKind::MethodCall { object, .. } = &e.kind {
+                        work.push(object);
+                    }
+                    work.extend(args.iter().map(|a| &a.value));
+                }
+                _ => {}
+            }
+        }
+        self.returned_closures.extend(out);
     }
 
     /// Record the `let f = |..| ..` bindings of `block` whose closure escapes.
@@ -14777,7 +14855,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !erased {
             return Ok(None);
         }
-        self.closure_escapes = false;
+        self.closure_escapes = self.returned_closures.contains(&a.id);
         let (op, _) = self.closure_value(a)?;
         let l = self.temp(inst_args[i]);
         self.assign(l, Rvalue::Use(op));
@@ -18804,6 +18882,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.bind_destructured(destructured)?;
         let ret = Place::local(Local::RETURN_PLACE);
+        self.note_returned_closures(body);
         self.push_scope();
         if job.ref_key {
             // The key borrows the element itself, through the argument
