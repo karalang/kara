@@ -140,7 +140,7 @@ fn main() {
     for (a, val) in cases.iter() {
         let root = construct(a);
         let before = text(level_order(root));
-        let after = text(level_order(insert_into_max_tree(root, *val)));
+        let after = text(level_order(insert_into_max_tree(root, val)));
         println(f"root = {before}, val = {val} -> {after}");
     }
     let mut but_50: Vec[i64] = Vec.new();
@@ -157,7 +157,7 @@ fn main() {
         ("99 values falling from 100 but 50".to_string(), but_50, 50),
     ];
     for (name, a, val) in big.iter() {
-        let got = insert_into_max_tree(construct(a), *val);
+        let got = insert_into_max_tree(construct(a), val);
         let vals = level_order(got);
         println(f"{name}, val = {val}: height {height(got)}, root {vals[0]}, checksum {fold(0, vals)}");
     }

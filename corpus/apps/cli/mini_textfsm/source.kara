@@ -604,7 +604,7 @@ impl ParseState {
     fn group_of(ref self, name: ref Vec[i64]) -> i64 {
         for (n, g) in self.names.iter() {
             if same(n, name) {
-                return *g;
+                return g;
             }
         }
         -1
@@ -674,15 +674,15 @@ fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
             }
             Node.Repeat(_, min, max, body) => {
                 let w = width_of(widths, body);
-                lo = add_width(lo, mul_width(w.lo, *min));
-                if *max == maxrepeat() and w.hi > 0 {
+                lo = add_width(lo, mul_width(w.lo, min));
+                if max == maxrepeat() and w.hi > 0 {
                     hi = maxwidth();
                 } else {
-                    hi = add_width(hi, mul_width(w.hi, *max));
+                    hi = add_width(hi, mul_width(w.hi, max));
                 }
             }
             Node.GroupRef(g) => {
-                let w = ref widths[*g];
+                let w = ref widths[g];
                 lo = add_width(lo, w.lo);
                 hi = add_width(hi, w.hi);
             }
@@ -1006,9 +1006,9 @@ fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr
         let only = ref set[0];
         if let Item.Lit(c) = only {
             if negate {
-                out.push(Node.NotLit(*c));
+                out.push(Node.NotLit(c));
             } else {
-                out.push(Node.Lit(*c));
+                out.push(Node.Lit(c));
             }
             return Ok(());
         }
@@ -1239,7 +1239,7 @@ fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref 
                 }
                 let mut seen = false;
                 for (g, _) in st.refpos.iter() {
-                    if *g == condgroup {
+                    if g == condgroup {
                         seen = true;
                     }
                 }
@@ -1343,8 +1343,8 @@ fn parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
         return Err(src.error("unbalanced parenthesis".to_string(), 0));
     }
     for (g, pos) in st.refpos.iter() {
-        if *g >= st.groups() {
-            return Err(re_error(f"invalid group reference {*g}", *pos));
+        if g >= st.groups() {
+            return Err(re_error(f"invalid group reference {g}", pos));
         }
     }
     let groups = st.groups() - 1;
@@ -1423,11 +1423,11 @@ impl Compiler {
         for n in nodes.iter() {
             match n {
                 Node.Lit(c) => {
-                    let v = if icase { lower(*c, ascii) } else { *c };
+                    let v = if icase { lower(c, ascii) } else { c };
                     self.emit(Op.Lit(v, icase, ascii));
                 }
                 Node.NotLit(c) => {
-                    let v = if icase { lower(*c, ascii) } else { *c };
+                    let v = if icase { lower(c, ascii) } else { c };
                     self.emit(Op.NotLit(v, icase, ascii));
                 }
                 Node.Any => {
@@ -1438,12 +1438,12 @@ impl Compiler {
                     }
                 }
                 Node.In(items, negate) => {
-                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    self.sets.push(CharSet { items: items.clone(), negate: negate });
                     let idx = self.sets.len() - 1;
                     self.emit(Op.In(idx, icase, ascii));
                 }
                 Node.At(kind) => {
-                    let mut k = *kind;
+                    let mut k = kind;
                     if (flags & flag_m()) != 0 {
                         if k == at_beginning() {
                             k = at_beginning_line();
@@ -1474,23 +1474,23 @@ impl Compiler {
                     }
                 }
                 Node.Group(g, add, off, body) => {
-                    if *g > 0 {
-                        self.emit(Op.Mark(2 * *g));
+                    if g > 0 {
+                        self.emit(Op.Mark(2 * g));
                     }
-                    self.compile(p, body, combine(flags, *add, *off))?;
-                    if *g > 0 {
-                        self.emit(Op.Mark(2 * *g + 1));
+                    self.compile(p, body, combine(flags, add, off))?;
+                    if g > 0 {
+                        self.emit(Op.Mark(2 * g + 1));
                     }
                 }
                 Node.Repeat(kind, min, max, body) => {
-                    if *kind == 2 {
+                    if kind == 2 {
                         let at = self.emit(Op.Fail);
-                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.compile_repeat(p, min, max, true, body, flags)?;
                         self.emit(Op.Succeed);
                         let next = self.here();
                         self.ops[at] = Op.Atomic(at + 1, next);
                     } else {
-                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                        self.compile_repeat(p, min, max, kind == 0, body, flags)?;
                     }
                 }
                 Node.Atomic(body) => {
@@ -1502,7 +1502,7 @@ impl Compiler {
                 }
                 Node.Assert(dir, negative, body) => {
                     let mut width = -1;
-                    if *dir < 0 {
+                    if dir < 0 {
                         let w = width_of(p.widths, body);
                         if w.lo != w.hi {
                             return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
@@ -1513,10 +1513,10 @@ impl Compiler {
                     self.compile(p, body, flags)?;
                     self.emit(Op.Succeed);
                     let next = self.here();
-                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                    self.ops[at] = Op.Look(width, negative, at + 1, next);
                 }
                 Node.GroupRef(g) => {
-                    self.emit(Op.Ref(*g, icase, ascii));
+                    self.emit(Op.Ref(g, icase, ascii));
                 }
                 Node.Exists(g, yes, no) => {
                     let at = self.emit(Op.Fail);
@@ -1527,10 +1527,10 @@ impl Compiler {
                         self.compile(p, no, flags)?;
                         let end = self.here();
                         self.ops[jump] = Op.Jmp(end);
-                        self.ops[at] = Op.Exists(*g, no_pc);
+                        self.ops[at] = Op.Exists(g, no_pc);
                     } else {
                         let end = self.here();
-                        self.ops[at] = Op.Exists(*g, end);
+                        self.ops[at] = Op.Exists(g, end);
                     }
                 }
                 Node.Failure => {
@@ -1676,11 +1676,11 @@ impl Matcher {
                 mode = 0;
                 ok = false;
                 if let Op.Until(r, _, max, _, body, _) = op {
-                    let count = self.counts[*r] + 1;
-                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
-                        self.set_count(*r, count);
-                        self.set_last(*r, pos);
-                        pc = *body;
+                    let count = self.counts[r] + 1;
+                    if not ((count >= max and max != maxrepeat()) or pos == self.lasts[r]) {
+                        self.set_count(r, count);
+                        self.set_last(r, pos);
+                        pc = body;
                         ok = true;
                     }
                 }
@@ -1690,7 +1690,7 @@ impl Matcher {
             } else {
                 match op {
                     Op.Lit(c, icase, ascii) => {
-                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                        if pos < self.s.len() and (if icase { lower(self.s[pos], ascii) == c } else { self.s[pos] == c }) {
                             pos += 1;
                             pc += 1;
                         } else {
@@ -1698,7 +1698,7 @@ impl Matcher {
                         }
                     }
                     Op.NotLit(c, icase, ascii) => {
-                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                        if pos < self.s.len() and (if icase { lower(self.s[pos], ascii) != c } else { self.s[pos] != c }) {
                             pos += 1;
                             pc += 1;
                         } else {
@@ -1722,7 +1722,7 @@ impl Matcher {
                         }
                     }
                     Op.In(set, icase, ascii) => {
-                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                        if pos < self.s.len() and in_set(prog.sets[set], self.s[pos], icase, ascii) {
                             pos += 1;
                             pc += 1;
                         } else {
@@ -1730,50 +1730,50 @@ impl Matcher {
                         }
                     }
                     Op.At(kind, ascii) => {
-                        if self.at(*kind, *ascii, pos) {
+                        if self.at(kind, ascii, pos) {
                             pc += 1;
                         } else {
                             ok = false;
                         }
                     }
                     Op.Mark(slot) => {
-                        self.set_mark(*slot, pos);
-                        if (*slot & 1) == 1 {
-                            self.set_lastindex(*slot / 2);
+                        self.set_mark(slot, pos);
+                        if (slot & 1) == 1 {
+                            self.set_lastindex(slot / 2);
                         }
                         pc += 1;
                     }
                     Op.Split(a, b) => {
-                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
-                        pc = *a;
+                        choices.push(Choice { pc: b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = a;
                     }
-                    Op.Jmp(a) => pc = *a,
+                    Op.Jmp(a) => pc = a,
                     Op.RepInit(r, until) => {
-                        self.set_count(*r, -1);
-                        self.set_last(*r, -1);
-                        pc = *until;
+                        self.set_count(r, -1);
+                        self.set_last(r, -1);
+                        pc = until;
                     }
                     Op.Until(r, min, max, greedy, body, exit) => {
-                        let count = self.counts[*r] + 1;
-                        if count < *min {
-                            self.set_count(*r, count);
-                            pc = *body;
-                        } else if *greedy {
-                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
-                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
-                                self.set_count(*r, count);
-                                self.set_last(*r, pos);
-                                pc = *body;
+                        let count = self.counts[r] + 1;
+                        if count < min {
+                            self.set_count(r, count);
+                            pc = body;
+                        } else if greedy {
+                            if (count < max or max == maxrepeat()) and pos != self.lasts[r] {
+                                choices.push(Choice { pc: exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(r, count);
+                                self.set_last(r, pos);
+                                pc = body;
                             } else {
-                                pc = *exit;
+                                pc = exit;
                             }
                         } else {
                             choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
-                            pc = *exit;
+                            pc = exit;
                         }
                     }
                     Op.Ref(g, icase, ascii) => {
-                        let (a, b) = self.group_span(*g);
+                        let (a, b) = self.group_span(g);
                         if a < 0 {
                             ok = false;
                         } else {
@@ -1785,7 +1785,7 @@ impl Matcher {
                                 while k < len {
                                     let x = self.s[a + k];
                                     let y = self.s[pos + k];
-                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    let eq = if icase { lower(x, ascii) == lower(y, ascii) } else { x == y };
                                     if not eq {
                                         ok = false;
                                         break;
@@ -1801,36 +1801,36 @@ impl Matcher {
                     }
                     Op.Look(width, negative, sub, next) => {
                         let mark = self.trail.len();
-                        let from = if *width < 0 { pos } else { pos - *width };
-                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
-                        if *negative {
+                        let from = if width < 0 { pos } else { pos - width };
+                        let found = from >= 0 and self.run(prog, sub, from, false) >= 0;
+                        if negative {
                             self.undo_to(mark);
                             if found {
                                 ok = false;
                             } else {
-                                pc = *next;
+                                pc = next;
                             }
                         } else if found {
-                            pc = *next;
+                            pc = next;
                         } else {
                             ok = false;
                         }
                     }
                     Op.Atomic(sub, next) => {
-                        let end = self.run(prog, *sub, pos, false);
+                        let end = self.run(prog, sub, pos, false);
                         if end >= 0 {
                             pos = end;
-                            pc = *next;
+                            pc = next;
                         } else {
                             ok = false;
                         }
                     }
                     Op.Exists(g, no) => {
-                        let (a, _) = self.group_span(*g);
+                        let (a, _) = self.group_span(g);
                         if a >= 0 {
                             pc += 1;
                         } else {
-                            pc = *no;
+                            pc = no;
                         }
                     }
                     Op.Fail => ok = false,
@@ -1865,10 +1865,10 @@ impl Matcher {
 fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
     for item in set.items.iter() {
         let hit = match item {
-            Item.Lit(l) => c == *l,
-            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Lit(l) => c == l,
+            Item.Range(lo, hi) => c >= lo and c <= hi,
             Item.Cat(k) => {
-                let kind = *k;
+                let kind = k;
                 if kind == 0 {
                     if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
                 } else if kind == 1 {
@@ -2135,7 +2135,7 @@ fn parse_template(repl: ref Vec[i64], prog: ref Program) -> Result[Vec[Piece], R
                 let mut found = -1;
                 for (n, g) in prog.names.iter() {
                     if same(n, name) {
-                        found = *g;
+                        found = g;
                     }
                 }
                 if found < 0 {
@@ -2203,7 +2203,7 @@ fn expand(pieces: ref Vec[Piece], s: ref Vec[i64], m: ref Found, out: mut ref Ve
         match piece {
             Piece.Text(t) => push_all(mut out, t),
             Piece.Group(g) => {
-                let (a, b) = if *g == 0 { (m.start, m.end) } else { m.spans[*g - 1] };
+                let (a, b) = if g == 0 { (m.start, m.end) } else { m.spans[g - 1] };
                 if a >= 0 {
                     push_all(mut out, slice(s, a, b));
                 }

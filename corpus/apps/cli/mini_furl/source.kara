@@ -1411,9 +1411,9 @@ fn type_name(v: ref JValue) -> String {
 fn truthy(v: ref JValue) -> bool {
     match v {
         JValue.Null => false,
-        JValue.Bool(b) => *b,
-        JValue.Int(i) => *i != 0,
-        JValue.Float(f) => *f != 0.0,
+        JValue.Bool(b) => b,
+        JValue.Int(i) => i != 0,
+        JValue.Float(f) => f != 0.0,
         JValue.Str(s) => s.len() > 0,
         JValue.List(l) => l.len() > 0,
         JValue.Obj(m) => m.len() > 0,
@@ -1673,8 +1673,8 @@ enum Pv {
 
 fn pv_of(v: ref JValue) -> Pv {
     match v {
-        JValue.Bool(b) => Pv.Bool(*b),
-        JValue.Int(i) => Pv.Int(*i),
+        JValue.Bool(b) => Pv.Bool(b),
+        JValue.Int(i) => Pv.Int(i),
         JValue.Str(s) => Pv.Str(s.clone()),
         _ => Pv.Null,
     }
@@ -1685,7 +1685,7 @@ fn pv_repr(v: ref Pv) -> String {
         Pv.Null => "None".to_string(),
         Pv.Str(s) => py_repr(s),
         Pv.Int(i) => f"{i}",
-        Pv.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Pv.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
     }
 }
 
@@ -1695,15 +1695,15 @@ fn pv_str(v: ref Pv) -> String {
         Pv.Null => "None".to_string(),
         Pv.Str(s) => s.clone(),
         Pv.Int(i) => f"{i}",
-        Pv.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Pv.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
     }
 }
 
 // Python's ==, where True == 1 and False == 0.
 fn pv_num(v: ref Pv) -> Option[i64] {
     match v {
-        Pv.Int(i) => Some(*i),
-        Pv.Bool(b) => Some(if *b { 1 } else { 0 }),
+        Pv.Int(i) => Some(i),
+        Pv.Bool(b) => Some(if b { 1 } else { 0 }),
         _ => None,
     }
 }
@@ -1729,7 +1729,7 @@ fn is_list(v: ref JValue) -> bool {
 
 fn is_true(v: ref JValue) -> bool {
     match v {
-        JValue.Bool(b) => *b,
+        JValue.Bool(b) => b,
         _ => false,
     }
 }
@@ -2559,7 +2559,7 @@ impl Fragment {
             self.query.load(a);
         }
         if let Some(JValue.Bool(b)) = sep {
-            self.sep = *b;
+            self.sep = b;
         }
         Ok(())
     }
@@ -3358,7 +3358,7 @@ fn show_value(name: Str, r: ref Result[String, PyErr]) {
 
 fn dq_of(v: ref Option[JValue]) -> DontQuote {
     match v {
-        Some(JValue.Bool(b)) => if *b { DontQuote.All } else { DontQuote.None_ },
+        Some(JValue.Bool(b)) => if b { DontQuote.All } else { DontQuote.None_ },
         Some(JValue.Str(s)) => DontQuote.Chars(s.clone()),
         _ => DontQuote.Chars(String.new()),
     }

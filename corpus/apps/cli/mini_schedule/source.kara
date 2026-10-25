@@ -655,9 +655,9 @@ fn str_repr(s: ref String) -> String {
 fn repr(v: ref J) -> String {
     match v {
         J.Null => "None".to_string(),
-        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         J.Int(digits) => digits.clone(),
-        J.Float(x) => float_repr(*x),
+        J.Float(x) => float_repr(x),
         J.Str(s) => str_repr(s),
         J.Arr(items) => {
             let mut out = "[".to_string();
@@ -710,9 +710,9 @@ fn type_name(v: ref J) -> String {
 // The number a bool, int or float compares as.
 fn num_of(v: ref J) -> Option[f64] {
     match v {
-        J.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        J.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
         J.Int(d) => Some(f64.parse(d).unwrap_or(0.0)),
-        J.Float(x) => Some(*x),
+        J.Float(x) => Some(x),
         _ => None,
     }
 }
@@ -1063,7 +1063,7 @@ fn dt_str(t: i64) -> String {
 
 fn opt_dt_str(t: ref Option[i64]) -> String {
     match t {
-        Some(v) => dt_str(*v),
+        Some(v) => dt_str(v),
         None => "None".to_string(),
     }
 }
@@ -1180,8 +1180,8 @@ fn unit_factor(unit: ref String) -> i64 {
 fn timedelta_of(unit: ref String, v: ref J) -> Result[i64, Exc] {
     match v {
         J.Int(d) => Ok(i64.parse(d).unwrap_or(0) * unit_factor(unit)),
-        J.Bool(b) => Ok(if *b { unit_factor(unit) } else { 0 }),
-        J.Float(x) => Ok(td_from_float(*x, unit_factor(unit))),
+        J.Bool(b) => Ok(if b { unit_factor(unit) } else { 0 }),
+        J.Float(x) => Ok(td_from_float(x, unit_factor(unit))),
         _ => Err(exc("TypeError", f"unsupported type for timedelta {unit} component: {type_name(v)}")),
     }
 }
@@ -1295,7 +1295,7 @@ fn match_from(elems: ref Vec[Elem], k: i64, s: ref Vec[i64], pos: i64, caps: ref
     }
     match ref elems[k] {
         Elem.Lit(ch) => {
-            if pos < s.len() and s[pos] == *ch {
+            if pos < s.len() and s[pos] == ch {
                 return match_from(elems, k + 1, s, pos + 1, caps);
             }
             None
@@ -1617,7 +1617,7 @@ fn job_str(j: ref Job) -> String {
 
 fn format_time(t: ref Option[i64]) -> String {
     match t {
-        Some(v) => dt_strftime(*v),
+        Some(v) => dt_strftime(v),
         None => "[never]".to_string(),
     }
 }
@@ -1871,9 +1871,9 @@ fn date_of(t: i64) -> i64 {
 // Job.until()
 fn until(j: mut ref Job, arg: ref Until, now: i64) -> Result[(), Exc] {
     let cancel_after = match arg {
-        Until.DateTime(t) => *t,
-        Until.Delta(d) => now + *d,
-        Until.Time((h, m, s)) => date_of(now) + *h * US_HOUR + *m * US_MIN + *s * US_SEC,
+        Until.DateTime(t) => t,
+        Until.Delta(d) => now + d,
+        Until.Time((h, m, s)) => date_of(now) + h * US_HOUR + m * US_MIN + s * US_SEC,
         Until.Text(s) => {
             let mut found: Option[i64] = None;
             let mut k = 0;
@@ -1907,7 +1907,7 @@ fn is_overdue(j: ref Job, when: i64) -> bool {
 fn index_of(v: ref J) -> Result[i64, Exc] {
     match v {
         J.Int(d) => Ok(i64.parse(d).unwrap_or(0)),
-        J.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        J.Bool(b) => Ok(if b { 1 } else { 0 }),
         _ => Err(exc("TypeError", f"'{type_name(v)}' object cannot be interpreted as an integer")),
     }
 }
@@ -1916,8 +1916,8 @@ fn index_of(v: ref J) -> Result[i64, Exc] {
 fn plus_one(v: ref J) -> J {
     match v {
         J.Int(d) => J.Int(f"{i64.parse(d).unwrap_or(0) + 1}"),
-        J.Bool(b) => J.Int(if *b { "2".to_string() } else { "1".to_string() }),
-        J.Float(x) => J.Float(*x + 1.0),
+        J.Bool(b) => J.Int(if b { "2".to_string() } else { "1".to_string() }),
+        J.Float(x) => J.Float(x + 1.0),
         _ => v.clone(),
     }
 }

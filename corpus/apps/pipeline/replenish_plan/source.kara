@@ -408,11 +408,11 @@ fn classify(skus: ref Vec[Sku]) -> Vec[i64] {
     let mut run = 0;
     for (r, _, i) in order {
         if run * 100 < total * 70 {
-            cls[*i] = 0;
+            cls[i] = 0;
         } else if run * 100 < total * 90 {
-            cls[*i] = 1;
+            cls[i] = 1;
         }
-        run += *r;
+        run += r;
     }
     cls
 }
@@ -478,9 +478,9 @@ fn sales_report(dc: ref Dc, skus: ref Vec[Sku]) -> String {
     let mut top_cat = String.new();
     let mut top_rev = -1;
     for (cat, r) in by_cat {
-        if *r > top_rev {
+        if r > top_rev {
             top_cat = cat.clone();
-            top_rev = *r;
+            top_rev = r;
         }
     }
     f"{dc.name} sales: {group3(units)} units, {dollars(rev)}, {stockouts} stockout weeks; top {top_cat} {dollars(top_rev)}"
@@ -530,9 +530,9 @@ fn accuracy_report(dc: ref Dc, skus: ref Vec[Sku], fits: ref Vec[Fit]) -> String
     let mut best_key = 0;
     let mut best_n = 0;
     for (key, n) in counts {
-        if *n > best_n {
-            best_key = *key;
-            best_n = *n;
+        if n > best_n {
+            best_key = key;
+            best_n = n;
         }
     }
     f"{dc.name} wmape: {parts.join(", ")}; most chosen alpha .{best_key / 100:02} beta .{best_key % 100:02} ({best_n} skus)"
@@ -553,7 +553,7 @@ fn order_report(dc: ref Dc, lines: ref Vec[Line]) -> String {
     picks.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
     let mut tops: Vec[String] = Vec.new();
     for (v, sku, qty) in picks.iter().take(3) {
-        tops.push(f"{sku} {qty} {dollars(*v)}");
+        tops.push(f"{sku} {qty} {dollars(v)}");
     }
     f"{dc.name} orders: {count} lines, {group3(units)} units, {dollars(value)}; largest {tops.join(", ")}"
 }
@@ -608,7 +608,7 @@ fn submit(sup: mut ref Supplier, dc: ref Dc, lines: ref Vec[Line]) -> String {
     }
     order.sort_by(|a, b| a.0.cmp(b.0));
     for (_, i) in order {
-        let l = ref lines[*i];
+        let l = ref lines[i];
         if l.qty == 0 {
             continue;
         }

@@ -12,7 +12,7 @@ fn canonical(cells: Vec[(i64, i64)]) -> Vec[i64] {
     for k in 0..8 {
         let mut moved: Vec[(i64, i64)] = Vec.new();
         for (r, c) in cells.iter() {
-            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let (a, b) = if k < 4 { (r, c) } else { (c, r) };
             let x = if k % 2 == 1 { -a } else { a };
             let y = if k % 4 >= 2 { -b } else { b };
             moved.push((x, y));
@@ -21,8 +21,8 @@ fn canonical(cells: Vec[(i64, i64)]) -> Vec[i64] {
         let (r0, c0) = moved[0];
         let mut flat: Vec[i64] = Vec.new();
         for (r, c) in moved.iter() {
-            flat.push(*r - r0);
-            flat.push(*c - c0);
+            flat.push(r - r0);
+            flat.push(c - c0);
         }
         if k == 0 or flat < best {
             best = flat;

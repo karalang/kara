@@ -26,15 +26,15 @@ fn employee_free_time(schedule: Vec[Vec[Interval]]) -> Vec[Interval] {
     let mut working = 0;
     let mut idle_since = -1;
     for (time, kind) in events.iter() {
-        if *kind == 0 {
+        if kind == 0 {
             if working == 0 and idle_since >= 0 {
-                free.push(Interval { start: idle_since, end: *time });
+                free.push(Interval { start: idle_since, end: time });
             }
             working += 1;
         } else {
             working -= 1;
             if working == 0 {
-                idle_since = *time;
+                idle_since = time;
             }
         }
     }

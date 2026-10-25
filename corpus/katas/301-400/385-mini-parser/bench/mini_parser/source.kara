@@ -48,7 +48,7 @@ fn parse_value(b: Slice[u8], pos: mut ref i64) -> NestedInteger {
 // The deepest nesting of lists, the number of integers and their sum.
 fn shape(x: ref NestedInteger) -> (i64, i64, i64) {
     match x {
-        NestedInteger.Int(n) => (0, 1, *n),
+        NestedInteger.Int(n) => (0, 1, n),
         NestedInteger.List(items) => {
             let mut depth = 0;
             let mut count = 0;

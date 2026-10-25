@@ -25,7 +25,7 @@ fn canonical_star(cells: Vec[(i64, i64)]) -> Vec[i64] {
     for k in 0..8 {
         let mut moved: Vec[(i64, i64)] = Vec.new();
         for (r, c) in cells.iter() {
-            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let (a, b) = if k < 4 { (r, c) } else { (c, r) };
             let x = if k % 2 == 1 { -a } else { a };
             let y = if k % 4 >= 2 { -b } else { b };
             moved.push((x, y));
@@ -34,8 +34,8 @@ fn canonical_star(cells: Vec[(i64, i64)]) -> Vec[i64] {
         let (r0, c0) = moved[0];
         let mut flat: Vec[i64] = Vec.new();
         for (r, c) in moved.iter() {
-            flat.push(*r - r0);
-            flat.push(*c - c0);
+            flat.push(r - r0);
+            flat.push(c - c0);
         }
         if k == 0 or flat < best {
             best = flat;
@@ -73,7 +73,7 @@ fn key_of_bfs(cells: Vec[(i64, i64)]) -> String {
     for k in 0..8 {
         let mut moved: Vec[(i64, i64)] = Vec.new();
         for (r, c) in cells.iter() {
-            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let (a, b) = if k < 4 { (r, c) } else { (c, r) };
             let x = if k % 2 == 1 { -a } else { a };
             let y = if k % 4 >= 2 { -b } else { b };
             moved.push((x, y));
@@ -82,7 +82,7 @@ fn key_of_bfs(cells: Vec[(i64, i64)]) -> String {
         let (r0, c0) = moved[0];
         let mut key = String.new();
         for (r, c) in moved.iter() {
-            key = key + f"{*r - r0},{*c - c0};";
+            key = key + f"{r - r0},{c - c0};";
         }
         if k == 0 or key < best {
             best = key;
@@ -116,8 +116,8 @@ fn num_distinct_islands2_bfs(grid: Vec[Vec[i64]]) -> i64 {
             while let Some((cr, cc)) = queue.pop_front() {
                 cells.push((cr, cc));
                 for (dr, dc) in steps.iter() {
-                    let nr = cr + *dr;
-                    let nc = cc + *dc;
+                    let nr = cr + dr;
+                    let nc = cc + dc;
                     if nr >= 0 and nc >= 0 and nr < rows and nc < cols
                             and grid[nr][nc] == 1 and not seen[nr][nc] {
                         seen[nr][nc] = true;
@@ -138,7 +138,7 @@ fn canonical_sorted(cells: Vec[(i64, i64)]) -> Vec[i64] {
     for k in 0..8 {
         let mut moved: Vec[(i64, i64)] = Vec.new();
         for (r, c) in cells.iter() {
-            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let (a, b) = if k < 4 { (r, c) } else { (c, r) };
             let x = if k % 2 == 1 { -a } else { a };
             let y = if k % 4 >= 2 { -b } else { b };
             moved.push((x, y));
@@ -147,8 +147,8 @@ fn canonical_sorted(cells: Vec[(i64, i64)]) -> Vec[i64] {
         let (r0, c0) = moved[0];
         let mut flat: Vec[i64] = Vec.new();
         for (r, c) in moved.iter() {
-            flat.push(*r - r0);
-            flat.push(*c - c0);
+            flat.push(r - r0);
+            flat.push(c - c0);
         }
         if k == 0 or flat < best {
             best = flat;
@@ -230,7 +230,7 @@ fn normalized_pairwise(cells: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
     let (r0, c0) = v[0];
     let mut out: Vec[(i64, i64)] = Vec.new();
     for (r, c) in v.iter() {
-        out.push((*r - r0, *c - c0));
+        out.push((r - r0, c - c0));
     }
     out
 }
@@ -242,7 +242,7 @@ fn same_shape_pairwise(cells: Vec[(i64, i64)], kept: Vec[(i64, i64)]) -> bool {
     for k in 0..8 {
         let mut moved: Vec[(i64, i64)] = Vec.new();
         for (r, c) in cells.iter() {
-            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let (a, b) = if k < 4 { (r, c) } else { (c, r) };
             let x = if k % 2 == 1 { -a } else { a };
             let y = if k % 4 >= 2 { -b } else { b };
             moved.push((x, y));

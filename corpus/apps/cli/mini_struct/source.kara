@@ -137,10 +137,10 @@ impl Session {
     fn repr(ref self, v: ref Val) -> String {
         match v {
             Val.Int(n) => f"{n}",
-            Val.Float(x) => float_repr(*x),
-            Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+            Val.Float(x) => float_repr(x),
+            Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
             Val.Bytes(b) => bytes_repr(b),
-            Val.Buf(i) => f"bytearray({bytes_repr(self.bufs[*i])})",
+            Val.Buf(i) => f"bytearray({bytes_repr(self.bufs[i])})",
             Val.Text(s) => str_repr(s),
             Val.Nothing => "None".to_string(),
             Val.List(xs) => {
@@ -462,18 +462,18 @@ fn unpack_half(h: u16) -> f64 {
 
 fn float_arg(v: ref Val) -> Result[f64, Exc] {
     match v {
-        Val.Float(x) => Ok(*x),
-        Val.Int(n) => Ok(*n as f64),
-        Val.Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
+        Val.Float(x) => Ok(x),
+        Val.Int(n) => Ok(n as f64),
+        Val.Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
         _ => Err(struct_error("required argument is not a float".to_string())),
     }
 }
 
 fn truthy(v: ref Val) -> bool {
     match v {
-        Val.Int(n) => *n != 0,
-        Val.Float(x) => *x != 0.0,
-        Val.Bool(b) => *b,
+        Val.Int(n) => n != 0,
+        Val.Float(x) => x != 0.0,
+        Val.Bool(b) => b,
         Val.Bytes(b) => b.len() > 0,
         Val.Buf(_) => true,
         Val.Text(s) => s.len() > 0,
@@ -490,7 +490,7 @@ impl Session {
     fn byte_arg(ref self, v: ref Val) -> Option[Vec[u8]] {
         match v {
             Val.Bytes(b) => Some(b.clone()),
-            Val.Buf(i) => Some(self.bufs[*i].clone()),
+            Val.Buf(i) => Some(self.bufs[i].clone()),
             _ => None,
         }
     }
@@ -665,8 +665,8 @@ fn iter_unpack(f: ref Fmt, data: ref Vec[u8]) -> Result[Val, Exc] {
 
 fn int_arg(v: ref Val) -> Result[i64, Exc] {
     match v {
-        Val.Int(n) => Ok(*n as i64),
-        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        Val.Int(n) => Ok(n as i64),
+        Val.Bool(b) => Ok(if b { 1 } else { 0 }),
         _ => Err(type_error(f"'{type_name(v)}' object cannot be interpreted as an integer")),
     }
 }

@@ -64,10 +64,10 @@ fn type_name(v: ref Val) -> String {
 // A number's value, for Python's cross-type equality (True == 1 == 1.0).
 fn as_number(v: ref Val) -> Option[f64] {
     match v {
-        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Val.Int(i) => Some(*i as f64),
-        Val.UInt(u) => Some(*u as f64),
-        Val.Float(f) => Some(*f),
+        Val.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        Val.Int(i) => Some(i as f64),
+        Val.UInt(u) => Some(u as f64),
+        Val.Float(f) => Some(f),
         _ => None,
     }
 }
@@ -83,9 +83,9 @@ fn is_int_like(v: ref Val) -> bool {
 
 fn int_of(v: ref Val) -> i64 {
     match v {
-        Val.Bool(b) => if *b { 1 } else { 0 },
-        Val.Int(i) => *i,
-        Val.UInt(u) => *u as i64,
+        Val.Bool(b) => if b { 1 } else { 0 },
+        Val.Int(i) => i,
+        Val.UInt(u) => u as i64,
         _ => 0,
     }
 }
@@ -117,8 +117,8 @@ fn list_eq(a: ref Vec[Val], b: ref Vec[Val]) -> bool {
 // Python's ==, for the values that can be dict keys.
 fn py_eq(a: ref Val, b: ref Val) -> bool {
     if is_int_like(a) and is_int_like(b) {
-        let ua = match a { Val.UInt(u) => Some(*u), _ => None };
-        let ub = match b { Val.UInt(u) => Some(*u), _ => None };
+        let ua = match a { Val.UInt(u) => Some(u), _ => None };
+        let ub = match b { Val.UInt(u) => Some(u), _ => None };
         return match (ua, ub) {
             (Some(x), Some(y)) => x == y,
             (Some(_), None) => false,
@@ -138,10 +138,10 @@ fn py_eq(a: ref Val, b: ref Val) -> bool {
         Val.Bytes(x) => match b { Val.Bytes(y) => bytes_eq(x, y), _ => false },
         Val.Tuple(x) => match b { Val.Tuple(y) => list_eq(x, y), _ => false },
         Val.Ext(c, d) => match b {
-            Val.Ext(c2, d2) => *c == *c2 and bytes_eq(d, d2),
+            Val.Ext(c2, d2) => c == c2 and bytes_eq(d, d2),
             _ => false,
         },
-        Val.Ts(s, n) => match b { Val.Ts(s2, n2) => *s == *s2 and *n == *n2, _ => false },
+        Val.Ts(s, n) => match b { Val.Ts(s2, n2) => s == s2 and n == n2, _ => false },
         _ => false,
     }
 }
@@ -411,11 +411,11 @@ fn repr_list(items: ref Vec[Val], open: Str, close: Str) -> String {
 fn repr(v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(i) => f"{i}",
         Val.UInt(u) => f"{u}",
         Val.Big(s) => s.clone(),
-        Val.Float(f) => repr_float(*f),
+        Val.Float(f) => repr_float(f),
         Val.Str(s) => repr_str(s),
         Val.Bytes(b) => repr_bytes(b),
         Val.List(items) => repr_list(items, "[", "]"),
@@ -812,16 +812,16 @@ impl Packer {
     fn pack(mut ref self, v: ref Val) -> Result[(), String] {
         match v {
             Val.Nil => self.byte(0xC0),
-            Val.Bool(b) => self.byte(if *b { 0xC3 } else { 0xC2 }),
-            Val.Int(i) => self.pack_int(*i),
-            Val.UInt(u) => self.head(0xCF, *u, 8),
+            Val.Bool(b) => self.byte(if b { 0xC3 } else { 0xC2 }),
+            Val.Int(i) => self.pack_int(i),
+            Val.UInt(u) => self.head(0xCF, u, 8),
             Val.Big(_) => return Err("OverflowError: Integer value out of range".to_string()),
             Val.Float(f) => {
                 if self.use_single_float {
-                    let s = *f as f32;
+                    let s = f as f32;
                     let inf = 1.0 / 0.0;
                     let s_inf = s as f64 == inf or s as f64 == -inf;
-                    if s_inf and *f != inf and *f != -inf {
+                    if s_inf and f != inf and f != -inf {
                         return Err("OverflowError: float too large to pack with f format".to_string());
                     }
                     self.head(0xCA, f.to_bits32() as u64, 4);
@@ -842,9 +842,9 @@ impl Packer {
                     self.buf.push(x);
                 }
             }
-            Val.Ext(c, d) => self.ext(*c, d),
+            Val.Ext(c, d) => self.ext(c, d),
             Val.Ts(s, n) => {
-                let d = ts_bytes(*s, *n);
+                let d = ts_bytes(s, n);
                 self.ext(-1, d);
             }
             Val.List(items) => {
@@ -1442,7 +1442,7 @@ fn event_time(t: ref Val) -> Result[String, String] {
     match t {
         Val.Int(i) => Ok(f"{i}.000000000"),
         Val.Ext(code, d) => {
-            if *code == 0 and d.len() == 8 {
+            if code == 0 and d.len() == 8 {
                 let ns = be(d, 4, 4) as i64;
                 let mut frac = f"{ns}";
                 while frac.len() < 9 {

@@ -1517,7 +1517,7 @@ fn str_list(v: ref Option[JValue]) -> Vec[String] {
         for it in items.iter() {
             match it {
                 JValue.Str(s) => out.push(s.clone()),
-                JValue.Bool(b) => out.push(py_bool(*b)),
+                JValue.Bool(b) => out.push(py_bool(b)),
                 _ => {}
             }
         }

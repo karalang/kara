@@ -55,7 +55,7 @@ fn read_binary_watch_choose(turned_on: i64) -> Vec[String] {
     found.sort();
     let mut times: Vec[String] = Vec.new();
     for (h, m) in found.iter() {
-        times.push(f"{*h}:{*m:02}");
+        times.push(f"{h}:{m:02}");
     }
     times
 }
@@ -94,7 +94,7 @@ fn read_binary_watch_split(turned_on: i64) -> Vec[String] {
     found.sort();
     let mut times: Vec[String] = Vec.new();
     for (h, m) in found.iter() {
-        times.push(f"{*h}:{*m:02}");
+        times.push(f"{h}:{m:02}");
     }
     times
 }
@@ -117,7 +117,7 @@ fn read_binary_watch_masks(turned_on: i64) -> Vec[String] {
     found.sort();
     let mut times: Vec[String] = Vec.new();
     for (h, m) in found.iter() {
-        times.push(f"{*h}:{*m:02}");
+        times.push(f"{h}:{m:02}");
     }
     times
 }

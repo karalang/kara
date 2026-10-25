@@ -92,10 +92,10 @@ fn levels_is_complete_tree(root: Option[TreeNode]) -> bool {
         let mut next: Vec[(TreeNode, i64)] = Vec.new();
         for (node, p) in level.iter() {
             if let Some(l) = node.left {
-                next.push((l, 2 * *p));
+                next.push((l, 2 * p));
             }
             if let Some(r) = node.right {
-                next.push((r, 2 * *p + 1));
+                next.push((r, 2 * p + 1));
             }
         }
         if next.len() == 0 {

@@ -2364,10 +2364,10 @@ fn val_repr(v: ref Val) -> String {
         Val.Uid(s) => str_repr(s),
         Val.Ds(s) => f"'{s}'",
         Val.Is(n, _) => f"'{n}'",
-        Val.IsF(f, _) => float_repr(*f),
+        Val.IsF(f, _) => float_repr(f),
         Val.Int(n) => f"{n}",
-        Val.Float(f) => float_repr(*f),
-        Val.Tag(t) => tag_str(*t),
+        Val.Float(f) => float_repr(f),
+        Val.Tag(t) => tag_str(t),
         Val.Pn(comps) => str_repr(join(comps, "=")),
         Val.Bytes(b) => bytes_repr(b),
         Val.Multi(xs) => multi_str(xs),
@@ -2405,7 +2405,7 @@ fn plain_str(v: ref Val) -> String {
         Val.Uid(s) => s.clone(),
         Val.Ds(s) => s.clone(),
         Val.Is(_, s) => s.clone(),
-        Val.IsF(f, _) => float_repr(*f),
+        Val.IsF(f, _) => float_repr(f),
         Val.Pn(comps) => join(comps, "="),
         _ => val_repr(v),
     }
@@ -2684,17 +2684,17 @@ fn write_bytes(out: mut ref Vec[u8], v: ref Val, pad: bool) {
 fn push_number(out: mut ref Vec[u8], v: ref Val, fmt: char, little: bool) {
     let size = number_size(fmt);
     match v {
-        Val.Int(n) => push_uint(mut out, *n as u64, size, little),
+        Val.Int(n) => push_uint(mut out, n as u64, size, little),
         Val.Float(f) => {
             if fmt == 'f' {
-                push_uint(mut out, f64_to_f32_bits(*f) as u64, 4, little);
+                push_uint(mut out, f64_to_f32_bits(f) as u64, 4, little);
             } else if fmt == 'd' {
                 push_uint(mut out, f.to_bits(), 8, little);
             } else {
-                push_uint(mut out, *f as i64 as u64, size, little);
+                push_uint(mut out, f as i64 as u64, size, little);
             }
         }
-        Val.Is(n, _) => push_uint(mut out, *n as u64, size, little),
+        Val.Is(n, _) => push_uint(mut out, n as u64, size, little),
         _ => {}
     }
 }
@@ -2713,8 +2713,8 @@ fn write_numbers(out: mut ref Vec[u8], v: ref Val, fmt: char, little: bool) {
 
 fn write_at(out: mut ref Vec[u8], v: ref Val, little: bool) {
     match v {
-        Val.Tag(t) => push_tag(mut out, *t, little),
-        Val.Int(t) => push_tag(mut out, *t, little),
+        Val.Tag(t) => push_tag(mut out, t, little),
+        Val.Int(t) => push_tag(mut out, t, little),
         Val.Multi(xs) => {
             for x in xs.iter() {
                 write_at(mut out, x, little);

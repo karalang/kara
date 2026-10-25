@@ -38,8 +38,8 @@ fn distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
     let mut parent: Vec[i64] = Vec.filled(top + 1, -2);
     let mut depth: Vec[i64] = Vec.filled(top + 1, 0);
     for (v, up, d) in ups.iter() {
-        parent[*v] = *up;
-        depth[*v] = *d;
+        parent[v] = up;
+        depth[v] = d;
     }
     if parent[target] == -2 {
         return found;

@@ -244,7 +244,7 @@ impl[K: Hash + Eq + Clone + PyRepr] Counter[K] {
     fn total(ref self) -> i64 {
         let mut t = 0;
         for (_, n) in self.d.items().iter() {
-            t += *n;
+            t += n;
         }
         t
     }
@@ -277,7 +277,7 @@ impl[K: Hash + Eq + Clone + PyRepr] Counter[K] {
     fn elements(ref self) -> Vec[K] {
         let mut out: Vec[K] = Vec.new();
         for (k, n) in self.d.items().iter() {
-            for _ in 0..*n {
+            for _ in 0..n {
                 out.push(k.clone());
             }
         }

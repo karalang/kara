@@ -54,10 +54,10 @@ fn find_shortest_way(maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) -> Str
             let next = (dist + steps, path + name);
             match best.get((r, c)) {
                 Some((d, p)) => {
-                    if next.0 > *d or (next.0 == *d and next.1 >= p) {
+                    if next.0 > d or (next.0 == d and next.1 >= p) {
                         continue;
                     }
-                    frontier.remove((*d, p.clone(), r, c));
+                    frontier.remove((d, p.clone(), r, c));
                 }
                 None => {}
             }

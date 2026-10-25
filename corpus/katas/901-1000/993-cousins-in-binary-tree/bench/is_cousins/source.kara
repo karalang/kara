@@ -16,10 +16,10 @@ fn is_cousins(root: TreeNode, x: i64, y: i64) -> bool {
         let mut next: Vec[(TreeNode, i64)] = Vec.new();
         for (node, parent) in level.iter() {
             if node.val == x {
-                px = *parent;
+                px = parent;
             }
             if node.val == y {
-                py = *parent;
+                py = parent;
             }
             if let Some(l) = node.left {
                 next.push((l, node.val));

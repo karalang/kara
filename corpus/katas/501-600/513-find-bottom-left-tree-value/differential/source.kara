@@ -176,20 +176,20 @@ fn reference(root: TreeNode) -> (i64, i64, i64) {
     levels(Some(root), 0, mut all);
     let mut deepest = 0;
     for (d, _) in all.iter() {
-        if *d > deepest {
-            deepest = *d;
+        if d > deepest {
+            deepest = d;
         }
     }
     let mut first = 0;
     let mut last = 0;
     let mut seen = false;
     for (d, v) in all.iter() {
-        if *d == deepest {
+        if d == deepest {
             if not seen {
-                first = *v;
+                first = v;
                 seen = true;
             }
-            last = *v;
+            last = v;
         }
     }
     (deepest, first, last)

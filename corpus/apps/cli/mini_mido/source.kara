@@ -765,9 +765,9 @@ fn float_repr(x: f64) -> String {
 fn py_repr(j: ref J) -> String {
     match j {
         J.Null => "None".to_string(),
-        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         J.Int(t) => t.clone(),
-        J.Float(x) => float_repr(*x),
+        J.Float(x) => float_repr(x),
         J.Str(t) => str_repr(t),
         J.Arr(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -803,19 +803,19 @@ fn ints_repr(xs: ref Vec[i64]) -> String {
 
 fn as_num(j: ref J) -> f64 {
     match j {
-        J.Bool(b) => if *b { 1.0 } else { 0.0 },
+        J.Bool(b) => if b { 1.0 } else { 0.0 },
         J.Int(t) => {
             let n: Option[i64] = t.parse();
             n.unwrap_or(0) as f64
         }
-        J.Float(x) => *x,
+        J.Float(x) => x,
         _ => 0.0,
     }
 }
 
 fn as_int(j: ref J) -> i64 {
     match j {
-        J.Bool(b) => if *b { 1 } else { 0 },
+        J.Bool(b) => if b { 1 } else { 0 },
         J.Int(t) => {
             let n: Option[i64] = t.parse();
             n.unwrap_or(0)
@@ -958,12 +958,12 @@ enum V {
 fn from_j(j: ref J) -> V {
     match j {
         J.Null => V.Nil,
-        J.Bool(b) => V.Bool(*b),
+        J.Bool(b) => V.Bool(b),
         J.Int(t) => {
             let n: Option[i64] = t.parse();
             V.Int(n.unwrap_or(0))
         }
-        J.Float(x) => V.Float(*x),
+        J.Float(x) => V.Float(x),
         J.Str(t) => V.Str(t.clone()),
         J.Arr(items) => {
             let mut out: Vec[V] = Vec.new();
@@ -1000,9 +1000,9 @@ fn repr_items(xs: ref Vec[V]) -> String {
 fn repr(v: ref V) -> String {
     match v {
         V.Nil => "None".to_string(),
-        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         V.Int(n) => f"{n}",
-        V.Float(x) => float_repr(*x),
+        V.Float(x) => float_repr(x),
         V.Str(t) => str_repr(t),
         V.List(xs) => f"[{repr_items(xs)}]",
         V.Tuple(xs) => {
@@ -1057,18 +1057,18 @@ fn is_real(v: ref V) -> bool {
 
 fn int_of(v: ref V) -> i64 {
     match v {
-        V.Bool(b) => if *b { 1 } else { 0 },
-        V.Int(n) => *n,
-        V.Float(x) => *x as i64,
+        V.Bool(b) => if b { 1 } else { 0 },
+        V.Int(n) => n,
+        V.Float(x) => x as i64,
         _ => 0,
     }
 }
 
 fn num_of(v: ref V) -> f64 {
     match v {
-        V.Bool(b) => if *b { 1.0 } else { 0.0 },
-        V.Int(n) => *n as f64,
-        V.Float(x) => *x,
+        V.Bool(b) => if b { 1.0 } else { 0.0 },
+        V.Int(n) => n as f64,
+        V.Float(x) => x,
         _ => 0.0,
     }
 }
@@ -1156,9 +1156,9 @@ fn num_lt(a: ref V, b: ref V) -> bool {
 fn truthy(v: ref V) -> bool {
     match v {
         V.Nil => false,
-        V.Bool(b) => *b,
-        V.Int(n) => *n != 0,
-        V.Float(x) => *x != 0.0,
+        V.Bool(b) => b,
+        V.Int(n) => n != 0,
+        V.Float(x) => x != 0.0,
         V.Str(t) => t.len() > 0,
         V.List(xs) => xs.len() > 0,
         V.Tuple(xs) => xs.len() > 0,
@@ -1212,7 +1212,7 @@ fn items_of(v: ref V) -> Result[Vec[V], Exc] {
 fn bytearray_of(v: ref V) -> Result[Vec[i64], Exc] {
     match v {
         V.Bool(_) => zeros(int_of(v)),
-        V.Int(n) => zeros(*n),
+        V.Int(n) => zeros(n),
         V.Str(_) => Err(exc("TypeError", "string argument without an encoding".to_string())),
         V.List(xs) => byte_items(xs),
         V.Tuple(xs) => byte_items(xs),
@@ -4269,7 +4269,7 @@ fn step_msgs(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
     } else if o == "format" {
         let a = jtext(st[1]);
         let t = match st[2] {
-            J.Bool(b) => *b,
+            J.Bool(b) => b,
             _ => false,
         };
         let m = env.msg(a);
@@ -4576,7 +4576,7 @@ fn step_tracks(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
         let v = jtext(st[1]);
         let names = jnames(st[2]);
         let skip = match st[3] {
-            J.Bool(b) => *b,
+            J.Bool(b) => b,
             _ => false,
         };
         match merge_tracks(track_items(env, names), skip) {
@@ -4680,7 +4680,7 @@ fn step_files(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
             ms.push(env.msg(n));
         }
         let plain = match st[3] {
-            J.Bool(b) => *b,
+            J.Bool(b) => b,
             _ => false,
         };
         write_syx(data_path(p), ms, plain)?;
@@ -4702,7 +4702,7 @@ fn step_ports(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
     let v = jtext(st[1]);
     if o == "port" {
         let auto = match st[3] {
-            J.Bool(b) => *b,
+            J.Bool(b) => b,
             _ => false,
         };
         let p = Port { name: jtext(st[2]), closed: false, autoreset: auto, messages: Vec.new() };

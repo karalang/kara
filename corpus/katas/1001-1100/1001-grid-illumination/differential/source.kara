@@ -185,7 +185,7 @@ fn lines_grid_illumination(n: i64, lamps: ref Vec[Vec[i64]], queries: ref Vec[Ve
         let (r, c) = (q[0], q[1]);
         let mut lit = 0;
         for (kind, value) in [(0, r), (1, c), (2, r - c), (3, r + c)].iter() {
-            if count.get(lines_line(*kind, *value)).unwrap_or(0) > 0 {
+            if count.get(lines_line(kind, value)).unwrap_or(0) > 0 {
                 lit = 1;
             }
         }

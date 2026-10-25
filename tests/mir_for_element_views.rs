@@ -3,7 +3,9 @@
 //! `karac check` binds it as a `ref`, and `*o` reads through it. The MIR
 //! pipeline binds the same names at their value types and reads `*o` as the
 //! binding, so a program check accepts runs, and prints the same, on the
-//! interpreter and the compiled backend (B-2026-10-23-8).
+//! interpreter and the compiled backend (B-2026-10-23-8). A `Copy` part of a
+//! destructured element is a copy rather than a view (§4.6), so `*` on it is
+//! the §5.10 error and these programs read it bare (B-2026-10-24-36).
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -65,7 +67,7 @@ fn main() {
     let want = "b".to_string();
     let ns = names();
     for (o, n) in ns {
-        if *o == want { println(f"{n} {*n}"); }
+        if *o == want { println(f"{n} {n}"); }
     }
     for (o, _) in names() {
         if *o != want { println(f"{o}"); }
@@ -106,7 +108,7 @@ fn total(p: ref Payload) -> i64 {
     let mut n: i64 = 0;
     for s in p.segs {
         match s {
-            Seg.Code(v) => n += *v,
+            Seg.Code(v) => n += v,
             Seg.Text(t) => n += t.len() as i64,
         }
     }

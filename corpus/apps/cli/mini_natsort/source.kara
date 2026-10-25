@@ -1566,7 +1566,7 @@ fn num_key(v: ref J, alg: ref Alg) -> K {
     let mut out: Vec[K] = Vec.new();
     match v {
         J.F(x) => {
-            let x = *x;
+            let x = x;
             if x != x {
                 out = [sep, K.F(rep), K.S((if alg.nanlast { "3" } else { "1" }).to_string())];
             } else if x == rep {
@@ -1579,7 +1579,7 @@ fn num_key(v: ref J, alg: ref Alg) -> K {
             out = [sep, K.I(n.clone())];
         }
         J.B(b) => {
-            out = [sep, K.I((if *b { "1" } else { "0" }).to_string())];
+            out = [sep, K.I((if b { "1" } else { "0" }).to_string())];
         }
         _ => {
             out = [sep, K.F(rep), K.S("2".to_string())];
@@ -1642,9 +1642,9 @@ fn k_cmp(a: ref K, b: ref K) -> i64 {
             }
         }
         (K.I(x), K.I(y)) => cmp_int(x, y),
-        (K.F(x), K.F(y)) => cmp_f(*x, *y),
-        (K.I(x), K.F(y)) => cmp_int_float(x, *y),
-        (K.F(x), K.I(y)) => -cmp_int_float(y, *x),
+        (K.F(x), K.F(y)) => cmp_f(x, y),
+        (K.I(x), K.F(y)) => cmp_int_float(x, y),
+        (K.F(x), K.I(y)) => -cmp_int_float(y, x),
         (K.T(x), K.T(y)) => {
             let mut i = 0;
             while i < x.len() and i < y.len() {
@@ -1715,7 +1715,7 @@ fn k_repr(k: ref K, uni: ref Uni) -> String {
     match k {
         K.S(s) => uni.repr(chars_of(s)),
         K.I(n) => n.clone(),
-        K.F(x) => float_repr(*x),
+        K.F(x) => float_repr(x),
         K.T(items) => {
             let mut parts: Vec[String] = Vec.new();
             for it in items.iter() {
@@ -1735,8 +1735,8 @@ fn j_repr(v: ref J, uni: ref Uni) -> String {
     match v {
         J.S(s) => uni.repr(chars_of(s)),
         J.N(n) => n.clone(),
-        J.F(x) => float_repr(*x),
-        J.B(b) => (if *b { "True" } else { "False" }).to_string(),
+        J.F(x) => float_repr(x),
+        J.B(b) => (if b { "True" } else { "False" }).to_string(),
         J.Null => "None".to_string(),
         J.A(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -1955,7 +1955,7 @@ fn parse_cli(args: ref Vec[String], uni: ref Uni) -> Result[Cli, String] {
 
 fn check_filters(fs: ref Vec[(f64, f64)]) -> Result[(), String] {
     for (lo, hi) in fs.iter() {
-        if *lo >= *hi {
+        if lo >= hi {
             return Err("Error in --filter: low >= high".to_string());
         }
     }
@@ -1972,7 +1972,7 @@ fn conv_float(cs: ref Vec[char], uni: ref Uni) -> Result[f64, String] {
 fn numbers_in(entry: ref String, alg: ref Alg, uni: ref Uni) -> Vec[Vec[char]] {
     let mut out: Vec[Vec[char]] = Vec.new();
     for (piece, is_n) in split_numbers(chars_of(entry), alg, uni).iter() {
-        if *is_n {
+        if is_n {
             out.push(piece.clone());
         }
     }
@@ -1985,7 +1985,7 @@ fn in_ranges(entry: ref String, fs: ref Vec[(f64, f64)], alg: ref Alg, uni: ref 
     for num in numbers_in(entry, alg, uni).iter() {
         for (lo, hi) in fs.iter() {
             let x = conv_float(num, uni)?;
-            if *lo <= x and x <= *hi {
+            if lo <= x and x <= hi {
                 return Ok(true);
             }
         }

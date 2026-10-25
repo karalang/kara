@@ -512,24 +512,24 @@ fn emit_node(prog: mut ref Vec[Inst], n: ref Node) {
             prog.push(Inst.Save(2 * idx + 1));
         }
         Node.Rep(body, lo, hi, greedy) => {
-            for _ in 0..*lo {
+            for _ in 0..lo {
                 emit_node(mut prog, body[0]);
             }
-            if *hi < 0 {
+            if hi < 0 {
                 // x*: L: split(body, out); body; jmp L
                 let l = prog.len();
                 prog.push(Inst.Split(0, 0));
                 emit_node(mut prog, body[0]);
                 prog.push(Inst.Jmp(l));
                 let out = prog.len();
-                prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
             } else {
-                for _ in *lo..*hi {
+                for _ in lo..hi {
                     let l = prog.len();
                     prog.push(Inst.Split(0, 0));
                     emit_node(mut prog, body[0]);
                     let out = prog.len();
-                    prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                    prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
                 }
             }
         }
@@ -587,13 +587,13 @@ fn re_run(re: ref Re, s: ref Vec[char], pos0: i64, slots: mut ref Vec[i64]) -> b
                     if pos == s.len() { pc += 1; } else { break; }
                 }
                 Inst.Split(a, b) => {
-                    stack.push(Bt.Try(*b, pos));
-                    pc = *a;
+                    stack.push(Bt.Try(b, pos));
+                    pc = a;
                 }
-                Inst.Jmp(a) => pc = *a,
+                Inst.Jmp(a) => pc = a,
                 Inst.Save(k) => {
-                    stack.push(Bt.Restore(*k, slots[*k]));
-                    slots[*k] = pos;
+                    stack.push(Bt.Restore(k, slots[k]));
+                    slots[k] = pos;
                     pc += 1;
                 }
                 Inst.Match => return true,
@@ -1241,11 +1241,11 @@ fn decode(codec: ref Codec, b: ref Vec[u8]) -> Result[String, Exc] {
             Ok(out)
         }
         Codec.U16(le) => {
-            let name = if *le { "utf-16-le" } else { "utf-16-be" };
+            let name = if le { "utf-16-le" } else { "utf-16-be" };
             let mut out = String.new();
             let mut i = 0;
             let unit = |j: i64| {
-                if *le { b[j] as i64 + 256 * (b[j + 1] as i64) } else { 256 * (b[j] as i64) + b[j + 1] as i64 }
+                if le { b[j] as i64 + 256 * (b[j + 1] as i64) } else { 256 * (b[j] as i64) + b[j + 1] as i64 }
             };
             while i < b.len() {
                 if i + 1 >= b.len() {
@@ -1272,7 +1272,7 @@ fn decode(codec: ref Codec, b: ref Vec[u8]) -> Result[String, Exc] {
             Ok(out)
         }
         Codec.U32(le) => {
-            let name = if *le { "utf-32-le" } else { "utf-32-be" };
+            let name = if le { "utf-32-le" } else { "utf-32-be" };
             let mut out = String.new();
             let mut i = 0;
             while i < b.len() {
@@ -1281,7 +1281,7 @@ fn decode(codec: ref Codec, b: ref Vec[u8]) -> Result[String, Exc] {
                 }
                 let mut u = 0;
                 for k in 0..4 {
-                    let j = if *le { i + 3 - k } else { i + k };
+                    let j = if le { i + 3 - k } else { i + k };
                     u = u * 256 + b[j] as i64;
                 }
                 if u > 0x10ffff {
@@ -1352,10 +1352,10 @@ fn encode(codec: ref Codec, s: ref String) -> Result[Vec[u8], Exc] {
                 let n = c as i64;
                 if n >= 0x10000 {
                     let v = n - 0x10000;
-                    push_unit(mut out, 0xd800 + v / 1024, *le);
-                    push_unit(mut out, 0xdc00 + v % 1024, *le);
+                    push_unit(mut out, 0xd800 + v / 1024, le);
+                    push_unit(mut out, 0xdc00 + v % 1024, le);
                 } else {
-                    push_unit(mut out, n, *le);
+                    push_unit(mut out, n, le);
                 }
             }
         }
@@ -1364,7 +1364,7 @@ fn encode(codec: ref Codec, s: ref String) -> Result[Vec[u8], Exc] {
                 let n = c as i64;
                 let bs: Vec[i64] = vec![n / 16777216, (n / 65536) % 256, (n / 256) % 256, n % 256];
                 for k in 0..4 {
-                    out.push((if *le { bs[3 - k] } else { bs[k] }) as u8);
+                    out.push((if le { bs[3 - k] } else { bs[k] }) as u8);
                 }
             }
         }
@@ -1717,7 +1717,7 @@ fn save(p: ref Pats, w: mut ref World, v: mut ref Vtt, dest: ref Option[String],
         None => v.encoding.clone(),
     };
     let bom = match add_bom {
-        Some(b) => *b,
+        Some(b) => b,
         None => v.has_bom,
     };
     write_text(mut w, file, encoding, bom, vtt_to_str(v))
@@ -2056,7 +2056,7 @@ fn cli_parse(args: ref Vec[String], co: mut ref CliOut) -> Result[(Option[String
             }
             CliArg.Unknown => extras.push(args[i].clone()),
             CliArg.Opt(a, explicit) => {
-                if *a == 0 {
+                if a == 0 {
                     for line in help_text() {
                         co.out.push(line.clone());
                     }
@@ -2071,20 +2071,20 @@ fn cli_parse(args: ref Vec[String], co: mut ref CliOut) -> Result[(Option[String
                             _ => false,
                         };
                         if not next_ok {
-                            return Err(f"argument {action_name(*a)}: expected one argument");
+                            return Err(f"argument {action_name(a)}: expected one argument");
                         }
                         i += 1;
                         args[i].clone()
                     }
                 };
-                if *a == 1 {
+                if a == 1 {
                     output = Some(value);
                 } else {
                     let n = match py_int(value) {
                         Some(n) => n,
-                        None => return Err(f"argument {action_name(*a)}: invalid int value: {py_repr_str(value)}"),
+                        None => return Err(f"argument {action_name(a)}: invalid int value: {py_repr_str(value)}"),
                     };
-                    if *a == 2 {
+                    if a == 2 {
                         seconds = n;
                     } else {
                         mpegts = n;

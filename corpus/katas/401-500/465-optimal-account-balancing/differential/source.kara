@@ -277,8 +277,8 @@ fn most_blocks(debts: Vec[i64], i: i64, blocks: mut ref Vec[i64]) -> i64 {
 fn brute(transactions: Vec[(i64, i64, i64)]) -> i64 {
     let mut balance = vec![0; 12];
     for (from, to, amount) in transactions {
-        balance[*from] -= *amount;
-        balance[*to] += *amount;
+        balance[from] -= amount;
+        balance[to] += amount;
     }
     let mut debts: Vec[i64] = Vec.new();
     for b in balance {
@@ -325,9 +325,9 @@ fn main() {
         let mut scaled: Vec[(i64, i64, i64)] = Vec.new();
         let mut reversed: Vec[(i64, i64, i64)] = Vec.new();
         for (from, to, amount) in ledger {
-            renamed.push((names[*from], names[*to], *amount));
-            scaled.push((*from, *to, *amount * factor));
-            reversed.push((*to, *from, *amount));
+            renamed.push((names[from], names[to], amount));
+            scaled.push((from, to, amount * factor));
+            reversed.push((to, from, amount));
         }
         let mut padded = ledger.clone();
         let a = next_random(mut seed) % 12;
@@ -347,7 +347,7 @@ fn main() {
         let right = random_ledger(1 + next_random(mut seed) % 3, 6, size, mut seed);
         let mut both = left.clone();
         for (from, to, amount) in right {
-            both.push((*from + 6, *to + 6, *amount * 1000));
+            both.push((from + 6, to + 6, amount * 1000));
         }
         for arm in 0..4 {
             checks += 5;

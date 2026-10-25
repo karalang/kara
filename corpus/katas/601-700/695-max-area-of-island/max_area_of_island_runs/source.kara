@@ -42,9 +42,9 @@ fn max_area_of_island(grid: Vec[Vec[i64]]) -> i64 {
             parent.push(id);
             weight.push(c - start);
             for (a, b, other) in above.iter() {
-                if *a < c and start <= *b {
+                if a < c and start <= b {
                     let x = find(mut parent, id);
-                    let y = find(mut parent, *other);
+                    let y = find(mut parent, other);
                     if x != y {
                         parent[y] = x;
                         weight[x] += weight[y];

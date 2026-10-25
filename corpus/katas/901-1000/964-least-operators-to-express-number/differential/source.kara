@@ -186,12 +186,12 @@ fn literal(x: i64, target: i64) -> i64 {
                 return d - 1;
             }
             for (step, c) in powers.iter() {
-                for w in [v + *step, v - *step] {
+                for w in [v + step, v - step] {
                     if w >= -bound and w <= bound and dist[w + bound] < 0 {
-                        while buckets.len() <= d + *c {
+                        while buckets.len() <= d + c {
                             buckets.push(Vec.new());
                         }
-                        buckets[d + *c].push(w);
+                        buckets[d + c].push(w);
                     }
                 }
             }

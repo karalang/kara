@@ -546,7 +546,7 @@ enum Msg {
 fn msg_repr(m: ref Msg) -> String {
     match m {
         Msg.Bytes(b) => py_bytes_repr(b),
-        Msg.Int(n) => f"{*n}",
+        Msg.Int(n) => f"{n}",
         Msg.List(v) => int_list(v),
         Msg.Tuple(v) => int_tuple(v),
         Msg.Nothing => "None".to_string(),
@@ -950,7 +950,7 @@ fn encode_msg(out: mut ref Vec[u8], m: ref Msg) -> Result[(), Exc] {
                 out.push(*x);
             }
         },
-        Msg.Int(n) => put16(mut out, *n)?,
+        Msg.Int(n) => put16(mut out, n)?,
         Msg.List(v) | Msg.Tuple(v) => {
             for x in v {
                 put16(mut out, *x)?;
@@ -998,11 +998,11 @@ fn encode_devinfo(out: mut ref Vec[u8], p: ref Pdu) -> Result[(), Exc] {
         let len = char_len(data);
         space_left -= 2 + len;
         if space_left <= 0 {
-            next = *oid;
+            next = oid;
             more = 0xFF;
             break;
         }
-        put8(mut objects, *oid)?;
+        put8(mut objects, oid)?;
         put8(mut objects, len)?;
         for x in utf8(data) {
             objects.push(x);
@@ -1600,7 +1600,7 @@ impl Mcb {
     // identity[key], which is dict.setdefault(key, "").
     fn ident_get(mut ref self, key: i64) -> String {
         for (k, v) in self.identity.iter() {
-            if *k == key {
+            if k == key {
                 return v.clone();
             }
         }
@@ -1747,16 +1747,16 @@ fn sparse_block(pairs: ref Vec[(i64, i64)], mutable: bool) -> Block {
     let mut map: Map[i64, i64] = Map.new();
     let mut defaults: Vec[(i64, i64)] = Vec.new();
     for (k, v) in pairs.iter() {
-        if map.contains_key(*k) {
+        if map.contains_key(k) {
             for d in defaults.iter_mut() {
-                if d.0 == *k {
-                    d.1 = *v;
+                if d.0 == k {
+                    d.1 = v;
                 }
             }
         } else {
-            defaults.push((*k, *v));
+            defaults.push((k, v));
         }
-        map.insert(*k, *v);
+        map.insert(k, v);
     }
     Block { sparse: true, address: 0, values: Vec.new(), default: 0, map: map, defaults: defaults, mutable: mutable }
 }
@@ -1820,7 +1820,7 @@ impl Block {
         if self.sparse {
             let mut map: Map[i64, i64] = Map.new();
             for (k, v) in self.defaults.iter() {
-                map.insert(*k, *v);
+                map.insert(k, v);
             }
             self.map = map;
         } else {
@@ -1840,7 +1840,7 @@ impl Block {
                 out.push_str(", ");
             }
             first = false;
-            out.push_str(f"{*k}: {*v}");
+            out.push_str(f"{k}: {v}");
         }
         f"DataStore({self.map.len()}, {{{out}}})"
     }
@@ -2396,14 +2396,14 @@ fn diag_response(req: ref Pdu, m: own Msg) -> Pdu {
 
 fn msg_int(m: ref Msg) -> i64 {
     match m {
-        Msg.Int(n) => *n,
+        Msg.Int(n) => n,
         _ => 0,
     }
 }
 
 fn msg_truthy(m: ref Msg) -> bool {
     match m {
-        Msg.Int(n) => *n != 0,
+        Msg.Int(n) => n != 0,
         Msg.Bytes(b) => b.len() > 0,
         Msg.List(v) | Msg.Tuple(v) => v.len() > 0,
         Msg.Nothing => false,
@@ -3008,7 +3008,7 @@ impl Builder {
         }
         let mut out: Vec[u8] = Vec.new();
         for (hi, lo) in words.iter() {
-            word(self.little, *hi, *lo, mut out);
+            word(self.little, hi, lo, mut out);
         }
         out
     }
@@ -3146,7 +3146,7 @@ impl Decoder {
         }
         let mut out: Vec[u8] = Vec.new();
         for (hi, lo) in ws.iter() {
-            word(self.little, *hi, *lo, mut out);
+            word(self.little, hi, lo, mut out);
         }
         Ok(out)
     }

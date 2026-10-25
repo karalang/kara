@@ -2385,7 +2385,7 @@ fn rval_str(v: ref RVal) -> String {
     match v {
         RVal.S(show, _) => py_repr(chars(show)),
         RVal.I(n) => f"{n}",
-        RVal.M(n, leap) => if *leap { f"{n}L" } else { f"{n}" },
+        RVal.M(n, leap) => if leap { f"{n}L" } else { f"{n}" },
         RVal.T(t) => if not t.pair and t.a.kind == TK_DURATION { py_repr(chars(td_str(t.a))) } else { dtv_str(t) },
     }
 }
@@ -2394,7 +2394,7 @@ fn rval_ical(v: ref RVal) -> String {
     match v {
         RVal.S(_, ical) => ical.clone(),
         RVal.I(n) => f"{n}",
-        RVal.M(n, leap) => if *leap { f"{n}L" } else { f"{n}" },
+        RVal.M(n, leap) => if leap { f"{n}L" } else { f"{n}" },
         RVal.T(t) => dtv_ical(t, false),
     }
 }
@@ -2716,7 +2716,7 @@ fn show_value(v: ref Val) -> String {
             out.push(']');
             out
         }
-        Val.Offset(secs) => f"vUTCOffset {td_str(tm_duration(*secs))}",
+        Val.Offset(secs) => f"vUTCOffset {td_str(tm_duration(secs))}",
         Val.Recur(parts) => f"vRecur {recur_show(parts)}",
         Val.Cat(cats) => {
             let mut out = "vCategory [".to_string();
@@ -2729,15 +2729,15 @@ fn show_value(v: ref Val) -> String {
             out.push(']');
             out
         }
-        Val.Geo(a, b) => f"vGeo {floats_repr(*a, *b)}",
+        Val.Geo(a, b) => f"vGeo {floats_repr(a, b)}",
         Val.Binary(b) => {
             let n = if b.len() < 24 { b.len() } else { 24 };
             let head: Vec[i64] = b[0..n].to_vec();
             f"vBinary {b.len()} bytes {bytes_repr(head)}"
         }
-        Val.Bool(b) => f"vBoolean {py_bool(*b)}",
+        Val.Bool(b) => f"vBoolean {py_bool(b)}",
         Val.Int(n) => f"vInt {n}",
-        Val.Float(x) => f"vFloat {float_repr(*x)}",
+        Val.Float(x) => f"vFloat {float_repr(x)}",
     }
 }
 
@@ -2760,7 +2760,7 @@ fn value_ical(v: ref Val, params: ref Params) -> String {
             }
             out
         }
-        Val.Offset(secs) => offset_ical(*secs),
+        Val.Offset(secs) => offset_ical(secs),
         Val.Recur(parts) => recur_ical(parts),
         Val.Cat(cats) => {
             let mut out = String.new();
@@ -2772,11 +2772,11 @@ fn value_ical(v: ref Val, params: ref Params) -> String {
             }
             out
         }
-        Val.Geo(a, b) => f"{float_repr(*a)};{float_repr(*b)}",
+        Val.Geo(a, b) => f"{float_repr(a)};{float_repr(b)}",
         Val.Binary(b) => b64_encode(b),
-        Val.Bool(b) => if *b { "TRUE".to_string() } else { "FALSE".to_string() },
+        Val.Bool(b) => if b { "TRUE".to_string() } else { "FALSE".to_string() },
         Val.Int(n) => f"{n}",
-        Val.Float(x) => float_repr(*x),
+        Val.Float(x) => float_repr(x),
     }
 }
 // ---------------------------------------------------------------- components

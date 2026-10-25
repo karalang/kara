@@ -454,8 +454,8 @@ fn present_key(counts: ref Map[i64, i64], start: i64) -> i64 {
 fn extreme(counts: ref Map[i64, i64], largest: bool) -> i64 {
     let mut want = -1;
     for (_, c) in counts {
-        if want < 0 or (largest and *c > want) or (not largest and *c < want) {
-            want = *c;
+        if want < 0 or (largest and c > want) or (not largest and c < want) {
+            want = c;
         }
     }
     want
@@ -584,8 +584,8 @@ fn verify(ops: ref Vec[i64], answers: ref Vec[String], bad: mut ref Vec[bool]) {
             } else {
                 let mut want = -1;
                 for (_, c) in counts {
-                    if want < 0 or (op == 2 and *c > want) or (op == 3 and *c < want) {
-                        want = *c;
+                    if want < 0 or (op == 2 and c > want) or (op == 3 and c < want) {
+                        want = c;
                     }
                 }
                 match counts.get(answers[next]) {

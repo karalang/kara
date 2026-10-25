@@ -26,9 +26,9 @@ fn find_cheapest_price(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i6
         let mut next: VecDeque[(i64, i64)] = VecDeque.new();
         while let Some((city, spent)) = level.pop_front() {
             for (to, price) in out[city].iter() {
-                if spent + *price < best[*to] {
-                    best[*to] = spent + *price;
-                    next.push_back((*to, spent + *price));
+                if spent + price < best[to] {
+                    best[to] = spent + price;
+                    next.push_back((to, spent + price));
                 }
             }
         }

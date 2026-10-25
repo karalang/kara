@@ -577,10 +577,10 @@ fn latin9_byte(cp: i64) -> i64 {
     let t = [(0xA4, 0x20AC), (0xA6, 0x0160), (0xA8, 0x0161), (0xB4, 0x017D), (0xB8, 0x017E), (0xBC, 0x0152),
         (0xBD, 0x0153), (0xBE, 0x0178)];
     for (b, u) in t.iter() {
-        if *u == cp {
-            return *b;
+        if u == cp {
+            return b;
         }
-        if *b == cp {
+        if b == cp {
             return -1;
         }
     }
@@ -591,8 +591,8 @@ fn latin9_char(b: i64) -> i64 {
     let t = [(0xA4, 0x20AC), (0xA6, 0x0160), (0xA8, 0x0161), (0xB4, 0x017D), (0xB8, 0x017E), (0xBC, 0x0152),
         (0xBD, 0x0153), (0xBE, 0x0178)];
     for (x, u) in t.iter() {
-        if *x == b {
-            return *u;
+        if x == b {
+            return u;
         }
     }
     b
@@ -1364,7 +1364,7 @@ impl Header {
     fn encode(mut ref self, splitchars: ref String, maxlinelen: ref Option[i64], linesep: ref String) -> Result[String, String] {
         self.normalize();
         let mut maxlen = match maxlinelen {
-            Some(n) => *n,
+            Some(n) => n,
             None => self.maxlinelen,
         };
         if maxlen == 0 {
@@ -2230,7 +2230,7 @@ fn zone_offset(tz: ref String) -> Option[i64] {
         ("CST", -600), ("CDT", -500), ("MST", -700), ("MDT", -600), ("PST", -800), ("PDT", -700)];
     for (n, o) in zones.iter() {
         if *n == *tz {
-            return Some(*o);
+            return Some(o);
         }
     }
     None
@@ -2620,7 +2620,7 @@ fn opt_str(v: ref Option[JValue]) -> Option[String] {
 
 fn flag(v: ref Option[JValue], default: bool) -> bool {
     match v {
-        Some(JValue.Bool(b)) => *b,
+        Some(JValue.Bool(b)) => b,
         _ => default,
     }
 }

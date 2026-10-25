@@ -9681,8 +9681,20 @@ impl<'a> super::TypeChecker<'a> {
                 self.bind_pattern_types(pattern, &elem_ty);
                 self.current_scrutinee_core_borrowed = prev_core;
                 if core_borrowed {
+                    // A `Copy` part of the item copies (§4.6), so `*i` on
+                    // `for (v, i) in xs.iter()` is an error; the item itself
+                    // (`for x in c`) is the `ref` (B-2026-10-24-36). An
+                    // explicit `ref` binding is already a view.
+                    let whole = matches!(pattern.kind, PatternKind::Binding(_));
                     for n in pattern.binding_names() {
-                        self.local_scope.mark_view(&n);
+                        let copied = !whole
+                            && self.local_scope.lookup(&n).is_some_and(|t| {
+                                !matches!(t, Type::Ref(_) | Type::MutRef(_))
+                                    && self.is_copy_type_during_check(t)
+                            });
+                        if !copied {
+                            self.local_scope.mark_view(&n);
+                        }
                     }
                 } else if self.cli_lint_overrides.strict_core {
                     // A zip with one lending side (`a.iter().zip(b.into_iter())`):

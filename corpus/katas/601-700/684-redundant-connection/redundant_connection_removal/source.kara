@@ -64,7 +64,7 @@ fn connects(edges: ref Vec[(i64, i64)], n: i64) -> bool {
         label.push(v);
     }
     for (a, b) in edges.iter() {
-        let (from, to) = (label[*a], label[*b]);
+        let (from, to) = (label[a], label[b]);
         if from != to {
             for v in 1..n + 1 {
                 if label[v] == from {

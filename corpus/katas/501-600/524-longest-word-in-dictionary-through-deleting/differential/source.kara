@@ -120,11 +120,11 @@ fn find_longest_word_waiting(s: Str, dictionary: Vec[String]) -> String {
     for b in s.bytes().iter() {
         let moving = mem.replace(mut waiting[(*b - 97) as i64], Vec.new());
         for (w, matched) in moving.iter() {
-            let word = dictionary[*w].bytes();
-            if *matched + 1 == word.len() {
-                done.push(*w);
+            let word = dictionary[w].bytes();
+            if matched + 1 == word.len() {
+                done.push(w);
             } else {
-                waiting[(word[*matched + 1] - 97) as i64].push((*w, *matched + 1));
+                waiting[(word[matched + 1] - 97) as i64].push((w, matched + 1));
             }
         }
     }

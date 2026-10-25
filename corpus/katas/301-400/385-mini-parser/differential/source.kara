@@ -207,7 +207,7 @@ fn serialize(x: ref NestedInteger) -> String {
 
 fn shape(x: ref NestedInteger) -> (i64, i64, i64) {
     match x {
-        NestedInteger.Int(n) => (0, 1, *n),
+        NestedInteger.Int(n) => (0, 1, n),
         NestedInteger.List(items) => {
             let mut depth = 0;
             let mut count = 0;

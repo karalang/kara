@@ -55,7 +55,7 @@ impl Solution {
     fn pick_index(mut ref self) -> i64 {
         let r = self.draw.below(self.total);
         match self.starts.floor(r) {
-            Some((_, i)) => *i,
+            Some((_, i)) => i,
             None => 0,
         }
     }

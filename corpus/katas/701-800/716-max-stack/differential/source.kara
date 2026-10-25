@@ -185,7 +185,7 @@ impl MaxStackSorted {
 
     fn peek_max(ref self) -> i64 {
         match self.ids.floor(i64.MAX) {
-            Some((x, _)) => *x,
+            Some((x, _)) => x,
             None => 0,
         }
     }

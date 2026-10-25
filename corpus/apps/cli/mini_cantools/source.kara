@@ -85,14 +85,14 @@ fn float_str(x: f64) -> String {
 fn num_str(n: ref Num) -> String {
     match n {
         Num.I(v) => f"{v}",
-        Num.F(v) => float_str(*v),
+        Num.F(v) => float_str(v),
     }
 }
 
 fn num_f(n: ref Num) -> f64 {
     match n {
-        Num.I(v) => *v as f64,
-        Num.F(v) => *v,
+        Num.I(v) => v as f64,
+        Num.F(v) => v,
     }
 }
 
@@ -155,7 +155,7 @@ fn ints_repr(xs: ref Vec[i64]) -> String {
 fn val_str(v: ref Val) -> String {
     match v {
         Val.I(x) => f"{x}",
-        Val.F(x) => float_str(*x),
+        Val.F(x) => float_str(x),
         Val.Named(_, name) => name.clone(),
         Val.Str(s) => s.clone(),
     }
@@ -164,7 +164,7 @@ fn val_str(v: ref Val) -> String {
 fn val_repr(v: ref Val) -> String {
     match v {
         Val.I(x) => f"{x}",
-        Val.F(x) => float_str(*x),
+        Val.F(x) => float_str(x),
         Val.Named(_, name) => f"'{name}'",
         Val.Str(s) => py_repr(s),
     }
@@ -208,29 +208,29 @@ fn round_half_even(x: f64) -> i64 {
 
 fn py_round(v: ref Num) -> i64 {
     match v {
-        Num.I(x) => *x,
-        Num.F(x) => round_half_even(*x),
+        Num.I(x) => x,
+        Num.F(x) => round_half_even(x),
     }
 }
 
 // Arithmetic with Python's int/float rules.
 fn num_add(a: ref Num, b: ref Num) -> Num {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => Num.I(*x + *y),
+        (Num.I(x), Num.I(y)) => Num.I(x + y),
         _ => Num.F(num_f(a) + num_f(b)),
     }
 }
 
 fn num_sub(a: ref Num, b: ref Num) -> Num {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => Num.I(*x - *y),
+        (Num.I(x), Num.I(y)) => Num.I(x - y),
         _ => Num.F(num_f(a) - num_f(b)),
     }
 }
 
 fn num_mul(a: ref Num, b: ref Num) -> Num {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => Num.I(*x * *y),
+        (Num.I(x), Num.I(y)) => Num.I(x * y),
         _ => Num.F(num_f(a) * num_f(b)),
     }
 }
@@ -242,22 +242,22 @@ fn num_div(a: ref Num, b: ref Num) -> f64 {
 
 fn num_lt(a: ref Num, b: ref Num) -> bool {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => *x < *y,
+        (Num.I(x), Num.I(y)) => x < y,
         _ => num_f(a) < num_f(b),
     }
 }
 
 fn num_eq_int(a: ref Num, b: i64) -> bool {
     match a {
-        Num.I(x) => *x == b,
-        Num.F(x) => *x == (b as f64),
+        Num.I(x) => x == b,
+        Num.F(x) => x == (b as f64),
     }
 }
 
 fn num_abs(a: ref Num) -> Num {
     match a {
-        Num.I(x) => if *x < 0 { Num.I(-*x) } else { Num.I(*x) },
-        Num.F(x) => if *x < 0.0 { Num.F(-*x) } else { Num.F(*x) },
+        Num.I(x) => if x < 0 { Num.I(-x) } else { Num.I(x) },
+        Num.F(x) => if x < 0.0 { Num.F(-x) } else { Num.F(x) },
     }
 }
 
@@ -266,9 +266,9 @@ fn num_abs(a: ref Num) -> Num {
 fn num_divmod(a: ref Num, b: ref Num) -> (Num, bool) {
     match (a, b) {
         (Num.I(x), Num.I(y)) => {
-            let mut q = *x / *y;
-            let r = *x - q * *y;
-            if r != 0 and ((r < 0) != (*y < 0)) {
+            let mut q = x / y;
+            let r = x - q * y;
+            if r != 0 and ((r < 0) != (y < 0)) {
                 q -= 1;
             }
             (Num.I(q), r == 0)
@@ -1047,14 +1047,14 @@ struct Conv {
 fn num_is_integer(n: ref Num) -> bool {
     match n {
         Num.I(_) => true,
-        Num.F(x) => *x == x.floor(),
+        Num.F(x) => x == x.floor(),
     }
 }
 
 fn num_to_int(n: ref Num) -> Num {
     match n {
-        Num.I(x) => Num.I(*x),
-        Num.F(x) => Num.I(*x as i64),
+        Num.I(x) => Num.I(x),
+        Num.F(x) => Num.I(x as i64),
     }
 }
 
@@ -1116,7 +1116,7 @@ fn choice_name(c: ref Conv, raw: i64) -> Option[String] {
         return None;
     }
     for (v, name) in c.choices.iter() {
-        if *v == raw {
+        if v == raw {
             return Some(name.clone());
         }
     }
@@ -1128,7 +1128,7 @@ fn has_choice(c: ref Conv, raw: ref Num) -> bool {
         return false;
     }
     for (v, _) in c.choices.iter() {
-        if num_eq_int(raw, *v) {
+        if num_eq_int(raw, v) {
             return true;
         }
     }
@@ -1145,7 +1145,7 @@ fn choice_to_number(c: ref Conv, text: ref String) -> Result[i64, Fail] {
     let mut found: Option[i64] = None;
     for (v, name) in c.choices.iter() {
         if name == text {
-            found = Some(*v);
+            found = Some(v);
         }
     }
     match found {
@@ -1205,7 +1205,7 @@ enum AVal {
 fn aval_repr(v: ref AVal) -> String {
     match v {
         AVal.I(x) => f"{x}",
-        AVal.F(x) => float_str(*x),
+        AVal.F(x) => float_str(x),
         AVal.S(s) => py_repr(s),
     }
 }
@@ -1348,8 +1348,8 @@ fn create_codec(sigs: ref Vec[Sig], parent: ref Option[String], mux_id: Option[i
                 }
             }
             for (v, _) in s.conv.choices.iter() {
-                if not children.contains(*v) {
-                    children.push(*v);
+                if not children.contains(v) {
+                    children.push(v);
                 }
             }
             children.sort();
@@ -1500,7 +1500,7 @@ fn build_message(frame_dbc: i64, name: own String, length: i64, senders: own Vec
     keyed.sort();
     let mut sorted: Vec[Sig] = Vec.new();
     for (_, i) in keyed.iter() {
-        sorted.push(signals[*i].clone());
+        sorted.push(signals[i].clone());
     }
     for s in sorted.iter() {
         if s.length <= 0 {
@@ -1581,7 +1581,7 @@ fn last_comment_node(c: ref Comments, name: ref String) -> Option[String] {
 fn last_comment_message(c: ref Comments, frame: i64) -> Option[String] {
     let mut out: Option[String] = None;
     for (f, t) in c.messages.iter() {
-        if *f == frame {
+        if f == frame {
             out = Some(t.clone());
         }
     }
@@ -1591,7 +1591,7 @@ fn last_comment_message(c: ref Comments, frame: i64) -> Option[String] {
 fn last_comment_signal(c: ref Comments, frame: i64, sig: ref String) -> Option[String] {
     let mut out: Option[String] = None;
     for (f, s, t) in c.signals.iter() {
-        if *f == frame and s == sig {
+        if f == frame and s == sig {
             out = Some(t.clone());
         }
     }
@@ -1794,7 +1794,7 @@ fn load_inner(text: ref String, strict: bool) -> Result[Db, Fail] {
         let frame_dbc = decimal_int(tv(message, 1));
         let mut senders: Vec[String] = [tv(message, 5)].to_vec();
         for (f, n) in extra_senders.iter() {
-            if *f == frame_dbc and not senders.contains(n) {
+            if f == frame_dbc and not senders.contains(n) {
                 senders.push(n.clone());
             }
         }
@@ -1888,7 +1888,7 @@ fn load_inner(text: ref String, strict: bool) -> Result[Db, Fail] {
             let unit = tv(sg, 19);
             let mut sig_choices: Option[Vec[(i64, String)]] = None;
             for (f, s, cs) in choices.iter() {
-                if *f == frame_dbc and *s == sname {
+                if f == frame_dbc and *s == sname {
                     sig_choices = Some(cs.clone());
                 }
             }
@@ -1946,7 +1946,7 @@ fn load_inner(text: ref String, strict: bool) -> Result[Db, Fail] {
 fn val_text(v: ref AVal) -> String {
     match v {
         AVal.I(x) => f"{x}",
-        AVal.F(x) => float_str(*x),
+        AVal.F(x) => float_str(x),
         AVal.S(s) => s.clone(),
     }
 }
@@ -2011,16 +2011,16 @@ fn sig_by_name(m: ref Msg, name: ref String) -> i64 {
 
 fn val_num(v: ref Val) -> Option[Num] {
     match v {
-        Val.I(x) => Some(Num.I(*x)),
-        Val.F(x) => Some(Num.F(*x)),
+        Val.I(x) => Some(Num.I(x)),
+        Val.F(x) => Some(Num.F(x)),
         _ => None,
     }
 }
 
 fn num_val(n: ref Num) -> Val {
     match n {
-        Num.I(x) => Val.I(*x),
-        Num.F(x) => Val.F(*x),
+        Num.I(x) => Val.I(x),
+        Num.F(x) => Val.F(x),
     }
 }
 
@@ -2202,7 +2202,7 @@ fn encode_node(m: ref Msg, c: ref Codec, d: ref Vec[(String, Val)], scaling: boo
     }
     big.sort();
     for (_, k) in big.iter() {
-        check_fits(m.signals[c.sigs[*k]], raws[*k])?;
+        check_fits(m.signals[c.sigs[k]], raws[k])?;
     }
     let mut k = c.sigs.len() - 1;
     while k >= 0 {
@@ -2606,9 +2606,9 @@ fn val_f(v: ref Val) -> f64 {
 
 fn val_i(v: ref Val) -> i64 {
     match v {
-        Val.I(x) => *x,
-        Val.F(x) => *x as i64,
-        Val.Named(x, _) => *x,
+        Val.I(x) => x,
+        Val.F(x) => x as i64,
+        Val.Named(x, _) => x,
         Val.Str(_) => 0,
     }
 }
@@ -2847,7 +2847,7 @@ fn analyse(db: ref Db, text: ref String) {
     }
     let mut n_enc = 0;
     for (_, n, _) in encode_errors.iter() {
-        n_enc += *n;
+        n_enc += n;
     }
     println(f"re-encode errors: {n_enc}");
     for (e, n, first) in encode_errors.iter() {

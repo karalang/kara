@@ -23,7 +23,7 @@ fn read_binary_watch(turned_on: i64) -> Vec[String] {
     found.sort();
     let mut times: Vec[String] = Vec.new();
     for (h, m) in found.iter() {
-        times.push(f"{*h}:{*m:02}");
+        times.push(f"{h}:{m:02}");
     }
     times
 }

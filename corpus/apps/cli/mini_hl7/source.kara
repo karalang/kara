@@ -1545,7 +1545,7 @@ fn acc_key(a: ref Accessor) -> String {
 
 fn or1(v: ref Option[i64]) -> i64 {
     match v {
-        Some(n) => if *n == 0 { 1 } else { *n },
+        Some(n) => if n == 0 { 1 } else { n },
         None => 1,
     }
 }
@@ -1760,7 +1760,7 @@ fn seg_extract(seg: ref Cont, a: ref Accessor) -> Result[String, PyErr] {
         if cn == 1 and sn == 1 {
             let raw = text_of(rep);
             let msh12 = match a.field {
-                Some(n) => *n == 1 or *n == 2,
+                Some(n) => n == 1 or n == 2,
                 None => false,
             };
             if name == "MSH" and msh12 {

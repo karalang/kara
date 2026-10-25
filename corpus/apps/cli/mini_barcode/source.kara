@@ -762,9 +762,9 @@ fn float_repr(x: f64) -> String {
 fn py_repr(j: ref J) -> String {
     match j {
         J.Null => "None".to_string(),
-        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         J.Int(t) => t.clone(),
-        J.Float(x) => float_repr(*x),
+        J.Float(x) => float_repr(x),
         J.Str(t) => str_repr(t),
         J.Arr(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -801,9 +801,9 @@ fn ints_repr(xs: ref Vec[i64]) -> String {
 fn truthy(j: ref J) -> bool {
     match j {
         J.Null => false,
-        J.Bool(b) => *b,
+        J.Bool(b) => b,
         J.Int(t) => *t != "0" and *t != "-0",
-        J.Float(x) => *x != 0.0,
+        J.Float(x) => x != 0.0,
         J.Str(t) => t.len() > 0,
         J.Arr(x) => x.len() > 0,
         J.Obj(x) => x.len() > 0,
@@ -812,19 +812,19 @@ fn truthy(j: ref J) -> bool {
 
 fn as_num(j: ref J) -> f64 {
     match j {
-        J.Bool(b) => if *b { 1.0 } else { 0.0 },
+        J.Bool(b) => if b { 1.0 } else { 0.0 },
         J.Int(t) => {
             let n: Option[i64] = t.parse();
             n.unwrap_or(0) as f64
         }
-        J.Float(x) => *x,
+        J.Float(x) => x,
         _ => 0.0,
     }
 }
 
 fn as_int(j: ref J) -> i64 {
     match j {
-        J.Bool(b) => if *b { 1 } else { 0 },
+        J.Bool(b) => if b { 1 } else { 0 },
         J.Int(t) => {
             let n: Option[i64] = t.parse();
             n.unwrap_or(0)

@@ -39,14 +39,14 @@ impl Half {
 
     fn largest(self) -> i64 {
         match self.counts.floor(i64.MAX) {
-            Some((key, _)) => *key,
+            Some((key, _)) => key,
             None => i64.MIN,
         }
     }
 
     fn smallest(self) -> i64 {
         match self.counts.ceiling(i64.MIN) {
-            Some((key, _)) => *key,
+            Some((key, _)) => key,
             None => i64.MAX,
         }
     }

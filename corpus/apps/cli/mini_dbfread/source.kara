@@ -659,15 +659,15 @@ fn type_name(v: ref Val) -> String {
         Val.Int(_) => "int",
         Val.Float(_) => "float",
         Val.Str(_) => "str",
-        Val.Bytes(_, k) => if *k == B_TEXT {
+        Val.Bytes(_, k) => if k == B_TEXT {
             "TextMemo"
-        } else if *k == B_PICTURE {
+        } else if k == B_PICTURE {
             "PictureMemo"
-        } else if *k == B_OBJECT {
+        } else if k == B_OBJECT {
             "ObjectMemo"
-        } else if *k == B_BINARY {
+        } else if k == B_BINARY {
             "BinaryMemo"
-        } else if *k == B_INVALID {
+        } else if k == B_INVALID {
             "InvalidValue"
         } else {
             "bytes"
@@ -743,10 +743,10 @@ fn pow10(n: i64) -> i64 {
 fn dec_add(a: ref Val, b: ref Val) -> Val {
     match (a, b) {
         (Val.Dec(c1, e1), Val.Dec(c2, e2)) => {
-            if *e1 <= *e2 {
-                Val.Dec(*c1 + *c2 * pow10(*e2 - *e1), *e1)
+            if e1 <= e2 {
+                Val.Dec(c1 + c2 * pow10(e2 - e1), e1)
             } else {
-                Val.Dec(*c1 * pow10(*e1 - *e2) + *c2, *e2)
+                Val.Dec(c1 * pow10(e1 - e2) + c2, e2)
             }
         }
         _ => a.clone(),
@@ -760,9 +760,9 @@ fn date_str(y: i64, m: i64, d: i64) -> String {
 fn dt_str(v: ref Val) -> String {
     match v {
         Val.Dt(y, mo, d, h, mi, s, us) => {
-            let mut out = f"{date_str(*y, *mo, *d)} {zpad(*h, 2)}:{zpad(*mi, 2)}:{zpad(*s, 2)}";
-            if *us != 0 {
-                out.push_str(f".{zpad(*us, 6)}");
+            let mut out = f"{date_str(y, mo, d)} {zpad(h, 2)}:{zpad(mi, 2)}:{zpad(s, 2)}";
+            if us != 0 {
+                out.push_str(f".{zpad(us, 6)}");
             }
             out
         }
@@ -773,11 +773,11 @@ fn dt_str(v: ref Val) -> String {
 fn val_repr(v: ref Val) -> String {
     match v {
         Val.Non => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => f"{n}",
         Val.Float(x) => f"{x}",
         Val.Str(s) => str_repr(s),
-        Val.Bytes(b, k) => if *k == B_INVALID {
+        Val.Bytes(b, k) => if k == B_INVALID {
             f"InvalidValue({bytes_repr(b)})"
         } else {
             bytes_repr(b)
@@ -785,16 +785,16 @@ fn val_repr(v: ref Val) -> String {
         Val.Date(y, m, d) => f"datetime.date({y}, {m}, {d})",
         Val.Dt(y, mo, d, h, mi, s, us) => {
             let mut out = f"datetime.datetime({y}, {mo}, {d}, {h}, {mi}";
-            if *s != 0 or *us != 0 {
+            if s != 0 or us != 0 {
                 out.push_str(f", {s}");
             }
-            if *us != 0 {
+            if us != 0 {
                 out.push_str(f", {us}");
             }
             out.push(')');
             out
         }
-        Val.Dec(c, e) => f"Decimal('{dec_str(*c, *e)}')",
+        Val.Dec(c, e) => f"Decimal('{dec_str(c, e)}')",
     }
 }
 
@@ -803,9 +803,9 @@ fn val_str(v: ref Val) -> String {
     match v {
         Val.Str(s) => s.clone(),
         Val.Bytes(b, _) => bytes_repr(b),
-        Val.Date(y, m, d) => date_str(*y, *m, *d),
+        Val.Date(y, m, d) => date_str(y, m, d),
         Val.Dt(_, _, _, _, _, _, _) => dt_str(v),
-        Val.Dec(c, e) => dec_str(*c, *e),
+        Val.Dec(c, e) => dec_str(c, e),
         _ => val_repr(v),
     }
 }
@@ -2094,7 +2094,7 @@ fn json_str(s: ref String) -> String {
 fn json_val(v: ref Val) -> String {
     match v {
         Val.Non => "null".to_string(),
-        Val.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Val.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
         Val.Int(n) => f"{n}",
         Val.Float(x) => f"{x}",
         _ => json_str(val_str(v)),
@@ -2154,7 +2154,7 @@ fn sql_type(t: ref String) -> String {
 fn sql_literal(v: ref Val) -> String {
     match v {
         Val.Non => "NULL".to_string(),
-        Val.Bool(b) => if *b { "1".to_string() } else { "0".to_string() },
+        Val.Bool(b) => if b { "1".to_string() } else { "0".to_string() },
         Val.Int(_) => val_str(v),
         Val.Float(_) => val_str(v),
         Val.Dec(_, _) => val_str(v),
@@ -2230,7 +2230,7 @@ fn to_sql(dest: ref String, encoding: ref String, errors: ref String, paths: ref
 
 fn dt_key(v: ref Val) -> Vec[i64] {
     match v {
-        Val.Dt(y, mo, d, h, mi, s, us) => vec![*y, *mo, *d, *h, *mi, *s, *us],
+        Val.Dt(y, mo, d, h, mi, s, us) => vec![y, mo, d, h, mi, s, us],
         _ => Vec.new(),
     }
 }

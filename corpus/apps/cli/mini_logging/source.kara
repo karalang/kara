@@ -589,7 +589,7 @@ fn json_text(j: ref JValue) -> Option[String] {
 
 fn json_int(j: ref JValue) -> i64 {
     match j {
-        JValue.Int(n) => *n,
+        JValue.Int(n) => n,
         _ => 0,
     }
 }
@@ -610,8 +610,8 @@ fn json_list(j: ref JValue) -> Vec[String] {
 fn truthy(j: ref JValue) -> bool {
     match j {
         JValue.Null => false,
-        JValue.Bool(b) => *b,
-        JValue.Int(n) => *n != 0,
+        JValue.Bool(b) => b,
+        JValue.Int(n) => n != 0,
         JValue.Text(s) => s.len() > 0,
         JValue.Arr(items) => items.len() > 0,
         JValue.Obj(keys, _) => keys.len() > 0,
@@ -622,7 +622,7 @@ fn truthy(j: ref JValue) -> bool {
 fn json_str(j: ref JValue) -> String {
     match j {
         JValue.Null => "None".to_string(),
-        JValue.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        JValue.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         JValue.Int(n) => f"{n}",
         JValue.Text(s) => s.clone(),
         _ => "...".to_string(),
@@ -658,7 +658,7 @@ fn val_repr(v: ref Val) -> String {
 
 fn json_val(j: ref JValue) -> Val {
     match j {
-        JValue.Int(n) => Val.I(*n),
+        JValue.Int(n) => Val.I(n),
         _ => Val.S(json_str(j)),
     }
 }
@@ -849,7 +849,7 @@ fn convert(v: ref Val, conv: u8, flags: Str, width: i64, prec: i64) -> Result[St
     };
     if conv == b'd' or conv == b'i' or conv == b'u' or conv == b'x' or conv == b'X' or conv == b'o' {
         let n = match v {
-            Val.I(n) => *n,
+            Val.I(n) => n,
             Val.F(t) => trunc_text(t),
             Val.S(_) => return Err("%d format: a real number is required, not str".to_string()),
         };
@@ -1914,7 +1914,7 @@ impl St {
     // logging._checkLevel
     fn check_level(ref self, j: ref JValue) -> Result[i64, String] {
         match j {
-            JValue.Int(n) => Ok(*n),
+            JValue.Int(n) => Ok(n),
             JValue.Text(s) => match self.level_by_name(s) {
                 Some(n) => Ok(n),
                 None => Err(f"ValueError: Unknown level: {py_repr(s)}"),

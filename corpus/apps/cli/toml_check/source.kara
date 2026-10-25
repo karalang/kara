@@ -28,14 +28,14 @@ enum TVal {
 
 fn tab_id(v: ref TVal) -> i64 {
     match v {
-        TVal.Tab(t) => *t,
+        TVal.Tab(t) => t,
         _ => -1,
     }
 }
 
 fn arr_id(v: ref TVal) -> i64 {
     match v {
-        TVal.Arr(a) => *a,
+        TVal.Arr(a) => a,
         _ => -1,
     }
 }
@@ -1131,7 +1131,7 @@ fn fmt_float(x: f64) -> String {
 fn render_value(doc: ref Doc, path: Str, v: ref TVal, out: mut ref Vec[String]) {
     match v {
         TVal.Tab(t) => {
-            let tb = ref doc.tables[*t];
+            let tb = ref doc.tables[t];
             if tb.keys.len() == 0 {
                 out.push(f"{path} = table {{}}");
             }
@@ -1141,7 +1141,7 @@ fn render_value(doc: ref Doc, path: Str, v: ref TVal, out: mut ref Vec[String]) 
             }
         }
         TVal.Arr(a) => {
-            let items = ref doc.arrays[*a];
+            let items = ref doc.arrays[a];
             out.push(f"{path} = array[{items.len()}]");
             for i in 0..items.len() {
                 render_value(doc, f"{path}[{i}]", items[i], mut out);
@@ -1149,7 +1149,7 @@ fn render_value(doc: ref Doc, path: Str, v: ref TVal, out: mut ref Vec[String]) 
         }
         TVal.Text(s) => out.push(f"{path} = string {quote(s)}"),
         TVal.Int(n) => out.push(f"{path} = integer {n}"),
-        TVal.Float(x) => out.push(f"{path} = float {fmt_float(*x)}"),
+        TVal.Float(x) => out.push(f"{path} = float {fmt_float(x)}"),
         TVal.Bool(b) => out.push(f"{path} = bool {b}"),
         TVal.Moment(kind, text) => out.push(f"{path} = {kind} {text}"),
     }

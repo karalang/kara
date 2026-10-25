@@ -602,9 +602,9 @@ fn repr_list(xs: ref Vec[V]) -> String {
 fn repr(v: ref V) -> String {
     match v {
         V.Nil => "None".to_string(),
-        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         V.Int(d) => d.clone(),
-        V.Float(x) => float_repr(*x),
+        V.Float(x) => float_repr(x),
         V.Str(s) => py_repr_str(s),
         V.SStr(s) => f"String({py_repr_str(s)})",
         V.Sym(s) => f"Symbol({py_repr_str(s)})",
@@ -1045,9 +1045,9 @@ fn delimiters(opener: Str, closer: Str, xs: ref Vec[V], o: ref DumpOpts) -> Resu
 fn tosexp(v: ref V, o: ref DumpOpts) -> Result[String, Exc] {
     match v {
         V.Nil => Ok(o.none_as.clone()),
-        V.Bool(b) => Ok(if *b { o.true_as.clone() } else { o.false_as.clone() }),
+        V.Bool(b) => Ok(if b { o.true_as.clone() } else { o.false_as.clone() }),
         V.Int(d) => Ok(d.clone()),
-        V.Float(x) => Ok(float_repr(*x)),
+        V.Float(x) => Ok(float_repr(x)),
         V.Str(s) => {
             if o.str_as == "symbol" {
                 Ok(s.clone())

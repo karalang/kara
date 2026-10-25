@@ -1020,7 +1020,7 @@ fn controlled_report(ph: ref Pharmacy, drugs: ref Vec[Drug], claims: ref Vec[Cla
     }
     let mut ranked: Vec[(String, i64)] = Vec.new();
     for (k, n) in by_dea {
-        ranked.push((k.clone(), *n));
+        ranked.push((k.clone(), n));
     }
     ranked.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
     let top = if ranked.len() > 0 { f"{ranked[0].0} with {ranked[0].1}" } else { "none".to_string() };
@@ -1149,7 +1149,7 @@ fn accumulator_summary(acc: ref Accumulators) -> Vec[String] {
     }
     let mut ranked: Vec[(String, i64)] = Vec.new();
     for (k, v) in acc.share {
-        ranked.push((k.clone(), *v));
+        ranked.push((k.clone(), v));
     }
     ranked.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
     let mut top: Vec[String] = Vec.new();

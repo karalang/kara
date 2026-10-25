@@ -1037,13 +1037,13 @@ enum Val {
 fn repr_val(v: ref Val) -> String {
     match v {
         Val.None => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Str(s) => repr_str(s),
         Val.Int(n) => f"{n}",
-        Val.Float(x) => float_repr(*x),
+        Val.Float(x) => float_repr(x),
         Val.Dec(d) => f"Decimal('{dec_str(d)}')",
         Val.Time(t) => tm_repr(t),
-        Val.Date(y, m, d) => date_repr(*y, *m, *d),
+        Val.Date(y, m, d) => date_repr(y, m, d),
         Val.Dt(t) => dt_repr(t),
         Val.List(xs) => repr_list(xs),
         Val.Trans(xs) => f"Transducer(type={repr_str(xs[0])}, value={repr_str(xs[1])}, units={repr_str(xs[2])}, id={repr_str(xs[3])})",
@@ -1097,10 +1097,10 @@ fn val_text(v: ref Val) -> String {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.None => false,
-        Val.Bool(b) => *b,
+        Val.Bool(b) => b,
         Val.Str(s) => s.len() > 0,
-        Val.Int(n) => *n != 0,
-        Val.Float(x) => *x != 0.0,
+        Val.Int(n) => n != 0,
+        Val.Float(x) => x != 0.0,
         Val.Dec(d) => d.special != 0 or d.coef != 0,
         Val.List(xs) => xs.len() > 0,
         _ => true,
@@ -1711,8 +1711,8 @@ fn signed_deg(lib: ref Lib, m: ref Msg, field: Str, dir: Str, pos: Str, neg: Str
 
 fn int_arg(v: ref Val) -> Result[i64, PyErr] {
     match v {
-        Val.Int(n) => Ok(*n),
-        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        Val.Int(n) => Ok(n),
+        Val.Bool(b) => Ok(if b { 1 } else { 0 }),
         _ => Err(perr("TypeError", f"'{py_type_name(v)}' object cannot be interpreted as an integer")),
     }
 }
@@ -1741,7 +1741,7 @@ fn make_date(y: ref Val, mo: ref Val, d: ref Val) -> Result[Val, PyErr] {
 // datetime.datetime.combine(date, time)
 fn combine(d: ref Val, t: ref Val) -> Result[Dt, PyErr] {
     let (y, mo, dd) = match d {
-        Val.Date(y, mo, dd) => (*y, *mo, *dd),
+        Val.Date(y, mo, dd) => (y, mo, dd),
         Val.Dt(x) => (x.y, x.mo, x.d),
         _ => return Err(perr("TypeError", f"combine() argument 1 must be datetime.date, not {type_name(d)}")),
     };
@@ -2375,8 +2375,8 @@ fn get_or_none(lib: ref Lib, m: ref Msg, name: Str) -> Val {
 
 fn as_f64(v: ref Val) -> f64 {
     match v {
-        Val.Float(x) => *x,
-        Val.Int(n) => *n as f64,
+        Val.Float(x) => x,
+        Val.Int(n) => n as f64,
         Val.Dec(d) => dec_float(d),
         _ => 0.0,
     }

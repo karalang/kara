@@ -27,7 +27,7 @@ fn mincost_to_hire_workers(quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
         sum += q;
         if held > k {
             let (top, c) = match counts.floor(1 << 40) {
-                Some((t, c)) => (*t, *c),
+                Some((t, c)) => (t, c),
                 None => (0, 0),
             };
             if c == 1 {

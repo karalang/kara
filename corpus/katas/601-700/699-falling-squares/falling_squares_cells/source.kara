@@ -8,8 +8,8 @@
 fn falling_squares(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut edges: Vec[i64] = Vec.new();
     for (left, side) in positions.iter() {
-        edges.push(*left);
-        edges.push(*left + *side);
+        edges.push(left);
+        edges.push(left + side);
     }
     edges.sort();
     edges.dedup();
@@ -17,13 +17,13 @@ fn falling_squares(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut answer: Vec[i64] = Vec.new();
     let mut highest = 0;
     for (left, side) in positions.iter() {
-        let from = edges.binary_search(*left).unwrap();
-        let to = edges.binary_search(*left + *side).unwrap();
+        let from = edges.binary_search(left).unwrap();
+        let to = edges.binary_search(left + side).unwrap();
         let mut base = 0;
         for c in from..to {
             base = base.max(heights[c]);
         }
-        let top = base + *side;
+        let top = base + side;
         for c in from..to {
             heights[c] = top;
         }

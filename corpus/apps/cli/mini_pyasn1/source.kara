@@ -2104,9 +2104,9 @@ fn dict_repr(w: ref W, items: ref Vec[PItem]) -> String {
 fn p_repr(w: ref W, p: ref P) -> String {
     match p {
         P.None_ => "None".to_string(),
-        P.Bool(b) => bool_str(*b),
+        P.Bool(b) => bool_str(b),
         P.Int(b) => big_str(b),
-        P.Float(x) => float_repr(*x),
+        P.Float(x) => float_repr(x),
         P.Str(s) => str_repr(s),
         P.Bytes(b) => bytes_repr(b),
         P.List(xs) => f"[{join(items_repr(w, xs), ", ")}]",
@@ -2125,7 +2125,7 @@ fn p_repr(w: ref W, p: ref P) -> String {
                 f"OrderedDict({dict_repr(w, items)})"
             }
         }
-        P.Obj(o) => obj_repr(w, *o),
+        P.Obj(o) => obj_repr(w, o),
         P.Bits(v, _) => big_str(v),
     }
 }
@@ -2134,7 +2134,7 @@ fn p_repr(w: ref W, p: ref P) -> String {
 fn p_str(w: ref W, p: ref P) -> String {
     match p {
         P.Str(s) => s.clone(),
-        P.Obj(o) => obj_str(w, *o),
+        P.Obj(o) => obj_str(w, o),
         _ => p_repr(w, p),
     }
 }
@@ -2151,7 +2151,7 @@ fn p_is_num(p: ref P) -> bool {
 
 fn p_big(p: ref P) -> Big {
     match p {
-        P.Bool(b) => big_i(if *b { 1 } else { 0 }),
+        P.Bool(b) => big_i(if b { 1 } else { 0 }),
         P.Int(b) => b.clone(),
         P.Bits(b, _) => b.clone(),
         _ => big_zero(),
@@ -2167,7 +2167,7 @@ fn p_is_float(p: ref P) -> bool {
 
 fn p_float(p: ref P) -> f64 {
     match p {
-        P.Float(x) => *x,
+        P.Float(x) => x,
         _ => big_to_f64(p_big(p)).unwrap_or(1.0 / 0.0),
     }
 }
@@ -2192,7 +2192,7 @@ fn p_eq(w: ref W, a: ref P, b: ref P) -> bool {
         (P.Bytes(x), P.Bytes(y)) => *x == *y,
         (P.List(x), P.List(y)) => vec_eq(w, x, y),
         (P.Tuple(x), P.Tuple(y)) => vec_eq(w, x, y),
-        (P.Obj(x), P.Obj(y)) => *x == *y,
+        (P.Obj(x), P.Obj(y)) => x == y,
         _ => false,
     }
 }
@@ -2214,9 +2214,9 @@ fn vec_eq(w: ref W, x: ref Vec[P], y: ref Vec[P]) -> bool {
 fn p_truthy(p: ref P) -> bool {
     match p {
         P.None_ => false,
-        P.Bool(b) => *b,
+        P.Bool(b) => b,
         P.Int(b) => not big_is_zero(b),
-        P.Float(x) => *x != 0.0,
+        P.Float(x) => x != 0.0,
         P.Str(s) => s.len() > 0,
         P.Bytes(b) => b.len() > 0,
         P.List(xs) => xs.len() > 0,
@@ -2237,7 +2237,7 @@ fn p_len(p: ref P) -> Option[i64] {
         P.Tuple(xs) => Some(xs.len()),
         P.Dict(xs) => Some(xs.len()),
         P.ODict(xs) => Some(xs.len()),
-        P.Bits(_, n) => Some(*n),
+        P.Bits(_, n) => Some(n),
         _ => None,
     }
 }
@@ -2595,7 +2595,7 @@ fn nv_add(w: mut ref W, a: i64, b: i64) -> Result[i64, Exc] {
 fn num_p(n: ref Num) -> P {
     match n {
         Num.I(b) => P.Int(b.clone()),
-        Num.F(x) => P.Float(*x),
+        Num.F(x) => P.Float(x),
     }
 }
 
@@ -2604,7 +2604,7 @@ fn val_p(v: ref Val) -> P {
     match v {
         Val.NoValue => P.None_,
         Val.Int(b) => P.Int(b.clone()),
-        Val.Bits(b, n) => P.Bits(b.clone(), *n),
+        Val.Bits(b, n) => P.Bits(b.clone(), n),
         Val.Octets(b) => P.Bytes(b.clone()),
         Val.Text(s) => P.Str(s.clone()),
         Val.Oid(arcs) => {
@@ -2614,8 +2614,8 @@ fn val_p(v: ref Val) -> P {
             }
             P.Tuple(xs)
         }
-        Val.Inf(plus) => P.Float(if *plus { 1.0 / 0.0 } else { -1.0 / 0.0 }),
-        Val.Real(m, b, e) => P.Tuple(vec![num_p(m), p_int(*b), p_int(*e)]),
+        Val.Inf(plus) => P.Float(if plus { 1.0 / 0.0 } else { -1.0 / 0.0 }),
+        Val.Real(m, b, e) => P.Tuple(vec![num_p(m), p_int(b), p_int(e)]),
     }
 }
 
@@ -2801,7 +2801,7 @@ fn fmod_py(x: f64, m: f64) -> f64 {
 fn num_is_zero(n: ref Num) -> bool {
     match n {
         Num.I(b) => big_is_zero(b),
-        Num.F(x) => *x == 0.0,
+        Num.F(x) => x == 0.0,
     }
 }
 
@@ -2814,7 +2814,7 @@ fn normalize10(m0: ref Num, b: i64, e0: i64) -> Val {
         Num.I(x) => mi = x.clone(),
         Num.F(x) => {
             is_int = false;
-            mf = *x;
+            mf = x;
         }
     }
     let mut e = e0;
@@ -2844,25 +2844,25 @@ fn normalize10(m0: ref Num, b: i64, e0: i64) -> Val {
 // float(self) of a Real; None is OverflowError
 fn real_float(v: ref Val) -> Option[f64] {
     match v {
-        Val.Inf(plus) => Some(if *plus { 1.0 / 0.0 } else { -1.0 / 0.0 }),
+        Val.Inf(plus) => Some(if plus { 1.0 / 0.0 } else { -1.0 / 0.0 }),
         Val.Real(m, b, e) => {
-            if *e >= 0 {
-                let p = big_pow_small(*b, *e);
+            if e >= 0 {
+                let p = big_pow_small(b, e);
                 match m {
                     Num.I(x) => big_to_f64(big_mul(x, p)),
                     Num.F(x) => {
                         let f = big_to_f64(p)?;
-                        Some(*x * f)
+                        Some(x * f)
                     }
                 }
             } else {
-                let p = (*b as f64).pow(*e as f64);
+                let p = (b as f64).pow(e as f64);
                 match m {
                     Num.I(x) => {
                         let f = big_to_f64(x)?;
                         Some(f * p)
                     }
-                    Num.F(x) => Some(*x * p),
+                    Num.F(x) => Some(x * p),
                 }
             }
         }
@@ -2934,7 +2934,7 @@ fn value_error(msg: own String) -> Exc {
 // int(x)
 fn py_int(w: ref W, v: ref P) -> Result[Big, Exc] {
     match v {
-        P.Bool(b) => Ok(big_i(if *b { 1 } else { 0 })),
+        P.Bool(b) => Ok(big_i(if b { 1 } else { 0 })),
         P.Int(b) => Ok(b.clone()),
         P.Bits(b, _) => Ok(b.clone()),
         P.Float(x) => {
@@ -2944,7 +2944,7 @@ fn py_int(w: ref W, v: ref P) -> Result[Big, Exc] {
             if x.is_infinite() {
                 return Err(exc("OverflowError", "cannot convert float infinity to integer".to_string()));
             }
-            Ok(f64_to_big(*x))
+            Ok(f64_to_big(x))
         }
         P.Str(s) => match parse_int_text(s, 10) {
             Some(b) => Ok(b),
@@ -2954,7 +2954,7 @@ fn py_int(w: ref W, v: ref P) -> Result[Big, Exc] {
             Some(x) => Ok(x),
             None => Err(value_error(f"invalid literal for int() with base 10: {bytes_repr(b)}")),
         },
-        P.Obj(o) => obj_int(w, *o),
+        P.Obj(o) => obj_int(w, o),
         _ => Err(type_error(f"int() argument must be a string, a bytes-like object or a real number, not '{p_type_name(v)}'")),
     }
 }
@@ -2985,7 +2985,7 @@ fn obj_int(w: ref W, o: i64) -> Result[Big, Exc] {
 fn py_bytes(w: ref W, v: ref P) -> Result[Vec[u8], Exc] {
     match v {
         P.Bytes(b) => Ok(b.clone()),
-        P.Bool(b) => Ok(if *b { vec![0 as u8] } else { Vec.new() }),
+        P.Bool(b) => Ok(if b { vec![0 as u8] } else { Vec.new() }),
         P.Int(n) => {
             if n.neg {
                 return Err(value_error("negative count".to_string()));
@@ -3003,7 +3003,7 @@ fn bytes_of_list(xs: ref Vec[P]) -> Result[Vec[u8], Exc] {
     for x in xs.iter() {
         let n = match x {
             P.Int(b) => b.clone(),
-            P.Bool(b) => big_i(if *b { 1 } else { 0 }),
+            P.Bool(b) => big_i(if b { 1 } else { 0 }),
             _ => return Err(type_error(f"'{p_type_name(x)}' object cannot be interpreted as an integer")),
         };
         if n.neg or big_cmp(n, big_i(255)) > 0 {
@@ -3029,7 +3029,7 @@ fn obj_octets(w: ref W, o: i64) -> Result[Vec[u8], Exc] {
         Val.Text(s) => encode_text(s, w.objs[o].enc),
         Val.Bits(b, n) => {
             let bl = big_bit_length(b);
-            let k = if *n > bl { *n } else { bl };
+            let k = if n > bl { n } else { bl };
             Ok(big_to_bytes_n(b, (k + 7) / 8))
         }
         _ => Err(type_error("no octets".to_string())),
@@ -3074,10 +3074,10 @@ fn pretty_in(w: ref W, cls: i64, named: i64, enc: ref String, v: ref P) -> Resul
             P.List(xs) => decode_text(bytes_of_list(xs)?, enc)?,
             P.Tuple(xs) => decode_text(bytes_of_list(xs)?, enc)?,
             P.Obj(o) => {
-                if is_octet_family(w.objs[*o].tid) {
-                    decode_text(obj_octets(w, *o)?, enc)?
+                if is_octet_family(w.objs[o].tid) {
+                    decode_text(obj_octets(w, o)?, enc)?
                 } else {
-                    obj_str_r(w, *o)?
+                    obj_str_r(w, o)?
                 }
             }
             _ => p_str(w, v),
@@ -3095,12 +3095,12 @@ fn pretty_in(w: ref W, cls: i64, named: i64, enc: ref String, v: ref P) -> Resul
         P.Bytes(b) => b.clone(),
         P.Str(s) => encode_text(s, enc)?,
         P.Obj(o) => {
-            if is_octet_family(w.objs[*o].tid) {
-                obj_octets(w, *o)?
-            } else if is_constructed(w.objs[*o].tid) {
-                return Err(type_error(f"cannot convert '{cls_name(w, *o)}' object to bytes"));
+            if is_octet_family(w.objs[o].tid) {
+                obj_octets(w, o)?
+            } else if is_constructed(w.objs[o].tid) {
+                return Err(type_error(f"cannot convert '{cls_name(w, o)}' object to bytes"));
             } else {
-                encode_text(obj_str_r(w, *o)?, enc)?
+                encode_text(obj_str_r(w, o)?, enc)?
             }
         }
         _ => py_bytes(w, v)?,
@@ -3150,7 +3150,7 @@ fn all_digits(s: ref String) -> bool {
 
 fn bits_in(w: ref W, cname: ref String, named: i64, v: ref P) -> Result[Val, Exc] {
     match v {
-        P.Bits(b, n) => Ok(Val.Bits(b.clone(), *n)),
+        P.Bits(b, n) => Ok(Val.Bits(b.clone(), n)),
         P.Str(s) => {
             if s.len() == 0 {
                 return Ok(Val.Bits(big_zero(), 0));
@@ -3206,17 +3206,17 @@ fn bits_in(w: ref W, cname: ref String, named: i64, v: ref P) -> Result[Val, Exc
         P.List(xs) => bits_from_bin(cname, truth_bits(xs)),
         P.Tuple(xs) => bits_from_bin(cname, truth_bits(xs)),
         P.Obj(o) => {
-            if w.objs[*o].tid == T_BITS {
-                match w.objs[*o].val {
-                    Val.Bits(b, n) => Ok(Val.Bits(b.clone(), *n)),
+            if w.objs[o].tid == T_BITS {
+                match w.objs[o].val {
+                    Val.Bits(b, n) => Ok(Val.Bits(b.clone(), n)),
                     _ => Err(novalue_op("__int__")),
                 }
             } else {
-                Err(perr(f"Bad BitString initializer type '{obj_str(w, *o)}'"))
+                Err(perr(f"Bad BitString initializer type '{obj_str(w, o)}'"))
             }
         }
         P.Int(b) => Ok(Val.Bits(b.clone(), big_bit_length(b))),
-        P.Bool(b) => Ok(Val.Bits(big_i(if *b { 1 } else { 0 }), if *b { 1 } else { 0 })),
+        P.Bool(b) => Ok(Val.Bits(big_i(if b { 1 } else { 0 }), if b { 1 } else { 0 })),
         _ => Err(perr(f"Bad BitString initializer type '{p_str(w, v)}'")),
     }
 }
@@ -3232,13 +3232,13 @@ fn truth_bits(xs: ref Vec[P]) -> String {
 fn oid_in(w: ref W, cname: ref String, label: Str, v: ref P) -> Result[Val, Exc] {
     match v {
         P.Obj(o) => {
-            if w.objs[*o].tid == T_OID or w.objs[*o].tid == T_RELOID {
-                return match w.objs[*o].val {
+            if w.objs[o].tid == T_OID or w.objs[o].tid == T_RELOID {
+                return match w.objs[o].val {
                     Val.Oid(a) => Ok(Val.Oid(a.clone())),
                     _ => Err(novalue_op("__iter__")),
                 };
             }
-            Err(perr(f"Malformed {label} {obj_str(w, *o)} at {cname}: '{cls_name(w, *o)}' object is not iterable"))
+            Err(perr(f"Malformed {label} {obj_str(w, o)} at {cname}: '{cls_name(w, o)}' object is not iterable"))
         }
         P.Str(s) => {
             if s.contains("-") {
@@ -3316,7 +3316,7 @@ fn real_in(w: ref W, v: ref P) -> Result[Val, Exc] {
             }
             if let P.Float(x) = xs[0] {
                 if x.is_infinite() {
-                    return Ok(Val.Inf(*x > 0.0));
+                    return Ok(Val.Inf(x > 0.0));
                 }
             }
             let b = p_big(xs[1]);
@@ -3324,7 +3324,7 @@ fn real_in(w: ref W, v: ref P) -> Result[Val, Exc] {
                 return Err(perr(f"Prohibited base for Real value: {p_str(w, xs[1])}"));
             }
             let m = match xs[0] {
-                P.Float(x) => Num.F(*x),
+                P.Float(x) => Num.F(x),
                 _ => Num.I(p_big(xs[0])),
             };
             let e = big_small(p_big(xs[2]));
@@ -3335,21 +3335,21 @@ fn real_in(w: ref W, v: ref P) -> Result[Val, Exc] {
             Ok(Val.Real(m, base, e))
         }
         P.Int(b) => Ok(normalize10(Num.I(b.clone()), 10, 0)),
-        P.Bool(b) => Ok(normalize10(Num.I(big_i(if *b { 1 } else { 0 })), 10, 0)),
-        P.Float(x) => float_real(*x),
+        P.Bool(b) => Ok(normalize10(Num.I(big_i(if b { 1 } else { 0 })), 10, 0)),
+        P.Float(x) => float_real(x),
         P.Str(s) => match py_float(s) {
             Some(x) => float_real(x),
             None => Err(perr(f"Bad real value syntax: {s}")),
         },
         P.Obj(o) => {
-            if w.objs[*o].tid == T_REAL {
-                return match w.objs[*o].val {
+            if w.objs[o].tid == T_REAL {
+                return match w.objs[o].val {
                     Val.Inf(_) => Err(perr("Invalid infinite value operation".to_string())),
-                    Val.Real(m, b, e) => Ok(Val.Real(m.clone(), *b, *e)),
+                    Val.Real(m, b, e) => Ok(Val.Real(m.clone(), b, e)),
                     _ => Err(novalue_op("__getitem__")),
                 };
             }
-            Err(perr(f"Bad real value syntax: {obj_str(w, *o)}"))
+            Err(perr(f"Bad real value syntax: {obj_str(w, o)}"))
         }
         _ => Err(perr(f"Bad real value syntax: {p_str(w, v)}")),
     }
@@ -4147,7 +4147,7 @@ fn zeros(n: i64) -> String {
 fn obj_str_r(w: ref W, o: i64) -> Result[String, Exc] {
     let t = w.objs[o].tid;
     match w.objs[o].val {
-        Val.Bits(b, n) => return Ok(as_binary(b, *n)),
+        Val.Bits(b, n) => return Ok(as_binary(b, n)),
         Val.Octets(b) => return decode_text(b, w.objs[o].enc),
         Val.Text(s) => return Ok(s.clone()),
         Val.NoValue => {
@@ -4223,9 +4223,9 @@ fn j_int(j: ref J) -> i64 {
 fn j_truthy(j: ref J) -> bool {
     match j {
         J.Null => false,
-        J.Bool(b) => *b,
+        J.Bool(b) => b,
         J.Int(s) => not big_is_zero(j_big(s)),
-        J.Float(x) => *x != 0.0,
+        J.Float(x) => x != 0.0,
         J.Str(s) => s.len() > 0,
         J.Arr(xs) => xs.len() > 0,
         J.Obj(ms) => ms.len() > 0,
@@ -4246,9 +4246,9 @@ fn unhex_str(s: ref String) -> Vec[u8] {
 fn pyval(j: ref J) -> P {
     match j {
         J.Null => P.None_,
-        J.Bool(b) => P.Bool(*b),
+        J.Bool(b) => P.Bool(b),
         J.Int(s) => P.Int(j_big(s)),
-        J.Float(x) => P.Float(*x),
+        J.Float(x) => P.Float(x),
         J.Str(s) => P.Str(s.clone()),
         J.Arr(xs) => {
             let mut out: Vec[P] = Vec.new();
@@ -4785,7 +4785,7 @@ fn job_ptype(w: mut ref W, j: ref J) {
 
 fn bits_val(w: ref W, o: i64) -> (Big, i64) {
     match w.objs[o].val {
-        Val.Bits(b, n) => (b.clone(), *n),
+        Val.Bits(b, n) => (b.clone(), n),
         _ => (big_zero(), 0),
     }
 }
@@ -5381,7 +5381,7 @@ fn enc_value(w: mut ref W, c: i64, tid: i64, v: i64, spec: i64, o: ref Eo) -> Re
 
 fn bits_len(w: ref W, o: i64) -> Result[i64, Exc] {
     match w.objs[o].val {
-        Val.Bits(_, n) => Ok(*n),
+        Val.Bits(_, n) => Ok(n),
         _ => Err(novalue_op("__len__")),
     }
 }
@@ -5571,8 +5571,8 @@ fn drop_fp(m: ref Num, e0: i64) -> (i64, Big, i64) {
             (s, big_abs(b), e)
         }
         Num.F(x) => {
-            let s = if *x < 0.0 { -1 } else { 1 };
-            let mut f = if *x < 0.0 { -*x } else { *x };
+            let s = if x < 0.0 { -1 } else { 1 };
+            let mut f = if x < 0.0 { -x } else { x };
             while f.trunc() != f {
                 f = f * 2.0;
                 e -= 1;
@@ -6022,7 +6022,7 @@ fn st_read(st: mut ref St, n: i64) -> Result[Vec[u8], Exc] {
 fn spec_repr(w: ref W, s: ref Spec) -> String {
     match s {
         Spec.Nil => "None".to_string(),
-        Spec.O(o) => obj_repr(w, *o),
+        Spec.O(o) => obj_repr(w, o),
         Spec.M(tm) => tm_repr(w, tm),
     }
 }
@@ -6179,7 +6179,7 @@ fn proto(w: mut ref W, d: ref Dk) -> Result[i64, Exc] {
 // _createComponent
 fn create(w: mut ref W, d: ref Dk, spec: ref Spec, ts: ref TagSet, v: own P) -> Result[i64, Exc] {
     match spec {
-        Spec.O(s) => simple_clone(mut w, *s, Some(v)),
+        Spec.O(s) => simple_clone(mut w, s, Some(v)),
         _ => {
             let mut init = cls_init(w, d.cls);
             init.tags = ts.clone();
@@ -6191,14 +6191,14 @@ fn create(w: mut ref W, d: ref Dk, spec: ref Spec, ts: ref TagSet, v: own P) -> 
 fn dv_bytes(w: ref W, v: ref Dv) -> Result[Vec[u8], Exc] {
     match v {
         Dv.Raw(b) => Ok(b.clone()),
-        Dv.Obj(o) => obj_octets(w, *o),
+        Dv.Obj(o) => obj_octets(w, o),
         _ => Err(type_error("can't concat NoneType to bytes".to_string())),
     }
 }
 
 fn dv_obj(v: ref Dv) -> Result[i64, Exc] {
     match v {
-        Dv.Obj(o) => Ok(*o),
+        Dv.Obj(o) => Ok(o),
         _ => Err(exc("AttributeError", "'NoneType' object has no attribute 'tagSet'".to_string())),
     }
 }
@@ -6262,13 +6262,13 @@ fn dec_item(w: mut ref W, st: mut ref St, spec: ref Spec, ts_in: ref Option[TagS
             d = by_tag(w, ts, st.codec);
         }
         Spec.O(s) => {
-            let tm = obj_tagmap(w, *s);
+            let tm = obj_tagmap(w, s);
             if tm.err.len() > 0 {
                 return Err(perr(tm.err));
             }
-            if ts_eq(ts, w.objs[*s].tags) or tm_contains(tm, ts) {
-                d = by_type(w, *s, st.codec);
-                chosen = Spec.O(*s);
+            if ts_eq(ts, w.objs[s].tags) or tm_contains(tm, ts) {
+                d = by_type(w, s, st.codec);
+                chosen = Spec.O(s);
             }
         }
         Spec.M(tm) => match tm_get(tm, ts) {
@@ -6369,7 +6369,7 @@ fn dec_value(w: mut ref W, st: mut ref St, d: ref Dk, spec: ref Spec, ts: ref Ta
     }
     if k == K_ANY {
         let untag = match spec {
-            Spec.O(s) => not ts_eq(ts, w.objs[*s].tags),
+            Spec.O(s) => not ts_eq(ts, w.objs[s].tags),
             Spec.M(tm) => not tm_contains(tm, ts),
             Spec.Nil => true,
         };
@@ -6431,7 +6431,7 @@ fn dec_indef(w: mut ref W, st: mut ref St, d: ref Dk, spec: ref Spec, ts: ref Ta
     }
     if k == K_ANY {
         let tagged = match spec {
-            Spec.O(s) => ts_eq(ts, w.objs[*s].tags),
+            Spec.O(s) => ts_eq(ts, w.objs[s].tags),
             Spec.M(tm) => tm_contains(tm, ts),
             Spec.Nil => false,
         };
@@ -6883,7 +6883,7 @@ fn decode_open_types(w: mut ref W, st: ref St, obj: i64) -> Result[(), Exc] {
 
 fn cons_clone(w: mut ref W, d: ref Dk, spec: ref Spec, ts: ref TagSet) -> Result[i64, Exc] {
     match spec {
-        Spec.O(s) => obj_clone(mut w, *s, false),
+        Spec.O(s) => obj_clone(mut w, s, false),
         _ => {
             let init = cls_init(w, d.cls);
             Ok(cons_new(mut w, d.cls, ts, init.sub, init.ctype, init.size))
@@ -6900,7 +6900,7 @@ fn dec_cons(w: mut ref W, st: mut ref St, d: ref Dk, spec: ref Spec, ts: ref Tag
         return Ok(Dv.Raw(st_read(mut st, len)?));
     }
     let s = match spec {
-        Spec.O(s) => *s,
+        Spec.O(s) => s,
         _ => return schemaless(mut w, mut st, d, ts, len),
     };
     let obj = obj_clone(mut w, s, false)?;
@@ -6942,7 +6942,7 @@ fn dec_cons_indef(w: mut ref W, st: mut ref St, d: ref Dk, spec: ref Spec, ts: r
         return Ok(Dv.Raw(st_read(mut st, -1)?));
     }
     let s = match spec {
-        Spec.O(s) => *s,
+        Spec.O(s) => s,
         _ => return schemaless(mut w, mut st, d, ts, -1),
     };
     let obj = obj_clone(mut w, s, false)?;
@@ -7676,7 +7676,7 @@ fn csr_build(w: mut ref W, req: ref J, types: ref Vec[(String, i64)]) -> Result[
         let mut spec = -1;
         for (k, t) in types.iter() {
             if *k == oid {
-                spec = *t;
+                spec = t;
             }
         }
         if spec < 0 {

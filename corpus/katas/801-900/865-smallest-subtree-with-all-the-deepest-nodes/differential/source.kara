@@ -223,7 +223,7 @@ fn literal_subtree(root: Option[TreeNode]) -> Option[TreeNode] {
     }
     let mut deep: Vec[i64] = Vec.new();
     for (node, d) in nodes.iter() {
-        if *d == most {
+        if d == most {
             deep.push(node.val);
         }
     }
@@ -429,11 +429,11 @@ fn grown(root: Option[TreeNode], n: i64, deep: bool, pick: i64) -> Option[TreeNo
     let nodes = with_depths(copy);
     let mut most = 0;
     for (_, d) in nodes.iter() {
-        most = most.max(*d);
+        most = most.max(d);
     }
     let mut free: Vec[TreeNode] = Vec.new();
     for (node, d) in nodes.iter() {
-        let fits = if deep { *d == most } else { *d < most - 1 };
+        let fits = if deep { d == most } else { d < most - 1 };
         if fits and (node.left.is_none() or node.right.is_none()) {
             free.push(*node);
         }

@@ -2376,7 +2376,7 @@ fn json_loads(cs: ref Vec[i64]) -> Option[P] {
 fn p_repr(v: ref P, out: mut ref Vec[i64]) {
     match v {
         P.Null => push_ascii(mut out, "None"),
-        P.Bool(b) => push_ascii(mut out, if *b { "True" } else { "False" }),
+        P.Bool(b) => push_ascii(mut out, if b { "True" } else { "False" }),
         P.Int(n) => push_ascii(mut out, f"{n}"),
         P.Float(s) => push_ascii(mut out, s),
         P.Str(s) => str_repr(s, mut out),
@@ -2461,7 +2461,7 @@ fn json_dumps(v: ref J, compact: bool, out: mut ref Vec[i64]) {
     let colon = if compact { ":" } else { ": " };
     match v {
         J.Null => push_ascii(mut out, "null"),
-        J.B(b) => push_ascii(mut out, if *b { "true" } else { "false" }),
+        J.B(b) => push_ascii(mut out, if b { "true" } else { "false" }),
         J.N(n) => push_ascii(mut out, f"{n}"),
         J.S(s) => json_str(cps_of(s), not compact, mut out),
         J.A(items) => {

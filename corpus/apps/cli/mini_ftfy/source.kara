@@ -2394,7 +2394,7 @@ fn decode_val(w: ref String) -> Val {
 fn val_repr(u: ref Uni, v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
-        Val.Flag(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Flag(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => f"{n}",
         Val.Text(t) => str_repr(u, t),
         Val.Bytes(b) => bytes_repr(b),
@@ -2423,7 +2423,7 @@ fn out_repr(u: ref Uni, o: ref Out) -> String {
             };
             f"ExplainedText(text={str_repr(u, t)}, explanation={e})"
         }
-        Out.OBool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Out.OBool(b) => if b { "True".to_string() } else { "False".to_string() },
         Out.OInt(n) => f"{n}",
         Out.OPair(t, name) => f"({str_repr(u, t)}, '{name}')",
     }
@@ -2447,8 +2447,8 @@ fn bytes_error_text() -> String {
 
 fn flag_of(v: ref Val) -> bool {
     match v {
-        Val.Flag(b) => *b,
-        Val.Int(n) => *n != 0,
+        Val.Flag(b) => b,
+        Val.Int(n) => n != 0,
         Val.Text(t) => t.len() > 0,
         _ => false,
     }
@@ -2496,7 +2496,7 @@ fn with_kwargs(config: ref Config, kwargs: ref Vec[(String, Val)]) -> Result[Con
             };
         } else if *name == "max_decode_length" {
             c.max_decode_length = match v {
-                Val.Int(n) => *n,
+                Val.Int(n) => n,
                 _ => 0,
             };
         } else if *name == "explain" {

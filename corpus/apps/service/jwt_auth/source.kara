@@ -286,7 +286,7 @@ impl JObj {
         for i in 0..self.keys.len() {
             if self.keys[i] == key {
                 match self.vals[i] {
-                    JVal.JInt(n) => return Some(*n),
+                    JVal.JInt(n) => return Some(n),
                     _ => return None,
                 }
             }

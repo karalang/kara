@@ -249,7 +249,7 @@ fn main() {
     for p in pages.iter() {
         toc.push_str(f"- [{p.title}]({p.slug}.html)\n");
         for (level, text, id) in p.headings.iter() {
-            if *level == 2 {
+            if level == 2 {
                 toc.push_str(f"- [{p.title}: {text}]({p.slug}.html#{id})\n");
             }
         }

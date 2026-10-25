@@ -967,7 +967,7 @@ fn seed(r: mut ref Random, a: ref SeedArg, version: i64) {
         SeedArg.Int(v) => big_make(false, v.d.clone()),
         SeedArg.Float(x) => {
             // the hash, cast to size_t
-            let h = hash_float(*x);
+            let h = hash_float(x);
             big_u64(h as u64)
         }
         SeedArg.Text(s) => {
@@ -1152,14 +1152,14 @@ fn num_f(v: ref PyNum) -> f64 {
                 0.0
             }
         }
-        PyNum.F(x) => *x,
+        PyNum.F(x) => x,
     }
 }
 
 fn num_str(v: ref PyNum) -> String {
     match v {
         PyNum.I(b) => big_str(b),
-        PyNum.F(x) => repr_f(*x),
+        PyNum.F(x) => repr_f(x),
     }
 }
 
@@ -1218,7 +1218,7 @@ fn randrange(r: mut ref Random, start: ref PyNum, stop: ref Option[PyNum], step:
 fn randint(r: mut ref Random, a: ref PyNum, b: ref PyNum) -> Result[Big, Exc] {
     let stop = match b {
         PyNum.I(v) => PyNum.I(big_add(v, big(1))),
-        PyNum.F(x) => PyNum.F(*x + 1.0),
+        PyNum.F(x) => PyNum.F(x + 1.0),
     };
     randrange(mut r, a, Some(stop), None)
 }
@@ -1427,7 +1427,7 @@ fn triangular(r: mut ref Random, low0: f64, high0: f64, mode: ref Option[f64]) -
             if high0 - low0 == 0.0 {
                 return None;
             }
-            (*m - low0) / (high0 - low0)
+            (m - low0) / (high0 - low0)
         }
     };
     let mut low = low0;

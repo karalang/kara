@@ -19,7 +19,7 @@ fn min_distance(height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i64], nut
     let (_, first) = extra[0];
     let mut walk = distance(squirrel, nuts[first]) + distance(nuts[first], tree);
     for (_, i) in extra[1..].iter() {
-        walk += 2 * distance(nuts[*i], tree);
+        walk += 2 * distance(nuts[i], tree);
     }
     walk
 }

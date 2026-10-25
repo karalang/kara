@@ -395,9 +395,9 @@ fn dict_repr(keys: ref Vec[String], vals: ref Vec[Val], od: bool) -> String {
 fn repr(v: ref Val, od: bool) -> String {
     match v {
         Val.Non => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(s) => s.clone(),
-        Val.Dec(neg, d, e) => f"Decimal('{sci_string(*neg, d, *e)}')",
+        Val.Dec(neg, d, e) => f"Decimal('{sci_string(neg, d, e)}')",
         Val.Float(x) => f"{x}",
         Val.Str(s) => str_repr(s),
         Val.List(xs) => {
@@ -422,15 +422,15 @@ fn repr(v: ref Val, od: bool) -> String {
 fn val_str(v: ref Val) -> String {
     match v {
         Val.Str(s) => s.clone(),
-        Val.Dec(neg, d, e) => sci_string(*neg, d, *e),
+        Val.Dec(neg, d, e) => sci_string(neg, d, e),
         _ => repr(v, false),
     }
 }
 
 fn out_repr(o: ref Out, od: bool) -> String {
     match o {
-        Out.Basic(k, v) => f"({str_repr(ev_name(*k))}, {repr(v, od)})",
-        Out.Parsed(p, k, v) => f"({str_repr(p)}, {str_repr(ev_name(*k))}, {repr(v, od)})",
+        Out.Basic(k, v) => f"({str_repr(ev_name(k))}, {repr(v, od)})",
+        Out.Parsed(p, k, v) => f"({str_repr(p)}, {str_repr(ev_name(k))}, {repr(v, od)})",
         Out.Item(v) => repr(v, od),
         Out.Pair(k, v) => f"({str_repr(k)}, {repr(v, od)})",
     }
@@ -502,9 +502,9 @@ fn json_string(s: ref String) -> String {
 fn dumps(v: ref Val) -> String {
     match v {
         Val.Non => "null".to_string(),
-        Val.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Val.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
         Val.Int(s) => s.clone(),
-        Val.Dec(neg, d, e) => sci_string(*neg, d, *e),
+        Val.Dec(neg, d, e) => sci_string(neg, d, e),
         Val.Float(x) => f"{x}",
         Val.Str(s) => json_string(s),
         Val.List(xs) => {
@@ -1567,7 +1567,7 @@ fn gen_next(g: mut ref Gen) -> Result[Option[Out], Exc] {
 // amounts in it are small enough for i64.
 fn dec_of(v: ref Val) -> (i64, i64) {
     match v {
-        Val.Dec(neg, d, e) => (if *neg { -atoi(d) } else { atoi(d) }, *e),
+        Val.Dec(neg, d, e) => (if neg { -atoi(d) } else { atoi(d) }, e),
         Val.Int(s) => (atoi(s), 0),
         _ => (0, 0),
     }
@@ -2010,7 +2010,7 @@ fn report(src: ref String, dest: ref String) -> Result[(), Exc] {
 
 fn float_of(v: ref Val) -> f64 {
     match v {
-        Val.Float(x) => *x,
+        Val.Float(x) => x,
         Val.Int(s) => atoi(s) as f64,
         _ => 0.0,
     }

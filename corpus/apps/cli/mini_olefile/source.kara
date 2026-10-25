@@ -576,8 +576,8 @@ enum Val {
 fn val_repr(v: ref Val) -> String {
     match v {
         Val.Nothing => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
-        Val.Int(n) => f"{*n}",
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{n}",
         Val.Bytes(b) => repr_bytes(b),
         Val.Text(s) => repr_str(s),
         Val.Date(d) => date_repr(d),
@@ -2000,8 +2000,8 @@ fn opt_repr(s: ref Option[String]) -> String {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.Nothing => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
         Val.Bytes(b) => b.len() > 0,
         Val.Text(s) => s.len() > 0,
         Val.Date(_) => true,

@@ -586,7 +586,7 @@ fn route_job(src: ref String, dst: ref String, out: mut ref String) -> Result[()
         }
         if let Some(edges) = adj.get(u) {
             for (v, w) in edges.iter() {
-                let nd = d + *w;
+                let nd = d + w;
                 let better = match dist.get(v) {
                     None => true,
                     Some(old) => nd < *old,

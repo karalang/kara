@@ -1248,14 +1248,14 @@ fn fget_str(st: ref Store, d: i64, k: Str) -> String {
 
 fn val_dict(v: ref Val) -> i64 {
     match v {
-        Val.D(i) => *i,
+        Val.D(i) => i,
         _ => -1,
     }
 }
 
 fn val_list(v: ref Val) -> i64 {
     match v {
-        Val.L(i) => *i,
+        Val.L(i) => i,
         _ => -1,
     }
 }
@@ -1264,10 +1264,10 @@ fn deep_copy(st: mut ref Store, v: ref Val) -> Val {
     match v {
         Val.D(d) => {
             let nd = d_new(mut st);
-            let n = st.dk[*d].len();
+            let n = st.dk[d].len();
             for i in 0..n {
-                let k = st.dk[*d][i].clone();
-                let x = st.dv[*d][i].clone();
+                let k = st.dk[d][i].clone();
+                let x = st.dv[d][i].clone();
                 let c = deep_copy(mut st, x);
                 d_put(mut st, nd, k, c);
             }
@@ -1275,9 +1275,9 @@ fn deep_copy(st: mut ref Store, v: ref Val) -> Val {
         }
         Val.L(l) => {
             let nl = l_new(mut st);
-            let n = st.ls[*l].len();
+            let n = st.ls[l].len();
             for i in 0..n {
-                let x = st.ls[*l][i].clone();
+                let x = st.ls[l][i].clone();
                 let c = deep_copy(mut st, x);
                 st.ls[nl].push(c);
             }
@@ -1290,16 +1290,16 @@ fn deep_copy(st: mut ref Store, v: ref Val) -> Val {
 fn val_eq(st: ref Store, a: ref Val, b: ref Val) -> bool {
     match (a, b) {
         (Val.Null, Val.Null) => true,
-        (Val.Bool(x), Val.Bool(y)) => *x == *y,
-        (Val.Int(x), Val.Int(y)) => *x == *y,
+        (Val.Bool(x), Val.Bool(y)) => x == y,
+        (Val.Int(x), Val.Int(y)) => x == y,
         (Val.Str(x), Val.Str(y)) => x == y,
         (Val.D(x), Val.D(y)) => {
-            if st.dk[*x].len() != st.dk[*y].len() {
+            if st.dk[x].len() != st.dk[y].len() {
                 return false;
             }
-            for i in 0..st.dk[*x].len() {
-                let j = d_find(st, *y, st.dk[*x][i]);
-                if j < 0 or not val_eq(st, st.dv[*x][i], st.dv[*y][j]) {
+            for i in 0..st.dk[x].len() {
+                let j = d_find(st, y, st.dk[x][i]);
+                if j < 0 or not val_eq(st, st.dv[x][i], st.dv[y][j]) {
                     return false;
                 }
             }
@@ -1324,7 +1324,7 @@ fn tm_repr(t: ref Vec[i64]) -> String {
 fn scalar(st: ref Store, v: ref Val) -> String {
     match v {
         Val.Null => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(i) => f"{i}",
         Val.Str(s) => py_repr(s),
         Val.Tm(t) => tm_repr(t),
@@ -1335,8 +1335,8 @@ fn scalar(st: ref Store, v: ref Val) -> String {
 
 fn nonempty(st: ref Store, v: ref Val) -> bool {
     match v {
-        Val.D(d) => st.dk[*d].len() > 0,
-        Val.L(l) => st.ls[*l].len() > 0,
+        Val.D(d) => st.dk[d].len() > 0,
+        Val.L(l) => st.ls[l].len() > 0,
         _ => false,
     }
 }
@@ -1345,9 +1345,9 @@ fn dump(st: ref Store, v: ref Val, ind: Str, out: mut ref Vec[String]) {
     let deeper = f"{ind}  ";
     match v {
         Val.D(d) => {
-            for i in 0..st.dk[*d].len() {
-                let k = st.dk[*d][i].clone();
-                let x = ref st.dv[*d][i];
+            for i in 0..st.dk[d].len() {
+                let k = st.dk[d][i].clone();
+                let x = ref st.dv[d][i];
                 if nonempty(st, x) {
                     out.push(f"{ind}{k}:");
                     dump(st, x, deeper, mut out);
@@ -1357,8 +1357,8 @@ fn dump(st: ref Store, v: ref Val, ind: Str, out: mut ref Vec[String]) {
             }
         }
         Val.L(l) => {
-            for i in 0..st.ls[*l].len() {
-                let x = ref st.ls[*l][i];
+            for i in 0..st.ls[l].len() {
+                let x = ref st.ls[l][i];
                 if nonempty(st, x) {
                     out.push(f"{ind}- [{i}]");
                     dump(st, x, deeper, mut out);

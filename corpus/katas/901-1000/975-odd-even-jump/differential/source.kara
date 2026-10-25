@@ -16,10 +16,10 @@ fn star_odd_even_jumps(arr: Vec[i64]) -> i64 {
     let mut good = 1;
     for i in (0..n - 1).rev() {
         if let Some((_, j)) = seen.ceiling(arr[i]) {
-            higher[i] = lower[*j];
+            higher[i] = lower[j];
         }
         if let Some((_, j)) = seen.floor(arr[i]) {
-            lower[i] = higher[*j];
+            lower[i] = higher[j];
         }
         seen.insert(arr[i], i);
         if higher[i] {

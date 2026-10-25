@@ -21,7 +21,7 @@ fn find132pattern(nums: Vec[i64]) -> bool {
         }
         if nums[j] > low {
             if let Some((two, _)) = right.ceiling(low + 1) {
-                if *two < nums[j] {
+                if two < nums[j] {
                     return true;
                 }
             }

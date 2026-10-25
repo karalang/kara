@@ -90,7 +90,7 @@ fn check_rule(rule: ref Rule, attrs: ref SortedMap[String, String]) -> Option[St
         },
         Rule.AtLeast { attr, min } => match attrs.get(attr) {
             Some(v) => match i64.parse(v) {
-                Ok(n) => if n >= *min { None } else { Some(f"{attr}={n} < {min}") },
+                Ok(n) => if n >= min { None } else { Some(f"{attr}={n} < {min}") },
                 Err(_) => Some(f"{attr} not a number"),
             },
             None => Some(f"no {attr}"),

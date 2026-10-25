@@ -380,7 +380,7 @@ fn j_get(j: ref J, key: Str) -> J {
 
 fn j_bool(j: ref J, default: bool) -> bool {
     match j {
-        J.B(b) => *b,
+        J.B(b) => b,
         _ => default,
     }
 }
@@ -528,11 +528,11 @@ impl World {
     fn value_repr(ref self, v: ref Pv) -> String {
         match v {
             Pv.Nothing => "None".to_string(),
-            Pv.Flag(b) => if *b { "True".to_string() } else { "False".to_string() },
+            Pv.Flag(b) => if b { "True".to_string() } else { "False".to_string() },
             Pv.Count(n) => f"{n}",
             Pv.Text(s) => py_repr(s),
             Pv.List(id) => {
-                let parts: Vec[String] = self.lists[*id].iter().map(|s| py_repr(s)).collect();
+                let parts: Vec[String] = self.lists[id].iter().map(|s| py_repr(s)).collect();
                 let joined = parts.join(", ");
                 f"[{joined}]"
             }
@@ -542,10 +542,10 @@ impl World {
     fn truthy(ref self, v: ref Pv) -> bool {
         match v {
             Pv.Nothing => false,
-            Pv.Flag(b) => *b,
-            Pv.Count(n) => *n != 0,
+            Pv.Flag(b) => b,
+            Pv.Count(n) => n != 0,
             Pv.Text(s) => not s.is_empty(),
-            Pv.List(id) => not self.lists[*id].is_empty(),
+            Pv.List(id) => not self.lists[id].is_empty(),
         }
     }
 
@@ -582,7 +582,7 @@ impl World {
 
 fn flat_into(p: ref Pat, out: mut ref Vec[i64]) {
     match p {
-        Pat.Leaf(id) => out.push(*id),
+        Pat.Leaf(id) => out.push(id),
         Pat.Required(c) => flat_all(c, mut out),
         Pat.Optional(c) => flat_all(c, mut out),
         Pat.AnyOptions(c) => flat_all(c, mut out),
@@ -665,7 +665,7 @@ fn unify(p: own Pat, w: ref World, uniq: ref Vec[(String, i64)]) -> Pat {
             let r = w.repr(id);
             for (ur, uid) in uniq.iter() {
                 if *ur == r {
-                    return Pat.Leaf(*uid);
+                    return Pat.Leaf(uid);
                 }
             }
             Pat.Leaf(id)
@@ -729,7 +729,7 @@ fn either_cases(p: ref Pat) -> Vec[Vec[i64]] {
             let mut leaves: Vec[i64] = Vec.new();
             for c in children.iter() {
                 if let Pat.Leaf(id) = c {
-                    leaves.push(*id);
+                    leaves.push(id);
                 }
             }
             ret.push(leaves);
@@ -927,7 +927,7 @@ fn match_leaf(w: mut ref World, id: i64, left: ref Vec[i64], collected: ref Vec[
 
 fn do_match(w: mut ref World, p: ref Pat, left: ref Vec[i64], collected: ref Vec[i64]) -> M {
     match p {
-        Pat.Leaf(id) => match_leaf(mut w, *id, left, collected),
+        Pat.Leaf(id) => match_leaf(mut w, id, left, collected),
         Pat.Required(c) => {
             let mut l = left.clone();
             let mut col = collected.clone();

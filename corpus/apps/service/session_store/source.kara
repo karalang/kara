@@ -285,7 +285,7 @@ fn join(parts: ref Vec[String], sep: ref String) -> String {
 fn resolve(r: ref TokenRef, issued: ref Vec[String]) -> String {
     match r {
         TokenRef.Issued(i) => {
-            if *i < issued.len() { issued[*i].clone() } else { f"s-unissued{i}" }
+            if i < issued.len() { issued[i].clone() } else { f"s-unissued{i}" }
         }
         TokenRef.Literal(s) => s.clone(),
     }

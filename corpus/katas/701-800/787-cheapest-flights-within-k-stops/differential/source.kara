@@ -45,9 +45,9 @@ fn find_cheapest_price_levels(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64
         let mut next: VecDeque[(i64, i64)] = VecDeque.new();
         while let Some((city, spent)) = level.pop_front() {
             for (to, price) in out[city].iter() {
-                if spent + *price < best[*to] {
-                    best[*to] = spent + *price;
-                    next.push_back((*to, spent + *price));
+                if spent + price < best[to] {
+                    best[to] = spent + price;
+                    next.push_back((to, spent + price));
                 }
             }
         }
@@ -82,7 +82,7 @@ fn find_cheapest_price_dijkstra(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i
         }
         fewest[city] = used;
         for (to, price) in out[city].iter() {
-            queue.push((spent + *price, *to, used + 1));
+            queue.push((spent + price, to, used + 1));
         }
     }
     -1
@@ -102,9 +102,9 @@ fn cheapest_memo(out: Vec[Vec[(i64, i64)]], city: i64, left: i64, dst: i64, memo
     }
     let mut best = -1;
     for (to, price) in out[city].iter() {
-        let rest = cheapest_memo(out, *to, left - 1, dst, mut memo);
-        if rest != -1 and (best == -1 or *price + rest < best) {
-            best = *price + rest;
+        let rest = cheapest_memo(out, to, left - 1, dst, mut memo);
+        if rest != -1 and (best == -1 or price + rest < best) {
+            best = price + rest;
         }
     }
     memo[city][left] = best;

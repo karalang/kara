@@ -991,11 +991,11 @@ fn int_list_repr(v: ref Vec[i64]) -> String {
 fn val_repr(v: ref Val) -> String {
     match v {
         Val.Nothing => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
-        Val.Int(n) => f"{*n}",
-        Val.Float(x) => float_repr(*x),
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => float_repr(x),
         Val.Text(s) => repr_str(s),
-        Val.Date(y, m, d) => f"datetime.date({*y}, {*m}, {*d})",
+        Val.Date(y, m, d) => f"datetime.date({y}, {m}, {d})",
         Val.List(xs) => int_list_repr(xs),
     }
 }
@@ -1005,7 +1005,7 @@ fn val_str(v: ref Val) -> String {
     match v {
         Val.Nothing => "None".to_string(),
         Val.Text(s) => s.clone(),
-        Val.Date(y, m, d) => f"{*y:04}-{*m:02}-{*d:02}",
+        Val.Date(y, m, d) => f"{y:04}-{m:02}-{d:02}",
         _ => val_repr(v),
     }
 }
@@ -1051,7 +1051,7 @@ fn opt_floats_repr(v: ref Vec[Option[f64]]) -> String {
     let mut parts: Vec[String] = Vec.new();
     for x in v.iter() {
         match x {
-            Some(f) => parts.push(float_repr(*f)),
+            Some(f) => parts.push(float_repr(f)),
             None => parts.push("None".to_string()),
         }
     }
@@ -1429,7 +1429,7 @@ fn json_coord(p: ref Vec[Option[f64]]) -> String {
     let mut parts: Vec[String] = Vec.new();
     for v in p.iter() {
         match v {
-            Some(x) => parts.push(json_float(*x)),
+            Some(x) => parts.push(json_float(x)),
             None => parts.push("null".to_string()),
         }
     }
@@ -1619,7 +1619,7 @@ fn points_repr(s: ref Shape) -> String {
         let mut vs: Vec[String] = Vec.new();
         for v in p.iter() {
             match v {
-                Some(x) => vs.push(float_repr(*x)),
+                Some(x) => vs.push(float_repr(x)),
                 None => vs.push("None".to_string()),
             }
         }
@@ -1920,9 +1920,9 @@ fn not_float(s: ref String) -> PyErr {
 // int(value), then int(float(value)) when that raises ValueError.
 fn to_int(v: ref Val) -> Result[i64, PyErr] {
     match v {
-        Val.Int(n) => Ok(*n),
-        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
-        Val.Float(x) => float_trunc(*x),
+        Val.Int(n) => Ok(n),
+        Val.Bool(b) => Ok(if b { 1 } else { 0 }),
+        Val.Float(x) => float_trunc(x),
         Val.Text(s) => match py_int_s(s) {
             Some(n) => Ok(n),
             None => match py_float_s(s) {
@@ -1936,9 +1936,9 @@ fn to_int(v: ref Val) -> Result[i64, PyErr] {
 
 fn to_float(v: ref Val) -> Result[f64, PyErr] {
     match v {
-        Val.Int(n) => Ok(*n as f64),
-        Val.Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-        Val.Float(x) => Ok(*x),
+        Val.Int(n) => Ok(n as f64),
+        Val.Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
+        Val.Float(x) => Ok(x),
         Val.Text(s) => match py_float_s(s) {
             Some(x) => Ok(x),
             None => Err(not_float(s)),
@@ -3588,7 +3588,7 @@ fn save_writer(base: ref String, w: ref Writer) {
 
 fn opt_int_repr(v: ref Option[i64]) -> String {
     match v {
-        Some(n) => f"{*n}",
+        Some(n) => f"{n}",
         None => "None".to_string(),
     }
 }
@@ -3788,11 +3788,11 @@ fn job_iter(r: mut ref Reader) -> Result[(), PyErr] {
 fn val_json(v: ref Val) -> String {
     match v {
         Val.Nothing => "null".to_string(),
-        Val.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
-        Val.Int(n) => f"{*n}",
-        Val.Float(x) => json_float(*x),
+        Val.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => json_float(x),
         Val.Text(s) => json_str(s),
-        Val.Date(y, m, d) => json_str(ymd(*y, *m, *d)),
+        Val.Date(y, m, d) => json_str(ymd(y, m, d)),
         Val.List(xs) => int_list_repr(xs),
     }
 }
@@ -3999,7 +3999,7 @@ fn job_report() -> Result[(), PyErr] {
         let mut ms: Vec[f64] = Vec.new();
         for v in s.m.clone().unwrap_or(Vec.new()).iter() {
             if let Some(x) = v {
-                ms.push(*x);
+                ms.push(x);
             }
         }
         let mr = if ms.len() == 0 {

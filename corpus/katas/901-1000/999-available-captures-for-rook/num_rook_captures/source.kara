@@ -17,8 +17,8 @@ fn num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
     }
     let mut captures = 0;
     for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
-        let mut r = rr + *dr;
-        let mut c = rc + *dc;
+        let mut r = rr + dr;
+        let mut c = rc + dc;
         while r >= 0 and r < 8 and c >= 0 and c < 8 {
             if board[r][c] == 'p' {
                 captures += 1;
@@ -27,8 +27,8 @@ fn num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
             if board[r][c] == 'B' {
                 break;
             }
-            r += *dr;
-            c += *dc;
+            r += dr;
+            c += dc;
         }
     }
     captures

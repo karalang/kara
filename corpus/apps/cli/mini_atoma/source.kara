@@ -1329,7 +1329,7 @@ fn utcoffset(t: ref Tz) -> Option[i64] {
         Tz.Naive => None,
         Tz.Utc => Some(0),
         Tz.Local => Some(0),
-        Tz.Offset(_, s) => Some(*s),
+        Tz.Offset(_, s) => Some(s),
     }
 }
 
@@ -2439,7 +2439,7 @@ fn build_tz(r: ref Res, o: ref Opts) -> (Tz, Option[String]) {
         for (k, v) in o.tzinfos.iter() {
             if *k == name {
                 return match v {
-                    Some(s) => (Tz.Offset(Some(name.clone()), *s), None),
+                    Some(s) => (Tz.Offset(Some(name.clone()), s), None),
                     None => (Tz.Naive, None),
                 };
             }
@@ -3399,9 +3399,9 @@ fn type_name(v: ref JValue) -> String {
 fn truthy(v: ref JValue) -> bool {
     match v {
         JValue.Null => false,
-        JValue.Bool(b) => *b,
-        JValue.Int(i) => *i != 0,
-        JValue.Float(f) => *f != 0.0,
+        JValue.Bool(b) => b,
+        JValue.Int(i) => i != 0,
+        JValue.Float(f) => f != 0.0,
         JValue.Str(s) => s.len() > 0,
         JValue.List(l) => l.len() > 0,
         JValue.Obj(m) => m.len() > 0,
@@ -4143,8 +4143,8 @@ fn json_int(root: ref JValue, name: Str) -> Result[Option[JValue], PyErr] {
 
 fn int_value(v: ref JValue) -> i64 {
     match v {
-        JValue.Int(n) => *n,
-        JValue.Bool(b) => if *b { 1 } else { 0 },
+        JValue.Int(n) => n,
+        JValue.Bool(b) => if b { 1 } else { 0 },
         _ => 0,
     }
 }
@@ -4325,7 +4325,7 @@ fn outlines_of(t: ref Tree, e: i64) -> Vec[OpmlOutline] {
 // get_text(head, name) when head may be None: None.find(...) fails.
 fn head_text(t: ref Tree, head: ref Option[i64], name: Str) -> Result[Option[String], PyErr] {
     match head {
-        Some(h) => get_text(t, *h, name, true),
+        Some(h) => get_text(t, h, name, true),
         None => Err(none_has_no("find")),
     }
 }
@@ -4542,7 +4542,7 @@ fn or_empty(a: ref Option[String], b: ref Option[String]) -> String {
 
 fn int_json(n: ref Option[i64]) -> Option[JValue] {
     match n {
-        Some(v) => Some(JValue.Int(*v)),
+        Some(v) => Some(JValue.Int(v)),
         None => None,
     }
 }
@@ -4703,7 +4703,7 @@ fn f_bool(b: bool) -> String {
 // an int, or the bool that stood in for one
 fn f_pyint(v: ref Option[JValue]) -> String {
     match v {
-        Some(JValue.Bool(b)) => f_bool(*b),
+        Some(JValue.Bool(b)) => f_bool(b),
         Some(JValue.Int(n)) => f"{n}",
         _ => "None".to_string(),
     }
@@ -4723,7 +4723,7 @@ fn td_str(n: i64) -> String {
 
 fn f_td(v: ref Option[i64]) -> String {
     match v {
-        Some(n) => td_str(*n),
+        Some(n) => td_str(n),
         None => "None".to_string(),
     }
 }

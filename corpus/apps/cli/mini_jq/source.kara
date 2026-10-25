@@ -265,7 +265,7 @@ fn is_num(v: ref J) -> bool {
 
 fn num_of(v: ref J) -> f64 {
     match v {
-        J.Num(x, _) => *x,
+        J.Num(x, _) => x,
         _ => 0.0,
     }
 }
@@ -740,7 +740,7 @@ fn dump_to(v: ref J, pretty: bool, sort: bool, depth: i64, out: mut ref String) 
         J.Null => out.push_str("null"),
         J.False => out.push_str("false"),
         J.True => out.push_str("true"),
-        J.Num(x, lit) => out.push_str(num_dump(*x, lit)),
+        J.Num(x, lit) => out.push_str(num_dump(x, lit)),
         J.Str(s) => quote(s, mut out),
         J.Arr(a) => {
             if a.items.len() == 0 {
@@ -871,10 +871,10 @@ fn cmp(a: ref J, b: ref J) -> i64 {
     match a {
         J.Num(x, _) => {
             let y = num_of(b);
-            if *x < y {
+            if x < y {
                 return -1;
             }
-            if *x > y {
+            if x > y {
                 return 1;
             }
             0
@@ -2048,7 +2048,7 @@ fn index_val(v: ref J, k: ref J) -> Result[J, String] {
         },
         J.Arr(a) => match k {
             J.Num(x, _) => {
-                let mut i = floor_int(*x);
+                let mut i = floor_int(x);
                 if i < 0 {
                     i += a.items.len();
                 }
@@ -2071,7 +2071,7 @@ fn slice_bound(b: ref J, n: i64, dflt: i64, up: bool) -> Result[i64, String] {
     match b {
         J.Null => Ok(dflt),
         J.Num(x, _) => {
-            let mut i = if up { 0 - floor_int(0.0 - *x) } else { floor_int(*x) };
+            let mut i = if up { 0 - floor_int(0.0 - x) } else { floor_int(x) };
             if i < 0 {
                 i += n;
             }
@@ -2223,7 +2223,7 @@ fn binop(op: Str, a: ref J, b: ref J) -> Result[J, String] {
         }
         match a {
             J.Num(x, _) => match b {
-                J.Num(y, _) => return Ok(num(*x + *y)),
+                J.Num(y, _) => return Ok(num(x + y)),
                 _ => {}
             },
             J.Str(x) => match b {
@@ -2269,7 +2269,7 @@ fn binop(op: Str, a: ref J, b: ref J) -> Result[J, String] {
     if op == "-" {
         match a {
             J.Num(x, _) => match b {
-                J.Num(y, _) => return Ok(num(*x - *y)),
+                J.Num(y, _) => return Ok(num(x - y)),
                 _ => {}
             },
             J.Arr(x) => match b {
@@ -2297,12 +2297,12 @@ fn binop(op: Str, a: ref J, b: ref J) -> Result[J, String] {
     if op == "*" {
         match a {
             J.Num(x, _) => match b {
-                J.Num(y, _) => return Ok(num(*x * *y)),
-                J.Str(s) => return Ok(repeat_text(s, *x)),
+                J.Num(y, _) => return Ok(num(x * y)),
+                J.Str(s) => return Ok(repeat_text(s, x)),
                 _ => {}
             },
             J.Str(s) => match b {
-                J.Num(y, _) => return Ok(repeat_text(s, *y)),
+                J.Num(y, _) => return Ok(repeat_text(s, y)),
                 _ => {}
             },
             J.Obj(x) => match b {
@@ -2317,10 +2317,10 @@ fn binop(op: Str, a: ref J, b: ref J) -> Result[J, String] {
         match a {
             J.Num(x, _) => match b {
                 J.Num(y, _) => {
-                    if *y == 0.0 {
+                    if y == 0.0 {
                         return Err(type_error2(a, b, "cannot be divided because the divisor is zero"));
                     }
-                    return Ok(num(*x / *y));
+                    return Ok(num(x / y));
                 }
                 _ => {}
             },
@@ -2336,11 +2336,11 @@ fn binop(op: Str, a: ref J, b: ref J) -> Result[J, String] {
     match a {
         J.Num(x, _) => match b {
             J.Num(y, _) => {
-                let bi = *y as i64;
+                let bi = y as i64;
                 if bi == 0 {
                     return Err(type_error2(a, b, "cannot be divided (remainder) because the divisor is zero"));
                 }
-                let ai = *x as i64;
+                let ai = x as i64;
                 let bm = if bi < 0 { 0 - bi } else { bi };
                 return Ok(num((ai % bm) as f64));
             }
@@ -2403,7 +2403,7 @@ fn set_in(v: ref J, path: ref Vec[J], i: i64, x: ref J) -> Result[J, String] {
                 J.Arr(a) => a.items.clone(),
                 _ => return Err(f"Cannot index {type_name(v)} with number"),
             };
-            let mut idx = floor_int(*n);
+            let mut idx = floor_int(n);
             if idx < 0 {
                 idx += items.len();
                 if idx < 0 {
@@ -2455,7 +2455,7 @@ fn del_in(v: ref J, path: ref Vec[J], i: i64) -> Result[J, String] {
         }
         J.Arr(a) => {
             let n = match k {
-                J.Num(x, _) => *x,
+                J.Num(x, _) => x,
                 _ => return Err("Cannot delete field at object index of array".to_string()),
             };
             let mut idx = floor_int(n);
@@ -2523,10 +2523,10 @@ fn ev(tree: ref Prog, r: mut ref R, e: i64, v: ref J, p: ref J, pm: bool, env: i
             emit(mut out, v.clone(), p.clone());
             None
         }
-        Expr.Index(t, k) => ev_index(tree, mut r, *t, *k, v, p, pm, env, mut out),
-        Expr.Slice(t, f, to) => ev_slice(tree, mut r, *t, *f, *to, v, p, pm, env, mut out),
+        Expr.Index(t, k) => ev_index(tree, mut r, t, k, v, p, pm, env, mut out),
+        Expr.Slice(t, f, to) => ev_slice(tree, mut r, t, f, to, v, p, pm, env, mut out),
         Expr.Iter(t) => {
-            let tr = run_p(tree, mut r, *t, v, p, pm, env);
+            let tr = run_p(tree, mut r, t, v, p, pm, env);
             for i in 0..tr.vals.len() {
                 let tv = ref tr.vals[i];
                 match tv {
@@ -2548,24 +2548,24 @@ fn ev(tree: ref Prog, r: mut ref R, e: i64, v: ref J, p: ref J, pm: bool, env: i
             get_err(tr)
         }
         Expr.Try(body, h) => {
-            let br = run_p(tree, mut r, *body, v, p, pm, env);
+            let br = run_p(tree, mut r, body, v, p, pm, env);
             for i in 0..br.vals.len() {
                 emit(mut out, br.vals[i].clone(), br.paths[i].clone());
             }
             match br.err {
                 Some(ev_err) => {
-                    if *h < 0 {
+                    if h < 0 {
                         return None;
                     }
-                    ev(tree, mut r, *h, ev_err, J.Null, false, env, mut out)
+                    ev(tree, mut r, h, ev_err, J.Null, false, env, mut out)
                 }
                 None => None,
             }
         }
         Expr.Pipe(a, b) => {
-            let ar = run_p(tree, mut r, *a, v, p, pm, env);
+            let ar = run_p(tree, mut r, a, v, p, pm, env);
             for i in 0..ar.vals.len() {
-                let err = ev(tree, mut r, *b, ar.vals[i], ar.paths[i], pm, env, mut out);
+                let err = ev(tree, mut r, b, ar.vals[i], ar.paths[i], pm, env, mut out);
                 if err.is_some() {
                     return err;
                 }
@@ -2573,14 +2573,14 @@ fn ev(tree: ref Prog, r: mut ref R, e: i64, v: ref J, p: ref J, pm: bool, env: i
             get_err(ar)
         }
         Expr.Comma(a, b) => {
-            let err = ev(tree, mut r, *a, v, p, pm, env, mut out);
+            let err = ev(tree, mut r, a, v, p, pm, env, mut out);
             if err.is_some() {
                 return err;
             }
-            ev(tree, mut r, *b, v, p, pm, env, mut out)
+            ev(tree, mut r, b, v, p, pm, env, mut out)
         }
         Expr.Alt(a, b) => {
-            let ar = run_p(tree, mut r, *a, v, p, pm, env);
+            let ar = run_p(tree, mut r, a, v, p, pm, env);
             let mut any = false;
             for i in 0..ar.vals.len() {
                 if truthy(ar.vals[i]) {
@@ -2591,17 +2591,17 @@ fn ev(tree: ref Prog, r: mut ref R, e: i64, v: ref J, p: ref J, pm: bool, env: i
             if any {
                 return None;
             }
-            ev(tree, mut r, *b, v, p, pm, env, mut out)
+            ev(tree, mut r, b, v, p, pm, env, mut out)
         }
-        Expr.If(conds, thens, els) => ev_if(tree, mut r, conds, thens, *els, 0, v, p, pm, env, mut out),
+        Expr.If(conds, thens, els) => ev_if(tree, mut r, conds, thens, els, 0, v, p, pm, env, mut out),
         Expr.Bind(src, pat, body) => {
-            let sr = run(tree, mut r, *src, v, env);
+            let sr = run(tree, mut r, src, v, env);
             for i in 0..sr.vals.len() {
-                let e2 = match bind_pat(tree, mut r, *pat, sr.vals[i], v, env) {
+                let e2 = match bind_pat(tree, mut r, pat, sr.vals[i], v, env) {
                     Ok(f) => f,
                     Err(m) => return Some(m),
                 };
-                let err = ev(tree, mut r, *body, v, p, pm, e2, mut out);
+                let err = ev(tree, mut r, body, v, p, pm, e2, mut out);
                 if err.is_some() {
                     return err;
                 }
@@ -2610,9 +2610,9 @@ fn ev(tree: ref Prog, r: mut ref R, e: i64, v: ref J, p: ref J, pm: bool, env: i
         }
         Expr.Call(name, args) => ev_call(tree, mut r, e, name, args, v, p, pm, env, mut out),
         Expr.Def(d, body) => {
-            let fd = ref tree.defs[*d];
-            let f = push_frame(mut r, F_DEF, fd.name, fd.params.len(), J.Null, *d, -1, env);
-            ev(tree, mut r, *body, v, p, pm, f, mut out)
+            let fd = ref tree.defs[d];
+            let f = push_frame(mut r, F_DEF, fd.name, fd.params.len(), J.Null, d, -1, env);
+            ev(tree, mut r, body, v, p, pm, f, mut out)
         }
         _ => {
             if not pm {
@@ -2762,7 +2762,7 @@ fn ev_value(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64, out: mut r
         Expr.LNull => emit(mut out, J.Null, J.Null),
         Expr.LTrue => emit(mut out, J.True, J.Null),
         Expr.LFalse => emit(mut out, J.False, J.Null),
-        Expr.LNum(n, text) => emit(mut out, J.Num(*n, text.clone()), J.Null),
+        Expr.LNum(n, text) => emit(mut out, J.Num(n, text.clone()), J.Null),
         Expr.LStr(s) => emit(mut out, J.Str(s.clone()), J.Null),
         Expr.Format(name) => match format_val(name, v) {
             Ok(s) => emit(mut out, J.Str(s), J.Null),
@@ -2773,11 +2773,11 @@ fn ev_value(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64, out: mut r
             return interp_build(tree, mut r, lits, parts, fmt, n, lits[n].clone(), v, env, mut out);
         }
         Expr.ArrLit(body) => {
-            if *body < 0 {
+            if body < 0 {
                 emit(mut out, arr(Vec.new()), J.Null);
                 return None;
             }
-            let br = run(tree, mut r, *body, v, env);
+            let br = run(tree, mut r, body, v, env);
             if has_err(br) {
                 return get_err(br);
             }
@@ -2787,11 +2787,11 @@ fn ev_value(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64, out: mut r
             return obj_build(tree, mut r, keys, vals, 0, Vec.new(), Vec.new(), v, env, mut out);
         }
         Expr.Neg(a) => {
-            let ar = run(tree, mut r, *a, v, env);
+            let ar = run(tree, mut r, a, v, env);
             for i in 0..ar.vals.len() {
                 let av = ref ar.vals[i];
                 match av {
-                    J.Num(n, _) => emit(mut out, num(0.0 - *n), J.Null),
+                    J.Num(n, _) => emit(mut out, num(0.0 - n), J.Null),
                     _ => return fail(f"{describe(av)} cannot be negated"),
                 }
             }
@@ -2799,11 +2799,11 @@ fn ev_value(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64, out: mut r
         }
         Expr.Bin(op, a, b) => {
             // the right operand varies slowest
-            let br = run(tree, mut r, *b, v, env);
+            let br = run(tree, mut r, b, v, env);
             if br.vals.len() == 0 {
                 return get_err(br);
             }
-            let ar = run(tree, mut r, *a, v, env);
+            let ar = run(tree, mut r, a, v, env);
             for j in 0..br.vals.len() {
                 for i in 0..ar.vals.len() {
                     match binop(op, ar.vals[i], br.vals[j]) {
@@ -2817,20 +2817,20 @@ fn ev_value(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64, out: mut r
             }
             return get_err(br);
         }
-        Expr.And(a, b) => return ev_logic(tree, mut r, *a, *b, true, v, env, mut out),
-        Expr.Or(a, b) => return ev_logic(tree, mut r, *a, *b, false, v, env, mut out),
-        Expr.Assign(op, lhs, rhs) => return ev_assign(tree, mut r, op, *lhs, *rhs, v, env, mut out),
+        Expr.And(a, b) => return ev_logic(tree, mut r, a, b, true, v, env, mut out),
+        Expr.Or(a, b) => return ev_logic(tree, mut r, a, b, false, v, env, mut out),
+        Expr.Assign(op, lhs, rhs) => return ev_assign(tree, mut r, op, lhs, rhs, v, env, mut out),
         Expr.Reduce(src, pat, init, update) => {
-            let ir = run(tree, mut r, *init, v, env);
+            let ir = run(tree, mut r, init, v, env);
             for k in 0..ir.vals.len() {
                 let mut acc = ir.vals[k].clone();
-                let sr = run(tree, mut r, *src, v, env);
+                let sr = run(tree, mut r, src, v, env);
                 for i in 0..sr.vals.len() {
-                    let e2 = match bind_pat(tree, mut r, *pat, sr.vals[i], v, env) {
+                    let e2 = match bind_pat(tree, mut r, pat, sr.vals[i], v, env) {
                         Ok(f) => f,
                         Err(m) => return Some(m),
                     };
-                    let ur = run(tree, mut r, *update, acc, e2);
+                    let ur = run(tree, mut r, update, acc, e2);
                     if has_err(ur) {
                         return get_err(ur);
                     }
@@ -2844,20 +2844,20 @@ fn ev_value(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64, out: mut r
             return get_err(ir);
         }
         Expr.Foreach(src, pat, init, update, extract) => {
-            let ir = run(tree, mut r, *init, v, env);
+            let ir = run(tree, mut r, init, v, env);
             for k in 0..ir.vals.len() {
                 let mut acc = ir.vals[k].clone();
-                let sr = run(tree, mut r, *src, v, env);
+                let sr = run(tree, mut r, src, v, env);
                 for i in 0..sr.vals.len() {
-                    let e2 = match bind_pat(tree, mut r, *pat, sr.vals[i], v, env) {
+                    let e2 = match bind_pat(tree, mut r, pat, sr.vals[i], v, env) {
                         Ok(f) => f,
                         Err(m) => return Some(m),
                     };
-                    let ur = run(tree, mut r, *update, acc, e2);
+                    let ur = run(tree, mut r, update, acc, e2);
                     for j in 0..ur.vals.len() {
                         acc = ur.vals[j].clone();
-                        if *extract >= 0 {
-                            let err = ev(tree, mut r, *extract, acc, J.Null, false, e2, mut out);
+                        if extract >= 0 {
+                            let err = ev(tree, mut r, extract, acc, J.Null, false, e2, mut out);
                             if err.is_some() {
                                 return err;
                             }
@@ -3469,7 +3469,7 @@ fn num_required(v: ref J, what: Str) -> String {
 
 fn math1(name: Str, v: ref J) -> Result[J, String] {
     let x = match v {
-        J.Num(n, _) => *n,
+        J.Num(n, _) => n,
         _ => return Err(num_required(v, name)),
     };
     let y = if name == "floor" {
@@ -3666,7 +3666,7 @@ fn implode(v: ref J) -> Result[J, String] {
     let mut bytes: Vec[u8] = Vec.new();
     for i in 0..items.len() {
         match items[i] {
-            J.Num(x, _) => push_utf8(mut bytes, *x as i64),
+            J.Num(x, _) => push_utf8(mut bytes, x as i64),
             _ => return Err("Unicode codepoint must be numeric".to_string()),
         }
     }
@@ -3815,7 +3815,7 @@ fn native0(r: mut ref R, name: Str, v: ref J) -> Result[J, String] {
     }
     if name == "todateiso8601" {
         return match v {
-            J.Num(x, _) => Ok(J.Str(iso_date(*x))),
+            J.Num(x, _) => Ok(J.Str(iso_date(x))),
             _ => Err("strftime/1 requires parsed datetime inputs".to_string()),
         };
     }
@@ -3880,7 +3880,7 @@ fn native1(name: Str, v: ref J, a: ref J) -> Result[J, String] {
                 _ => Err(f"Cannot check whether object has a {type_name(a)} key"),
             },
             J.Arr(x) => match a {
-                J.Num(n, _) => Ok(jbool(*n >= 0.0 and *n < x.items.len() as f64)),
+                J.Num(n, _) => Ok(jbool(n >= 0.0 and n < x.items.len() as f64)),
                 _ => Err(f"Cannot check whether array has a {type_name(a)} key"),
             },
             _ => Err(f"Cannot check whether {type_name(v)} has a {type_name(a)} key"),
@@ -4223,84 +4223,84 @@ fn check(tree: ref Prog, e: i64, sc: mut ref Scope, errs: mut ref Vec[CErr]) {
             }
         }
         Expr.Index(t, k) => {
-            check(tree, *t, mut sc, mut errs);
-            check(tree, *k, mut sc, mut errs);
+            check(tree, t, mut sc, mut errs);
+            check(tree, k, mut sc, mut errs);
         }
         Expr.Slice(t, f, to) => {
-            check(tree, *t, mut sc, mut errs);
-            check(tree, *f, mut sc, mut errs);
-            check(tree, *to, mut sc, mut errs);
+            check(tree, t, mut sc, mut errs);
+            check(tree, f, mut sc, mut errs);
+            check(tree, to, mut sc, mut errs);
         }
-        Expr.Iter(t) => check(tree, *t, mut sc, mut errs),
+        Expr.Iter(t) => check(tree, t, mut sc, mut errs),
         Expr.Try(a, b) => {
-            check(tree, *a, mut sc, mut errs);
-            check(tree, *b, mut sc, mut errs);
+            check(tree, a, mut sc, mut errs);
+            check(tree, b, mut sc, mut errs);
         }
-        Expr.ArrLit(a) => check(tree, *a, mut sc, mut errs),
+        Expr.ArrLit(a) => check(tree, a, mut sc, mut errs),
         Expr.ObjLit(keys, vals) => {
             for i in 0..keys.len() {
                 check(tree, keys[i], mut sc, mut errs);
                 check(tree, vals[i], mut sc, mut errs);
             }
         }
-        Expr.Neg(a) => check(tree, *a, mut sc, mut errs),
+        Expr.Neg(a) => check(tree, a, mut sc, mut errs),
         Expr.Pipe(a, b) => {
-            check(tree, *a, mut sc, mut errs);
-            check(tree, *b, mut sc, mut errs);
+            check(tree, a, mut sc, mut errs);
+            check(tree, b, mut sc, mut errs);
         }
         Expr.Comma(a, b) => {
-            check(tree, *a, mut sc, mut errs);
-            check(tree, *b, mut sc, mut errs);
+            check(tree, a, mut sc, mut errs);
+            check(tree, b, mut sc, mut errs);
         }
         Expr.Bin(_, a, b) => {
-            check(tree, *a, mut sc, mut errs);
-            check(tree, *b, mut sc, mut errs);
+            check(tree, a, mut sc, mut errs);
+            check(tree, b, mut sc, mut errs);
         }
         Expr.And(a, b) => {
-            check(tree, *a, mut sc, mut errs);
-            check(tree, *b, mut sc, mut errs);
+            check(tree, a, mut sc, mut errs);
+            check(tree, b, mut sc, mut errs);
         }
         Expr.Or(a, b) => {
-            check(tree, *a, mut sc, mut errs);
-            check(tree, *b, mut sc, mut errs);
+            check(tree, a, mut sc, mut errs);
+            check(tree, b, mut sc, mut errs);
         }
         Expr.Alt(a, b) => {
-            check(tree, *a, mut sc, mut errs);
-            check(tree, *b, mut sc, mut errs);
+            check(tree, a, mut sc, mut errs);
+            check(tree, b, mut sc, mut errs);
         }
         Expr.Assign(_, a, b) => {
-            check(tree, *a, mut sc, mut errs);
-            check(tree, *b, mut sc, mut errs);
+            check(tree, a, mut sc, mut errs);
+            check(tree, b, mut sc, mut errs);
         }
         Expr.If(conds, thens, els) => {
             for i in 0..conds.len() {
                 check(tree, conds[i], mut sc, mut errs);
                 check(tree, thens[i], mut sc, mut errs);
             }
-            check(tree, *els, mut sc, mut errs);
+            check(tree, els, mut sc, mut errs);
         }
         Expr.Reduce(src, pat, init, update) => {
-            check(tree, *src, mut sc, mut errs);
-            check(tree, *init, mut sc, mut errs);
+            check(tree, src, mut sc, mut errs);
+            check(tree, init, mut sc, mut errs);
             let nv = sc.vars.len();
-            pat_vars(tree, *pat, mut sc, mut errs);
-            check(tree, *update, mut sc, mut errs);
+            pat_vars(tree, pat, mut sc, mut errs);
+            check(tree, update, mut sc, mut errs);
             sc.vars.truncate(nv);
         }
         Expr.Foreach(src, pat, init, update, extract) => {
-            check(tree, *src, mut sc, mut errs);
-            check(tree, *init, mut sc, mut errs);
+            check(tree, src, mut sc, mut errs);
+            check(tree, init, mut sc, mut errs);
             let nv = sc.vars.len();
-            pat_vars(tree, *pat, mut sc, mut errs);
-            check(tree, *update, mut sc, mut errs);
-            check(tree, *extract, mut sc, mut errs);
+            pat_vars(tree, pat, mut sc, mut errs);
+            check(tree, update, mut sc, mut errs);
+            check(tree, extract, mut sc, mut errs);
             sc.vars.truncate(nv);
         }
         Expr.Bind(src, pat, body) => {
-            check(tree, *src, mut sc, mut errs);
+            check(tree, src, mut sc, mut errs);
             let nv = sc.vars.len();
-            pat_vars(tree, *pat, mut sc, mut errs);
-            check(tree, *body, mut sc, mut errs);
+            pat_vars(tree, pat, mut sc, mut errs);
+            check(tree, body, mut sc, mut errs);
             sc.vars.truncate(nv);
         }
         Expr.Var(name) => {
@@ -4316,7 +4316,7 @@ fn check(tree: ref Prog, e: i64, sc: mut ref Scope, errs: mut ref Vec[CErr]) {
             check_all(tree, args, mut sc, mut errs);
         }
         Expr.Def(d, body) => {
-            let fd = ref tree.defs[*d];
+            let fd = ref tree.defs[d];
             let nf = sc.fns.len();
             let nv = sc.vars.len();
             sc.fns.push(f"{fd.name}/{fd.params.len()}");
@@ -4333,7 +4333,7 @@ fn check(tree: ref Prog, e: i64, sc: mut ref Scope, errs: mut ref Vec[CErr]) {
             check(tree, fd.body, mut sc, mut errs);
             sc.fns.truncate(nf2);
             sc.vars.truncate(nv);
-            check(tree, *body, mut sc, mut errs);
+            check(tree, body, mut sc, mut errs);
             sc.fns.truncate(nf);
         }
         _ => {}
@@ -4555,10 +4555,10 @@ fn base_env(tree: ref Prog, r: mut ref R, root: i64, names: mut ref Vec[String])
         let x = ref tree.exprs[e];
         match x {
             Expr.Def(d, body) => {
-                let fd = ref tree.defs[*d];
-                env = push_frame(mut r, F_DEF, fd.name, fd.params.len(), J.Null, *d, -1, env);
+                let fd = ref tree.defs[d];
+                env = push_frame(mut r, F_DEF, fd.name, fd.params.len(), J.Null, d, -1, env);
                 names.push(f"{fd.name}/{fd.params.len()}");
-                e = *body;
+                e = body;
             }
             _ => break,
         }

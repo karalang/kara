@@ -186,7 +186,7 @@ fn definition(root: Option[TreeNode]) -> Vec[f64] {
         let mut count = 0;
         for (path, val) in all.iter() {
             if path.len() == depth {
-                sum += *val;
+                sum += val;
                 count += 1;
             }
         }

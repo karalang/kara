@@ -1204,7 +1204,7 @@ fn r(v: ref Val) -> String {
         Val.Str(s) => py_repr(s),
         Val.Int(n) => f"{n}",
         Val.Float(x) => f"{x}",
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Tup(items) => {
             let mut parts: Vec[String] = Vec.new();
             for x in items.iter() {
@@ -1219,7 +1219,7 @@ fn r(v: ref Val) -> String {
             }
             f"[{join(parts, ", ")}]"
         }
-        Val.Dt(y, mo, d, h, mi, s) => f"datetime({y}-{pad2(*mo)}-{pad2(*d)} {pad2(*h)}:{pad2(*mi)}:{pad2(*s)})",
+        Val.Dt(y, mo, d, h, mi, s) => f"datetime({y}-{pad2(mo)}-{pad2(d)} {pad2(h)}:{pad2(mi)}:{pad2(s)})",
         Val.Uuid(u) => f"UUID({u})",
         Val.File(name, _) => f"<file {name}>",
     }
@@ -1239,9 +1239,9 @@ fn val_eq(a: ref Val, b: ref Val) -> bool {
         (Val.FlagNeeds, Val.FlagNeeds) => true,
         (Val.Nil, Val.Nil) => true,
         (Val.Str(x), Val.Str(y)) => x == y,
-        (Val.Int(x), Val.Int(y)) => *x == *y,
-        (Val.Float(x), Val.Float(y)) => *x == *y,
-        (Val.Bool(x), Val.Bool(y)) => *x == *y,
+        (Val.Int(x), Val.Int(y)) => x == y,
+        (Val.Float(x), Val.Float(y)) => x == y,
+        (Val.Bool(x), Val.Bool(y)) => x == y,
         _ => false,
     }
 }
@@ -1353,9 +1353,9 @@ fn type_name(t: ref PType) -> String {
         PType.DateTime(_) => "datetime".to_string(),
         PType.FileT => "filename".to_string(),
         PType.PathT(_, file_okay, dir_okay) => {
-            if *file_okay and not *dir_okay {
+            if file_okay and not dir_okay {
                 "file".to_string()
-            } else if *dir_okay and not *file_okay {
+            } else if dir_okay and not file_okay {
                 "directory".to_string()
             } else {
                 "path".to_string()
@@ -2061,7 +2061,7 @@ fn pset(items: mut ref Vec[(String, Val)], k: Str, v: own Val) {
 fn sget(items: ref Vec[(String, i64)], k: Str) -> i64 {
     for (a, b) in items.iter() {
         if a == k {
-            return *b;
+            return b;
         }
     }
     0
@@ -2080,7 +2080,7 @@ fn sset(items: mut ref Vec[(String, i64)], k: Str, v: i64) {
 fn bget(items: ref Vec[(String, bool)], k: Str) -> bool {
     for (a, b) in items.iter() {
         if a == k {
-            return *b;
+            return b;
         }
     }
     false
@@ -2360,7 +2360,7 @@ impl App {
     fn get_command(ref self, cmd: i64, name: Str) -> i64 {
         for (n, i) in self.cmds[cmd].subs.iter() {
             if n == name {
-                return *i;
+                return i;
             }
         }
         -1
@@ -2428,7 +2428,7 @@ fn takes_value(o: ref POpt) -> bool {
 fn lookup_opt(m: ref Vec[(String, i64)], k: Str) -> i64 {
     for (a, b) in m.iter() {
         if a == k {
-            return *b;
+            return b;
         }
     }
     -1
@@ -2775,9 +2775,9 @@ fn range_bound(t: ref PType) -> Option[Bound] {
 
 fn to_int(v: ref Val) -> Option[i64] {
     match v {
-        Val.Int(n) => Some(*n),
-        Val.Bool(b) => Some(if *b { 1 } else { 0 }),
-        Val.Float(x) => Some(*x as i64),
+        Val.Int(n) => Some(n),
+        Val.Bool(b) => Some(if b { 1 } else { 0 }),
+        Val.Float(x) => Some(x as i64),
         Val.Str(s) => py_int(s),
         _ => None,
     }
@@ -2785,9 +2785,9 @@ fn to_int(v: ref Val) -> Option[i64] {
 
 fn to_float(v: ref Val) -> Option[f64] {
     match v {
-        Val.Float(x) => Some(*x),
-        Val.Int(n) => Some(*n as f64),
-        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Val.Float(x) => Some(x),
+        Val.Int(n) => Some(n as f64),
+        Val.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
         Val.Str(s) => py_float(s),
         _ => None,
     }
@@ -2814,12 +2814,12 @@ fn bool_states() -> Vec[(String, bool)] {
 // BoolParamType.str_to_bool
 fn str_to_bool(v: ref Val) -> Option[bool] {
     match v {
-        Val.Bool(b) => Some(*b),
+        Val.Bool(b) => Some(b),
         Val.Str(s) => {
             let k = lower_ascii(py_strip(s));
             for (name, b) in bool_states().iter() {
                 if *name == k {
-                    return Some(*b);
+                    return Some(b);
                 }
             }
             None
@@ -2945,8 +2945,8 @@ fn match_fmt(s: ref Vec[char], si: i64, f: ref Vec[char], fi: i64, fields: mut r
         for (w, n) in field_options(code, s, si).iter() {
             let slot = field_slot(code);
             let old = fields[slot];
-            fields[slot] = *n;
-            if match_fmt(s, si + *w, f, fi + 2, mut fields) {
+            fields[slot] = n;
+            if match_fmt(s, si + w, f, fi + 2, mut fields) {
                 return true;
             }
             fields[slot] = old;
@@ -3105,8 +3105,8 @@ impl App {
                 }
             },
             PType.Choice(choices, cs) => {
-                let normed = self.normalize_choice(ctx, py_str(v), *cs);
-                let values = self.choice_values(ctx, choices, *cs);
+                let normed = self.normalize_choice(ctx, py_str(v), cs);
+                let values = self.choice_values(ctx, choices, cs);
                 for i in 0..choices.len() {
                     if values[i] == normed {
                         return Ok(Val.Str(choices[i].clone()));
@@ -3166,15 +3166,15 @@ impl App {
                 let label = title_case(type_name(ty));
                 let kind = path_kind(name);
                 if kind == 0 {
-                    if not *exists {
+                    if not exists {
                         return Ok(Val.Str(name));
                     }
                     return Err(bad_parameter(f"{label} {py_repr(name)} does not exist."));
                 }
-                if not *file_okay and kind == 1 {
+                if not file_okay and kind == 1 {
                     return Err(bad_parameter(f"{label} {py_repr(name)} is a file."));
                 }
-                if not *dir_okay and kind == 2 {
+                if not dir_okay and kind == 2 {
                     return Err(bad_parameter(f"{label} {py_repr(name)} is a directory."));
                 }
                 Ok(Val.Str(name))
@@ -3202,7 +3202,7 @@ impl App {
     fn type_metavar(ref self, ctx: i64, p: ref Param) -> Option[String] {
         match p.ty {
             PType.Choice(choices, cs) => {
-                let s = join(self.choice_values(ctx, choices, *cs), "|");
+                let s = join(self.choice_values(ctx, choices, cs), "|");
                 if p.required and not p.is_opt {
                     let mut out = String.new();
                     out.push('{');
@@ -3282,7 +3282,7 @@ impl App {
     // ParamType.get_missing_message
     fn missing_message(ref self, ctx: i64, p: ref Param) -> String {
         match p.ty {
-            PType.Choice(choices, cs) => f"Choose from:\n\t{join(self.choice_values(ctx, choices, *cs), ",\n\t")}",
+            PType.Choice(choices, cs) => f"Choose from:\n\t{join(self.choice_values(ctx, choices, cs), ",\n\t")}",
             _ => String.new(),
         }
     }
@@ -3328,10 +3328,10 @@ impl App {
 
 fn truthy(v: ref Val) -> bool {
     match v {
-        Val.Bool(b) => *b,
+        Val.Bool(b) => b,
         Val.Nil => false,
         Val.Unset => false,
-        Val.Int(n) => *n != 0,
+        Val.Int(n) => n != 0,
         Val.Str(s) => s.len() > 0,
         Val.Tup(xs) => xs.len() > 0,
         Val.List(xs) => xs.len() > 0,
@@ -3384,7 +3384,7 @@ fn processing_order(order: ref Vec[i64], params: ref Vec[Param]) -> Vec[i64] {
     keys.sort();
     let mut out: Vec[i64] = Vec.new();
     for (_, _, i) in keys.iter() {
-        out.push(*i);
+        out.push(i);
     }
     out
 }
@@ -4146,9 +4146,9 @@ fn wrap_text(text: Str, width: i64, initial: Str, subsequent: Str, preserve: boo
     for (ind, raw, body) in paras.iter() {
         let mut w2 = Wrapper.new(width);
         w2.replace_whitespace = false;
-        w2.initial_indent = chars_of(f"{initial}{spaces(*ind)}");
-        w2.subsequent_indent = chars_of(f"{subsequent}{spaces(*ind)}");
-        if *raw {
+        w2.initial_indent = chars_of(f"{initial}{spaces(ind)}");
+        w2.subsequent_indent = chars_of(f"{subsequent}{spaces(ind)}");
+        if raw {
             let mut lines: Vec[String] = Vec.new();
             let parts = lines_of(body);
             for k in 0..parts.len() {
@@ -4455,7 +4455,7 @@ impl App {
                 let limit = f.width - 6 - longest;
                 let mut rows: Vec[(String, String)] = Vec.new();
                 for (n, sub) in shown.iter() {
-                    rows.push((n.clone(), self.short_help(*sub, limit)));
+                    rows.push((n.clone(), self.short_help(sub, limit)));
                 }
                 f.section("Commands", rows);
             }

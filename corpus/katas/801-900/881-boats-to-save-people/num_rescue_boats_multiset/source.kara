@@ -17,13 +17,13 @@ fn num_rescue_boats(people: Vec[i64], limit: i64) -> i64 {
     let mut boats = 0;
     while not waiting.is_empty() {
         let lightest = match waiting.ceiling(0) {
-            Some((w, _)) => *w,
+            Some((w, _)) => w,
             None => 0,
         };
         take(mut waiting, lightest);
         boats += 1;
         let partner = match waiting.floor(limit - lightest) {
-            Some((w, _)) => *w,
+            Some((w, _)) => w,
             None => 0,
         };
         if partner > 0 {

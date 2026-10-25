@@ -341,10 +341,10 @@ fn latin9_byte(cp: i64) -> i64 {
     let t = [(0xA4, 0x20AC), (0xA6, 0x0160), (0xA8, 0x0161), (0xB4, 0x017D), (0xB8, 0x017E), (0xBC, 0x0152),
         (0xBD, 0x0153), (0xBE, 0x0178)];
     for (b, u) in t.iter() {
-        if *u == cp {
-            return *b;
+        if u == cp {
+            return b;
         }
-        if *b == cp {
+        if b == cp {
             return -1;
         }
     }
@@ -355,8 +355,8 @@ fn latin9_char(b: i64) -> i64 {
     let t = [(0xA4, 0x20AC), (0xA6, 0x0160), (0xA8, 0x0161), (0xB4, 0x017D), (0xB8, 0x017E), (0xBC, 0x0152),
         (0xBD, 0x0153), (0xBE, 0x0178)];
     for (x, u) in t.iter() {
-        if *x == b {
-            return *u;
+        if x == b {
+            return u;
         }
     }
     b
@@ -1135,7 +1135,7 @@ impl Header {
     fn encode(mut ref self, splitchars: ref String, maxlinelen: ref Option[i64], linesep: ref String) -> Result[String, String] {
         self.normalize();
         let mut maxlen = match maxlinelen {
-            Some(n) => *n,
+            Some(n) => n,
             None => self.maxlinelen,
         };
         if maxlen == 0 {
@@ -2777,7 +2777,7 @@ fn decode_params(params: ref Vec[(String, String)]) -> Vec[(String, PValue)] {
         let mut joined = String.new();
         let mut extended = false;
         for (_, s, encoded) in sorted.iter() {
-            if *encoded {
+            if encoded {
                 joined.push_str(unquote_latin1(s));
                 extended = true;
             } else {
@@ -5281,8 +5281,8 @@ impl Box {
     fn lookup(mut ref self, key: i64) -> Result[(i64, i64), String] {
         self.ensure_toc();
         for (k, a, b) in self.toc.iter() {
-            if *k == key {
-                return Ok((*a, *b));
+            if k == key {
+                return Ok((a, b));
             }
         }
         Err(no_key(f"{key}"))
@@ -5290,7 +5290,7 @@ impl Box {
 
     fn babyl_labels_of(ref self, key: i64) -> Option[Vec[Label]] {
         for (k, ls) in self.blabels.iter() {
-            if *k == key {
+            if k == key {
                 return Some(ls.clone());
             }
         }
@@ -5793,8 +5793,8 @@ impl Box {
             let (name, kl) = seqs[i].clone();
             let mut kl2 = kl.clone();
             for (old, new) in changes.iter() {
-                if let Some(at) = kl2.iter().position(|k| *k == *old) {
-                    kl2[at] = *new;
+                if let Some(at) = kl2.iter().position(|k| *k == old) {
+                    kl2[at] = new;
                 }
             }
             seqs[i] = (name, kl2);

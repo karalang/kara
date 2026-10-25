@@ -29,9 +29,9 @@ fn minimum_length_encoding(words: Vec[String]) -> i64 {
     let mut counted: Vec[bool] = Vec.filled(child_count.len(), false);
     let mut total = 0;
     for (node, length) in ends.iter() {
-        if child_count[*node] == 0 and not counted[*node] {
-            counted[*node] = true;
-            total += *length + 1;
+        if child_count[node] == 0 and not counted[node] {
+            counted[node] = true;
+            total += length + 1;
         }
     }
     total

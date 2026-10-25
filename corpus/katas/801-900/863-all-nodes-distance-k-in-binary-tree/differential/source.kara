@@ -91,8 +91,8 @@ fn graph_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
         adjacent.push(Vec.new());
     }
     for (a, b) in edges.iter() {
-        adjacent[*a].push(*b);
-        adjacent[*b].push(*a);
+        adjacent[a].push(b);
+        adjacent[b].push(a);
     }
     let mut dist: Vec[i64] = Vec.filled(top + 1, -1);
     let mut queue: VecDeque[i64] = VecDeque.new();
@@ -260,8 +260,8 @@ fn lca_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
     let mut parent: Vec[i64] = Vec.filled(top + 1, -2);
     let mut depth: Vec[i64] = Vec.filled(top + 1, 0);
     for (v, up, d) in ups.iter() {
-        parent[*v] = *up;
-        depth[*v] = *d;
+        parent[v] = up;
+        depth[v] = d;
     }
     if parent[target] == -2 {
         return found;
@@ -321,8 +321,8 @@ fn literal_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
         d.push(row);
     }
     for (a, b) in edges.iter() {
-        d[*a][*b] = 1;
-        d[*b][*a] = 1;
+        d[a][b] = 1;
+        d[b][a] = 1;
     }
     for m in 0..size {
         for i in 0..size {

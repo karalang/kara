@@ -25,8 +25,8 @@ fn star_oranges_rotting(grid: ref Vec[Vec[i64]]) -> i64 {
     while let Some((r, c, t)) = queue.pop_front() {
         minutes = t;
         for (dr, dc) in steps.iter() {
-            let nr = r + *dr;
-            let nc = c + *dc;
+            let nr = r + dr;
+            let nc = c + dc;
             if nr >= 0 and nr < m and nc >= 0 and nc < n and g[nr][nc] == 1 {
                 g[nr][nc] = 2;
                 fresh -= 1;
@@ -58,7 +58,7 @@ fn levels_oranges_rotting(grid: ref Vec[Vec[i64]]) -> i64 {
     while fresh > 0 {
         let mut next: Vec[(i64, i64)] = Vec.new();
         for (r, c) in frontier.iter() {
-            for (nr, nc) in vec![(*r + 1, *c), (*r - 1, *c), (*r, *c + 1), (*r, *c - 1)] {
+            for (nr, nc) in vec![(r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)] {
                 if nr >= 0 and nr < m and nc >= 0 and nc < n and g[nr][nc] == 1 {
                     g[nr][nc] = 2;
                     fresh -= 1;

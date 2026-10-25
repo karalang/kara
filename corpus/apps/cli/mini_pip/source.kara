@@ -1920,13 +1920,13 @@ fn normalize_extras(m: ref MNode) -> MNode {
             MNode.List(out)
         }
         MNode.Item(lv, l, op, rv, r) => {
-            if *lv and l == "extra" and not *rv {
+            if lv and l == "extra" and not rv {
                 return MNode.Item(true, l.clone(), op.clone(), false, canonicalize_name(r));
             }
-            if *rv and r == "extra" and not *lv {
+            if rv and r == "extra" and not lv {
                 return MNode.Item(false, canonicalize_name(l), op.clone(), true, r.clone());
             }
-            if *rv and (r == "extras" or r == "dependency_groups") and not *lv {
+            if rv and (r == "extras" or r == "dependency_groups") and not lv {
                 return MNode.Item(false, canonicalize_name(l), op.clone(), true, r.clone());
             }
             m.clone()
@@ -1974,7 +1974,7 @@ fn format_marker(m: ref MNode, first: bool) -> String {
             let inner = join(parts, " ");
             if first { inner } else { f"({inner})" }
         }
-        MNode.Item(lv, l, op, rv, r) => f"{serialize_operand(*lv, l)} {op} {serialize_operand(*rv, r)}",
+        MNode.Item(lv, l, op, rv, r) => f"{serialize_operand(lv, l)} {op} {serialize_operand(rv, r)}",
         MNode.Word(w) => w.clone(),
     }
 }
@@ -2059,12 +2059,12 @@ fn eval_marker(m: ref MNode, env: ref Env) -> Result[bool, String] {
             Ok(any or all)
         }
         MNode.Item(lv, l, op, _, r) => {
-            let key = if *lv { l.clone() } else { r.clone() };
+            let key = if lv { l.clone() } else { r.clone() };
             let value = match env.get(key) {
                 Some(v) => v,
                 None => return Err(f"UndefinedEnvironmentName: {py_repr(key)}"),
             };
-            if *lv { eval_op(value, op, r, key) } else { eval_op(l, op, value, key) }
+            if lv { eval_op(value, op, r, key) } else { eval_op(l, op, value, key) }
         }
         MNode.Word(_) => Ok(false),
     }

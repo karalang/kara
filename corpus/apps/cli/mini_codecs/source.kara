@@ -661,8 +661,8 @@ fn lookup(t: ref Tables, name: ref String) -> Result[Codec, Exc] {
 
 fn charmap_encode_char(m: ref CharMap, c: i64) -> i64 {
     for (u, b) in m.encode.iter() {
-        if *u == c {
-            return *b;
+        if u == c {
+            return b;
         }
     }
     -1
@@ -670,7 +670,7 @@ fn charmap_encode_char(m: ref CharMap, c: i64) -> i64 {
 
 fn name_of(t: ref Tables, c: i64) -> Option[String] {
     for (u, n) in t.names.iter() {
-        if *u == c {
+        if u == c {
             return Some(n.clone());
         }
     }

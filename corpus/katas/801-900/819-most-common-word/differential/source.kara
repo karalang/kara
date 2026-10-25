@@ -161,10 +161,10 @@ fn occurrences(text: Str, word: Str) -> i64 {
     let target = word.bytes();
     let mut n = 0;
     for (start, end) in word_spans(text).iter() {
-        if *end - *start == target.len() {
+        if end - start == target.len() {
             let mut same = true;
             for k in 0..target.len() {
-                if lower(bytes[*start + k]) != lower(target[k]) {
+                if lower(bytes[start + k]) != lower(target[k]) {
                     same = false;
                 }
             }
@@ -185,7 +185,7 @@ fn answer_by_definition(paragraph: Str, banned: Vec[String]) -> String {
     let mut most = 0;
     for (start, end) in word_spans(paragraph).iter() {
         let mut word = String.new();
-        for k in *start..*end {
+        for k in start..end {
             word.push(lower(bytes[k]) as char);
         }
         let mut is_banned = false;
@@ -293,7 +293,7 @@ fn main() {
         let top = occurrences(paragraph.as_str(), want.as_str());
         let mut level = 0;
         for (start, end) in word_spans(paragraph.as_str()).iter() {
-            let w = paragraph[*start..*end].to_lowercase();
+            let w = paragraph[start..end].to_lowercase();
             if not banned.contains(w.clone()) and w != want and occurrences(paragraph.as_str(), w.as_str()) == top {
                 level += 1;
             }

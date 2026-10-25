@@ -6,7 +6,7 @@ enum V {
 
 fn f(x: ref Option[i64]) -> i64 {
     match x {
-        Some(n) => *n,
+        Some(n) => n,
         None => -1,
     }
 }
@@ -21,7 +21,7 @@ fn name(x: ref Option[String]) -> String {
 fn v(x: ref V) -> i64 {
     match x {
         V.None => 0,
-        V.Int(n) => *n,
+        V.Int(n) => n,
     }
 }
 

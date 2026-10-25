@@ -14,10 +14,10 @@ fn find_redundant_connection(edges: Vec[(i64, i64)]) -> (i64, i64) {
     }
     let mut degree: Vec[i64] = vec![0; n + 1];
     for (a, b) in edges.iter() {
-        adj[*a].push(*b);
-        adj[*b].push(*a);
-        degree[*a] += 1;
-        degree[*b] += 1;
+        adj[a].push(b);
+        adj[b].push(a);
+        degree[a] += 1;
+        degree[b] += 1;
     }
     let mut leaves: Vec[i64] = Vec.new();
     for v in 1..n + 1 {
@@ -65,7 +65,7 @@ fn connects(edges: ref Vec[(i64, i64)], n: i64) -> bool {
         label.push(v);
     }
     for (a, b) in edges.iter() {
-        let (from, to) = (label[*a], label[*b]);
+        let (from, to) = (label[a], label[b]);
         if from != to {
             for v in 1..n + 1 {
                 if label[v] == from {

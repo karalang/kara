@@ -224,9 +224,9 @@ fn is_int(v: ref Val) -> bool {
 
 fn int_value(v: ref Val) -> i128 {
     match v {
-        Val.Bool(b) => if *b { 1 } else { 0 },
-        Val.Int(n) => *n,
-        Val.Int64(n) => *n,
+        Val.Bool(b) => if b { 1 } else { 0 },
+        Val.Int(n) => n,
+        Val.Int64(n) => n,
         _ => 0,
     }
 }
@@ -1419,24 +1419,24 @@ fn dict_repr(d: ref Vec[(String, Val)]) -> Result[String, Exc] {
 fn py_repr(v: ref Val) -> Result[String, Exc] {
     let s = match v {
         Val.Null => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => f"{n}",
         Val.Int64(n) => f"{n}",
-        Val.Float(x) => float_repr(*x),
+        Val.Float(x) => float_repr(x),
         Val.Str(s) => py_str_repr(s),
         Val.Bytes(b) => py_bytes_repr(b),
-        Val.Binary(b, st) => if *st == 8 { "<Binary(REDACTED, 8)>".to_string() } else { f"Binary({py_bytes_repr(b)}, {st})" },
+        Val.Binary(b, st) => if st == 8 { "<Binary(REDACTED, 8)>".to_string() } else { f"Binary({py_bytes_repr(b)}, {st})" },
         Val.Uuid(b) => f"UUID('{uuid_str(b)}')",
         Val.Oid(b) => f"ObjectId('{hex_of(b)}')",
-        Val.Dt(t) => dt_repr(*t),
+        Val.Dt(t) => dt_repr(t),
         Val.DtMs(m) => f"DatetimeMS({m})",
-        Val.Regex(p, f) => f"Regex({py_str_repr(p)}, {flags_repr(*f)})",
+        Val.Regex(p, f) => f"Regex({py_str_repr(p)}, {flags_repr(f)})",
         Val.Code(c, scope) => match scope {
             Some(d) => f"Code({py_str_repr(c)}, {dict_repr(d)?})",
             None => f"Code({py_str_repr(c)}, None)",
         },
         Val.Ts(t, i) => f"Timestamp({t}, {i})",
-        Val.Dec(h, l) => f"Decimal128('{dec128_str(*h, *l)?}')",
+        Val.Dec(h, l) => f"Decimal128('{dec128_str(h, l)?}')",
         Val.MinKey => "MinKey()".to_string(),
         Val.MaxKey => "MaxKey()".to_string(),
         Val.DbRef(coll, id, db, extra) => {
@@ -1468,10 +1468,10 @@ fn py_str(v: ref Val) -> Result[String, Exc] {
         Val.Str(s) => Ok(s.clone()),
         Val.Code(c, _) => Ok(c.clone()),
         Val.Oid(b) => Ok(hex_of(b)),
-        Val.Dec(h, l) => dec128_str(*h, *l),
+        Val.Dec(h, l) => dec128_str(h, l),
         Val.Uuid(b) => Ok(uuid_str(b)),
         Val.Dt(t) => {
-            let p = dt_parts(*t);
+            let p = dt_parts(t);
             let base = f"{pad(p.y, 4)}-{pad(p.mo, 2)}-{pad(p.d, 2)} {pad(p.h, 2)}:{pad(p.mi, 2)}:{pad(p.s, 2)}";
             Ok(if p.us != 0 { f"{base}.{pad(p.us, 6)}" } else { base })
         },
@@ -1520,7 +1520,7 @@ fn py_int_of(v: ref Val) -> Result[i128, Exc] {
     match v {
         Val.Str(s) => py_int(s, 10),
         Val.Code(s, _) => py_int(s, 10),
-        Val.Float(x) => float_to_int(*x),
+        Val.Float(x) => float_to_int(x),
         _ => {
             if is_int(v) {
                 return Ok(int_value(v));
@@ -2213,10 +2213,10 @@ fn dump_date(t: i64, mode: i64, out: mut ref String) {
 fn dump_val(v: ref Val, mode: i64, out: mut ref String) -> Result[(), Exc] {
     match v {
         Val.Null => out.push_str("null"),
-        Val.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Val.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         Val.Int(n) => {
             if mode == MODE_CANONICAL {
-                if *n >= -2147483648 and *n < 2147483648 {
+                if n >= -2147483648 and n < 2147483648 {
                     out.push_str(f"{{\"$numberInt\": \"{n}\"}}");
                 } else {
                     out.push_str(f"{{\"$numberLong\": \"{n}\"}}");
@@ -2234,11 +2234,11 @@ fn dump_val(v: ref Val, mode: i64, out: mut ref String) -> Result[(), Exc] {
         },
         Val.Float(x) => {
             let inf = 1.0e300 * 1.0e300;
-            let special = if *x != *x {
+            let special = if x != x {
                 "NaN"
-            } else if *x == inf {
+            } else if x == inf {
                 "Infinity"
-            } else if *x == -inf {
+            } else if x == -inf {
                 "-Infinity"
             } else {
                 ""
@@ -2246,16 +2246,16 @@ fn dump_val(v: ref Val, mode: i64, out: mut ref String) -> Result[(), Exc] {
             if mode != MODE_LEGACY and special.len() > 0 {
                 out.push_str(f"{{\"$numberDouble\": \"{special}\"}}");
             } else if mode == MODE_CANONICAL {
-                out.push_str(f"{{\"$numberDouble\": \"{float_repr(*x)}\"}}");
+                out.push_str(f"{{\"$numberDouble\": \"{float_repr(x)}\"}}");
             } else if special.len() > 0 {
                 out.push_str(special);
             } else {
-                out.push_str(float_repr(*x));
+                out.push_str(float_repr(x));
             }
         },
         Val.Str(s) => out.push_str(json_str(s)),
         Val.Bytes(b) => dump_binary(b, 0, mode, mut out),
-        Val.Binary(b, st) => dump_binary(b, *st, mode, mut out),
+        Val.Binary(b, st) => dump_binary(b, st, mode, mut out),
         Val.Uuid(b) => {
             if mode == MODE_LEGACY {
                 out.push_str(f"{{\"$uuid\": \"{hex_of(b)}\"}}");
@@ -2264,10 +2264,10 @@ fn dump_val(v: ref Val, mode: i64, out: mut ref String) -> Result[(), Exc] {
             }
         },
         Val.Oid(b) => out.push_str(f"{{\"$oid\": \"{hex_of(b)}\"}}"),
-        Val.Dt(t) => dump_date(*t, mode, mut out),
+        Val.Dt(t) => dump_date(t, mode, mut out),
         Val.DtMs(m) => {
-            if mode == MODE_RELAXED and *m >= 0 and *m <= MAX_UTC_MS {
-                dump_date(*m * 1000, mode, mut out);
+            if mode == MODE_RELAXED and m >= 0 and m <= MAX_UTC_MS {
+                dump_date(m * 1000, mode, mut out);
             } else if mode == MODE_LEGACY {
                 out.push_str(f"{{\"$date\": \"{m}\"}}");
             } else {
@@ -2277,7 +2277,7 @@ fn dump_val(v: ref Val, mode: i64, out: mut ref String) -> Result[(), Exc] {
         Val.Regex(p, f) => {
             let mut letters = String.new();
             for (bit, l) in [(RE_I, 'i'), (RE_L, 'l'), (RE_M, 'm'), (RE_S, 's'), (RE_U, 'u'), (RE_X, 'x')] {
-                if *f & bit != 0 {
+                if f & bit != 0 {
                     letters.push(l);
                 }
             }
@@ -2296,7 +2296,7 @@ fn dump_val(v: ref Val, mode: i64, out: mut ref String) -> Result[(), Exc] {
             out.push('}');
         },
         Val.Ts(t, i) => out.push_str(f"{{\"$timestamp\": {{\"t\": {t}, \"i\": {i}}}}}"),
-        Val.Dec(h, l) => out.push_str(f"{{\"$numberDecimal\": \"{dec128_str(*h, *l)?}\"}}"),
+        Val.Dec(h, l) => out.push_str(f"{{\"$numberDecimal\": \"{dec128_str(h, l)?}\"}}"),
         Val.MinKey => out.push_str("{\"$minKey\": 1}"),
         Val.MaxKey => out.push_str("{\"$maxKey\": 1}"),
         Val.DbRef(coll, id, db, extra) => dump_dict(dbref_doc(coll, id, db, extra), mode, mut out)?,
@@ -2424,7 +2424,7 @@ fn encode_value(out: mut ref Vec[u8], name: Str, v: ref Val, check_keys: bool) -
     let tag: u8 = match v {
         Val.Null => 0x0A,
         Val.Bool(_) => 0x08,
-        Val.Int(n) => if *n >= -2147483648 and *n <= 2147483647 { 0x10 } else { 0x12 },
+        Val.Int(n) => if n >= -2147483648 and n <= 2147483647 { 0x10 } else { 0x12 },
         Val.Int64(_) => 0x12,
         Val.Float(_) => 0x01,
         Val.Str(_) => 0x02,
@@ -2447,12 +2447,12 @@ fn encode_value(out: mut ref Vec[u8], name: Str, v: ref Val, check_keys: bool) -
     // the pieces that can fail come before anything is written
     match v {
         Val.Int(n) => {
-            if *n < -9223372036854775808 or *n > 9223372036854775807 {
+            if n < -9223372036854775808 or n > 9223372036854775807 {
                 return Err(exc("OverflowError", "BSON can only handle up to 8-byte ints"));
             }
         },
         Val.Int64(n) => {
-            if *n < -9223372036854775808 or *n > 9223372036854775807 {
+            if n < -9223372036854775808 or n > 9223372036854775807 {
                 return Err(exc("OverflowError", "BSON can only handle up to 8-byte ints"));
             }
         },
@@ -2465,15 +2465,15 @@ fn encode_value(out: mut ref Vec[u8], name: Str, v: ref Val, check_keys: bool) -
     push_cstr(mut out, name);
     match v {
         Val.Null => {},
-        Val.Bool(b) => out.push(if *b { 1 } else { 0 }),
+        Val.Bool(b) => out.push(if b { 1 } else { 0 }),
         Val.Int(n) => {
             if tag == 0x10 {
-                push_i32(mut out, *n as i64);
+                push_i32(mut out, n as i64);
             } else {
-                push_i64(mut out, *n as i64);
+                push_i64(mut out, n as i64);
             }
         },
-        Val.Int64(n) => push_i64(mut out, *n as i64),
+        Val.Int64(n) => push_i64(mut out, n as i64),
         Val.Float(x) => push_u64(mut out, x.to_bits()),
         Val.Str(s) => {
             push_i32(mut out, s.len() as i64 + 1);
@@ -2485,30 +2485,30 @@ fn encode_value(out: mut ref Vec[u8], name: Str, v: ref Val, check_keys: bool) -
             out.extend_from_slice(b[..]);
         },
         Val.Binary(b, st) => {
-            if *st == 2 {
+            if st == 2 {
                 push_i32(mut out, b.len() as i64 + 4);
                 out.push(2);
                 push_i32(mut out, b.len() as i64);
             } else {
                 push_i32(mut out, b.len() as i64);
-                out.push(*st as u8);
+                out.push(st as u8);
             }
             out.extend_from_slice(b[..]);
         },
         Val.Oid(b) => out.extend_from_slice(b[..]),
-        Val.Dt(t) => push_i64(mut out, dt_millis(*t)),
-        Val.DtMs(m) => push_i64(mut out, *m),
+        Val.Dt(t) => push_i64(mut out, dt_millis(t)),
+        Val.DtMs(m) => push_i64(mut out, m),
         Val.Regex(p, f) => {
             if p.contains("\u{0}") {
                 return Err(invalid_doc("BSON keys / regex patterns must not contain a NUL character"));
             }
             push_cstr(mut out, p);
             let mut letters = String.new();
-            if *f == RE_U {
+            if f == RE_U {
                 letters.push('u');
-            } else if *f != 0 {
+            } else if f != 0 {
                 for (bit, l) in [(RE_I, 'i'), (RE_L, 'l'), (RE_M, 'm'), (RE_S, 's'), (RE_U, 'u'), (RE_X, 'x')] {
-                    if *f & bit != 0 {
+                    if f & bit != 0 {
                         letters.push(l);
                     }
                 }
@@ -2532,12 +2532,12 @@ fn encode_value(out: mut ref Vec[u8], name: Str, v: ref Val, check_keys: bool) -
             }
         },
         Val.Ts(t, i) => {
-            push_i32(mut out, *i);
-            push_i32(mut out, *t);
+            push_i32(mut out, i);
+            push_i32(mut out, t);
         },
         Val.Dec(h, l) => {
-            push_u64(mut out, *l);
-            push_u64(mut out, *h);
+            push_u64(mut out, l);
+            push_u64(mut out, h);
         },
         Val.MinKey => {},
         Val.MaxKey => {},

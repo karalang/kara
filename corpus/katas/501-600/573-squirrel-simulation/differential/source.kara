@@ -64,7 +64,7 @@ fn min_distance_sorted(height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i6
     let (_, first) = extra[0];
     let mut walk = distance_sorted(squirrel, nuts[first]) + distance_sorted(nuts[first], tree);
     for (_, i) in extra[1..].iter() {
-        walk += 2 * distance_sorted(nuts[*i], tree);
+        walk += 2 * distance_sorted(nuts[i], tree);
     }
     walk
 }
@@ -86,9 +86,9 @@ fn steps(height: i64, width: i64, from: Vec[i64], to: Vec[i64]) -> i64 {
         }
         let moves = vec![(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)];
         for (nr, nc) in moves.iter() {
-            if *nr >= 0 and *nr < height and *nc >= 0 and *nc < width and not seen[*nr * width + *nc] {
-                seen[*nr * width + *nc] = true;
-                queue.push((*nr, *nc, d + 1));
+            if nr >= 0 and nr < height and nc >= 0 and nc < width and not seen[nr * width + nc] {
+                seen[nr * width + nc] = true;
+                queue.push((nr, nc, d + 1));
             }
         }
     }

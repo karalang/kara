@@ -57,8 +57,8 @@ impl Tree {
 fn falling_squares(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut edges: Vec[i64] = Vec.new();
     for (left, side) in positions.iter() {
-        edges.push(*left);
-        edges.push(*left + *side);
+        edges.push(left);
+        edges.push(left + side);
     }
     edges.sort();
     edges.dedup();
@@ -66,9 +66,9 @@ fn falling_squares(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut tree = Tree { best: vec![0; 4 * cells], pending: vec![-1; 4 * cells] };
     let mut answer: Vec[i64] = Vec.new();
     for (left, side) in positions.iter() {
-        let from = edges.binary_search(*left).unwrap();
-        let to = edges.binary_search(*left + *side).unwrap();
-        let top = tree.query(1, 0, cells, from, to) + *side;
+        let from = edges.binary_search(left).unwrap();
+        let to = edges.binary_search(left + side).unwrap();
+        let top = tree.query(1, 0, cells, from, to) + side;
         tree.set(1, 0, cells, from, to, top);
         answer.push(tree.best[1]);
     }

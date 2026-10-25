@@ -22,7 +22,7 @@ fn width_of_binary_tree_star(root: Option[TreeNode]) -> i64 {
         best = best.max(last - first + 1);
         let mut next: Vec[(TreeNode, i64)] = Vec.new();
         for (node, place) in level.iter() {
-            let p = (*place - first) * 2;
+            let p = (place - first) * 2;
             if let Some(l) = node.left {
                 next.push((l, p));
             }

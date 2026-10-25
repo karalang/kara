@@ -19,7 +19,7 @@ impl T {
     }
     fn get(ref self, k: ref Val) -> Val {
         match k {
-            Val.Int(i) => if *i < self.arr.len() { Val.Int(self.arr[*i]) } else { Val.Nil },
+            Val.Int(i) => if i < self.arr.len() { Val.Int(self.arr[i]) } else { Val.Nil },
             Val.Nil => Val.Nil,
         }
     }

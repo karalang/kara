@@ -343,24 +343,24 @@ fn emit_node(prog: mut ref Vec[Inst], n: ref Node) {
             prog[at] = Inst.Look(prog.len());
         }
         Node.Rep(body, lo, hi, greedy) => {
-            for _ in 0..*lo {
+            for _ in 0..lo {
                 emit_node(mut prog, body[0]);
             }
-            if *hi < 0 {
+            if hi < 0 {
                 // x*: L: split(body, out); body; jmp L
                 let l = prog.len();
                 prog.push(Inst.Split(0, 0));
                 emit_node(mut prog, body[0]);
                 prog.push(Inst.Jmp(l));
                 let out = prog.len();
-                prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
             } else {
-                for _ in *lo..*hi {
+                for _ in lo..hi {
                     let l = prog.len();
                     prog.push(Inst.Split(0, 0));
                     emit_node(mut prog, body[0]);
                     let out = prog.len();
-                    prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                    prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
                 }
             }
         }
@@ -424,19 +424,19 @@ fn re_run(re: ref Re, s: ref Vec[char], pc0: i64, pos0: i64, slots: mut ref Vec[
                     if pos == s.len() { pc += 1; } else { break; }
                 }
                 Inst.Split(a, b) => {
-                    stack.push(Bt.Try(*b, pos));
-                    pc = *a;
+                    stack.push(Bt.Try(b, pos));
+                    pc = a;
                 }
-                Inst.Jmp(a) => pc = *a,
+                Inst.Jmp(a) => pc = a,
                 Inst.Save(k) => {
-                    stack.push(Bt.Restore(*k, slots[*k]));
-                    slots[*k] = pos;
+                    stack.push(Bt.Restore(k, slots[k]));
+                    slots[k] = pos;
                     pc += 1;
                 }
                 Inst.Look(cont) => {
                     let mut inner = slots.clone();
                     if re_run(re, s, pc + 1, pos, mut inner) {
-                        pc = *cont;
+                        pc = cont;
                     } else {
                         break;
                     }
@@ -724,7 +724,7 @@ fn is(s: ref Vec[char], i: i64, c: char) -> bool {
 
 fn is_some(ch: ref Option[char], c: char) -> bool {
     match ch {
-        Some(x) => *x == c,
+        Some(x) => x == c,
         None => false,
     }
 }
@@ -1466,7 +1466,7 @@ fn h_str(e: ref HEnc, s: ref String, level: i64) -> String {
 fn h_enc(e: ref HEnc, v: ref Hv, level: i64, root: bool) -> String {
     match v {
         Hv.Null => "null".to_string(),
-        Hv.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Hv.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
         Hv.Int(i) => i.clone(),
         Hv.Dec(d) => dec_str(d),
         Hv.Str(s) => h_str(e, s, level),
@@ -1538,7 +1538,7 @@ struct JEnc {
 fn j_enc(e: ref JEnc, v: ref Hv, level: i64) -> String {
     match v {
         Hv.Null => "null".to_string(),
-        Hv.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Hv.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
         Hv.Int(i) => i.clone(),
         Hv.Dec(d) => dec_str(d),
         Hv.Str(s) => quote_str(s, e.ascii, false),

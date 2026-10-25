@@ -339,12 +339,12 @@ fn uint_i64(b: ref Vec[u8]) -> i64 {
 fn py_repr(v: ref Val) -> String {
     match v {
         Val.Str(s) => py_str_repr(s),
-        Val.Double(x) => float_repr(*x),
-        Val.Float(x) => float_repr(*x),
+        Val.Double(x) => float_repr(x),
+        Val.Float(x) => float_repr(x),
         Val.Bytes(b) => py_bytes_repr(b),
         Val.UInt(b) => uint_digits(b),
         Val.Int(n) => f"{n}",
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Map(d) => {
             let mut parts: Vec[String] = Vec.new();
             for p in d {
@@ -374,8 +374,8 @@ fn py_str(v: ref Val) -> String {
 fn int_of(v: ref Val) -> i64 {
     match v {
         Val.UInt(b) => uint_i64(b),
-        Val.Int(n) => *n,
-        Val.Bool(b) => if *b { 1 } else { 0 },
+        Val.Int(n) => n,
+        Val.Bool(b) => if b { 1 } else { 0 },
         _ => 0,
     }
 }
@@ -384,12 +384,12 @@ fn int_of(v: ref Val) -> i64 {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.Str(s) => s.len() > 0,
-        Val.Double(x) => *x != 0.0,
-        Val.Float(x) => *x != 0.0,
+        Val.Double(x) => x != 0.0,
+        Val.Float(x) => x != 0.0,
         Val.Bytes(b) => b.len() > 0,
         Val.UInt(b) => uint_i64(b) != 0,
-        Val.Int(n) => *n != 0,
-        Val.Bool(b) => *b,
+        Val.Int(n) => n != 0,
+        Val.Bool(b) => b,
         Val.Map(d) => d.len() > 0,
         Val.Arr(items) => items.len() > 0,
     }

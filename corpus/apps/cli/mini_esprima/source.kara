@@ -610,7 +610,7 @@ impl ParseState {
     fn group_of(ref self, name: ref Vec[i64]) -> i64 {
         for (n, g) in self.names.iter() {
             if same(n, name) {
-                return *g;
+                return g;
             }
         }
         -1
@@ -680,15 +680,15 @@ fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
             }
             Node.Repeat(_, min, max, body) => {
                 let w = width_of(widths, body);
-                lo = add_width(lo, mul_width(w.lo, *min));
-                if *max == maxrepeat() and w.hi > 0 {
+                lo = add_width(lo, mul_width(w.lo, min));
+                if max == maxrepeat() and w.hi > 0 {
                     hi = maxwidth();
                 } else {
-                    hi = add_width(hi, mul_width(w.hi, *max));
+                    hi = add_width(hi, mul_width(w.hi, max));
                 }
             }
             Node.GroupRef(g) => {
-                let w = ref widths[*g];
+                let w = ref widths[g];
                 lo = add_width(lo, w.lo);
                 hi = add_width(hi, w.hi);
             }
@@ -1012,9 +1012,9 @@ fn parse_set(src: mut ref ReTokenizer, out: mut ref Vec[Node]) -> Result[(), ReE
         let only = ref set[0];
         if let Item.Lit(c) = only {
             if negate {
-                out.push(Node.NotLit(*c));
+                out.push(Node.NotLit(c));
             } else {
-                out.push(Node.Lit(*c));
+                out.push(Node.Lit(c));
             }
             return Ok(());
         }
@@ -1245,7 +1245,7 @@ fn parse_group(src: mut ref ReTokenizer, st: mut ref ParseState, verbose: mut re
                 }
                 let mut seen = false;
                 for (g, _) in st.refpos.iter() {
-                    if *g == condgroup {
+                    if g == condgroup {
                         seen = true;
                     }
                 }
@@ -1349,8 +1349,8 @@ fn parse(pattern: ref Vec[i64], flags: i64) -> Result[ReParsed, ReErr] {
         return Err(src.error("unbalanced parenthesis".to_string(), 0));
     }
     for (g, pos) in st.refpos.iter() {
-        if *g >= st.groups() {
-            return Err(re_error(f"invalid group reference {*g}", *pos));
+        if g >= st.groups() {
+            return Err(re_error(f"invalid group reference {g}", pos));
         }
     }
     let groups = st.groups() - 1;
@@ -1429,11 +1429,11 @@ impl Compiler {
         for n in nodes.iter() {
             match n {
                 Node.Lit(c) => {
-                    let v = if icase { lower(*c, ascii) } else { *c };
+                    let v = if icase { lower(c, ascii) } else { c };
                     self.emit(Op.Lit(v, icase, ascii));
                 }
                 Node.NotLit(c) => {
-                    let v = if icase { lower(*c, ascii) } else { *c };
+                    let v = if icase { lower(c, ascii) } else { c };
                     self.emit(Op.NotLit(v, icase, ascii));
                 }
                 Node.Any => {
@@ -1444,12 +1444,12 @@ impl Compiler {
                     }
                 }
                 Node.In(items, negate) => {
-                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    self.sets.push(CharSet { items: items.clone(), negate: negate });
                     let idx = self.sets.len() - 1;
                     self.emit(Op.In(idx, icase, ascii));
                 }
                 Node.At(kind) => {
-                    let mut k = *kind;
+                    let mut k = kind;
                     if (flags & flag_m()) != 0 {
                         if k == at_beginning() {
                             k = at_beginning_line();
@@ -1480,23 +1480,23 @@ impl Compiler {
                     }
                 }
                 Node.Group(g, add, off, body) => {
-                    if *g > 0 {
-                        self.emit(Op.Mark(2 * *g));
+                    if g > 0 {
+                        self.emit(Op.Mark(2 * g));
                     }
-                    self.compile(p, body, combine(flags, *add, *off))?;
-                    if *g > 0 {
-                        self.emit(Op.Mark(2 * *g + 1));
+                    self.compile(p, body, combine(flags, add, off))?;
+                    if g > 0 {
+                        self.emit(Op.Mark(2 * g + 1));
                     }
                 }
                 Node.Repeat(kind, min, max, body) => {
-                    if *kind == 2 {
+                    if kind == 2 {
                         let at = self.emit(Op.Fail);
-                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.compile_repeat(p, min, max, true, body, flags)?;
                         self.emit(Op.Succeed);
                         let next = self.here();
                         self.ops[at] = Op.Atomic(at + 1, next);
                     } else {
-                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                        self.compile_repeat(p, min, max, kind == 0, body, flags)?;
                     }
                 }
                 Node.Atomic(body) => {
@@ -1508,7 +1508,7 @@ impl Compiler {
                 }
                 Node.Assert(dir, negative, body) => {
                     let mut width = -1;
-                    if *dir < 0 {
+                    if dir < 0 {
                         let w = width_of(p.widths, body);
                         if w.lo != w.hi {
                             return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
@@ -1519,10 +1519,10 @@ impl Compiler {
                     self.compile(p, body, flags)?;
                     self.emit(Op.Succeed);
                     let next = self.here();
-                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                    self.ops[at] = Op.Look(width, negative, at + 1, next);
                 }
                 Node.GroupRef(g) => {
-                    self.emit(Op.Ref(*g, icase, ascii));
+                    self.emit(Op.Ref(g, icase, ascii));
                 }
                 Node.Exists(g, yes, no) => {
                     let at = self.emit(Op.Fail);
@@ -1533,10 +1533,10 @@ impl Compiler {
                         self.compile(p, no, flags)?;
                         let end = self.here();
                         self.ops[jump] = Op.Jmp(end);
-                        self.ops[at] = Op.Exists(*g, no_pc);
+                        self.ops[at] = Op.Exists(g, no_pc);
                     } else {
                         let end = self.here();
-                        self.ops[at] = Op.Exists(*g, end);
+                        self.ops[at] = Op.Exists(g, end);
                     }
                 }
                 Node.Failure => {
@@ -1615,13 +1615,13 @@ fn vobj(n: i64) -> Val {
 fn truthy(h: ref Heap, v: ref Val) -> bool {
     match v {
         Val.Null => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
         Val.Big(_) => true,
-        Val.Float(x) => *x != 0.0,
+        Val.Float(x) => x != 0.0,
         Val.Str(s) => not s.is_empty(),
         Val.Obj(_) => true,
-        Val.List(l) => h.lists[*l].len() > 0,
+        Val.List(l) => h.lists[l].len() > 0,
         Val.Pat(_) => true,
     }
 }
@@ -1630,10 +1630,10 @@ fn truthy(h: ref Heap, v: ref Val) -> bool {
 fn py_str(v: ref Val) -> String {
     match v {
         Val.Null => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
-        Val.Int(n) => f"{*n}",
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{n}",
         Val.Big(s) => s.clone(),
-        Val.Float(x) => f"{*x}",
+        Val.Float(x) => f"{x}",
         Val.Str(s) => s.clone(),
         Val.Obj(_) => "<object>".to_string(),
         Val.List(_) => "[...]".to_string(),
@@ -1650,21 +1650,21 @@ fn val_is_str(v: ref Val, s: Str) -> bool {
 
 fn as_obj(v: ref Val) -> i64 {
     match v {
-        Val.Obj(n) => *n,
+        Val.Obj(n) => n,
         _ => -1,
     }
 }
 
 fn as_list(v: ref Val) -> i64 {
     match v {
-        Val.List(n) => *n,
+        Val.List(n) => n,
         _ => -1,
     }
 }
 
 fn as_int(v: ref Val) -> i64 {
     match v {
-        Val.Int(n) => *n,
+        Val.Int(n) => n,
         _ => 0,
     }
 }
@@ -1919,27 +1919,27 @@ fn json_key(k: ref String) -> String {
 fn write_json(h: ref Heap, v: ref Val, out: mut ref String) {
     match v {
         Val.Null => out.push_str("null"),
-        Val.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Val.Int(n) => out.push_str(f"{*n}"),
+        Val.Bool(b) => out.push_str(if b { "true" } else { "false" }),
+        Val.Int(n) => out.push_str(f"{n}"),
         Val.Big(s) => out.push_str(s),
-        Val.Float(x) => out.push_str(json_float(*x)),
+        Val.Float(x) => out.push_str(json_float(x)),
         Val.Str(s) => json_str(s, mut out),
         Val.Pat(r) => out.push_str(r),
         Val.List(l) => {
             out.push('[');
             let mut i = 0;
-            while i < h.lists[*l].len() {
+            while i < h.lists[l].len() {
                 if i > 0 {
                     out.push(',');
                 }
-                write_json(h, h.lists[*l][i], mut out);
+                write_json(h, h.lists[l][i], mut out);
                 i += 1;
             }
             out.push(']');
         }
         Val.Obj(n) => {
             out.push('{');
-            let o = ref h.objs[*n];
+            let o = ref h.objs[n];
             let mut first = true;
             let mut i = 0;
             while i < o.keys.len() {
@@ -4105,7 +4105,7 @@ impl JsParser {
                 if message.is_empty() {
                     msg = "Unexpected token %0".to_string();
                 }
-                value = py_str(self.h.get(*n, "value"));
+                value = py_str(self.h.get(n, "value"));
             }
             Culprit.NoTok => {}
         }
@@ -7640,15 +7640,15 @@ fn present(h: ref Heap, n: i64, key: Str) -> bool {
 fn walk_nodes(h: ref Heap, v: ref Val, out: mut ref Vec[i64]) {
     match v {
         Val.Obj(n) => {
-            if present(h, *n, "type") {
-                out.push(*n);
+            if present(h, n, "type") {
+                out.push(n);
             }
-            for x in h.objs[*n].vals.iter() {
+            for x in h.objs[n].vals.iter() {
                 walk_nodes(h, x, mut out);
             }
         }
         Val.List(l) => {
-            for x in h.lists[*l].iter() {
+            for x in h.lists[l].iter() {
                 walk_nodes(h, x, mut out);
             }
         }
@@ -7666,7 +7666,7 @@ fn depth_of(h: ref Heap, v: ref Val) -> i64 {
     match v {
         Val.Obj(n) => {
             let mut d = 0;
-            for x in h.objs[*n].vals.iter() {
+            for x in h.objs[n].vals.iter() {
                 let k = depth_of(h, x);
                 if k > d {
                     d = k;
@@ -7676,7 +7676,7 @@ fn depth_of(h: ref Heap, v: ref Val) -> i64 {
         }
         Val.List(l) => {
             let mut d = 0;
-            for x in h.lists[*l].iter() {
+            for x in h.lists[l].iter() {
                 let k = depth_of(h, x);
                 if k > d {
                     d = k;
@@ -7959,18 +7959,18 @@ fn outline(h: ref Heap, v: ref Val, level: i64, out: mut ref Vec[String]) {
     match v {
         Val.Obj(n) => {
             let mut inner = level;
-            if present(h, *n, "type") {
-                if let Some(entry) = outline_entry(h, *n) {
-                    out.push(f"{indent(level)}L{start_line(h, *n)} {entry}");
+            if present(h, n, "type") {
+                if let Some(entry) = outline_entry(h, n) {
+                    out.push(f"{indent(level)}L{start_line(h, n)} {entry}");
                     inner = level + 1;
                 }
             }
-            for x in h.objs[*n].vals.iter() {
+            for x in h.objs[n].vals.iter() {
                 outline(h, x, inner, mut out);
             }
         }
         Val.List(l) => {
-            for x in h.lists[*l].iter() {
+            for x in h.lists[l].iter() {
                 outline(h, x, level, mut out);
             }
         }

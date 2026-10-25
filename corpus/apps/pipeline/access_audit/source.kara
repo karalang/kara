@@ -203,7 +203,7 @@ fn status_report(hits: ref Vec[Hit]) -> String {
 fn ranked(counts: ref SortedMap[String, i64]) -> Vec[(String, i64)] {
     let mut v: Vec[(String, i64)] = Vec.new();
     for (k, n) in counts {
-        v.push((k.clone(), *n));
+        v.push((k.clone(), n));
     }
     v.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
     v
@@ -266,7 +266,7 @@ fn busiest_minutes(hits: ref Vec[Hit], n: i64) -> String {
     }
     let mut v: Vec[((String, i64), i64)] = Vec.new();
     for (k, c) in per {
-        v.push((k.clone(), *c));
+        v.push((k.clone(), c));
     }
     v.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
     let mut out = "busiest minutes:".to_string();

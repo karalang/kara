@@ -660,7 +660,7 @@ impl ParseState {
     fn group_of(ref self, name: ref Vec[i64]) -> i64 {
         for (n, g) in self.names.iter() {
             if same(n, name) {
-                return *g;
+                return g;
             }
         }
         -1
@@ -730,15 +730,15 @@ fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
             }
             Node.Repeat(_, min, max, body) => {
                 let w = width_of(widths, body);
-                lo = add_width(lo, mul_width(w.lo, *min));
-                if *max == maxrepeat() and w.hi > 0 {
+                lo = add_width(lo, mul_width(w.lo, min));
+                if max == maxrepeat() and w.hi > 0 {
                     hi = maxwidth();
                 } else {
-                    hi = add_width(hi, mul_width(w.hi, *max));
+                    hi = add_width(hi, mul_width(w.hi, max));
                 }
             }
             Node.GroupRef(g) => {
-                let w = ref widths[*g];
+                let w = ref widths[g];
                 lo = add_width(lo, w.lo);
                 hi = add_width(hi, w.hi);
             }
@@ -1062,9 +1062,9 @@ fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr
         let only = ref set[0];
         if let Item.Lit(c) = only {
             if negate {
-                out.push(Node.NotLit(*c));
+                out.push(Node.NotLit(c));
             } else {
-                out.push(Node.Lit(*c));
+                out.push(Node.Lit(c));
             }
             return Ok(());
         }
@@ -1295,7 +1295,7 @@ fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref 
                 }
                 let mut seen = false;
                 for (g, _) in st.refpos.iter() {
-                    if *g == condgroup {
+                    if g == condgroup {
                         seen = true;
                     }
                 }
@@ -1399,8 +1399,8 @@ fn re_parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
         return Err(src.error("unbalanced parenthesis".to_string(), 0));
     }
     for (g, pos) in st.refpos.iter() {
-        if *g >= st.groups() {
-            return Err(re_error(f"invalid group reference {*g}", *pos));
+        if g >= st.groups() {
+            return Err(re_error(f"invalid group reference {g}", pos));
         }
     }
     let groups = st.groups() - 1;
@@ -1479,11 +1479,11 @@ impl Compiler {
         for n in nodes.iter() {
             match n {
                 Node.Lit(c) => {
-                    let v = if icase { lower(*c, ascii) } else { *c };
+                    let v = if icase { lower(c, ascii) } else { c };
                     self.emit(Op.Lit(v, icase, ascii));
                 }
                 Node.NotLit(c) => {
-                    let v = if icase { lower(*c, ascii) } else { *c };
+                    let v = if icase { lower(c, ascii) } else { c };
                     self.emit(Op.NotLit(v, icase, ascii));
                 }
                 Node.Any => {
@@ -1494,12 +1494,12 @@ impl Compiler {
                     }
                 }
                 Node.In(items, negate) => {
-                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    self.sets.push(CharSet { items: items.clone(), negate: negate });
                     let idx = self.sets.len() - 1;
                     self.emit(Op.In(idx, icase, ascii));
                 }
                 Node.At(kind) => {
-                    let mut k = *kind;
+                    let mut k = kind;
                     if (flags & flag_m()) != 0 {
                         if k == at_beginning() {
                             k = at_beginning_line();
@@ -1530,23 +1530,23 @@ impl Compiler {
                     }
                 }
                 Node.Group(g, add, off, body) => {
-                    if *g > 0 {
-                        self.emit(Op.Mark(2 * *g));
+                    if g > 0 {
+                        self.emit(Op.Mark(2 * g));
                     }
-                    self.compile(p, body, combine(flags, *add, *off))?;
-                    if *g > 0 {
-                        self.emit(Op.Mark(2 * *g + 1));
+                    self.compile(p, body, combine(flags, add, off))?;
+                    if g > 0 {
+                        self.emit(Op.Mark(2 * g + 1));
                     }
                 }
                 Node.Repeat(kind, min, max, body) => {
-                    if *kind == 2 {
+                    if kind == 2 {
                         let at = self.emit(Op.Fail);
-                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.compile_repeat(p, min, max, true, body, flags)?;
                         self.emit(Op.Succeed);
                         let next = self.here();
                         self.ops[at] = Op.Atomic(at + 1, next);
                     } else {
-                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                        self.compile_repeat(p, min, max, kind == 0, body, flags)?;
                     }
                 }
                 Node.Atomic(body) => {
@@ -1558,7 +1558,7 @@ impl Compiler {
                 }
                 Node.Assert(dir, negative, body) => {
                     let mut width = -1;
-                    if *dir < 0 {
+                    if dir < 0 {
                         let w = width_of(p.widths, body);
                         if w.lo != w.hi {
                             return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
@@ -1569,10 +1569,10 @@ impl Compiler {
                     self.compile(p, body, flags)?;
                     self.emit(Op.Succeed);
                     let next = self.here();
-                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                    self.ops[at] = Op.Look(width, negative, at + 1, next);
                 }
                 Node.GroupRef(g) => {
-                    self.emit(Op.Ref(*g, icase, ascii));
+                    self.emit(Op.Ref(g, icase, ascii));
                 }
                 Node.Exists(g, yes, no) => {
                     let at = self.emit(Op.Fail);
@@ -1583,10 +1583,10 @@ impl Compiler {
                         self.compile(p, no, flags)?;
                         let end = self.here();
                         self.ops[jump] = Op.Jmp(end);
-                        self.ops[at] = Op.Exists(*g, no_pc);
+                        self.ops[at] = Op.Exists(g, no_pc);
                     } else {
                         let end = self.here();
-                        self.ops[at] = Op.Exists(*g, end);
+                        self.ops[at] = Op.Exists(g, end);
                     }
                 }
                 Node.Failure => {
@@ -1732,11 +1732,11 @@ impl Matcher {
                 mode = 0;
                 ok = false;
                 if let Op.Until(r, _, max, _, body, _) = op {
-                    let count = self.counts[*r] + 1;
-                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
-                        self.set_count(*r, count);
-                        self.set_last(*r, pos);
-                        pc = *body;
+                    let count = self.counts[r] + 1;
+                    if not ((count >= max and max != maxrepeat()) or pos == self.lasts[r]) {
+                        self.set_count(r, count);
+                        self.set_last(r, pos);
+                        pc = body;
                         ok = true;
                     }
                 }
@@ -1746,7 +1746,7 @@ impl Matcher {
             } else {
                 match op {
                     Op.Lit(c, icase, ascii) => {
-                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                        if pos < self.s.len() and (if icase { lower(self.s[pos], ascii) == c } else { self.s[pos] == c }) {
                             pos += 1;
                             pc += 1;
                         } else {
@@ -1754,7 +1754,7 @@ impl Matcher {
                         }
                     }
                     Op.NotLit(c, icase, ascii) => {
-                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                        if pos < self.s.len() and (if icase { lower(self.s[pos], ascii) != c } else { self.s[pos] != c }) {
                             pos += 1;
                             pc += 1;
                         } else {
@@ -1778,7 +1778,7 @@ impl Matcher {
                         }
                     }
                     Op.In(set, icase, ascii) => {
-                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                        if pos < self.s.len() and in_set(prog.sets[set], self.s[pos], icase, ascii) {
                             pos += 1;
                             pc += 1;
                         } else {
@@ -1786,50 +1786,50 @@ impl Matcher {
                         }
                     }
                     Op.At(kind, ascii) => {
-                        if self.at(*kind, *ascii, pos) {
+                        if self.at(kind, ascii, pos) {
                             pc += 1;
                         } else {
                             ok = false;
                         }
                     }
                     Op.Mark(slot) => {
-                        self.set_mark(*slot, pos);
-                        if (*slot & 1) == 1 {
-                            self.set_lastindex(*slot / 2);
+                        self.set_mark(slot, pos);
+                        if (slot & 1) == 1 {
+                            self.set_lastindex(slot / 2);
                         }
                         pc += 1;
                     }
                     Op.Split(a, b) => {
-                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
-                        pc = *a;
+                        choices.push(Choice { pc: b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = a;
                     }
-                    Op.Jmp(a) => pc = *a,
+                    Op.Jmp(a) => pc = a,
                     Op.RepInit(r, until) => {
-                        self.set_count(*r, -1);
-                        self.set_last(*r, -1);
-                        pc = *until;
+                        self.set_count(r, -1);
+                        self.set_last(r, -1);
+                        pc = until;
                     }
                     Op.Until(r, min, max, greedy, body, exit) => {
-                        let count = self.counts[*r] + 1;
-                        if count < *min {
-                            self.set_count(*r, count);
-                            pc = *body;
-                        } else if *greedy {
-                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
-                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
-                                self.set_count(*r, count);
-                                self.set_last(*r, pos);
-                                pc = *body;
+                        let count = self.counts[r] + 1;
+                        if count < min {
+                            self.set_count(r, count);
+                            pc = body;
+                        } else if greedy {
+                            if (count < max or max == maxrepeat()) and pos != self.lasts[r] {
+                                choices.push(Choice { pc: exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(r, count);
+                                self.set_last(r, pos);
+                                pc = body;
                             } else {
-                                pc = *exit;
+                                pc = exit;
                             }
                         } else {
                             choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
-                            pc = *exit;
+                            pc = exit;
                         }
                     }
                     Op.Ref(g, icase, ascii) => {
-                        let (a, b) = self.group_span(*g);
+                        let (a, b) = self.group_span(g);
                         if a < 0 {
                             ok = false;
                         } else {
@@ -1841,7 +1841,7 @@ impl Matcher {
                                 while k < len {
                                     let x = self.s[a + k];
                                     let y = self.s[pos + k];
-                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    let eq = if icase { lower(x, ascii) == lower(y, ascii) } else { x == y };
                                     if not eq {
                                         ok = false;
                                         break;
@@ -1857,36 +1857,36 @@ impl Matcher {
                     }
                     Op.Look(width, negative, sub, next) => {
                         let mark = self.trail.len();
-                        let from = if *width < 0 { pos } else { pos - *width };
-                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
-                        if *negative {
+                        let from = if width < 0 { pos } else { pos - width };
+                        let found = from >= 0 and self.run(prog, sub, from, false) >= 0;
+                        if negative {
                             self.undo_to(mark);
                             if found {
                                 ok = false;
                             } else {
-                                pc = *next;
+                                pc = next;
                             }
                         } else if found {
-                            pc = *next;
+                            pc = next;
                         } else {
                             ok = false;
                         }
                     }
                     Op.Atomic(sub, next) => {
-                        let end = self.run(prog, *sub, pos, false);
+                        let end = self.run(prog, sub, pos, false);
                         if end >= 0 {
                             pos = end;
-                            pc = *next;
+                            pc = next;
                         } else {
                             ok = false;
                         }
                     }
                     Op.Exists(g, no) => {
-                        let (a, _) = self.group_span(*g);
+                        let (a, _) = self.group_span(g);
                         if a >= 0 {
                             pc += 1;
                         } else {
-                            pc = *no;
+                            pc = no;
                         }
                     }
                     Op.Fail => ok = false,
@@ -1921,10 +1921,10 @@ impl Matcher {
 fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
     for item in set.items.iter() {
         let hit = match item {
-            Item.Lit(l) => c == *l,
-            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Lit(l) => c == l,
+            Item.Range(lo, hi) => c >= lo and c <= hi,
             Item.Cat(k) => {
-                let kind = *k;
+                let kind = k;
                 if kind == 0 {
                     if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
                 } else if kind == 1 {
@@ -2336,7 +2336,7 @@ fn group_index(rx: ref Rx, id: i64, name: Str) -> i64 {
     let n = u(name);
     for (k, g) in rx.progs[id].names.iter() {
         if same(k, n) {
-            return *g;
+            return g;
         }
     }
     -1
@@ -2376,7 +2376,7 @@ fn group0(s: ref Vec[i64], f: ref Found) -> Vec[i64] {
 // m.lastgroup.
 fn last_group(rx: ref Rx, id: i64, f: ref Found) -> String {
     for (k, g) in rx.progs[id].names.iter() {
-        if *g == f.lastindex {
+        if g == f.lastindex {
             return to_string(k);
         }
     }
@@ -3082,14 +3082,14 @@ fn new_tree(cx: mut ref Ctx, data: Str, children: own Vec[N]) -> i64 {
 
 fn tree_id(n: ref N) -> i64 {
     match n {
-        N.Tr(t) => *t,
+        N.Tr(t) => t,
         _ => -1,
     }
 }
 
 fn is_tree(n: ref N, data: Str, cx: ref Ctx) -> bool {
     match n {
-        N.Tr(t) => cx.trees[*t].data == data,
+        N.Tr(t) => cx.trees[t].data == data,
         _ => false,
     }
 }
@@ -3112,8 +3112,8 @@ fn iter_subtrees(cx: ref Ctx, root: i64) -> Vec[i64] {
         let mut i = ch.len() - 1;
         while i >= 0 {
             if let N.Tr(c) = ref ch[i] {
-                if not seen.contains_key(*c) {
-                    queue.push(*c);
+                if not seen.contains_key(c) {
+                    queue.push(c);
                 }
             }
             i -= 1;
@@ -3165,11 +3165,11 @@ fn expand_kids(cx: mut ref Ctx, t: i64, data: Str) -> bool {
 fn n_eq(cx: ref Ctx, a: ref N, b: ref N) -> bool {
     match (a, b) {
         (N.Tr(x), N.Tr(y)) => {
-            if *x == *y {
+            if x == y {
                 return true;
             }
-            let ta = ref cx.trees[*x];
-            let tb = ref cx.trees[*y];
+            let ta = ref cx.trees[x];
+            let tb = ref cx.trees[y];
             if ta.data != tb.data or ta.children.len() != tb.children.len() {
                 return false;
             }
@@ -3185,7 +3185,7 @@ fn n_eq(cx: ref Ctx, a: ref N, b: ref N) -> bool {
         (N.Tk(x), N.Tk(y)) => x.ttype == y.ttype and same(x.value, y.value),
         (N.Sy(x), N.Sy(y)) => sym_eq(x, y),
         (N.Pa(x), N.Pa(y)) => pat_eq(x, y),
-        (N.In(x), N.In(y)) => *x == *y,
+        (N.In(x), N.In(y)) => x == y,
         (N.Nil, N.Nil) => true,
         _ => false,
     }
@@ -3195,8 +3195,8 @@ fn n_eq(cx: ref Ctx, a: ref N, b: ref N) -> bool {
 fn copy_n(cx: mut ref Ctx, n: ref N) -> N {
     match n {
         N.Tr(t) => {
-            let data = cx.trees[*t].data.clone();
-            let kids = cx.trees[*t].children.clone();
+            let data = cx.trees[t].data.clone();
+            let kids = cx.trees[t].children.clone();
             let mut out: Vec[N] = Vec.new();
             for k in kids.iter() {
                 out.push(copy_n(mut cx, k));
@@ -3223,7 +3223,7 @@ fn n_text(n: ref N) -> String {
         N.Tk(t) => to_string(t.value),
         N.Nil => "None".to_string(),
         N.Sy(s) => s.name.clone(),
-        N.In(i) => f"{*i}",
+        N.In(i) => f"{i}",
         _ => "?".to_string(),
     }
 }
@@ -3245,7 +3245,7 @@ fn pretty_into(cx: ref Ctx, t: i64, level: i64, out: mut ref String) {
     out.push_str("\n");
     for c in tr.children.iter() {
         match c {
-            N.Tr(s) => pretty_into(cx, *s, level + 1, mut out),
+            N.Tr(s) => pretty_into(cx, s, level + 1, mut out),
             _ => {
                 let mut j = 0;
                 while j < level + 1 {
@@ -3263,7 +3263,7 @@ fn pretty_into(cx: ref Ctx, t: i64, level: i64, out: mut ref String) {
 fn scan_tokens(cx: ref Ctx, t: i64, out: mut ref Vec[Token]) {
     for c in cx.trees[t].children.iter() {
         match c {
-            N.Tr(s) => scan_tokens(cx, *s, mut out),
+            N.Tr(s) => scan_tokens(cx, s, mut out),
             N.Tk(k) => out.push(k.clone()),
             _ => {}
         }
@@ -3283,7 +3283,7 @@ fn used_symbols(cx: ref Ctx, t: i64) -> Vec[String] {
 fn scan_sym_names(cx: ref Ctx, t: i64, out: mut ref Vec[String]) {
     for c in cx.trees[t].children.iter() {
         match c {
-            N.Tr(s) => scan_sym_names(cx, *s, mut out),
+            N.Tr(s) => scan_sym_names(cx, s, mut out),
             N.Sy(s) => {
                 if not has_str(out, s.name) {
                     out.push(s.name.clone());
@@ -3543,8 +3543,8 @@ fn tok_name(n: ref N) -> String {
 fn prepare_grammar(cx: mut ref Ctx, n: ref N) -> N {
     match n {
         N.Tr(t) => {
-            let data = cx.trees[*t].data.clone();
-            let kids = cx.trees[*t].children.clone();
+            let data = cx.trees[t].data.clone();
+            let kids = cx.trees[t].children.clone();
             if data == "terminal" {
                 let name = tok_name(kids[0]);
                 let f = name.starts_with("_");
@@ -3557,7 +3557,7 @@ fn prepare_grammar(cx: mut ref Ctx, n: ref N) -> N {
             for k in kids.iter() {
                 out.push(prepare_grammar(mut cx, k));
             }
-            cx.trees[*t].children = out;
+            cx.trees[t].children = out;
             n.clone()
         }
         _ => n.clone(),
@@ -3878,10 +3878,10 @@ fn resolve_term_references(cx: mut ref Ctx, terms: ref Vec[(String, i64)]) -> Re
     loop {
         let mut changed = false;
         for (name, tree) in terms.iter() {
-            if *tree < 0 {
+            if tree < 0 {
                 continue;
             }
-            for exp in find_data(cx, *tree, "value") {
+            for exp in find_data(cx, tree, "value") {
                 let item = cx.trees[exp].children[0].clone();
                 if let N.Sy(s) = item {
                     if not s.term {
@@ -3890,7 +3890,7 @@ fn resolve_term_references(cx: mut ref Ctx, terms: ref Vec[(String, i64)]) -> Re
                     let mut target = -2;
                     for (n2, t2) in terms.iter() {
                         if *n2 == s.name {
-                            target = *t2;
+                            target = t2;
                         }
                     }
                     if target == -2 {
@@ -3906,13 +3906,13 @@ fn resolve_term_references(cx: mut ref Ctx, terms: ref Vec[(String, i64)]) -> Re
         }
     }
     for (name, tree) in terms.iter() {
-        if *tree < 0 {
+        if tree < 0 {
             continue;
         }
-        for c in cx.trees[*tree].children.iter() {
+        for c in cx.trees[tree].children.iter() {
             if let N.Tr(ct) = c {
-                for s in iter_subtrees(cx, *ct) {
-                    if s == *tree {
+                for s in iter_subtrees(cx, ct) {
+                    if s == tree {
                         return Err(grammar_error(f"Recursion in terminal '{name}' (recursion is only allowed in rules, not terminals)"));
                     }
                 }
@@ -4129,7 +4129,7 @@ fn inplace(cx: mut ref Ctx, c: mut ref Comp, kind: i64, root: ref N) -> Result[N
         let mut out: Vec[N] = Vec.new();
         for k in kids.iter() {
             match k {
-                N.Tr(t) => out.push(call_user(mut cx, mut c, kind, *t)?),
+                N.Tr(t) => out.push(call_user(mut cx, mut c, kind, t)?),
                 _ => out.push(k.clone()),
             }
         }
@@ -4563,7 +4563,7 @@ fn apply_template(cx: mut ref Ctx, c: mut ref Comp, kids: ref Vec[N]) -> Result[
 fn rule_size(cx: ref Ctx, n: ref N, keep: bool) -> i64 {
     match n {
         N.Tr(t) => {
-            let tr = ref cx.trees[*t];
+            let tr = ref cx.trees[t];
             let mut total = 0;
             let mut best = 0;
             for k in tr.children.iter() {
@@ -4729,7 +4729,7 @@ fn generate_repeats(cx: mut ref Ctx, c: mut ref Comp, rule: ref N, mn: i64, mx: 
 fn n_repr(cx: ref Ctx, n: ref N) -> String {
     match n {
         N.Sy(s) => sym_repr(s),
-        N.Tr(t) => f"Tree({repr_of(u(cx.trees[*t].data))}, ...)",
+        N.Tr(t) => f"Tree({repr_of(u(cx.trees[t].data))}, ...)",
         _ => n_text(n),
     }
 }
@@ -4899,21 +4899,21 @@ fn compile_grammar(cx: mut ref Ctx, g: ref Grammar, start: ref String, keep: ref
     };
     let mut term_trees: Vec[(String, i64, i64)] = Vec.new();
     for (name, tree, prio) in g.term_defs.iter() {
-        if *tree < 0 {
+        if tree < 0 {
             continue;
         }
-        term_trees.push((name.clone(), copy_tree(mut cx, *tree), *prio));
+        term_trees.push((name.clone(), copy_tree(mut cx, tree), prio));
     }
     for (name, tree, _) in term_trees.iter() {
-        let exps = find_data(cx, *tree, "expansion");
+        let exps = find_data(cx, tree, "expansion");
         if exps.len() == 1 and cx.trees[exps[0]].children.len() == 0 {
             return Err(grammar_error(f"Terminals cannot be empty ({name})"));
         }
     }
     for (name, tree, prio) in term_trees.iter() {
-        let lit = inplace(mut cx, mut c, 1, N.Tr(*tree))?;
+        let lit = inplace(mut cx, mut c, 1, N.Tr(tree))?;
         let p = tree_to_pattern(mut cx, lit)?;
-        terminals.push(TermDef { name: name.clone(), pattern: as_pattern(p), priority: *prio });
+        terminals.push(TermDef { name: name.clone(), pattern: as_pattern(p), priority: prio });
     }
     for t in terminals.iter() {
         c.term_set.push(t.name.clone());
@@ -4959,9 +4959,9 @@ fn compile_grammar(cx: mut ref Ctx, g: ref Grammar, start: ref String, keep: ref
     }
     let mut compiled: Vec[Rule] = Vec.new();
     for (name, tree, options) in rules.iter() {
-        simplify(mut cx, *tree);
+        simplify(mut cx, tree);
         let mut alts: Vec[(Vec[Sym], Option[String])] = Vec.new();
-        rule_alternatives(cx, N.Tr(*tree), mut alts);
+        rule_alternatives(cx, N.Tr(tree), mut alts);
         let mut order = 0;
         for (expansion, alias) in alts.iter() {
             if alias.is_some() and name.starts_with("_") {
@@ -5406,7 +5406,7 @@ fn build_table(rules: ref Vec[Rule], start: ref String) -> Result[Table, LErr] {
             k += 1;
         }
         for (sym, target) in a.states[s].trans.iter() {
-            row[*sym] = *target + 1;
+            row[sym] = target + 1;
         }
         for (la, rs) in a.states[s].la.iter() {
             let mut chosen = -1;
@@ -5435,7 +5435,7 @@ fn build_table(rules: ref Vec[Rule], start: ref String) -> Result[Table, LErr] {
                 if best_p > second_p {
                     chosen = best;
                 } else {
-                    let mut msg = f"Reduce/Reduce collision in {sym_repr(terminal(t.sym_names[*la], false))} between the following rules: ";
+                    let mut msg = f"Reduce/Reduce collision in {sym_repr(terminal(t.sym_names[la], false))} between the following rules: ";
                     for r in rs.iter() {
                         msg.push_str(f"\n\t- {rule_text(t.rules[*r])}");
                     }
@@ -5445,8 +5445,8 @@ fn build_table(rules: ref Vec[Rule], start: ref String) -> Result[Table, LErr] {
             } else {
                 chosen = rs[0];
             }
-            if row[*la] == 0 {
-                row[*la] = 0 - (chosen + 1);
+            if row[la] == 0 {
+                row[la] = 0 - (chosen + 1);
             }
         }
         t.actions.push(row);
@@ -5474,8 +5474,8 @@ fn add_sym(t: mut ref Table, name: ref String, term: bool) {
 
 fn trans_of(a: ref Analysis, state: i64, sym: i64) -> i64 {
     for (s, target) in a.states[state].trans.iter() {
-        if *s == sym {
-            return *target;
+        if s == sym {
+            return target;
         }
     }
     -1
@@ -5620,7 +5620,7 @@ fn compute_lookaheads(a: mut ref Analysis, root_rule: i64) {
             let mut s = 0;
             while s < nsyms {
                 if bits_has(set, s) {
-                    add_lookahead(mut a.states[*state], s, *rule);
+                    add_lookahead(mut a.states[state], s, rule);
                 }
                 s += 1;
             }
@@ -5861,7 +5861,7 @@ fn make_basic_lexer(cx: mut ref Ctx, terminals: ref Vec[TermDef], which: ref Vec
             r.push(36);
             ids.push(rx_id_v(mut cx.rx, r, 0));
         }
-        unless_rx.push((*re_i, ids));
+        unless_rx.push((re_i, ids));
     }
     Ok(BLexer { terms: terms, rx_ids: rx_ids, unless: unless, unless_rx: unless_rx, ignore: ignore.clone(), newline: newline, allowed: allowed })
 }
@@ -6082,19 +6082,19 @@ fn build_node(cx: mut ref Ctx, b: ref RuleBuilder, children: own Vec[N]) -> N {
     if b.has_filter {
         for (i, expand, nones) in b.include.iter() {
             let mut k = 0;
-            while k < *nones {
+            while k < nones {
                 filtered.push(N.Nil);
                 k += 1;
             }
-            if *expand {
-                let c = tree_id(children[*i]);
+            if expand {
+                let c = tree_id(children[i]);
                 if c >= 0 {
                     for x in cx.trees[c].children.iter() {
                         filtered.push(x.clone());
                     }
                 }
             } else {
-                filtered.push(children[*i].clone());
+                filtered.push(children[i].clone());
             }
         }
         let mut k = 0;
@@ -6645,7 +6645,7 @@ fn load(cx: mut ref Ctx, name: ref String, basic: bool, placeholders: bool) -> R
     let key = f"{name} {basic} {placeholders}";
     for (k, id) in cx.cache.iter() {
         if *k == key {
-            return Ok(*id);
+            return Ok(id);
         }
     }
     let path = f"data/grammars/{name}";
@@ -6825,7 +6825,7 @@ fn floor_mod(a: i64, b: i64) -> i64 {
 
 fn calc_eval(cx: ref Ctx, n: ref N, env: ref Map[String, i64]) -> Result[i64, String] {
     let t = match n {
-        N.Tr(t) => *t,
+        N.Tr(t) => t,
         N.Tk(k) => return Err(f"unexpected token {k.ttype}"),
         _ => return Err("unknown node None".to_string()),
     };

@@ -69,11 +69,11 @@ fn type_name(v: ref Val) -> String {
 
 fn truthy(v: ref Val) -> bool {
     match v {
-        Val.Int(n) => *n != 0,
-        Val.Float(x) => *x != 0.0,
+        Val.Int(n) => n != 0,
+        Val.Float(x) => x != 0.0,
         Val.Str(s) => not s.is_empty(),
         Val.Bytes(b) => not b.is_empty(),
-        Val.Bool(b) => *b,
+        Val.Bool(b) => b,
         Val.Nil => false,
         Val.Tuple(xs) => not xs.is_empty(),
         Val.List(xs) => not xs.is_empty(),
@@ -206,10 +206,10 @@ fn join_repr(xs: ref Vec[Val]) -> String {
 fn repr(v: ref Val) -> String {
     match v {
         Val.Int(n) => f"{n}",
-        Val.Float(x) => float_repr(*x),
+        Val.Float(x) => float_repr(x),
         Val.Str(s) => str_repr(s),
         Val.Bytes(b) => bytes_repr(b),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Nil => "None".to_string(),
         Val.Tuple(xs) => {
             if xs.len() == 1 {
@@ -219,7 +219,7 @@ fn repr(v: ref Val) -> String {
             }
         }
         Val.List(xs) => f"[{join_repr(xs)}]",
-        Val.Stamp(s, f) => stamp_repr(*s, *f),
+        Val.Stamp(s, f) => stamp_repr(s, f),
     }
 }
 
@@ -462,7 +462,7 @@ enum Ts {
 fn ts_repr(t: ref Ts) -> String {
     match t {
         Ts.Imm => "0".to_string(),
-        Ts.At(x) => float_repr(*x),
+        Ts.At(x) => float_repr(x),
     }
 }
 
@@ -491,16 +491,16 @@ enum When {
 fn write_date(w: ref When) -> Result[Vec[u8], Exc] {
     let x = match w {
         When.I(n) => {
-            if *n == 0 {
+            if n == 0 {
                 return Ok(immediately());
             }
-            ((*n + 2208988800) as f64) * 4294967296.0
+            ((n + 2208988800) as f64) * 4294967296.0
         }
         When.F(f) => {
-            if *f == 0.0 {
+            if f == 0.0 {
                 return Ok(immediately());
             }
-            (*f + 2208988800.0) * 4294967296.0
+            (f + 2208988800.0) * 4294967296.0
         }
     };
     if x != x {
@@ -524,17 +524,17 @@ fn write_date(w: ref When) -> Result[Vec[u8], Exc] {
 
 fn int_of(v: ref Val) -> Option[i64] {
     match v {
-        Val.Int(n) => Some(*n),
-        Val.Bool(b) => Some(if *b { 1 } else { 0 }),
+        Val.Int(n) => Some(n),
+        Val.Bool(b) => Some(if b { 1 } else { 0 }),
         _ => None,
     }
 }
 
 fn float_of(v: ref Val) -> Option[f64] {
     match v {
-        Val.Int(n) => Some(*n as f64),
-        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Val.Float(x) => Some(*x),
+        Val.Int(n) => Some(n as f64),
+        Val.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        Val.Float(x) => Some(x),
         _ => None,
     }
 }
@@ -675,7 +675,7 @@ fn items_of(v: ref Val) -> Result[Vec[Val], Exc] {
         Val.Tuple(xs) => Ok(xs.clone()),
         // (datetime, fraction): the datetime stands in as the Stamp itself,
         // which nothing in python-osc accepts either.
-        Val.Stamp(s, f) => Ok(vec![Val.Stamp(*s, *f), Val.Int(*f)]),
+        Val.Stamp(s, f) => Ok(vec![Val.Stamp(s, f), Val.Int(f)]),
         _ => Err(exc("TypeError", f"'{type_name(v)}' object is not iterable")),
     }
 }
@@ -890,8 +890,8 @@ fn get_arg_type(v: ref Val) -> Result[Ty, Exc] {
     match v {
         Val.Str(_) => Ok(code("s")),
         Val.Bytes(_) => Ok(code("b")),
-        Val.Bool(b) => Ok(if *b { code("T") } else { code("F") }),
-        Val.Int(n) => Ok(if bit_length_over_31(*n) { code("h") } else { code("i") }),
+        Val.Bool(b) => Ok(if b { code("T") } else { code("F") }),
+        Val.Int(n) => Ok(if bit_length_over_31(n) { code("h") } else { code("i") }),
         Val.Float(_) => Ok(code("f")),
         Val.Tuple(xs) => {
             if xs.len() == 4 {
@@ -1434,10 +1434,10 @@ struct Re {
 
 fn emit_node(r: mut ref Re, n: ref Node) {
     match n {
-        Node.Lit(c) => r.prog.push(Inst.Ch(*c)),
+        Node.Lit(c) => r.prog.push(Inst.Ch(c)),
         Node.Any => r.prog.push(Inst.Any),
         Node.Set(neg, items) => {
-            r.sets.push((*neg, items.clone()));
+            r.sets.push((neg, items.clone()));
             r.prog.push(Inst.Set(r.sets.len() - 1));
         }
         Node.Group(alts) => emit_alts(mut r, alts),
@@ -1509,7 +1509,7 @@ fn in_set(r: ref Re, k: i64, c: char) -> bool {
     let x = c as i64;
     let mut hit = false;
     for (lo, hi) in items.iter() {
-        if x >= (*lo as i64) and x <= (*hi as i64) {
+        if x >= (lo as i64) and x <= (hi as i64) {
             hit = true;
         }
     }
@@ -1609,7 +1609,7 @@ fn val_eq(a: ref Val, b: ref Val) -> bool {
         (Val.Nil, Val.Nil) => true,
         (Val.List(x), Val.List(y)) => vals_eq(x, y),
         (Val.Tuple(x), Val.Tuple(y)) => vals_eq(x, y),
-        (Val.Stamp(s1, f1), Val.Stamp(s2, f2)) => *s1 == *s2 and *f1 == *f2,
+        (Val.Stamp(s1, f1), Val.Stamp(s2, f2)) => s1 == s2 and f1 == f2,
         _ => false,
     }
 }

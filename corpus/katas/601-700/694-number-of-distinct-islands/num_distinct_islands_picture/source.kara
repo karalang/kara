@@ -51,7 +51,7 @@ fn num_distinct_islands(grid: Vec[Vec[i64]]) -> i64 {
             let height = bottom - top + 1;
             let mut canvas: Vec[bool] = vec![false; width * height];
             for (r, c) in cells.iter() {
-                canvas[(*r - top) * width + (*c - left)] = true;
+                canvas[(r - top) * width + (c - left)] = true;
             }
             let mut picture = String.new();
             for i in 0..height {

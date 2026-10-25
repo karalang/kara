@@ -477,8 +477,8 @@ fn compile(pat: ref String) -> Vec[Tok] {
 fn in_set(items: ref Vec[Item], c: char) -> bool {
     for it in items.iter() {
         match it {
-            Item.One(x) => if *x == c { return true; },
-            Item.Range(a, b) => if *a <= c and c <= *b { return true; },
+            Item.One(x) => if x == c { return true; },
+            Item.Range(a, b) => if a <= c and c <= b { return true; },
         }
     }
     false

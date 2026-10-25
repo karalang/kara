@@ -62,9 +62,9 @@ impl Json {
 fn json_write(j: ref Json, out: mut ref String) {
     match j {
         Json.Null => out.push_str("null"),
-        Json.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Json.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         Json.Int(n) => out.push_str(f"{n}"),
-        Json.Number(x) => out.push_str(json_number_text(*x)),
+        Json.Number(x) => out.push_str(json_number_text(x)),
         Json.String(s) => json_write_str(s, out),
         Json.Array(items) => {
             out.push('[');

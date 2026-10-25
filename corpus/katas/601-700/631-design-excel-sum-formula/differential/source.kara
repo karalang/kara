@@ -513,7 +513,7 @@ fn cells_of(ranges: Vec[String]) -> Vec[String] {
     let mut out: Vec[String] = Vec.new();
     for range in ranges.iter() {
         for (r, c) in covered(range.clone()).iter() {
-            out.push(f"{letter(*c)}{*r}");
+            out.push(f"{letter(c)}{r}");
         }
     }
     out
@@ -535,7 +535,7 @@ fn defined(ops: Vec[Op], upto: i64, row: i64, column: char) -> i64 {
             let mut total = 0;
             for range in op.ranges.iter() {
                 for (r, c) in covered(range.clone()).iter() {
-                    total += defined(ops, upto, *r, letter(*c));
+                    total += defined(ops, upto, r, letter(c));
                 }
             }
             return total;

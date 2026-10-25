@@ -2,7 +2,7 @@ enum E { S(String), B(bool), N(i64) }
 fn render(e: ref E, out: mut ref String) {
 match e {
 S(s) => { out.push_str(s); }
-B(b) => { if *b { out.push_str("T"); } else { out.push_str("F"); } }
+B(b) => { if b { out.push_str("T"); } else { out.push_str("F"); } }
 N(n) => { out.push_str(f"{n}"); }
 }
 }

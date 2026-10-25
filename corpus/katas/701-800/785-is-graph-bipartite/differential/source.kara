@@ -187,8 +187,8 @@ fn from_edges(n: i64, edges: Vec[(i64, i64)]) -> Vec[Vec[i64]] {
         graph.push(Vec.new());
     }
     for (a, b) in edges.iter() {
-        graph[*a].push(*b);
-        graph[*b].push(*a);
+        graph[a].push(b);
+        graph[b].push(a);
     }
     graph
 }
@@ -232,7 +232,7 @@ fn make_graph(seed: mut ref i64, n: i64, kind: i64) -> Vec[Vec[i64]] {
             let b = next_random(mut seed) % n;
             let mut joined = a == b;
             for (x, y) in edges.iter() {
-                if (*x == a and *y == b) or (*x == b and *y == a) {
+                if (x == a and y == b) or (x == b and y == a) {
                     joined = true;
                 }
             }

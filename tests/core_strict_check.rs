@@ -3034,9 +3034,10 @@ fn an_owned_receiver_on_a_for_element_moves_the_loop() {
     );
 }
 
-/// B-2026-10-12-9: `*p.0` on an undestructured `SortedMap.iter()` item, and
-/// `*k` / `*v` on a `floor` / `ceiling` entry (`Option[(ref K, ref V)]` in
-/// docs/library/collections.md), read through the view.
+/// B-2026-10-12-9: `*p.0` on an undestructured `SortedMap.iter()` item reads
+/// through the view. A `Copy` part bound out of a `floor` / `ceiling` entry
+/// is a copy (core-semantics §4.6), read as `k`: `*k` there is the
+/// drop-the-`*` error (B-2026-10-24-36).
 #[test]
 fn deref_of_a_map_item_part_and_a_floor_entry_is_accepted() {
     accepted(
@@ -3048,10 +3049,10 @@ fn deref_of_a_map_item_part_and_a_floor_entry_is_accepted() {
          \x20       println(f\"{*p.0} {*p.1}\");\n\
          \x20   }\n\
          \x20   if let Some((k, v)) = m.floor(4) {\n\
-         \x20       println(f\"{*k} {*v}\");\n\
+         \x20       println(f\"{k} {v}\");\n\
          \x20   }\n\
          \x20   if let Some((k, v)) = m.ceiling(0) {\n\
-         \x20       println(f\"{*k} {*v}\");\n\
+         \x20       println(f\"{k} {v}\");\n\
          \x20   }\n\
          }\n",
     );
@@ -3698,7 +3699,8 @@ fn refs_held_in_a_vec_of_refs_are_copies() {
 
 /// B-2026-10-14-27 — design.md § `*` and `ref` in expressions: `==` and `<`
 /// borrow `*r` and need no copy, so `*w == target` through a view of a
-/// `String` moves nothing. A `*w` that IS a move (a `let` or a by-value
+/// `String` moves nothing. (`size`, a `Copy` part, is a copy and read bare,
+/// B-2026-10-24-36.) A `*w` that IS a move (a `let` or a by-value
 /// argument) is still refused.
 #[test]
 fn deref_of_a_view_compared_is_a_borrow() {
@@ -3725,7 +3727,7 @@ fn deref_of_a_view_compared_is_a_borrow() {
                  match e {\n\
                      Item.File(path, size) => {\n\
                          if *path == name {\n\
-                             return *size;\n\
+                             return size;\n\
                          }\n\
                      }\n\
                      Item.Dir(path) => {\n\
@@ -13254,4 +13256,48 @@ fn a_package_with_two_modules_is_checked_against_the_v2_library() {
         "names the module's file: {err}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
+    // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
+    // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is
+    // the drop-the-`*` error (§5.10) in `while let`, `if let`, `match` and a
+    // `for` destructure, as it already was in a `let` destructure. The item
+    // of a bare `for` is still the `ref`, and a `ref` binding still borrows.
+    let shapes = [
+        (
+            "while let Some((s, _)) = q.front() { if *s > 2 { q.pop_front(); } else { break; } }",
+            "if s > 2",
+        ),
+        (
+            "if let Some((a, _)) = q.front() { println(f\"{*a}\"); }",
+            "{a}",
+        ),
+        (
+            "match q.front() { Some((m, _)) => println(f\"{*m + 1}\"), None => {} }",
+            "{m + 1}",
+        ),
+        ("for (_, i) in q.iter() { println(f\"{*i}\"); }", "{i}"),
+    ];
+    for (body, edit) in shapes {
+        let src = format!(
+            "fn main() {{\n    let mut q: VecDeque[(i64, i64)] = VecDeque.new();\n    \
+             q.push_back((3, 4));\n    {body}\n}}\n"
+        );
+        rejected_then_fixed_by(
+            "copy-part-of-a-borrowed-scrutinee",
+            &src,
+            "a 'i64' is copied, so drop the `*`",
+            edit,
+        );
+    }
+    accepted_and_runs(
+        "copy-part-ref-binding-and-for-item",
+        "fn main() {\n    let v = vec![(1, 2), (3, 4)];\n    let mut t = 0;\n    \
+         for (a, b) in v.iter() { t += a * b; }\n    \
+         if let Some((ref x, _)) = v.first() { t += *x; }\n    \
+         let w = vec![5, 6];\n    for x in w { t += *x; }\n    println(f\"{t}\");\n}\n",
+        "26\n",
+    );
 }

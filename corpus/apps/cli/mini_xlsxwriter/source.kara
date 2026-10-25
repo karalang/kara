@@ -61,9 +61,9 @@ fn is_finite(x: f64) -> bool {
 fn pystr(v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => f"{n}",
-        Val.Float(x) => float_repr(*x),
+        Val.Float(x) => float_repr(x),
         Val.Str(s) => s.clone(),
         Val.Fmt(i) => f"<Format {i}>",
         Val.Time(_) => "<datetime>".to_string(),
@@ -121,9 +121,9 @@ fn float_repr(x: f64) -> String {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.Nil => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
-        Val.Float(x) => *x != 0.0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
+        Val.Float(x) => x != 0.0,
         Val.Str(s) => s.len() > 0,
         Val.Time(_) => true,
         Val.Fmt(_) => true,
@@ -144,9 +144,9 @@ fn is_num(v: ref Val) -> bool {
 // The value of a number (a bool counts as 0 or 1, as in Python).
 fn num(v: ref Val) -> f64 {
     match v {
-        Val.Bool(b) => if *b { 1.0 } else { 0.0 },
-        Val.Int(n) => *n as f64,
-        Val.Float(x) => *x,
+        Val.Bool(b) => if b { 1.0 } else { 0.0 },
+        Val.Int(n) => n as f64,
+        Val.Float(x) => x,
         _ => 0.0,
     }
 }
@@ -154,9 +154,9 @@ fn num(v: ref Val) -> f64 {
 // int() of a number.
 fn as_int(v: ref Val) -> i64 {
     match v {
-        Val.Bool(b) => if *b { 1 } else { 0 },
-        Val.Int(n) => *n,
-        Val.Float(x) => *x as i64,
+        Val.Bool(b) => if b { 1 } else { 0 },
+        Val.Int(n) => n,
+        Val.Float(x) => x as i64,
         _ => 0,
     }
 }
@@ -189,7 +189,7 @@ fn str_of(v: ref Val) -> String {
 
 fn fmt_of(v: ref Val) -> Option[i64] {
     match v {
-        Val.Fmt(i) => Some(*i),
+        Val.Fmt(i) => Some(i),
         _ => None,
     }
 }
@@ -564,7 +564,7 @@ fn fmt_g(x: f64, prec: i64, upper: bool) -> String {
 // "%.16G" % number, as the cell writer formats a number.
 fn num_text(v: ref Val) -> String {
     match v {
-        Val.Int(n) => fmt_g(*n as f64, 16, true),
+        Val.Int(n) => fmt_g(n as f64, 16, true),
         _ => fmt_g(num(v), 16, true),
     }
 }
@@ -2309,14 +2309,14 @@ enum Cell {
 
 fn cell_fmt(c: ref Cell) -> Option[i64] {
     match c {
-        Cell.Str(_, f) => *f,
-        Cell.Num(_, f) => *f,
-        Cell.Blank(f) => *f,
-        Cell.Bool(_, f) => *f,
-        Cell.Formula(_, f, _) => *f,
-        Cell.Array(_, f, _, _, _) => *f,
-        Cell.Date(_, f) => *f,
-        Cell.Rich(_, f, _) => *f,
+        Cell.Str(_, f) => f,
+        Cell.Num(_, f) => f,
+        Cell.Blank(f) => f,
+        Cell.Bool(_, f) => f,
+        Cell.Formula(_, f, _) => f,
+        Cell.Array(_, f, _, _, _) => f,
+        Cell.Date(_, f) => f,
+        Cell.Rich(_, f, _) => f,
     }
 }
 
@@ -3174,7 +3174,7 @@ fn autofit(sh: mut ref Sheet, cx: ref Ctx) {
         let mut length: i64 = 0;
         match cell {
             Cell.Str(i, _) => {
-                length = text_width(cx.lib.widths, cx.sst.arr[*i]);
+                length = text_width(cx.lib.widths, cx.sst.arr[i]);
             }
             Cell.Rich(_, _, raw) => {
                 length = text_width(cx.lib.widths, raw);
@@ -3186,7 +3186,7 @@ fn autofit(sh: mut ref Sheet, cx: ref Ctx) {
                 length = 68;
             }
             Cell.Bool(b, _) => {
-                length = if *b != 0 { 31 } else { 36 };
+                length = if b != 0 { 31 } else { 36 };
             }
             Cell.Formula(_, _, v) => {
                 length = formula_width(cx.lib.widths, v);
@@ -4163,7 +4163,7 @@ fn cell_xml(out: mut ref String, sh: ref Sheet, fm: mut ref Formats, row: i64, c
             out.push_str("<c");
             out.push_str(attr_text(a, true));
             out.push_str("><v>");
-            out.push_str(fmt_g(*x, 16, true));
+            out.push_str(fmt_g(x, 16, true));
             out.push_str("</v></c>");
         }
         Cell.Str(i, _) => {
@@ -4181,7 +4181,7 @@ fn cell_xml(out: mut ref String, sh: ref Sheet, fm: mut ref Formats, row: i64, c
             match v {
                 Val.Bool(b) => {
                     a.add("t", "b");
-                    value = if *b { "1".to_string() } else { "0".to_string() };
+                    value = if b { "1".to_string() } else { "0".to_string() };
                 }
                 Val.Str(t) => {
                     if t.len() == 0 {
@@ -4203,7 +4203,7 @@ fn cell_xml(out: mut ref String, sh: ref Sheet, fm: mut ref Formats, row: i64, c
             out.push_str("</v></c>");
         }
         Cell.Array(f, _, v, range, dynamic) => {
-            if *dynamic {
+            if dynamic {
                 a.add("cm", "1");
             }
             let numeric = match v {

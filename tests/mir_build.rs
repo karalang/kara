@@ -2771,7 +2771,7 @@ fn main() {
 }
 
 /// A `Copy` payload bound out of an element (`match v[i] { J.I(n) => .. }`)
-/// reads through `*n` as `karac check`'s `ref` binding does
+/// is a copy (core-semantics §4.6, B-2026-10-24-36), read as `n`
 /// (B-2026-10-15-24), in a free function and on `self.vals[i]`.
 #[test]
 fn mir_deref_of_a_copy_payload_of_an_element() {
@@ -2780,12 +2780,12 @@ enum J { I(i64), S(String) }
 struct H { vals: Vec[J] }
 impl H {
     fn first(ref self) -> Option[i64] {
-        match self.vals[0] { J.I(n) => Some(*n), _ => None }
+        match self.vals[0] { J.I(n) => Some(n), _ => None }
     }
 }
 fn first_int(vals: ref Vec[J]) -> Option[i64] {
     match vals[0] {
-        J.I(n) => Some(*n),
+        J.I(n) => Some(n),
         _ => None,
     }
 }
@@ -3096,7 +3096,7 @@ impl T {
     }
     fn get(ref self, k: ref Val) -> Val {
         match k {
-            Val.Int(i) => if *i < self.arr.len() { Val.Int(self.arr[*i]) } else { Val.Nil },
+            Val.Int(i) => if i < self.arr.len() { Val.Int(self.arr[i]) } else { Val.Nil },
             Val.Nil => Val.Nil,
         }
     }
@@ -6686,7 +6686,7 @@ enum V {
 
 fn f(x: ref Option[i64]) -> i64 {
     match x {
-        Some(n) => *n,
+        Some(n) => n,
         None => -1,
     }
 }
@@ -6701,7 +6701,7 @@ fn name(x: ref Option[String]) -> String {
 fn v(x: ref V) -> i64 {
     match x {
         V.None => 0,
-        V.Int(n) => *n,
+        V.Int(n) => n,
     }
 }
 

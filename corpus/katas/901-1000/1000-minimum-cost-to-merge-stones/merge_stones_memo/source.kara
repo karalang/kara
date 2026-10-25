@@ -88,7 +88,7 @@ fn main() {
     ];
     for (stones, k) in cases.iter() {
         let text: Vec[String] = stones.iter().map(|x| f"{x}").collect();
-        println(f"stones = [{text.join(",")}], k = {k} -> {merge_stones(stones, *k)}");
+        println(f"stones = [{text.join(",")}], k = {k} -> {merge_stones(stones, k)}");
     }
     let big: Vec[(String, Vec[i64], i64)] = vec![
         ("30 piles of 100, k = 2".to_string(), Vec.filled(30, 100), 2),
@@ -99,7 +99,7 @@ fn main() {
         ("29 piles, 100 and 1 in turn, k = 5".to_string(), (0..29).map(|i| if i % 2 == 0 { 100 } else { 1 }).collect(), 5),
     ];
     for (name, stones, k) in big.iter() {
-        println(f"{name}: {merge_stones(stones, *k)}");
+        println(f"{name}: {merge_stones(stones, k)}");
     }
     let mut seed = 1000;
     for (count, most) in vec![(300, 6), (3000, 15), (300, 30)] {

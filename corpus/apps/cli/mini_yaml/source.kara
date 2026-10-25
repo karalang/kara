@@ -2427,9 +2427,9 @@ fn construct_timestamp(text: Str) -> String {
 
 fn as_number(v: ref V) -> Option[f64] {
     match v {
-        V.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        V.Int(n) => Some(*n as f64),
-        V.Float(x) => Some(*x),
+        V.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        V.Int(n) => Some(n as f64),
+        V.Float(x) => Some(x),
         _ => None,
     }
 }
@@ -2620,8 +2620,8 @@ fn json_key(k: ref V) -> String {
             let t = f"{n}";
             json_str(t)
         }
-        V.Float(x) => json_str(float_repr(*x)),
-        V.Bool(b) => json_str(if *b { "true" } else { "false" }),
+        V.Float(x) => json_str(float_repr(x)),
+        V.Bool(b) => json_str(if b { "true" } else { "false" }),
         V.Null => json_str("null"),
         V.Date(s) => json_str(s),
         _ => json_str("?"),
@@ -2631,12 +2631,12 @@ fn json_key(k: ref V) -> String {
 fn dump(v: ref V, level: i64, out: mut ref String) {
     match v {
         V.Null => out.push_str("null"),
-        V.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        V.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         V.Int(n) => {
             let t = f"{n}";
             out.push_str(t);
         }
-        V.Float(x) => out.push_str(float_repr(*x)),
+        V.Float(x) => out.push_str(float_repr(x)),
         V.Str(s) => out.push_str(json_str(s)),
         V.Date(s) => out.push_str(json_str(s)),
         V.Seq(items) => {
@@ -3018,9 +3018,9 @@ fn write_data() -> Result[(), String] {
 fn clone_v(v: ref V) -> V {
     match v {
         V.Null => V.Null,
-        V.Bool(b) => V.Bool(*b),
-        V.Int(n) => V.Int(*n),
-        V.Float(x) => V.Float(*x),
+        V.Bool(b) => V.Bool(b),
+        V.Int(n) => V.Int(n),
+        V.Float(x) => V.Float(x),
         V.Str(s) => V.Str(s.clone()),
         V.Date(s) => V.Date(s.clone()),
         V.Seq(items) => {
@@ -3135,9 +3135,9 @@ fn is_null(v: ref V) -> bool {
 fn py_str(v: ref V) -> String {
     match v {
         V.Null => "None".to_string(),
-        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         V.Int(n) => f"{n}",
-        V.Float(x) => float_repr(*x),
+        V.Float(x) => float_repr(x),
         V.Str(s) => s.clone(),
         V.Date(s) => s.clone(),
         _ => "?".to_string(),

@@ -836,7 +836,7 @@ fn type_name(v: ref Value) -> String {
 fn truthy(v: ref Value) -> bool {
     match v {
         Value.Nil => false,
-        Value.Bool(b) => *b,
+        Value.Bool(b) => b,
         _ => true,
     }
 }
@@ -873,7 +873,7 @@ fn norm_key(k: own Value) -> Value {
 fn key_code(k: ref Value) -> String {
     match k {
         Value.Nil => "z".to_string(),
-        Value.Bool(b) => if *b { "b1".to_string() } else { "b0".to_string() },
+        Value.Bool(b) => if b { "b1".to_string() } else { "b0".to_string() },
         Value.Int(i) => f"i{i}",
         Value.Num(x) => f"n{x}",
         Value.Text(s) => f"s{s}",
@@ -1433,8 +1433,8 @@ fn str_to_int_base(s: Str, base: i64) -> Option[i64] {
 // Arithmetic operands: numbers, and strings that read as numbers.
 fn to_arith(v: ref Value) -> Option[Value] {
     match v {
-        Value.Int(i) => Some(Value.Int(*i)),
-        Value.Num(x) => Some(Value.Num(*x)),
+        Value.Int(i) => Some(Value.Int(i)),
+        Value.Num(x) => Some(Value.Num(x)),
         Value.Text(s) => str_to_number(s),
         _ => None,
     }
@@ -1442,8 +1442,8 @@ fn to_arith(v: ref Value) -> Option[Value] {
 
 fn as_float(v: ref Value) -> f64 {
     match v {
-        Value.Int(i) => *i as f64,
-        Value.Num(x) => *x,
+        Value.Int(i) => i as f64,
+        Value.Num(x) => x,
         _ => 0.0,
     }
 }
@@ -1483,7 +1483,7 @@ fn float_mod(a: f64, b: f64) -> f64 {
 fn number_text(v: ref Value) -> String {
     match v {
         Value.Int(i) => f"{i}",
-        Value.Num(x) => float_text(*x),
+        Value.Num(x) => float_text(x),
         _ => String.new(),
     }
 }
@@ -2112,7 +2112,7 @@ fn hex_id(id: i64) -> String {
 fn tostring_raw(v: ref Value) -> String {
     match v {
         Value.Nil => "nil".to_string(),
-        Value.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
         Value.Int(_) => number_text(v),
         Value.Num(_) => number_text(v),
         Value.Text(s) => s.clone(),
@@ -2170,7 +2170,7 @@ fn describe(ast: ref Ast, env: ref Env, e: i64) -> String {
             None => f" (global '{n}')",
         },
         Expr.Index(_, k) => {
-            let kx = ref ast.exprs[*k];
+            let kx = ref ast.exprs[k];
             match kx {
                 Expr.Text(s) => f" (field '{s}')",
                 _ => String.new(),
@@ -2222,7 +2222,7 @@ fn index_value(ast: ref Ast, st: mut ref State, obj: own Value, key: ref Value, 
 fn check_key(st: ref State, k: ref Value) -> Result[(), Value] {
     match k {
         Value.Nil => Err(st.rt_error("index is nil")),
-        Value.Num(x) => if *x != *x { Err(st.rt_error("index is NaN")) } else { Ok(()) },
+        Value.Num(x) => if x != x { Err(st.rt_error("index is NaN")) } else { Ok(()) },
         _ => Ok(()),
     }
 }
@@ -2300,26 +2300,26 @@ fn eval_call(ast: ref Ast, st: mut ref State, env: ref Env, e: i64) -> Result[Ve
     let x = ref ast.exprs[e];
     match x {
         Expr.Call(fe, args, line) => {
-            let fv = eval(ast, mut st, env, *fe)?;
+            let fv = eval(ast, mut st, env, fe)?;
             let argv = eval_list(ast, mut st, env, args)?;
-            st.set_line(*line);
+            st.set_line(line);
             if not is_callable(fv) {
-                return Err(st.rt_error(f"attempt to call a {type_name(fv)} value{describe(ast, env, *fe)}"));
+                return Err(st.rt_error(f"attempt to call a {type_name(fv)} value{describe(ast, env, fe)}"));
             }
             call_value(ast, mut st, fv, argv)
         }
         Expr.Method(oe, name, args, line) => {
-            let ov = eval(ast, mut st, env, *oe)?;
-            st.set_line(*line);
+            let ov = eval(ast, mut st, env, oe)?;
+            st.set_line(line);
             let key = Value.Text(name.clone());
-            let fv = index_value(ast, mut st, ov.clone(), key, describe(ast, env, *oe))?;
+            let fv = index_value(ast, mut st, ov.clone(), key, describe(ast, env, oe))?;
             let mut argv: Vec[Value] = Vec.new();
             argv.push(ov);
             let rest = eval_list(ast, mut st, env, args)?;
             for v in rest.into_iter() {
                 argv.push(v);
             }
-            st.set_line(*line);
+            st.set_line(line);
             if not is_callable(fv) {
                 return Err(st.rt_error(f"attempt to call a {type_name(fv)} value (method '{name}')"));
             }
@@ -2339,47 +2339,47 @@ fn eval(ast: ref Ast, st: mut ref State, env: ref Env, e: i64) -> Result[Value, 
         Expr.Nil => Ok(Value.Nil),
         Expr.True => Ok(Value.Bool(true)),
         Expr.False => Ok(Value.Bool(false)),
-        Expr.Int(i) => Ok(Value.Int(*i)),
-        Expr.Float(f) => Ok(Value.Num(*f)),
+        Expr.Int(i) => Ok(Value.Int(i)),
+        Expr.Float(f) => Ok(Value.Num(f)),
         Expr.Text(s) => Ok(Value.Text(s.clone())),
         Expr.Name(n) => match lookup(env, env.names.len(), n) {
             Some(c) => Ok(c.v.clone()),
             None => Ok(st.globals.get_str(n)),
         },
         Expr.Index(oe, ke) => {
-            let ov = eval(ast, mut st, env, *oe)?;
-            let kv = eval(ast, mut st, env, *ke)?;
-            index_value(ast, mut st, ov, kv, describe(ast, env, *oe))
+            let ov = eval(ast, mut st, env, oe)?;
+            let kv = eval(ast, mut st, env, ke)?;
+            index_value(ast, mut st, ov, kv, describe(ast, env, oe))
         }
         Expr.Call(_, _, _) => Ok(first(eval_call(ast, mut st, env, e)?)),
         Expr.Method(_, _, _, _) => Ok(first(eval_call(ast, mut st, env, e)?)),
-        Expr.Function(p) => Ok(make_closure(mut st, env, ast, *p)),
+        Expr.Function(p) => Ok(make_closure(mut st, env, ast, p)),
         Expr.Binary(op, l, r, line) => {
-            let a = eval(ast, mut st, env, *l)?;
-            let b = eval(ast, mut st, env, *r)?;
-            st.set_line(*line);
+            let a = eval(ast, mut st, env, l)?;
+            let b = eval(ast, mut st, env, r)?;
+            st.set_line(line);
             binary(ast, mut st, op, a, b)
         }
         Expr.Unary(op, o, line) => {
-            let a = eval(ast, mut st, env, *o)?;
-            st.set_line(*line);
-            unary(ast, mut st, op, a, describe(ast, env, *o))
+            let a = eval(ast, mut st, env, o)?;
+            st.set_line(line);
+            unary(ast, mut st, op, a, describe(ast, env, o))
         }
         Expr.And(l, r) => {
-            let a = eval(ast, mut st, env, *l)?;
+            let a = eval(ast, mut st, env, l)?;
             if not truthy(a) {
                 return Ok(a);
             }
-            eval(ast, mut st, env, *r)
+            eval(ast, mut st, env, r)
         }
         Expr.Or(l, r) => {
-            let a = eval(ast, mut st, env, *l)?;
+            let a = eval(ast, mut st, env, l)?;
             if truthy(a) {
                 return Ok(a);
             }
-            eval(ast, mut st, env, *r)
+            eval(ast, mut st, env, r)
         }
-        Expr.Paren(i) => eval(ast, mut st, env, *i),
+        Expr.Paren(i) => eval(ast, mut st, env, i),
         Expr.Table(items, keys, vals) => {
             let t = st.new_table();
             let positional = eval_list(ast, mut st, env, items)?;
@@ -2538,21 +2538,21 @@ fn raw_equal(a: ref Value, b: ref Value) -> bool {
     match a {
         Value.Nil => is_nil(b),
         Value.Bool(x) => match b {
-            Value.Bool(y) => *x == *y,
+            Value.Bool(y) => x == y,
             _ => false,
         },
         Value.Int(x) => match b {
-            Value.Int(y) => *x == *y,
-            Value.Num(y) => match float_to_int(*y) {
-                Some(j) => j == *x,
+            Value.Int(y) => x == y,
+            Value.Num(y) => match float_to_int(y) {
+                Some(j) => j == x,
                 None => false,
             },
             _ => false,
         },
         Value.Num(x) => match b {
-            Value.Num(y) => *x == *y,
-            Value.Int(y) => match float_to_int(*x) {
-                Some(j) => j == *y,
+            Value.Num(y) => x == y,
+            Value.Int(y) => match float_to_int(x) {
+                Some(j) => j == y,
                 None => false,
             },
             _ => false,
@@ -2608,7 +2608,7 @@ fn less_than(ast: ref Ast, st: mut ref State, a: ref Value, b: ref Value, or_equ
     if is_number(a) and is_number(b) {
         if let Value.Int(x) = a {
             if let Value.Int(y) = b {
-                return Ok(if or_equal { *x <= *y } else { *x < *y });
+                return Ok(if or_equal { x <= y } else { x < y });
             }
         }
         let x = as_float(a);
@@ -2749,7 +2749,7 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
         Stmt.LocalFunction(name, p) => {
             // declared first, so the function can call itself
             declare(env, name, Value.Nil);
-            let f = make_closure(mut st, env, ast, *p);
+            let f = make_closure(mut st, env, ast, p);
             let n = env.cells.len();
             env.cells[n - 1].v = f;
             Ok(Flow.Normal)
@@ -2764,9 +2764,9 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
                         None => places.push(Place { cell: None, global: n.clone(), obj: Value.Nil, key: Value.Nil, what: String.new() }),
                     },
                     Expr.Index(oe, ke) => {
-                        let ov = eval(ast, mut st, env, *oe)?;
-                        let kv = eval(ast, mut st, env, *ke)?;
-                        places.push(Place { cell: None, global: String.new(), obj: ov, key: kv, what: describe(ast, env, *oe) });
+                        let ov = eval(ast, mut st, env, oe)?;
+                        let kv = eval(ast, mut st, env, ke)?;
+                        places.push(Place { cell: None, global: String.new(), obj: ov, key: kv, what: describe(ast, env, oe) });
                     }
                     _ => return Err(st.rt_error("cannot assign to this expression")),
                 }
@@ -2788,7 +2788,7 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
             Ok(Flow.Normal)
         }
         Stmt.Expression(e) => {
-            eval_call(ast, mut st, env, *e)?;
+            eval_call(ast, mut st, env, e)?;
             Ok(Flow.Normal)
         }
         Stmt.If(conds, blocks, other) => {
@@ -2798,18 +2798,18 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
                     return exec_block(ast, mut st, env, blocks[i]);
                 }
             }
-            if *other >= 0 {
-                return exec_block(ast, mut st, env, *other);
+            if other >= 0 {
+                return exec_block(ast, mut st, env, other);
             }
             Ok(Flow.Normal)
         }
         Stmt.While(c, body) => {
             loop {
-                let cv = eval(ast, mut st, env, *c)?;
+                let cv = eval(ast, mut st, env, c)?;
                 if not truthy(cv) {
                     break;
                 }
-                match exec_block(ast, mut st, env, *body)? {
+                match exec_block(ast, mut st, env, body)? {
                     Flow.Break => break,
                     Flow.Return(vs) => return Ok(Flow.Return(vs)),
                     Flow.Normal => {}
@@ -2821,23 +2821,23 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
             loop {
                 // the condition can see the body's locals
                 let inner = new_env(env);
-                match exec_stmts(ast, mut st, inner, *body)? {
+                match exec_stmts(ast, mut st, inner, body)? {
                     Flow.Break => break,
                     Flow.Return(vs) => return Ok(Flow.Return(vs)),
                     Flow.Normal => {}
                 }
-                let cv = eval(ast, mut st, inner, *c)?;
+                let cv = eval(ast, mut st, inner, c)?;
                 if truthy(cv) {
                     break;
                 }
             }
             Ok(Flow.Normal)
         }
-        Stmt.NumFor(var, start, stop, step, body) => exec_numfor(ast, mut st, env, var, *start, *stop, *step, *body),
-        Stmt.GenFor(names, values, body) => exec_genfor(ast, mut st, env, names, values, *body),
+        Stmt.NumFor(var, start, stop, step, body) => exec_numfor(ast, mut st, env, var, start, stop, step, body),
+        Stmt.GenFor(names, values, body) => exec_genfor(ast, mut st, env, names, values, body),
         Stmt.Return(values) => Ok(Flow.Return(eval_list(ast, mut st, env, values)?)),
         Stmt.Break => Ok(Flow.Break),
-        Stmt.Do(b) => exec_block(ast, mut st, env, *b),
+        Stmt.Do(b) => exec_block(ast, mut st, env, b),
     }
 }
 
@@ -3412,7 +3412,7 @@ fn math_lib(st: mut ref State, id: i64, args: own Vec[Value]) -> Result[Vec[Valu
 fn num_less(a: ref Value, b: ref Value) -> bool {
     if let Value.Int(x) = a {
         if let Value.Int(y) = b {
-            return *x < *y;
+            return x < y;
         }
     }
     as_float(a) < as_float(b)
@@ -3660,11 +3660,11 @@ fn string_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own 
             _ => String.new(),
         };
         let pos: i64 = match f.state[2] {
-            Value.Int(i) => *i,
+            Value.Int(i) => i,
             _ => 0,
         };
         let last: i64 = match f.state[3] {
-            Value.Int(i) => *i,
+            Value.Int(i) => i,
             _ => -1,
         };
         let mut ms = new_match_state(s, p);
@@ -4019,7 +4019,7 @@ fn write_piece(st: ref State, args: ref Vec[Value], i: i64, fname: Str) -> Resul
     match v {
         Value.Text(s) => Ok(s.clone()),
         Value.Int(n) => Ok(f"{n}"),
-        Value.Num(x) => Ok(fmt_g(*x, 14, false, false)),
+        Value.Num(x) => Ok(fmt_g(x, 14, false, false)),
         _ => Err(bad_arg(st, i, fname, f"string expected, got {type_name(v)}")),
     }
 }
@@ -4091,7 +4091,7 @@ fn io_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[
     }
     if id == B_LINES_ITER {
         let i: i64 = match f.state[0] {
-            Value.Int(i) => *i,
+            Value.Int(i) => i,
             _ => 1,
         };
         if i >= f.state.len() {

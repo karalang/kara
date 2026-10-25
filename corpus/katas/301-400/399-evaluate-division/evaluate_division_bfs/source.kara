@@ -28,7 +28,7 @@ fn calc_equation(equations: Vec[(String, String)], values: Vec[f64], queries: Ve
                 }
                 for (next, w) in graph[at].iter() {
                     if seen.insert(next.clone()) {
-                        queue.push_back((next.clone(), product * *w));
+                        queue.push_back((next.clone(), product * w));
                     }
                 }
             }

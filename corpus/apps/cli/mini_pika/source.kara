@@ -490,8 +490,8 @@ fn vstr(s: ref String) -> Val {
 fn val_eq(a: ref Val, b: ref Val) -> bool {
     match (a, b) {
         (Val.Nil, Val.Nil) => true,
-        (Val.Bool(x), Val.Bool(y)) => *x == *y,
-        (Val.Int(x), Val.Int(y)) => *x == *y,
+        (Val.Bool(x), Val.Bool(y)) => x == y,
+        (Val.Int(x), Val.Int(y)) => x == y,
         (Val.Str(x), Val.Str(y)) => *x == *y,
         (Val.Bytes(x), Val.Bytes(y)) => *x == *y,
         _ => false,
@@ -533,11 +533,11 @@ fn dict_get(d: ref Val, key: ref String) -> Option[Val] {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.Nil => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
-        Val.LongI(n) => *n != 0,
-        Val.LongU(n) => *n != 0,
-        Val.Dec(c, _) => *c != 0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
+        Val.LongI(n) => n != 0,
+        Val.LongU(n) => n != 0,
+        Val.Dec(c, _) => c != 0,
         Val.Time(_) => true,
         Val.Str(s) => s.len() > 0,
         Val.Bytes(b) => b.len() > 0,
@@ -627,12 +627,12 @@ fn time_repr(t: ref i64) -> String {
 fn py_repr(v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
-        Val.Bool(b) => py_bool(*b),
+        Val.Bool(b) => py_bool(b),
         Val.Int(n) => f"{n}",
         Val.LongI(n) => f"{n}L",
         Val.LongU(n) => f"{n}L",
         Val.Dec(c, e) => {
-            let s = dec_str(*c, *e);
+            let s = dec_str(c, e);
             f"Decimal('{s}')"
         }
         Val.Time(t) => time_repr(t),
@@ -663,7 +663,7 @@ fn py_str(v: ref Val) -> String {
         Val.Str(s) => s.clone(),
         Val.LongI(n) => f"{n}",
         Val.LongU(n) => f"{n}",
-        Val.Dec(c, e) => dec_str(*c, *e),
+        Val.Dec(c, e) => dec_str(c, e),
         _ => py_repr(v),
     }
 }
@@ -736,22 +736,22 @@ fn encode_value(out: mut ref Vec[u8], v: ref Val) -> Result[(), PyErr] {
         }
         Val.Bool(x) => {
             out.push(b't');
-            out.push(if *x { 1 } else { 0 });
+            out.push(if x { 1 } else { 0 });
         }
         Val.LongI(n) => {
-            if *n < 0 {
+            if n < 0 {
                 out.push(b'L');
             } else {
                 out.push(b'l');
             }
-            push_be(mut out, *n, 8);
+            push_be(mut out, n, 8);
         }
         Val.LongU(n) => {
             out.push(b'l');
-            push_be_u64(mut out, *n);
+            push_be_u64(mut out, n);
         }
         Val.Int(n) => {
-            let x = *n;
+            let x = n;
             if x >= -2147483648 and x <= 2147483647 {
                 out.push(b'I');
                 push_be(mut out, x, 4);
@@ -762,8 +762,8 @@ fn encode_value(out: mut ref Vec[u8], v: ref Val) -> Result[(), PyErr] {
         }
         Val.Dec(c, e) => {
             // value.normalize(): the trailing zeros go into the exponent
-            let mut coef = *c;
-            let mut exp = *e;
+            let mut coef = c;
+            let mut exp = e;
             if coef == 0 {
                 exp = 0;
             }
@@ -792,7 +792,7 @@ fn encode_value(out: mut ref Vec[u8], v: ref Val) -> Result[(), PyErr] {
         }
         Val.Time(t) => {
             out.push(b'T');
-            push_be(mut out, *t, 8);
+            push_be(mut out, t, 8);
         }
         Val.Dict(_) => {
             out.push(b'F');
@@ -1107,8 +1107,8 @@ fn encode_method(m: ref Meth) -> Result[Vec[u8], PyErr] {
 
 fn val_int(v: ref Val) -> i64 {
     match v {
-        Val.Int(n) => *n,
-        Val.Bool(b) => if *b { 1 } else { 0 },
+        Val.Int(n) => n,
+        Val.Bool(b) => if b { 1 } else { 0 },
         _ => 0,
     }
 }
@@ -1352,9 +1352,9 @@ fn frame_type(f: ref Frame) -> i64 {
 
 fn frame_channel(f: ref Frame) -> i64 {
     match f {
-        Frame.Method(c, _) => *c,
-        Frame.Header(c, _, _) => *c,
-        Frame.Body(c, _) => *c,
+        Frame.Method(c, _) => c,
+        Frame.Header(c, _, _) => c,
+        Frame.Body(c, _) => c,
         _ => 0,
     }
 }
@@ -1375,24 +1375,24 @@ fn marshal(f: ref Frame) -> Result[Vec[u8], PyErr] {
             let mut p: Vec[u8] = Vec.new();
             push_be(mut p, m.sp.index, 4);
             append(mut p, encode_method(m)?);
-            Ok(wrap(1, *ch, p))
+            Ok(wrap(1, ch, p))
         }
         Frame.Header(ch, size, props) => {
             let mut p: Vec[u8] = Vec.new();
             push_be(mut p, 60, 2);
             push_be(mut p, 0, 2);
-            push_be(mut p, *size, 8);
+            push_be(mut p, size, 8);
             append(mut p, props_encode(props)?);
-            Ok(wrap(2, *ch, p))
+            Ok(wrap(2, ch, p))
         }
-        Frame.Body(ch, frag) => Ok(wrap(3, *ch, frag)),
+        Frame.Body(ch, frag) => Ok(wrap(3, ch, frag)),
         Frame.Heartbeat => Ok(wrap(8, 0, Vec.new())),
         Frame.Protocol(major, minor, rev) => {
             let mut out = str_bytes("AMQP");
             out.push(0);
-            push_be(mut out, *major, 1);
-            push_be(mut out, *minor, 1);
-            push_be(mut out, *rev, 1);
+            push_be(mut out, major, 1);
+            push_be(mut out, minor, 1);
+            push_be(mut out, rev, 1);
             Ok(out)
         }
     }
@@ -1558,7 +1558,7 @@ fn float_repr(x: f64) -> String {
 
 fn opt_float_repr(x: ref Option[f64]) -> String {
     match x {
-        Some(v) => float_repr(*v),
+        Some(v) => float_repr(v),
         None => "None".to_string(),
     }
 }
@@ -2770,8 +2770,8 @@ fn process_frame(c: mut ref Conn, f: ref Frame) -> Result[(), PyErr] {
     c.frames_received += 1;
     match f {
         Frame.Method(ch, m) => {
-            if cb_pending(c, *ch, m.sp.name) > 0 {
-                cb_process(mut c, *ch, m.sp.name, -1, CbArg.Frame(f.clone()))?;
+            if cb_pending(c, ch, m.sp.name) > 0 {
+                cb_process(mut c, ch, m.sp.name, -1, CbArg.Frame(f.clone()))?;
                 return Ok(());
             }
         }
@@ -3505,8 +3505,8 @@ fn asm_process(ch: mut ref Chan, f: ref Frame) -> Result[Option[(Option[Meth], i
             }
         }
         Frame.Header(_, size, props) => {
-            ch.asm_header = Some((*size, props.clone()));
-            if *size == 0 {
+            ch.asm_header = Some((size, props.clone()));
+            if size == 0 {
                 return Ok(Some(asm_finish(mut ch)));
             }
             return Ok(None);
@@ -3711,24 +3711,24 @@ fn invoke(c: mut ref Conn, cb: ref Cb, arg: ref CbArg) -> Result[(), PyErr] {
             Ok(())
         }
         Cb.ChannelCleanup => match arg {
-            CbArg.Chan(n) => on_channel_cleanup(mut c, *n),
+            CbArg.Chan(n) => on_channel_cleanup(mut c, n),
             _ => Ok(()),
         },
-        Cb.SyncComplete(n) => sync_complete(mut c, *n),
-        Cb.OpenOk(n) => ch_on_openok(mut c, *n),
+        Cb.SyncComplete(n) => sync_complete(mut c, n),
+        Cb.OpenOk(n) => ch_on_openok(mut c, n),
         Cb.GetEmpty(_) => Ok(()),
         Cb.Cancel(n) => {
-            ch_on_cancel(mut c, *n, arg_meth(arg));
+            ch_on_cancel(mut c, n, arg_meth(arg));
             Ok(())
         }
         Cb.Flow(_) => Ok(()),
-        Cb.CloseFromBroker(n) => ch_on_close_from_broker(mut c, *n, arg_meth(arg)),
+        Cb.CloseFromBroker(n) => ch_on_close_from_broker(mut c, n, arg_meth(arg)),
         Cb.CancelOk(n) => {
-            cleanup_consumer_ref(mut c, *n, mstr(arg_meth(arg), "consumer_tag"));
+            cleanup_consumer_ref(mut c, n, mstr(arg_meth(arg), "consumer_tag"));
             Ok(())
         }
         Cb.EventOk(_) => Ok(()),
-        Cb.CloseOk(n) => transition_to_closed(mut c, *n),
+        Cb.CloseOk(n) => transition_to_closed(mut c, n),
         Cb.AppOpen => app_on_open(mut c),
         Cb.AppOpenError => {
             let e = arg_err(arg);
@@ -3750,7 +3750,7 @@ fn invoke(c: mut ref Conn, cb: ref Cb, arg: ref CbArg) -> Result[(), PyErr] {
             Ok(())
         }
         Cb.AppChannelClosed => match arg {
-            CbArg.ChanErr(n, e) => app_on_channel_closed(mut c, *n, e),
+            CbArg.ChanErr(n, e) => app_on_channel_closed(mut c, n, e),
             _ => Ok(()),
         },
         Cb.AppReturn => match arg {

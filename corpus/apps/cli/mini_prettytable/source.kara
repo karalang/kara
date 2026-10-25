@@ -6763,8 +6763,8 @@ fn py_repr(v: ref V) -> String {
     match v {
         V.S(s) => repr_str(s),
         V.I(n) => f"{n}",
-        V.F(x) => float_repr(*x),
-        V.B(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.F(x) => float_repr(x),
+        V.B(b) => if b { "True".to_string() } else { "False".to_string() },
         V.N => "None".to_string(),
         V.L(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -6791,9 +6791,9 @@ fn type_name(v: ref V) -> String {
 fn truthy(v: ref V) -> bool {
     match v {
         V.S(s) => s.len() > 0,
-        V.I(n) => *n != 0,
-        V.F(x) => *x != 0.0,
-        V.B(b) => *b,
+        V.I(n) => n != 0,
+        V.F(x) => x != 0.0,
+        V.B(b) => b,
         V.N => false,
         V.L(items) => items.len() > 0,
     }
@@ -6802,17 +6802,17 @@ fn truthy(v: ref V) -> bool {
 // The number of an int, float or bool.
 fn num_of(v: ref V) -> Option[f64] {
     match v {
-        V.I(n) => Some(*n as f64),
-        V.F(x) => Some(*x),
-        V.B(b) => Some(if *b { 1.0 } else { 0.0 }),
+        V.I(n) => Some(n as f64),
+        V.F(x) => Some(x),
+        V.B(b) => Some(if b { 1.0 } else { 0.0 }),
         _ => None,
     }
 }
 
 fn int_of(v: ref V) -> Option[i64] {
     match v {
-        V.I(n) => Some(*n),
-        V.B(b) => Some(if *b { 1 } else { 0 }),
+        V.I(n) => Some(n),
+        V.B(b) => Some(if b { 1 } else { 0 }),
         _ => None,
     }
 }
@@ -7090,7 +7090,7 @@ impl IMap {
     fn get(ref self, k: ref String) -> Option[i64] {
         for (key, v) in self.items.iter() {
             if key == k {
-                return Some(*v);
+                return Some(v);
             }
         }
         None
@@ -7494,8 +7494,8 @@ fn v_of_j(j: ref J) -> V {
                 V.I(i64.parse(t).unwrap_or(0))
             }
         }
-        J.F(x) => V.F(*x),
-        J.B(b) => V.B(*b),
+        J.F(x) => V.F(x),
+        J.B(b) => V.B(b),
         J.Null => V.N,
         J.A(items) => {
             let mut out: Vec[V] = Vec.new();
@@ -7535,8 +7535,8 @@ fn j_truthy(j: ref J) -> bool {
     match j {
         J.S(s) => s.len() > 0,
         J.N(_) => truthy(v_of_j(j)),
-        J.F(x) => *x != 0.0,
-        J.B(b) => *b,
+        J.F(x) => x != 0.0,
+        J.B(b) => b,
         J.Null => false,
         J.A(items) => items.len() > 0,
         J.O(m) => m.len() > 0,
@@ -7561,7 +7561,7 @@ fn j_text(j: ref J) -> String {
 // val in (True, False): True, False, 1, 0, 1.0 and 0.0 are.
 fn j_bool(j: ref J) -> Option[bool] {
     match j {
-        J.B(b) => Some(*b),
+        J.B(b) => Some(b),
         J.N(_) => {
             match num_of(v_of_j(j)) {
                 Some(x) => if x == 1.0 { Some(true) } else if x == 0.0 { Some(false) } else { None },
@@ -7740,9 +7740,9 @@ fn printf_one(fmt: ref String, value: ref V) -> Result[String, String] {
         if conv == 'd' or conv == 'i' or conv == 'u' {
             spec.push('d');
             let n = match value {
-                V.I(n) => *n,
-                V.B(b) => if *b { 1 } else { 0 },
-                V.F(x) => *x as i64,
+                V.I(n) => n,
+                V.B(b) => if b { 1 } else { 0 },
+                V.F(x) => x as i64,
                 _ => return Err(type_err(f"%{conv} format: a real number is required, not {type_name(value)}")),
             };
             out.push_str(format_int(n, spec)?);
@@ -7812,9 +7812,9 @@ fn formatter(name: ref String, field: ref String, v: ref V) -> Result[String, St
 fn fmt_num(v: ref V, spec: Str) -> Result[String, String] {
     let sp = spec.to_string();
     match v {
-        V.I(n) => format_int(*n, sp),
-        V.B(b) => format_bool(*b, sp),
-        V.F(x) => format_float(*x, sp),
+        V.I(n) => format_int(n, sp),
+        V.B(b) => format_bool(b, sp),
+        V.F(x) => format_float(x, sp),
         _ => Err(value_err(f"Unknown format code '{last_char(spec)}' for object of type '{type_name(v)}'")),
     }
 }
@@ -9363,7 +9363,7 @@ fn py_slice_list(v: ref Vec[Vec[V]], start: i64, end: ref Option[i64]) -> Vec[Ve
     let n = v.len();
     let lo = clamp_index(start, n);
     let hi = match end {
-        Some(e) => clamp_index(*e, n),
+        Some(e) => clamp_index(e, n),
         None => n,
     };
     let mut out: Vec[Vec[V]] = Vec.new();
@@ -9379,7 +9379,7 @@ fn py_slice_bools(v: ref Vec[bool], start: i64, end: ref Option[i64]) -> Vec[boo
     let n = v.len();
     let mut lo = if start < 0 { start + n } else { start };
     let mut hi = match end {
-        Some(e) => if *e < 0 { *e + n } else { *e },
+        Some(e) => if e < 0 { e + n } else { e },
         None => n,
     };
     if lo < 0 {
@@ -10167,7 +10167,7 @@ fn json_value(v: ref V, jo: ref JsonOpts, level: i64) -> String {
         V.S(s) => json_quote(s),
         V.I(n) => f"{n}",
         V.F(_) => py_str(v),
-        V.B(b) => if *b { "true".to_string() } else { "false".to_string() },
+        V.B(b) => if b { "true".to_string() } else { "false".to_string() },
         V.N => "null".to_string(),
         V.L(items) => {
             let mut parts: Vec[String] = Vec.new();

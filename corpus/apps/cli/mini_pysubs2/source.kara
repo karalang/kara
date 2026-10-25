@@ -422,35 +422,35 @@ fn float_repr(x: f64) -> String {
 fn num_repr(n: ref Num) -> String {
     match n {
         Num.I(i) => f"{i}",
-        Num.F(x) => float_repr(*x),
+        Num.F(x) => float_repr(x),
     }
 }
 
 fn num_f(n: ref Num) -> f64 {
     match n {
-        Num.I(i) => *i as f64,
-        Num.F(x) => *x,
+        Num.I(i) => i as f64,
+        Num.F(x) => x,
     }
 }
 
 fn num_eq(a: ref Num, b: ref Num) -> bool {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => *x == *y,
+        (Num.I(x), Num.I(y)) => x == y,
         _ => num_f(a) == num_f(b),
     }
 }
 
 fn num_add(a: ref Num, b: ref Num) -> Num {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => Num.I(*x + *y),
+        (Num.I(x), Num.I(y)) => Num.I(x + y),
         _ => Num.F(num_f(a) + num_f(b)),
     }
 }
 
 fn num_mul(a: ref Num, k: i64) -> Num {
     match a {
-        Num.I(x) => Num.I(*x * k),
-        Num.F(x) => Num.F(*x * (k as f64)),
+        Num.I(x) => Num.I(x * k),
+        Num.F(x) => Num.F(x * (k as f64)),
     }
 }
 
@@ -477,8 +477,8 @@ fn round_even(x: f64) -> i64 {
 // int(round(n))
 fn num_round(n: ref Num) -> i64 {
     match n {
-        Num.I(i) => *i,
-        Num.F(x) => round_even(*x),
+        Num.I(i) => i,
+        Num.F(x) => round_even(x),
     }
 }
 
@@ -995,24 +995,24 @@ fn emit_node(prog: mut ref Vec[Inst], n: ref Node) {
             prog.push(Inst.Save(2 * idx + 1));
         }
         Node.Rep(body, lo, hi, greedy) => {
-            for _ in 0..*lo {
+            for _ in 0..lo {
                 emit_node(mut prog, body[0]);
             }
-            if *hi < 0 {
+            if hi < 0 {
                 // x*: L: split(body, out); body; jmp L
                 let l = prog.len();
                 prog.push(Inst.Split(0, 0));
                 emit_node(mut prog, body[0]);
                 prog.push(Inst.Jmp(l));
                 let out = prog.len();
-                prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
             } else {
-                for _ in *lo..*hi {
+                for _ in lo..hi {
                     let l = prog.len();
                     prog.push(Inst.Split(0, 0));
                     emit_node(mut prog, body[0]);
                     let out = prog.len();
-                    prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                    prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
                 }
             }
         }
@@ -1082,13 +1082,13 @@ fn re_run(re: ref Re, s: ref Vec[char], pos0: i64, full: bool, slots: mut ref Ve
                     if pos == n { pc += 1; } else { break; }
                 }
                 Inst.Split(a, b) => {
-                    stack.push(Bt.Try(*b, pos));
-                    pc = *a;
+                    stack.push(Bt.Try(b, pos));
+                    pc = a;
                 }
-                Inst.Jmp(a) => pc = *a,
+                Inst.Jmp(a) => pc = a,
                 Inst.Save(k) => {
-                    stack.push(Bt.Restore(*k, slots[*k]));
-                    slots[*k] = pos;
+                    stack.push(Bt.Restore(k, slots[k]));
+                    slots[k] = pos;
                     pc += 1;
                 }
                 Inst.Match => {
@@ -2030,8 +2030,8 @@ fn ms_to_times(ms: ref Num) -> (i64, i64, i64, i64) {
 
 fn num_abs(n: ref Num) -> Num {
     match n {
-        Num.I(i) => Num.I(if *i < 0 { -*i } else { *i }),
-        Num.F(x) => Num.F(if *x < 0.0 { -*x } else { *x }),
+        Num.I(i) => Num.I(if i < 0 { -i } else { i }),
+        Num.F(x) => Num.F(if x < 0.0 { -x } else { x }),
     }
 }
 
@@ -2080,8 +2080,8 @@ enum Align {
 
 fn align_value(a: ref Align) -> i64 {
     match a {
-        Align.E(n) => *n,
-        Align.P(n) => *n,
+        Align.E(n) => n,
+        Align.P(n) => n,
     }
 }
 
@@ -2092,7 +2092,7 @@ fn align_names() -> Vec[Str] {
 
 fn align_repr(a: ref Align) -> String {
     match a {
-        Align.E(n) => f"<Alignment.{align_names()[*n - 1]}: {n}>",
+        Align.E(n) => f"<Alignment.{align_names()[n - 1]}: {n}>",
         Align.P(n) => f"{n}",
     }
 }
@@ -2800,7 +2800,7 @@ fn ss_read(w: mut ref World, p: ref Pats, subs: mut ref Subs, lines: ref Vec[Str
 fn ss_num(n: ref Num) -> String {
     match n {
         Num.I(i) => f"{i}",
-        Num.F(x) => if is_integer(*x) { f"{x as i64}" } else { float_repr(*x) },
+        Num.F(x) => if is_integer(x) { f"{x as i64}" } else { float_repr(x) },
     }
 }
 
@@ -3115,7 +3115,7 @@ fn srt_prepare(p: ref Pats, lines: ref Vec[String], o: ref ReadOpts) -> String {
     s = re_sub(p.trailing_number, "", s);
     if not o.keep_html {
         for (re, tpl) in p.srt_tags {
-            s = re_sub(re, *tpl, s);
+            s = re_sub(re, tpl, s);
         }
     }
     if not (o.keep_html or o.keep_unknown) {
@@ -3796,24 +3796,24 @@ fn json_items(v: ref JVal) -> Vec[(String, JVal)] {
 
 fn json_int(v: ref JVal) -> i64 {
     match v {
-        JVal.Int(n) => *n,
-        JVal.Bool(b) => if *b { 1 } else { 0 },
-        JVal.Float(x) => *x as i64,
+        JVal.Int(n) => n,
+        JVal.Bool(b) => if b { 1 } else { 0 },
+        JVal.Float(x) => x as i64,
         _ => 0,
     }
 }
 
 fn json_num(v: ref JVal) -> Num {
     match v {
-        JVal.Float(x) => Num.F(*x),
+        JVal.Float(x) => Num.F(x),
         _ => Num.I(json_int(v)),
     }
 }
 
 fn json_bool(v: ref JVal) -> bool {
     match v {
-        JVal.Bool(b) => *b,
-        JVal.Int(n) => *n != 0,
+        JVal.Bool(b) => b,
+        JVal.Int(n) => n != 0,
         _ => false,
     }
 }
@@ -4016,7 +4016,7 @@ fn json_float(x: f64) -> String {
 fn json_numv(n: ref Num) -> String {
     match n {
         Num.I(i) => f"{i}",
-        Num.F(x) => json_float(*x),
+        Num.F(x) => json_float(x),
     }
 }
 
@@ -4122,7 +4122,7 @@ fn check_format(fmt: ref String) -> Result[(), Exc] {
 
 fn get_format_identifier(ext: ref String) -> Result[String, Exc] {
     for (e, f) in ext_table() {
-        if *ext == *e {
+        if *ext == e {
             return Ok(f.to_string());
         }
     }
@@ -4132,7 +4132,7 @@ fn get_format_identifier(ext: ref String) -> Result[String, Exc] {
 fn get_file_extension(fmt: ref String) -> Result[String, Exc] {
     check_format(fmt)?;
     for (e, f) in ext_table() {
-        if *fmt == *f {
+        if *fmt == f {
             return Ok(e.to_string());
         }
     }
@@ -4658,7 +4658,7 @@ struct Cli {
 fn find_opt(table: ref Vec[(String, i64)], s: ref String) -> i64 {
     for (o, i) in table {
         if *o == *s {
-            return *i;
+            return i;
         }
     }
     -1
@@ -4684,7 +4684,7 @@ fn option_tuples(table: ref Vec[(String, i64)], s: ref String) -> Vec[Opt] {
     if cs[1] == '-' {
         for (o, i) in table {
             if o.starts_with(prefix) {
-                out.push(Opt { act: *i, text: o.clone(), sep: sep.clone(), explicit: exp.clone() });
+                out.push(Opt { act: i, text: o.clone(), sep: sep.clone(), explicit: exp.clone() });
             }
         }
     } else {
@@ -4692,9 +4692,9 @@ fn option_tuples(table: ref Vec[(String, i64)], s: ref String) -> Vec[Opt] {
         let short_explicit = chars_str(cs, 2, cs.len());
         for (o, i) in table {
             if *o == short {
-                out.push(Opt { act: *i, text: o.clone(), sep: Some(String.new()), explicit: Some(short_explicit.clone()) });
+                out.push(Opt { act: i, text: o.clone(), sep: Some(String.new()), explicit: Some(short_explicit.clone()) });
             } else if o.starts_with(prefix) {
-                out.push(Opt { act: *i, text: o.clone(), sep: sep.clone(), explicit: exp.clone() });
+                out.push(Opt { act: i, text: o.clone(), sep: sep.clone(), explicit: exp.clone() });
             }
         }
     }
@@ -5082,7 +5082,7 @@ fn consume_optional(cli: mut ref Cli, p: ref Pats, ps: mut ref ArgParser, argv: 
         }
     }
     for (ai, args, _) in todo {
-        take_action(mut cli, p, mut ps, *ai, args, true)?;
+        take_action(mut cli, p, mut ps, ai, args, true)?;
     }
     Ok(stop)
 }

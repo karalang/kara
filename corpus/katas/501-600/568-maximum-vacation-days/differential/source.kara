@@ -104,7 +104,7 @@ fn max_vacation_days_lists(flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
     let mut answer = 0;
     for b in best.iter() {
         if let Some(total) = b {
-            answer = answer.max(*total);
+            answer = answer.max(total);
         }
     }
     answer

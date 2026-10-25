@@ -30,8 +30,8 @@ fn falling_squares_star(positions: Vec[(i64, i64)]) -> Vec[i64] {
 fn falling_squares_cells(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut edges: Vec[i64] = Vec.new();
     for (left, side) in positions.iter() {
-        edges.push(*left);
-        edges.push(*left + *side);
+        edges.push(left);
+        edges.push(left + side);
     }
     edges.sort();
     edges.dedup();
@@ -39,13 +39,13 @@ fn falling_squares_cells(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut answer: Vec[i64] = Vec.new();
     let mut highest = 0;
     for (left, side) in positions.iter() {
-        let from = edges.binary_search(*left).unwrap();
-        let to = edges.binary_search(*left + *side).unwrap();
+        let from = edges.binary_search(left).unwrap();
+        let to = edges.binary_search(left + side).unwrap();
         let mut base = 0;
         for c in from..to {
             base = base.max(heights[c]);
         }
-        let top = base + *side;
+        let top = base + side;
         for c in from..to {
             heights[c] = top;
         }
@@ -108,8 +108,8 @@ impl Tree {
 fn falling_squares_tree(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut edges: Vec[i64] = Vec.new();
     for (left, side) in positions.iter() {
-        edges.push(*left);
-        edges.push(*left + *side);
+        edges.push(left);
+        edges.push(left + side);
     }
     edges.sort();
     edges.dedup();
@@ -117,9 +117,9 @@ fn falling_squares_tree(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut tree = Tree { best: vec![0; 4 * cells], pending: vec![-1; 4 * cells] };
     let mut answer: Vec[i64] = Vec.new();
     for (left, side) in positions.iter() {
-        let from = edges.binary_search(*left).unwrap();
-        let to = edges.binary_search(*left + *side).unwrap();
-        let top = tree.query(1, 0, cells, from, to) + *side;
+        let from = edges.binary_search(left).unwrap();
+        let to = edges.binary_search(left + side).unwrap();
+        let top = tree.query(1, 0, cells, from, to) + side;
         tree.set(1, 0, cells, from, to, top);
         answer.push(tree.best[1]);
     }
@@ -131,7 +131,7 @@ fn falling_squares_tree(positions: Vec[(i64, i64)]) -> Vec[i64] {
 // A key at x, holding the height of the stretch x was in.
 fn cut_intervals(ground: mut ref SortedMap[i64, i64], x: i64) {
     let h = match ground.floor(x) {
-        Some((_, h)) => *h,
+        Some((_, h)) => h,
         None => 0,
     };
     ground.insert(x, h);
@@ -143,20 +143,20 @@ fn falling_squares_intervals(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut answer: Vec[i64] = Vec.new();
     let mut highest = 0;
     for (left, side) in positions.iter() {
-        let right = *left + *side;
+        let right = left + side;
         cut_intervals(mut ground, right);
-        cut_intervals(mut ground, *left);
+        cut_intervals(mut ground, left);
         let mut base = 0;
         let mut inside: Vec[i64] = Vec.new();
-        for (x, h) in ground.range(*left, right) {
+        for (x, h) in ground.range(left, right) {
             base = base.max(*h);
             inside.push(*x);
         }
         for x in inside.iter() {
             ground.remove(*x);
         }
-        let top = base + *side;
-        ground.insert(*left, top);
+        let top = base + side;
+        ground.insert(left, top);
         highest = highest.max(top);
         answer.push(highest);
     }
@@ -191,11 +191,11 @@ fn definition(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut answer: Vec[i64] = Vec.new();
     for (left, side) in positions.iter() {
         let mut base = 0;
-        for x in *left..*left + *side {
+        for x in left..left + side {
             base = base.max(columns[x]);
         }
-        for x in *left..*left + *side {
-            columns[x] = base + *side;
+        for x in left..left + side {
+            columns[x] = base + side;
         }
         let mut highest = 0;
         for h in columns.iter() {
@@ -228,9 +228,9 @@ fn main() {
         let mut mirrored: Vec[(i64, i64)] = Vec.new();
         let mut scaled: Vec[(i64, i64)] = Vec.new();
         for (left, side) in positions.iter() {
-            shifted.push((*left + 1000, *side));
-            mirrored.push((60 - *left - *side, *side));
-            scaled.push((3 * *left, 3 * *side));
+            shifted.push((left + 1000, side));
+            mirrored.push((60 - left - side, side));
+            scaled.push((3 * left, 3 * side));
         }
         let want = definition(positions);
         for which in 0..arms {

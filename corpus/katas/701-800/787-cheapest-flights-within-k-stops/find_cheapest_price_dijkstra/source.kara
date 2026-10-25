@@ -32,7 +32,7 @@ fn find_cheapest_price(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i6
         }
         fewest[city] = used;
         for (to, price) in out[city].iter() {
-            queue.push((spent + *price, *to, used + 1));
+            queue.push((spent + price, to, used + 1));
         }
     }
     -1

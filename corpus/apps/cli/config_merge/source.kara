@@ -121,8 +121,8 @@ fn coerce(key: own String, raw: String, kind: ref Kind, layer: own String) -> Re
         Kind.Int { min, max } => match i64.parse(text).ok() {
             None => Err(ConfigError.BadInt { layer, key, raw: text.to_string() }),
             Some(n) => {
-                if n < *min or n > *max {
-                    Err(ConfigError.OutOfRange { layer, key, value: n, min: *min, max: *max })
+                if n < min or n > max {
+                    Err(ConfigError.OutOfRange { layer, key, value: n, min: min, max: max })
                 } else {
                     Ok(Value.Int(n))
                 }

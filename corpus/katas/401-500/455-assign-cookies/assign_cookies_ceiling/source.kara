@@ -19,7 +19,7 @@ fn find_content_children(g: Vec[i64], s: Vec[i64]) -> i64 {
         let Some((size, _)) = cookies.ceiling(want) else {
             break;
         };
-        let size = *size;
+        let size = size;
         cookies[size] -= 1;
         if cookies[size] == 0 {
             cookies.remove(size);

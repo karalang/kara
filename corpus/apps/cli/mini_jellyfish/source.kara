@@ -679,7 +679,7 @@ fn bool_repr(b: bool) -> String {
 
 fn opt_bool_repr(b: ref Option[bool]) -> String {
     match b {
-        Some(v) => bool_repr(*v),
+        Some(v) => bool_repr(v),
         None => "None".to_string(),
     }
 }

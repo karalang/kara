@@ -448,7 +448,7 @@ fn alloc(h: mut ref Heap, kind: i64, items: own Vec[V], tag: u64, inner: i64) ->
 
 fn kind_of(h: ref Heap, v: ref V) -> i64 {
     match v {
-        V.Obj(i) => h.objs[*i].kind,
+        V.Obj(i) => h.objs[i].kind,
         _ => -1,
     }
 }
@@ -483,7 +483,7 @@ fn type_name(h: ref Heap, v: ref V) -> String {
         V.Net(b, _) => if b.len() == 4 { "IPv4Network" } else { "IPv6Network" },
         V.Regex(_) => "Pattern",
         V.Obj(i) => {
-            let k = h.objs[*i].kind;
+            let k = h.objs[i].kind;
             if k == LIST {
                 "list"
             } else if k == TUPLE {
@@ -547,9 +547,9 @@ fn float_rat(x: f64) -> (Big, Big) {
 // Decimal and Fraction; None for NaN, an infinity or a non-number.
 fn num_rat(v: ref V) -> Option[(Big, Big)] {
     match v {
-        V.Bool(b) => Some((big_from_i64(if *b { 1 } else { 0 }), big_from_i64(1))),
+        V.Bool(b) => Some((big_from_i64(if b { 1 } else { 0 }), big_from_i64(1))),
         V.Int(n) => Some((n.clone(), big_from_i64(1))),
-        V.Float(x) => if is_nan(*x) or is_inf(*x) { None } else { Some(float_rat(*x)) },
+        V.Float(x) => if is_nan(x) or is_inf(x) { None } else { Some(float_rat(x)) },
         V.Dec(d) => {
             if d.special != 0 {
                 return None;
@@ -583,7 +583,7 @@ fn is_number(v: ref V) -> bool {
 // +1 or -1 for an infinite float or Decimal, else 0
 fn inf_sign(v: ref V) -> i64 {
     match v {
-        V.Float(x) => if *x == 1.0 / 0.0 { 1 } else if *x == -1.0 / 0.0 { -1 } else { 0 },
+        V.Float(x) => if x == 1.0 / 0.0 { 1 } else if x == -1.0 / 0.0 { -1 } else { 0 },
         V.Dec(d) => if d.special == 2 { if d.neg { -1 } else { 1 } } else { 0 },
         _ => 0,
     }
@@ -608,7 +608,7 @@ fn num_eq(a: ref V, b: ref V) -> bool {
 fn int_like(v: ref V) -> Option[Big] {
     match v {
         V.Int(n) => Some(n.clone()),
-        V.Bool(b) => Some(big_from_i64(if *b { 1 } else { 0 })),
+        V.Bool(b) => Some(big_from_i64(if b { 1 } else { 0 })),
         _ => None,
     }
 }
@@ -660,11 +660,11 @@ fn py_eq(h: ref Heap, a: ref V, b: ref V) -> bool {
         (V.Bytes(x), V.Bytes(y)) => x == y,
         (V.Simple(x), V.Simple(y)) => x == y,
         (V.Simple(x), _) => match int_like(b) {
-            Some(n) => big_cmp(n, big_from_i64(*x)) == 0,
+            Some(n) => big_cmp(n, big_from_i64(x)) == 0,
             None => false,
         },
         (_, V.Simple(y)) => match int_like(a) {
-            Some(n) => big_cmp(n, big_from_i64(*y)) == 0,
+            Some(n) => big_cmp(n, big_from_i64(y)) == 0,
             None => false,
         },
         (V.Date(x), V.Date(y)) => x == y,
@@ -677,16 +677,16 @@ fn py_eq(h: ref Heap, a: ref V, b: ref V) -> bool {
             if i == j {
                 return true;
             }
-            let oa = ref h.objs[*i];
-            let ob = ref h.objs[*j];
+            let oa = ref h.objs[i];
+            let ob = ref h.objs[j];
             let ka = oa.kind;
             let kb = ob.kind;
             if ka == LIST and kb == LIST or ka == TUPLE and kb == TUPLE {
                 return seq_eq(h, oa.items, ob.items);
             }
             if (ka == DICT or ka == FDICT) and (kb == DICT or kb == FDICT) {
-                let x = dict_items(h, *i);
-                let y = dict_items(h, *j);
+                let x = dict_items(h, i);
+                let y = dict_items(h, j);
                 if x.len() != y.len() {
                     return false;
                 }
@@ -724,12 +724,12 @@ fn py_eq(h: ref Heap, a: ref V, b: ref V) -> bool {
 fn unhashable(h: ref Heap, v: ref V) -> Option[String] {
     match v {
         V.Obj(i) => {
-            let o = ref h.objs[*i];
+            let o = ref h.objs[i];
             if o.kind == LIST or o.kind == DICT or o.kind == SET {
                 return Some(type_name(h, v));
             }
             if o.kind == FDICT {
-                let items = dict_items(h, *i);
+                let items = dict_items(h, i);
                 // frozenset(self) first, then frozenset(self.values())
                 let mut k = 0;
                 while k < items.len() {
@@ -1589,25 +1589,25 @@ fn rep(h: ref Heap, v: ref V, show: bool, seen: ref Vec[i64]) -> String {
         V.None => "None".to_string(),
         V.Undef => "undefined".to_string(),
         V.Brk => "break_marker".to_string(),
-        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         V.Int(n) => big_str(n),
-        V.Float(x) => float_repr(*x),
+        V.Float(x) => float_repr(x),
         V.Bytes(b) => repr_bytes(b),
         V.Str(s) => repr_str(s),
         V.Simple(n) => if show { f"({n},)" } else { f"CBORSimpleValue(value={n})" },
         V.Dec(d) => f"Decimal('{dec_str(d)}')",
         V.Frac(n, d) => f"Fraction({big_str(n)}, {big_str(d)})",
-        V.Date(o) => date_repr(*o),
+        V.Date(o) => date_repr(o),
         V.Dt(t) => dt_repr(t),
         V.Uuid(b) => f"UUID('{uuid_str(b)}')",
         V.Ip(b) => f"{type_name(h, v)}('{ip_str(b)}')",
-        V.Net(b, p) => f"{type_name(h, v)}('{net_str(b, *p)}')",
+        V.Net(b, p) => f"{type_name(h, v)}('{net_str(b, p)}')",
         V.Regex(s) => f"re.compile({repr_str(s)})",
         V.Obj(i) => {
-            let o = ref h.objs[*i];
+            let o = ref h.objs[i];
             let k = o.kind;
             for x in seen.iter() {
-                if *x == *i {
+                if *x == i {
                     if k == LIST {
                         return "[...]".to_string();
                     } else if k == TUPLE {
@@ -1620,7 +1620,7 @@ fn rep(h: ref Heap, v: ref V, show: bool, seen: ref Vec[i64]) -> String {
                 }
             }
             let mut inner = seen.clone();
-            inner.push(*i);
+            inner.push(i);
             if k == LIST or k == TUPLE {
                 let mut parts: Vec[String] = Vec.new();
                 for x in o.items.iter() {
@@ -1674,11 +1674,11 @@ fn py_str(h: ref Heap, v: ref V) -> String {
         V.Str(s) => s.clone(),
         V.Dec(d) => dec_str(d),
         V.Frac(n, d) => frac_str(n, d),
-        V.Date(o) => date_iso(*o),
+        V.Date(o) => date_iso(o),
         V.Dt(t) => dt_iso(t, " "),
         V.Uuid(b) => uuid_str(b),
         V.Ip(b) => ip_str(b),
-        V.Net(b, p) => net_str(b, *p),
+        V.Net(b, p) => net_str(b, p),
         _ => rep(h, v, false, Vec.new()),
     }
 }
@@ -1842,7 +1842,7 @@ const INDEFINITE: i128 = -1;
 fn as_index(v: ref V) -> Option[i64] {
     match v {
         V.Int(n) => big_to_i64(n),
-        V.Bool(b) => Some(if *b { 1 } else { 0 }),
+        V.Bool(b) => Some(if b { 1 } else { 0 }),
         _ => None,
     }
 }
@@ -2193,7 +2193,7 @@ impl Decoder {
     fn pair(ref self, v: ref V) -> Option[(V, V)] {
         match v {
             V.Obj(i) => {
-                let o = ref self.h.objs[*i];
+                let o = ref self.h.objs[i];
                 if (o.kind == LIST or o.kind == TUPLE) and o.items.len() == 2 {
                     Some((o.items[0].clone(), o.items[1].clone()))
                 } else {
@@ -2900,7 +2900,7 @@ impl Encoder {
             }
             V.Int(n) => self.int(mut h, n),
             V.Float(x) => {
-                self.float(*x);
+                self.float(x);
                 Ok(())
             }
             V.Dec(d) => {
@@ -2920,7 +2920,7 @@ impl Encoder {
                 self.unshared_semantic(mut h, 4, pair)
             }
             V.Bool(b) => {
-                self.out.push(if *b { 0xf5 } else { 0xf4 });
+                self.out.push(if b { 0xf5 } else { 0xf4 });
                 Ok(())
             }
             V.None => {
@@ -2935,13 +2935,13 @@ impl Encoder {
             V.Dt(t) => self.datetime(mut h, t),
             V.Date(o) => {
                 if self.o.date_as_datetime {
-                    let (y, m, d) = ord_to_ymd(*o);
+                    let (y, m, d) = ord_to_ymd(o);
                     return self.datetime(mut h, DateTime { y: y, mo: m, d: d, h: 0, mi: 0, s: 0, us: 0, off: 0 });
                 }
                 if self.o.timestamps {
-                    return self.semantic(mut h, 100, V.Int(big_from_i64(*o - 719163)));
+                    return self.semantic(mut h, 100, V.Int(big_from_i64(o - 719163)));
                 }
-                self.semantic(mut h, 1004, V.Str(date_iso(*o)))
+                self.semantic(mut h, 1004, V.Str(date_iso(o)))
             }
             V.Regex(s) => self.semantic(mut h, 35, V.Str(s.clone())),
             V.Frac(n, d) => {
@@ -2951,27 +2951,27 @@ impl Encoder {
             V.Uuid(b) => self.semantic(mut h, 37, V.Bytes(b.clone())),
             V.Ip(b) => self.semantic(mut h, 260, V.Bytes(b.clone())),
             V.Net(b, p) => {
-                let m = self.fresh(mut h, DICT, vec![V.Bytes(b.clone()), V.Int(big_from_i64(*p))]);
+                let m = self.fresh(mut h, DICT, vec![V.Bytes(b.clone()), V.Int(big_from_i64(p))]);
                 self.semantic(mut h, 261, m)
             }
             V.Simple(n) => {
-                if *n < 24 {
-                    self.out.push((0xE0 | *n) as u8);
+                if n < 24 {
+                    self.out.push((0xE0 | n) as u8);
                 } else {
                     self.out.push(0xF8);
-                    self.out.push(*n as u8);
+                    self.out.push(n as u8);
                 }
                 Ok(())
             }
             V.Obj(i) => {
-                let kind = h.objs[*i].kind;
+                let kind = h.objs[i].kind;
                 if kind == TAG {
-                    let tag = h.objs[*i].tag;
-                    let value = h.objs[*i].items[0].clone();
+                    let tag = h.objs[i].tag;
+                    let value = h.objs[i].items[0].clone();
                     return self.semantic(mut h, tag, value);
                 }
                 if kind == SET or kind == FSET {
-                    let items = h.objs[*i].items.clone();
+                    let items = h.objs[i].items.clone();
                     if not self.o.canonical {
                         let t = self.fresh(mut h, TUPLE, items);
                         return self.semantic(mut h, 258, t);
@@ -2988,7 +2988,7 @@ impl Encoder {
                     let l = self.fresh(mut h, LIST, sorted);
                     return self.semantic(mut h, 258, l);
                 }
-                self.container(mut h, *i)
+                self.container(mut h, i)
             }
         }
     }
@@ -3038,7 +3038,7 @@ enum J {
 
 fn obj_id(v: ref V) -> i64 {
     match v {
-        V.Obj(i) => *i,
+        V.Obj(i) => i,
         _ => -1,
     }
 }
@@ -3059,11 +3059,11 @@ fn self_ref() -> Exc {
 // isinstance(v, (tuple, list, set)): the items, if so
 fn seq_items(h: ref Heap, v: ref V) -> Option[Vec[V]] {
     match v {
-        V.Simple(n) => Some(vec![V.Int(big_from_i64(*n))]),
+        V.Simple(n) => Some(vec![V.Int(big_from_i64(n))]),
         V.Obj(i) => {
-            let k = h.objs[*i].kind;
+            let k = h.objs[i].kind;
             if k == LIST or k == TUPLE or k == SET {
-                Some(h.objs[*i].items.clone())
+                Some(h.objs[i].items.clone())
             } else {
                 None
             }
@@ -3349,7 +3349,7 @@ impl JsonOut {
                 return Ok(());
             }
             V.Bool(b) => {
-                self.out.push_str(if *b { "true" } else { "false" });
+                self.out.push_str(if b { "true" } else { "false" });
                 return Ok(());
             }
             V.Int(n) => {
@@ -3357,7 +3357,7 @@ impl JsonOut {
                 return Ok(());
             }
             V.Float(x) => {
-                self.out.push_str(float_str(*x));
+                self.out.push_str(float_str(x));
                 return Ok(());
             }
             _ => {}
@@ -3368,7 +3368,7 @@ impl JsonOut {
             return self.list(h, items, obj_id(v), level);
         }
         if let V.Simple(n) = v {
-            return self.list(h, vec![J.Raw(V.Int(big_from_i64(*n)))], -1, level);
+            return self.list(h, vec![J.Raw(V.Int(big_from_i64(n)))], -1, level);
         }
         if k == DICT {
             let items = h.objs[obj_id(v)].items.clone();
@@ -3392,9 +3392,9 @@ impl JsonOut {
             V.Uuid(b) => J.Raw(V.Str(f"urn:uuid:{uuid_str(b)}")),
             V.Regex(s) => J.Raw(V.Str(s.clone())),
             V.Ip(b) => J.Raw(V.Str(ip_str(b))),
-            V.Net(b, p) => J.Raw(V.Str(net_str(b, *p))),
+            V.Net(b, p) => J.Raw(V.Str(net_str(b, p))),
             V.Obj(i) => {
-                let o = ref h.objs[*i];
+                let o = ref h.objs[i];
                 if o.kind == FDICT {
                     J.Raw(V.Str(rep(h, V.Obj(o.inner), false, Vec.new())))
                 } else if o.kind == TAG {
@@ -3533,7 +3533,7 @@ fn finish(out: own String, e: ref Exc) -> String {
 
 fn has_set(h: ref Heap, v: ref V, seen: ref Vec[i64]) -> bool {
     let id = match v {
-        V.Obj(i) => *i,
+        V.Obj(i) => i,
         _ => return false,
     };
     if path_has(seen, id) {

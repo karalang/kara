@@ -59,9 +59,9 @@ fn type_name(v: ref Value) -> String {
 // The number a bool or int compares as, for ==.
 fn as_num(v: ref Value) -> Option[f64] {
     match v {
-        Value.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Value.Int(i) => Some(*i as f64),
-        Value.Float(x) => Some(*x),
+        Value.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        Value.Int(i) => Some(i as f64),
+        Value.Float(x) => Some(x),
         _ => None,
     }
 }
@@ -76,8 +76,8 @@ fn is_intlike(v: ref Value) -> bool {
 
 fn int_of(v: ref Value) -> i64 {
     match v {
-        Value.Bool(b) => if *b { 1 } else { 0 },
-        Value.Int(i) => *i,
+        Value.Bool(b) => if b { 1 } else { 0 },
+        Value.Int(i) => i,
         _ => 0,
     }
 }
@@ -185,15 +185,15 @@ fn py_cmp(a: ref Value, b: ref Value) -> Option[i64] {
         (Value.List(x), Value.List(y)) => seq_cmp(x, y),
         (Value.Tuple(x), Value.Tuple(y)) => seq_cmp(x, y),
         (Value.Date(y1, m1, d1), Value.Date(y2, m2, d2)) => {
-            let c = cmp_i(*y1, *y2);
+            let c = cmp_i(y1, y2);
             if c != 0 {
                 return Some(c);
             }
-            let c2 = cmp_i(*m1, *m2);
+            let c2 = cmp_i(m1, m2);
             if c2 != 0 {
                 return Some(c2);
             }
-            Some(cmp_i(*d1, *d2))
+            Some(cmp_i(d1, d2))
         }
         _ => None,
     }
@@ -414,9 +414,9 @@ fn get_or(v: ref Value, k: Str, default: own Value) -> Value {
 fn truthy(v: ref Value) -> bool {
     match v {
         Value.Null => false,
-        Value.Bool(b) => *b,
-        Value.Int(i) => *i != 0,
-        Value.Float(x) => *x != 0.0,
+        Value.Bool(b) => b,
+        Value.Int(i) => i != 0,
+        Value.Float(x) => x != 0.0,
         Value.Date(_, _, _) => true,
         _ => py_len(v) > 0,
     }
@@ -424,7 +424,7 @@ fn truthy(v: ref Value) -> bool {
 
 fn is_true(v: ref Value) -> bool {
     match v {
-        Value.Bool(b) => *b,
+        Value.Bool(b) => b,
         _ => false,
     }
 }
@@ -488,9 +488,9 @@ fn join_repr(xs: ref Vec[Value]) -> String {
 fn py_repr(v: ref Value) -> String {
     match v {
         Value.Null => "None".to_string(),
-        Value.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Value.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Value.Int(i) => f"{i}",
-        Value.Float(x) => float_repr(*x),
+        Value.Float(x) => float_repr(x),
         Value.Str(s) => str_repr(s),
         Value.List(xs) => f"[{join_repr(xs)}]",
         Value.Tuple(xs) => {
@@ -528,8 +528,8 @@ fn py_str(v: ref Value) -> String {
             for _ in ys.len()..4 {
                 pad.push('0');
             }
-            let ms = if *m < 10 { f"0{m}" } else { f"{m}" };
-            let ds = if *d < 10 { f"0{d}" } else { f"{d}" };
+            let ms = if m < 10 { f"0{m}" } else { f"{m}" };
+            let ds = if d < 10 { f"0{d}" } else { f"{d}" };
             f"{pad}{ys}-{ms}-{ds}"
         }
         _ => py_repr(v),
@@ -3056,12 +3056,12 @@ fn int_of_str(s: ref String) -> Result[i64, String] {
 
 fn coerce_int(v: ref Value) -> Result[Value, String] {
     match v {
-        Value.Int(i) => Ok(Value.Int(*i)),
-        Value.Bool(b) => Ok(Value.Int(if *b { 1 } else { 0 })),
+        Value.Int(i) => Ok(Value.Int(i)),
+        Value.Bool(b) => Ok(Value.Int(if b { 1 } else { 0 })),
         Value.Float(x) => {
-            if *x != *x {
+            if x != x {
                 Err("cannot convert float NaN to integer".to_string())
-            } else if *x == 1.0 / 0.0 or *x == -1.0 / 0.0 {
+            } else if x == 1.0 / 0.0 or x == -1.0 / 0.0 {
                 Err("cannot convert float infinity to integer".to_string())
             } else {
                 Ok(Value.Int(x.trunc() as i64))
@@ -3074,9 +3074,9 @@ fn coerce_int(v: ref Value) -> Result[Value, String] {
 
 fn coerce_float(v: ref Value) -> Result[Value, String] {
     match v {
-        Value.Int(i) => Ok(Value.Float(*i as f64)),
-        Value.Bool(b) => Ok(Value.Float(if *b { 1.0 } else { 0.0 })),
-        Value.Float(x) => Ok(Value.Float(*x)),
+        Value.Int(i) => Ok(Value.Float(i as f64)),
+        Value.Bool(b) => Ok(Value.Float(if b { 1.0 } else { 0.0 })),
+        Value.Float(x) => Ok(Value.Float(x)),
         Value.Str(s) => match f64.parse(py_strip(s)) {
             Ok(x) => Ok(Value.Float(x)),
             Err(_) => Err(f"could not convert string to float: {str_repr(s)}"),

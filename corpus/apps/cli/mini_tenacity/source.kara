@@ -655,9 +655,9 @@ fn str_repr(s: ref String) -> String {
 fn repr(v: ref J) -> String {
     match v {
         J.Null => "None".to_string(),
-        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         J.Int(digits) => digits.clone(),
-        J.Float(x) => float_repr(*x),
+        J.Float(x) => float_repr(x),
         J.Str(s) => str_repr(s),
         J.Arr(items) => {
             let mut out = "[".to_string();
@@ -710,9 +710,9 @@ fn type_name(v: ref J) -> String {
 // The number a bool, int or float compares as.
 fn num_of(v: ref J) -> Option[f64] {
     match v {
-        J.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        J.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
         J.Int(d) => Some(f64.parse(d).unwrap_or(0.0)),
-        J.Float(x) => Some(*x),
+        J.Float(x) => Some(x),
         _ => None,
     }
 }
@@ -813,22 +813,22 @@ enum Num {
 
 fn num_f(n: ref Num) -> f64 {
     match n {
-        Num.I(i) => *i as f64,
-        Num.F(x) => *x,
+        Num.I(i) => i as f64,
+        Num.F(x) => x,
     }
 }
 
 fn num_repr(n: ref Num) -> String {
     match n {
         Num.I(i) => f"{i}",
-        Num.F(x) => float_repr(*x),
+        Num.F(x) => float_repr(x),
     }
 }
 
 fn num_add(a: ref Num, b: ref Num) -> Num {
     if let Num.I(x) = a {
         if let Num.I(y) = b {
-            return Num.I(*x + *y);
+            return Num.I(x + y);
         }
     }
     Num.F(num_f(a) + num_f(b))
@@ -837,7 +837,7 @@ fn num_add(a: ref Num, b: ref Num) -> Num {
 fn num_sub(a: ref Num, b: ref Num) -> Num {
     if let Num.I(x) = a {
         if let Num.I(y) = b {
-            return Num.I(*x - *y);
+            return Num.I(x - y);
         }
     }
     Num.F(num_f(a) - num_f(b))
@@ -846,7 +846,7 @@ fn num_sub(a: ref Num, b: ref Num) -> Num {
 fn num_mul(a: ref Num, b: ref Num) -> Num {
     if let Num.I(x) = a {
         if let Num.I(y) = b {
-            return Num.I(*x * *y);
+            return Num.I(x * y);
         }
     }
     Num.F(num_f(a) * num_f(b))
@@ -855,7 +855,7 @@ fn num_mul(a: ref Num, b: ref Num) -> Num {
 fn num_lt(a: ref Num, b: ref Num) -> bool {
     if let Num.I(x) = a {
         if let Num.I(y) = b {
-            return *x < *y;
+            return x < y;
         }
     }
     num_f(a) < num_f(b)
@@ -878,7 +878,7 @@ fn num_pow(base: ref Num, e: i64) -> Option[Num] {
         Num.I(b) => {
             let mut p: i64 = 1;
             for _ in 0..e {
-                p = p * *b;
+                p = p * b;
             }
             Some(Num.I(p))
         }
@@ -900,7 +900,7 @@ fn py_sum(items: ref Vec[Num]) -> Num {
     let mut isum: i64 = 0;
     while i < items.len() {
         match items[i] {
-            Num.I(v) => isum += *v,
+            Num.I(v) => isum += v,
             Num.F(_) => break,
         }
         i += 1;
@@ -914,15 +914,15 @@ fn py_sum(items: ref Vec[Num]) -> Num {
     while i < items.len() {
         match items[i] {
             Num.F(x) => {
-                let t = f + *x;
+                let t = f + x;
                 if f.abs() >= x.abs() {
-                    c += (f - t) + *x;
+                    c += (f - t) + x;
                 } else {
-                    c += (*x - t) + f;
+                    c += (x - t) + f;
                 }
                 f = t;
             }
-            Num.I(v) => f += *v as f64,
+            Num.I(v) => f += v as f64,
         }
         i += 1;
     }
@@ -1580,9 +1580,9 @@ fn sleep(w: mut ref World, secs: f64) {
 
 fn eval_stop(w: ref World, s: ref Stop, rs: ref State) -> bool {
     match s {
-        Stop.AfterAttempt(n) => rs.attempt >= *n,
-        Stop.AfterDelay(d) => seconds_since_start(rs) >= *d,
-        Stop.BeforeDelay(d) => num_f(num_add(Num.F(seconds_since_start(rs)), rs.upcoming)) >= *d,
+        Stop.AfterAttempt(n) => rs.attempt >= n,
+        Stop.AfterDelay(d) => seconds_since_start(rs) >= d,
+        Stop.BeforeDelay(d) => num_f(num_add(Num.F(seconds_since_start(rs)), rs.upcoming)) >= d,
         Stop.Never => false,
         Stop.EventSet => w.event,
         Stop.Any(items) => {
@@ -1621,14 +1621,14 @@ fn exponential(c: ref ExpCfg, attempt: i64) -> Num {
 
 fn eval_wait(w: mut ref World, wt: ref Wait, rs: ref State) -> Result[Num, Thrown] {
     match wt {
-        Wait.Fixed(x) => Ok(Num.F(*x)),
+        Wait.Fixed(x) => Ok(Num.F(x)),
         Wait.Random(lo, hi) => {
             let r = random_float(mut w.rng);
-            Ok(Num.F(*lo + r * (*hi - *lo)))
+            Ok(Num.F(lo + r * (hi - lo)))
         }
         Wait.Incr(start, inc, max) => {
-            let result = *start + *inc * ((rs.attempt - 1) as f64);
-            Ok(py_max(Num.I(0), py_min(Num.F(result), Num.F(*max))))
+            let result = start + inc * ((rs.attempt - 1) as f64);
+            Ok(py_max(Num.I(0), py_min(Num.F(result), Num.F(max))))
         }
         Wait.Exp(c) => Ok(exponential(c, rs.attempt)),
         Wait.RandExp(c) => {
@@ -1673,9 +1673,9 @@ fn eval_wait(w: mut ref World, wt: ref Wait, rs: ref State) -> Result[Num, Throw
 fn truthy(v: ref J) -> bool {
     match v {
         J.Null => false,
-        J.Bool(b) => *b,
+        J.Bool(b) => b,
         J.Int(d) => i64.parse(d).unwrap_or(1) != 0,
-        J.Float(x) => *x != 0.0,
+        J.Float(x) => x != 0.0,
         J.Str(s) => s.len() > 0,
         J.Arr(items) => items.len() > 0,
         J.Obj(members) => members.len() > 0,
@@ -1802,11 +1802,11 @@ fn run_cb(w: mut ref World, cb: ref Cb, rs: ref State, stats: ref RetryStats, na
         Cb.Nothing => {}
         Cb.BeforeLog(lg, level) => {
             let msg = f"Starting call to '{fn_name(name)}', this is the {ordinal(rs.attempt)} time calling it.";
-            log(mut w, lg, *level, msg);
+            log(mut w, lg, level, msg);
         }
         Cb.AfterLog(lg, level, fmt) => {
             let msg = f"Finished call to '{fn_name(name)}' after {sec_format(fmt, seconds_since_start(rs))}(s), this was the {ordinal(rs.attempt)} time calling it.";
-            log(mut w, lg, *level, msg);
+            log(mut w, lg, level, msg);
         }
         Cb.SleepLog(lg, level) => {
             let what = match rs.outcome {
@@ -1821,7 +1821,7 @@ fn run_cb(w: mut ref World, cb: ref Cb, rs: ref State, stats: ref RetryStats, na
                 None => String.new(),
             };
             let msg = f"Retrying {fn_name(name)} in {sleep_s} seconds as it {what}.";
-            log(mut w, lg, *level, msg);
+            log(mut w, lg, level, msg);
         }
         Cb.Trace => {
             let line = f"  trace: {state_repr(rs)}; next_action={next_action_repr(rs)}; upcoming_sleep={num_repr(rs.upcoming)}";
@@ -1887,8 +1887,8 @@ fn call_script(w: mut ref World) -> Outcome {
 fn call(w: mut ref World, callee: ref Callee) -> Outcome {
     match callee {
         Callee.Script => call_script(mut w),
-        Callee.Post(i) => post_hook(mut w, *i),
-        Callee.Upload(k, length) => upload_part(mut w, *k, *length),
+        Callee.Post(i) => post_hook(mut w, i),
+        Callee.Upload(k, length) => upload_part(mut w, k, length),
     }
 }
 
@@ -2033,7 +2033,7 @@ fn members_of(v: ref J) -> Vec[Member] {
 fn index_of(v: ref J) -> Result[i64, Exc] {
     match v {
         J.Int(d) => Ok(i64.parse(d).unwrap_or(0)),
-        J.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        J.Bool(b) => Ok(if b { 1 } else { 0 }),
         _ => Err(exc("TypeError", f"'{type_name(v)}' object cannot be interpreted as an integer")),
     }
 }
@@ -2041,8 +2041,8 @@ fn index_of(v: ref J) -> Result[i64, Exc] {
 fn num_from(v: ref J) -> Num {
     match v {
         J.Int(d) => Num.I(i64.parse(d).unwrap_or(0)),
-        J.Bool(b) => Num.I(if *b { 1 } else { 0 }),
-        J.Float(x) => Num.F(*x),
+        J.Bool(b) => Num.I(if b { 1 } else { 0 }),
+        J.Float(x) => Num.F(x),
         _ => Num.I(0),
     }
 }

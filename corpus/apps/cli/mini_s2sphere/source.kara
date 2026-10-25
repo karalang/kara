@@ -2610,33 +2610,33 @@ enum Region {
 
 fn reg_may_intersect(r: ref Region, cell: Cell) -> Result[bool, Exc] {
     match r {
-        Region.RCap(c) => cap_may_intersect(*c, cell),
-        Region.RRect(x) => rect_may_intersect(*x, cell),
-        Region.RCell(a) => cell_may_intersect(*a, cell),
+        Region.RCap(c) => cap_may_intersect(c, cell),
+        Region.RRect(x) => rect_may_intersect(x, cell),
+        Region.RCell(a) => cell_may_intersect(a, cell),
     }
 }
 
 fn reg_contains_cell(r: ref Region, cell: Cell) -> Result[bool, Exc] {
     match r {
-        Region.RCap(c) => cap_contains_cell(*c, cell),
-        Region.RRect(x) => rect_contains_cell(*x, cell),
-        Region.RCell(a) => cell_contains_cell(*a, cell),
+        Region.RCap(c) => cap_contains_cell(c, cell),
+        Region.RRect(x) => rect_contains_cell(x, cell),
+        Region.RCell(a) => cell_contains_cell(a, cell),
     }
 }
 
 fn reg_contains_point(r: ref Region, p: P) -> Result[bool, Exc] {
     match r {
-        Region.RCap(c) => cap_contains_point(*c, p),
-        Region.RRect(x) => rect_contains_point(*x, p),
-        Region.RCell(a) => cell_contains_point(*a, p),
+        Region.RCap(c) => cap_contains_point(c, p),
+        Region.RRect(x) => rect_contains_point(x, p),
+        Region.RCell(a) => cell_contains_point(a, p),
     }
 }
 
 fn reg_cap_bound(r: ref Region) -> Result[Cap, Exc] {
     match r {
-        Region.RCap(c) => Ok(*c),
-        Region.RRect(x) => rect_cap_bound(*x),
-        Region.RCell(a) => cell_cap_bound(*a),
+        Region.RCap(c) => Ok(c),
+        Region.RRect(x) => rect_cap_bound(x),
+        Region.RCell(a) => cell_cap_bound(a),
     }
 }
 

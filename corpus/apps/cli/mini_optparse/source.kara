@@ -733,9 +733,9 @@ fn repr_float(x: f64) -> String {
 fn repr(v: ref Val) -> String {
     match v {
         Val.NoneV => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => f"{n}",
-        Val.Float(x) => repr_float(*x),
+        Val.Float(x) => repr_float(x),
         Val.Str(s) => repr_str(s),
         Val.List(items) => {
             let r: Vec[String] = items.iter().map(|x| repr(x)).collect();
@@ -759,9 +759,9 @@ fn py_str(v: ref Val) -> String {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.NoneV => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
-        Val.Float(x) => *x != 0.0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
+        Val.Float(x) => x != 0.0,
         Val.Str(s) => not s.is_empty(),
         Val.List(items) => not items.is_empty(),
         Val.Tuple(items) => not items.is_empty(),
@@ -2489,8 +2489,8 @@ fn get(d: ref Dict, k: Str) -> Val {
 
 fn as_int(v: ref Val) -> i64 {
     match v {
-        Val.Int(n) => *n,
-        Val.Bool(b) => if *b { 1 } else { 0 },
+        Val.Int(n) => n,
+        Val.Bool(b) => if b { 1 } else { 0 },
         _ => 0,
     }
 }

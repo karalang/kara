@@ -51,7 +51,7 @@ fn main() {
         (vec![0, 0, 1, 1, 0, 0], 2),
     ];
     for (nums, k) in cases.iter() {
-        println(f"nums = {bits_text(nums)}, k = {k} -> {min_k_bit_flips(nums, *k)}");
+        println(f"nums = {bits_text(nums)}, k = {k} -> {min_k_bit_flips(nums, k)}");
     }
     let zeros: Vec[i64] = Vec.filled(100000, 0);
     println(f"100000 zeros, k = 1: {min_k_bit_flips(zeros, 1)}");

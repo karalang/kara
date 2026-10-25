@@ -969,7 +969,7 @@ fn le32(v: i64) -> Vec[u8] {
 // struct.pack(">" + f, v) for an integer format, appended to out.
 fn pack_int(out: mut ref Vec[u8], f: Str, v: ref Pv) -> Result[(), Exc] {
     let n = match v {
-        Pv.Int(n) => *n,
+        Pv.Int(n) => n,
         _ => return Err(struct_error("required argument is not an integer".to_string())),
     };
     let size = fmt_size(f);
@@ -989,8 +989,8 @@ fn pack_int(out: mut ref Vec[u8], f: Str, v: ref Pv) -> Result[(), Exc] {
 // struct.pack(">f") or ">d" of an int or a float.
 fn pack_float(out: mut ref Vec[u8], double: bool, v: ref Pv) -> Result[(), Exc] {
     let x = match v {
-        Pv.Float(x) => *x,
-        Pv.Int(n) => *n as f64,
+        Pv.Float(x) => x,
+        Pv.Int(n) => n as f64,
         _ => return Err(struct_error("required argument is not a float".to_string())),
     };
     if double {
@@ -1133,7 +1133,7 @@ enum Key {
 
 fn key_eq(a: ref Key, b: ref Key) -> bool {
     match (a, b) {
-        (Key.Num(x), Key.Num(y)) => *x == *y,
+        (Key.Num(x), Key.Num(y)) => x == y,
         (Key.Name(x), Key.Name(y)) => *x == *y,
         _ => false,
     }
@@ -1280,7 +1280,7 @@ fn del_tag(entries: mut ref Vec[Entry], tag: i64) -> bool {
 
 fn int_of(v: ref Pv) -> i64 {
     match v {
-        Pv.Int(n) => *n,
+        Pv.Int(n) => n,
         _ => 0,
     }
 }
@@ -1885,7 +1885,7 @@ impl Reader {
     fn sub_ifd(ref self, pointer: ref Pv, name: Str) -> Result[Vec[Entry], Exc] {
         match pointer {
             Pv.Int(p) => {
-                let (entries, _) = self.get_ifd_dict(*p, name)?;
+                let (entries, _) = self.get_ifd_dict(p, name)?;
                 Ok(entries)
             }
             _ => Err(type_error(f"can only concatenate {type_name(pointer)} (not \"int\") to {type_name(pointer)}")),
@@ -2130,7 +2130,7 @@ fn value_to_bytes(raw: ref Pv, value_type: i64, offset: i64) -> Result[(Vec[u8],
 
 fn is_pointer_tag(ifd: Str, key: ref Key) -> bool {
     let t = match key {
-        Key.Num(t) => *t,
+        Key.Num(t) => t,
         Key.Name(_) => return false,
     };
     (ifd == "0th" and (t == 34665 or t == 34853)) or (ifd == "Exif" and t == 40965) or (ifd == "1st" and (t == 513 or t == 514))
@@ -2154,7 +2154,7 @@ fn sort_keys(entries: ref Vec[Entry]) -> Vec[Entry] {
 
 fn key_less(a: ref Key, b: ref Key) -> bool {
     match (a, b) {
-        (Key.Num(x), Key.Num(y)) => *x < *y,
+        (Key.Num(x), Key.Num(y)) => x < y,
         (Key.Name(x), Key.Name(y)) => *x < *y,
         (Key.Num(_), Key.Name(_)) => true,
         _ => false,
@@ -2658,8 +2658,8 @@ fn spec_val(s: ref J, env: ref Env) -> Result[Pv, Exc] {
         }
         J.Str(t) => Ok(Pv.Str(t.clone())),
         J.Int(_) => Ok(Pv.Int(jint(s))),
-        J.Float(x) => Ok(Pv.Float(*x)),
-        J.Bool(b) => Ok(Pv.Int(if *b { 1 } else { 0 })),
+        J.Float(x) => Ok(Pv.Float(x)),
+        J.Bool(b) => Ok(Pv.Int(if b { 1 } else { 0 })),
         J.Null => Ok(Pv.Nil),
     }
 }
@@ -3554,8 +3554,8 @@ fn share() -> Result[(), Exc] {
         }
         for (ifd, tag) in secret.iter() {
             let mut entries = entries_of(d, *ifd);
-            if del_tag(mut entries, *tag) {
-                let label = match tag_info(*ifd, *tag) {
+            if del_tag(mut entries, tag) {
+                let label = match tag_info(*ifd, tag) {
                     Some((n, _)) => n.to_string(),
                     None => f"{tag}",
                 };

@@ -242,8 +242,8 @@ fn euler_regions_by_slashes(grid: Vec[String]) -> i64 {
             (i * w + n, (i + 1) * w + n),
         ];
         for (a, b) in sides.iter() {
-            adj[*a].push(*b);
-            adj[*b].push(*a);
+            adj[a].push(b);
+            adj[b].push(a);
             edges += 1;
         }
     }
@@ -347,8 +347,8 @@ fn literal(grid: ref Vec[String]) -> i64 {
             let (y, x) = (p / m, p % m);
             let around: Vec[(i64, i64)] = vec![(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)];
             for (yy, xx) in around.iter() {
-                if *yy >= 0 and *yy < m and *xx >= 0 and *xx < m {
-                    let q = *yy * m + *xx;
+                if yy >= 0 and yy < m and xx >= 0 and xx < m {
+                    let q = yy * m + xx;
                     if not wall[q] and label[q] < 0 {
                         label[q] = regions;
                         frontier.push(q);

@@ -293,7 +293,7 @@ fn emit(prog: mut ref Vec[Inst], op: i64, c: char, x: i64, y: i64) -> i64 {
 fn compile_re(re: ref Re, prog: mut ref Vec[Inst], classes: mut ref Vec[CharClass]) {
     match re {
         Re.Char(c) => {
-            emit(mut prog, OP_CHAR, *c, 0, 0);
+            emit(mut prog, OP_CHAR, c, 0, 0);
         }
         Re.Any => {
             emit(mut prog, OP_ANY, ' ', 0, 0);
@@ -337,24 +337,24 @@ fn compile_re(re: ref Re, prog: mut ref Vec[Inst], classes: mut ref Vec[CharClas
         Re.Repeat(inner, lo, hi, greedy) => {
             let body = inner[0].clone();
             let mut k: i64 = 0;
-            while k < *lo {
+            while k < lo {
                 compile_re(body, mut prog, mut classes);
                 k += 1;
             }
-            if *hi < 0 {
+            if hi < 0 {
                 // body*: L: split(B, E); B: body; jmp L; E:
                 let l = emit(mut prog, OP_SPLIT, ' ', 0, 0);
                 compile_re(body, mut prog, mut classes);
                 emit(mut prog, OP_JMP, ' ', l, 0);
                 let e = prog.len() as i64;
-                set_split(mut prog, l, l + 1, e, *greedy);
+                set_split(mut prog, l, l + 1, e, greedy);
             } else {
-                let mut opt: i64 = *lo;
-                while opt < *hi {
+                let mut opt: i64 = lo;
+                while opt < hi {
                     let l = emit(mut prog, OP_SPLIT, ' ', 0, 0);
                     compile_re(body, mut prog, mut classes);
                     let e = prog.len() as i64;
-                    set_split(mut prog, l, l + 1, e, *greedy);
+                    set_split(mut prog, l, l + 1, e, greedy);
                     opt += 1;
                 }
             }

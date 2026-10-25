@@ -1468,9 +1468,9 @@ fn join_reprs(items: ref Vec[Value], ascii: bool, env: ref Env) -> String {
 fn repr(v: ref Value, ascii: bool, env: ref Env) -> String {
     match v {
         Value.Nil => "None".to_string(),
-        Value.Bool(b) => (if *b { "True" } else { "False" }).to_string(),
+        Value.Bool(b) => (if b { "True" } else { "False" }).to_string(),
         Value.Int(n) => n.to_string(),
-        Value.Float(x) => float_repr(*x),
+        Value.Float(x) => float_repr(x),
         Value.Str(s) => str_repr(s, ascii, env),
         Value.Markup(s) => f"Markup({str_repr(s, ascii, env)})",
         Value.List(items) => f"[{join_reprs(items, ascii, env)}]",
@@ -1755,9 +1755,9 @@ fn builtin_format(v: ref Value, spec: ref String, env: ref Env) -> Result[String
     match v {
         Value.Str(s) => format_str(s, sp),
         Value.Markup(s) => format_str(s, sp),
-        Value.Int(n) => if sp.len() == 0 { Ok(n.to_string()) } else { format_int(*n, sp) },
-        Value.Bool(b) => if sp.len() == 0 { Ok(to_str(v, env)) } else { format_int(if *b { 1 } else { 0 }, sp) },
-        Value.Float(x) => if sp.len() == 0 { Ok(float_repr(*x)) } else { format_float(*x, sp) },
+        Value.Int(n) => if sp.len() == 0 { Ok(n.to_string()) } else { format_int(n, sp) },
+        Value.Bool(b) => if sp.len() == 0 { Ok(to_str(v, env)) } else { format_int(if b { 1 } else { 0 }, sp) },
+        Value.Float(x) => if sp.len() == 0 { Ok(float_repr(x)) } else { format_float(x, sp) },
         _ => {
             if sp.len() == 0 {
                 Ok(to_str(v, env))
@@ -1807,7 +1807,7 @@ fn get_attr(obj: ref Value, name: ref String) -> Result[Value, PyError] {
                 return Ok(Value.Str(e.clone()));
             }
             if name == "id" {
-                return Ok(Value.Int(*id));
+                return Ok(Value.Int(id));
             }
         }
         Value.Badge(l) => {
@@ -1855,7 +1855,7 @@ fn get_item(obj: ref Value, key: ref Value, env: ref Env) -> Result[Value, PyErr
         Value.Dict(pairs) => dict_get(pairs, key, env),
         Value.List(items) => match key {
             Value.Int(n) => {
-                let k = index_of(*n, items.len());
+                let k = index_of(n, items.len());
                 if k < 0 or k >= items.len() {
                     return Err(py_error("IndexError", "list index out of range".to_string()));
                 }
@@ -1865,7 +1865,7 @@ fn get_item(obj: ref Value, key: ref Value, env: ref Env) -> Result[Value, PyErr
         },
         Value.Tuple(items) => match key {
             Value.Int(n) => {
-                let k = index_of(*n, items.len());
+                let k = index_of(n, items.len());
                 if k < 0 or k >= items.len() {
                     return Err(py_error("IndexError", "tuple index out of range".to_string()));
                 }
@@ -1883,7 +1883,7 @@ fn str_item(s: ref String, key: ref Value, markup: bool) -> Result[Value, PyErro
     match key {
         Value.Int(n) => {
             let cs = to_chars(s);
-            let k = index_of(*n, cs.len());
+            let k = index_of(n, cs.len());
             if k < 0 or k >= cs.len() {
                 return Err(py_error("IndexError", "string index out of range".to_string()));
             }
@@ -2125,16 +2125,16 @@ fn markup_format(fmt: ref String, args: ref Vec[Value], kw: ref Vec[(Value, Valu
 fn helper_int(o: ref Value, conv: char, env: ref Env) -> Result[i64, PyError] {
     let wrong = type_error(f"%{conv} format: a real number is required, not _MarkupEscapeHelper");
     match o {
-        Value.Int(n) => Ok(*n),
-        Value.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        Value.Int(n) => Ok(n),
+        Value.Bool(b) => Ok(if b { 1 } else { 0 }),
         Value.Float(x) => {
-            if *x != *x {
+            if x != x {
                 return Err(value_error("cannot convert float NaN to integer"));
             }
-            if *x == f64.INFINITY or *x == -f64.INFINITY {
+            if x == f64.INFINITY or x == -f64.INFINITY {
                 return Err(py_error("OverflowError", "cannot convert float infinity to integer".to_string()));
             }
-            Ok(*x as i64)
+            Ok(x as i64)
         }
         Value.Str(s) => int_of_str(s, env),
         Value.Markup(s) => int_of_str(s, env),
@@ -2151,9 +2151,9 @@ fn int_of_str(s: ref String, env: ref Env) -> Result[i64, PyError] {
 
 fn helper_float(o: ref Value, env: ref Env) -> Result[f64, PyError] {
     match o {
-        Value.Int(n) => Ok(*n as f64),
-        Value.Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-        Value.Float(x) => Ok(*x),
+        Value.Int(n) => Ok(n as f64),
+        Value.Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
+        Value.Float(x) => Ok(x),
         Value.Str(s) => float_of_str(s, env),
         Value.Markup(s) => float_of_str(s, env),
         _ => Err(type_error(f"float() argument must be a string or a real number, not '{type_name(o)}'")),
@@ -2655,7 +2655,7 @@ fn py_expandtabs(s: ref String, tabsize: i64) -> String {
 fn clamp_index(v: ref Value, dflt: i64, len: i64, st: i64) -> i64 {
     match v {
         Value.Int(n) => {
-            let mut k = *n;
+            let mut k = n;
             if k < 0 {
                 k += len;
                 if k < 0 {
@@ -2673,7 +2673,7 @@ fn clamp_index(v: ref Value, dflt: i64, len: i64, st: i64) -> i64 {
 // The indices a slice picks, as slice.indices does.
 fn slice_indices(len: i64, start: ref Value, stop: ref Value, step: ref Value) -> Result[Vec[i64], PyError] {
     let st = match step {
-        Value.Int(n) => *n,
+        Value.Int(n) => n,
         _ => 1,
     };
     if st == 0 {
@@ -2761,7 +2761,7 @@ fn call_method(m: ref String, meth: ref String, args: ref Vec[Value], env: ref E
     }
     if meth == "splitlines" {
         let keep = match args.get(0) {
-            Some(Value.Bool(b)) => *b,
+            Some(Value.Bool(b)) => b,
             _ => false,
         };
         return Ok(Value.List(markups(py_splitlines(m, keep, env))));
@@ -5347,8 +5347,8 @@ fn add_values(a: ref Value, b: ref Value, env: ref Env) -> Result[Value, PyError
 
 fn mul_value(m: ref Value, n: ref Value) -> Value {
     let k = match n {
-        Value.Int(k) => *k,
-        Value.Bool(b) => if *b { 1 } else { 0 },
+        Value.Int(k) => k,
+        Value.Bool(b) => if b { 1 } else { 0 },
         _ => 0,
     };
     let mut out = String.new();

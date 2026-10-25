@@ -2394,9 +2394,9 @@ fn val_str(v: ref Val) -> String {
 fn val_repr(v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(i) => i.to_string(),
-        Val.Float(x) => float_repr(*x),
+        Val.Float(x) => float_repr(x),
         Val.Str(s) => repr_str(s),
         Val.List(items) => {
             let parts: Vec[String] = items.iter().map(|x| val_repr(x)).collect();
@@ -2412,9 +2412,9 @@ fn val_repr(v: ref Val) -> String {
 // float(v)
 fn py_float_of(v: ref Val) -> Result[f64, String] {
     match v {
-        Val.Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-        Val.Int(i) => Ok(*i as f64),
-        Val.Float(x) => Ok(*x),
+        Val.Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
+        Val.Int(i) => Ok(i as f64),
+        Val.Float(x) => Ok(x),
         Val.Str(s) => match py_float(s) {
             Some(x) => Ok(x),
             None => Err(f"ValueError: could not convert string to float: {repr_str(s)}"),
@@ -2437,9 +2437,9 @@ fn float_to_int(x: f64) -> Result[i128, String] {
 // int(v)
 fn py_int_of(v: ref Val) -> Result[i128, String] {
     match v {
-        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
-        Val.Int(i) => Ok(*i),
-        Val.Float(x) => float_to_int(*x),
+        Val.Bool(b) => Ok(if b { 1 } else { 0 }),
+        Val.Int(i) => Ok(i),
+        Val.Float(x) => float_to_int(x),
         Val.Str(s) => {
             if py_int_ok(s) {
                 let cleaned = py_strip(s).replace("_", "");
@@ -2567,13 +2567,13 @@ fn format_val(v: ref Val, spec: ref String) -> Result[String, String] {
             if spec.is_empty() {
                 Ok(i.to_string())
             } else if spec == "," {
-                Ok(group_int(*i))
+                Ok(group_int(i))
             } else {
-                format_int(*i as i64, spec)
+                format_int(i as i64, spec)
             }
         }
-        Val.Bool(b) => format_bool(*b, spec),
-        Val.Float(x) => format_float(*x, spec),
+        Val.Bool(b) => format_bool(b, spec),
+        Val.Float(x) => format_float(x, spec),
         Val.Str(s) => {
             if spec.is_empty() {
                 Ok(s.clone())
@@ -3586,9 +3586,9 @@ fn unit_of(name: ref String) -> Result[i64, String] {
 // timedelta(seconds=v) for a number.
 fn td_of(v: ref Val) -> Result[i128, String] {
     match v {
-        Val.Int(i) => Ok(*i * 1000000),
-        Val.Bool(b) => Ok(if *b { 1000000 } else { 0 }),
-        Val.Float(x) => Ok(td_from_seconds(*x)),
+        Val.Int(i) => Ok(i * 1000000),
+        Val.Bool(b) => Ok(if b { 1000000 } else { 0 }),
+        Val.Float(x) => Ok(td_from_seconds(x)),
         _ => Err(f"TypeError: unsupported type for timedelta seconds component: {type_name(v)}"),
     }
 }
@@ -3599,7 +3599,7 @@ fn naturaldelta(h: ref H, v: ref Val, months: bool, minimum_unit: ref String) ->
         return Err(f"ValueError: Minimum unit '{minimum_unit}' not supported");
     }
     let us = match v {
-        Val.Td(t) => *t,
+        Val.Td(t) => t,
         _ => {
             if let Err(e) = py_int_of(v) {
                 return fallback(e, v);
@@ -3696,14 +3696,14 @@ fn naturaldelta(h: ref H, v: ref Val, months: bool, minimum_unit: ref String) ->
 // that never needs the actual time.
 fn date_and_delta(v: ref Val, now: i128, precise: bool) -> Result[Option[(i128, i128)], String] {
     let delta = match v {
-        Val.Dt(d) => now - *d,
-        Val.Td(t) => *t,
+        Val.Dt(d) => now - d,
+        Val.Td(t) => t,
         _ => {
             let n = if precise {
                 v.clone()
             } else {
                 match v {
-                    Val.Float(x) => match py_round(*x) {
+                    Val.Float(x) => match py_round(x) {
                         Ok(i) => Val.Int(i),
                         Err(e) => {
                             if caught(e) {
@@ -3713,7 +3713,7 @@ fn date_and_delta(v: ref Val, now: i128, precise: bool) -> Result[Option[(i128, 
                         }
                     },
                     Val.Int(_) => v.clone(),
-                    Val.Bool(b) => Val.Int(if *b { 1 } else { 0 }),
+                    Val.Bool(b) => Val.Int(if b { 1 } else { 0 }),
                     _ => return Ok(None),
                 }
             };
@@ -3729,7 +3729,7 @@ fn date_and_delta(v: ref Val, now: i128, precise: bool) -> Result[Option[(i128, 
 fn naturaltime(h: ref H, v: ref Val, future: bool, months: bool, minimum_unit: ref String, when: ref Val)
         -> Result[Val, String] {
     let now = match when {
-        Val.Dt(d) => *d,
+        Val.Dt(d) => d,
         _ => 0,
     };
     let (date, delta) = match date_and_delta(v, now, false)? {
@@ -3895,8 +3895,8 @@ fn precisedelta(h: ref H, v: ref Val, minimum_unit: ref String, suppress: ref Ve
 
 fn day_of(v: ref Val) -> Option[i64] {
     match v {
-        Val.Date(d) => Some(*d),
-        Val.Dt(us) => Some((floor_div128(*us, DAY_US) as i64) + 1),
+        Val.Date(d) => Some(d),
+        Val.Dt(us) => Some((floor_div128(us, DAY_US) as i64) + 1),
         _ => None,
     }
 }
@@ -3948,9 +3948,9 @@ fn jint(j: ref JValue, i: i64) -> i128 {
 fn val_of(j: ref JValue) -> Val {
     match j {
         JValue.Null => Val.Nil,
-        JValue.Bool(b) => Val.Bool(*b),
-        JValue.Int(i) => Val.Int(*i as i128),
-        JValue.Float(x) => Val.Float(*x),
+        JValue.Bool(b) => Val.Bool(b),
+        JValue.Int(i) => Val.Int(i as i128),
+        JValue.Float(x) => Val.Float(x),
         JValue.Str(s) => Val.Str(s.clone()),
         JValue.List(items) => Val.List(items.iter().map(|x| val_of(x)).collect()),
         JValue.Obj(_) => {

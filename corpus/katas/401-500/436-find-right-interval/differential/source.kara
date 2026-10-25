@@ -53,7 +53,7 @@ fn find_right_interval_map(intervals: Vec[(i64, i64)]) -> Vec[i64] {
     let mut right: Vec[i64] = Vec.new();
     for iv in intervals {
         match starts.ceiling(iv.1) {
-            Some((_, j)) => right.push(*j),
+            Some((_, j)) => right.push(j),
             None => right.push(-1),
         }
     }

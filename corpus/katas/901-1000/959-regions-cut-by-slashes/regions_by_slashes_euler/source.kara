@@ -25,8 +25,8 @@ fn regions_by_slashes(grid: Vec[String]) -> i64 {
             (i * w + n, (i + 1) * w + n),
         ];
         for (a, b) in sides.iter() {
-            adj[*a].push(*b);
-            adj[*b].push(*a);
+            adj[a].push(b);
+            adj[b].push(a);
             edges += 1;
         }
     }

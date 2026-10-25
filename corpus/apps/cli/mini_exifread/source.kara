@@ -218,8 +218,8 @@ fn join_repr(xs: ref Vec[Val]) -> String {
 fn repr(v: ref Val) -> String {
     match v {
         Val.Int(n) => f"{n}",
-        Val.Rat(n, d) => rat_str(*n, *d),
-        Val.Float(x) => float_repr(*x),
+        Val.Rat(n, d) => rat_str(n, d),
+        Val.Float(x) => float_repr(x),
         Val.Tup(xs) => {
             if xs.len() == 1 {
                 let inner = repr(xs[0]);
@@ -340,8 +340,8 @@ fn slice(v: ref Val, a: i64, b: i64) -> Val {
 // The int a value equals, as a dict lookup or a list comparison sees it.
 fn int_key(v: ref Val) -> Option[i64] {
     match v {
-        Val.Int(n) => Some(*n),
-        Val.Rat(n, d) => if *d == 1 { Some(*n) } else { None },
+        Val.Int(n) => Some(n),
+        Val.Rat(n, d) => if d == 1 { Some(n) } else { None },
         _ => None,
     }
 }
@@ -888,8 +888,8 @@ fn make_string(seq: ref Val) -> String {
             for x in xs.iter() {
                 match x {
                     Val.Int(n) => {
-                        if *n >= 32 and *n < 256 {
-                            utf8_char(mut out, *n);
+                        if n >= 32 and n < 256 {
+                            utf8_char(mut out, n);
                         }
                     }
                     _ => {}
@@ -1021,7 +1021,7 @@ fn special_mode(val: ref Val) -> Result[String, Exc] {
 fn convert_temp(v: ref Val) -> Result[String, Exc] {
     match v {
         Val.Int(n) => {
-            let c = *n - 128;
+            let c = n - 128;
             Ok(f"{c} C")
         }
         other => {
@@ -1141,7 +1141,7 @@ fn ignored(tag: i64) -> bool {
 
 fn dump_ifd(h: mut ref Hdr, t: ref Tables, at: ref Val, ifd_name: ref String, table: i64, relative: bool, stop: ref String, w: mut ref World) -> Result[(), Exc] {
     let ifd = match at {
-        Val.Int(n) => *n,
+        Val.Int(n) => n,
         _ => {
             log(mut w, f"Possibly corrupted IFD: {ifd_name}");
             return Ok(());
@@ -1198,7 +1198,7 @@ fn list_ifd(h: mut ref Hdr, w: mut ref World) -> Vec[i64] {
 
 fn as_offset(v: ref Val) -> Result[i64, Exc] {
     match v {
-        Val.Int(n) => Ok(*n),
+        Val.Int(n) => Ok(n),
         Val.Rat(_, _) => Err(exc("TypeError", "'Ratio' object cannot be interpreted as an integer")),
         other => {
             let tn = type_name(other);
@@ -1968,10 +1968,10 @@ fn to_bytes(xs: ref Vec[Val]) -> Result[Vec[u8], Exc] {
     for x in xs.iter() {
         match x {
             Val.Int(n) => {
-                if *n < 0 or *n > 255 {
+                if n < 0 or n > 255 {
                     return Err(exc("ValueError", "bytes must be in range(0, 256)"));
                 }
-                out.push(*n as u8);
+                out.push(n as u8);
             }
             other => {
                 let tn = type_name(other);

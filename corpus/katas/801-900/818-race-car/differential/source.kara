@@ -134,8 +134,8 @@ fn answers_by_definition(farthest: i64) -> Vec[i64] {
         steps += 1;
         let mut next: Vec[(i64, i64, bool)] = Vec.new();
         for (pos, e, back) in level.iter() {
-            let speed = if *back { -(1 << *e) } else { 1 << *e };
-            let moves = [(*pos + speed, *e + 1, *back), (*pos, 0, not *back)];
+            let speed = if back { -(1 << e) } else { 1 << e };
+            let moves = [(pos + speed, e + 1, back), (pos, 0, not back)];
             for (p, f, b) in moves {
                 if p <= -reach or p >= reach or f >= speeds or seen[state(p, f, b)] {
                     continue;

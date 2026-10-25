@@ -8874,7 +8874,7 @@ fn no_kwargs(a: ref CallArgs, fname: Str) -> Result[bool, Exc] {
 fn call_value(w: mut ref World, f: ref Val, a0: ref CallArgs) -> Result[Val, Exc] {
     let mut a = a0.clone();
     let fid = match f {
-        Val.Fn(i) => *i,
+        Val.Fn(i) => i,
         other => {
             return Err(type_error(f"{str_repr(type_name(other))} object is not callable"));
         }

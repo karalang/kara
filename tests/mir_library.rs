@@ -852,9 +852,11 @@ fn main() {
     );
 }
 
-/// B-2026-10-12-9: `*` on a `Copy` part of a borrowed item reads it, as
-/// `karac check` accepts: a destructured `Vec[(String, f64)]` iter item, a
-/// `Set` iter item, an undestructured `SortedMap` item and a `floor` entry.
+/// B-2026-10-12-9: `*` on a `Copy` item of a borrowed collection reads it, as
+/// `karac check` accepts: a `Set` iter item and an undestructured `SortedMap`
+/// item. A `Copy` part bound by destructuring is a copy (core-semantics §4.6,
+/// B-2026-10-24-36), read bare: a `Vec[(String, f64)]` iter item's `w` and a
+/// `floor` entry's `k` and `x`.
 #[test]
 fn deref_of_a_copy_part_of_a_borrowed_item_reads_it() {
     assert_runs(
@@ -863,7 +865,7 @@ fn main() {
     let v: Vec[(String, f64)] = vec![("a".to_string(), 1.5), ("b".to_string(), 2.0)];
     let mut t = 0.0;
     for (n, w) in v.iter() {
-        t = t + *w;
+        t = t + w;
     }
     println(f"{t}");
     let mut s: Set[i64] = Set.new();
@@ -881,7 +883,7 @@ fn main() {
         println(f"{*p.0} {*p.1}");
     }
     if let Some((k, x)) = m.floor(4) {
-        println(f"{*k} {*x}");
+        println(f"{k} {x}");
     }
 }
 "#,
@@ -890,7 +892,8 @@ fn main() {
 }
 
 /// B-2026-10-12-9: a bare `for` over a collection borrows it (core semantics
-/// §4.6), so `*v` reads a `Copy` item, whole or destructured.
+/// §4.6), so `*v` reads a `Copy` item; a destructured `Copy` part is a copy,
+/// read bare (B-2026-10-24-36).
 #[test]
 fn deref_of_a_copy_item_of_a_bare_for_reads_it() {
     assert_runs(
@@ -909,7 +912,7 @@ fn main() {
     counts.insert('b', 3);
     let mut s = 0;
     for (_, c) in counts {
-        s += *c;
+        s += c;
     }
     println(f"{s} {total(vec![1, 2, 3])}");
 }

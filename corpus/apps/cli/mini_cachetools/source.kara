@@ -802,8 +802,8 @@ fn float_repr(x: f64) -> String {
 fn v_repr(v: ref V) -> String {
     match v {
         V.Int(n) => f"{n}",
-        V.Float(x) => float_repr(*x),
-        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Float(x) => float_repr(x),
+        V.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         V.Str(s) => repr_of(cps_of(s)),
         V.Tup(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -837,13 +837,13 @@ fn v_key(v: ref V) -> String {
     match v {
         V.Int(n) => f"n{n}",
         V.Float(x) => {
-            let i = *x as i64;
-            if (i as f64) == *x {
+            let i = x as i64;
+            if (i as f64) == x {
                 return f"n{i}";
             }
             f"f{x}"
         }
-        V.Bool(b) => if *b { "n1".to_string() } else { "n0".to_string() },
+        V.Bool(b) => if b { "n1".to_string() } else { "n0".to_string() },
         V.Str(s) => f"s{s}",
         V.Tup(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -861,9 +861,9 @@ fn v_key(v: ref V) -> String {
 
 fn v_hash(v: ref V) -> i64 {
     match v {
-        V.Int(n) => int_hash(*n),
-        V.Float(x) => int_hash(*x as i64),
-        V.Bool(b) => if *b { 1 } else { 0 },
+        V.Int(n) => int_hash(n),
+        V.Float(x) => int_hash(x as i64),
+        V.Bool(b) => if b { 1 } else { 0 },
         V.Str(s) => str_hash(s),
         V.Tup(items) => tuple_hash(items),
         _ => 0,
@@ -888,9 +888,9 @@ fn type_name(v: ref V) -> String {
 fn v_of(j: ref J) -> V {
     match j {
         J.S(s) => V.Str(s.clone()),
-        J.N(n) => V.Int(*n),
-        J.F(x) => V.Float(*x),
-        J.B(b) => V.Bool(*b),
+        J.N(n) => V.Int(n),
+        J.F(x) => V.Float(x),
+        J.B(b) => V.Bool(b),
         J.A(items) => {
             let mut out: Vec[V] = Vec.new();
             for it in items.iter() {
@@ -1140,7 +1140,7 @@ impl PySet {
         self.state = fresh.state;
         self.fill = self.used;
         for (k, h) in old.iter() {
-            self.insert_clean(k, *h);
+            self.insert_clean(k, h);
         }
     }
 
@@ -2065,7 +2065,7 @@ impl Cache {
         if let V.Str(s) = k {
             for (name, n) in self.ttu.table.iter() {
                 if name == s {
-                    return Ok(time + *n);
+                    return Ok(time + n);
                 }
             }
         }
@@ -2241,11 +2241,11 @@ struct Memo {
 
 fn profile(uid: ref V) -> Option[String] {
     let n = match uid {
-        V.Int(n) => *n,
-        V.Bool(b) => if *b { 1 } else { 0 },
+        V.Int(n) => n,
+        V.Bool(b) => if b { 1 } else { 0 },
         V.Float(x) => {
-            let i = *x as i64;
-            if (i as f64) != *x {
+            let i = x as i64;
+            if (i as f64) != x {
                 return None;
             }
             i
@@ -2265,7 +2265,7 @@ fn table_int(name: ref V, table: ref Vec[(Str, i64)], default: i64) -> i64 {
     if let V.Str(s) = name {
         for (k, n) in table.iter() {
             if s == *k {
-                return *n;
+                return n;
             }
         }
     }
@@ -2286,9 +2286,9 @@ fn arg(args: ref Vec[V], kw: ref Vec[(String, V)], pos: i64, name: Str, default:
 
 fn int_of(v: ref V) -> i64 {
     match v {
-        V.Int(n) => *n,
-        V.Bool(b) => if *b { 1 } else { 0 },
-        V.Float(x) => *x as i64,
+        V.Int(n) => n,
+        V.Bool(b) => if b { 1 } else { 0 },
+        V.Float(x) => x as i64,
         _ => 0,
     }
 }
@@ -2443,8 +2443,8 @@ fn j_repr(j: ref J) -> String {
     match j {
         J.S(s) => repr_of(cps_of(s)),
         J.N(n) => f"{n}",
-        J.F(x) => float_repr(*x),
-        J.B(b) => bool_repr(*b),
+        J.F(x) => float_repr(x),
+        J.B(b) => bool_repr(b),
         J.Null => "None".to_string(),
         J.A(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -2479,7 +2479,7 @@ fn ints_of(j: ref J) -> Vec[i64] {
     if let J.A(items) = j {
         for it in items.iter() {
             if let J.N(n) = it {
-                out.push(*n);
+                out.push(n);
             }
         }
     }
@@ -2507,7 +2507,7 @@ fn make_cache(spec: ref J, j: ref J) -> Result[Cache, String] {
         if let J.O(members) = j_get(t, "table") {
             for (k, v) in members.iter() {
                 if let J.N(n) = v {
-                    c.ttu.table.push((k.clone(), *n));
+                    c.ttu.table.push((k.clone(), n));
                 }
             }
         }

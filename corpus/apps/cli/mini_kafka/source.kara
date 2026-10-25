@@ -1948,7 +1948,7 @@ fn py_repr(v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
         Val.Int(n) => f"{n}",
-        Val.Bool(b) => py_bool(*b),
+        Val.Bool(b) => py_bool(b),
         Val.Str(s) => str_repr(s),
         Val.Bytes(b) => bytes_repr(b),
         Val.List(items) => {
@@ -1985,8 +1985,8 @@ fn py_str(v: ref Val) -> String {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.Nil => false,
-        Val.Int(n) => *n != 0,
-        Val.Bool(b) => *b,
+        Val.Int(n) => n != 0,
+        Val.Bool(b) => b,
         Val.Str(s) => s.len() > 0,
         Val.Bytes(b) => b.len() > 0,
         Val.List(items) => items.len() > 0,
@@ -2015,8 +2015,8 @@ fn push_uv32(out: mut ref Vec[u8], value: i64) {
 
 fn int_of(v: ref Val) -> Result[i64, Exc] {
     match v {
-        Val.Int(n) => Ok(*n),
-        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        Val.Int(n) => Ok(n),
+        Val.Bool(b) => Ok(if b { 1 } else { 0 }),
         _ => Err(pack_error()),
     }
 }
@@ -2863,7 +2863,7 @@ fn val_at(v: ref Val, i: i64) -> Val {
 
 fn int_val(v: ref Val) -> i64 {
     match v {
-        Val.Int(n) => *n,
+        Val.Int(n) => n,
         _ => 0,
     }
 }

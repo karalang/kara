@@ -653,8 +653,8 @@ fn name_of(e: ref Elf, k: i64) -> String {
 
 fn dyn_tag(e: ref Elf, tag: i64) -> Option[i64] {
     for (t, v) in e.dyn {
-        if *t == tag {
-            return Some(*v);
+        if t == tag {
+            return Some(v);
         }
     }
     None
@@ -662,8 +662,8 @@ fn dyn_tag(e: ref Elf, tag: i64) -> Option[i64] {
 
 fn is_pie(e: ref Elf) -> bool {
     for (t, v) in e.dyn {
-        if *t == DT_FLAGS_1 {
-            return (*v & 0x08000000) != 0;
+        if t == DT_FLAGS_1 {
+            return (v & 0x08000000) != 0;
         }
     }
     false
@@ -1024,8 +1024,8 @@ fn dynamic_section(out: mut ref String, e: ref Elf) {
     out.push_str("  Tag        Type                         Name/Value\n");
     let st = dyn_strtab(e);
     for (t, v) in e.dyn {
-        let name = dyn_type_name(*t);
-        out.push_str(f" 0x{*t:016x} ({name}){rjust(" ", 19 - name.len())}{dyn_value(e, st, *t, *v)}\n");
+        let name = dyn_type_name(t);
+        out.push_str(f" 0x{t:016x} ({name}){rjust(" ", 19 - name.len())}{dyn_value(e, st, t, v)}\n");
     }
 }
 
@@ -1175,7 +1175,7 @@ fn read_versions(e: ref Elf) -> Versions {
 
 fn lookup_ver(list: ref Vec[(i64, String)], idx: i64) -> Option[String] {
     for (k, name) in list {
-        if *k == idx {
+        if k == idx {
             return Some(name.clone());
         }
     }
@@ -2251,8 +2251,8 @@ fn ldcheck(out: mut ref String, f: Str) {
     let st = dyn_strtab(e).unwrap_or(0);
     let mut needed: Vec[String] = Vec.new();
     for (t, v) in e.dyn {
-        if *t == DT_NEEDED {
-            needed.push(cstr(e, st + *v));
+        if t == DT_NEEDED {
+            needed.push(cstr(e, st + v));
         }
     }
     let mut kind = "";

@@ -737,9 +737,9 @@ fn json_float(x: f64) -> String {
 fn json_dumps(v: ref J, out: mut ref String) {
     match v {
         J.Null => out.push_str("null"),
-        J.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        J.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         J.Int(s) => out.push_str(s),
-        J.Float(x) => out.push_str(json_float(*x)),
+        J.Float(x) => out.push_str(json_float(x)),
         J.Str(s) => json_str(s, mut out),
         J.Arr(xs) => {
             out.push('[');
@@ -1340,9 +1340,9 @@ struct PyItem {
 fn show(v: ref PyV) -> String {
     match v {
         PyV.None => "None".to_string(),
-        PyV.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        PyV.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         PyV.Int(n) => f"{n}",
-        PyV.Float(x) => float_repr(*x),
+        PyV.Float(x) => float_repr(x),
         PyV.Str(s) => str_repr(s),
         PyV.List(xs) => {
             let mut out = "[".to_string();
@@ -2252,10 +2252,10 @@ fn unwrap_item(w: mut ref World, id: i64) -> Result[PyV, Exc] {
 fn unwrap_val(w: mut ref World, v: ref Val) -> Result[PyV, Exc] {
     match v {
         Val.Py(p) => Ok(p.clone()),
-        Val.It(id) => unwrap_item(mut w, *id),
-        Val.Doc(c) => c_unwrap(mut w, *c),
+        Val.It(id) => unwrap_item(mut w, id),
+        Val.Doc(c) => c_unwrap(mut w, c),
         Val.Prox(p) => {
-            let inner = w.proxies[*p].internal;
+            let inner = w.proxies[p].internal;
             c_unwrap(mut w, inner)
         }
         Val.Ky(_) => Err(exc("AttributeError", "'SingleKey' object has no attribute 'unwrap'".to_string())),
@@ -2291,7 +2291,7 @@ fn table_unwrap(w: mut ref World, c: i64) -> Result[PyV, Exc] {
 // item, -1 for None.
 fn item_of(w: mut ref World, v: ref Val, parent: i64, sort_keys: bool) -> Result[i64, Exc] {
     match v {
-        Val.It(id) => Ok(*id),
+        Val.It(id) => Ok(id),
         Val.Py(p) => item_py(mut w, p, parent, sort_keys),
         Val.Doc(_) => Err(exc("ConvertError", "Unable to convert an object of <class 'tomlkit.toml_document.TOMLDocument'> to a TOML item".to_string())),
         Val.Prox(_) => Err(exc("ConvertError", "Unable to convert an object of <class 'tomlkit.container.OutOfOrderTableProxy'> to a TOML item".to_string())),
@@ -2356,9 +2356,9 @@ fn new_table_item(w: mut ref World, kind: i64, aot_elem: bool) -> i64 {
 
 fn item_py(w: mut ref World, p: ref PyV, parent: i64, sort_keys: bool) -> Result[i64, Exc] {
     match p {
-        PyV.Bool(b) => Ok(mk_bool(mut w, *b, trivia())),
-        PyV.Int(n) => Ok(mk_int(mut w, *n, trivia(), f"{n}")),
-        PyV.Float(x) => Ok(mk_float(mut w, *x, trivia(), float_repr(*x))),
+        PyV.Bool(b) => Ok(mk_bool(mut w, b, trivia())),
+        PyV.Int(n) => Ok(mk_int(mut w, n, trivia(), f"{n}")),
+        PyV.Float(x) => Ok(mk_float(mut w, x, trivia(), float_repr(x))),
         PyV.Str(s) => string_from_raw(mut w, s, 0, true),
         PyV.DateTime(d) => {
             let raw = datetime_iso(d).replace("+00:00", "Z");
@@ -5112,7 +5112,7 @@ fn j_int(v: ref J) -> i64 {
 
 fn j_bool(v: ref J) -> bool {
     match v {
-        J.Bool(b) => *b,
+        J.Bool(b) => b,
         _ => false,
     }
 }
@@ -5168,9 +5168,9 @@ fn ev(w: mut ref World, env: ref Env, x: ref J) -> Result[Val, Exc] {
     }
     match x {
         J.Null => Ok(Val.Py(PyV.None)),
-        J.Bool(b) => Ok(Val.Py(PyV.Bool(*b))),
+        J.Bool(b) => Ok(Val.Py(PyV.Bool(b))),
         J.Int(_) => Ok(Val.Py(PyV.Int(j_int(x)))),
-        J.Float(f) => Ok(Val.Py(PyV.Float(*f))),
+        J.Float(f) => Ok(Val.Py(PyV.Float(f))),
         J.Str(s) => Ok(Val.Py(PyV.Str(s.clone()))),
         J.Arr(xs) => {
             let mut out: Vec[PyV] = Vec.new();
@@ -5323,7 +5323,7 @@ fn mk_ws_str_fixed(w: mut ref World, s: Str) -> i64 {
 fn val_kind(w: ref World, v: ref Val) -> String {
     match v {
         Val.Py(p) => py_type(p),
-        Val.It(id) => kind_name(w.items[*id].kind).to_string(),
+        Val.It(id) => kind_name(w.items[id].kind).to_string(),
         Val.Doc(_) => "TOMLDocument".to_string(),
         Val.Prox(_) => "OutOfOrderTableProxy".to_string(),
         Val.Ky(k) => if k.single { "SingleKey".to_string() } else { "DottedKey".to_string() },
@@ -5343,8 +5343,8 @@ fn show_val(w: mut ref World, v: ref Val) -> Result[String, Exc] {
 
 fn val_as_string(w: ref World, v: ref Val) -> Result[String, Exc] {
     match v {
-        Val.It(id) => Ok(as_string(w, *id)),
-        Val.Doc(c) => Ok(c_as_string(w, *c)),
+        Val.It(id) => Ok(as_string(w, id)),
+        Val.Doc(c) => Ok(c_as_string(w, c)),
         Val.Ky(k) => Ok(key_text(k)),
         Val.Prox(_) => Err(exc("AttributeError", "'OutOfOrderTableProxy' object has no attribute 'as_string'".to_string())),
         Val.Py(p) => Err(exc("AttributeError", f"'{py_type(p)}' object has no attribute 'as_string'")),
@@ -5354,10 +5354,10 @@ fn val_as_string(w: ref World, v: ref Val) -> Result[String, Exc] {
 // The container behind a document or a table, -1 for anything else.
 fn cont_of(w: ref World, v: ref Val) -> i64 {
     match v {
-        Val.Doc(c) => *c,
+        Val.Doc(c) => c,
         Val.It(id) => {
-            let k = w.items[*id].kind;
-            if k == K_TABLE or k == K_INLINE { w.items[*id].cont } else { -1 }
+            let k = w.items[id].kind;
+            if k == K_TABLE or k == K_INLINE { w.items[id].cont } else { -1 }
         }
         _ => -1,
     }
@@ -5369,7 +5369,7 @@ fn not_subscriptable(w: ref World, v: ref Val) -> Exc {
 
 fn index_of(k: ref Val) -> Option[i64] {
     match k {
-        Val.Py(PyV.Int(n)) => Some(*n),
+        Val.Py(PyV.Int(n)) => Some(n),
         _ => None,
     }
 }
@@ -5391,7 +5391,7 @@ fn list_index_error(k: ref Val) -> Exc {
 fn get_item(w: mut ref World, x: ref Val, k: ref Val) -> Result[Val, Exc] {
     if let Val.Prox(p) = x {
         let s = key_name(k).unwrap_or(String.new());
-        return proxy_getitem(mut w, *p, s);
+        return proxy_getitem(mut w, p, s);
     }
     let c = cont_of(w, x);
     if c >= 0 {
@@ -5401,16 +5401,16 @@ fn get_item(w: mut ref World, x: ref Val, k: ref Val) -> Result[Val, Exc] {
         };
     }
     if let Val.It(id) = x {
-        let kind = w.items[*id].kind;
+        let kind = w.items[id].kind;
         if kind == K_ARRAY {
             return match index_of(k) {
-                Some(i) => array_getitem(w, *id, i),
+                Some(i) => array_getitem(w, id, i),
                 None => Err(list_index_error(k)),
             };
         }
         if kind == K_AOT {
             return match index_of(k) {
-                Some(i) => aot_getitem(w, *id, i),
+                Some(i) => aot_getitem(w, id, i),
                 None => Err(list_index_error(k)),
             };
         }
@@ -5424,21 +5424,21 @@ fn get_item(w: mut ref World, x: ref Val, k: ref Val) -> Result[Val, Exc] {
 fn set_item(w: mut ref World, x: ref Val, k: ref Val, v: own Val) -> Result[(), Exc] {
     if let Val.Prox(p) = x {
         let s = key_name(k).unwrap_or(String.new());
-        return proxy_setitem(mut w, *p, s, v);
+        return proxy_setitem(mut w, p, s, v);
     }
     if let Val.Doc(c) = x {
         let s = key_name(k).unwrap_or(String.new());
-        return c_setitem(mut w, *c, s, v);
+        return c_setitem(mut w, c, s, v);
     }
     if let Val.It(id) = x {
-        let kind = w.items[*id].kind;
+        let kind = w.items[id].kind;
         if kind == K_TABLE or kind == K_INLINE {
             let s = key_name(k).unwrap_or(String.new());
-            return table_setitem(mut w, *id, s, v);
+            return table_setitem(mut w, id, s, v);
         }
         if kind == K_ARRAY {
             return match index_of(k) {
-                Some(i) => array_setitem(mut w, *id, i, v),
+                Some(i) => array_setitem(mut w, id, i, v),
                 None => Err(list_index_error(k)),
             };
         }
@@ -5452,7 +5452,7 @@ fn set_item(w: mut ref World, x: ref Val, k: ref Val, v: own Val) -> Result[(), 
 fn del_item(w: mut ref World, x: ref Val, k: ref Val) -> Result[(), Exc] {
     if let Val.Prox(p) = x {
         let s = key_name(k).unwrap_or(String.new());
-        return proxy_delitem(mut w, *p, s);
+        return proxy_delitem(mut w, p, s);
     }
     let c = cont_of(w, x);
     if c >= 0 {
@@ -5460,16 +5460,16 @@ fn del_item(w: mut ref World, x: ref Val, k: ref Val) -> Result[(), Exc] {
         return c_remove(mut w, c, key_of(s));
     }
     if let Val.It(id) = x {
-        let kind = w.items[*id].kind;
+        let kind = w.items[id].kind;
         if kind == K_ARRAY {
             return match index_of(k) {
-                Some(i) => array_delitem(mut w, *id, i),
+                Some(i) => array_delitem(mut w, id, i),
                 None => Err(list_index_error(k)),
             };
         }
         if kind == K_AOT {
             return match index_of(k) {
-                Some(i) => aot_delitem(mut w, *id, i),
+                Some(i) => aot_delitem(mut w, id, i),
                 None => Err(list_index_error(k)),
             };
         }
@@ -5486,22 +5486,22 @@ fn has_key(w: mut ref World, x: ref Val, k: ref String) -> bool {
 
 fn val_len(w: ref World, x: ref Val) -> Result[i64, Exc] {
     if let Val.Prox(p) = x {
-        return Ok(w.proxies[*p].dkeys.len());
+        return Ok(w.proxies[p].dkeys.len());
     }
     let c = cont_of(w, x);
     if c >= 0 {
         return Ok(w.conts[c].dkeys.len());
     }
     if let Val.It(id) = x {
-        let kind = w.items[*id].kind;
+        let kind = w.items[id].kind;
         if kind == K_ARRAY {
-            return Ok(w.items[*id].elems.len());
+            return Ok(w.items[id].elems.len());
         }
         if kind == K_AOT {
-            return Ok(w.items[*id].body.len());
+            return Ok(w.items[id].body.len());
         }
         if kind == K_STRING {
-            return Ok(char_len(w.items[*id].s));
+            return Ok(char_len(w.items[id].s));
         }
     }
     Err(exc("TypeError", f"object of type '{val_kind(w, x)}' has no len()"))
@@ -5509,7 +5509,7 @@ fn val_len(w: ref World, x: ref Val) -> Result[i64, Exc] {
 
 fn val_keys(w: ref World, x: ref Val) -> Vec[String] {
     if let Val.Prox(p) = x {
-        return w.proxies[*p].dkeys.clone();
+        return w.proxies[p].dkeys.clone();
     }
     let c = cont_of(w, x);
     if c >= 0 { w.conts[c].dkeys.clone() } else { Vec.new() }
@@ -5525,12 +5525,12 @@ fn append_kv(w: mut ref World, x: ref Val, key: own Val, v: own Val) -> Result[(
     };
     if let Val.Doc(c) = x {
         let it = item_of(mut w, v, -1, false)?;
-        return c_append(mut w, *c, k, it, true);
+        return c_append(mut w, c, k, it, true);
     }
     if let Val.It(id) = x {
-        let kind = w.items[*id].kind;
+        let kind = w.items[id].kind;
         if kind == K_TABLE or kind == K_INLINE {
-            return table_append(mut w, *id, k, key_obj, v);
+            return table_append(mut w, id, k, key_obj, v);
         }
     }
     Err(exc("AttributeError", f"'{val_kind(w, x)}' object has no attribute 'append'"))
@@ -5539,7 +5539,7 @@ fn append_kv(w: mut ref World, x: ref Val, key: own Val, v: own Val) -> Result[(
 fn is_ws_or_comment(w: ref World, v: ref Val) -> bool {
     match v {
         Val.It(id) => {
-            let k = w.items[*id].kind;
+            let k = w.items[id].kind;
             k == K_WS or k == K_COMMENT
         }
         _ => false,
@@ -5560,14 +5560,14 @@ fn add(w: mut ref World, x: ref Val, args: own Vec[Val]) -> Result[(), Exc] {
 // x.append(value) on an array or an array of tables.
 fn push(w: mut ref World, x: ref Val, v: own Val) -> Result[(), Exc] {
     if let Val.It(id) = x {
-        let kind = w.items[*id].kind;
+        let kind = w.items[id].kind;
         if kind == K_ARRAY {
-            let n = w.items[*id].elems.len();
-            return array_insert(mut w, *id, n, v);
+            let n = w.items[id].elems.len();
+            return array_insert(mut w, id, n, v);
         }
         if kind == K_AOT {
-            let n = w.items[*id].body.len();
-            return aot_insert(mut w, *id, n, v);
+            let n = w.items[id].body.len();
+            return aot_insert(mut w, id, n, v);
         }
     }
     Err(exc("TypeError", "append() missing 1 required positional argument: '_item'".to_string()))
@@ -5575,12 +5575,12 @@ fn push(w: mut ref World, x: ref Val, v: own Val) -> Result[(), Exc] {
 
 fn insert(w: mut ref World, x: ref Val, i: i64, v: own Val) -> Result[(), Exc] {
     if let Val.It(id) = x {
-        let kind = w.items[*id].kind;
+        let kind = w.items[id].kind;
         if kind == K_ARRAY {
-            return array_insert(mut w, *id, i, v);
+            return array_insert(mut w, id, i, v);
         }
         if kind == K_AOT {
-            return aot_insert(mut w, *id, i, v);
+            return aot_insert(mut w, id, i, v);
         }
     }
     Err(exc("AttributeError", f"'{val_kind(w, x)}' object has no attribute 'insert'"))
@@ -6077,7 +6077,7 @@ fn iso_at(w: mut ref World, x: ref Val, k: Str) -> Result[String, Exc] {
 fn str_val(w: ref World, x: ref Val) -> String {
     match x {
         Val.It(id) => {
-            let d = w.items[*id].clone();
+            let d = w.items[id].clone();
             if d.kind == K_STRING {
                 d.s.clone()
             } else if d.kind == K_INT {
@@ -6085,18 +6085,18 @@ fn str_val(w: ref World, x: ref Val) -> String {
             } else if d.kind == K_FLOAT {
                 float_repr(d.fval)
             } else {
-                as_string(w, *id)
+                as_string(w, id)
             }
         }
         Val.Py(PyV.Str(s)) => s.clone(),
-        Val.Py(PyV.Bool(b)) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Py(PyV.Bool(b)) => if b { "True".to_string() } else { "False".to_string() },
         _ => String.new(),
     }
 }
 
 fn is_str_val(w: ref World, x: ref Val) -> bool {
     match x {
-        Val.It(id) => w.items[*id].kind == K_STRING,
+        Val.It(id) => w.items[id].kind == K_STRING,
         Val.Py(PyV.Str(_)) => true,
         _ => false,
     }
@@ -6105,7 +6105,7 @@ fn is_str_val(w: ref World, x: ref Val) -> bool {
 fn isoformat(w: ref World, x: ref Val) -> String {
     match x {
         Val.It(id) => {
-            let d = w.items[*id].clone();
+            let d = w.items[id].clone();
             if d.kind == K_DATE {
                 date_iso(d.dt)
             } else if d.kind == K_TIME {
@@ -6123,7 +6123,7 @@ fn isoformat(w: ref World, x: ref Val) -> String {
 fn elements(w: ref World, x: ref Val) -> Vec[Val] {
     let mut out: Vec[Val] = Vec.new();
     if let Val.It(id) = x {
-        let d = w.items[*id].clone();
+        let d = w.items[id].clone();
         if d.kind == K_ARRAY {
             for e in d.elems {
                 out.push(Val.It(e));
@@ -6149,7 +6149,7 @@ fn bump_requirement(old: ref String, new: ref String) -> String {
 fn is_table_like(w: ref World, x: ref Val) -> bool {
     match x {
         Val.It(id) => {
-            let k = w.items[*id].kind;
+            let k = w.items[id].kind;
             k == K_TABLE or k == K_INLINE
         }
         _ => false,

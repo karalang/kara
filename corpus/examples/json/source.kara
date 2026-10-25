@@ -305,7 +305,7 @@ fn ser_into(v: ref Json, out: mut ref String) {
             out.push_str("null");
         }
         Bool(b) => {
-            if *b {
+            if b {
                 out.push_str("true");
             } else {
                 out.push_str("false");

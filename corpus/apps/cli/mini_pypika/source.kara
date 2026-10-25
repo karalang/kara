@@ -248,7 +248,7 @@ fn str_of(v: ref Val) -> String {
 
 fn obj_id(v: ref Val) -> i64 {
     match v {
-        Val.Obj(i) => *i,
+        Val.Obj(i) => i,
         _ => -1,
     }
 }
@@ -284,9 +284,9 @@ fn is_tuple_val(v: ref Val) -> bool {
 
 fn seq_id(v: ref Val) -> i64 {
     match v {
-        Val.Lst(i) => *i,
-        Val.Tup(i) => *i,
-        Val.Slc(i) => *i,
+        Val.Lst(i) => i,
+        Val.Tup(i) => i,
+        Val.Slc(i) => i,
         _ => -1,
     }
 }
@@ -318,7 +318,7 @@ fn new_obj(a: mut ref A, cls: i64) -> i64 {
 
 fn cls_of(a: ref A, v: ref Val) -> i64 {
     match v {
-        Val.Obj(i) => a.objs[*i].cls,
+        Val.Obj(i) => a.objs[i].cls,
         _ => -1,
     }
 }
@@ -425,7 +425,7 @@ fn set_list(a: mut ref A, o: i64, k: i64, xs: own Vec[Val]) {
 fn identical(x: ref Val, y: ref Val) -> bool {
     match x {
         Val.Obj(i) => match y {
-            Val.Obj(j) => *i == *j,
+            Val.Obj(j) => i == j,
             _ => false,
         },
         Val.Non => is_none(y),
@@ -437,9 +437,9 @@ fn py_truthy(v: ref Val) -> bool {
     match v {
         Val.Absent => false,
         Val.Non => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
-        Val.Float(x) => *x != 0.0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
+        Val.Float(x) => x != 0.0,
         Val.Str(s) => s.len() > 0,
         _ => true,
     }
@@ -921,25 +921,25 @@ fn same_val(x: ref Val, y: ref Val) -> bool {
             _ => false,
         },
         Val.Int(n) => match y {
-            Val.Int(m) => *n == *m,
-            Val.Bool(b) => *n == (if *b { 1 } else { 0 }),
-            Val.Float(f) => (*n as f64) == *f,
+            Val.Int(m) => n == m,
+            Val.Bool(b) => n == (if b { 1 } else { 0 }),
+            Val.Float(f) => (n as f64) == f,
             _ => false,
         },
         Val.Bool(b) => match y {
-            Val.Bool(c) => *b == *c,
-            Val.Int(m) => *m == (if *b { 1 } else { 0 }),
+            Val.Bool(c) => b == c,
+            Val.Int(m) => m == (if b { 1 } else { 0 }),
             _ => false,
         },
         Val.Float(f) => match y {
-            Val.Float(g) => *f == *g,
-            Val.Int(m) => *f == (*m as f64),
+            Val.Float(g) => f == g,
+            Val.Int(m) => f == (m as f64),
             _ => false,
         },
         Val.Non => is_none(y),
         Val.Absent => is_absent(y),
         Val.Date(d) => match y {
-            Val.Date(e) => *d == *e,
+            Val.Date(e) => d == e,
             _ => false,
         },
         _ => identical(x, y),
@@ -1024,7 +1024,7 @@ fn py_cls(a: ref A, v: ref Val) -> String {
         Val.Name(n) => n.clone(),
         Val.Meth(_, _) => "method".to_string(),
         Val.Obj(i) => {
-            let o = *i;
+            let o = i;
             let c = a.objs[o].cls;
             if c == C_QB {
                 let dk = geti(a, o, F_DK);
@@ -1314,9 +1314,9 @@ fn pyrepr(a: mut ref A, v: ref Val) -> Result[String, Exc] {
     match v {
         Val.Str(s) => Ok(str_repr(s)),
         Val.Date(d) => {
-            let y = *d / 10000;
-            let m = (*d / 100) % 100;
-            let dd = *d % 100;
+            let y = d / 10000;
+            let m = (d / 100) % 100;
+            let dd = d % 100;
             Ok(f"datetime.date({y}, {m}, {dd})")
         }
         Val.En(c, m) => {
@@ -1346,9 +1346,9 @@ fn pystr(a: mut ref A, v: ref Val) -> Result[String, Exc] {
     match v {
         Val.Absent => Ok("None".to_string()),
         Val.Non => Ok("None".to_string()),
-        Val.Bool(b) => Ok(if *b { "True".to_string() } else { "False".to_string() }),
+        Val.Bool(b) => Ok(if b { "True".to_string() } else { "False".to_string() }),
         Val.Int(n) => Ok(f"{n}"),
-        Val.Float(x) => Ok(float_repr(*x)),
+        Val.Float(x) => Ok(float_repr(x)),
         Val.Str(s) => Ok(s.clone()),
         Val.Lst(_) => seq_str(mut a, v, "[", "]"),
         Val.Tup(_) => seq_str(mut a, v, "(", ")"),
@@ -1358,11 +1358,11 @@ fn pystr(a: mut ref A, v: ref Val) -> Result[String, Exc] {
             let hi = pyrepr(mut a, xs[1])?;
             Ok(f"slice({lo}, {hi}, None)")
         }
-        Val.Date(d) => Ok(date_iso(*d)),
+        Val.Date(d) => Ok(date_iso(d)),
         Val.En(c, m) => Ok(f"{c}.{m}"),
         Val.Name(n) => Ok(f"<class '{n}'>"),
         Val.Meth(_, n) => Ok(f"<bound method {n}>"),
-        Val.Obj(o) => obj_str(mut a, *o),
+        Val.Obj(o) => obj_str(mut a, o),
     }
 }
 
@@ -1810,14 +1810,14 @@ fn formatted_value(a: mut ref A, value: ref Val, kw: ref Kw) -> Result[String, E
             return formatted_value(mut a, inner, kw);
         }
         Val.Date(d) => {
-            let s = sv(date_iso(*d));
+            let s = sv(date_iso(d));
             return formatted_value(mut a, s, kw);
         }
         Val.Str(s) => {
             let body = if q.len() > 0 { s.replace(q.as_str(), (q.clone() + q).as_str()) } else { s.clone() };
             return Ok(q.clone() + body + q);
         }
-        Val.Bool(b) => return Ok(if *b { "true".to_string() } else { "false".to_string() }),
+        Val.Bool(b) => return Ok(if b { "true".to_string() } else { "false".to_string() }),
         Val.Non => return Ok("null".to_string()),
         _ => {}
     }
@@ -3037,7 +3037,7 @@ fn tables_of(a: ref A, v: ref Val) -> Vec[Val] {
 
 fn tri(v: ref Val) -> i64 {
     match v {
-        Val.Bool(b) => if *b { 1 } else { 0 },
+        Val.Bool(b) => if b { 1 } else { 0 },
         _ => -1,
     }
 }
@@ -3609,9 +3609,9 @@ fn order_kw(kws: ref Vec[Karg]) -> Val {
 
 fn int_of(v: ref Val) -> i64 {
     match v {
-        Val.Int(n) => *n,
-        Val.Bool(b) => if *b { 1 } else { 0 },
-        Val.Float(x) => *x as i64,
+        Val.Int(n) => n,
+        Val.Bool(b) => if b { 1 } else { 0 },
+        Val.Float(x) => x as i64,
         _ => 0,
     }
 }
@@ -4205,9 +4205,9 @@ fn is_num(v: ref Val) -> bool {
 
 fn num_f(v: ref Val) -> f64 {
     match v {
-        Val.Int(n) => *n as f64,
-        Val.Float(x) => *x,
-        Val.Bool(b) => if *b { 1.0 } else { 0.0 },
+        Val.Int(n) => n as f64,
+        Val.Float(x) => x,
+        Val.Bool(b) => if b { 1.0 } else { 0.0 },
         _ => 0.0,
     }
 }
@@ -4495,19 +4495,19 @@ fn unop(a: mut ref A, op: Str, v: ref Val) -> Result[Val, Exc] {
     match v {
         Val.Int(n) => {
             if op == "-" {
-                return Ok(Val.Int(-*n));
+                return Ok(Val.Int(-n));
             }
             if op == "+" {
-                return Ok(Val.Int(*n));
+                return Ok(Val.Int(n));
             }
-            return Ok(Val.Int(-*n - 1));
+            return Ok(Val.Int(-n - 1));
         }
         Val.Float(x) => {
             if op == "-" {
-                return Ok(Val.Float(-*x));
+                return Ok(Val.Float(-x));
             }
             if op == "+" {
-                return Ok(Val.Float(*x));
+                return Ok(Val.Float(x));
             }
         }
         _ => {}
@@ -4684,7 +4684,7 @@ fn kw_from_args(kws: ref Vec[Karg]) -> Kw {
 
 fn call(a: mut ref A, f: ref Val, args: ref Vec[Val], kws: ref Vec[Karg]) -> Result[Val, Exc] {
     match f {
-        Val.Meth(o, name) => return method_call(mut a, *o, name, args, kws),
+        Val.Meth(o, name) => return method_call(mut a, o, name, args, kws),
         Val.Name(n) => return builtin_call(mut a, n, args, kws),
         _ => {}
     }

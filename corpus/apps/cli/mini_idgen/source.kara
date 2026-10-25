@@ -1828,7 +1828,7 @@ fn j_repr(j: ref J) -> String {
     match j {
         J.S(s) => repr_of(cps_of(s)),
         J.N(n) => f"{n}",
-        J.B(b) => bool_repr(*b),
+        J.B(b) => bool_repr(b),
         J.Null => "None".to_string(),
         J.A(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -1863,7 +1863,7 @@ fn j_ints(j: ref J) -> Vec[i64] {
     if let J.A(items) = j {
         for it in items.iter() {
             if let J.N(n) = it {
-                out.push(*n);
+                out.push(n);
             }
         }
     }
@@ -1872,7 +1872,7 @@ fn j_ints(j: ref J) -> Vec[i64] {
 
 fn j_opt_int(j: ref J) -> Option[i64] {
     match j {
-        J.N(n) => Some(*n),
+        J.N(n) => Some(n),
         _ => None,
     }
 }
@@ -2065,7 +2065,7 @@ fn run_shortuuid(j: ref J) {
                 _ => Vec.new(),
             };
             let legacy = match ref p[1] {
-                J.B(b) => *b,
+                J.B(b) => b,
                 _ => false,
             };
             let head = f"  decode({repr_of(s)}, legacy={bool_repr(legacy)})";
@@ -2212,8 +2212,8 @@ fn run_orders() {
     order.sort();
     for (name, k) in order.iter() {
         let t = pad_right(name, 8);
-        let c = pad_left(f"{counts[*k]}", 2);
-        let s = money(sums[*k], 10);
+        let c = pad_left(f"{counts[k]}", 2);
+        let s = money(sums[k], 10);
         emit(f"  total {t} {c} orders {s}");
     }
 }
@@ -2287,7 +2287,7 @@ fn run_events() {
     let mut macs: Vec[String] = Vec.new();
     let mut counts: Vec[i64] = Vec.new();
     for (_, _, i) in idx.iter() {
-        let e = ref good[*i];
+        let e = ref good[i];
         let mac = mac_of(e.node);
         let gap = match prev {
             None => String.new(),

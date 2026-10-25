@@ -2906,8 +2906,8 @@ fn run() -> Result[(), String] {
                 for (k, v) in members.iter() {
                     if k == "include_psl_private_domains" {
                         if let J.B(b) = v {
-                            include = *b;
-                            shown.push(f"include_psl_private_domains={py_bool(*b)}");
+                            include = b;
+                            shown.push(f"include_psl_private_domains={py_bool(b)}");
                         }
                     } else if k == "extra_suffixes" {
                         if let J.A(items) = v {

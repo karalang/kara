@@ -379,7 +379,7 @@ fn j_get(j: ref J, key: Str) -> J {
 
 fn j_bool(j: ref J, default: bool) -> bool {
     match j {
-        J.B(b) => *b,
+        J.B(b) => b,
         _ => default,
     }
 }
@@ -2189,7 +2189,7 @@ fn validate(e: ref String) -> Result[(), PyErr] {
 fn j_dump(j: ref J) -> String {
     match j {
         J.S(s) => json_quote(s),
-        J.B(b) => if *b { "true".to_string() } else { "false".to_string() },
+        J.B(b) => if b { "true".to_string() } else { "false".to_string() },
         J.Null => "null".to_string(),
         J.A(items) => {
             let parts: Vec[String] = items.iter().map(|x| j_dump(x)).collect();
@@ -2556,7 +2556,7 @@ fn consume_optional(c: mut ref Cli, start: i64) -> Result[i64, Stop] {
         }
     }
     for (a, args) in todo.iter() {
-        take_action(mut c, *a, args)?;
+        take_action(mut c, a, args)?;
     }
     Ok(stop)
 }

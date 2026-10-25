@@ -192,7 +192,7 @@ fn checksum(answers: Vec[Option[i64]], contents: Vec[i64]) -> i64 {
     let mut sum = 0;
     for a in answers.iter() {
         let v = match a {
-            Some(x) => *x + 2,
+            Some(x) => x + 2,
             None => 1,
         };
         sum = (sum * 31 + v) % 1000000007;

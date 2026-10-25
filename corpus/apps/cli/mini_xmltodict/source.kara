@@ -364,8 +364,8 @@ fn as_list(v: ref Option[Val]) -> Vec[Val] {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.Null => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
         Val.Str(s) => s.len() > 0,
         Val.List(items) => items.len() > 0,
         Val.Dict(ms) => ms.len() > 0,
@@ -387,7 +387,7 @@ fn type_name(v: ref Val) -> String {
 fn repr_val(v: ref Val, ordered: bool) -> String {
     match v {
         Val.Null => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => f"{n}",
         Val.Str(s) => py_repr(s),
         Val.List(items) => {
@@ -468,7 +468,7 @@ fn json_quote(s: ref String) -> String {
 fn json_dump(v: ref Val, depth: i64, out: mut ref String) {
     match v {
         Val.Null => out.push_str("null"),
-        Val.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Val.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         Val.Int(n) => out.push_str(f"{n}"),
         Val.Str(s) => out.push_str(json_quote(s)),
         Val.List(items) => {
@@ -2376,7 +2376,7 @@ fn rjust(s: ref String, w: i64) -> String {
 
 fn int_of(v: ref Option[Val]) -> i64 {
     match v {
-        Some(Val.Int(n)) => *n,
+        Some(Val.Int(n)) => n,
         _ => 0,
     }
 }

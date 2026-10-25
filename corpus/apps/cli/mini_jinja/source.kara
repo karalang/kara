@@ -279,9 +279,9 @@ fn type_name(v: ref Val) -> String {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.None => false,
-        Val.Bool(b) => *b,
-        Val.Int(i) => *i != 0,
-        Val.Float(x) => *x != 0.0,
+        Val.Bool(b) => b,
+        Val.Int(i) => i != 0,
+        Val.Float(x) => x != 0.0,
         Val.Str(s) => s.len() > 0,
         Val.Safe(s) => s.len() > 0,
         Val.List(l) => l.items.len() > 0,
@@ -369,9 +369,9 @@ fn repr(v: ref Val) -> String {
 fn to_str(v: ref Val) -> String {
     match v {
         Val.None => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(i) => f"{i}",
-        Val.Float(x) => float_text(*x),
+        Val.Float(x) => float_text(x),
         Val.Str(s) => s.clone(),
         Val.Safe(s) => s.clone(),
         Val.Undef(_) => String.new(),
@@ -1955,17 +1955,17 @@ fn py_fmod(a: f64, b: f64) -> f64 {
 
 fn as_float(v: ref Val) -> Option[f64] {
     match v {
-        Val.Int(i) => Some(*i as f64),
-        Val.Float(x) => Some(*x),
-        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Val.Int(i) => Some(i as f64),
+        Val.Float(x) => Some(x),
+        Val.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
         _ => None,
     }
 }
 
 fn as_int(v: ref Val) -> Option[i64] {
     match v {
-        Val.Int(i) => Some(*i),
-        Val.Bool(b) => Some(if *b { 1 } else { 0 }),
+        Val.Int(i) => Some(i),
+        Val.Bool(b) => Some(if b { 1 } else { 0 }),
         _ => None,
     }
 }
@@ -2633,7 +2633,7 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
         }
         Node.Print(e) => {
             if not r.suppress {
-                let v = eval(ast, mut r, *e)?;
+                let v = eval(ast, mut r, e)?;
                 out.push_str(output_text(v, r.auto));
             }
         }
@@ -2641,7 +2641,7 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
             if r.suppress {
                 return Ok(());
             }
-            render_for(ast, mut r, targets, *iter, *cond, *body, *els, mut out)?;
+            render_for(ast, mut r, targets, iter, cond, body, els, mut out)?;
         }
         Node.If(conds, bodies, els) => {
             if r.suppress {
@@ -2653,12 +2653,12 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
                     return render_body(ast, mut r, bodies[i], mut out);
                 }
             }
-            if *els >= 0 {
-                render_body(ast, mut r, *els, mut out)?;
+            if els >= 0 {
+                render_body(ast, mut r, els, mut out)?;
             }
         }
         Node.Set(name, attr, e) => {
-            let v = eval(ast, mut r, *e)?;
+            let v = eval(ast, mut r, e)?;
             if attr.len() == 0 {
                 dict_set(top_frame(r), name, v);
                 return Ok(());
@@ -2688,7 +2688,7 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
             }
         }
         Node.Extends(e) => {
-            let name = eval(ast, mut r, *e)?;
+            let name = eval(ast, mut r, e)?;
             r.parent = load(ast, name)?;
             r.suppress = true;
         }
@@ -2696,7 +2696,7 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
             if r.suppress {
                 return Ok(());
             }
-            let name = eval(ast, mut r, *e)?;
+            let name = eval(ast, mut r, e)?;
             let tid = load(ast, name)?;
             // the included template sees this context, and its own blocks
             let mut inner = new_state(r.scopes.clone(), ast.tpls[tid].auto);
@@ -2705,13 +2705,13 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
             render_body(ast, mut inner, ast.tpls[tid].root, mut out)?;
         }
         Node.Import(e, alias) => {
-            let name = eval(ast, mut r, *e)?;
+            let name = eval(ast, mut r, e)?;
             let tid = load(ast, name)?;
             let module = module_of(ast, tid)?;
             dict_set(top_frame(r), alias, Val.Dict(module));
         }
         Node.FromImport(e, names) => {
-            let name = eval(ast, mut r, *e)?;
+            let name = eval(ast, mut r, e)?;
             let tid = load(ast, name)?;
             let module = module_of(ast, tid)?;
             for i in 0..names.len() {
@@ -2723,8 +2723,8 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
             }
         }
         Node.MacroDef(m) => {
-            let name = ast.macros[*m].name.clone();
-            let mac = JMacro { name: name.clone(), def: *m, scopes: r.scopes.clone(), auto: r.auto };
+            let name = ast.macros[m].name.clone();
+            let mac = JMacro { name: name.clone(), def: m, scopes: r.scopes.clone(), auto: r.auto };
             dict_set(top_frame(r), name, Val.Macro(mac));
         }
     }
@@ -2798,27 +2798,27 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
     let x = ref ast.exprs[e];
     match x {
         Expr.ENone => Ok(Val.None),
-        Expr.EBool(b) => Ok(Val.Bool(*b)),
-        Expr.EInt(i) => Ok(Val.Int(*i)),
-        Expr.EFloat(f) => Ok(Val.Float(*f)),
+        Expr.EBool(b) => Ok(Val.Bool(b)),
+        Expr.EInt(i) => Ok(Val.Int(i)),
+        Expr.EFloat(f) => Ok(Val.Float(f)),
         Expr.EStr(s) => Ok(Val.Str(s.clone())),
         Expr.Name(n) => match lookup(r, n) {
             Some(v) => Ok(v),
             None => Ok(undef(f"{str_repr(n)} is undefined")),
         },
         Expr.Attr(obj, name) => {
-            let v = eval(ast, mut r, *obj)?;
+            let v = eval(ast, mut r, obj)?;
             get_attr(v, name)
         }
         Expr.Item(obj, key) => {
-            let v = eval(ast, mut r, *obj)?;
-            let k = eval(ast, mut r, *key)?;
+            let v = eval(ast, mut r, obj)?;
+            let k = eval(ast, mut r, key)?;
             get_item(v, k)
         }
         Expr.Slice(obj, a, b) => {
-            let v = eval(ast, mut r, *obj)?;
-            let start = if *a >= 0 { eval(ast, mut r, *a)? } else { Val.None };
-            let stop = if *b >= 0 { eval(ast, mut r, *b)? } else { Val.None };
+            let v = eval(ast, mut r, obj)?;
+            let start = if a >= 0 { eval(ast, mut r, a)? } else { Val.None };
+            let stop = if b >= 0 { eval(ast, mut r, b)? } else { Val.None };
             get_slice(v, start, stop)
         }
         Expr.ListLit(items) => {
@@ -2829,12 +2829,12 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             Ok(new_list(vs))
         }
         Expr.Bin(op, a, b) => {
-            let va = eval(ast, mut r, *a)?;
-            let vb = eval(ast, mut r, *b)?;
+            let va = eval(ast, mut r, a)?;
+            let vb = eval(ast, mut r, b)?;
             binop(op, va, vb)
         }
         Expr.Neg(a) => {
-            let v = eval(ast, mut r, *a)?;
+            let v = eval(ast, mut r, a)?;
             if let Some(err) = undef_error(v) {
                 return Err(err);
             }
@@ -2846,35 +2846,35 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             }
         }
         Expr.Not(a) => {
-            let v = eval(ast, mut r, *a)?;
+            let v = eval(ast, mut r, a)?;
             Ok(Val.Bool(not truthy(v)))
         }
         Expr.And(a, b) => {
-            let v = eval(ast, mut r, *a)?;
+            let v = eval(ast, mut r, a)?;
             if not truthy(v) {
                 return Ok(v);
             }
-            eval(ast, mut r, *b)
+            eval(ast, mut r, b)
         }
         Expr.Or(a, b) => {
-            let v = eval(ast, mut r, *a)?;
+            let v = eval(ast, mut r, a)?;
             if truthy(v) {
                 return Ok(v);
             }
-            eval(ast, mut r, *b)
+            eval(ast, mut r, b)
         }
         Expr.Cond(test, yes, no) => {
-            let t = eval(ast, mut r, *test)?;
+            let t = eval(ast, mut r, test)?;
             if truthy(t) {
-                return eval(ast, mut r, *yes);
+                return eval(ast, mut r, yes);
             }
-            if *no >= 0 {
-                return eval(ast, mut r, *no);
+            if no >= 0 {
+                return eval(ast, mut r, no);
             }
             Ok(undef(f"the inline if-expression on line {line} evaluated to false and no else section was defined."))
         }
         Expr.Cmp(first, ops, rest) => {
-            let mut left = eval(ast, mut r, *first)?;
+            let mut left = eval(ast, mut r, first)?;
             for i in 0..ops.len() {
                 let right = eval(ast, mut r, rest[i])?;
                 let op = ref ops[i];
@@ -2930,23 +2930,23 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             Ok(Val.Str(s))
         }
         Expr.Filter(value, name, args, kwn, kwv) => {
-            let v = eval(ast, mut r, *value)?;
+            let v = eval(ast, mut r, value)?;
             let (a, kv) = eval_args(ast, mut r, args, kwv)?;
             apply_filter(ast, mut r, name, v, a, kwn, kv)
         }
         Expr.Test(value, name, negated, args) => {
-            let v = eval(ast, mut r, *value)?;
+            let v = eval(ast, mut r, value)?;
             let mut a: Vec[Val] = Vec.new();
             for i in 0..args.len() {
                 a.push(eval(ast, mut r, args[i])?);
             }
             let res = apply_test(name, v, a)?;
-            Ok(Val.Bool(res != *negated))
+            Ok(Val.Bool(res != negated))
         }
         Expr.Call(f, args, kwn, kwv) => {
             let (a, kv) = eval_args(ast, mut r, args, kwv)?;
             // the globals: namespace() and super()
-            let fx = ref ast.exprs[*f];
+            let fx = ref ast.exprs[f];
             if let Expr.Name(n) = fx {
                 if lookup(r, n).is_none() {
                     if n == "namespace" {
@@ -2961,7 +2961,7 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
                     }
                 }
             }
-            let callee = eval(ast, mut r, *f)?;
+            let callee = eval(ast, mut r, f)?;
             match callee {
                 Val.Macro(m) => call_macro(ast, mut r, m, a, kwn, kv),
                 Val.Undef(msg) => Err(f"UndefinedError: {msg}"),

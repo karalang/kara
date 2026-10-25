@@ -69,11 +69,11 @@ fn contain_virus(is_infected: Vec[Vec[i64]]) -> i64 {
         for id in 0..cells.len() {
             if id == best {
                 for (r, c) in cells[id].iter() {
-                    g[*r][*c] = 2;
+                    g[r][c] = 2;
                 }
             } else {
                 for (r, c) in threats[id].iter() {
-                    g[*r][*c] = 1;
+                    g[r][c] = 1;
                 }
             }
         }

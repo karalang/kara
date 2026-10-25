@@ -13,7 +13,7 @@ fn main() {
     counts.insert('b', 3);
     let mut s = 0;
     for (_, c) in counts {
-        s += *c;
+        s += c;
     }
     println(f"{s} {total(vec![1, 2, 3])}");
 }

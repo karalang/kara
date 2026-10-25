@@ -4351,11 +4351,11 @@ fn opts_of(j: ref J) -> (Options, String) {
     if let J.O(members) = j {
         for (k, v) in members.iter() {
             let b = match v {
-                J.B(b) => *b,
+                J.B(b) => b,
                 _ => false,
             };
             match v {
-                J.B(b) => shown.push(f"{k}={py_bool(*b)}"),
+                J.B(b) => shown.push(f"{k}={py_bool(b)}"),
                 J.N(n) => shown.push(f"{k}={n}"),
                 _ => {}
             }

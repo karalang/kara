@@ -5315,7 +5315,7 @@ fn send_parse(c: mut ref Conn, name: ref Vec[u8], statement: Str, oids: ref Vec[
     append(mut val, i16_bytes(oids.len() as i64));
     for oid in oids {
         match oid {
-            V.Int(n) => append(mut val, i32_bytes(if *n == -1 { 0 } else { *n as i64 })),
+            V.Int(n) => append(mut val, i32_bytes(if n == -1 { 0 } else { n as i64 })),
             _ => return Err(exc("error", "required argument is not an integer")),
         }
     }

@@ -1711,8 +1711,8 @@ fn print_value(v: ref Value) -> String {
         Value.Var(n) => f"${n}",
         Value.Int(s) => s.clone(),
         Value.Float(s) => s.clone(),
-        Value.Str(s, block) => if *block { print_block_string(s) } else { print_string(s) },
-        Value.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value.Str(s, block) => if block { print_block_string(s) } else { print_string(s) },
+        Value.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
         Value.Null => "null".to_string(),
         Value.Enum(s) => s.clone(),
         Value.List(vals) => {

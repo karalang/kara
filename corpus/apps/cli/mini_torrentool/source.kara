@@ -498,7 +498,7 @@ fn py_repr(v: ref BVal) -> String {
             }
             "{" + join(parts, ", ") + "}"
         }
-        BVal.Mark(d) => f"<function Bencode.decode.<locals>.{creator_name(*d)} at 0x...>",
+        BVal.Mark(d) => f"<function Bencode.decode.<locals>.{creator_name(d)} at 0x...>",
     }
 }
 
@@ -531,7 +531,7 @@ fn value(v: ref BVal) -> String {
             "{" + join(parts, ", ") + "}"
         }
         BVal.Mark(d) => {
-            if *d { "<open dict>".to_string() } else { "<open list>".to_string() }
+            if d { "<open dict>".to_string() } else { "<open list>".to_string() }
         }
         _ => py_repr(v),
     }
@@ -555,7 +555,7 @@ fn py_eq(a: ref BVal, b: ref BVal) -> bool {
         (BVal.Int(x), BVal.Int(y)) => *x == *y,
         (BVal.Str(x), BVal.Str(y)) => *x == *y,
         (BVal.Bytes(x), BVal.Bytes(y)) => *x == *y,
-        (BVal.Mark(x), BVal.Mark(y)) => *x == *y,
+        (BVal.Mark(x), BVal.Mark(y)) => x == y,
         (BVal.List(x), BVal.List(y)) => {
             if x.len() != y.len() {
                 return false;

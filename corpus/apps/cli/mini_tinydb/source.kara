@@ -277,7 +277,7 @@ fn str_of(v: ref Val) -> String {
 
 fn ref_id(v: ref Val) -> i64 {
     match v {
-        Val.Ref(i) => *i,
+        Val.Ref(i) => i,
         _ => -1,
     }
 }
@@ -300,18 +300,18 @@ fn is_float(v: ref Val) -> bool {
 
 fn int_of(v: ref Val) -> i64 {
     match v {
-        Val.Bool(b) => if *b { 1 } else { 0 },
-        Val.Int(n) => *n,
-        Val.Float(x) => *x as i64,
+        Val.Bool(b) => if b { 1 } else { 0 },
+        Val.Int(n) => n,
+        Val.Float(x) => x as i64,
         _ => 0,
     }
 }
 
 fn float_of(v: ref Val) -> f64 {
     match v {
-        Val.Bool(b) => if *b { 1.0 } else { 0.0 },
-        Val.Int(n) => *n as f64,
-        Val.Float(x) => *x,
+        Val.Bool(b) => if b { 1.0 } else { 0.0 },
+        Val.Int(n) => n as f64,
+        Val.Float(x) => x,
         _ => 0.0,
     }
 }
@@ -366,7 +366,7 @@ fn new_obj(a: mut ref A, k: i64) -> i64 {
 
 fn kind(a: ref A, v: ref Val) -> i64 {
     match v {
-        Val.Ref(i) => a.objs[*i].k,
+        Val.Ref(i) => a.objs[i].k,
         _ => -1,
     }
 }
@@ -414,14 +414,14 @@ fn is_query_kind(k: i64) -> bool {
 
 fn items(a: ref A, v: ref Val) -> Vec[Val] {
     match v {
-        Val.Ref(i) => a.objs[*i].vs.clone(),
+        Val.Ref(i) => a.objs[i].vs.clone(),
         _ => Vec.new(),
     }
 }
 
 fn keys(a: ref A, v: ref Val) -> Vec[Val] {
     match v {
-        Val.Ref(i) => a.objs[*i].ks.clone(),
+        Val.Ref(i) => a.objs[i].ks.clone(),
         _ => Vec.new(),
     }
 }
@@ -429,12 +429,12 @@ fn keys(a: ref A, v: ref Val) -> Vec[Val] {
 fn identical(x: ref Val, y: ref Val) -> bool {
     match x {
         Val.Ref(i) => match y {
-            Val.Ref(j) => *i == *j,
+            Val.Ref(j) => i == j,
             _ => false,
         },
         Val.Non => is_none(y),
         Val.Bool(p) => match y {
-            Val.Bool(q) => *p == *q,
+            Val.Bool(q) => p == q,
             _ => false,
         },
         Val.Fn(f) => match y {
@@ -457,7 +457,7 @@ fn type_name(a: ref A, v: ref Val) -> String {
         Val.Fn(_) => "function",
         Val.Meth(_, _) => "method",
         Val.Ref(i) => {
-            let k = a.objs[*i].k;
+            let k = a.objs[i].k;
             if k == K_LIST {
                 "list"
             } else if k == K_TUPLE {
@@ -499,16 +499,16 @@ fn type_name(a: ref A, v: ref Val) -> String {
 fn truthy(a: ref A, v: ref Val) -> bool {
     match v {
         Val.Non => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
-        Val.Float(x) => *x != 0.0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
+        Val.Float(x) => x != 0.0,
         Val.Str(s) => s.len() > 0,
         Val.Ref(i) => {
-            let k = a.objs[*i].k;
+            let k = a.objs[i].k;
             if is_seq_kind(k) or is_set_kind(k) or k == K_LRU {
-                a.objs[*i].vs.len() > 0
+                a.objs[i].vs.len() > 0
             } else if is_dict_kind(k) {
-                a.objs[*i].ks.len() > 0
+                a.objs[i].ks.len() > 0
             } else {
                 true
             }
@@ -520,7 +520,7 @@ fn truthy(a: ref A, v: ref Val) -> bool {
 // The hash value a query was built with (None when it is not cacheable).
 fn qhash(a: ref A, v: ref Val) -> Val {
     match v {
-        Val.Ref(i) => a.objs[*i].a.clone(),
+        Val.Ref(i) => a.objs[i].a.clone(),
         _ => Val.Non,
     }
 }
@@ -544,11 +544,11 @@ fn py_eq(a: ref A, x: ref Val, y: ref Val) -> bool {
             _ => false,
         },
         Val.Meth(i, m) => match y {
-            Val.Meth(j, n) => *i == *j and m == n,
+            Val.Meth(j, n) => i == j and m == n,
             _ => false,
         },
         Val.Ref(i) => match y {
-            Val.Ref(j) => obj_eq(a, *i, *j),
+            Val.Ref(j) => obj_eq(a, i, j),
             _ => false,
         },
         _ => false,
@@ -829,14 +829,14 @@ fn join_reprs(a: ref A, xs: ref Vec[Val]) -> String {
 fn repr(a: ref A, v: ref Val) -> String {
     match v {
         Val.Non => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => f"{n}",
         Val.Float(x) => f"{x}",
         Val.Str(s) => str_repr(s),
         Val.Fn(f) => f"<function {f}>",
         Val.Meth(_, m) => f"<bound method {m}>",
         Val.Ref(i) => {
-            let o = a.objs[*i].clone();
+            let o = a.objs[i].clone();
             if o.k == K_LIST {
                 let s = join_reprs(a, o.vs);
                 f"[{s}]"
@@ -906,18 +906,18 @@ fn str_hash(s: ref String) -> i64 {
 fn py_hash(a: ref A, v: ref Val) -> Result[i64, Exc] {
     match v {
         Val.Non => return Ok(17),
-        Val.Bool(b) => return Ok(if *b { 1 } else { 0 }),
-        Val.Int(n) => return Ok(((*n % HMOD) + HMOD) % HMOD),
+        Val.Bool(b) => return Ok(if b { 1 } else { 0 }),
+        Val.Int(n) => return Ok(((n % HMOD) + HMOD) % HMOD),
         Val.Float(x) => {
-            let t = *x as i64;
-            if t as f64 == *x {
+            let t = x as i64;
+            if t as f64 == x {
                 return Ok(((t % HMOD) + HMOD) % HMOD);
             }
             return Ok(str_hash(f"{x}"));
         }
         Val.Str(s) => return Ok(str_hash(s)),
         Val.Fn(f) => return Ok(str_hash(f)),
-        Val.Meth(i, m) => return Ok((str_hash(m) + *i) % HMOD),
+        Val.Meth(i, m) => return Ok((str_hash(m) + i) % HMOD),
         Val.Ref(_) => {}
     }
     hashable_check(a, v)?;
@@ -1485,7 +1485,7 @@ fn json_key(a: ref A, k: ref Val) -> Result[String, Exc] {
         Val.Str(s) => Ok(s.clone()),
         Val.Int(n) => Ok(f"{n}"),
         Val.Float(x) => Ok(f"{x}"),
-        Val.Bool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
+        Val.Bool(b) => Ok(if b { "true".to_string() } else { "false".to_string() }),
         Val.Non => Ok("null".to_string()),
         _ => {
             let t = type_name(a, k);
@@ -1501,7 +1501,7 @@ fn json_enc(a: ref A, v: ref Val, o: ref JOpt, level: i64, out: mut ref String) 
             return Ok(());
         }
         Val.Bool(b) => {
-            out.push_str(if *b { "true" } else { "false" });
+            out.push_str(if b { "true" } else { "false" });
             return Ok(());
         }
         Val.Int(n) => {
@@ -3521,7 +3521,7 @@ fn builtin(a: mut ref A, name: ref String, args: ref Vec[Val], kws: ref Vec[Karg
 // f(*args, **kws)
 fn call_val(a: mut ref A, f: ref Val, args: own Vec[Val], kws: own Vec[Karg]) -> Result[Val, Exc] {
     match f {
-        Val.Meth(id, name) => return method(mut a, *id, name, args, kws),
+        Val.Meth(id, name) => return method(mut a, id, name, args, kws),
         Val.Fn(name) => return builtin(mut a, name, args, kws),
         _ => {}
     }

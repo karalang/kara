@@ -20,10 +20,10 @@ fn find_redundant_connection(edges: Vec[(i64, i64)]) -> (i64, i64) {
         parent.push(v);
     }
     for (a, b) in edges.iter() {
-        let ra = find(mut parent, *a);
-        let rb = find(mut parent, *b);
+        let ra = find(mut parent, a);
+        let rb = find(mut parent, b);
         if ra == rb {
-            return (*a, *b);
+            return (a, b);
         }
         if size[ra] < size[rb] {
             parent[ra] = rb;

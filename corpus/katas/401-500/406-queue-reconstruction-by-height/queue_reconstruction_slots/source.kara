@@ -26,7 +26,7 @@ fn reconstruct_queue(people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
     let mut queue: Vec[(i64, i64)] = Vec.new();
     for s in slots.iter() {
         if let Some(p) = s {
-            queue.push(*p);
+            queue.push(p);
         }
     }
     queue

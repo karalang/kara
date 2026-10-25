@@ -17,9 +17,9 @@ fn cheapest(out: Vec[Vec[(i64, i64)]], city: i64, left: i64, dst: i64, memo: mut
     }
     let mut best = -1;
     for (to, price) in out[city].iter() {
-        let rest = cheapest(out, *to, left - 1, dst, mut memo);
-        if rest != -1 and (best == -1 or *price + rest < best) {
-            best = *price + rest;
+        let rest = cheapest(out, to, left - 1, dst, mut memo);
+        if rest != -1 and (best == -1 or price + rest < best) {
+            best = price + rest;
         }
     }
     memo[city][left] = best;

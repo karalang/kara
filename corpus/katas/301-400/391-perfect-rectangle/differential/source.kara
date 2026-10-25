@@ -89,7 +89,7 @@ fn cover_sweep(rects: Vec[Vec[i64]]) -> bool {
             open.remove(bottom);
         } else {
             if let Some((_, reach)) = open.floor(top - 1) {
-                if *reach > bottom {
+                if reach > bottom {
                     return false;
                 }
             }

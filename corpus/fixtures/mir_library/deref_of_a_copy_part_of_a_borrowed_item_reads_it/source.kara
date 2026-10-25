@@ -3,7 +3,7 @@ fn main() {
     let v: Vec[(String, f64)] = vec![("a".to_string(), 1.5), ("b".to_string(), 2.0)];
     let mut t = 0.0;
     for (n, w) in v.iter() {
-        t = t + *w;
+        t = t + w;
     }
     println(f"{t}");
     let mut s: Set[i64] = Set.new();
@@ -21,6 +21,6 @@ fn main() {
         println(f"{*p.0} {*p.1}");
     }
     if let Some((k, x)) = m.floor(4) {
-        println(f"{*k} {*x}");
+        println(f"{k} {x}");
     }
 }

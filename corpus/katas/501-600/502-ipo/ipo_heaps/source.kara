@@ -15,7 +15,7 @@ fn find_maximized_capital(k: i64, w: i64, profits: Vec[i64], capital: Vec[i64]) 
     let mut money = w;
     for _ in 0..k {
         while let Some((need, _)) = waiting.peek() {
-            if *need > money {
+            if need > money {
                 break;
             }
             let (_, profit) = waiting.pop().unwrap();

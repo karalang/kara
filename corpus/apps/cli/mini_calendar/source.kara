@@ -438,7 +438,7 @@ impl HtmlCalendar {
     fn formatweek(self, week: ref Vec[(i64, i64)]) -> String {
         let mut s = String.new();
         for (d, wd) in week.iter() {
-            s.push_str(self.formatday(*d, *wd));
+            s.push_str(self.formatday(d, wd));
         }
         f"<tr>{s}</tr>"
     }

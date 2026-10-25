@@ -974,10 +974,10 @@ fn reduce_error() -> Exc {
 fn show(v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => n.to_string(),
         Val.Big(d) => d.clone(),
-        Val.Float(x) => float_repr(*x),
+        Val.Float(x) => float_repr(x),
         Val.Str(s) => py_ascii(s),
         Val.Bytes(b) => bytes_repr(b),
     }
@@ -1006,10 +1006,10 @@ fn py_str(v: ref Val) -> String {
 fn py_bool(v: ref Val) -> bool {
     match v {
         Val.Nil => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
         Val.Big(_) => true,
-        Val.Float(x) => *x != 0.0,
+        Val.Float(x) => x != 0.0,
         Val.Str(s) => not s.is_empty(),
         Val.Bytes(b) => not b.is_empty(),
     }
@@ -1041,10 +1041,10 @@ fn ascii_digits(s: ref String, ds: ref Vec[(i64, i64)]) -> Vec[char] {
 fn to_float(v: ref Val, ds: ref Vec[(i64, i64)]) -> Option[f64] {
     match v {
         Val.Nil => None,
-        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Val.Int(n) => Some(*n as f64),
+        Val.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        Val.Int(n) => Some(n as f64),
         Val.Big(d) => py_float_str(to_chars(d)),
-        Val.Float(x) => Some(*x),
+        Val.Float(x) => Some(x),
         Val.Str(s) => py_float_str(ascii_digits(s, ds)),
         Val.Bytes(b) => {
             let mut cs: Vec[char] = Vec.new();
@@ -1060,17 +1060,17 @@ fn to_float(v: ref Val, ds: ref Vec[(i64, i64)]) -> Option[f64] {
 fn to_int(v: ref Val, ds: ref Vec[(i64, i64)]) -> Result[i64, Exc] {
     match v {
         Val.Nil => Err(exc("TypeError", "int() argument must be a string, a bytes-like object or a real number, not 'NoneType'")),
-        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
-        Val.Int(n) => Ok(*n),
+        Val.Bool(b) => Ok(if b { 1 } else { 0 }),
+        Val.Int(n) => Ok(n),
         // Not reached by the jobs: widths never hold an int this large.
         Val.Big(d) => Err(exc("OverflowError", f"int too large: {d}")),
         Val.Float(x) => {
-            if *x != *x {
+            if x != x {
                 Err(exc("ValueError", "cannot convert float NaN to integer"))
-            } else if *x == f64.INFINITY or *x == -f64.INFINITY {
+            } else if x == f64.INFINITY or x == -f64.INFINITY {
                 Err(exc("OverflowError", "cannot convert float infinity to integer"))
             } else {
-                Ok(*x as i64)
+                Ok(x as i64)
             }
         }
         Val.Str(s) => match py_int_str(ascii_digits(s, ds)) {
@@ -1503,8 +1503,8 @@ impl Table {
     fn set_precision(mut ref self, v: ref Val) -> Result[(), Exc] {
         match v {
             Val.Int(n) => {
-                if *n >= 0 {
-                    self.precision = *n;
+                if n >= 0 {
+                    self.precision = n;
                     return Ok(());
                 }
             }

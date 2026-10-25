@@ -691,9 +691,9 @@ fn compact(sort_keys: bool) -> Dump {
 fn encode(o: ref Dump, v: ref J, out: mut ref String) {
     match v {
         J.Null => out.push_str("null"),
-        J.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        J.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         J.Int(digits) => out.push_str(digits),
-        J.Float(x) => out.push_str(float_json(*x)),
+        J.Float(x) => out.push_str(float_json(x)),
         J.Str(s) => encode_str(true, s, mut out),
         J.Arr(items) => {
             out.push('[');
@@ -787,9 +787,9 @@ fn str_repr(s: ref String) -> String {
 fn repr(v: ref J) -> String {
     match v {
         J.Null => "None".to_string(),
-        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         J.Int(digits) => digits.clone(),
-        J.Float(x) => float_repr(*x),
+        J.Float(x) => float_repr(x),
         J.Str(s) => str_repr(s),
         J.Arr(items) => {
             let mut out = "[".to_string();
@@ -870,9 +870,9 @@ fn type_name(v: ref J) -> String {
 fn truthy(v: ref J) -> bool {
     match v {
         J.Null => false,
-        J.Bool(b) => *b,
+        J.Bool(b) => b,
         J.Int(d) => d != "0",
-        J.Float(x) => *x != 0.0,
+        J.Float(x) => x != 0.0,
         J.Str(s) => s.len() > 0,
         J.Arr(items) => items.len() > 0,
         J.Obj(members) => members.len() > 0,
@@ -882,9 +882,9 @@ fn truthy(v: ref J) -> bool {
 // The number a bool, int or float compares as.
 fn num_of(v: ref J) -> Option[f64] {
     match v {
-        J.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        J.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
         J.Int(d) => Some(f64.parse(d).unwrap_or(0.0)),
-        J.Float(x) => Some(*x),
+        J.Float(x) => Some(x),
         _ => None,
     }
 }
@@ -1627,14 +1627,14 @@ fn prepare_key(a: ref Alg, key: ref Key) -> Result[Vec[u8], Exc] {
 fn sign(a: ref Alg, msg: ref Vec[u8], key: ref Vec[u8]) -> Vec[u8] {
     match a {
         Alg.NoneAlg => Vec.new(),
-        Alg.Hmac(bits) => hmac_digest(*bits, key, msg),
+        Alg.Hmac(bits) => hmac_digest(bits, key, msg),
     }
 }
 
 fn verify(a: ref Alg, msg: ref Vec[u8], key: ref Vec[u8], sig: ref Vec[u8]) -> bool {
     match a {
         Alg.NoneAlg => false,
-        Alg.Hmac(bits) => compare_digest(sig, hmac_digest(*bits, key, msg)),
+        Alg.Hmac(bits) => compare_digest(sig, hmac_digest(bits, key, msg)),
     }
 }
 
@@ -1898,7 +1898,7 @@ fn validate_headers(headers: ref J) -> Result[(), Exc] {
 
 fn is_false(v: ref J) -> bool {
     match v {
-        J.Bool(b) => not *b,
+        J.Bool(b) => not b,
         _ => false,
     }
 }
@@ -2307,17 +2307,17 @@ fn int_of_str(text: ref String) -> Option[PyInt] {
 // are raised.
 fn py_int(v: ref J) -> Result[Option[PyInt], Exc] {
     match v {
-        J.Bool(b) => Ok(Some(PyInt.Small(if *b { 1 } else { 0 }))),
+        J.Bool(b) => Ok(Some(PyInt.Small(if b { 1 } else { 0 }))),
         J.Int(d) => {
             let neg = d.starts_with("-");
             let digits = if neg { d.substring(1, d.len()).to_string() } else { d.clone() };
             Ok(Some(int_of_digits(neg, digits)))
         }
         J.Float(x) => {
-            if *x != *x {
+            if x != x {
                 return Ok(None);
             }
-            if *x == 1.0 / 0.0 or *x == -1.0 / 0.0 {
+            if x == 1.0 / 0.0 or x == -1.0 / 0.0 {
                 return Err(exc("OverflowError", "cannot convert float infinity to integer".to_string()));
             }
             let t = x.trunc();
@@ -2335,16 +2335,16 @@ fn py_int(v: ref J) -> Result[Option[PyInt], Exc] {
 // The sign of n - x, as Python compares an int with a float exactly.
 fn cmp_int_float(n: ref PyInt, x: f64) -> i64 {
     match n {
-        PyInt.Huge(h) => if *h < x { -1 } else if *h > x { 1 } else { 0 },
+        PyInt.Huge(h) => if h < x { -1 } else if h > x { 1 } else { 0 },
         PyInt.Small(i) => {
-            let f = *i as f64;
+            let f = i as f64;
             if f < x {
                 -1
             } else if f > x {
                 1
             } else {
                 let xi = x as i64;
-                if *i < xi { -1 } else if *i > xi { 1 } else { 0 }
+                if i < xi { -1 } else if i > xi { 1 } else { 0 }
             }
         }
     }

@@ -22,10 +22,10 @@ fn find_redundant_connection_star(edges: Vec[(i64, i64)]) -> (i64, i64) {
         parent.push(v);
     }
     for (a, b) in edges.iter() {
-        let ra = find_star(mut parent, *a);
-        let rb = find_star(mut parent, *b);
+        let ra = find_star(mut parent, a);
+        let rb = find_star(mut parent, b);
         if ra == rb {
-            return (*a, *b);
+            return (a, b);
         }
         if size[ra] < size[rb] {
             parent[ra] = rb;
@@ -65,11 +65,11 @@ fn find_redundant_connection_search(edges: Vec[(i64, i64)]) -> (i64, i64) {
         adj.push(Vec.new());
     }
     for (a, b) in edges.iter() {
-        if reachable_search(adj, *a, *b) {
-            return (*a, *b);
+        if reachable_search(adj, a, b) {
+            return (a, b);
         }
-        adj[*a].push(*b);
-        adj[*b].push(*a);
+        adj[a].push(b);
+        adj[b].push(a);
     }
     (0, 0)
 }
@@ -84,10 +84,10 @@ fn find_redundant_connection_peel(edges: Vec[(i64, i64)]) -> (i64, i64) {
     }
     let mut degree: Vec[i64] = vec![0; n + 1];
     for (a, b) in edges.iter() {
-        adj[*a].push(*b);
-        adj[*b].push(*a);
-        degree[*a] += 1;
-        degree[*b] += 1;
+        adj[a].push(b);
+        adj[b].push(a);
+        degree[a] += 1;
+        degree[b] += 1;
     }
     let mut leaves: Vec[i64] = Vec.new();
     for v in 1..n + 1 {
@@ -243,7 +243,7 @@ fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
         let b = 1 + next_random(mut seed) % n;
         let mut fresh = a != b;
         for (x, y) in edges.iter() {
-            if (*x == a and *y == b) or (*x == b and *y == a) {
+            if (x == a and y == b) or (x == b and y == a) {
                 fresh = false;
             }
         }

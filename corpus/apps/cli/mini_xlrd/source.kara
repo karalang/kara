@@ -3171,23 +3171,23 @@ fn rangename2d(rlo: i64, rhi: i64, clo: i64, chi: i64) -> Result[String, Exc] {
 fn show_val(v: ref Val) -> String {
     match v {
         Val.Str(s) => py_ascii(s),
-        Val.Num(f) => f"{*f}",
-        Val.Int(i) => f"{*i}",
+        Val.Num(f) => f"{f}",
+        Val.Int(i) => f"{i}",
     }
 }
 
 fn val_num(v: ref Val) -> f64 {
     match v {
-        Val.Num(f) => *f,
-        Val.Int(i) => *i as f64,
+        Val.Num(f) => f,
+        Val.Int(i) => i as f64,
         Val.Str(_) => 0.0,
     }
 }
 
 fn val_int(v: ref Val) -> i64 {
     match v {
-        Val.Int(i) => *i,
-        Val.Num(f) => *f as i64,
+        Val.Int(i) => i,
+        Val.Num(f) => f as i64,
         Val.Str(_) => 0,
     }
 }
@@ -3195,8 +3195,8 @@ fn val_int(v: ref Val) -> i64 {
 fn val_str(v: ref Val) -> String {
     match v {
         Val.Str(s) => s.clone(),
-        Val.Num(f) => f"{*f}",
-        Val.Int(i) => f"{*i}",
+        Val.Num(f) => f"{f}",
+        Val.Int(i) => f"{i}",
     }
 }
 

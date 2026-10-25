@@ -15,8 +15,8 @@ fn shortest_subarray(nums: Vec[i64], k: i64) -> i64 {
     for j in 1..n + 1 {
         sum += nums[j - 1];
         while let Some((s, i)) = waiting.peek() {
-            if sum - *s >= k {
-                best = best.min(j - *i);
+            if sum - s >= k {
+                best = best.min(j - i);
                 waiting.pop();
             } else {
                 break;

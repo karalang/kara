@@ -1370,7 +1370,15 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::TypeMismatch,
                     );
                 }
-                let wrapped = mode.wrap_binding_ty(expected.clone());
+                // v2 core §4.6: a plain binding of a `Copy` part copies it,
+                // whatever the scrutinee, so it is a value and `*` on it is
+                // an error (B-2026-10-24-36); `ref name` still borrows it.
+                let copies = self.core_binding_copies(pattern, expected);
+                let wrapped = if copies {
+                    expected.clone()
+                } else {
+                    mode.wrap_binding_ty(expected.clone())
+                };
                 let binding_ty = self.lib_view_binding_ty(mode, wrapped.clone());
                 if self.library_methods_from_source
                     && matches!(binding_ty, Type::Ref(_) | Type::MutRef(_))
@@ -1402,6 +1410,7 @@ impl<'a> super::TypeChecker<'a> {
                 // it is §3.7's error, which the view rules report.
                 if self.cli_lint_overrides.strict_core
                     && matches!(mode, ScrutineeMode::Owned)
+                    && !copies
                     && (self.current_scrutinee_core_borrowed
                         || self.core_shared_depth > 0
                         || self
@@ -3866,6 +3875,22 @@ fn non_exhaustive_match_fix_it(
 /// for a bare `for` over a borrowed collection: a Copy scalar is copied out by
 /// value, an aggregate stays borrowed (same borrow form as the tuple), and a
 /// field that is already a borrow is left as it is.
+impl<'a> super::TypeChecker<'a> {
+    /// v2 core §4.6: whether a plain binding of a `Copy` part copies it: not
+    /// an explicit `ref` / `mut ref` binding, and not of a reference type.
+    fn core_binding_copies(&self, pattern: &Pattern, expected: &Type) -> bool {
+        let key = SpanKey::from_span(&pattern.span);
+        (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+            && !matches!(
+                expected,
+                Type::Ref(_) | Type::MutRef(_) | Type::Error | Type::TypeVar(_)
+            )
+            && !self.program.ref_binding_spans.contains(&key)
+            && !self.program.mut_ref_binding_spans.contains(&key)
+            && self.is_copy_type_during_check(expected)
+    }
+}
+
 fn borrowed_field_binding_ty(field: &Type, is_mut: bool) -> Type {
     match field {
         Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => field.clone(),

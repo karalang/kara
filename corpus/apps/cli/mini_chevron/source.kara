@@ -259,9 +259,9 @@ fn add_node(arena: mut ref Vec[Node], n: own Node) -> i64 {
 fn truthy(arena: ref Vec[Node], id: i64) -> bool {
     match ref arena[id] {
         Node.Null => false,
-        Node.Bool(b) => *b,
-        Node.Int(i) => *i != 0,
-        Node.Float(x) => *x != 0.0,
+        Node.Bool(b) => b,
+        Node.Int(i) => i != 0,
+        Node.Float(x) => x != 0.0,
         Node.Str(s) => s.len() > 0,
         Node.List(v) => v.len() > 0,
         Node.Dict(v) => v.len() > 0,
@@ -271,9 +271,9 @@ fn truthy(arena: ref Vec[Node], id: i64) -> bool {
 // `x in (0, False)`: 0, 0.0, -0.0 and False
 fn zero_or_false(arena: ref Vec[Node], id: i64) -> bool {
     match ref arena[id] {
-        Node.Bool(b) => not *b,
-        Node.Int(i) => *i == 0,
-        Node.Float(x) => *x == 0.0,
+        Node.Bool(b) => not b,
+        Node.Int(i) => i == 0,
+        Node.Float(x) => x == 0.0,
         _ => false,
     }
 }
@@ -281,7 +281,7 @@ fn zero_or_false(arena: ref Vec[Node], id: i64) -> bool {
 // `x is True`
 fn is_true(arena: ref Vec[Node], id: i64) -> bool {
     match ref arena[id] {
-        Node.Bool(b) => *b,
+        Node.Bool(b) => b,
         _ => false,
     }
 }
@@ -298,7 +298,7 @@ fn py_str(arena: ref Vec[Node], id: i64) -> String {
 fn py_repr(arena: ref Vec[Node], id: i64) -> String {
     match ref arena[id] {
         Node.Null => "None".to_string(),
-        Node.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Node.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Node.Int(i) => f"{i}",
         Node.Float(x) => f"{x}",
         Node.Str(s) => py_repr_str(s),
@@ -312,7 +312,7 @@ fn py_repr(arena: ref Vec[Node], id: i64) -> String {
         Node.Dict(entries) => {
             let mut parts: Vec[String] = Vec.new();
             for (k, v) in entries.iter() {
-                parts.push(f"{py_repr_str(k)}: {py_repr(arena, *v)}");
+                parts.push(f"{py_repr_str(k)}: {py_repr(arena, v)}");
             }
             let mut out = String.new();
             out.push('{');
@@ -943,7 +943,7 @@ fn lookup_step(arena: ref Vec[Node], at: i64, child: ref String) -> Step {
         Node.Dict(entries) => {
             for (k, v) in entries.iter() {
                 if k == child {
-                    return Step.To(*v);
+                    return Step.To(v);
                 }
             }
             Step.Miss
@@ -982,12 +982,12 @@ fn lookup_step(arena: ref Vec[Node], at: i64, child: ref String) -> Step {
                 } else if child == "denominator" {
                     Step.NewInt(1)
                 } else {
-                    Step.NewInt(if *b { 1 } else { 0 })
+                    Step.NewInt(if b { 1 } else { 0 })
                 }
             }
             None => not_subscriptable(child, "bool"),
         },
-        Node.Float(x) => match number_attr(child, *x, true) {
+        Node.Float(x) => match number_attr(child, x, true) {
             Some(v) => Step.NewFloat(v),
             None => not_subscriptable(child, "float"),
         },

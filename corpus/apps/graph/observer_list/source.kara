@@ -166,7 +166,7 @@ impl Sheet {
     }
     fn eval(ref self, name: ref String, formula: ref Formula) -> Result[i64, SheetError] {
         match formula {
-            Formula.Const(n) => Ok(*n),
+            Formula.Const(n) => Ok(n),
             Formula.Sum(names) => {
                 let mut total = 0;
                 for n in names {
@@ -182,7 +182,7 @@ impl Sheet {
                 }
                 Ok(best)
             }
-            Formula.Scale(a, k) => Ok(self.value_of(a)? * *k),
+            Formula.Scale(a, k) => Ok(self.value_of(a)? * k),
             Formula.Product(a, b) => Ok(self.value_of(a)? * self.value_of(b)?),
             Formula.Diff(a, b) => Ok(self.value_of(a)? - self.value_of(b)?),
             Formula.Div(a, b) => {

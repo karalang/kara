@@ -1858,9 +1858,9 @@ fn when_of(text: ref String) -> When {
 // The seconds a time stands for, as int(dt.timestamp()) gives them.
 fn stamp_of(w: ref When) -> i64 {
     match w {
-        When.Stamp(t) => *t,
-        When.Naive(t) => *t,
-        When.Aware(local, off) => *local - *off,
+        When.Stamp(t) => t,
+        When.Naive(t) => t,
+        When.Aware(local, off) => local - off,
     }
 }
 
@@ -1874,19 +1874,19 @@ fn timecode(w: ref When, interval: i64) -> Result[i64, Exc] {
     let t = match w {
         When.Stamp(t) => {
             // fromtimestamp, and its look a day back for a fold
-            let y = year_of(*t);
+            let y = year_of(t);
             if y < 1 or y > 9999 {
                 return Err(year_error(y));
             }
-            let back = year_of(*t - 86400);
+            let back = year_of(t - 86400);
             if back < 1 {
                 return Err(year_error(back));
             }
-            *t
+            t
         }
-        When.Naive(t) => *t,
+        When.Naive(t) => t,
         When.Aware(local, off) => {
-            let utc = *local - *off;
+            let utc = local - off;
             let y = year_of(utc);
             if y < 1 or y > 9999 {
                 return Err(exc("OverflowError", "date value out of range".to_string()));

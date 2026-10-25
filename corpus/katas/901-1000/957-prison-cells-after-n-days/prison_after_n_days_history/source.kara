@@ -80,7 +80,7 @@ fn main() {
         (vec![0, 0, 1, 0, 0, 1, 0, 0], 999999999),
     ];
     for (cells, n) in cases.iter() {
-        println(f"{show(cells)} after {n}: {show(prison_after_n_days(cells.clone(), *n))}");
+        println(f"{show(cells)} after {n}: {show(prison_after_n_days(cells.clone(), n))}");
     }
     // 300 random cases of a random row after 0 to 99 days
     let mut seed = 957;

@@ -491,9 +491,9 @@ fn json_float(x: f64) -> String {
 fn dumps_to(j: ref J, out: mut ref String) {
     match j {
         J.Null => out.push_str("null"),
-        J.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        J.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         J.Int(n) => out.push_str(f"{n}"),
-        J.Float(x) => out.push_str(json_float(*x)),
+        J.Float(x) => out.push_str(json_float(x)),
         J.Text(s) => out.push_str(json_str(s)),
         J.Arr(items) => {
             out.push('[');
@@ -533,9 +533,9 @@ fn dumps(j: ref J) -> String {
 // A number as Python compares it: bools are 0 and 1.
 fn num_of(j: ref J) -> Option[f64] {
     match j {
-        J.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        J.Int(n) => Some(*n as f64),
-        J.Float(x) => Some(*x),
+        J.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        J.Int(n) => Some(n as f64),
+        J.Float(x) => Some(x),
         _ => None,
     }
 }
@@ -2004,8 +2004,8 @@ fn hash_channels(value: ref String) -> Option[Vec[f64]] {
 
 fn keyword_rgb(name: ref String, level4: bool) -> Option[(i64, i64, i64)] {
     for (k, r, g, b, four) in color_keywords().iter() {
-        if name == *k and (level4 or not *four) {
-            return Some((*r, *g, *b));
+        if name == *k and (level4 or not four) {
+            return Some((r, g, b));
         }
     }
     None
@@ -2858,7 +2858,7 @@ fn rgb_string(coords: ref Vec[Option[f64]], alpha: f64) -> Result[String, PyErr]
     for c in coords.iter() {
         match c {
             None => return Err(py_err("TypeError", "unsupported operand type(s) for *: 'NoneType' and 'int'")),
-            Some(x) => parts.push(number_text(Some(*x * 255.0))),
+            Some(x) => parts.push(number_text(Some(x * 255.0))),
         }
     }
     let mut out = if alpha != 1.0 { "rgba(".to_string() } else { "rgb(".to_string() };

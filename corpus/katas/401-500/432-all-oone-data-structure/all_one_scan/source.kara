@@ -72,13 +72,13 @@ fn check(kind: Str, got: String, counts: ref Map[String, i64]) -> String {
     }
     let mut want = -1;
     for (_, c) in counts {
-        if want < 0 or (kind == "max" and *c > want) or (kind == "min" and *c < want) {
-            want = *c;
+        if want < 0 or (kind == "max" and c > want) or (kind == "min" and c < want) {
+            want = c;
         }
     }
     let mut holders = 0;
     for (_, c) in counts {
-        if *c == want {
+        if c == want {
             holders += 1;
         }
     }
@@ -195,7 +195,7 @@ fn main() {
     }
     let mut total = 0;
     for (_, c) in counts {
-        total += *c;
+        total += c;
     }
     println(f"20000 random operations on 50 keys: {answers.len()} queries, {failed} failed, {counts.len()} keys left, total count {total}, checksum {checksum}");
 }

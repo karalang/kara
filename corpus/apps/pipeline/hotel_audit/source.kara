@@ -928,10 +928,10 @@ fn ledger_summary(lg: ref Ledger) -> Vec[String] {
     let mut members: Vec[(String, i64)] = Vec.new();
     let mut counts: Vec[i64] = Vec.filled(4, 0);
     for (m, p) in lg.points {
-        members.push((m.clone(), *p));
+        members.push((m.clone(), p));
     }
     for (_, t) in lg.tier {
-        counts[*t] += 1;
+        counts[t] += 1;
     }
     members.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
     let mut top: Vec[String] = Vec.new();

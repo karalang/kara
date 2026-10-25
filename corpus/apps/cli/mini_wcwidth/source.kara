@@ -888,7 +888,7 @@ fn repr_str(s: ref String, t: ref Tables) -> String {
 fn match_version(t: ref Tables, job: mut ref Job, given: ref String) -> i64 {
     for (g, k) in job.seen.iter() {
         if g == given {
-            return *k;
+            return k;
         }
     }
     let k = match_uncached(t, mut job, given);
@@ -1050,7 +1050,7 @@ fn j_ints(j: ref J, key: Str) -> Vec[i64] {
     if let J.A(items) = j_get(j, key) {
         for it in items.iter() {
             if let J.N(n) = it {
-                out.push(*n);
+                out.push(n);
             }
         }
     }

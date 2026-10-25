@@ -153,7 +153,7 @@ fn values(field: ref String) -> Vec[Num] {
 fn repr_num(v: ref Num) -> String {
     match v {
         Num.I(i) => f"{i}",
-        Num.F(x) => repr_f(*x),
+        Num.F(x) => repr_f(x),
         Num.S(s) => repr_str(s),
     }
 }
@@ -192,8 +192,8 @@ fn is_int(v: ref Num) -> bool {
 // float(x); a str never reaches it
 fn to_f(v: ref Num) -> f64 {
     match v {
-        Num.I(i) => *i as f64,
-        Num.F(x) => *x,
+        Num.I(i) => i as f64,
+        Num.F(x) => x,
         Num.S(_) => 0.0 / 0.0,
     }
 }
@@ -208,21 +208,21 @@ fn floats(v: ref Vec[Num]) -> Vec[f64] {
 
 fn n_add(a: ref Num, b: ref Num) -> Num {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => Num.I(*x + *y),
+        (Num.I(x), Num.I(y)) => Num.I(x + y),
         _ => Num.F(to_f(a) + to_f(b)),
     }
 }
 
 fn n_sub(a: ref Num, b: ref Num) -> Num {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => Num.I(*x - *y),
+        (Num.I(x), Num.I(y)) => Num.I(x - y),
         _ => Num.F(to_f(a) - to_f(b)),
     }
 }
 
 fn n_mul(a: ref Num, b: ref Num) -> Num {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => Num.I(*x * *y),
+        (Num.I(x), Num.I(y)) => Num.I(x * y),
         _ => Num.F(to_f(a) * to_f(b)),
     }
 }
@@ -242,7 +242,7 @@ fn n_div(a: ref Num, b: ref Num) -> Result[Num, Exc] {
 // a < b; strs compare with strs, numbers with numbers
 fn n_lt(a: ref Num, b: ref Num) -> bool {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => *x < *y,
+        (Num.I(x), Num.I(y)) => x < y,
         (Num.S(x), Num.S(y)) => *x < *y,
         _ => to_f(a) < to_f(b),
     }
@@ -251,7 +251,7 @@ fn n_lt(a: ref Num, b: ref Num) -> bool {
 // a == b, as a dict key compares (two NaN objects never match)
 fn n_eq(a: ref Num, b: ref Num) -> bool {
     match (a, b) {
-        (Num.I(x), Num.I(y)) => *x == *y,
+        (Num.I(x), Num.I(y)) => x == y,
         (Num.S(x), Num.S(y)) => *x == *y,
         (Num.S(_), _) => false,
         (_, Num.S(_)) => false,
@@ -706,7 +706,7 @@ fn float_sqrt_of_frac(n: ref Big, m: ref Big) -> Result[f64, Exc] {
 // is whole, a float otherwise
 fn convert(v: ref Val, all_int: bool) -> Result[Num, Exc] {
     match v {
-        Val.Sp(x) => Ok(Num.F(*x)),
+        Val.Sp(x) => Ok(Num.F(x)),
         Val.R(r) => {
             if all_int {
                 let (q, rem) = big_divmod_mag(r.num, r.den);
@@ -1049,16 +1049,16 @@ fn exact_sum(data: ref Vec[Num]) -> Result[Summed, Exc] {
         count += 1;
         match x {
             Num.I(i) => {
-                acc = dy_add(acc, Dy { num: big_from_i64(*i), e: 0 });
+                acc = dy_add(acc, Dy { num: big_from_i64(i), e: 0 });
             }
             Num.F(f) => {
                 all_int = false;
-                if is_finite(*f) {
-                    acc = dy_add(acc, float_dy(*f));
+                if is_finite(f) {
+                    acc = dy_add(acc, float_dy(f));
                 } else {
                     special = Some(match special {
-                        Some(s) => s + *f,
-                        None => *f,
+                        Some(s) => s + f,
+                        None => f,
                     });
                 }
             }
@@ -1077,7 +1077,7 @@ fn exact_sum(data: ref Vec[Num]) -> Result[Summed, Exc] {
 fn val_div_i(v: ref Val, k: i64) -> Val {
     match v {
         Val.R(r) => Val.R(rat_div_i(r, k)),
-        Val.Sp(x) => Val.Sp(*x / k as f64),
+        Val.Sp(x) => Val.Sp(x / k as f64),
     }
 }
 
@@ -1107,17 +1107,17 @@ fn sum_squares(data: ref Vec[Num], c: ref Option[Num]) -> Result[Squares, Exc] {
     for x in data.iter() {
         count += 1;
         let d = match x {
-            Num.I(i) => Dy { num: big_from_i64(*i), e: 0 },
+            Num.I(i) => Dy { num: big_from_i64(i), e: 0 },
             Num.F(f) => {
                 all_int = false;
-                if not is_finite(*f) {
+                if not is_finite(f) {
                     special = Some(match special {
-                        Some(s) => s + *f,
-                        None => *f,
+                        Some(s) => s + f,
+                        None => f,
                     });
                     continue;
                 }
-                float_dy(*f)
+                float_dy(f)
             }
             Num.S(_) => {
                 return Err(exc("TypeError", "can't convert type 'str' to numerator/denominator"));
@@ -1477,7 +1477,7 @@ fn mean_stdev(data: ref Vec[Num]) -> Result[(f64, f64), Exc] {
 
 fn to_f_val(v: ref Val) -> f64 {
     match v {
-        Val.Sp(x) => *x,
+        Val.Sp(x) => x,
         Val.R(r) => match rat_f64(r) {
             Ok(x) => x,
             Err(_) => 0.0 / 0.0,

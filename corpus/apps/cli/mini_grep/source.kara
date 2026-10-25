@@ -279,7 +279,7 @@ fn emit(n: ref Node, prog: mut ref Vec[Inst]) {
             }
         }
         Node.Repeat(inner, lo, hi, greedy) => {
-            for _ in 0..*lo {
+            for _ in 0..lo {
                 emit(inner, mut prog);
             }
             if hi < 0 {
@@ -292,7 +292,7 @@ fn emit(n: ref Node, prog: mut ref Vec[Inst]) {
                 prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
             } else {
                 let mut holes: Vec[i64] = Vec.new();
-                for _ in *lo..*hi {
+                for _ in lo..hi {
                     holes.push(prog.len());
                     prog.push(Inst.Split(-1, -1));
                     emit(inner, mut prog);
@@ -324,7 +324,7 @@ fn compile(pattern: Str, fold: bool) -> Result[Regex2, String] {
 fn in_set(rs: ref Vec[(char, char)], neg: bool, c: char) -> bool {
     let mut hit = false;
     for (lo, hi) in rs.iter() {
-        if c >= *lo and c <= *hi {
+        if c >= lo and c <= hi {
             hit = true;
             break;
         }

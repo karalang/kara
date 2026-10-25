@@ -1165,9 +1165,9 @@ fn json_text(v: ref Val) -> String {
 fn truthy(v: ref Val) -> bool {
     match v {
         Val.Null => false,
-        Val.Bool(b) => *b,
-        Val.Int(n) => *n != 0,
-        Val.Float(f) => *f != 0.0,
+        Val.Bool(b) => b,
+        Val.Int(n) => n != 0,
+        Val.Float(f) => f != 0.0,
         Val.Str(s) => s.len() > 0,
         Val.List(xs) => xs.len() > 0,
         Val.Dict(ms) => ms.len() > 0,
@@ -1226,9 +1226,9 @@ fn val_repr(v: ref Val) -> String {
 fn py_str(v: ref Val) -> String {
     match v {
         Val.Null => "None".to_string(),
-        Val.Bool(b) => bool_text(*b),
+        Val.Bool(b) => bool_text(b),
         Val.Int(n) => f"{n}",
-        Val.Float(f) => float_repr(*f),
+        Val.Float(f) => float_repr(f),
         Val.Str(s) => s.clone(),
         _ => val_repr(v),
     }

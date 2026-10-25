@@ -1180,7 +1180,7 @@ fn check_address(coin: ref String, a: ref String) -> String {
     let v = payload[0] as i64;
     let mut kind = String.new();
     for (n, s) in net.versions.iter() {
-        if *n == v {
+        if n == v {
             kind = s.clone();
         }
     }

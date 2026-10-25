@@ -793,9 +793,9 @@ fn exc_str(e: ref ExcV) -> String {
 fn repr(v: ref V) -> String {
     match v {
         V.Nothing => "None".to_string(),
-        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
-        V.Int(n) => f"{*n}",
-        V.Float(x) => float_repr(*x),
+        V.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        V.Int(n) => f"{n}",
+        V.Float(x) => float_repr(x),
         V.Str(s) => str_repr(s),
         V.Bytes(b) => bytes_repr(b),
         V.List(items) => f"[{join_reprs(items)}]",
@@ -841,9 +841,9 @@ fn type_name(v: ref V) -> String {
 fn truthy(v: ref V) -> bool {
     match v {
         V.Nothing => false,
-        V.Bool(b) => *b,
-        V.Int(n) => *n != 0,
-        V.Float(x) => *x != 0.0,
+        V.Bool(b) => b,
+        V.Int(n) => n != 0,
+        V.Float(x) => x != 0.0,
         V.Str(s) => s.len() > 0,
         V.Bytes(b) => b.len() > 0,
         V.List(items) => items.len() > 0,
@@ -855,9 +855,9 @@ fn truthy(v: ref V) -> bool {
 
 fn num_of(v: ref V) -> Option[f64] {
     match v {
-        V.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        V.Int(n) => Some(*n as f64),
-        V.Float(x) => Some(*x),
+        V.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        V.Int(n) => Some(n as f64),
+        V.Float(x) => Some(x),
         _ => None,
     }
 }
@@ -886,7 +886,7 @@ fn seq_eq(a: ref Vec[V], b: ref Vec[V]) -> bool {
 fn py_eq(a: ref V, b: ref V) -> bool {
     if let V.Int(x) = a {
         if let V.Int(y) = b {
-            return *x == *y;
+            return x == y;
         }
     }
     let na = num_of(a);
@@ -1077,7 +1077,7 @@ fn j_str(v: ref J) -> String {
 
 fn j_bool(v: ref J) -> bool {
     match v {
-        J.Bool(b) => *b,
+        J.Bool(b) => b,
         _ => false,
     }
 }
@@ -1153,9 +1153,9 @@ fn decode_exc(d: ref J) -> ExcV {
 fn decode(v: ref J) -> V {
     match v {
         J.Null => V.Nothing,
-        J.Bool(b) => V.Bool(*b),
+        J.Bool(b) => V.Bool(b),
         J.Int(d) => V.Int(i64.parse(d).unwrap_or(0)),
-        J.Float(x) => V.Float(*x),
+        J.Float(x) => V.Float(x),
         J.Str(s) => V.Str(s.clone()),
         J.Arr(items) => {
             let mut out: Vec[V] = Vec.new();
@@ -1619,10 +1619,10 @@ fn json_fallback(v: ref V) -> V {
 fn json_key(k: ref V, ascii: bool, out: mut ref String) -> Result[(), Exc] {
     match k {
         V.Str(s) => json_str(s, ascii, mut out),
-        V.Float(x) => out.push_str(json_str_of(json_float(*x), ascii)),
-        V.Bool(b) => out.push_str(json_str_of(if *b { "true".to_string() } else { "false".to_string() }, ascii)),
+        V.Float(x) => out.push_str(json_str_of(json_float(x), ascii)),
+        V.Bool(b) => out.push_str(json_str_of(if b { "true".to_string() } else { "false".to_string() }, ascii)),
         V.Nothing => out.push_str("\"null\""),
-        V.Int(n) => out.push_str(f"\"{*n}\""),
+        V.Int(n) => out.push_str(f"\"{n}\""),
         _ => return Err(terr(f"keys must be str, int, float, bool or None, not {type_name(k)}")),
     }
     Ok(())
@@ -1662,9 +1662,9 @@ fn json_seq(o: ref JsonOpts, items: ref Vec[V], level: i64, out: mut ref String)
 fn json_enc(o: ref JsonOpts, v: ref V, level: i64, out: mut ref String) -> Result[(), Exc] {
     match v {
         V.Nothing => out.push_str("null"),
-        V.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        V.Int(n) => out.push_str(f"{*n}"),
-        V.Float(x) => out.push_str(json_float(*x)),
+        V.Bool(b) => out.push_str(if b { "true" } else { "false" }),
+        V.Int(n) => out.push_str(f"{n}"),
+        V.Float(x) => out.push_str(json_float(x)),
         V.Str(s) => json_str(s, o.ensure_ascii, mut out),
         V.List(items) => json_seq(o, items, level, mut out)?,
         V.Tuple(items) => json_seq(o, items, level, mut out)?,
@@ -3139,7 +3139,7 @@ fn run_proc(w: mut ref World, p: ref Proc, m: ref String, val: own V) -> Result[
         Proc.Capture(ci) => {
             let mut ed = as_dict(val, "LogCapture on a non-dict")?;
             d_set(mut ed, "log_level", V.Str(map_method_name(m)));
-            w.caps[*ci].push(V.Dict(ed));
+            w.caps[ci].push(V.Dict(ed));
             Err(drop_event())
         }
         Proc.Method => {
@@ -3175,10 +3175,10 @@ fn run_proc(w: mut ref World, p: ref Proc, m: ref String, val: own V) -> Result[
         Proc.Sample(si) => {
             let ed = as_dict(val, "a processor on a non-dict")?;
             if let Some(V.Str(e)) = d_get(ed, "event") {
-                if e == w.samplers[*si].event {
-                    w.samplers[*si].seen += 1;
-                    if (w.samplers[*si].seen - 1) % w.samplers[*si].every != 0 {
-                        w.samplers[*si].dropped += 1;
+                if e == w.samplers[si].event {
+                    w.samplers[si].seen += 1;
+                    if (w.samplers[si].seen - 1) % w.samplers[si].every != 0 {
+                        w.samplers[si].dropped += 1;
                         return Err(drop_event());
                     }
                 }

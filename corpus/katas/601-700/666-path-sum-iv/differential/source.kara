@@ -164,7 +164,7 @@ fn paths(nums: Vec[i64]) -> Vec[(i64, i64)] {
         let depth = *x / 100;
         let position = *x / 10 % 10;
         for (key, parent) in nodes.iter() {
-            if *key == (depth - 1) * 10 + (position + 1) / 2 {
+            if key == (depth - 1) * 10 + (position + 1) / 2 {
                 if position % 2 == 1 {
                     parent.left = Some(n);
                 } else {
@@ -208,8 +208,8 @@ fn main() {
         let mut want = 0;
         let mut lengths = 0;
         for (s, l) in all.iter() {
-            want += *s;
-            lengths += *l;
+            want += s;
+            lengths += l;
         }
         // Mirrored; every value raised by 1; the root alone raised by 1;
         // and two children of 0 under every node above the fourth level
@@ -240,8 +240,8 @@ fn main() {
         }
         grown.sort();
         for (s, l) in all.iter() {
-            if *l < 4 {
-                extra += *s;
+            if l < 4 {
+                extra += s;
             }
         }
         for which in 0..4 {

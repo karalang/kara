@@ -433,8 +433,8 @@ fn truthy(v: ref Val) -> bool {
     match v {
         Val.Nil => false,
         Val.Str(s) => s.len() > 0,
-        Val.Num(x) => *x != 0.0,
-        Val.Int(i) => *i != 0,
+        Val.Num(x) => x != 0.0,
+        Val.Int(i) => i != 0,
         Val.Time(_) => true,
         Val.One(_) => true,
         Val.Elems(v) => v.len() > 0,
@@ -444,8 +444,8 @@ fn truthy(v: ref Val) -> bool {
 impl Obj {
     fn num(ref self, slot: i64) -> Option[f64] {
         match ref self.vals[slot] {
-            Val.Num(x) => Some(*x),
-            Val.Int(i) => Some(*i as f64),
+            Val.Num(x) => Some(x),
+            Val.Int(i) => Some(i as f64),
             _ => None,
         }
     }
@@ -1518,7 +1518,7 @@ fn val_str(v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
         Val.Str(s) => s.clone(),
-        Val.Num(x) => float_str(*x),
+        Val.Num(x) => float_str(x),
         Val.Int(i) => f"{i}",
         Val.Time(t) => stamp_str(t),
         _ => "?".to_string(),
@@ -2066,8 +2066,8 @@ fn calculate_max_speed(sd: ref Vec[(f64, f64)], percentile: f64, ignore_nonstand
         // max() keeps the first of equal values
         let mut best = sd[0].0;
         for (s, _) in sd.iter() {
-            if *s > best {
-                best = *s;
+            if s > best {
+                best = s;
             }
         }
         return Some(best);
@@ -2078,7 +2078,7 @@ fn calculate_max_speed(sd: ref Vec[(f64, f64)], percentile: f64, ignore_nonstand
     }
     let mut distances: Vec[f64] = Vec.new();
     for (_, d) in sd.iter() {
-        distances.push(*d);
+        distances.push(d);
     }
     let average = fsum(distances) / size as f64;
     let mut squares: Vec[f64] = Vec.new();
@@ -2088,8 +2088,8 @@ fn calculate_max_speed(sd: ref Vec[(f64, f64)], percentile: f64, ignore_nonstand
     let deviation = (fsum(squares) / size as f64).sqrt();
     let mut speeds: Vec[f64] = Vec.new();
     for (s, d) in sd.iter() {
-        if (*d - average).abs() <= deviation * 1.5 {
-            speeds.push(*s);
+        if (d - average).abs() <= deviation * 1.5 {
+            speeds.push(s);
         }
     }
     if speeds.len() == 0 {
@@ -2107,7 +2107,7 @@ fn calculate_uphill_downhill(all: ref Vec[Option[f64]]) -> (f64, f64) {
     let mut e: Vec[f64] = Vec.new();
     for x in all.iter() {
         if let Some(v) = x {
-            e.push(*v);
+            e.push(v);
         }
     }
     let size = e.len();
@@ -2730,7 +2730,7 @@ fn nearest_locations(tracks: ref Vec[Obj], lat: f64, lon: f64, threshold_distanc
     let mut found = 0;
     let mut candidate: Option[f64] = None;
     for (t, s, p, _) in points.iter() {
-        let d = loc_dist(lat, lon, point_at(tracks, *t, *s, *p));
+        let d = loc_dist(lat, lon, point_at(tracks, t, s, p));
         if d < threshold {
             if candidate.is_none() or d < candidate.unwrap() {
                 candidate = Some(d);

@@ -191,7 +191,7 @@ fn num_distinct_islands_picture(grid: Vec[Vec[i64]]) -> i64 {
             let height = bottom - top + 1;
             let mut canvas: Vec[bool] = vec![false; width * height];
             for (r, c) in cells.iter() {
-                canvas[(*r - top) * width + (*c - left)] = true;
+                canvas[(r - top) * width + (c - left)] = true;
             }
             let mut picture = String.new();
             for i in 0..height {
@@ -312,8 +312,8 @@ fn definition(grid: Vec[Vec[i64]]) -> i64 {
             let dc = cells[b][0].1 - cells[a][0].1;
             let mut same = true;
             for (r, c) in cells[a].iter() {
-                let rr = *r + dr;
-                let cc = *c + dc;
+                let rr = r + dr;
+                let cc = c + dc;
                 if rr < 0 or cc < 0 or rr >= m or cc >= n or label[rr][cc] != labels[b] {
                     same = false;
                 }

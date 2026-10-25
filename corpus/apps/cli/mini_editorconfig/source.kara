@@ -920,19 +920,19 @@ fn emit_seq(prog: mut ref Vec[Inst], sets: mut ref Vec[Vec[SetItem]], seq: ref V
 
 fn emit(prog: mut ref Vec[Inst], sets: mut ref Vec[Vec[SetItem]], n: ref Node, dotall: bool) {
     match n {
-        Node.Lit(c) => prog.push(Inst.Ch(*c)),
+        Node.Lit(c) => prog.push(Inst.Ch(c)),
         Node.Any => prog.push(Inst.Any(dotall)),
-        Node.Cat(c) => prog.push(Inst.Cat(*c)),
+        Node.Cat(c) => prog.push(Inst.Cat(c)),
         Node.Set(neg, items) => {
-            prog.push(Inst.Set(*neg, sets.len()));
+            prog.push(Inst.Set(neg, sets.len()));
             sets.push(items.clone());
         }
         Node.Begin => prog.push(Inst.Begin),
         Node.Dollar => prog.push(Inst.Dollar),
         Node.End => prog.push(Inst.End),
         Node.Group(g, alts) => {
-            if *g > 0 {
-                prog.push(Inst.Save(*g * 2));
+            if g > 0 {
+                prog.push(Inst.Save(g * 2));
             }
             // Split to each alternative in turn; each one jumps past the rest.
             let mut jumps: Vec[i64] = Vec.new();
@@ -955,26 +955,26 @@ fn emit(prog: mut ref Vec[Inst], sets: mut ref Vec[Vec[SetItem]], n: ref Node, d
             for j in jumps.iter() {
                 prog[*j] = Inst.Jmp(end);
             }
-            if *g > 0 {
-                prog.push(Inst.Save(*g * 2 + 1));
+            if g > 0 {
+                prog.push(Inst.Save(g * 2 + 1));
             }
         }
         Node.Repeat(lo, hi, greedy, item) => {
             let mut k = 0;
-            while k < *lo {
+            while k < lo {
                 emit(mut prog, mut sets, item[0], dotall);
                 k += 1;
             }
-            if *hi < 0 {
+            if hi < 0 {
                 let top = prog.len();
                 prog.push(Inst.Split(0, 0));
                 emit(mut prog, mut sets, item[0], dotall);
                 prog.push(Inst.Jmp(top));
                 let out = prog.len();
-                prog[top] = if *greedy { Inst.Split(top + 1, out) } else { Inst.Split(out, top + 1) };
+                prog[top] = if greedy { Inst.Split(top + 1, out) } else { Inst.Split(out, top + 1) };
             } else {
                 let mut holes: Vec[i64] = Vec.new();
-                while k < *hi {
+                while k < hi {
                     holes.push(prog.len());
                     prog.push(Inst.Split(0, 0));
                     emit(mut prog, mut sets, item[0], dotall);
@@ -983,7 +983,7 @@ fn emit(prog: mut ref Vec[Inst], sets: mut ref Vec[Vec[SetItem]], n: ref Node, d
                 let out = prog.len();
                 for h in holes.iter() {
                     let h = *h;
-                    prog[h] = if *greedy { Inst.Split(h + 1, out) } else { Inst.Split(out, h + 1) };
+                    prog[h] = if greedy { Inst.Split(h + 1, out) } else { Inst.Split(out, h + 1) };
                 }
             }
         }
@@ -1009,8 +1009,8 @@ fn set_has(neg: bool, items: ref Vec[SetItem], c: char) -> bool {
     let mut hit = false;
     for it in items.iter() {
         let yes = match it {
-            SetItem.Range(lo, hi) => n >= *lo and n <= *hi,
-            SetItem.Cat(k) => cat_match(*k, c),
+            SetItem.Range(lo, hi) => n >= lo and n <= hi,
+            SetItem.Cat(k) => cat_match(k, c),
         };
         if yes {
             hit = true;

@@ -612,7 +612,7 @@ fn exc(kind: Str, msg: ref String) -> Exc {
 fn show(v: ref Val) -> String {
     match v {
         Val.Nil => "None".to_string(),
-        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Val.Int(n) => n.to_string(),
         Val.Float(_, r) => r.clone(),
         Val.Str(s) => py_repr(s),
@@ -807,10 +807,10 @@ fn string_to_dt(s: ref String, ds: ref Vec[(i64, i64)]) -> Option[DateTime] {
 fn parse(v: ref Val, ds: ref Vec[(i64, i64)]) -> Option[DateTime] {
     match v {
         Val.Dt(t) => Some(t.clone()),
-        Val.Date(y, m, d) => Some(midnight(*y, *m, *d)),
-        Val.Bool(b) => Some(from_epoch(if *b { 1 } else { 0 }, 0)),
-        Val.Int(n) => Some(from_epoch(*n, 0)),
-        Val.Float(x, _) => Some(from_float_ts(*x)),
+        Val.Date(y, m, d) => Some(midnight(y, m, d)),
+        Val.Bool(b) => Some(from_epoch(if b { 1 } else { 0 }, 0)),
+        Val.Int(n) => Some(from_epoch(n, 0)),
+        Val.Float(x, _) => Some(from_float_ts(x)),
         Val.Str(s) => string_to_dt(s, ds),
         _ => None,
     }

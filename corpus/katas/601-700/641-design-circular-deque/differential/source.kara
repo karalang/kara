@@ -80,8 +80,8 @@ fn drive_star(k: i64, ops: Vec[Op], shift: i64) -> Trace {
     let mut t = new_trace();
     for op in ops.iter() {
         let result = match op {
-            Op.InsertFront(value) => f"{q.insert_front(*value)}",
-            Op.InsertLast(value) => f"{q.insert_last(*value)}",
+            Op.InsertFront(value) => f"{q.insert_front(value)}",
+            Op.InsertLast(value) => f"{q.insert_last(value)}",
             Op.DeleteFront => f"{q.delete_front()}",
             Op.DeleteLast => f"{q.delete_last()}",
             Op.GetFront => f"{q.get_front()}",
@@ -176,8 +176,8 @@ fn drive_slots(k: i64, ops: Vec[Op], shift: i64) -> Trace {
     let mut t = new_trace();
     for op in ops.iter() {
         let result = match op {
-            Op.InsertFront(value) => f"{q.insert_front(*value)}",
-            Op.InsertLast(value) => f"{q.insert_last(*value)}",
+            Op.InsertFront(value) => f"{q.insert_front(value)}",
+            Op.InsertLast(value) => f"{q.insert_last(value)}",
             Op.DeleteFront => f"{q.delete_front()}",
             Op.DeleteLast => f"{q.delete_last()}",
             Op.GetFront => f"{q.get_front()}",
@@ -263,8 +263,8 @@ fn drive_deque(k: i64, ops: Vec[Op], shift: i64) -> Trace {
     let mut t = new_trace();
     for op in ops.iter() {
         let result = match op {
-            Op.InsertFront(value) => f"{q.insert_front(*value)}",
-            Op.InsertLast(value) => f"{q.insert_last(*value)}",
+            Op.InsertFront(value) => f"{q.insert_front(value)}",
+            Op.InsertLast(value) => f"{q.insert_last(value)}",
             Op.DeleteFront => f"{q.delete_front()}",
             Op.DeleteLast => f"{q.delete_last()}",
             Op.GetFront => f"{q.get_front()}",
@@ -391,8 +391,8 @@ fn drive_stacks(k: i64, ops: Vec[Op], shift: i64) -> Trace {
     let mut t = new_trace();
     for op in ops.iter() {
         let result = match op {
-            Op.InsertFront(value) => f"{q.insert_front(*value)}",
-            Op.InsertLast(value) => f"{q.insert_last(*value)}",
+            Op.InsertFront(value) => f"{q.insert_front(value)}",
+            Op.InsertLast(value) => f"{q.insert_last(value)}",
             Op.DeleteFront => f"{q.delete_front()}",
             Op.DeleteLast => f"{q.delete_last()}",
             Op.GetFront => f"{q.get_front()}",
@@ -463,14 +463,14 @@ fn definition(k: i64, ops: Vec[Op]) -> Vec[String] {
             Op.InsertFront(value) => {
                 let ok = items.len() < k;
                 if ok {
-                    items.insert(0, *value);
+                    items.insert(0, value);
                 }
                 out.push(f"{ok}");
             }
             Op.InsertLast(value) => {
                 let ok = items.len() < k;
                 if ok {
-                    items.push(*value);
+                    items.push(value);
                 }
                 out.push(f"{ok}");
             }
@@ -529,8 +529,8 @@ fn mirrored(ops: Vec[Op]) -> Vec[Op] {
     let mut out: Vec[Op] = Vec.new();
     for op in ops.iter() {
         out.push(match op {
-            Op.InsertFront(value) => Op.InsertLast(*value),
-            Op.InsertLast(value) => Op.InsertFront(*value),
+            Op.InsertFront(value) => Op.InsertLast(value),
+            Op.InsertLast(value) => Op.InsertFront(value),
             Op.DeleteFront => Op.DeleteLast,
             Op.DeleteLast => Op.DeleteFront,
             Op.GetFront => Op.GetRear,

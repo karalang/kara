@@ -34,8 +34,8 @@ fn distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
         adjacent.push(Vec.new());
     }
     for (a, b) in edges.iter() {
-        adjacent[*a].push(*b);
-        adjacent[*b].push(*a);
+        adjacent[a].push(b);
+        adjacent[b].push(a);
     }
     let mut dist: Vec[i64] = Vec.filled(top + 1, -1);
     let mut queue: VecDeque[i64] = VecDeque.new();

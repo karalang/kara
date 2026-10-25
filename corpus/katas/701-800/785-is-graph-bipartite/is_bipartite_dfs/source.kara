@@ -46,8 +46,8 @@ fn from_edges(n: i64, edges: Vec[(i64, i64)]) -> Vec[Vec[i64]] {
         graph.push(Vec.new());
     }
     for (a, b) in edges.iter() {
-        graph[*a].push(*b);
-        graph[*b].push(*a);
+        graph[a].push(b);
+        graph[b].push(a);
     }
     graph
 }

@@ -11,7 +11,7 @@
 // A key at x, holding the height of the stretch x was in.
 fn cut(ground: mut ref SortedMap[i64, i64], x: i64) {
     let h = match ground.floor(x) {
-        Some((_, h)) => *h,
+        Some((_, h)) => h,
         None => 0,
     };
     ground.insert(x, h);
@@ -23,20 +23,20 @@ fn falling_squares(positions: Vec[(i64, i64)]) -> Vec[i64] {
     let mut answer: Vec[i64] = Vec.new();
     let mut highest = 0;
     for (left, side) in positions.iter() {
-        let right = *left + *side;
+        let right = left + side;
         cut(mut ground, right);
-        cut(mut ground, *left);
+        cut(mut ground, left);
         let mut base = 0;
         let mut inside: Vec[i64] = Vec.new();
-        for (x, h) in ground.range(*left, right) {
+        for (x, h) in ground.range(left, right) {
             base = base.max(*h);
             inside.push(*x);
         }
         for x in inside.iter() {
             ground.remove(*x);
         }
-        let top = base + *side;
-        ground.insert(*left, top);
+        let top = base + side;
+        ground.insert(left, top);
         highest = highest.max(top);
         answer.push(highest);
     }

@@ -20,10 +20,10 @@ fn is_cousins(root: TreeNode, x: i64, y: i64) -> bool {
         let mut next: Vec[(TreeNode, i64)] = Vec.new();
         for (node, parent) in level.iter() {
             if node.val == x {
-                px = *parent;
+                px = parent;
             }
             if node.val == y {
-                py = *parent;
+                py = parent;
             }
             if let Some(l) = node.left {
                 next.push((l, node.val));
@@ -189,7 +189,7 @@ fn main() {
         (vec![Some(1), Some(2)], 1, 2),
     ];
     for (vals, x, y) in cases.iter() {
-        println(f"root = {level_order_text(vals)}, x = {x}, y = {y} -> {tf(is_cousins(from_level_order(vals), *x, *y))}");
+        println(f"root = {level_order_text(vals)}, x = {x}, y = {y} -> {tf(is_cousins(from_level_order(vals), x, y))}");
     }
     println(f"the complete tree of 100 nodes: {all_pairs(complete_tree(100), 100)} of 4950 pairs are cousins");
     println(f"a zigzag path of 100 nodes: {all_pairs(path(100), 100)} of 4950 pairs are cousins");

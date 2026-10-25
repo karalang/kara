@@ -1634,7 +1634,7 @@ fn has_star(v: ref Vec[It]) -> bool {
 // The key _expand sorts by: f"{i:02}" for a number, else the string.
 fn sort_key(x: ref It) -> String {
     match x {
-        It.N(n) => if *n >= 0 and *n < 10 { f"0{n}" } else { f"{n}" },
+        It.N(n) => if n >= 0 and n < 10 { f"0{n}" } else { f"{n}" },
         It.Star => "*".to_string(),
         It.L => "l".to_string(),
     }
@@ -2192,7 +2192,7 @@ fn expand_field(
     keyed.sort();
     let mut out: Vec[It] = Vec.new();
     for (_, i) in keyed.iter() {
-        out.push(uniq[*i].clone());
+        out.push(uniq[i].clone());
     }
     if out.len() == LEN_MEANS_ALL[field_index] {
         let keep = (field_index == DAY_FIELD and find_byte(expressions[DOW_FIELD], b'*') < 0)
@@ -2246,12 +2246,12 @@ fn expand(
             if let It.N(v) = x {
                 let mut keyed = false;
                 for e in nth.iter() {
-                    if e.wday == *v {
+                    if e.wday == v {
                         keyed = true;
                     }
                 }
                 if not keyed {
-                    rest.push(*v);
+                    rest.push(v);
                 }
             }
         }
@@ -2296,13 +2296,13 @@ fn strict_check(expr_format: Str, fields: ref Vec[Vec[It]], strict_year: ref Opt
     let mut int_days: Vec[i64] = Vec.new();
     for x in days.iter() {
         if let It.N(v) = x {
-            int_days.push(*v);
+            int_days.push(v);
         }
     }
     let mut int_months: Vec[i64] = Vec.new();
     for x in months.iter() {
         if let It.N(v) = x {
-            int_months.push(*v);
+            int_months.push(v);
         }
     }
     if int_days.len() == 0 or int_months.len() == 0 {
@@ -2326,7 +2326,7 @@ fn strict_check(expr_format: Str, fields: ref Vec[Vec[It]], strict_year: ref Opt
                 for x in years.iter() {
                     if let It.N(y) = x {
                         seen = true;
-                        if is_leap(*y) {
+                        if is_leap(y) {
                             any = true;
                         }
                     }
@@ -2409,7 +2409,7 @@ fn time_str(zs: ref Zones, t: ref TimeArg) -> String {
 // croniter.__init__
 fn new_cron(zs: ref Zones, expr: Str, start: ref TimeArg, o: ref Opts) -> Result[Cron, Exc] {
     let (tz, cur) = match start {
-        TimeArg.Ts(x) => (-1, *x),
+        TimeArg.Ts(x) => (-1, x),
         TimeArg.At(d) => (d.tz, dt_to_ts(zs, d)),
     };
     let max_years = match o.max_years {
@@ -2434,7 +2434,7 @@ fn next_nearest_diff(x: i64, to_check: ref Vec[It], range_val: i64) -> Option[i6
     for d in to_check.iter() {
         let mut v: i64 = 0;
         match d {
-            It.N(n) => v = *n,
+            It.N(n) => v = n,
             _ => v = range_val,
         }
         if range_val >= 0 {
@@ -2889,8 +2889,8 @@ fn cron_range(zs: ref Zones, start0: ref TimeArg, stop0: ref TimeArg, expr: Str,
     let mut same = false;
     if let TimeArg.Ts(a) = start0 {
         if let TimeArg.Ts(b) = stop0 {
-            start = naive(from_timestamp(*a));
-            stop = naive(from_timestamp(*b));
+            start = naive(from_timestamp(a));
+            stop = naive(from_timestamp(b));
             auto_float = true;
             same = true;
         }
@@ -2952,14 +2952,14 @@ fn cron_range(zs: ref Zones, start0: ref TimeArg, stop0: ref TimeArg, expr: Str,
 
 fn time_arg(zs: mut ref Zones, j: ref J) -> Result[TimeArg, String] {
     match j {
-        J.F(x) => Ok(TimeArg.Ts(*x)),
-        J.N(n) => Ok(TimeArg.Ts(*n as f64)),
+        J.F(x) => Ok(TimeArg.Ts(x)),
+        J.N(n) => Ok(TimeArg.Ts(n as f64)),
         _ => {
             let mut v: Vec[i64] = Vec.new();
             if let J.A(items) = j_get(j, "dt") {
                 for x in items.iter() {
                     if let J.N(n) = x {
-                        v.push(*n as i64);
+                        v.push(n as i64);
                     }
                 }
             }
@@ -2997,7 +2997,7 @@ fn strict_year_of(o: ref J) -> Option[Vec[i64]] {
             let mut v: Vec[i64] = Vec.new();
             for x in items.iter() {
                 if let J.N(n) = x {
-                    v.push(*n as i64);
+                    v.push(n as i64);
                 }
             }
             Some(v)

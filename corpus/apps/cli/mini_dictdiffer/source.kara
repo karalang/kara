@@ -701,17 +701,17 @@ fn is_num(v: ref V) -> bool {
 
 fn as_f64(v: ref V) -> f64 {
     match v {
-        V.Bool(b) => if *b { 1.0 } else { 0.0 },
-        V.Int(n) => *n as f64,
-        V.Float(x) => *x,
+        V.Bool(b) => if b { 1.0 } else { 0.0 },
+        V.Int(n) => n as f64,
+        V.Float(x) => x,
         _ => 0.0,
     }
 }
 
 fn int_like(v: ref V) -> Option[i64] {
     match v {
-        V.Bool(b) => Some(if *b { 1 } else { 0 }),
-        V.Int(n) => Some(*n),
+        V.Bool(b) => Some(if b { 1 } else { 0 }),
+        V.Int(n) => Some(n),
         _ => None,
     }
 }
@@ -860,9 +860,9 @@ fn join(parts: ref Vec[String], sep: Str) -> String {
 fn fmt(v: ref V) -> String {
     match v {
         V.None => "None".to_string(),
-        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         V.Int(n) => f"{n}",
-        V.Float(x) => float_repr(*x),
+        V.Float(x) => float_repr(x),
         V.Str(t) => str_repr(t),
         V.List(items) => {
             let mut parts: Vec[String] = Vec.new();
@@ -1008,8 +1008,8 @@ fn parse_py_int(t: ref String) -> Option[i64] {
 // int(v).
 fn py_int(v: ref V) -> Result[i64, Exc] {
     match v {
-        V.Int(n) => Ok(*n),
-        V.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        V.Int(n) => Ok(n),
+        V.Bool(b) => Ok(if b { 1 } else { 0 }),
         V.Float(x) => {
             if x.is_nan() {
                 return Err(exc("ValueError", "cannot convert float NaN to integer".to_string()));
@@ -1017,7 +1017,7 @@ fn py_int(v: ref V) -> Result[i64, Exc] {
             if x.is_infinite() {
                 return Err(exc("OverflowError", "cannot convert float infinity to integer".to_string()));
             }
-            Ok(*x as i64)
+            Ok(x as i64)
         }
         V.Str(t) => match parse_py_int(t) {
             Some(n) => Ok(n),
@@ -1080,9 +1080,9 @@ fn from_j(j: ref J) -> V {
 fn from_j_hook(j: ref J, hook: bool) -> V {
     match j {
         J.Null => V.None,
-        J.Bool(b) => V.Bool(*b),
+        J.Bool(b) => V.Bool(b),
         J.Int(t) => V.Int(str_int(t)),
-        J.Float(x) => V.Float(*x),
+        J.Float(x) => V.Float(x),
         J.Str(t) => V.Str(t.clone()),
         J.Arr(items) => {
             let mut out: Vec[V] = Vec.new();
@@ -1164,8 +1164,8 @@ fn json_key(k: ref V) -> Result[String, Exc] {
     match k {
         V.Str(t) => Ok(t.clone()),
         V.Int(n) => Ok(f"{n}"),
-        V.Float(x) => Ok(json_float(*x)),
-        V.Bool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
+        V.Float(x) => Ok(json_float(x)),
+        V.Bool(b) => Ok(if b { "true".to_string() } else { "false".to_string() }),
         V.None => Ok("null".to_string()),
         _ => Err(type_error(f"keys must be str, int, float, bool or None, not {type_name(k)}")),
     }
@@ -1185,9 +1185,9 @@ fn json_newline(indent: i64, level: i64, out: mut ref String) {
 fn json_enc(v: ref V, indent: i64, sort_keys: bool, level: i64, out: mut ref String) -> Result[(), Exc] {
     match v {
         V.None => out.push_str("null"),
-        V.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        V.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         V.Int(n) => out.push_str(f"{n}"),
-        V.Float(x) => out.push_str(json_float(*x)),
+        V.Float(x) => out.push_str(json_float(x)),
         V.Str(t) => json_str(t, mut out),
         V.List(items) => json_seq(items, indent, sort_keys, level, mut out)?,
         V.Tuple(items) => json_seq(items, indent, sort_keys, level, mut out)?,
@@ -1230,7 +1230,7 @@ fn json_enc(v: ref V, indent: i64, sort_keys: bool, level: i64, out: mut ref Str
                 }
                 json_str(k, mut out);
                 out.push_str(": ");
-                json_enc(items[*idx].val, indent, sort_keys, level + 1, mut out)?;
+                json_enc(items[idx].val, indent, sort_keys, level + 1, mut out)?;
             }
             if indent >= 0 {
                 json_newline(indent, level, mut out);
@@ -1360,9 +1360,9 @@ fn tol_of(v: ref V) -> f64 {
 fn truthy(v: ref V) -> bool {
     match v {
         V.None => false,
-        V.Bool(b) => *b,
-        V.Int(n) => *n != 0,
-        V.Float(x) => *x != 0.0,
+        V.Bool(b) => b,
+        V.Int(n) => n != 0,
+        V.Float(x) => x != 0.0,
         V.Str(t) => t.len() > 0,
         V.List(x) => x.len() > 0,
         V.Tuple(x) => x.len() > 0,

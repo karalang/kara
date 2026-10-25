@@ -565,7 +565,7 @@ fn utcoffset(t: ref Tz) -> Option[i64] {
         Tz.Naive => None,
         Tz.Utc => Some(0),
         Tz.Local => Some(0),
-        Tz.Offset(_, s) => Some(*s),
+        Tz.Offset(_, s) => Some(s),
     }
 }
 
@@ -1675,7 +1675,7 @@ fn build_tz(r: ref Res, o: ref Opts) -> (Tz, Option[String]) {
         for (k, v) in o.tzinfos.iter() {
             if *k == name {
                 return match v {
-                    Some(s) => (Tz.Offset(Some(name.clone()), *s), None),
+                    Some(s) => (Tz.Offset(Some(name.clone()), s), None),
                     None => (Tz.Naive, None),
                 };
             }
@@ -2373,7 +2373,7 @@ fn run_parse(j: ref JValue) -> String {
     if let Some(JValue.Obj(items)) = get(j, "tzinfos") {
         for (k, v) in items.iter() {
             let off = match v {
-                JValue.Int(n) => Some(*n),
+                JValue.Int(n) => Some(n),
                 _ => None,
             };
             o.tzinfos.push((k.clone(), off));

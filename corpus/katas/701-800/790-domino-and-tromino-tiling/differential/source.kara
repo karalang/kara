@@ -157,18 +157,18 @@ fn count_tilings(open: mut ref Vec[bool], n: i64, shapes: Vec[Vec[(i64, i64)]], 
     for shape in shapes.iter() {
         let mut fits = true;
         for (dr, dc) in shape.iter() {
-            let (r, c) = (row + *dr, col + *dc);
+            let (r, c) = (row + dr, col + dc);
             if r < 0 or r > 1 or c >= n or not open[c * 2 + r] {
                 fits = false;
             }
         }
         if fits {
             for (dr, dc) in shape.iter() {
-                open[(col + *dc) * 2 + row + *dr] = false;
+                open[(col + dc) * 2 + row + dr] = false;
             }
             total += count_tilings(mut open, n, shapes, first + 1);
             for (dr, dc) in shape.iter() {
-                open[(col + *dc) * 2 + row + *dr] = true;
+                open[(col + dc) * 2 + row + dr] = true;
             }
         }
     }

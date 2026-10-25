@@ -295,7 +295,7 @@ struct Payload {
 fn seg_copy(s: ref Seg) -> Seg {
     match s {
         Seg.Text(t) => Seg.Text(t.clone()),
-        Seg.Code(v) => Seg.Code(*v),
+        Seg.Code(v) => Seg.Code(v),
     }
 }
 
@@ -336,7 +336,7 @@ fn enc_upper(enc: ref String) -> String {
 fn seg_repr(s: ref Seg) -> String {
     match s {
         Seg.Text(t) => py_repr(t),
-        Seg.Code(v) => f"DataMatrixCodeword({*v})",
+        Seg.Code(v) => f"DataMatrixCodeword({v})",
     }
 }
 
@@ -359,7 +359,7 @@ fn merge_segs(segs: ref Vec[Seg]) -> Vec[Seg] {
                     pending = String.new();
                     have = false;
                 }
-                out.push(Seg.Code(*v));
+                out.push(Seg.Code(v));
             }
         }
     }
@@ -526,7 +526,7 @@ fn compat_transform(segs: ref Vec[Seg], warnings: mut ref Vec[String]) -> Result
                     out.push(Seg.Text(chunk));
                 }
             }
-            Seg.Code(v) => out.push(Seg.Code(*v)),
+            Seg.Code(v) => out.push(Seg.Code(v)),
         }
     }
     Ok(out)

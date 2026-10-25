@@ -28,7 +28,7 @@ impl LogSystem {
         for (id, timestamp) in self.logs.iter() {
             let cut = timestamp.slice(0, n);
             if cut >= low and cut <= high {
-                ids.push(*id);
+                ids.push(id);
             }
         }
         ids

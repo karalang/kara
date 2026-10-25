@@ -15,10 +15,10 @@ fn find_radius(houses: Vec[i64], heaters: Vec[i64]) -> i64 {
     for house in houses {
         let mut need = i64.MAX;
         if let Some((before, _)) = at.floor(house) {
-            need = house - *before;
+            need = house - before;
         }
         if let Some((after, _)) = at.ceiling(house) {
-            need = need.min(*after - house);
+            need = need.min(after - house);
         }
         radius = radius.max(need);
     }

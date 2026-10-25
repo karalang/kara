@@ -713,8 +713,8 @@ const BIG: i64 = 9223372036854775807;
 
 fn nf(n: ref Num) -> f64 {
     match n {
-        Num.I(i) => *i as f64,
-        Num.F(x) => *x,
+        Num.I(i) => i as f64,
+        Num.F(x) => x,
     }
 }
 
@@ -729,7 +729,7 @@ fn num_repr(n: ref Num) -> String {
 fn ncmp(a: ref Num, b: ref Num) -> i64 {
     if let Num.I(x) = a {
         if let Num.I(y) = b {
-            return if *x < *y { -1 } else if *x > *y { 1 } else { 0 };
+            return if x < y { -1 } else if x > y { 1 } else { 0 };
         }
     }
     let x = nf(a);
@@ -771,7 +771,7 @@ fn py_max(a: own Num, b: own Num) -> Num {
 fn n_mul(a: ref Num, b: ref Num) -> Num {
     if let Num.I(x) = a {
         if let Num.I(y) = b {
-            return Num.I(*x * *y);
+            return Num.I(x * y);
         }
     }
     Num.F(nf(a) * nf(b))
@@ -779,8 +779,8 @@ fn n_mul(a: ref Num, b: ref Num) -> Num {
 
 fn n_add1(a: ref Num) -> Num {
     match a {
-        Num.I(x) => Num.I(*x + 1),
-        Num.F(x) => Num.F(*x + 1.0),
+        Num.I(x) => Num.I(x + 1),
+        Num.F(x) => Num.F(x + 1.0),
     }
 }
 
@@ -2339,15 +2339,15 @@ fn extract(query: ref Seq, choices: ref Vec[(Key, Option[Seq])], o: ref Opts) ->
 
 fn num_of(v: ref JValue) -> Option[Num] {
     match v {
-        JValue.Int(i) => Some(Num.I(*i)),
-        JValue.Float(x) => Some(Num.F(*x)),
+        JValue.Int(i) => Some(Num.I(i)),
+        JValue.Float(x) => Some(Num.F(x)),
         _ => None,
     }
 }
 
 fn jint(v: ref JValue) -> i64 {
     match v {
-        JValue.Int(i) => *i,
+        JValue.Int(i) => i,
         _ => 0,
     }
 }
@@ -2393,7 +2393,7 @@ fn read_opts(o: mut ref Opts, v: ref JValue) {
             }
         } else if k == "pad" {
             o.pad = match x {
-                JValue.Bool(b) => *b,
+                JValue.Bool(b) => b,
                 _ => true,
             };
         } else if k == "prefix_weight" {
@@ -2403,7 +2403,7 @@ fn read_opts(o: mut ref Opts, v: ref JValue) {
             };
         } else if k == "limit" {
             o.limit = match x {
-                JValue.Int(i) => Some(*i),
+                JValue.Int(i) => Some(i),
                 _ => None,
             };
         } else if k == "scorer" {

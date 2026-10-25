@@ -560,9 +560,9 @@ enum Cell {
 fn cell_of(j: ref JValue) -> Result[Cell, String] {
     match j {
         JValue.Null => Ok(Cell.Nil),
-        JValue.Bool(b) => Ok(Cell.Bool(*b)),
-        JValue.Int(i) => Ok(Cell.Int(*i)),
-        JValue.Float(f) => Ok(Cell.Float(*f)),
+        JValue.Bool(b) => Ok(Cell.Bool(b)),
+        JValue.Int(i) => Ok(Cell.Int(i)),
+        JValue.Float(f) => Ok(Cell.Float(f)),
         JValue.Str(s) => Ok(Cell.Str(s.clone())),
         _ => Err("a table cell must be a scalar".to_string()),
     }
@@ -588,9 +588,9 @@ fn float_repr(x: f64) -> String {
 fn cell_str(c: ref Cell) -> String {
     match c {
         Cell.Nil => "None".to_string(),
-        Cell.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Cell.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
         Cell.Int(i) => i.to_string(),
-        Cell.Float(f) => float_repr(*f),
+        Cell.Float(f) => float_repr(f),
         Cell.Str(s) => s.clone(),
     }
 }
@@ -1644,9 +1644,9 @@ fn type_of(cell: ref Cell, has_invisible: bool, numparse: bool) -> i64 {
 // float(v) for a value of a float column; None where it raises.
 fn float_of(c: ref Cell) -> Option[f64] {
     match c {
-        Cell.Int(i) => Some(*i as f64),
-        Cell.Float(f) => Some(*f),
-        Cell.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Cell.Int(i) => Some(i as f64),
+        Cell.Float(f) => Some(f),
+        Cell.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
         Cell.Str(s) => py_float(s),
         Cell.Nil => None,
     }
@@ -1729,8 +1729,8 @@ fn format_cell(val: ref Cell, valtype: i64, floatfmt: ref String, intfmt: ref St
     if valtype == T_INT {
         return match val {
             Cell.Str(s) => colored_int(s, intfmt),
-            Cell.Int(i) => format_int(*i, intfmt),
-            Cell.Bool(b) => format_bool(*b, intfmt),
+            Cell.Int(i) => format_int(i, intfmt),
+            Cell.Bool(b) => format_bool(b, intfmt),
             _ => Ok(cell_str(val)),
         };
     }
@@ -2542,8 +2542,8 @@ fn build_line(colwidths: ref Vec[i64], colaligns: ref Vec[Option[String]], f: re
             for a in colaligns.iter() {
                 spec.push_str(align_attr(a, "l", "r", "c", "r", "l"));
             }
-            let begin = if *longtable { "\\begin{longtable}{" } else { "\\begin{tabular}{" };
-            let rule = if *booktabs { "\\toprule" } else { "\\hline" };
+            let begin = if longtable { "\\begin{longtable}{" } else { "\\begin{tabular}{" };
+            let rule = if booktabs { "\\toprule" } else { "\\hline" };
             Ok(begin.to_string() + spec + "}\n" + rule)
         }
         LineFmt.AsciidocAbove => asciidoc_header(false, colwidths, colaligns),
@@ -2621,7 +2621,7 @@ fn build_row(cells: ref Vec[String], colwidths: ref Vec[i64], colaligns: ref Vec
             let mut i = 0;
             while i < cells.len() and i < colaligns.len() {
                 let attr = align_attr(colaligns[i], "", " style=\"text-align: right;\"", " style=\"text-align: center;\"", " style=\"text-align: right;\"", "");
-                let c = if *unsafe_ { cells[i].clone() } else { html_escape(cells[i]) };
+                let c = if unsafe_ { cells[i].clone() } else { html_escape(cells[i]) };
                 vals.push_str(f"<{tag}{attr}>{c}</{tag}>");
                 i += 1;
             }
@@ -2646,13 +2646,13 @@ fn build_row(cells: ref Vec[String], colwidths: ref Vec[i64], colaligns: ref Vec
         RowFmt.Latex(escape) => {
             let mut vals: Vec[String] = Vec.new();
             for c in cells.iter() {
-                vals.push(if *escape { latex_escape(c) } else { c.clone() });
+                vals.push(if escape { latex_escape(c) } else { c.clone() });
             }
             Ok(py_rstrip(vals.join("&") + "\\\\"))
         }
         RowFmt.Asciidoc(is_header) => {
             let data = "|".to_string() + cells.join("|");
-            if *is_header {
+            if is_header {
                 Ok(f"{asciidoc_header(true, colwidths, colaligns)?}\n{data}")
             } else {
                 Ok(data)
@@ -2766,8 +2766,8 @@ fn json_str(j: ref JValue) -> Option[String] {
 
 fn json_bool(j: ref JValue) -> bool {
     match j {
-        JValue.Bool(b) => *b,
-        JValue.Int(i) => *i != 0,
+        JValue.Bool(b) => b,
+        JValue.Int(i) => i != 0,
         _ => false,
     }
 }
@@ -2800,12 +2800,12 @@ fn opt_list(j: ref JValue) -> Option[Vec[Option[String]]] {
 
 fn widths_of(j: ref JValue) -> Widths {
     match j {
-        JValue.Int(i) => Widths.Scalar(*i),
+        JValue.Int(i) => Widths.Scalar(i),
         JValue.List(items) => {
             let mut v: Vec[Option[i64]] = Vec.new();
             for x in items.iter() {
                 v.push(match x {
-                    JValue.Int(i) => Some(*i),
+                    JValue.Int(i) => Some(i),
                     _ => None,
                 });
             }
@@ -2843,7 +2843,7 @@ fn opts_of(job: ref JValue) -> Result[Opts, String] {
             } else if k == "showindex" {
                 o.showindex = match v {
                     JValue.Str(s) => if s == "default" { ShowIndex.Default } else if s == "always" { ShowIndex.Always } else if s == "never" { ShowIndex.Never } else { ShowIndex.Other },
-                    JValue.Bool(b) => ShowIndex.Flag(*b),
+                    JValue.Bool(b) => ShowIndex.Flag(b),
                     JValue.List(items) => {
                         let mut cells: Vec[Cell] = Vec.new();
                         for x in items.iter() {
@@ -2859,7 +2859,7 @@ fn opts_of(job: ref JValue) -> Result[Opts, String] {
                         let mut idx: Vec[i64] = Vec.new();
                         for x in items.iter() {
                             if let JValue.Int(i) = x {
-                                idx.push(*i);
+                                idx.push(i);
                             }
                         }
                         NumParse.List(idx)
@@ -3119,7 +3119,7 @@ fn normalize(data: ref JValue, headers: ref Headers, showindex: ref ShowIndex) -
             rows = prepend_index(rows, index)?;
         }
         ShowIndex.Flag(b) => {
-            if *b {
+            if b {
                 let mut index: Vec[Cell] = Vec.new();
                 for i in 0..rows.len() {
                     index.push(Cell.Int(i));
@@ -3152,7 +3152,7 @@ fn expand_numparse(d: ref NumParse, n: i64) -> Result[Vec[bool], String] {
         NumParse.Flag(b) => {
             let mut v: Vec[bool] = Vec.new();
             for _ in 0..n {
-                v.push(not *b);
+                v.push(not b);
             }
             Ok(v)
         }
@@ -3178,7 +3178,7 @@ fn expand_widths(w: ref Widths, n: i64) -> Vec[Option[i64]] {
     match w {
         Widths.Scalar(x) => {
             for _ in 0..n {
-                v.push(Some(*x));
+                v.push(Some(x));
             }
         }
         Widths.List(l) => {
@@ -3989,8 +3989,8 @@ fn run_format(job: ref JValue) -> Vec[String] {
     if let Some(JValue.List(values)) = get(job, "values") {
         for v in values.iter() {
             let r = match v {
-                JValue.Int(i) => format_int(*i, spec),
-                JValue.Float(f) => format_float(*f, spec),
+                JValue.Int(i) => format_int(i, spec),
+                JValue.Float(f) => format_float(f, spec),
                 JValue.Str(s) => match py_float(s) {
                     Some(x) => format_float(x, spec),
                     None => Err(value_error(f"could not convert string to float: {repr_str(s)}")),

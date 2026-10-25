@@ -162,11 +162,11 @@ fn contain_virus_sets(is_infected: Vec[Vec[i64]]) -> i64 {
         for id in 0..cells.len() {
             if id == best {
                 for (r, c) in cells[id].iter() {
-                    g[*r][*c] = 2;
+                    g[r][c] = 2;
                 }
             } else {
                 for (r, c) in threats[id].iter() {
-                    g[*r][*c] = 1;
+                    g[r][c] = 1;
                 }
             }
         }
@@ -383,7 +383,7 @@ fn contain_virus_recur(is_infected: Vec[Vec[i64]]) -> i64 {
         for id in 0..cells.len() {
             if id == best {
                 for (r, c) in cells[id].iter() {
-                    g[*r][*c] = 2;
+                    g[r][c] = 2;
                 }
             } else {
                 for x in threats[id].iter() {
@@ -455,8 +455,8 @@ fn definition(grid: Vec[Vec[i64]], tied: mut ref bool) -> i64 {
                         continue;
                     }
                     for (a, b) in near(g, r, c).iter() {
-                        if g[*a][*b] == 1 and label[*a][*b] < label[r][c] {
-                            label[r][c] = label[*a][*b];
+                        if g[a][b] == 1 and label[a][b] < label[r][c] {
+                            label[r][c] = label[a][b];
                             changed = true;
                         }
                     }
@@ -474,7 +474,7 @@ fn definition(grid: Vec[Vec[i64]], tied: mut ref bool) -> i64 {
                     }
                     let mut touches = false;
                     for (a, b) in near(g, r, c).iter() {
-                        if g[*a][*b] == 1 and label[*a][*b] == l {
+                        if g[a][b] == 1 and label[a][b] == l {
                             touches = true;
                         }
                     }
@@ -500,13 +500,13 @@ fn definition(grid: Vec[Vec[i64]], tied: mut ref bool) -> i64 {
                 if g[r][c] == 1 and label[r][c] == best {
                     next[r][c] = 2;
                     for (a, b) in near(g, r, c).iter() {
-                        if g[*a][*b] == 0 {
+                        if g[a][b] == 0 {
                             walls += 1;
                         }
                     }
                 } else if g[r][c] == 0 {
                     for (a, b) in near(g, r, c).iter() {
-                        if g[*a][*b] == 1 and label[*a][*b] != best {
+                        if g[a][b] == 1 and label[a][b] != best {
                             next[r][c] = 1;
                         }
                     }

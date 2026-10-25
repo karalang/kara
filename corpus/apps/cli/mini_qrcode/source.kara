@@ -577,7 +577,7 @@ fn rs_blocks(table: ref Vec[Vec[i64]], version: i64, ec: i64) -> Vec[(i64, i64)]
 fn data_bits(table: ref Vec[Vec[i64]], version: i64, ec: i64) -> i64 {
     let mut total = 0;
     for (_, dc) in rs_blocks(table, version, ec).iter() {
-        total += *dc * 8;
+        total += dc * 8;
     }
     total
 }
@@ -601,8 +601,8 @@ fn create_bytes(gf: ref Gf, buffer: ref BitBuffer, blocks: ref Vec[(i64, i64)]) 
     let mut ecdata: Vec[Vec[i64]] = Vec.new();
     let mut gens: Vec[(i64, Vec[i64])] = Vec.new();
     for (total, dc_count) in blocks.iter() {
-        let dc_n = *dc_count;
-        let ec_n = *total - dc_n;
+        let dc_n = dc_count;
+        let ec_n = total - dc_n;
         if dc_n > max_dc {
             max_dc = dc_n;
         }
@@ -620,7 +620,7 @@ fn create_bytes(gf: ref Gf, buffer: ref BitBuffer, blocks: ref Vec[(i64, i64)]) 
         // which holds the same products)
         let mut rs_poly: Vec[i64] = Vec.new();
         for (n, p) in gens.iter() {
-            if *n == ec_n {
+            if n == ec_n {
                 rs_poly = p.clone();
             }
         }
@@ -679,7 +679,7 @@ fn create_data(gf: ref Gf, table: ref Vec[Vec[i64]], version: i64, ec: i64, chun
     let blocks = rs_blocks(table, version, ec);
     let mut bit_limit = 0;
     for (_, dc) in blocks.iter() {
-        bit_limit += *dc * 8;
+        bit_limit += dc * 8;
     }
     if buffer.length > bit_limit {
         return Err(py_err("DataOverflowError", f"Code length overflow. Data size ({buffer.length}) > size available ({bit_limit})"));

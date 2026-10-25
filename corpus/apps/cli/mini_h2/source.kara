@@ -2119,12 +2119,12 @@ fn new_settings(client: bool, initial: ref Vec[(i64, i64)]) -> Settings {
     s.vals.push(vec![16384]);
     s.vals.push(vec![0]);
     for (k, v) in initial.iter() {
-        let i = s.find(*k);
+        let i = s.find(k);
         if i < 0 {
-            s.keys.push(*k);
-            s.vals.push(vec![*v]);
+            s.keys.push(k);
+            s.vals.push(vec![v]);
         } else {
-            s.vals[i] = vec![*v];
+            s.vals[i] = vec![v];
         }
     }
     s
@@ -2165,7 +2165,7 @@ impl Settings {
 
     fn update(mut ref self, pairs: ref Vec[(i64, i64)]) -> Result[(), H2Err] {
         for (k, v) in pairs.iter() {
-            self.set(*k, *v)?;
+            self.set(k, v)?;
         }
         Ok(())
     }
@@ -3740,7 +3740,7 @@ fn new_conn(cfg: ref Config) -> Conn {
 fn settings_frame(pairs: ref Vec[(i64, i64)]) -> Frame {
     let mut f = blank_frame(k_settings(), 0);
     for (k, v) in pairs.iter() {
-        set_setting(mut f, *k, *v);
+        set_setting(mut f, k, v);
     }
     f
 }
@@ -4202,8 +4202,8 @@ impl Conn {
             return self.streams[i].closed_by;
         }
         for (k, by) in self.closed.iter() {
-            if *k == sid {
-                return *by;
+            if k == sid {
+                return by;
             }
         }
         -1
@@ -4432,7 +4432,7 @@ impl Conn {
         // whose acknowledged values have not moved yet.
         let mut e = ev(EV_REMOTE_SETTINGS, 0);
         for (k, v) in f.settings.iter() {
-            e.changed.push(Changed { setting: *k, original: self.remote.get(*k), new: *v });
+            e.changed.push(Changed { setting: k, original: self.remote.get(k), new: v });
         }
         let frames = self.acknowledge_settings()?;
         Ok((frames, evs1(e)))

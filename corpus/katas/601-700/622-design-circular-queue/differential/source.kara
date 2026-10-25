@@ -63,7 +63,7 @@ fn drive_star(k: i64, ops: Vec[Op], shift: i64) -> Trace {
     let mut t = new_trace();
     for op in ops.iter() {
         let result = match op {
-            Op.EnQueue(value) => f"{q.en_queue(*value)}",
+            Op.EnQueue(value) => f"{q.en_queue(value)}",
             Op.DeQueue => f"{q.de_queue()}",
             Op.Front => f"{q.front()}",
             Op.Rear => f"{q.rear()}",
@@ -137,7 +137,7 @@ fn drive_slots(k: i64, ops: Vec[Op], shift: i64) -> Trace {
     let mut t = new_trace();
     for op in ops.iter() {
         let result = match op {
-            Op.EnQueue(value) => f"{q.en_queue(*value)}",
+            Op.EnQueue(value) => f"{q.en_queue(value)}",
             Op.DeQueue => f"{q.de_queue()}",
             Op.Front => f"{q.front()}",
             Op.Rear => f"{q.rear()}",
@@ -234,7 +234,7 @@ fn drive_linked(k: i64, ops: Vec[Op], shift: i64) -> Trace {
     let mut t = new_trace();
     for op in ops.iter() {
         let result = match op {
-            Op.EnQueue(value) => f"{q.en_queue(*value)}",
+            Op.EnQueue(value) => f"{q.en_queue(value)}",
             Op.DeQueue => f"{q.de_queue()}",
             Op.Front => f"{q.front()}",
             Op.Rear => f"{q.rear()}",
@@ -302,7 +302,7 @@ fn drive_deque(k: i64, ops: Vec[Op], shift: i64) -> Trace {
     let mut t = new_trace();
     for op in ops.iter() {
         let result = match op {
-            Op.EnQueue(value) => f"{q.en_queue(*value)}",
+            Op.EnQueue(value) => f"{q.en_queue(value)}",
             Op.DeQueue => f"{q.de_queue()}",
             Op.Front => f"{q.front()}",
             Op.Rear => f"{q.rear()}",
@@ -370,7 +370,7 @@ fn definition(k: i64, ops: Vec[Op]) -> Vec[String] {
             Op.EnQueue(value) => {
                 let ok = items.len() < k;
                 if ok {
-                    items.push(*value);
+                    items.push(value);
                 }
                 out.push(f"{ok}");
             }

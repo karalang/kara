@@ -76,7 +76,7 @@ fn cal_points_typed(operations: Vec[String]) -> i64 {
     for op in ops.iter() {
         match op {
             Op.Score(x) => {
-                scores[top] = *x;
+                scores[top] = x;
                 top += 1;
             }
             Op.Sum => {

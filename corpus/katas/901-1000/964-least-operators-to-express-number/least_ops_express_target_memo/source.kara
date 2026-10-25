@@ -59,7 +59,7 @@ fn main() {
         (7, 342),
     ];
     for (x, target) in cases.iter() {
-        println(f"x = {x}, target = {target}: {least_ops_express_target(*x, *target)}");
+        println(f"x = {x}, target = {target}: {least_ops_express_target(x, target)}");
     }
     // every target from 1 to 300 for every x from 2 to 12
     let mut total = 0;

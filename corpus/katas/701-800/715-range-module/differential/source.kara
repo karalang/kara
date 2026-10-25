@@ -101,10 +101,10 @@ impl RangeModuleSorted {
         let mut lo = left;
         let mut hi = right;
         if let Some((s, e)) = self.spans.floor(left) {
-            if *e >= left {
-                lo = *s;
-                if *e > hi {
-                    hi = *e;
+            if e >= left {
+                lo = s;
+                if e > hi {
+                    hi = e;
                 }
             }
         }
@@ -123,7 +123,7 @@ impl RangeModuleSorted {
 
     fn query_range(ref self, left: i64, right: i64) -> bool {
         match self.spans.floor(left) {
-            Some((_, e)) => *e >= right,
+            Some((_, e)) => e >= right,
             None => false,
         }
     }
@@ -134,8 +134,8 @@ impl RangeModuleSorted {
         let mut before = 0;
         let mut before_end = 0;
         if let Some((s, e)) = self.spans.floor(left - 1) {
-            before = *s;
-            before_end = *e;
+            before = s;
+            before_end = e;
         }
         if before_end > left {
             self.spans.insert(before, left);

@@ -1772,7 +1772,7 @@ fn match_q(rng: ref Vec[(String, f64)], t: ref String) -> Option[f64] {
         }
         if spec > best_spec {
             best_spec = spec;
-            best_q = *q;
+            best_q = q;
         }
     }
     if best_spec == 0 { None } else { Some(best_q) }
