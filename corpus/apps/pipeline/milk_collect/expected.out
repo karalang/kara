@@ -1,0 +1,53 @@
+VAL farms: 120 rows, 2,992 bytes, fnv a8f0932e
+VAL tankers: 8 rows, 134 bytes, fnv 1a50d34a
+VAL pickups: 627 rows, 15,607 bytes, fnv 9896d68a
+VAL samples: 627 rows, 13,043 bytes, fnv d937282c
+HIL farms: 90 rows, 2,238 bytes, fnv 0e077068
+HIL tankers: 6 rows, 106 bytes, fnv d3232288
+HIL pickups: 466 rows, 11,582 bytes, fnv 26c96282
+HIL samples: 466 rows, 9,693 bytes, fnv dac398b4
+COA farms: 140 rows, 3,487 bytes, fnv 2c4fe627
+COA tankers: 15 rows, 232 bytes, fnv 2e8fbb2f
+COA pickups: 774 rows, 19,282 bytes, fnv 7b350eec
+COA samples: 774 rows, 16,131 bytes, fnv 4e5264c7
+LAK farms: 70 rows, 1,773 bytes, fnv 2a335792
+LAK tankers: 3 rows, 64 bytes, fnv 48c09e0d
+LAK pickups: 421 rows, 10,457 bytes, fnv f85286ce
+LAK samples: 421 rows, 8,727 bytes, fnv 846d8d73
+VAL_pickups.bad line 41: no farm 1999
+HIL_samples.bad line 31: bad inhibitor result 'X'
+COA_tankers.csv line 2: tanker T3-01 is not at LAK
+parsed files match the built ones: true
+VAL loads: 115 rows, 2,827 bytes, fnv 9ea8967f
+VAL payments: 120 rows, 6,965 bytes, fnv d421272a
+HIL loads: 104 rows, 2,539 bytes, fnv da860cf6
+HIL payments: 90 rows, 5,259 bytes, fnv aad5464c
+COA loads: 159 rows, 3,903 bytes, fnv 3c92ecf0
+COA payments: 140 rows, 8,149 bytes, fnv 94b229b3
+LAK loads: 86 rows, 2,100 bytes, fnv b75b694e
+LAK payments: 70 rows, 4,190 bytes, fnv bae18389
+VAL collections: 607 pickups, 2,585,669 litres, 20 refused (12 warm, 8 suspended, 83,927 litres); by day 88 87 86 86 85 88 87
+HIL collections: 454 pickups, 1,899,509 litres, 12 refused (9 warm, 3 suspended, 49,781 litres); by day 69 61 68 61 68 60 67
+COA collections: 753 pickups, 3,113,925 litres, 21 refused (18 warm, 3 suspended, 90,443 litres); by day 105 107 108 108 108 107 110
+LAK collections: 413 pickups, 1,785,140 litres, 8 refused (4 warm, 4 suspended, 33,085 litres); by day 63 54 61 54 63 55 63
+VAL quality: fat 4.19%, protein 3.34%, cells 301k; farms by cell count 34 under 200k, 58 200k-399k, 22 400k-499k, 6 500k and over; 22 pickups over 100k bacteria
+HIL quality: fat 4.16%, protein 3.36%, cells 304k; farms by cell count 25 under 200k, 36 200k-399k, 20 400k-499k, 9 500k and over; 19 pickups over 100k bacteria
+COA quality: fat 4.19%, protein 3.34%, cells 283k; farms by cell count 46 under 200k, 60 200k-399k, 28 400k-499k, 6 500k and over; 36 pickups over 100k bacteria
+LAK quality: fat 4.17%, protein 3.35%, cells 314k; farms by cell count 20 under 200k, 29 200k-399k, 13 400k-499k, 8 500k and over; 11 pickups over 100k bacteria
+VAL loads: 115 tanker loads on 4 routes, 54 at least 90% full; 5 dumped (138,260 litres) for inhibitors from 5 farms, charged $62,217.00; busiest route 4 with 35 loads
+HIL loads: 104 tanker loads on 3 routes, 37 at least 90% full; 2 dumped (39,670 litres) for inhibitors from 2 farms, charged $17,851.50; busiest route 1 with 51 loads
+COA loads: 159 tanker loads on 5 routes, 71 at least 90% full; 2 dumped (46,843 litres) for inhibitors from 2 farms, charged $21,079.35; busiest route 3 with 38 loads
+LAK loads: 86 tanker loads on 3 routes, 50 at least 90% full; 3 dumped (65,605 litres) for inhibitors from 3 farms, charged $29,522.25; busiest route 1 with 35 loads
+VAL intake: received 2,447,409 litres, processed 2,352,000, 60,000 in the silo at the end, 35,409 surplus; 7 days at capacity; by day 336,000 336,000 336,000 336,000 336,000 336,000 336,000
+HIL intake: received 1,859,839 litres, processed 1,729,000, 40,000 in the silo at the end, 90,839 surplus; 7 days at capacity; by day 247,000 247,000 247,000 247,000 247,000 247,000 247,000
+COA intake: received 3,067,082 litres, processed 2,963,285, 70,000 in the silo at the end, 33,797 surplus; 6 days at capacity; by day 413,285 425,000 425,000 425,000 425,000 425,000 425,000
+LAK intake: received 1,719,535 litres, processed 1,617,000, 30,000 in the silo at the end, 72,535 surplus; 7 days at capacity; by day 231,000 231,000 231,000 231,000 231,000 231,000 231,000
+VAL payments: 120 farms, $1,197,177.24 paid, 46.65 c/L; quality bonus $36,656.43, penalties $29,300.77, over quota $9,761.22; 5 farms owe; top farm 1078 $23,667.17
+HIL payments: 90 farms, $913,394.11 paid, 48.33 c/L; quality bonus $33,832.36, penalties $22,750.12, over quota $9,369.12; 2 farms owe; top farm 2034 $23,697.95
+COA payments: 140 farms, $1,529,079.45 paid, 49.19 c/L; quality bonus $61,958.89, penalties $31,138.71, over quota $9,525.00; 2 farms owe; top farm 3102 $24,526.63
+LAK payments: 70 farms, $854,257.93 paid, 48.23 c/L; quality bonus $42,166.64, penalties $23,056.73, over quota $5,996.28; 3 farms owe; top farm 4022 $28,070.28
+VAL drier: sent 35,409 litres of surplus, 35,409 dried, 0 sold on the spot market; 114,591 litres of room left
+HIL drier: sent 90,839 litres of surplus, 90,839 dried, 0 sold on the spot market; 23,752 litres of room left
+COA drier: sent 33,797 litres of surplus, 23,752 dried, 10,045 sold on the spot market; 0 litres of room left
+LAK drier: sent 72,535 litres of surplus, 0 dried, 72,535 sold on the spot market; 0 litres of room left
+drier.log: 4 entries, 77 bytes, fnv 64ebc35c

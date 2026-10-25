@@ -1,0 +1,1162 @@
+// pipeline/milk_collect
+//
+// A week of milk collection at a dairy co-operative's four plants. For
+// each plant it builds the farm register (route, herd, tank, how often the
+// tanker calls, organic or not, the quota), the tanker fleet on each
+// route, the week's pickups at the farms and the lab's results for each
+// pickup's sample (fat, protein, somatic cells, bacteria, an inhibitor
+// test for antibiotics). It writes them as CSV, reads them back and parses
+// them with the checks the plant's system makes, then closes the week day
+// by day: a pickup is refused if the farm is suspended or its tank is too
+// warm, and otherwise goes into its route's tanker until the tanker is
+// full and the next one starts; at the plant each load's samples are
+// read, and a load with a positive inhibitor test is dumped, charged to
+// the farms that caused it and those farms are not collected for two
+// days. The plant processes up to its capacity a day, keeps the rest in
+// its silo and has a surplus when the silo is full. The farms are paid for
+// their fat and protein, with quality bonuses and penalties, organic
+// premiums, haulage, charges and over-quota deductions. The loads and the
+// payments are written and read back, and five reports per plant follow:
+// collections, quality, loads, intake and payments. Then the co-op's drier
+// takes the plants' surplus in the order they send it, until it is full.
+//
+// The builds, the writes, the reads, the parses, the week closes, the
+// load and payment files and the reports are each a group of statements
+// that do not depend on each other (a stmt-par app). The drier takes what
+// the plants before have left room for, so the four plants have to send
+// in order.
+
+const MASK32: i64 = 4294967295;
+const DAYS: i64 = 7;
+// milk weighs 1030 g a litre; fat and protein are in hundredths of a percent
+const DENSITY: i64 = 1030;
+// cents per kg of fat and of protein, and per litre hauled
+const FAT_PRICE: i64 = 520;
+const PROTEIN_PRICE: i64 = 890;
+const HAULAGE: i64 = 4;
+const ORGANIC: i64 = 12;
+// a tank warmer than this (tenths of a degree) is refused at the farm
+const WARM: i64 = 60;
+// somatic cells (thousands per mL): the bands, and cents per litre in each
+const SCC_BANDS: Array[i64, 3] = [200, 400, 500];
+const SCC_ADJUST: Array[i64, 4] = [2, 0, -3, -8];
+const SCC_NAMES: Array[Str, 4] = ["under 200k", "200k-399k", "400k-499k", "500k and over"];
+// bacteria (thousand cfu per mL) over this cost 2 cents a litre
+const BACTERIA: i64 = 100;
+const BACTERIA_CHARGE: i64 = 2;
+// a dumped load is charged to the farms whose samples were positive, at
+// this many cents a litre, and they are not collected for two days
+const DUMP_PRICE: i64 = 45;
+const SUSPEND: i64 = 3;
+// cents a litre on what a farm sends over its quota for the week
+const OVER_QUOTA: i64 = 6;
+// the co-op's drier takes the plants' surplus for the week, in the order
+// they send it, until it is full
+const DRIER: i64 = 150000;
+
+struct Site {
+    code: String,
+    digit: i64,
+    seed: i64,
+    farms: i64,
+    routes: i64,
+    tankers: i64,
+    capacity: i64,
+    silo: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Farm {
+    fid: i64,
+    route: i64,
+    herd: i64,
+    tank: i64,
+    every: i64,
+    organic: bool,
+    quota: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Tanker {
+    tid: String,
+    route: i64,
+    capacity: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Pickup {
+    pno: i64,
+    day: i64,
+    minute: i64,
+    fid: i64,
+    litres: i64,
+    temp: i64,
+}
+
+#[derive(Clone, PartialEq)]
+struct Sample {
+    pno: i64,
+    fat: i64,
+    protein: i64,
+    scc: i64,
+    bacteria: i64,
+    inhibitor: bool,
+}
+
+// a tanker's trip on its route: the pickups it holds, and whether the
+// plant dumped it
+struct Load {
+    lno: i64,
+    day: i64,
+    route: i64,
+    tanker: String,
+    capacity: i64,
+    picks: Vec[i64],
+    litres: i64,
+    dumped: bool,
+}
+
+// a farm's week: what it was paid for, and how its pay was made up
+#[derive(Copy)]
+struct Account {
+    fid: i64,
+    pickups: i64,
+    litres: i64,
+    fat: i64,
+    protein: i64,
+    scc: i64,
+    gross: i64,
+    quality: i64,
+    haulage: i64,
+    charges: i64,
+    over: i64,
+    net: i64,
+}
+
+struct Week {
+    loads: Vec[Load],
+    paid: Vec[i64],
+    until: Vec[i64],
+    charges: Vec[i64],
+    charged_farms: Set[i64],
+    refused: Vec[i64],
+    refused_litres: i64,
+    collected: i64,
+    litres: i64,
+    by_day: Vec[i64],
+    received: Vec[i64],
+    processed: Vec[i64],
+    dumped: i64,
+    dumped_litres: i64,
+    silo: i64,
+    surplus: i64,
+    full_days: i64,
+    route_loads: Vec[i64],
+    bacteria: i64,
+    accounts: Vec[Account],
+}
+
+struct Drier {
+    left: i64,
+    log: Vec[String],
+}
+
+enum BatchError {
+    Bad(String),
+}
+
+impl BatchError {
+    fn describe(ref self) -> String {
+        match self {
+            BatchError.Bad(what) => what.clone(),
+        }
+    }
+}
+
+fn bad(what: ref String) -> BatchError {
+    BatchError.Bad(what.clone())
+}
+
+// ------------------------------------------------------------ helpers
+
+fn hash32(a: i64) -> i64 {
+    let mut h = a & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    h = (((h >> 16) ^ h) * 73244475) & MASK32;
+    (h >> 16) ^ h
+}
+
+fn mix(seed: i64, i: i64, salt: i64) -> i64 {
+    hash32(seed * 1000003 + i * 104729 + salt * 15485863)
+}
+
+fn text_sum(text: ref String) -> i64 {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = ((h ^ (b as i64)) * 16777619) & MASK32;
+    }
+    h
+}
+
+fn group3(n: i64) -> String {
+    let mut s = f"{n}";
+    let mut out = String.new();
+    while s.len() > 3 {
+        let cut = s.len() - 3;
+        out = f",{s.substring(cut, s.len())}{out}";
+        s = s.substring(0, cut);
+    }
+    f"{s}{out}"
+}
+
+fn money(c: i64) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.abs();
+    f"{sign}${group3(a / 100)}.{a % 100:02}"
+}
+
+fn percent(bp: i64) -> String {
+    f"{bp / 100}.{bp % 100:02}%"
+}
+
+fn clock(m: i64) -> String {
+    f"{m / 60:02}:{m % 60:02}"
+}
+
+fn split_on(text: ref String, sep: ref String) -> Vec[String] {
+    text.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn is_digits(s: ref String) -> bool {
+    s.len() > 0 and s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn to_int(s: ref String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// An integer between lo and hi, or None.
+fn small_int(t: ref String, lo: i64, hi: i64) -> Option[i64] {
+    if not is_digits(t) or t.len() > 8 {
+        return None;
+    }
+    let v = to_int(t);
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+// HH:MM as a minute of the day, or None.
+fn time_of(t: ref String) -> Option[i64] {
+    if t.len() != 5 or t.substring(2, 3) != ":" or not is_digits(t.substring(0, 2)) or not is_digits(t.substring(3, 5)) {
+        return None;
+    }
+    let h = to_int(t.substring(0, 2));
+    let m = to_int(t.substring(3, 5));
+    if h > 23 or m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+fn file_line(name: ref String, text: ref String) -> String {
+    let rows = split_on(text, "\n").len() as i64 - 2;
+    f"{name}: {group3(rows)} rows, {group3(text.len() as i64)} bytes, fnv {text_sum(text):08x}"
+}
+
+fn tanker_id(site: ref Site, n: i64) -> String {
+    f"T{site.digit}-{n:02}"
+}
+
+// The somatic cell band a count falls in.
+fn band(scc: i64) -> i64 {
+    let mut b = 0;
+    while b < 3 and scc >= SCC_BANDS[b] {
+        b += 1;
+    }
+    b
+}
+
+fn farm_index(farms: ref Vec[Farm]) -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    for k in 0..farms.len() {
+        m.insert(farms[k].fid, k);
+    }
+    m
+}
+
+// ------------------------------------------------------------ building
+
+fn build_farms(site: ref Site) -> Vec[Farm] {
+    let mut out: Vec[Farm] = Vec.new();
+    for k in 0..site.farms {
+        let r = mix(site.seed, k, 11);
+        let herd = 30 + (r >> 8) % 200;
+        let litres = herd * (22 + (r >> 16) % 9);
+        let every = if herd >= 120 { 1 } else { 2 };
+        let tank = (litres * every * 106 / 100 + 499) / 500 * 500;
+        out.push(Farm {
+            fid: site.digit * 1000 + 1 + k,
+            route: 1 + r % site.routes,
+            herd: herd,
+            tank: tank,
+            every: every,
+            organic: (r >> 24) % 100 < 12,
+            quota: herd * 25,
+        });
+    }
+    out
+}
+
+fn build_tankers(site: ref Site) -> Vec[Tanker] {
+    let sizes = [18000, 24000, 30000];
+    let mut out: Vec[Tanker] = Vec.new();
+    let mut n = 0;
+    for route in 1..site.routes + 1 {
+        for _ in 0..site.tankers {
+            n += 1;
+            out.push(Tanker { tid: tanker_id(site, n), route: route, capacity: sizes[mix(site.seed, n, 21) % 3] });
+        }
+    }
+    out
+}
+
+fn build_pickups(site: ref Site, farms: ref Vec[Farm]) -> Vec[Pickup] {
+    // each farm's place on its route, in register order
+    let mut pos: Vec[i64] = Vec.new();
+    let mut count = Vec.filled(site.routes + 1, 0);
+    for f in farms {
+        pos.push(count[f.route]);
+        count[f.route] += 1;
+    }
+    let mut out: Vec[Pickup] = Vec.new();
+    let mut n = 0;
+    for d in 1..DAYS + 1 {
+        let mut day: Vec[(i64, i64, i64, i64)] = Vec.new();
+        for k in 0..farms.len() {
+            let f = ref farms[k];
+            if (d + f.fid) % f.every != 0 {
+                continue;
+            }
+            let r = mix(site.seed, d * 10000 + f.fid, 31);
+            let y = 22 + (mix(site.seed, k, 11) >> 16) % 9;
+            let litres = f.herd * y * f.every * (95 + r % 11) / 100;
+            let minute = 300 + (f.route - 1) * 11 + pos[k] * 17 + (r >> 8) % 9;
+            let mut temp = 30 + (r >> 12) % 16;
+            if (r >> 20) % 100 < 2 {
+                temp = 61 + (r >> 4) % 30;
+            }
+            day.push((minute, f.fid, litres, temp));
+        }
+        day.sort();
+        for (minute, fid, litres, temp) in day {
+            n += 1;
+            out.push(Pickup { pno: n, day: d, minute: minute, fid: fid, litres: litres, temp: temp });
+        }
+    }
+    out
+}
+
+fn build_samples(site: ref Site, pickups: ref Vec[Pickup]) -> Vec[Sample] {
+    let mut out: Vec[Sample] = Vec.new();
+    for p in pickups {
+        let q = mix(site.seed, p.pno, 41);
+        let b = mix(site.seed, p.fid, 14);
+        let mut bacteria = 5 + (q >> 18) % 60;
+        if (q >> 24) % 100 < 4 {
+            bacteria = 120 + (q >> 4) % 300;
+        }
+        out.push(Sample {
+            pno: p.pno,
+            fat: 380 + b % 80 + q % 41 - 20,
+            protein: 310 + (b >> 8) % 50 + (q >> 8) % 21 - 10,
+            scc: (80 + (b >> 16) % 450) * (90 + (q >> 12) % 21) / 100,
+            bacteria: bacteria,
+            inhibitor: mix(site.seed, p.pno, 42) % 1000 < 6,
+        });
+    }
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn farm_header() -> String {
+    "farm,route,herd,tank,every,organic,quota".to_string()
+}
+
+fn tanker_header() -> String {
+    "tanker,route,capacity".to_string()
+}
+
+fn pickup_header() -> String {
+    "pickup,day,time,farm,litres,temperature".to_string()
+}
+
+fn sample_header() -> String {
+    "pickup,fat,protein,scc,bacteria,inhibitor".to_string()
+}
+
+fn load_header() -> String {
+    "load,day,route,tanker,pickups,litres,result".to_string()
+}
+
+fn payment_header() -> String {
+    "farm,pickups,litres,fat,protein,scc,gross,quality,haulage,charges,over_quota,net".to_string()
+}
+
+fn encode_farms(farms: ref Vec[Farm]) -> String {
+    let mut out = f"{farm_header()}\n";
+    for f in farms {
+        let organic = if f.organic { "Y" } else { "N" };
+        out.push_str(f"{f.fid},{f.route},{f.herd},{f.tank},{f.every},{organic},{f.quota}\n");
+    }
+    out
+}
+
+fn encode_tankers(tankers: ref Vec[Tanker]) -> String {
+    let mut out = f"{tanker_header()}\n";
+    for t in tankers {
+        out.push_str(f"{t.tid},{t.route},{t.capacity}\n");
+    }
+    out
+}
+
+fn encode_pickups(pickups: ref Vec[Pickup]) -> String {
+    let mut out = f"{pickup_header()}\n";
+    for p in pickups {
+        out.push_str(f"{p.pno},{p.day},{clock(p.minute)},{p.fid},{p.litres},{p.temp}\n");
+    }
+    out
+}
+
+fn encode_samples(samples: ref Vec[Sample]) -> String {
+    let mut out = f"{sample_header()}\n";
+    for s in samples {
+        let inhibitor = if s.inhibitor { "P" } else { "N" };
+        out.push_str(f"{s.pno},{s.fat},{s.protein},{s.scc},{s.bacteria},{inhibitor}\n");
+    }
+    out
+}
+
+fn encode_loads(w: ref Week) -> String {
+    let mut out = f"{load_header()}\n";
+    for ld in w.loads {
+        let result = if ld.dumped { "DUMPED" } else { "OK" };
+        out.push_str(f"{ld.lno},{ld.day},{ld.route},{ld.tanker},{ld.picks.len()},{ld.litres},{result}\n");
+    }
+    out
+}
+
+fn encode_payments(w: ref Week) -> String {
+    let mut out = f"{payment_header()}\n";
+    for a in w.accounts {
+        out.push_str(f"{a.fid},{a.pickups},{a.litres},{a.fat},{a.protein},{a.scc},{a.gross},{a.quality},{a.haulage},{a.charges},{a.over},{a.net}\n");
+    }
+    out
+}
+
+fn read_text(path: ref String) -> Result[String, BatchError] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(bad(f"cannot read {path}")),
+    }
+}
+
+// Replace a field of line n (counting the header as line 0).
+fn damage(text: ref String, n: i64, field: i64, value: ref String) -> String {
+    let mut lines = split_on(text, "\n");
+    let mut f = split_on(lines[n], ",");
+    f[field] = value.clone();
+    lines[n] = f.join(",");
+    lines.join("\n")
+}
+
+// ------------------------------------------------------------ parsing
+
+// The lines between the header and the final newline.
+fn body_lines(path: ref String, text: ref String, header: ref String) -> Result[Vec[String], BatchError] {
+    let lines = split_on(text, "\n");
+    let n = lines.len() as i64;
+    if n < 2 or lines[n - 1] != "" {
+        return Err(bad(f"{path}: no final newline"));
+    }
+    if lines[0] != header {
+        return Err(bad(f"{path} line 1: bad header"));
+    }
+    Ok(lines[1..n - 1].to_vec())
+}
+
+fn fields_of(path: ref String, n: i64, line: ref String, want: i64) -> Result[Vec[String], BatchError] {
+    let f = split_on(line, ",");
+    if f.len() as i64 != want {
+        return Err(bad(f"{path} line {n}: expected {want} fields, found {f.len()}"));
+    }
+    Ok(f)
+}
+
+fn parse_farms(path: ref String, site: ref Site, text: ref String) -> Result[Vec[Farm], BatchError] {
+    let mut out: Vec[Farm] = Vec.new();
+    let mut seen: Set[i64] = Set.new();
+    let mut n = 1;
+    for line in body_lines(path, text, farm_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 7)?;
+        let fid = if f[0].len() == 4 { small_int(f[0], 0, 9999) } else { None };
+        let fid = match fid {
+            Some(v) if v / 1000 == site.digit => v,
+            _ => return Err(bad(f"{path} line {n}: bad farm id '{f[0]}'")),
+        };
+        if seen.contains(fid) {
+            return Err(bad(f"{path} line {n}: farm {fid} twice"));
+        }
+        seen.insert(fid);
+        let route = match small_int(f[1], 1, site.routes) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: no route '{f[1]}' at {site.code}")),
+        };
+        let herd = match small_int(f[2], 1, 5000) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad herd '{f[2]}'")),
+        };
+        let tank = match small_int(f[3], 100, 999999) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad tank '{f[3]}'")),
+        };
+        let every = match small_int(f[4], 1, 2) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad pickup interval '{f[4]}'")),
+        };
+        if f[5] != "Y" and f[5] != "N" {
+            return Err(bad(f"{path} line {n}: bad organic flag '{f[5]}'"));
+        }
+        let quota = match small_int(f[6], 0, 999999) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad quota '{f[6]}'")),
+        };
+        out.push(Farm { fid: fid, route: route, herd: herd, tank: tank, every: every, organic: f[5] == "Y", quota: quota });
+    }
+    Ok(out)
+}
+
+fn parse_tankers(path: ref String, site: ref Site, text: ref String) -> Result[Vec[Tanker], BatchError] {
+    let mut out: Vec[Tanker] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    let mut n = 1;
+    for line in body_lines(path, text, tanker_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 3)?;
+        let t = ref f[0];
+        if t.len() != 5 or t.substring(0, 1) != "T" or t.substring(2, 3) != "-" or not is_digits(t.substring(1, 2)) or not is_digits(t.substring(3, 5)) {
+            return Err(bad(f"{path} line {n}: bad tanker '{t}'"));
+        }
+        if to_int(t.substring(1, 2)) != site.digit {
+            return Err(bad(f"{path} line {n}: tanker {t} is not at {site.code}"));
+        }
+        if seen.contains(t) {
+            return Err(bad(f"{path} line {n}: tanker {t} twice"));
+        }
+        seen.insert(t.clone());
+        let route = match small_int(f[1], 1, site.routes) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: no route '{f[1]}' at {site.code}")),
+        };
+        let capacity = match small_int(f[2], 1000, 60000) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad capacity '{f[2]}'")),
+        };
+        out.push(Tanker { tid: t.clone(), route: route, capacity: capacity });
+    }
+    for r in 1..site.routes + 1 {
+        if not out.iter().any(|t| t.route == r) {
+            return Err(bad(f"{path}: no tanker on route {r}"));
+        }
+    }
+    Ok(out)
+}
+
+fn parse_pickups(path: ref String, site: ref Site, farms: ref Vec[Farm], text: ref String) -> Result[Vec[Pickup], BatchError] {
+    let index = farm_index(farms);
+    let mut out: Vec[Pickup] = Vec.new();
+    let mut n = 1;
+    let mut last = 0;
+    for line in body_lines(path, text, pickup_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 6)?;
+        if f[0] != f"{n - 1}" {
+            return Err(bad(f"{path} line {n}: pickup '{f[0]}' out of order"));
+        }
+        let day = match small_int(f[1], 1, DAYS) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad day '{f[1]}'")),
+        };
+        let minute = match time_of(f[2]) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad time '{f[2]}'")),
+        };
+        if day * 1440 + minute < last {
+            return Err(bad(f"{path} line {n}: time goes backwards"));
+        }
+        last = day * 1440 + minute;
+        let k = match small_int(f[3], 0, 9999) {
+            Some(v) => index.get(v),
+            None => None,
+        };
+        let farm = match k {
+            Some(k) => ref farms[k],
+            None => return Err(bad(f"{path} line {n}: no farm {f[3]}")),
+        };
+        let litres = match small_int(f[4], 1, 999999) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad litres '{f[4]}'")),
+        };
+        if litres > farm.tank {
+            return Err(bad(f"{path} line {n}: {litres} litres is more than farm {farm.fid}'s tank"));
+        }
+        let temp = match small_int(f[5], 0, 400) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad temperature '{f[5]}'")),
+        };
+        out.push(Pickup { pno: n - 1, day: day, minute: minute, fid: farm.fid, litres: litres, temp: temp });
+    }
+    Ok(out)
+}
+
+fn parse_samples(path: ref String, site: ref Site, pickups: ref Vec[Pickup], text: ref String) -> Result[Vec[Sample], BatchError] {
+    let mut out: Vec[Sample] = Vec.new();
+    let mut n = 1;
+    for line in body_lines(path, text, sample_header())? {
+        n += 1;
+        let f = fields_of(path, n, line, 6)?;
+        if n - 1 > pickups.len() or f[0] != f"{n - 1}" {
+            return Err(bad(f"{path} line {n}: no pickup '{f[0]}'"));
+        }
+        let fat = match small_int(f[1], 100, 900) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad fat '{f[1]}'")),
+        };
+        let protein = match small_int(f[2], 100, 900) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad protein '{f[2]}'")),
+        };
+        let scc = match small_int(f[3], 1, 9999) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad cell count '{f[3]}'")),
+        };
+        let bacteria = match small_int(f[4], 0, 9999) {
+            Some(v) => v,
+            None => return Err(bad(f"{path} line {n}: bad bacteria count '{f[4]}'")),
+        };
+        if f[5] != "P" and f[5] != "N" {
+            return Err(bad(f"{path} line {n}: bad inhibitor result '{f[5]}'"));
+        }
+        out.push(Sample { pno: n - 1, fat: fat, protein: protein, scc: scc, bacteria: bacteria, inhibitor: f[5] == "P" });
+    }
+    if out.len() != pickups.len() {
+        return Err(bad(f"{path}: {out.len()} samples for {pickups.len()} pickups"));
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the week
+
+// A load reaches the plant: its samples are read, and if any is positive
+// for inhibitors the load is dumped and charged to the farms that caused
+// it, who are suspended. Every other pickup in it is paid for.
+fn deliver(w: mut ref Week, li: i64, day: i64, pickups: ref Vec[Pickup], samples: ref Vec[Sample], index: ref Map[i64, i64]) {
+    let mut positive: Vec[i64] = Vec.new();
+    for i in w.loads[li].picks {
+        if samples[i].inhibitor and not positive.contains(pickups[i].fid) {
+            positive.push(pickups[i].fid);
+        }
+    }
+    let litres = w.loads[li].litres;
+    if positive.len() > 0 {
+        w.loads[li].dumped = true;
+        w.dumped += 1;
+        w.dumped_litres += litres;
+        let charge = litres * DUMP_PRICE / positive.len();
+        for fid in positive {
+            let k = index.get(fid) ?? 0;
+            w.charges[k] += charge;
+            w.charged_farms.insert(fid);
+            w.until[k] = day + SUSPEND;
+        }
+        for i in w.loads[li].picks.clone() {
+            if not positive.contains(pickups[i].fid) {
+                w.paid.push(i);
+            }
+        }
+        return;
+    }
+    w.received[day - 1] += litres;
+    for i in w.loads[li].picks.clone() {
+        w.paid.push(i);
+    }
+}
+
+fn close_week(site: ref Site, farms: ref Vec[Farm], tankers: ref Vec[Tanker], pickups: ref Vec[Pickup], samples: ref Vec[Sample]) -> Week {
+    let index = farm_index(farms);
+    let mut by_route: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..site.routes + 1 {
+        by_route.push(Vec.new());
+    }
+    for k in 0..tankers.len() {
+        by_route[tankers[k].route].push(k);
+    }
+    let mut w = Week {
+        loads: Vec.new(),
+        paid: Vec.new(),
+        until: Vec.filled(farms.len(), 0),
+        charges: Vec.filled(farms.len(), 0),
+        charged_farms: Set.new(),
+        refused: Vec.filled(2, 0),
+        refused_litres: 0,
+        collected: 0,
+        litres: 0,
+        by_day: Vec.filled(DAYS, 0),
+        received: Vec.filled(DAYS, 0),
+        processed: Vec.filled(DAYS, 0),
+        dumped: 0,
+        dumped_litres: 0,
+        silo: 0,
+        surplus: 0,
+        full_days: 0,
+        route_loads: Vec.filled(site.routes + 1, 0),
+        bacteria: 0,
+        accounts: Vec.new(),
+    };
+    let mut trips = Vec.filled(site.routes + 1, 0);
+    let mut i = 0;
+    for day in 1..DAYS + 1 {
+        // the load each route's tanker is filling, by index into w.loads
+        let mut open = Vec.filled(site.routes + 1, -1);
+        while i < pickups.len() and pickups[i].day == day {
+            let p = ref pickups[i];
+            let k = index.get(p.fid) ?? 0;
+            if day < w.until[k] {
+                w.refused[1] += 1;
+                w.refused_litres += p.litres;
+                i += 1;
+                continue;
+            }
+            if p.temp > WARM {
+                w.refused[0] += 1;
+                w.refused_litres += p.litres;
+                i += 1;
+                continue;
+            }
+            let r = farms[k].route;
+            if open[r] >= 0 and w.loads[open[r]].litres + p.litres > w.loads[open[r]].capacity {
+                deliver(mut w, open[r], day, pickups, samples, index);
+                open[r] = -1;
+            }
+            if open[r] < 0 {
+                let t = ref tankers[by_route[r][trips[r] % by_route[r].len()]];
+                trips[r] += 1;
+                w.route_loads[r] += 1;
+                w.loads.push(Load {
+                    lno: w.loads.len() + 1,
+                    day: day,
+                    route: r,
+                    tanker: t.tid.clone(),
+                    capacity: t.capacity,
+                    picks: Vec.new(),
+                    litres: 0,
+                    dumped: false,
+                });
+                open[r] = w.loads.len() - 1;
+            }
+            let li = open[r];
+            w.loads[li].picks.push(i);
+            w.loads[li].litres += p.litres;
+            w.collected += 1;
+            w.litres += p.litres;
+            w.by_day[day - 1] += 1;
+            i += 1;
+        }
+        for r in 1..site.routes + 1 {
+            if open[r] >= 0 {
+                deliver(mut w, open[r], day, pickups, samples, index);
+            }
+        }
+        w.silo += w.received[day - 1];
+        let done = w.silo.min(site.capacity);
+        w.processed[day - 1] = done;
+        w.silo -= done;
+        if done == site.capacity {
+            w.full_days += 1;
+        }
+        if w.silo > site.silo {
+            w.surplus += w.silo - site.silo;
+            w.silo = site.silo;
+        }
+    }
+    pay(mut w, farms, pickups, samples, index);
+    w
+}
+
+// What each farm is owed for the pickups the plant kept.
+fn pay(w: mut ref Week, farms: ref Vec[Farm], pickups: ref Vec[Pickup], samples: ref Vec[Sample], index: ref Map[i64, i64]) {
+    let mut acc: Vec[Account] = Vec.new();
+    for f in farms {
+        acc.push(Account { fid: f.fid, pickups: 0, litres: 0, fat: 0, protein: 0, scc: 0, gross: 0, quality: 0, haulage: 0, charges: 0, over: 0, net: 0 });
+    }
+    let mut wf = Vec.filled(farms.len(), 0);
+    let mut wp = Vec.filled(farms.len(), 0);
+    let mut ws = Vec.filled(farms.len(), 0);
+    w.paid.sort();
+    for idx in w.paid.clone() {
+        let p = ref pickups[idx];
+        let s = ref samples[idx];
+        let k = index.get(p.fid) ?? 0;
+        acc[k].pickups += 1;
+        acc[k].litres += p.litres;
+        wf[k] += s.fat * p.litres;
+        wp[k] += s.protein * p.litres;
+        ws[k] += s.scc * p.litres;
+        let fat_g = p.litres * DENSITY * s.fat / 10000;
+        let prot_g = p.litres * DENSITY * s.protein / 10000;
+        acc[k].gross += fat_g * FAT_PRICE / 1000 + prot_g * PROTEIN_PRICE / 1000;
+        let mut q = SCC_ADJUST[band(s.scc)] * p.litres;
+        if s.bacteria > BACTERIA {
+            q -= BACTERIA_CHARGE * p.litres;
+            w.bacteria += 1;
+        }
+        if farms[k].organic {
+            q += ORGANIC * p.litres;
+        }
+        acc[k].quality += q;
+        acc[k].haulage += HAULAGE * p.litres;
+    }
+    for k in 0..farms.len() {
+        let mut a = acc[k];
+        if a.litres > 0 {
+            a.fat = wf[k] / a.litres;
+            a.protein = wp[k] / a.litres;
+            a.scc = ws[k] / a.litres;
+        }
+        a.charges = w.charges[k];
+        let allowed = farms[k].quota * DAYS;
+        if a.litres > allowed {
+            a.over = (a.litres - allowed) * OVER_QUOTA;
+        }
+        a.net = a.gross + a.quality - a.haulage - a.charges - a.over;
+        w.accounts.push(a);
+    }
+}
+
+// ------------------------------------------------------------ reports
+
+fn collection_report(site: ref Site, w: ref Week) -> String {
+    let days: Vec[String] = w.by_day.iter().map(|x| f"{x}").collect();
+    f"{site.code} collections: {group3(w.collected)} pickups, {group3(w.litres)} litres, {w.refused[0] + w.refused[1]} refused ({w.refused[0]} warm, {w.refused[1]} suspended, {group3(w.refused_litres)} litres); by day {days.join(" ")}"
+}
+
+fn quality_report(site: ref Site, w: ref Week) -> String {
+    let mut litres = 0;
+    let mut f = 0;
+    let mut p = 0;
+    let mut s = 0;
+    let mut bands = [0, 0, 0, 0];
+    for a in w.accounts {
+        if a.litres == 0 {
+            continue;
+        }
+        litres += a.litres;
+        f += a.fat * a.litres;
+        p += a.protein * a.litres;
+        s += a.scc * a.litres;
+        bands[band(a.scc)] += 1;
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for b in 0..4 {
+        parts.push(f"{bands[b]} {SCC_NAMES[b]}");
+    }
+    f"{site.code} quality: fat {percent(f / litres)}, protein {percent(p / litres)}, cells {s / litres}k; farms by cell count {parts.join(", ")}; {w.bacteria} pickups over {BACTERIA}k bacteria"
+}
+
+fn load_report(site: ref Site, w: ref Week) -> String {
+    let mut busiest = 1;
+    for r in 1..site.routes + 1 {
+        if w.route_loads[r] > w.route_loads[busiest] {
+            busiest = r;
+        }
+    }
+    let full = w.loads.iter().filter(|ld| ld.litres * 10 >= ld.capacity * 9).count();
+    let charged: i64 = w.charges.iter().sum();
+    f"{site.code} loads: {w.loads.len()} tanker loads on {site.routes} routes, {full} at least 90% full; {w.dumped} dumped ({group3(w.dumped_litres)} litres) for inhibitors from {w.charged_farms.len()} farms, charged {money(charged)}; busiest route {busiest} with {w.route_loads[busiest]} loads"
+}
+
+fn intake_report(site: ref Site, w: ref Week) -> String {
+    let received: i64 = w.received.iter().sum();
+    let processed: i64 = w.processed.iter().sum();
+    let days: Vec[String] = w.processed.iter().map(|x| group3(*x)).collect();
+    f"{site.code} intake: received {group3(received)} litres, processed {group3(processed)}, {group3(w.silo)} in the silo at the end, {group3(w.surplus)} surplus; {w.full_days} days at capacity; by day {days.join(" ")}"
+}
+
+fn payment_report(site: ref Site, w: ref Week) -> String {
+    let mut paid = 0;
+    let mut litres = 0;
+    let mut bonus = 0;
+    let mut penalty = 0;
+    let mut over = 0;
+    let mut negative = 0;
+    let mut top = -1;
+    for k in 0..w.accounts.len() {
+        let a = ref w.accounts[k];
+        paid += a.net;
+        litres += a.litres;
+        if a.quality > 0 {
+            bonus += a.quality;
+        } else {
+            penalty -= a.quality;
+        }
+        over += a.over;
+        if a.net < 0 {
+            negative += 1;
+        }
+        if top < 0 or a.net > w.accounts[top].net {
+            top = k;
+        }
+    }
+    let best = ref w.accounts[top];
+    f"{site.code} payments: {w.accounts.len()} farms, {money(paid)} paid, {paid / litres}.{paid * 100 / litres % 100:02} c/L; quality bonus {money(bonus)}, penalties {money(penalty)}, over quota {money(over)}; {negative} farms owe; top farm {best.fid} {money(best.net)}"
+}
+
+// ------------------------------------------------------------ the drier
+
+// A plant sends its week's surplus; the drier takes what it has room for
+// and the rest is sold on the spot market.
+fn send(drier: mut ref Drier, site: ref Site, w: ref Week) -> String {
+    let asked = w.surplus;
+    let taken = asked.min(drier.left);
+    drier.left -= taken;
+    drier.log.push(f"{site.code},{asked},{taken},{drier.left}");
+    f"{site.code} drier: sent {group3(asked)} litres of surplus, {group3(taken)} dried, {group3(asked - taken)} sold on the spot market; {group3(drier.left)} litres of room left"
+}
+
+// ------------------------------------------------------------ the job
+
+fn run() -> Result[(), BatchError] {
+    let val = Site { code: "VAL", digit: 1, seed: 9101, farms: 120, routes: 4, tankers: 2, capacity: 336000, silo: 60000 };
+    let hil = Site { code: "HIL", digit: 2, seed: 9202, farms: 90, routes: 3, tankers: 2, capacity: 247000, silo: 40000 };
+    let coa = Site { code: "COA", digit: 3, seed: 9303, farms: 140, routes: 5, tankers: 3, capacity: 425000, silo: 70000 };
+    let lak = Site { code: "LAK", digit: 4, seed: 9404, farms: 70, routes: 3, tankers: 1, capacity: 231000, silo: 30000 };
+
+    // Four farm registers and four fleets, then four weeks of pickups over
+    // each plant's own farms and four sets of lab results.
+    let f1 = build_farms(val);
+    let f2 = build_farms(hil);
+    let f3 = build_farms(coa);
+    let f4 = build_farms(lak);
+    let t1 = build_tankers(val);
+    let t2 = build_tankers(hil);
+    let t3 = build_tankers(coa);
+    let t4 = build_tankers(lak);
+    let p1 = build_pickups(val, f1);
+    let p2 = build_pickups(hil, f2);
+    let p3 = build_pickups(coa, f3);
+    let p4 = build_pickups(lak, f4);
+    let s1 = build_samples(val, p1);
+    let s2 = build_samples(hil, p2);
+    let s3 = build_samples(coa, p3);
+    let s4 = build_samples(lak, p4);
+
+    // Sixteen writes.
+    let w1 = fs.write("VAL_farms.csv", encode_farms(f1));
+    let w2 = fs.write("VAL_tankers.csv", encode_tankers(t1));
+    let w3 = fs.write("VAL_pickups.csv", encode_pickups(p1));
+    let w4 = fs.write("VAL_samples.csv", encode_samples(s1));
+    let w5 = fs.write("HIL_farms.csv", encode_farms(f2));
+    let w6 = fs.write("HIL_tankers.csv", encode_tankers(t2));
+    let w7 = fs.write("HIL_pickups.csv", encode_pickups(p2));
+    let w8 = fs.write("HIL_samples.csv", encode_samples(s2));
+    let w9 = fs.write("COA_farms.csv", encode_farms(f3));
+    let w10 = fs.write("COA_tankers.csv", encode_tankers(t3));
+    let w11 = fs.write("COA_pickups.csv", encode_pickups(p3));
+    let w12 = fs.write("COA_samples.csv", encode_samples(s3));
+    let w13 = fs.write("LAK_farms.csv", encode_farms(f4));
+    let w14 = fs.write("LAK_tankers.csv", encode_tankers(t4));
+    let w15 = fs.write("LAK_pickups.csv", encode_pickups(p4));
+    let w16 = fs.write("LAK_samples.csv", encode_samples(s4));
+    if w1.is_err() or w2.is_err() or w3.is_err() or w4.is_err() or w5.is_err() or w6.is_err() or w7.is_err() or w8.is_err()
+        or w9.is_err() or w10.is_err() or w11.is_err() or w12.is_err() or w13.is_err() or w14.is_err() or w15.is_err() or w16.is_err() {
+        return Err(bad("could not write the week's files"));
+    }
+
+    // A copy of VAL's pickups naming a farm it does not have, and of HIL's
+    // lab results with an inhibitor result that is neither P nor N.
+    let whole = read_text("VAL_pickups.csv")?;
+    if fs.write("VAL_pickups.bad", damage(whole, 40, 3, "1999")).is_err() {
+        return Err(bad("could not write VAL_pickups.bad"));
+    }
+    let whole2 = read_text("HIL_samples.csv")?;
+    if fs.write("HIL_samples.bad", damage(whole2, 30, 5, "X")).is_err() {
+        return Err(bad("could not write HIL_samples.bad"));
+    }
+
+    // Sixteen reads.
+    let x1 = read_text("VAL_farms.csv")?;
+    let y1 = read_text("VAL_tankers.csv")?;
+    let z1 = read_text("VAL_pickups.csv")?;
+    let r1 = read_text("VAL_samples.csv")?;
+    let x2 = read_text("HIL_farms.csv")?;
+    let y2 = read_text("HIL_tankers.csv")?;
+    let z2 = read_text("HIL_pickups.csv")?;
+    let r2 = read_text("HIL_samples.csv")?;
+    let x3 = read_text("COA_farms.csv")?;
+    let y3 = read_text("COA_tankers.csv")?;
+    let z3 = read_text("COA_pickups.csv")?;
+    let r3 = read_text("COA_samples.csv")?;
+    let x4 = read_text("LAK_farms.csv")?;
+    let y4 = read_text("LAK_tankers.csv")?;
+    let z4 = read_text("LAK_pickups.csv")?;
+    let r4 = read_text("LAK_samples.csv")?;
+    println(file_line("VAL farms", x1));
+    println(file_line("VAL tankers", y1));
+    println(file_line("VAL pickups", z1));
+    println(file_line("VAL samples", r1));
+    println(file_line("HIL farms", x2));
+    println(file_line("HIL tankers", y2));
+    println(file_line("HIL pickups", z2));
+    println(file_line("HIL samples", r2));
+    println(file_line("COA farms", x3));
+    println(file_line("COA tankers", y3));
+    println(file_line("COA pickups", z3));
+    println(file_line("COA samples", r3));
+    println(file_line("LAK farms", x4));
+    println(file_line("LAK tankers", y4));
+    println(file_line("LAK pickups", z4));
+    println(file_line("LAK samples", r4));
+
+    // Four registers and four fleets, then four pickup files, which need
+    // the register, then four sets of results, which need the pickups.
+    // Each can fail with `?`, so a parallel run has to report the first
+    // failure in source order.
+    let pf1 = parse_farms("VAL_farms.csv", val, x1)?;
+    let pf2 = parse_farms("HIL_farms.csv", hil, x2)?;
+    let pf3 = parse_farms("COA_farms.csv", coa, x3)?;
+    let pf4 = parse_farms("LAK_farms.csv", lak, x4)?;
+    let pt1 = parse_tankers("VAL_tankers.csv", val, y1)?;
+    let pt2 = parse_tankers("HIL_tankers.csv", hil, y2)?;
+    let pt3 = parse_tankers("COA_tankers.csv", coa, y3)?;
+    let pt4 = parse_tankers("LAK_tankers.csv", lak, y4)?;
+    let pp1 = parse_pickups("VAL_pickups.csv", val, pf1, z1)?;
+    let pp2 = parse_pickups("HIL_pickups.csv", hil, pf2, z2)?;
+    let pp3 = parse_pickups("COA_pickups.csv", coa, pf3, z3)?;
+    let pp4 = parse_pickups("LAK_pickups.csv", lak, pf4, z4)?;
+    let ps1 = parse_samples("VAL_samples.csv", val, pp1, r1)?;
+    let ps2 = parse_samples("HIL_samples.csv", hil, pp2, r2)?;
+    let ps3 = parse_samples("COA_samples.csv", coa, pp3, r3)?;
+    let ps4 = parse_samples("LAK_samples.csv", lak, pp4, r4)?;
+    match parse_pickups("VAL_pickups.bad", val, pf1, read_text("VAL_pickups.bad")?) {
+        Ok(_) => println("VAL_pickups.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_samples("HIL_samples.bad", hil, pp2, read_text("HIL_samples.bad")?) {
+        Ok(_) => println("HIL_samples.bad: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    match parse_tankers("COA_tankers.csv", lak, y3) {
+        Ok(_) => println("COA_tankers.csv: parsed"),
+        Err(e) => println(e.describe()),
+    }
+    let same = pf1 == f1 and pf2 == f2 and pf3 == f3 and pf4 == f4 and pt1 == t1 and pt2 == t2 and pt3 == t3 and pt4 == t4
+        and pp1 == p1 and pp2 == p2 and pp3 == p3 and pp4 == p4 and ps1 == s1 and ps2 == s2 and ps3 == s3 and ps4 == s4;
+    println(f"parsed files match the built ones: {same}");
+
+    // Four week closes, the hot group.
+    let m1 = close_week(val, pf1, pt1, pp1, ps1);
+    let m2 = close_week(hil, pf2, pt2, pp2, ps2);
+    let m3 = close_week(coa, pf3, pt3, pp3, ps3);
+    let m4 = close_week(lak, pf4, pt4, pp4, ps4);
+
+    // The loads and the payments, written and read back.
+    let e1 = fs.write("VAL_loads.csv", encode_loads(m1));
+    let e2 = fs.write("VAL_payments.csv", encode_payments(m1));
+    let e3 = fs.write("HIL_loads.csv", encode_loads(m2));
+    let e4 = fs.write("HIL_payments.csv", encode_payments(m2));
+    let e5 = fs.write("COA_loads.csv", encode_loads(m3));
+    let e6 = fs.write("COA_payments.csv", encode_payments(m3));
+    let e7 = fs.write("LAK_loads.csv", encode_loads(m4));
+    let e8 = fs.write("LAK_payments.csv", encode_payments(m4));
+    if e1.is_err() or e2.is_err() or e3.is_err() or e4.is_err() or e5.is_err() or e6.is_err() or e7.is_err() or e8.is_err() {
+        return Err(bad("could not write the loads and payments"));
+    }
+    let l1 = read_text("VAL_loads.csv")?;
+    let n1 = read_text("VAL_payments.csv")?;
+    let l2 = read_text("HIL_loads.csv")?;
+    let n2 = read_text("HIL_payments.csv")?;
+    let l3 = read_text("COA_loads.csv")?;
+    let n3 = read_text("COA_payments.csv")?;
+    let l4 = read_text("LAK_loads.csv")?;
+    let n4 = read_text("LAK_payments.csv")?;
+    println(file_line("VAL loads", l1));
+    println(file_line("VAL payments", n1));
+    println(file_line("HIL loads", l2));
+    println(file_line("HIL payments", n2));
+    println(file_line("COA loads", l3));
+    println(file_line("COA payments", n3));
+    println(file_line("LAK loads", l4));
+    println(file_line("LAK payments", n4));
+
+    // Reports that only read what came before.
+    let c1 = collection_report(val, m1);
+    let c2 = collection_report(hil, m2);
+    let c3 = collection_report(coa, m3);
+    let c4 = collection_report(lak, m4);
+    let q1 = quality_report(val, m1);
+    let q2 = quality_report(hil, m2);
+    let q3 = quality_report(coa, m3);
+    let q4 = quality_report(lak, m4);
+    let k1 = load_report(val, m1);
+    let k2 = load_report(hil, m2);
+    let k3 = load_report(coa, m3);
+    let k4 = load_report(lak, m4);
+    let i1 = intake_report(val, m1);
+    let i2 = intake_report(hil, m2);
+    let i3 = intake_report(coa, m3);
+    let i4 = intake_report(lak, m4);
+    let a1 = payment_report(val, m1);
+    let a2 = payment_report(hil, m2);
+    let a3 = payment_report(coa, m3);
+    let a4 = payment_report(lak, m4);
+    for line in [c1, c2, c3, c4, q1, q2, q3, q4, k1, k2, k3, k4, i1, i2, i3, i4, a1, a2, a3, a4] {
+        println(line);
+    }
+
+    // The drier takes what the plants before have left room for, so the
+    // plants send in order.
+    let mut drier = Drier { left: DRIER, log: Vec.new() };
+    println(send(mut drier, val, m1));
+    println(send(mut drier, hil, m2));
+    println(send(mut drier, coa, m3));
+    println(send(mut drier, lak, m4));
+    if fs.write("drier.log", f"{drier.log.join("\n")}\n").is_err() {
+        return Err(bad("could not write drier.log"));
+    }
+    let back = read_text("drier.log")?;
+    let rows = split_on(back, "\n").len() as i64 - 1;
+    println(f"drier.log: {group3(rows)} entries, {group3(back.len() as i64)} bytes, fnv {text_sum(back):08x}");
+
+    for code in ["VAL", "HIL", "COA", "LAK"] {
+        for name in ["farms", "tankers", "pickups", "samples", "loads", "payments"] {
+            let _ = fs.remove_file(f"{code}_{name}.csv");
+        }
+    }
+    for p in ["VAL_pickups.bad", "HIL_samples.bad", "drier.log"] {
+        let _ = fs.remove_file(p);
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"milk_collect failed: {e.describe()}"),
+    }
+}
