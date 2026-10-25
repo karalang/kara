@@ -1,2 +1,2 @@
-fn make(m: Map[i64, i64]) -> Fn(i64) -> i64 { |n| m.len() + n }
+fn make(m: own Map[i64, i64]) -> Fn(i64) -> i64 { |n| m.len() + n }
 fn main() { let mut mm = Map.new(); mm.insert(1i64, 2i64); let f = make(mm); println(f"{f(0i64)}"); }

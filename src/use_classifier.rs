@@ -429,6 +429,72 @@ impl<'a> UseClassifier<'a> {
 
     /// Whether `name` is a binding local to any currently-open closure body
     /// (its param or an inner `let`) — see `closure_local_stack`.
+    /// v2 core §9.3: an escaping closure captures every place by move, so a
+    /// place it uses from behind a borrow (a `ref` or bare parameter, a `ref`
+    /// local) that is neither `Copy` nor a counted handle would move out of
+    /// the borrow (§3.7). `|x| x + p.n` copies `p.n`; `size(p)` and
+    /// `p.s.len()` capture `p` and `p.s` (B-2026-10-25-20).
+    fn note_escaping_borrow_capture(&mut self, place: &Expr) {
+        if self.escaping_closure_depth == 0 || !crate::ownership::core_rules() {
+            return;
+        }
+        let mut root = place;
+        let mut text = Vec::new();
+        loop {
+            match &root.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    text.push(field.clone());
+                    root = object;
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    text.push(index.to_string());
+                    root = object;
+                }
+                _ => break,
+            }
+        }
+        let name = match &root.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return,
+        };
+        if self.is_closure_local(name) {
+            return;
+        }
+        let Some(Type::Ref(inner) | Type::MutRef(inner)) = self
+            .param_types
+            .get(name)
+            .or_else(|| self.local_types.get(name))
+            .or_else(|| self.tc.node_types.get(&root.id).map(|(t, _)| t))
+        else {
+            return;
+        };
+        let mut ty = if text.is_empty() {
+            Some(&**inner)
+        } else {
+            self.tc
+                .node_types
+                .get(&place.id)
+                .map(|(t, _)| t)
+                .or_else(|| self.tc.expr_types.get(&SpanKey::from_span(&place.span)))
+        };
+        while let Some(Type::Ref(t) | Type::MutRef(t)) = ty {
+            ty = Some(t);
+        }
+        let Some(ty) = ty else { return };
+        if matches!(ty, Type::Error | Type::TypeVar(_) | Type::Function { .. })
+            || self.is_copy_type(ty)
+            || type_counts_or_copies(ty, self.tc, &|t| self.is_copy_type(t), true)
+        {
+            return;
+        }
+        text.push(name.to_string());
+        text.reverse();
+        self.classification
+            .core_escaping_borrow_captures
+            .push((place.span, text.join(".")));
+    }
+
     fn is_closure_local(&self, name: &str) -> bool {
         self.closure_local_stack.iter().any(|s| s.contains(name))
     }
@@ -809,11 +875,13 @@ impl<'a> UseClassifier<'a> {
     fn walk_expr(&mut self, expr: &Expr, mode: Mode) {
         match &expr.kind {
             ExprKind::Identifier(name) => {
+                self.note_escaping_borrow_capture(expr);
                 let kind = self.classify_identifier(name, &expr.span, mode);
                 self.record_named(&expr.span, kind, Some(name));
                 self.record_closure_capture_consume(name, kind, &expr.span);
             }
             ExprKind::SelfValue => {
+                self.note_escaping_borrow_capture(expr);
                 let kind = self.classify_identifier("self", &expr.span, mode);
                 self.record_named(&expr.span, kind, Some("self"));
                 self.record_closure_capture_consume("self", kind, &expr.span);
@@ -1164,6 +1232,7 @@ impl<'a> UseClassifier<'a> {
             // leaf itself is still classified per `mode` (a read stays a
             // read); the place only refines disjointness.
             ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                self.note_escaping_borrow_capture(expr);
                 let leaf_mode = if mode == Mode::Consuming && !self.expr_is_copy(expr) {
                     Mode::Consuming
                 } else {

@@ -1671,6 +1671,10 @@ pub struct OwnershipChecker<'a> {
     /// [`crate::cfg::Classification::core_borrow_moves`], across every
     /// function; turned into `MoveOutOfPlace` errors by `core_move_errors`.
     pub(crate) core_borrow_moves: Vec<Span>,
+    /// [`crate::cfg::Classification::core_escaping_borrow_captures`], across
+    /// every function; turned into `MoveOutOfPlace` errors by
+    /// `core_move_errors`.
+    pub(crate) core_escaping_borrow_captures: Vec<(Span, String)>,
     /// Non-`Copy` places returned bare into a `ref` / `mut ref` slot of the
     /// return type (B-2026-10-22-28); turned into `MoveOutOfPlace` errors by
     /// `core_move_errors`.
@@ -2074,6 +2078,7 @@ impl<'a> OwnershipChecker<'a> {
             core_read_only_index_lets: HashSet::new(),
             core_index_moves: Vec::new(),
             core_borrow_moves: Vec::new(),
+            core_escaping_borrow_captures: Vec::new(),
             core_bare_ref_returns: Vec::new(),
             core_projection_consumes: FxHashMap::default(),
             panic_on_alloc_failure: true,
@@ -3094,6 +3099,8 @@ impl<'a> OwnershipChecker<'a> {
         );
         self.core_borrow_moves
             .extend(classification.core_borrow_moves.iter().copied());
+        self.core_escaping_borrow_captures
+            .extend(classification.core_escaping_borrow_captures.iter().cloned());
         self.core_projection_consumes.extend(
             classification
                 .core_projection_consumes

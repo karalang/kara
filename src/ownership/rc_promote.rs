@@ -415,6 +415,29 @@ impl<'a> super::OwnershipChecker<'a> {
                 consume_span: None,
             });
         }
+        // v2 core §9.3: an escaping closure captures by move, and a place
+        // behind a borrow cannot be moved out of it (§3.7, B-2026-10-25-20).
+        let mut seen = HashSet::new();
+        for (span, place) in &self.core_escaping_borrow_captures {
+            if !seen.insert(SpanKey::from_span(span)) {
+                continue;
+            }
+            let root = place.split('.').next().unwrap_or(place);
+            out.push(OwnershipError {
+                message: format!(
+                    "an escaping closure captures `{place}` by move (core-semantics §9.3), \
+                     but `{root}` borrows its value, so `{place}` cannot be moved out of it"
+                ),
+                span: *span,
+                kind: OwnershipErrorKind::MoveOutOfPlace,
+                suggestion: Some(format!(
+                    "take `{root}` by value (`own`), or clone `{place}` into a new binding \
+                     before the closure and capture that"
+                )),
+                replacement: None,
+                consume_span: None,
+            });
+        }
         // design.md § returning a reference (B-2026-10-22-28).
         let mut seen = HashSet::new();
         for bare in &self.core_bare_ref_returns {

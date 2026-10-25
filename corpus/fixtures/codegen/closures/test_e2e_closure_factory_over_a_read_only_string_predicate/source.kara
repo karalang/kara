@@ -1,4 +1,4 @@
-fn forbids(bad: String) -> Fn(ref String) -> bool { |s| not s.contains(bad) }
+fn forbids(bad: own String) -> Fn(ref String) -> bool { |s| not s.contains(bad) }
 fn has_ref(v: Vec[String], s: ref String) -> bool { return v.contains(s); }
 fn main() {
 let f = forbids("xy");

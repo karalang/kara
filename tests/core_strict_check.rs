@@ -13423,6 +13423,54 @@ fn an_own_self_method_on_a_borrowed_receiver_is_a_move_out_of_the_borrow() {
 }
 
 #[test]
+fn an_escaping_closure_cannot_capture_a_non_copy_place_behind_a_borrow() {
+    // B-2026-10-25-20: an escaping closure captures every place by move
+    // (core-semantics §9.3), so a place it uses from behind a borrow (a bare
+    // or `ref` parameter, a `ref` local) that is neither `Copy` nor a
+    // counted handle would move out of the borrow (§3.7) and is refused:
+    // the whole parameter (`size(p)`), a non-`Copy` field (`p.s.len()`).
+    // A `Copy` field is copied (`p.n`), an `own` parameter moves in, and a
+    // closure passed to a built-in like `Vec.from_fn` does not escape.
+    let program = |op: &str, param: &str| {
+        format!(
+            "struct P {{\n    s: String,\n    n: i64,\n}}\nstruct Op {{\n    run: Fn(i64) -> i64,\n}}\n\
+             fn new_op(run: escaping Fn(i64) -> i64) -> Op {{\n    Op {{ run: run }}\n}}\n\
+             fn size(p: P) -> i64 {{\n    p.n + p.s.len()\n}}\n\
+             fn adder(p: {param}) -> Op {{\n    new_op({op})\n}}\n\
+             fn main() {{\n    let op = adder(P {{ s: \"a\", n: 5 }});\n    \
+             println(f\"{{(op.run)(1)}} {{(op.run)(2)}}\");\n}}\n"
+        )
+    };
+    for (tag, op, param, place) in [
+        ("whole", "|x| x + size(p)", "P", "`p`"),
+        ("ref", "|x| x + size(p)", "ref P", "`p`"),
+        ("field", "|x| x + p.s.len()", "P", "`p.s`"),
+    ] {
+        rejected_with(
+            &format!("escaping-borrow-{tag}"),
+            &program(op, param),
+            &format!("an escaping closure captures {place} by move (core-semantics §9.3), but `p` borrows its value"),
+        );
+    }
+    accepted_and_runs(
+        "escaping-borrow-copy-field",
+        &program("|x| x + p.n", "P"),
+        "6 7\n",
+    );
+    accepted_and_runs(
+        "escaping-borrow-own",
+        &program("|x| x + size(p)", "own P"),
+        "7 8\n",
+    );
+    accepted_and_runs(
+        "escaping-borrow-from-fn",
+        "fn f(mat: Vec[i64]) -> Vec[i64] {\n    Vec.from_fn(3, |j| mat[j] * 2)\n}\n\
+         fn main() {\n    let m = vec![1, 2, 3];\n    println(f\"{f(m)[2]} {m.len()}\");\n}\n",
+        "6 3\n",
+    );
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

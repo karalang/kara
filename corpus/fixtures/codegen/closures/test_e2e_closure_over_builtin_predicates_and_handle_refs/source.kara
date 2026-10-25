@@ -1,9 +1,9 @@
 struct P { x: i64, y: i64 }
-fn starts(p: String) -> Fn(ref String) -> bool { |s| s.starts_with(p) }
-fn ends(p: String) -> Fn(ref String) -> bool { |s| s.ends_with(p) }
-fn forbids(b: String) -> Fn(ref String) -> bool { |s| not s.contains(b) }
-fn keyed(k: String) -> Fn(ref Map[String, i64]) -> bool { |m| m.contains_key(k) }
-fn member(e: String) -> Fn(ref Set[String]) -> bool { |st| st.contains(e) }
+fn starts(p: own String) -> Fn(ref String) -> bool { |s| s.starts_with(p) }
+fn ends(p: own String) -> Fn(ref String) -> bool { |s| s.ends_with(p) }
+fn forbids(b: own String) -> Fn(ref String) -> bool { |s| not s.contains(b) }
+fn keyed(k: own String) -> Fn(ref Map[String, i64]) -> bool { |m| m.contains_key(k) }
+fn member(e: own String) -> Fn(ref Set[String]) -> bool { |st| st.contains(e) }
 fn msize() -> Fn(ref Map[String, i64]) -> i64 { |m| m.len() }
 fn ssize() -> Fn(ref Set[String]) -> i64 { |st| st.len() }
 fn nocap() -> Fn(ref String) -> bool { |s| s.starts_with("ab") }

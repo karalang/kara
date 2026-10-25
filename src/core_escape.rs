@@ -67,8 +67,12 @@ pub fn analyze(program: &Program) -> CoreEscape {
     };
     let mut sigs: FxHashMap<String, Sig> = FxHashMap::default();
     let mut fns: Vec<&Function> = Vec::new();
+    let mut enums: FxHashSet<String> = ["Option", "Result"].iter().map(|s| s.to_string()).collect();
     for item in &program.items {
         match item {
+            Item::EnumDef(e) => {
+                enums.insert(e.name.clone());
+            }
             Item::Function(f) => {
                 sigs.insert(f.name.clone(), sig_of(f));
                 fns.push(f);
@@ -95,6 +99,7 @@ pub fn analyze(program: &Program) -> CoreEscape {
     for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
         let mut w = Walker {
             sigs: &sigs,
+            enums: &enums,
             esc,
             scopes: Vec::new(),
             out: &mut out,
@@ -106,6 +111,8 @@ pub fn analyze(program: &Program) -> CoreEscape {
 
 struct Walker<'a> {
     sigs: &'a FxHashMap<String, Sig>,
+    /// The enums' names, whose `E.V(x)` constructs a value.
+    enums: &'a FxHashSet<String>,
     esc: &'a FxHashSet<SpanKey>,
     scopes: Vec<FxHashMap<String, Bound>>,
     out: &'a mut CoreEscape,
@@ -281,11 +288,17 @@ impl Walker<'_> {
                     }
                     ExprKind::Path { segments, .. } => {
                         let key = segments.join(".");
+                        let variant = segments.len() >= 2
+                            && self.enums.contains(&segments[segments.len() - 2]);
                         match self.sigs.get(&key) {
                             Some(sig) => self.walk_args(args, Some(sig), None),
                             // An enum variant constructor: the payload goes
                             // where the value goes.
-                            None => self.walk_args(args, None, value_of(pos)),
+                            None if variant => self.walk_args(args, None, value_of(pos)),
+                            // A built-in associated function (`Vec.from_fn`):
+                            // its function-typed parameters do not escape
+                            // (§9.3, B-2026-10-25-20).
+                            None => self.walk_args(args, None, None),
                         }
                     }
                     _ => {

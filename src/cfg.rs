@@ -239,6 +239,11 @@ pub struct Classification {
     /// handed to a method taking `self` by value: a move out of a borrow
     /// (`docs/core-semantics.md` §3.7, C3).
     pub core_borrow_moves: Vec<crate::token::Span>,
+    /// Places an escaping closure captures (so moves, §9.3) from behind a
+    /// borrow, a `ref` or bare parameter, that are neither `Copy` nor a
+    /// counted handle: a move out of the borrow (§3.7, B-2026-10-25-20). The
+    /// place's span and its spelling.
+    pub core_escaping_borrow_captures: Vec<(crate::token::Span, String)>,
     /// Consumed field projections (`h.o`), keyed by their root identifier's
     /// span: the projection's span and its source spelling.
     pub core_projection_consumes: FxHashMap<SpanKey, (crate::token::Span, String)>,
