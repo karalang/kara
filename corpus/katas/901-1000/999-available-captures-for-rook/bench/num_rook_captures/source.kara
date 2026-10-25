@@ -1,0 +1,85 @@
+// Benchmark: LeetCode #999 Available Captures for Rook -- the ★ arm, a
+// walk from the rook each way, on random 8 by 8 boards. Mirrors
+// num_rook_captures.c, .rs, .py and go-seq/.
+
+fn num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
+    let mut rr = 0;
+    let mut rc = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == 'R' {
+                rr = r;
+                rc = c;
+            }
+        }
+    }
+    let mut captures = 0;
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+        let mut r = rr + *dr;
+        let mut c = rc + *dc;
+        while r >= 0 and r < 8 and c >= 0 and c < 8 {
+            if board[r][c] == 'p' {
+                captures += 1;
+                break;
+            }
+            if board[r][c] == 'B' {
+                break;
+            }
+            r += *dr;
+            c += *dc;
+        }
+    }
+    captures
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 500000;
+    let mut seed = 999;
+    // 20 boards, the rook on a random square and each other square a pawn
+    // 4 times in 16 and a bishop 2 times in 16
+    let mut boards: Vec[Vec[Vec[char]]] = Vec.new();
+    for _ in 0..20 {
+        let rook = next_random(mut seed) % 64;
+        let mut board: Vec[Vec[char]] = Vec.new();
+        for r in 0..8 {
+            let mut row: Vec[char] = Vec.new();
+            for c in 0..8 {
+                let x = next_random(mut seed) % 16;
+                if r * 8 + c == rook {
+                    row.push('R');
+                } else if x < 4 {
+                    row.push('p');
+                } else if x < 6 {
+                    row.push('B');
+                } else {
+                    row.push('.');
+                }
+            }
+            board.push(row);
+        }
+        boards.push(board);
+    }
+    let mut captures = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let k = (r + i) % 20;
+            let got = num_rook_captures(boards[k]);
+            captures += got;
+            check = (check * 31 + got + 1) % 1000000007;
+            // a pawn put on or taken off one square, so no board stays put
+            let s = (r * 13 + i * 5) % 64;
+            if boards[k][s / 8][s % 8] == '.' {
+                boards[k][s / 8][s % 8] = 'p';
+            } else if boards[k][s / 8][s % 8] == 'p' {
+                boards[k][s / 8][s % 8] = '.';
+            }
+        }
+    }
+    println(f"{rounds} rounds over 20 boards: {captures} captures, checksum {check}");
+}

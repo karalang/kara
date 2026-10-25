@@ -1,0 +1,7 @@
+source = "kara-katas/leetcode/901-1000/999-available-captures-for-rook/bench/num_rook_captures.kara"
+dedup_of = []
+tags = ["bench"]
+class = "e"
+bucket = "timeout"
+classified_with = "1dac79a30"
+extracted_src = "904ee3ad"

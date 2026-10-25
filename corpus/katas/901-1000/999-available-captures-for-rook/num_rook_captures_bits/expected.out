@@ -1,0 +1,14 @@
+......../...p..../...R...p/......../......../...p..../......../........ -> 3
+......../.ppppp../.ppBpp../.pBRBp../.ppBpp../.ppppp../......../........ -> 0
+......../...p..../...p..../pp.R.pB./......../...B..../...p..../........ -> 3
+R......./......../......../......../......../......../......../........ -> 0
+pppppppp/pppppppp/pppppppp/pppRpppp/pppppppp/pppppppp/pppppppp/pppppppp -> 4
+Rppppppp/pppppppp/pppppppp/pppppppp/pppppppp/pppppppp/pppppppp/pppppppp -> 2
+p......p/......../......../......../......../......../......../p......R -> 2
+...p..../...B..../......../pB.R..Bp/......../......../...B..../...p.... -> 0
+......../......../...p..../..pRp.../...p..../......../......../........ -> 4
+BBBBBBBB/BBBBBBBB/BBBBBBBB/BBBRBBBB/BBBBBBBB/BBBBBBBB/BBBBBBBB/BBBBBBBB -> 0
+the rook on each of the 64 squares of a board of pawns: 224 captures
+300 random boards with 1119 pawns: 204 captures, checksum 273235548
+3000 random boards with 35462 pawns: 4465 captures, checksum 655964510
+3000 random boards with 70790 pawns: 5828 captures, checksum 381387244

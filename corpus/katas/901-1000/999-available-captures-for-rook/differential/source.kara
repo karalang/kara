@@ -1,0 +1,464 @@
+// LeetCode #999: Available Captures for Rook -- differential.
+//
+// The five arms against the statement read literally and against each
+// other, on random boards.
+
+// ---- star ----
+
+// LeetCode #999: Available Captures for Rook -- a walk each way
+//
+// From the rook, walk up, down, left and right one square at a time:
+// a pawn is captured and ends the walk, a bishop ends it, and the edge
+// of the board ends it. O(1) on an 8 by 8 board.
+
+fn star_num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
+    let mut rr = 0;
+    let mut rc = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == 'R' {
+                rr = r;
+                rc = c;
+            }
+        }
+    }
+    let mut captures = 0;
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+        let mut r = rr + *dr;
+        let mut c = rc + *dc;
+        while r >= 0 and r < 8 and c >= 0 and c < 8 {
+            if board[r][c] == 'p' {
+                captures += 1;
+                break;
+            }
+            if board[r][c] == 'B' {
+                break;
+            }
+            r += *dr;
+            c += *dc;
+        }
+    }
+    captures
+}
+
+// ---- scan ----
+
+// LeetCode #999: Available Captures for Rook -- four loops
+//
+// The rook's row and column, each read outwards from the rook by its
+// own loop: up the column, down it, left along the row and right. The
+// first piece each loop meets decides it, a pawn counting one. O(1) on
+// an 8 by 8 board.
+
+// 1 when the first piece met is a pawn, 0 for a bishop
+fn scan_first_is_pawn(x: char) -> i64 {
+    if x == 'p' { 1 } else { 0 }
+}
+
+fn scan_num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
+    let mut rr = 0;
+    let mut rc = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == 'R' {
+                rr = r;
+                rc = c;
+            }
+        }
+    }
+    let mut captures = 0;
+    let mut r = rr - 1;
+    while r >= 0 {
+        if board[r][rc] != '.' {
+            captures += scan_first_is_pawn(board[r][rc]);
+            break;
+        }
+        r -= 1;
+    }
+    r = rr + 1;
+    while r < 8 {
+        if board[r][rc] != '.' {
+            captures += scan_first_is_pawn(board[r][rc]);
+            break;
+        }
+        r += 1;
+    }
+    let mut c = rc - 1;
+    while c >= 0 {
+        if board[rr][c] != '.' {
+            captures += scan_first_is_pawn(board[rr][c]);
+            break;
+        }
+        c -= 1;
+    }
+    c = rc + 1;
+    while c < 8 {
+        if board[rr][c] != '.' {
+            captures += scan_first_is_pawn(board[rr][c]);
+            break;
+        }
+        c += 1;
+    }
+    captures
+}
+
+// ---- nearest ----
+
+// LeetCode #999: Available Captures for Rook -- the nearest piece
+//
+// Each of the rook's two lines is read whole, from one end to the
+// other, remembering the last piece before the rook and the first piece
+// after it; those four are the pieces the rook can reach, and the pawns
+// among them are its captures. O(1) on an 8 by 8 board.
+
+// the pawns among the nearest pieces on each side of place `at` in line
+fn nearest_line_captures(line: ref Vec[char], at: i64) -> i64 {
+    let mut before = '.';
+    let mut after = '.';
+    for i in 0..8 {
+        if line[i] != '.' and i != at {
+            if i < at {
+                before = line[i];
+            } else if after == '.' {
+                after = line[i];
+            }
+        }
+    }
+    let mut n = 0;
+    if before == 'p' {
+        n += 1;
+    }
+    if after == 'p' {
+        n += 1;
+    }
+    n
+}
+
+fn nearest_num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
+    let mut rr = 0;
+    let mut rc = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == 'R' {
+                rr = r;
+                rc = c;
+            }
+        }
+    }
+    let column: Vec[char] = (0..8).map(|r| board[r][rc]).collect();
+    nearest_line_captures(board[rr], rc) + nearest_line_captures(column, rr)
+}
+
+// ---- strings ----
+
+// LeetCode #999: Available Captures for Rook -- the pieces in a string
+//
+// The rook's row and its column, each as a string with the empty
+// squares taken out, leave only the pieces in order; what the rook can
+// reach are its neighbours in that string, and each `p` beside the `R`
+// is a capture. O(1) on an 8 by 8 board.
+
+fn strings_beside(pieces: ref String) -> i64 {
+    let p: Vec[char] = pieces.chars().collect();
+    let mut n = 0;
+    for i in 0..p.len() {
+        if p[i] == 'R' {
+            if i > 0 and p[i - 1] == 'p' {
+                n += 1;
+            }
+            if i + 1 < p.len() and p[i + 1] == 'p' {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+fn strings_num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == 'R' {
+                let row: String = board[r].iter().filter(|x| *x != '.').collect();
+                let column: String = (0..8).map(|i| board[i][c]).filter(|x| x != '.').collect();
+                return strings_beside(row) + strings_beside(column);
+            }
+        }
+    }
+    0
+}
+
+// ---- bits ----
+
+// LeetCode #999: Available Captures for Rook -- bit masks
+//
+// The rook's row and column become two 8-bit masks each, one of the
+// squares holding a piece and one of those holding a pawn. The nearest
+// piece above the rook's place is the lowest set bit of the pieces
+// above it, the nearest below the highest set bit of those below, and
+// each is a capture when its bit is set in the pawns. O(1).
+
+fn bits_line_captures(pieces: i64, pawns: i64, at: i64) -> i64 {
+    let mut n = 0;
+    let above = pieces & ((255 << (at + 1)) & 255);
+    if above != 0 {
+        let lowest = above & -above;
+        if pawns & lowest != 0 {
+            n += 1;
+        }
+    }
+    let mut below = pieces & ((1 << at) - 1);
+    if below != 0 {
+        // the highest set bit: clear the lowest until one is left
+        while below & (below - 1) != 0 {
+            below = below & (below - 1);
+        }
+        if pawns & below != 0 {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn bits_num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
+    let mut rr = 0;
+    let mut rc = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == 'R' {
+                rr = r;
+                rc = c;
+            }
+        }
+    }
+    let mut row_pieces = 0;
+    let mut row_pawns = 0;
+    let mut col_pieces = 0;
+    let mut col_pawns = 0;
+    for i in 0..8 {
+        if board[rr][i] != '.' {
+            row_pieces |= 1 << i;
+        }
+        if board[rr][i] == 'p' {
+            row_pawns |= 1 << i;
+        }
+        if board[i][rc] != '.' {
+            col_pieces |= 1 << i;
+        }
+        if board[i][rc] == 'p' {
+            col_pawns |= 1 << i;
+        }
+    }
+    bits_line_captures(row_pieces, row_pawns, rc) + bits_line_captures(col_pieces, col_pawns, rr)
+}
+
+// ---- checks ----
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_board(pawns: i64, bishops: i64, seed: mut ref i64) -> Vec[Vec[char]] {
+    let rook = next_random(mut seed) % 64;
+    let mut board: Vec[Vec[char]] = Vec.new();
+    for r in 0..8 {
+        let mut row: Vec[char] = Vec.new();
+        for c in 0..8 {
+            if r * 8 + c == rook {
+                row.push('R');
+            } else {
+                let x = next_random(mut seed) % 16;
+                if x < pawns {
+                    row.push('p');
+                } else if x < pawns + bishops {
+                    row.push('B');
+                } else {
+                    row.push('.');
+                }
+            }
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn arm(k: i64, board: ref Vec[Vec[char]]) -> i64 {
+    if k == 0 {
+        star_num_rook_captures(board)
+    } else if k == 1 {
+        scan_num_rook_captures(board)
+    } else if k == 2 {
+        nearest_num_rook_captures(board)
+    } else if k == 3 {
+        strings_num_rook_captures(board)
+    } else {
+        bits_num_rook_captures(board)
+    }
+}
+
+// Whether the rook can move to square (r, c) in one move: it is in the
+// rook's row or column, and every square strictly between is empty.
+fn reaches(board: ref Vec[Vec[char]], r: i64, c: i64) -> bool {
+    let mut rr = 0;
+    let mut rc = 0;
+    for i in 0..8 {
+        for j in 0..8 {
+            if board[i][j] == 'R' {
+                rr = i;
+                rc = j;
+            }
+        }
+    }
+    if r == rr and c == rc {
+        return false;
+    }
+    if r == rr {
+        for j in rc.min(c) + 1..rc.max(c) {
+            if board[r][j] != '.' {
+                return false;
+            }
+        }
+        return true;
+    }
+    if c == rc {
+        for i in rr.min(r) + 1..rr.max(r) {
+            if board[i][c] != '.' {
+                return false;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+// The statement read literally: the number of pawns the rook can move
+// to in one move.
+fn literal(board: ref Vec[Vec[char]]) -> i64 {
+    let mut n = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == 'p' and reaches(board, r, c) {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+// a random empty square, or (-1, -1) when there is none
+fn empty_square(board: ref Vec[Vec[char]], seed: mut ref i64) -> (i64, i64) {
+    let mut empties: Vec[(i64, i64)] = Vec.new();
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == '.' {
+                empties.push((r, c));
+            }
+        }
+    }
+    if empties.len() == 0 {
+        return (-1, -1);
+    }
+    empties[next_random(mut seed) % empties.len()]
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(tally: mut ref Tally, board: ref Vec[Vec[char]], small: bool, seed: mut ref i64) -> i64 {
+    let truth = if small { literal(board) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for k in 0..5 {
+        got.push(arm(k, board));
+    }
+    let transposed: Vec[Vec[char]] = (0..8).map(|r| (0..8).map(|c| board[c][r]).collect()).collect();
+    let upside_down: Vec[Vec[char]] = (0..8).map(|r| board[7 - r].clone()).collect();
+    let (pr, pc) = empty_square(board, mut seed);
+    let (br, bc) = empty_square(board, mut seed);
+    for k in 0..5 {
+        let g = got[k];
+        // P1: the statement's answer, on the first 3000 boards
+        if small {
+            check(mut tally, 1, g == truth);
+        }
+        // P2: the board transposed gives the same answer
+        check(mut tally, 2, arm(k, transposed) == g);
+        // P3: the board turned upside down gives the same answer
+        check(mut tally, 3, arm(k, upside_down) == g);
+        // P4: a pawn put on an empty square adds 0 or 1, and 1 only where
+        // the rook reaches that square
+        let mut p4 = true;
+        if pr >= 0 {
+            let mut more = board.clone();
+            more[pr][pc] = 'p';
+            let d = arm(k, more) - g;
+            p4 = d == 0 or (d == 1 and reaches(board, pr, pc));
+        }
+        check(mut tally, 4, p4);
+        // P5: a bishop put on an empty square takes off 0 or 1, and 1 only
+        // where the rook reaches that square
+        let mut p5 = true;
+        if br >= 0 {
+            let mut more = board.clone();
+            more[br][bc] = 'B';
+            let d = g - arm(k, more);
+            p5 = d == 0 or (d == 1 and reaches(board, br, bc));
+        }
+        check(mut tally, 5, p5);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for j in 0..5 {
+            if j != k and got[j] == g {
+                agree += 1;
+            }
+        }
+        check(mut tally, 6, agree >= 2);
+    }
+    got[0]
+}
+
+fn main() {
+    let mut tally = Tally { checks: 0, failures: vec![0, 0, 0, 0, 0, 0] };
+    let mut seed = 999;
+    let mut pawns = 0;
+    let mut captures = 0;
+    let mut check_sum = 0;
+    // 3000 boards of random density against the statement, then 200 with
+    // a pawn on 10 squares in 16 and a bishop on 3
+    for c in 0..3200 {
+        let small = c < 3000;
+        let p = if small { next_random(mut seed) % 9 } else { 10 };
+        let b = if small { next_random(mut seed) % 5 } else { 3 };
+        let board = random_board(p, b, mut seed);
+        for row in board.iter() {
+            for x in row.iter() {
+                if *x == 'p' {
+                    pawns += 1;
+                }
+            }
+        }
+        let got = properties(mut tally, board, small, mut seed);
+        captures += got;
+        check_sum = (check_sum * 31 + got + 1) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += tally.failures[p];
+        if tally.failures[p] > 0 {
+            by = by + f" P{p + 1} {tally.failures[p]}";
+        }
+    }
+    println(f"3200 boards with {pawns} pawns: {captures} captures, checksum {check_sum}, {tally.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

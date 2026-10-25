@@ -1,0 +1,144 @@
+// LeetCode #999: Available Captures for Rook -- four loops
+//
+// The rook's row and column, each read outwards from the rook by its
+// own loop: up the column, down it, left along the row and right. The
+// first piece each loop meets decides it, a pawn counting one. O(1) on
+// an 8 by 8 board.
+
+// 1 when the first piece met is a pawn, 0 for a bishop
+fn first_is_pawn(x: char) -> i64 {
+    if x == 'p' { 1 } else { 0 }
+}
+
+fn num_rook_captures(board: ref Vec[Vec[char]]) -> i64 {
+    let mut rr = 0;
+    let mut rc = 0;
+    for r in 0..8 {
+        for c in 0..8 {
+            if board[r][c] == 'R' {
+                rr = r;
+                rc = c;
+            }
+        }
+    }
+    let mut captures = 0;
+    let mut r = rr - 1;
+    while r >= 0 {
+        if board[r][rc] != '.' {
+            captures += first_is_pawn(board[r][rc]);
+            break;
+        }
+        r -= 1;
+    }
+    r = rr + 1;
+    while r < 8 {
+        if board[r][rc] != '.' {
+            captures += first_is_pawn(board[r][rc]);
+            break;
+        }
+        r += 1;
+    }
+    let mut c = rc - 1;
+    while c >= 0 {
+        if board[rr][c] != '.' {
+            captures += first_is_pawn(board[rr][c]);
+            break;
+        }
+        c -= 1;
+    }
+    c = rc + 1;
+    while c < 8 {
+        if board[rr][c] != '.' {
+            captures += first_is_pawn(board[rr][c]);
+            break;
+        }
+        c += 1;
+    }
+    captures
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn parse(rows: ref Vec[String]) -> Vec[Vec[char]] {
+    rows.iter().map(|row| row.chars().collect()).collect()
+}
+
+// a board with the rook on a random square and each other square a pawn
+// `pawns` times in 16 and a bishop `bishops` times in 16
+fn random_board(pawns: i64, bishops: i64, seed: mut ref i64) -> Vec[Vec[char]] {
+    let rook = next_random(mut seed) % 64;
+    let mut board: Vec[Vec[char]] = Vec.new();
+    for r in 0..8 {
+        let mut row: Vec[char] = Vec.new();
+        for c in 0..8 {
+            if r * 8 + c == rook {
+                row.push('R');
+            } else {
+                let x = next_random(mut seed) % 16;
+                if x < pawns {
+                    row.push('p');
+                } else if x < pawns + bishops {
+                    row.push('B');
+                } else {
+                    row.push('.');
+                }
+            }
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[String]] = vec![
+        vec!["........", "...p....", "...R...p", "........", "........", "...p....", "........", "........"],
+        vec!["........", ".ppppp..", ".ppBpp..", ".pBRBp..", ".ppBpp..", ".ppppp..", "........", "........"],
+        vec!["........", "...p....", "...p....", "pp.R.pB.", "........", "...B....", "...p....", "........"],
+        vec!["R.......", "........", "........", "........", "........", "........", "........", "........"],
+        vec!["pppppppp", "pppppppp", "pppppppp", "pppRpppp", "pppppppp", "pppppppp", "pppppppp", "pppppppp"],
+        vec!["Rppppppp", "pppppppp", "pppppppp", "pppppppp", "pppppppp", "pppppppp", "pppppppp", "pppppppp"],
+        vec!["p......p", "........", "........", "........", "........", "........", "........", "p......R"],
+        vec!["...p....", "...B....", "........", "pB.R..Bp", "........", "........", "...B....", "...p...."],
+        vec!["........", "........", "...p....", "..pRp...", "...p....", "........", "........", "........"],
+        vec!["BBBBBBBB", "BBBBBBBB", "BBBBBBBB", "BBBRBBBB", "BBBBBBBB", "BBBBBBBB", "BBBBBBBB", "BBBBBBBB"],
+    ].iter().map(|rows| rows.iter().map(|s| s.to_string()).collect()).collect();
+    for rows in examples.iter() {
+        println(f"{rows.join("/")} -> {num_rook_captures(parse(rows))}");
+    }
+    let mut every = 0;
+    for square in 0..64 {
+        let mut board: Vec[Vec[char]] = Vec.new();
+        for r in 0..8 {
+            let row: Vec[char] = (0..8).map(|c| if r * 8 + c == square { 'R' } else { 'p' }).collect();
+            board.push(row);
+        }
+        every += num_rook_captures(board);
+    }
+    println(f"the rook on each of the 64 squares of a board of pawns: {every} captures");
+    let mut seed = 999;
+    for (count, pawns, bishops) in vec![(300, 1, 1), (3000, 3, 2), (3000, 6, 4)] {
+        let mut npawns = 0;
+        let mut captures = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let board = random_board(pawns, bishops, mut seed);
+            let got = num_rook_captures(board);
+            for row in board.iter() {
+                for x in row.iter() {
+                    if *x == 'p' {
+                        npawns += 1;
+                    }
+                }
+            }
+            captures += got;
+            check = (check * 31 + got + 1) % 1000000007;
+        }
+        println(f"{count} random boards with {npawns} pawns: {captures} captures, checksum {check}");
+    }
+}
