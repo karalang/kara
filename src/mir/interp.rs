@@ -569,6 +569,12 @@ pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, S
     let bodies: Vec<Body> = program.bodies.values().cloned().collect();
     let seed = program.suspending.clone().unwrap_or_default();
     let (bodies, _) = coroutine::transform_from(&bodies, tys, &seed)?;
+    // `KARAC_MIR_DUMP=coroutines` prints every body after the transform.
+    if std::env::var("KARAC_MIR_DUMP").as_deref() == Ok("coroutines") {
+        for b in &bodies {
+            eprintln!("{}", super::pretty::pretty_body(b, tys));
+        }
+    }
     let mut p = program.clone();
     p.bodies = bodies
         .into_iter()
@@ -1743,6 +1749,58 @@ impl<'a> Interp<'a> {
                 Ok(std::mem::replace(slot, fill))
             }
             ("__yield_now", "") => Ok(Value::Unit),
+            // A call through a function value that may suspend (M4 item 4,
+            // `coroutine::FN_SUSPENDS`).
+            ("__fn_suspends", "") => {
+                let f = match args.first() {
+                    Some(Value::Ref(a)) => self.slot(a)?,
+                    _ => return err("__fn_suspends takes a reference to a function value"),
+                };
+                let Value::Erased { body, .. } = f else {
+                    return err(format!(
+                        "__fn_suspends of {f:?}, which is not a function value"
+                    ));
+                };
+                let start = coroutine::dstart_name(&body);
+                Ok(Value::Bool(self.program.bodies.contains_key(&start)))
+            }
+            ("__fn_start", "") => {
+                let mut args = args;
+                if args.is_empty() {
+                    return err("__fn_start takes a function value");
+                }
+                let f = args.remove(0);
+                self.call_erased_as(f, args, true)
+            }
+            ("__frame_start", "") => {
+                let mut args = args;
+                if args.is_empty() {
+                    return err("__frame_start takes a resume body");
+                }
+                let resume = self.string_at(&args.remove(0))?;
+                let Some(body) = self.program.bodies.get(&resume) else {
+                    return err(format!("__frame_start: no resume body {resume}"));
+                };
+                let TyKind::MutRef(frame_ty) = self.tys.kind(body.locals[1].ty) else {
+                    return err(format!("{resume} does not take its frame"));
+                };
+                // The arguments are the frame's first fields after its state.
+                let mut frame = self.fresh_frame(frame_ty);
+                if let Value::Agg(fs) = &mut frame {
+                    for (j, a) in args.into_iter().enumerate() {
+                        fs[j + 1] = a;
+                    }
+                }
+                let slot = self.alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: frame,
+                });
+                Ok(Value::Erased {
+                    body: resume,
+                    env: Some((slot, frame_ty)),
+                })
+            }
             ("__ready", "") => self.ready(&args),
             // The interpreter's descriptor calls complete when made.
             ("__io_again", "") => Ok(Value::Bool(false)),
@@ -3762,8 +3820,10 @@ impl<'a> Interp<'a> {
                     weak: 0,
                     value: v,
                 });
+                // A coroutine's closure is named by the function its
+                // generated bodies were made from (`coroutine::made_from`).
                 Ok(Value::Erased {
-                    body: body.instance.name.clone(),
+                    body: coroutine::made_from(&body.instance.name).to_string(),
                     env: Some((slot, from)),
                 })
             }
@@ -3780,7 +3840,7 @@ impl<'a> Interp<'a> {
     /// says; an environment it only borrowed is dropped once a by-value
     /// call returns.
     fn call_erased(&mut self, f: Value, args: Vec<Value>) -> R<Value> {
-        let v = self.call_erased_here(f, args)?;
+        let v = self.call_erased_as(f, args, false)?;
         // As in `call_callee` (§11.12).
         if self.panic_unwinding() {
             return Err(Stop::Abort(AbortReason::Panic));
@@ -3788,14 +3848,21 @@ impl<'a> Interp<'a> {
         Ok(v)
     }
 
-    /// [`Interp::call_erased`]'s call.
-    fn call_erased_here(&mut self, f: Value, args: Vec<Value>) -> R<Value> {
+    /// [`Self::call_erased`]'s call, or (`start`) the call that starts the
+    /// suspending function behind `f` in a frame of its own: its
+    /// `dstart` called as `f`'s body would be (`coroutine::FN_START`).
+    fn call_erased_as(&mut self, f: Value, args: Vec<Value>, start: bool) -> R<Value> {
         let (f, by_value) = match f {
             Value::Ref(a) => (self.slot(&a)?, false),
             v => (v, true),
         };
         let Value::Erased { body: name, env } = f else {
             return err(format!("call through {f:?}, which is not a function value"));
+        };
+        let name = if start {
+            coroutine::dstart_name(&name)
+        } else {
+            name
         };
         let args = self.read_lent_args(&name, args, env.is_some())?;
         let Some((slot, env_ty)) = env else {
@@ -3836,6 +3903,12 @@ impl<'a> Interp<'a> {
             all.push(Value::Ref(at.clone()));
         }
         all.extend(args);
+        if start && by_value && !takes_env {
+            return err(format!(
+                "{name}: a suspending closure that borrows its captures, called by value \
+                 through a function value, is not supported yet"
+            ));
+        }
         let ret = self.call(&name, all)?;
         if by_value && !takes_env {
             self.drop_at(&at, env_ty)?;
@@ -12473,6 +12546,14 @@ impl<'a> Interp<'a> {
     /// `ty` is the ADT or shared type; its fields are read through it.
     fn drop_adt(&mut self, addr: &Addr, ty: Ty, a: AdtId) -> R<()> {
         let adt = self.tys.adt(a);
+        // A coroutine frame's fields are initialized only as its state
+        // says, so its own `drop_frame` drops it: a frame started for a
+        // call through a function value (`coroutine::FRAME_START`).
+        if let Some(co) = coroutine::frame_owner(&adt.name) {
+            let drop = coroutine::drop_frame_name(co);
+            self.call(&drop, vec![Value::Ref(addr.clone())])?;
+            return Ok(());
+        }
         if adt.has_drop_impl {
             if !self.slot(addr)?.fully_init() {
                 return err(format!(

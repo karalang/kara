@@ -186,6 +186,9 @@ pub struct Cx<'ctx, 'p> {
     clones: clone::Clones<'ctx>,
     keys: key::Keys<'ctx>,
     shims: callable::Shims<'ctx>,
+    /// Whether the program calls suspending functions through values
+    /// (`callable.rs`), once asked.
+    dyn_fns: Option<bool>,
     /// Bodies declared and not lowered yet.
     todo: Vec<&'p Body>,
     /// The bodies already put on `todo`.
@@ -240,6 +243,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             clones: clone::Clones::default(),
             keys: key::Keys::default(),
             shims: callable::Shims::default(),
+            dyn_fns: None,
             todo: Vec::new(),
             scheduled: std::collections::HashSet::new(),
             vfns: HashMap::new(),

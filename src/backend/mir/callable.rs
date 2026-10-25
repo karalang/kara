@@ -22,7 +22,7 @@ use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue, PointerVa
 use inkwell::IntPredicate;
 
 use super::{Cx, R};
-use crate::mir::{Body, Operand, Place, Ty, TyKind};
+use crate::mir::{coroutine, Body, Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
     x.to_string()
@@ -238,7 +238,11 @@ impl<'ctx> Cx<'ctx, '_> {
                         .enumerate()
                         .map(|(i, t)| Ok((param(3 + i as u32)?, *t)))
                         .collect::<R<_>>()?;
-                    self.build_thunk(&name, ret, env, consume, &args)?;
+                    if self.dyn_fns() {
+                        self.build_dyn_thunk(&name, ret, env, consume, &args)?;
+                    } else {
+                        self.build_thunk(&name, ret, env, consume, &args)?;
+                    }
                     self.builder.build_return(None).map_err(e)?;
                 }
                 Shim::SortBy { f: fty, by_key, el } => {
@@ -578,6 +582,192 @@ impl<'ctx> Cx<'ctx, '_> {
         })
     }
 
+    /// Whether the program calls a suspending function through a value
+    /// (M4 item 4): it has a `dstart` body, and every thunk then answers
+    /// the modes of [`Self::build_dyn_thunk`].
+    fn dyn_fns(&mut self) -> bool {
+        if self.dyn_fns.is_none() {
+            let any = self.program.bodies.keys().any(|n| coroutine::is_dstart(n));
+            self.dyn_fns = Some(any);
+        }
+        self.dyn_fns == Some(true)
+    }
+
+    /// The thunk of `name` in a program that calls suspending functions
+    /// through values. Its `consume` byte is a mode: 0 and 1 call `name`
+    /// (by reference, or consuming the value) as [`Self::build_thunk`]
+    /// does, 2 and 3 start it in a frame of its own (`coroutine::FN_START`)
+    /// by calling its `dstart` the same way, and 4 writes at `ret` whether
+    /// it suspends (`coroutine::FN_SUSPENDS`). A suspending `name` has no
+    /// body to call synchronously, so modes 0 and 1 abort; a call from the
+    /// program's own code asks first, and a native never gets one
+    /// (`coroutine::passed_to_native`).
+    fn build_dyn_thunk(
+        &mut self,
+        name: &str,
+        ret: PointerValue<'ctx>,
+        env: PointerValue<'ctx>,
+        mode: IntValue<'ctx>,
+        args: &[Arg<'ctx>],
+    ) -> R<()> {
+        let start = coroutine::dstart_name(name);
+        let program = self.program;
+        let suspends = program.bodies.get(&start);
+        let f = self.cur_fn()?;
+        let [call, by_ref, consuming, query, done] =
+            ["call", "start", "start.own", "query", "done"]
+                .map(|n| self.llcx.append_basic_block(f, n));
+        let i8t = self.llcx.i8_type();
+        self.builder
+            .build_switch(
+                mode,
+                call,
+                &[
+                    (i8t.const_int(2, false), by_ref),
+                    (i8t.const_int(3, false), consuming),
+                    (i8t.const_int(4, false), query),
+                ],
+            )
+            .map_err(e)?;
+        self.builder.position_at_end(query);
+        let answer = i8t.const_int(u64::from(suspends.is_some()), false);
+        self.store(ret, answer.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        for (at, own) in [(by_ref, false), (consuming, true)] {
+            self.builder.position_at_end(at);
+            match suspends {
+                Some(b) if own && b.arg_count == args.len() + 1 && !self.env_by_value(b) => {
+                    // The frame would borrow captures the call gives back.
+                    self.abort_with(
+                        "a suspending closure that borrows its captures, called by value \
+                         through a function value, is not supported yet",
+                    )?;
+                }
+                Some(_) => {
+                    let flag = i8t.const_int(u64::from(own), false);
+                    self.build_thunk(&start, ret, env, flag, args)?;
+                    self.builder.build_unconditional_branch(done).map_err(e)?;
+                }
+                None => {
+                    self.builder.build_unreachable().map_err(e)?;
+                }
+            }
+        }
+        self.builder.position_at_end(call);
+        if suspends.is_some() {
+            self.abort_with("a suspending function value was called where it cannot wait")?;
+        } else {
+            let one = self
+                .builder
+                .build_int_compare(IntPredicate::NE, mode, i8t.const_zero(), "")
+                .map_err(e)?;
+            let consume = self.builder.build_int_z_extend(one, i8t, "").map_err(e)?;
+            self.build_thunk(name, ret, env, consume, args)?;
+            self.builder.build_unconditional_branch(done).map_err(e)?;
+        }
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// `coroutine::FN_SUSPENDS` and `coroutine::FN_START`: the call through
+    /// the erased value `args[0]` in mode 4 (whether it suspends, written
+    /// at `dest`), or 2 or 3 (its frame started, as an erased poller at
+    /// `dest`), as [`Self::build_dyn_thunk`] reads them.
+    pub(super) fn fn_value_native(&mut self, start: bool, args: &[Operand], dest: &Place) -> R<()> {
+        let (f, rest) = args
+            .split_first()
+            .ok_or("a function-value native takes a value")?;
+        let Callee::Erased { at, ty, consume } = self.callee_of(f)? else {
+            return Err("a function-value native's operand is not erased".into());
+        };
+        let TyKind::Fn { params, .. } = self.tys.kind(ty) else {
+            return Err("an erased callee of a non-function type".into());
+        };
+        let i8t = self.llcx.i8_type();
+        let (mode, ret, args) = if start {
+            let mut vals = Vec::with_capacity(rest.len());
+            for a in rest {
+                let t = self.operand_type(a)?;
+                let slot = self.temp(t, "arg")?;
+                self.store_operand(slot, a)?;
+                vals.push((slot, t));
+            }
+            (2 + u64::from(consume), self.place_ptr(dest)?, vals)
+        } else {
+            (4, self.entry_slot(1, "suspends")?, Vec::new())
+        };
+        let code = self.load_ptr(at)?;
+        let env = self.load_ptr(self.offset(at, 8)?)?;
+        let mut vals: Vec<BasicMetadataValueEnum> =
+            vec![ret.into(), env.into(), i8t.const_int(mode, false).into()];
+        let p = self.ptr_ty();
+        let null = p.const_null();
+        for (i, want) in params.iter().enumerate() {
+            vals.push(match args.get(i) {
+                Some(a) => self.adapt_arg(*a, *want)?.into(),
+                None => null.into(),
+            });
+        }
+        let mut ps: Vec<BasicMetadataTypeEnum> = vec![p.into(), p.into(), i8t.into()];
+        ps.extend(params.iter().map(|_| BasicMetadataTypeEnum::from(p)));
+        let fn_ty = self.llcx.void_type().fn_type(&ps, false);
+        self.builder
+            .build_indirect_call(fn_ty, code, &vals, "")
+            .map_err(e)?;
+        if !start {
+            let b = self
+                .builder
+                .build_load(i8t, ret, "")
+                .map_err(e)?
+                .into_int_value();
+            let on = self
+                .builder
+                .build_int_compare(IntPredicate::NE, b, i8t.const_zero(), "")
+                .map_err(e)?;
+            self.store_bool(dest, on)?;
+        }
+        Ok(())
+    }
+
+    /// `coroutine::FRAME_START`: a frame of the resume body `args[0]` on
+    /// the heap, zeroed (its first state), with the rest of `args` moved
+    /// into its argument fields, as the erased poller at `dest` whose calls
+    /// resume it and whose drop drops it through its `drop_frame`.
+    pub(super) fn frame_start(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let (name, rest) = args
+            .split_first()
+            .ok_or("__frame_start takes a resume body")?;
+        let resume = Self::str_operand(name)?.to_string();
+        let (frame_ty, _) = self.task_types(&resume)?;
+        let size = self.layout(frame_ty)?.size;
+        let malloc = self.libc_fn("malloc");
+        let frame = self
+            .builder
+            .build_call(malloc, &[self.i64(size.max(1)).into()], "frame")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_memset(frame, 8, self.llcx.i8_type().const_zero(), self.i64(size))
+            .map_err(e)?;
+        for (j, a) in rest.iter().enumerate() {
+            let at = self.offset(frame, self.field_offset(frame_ty, None, j as u32 + 1)?)?;
+            self.store_operand(at, a)?;
+        }
+        let poller = self.place_type(dest)?;
+        let thunk = self.shim_fn(Shim::Thunk(resume, poller));
+        let drop = if self.tys.needs_drop(frame_ty) {
+            self.glue_fn(frame_ty).as_global_value().as_pointer_value()
+        } else {
+            self.ptr_ty().const_null()
+        };
+        let d = self.place_ptr(dest)?;
+        self.store(d, thunk.as_global_value().as_pointer_value().into())?;
+        self.store(self.offset(d, 8)?, frame.into())?;
+        self.store(self.offset(d, 16)?, drop.into())
+    }
+
     /// The `Erase` cast: `from` as an erased value at `dst`.
     pub(super) fn erase_into(
         &mut self,
@@ -596,7 +786,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 crate::mir::ConstKind::FnDef(inst) => inst.name.clone(),
                 _ => return Err("erasing a constant that is not a function".into()),
             },
-            _ => self.body_of_def(from)?.instance.name.clone(),
+            // A coroutine's closure is named by the function its generated
+            // bodies were made from.
+            _ => coroutine::made_from(&self.body_of_def(from)?.instance.name).to_string(),
         };
         let thunk = self.shim_fn(Shim::Thunk(name, to));
         self.store(dst, thunk.as_global_value().as_pointer_value().into())?;

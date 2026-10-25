@@ -57,7 +57,7 @@ Written by the MIR owner after the decision, as the plan the implementation foll
 
 **Not in the first cut:**
 - **A recursive cycle of coroutines** has no finite frame. It is refused with a diagnostic until the first measurement says how often services need it, as the decision asked. Then the callee frame at the back edge is boxed.
-- **A `suspends` call through a function value** whose callee is unknown is refused for the same reason.
+- **A `suspends` call through a function value** whose callee is unknown is refused for the same reason. (Since M4 item 4 it is not: a coroutine erased into a value runs in a frame of its own on the heap, started through the value and resumed until ready. A function type carries no effects in MIR, so a value of a type some coroutine is erased into is asked at each call whether it suspends, and one that does not is called as before. A coroutine handed unerased to a native, which would call it synchronously, is still refused. See `coroutine::rewrite_dyn_calls`.)
 
 **The interpreter** already runs suspending programs correctly without the transform, because its natives complete synchronously. So the transform is validated by an executor behind `KARAC_MIR_COROUTINES=1`, with a test native `__yield_now()` that is `Pending` on its first resume, until the corpus agrees under it. Only then does the executor become the default.
 

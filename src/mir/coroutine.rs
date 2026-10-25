@@ -11,7 +11,7 @@ use crate::ids::{DefId, NodeId};
 
 use super::borrowck::liveness;
 use super::syntax::*;
-use super::ty::{AdtDef, AdtId, IntTy, Ty, TyInterner, TyKind, VariantDef};
+use super::ty::{AdtDef, AdtId, FnKind, IntTy, Ty, TyInterner, TyKind, VariantDef};
 
 /// The executor's test native: `Pending` on its first resume and `Ready(())`
 /// on the next.
@@ -96,6 +96,461 @@ pub const ISOLATING: &str = "TaskGroup.isolating";
 /// exit the builder puts after a call that may suspend or panic.
 pub fn has_cancel_exit(body: &Body, target: BasicBlock) -> bool {
     cancel_exit_of(body, target).is_some()
+}
+
+/// A coroutine erased into a function value (M4 item 4) is called through
+/// a frame of its own on the heap. `__fn_suspends(ref f)` is `true` when
+/// the erased value `f` is such a coroutine. `__fn_start(f, args..)` then
+/// starts it: it calls the coroutine's `F#dstart` with `f`'s environment
+/// and the arguments, as a call through `f` would call `F`, and answers
+/// the started frame as an erased `MutFn() -> Poll[T]` whose every call
+/// resumes it and whose drop drops it through `F#drop_frame`. The caller
+/// resumes it until it is ready, suspending in between.
+pub const FN_SUSPENDS: &str = "__fn_suspends";
+/// See [`FN_SUSPENDS`].
+pub const FN_START: &str = "__fn_start";
+/// `__frame_start(const "F#resume", args..)`, the body of `F#dstart`: a
+/// fresh frame of that resume body on the heap, in its first state, with
+/// `args` as its arguments, as the erased `MutFn() -> Poll[T]` that
+/// resumes it.
+pub const FRAME_START: &str = "__frame_start";
+
+/// The body that starts coroutine `name`'s frame for a call through a
+/// function value ([`FN_START`]).
+pub fn dstart_name(name: &str) -> String {
+    format!("{name}#dstart")
+}
+
+/// Whether `body_name` is a coroutine's `dstart` body.
+pub fn is_dstart(body_name: &str) -> bool {
+    body_name.ends_with("#dstart")
+}
+
+/// The function a generated body was made from: `F` for `F#resume`,
+/// `F#drop_frame` and `F#dstart`, which share `F`'s DefId.
+pub fn made_from(body_name: &str) -> &str {
+    ["#resume", "#drop_frame", "#dstart"]
+        .iter()
+        .find_map(|s| body_name.strip_suffix(s))
+        .unwrap_or(body_name)
+}
+
+/// The erased function type `t` with its kind forgotten, so a value
+/// widened from `Fn` to `MutFn` or `OnceFn` keeps its taint.
+fn fn_key(tys: &TyInterner, t: Ty) -> Option<Ty> {
+    match tys.kind(t) {
+        TyKind::Fn { params, ret, .. } => Some(tys.intern(TyKind::Fn {
+            params,
+            ret,
+            kind: FnKind::Fn,
+        })),
+        _ => None,
+    }
+}
+
+/// The name a program that cancels gives the calls through values of the
+/// type `t` (behind references) that may suspend, among the callees whose
+/// calls get a cancel exit (`lower::cancel_points`).
+pub fn fn_value_key(tys: &TyInterner, mut t: Ty) -> Option<String> {
+    while let TyKind::Ref(i) | TyKind::MutRef(i) = tys.kind(t) {
+        t = i;
+    }
+    fn_key(tys, t).map(|k| format!("fn value {}", tys.display(k)))
+}
+
+/// The type of `o` in `body`.
+fn operand_ty(body: &Body, tys: &TyInterner, o: &Operand) -> Option<Ty> {
+    match o {
+        Operand::Const(c) => Some(c.ty),
+        Operand::Copy(p) | Operand::Move(p) => {
+            super::place_ty::place_ty(body, tys, p).ok().map(|t| t.ty)
+        }
+    }
+}
+
+/// The erased function type a call through `func` calls, behind any
+/// references, keyed by [`fn_key`].
+fn called_fn_key(body: &Body, tys: &TyInterner, func: &Operand) -> Option<Ty> {
+    if direct_callee(func).is_some() {
+        return None;
+    }
+    let mut t = operand_ty(body, tys, func)?;
+    while let TyKind::Ref(i) | TyKind::MutRef(i) = tys.kind(t) {
+        t = i;
+    }
+    fn_key(tys, t)
+}
+
+/// What calls through function values add to the coroutines (M4 item 4).
+pub struct DynCalls {
+    /// Every coroutine: `coroutines_from`'s, and the bodies that call
+    /// through a function value a coroutine may be erased into, and their
+    /// callers.
+    pub set: BTreeSet<String>,
+    /// The coroutines erased into a function value, which get a `dstart`.
+    pub erased: BTreeSet<String>,
+    /// The erased types ([`fn_key`]) those values have; a call through one
+    /// may suspend.
+    pub tainted: BTreeSet<Ty>,
+}
+
+/// [`coroutines_from`] with calls through function values: a coroutine
+/// erased into a value taints the value's type, a call through a tainted
+/// type may suspend, so its body is a coroutine too, and so on until
+/// nothing changes. A function type carries no effects in MIR, so every
+/// value of a tainted type is asked at the call whether it suspends.
+pub fn dyn_calls(bodies: &[Body], tys: &TyInterner, seed: &BTreeSet<String>) -> DynCalls {
+    let mut set = coroutines_from(bodies, seed);
+    loop {
+        let (erased, tainted) = erased_coroutines(bodies, tys, &set);
+        let callers: Vec<String> = bodies
+            .iter()
+            .filter(|b| !set.contains(&b.instance.name))
+            .filter(|b| {
+                b.blocks.iter().any(|d| match &d.terminator.kind {
+                    TerminatorKind::Call { func, .. } => {
+                        called_fn_key(b, tys, func).is_some_and(|k| tainted.contains(&k))
+                    }
+                    _ => false,
+                })
+            })
+            .map(|b| b.instance.name.clone())
+            .collect();
+        if callers.is_empty() {
+            return DynCalls {
+                set,
+                erased,
+                tainted,
+            };
+        }
+        set.extend(callers);
+        set = coroutines_from(bodies, &set);
+    }
+}
+
+/// The erased `MutFn() -> Poll[T]` a started frame of a coroutine
+/// returning `T` is called through ([`FN_START`]).
+fn poller_ty(tys: &TyInterner, polls: &mut BTreeMap<Ty, Ty>, t: Ty) -> Ty {
+    let poll = poll_of(tys, polls, t);
+    tys.intern(TyKind::Fn {
+        params: vec![],
+        ret: poll,
+        kind: FnKind::MutFn,
+    })
+}
+
+/// A native's name as a callee operand.
+fn native_fn(tys: &TyInterner, name: &str) -> Operand {
+    Operand::Const(Const {
+        ty: tys.unit(),
+        kind: ConstKind::FnDef(InstanceId {
+            def: DefId(0),
+            args: vec![],
+            name: name.to_string(),
+        }),
+    })
+}
+
+/// `F#dstart(args..) -> MutFn() -> Poll[T]` for the coroutine `F` erased
+/// into a value: `F`'s parameters, and a frame of `F` started with them
+/// ([`FRAME_START`]). A call through the value starts it as a call would
+/// call `F`, with the value's environment first for a closure.
+fn dstart(body: &Body, tys: &TyInterner, polls: &mut BTreeMap<Ty, Ty>) -> Body {
+    let si = SourceInfo {
+        span: body.span,
+        scope: SourceScope(0),
+    };
+    let poller = poller_ty(tys, polls, body.return_ty());
+    let mut locals = vec![LocalDecl {
+        ty: poller,
+        mutability: Mutability::Mut,
+        kind: LocalKind::ReturnPlace,
+        source_info: si,
+    }];
+    locals.extend(body.args().map(|l| body.local(l).clone()));
+    let mut args = vec![Operand::Const(Const {
+        ty: tys.intern(TyKind::Str),
+        kind: ConstKind::Str(resume_name(&body.instance.name)),
+    })];
+    args.extend(body.args().map(|l| Operand::Move(Place::local(l))));
+    let term = |kind| Terminator {
+        kind,
+        source_info: si,
+    };
+    let blocks = vec![
+        BasicBlockData {
+            statements: vec![],
+            terminator: term(TerminatorKind::Call {
+                func: native_fn(tys, FRAME_START),
+                args,
+                destination: Place::local(Local::RETURN_PLACE),
+                target: Some(BasicBlock(1)),
+                unwind: UnwindAction::Abort,
+            }),
+        },
+        BasicBlockData {
+            statements: vec![],
+            terminator: term(TerminatorKind::Return),
+        },
+    ];
+    let mut instance = body.instance.clone();
+    instance.name = dstart_name(&body.instance.name);
+    Body {
+        instance,
+        locals,
+        arg_count: body.arg_count,
+        blocks,
+        scopes: body.scopes.clone(),
+        phase: body.phase,
+        span: body.span,
+        provided: Vec::new(),
+        auto_par_candidates: Vec::new(),
+        par_regions: Vec::new(),
+        suspends: false,
+        drop_flags: Vec::new(),
+    }
+}
+
+/// Rewrites each call of `body` through a function value of a `tainted`
+/// type ([`dyn_calls`]):
+///
+/// ```text
+/// call:  q = __fn_suspends(ref f) -> sw
+/// sw:    switchInt(copy q) -> [0: plain, otherwise: start]
+/// plain: dest = f(args..) -> next
+/// start: h = __fn_start(f, args..) -> poll
+/// poll:  r = &mut h; p = move r() -> chk
+/// chk:   d = discriminant(p); switchInt(copy d) -> [0: ready, otherwise: y]
+/// y:     _ = __yield_now() -> poll
+/// ready: dest = move (p as Ready).0; drop(h) -> next
+/// ```
+///
+/// so a value that suspends runs in its own frame, resumed each time the
+/// task is, while any other is called as before.
+fn rewrite_dyn_calls(
+    body: &mut Body,
+    tys: &TyInterner,
+    tainted: &BTreeSet<Ty>,
+    polls: &mut BTreeMap<Ty, Ty>,
+) -> Result<(), String> {
+    if tainted.is_empty() {
+        return Ok(());
+    }
+    for i in 0..body.blocks.len() {
+        let t = &body.blocks[i].terminator;
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            target: Some(next),
+            unwind,
+        } = &t.kind
+        else {
+            continue;
+        };
+        let Some(key) = called_fn_key(body, tys, func).filter(|k| tainted.contains(k)) else {
+            continue;
+        };
+        let TyKind::Fn { ret, .. } = tys.kind(key) else {
+            unreachable!("fn_key answers a function type")
+        };
+        let (func, args, dest, next, unwind, si) = (
+            func.clone(),
+            args.clone(),
+            destination.clone(),
+            *next,
+            *unwind,
+            t.source_info,
+        );
+        let poller = poller_ty(tys, polls, ret);
+        let poll_t = match tys.kind(poller) {
+            TyKind::Fn { ret, .. } => ret,
+            _ => unreachable!("a poller is a function type"),
+        };
+        let new_local = |body: &mut Body, ty: Ty| {
+            body.locals.push(LocalDecl {
+                ty,
+                mutability: Mutability::Mut,
+                kind: LocalKind::Temp,
+                source_info: si,
+            });
+            Local(body.locals.len() as u32 - 1)
+        };
+        let fty = operand_ty(body, tys, &func).ok_or("a call through an untyped value")?;
+        let mut pre = Vec::new();
+        let query = match &func {
+            Operand::Copy(p) | Operand::Move(p)
+                if matches!(tys.kind(fty), TyKind::Ref(_) | TyKind::MutRef(_)) =>
+            {
+                Operand::Copy(p.clone())
+            }
+            Operand::Copy(p) | Operand::Move(p) => {
+                let r = new_local(body, tys.intern(TyKind::Ref(fty)));
+                pre.push(Statement {
+                    kind: StatementKind::Assign(
+                        Place::local(r),
+                        Rvalue::Ref(BorrowKind::Shared, p.clone()),
+                    ),
+                    source_info: si,
+                });
+                Operand::Move(Place::local(r))
+            }
+            Operand::Const(_) => return Err("a call through a constant function value".into()),
+        };
+        let q = new_local(body, tys.bool());
+        let h = new_local(body, poller);
+        let r = new_local(body, tys.intern(TyKind::MutRef(poller)));
+        let p = new_local(body, poll_t);
+        let d = new_local(body, tys.int(IntTy::I64));
+        let u = new_local(body, tys.unit());
+        let base = body.blocks.len() as u32;
+        let [sw, plain, start, poll, chk, y, ready] =
+            std::array::from_fn(|k| BasicBlock(base + k as u32));
+        let term = |kind| Terminator {
+            kind,
+            source_info: si,
+        };
+        let block = |statements, kind| BasicBlockData {
+            statements,
+            terminator: term(kind),
+        };
+        let call = |func, args, destination: Local, target| TerminatorKind::Call {
+            func,
+            args,
+            destination: Place::local(destination),
+            target: Some(target),
+            unwind,
+        };
+        let orig = std::mem::replace(
+            &mut body.blocks[i].terminator,
+            term(call(native_fn(tys, FN_SUSPENDS), vec![query], q, sw)),
+        );
+        body.blocks[i].statements.extend(pre);
+        body.blocks.push(block(
+            vec![],
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(q)),
+                targets: SwitchTargets {
+                    values: vec![(0, plain)],
+                    otherwise: start,
+                },
+            },
+        ));
+        body.blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: orig,
+        });
+        let mut start_args = vec![func];
+        start_args.extend(args);
+        body.blocks.push(block(
+            vec![],
+            call(native_fn(tys, FN_START), start_args, h, poll),
+        ));
+        body.blocks.push(block(
+            vec![Statement {
+                kind: StatementKind::Assign(
+                    Place::local(r),
+                    Rvalue::Ref(BorrowKind::Mut, Place::local(h)),
+                ),
+                source_info: si,
+            }],
+            call(Operand::Move(Place::local(r)), vec![], p, chk),
+        ));
+        body.blocks.push(block(
+            vec![Statement {
+                kind: StatementKind::Assign(Place::local(d), Rvalue::Discriminant(Place::local(p))),
+                source_info: si,
+            }],
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(d)),
+                targets: SwitchTargets {
+                    values: vec![(0, ready)],
+                    otherwise: y,
+                },
+            },
+        ));
+        body.blocks.push(block(
+            vec![],
+            call(native_fn(tys, YIELD_NOW), vec![], u, poll),
+        ));
+        body.blocks.push(block(
+            vec![Statement {
+                kind: StatementKind::Assign(
+                    dest,
+                    Rvalue::Use(Operand::Move(Place {
+                        local: p,
+                        projection: vec![
+                            ProjElem::Downcast(VariantIdx(0)),
+                            ProjElem::Field(FieldIdx(0), ret),
+                        ],
+                    })),
+                ),
+                source_info: si,
+            }],
+            TerminatorKind::Drop {
+                place: Place::local(h),
+                target: next,
+                unwind: UnwindAction::Abort,
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// The coroutines among `set` some `Erase` cast makes a value of, and the
+/// types ([`fn_key`]) of those values, including the kinds they widen to.
+fn erased_coroutines(
+    bodies: &[Body],
+    tys: &TyInterner,
+    set: &BTreeSet<String>,
+) -> (BTreeSet<String>, BTreeSet<Ty>) {
+    let by_def = |def: DefId| {
+        bodies
+            .iter()
+            .find(|b| b.instance.def == def && set.contains(&b.instance.name))
+            .map(|b| b.instance.name.clone())
+    };
+    let mut erased = BTreeSet::new();
+    let mut tainted = BTreeSet::new();
+    let mut casts = Vec::new();
+    for b in bodies {
+        for d in &b.blocks {
+            for st in &d.statements {
+                if let StatementKind::Assign(_, Rvalue::Cast(CastKind::Erase, o, to)) = &st.kind {
+                    let from = operand_ty(b, tys, o);
+                    let source = match (direct_callee(o), from.map(|t| tys.kind(t))) {
+                        (Some(n), _) => set.contains(n).then(|| n.to_string()),
+                        (None, Some(TyKind::FnDef(def) | TyKind::Closure(def, _))) => by_def(def),
+                        _ => None,
+                    };
+                    match source {
+                        Some(n) => {
+                            erased.insert(n);
+                            tainted.extend(fn_key(tys, *to));
+                        }
+                        None => {
+                            if let (Some(f), Some(t)) =
+                                (from.and_then(|f| fn_key(tys, f)), fn_key(tys, *to))
+                            {
+                                casts.push((f, t));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Widening keeps the value, so its taint.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &(f, t) in &casts {
+            if tainted.contains(&f) && tainted.insert(t) {
+                changed = true;
+            }
+        }
+    }
+    (erased, tainted)
 }
 
 /// The cancel exit the builder put after a call that continues to
@@ -1028,8 +1483,10 @@ pub fn transform_from(
     for b in &mut bodies {
         insert_group_ends(b, tys)?;
     }
-    let mut set = coroutines_from(&bodies, suspending);
-    set.extend(task_names.iter().cloned());
+    let mut seed = suspending.clone();
+    seed.extend(task_names.iter().cloned());
+    let dyn_calls = dyn_calls(&bodies, tys, &seed);
+    let set = dyn_calls.set;
     let bodies = bodies.as_slice();
     // A spawned closure is made as a value, but its one caller is its task
     // body.
@@ -1039,18 +1496,27 @@ pub fn transform_from(
         .map(|b| b.instance.name.clone())
         .collect();
     let direct: BTreeSet<String> = set.difference(&spawned).cloned().collect();
-    if let Some(name) = called_indirectly(bodies, &direct, tys) {
+    if let Some((name, native)) = passed_to_native(bodies, &direct, tys) {
         return Err(format!(
-            "{name} suspends and is used as a function value; calling a coroutine through a \
-             function value is not supported yet"
+            "{name} suspends and is passed to `{native}`, which calls it where it cannot wait"
         ));
     }
-    // The coroutines' suspending natives behind their readiness loops.
+    // The `Poll` types the calls through values and the `dstart` bodies
+    // name, before the frames' (below).
+    let mut polls = BTreeMap::new();
+    let dstarts: Vec<Body> = bodies
+        .iter()
+        .filter(|b| dyn_calls.erased.contains(&b.instance.name))
+        .map(|b| dstart(b, tys, &mut polls))
+        .collect();
+    // The coroutines' calls through values that may suspend, and their
+    // suspending natives behind readiness loops.
     let bodies: Vec<Body> = bodies
         .iter()
         .map(|b| {
             let mut b = b.clone();
             if set.contains(&b.instance.name) {
+                rewrite_dyn_calls(&mut b, tys, &dyn_calls.tainted, &mut polls)?;
                 insert_ready_loops(&mut b, tys)?;
             }
             Ok(b)
@@ -1071,7 +1537,6 @@ pub fn transform_from(
     let order: Vec<&str> = layouts.keys().copied().collect();
     // The `Poll` types first: they take fresh DefIds too, which must not
     // be the ones the frames are named by before they are defined.
-    let mut polls = BTreeMap::new();
     let poll_tys: BTreeMap<&str, Ty> = order
         .iter()
         .map(|&n| (n, poll_of(tys, &mut polls, by_name[n].return_ty())))
@@ -1093,8 +1558,17 @@ pub fn transform_from(
     for &n in &order {
         let body = by_name[n];
         let lay = &layouts[n];
-        let mut locals: BTreeSet<Local> = lay.frame.iter().copied().collect();
-        locals.extend(body.args());
+        // The arguments first, as fields 1..=n, where a frame started
+        // without its body (`spawn_frame`, `FRAME_START`) puts them; the
+        // return place may be held too.
+        let held: BTreeSet<Local> = lay.frame.iter().copied().collect();
+        let locals: Vec<Local> = body
+            .args()
+            .chain(
+                held.into_iter()
+                    .filter(|l| l.index() == 0 || l.index() > body.arg_count),
+            )
+            .collect();
         let mut fields_def = vec![("state".to_string(), u32t)];
         let mut fields = BTreeMap::new();
         for l in locals {
@@ -1136,6 +1610,7 @@ pub fn transform_from(
         .iter()
         .filter(|b| !set.contains(&b.instance.name))
         .cloned()
+        .chain(dstarts)
         .collect();
     for &n in &order {
         out.push(Resume::new(by_name[n], &layouts[n], &frames, tys).build()?);
@@ -1144,9 +1619,6 @@ pub fn transform_from(
     Ok((out, frames))
 }
 
-/// A coroutine that is used other than as the callee of a direct call: a
-/// function item taken as a value, or a closure that is made. Its callers
-/// cannot be found, so the transform cannot give them a frame for it.
 /// The natives `with_span` becomes around a closure that suspends.
 pub const SPAN_ENTER: &str = "with_span_enter";
 pub const SPAN_EXIT: &str = "with_span_exit";
@@ -1317,7 +1789,11 @@ fn direct_span_bodies(bodies: &mut [Body], tys: &TyInterner, suspending: &BTreeS
     }
 }
 
-pub(crate) fn called_indirectly(
+/// A coroutine of `set` that is used other than as the callee of a direct
+/// call: a function item taken as a value, or a closure that is made. The
+/// parallel build keeps such a body from becoming a coroutine, whose calls
+/// through a value would then each start a frame on the heap.
+pub(crate) fn used_as_value(
     bodies: &[Body],
     set: &BTreeSet<String>,
     tys: &TyInterner,
@@ -1402,6 +1878,51 @@ pub(crate) fn called_indirectly(
             if let TerminatorKind::Call { args, .. } = &data.terminator.kind {
                 if let Some(n) = args.iter().find_map(named) {
                     return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A coroutine of `set` handed as a function item or closure (not erased)
+/// to a native, which would call it synchronously, and that native. A
+/// function item or closure passed to a body is called directly there,
+/// since the callee is specialised on its type, and an erased one is
+/// called through its own frame ([`FN_START`]).
+fn passed_to_native(
+    bodies: &[Body],
+    set: &BTreeSet<String>,
+    tys: &TyInterner,
+) -> Option<(String, String)> {
+    let names: BTreeSet<&str> = bodies.iter().map(|b| b.instance.name.as_str()).collect();
+    let by_def: BTreeMap<DefId, &str> = bodies
+        .iter()
+        .filter(|b| set.contains(&b.instance.name))
+        .map(|b| (b.instance.def, b.instance.name.as_str()))
+        .collect();
+    for b in bodies {
+        for d in &b.blocks {
+            let TerminatorKind::Call { func, args, .. } = &d.terminator.kind else {
+                continue;
+            };
+            let Some(native) = direct_callee(func).filter(|c| !names.contains(c)) else {
+                continue;
+            };
+            for a in args {
+                if let Some(n) = direct_callee(a).filter(|n| set.contains(*n)) {
+                    return Some((n.to_string(), native.to_string()));
+                }
+                let Some(mut t) = operand_ty(b, tys, a) else {
+                    continue;
+                };
+                while let TyKind::Ref(i) | TyKind::MutRef(i) = tys.kind(t) {
+                    t = i;
+                }
+                if let TyKind::FnDef(def) | TyKind::Closure(def, _) = tys.kind(t) {
+                    if let Some(n) = by_def.get(&def) {
+                        return Some((n.to_string(), native.to_string()));
+                    }
                 }
             }
         }
@@ -2656,7 +3177,7 @@ fn main() -> () suspends {
     }
 
     #[test]
-    fn transform_refuses_a_coroutine_used_as_a_value() {
+    fn transform_refuses_a_coroutine_passed_to_a_native() {
         let src = "
 fn leaf() -> () suspends {
     let mut _0: ();
@@ -2670,10 +3191,10 @@ fn leaf() -> () suspends {
 
 fn main() -> () {
     let mut _0: ();
-    let _1: fn#0;
     bb0: {
-        _1 = const leaf;
-        _0 = const ();
+        _0 = run_later(const leaf) -> bb1;
+    }
+    bb1: {
         return;
     }
 }
@@ -2681,7 +3202,7 @@ fn main() -> () {
         let m = parse_module(src).unwrap();
         let e = transform(&m.bodies, &m.tys).unwrap_err();
         assert!(
-            e.contains("leaf suspends and is used as a function value"),
+            e.contains("leaf suspends and is passed to `run_later`"),
             "{e}"
         );
     }

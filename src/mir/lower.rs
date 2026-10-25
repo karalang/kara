@@ -3396,11 +3396,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return None;
         }
         let TerminatorKind::Call {
-            func:
-                Operand::Const(Const {
-                    kind: ConstKind::FnDef(callee),
-                    ..
-                }),
+            func,
             destination,
             target: Some(target),
             ..
@@ -3408,10 +3404,26 @@ impl<'l, 'a> Bx<'l, 'a> {
         else {
             return None;
         };
-        let n = callee.name.as_str();
-        let suspends = n == "TaskGroup.spawn"
-            || crate::mir::coroutine::suspends_native(n)
-            || self.lcx.cancel_at.as_ref().is_some_and(|a| a.contains(n));
+        let suspends = match func {
+            Operand::Const(Const {
+                kind: ConstKind::FnDef(callee),
+                ..
+            }) => {
+                let n = callee.name.as_str();
+                n == "TaskGroup.spawn"
+                    || crate::mir::coroutine::suspends_native(n)
+                    || self.lcx.cancel_at.as_ref().is_some_and(|a| a.contains(n))
+            }
+            // A call through a function value a coroutine is erased into,
+            // or any call through a value in a program whose isolating
+            // tasks leave at a panic (§11.12): the value may panic.
+            f => {
+                let key = crate::mir::coroutine::fn_value_key(self.tys(), self.operand_ty(f));
+                self.lcx.cancel_at.as_ref().is_some_and(|a| {
+                    key.is_some_and(|k| a.contains(&k)) || a.contains(crate::mir::coroutine::PANIC)
+                })
+            }
+        };
         if !suspends {
             return None;
         }
@@ -21620,7 +21632,7 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
 /// tasks, that is called through a function value somewhere, which a
 /// coroutine cannot be yet.
 fn suspends_as_value(first: &Lowered, second: &Lowered) -> Option<String> {
-    use crate::mir::coroutine::{called_indirectly, coroutines};
+    use crate::mir::coroutine::{coroutines, used_as_value};
     let before = coroutines(first.program.bodies.values());
     let new: std::collections::BTreeSet<String> = coroutines(second.program.bodies.values())
         .into_iter()
@@ -21630,7 +21642,7 @@ fn suspends_as_value(first: &Lowered, second: &Lowered) -> Option<String> {
         return None;
     }
     let bodies: Vec<Body> = second.program.bodies.values().cloned().collect();
-    called_indirectly(&bodies, &new, &second.tys)
+    used_as_value(&bodies, &new, &second.tys)
 }
 
 /// [`build_source`] with each body's auto-par candidates recorded
@@ -22043,7 +22055,19 @@ fn cancel_points(lowered: &Lowered) -> Option<FxHashSet<String>> {
         return None;
     }
     let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
-    Some(report.suspending().into_iter().collect())
+    let seed: std::collections::BTreeSet<String> = report.suspending().into_iter().collect();
+    // And the calls through the function values a coroutine is erased
+    // into (M4 item 4), by their types.
+    let bodies: Vec<Body> = lowered.program.bodies.values().cloned().collect();
+    let calls = crate::mir::coroutine::dyn_calls(&bodies, &lowered.tys, &seed);
+    let mut at: FxHashSet<String> = calls.set.into_iter().collect();
+    at.extend(
+        calls
+            .tainted
+            .iter()
+            .filter_map(|&t| crate::mir::coroutine::fn_value_key(&lowered.tys, t)),
+    );
+    Some(at)
 }
 
 /// When `lowered` makes an isolating group (core-semantics §11.12): the

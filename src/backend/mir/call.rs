@@ -687,6 +687,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 let on = self.rt_flag(name, &[])?;
                 self.store_bool(dest, on)
             }
+            // A call through a function value that may suspend (M4 item 4).
+            ("__fn_suspends" | "__fn_start", "") => {
+                self.fn_value_native(base == "__fn_start", args, dest)
+            }
+            ("__frame_start", "") => self.frame_start(args, dest),
             ("__unwind", "") => {
                 let on = self.operand_scalar(&args[0])?.into_int_value();
                 let on = self

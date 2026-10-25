@@ -40,7 +40,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The str constant an operand is.
-    fn str_operand(a: &Operand) -> R<&str> {
+    pub(super) fn str_operand(a: &Operand) -> R<&str> {
         match a {
             Operand::Const(c) => match &c.kind {
                 ConstKind::Str(s) => Ok(s),
