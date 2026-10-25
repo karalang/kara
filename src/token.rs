@@ -285,6 +285,13 @@ pub enum Token {
     /// can attach it to the enclosing module rather than the next item.
     ModuleDocComment(String),
     Error(String),
+    /// A token the lexer could not read whose remedy is mechanical: its
+    /// message, and the text the token's whole source becomes, which the
+    /// parser offers as the error's machine-applicable fix (B-2026-10-24-27).
+    ErrorWithFix {
+        message: String,
+        fixed: String,
+    },
     /// A word from design.md § Reserved-for-Future-Use Keywords, carrying its
     /// source spelling.
     ///

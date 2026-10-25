@@ -1377,6 +1377,43 @@ impl Parser {
     /// should come through here; `error` is the legacy `Syntax` bucket.
     fn error_kind(&mut self, kind: ParseErrorKind, message: &str) {
         let span = self.current_span();
+        // At a token the lexer could not read, its own message is the
+        // error, reported once however many productions trip on it, not
+        // `Expected …, found Error("…")` (B-2026-10-24-27).
+        let (lexed, fixed) = match self.peek_token_ref() {
+            Token::Error(m) => (m.clone(), None),
+            Token::ErrorWithFix { message, fixed } => (message.clone(), Some(fixed.clone())),
+            _ => (String::new(), None),
+        };
+        // A literal left open runs to the end of the file, so the parser's
+        // complaint there (a missing `}`) is the same error again.
+        if *self.peek_token_ref() == Token::EOF && self.tokens.len() >= 2 {
+            let last = &self.tokens[self.tokens.len() - 2];
+            let open = matches!(&last.token, Token::Error(m) if m.starts_with("Unterminated"));
+            if open && self.errors.iter().any(|e| e.span == last.span) {
+                return;
+            }
+        }
+        if !lexed.is_empty() {
+            if !self.errors.iter().any(|e| e.span == span) {
+                if let Some(replacement) = fixed {
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&span),
+                        crate::resolver::TextEdit {
+                            offset: span.offset,
+                            length: span.length,
+                            replacement,
+                        },
+                    );
+                }
+                self.errors.push(ParseError {
+                    kind: ParseErrorKind::Syntax,
+                    message: lexed,
+                    span,
+                });
+            }
+            return;
+        }
         self.errors.push(ParseError {
             kind,
             message: message.to_string(),

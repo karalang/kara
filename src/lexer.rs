@@ -25,6 +25,66 @@ pub struct Lexer<'a> {
     start_column: usize,
 }
 
+/// The error for a backslash in an f-string hole's expression, the habit
+/// of escaping the quotes of a string written inside a quoted string.
+const ESCAPED_QUOTE_IN_HOLE: &str = "unexpected '\\' in f-string interpolation `{…}`; string \
+     literals inside an interpolation use plain quotes — write `{f(\"x\")}`, not escaped quotes";
+
+/// The f-string literal `lit` (its whole source, `f"` to the closing `"`)
+/// with the backslash dropped from each escaped quote inside a `{…}` hole,
+/// which is what its writer meant; `None` when there is none to drop.
+fn unescape_hole_quotes(lit: &str) -> Option<String> {
+    let open = lit.find('"')?;
+    let mut out = String::from(&lit[..=open]);
+    let mut chars = lit[open + 1..].chars().peekable();
+    let (mut depth, mut in_lit, mut dropped) = (0usize, None::<char>, false);
+    while let Some(c) = chars.next() {
+        if depth == 0 {
+            match c {
+                '\\' => {
+                    out.push(c);
+                    out.extend(chars.next());
+                    continue;
+                }
+                '{' if chars.peek() == Some(&'{') => {
+                    out.push(c);
+                    out.extend(chars.next());
+                    continue;
+                }
+                '{' => depth = 1,
+                _ => {}
+            }
+            out.push(c);
+            continue;
+        }
+        match c {
+            '\\' if matches!(chars.peek(), Some('"' | '\'')) => {
+                let q = chars.next()?;
+                dropped = true;
+                in_lit = match in_lit {
+                    Some(o) if o == q => None,
+                    None => Some(q),
+                    other => other,
+                };
+                out.push(q);
+                continue;
+            }
+            '"' | '\'' => {
+                in_lit = match in_lit {
+                    Some(o) if o == c => None,
+                    None => Some(c),
+                    other => other,
+                };
+            }
+            '{' if in_lit.is_none() => depth += 1,
+            '}' if in_lit.is_none() => depth -= 1,
+            _ => {}
+        }
+        out.push(c);
+    }
+    dropped.then_some(out)
+}
+
 impl<'a> Lexer<'a> {
     /// Creates a new Lexer for the given source code.
     pub fn new(source: &'a str) -> Self {
@@ -742,52 +802,51 @@ impl<'a> Lexer<'a> {
                         bytes.push(b'"');
                     }
                     b'0' => {
-                        return self.make_spanned(Token::Error(
+                        return self.literal_error(
                             "error[E_INTERIOR_NUL_IN_C_STRING]: \
                              interior NUL bytes are not permitted in C-string literals; \
                              remove the `\\0` escape"
                                 .to_string(),
-                        ));
+                        );
                     }
                     b'x' => {
                         self.advance(); // consume `x`
                         match self.parse_hex_byte_escape() {
                             Ok(0) => {
-                                return self.make_spanned(Token::Error(
+                                return self.literal_error(
                                     "error[E_INTERIOR_NUL_IN_C_STRING]: \
                                      interior NUL bytes are not permitted in C-string literals; \
                                      remove the `\\x00` escape"
                                         .to_string(),
-                                ));
+                                );
                             }
                             Ok(b) => bytes.push(b),
-                            Err(msg) => return self.make_spanned(Token::Error(msg)),
+                            Err(msg) => return self.literal_error(msg),
                         }
                     }
                     b'u' => {
                         self.advance();
                         match self.parse_unicode_escape() {
                             Ok('\0') => {
-                                return self.make_spanned(Token::Error(
+                                return self.literal_error(
                                     "error[E_INTERIOR_NUL_IN_C_STRING]: \
                                      interior NUL bytes are not permitted in C-string literals; \
                                      remove the `\\u{0}` escape"
                                         .to_string(),
-                                ));
+                                );
                             }
                             Ok(c) => {
                                 let mut buf = [0u8; 4];
                                 let s = c.encode_utf8(&mut buf);
                                 bytes.extend_from_slice(s.as_bytes());
                             }
-                            Err(msg) => return self.make_spanned(Token::Error(msg)),
+                            Err(msg) => return self.literal_error(msg),
                         }
                     }
                     _ => {
                         let c = self.consume_codepoint();
-                        return self.make_spanned(Token::Error(format!(
-                            "Unknown escape sequence in C-string: \\{c}"
-                        )));
+                        return self
+                            .literal_error(format!("Unknown escape sequence in C-string: \\{c}"));
                     }
                 }
             } else {
@@ -861,6 +920,34 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// A string literal's error, found at an escape inside it: the rest of
+    /// the literal, through its closing quote, goes with it, so lexing goes
+    /// on after the literal rather than from inside it (B-2026-10-24-27).
+    fn literal_error(&mut self, msg: String) -> SpannedToken {
+        while self.peek() != b'"' && !self.is_at_end() {
+            match self.peek() {
+                b'\\' => {
+                    self.advance();
+                    if !self.is_at_end() && self.peek() != b'\n' {
+                        self.consume_codepoint();
+                    }
+                }
+                b'\n' => {
+                    self.line += 1;
+                    self.column = 0;
+                    self.advance();
+                }
+                _ => {
+                    self.consume_codepoint();
+                }
+            }
+        }
+        if !self.is_at_end() {
+            self.advance(); // closing quote
+        }
+        self.make_spanned(Token::Error(msg))
+    }
+
     fn string(&mut self) -> SpannedToken {
         let mut value = String::new();
         while self.peek() != b'"' && !self.is_at_end() {
@@ -871,7 +958,7 @@ impl<'a> Lexer<'a> {
             if self.peek() == b'\\' {
                 match self.string_escape() {
                     Ok(c) => value.push(c),
-                    Err(msg) => return self.make_spanned(Token::Error(msg)),
+                    Err(msg) => return self.literal_error(msg),
                 }
             } else {
                 value.push(self.consume_codepoint());
@@ -1121,7 +1208,7 @@ impl<'a> Lexer<'a> {
                             self.advance();
                             match self.parse_hex_byte_escape() {
                                 Ok(v) => v,
-                                Err(msg) => return self.make_spanned(Token::Error(msg)),
+                                Err(msg) => return self.literal_error(msg),
                             }
                         }
                         b'u' => {
@@ -1157,9 +1244,9 @@ impl<'a> Lexer<'a> {
                         }
                         _ => {
                             let other = self.consume_codepoint();
-                            return self.make_spanned(Token::Error(format!(
+                            return self.literal_error(format!(
                                 "Unknown escape sequence in byte literal: \\{other}"
-                            )));
+                            ));
                         }
                     };
                     bytes.push(b);
@@ -1172,9 +1259,9 @@ impl<'a> Lexer<'a> {
                 }
                 b if b >= 0x80 => {
                     let other = self.consume_codepoint();
-                    return self.make_spanned(Token::Error(format!(
+                    return self.literal_error(format!(
                         "non-ASCII character `{other}` in byte string literal — use \\xHH for byte values above 0x7F"
-                    )));
+                    ));
                 }
                 b => {
                     self.advance();
@@ -1452,7 +1539,22 @@ impl<'a> Lexer<'a> {
     fn interpolated_string(&mut self) -> SpannedToken {
         let parts = match self.interpolation_parts(None) {
             Ok(parts) => parts,
-            Err(msg) => return self.make_spanned(Token::Error(msg)),
+            Err(msg) => {
+                let escaped = msg == ESCAPED_QUOTE_IN_HOLE;
+                let mut t = self.literal_error(msg);
+                let fixed = self
+                    .source_str
+                    .get(self.start..self.current)
+                    .filter(|_| escaped)
+                    .and_then(unescape_hole_quotes);
+                if let (Token::Error(message), Some(fixed)) = (&t.token, fixed) {
+                    t.token = Token::ErrorWithFix {
+                        message: message.clone(),
+                        fixed,
+                    };
+                }
+                return t;
+            }
         };
         if self.is_at_end() {
             return self.make_spanned(Token::Error("Unterminated interpolated string".to_string()));
@@ -1575,10 +1677,7 @@ impl<'a> Lexer<'a> {
                         // quotes. Previously copied verbatim, then silently emitted
                         // as literal text (the `\` fails to re-parse) — wrong output,
                         // no error. Emit a clear diagnostic instead.
-                        return Err("unexpected '\\' in f-string interpolation `{…}`; string \
-                             literals inside an interpolation use plain quotes — write \
-                             `{f(\"x\")}`, not escaped quotes"
-                            .to_string());
+                        return Err(ESCAPED_QUOTE_IN_HOLE.to_string());
                     }
                     if c == b'\n' {
                         self.line += 1;

@@ -888,13 +888,16 @@ fn test_interpolated_string_escaped_quote_is_clear_error() {
     // An escaped quote in *expression* position is invalid input (expression
     // context wants plain quotes). It used to be copied verbatim and silently
     // emitted as literal text; now it is a clear lex error, not silent wrong
-    // output.
+    // output. The error carries the literal with the quotes unescaped, the
+    // fix its writer meant, and the whole literal is the one token
+    // (B-2026-10-24-27).
     let tokens = tokens_only(r#"f"{ id(\"hi\") }""#);
     assert!(
-        tokens.iter().any(|t| matches!(
-            t,
-            Token::Error(msg) if msg.contains("f-string interpolation")
-        )),
+        matches!(
+            tokens.as_slice(),
+            [Token::ErrorWithFix { message, fixed }, Token::EOF]
+                if message.contains("f-string interpolation") && fixed == r#"f"{ id("hi") }""#
+        ),
         "escaped quote in interpolation should emit a clear lex error, got: {:?}",
         tokens
     );

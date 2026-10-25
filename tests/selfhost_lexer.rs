@@ -663,6 +663,9 @@ fn render_rust(t: &SpannedToken) -> String {
         // (`Unknown escape sequence: \q`) — the same treatment string payloads
         // get, and the port's `render` applies it identically.
         Token::Error(msg) => return body_with(s, &format!("ERROR {}", escape_for_render(msg))),
+        Token::ErrorWithFix { message, .. } => {
+            return body_with(s, &format!("ERROR {}", escape_for_render(message)))
+        }
         // B-2026-08-06-13. The seed lexer hands an out-of-i64-range magnitude
         // to the PARSER (which folds `-9223372036854775808` to i64::MIN and
         // rejects everything else) instead of erroring in the lexer; the KĀRA
