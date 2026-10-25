@@ -13896,6 +13896,26 @@ fn a_ref_to_a_shared_or_sync_enum_reads_as_the_handle() {
 }
 
 #[test]
+fn a_slice_where_a_vec_is_wanted_is_fixed_with_to_vec() {
+    // B-2026-10-25-9: `String.bytes()` is a `Slice[u8]`; where a `Vec[u8]`
+    // or a `ref Vec[u8]` is wanted, `karac fix` appends `.to_vec()`, and the
+    // message names it and the `Slice[u8]` parameter that takes both.
+    rejected_then_fixed_by(
+        "slice-to-a-ref-vec-param",
+        "fn total(b: ref Vec[u8]) -> i64 {\n    let mut t = 0;\n    for x in b {\n        t += x as i64;\n    }\n    t\n}\n\
+         fn main() {\n    let s = \"abc\".to_string();\n    println(f\"{total(s.bytes())}\");\n}\n",
+        "found 'Slice[u8]': `.to_vec()` copies the elements into a `Vec`; a `Slice[u8]` parameter would take both",
+        "total(s.bytes().to_vec())",
+    );
+    rejected_then_fixed_by(
+        "slice-assigned-to-a-vec",
+        "fn main() {\n    let mut cur: Vec[u8] = Vec.new();\n    cur = \"!\".bytes();\n    println(f\"{cur.len()}\");\n}\n",
+        "expected 'Vec[u8]', found 'Slice[u8]': `.to_vec()` copies the elements into a `Vec`",
+        "cur = \"!\".bytes().to_vec();",
+    );
+}
+
+#[test]
 fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
     // B-2026-10-24-36: a plain binding of a `Copy` part copies it whatever
     // the scrutinee (core-semantics §4.6), so it is a value and `*` on it is

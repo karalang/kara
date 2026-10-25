@@ -7191,6 +7191,47 @@ impl<'a> TypeChecker<'a> {
                 return false;
             }
         }
+        // A `Slice[T]` where a `Vec[T]` is wanted (`total(s.bytes())`,
+        // B-2026-10-25-9): `.to_vec()` copies the elements into a `Vec`.
+        if self.library_methods_from_source {
+            let (want, borrowed) = match expected {
+                Type::Ref(t) => (t.as_ref(), true),
+                t => (t, false),
+            };
+            if let (Type::Named { name, args }, Type::Slice { element, .. }) = (
+                want,
+                inference::resolve_type_var_top(found, &self.env.substitutions),
+            ) {
+                if name == "Vec" && args.len() == 1 && args[0] == *element {
+                    let elem = type_display(&element);
+                    let param = if borrowed {
+                        format!("; a `Slice[{elem}]` parameter would take both")
+                    } else {
+                        String::new()
+                    };
+                    self.type_error_with_fix_it(
+                        format!(
+                            "expected '{}', found '{}': `.to_vec()` copies the elements into \
+                             a `Vec`{param}",
+                            type_display(expected),
+                            type_display(found),
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                        FixIt {
+                            span: Span {
+                                line: span.line,
+                                column: span.column,
+                                offset: span.offset + span.length,
+                                length: 0,
+                            },
+                            replacement: ".to_vec()".to_string(),
+                        },
+                    );
+                    return false;
+                }
+            }
+        }
         if let Some(name) = self
             .str_lit_let_uses
             .get(&SpanKey::from_span(&span))
