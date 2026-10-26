@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "58b1045a"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "58b1045a"
 v2_reject = "core-semantics §4.6: a non-Copy value cannot be moved out of a borrowed place; `karac fix` cannot rewrite it. karac check: cannot move a non-`Copy` value out of a borrowed place: this call instantiates `T` with `Wide`, which is not `Copy`, and `Box.take` moves a `T` out of a borrow at line 3:39 (core-semantics.md §3.7, checked per instantiation). Write `.clone()` there under a `T: Clone` bound, or return a reference"

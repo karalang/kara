@@ -14,5 +14,5 @@ note = "legacy_backend is legacy-interp: legacy build double-frees on karac fix'
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "f4140538"
-model_rev = "5c9fbd42"
+model_rev = "3acf4472"
 model_src = "f4140538"

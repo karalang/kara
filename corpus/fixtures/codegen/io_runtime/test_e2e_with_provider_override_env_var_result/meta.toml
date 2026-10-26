@@ -14,5 +14,5 @@ note = "Migrated 2026-10-20 to `impl EnvProvider for FakeEnv` (core-semantics §
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "42f08c34"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "558222ae"

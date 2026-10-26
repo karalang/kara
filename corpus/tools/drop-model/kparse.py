@@ -914,6 +914,11 @@ class Parser:
             return ("un", "!", self.prefix())
         if self.at("&") or self.at("*"):
             raise Unsupported("& / * operators")
+        if self.at("ref") or (self.at("mut") and self.at("ref", 1)):
+            # an explicit lend of a place, `ref u.name` / `mut ref xs` (B-2026-10-22-28)
+            mut = self.at("mut")
+            self.i += 2 if mut else 1
+            return ("lend", mut, self.prefix())
         return self.postfix()
 
     def unary(self):

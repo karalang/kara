@@ -12,6 +12,6 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "73c5a4ac"
 v2_reject = "core-semantics §9.6: a closure that consumes its capture is OnceFn and may be called once; the program calls it twice (kata thread, 2026-10-10)"

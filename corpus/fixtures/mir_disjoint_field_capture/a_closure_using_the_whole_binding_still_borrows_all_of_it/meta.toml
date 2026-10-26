@@ -14,6 +14,6 @@ note = "first literal of the holding test: 'a whole-binding capture conflicts wi
 bucket = "a:refused"
 classified_with = "91582948a"
 extracted_src = "501c5111"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "501c5111"
 v2_reject = "core-semantics.md §9.1, §5.6: `push` captures all of `p`, so `p.b = 3` while it is live is refused; the holding test expects it (Thread A, 2026-10-24)"

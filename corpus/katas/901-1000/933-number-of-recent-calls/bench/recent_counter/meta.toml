@@ -14,5 +14,5 @@ note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-
 bucket = "timeout"
 classified_with = "ffbb6c307"
 extracted_src = "f79054b5"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "f79054b5"

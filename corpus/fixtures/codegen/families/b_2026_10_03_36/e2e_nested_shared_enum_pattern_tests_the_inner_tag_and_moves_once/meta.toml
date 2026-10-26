@@ -13,6 +13,6 @@ env = {}
 bucket = "a"
 classified_with = "9913c6855"
 model_exit = 0
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "9937d7ec"
 model_verdict = "SAME"

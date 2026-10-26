@@ -13,5 +13,5 @@ env = {}
 note = "expected.out is the drop model's output (kmodel, `own` read as owned, env.args().len() stubbed to 1 as under the runner): §7.5 drops the overwritten 4 and 7 at the assignment, the rest at scope end in reverse (2026-10-08) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "9913c6855"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "d198453a"

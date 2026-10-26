@@ -14,5 +14,5 @@ note = "v2 refuses this program, which the kata records as valid and blocked by 
 bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "7bd313f6"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "7bd313f6"

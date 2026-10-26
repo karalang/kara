@@ -1,0 +1,8 @@
+n=1 [] -> true
+n=2 [] -> false
+n=5 star -> true
+n=5 path -> true
+n=4 cycle -> false
+n=4 triangle + isolated -> false
+n=5 forest -> false
+n=5 path, shuffled edges -> true

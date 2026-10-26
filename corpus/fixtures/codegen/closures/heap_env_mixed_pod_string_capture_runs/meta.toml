@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "91582948a"
 extracted_src = "aed868a1"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "aed868a1"
 v2_reject = "core-semantics.md §5.4, §9.2: the closure `make` returns is a view of its borrowed parameter `p`, and the argument is a temporary dropped at the end of the `let`; the message naming `_2` is B-2026-10-24-10 (Thread A, 2026-10-24)"

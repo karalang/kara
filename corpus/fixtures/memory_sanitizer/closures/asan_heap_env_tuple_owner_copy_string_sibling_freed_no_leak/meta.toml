@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "135418fdf+local"
 extracted_src = "5c4e7cfc"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "5c4e7cfc"
 v2_reject = "core-semantics §3.2 (E0500) and §1.3: the program uses a value again after moving it into an `own` parameter or binding, and the compiler never inserts a copy (kata thread, 2026-10-10)"

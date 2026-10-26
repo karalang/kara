@@ -14,6 +14,6 @@ note = "core-semantics §7.2, §7.7, §7.8: drops and defers at scope end, LIFO;
 bucket = "a:refused"
 classified_with = "c39facf17"
 extracted_src = "57987f4c"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "57987f4c"
 v2_reject = "design.md § Enums (:1310): a variant is built with its qualified name; only Some/None/Ok/Err are written bare (check refuses it, E0521, B-2026-10-22-46)"

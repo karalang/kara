@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'string slice bounds 0..9 out of rang
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "ef79a13f"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "ef79a13f"

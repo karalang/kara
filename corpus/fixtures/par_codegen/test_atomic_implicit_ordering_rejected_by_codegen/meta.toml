@@ -14,5 +14,5 @@ note = "e-spec: every atomic operation is sequentially consistent and takes no o
 bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "a93ff776"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "cd67f953"

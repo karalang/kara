@@ -14,3 +14,5 @@ note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-
 bucket = "e-spec"
 classified_with = "9d6f7f28d+local"
 extracted_src = "a60c1212"
+model_rev = "3acf4472"
+model_src = "a60c1212"

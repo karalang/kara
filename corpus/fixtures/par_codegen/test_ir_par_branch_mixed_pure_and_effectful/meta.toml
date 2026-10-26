@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'expected exactly 2 mid-branch cancel
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "0025039d"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "2d3ee721"

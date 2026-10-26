@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "57b6bcfe"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "57b6bcfe"
 v2_reject = "core-semantics §14.1, §14.2: providers need a declared provider trait. karac check: `effect resource UserDB;` declares no provider trait, so it cannot be bound with `with_provider` (core-semantics.md §14.1): declare the trait its providers implement, `effect resource UserDB: SomeTrait;`, and implement it for the provider"

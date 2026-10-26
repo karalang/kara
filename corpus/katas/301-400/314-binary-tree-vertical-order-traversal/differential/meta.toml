@@ -14,3 +14,5 @@ note = "legacy fails on this program; expected.out is the differential's own ver
 bucket = "e-spec"
 classified_with = "9d6f7f28d+local"
 extracted_src = "256d3928"
+model_rev = "3acf4472"
+model_src = "256d3928"

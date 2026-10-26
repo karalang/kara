@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "97ef684b"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "97ef684b"
 v2_reject = "core-semantics §4.1: a bare parameter borrows (D5), so it cannot be given away. karac check: cannot give away parameter `x`: a bare parameter borrows (core-semantics §4.1), and an owned 'Result[(String, String), i64]' is wanted here. Take it by value with `x: own Result[(String, String), i64]`, or hand on a copy with `.clone()`"

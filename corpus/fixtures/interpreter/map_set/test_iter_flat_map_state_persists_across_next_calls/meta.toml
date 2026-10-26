@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "91582948a"
 extracted_src = "908d1280"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "908d1280"
 v2_reject = "core-semantics.md §5.4: the `flat_map` closure returns `inner.iter()`, a borrow of its own local `inner` (Thread A, 2026-10-24)"

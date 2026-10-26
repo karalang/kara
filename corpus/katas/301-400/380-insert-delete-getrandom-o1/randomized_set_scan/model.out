@@ -1,0 +1,8 @@
+example: insert 1 true, remove 2 false, insert 2 true
+get_random is 1 or 2: true
+remove 1 true, insert 2 false, get_random 2
+remove from empty: false
+negative values: insert -7 true, insert -7 false, get_random -7
+remove the last value: remove -7 true, insert -7 true
+after removing from both ends and the middle: sum of 100 draws 2484
+100 random workloads: checksum 292484300

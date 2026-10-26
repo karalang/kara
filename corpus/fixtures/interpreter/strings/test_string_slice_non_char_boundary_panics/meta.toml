@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY'
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "fff8b9ef"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "fff8b9ef"

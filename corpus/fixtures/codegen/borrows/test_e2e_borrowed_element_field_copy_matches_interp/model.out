@@ -1,0 +1,24 @@
+rt beta-2-long-enough-to-heap 2 beta-2-long-enough-to-heap
+rs delta-4-long-enough 4 delta-4-long-enough
+it alpha-1-long-enough-to-heap 1
+it beta-2-long-enough-to-heap 2
+it gamma-3-long-enough-to-heap 3
+it gamma-3-long-enough-to-heap
+ol alpha-1-long-enough-to-heap 1
+ol beta-2-long-enough-to-heap 2
+ol gamma-3-long-enough-to-heap 3
+mu alpha-1-long-enough-to-heap-X alpha-1-long-enough-to-heap
+mu beta-2-long-enough-to-heap-X beta-2-long-enough-to-heap
+mu gamma-3-long-enough-to-heap-X gamma-3-long-enough-to-heap
+vl 2 a-1-long-enough-to-heap 1
+vl b2 2
+ne nest-7-long-enough-to-heap 1
+ne nest-7-long-enough-to-heap
+wh alpha-1-long-enough-to-heap 1
+wh beta-2-long-enough-to-heap 2
+wh gamma-3-long-enough-to-heap 3
+wh alpha-1-long-enough-to-heap
+op opt-5-long-enough-to-heap
+op none
+pu gamma-3-long-enough-to-heap beta-2-long-enough-to-heap alpha-1-long-enough-to-heap
+done

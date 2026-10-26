@@ -14,5 +14,5 @@ note = "oracle: the Mend task's expected.txt (examples/mend/TASK_FORMAT.md) e-sp
 bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "174a2b31"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "174a2b31"

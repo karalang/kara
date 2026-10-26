@@ -14,6 +14,6 @@ note = "core-semantics §7.2: `a` drops at the end of `main`, never at its last 
 bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "2c0efc16"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "2c0efc16"
 row = "B-2026-10-22-38"

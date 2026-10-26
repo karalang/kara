@@ -15,5 +15,5 @@ note = "stmt-par groups (source.orig.kara lines): L344-L345 two fs.write of sepa
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "9441e210"
-model_rev = "5c9fbd42"
+model_rev = "3acf4472"
 model_src = "9441e210"

@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "107cb1a8"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "107cb1a8"
 v2_reject = "core-semantics §11.1: a `par` block's branches are comma-separated expressions. karac check: a `par` block's branches are comma-separated expressions, not statements (core-semantics.md §11.1): write `let (a, b) = par { f(), g() };` and use `a` and `b` after it, or `par { f(), g() };` when the values are not needed"

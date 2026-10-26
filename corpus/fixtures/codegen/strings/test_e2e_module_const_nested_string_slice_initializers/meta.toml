@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "336705c6"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "336705c6"
 v2_reject = "design.md § Constants (B-2026-10-22-8). karac check: error[E_MODULE_LET]: module-level `let CONFIG`: a value at module scope is a constant (design.md § Constants: `const NAME: T = e;` is the only value declared at module scope)"

@@ -345,6 +345,18 @@ class Model:
         """The declared type of a place: a binding's annotation, or a struct field's declared type."""
         if not p:
             return c.ty
+        if p[-1][0] == "i":
+            # An element: the collection's declared element (or value) type, so `values[m].insert(f)` on a
+            # `Vec[Set[(i64, i64)]]` knows its slots are owned (679's subsets).
+            t = self.declared_type(c, p[:-1])
+            if t and t[0] in ("ref", "mutref"):
+                t = t[1]
+            if t and t[0] == "app" and t[2]:
+                if t[1] in ("Vec", "Array", "VecDeque"):
+                    return t[2][0]
+                if t[1] in ("Map", "SortedMap") and len(t[2]) > 1:
+                    return t[2][1]
+            return None
         if p[-1][0] != "f":
             return None
         try:
@@ -713,6 +725,8 @@ class Model:
             return Handle(v.box)
         if self.is_copy(v):
             return self.copy_value(v)
+        if isinstance(v, Str) and self.declared_type(c, p) == ("app", "Str", []):
+            return Str(v.s)  # a `Str` is a view and copies (§1.1); the model keeps one value class for both
         if COUNT_HANDLE_AGGREGATES and self.handle_like(v):
             return self.clone_value(v)  # pending decision: Option/tuple of handles counts like a handle
         if b == "index":
@@ -771,6 +785,15 @@ class Model:
                     return c.v if not isinstance(c.v, Ref) else c.v
                 return self.use(c, p, b)
         return self.eval(e)
+
+    def lent_or_value(self, e, ty):
+        """An argument stored into a slot of declared type `ty`: an owned place stored into a `ref` slot
+        (`v.push(t)` on a `Vec[ref Node]`) is lent, not moved (§5.3; the builder's B-2026-10-14-13)."""
+        if ty is not None and ty[0] in ("ref", "mutref") and e[0] in self.PLACES:
+            pl = self.resolve(e)
+            if pl is not None and not isinstance(self.get(pl[0], pl[1]), Ref):
+                return self.borrow(e, ty[0] == "mutref")
+        return self.value(e)
 
     def borrow(self, e, mut=False):
         if e[0] in self.PLACES:
@@ -1046,6 +1069,13 @@ class Model:
         if not isinstance(v, Ref):
             return v
         if ty is not None and ty[0] != "tuple" and self.loose_type(ty):
+            if ty[0] == "app":
+                # A generic parameter: a `Copy` value lent by a bare parameter (`zero: T` given `0`) is
+                # copied in, as the field would copy it, rather than held as a reference that dies with
+                # its argument (307's generic Fenwick).
+                r = self.deref_refs(v)
+                if self.is_copy(r):
+                    return self.copy_value(r)
             return v  # a declared reference, a view, or a generic parameter
         r = self.read_through_ref(self.deref_refs(v))
         if r is not None:
@@ -1182,6 +1212,9 @@ class Model:
     def e_index(self, e):
         return self.use(*self.resolve(e))
 
+    def e_lend(self, e):
+        return self.borrow(e[2], e[1])
+
     def e_path(self, e):
         path = e[1]
         if len(path) == 2:
@@ -1232,7 +1265,9 @@ class Model:
         vals = {}
         ftys = dict(sd.fields)
         for f, x in fs:  # written order (§8.1)
-            vals[f] = self.store_owned(self.value(x), ftys.get(f), "struct field")
+            v = self.value(x)
+            self.mark_array(v, ftys.get(f))  # `ns: Array[i64, 3]` given `[1, 2, 3]` is a Copy array
+            vals[f] = self.store_owned(v, ftys.get(f), "struct field")
         missing = [f for f, _ in sd.fields if f not in vals]
         if missing:
             raise Unsupported(f"missing fields {missing}")
@@ -1977,6 +2012,15 @@ class Model:
         if p and b == "ref" and False:
             pass
         v = self.value(rhs)
+        if op == "=" and isinstance(v, Ref):
+            # A bare `T` parameter lends its argument; stored into an owned slot (`self.data[i] = val`
+            # in 307's generic Fenwick), a `Copy` value is copied in rather than held as a reference
+            # that dies with the caller's binding (§5.10).
+            dt = self.declared_type(c, p)
+            if dt is not None and dt[0] not in ("ref", "mutref"):
+                r = self.deref_refs(v)
+                if self.is_copy(r):
+                    v = self.copy_value(r)
         if op == "=":
             old = self.raw(c, p)
             if isinstance(old, Prim) and old.kind == "float" and isinstance(v, Prim) and v.kind == "int":
@@ -2034,7 +2078,9 @@ class Model:
             return all(self.matches(q, c, p + [("i", i)]) for i, q in enumerate(self.expand_rest(subs, n)) if q is not None)
         if k == "pstruct":
             path = pat[1]
-            if len(path) == 2 or path[0] in self.p.enums or (isinstance(v, Enum) and path[0] not in self.p.structs):
+            # Matched against an enum value, a bare name is that enum's variant even when a struct shares
+            # it (`Para { text }` on a `Block`, mir_bare_variant_pattern_named_like_a_struct).
+            if len(path) == 2 or path[0] in self.p.enums or isinstance(v, Enum):
                 var, ty = self.variant_of(path)
                 if not isinstance(v, Enum) or v.var != var:
                     return False
@@ -2376,8 +2422,8 @@ class Model:
         if name == "is_empty":
             return Prim(not v.elems, "bool")
         if name == "push":
-            x = self.value(args[0])
             et = self.elem_types(v.kind)
+            x = self.lent_or_value(args[0], et[0] if et else None)
             if et:
                 x = self.store_owned(x, et[0], "collection element")
             v = self.get(c, p)
@@ -2414,8 +2460,8 @@ class Model:
             return UNIT
         if name == "insert":
             i = self.read(args[0]).v
-            x = self.value(args[1])
             et = self.elem_types(v.kind)
+            x = self.lent_or_value(args[1], et[0] if et else None)
             if et:
                 x = self.store_owned(x, et[0], "collection element")
             if not 0 <= i <= len(v.elems):
@@ -2577,7 +2623,7 @@ def run_source(src: str):
         r = m.call_user(prog.fns["main"], None, [], None)
         code = 1 if isinstance(r, Enum) and r.ty == "Result" and r.var == "Err" else 0  # §10.3
     except KPanic as e:
-        if str(e) == "integer overflow" and _WIDE.search(src):
+        if str(e) in ("integer overflow", "shift amount out of range") and _WIDE.search(src):
             raise Unsupported("integer width (the model's integers are i64)")
         m.flags.add(f"panic: {e}")
         code = 101

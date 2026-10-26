@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "abe7495a"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "60856aaa"
 v2_reject = "core-semantics §11.2: two par branches that both print conflict, writes(Stdout) (kata thread, 2026-10-08)"

@@ -16,6 +16,6 @@ extracted_src = "b918b6a5"
 fixed_by_classify = true
 fixed_src = "8b1db08a"
 model_exit = 0
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "8b1db08a"
 model_verdict = "SAME"

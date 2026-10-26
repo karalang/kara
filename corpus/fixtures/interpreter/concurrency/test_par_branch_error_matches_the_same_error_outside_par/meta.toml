@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'a fault inside par must report the s
 bucket = "b-fix-incomplete:E0520"
 classified_with = "9913c6855"
 extracted_src = "6891a789"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "6891a789"

@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "c1c08593"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "c1c08593"
 v2_reject = "core-semantics §4.6: a binding bound to a borrow cannot hold an owned value. karac check: `acc` is a `ref A` (it was bound to a borrow), so it cannot hold this owned `A`, which would be dropped at the end of the statement; bind an owned copy where `acc` is declared (`.clone()`), or take the parameter it borrows as `own`"

@@ -1,0 +1,58 @@
+arg
+dU
+  1
+refarg
+dU
+  2
+bare
+dU
+  1
+loop
+dU
+dU
+dU
+dU
+dU
+  15
+method
+dU
+  1
+mref
+dU
+  2
+scrut
+dU
+  1
+scrutbare
+dU
+  2
+scrutnodrop
+  2
+discard
+dU
+  after
+discardbare
+dU
+  after
+letdisc
+dU
+  after
+ctor
+dU
+  after
+call
+dU
+  after
+keep
+  kept
+keepdisc
+dU
+  after
+nested
+dU
+  1
+field
+  2
+end
+dU
+dU

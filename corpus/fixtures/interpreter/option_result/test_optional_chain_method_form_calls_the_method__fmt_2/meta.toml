@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "e0115d7d"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "e0115d7d"
 v2_reject = "design.md § Results and propagation (:369, :4397): there is no optional chaining, `f()?.x` is `(f()?).x`; and core-semantics §4.1, §4.6: a part of a borrowed `self` cannot be moved out. karac check: cannot move a non-`Copy` value out of a borrowed place. Write `.clone()` to take a copy, or keep using it in place"

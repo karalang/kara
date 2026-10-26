@@ -15,6 +15,6 @@ bucket = "b-fix-incomplete:E0500"
 classified_with = "135418fdf+local"
 extracted_src = "ca080edd"
 model_exit = 0
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "ca080edd"
 model_verdict = "SAME"

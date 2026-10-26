@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'skipping nested with_provider e2e: r
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "1d86f547"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "1d86f547"

@@ -14,6 +14,6 @@ note = "oracle written by hand: the four bytes 1, 2, 3, 250 round-trip through a
 bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "b0cdae2d"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "b0cdae2d"
 row = "B-2026-10-22-38"

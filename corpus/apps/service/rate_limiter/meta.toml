@@ -14,5 +14,5 @@ note = "legacy_backend is legacy-interp: legacy build refuses LOG_PATH.clone() o
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "58e1231c"
-model_rev = "5c9fbd42"
+model_rev = "3acf4472"
 model_src = "58e1231c"

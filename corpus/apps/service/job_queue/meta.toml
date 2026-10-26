@@ -14,5 +14,5 @@ note = "stmt-par groups (source.orig.kara lines): L269-L271 three run_worker cal
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "6ee31c1f"
-model_rev = "5c9fbd42"
+model_rev = "3acf4472"
 model_src = "6ee31c1f"

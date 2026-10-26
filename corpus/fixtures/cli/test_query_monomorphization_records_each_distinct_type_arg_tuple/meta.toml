@@ -14,6 +14,6 @@ note = "first literal of the holding test: 'karac-cli-monomorphization-{}-{}'"
 bucket = "a"
 classified_with = "9913c6855"
 model_exit = 0
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "2bd314bb"
 model_verdict = "SAME"

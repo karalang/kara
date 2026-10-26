@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "d5717ab3"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "d5717ab3"
 v2_reject = "core-semantics §9.1 (Gowtham's Borrow ruling, ddae1ab1cb) and §5.6: the adaptor's closure captures the Copy local by `ref`, and the loop body writes it while the closure is live (kata thread, 2026-10-09)"

@@ -14,5 +14,5 @@ note = "stmt-par groups (source.orig.kara lines): L257-L259 three backend fetche
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "2cf06e14"
-model_rev = "5c9fbd42"
+model_rev = "3acf4472"
 model_src = "2cf06e14"

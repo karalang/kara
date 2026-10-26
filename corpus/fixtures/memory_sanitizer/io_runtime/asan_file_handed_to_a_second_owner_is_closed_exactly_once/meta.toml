@@ -14,5 +14,5 @@ note = "a format! template, filled in by template.toml with the values its test 
 bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "b438f663"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "b438f663"

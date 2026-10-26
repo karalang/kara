@@ -14,5 +14,5 @@ note = "expected.out at the spec form of floats (core-types.md § Printing), was
 bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "41a2527a"
-model_rev = "aafbe785"
+model_rev = "3acf4472"
 model_src = "41a2527a"

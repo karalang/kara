@@ -14,5 +14,5 @@ note = "stmt-par groups (source.orig.kara lines): L332-L335 four fs.write, each 
 bucket = "a"
 classified_with = "9913c6855"
 extracted_src = "fc2c055e"
-model_rev = "5c9fbd42"
+model_rev = "3acf4472"
 model_src = "fc2c055e"
