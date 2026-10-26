@@ -272,7 +272,12 @@ impl<'a> TypeChecker<'a> {
                             if let (Some(h), Some(sp)) = (&head, &m.self_param) {
                                 self_modes.insert(format!("{h}.{}", m.name), sp.clone());
                             }
-                            if let (Some(h), false) = (&head, m.stdlib_origin) {
+                            // An associated function of the library is checked
+                            // too: `Server.serve`'s handler is an `own Fn`
+                            // (B-2026-10-25-49).
+                            if let (Some(h), false) =
+                                (&head, m.stdlib_origin && m.self_param.is_some())
+                            {
                                 method_decls.insert(format!("{h}.{}", m.name), m.as_ref());
                             }
                             fns.push(m.as_ref());
@@ -1546,9 +1551,22 @@ impl Walk<'_, '_> {
         }
     }
 
-    /// §9.6 at a call: a user function's plain `Fn` parameter takes neither
-    /// a closure that writes a capture nor a `MutFn` parameter.
+    /// §9.6 at a call: a plain `Fn` parameter of a user function, or of any
+    /// associated function, takes neither a closure that writes a capture nor
+    /// a `MutFn` parameter.
     fn check_fn_kinds(&mut self, callee: &Expr, args: &[CallArg]) {
+        // `Type.f(..)`, an associated function (B-2026-10-25-49).
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if let [ty, f] = segments.as_slice() {
+                let key = format!("{ty}.{f}");
+                if let Some(f) = self.method_decls.get(key.as_str()).copied() {
+                    if f.self_param.is_none() {
+                        self.check_arg_kinds(&key, f, args);
+                    }
+                }
+            }
+            return;
+        }
         let ExprKind::Identifier(name) = &callee.kind else {
             return;
         };
