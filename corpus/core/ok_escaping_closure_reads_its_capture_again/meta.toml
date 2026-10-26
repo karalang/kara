@@ -1,0 +1,11 @@
+source = "corpus/core/ok_escaping_closure_reads_its_capture_again"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "concurrency"]
+class = "a"
+expected_from = "spec"
+rules = ["9.3", "9.5"]
+backends = []
+env = {}
+note = "B-2026-10-25-14: an escaping or task closure moves a capture in once, at its creation; reading it again in the body, twice or in a loop, reads the closure's own copy. Expected output worked by hand from core-semantics §9.3 and §9.5."

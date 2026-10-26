@@ -134,6 +134,12 @@ pub struct UseSite {
     /// with a place, defaults to the empty path (overlaps everything), so
     /// whole-root uses still conflict with a prior partial consume.
     pub place: PlacePath,
+    /// For a consume that is one only because an escaping or task closure
+    /// captures the binding by move (a read in its body), that closure's
+    /// span: the capture moves in once, at the closure's creation, so the
+    /// read does not move it from a later use in the same body (v2 core
+    /// §9.3, B-2026-10-25-14).
+    pub capture_scope: Option<SpanKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,6 +253,10 @@ pub struct Classification {
     /// Consumed field projections (`h.o`), keyed by their root identifier's
     /// span: the projection's span and its source spelling.
     pub core_projection_consumes: FxHashMap<SpanKey, (crate::token::Span, String)>,
+    /// Consumes that are one only because an escaping or task closure
+    /// captures the binding by move, keyed by the use's span: the closure's
+    /// span (see [`UseSite::capture_scope`]).
+    pub core_capture_scopes: FxHashMap<SpanKey, SpanKey>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use
@@ -641,7 +651,13 @@ impl<'a> CfgBuilder<'a> {
             span,
             consume_origin,
             place,
+            ..
         } = use_site;
+        let capture_scope = self
+            .classification
+            .core_capture_scopes
+            .get(&SpanKey::from_span(&span))
+            .copied();
         // Inner-locals of an active cleanup-site lowering get mangled
         // here so the formal RC predicate doesn't pair their
         // duplicated Consume sites across per-exit-site cleanup
@@ -653,6 +669,7 @@ impl<'a> CfgBuilder<'a> {
             span,
             consume_origin,
             place,
+            capture_scope,
         });
     }
 
@@ -845,6 +862,7 @@ impl<'a> CfgBuilder<'a> {
                             span: pattern.span,
                             consume_origin: ConsumeOrigin::Direct,
                             place: PlacePath::new(),
+                            capture_scope: None,
                         },
                     );
                 }
@@ -957,6 +975,7 @@ impl<'a> CfgBuilder<'a> {
                         span: expr.span,
                         consume_origin,
                         place,
+                        capture_scope: None,
                     },
                 );
                 cur
@@ -973,6 +992,7 @@ impl<'a> CfgBuilder<'a> {
                         span: expr.span,
                         consume_origin,
                         place,
+                        capture_scope: None,
                     },
                 );
                 cur
@@ -1148,6 +1168,7 @@ impl<'a> CfgBuilder<'a> {
                             span: pattern.span,
                             consume_origin: ConsumeOrigin::Direct,
                             place: PlacePath::new(),
+                            capture_scope: None,
                         },
                     );
                 }
@@ -1222,6 +1243,7 @@ impl<'a> CfgBuilder<'a> {
                                     span: arm.pattern.span,
                                     consume_origin: ConsumeOrigin::Direct,
                                     place: PlacePath::new(),
+                                    capture_scope: None,
                                 },
                             );
                         }
@@ -1290,6 +1312,7 @@ impl<'a> CfgBuilder<'a> {
                             span: pattern.span,
                             consume_origin: ConsumeOrigin::Direct,
                             place: PlacePath::new(),
+                            capture_scope: None,
                         },
                     );
                 }
@@ -1349,6 +1372,7 @@ impl<'a> CfgBuilder<'a> {
                             span: pattern.span,
                             consume_origin: ConsumeOrigin::Direct,
                             place: PlacePath::new(),
+                            capture_scope: None,
                         },
                     );
                 }
@@ -1517,6 +1541,7 @@ impl<'a> CfgBuilder<'a> {
                                 span: p.pattern.span,
                                 consume_origin: ConsumeOrigin::Direct,
                                 place: PlacePath::new(),
+                                capture_scope: None,
                             },
                         );
                     }

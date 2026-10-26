@@ -14362,3 +14362,55 @@ fn a_closure_that_lends_counts_or_matches_a_capture_stays_fn() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// B-2026-10-25-14: an escaping or task closure moves a capture in once, at
+/// its creation (§9.3), so reading it again in the body, twice or in a loop,
+/// is no use after a move. A use after the closure is created, and a real
+/// move in the body followed by a read, are still refused.
+#[test]
+fn an_escaping_closure_reads_its_capture_again() {
+    accepted_and_runs(
+        "escaping-capture-read-twice",
+        "struct Prog {\n    ops: Vec[i64],\n}\n\
+         fn size(p: ref Prog) -> i64 {\n    p.ops.len()\n}\n\
+         fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {\n    Vec[f]\n}\n\
+         fn main() {\n\
+             let prog = Prog { ops: Vec[1, 2, 3] };\n\
+             let fs = keep(|x| x + size(prog) + size(prog));\n\
+             let q = Prog { ops: Vec[1] };\n\
+             let gs = keep(|x| {\n        let mut t = x;\n        for _ in 0..3 {\n            t += size(q);\n        }\n        t\n    });\n\
+             println(f\"{(fs[0])(1)} {(gs[0])(1)}\");\n\
+         }\n",
+        "7 4\n",
+    );
+    for (tag, body, want) in [
+        (
+            "escaping-capture-used-after",
+            "let fs = keep(|x| x + size(prog));\n    println(size(prog));",
+            "was moved into an escaping closure",
+        ),
+        (
+            "escaping-capture-moved-then-read",
+            "let r = keep1(|x| { let a = eat(prog); x + a + size(prog) });\n    println(r);",
+            "moved here, used again here",
+        ),
+    ] {
+        let src = format!(
+            "struct Prog {{\n    ops: Vec[i64],\n}}\n\
+             fn size(p: ref Prog) -> i64 {{\n    p.ops.len()\n}}\n\
+             fn eat(p: own Prog) -> i64 {{\n    p.ops.len()\n}}\n\
+             fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {{\n    Vec[f]\n}}\n\
+             fn keep1(f: escaping OnceFn(i64) -> i64) -> i64 {{\n    f(1)\n}}\n\
+             fn main() {{\n\
+                 let prog = Prog {{ ops: Vec[1, 2, 3] }};\n\
+                 {body}\n\
+             }}\n"
+        );
+        let (dir, path) = fixture(tag, &src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(err.contains(want), "{tag}: expected `{want}` in: {err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

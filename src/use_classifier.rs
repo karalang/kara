@@ -877,12 +877,14 @@ impl<'a> UseClassifier<'a> {
             ExprKind::Identifier(name) => {
                 self.note_escaping_borrow_capture(expr);
                 let kind = self.classify_identifier(name, &expr.span, mode);
+                self.note_capture_scope(name, &expr.span, mode, kind);
                 self.record_named(&expr.span, kind, Some(name));
                 self.record_closure_capture_consume(name, kind, &expr.span);
             }
             ExprKind::SelfValue => {
                 self.note_escaping_borrow_capture(expr);
                 let kind = self.classify_identifier("self", &expr.span, mode);
+                self.note_capture_scope("self", &expr.span, mode, kind);
                 self.record_named(&expr.span, kind, Some("self"));
                 self.record_closure_capture_consume("self", kind, &expr.span);
             }
@@ -1627,6 +1629,7 @@ impl<'a> UseClassifier<'a> {
             ExprKind::Identifier(name) => {
                 self.record_place_at_root(&expr.span, path);
                 let kind = self.classify_identifier(name, &expr.span, leaf_mode);
+                self.note_capture_scope(name, &expr.span, leaf_mode, kind);
                 self.record(&expr.span, kind);
                 // A place rooted at the closure's own local (`match o.sub`
                 // on a `let o` inside the body) is a fresh move, not a
@@ -1643,6 +1646,7 @@ impl<'a> UseClassifier<'a> {
             ExprKind::SelfValue => {
                 self.record_place_at_root(&expr.span, path);
                 let kind = self.classify_identifier("self", &expr.span, leaf_mode);
+                self.note_capture_scope("self", &expr.span, leaf_mode, kind);
                 self.record(&expr.span, kind);
                 self.record_closure_capture_consume("self", kind, &expr.span);
             }
@@ -1808,16 +1812,43 @@ impl<'a> UseClassifier<'a> {
         }
     }
 
-    fn classify_identifier(&self, name: &str, span: &crate::token::Span, mode: Mode) -> UseKind {
-        // v2 core §9.3: an escaping closure captures every outer binding by
-        // move, whatever its body does with it.
-        let captured_by_move = (self.escaping_closure_depth > 0
+    /// v2 core §9.3: whether an enclosing escaping or task closure captures
+    /// `name` by move.
+    fn captured_by_move(&self, name: &str) -> bool {
+        (self.escaping_closure_depth > 0
             || self
                 .task_moved_captures
                 .iter()
                 .any(|m| m.iter().any(|n| n == name)))
             && !self.is_closure_local(name)
-            && (self.param_types.contains_key(name) || self.local_types.contains_key(name));
+            && (self.param_types.contains_key(name) || self.local_types.contains_key(name))
+    }
+
+    /// A read that is a consume only because its closure captures `name` by
+    /// move: the capture moves in once, at the closure's creation, so the
+    /// read must not move it from a later use in the same body
+    /// (B-2026-10-25-14).
+    fn note_capture_scope(
+        &mut self,
+        name: &str,
+        span: &crate::token::Span,
+        mode: Mode,
+        kind: UseKind,
+    ) {
+        if mode != Mode::Reading || kind != UseKind::Consume || !self.captured_by_move(name) {
+            return;
+        }
+        if let Some(&closure) = self.closure_span_stack.last() {
+            self.classification
+                .core_capture_scopes
+                .insert(SpanKey::from_span(span), closure);
+        }
+    }
+
+    fn classify_identifier(&self, name: &str, span: &crate::token::Span, mode: Mode) -> UseKind {
+        // v2 core §9.3: an escaping closure captures every outer binding by
+        // move, whatever its body does with it.
+        let captured_by_move = self.captured_by_move(name);
         if mode == Mode::Reading && !captured_by_move {
             return UseKind::Read;
         }

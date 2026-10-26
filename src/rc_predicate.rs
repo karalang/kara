@@ -294,6 +294,15 @@ fn cfg_reaches(cfg: &Cfg, from: BlockId, to: BlockId) -> bool {
 /// Find the first (C, U) pair for `binding` that satisfies the RC
 /// predicate, scanning consume sites in source order and the partner U
 /// in source order too. Returns `None` if no such pair exists.
+/// v2 core §9.3: an escaping or task closure moves a capture in once, at
+/// its creation, so a read of it in the body (`c`, a consume only for that
+/// reason) does not move it from a later use `u` in the same body
+/// (B-2026-10-25-14).
+fn in_capture_scope(c: &UseSite, u: &UseSite) -> bool {
+    c.capture_scope
+        .is_some_and(|k| k.0 <= u.span.offset && u.span.offset < k.0 + k.1)
+}
+
 fn first_witness(
     binding: &str,
     uses: &[(BlockId, usize, &UseSite)],
@@ -337,6 +346,9 @@ fn first_witness(
             // each other, so they are not an RC pair. Whole-value uses
             // carry the empty place, which overlaps everything.
             if place_paths_disjoint(&c.place, &u.place) {
+                continue;
+            }
+            if in_capture_scope(c, u) {
                 continue;
             }
             if dom.dominates(*cb, *ub) || dom.dominates(*ub, *cb) {
@@ -714,6 +726,9 @@ fn uam_witnesses_for_binding(
             if place_paths_disjoint(&c.place, &u.place) {
                 continue;
             }
+            if in_capture_scope(c, u) {
+                continue;
+            }
             if !precedes(*cb, *ci, *ub, *ui, dom) {
                 continue;
             }
@@ -931,7 +946,11 @@ pub(crate) fn loop_of_consume_candidates_from_sites(
     let mut witnesses = HashMap::new();
     for (binding, uses) in sites {
         for (cb, _ci, c) in uses.iter() {
-            if c.kind != UseKind::Consume {
+            // A read an escaping or task closure's capture makes a consume
+            // moves nothing on its own: the capture moved in at the
+            // closure's creation, outside every loop its body holds
+            // (B-2026-10-25-14).
+            if c.kind != UseKind::Consume || c.capture_scope.is_some() {
                 continue;
             }
             // Per-loop precision: the Consume fires loop-of-consume

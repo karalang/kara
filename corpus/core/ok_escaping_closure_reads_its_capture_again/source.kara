@@ -1,0 +1,35 @@
+struct Prog {
+    ops: Vec[i64],
+}
+
+fn size(p: ref Prog) -> i64 {
+    p.ops.len()
+}
+
+fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {
+    Vec[f]
+}
+
+fn main() {
+    // Moved into the closure once; each call reads the closure's own copy.
+    let prog = Prog { ops: Vec[1, 2, 3] };
+    let fs = keep(|x| {
+        let a = size(prog);
+        let b = size(prog);
+        x + a + b
+    });
+    println((fs[0])(1));
+    let looped = Prog { ops: Vec[1, 2] };
+    let gs = keep(|x| {
+        let mut t = x;
+        for _ in 0..3 {
+            t += size(looped);
+        }
+        t
+    });
+    println((gs[0])(1));
+    let other = Prog { ops: Vec[4, 5] };
+    let g = TaskGroup.new();
+    let h = g.spawn(|| size(other) + size(other));
+    println(h.join());
+}
