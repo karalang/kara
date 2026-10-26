@@ -16,14 +16,6 @@
 // math.degrees (a multiply by pi/180 and 180/pi), and round() (half to even).
 // Python's max(a, b) and min(a, b) keep a unless b is strictly beyond it,
 // which decides what a NaN does. jobs_text() holds data/jobs.tsv.
-//
-// Compiler gaps, worked around:
-// - B-2026-10-23-3: a method call on a `const` (`TOL0.sqrt()`) runs under
-//   --interp but v2 lowers it as a call of `f64.sqrt` and fails, so tiny()
-//   and tol2() copy the const into a local first.
-// - B-2026-10-23-4: Display breaks an exact tie between two equally short
-//   decimals away from zero, Python's repr toward the even digit, so fmt()
-//   checks the exact expansion and keeps the even candidate.
 
 const PI_F: f64 = 3.141592653589793;
 const DBL_MIN: f64 = 2.2250738585072014e-308;
@@ -51,11 +43,8 @@ const AREA: i64 = 16400;
 const LONG_UNROLL: i64 = 32768;
 const ALL: i64 = 32671;
 
-// B-2026-10-23-3: a method call on a const fails on v2, so the const is
-// copied into a local first.
 fn tiny() -> f64 {
-    let m = DBL_MIN;
-    m.sqrt()
+    DBL_MIN.sqrt()
 }
 
 fn tol1() -> f64 {
@@ -63,8 +52,7 @@ fn tol1() -> f64 {
 }
 
 fn tol2() -> f64 {
-    let t = TOL0;
-    t.sqrt()
+    TOL0.sqrt()
 }
 
 fn xthresh() -> f64 {
@@ -1130,59 +1118,13 @@ fn gen_inverse(g: ref Geod, lat1_in: f64, lon1: f64, lat2_in: f64, lon2: f64, ou
 
 // ----------------------------------------------------------- output
 
-// Python's repr: the shortest digits that read back, like Kara's Display,
-// but when two candidates are equally short and the value lies exactly
-// halfway between them Python keeps the one with the even last digit, where
-// Kara's rendering takes the one farther from zero (B-2026-10-23-4). The
-// exact expansion shows the tie: one more digit, a 5, then only zeros. Only
-// plain decimals are checked; none of the outputs ties in exponent form.
+// Python's repr: the shortest digits that read back, ties to the even
+// digit, which is Kara's Display; only a NaN is spelled differently.
 fn fmt(x: f64) -> String {
     if is_nan(x) {
         return "nan".to_string();
     }
-    let s = f"{x}";
-    let sb = s.bytes().to_vec();
-    let mut sdot = -1;
-    let mut i = 0;
-    while i < sb.len() {
-        if sb[i] == b'e' {
-            return s;
-        }
-        if sb[i] == b'.' {
-            sdot = i;
-        }
-        i += 1;
-    }
-    if sdot < 0 {
-        return s;
-    }
-    let k = sb.len() - sdot - 1;
-    let ub = f"{x:.60}".bytes().to_vec();
-    let mut udot = 0;
-    while ub[udot] != b'.' {
-        udot += 1;
-    }
-    let cut = udot + k + 1;
-    if cut >= ub.len() or ub[cut] != b'5' {
-        return s;
-    }
-    let mut j = cut + 1;
-    while j < ub.len() {
-        if ub[j] != b'0' {
-            return s;
-        }
-        j += 1;
-    }
-    if (ub[cut - 1] - b'0') % 2 != 0 {
-        return s;
-    }
-    let mut lo: Vec[u8] = Vec.new();
-    let mut m = 0;
-    while m < cut {
-        lo.push(ub[m]);
-        m += 1;
-    }
-    String.from_utf8(lo).unwrap_or(s.clone())
+    f"{x}"
 }
 
 fn kv(out: mut ref Vec[String], k: Str, x: f64) {

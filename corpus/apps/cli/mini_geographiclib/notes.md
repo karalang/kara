@@ -73,19 +73,18 @@ and masks.
 
 ## Compiler gaps
 
-Two gaps are worked around and listed in the source header:
+Two gaps were worked around at first, and both are fixed:
 
-- **B-2026-10-23-3:** a method call on a `const` (`TOL0.sqrt()`) passes
-  `karac check` and runs under `--interp`, but v2 lowers it as a call of
-  `f64.sqrt` and fails. `tiny()` and `tol2()` copy the const into a local
-  first.
-- **B-2026-10-23-4:** when a float lies exactly halfway between two equally
-  short decimals, Kāra prints the one farther from zero and Python the one
-  with the even last digit (`-75455689800034.625` is `...34.63` in Kāra and
-  `...34.62` in Python). One polygon area in the set hits this. `fmt()` reads
-  the exact expansion (`{x:.60}`) and keeps the even candidate; it matched
-  Python's `repr` on 5,847 floats, 142 of them ties. Only plain decimals are
-  checked, since no output here ties in exponent form.
+- **B-2026-10-23-3** (fixed in kara 4e667768da): a method call on a
+  `const` (`TOL0.sqrt()`) passed `karac check` but failed on v2, so
+  `tiny()` and `tol2()` copied the const into a local first. They call
+  `DBL_MIN.sqrt()` and `TOL0.sqrt()` again.
+- **B-2026-10-23-4** (fixed in kara cbcd20a557): when a float lay exactly
+  halfway between two equally short decimals, Kāra printed the one farther
+  from zero and Python the one with the even last digit
+  (`-75455689800034.625` printed `...34.63`, Python `...34.62`), so
+  `fmt()` read the exact expansion and kept the even candidate. It is
+  `f"{x}"` again, with only NaN spelled `nan`.
 
 ## Scope
 
