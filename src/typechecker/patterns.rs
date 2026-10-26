@@ -4065,8 +4065,42 @@ impl<'a> super::TypeChecker<'a> {
         }
         let bodies: Vec<Option<&Expr>> = elements.iter().map(Some).collect();
         self.view_string_literal_branches(&bodies, &mut tys);
-        let first_ty = tys[0].clone();
+        let mut first_ty = tys[0].clone();
         for (elem, ty) in elements[1..].iter().zip(&tys[1..]) {
+            // Elements still carrying inference variables meet as an
+            // `if`/`else` join's branches do: `[Vec.new(), Vec.new()]`,
+            // `[None, Some(1)]` (B-2026-10-25-6).
+            if (super::exprs::contains_type_var(&first_ty) || super::exprs::contains_type_var(ty))
+                && super::inference::unify_types(
+                    &first_ty,
+                    ty,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                )
+            {
+                first_ty = resolve_type_vars(
+                    &first_ty,
+                    &self.env.substitutions,
+                    &HashMap::new(),
+                    &self.env.const_substitutions,
+                    &HashMap::new(),
+                );
+                continue;
+            }
+            // A slot one element leaves open (`None`'s `T`) takes the
+            // other's, as a branch join's does.
+            let in_scope: std::collections::HashSet<&str> = self
+                .enclosing_bounds
+                .keys()
+                .map(|s| s.as_str())
+                .chain(["Self"])
+                .collect();
+            if find_unbound_type_param(&first_ty, &in_scope).is_some() {
+                if let Some(joined) = self.join_branch_types(&first_ty, ty) {
+                    first_ty = joined;
+                    continue;
+                }
+            }
             self.check_assignable(&first_ty, ty, elem.span);
         }
         first_ty

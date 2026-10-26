@@ -14277,3 +14277,29 @@ fn a_private_field_is_refused_through_an_imported_call() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_literals_open_element_types_meet_as_a_join_does() {
+    // B-2026-10-25-6: elements that leave an inference variable or a
+    // parameter open (`Vec.new()`, `None`) meet the others as an `if`/`else`
+    // join's branches do, so the literal checks and runs; a real mismatch is
+    // still refused.
+    let src = "fn main() {\n    let mut a = [Vec.new(), Vec.new()];\n    a[0].push(7);\n    a[1].push(8);\n    \
+               let b = [None, Some(1)];\n    let mut pts: Vec[Vec[i64]] = [Vec.new(), Vec.new()].to_vec();\n    \
+               pts[1].push(5);\n    println(f\"{a[0][0]} {a[1][0]} {b[1].unwrap_or(0)} {pts[1][0]}\");\n}\n";
+    accepted("literal-open-element-types", src);
+    let (dir, path) = fixture("literal-open-element-types-run", src);
+    let run = karac().arg("run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "7 8 1 5\n",
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    rejected(
+        "literal-element-mismatch",
+        "fn main() {\n    let a = [Vec.new(), Some(1)];\n    println(f\"{a.len()}\");\n}\n",
+        "expected 'Vec[?T0]', found 'Option[i64]'",
+    );
+}
