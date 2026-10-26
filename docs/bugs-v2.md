@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 42 |
+| false-positive | 43 |
 | diagnostics | 38 |
 | missing-feature | 30 |
 | perf | 13 |
@@ -73,7 +73,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 67 |
+| typecheck | 68 |
 | mir | 32 |
 | codegen | 22 |
 | interp | 19 |
@@ -106,7 +106,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
 | B-2026-10-20-32 | 2026-10-20 | typecheck+interp | medium | `IntoIterator` is not the spec's trait: the prelude's (runtime/stdlib/into_iterator.kara, CR-202) has `type Item; type IntoIter;` and no `into_iter` method, where design.md § Iteration gives `type Item; fn into_iter(own self) -> impl Iterator[Item = Self.Item]`. A spec-shaped impl is refused, a `C: IntoIterator` bound cannot call `.into_iter()`, and `v.extend(x)` on a user `IntoIterator` type passes check but the MIR builder refuses it | — |
 | B-2026-10-21-22 | 2026-10-21 | typecheck | medium | `AnyError`, which docs/library/README.md lists in the prelude and design.md §10 uses for `main` and `?`, is not defined: `fn main() -> Result[(), AnyError]` is "undefined type 'AnyError'" | — |
-| B-2026-10-21-29 | 2026-10-21 | ownership+typecheck | medium | `karac check` disagrees with collections.md on borrows in four places. It refuses: `a.union(b)` then `a.intersection(b)` ("value 'b' moved here"; Set and SortedSet `union`/`intersection`/`difference` take `other` bare, which borrows under D5), and `a[0] = 10` through a half of `v.split_at_mut(2)` ("declared without `mut`", while patterns cannot carry `mut`). It accepts what the page rejects: `v.len()` while both `split_at_mut` halves are live, and `s.iter_mut()` on a `Set`/`SortedSet` ("have no `iter_mut`"); the MIR backends then exit 3 on the latter. It also types a `VecDeque` with `Vec`'s whole method surface, so `d.sort()`, `d.truncate(n)` and `d.contains(x)` check though the page's VecDeque table has none of them. Later. | — |
 | B-2026-10-22-36 | 2026-10-22 | interp+codegen | medium | MIR builder gaps from the legacy test programs: raw pointer methods and `ptr.null`/`dangling`/`is_null` (M3, needed for FFI), associated functions and comparison methods on primitives (`i64.zero()`, `impl i64 { fn two }`, `a.lt(b)` on u8/bool), collection literals typed `VecDeque` or nested, indexing by a let-bound range, an uppercase local binding (`let F = Foo {..}; F.value`), literal patterns (negative, float, string inside `Option`), and a tail of single constructs | — |
 | B-2026-10-22-43 | 2026-10-22 | typecheck | low | E0517 prints a MIR temporary instead of the source place: `let g = v[0];` over a `Vec[Fn(i64) -> i64]` reports "move of (*_7) through a shared reference"; a user-facing message must name the source place (`v[0]`) | — |
 | B-2026-10-23-16 | 2026-10-23 | cli | low | The v2 build ignores `--monomorphization-budget`, `--enable-hot-swap` and a cross `--target`, and its `--output=json` carries no typecheck warnings; 10 cli tests ignored at the M3 deletion | — |
@@ -119,6 +118,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-40 | 2026-10-25 | resolver+effect | low | A channel operation's effect cannot be declared: the effect checker charges a stored callback that receives on a channel with `receives(Channel)` and asks the slot's clause for it, but a clause naming `receives(Channel)` is refused by the resolver (`'Channel' is not an effect resource (it is a prelude type or trait)`) | — |
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
 | B-2026-10-26-17 | 2026-10-26 | mir+mir-llvm | medium | After B-2026-10-26-14's fixes, at 9030678cd0 `KARAC_AUTO_PAR=1` builds still run under the M4b floor of 0.9x their own seq build: on one worker, the default, kata 28 brute_force 0.26x, 191 popcount 0.36x, 4 binary_search_partition 0.56x, 9 palindrome 0.70x and 8 atoi 0.75x (11 programs under 0.9x in all) (CORRECTED: hotel_audit, under on 4 workers in the first three timings, ran 0.97 / 0.98 / 0.92 in three more 21-run timings, inside the swing of a no-site control; no 4-worker app is reliably under at this box's resolution) (Thread B: hotel_audit's two small tasked loops are not the cause either, re-timed in three 31-run passes; the one-worker katas pay for the task form itself, see detail) | — |
+| B-2026-10-26-18 | 2026-10-26 | typecheck | low | `karac check` types a `VecDeque` with `Vec`'s whole method surface, so `d.sort()`, `d.dedup()`, `d.binary_search(x)`, `d.as_slice()` check though collections.md (857e45825) refuses them; it should refuse every method off the VecDeque table with a "no method on VecDeque" diagnostic, suggesting `Vec.from_iter(dq)` for the ones that need one contiguous slice (sort, dedup, binary_search, reverse, ranges, as_slice) | — |
 
 ### Fixed
 
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-20-34 | typecheck+interp | medium | A closure returned inside its enclosing closure's result captures that closure's parameter or local, `Copy` or not, by `ref`, so `(0..n).flat_map(\|i\|… | 643e98ab75 |
 | B-2026-10-20-36 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes… | 7deb035b43 |
 | B-2026-10-21-3 | typecheck | low | An unannotated `Map.new()` or `Set.new()` whose first use is a lookup by a `Str` is fixed at a `Str` key, so the `String` insert after it is refused… | 7deb035b43 |
+| B-2026-10-21-29 | ownership+typecheck | medium | `karac check` disagrees with collections.md on borrows in four places | 4344167c8b |
 | B-2026-10-21-41 | typecheck+interp+codegen | medium | Connection pool factory cannot fail: docs/library/pool.md specifies `Pool[T, E]` with `new(create_fn: own Fn() -> Result[T, E], max_connections, max_… | de17752282 |
 | B-2026-10-21-42 | typecheck+interp+codegen | medium | Connection pool `acquire` takes `timeout: i64` milliseconds where docs/library/pool.md specifies `timeout: Duration` (`pool.acquire(Duration.ms(500))… | de17752282 |
 | B-2026-10-21-43 | typecheck+interp+codegen | low | Connection pool `with_health_check` takes `ref self` and returns a second `Pool` value where docs/library/pool.md specifies a builder taking `own sel… | de17752282 |
