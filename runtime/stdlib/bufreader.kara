@@ -26,11 +26,6 @@
 // read), so they carry no effect. The read methods carry
 // `reads(FileSystem)`.
 //
-// Interpreter-only MVP. The cancel-safety `#[cancel_unsafe_until(...)]`
-// annotation is deferred to a follow-on slice (phase-6 slice 3b) — see the
-// `BufReader[R]` entry in `phase-8-stdlib-floor.md` for the v1 surface +
-// deferral list.
-//
 // **`lines()`.** Returns a `LinesIter` that the `for` loop drains one line
 // at a time, yielding `Result[String, IoError]` per line (the line with its
 // trailing `\n` / `\r\n` stripped, matching Rust's `BufRead::lines`; EOF

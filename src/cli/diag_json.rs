@@ -809,13 +809,6 @@ struct ScopeEntry {
     /// pattern span. When `None`, `type_override` carries the surface
     /// type directly.
     span_key: Option<crate::resolver::SpanKey>,
-    /// Source `Span` of the binding's introducing pattern, threaded
-    /// into `StateStructField.binding_span` so `raii_check` can anchor
-    /// a "binding declared here" secondary highlight. `SpanKey` is
-    /// lossy (offset+length only), so the full `Span` is carried in
-    /// parallel rather than reconstructed. `None` mirrors `span_key:
-    /// None` (synthetic bindings like `self`).
-    binding_span: Option<crate::token::Span>,
     type_override: Option<String>,
 }
 
@@ -845,7 +838,6 @@ pub(super) fn walk_fn_for_state_struct_layout(
         walker.scope.push(ScopeEntry {
             name: "self".to_string(),
             span_key: None,
-            binding_span: None,
             type_override: impl_target_type.map(|s| s.to_string()),
         });
     }
@@ -854,7 +846,6 @@ pub(super) fn walk_fn_for_state_struct_layout(
             walker.scope.push(ScopeEntry {
                 name,
                 span_key: Some(crate::resolver::SpanKey::from_span(&span)),
-                binding_span: Some(span),
                 type_override: None,
             });
         }
@@ -901,7 +892,6 @@ impl StateStructLayoutWalker<'_> {
                 self.fields.push(crate::ast::StateStructField {
                     name: entry.name.clone(),
                     type_name,
-                    binding_span: entry.binding_span,
                 });
             }
         }
@@ -924,7 +914,6 @@ impl StateStructLayoutWalker<'_> {
             self.scope.push(ScopeEntry {
                 name,
                 span_key: Some(crate::resolver::SpanKey::from_span(&span)),
-                binding_span: Some(span),
                 type_override: None,
             });
         }
@@ -943,7 +932,6 @@ impl StateStructLayoutWalker<'_> {
             self.scope.push(ScopeEntry {
                 name,
                 span_key: Some(crate::resolver::SpanKey::from_span(&span)),
-                binding_span: Some(span),
                 type_override: None,
             });
         }
@@ -963,7 +951,6 @@ impl StateStructLayoutWalker<'_> {
                     self.scope.push(ScopeEntry {
                         name,
                         span_key: Some(crate::resolver::SpanKey::from_span(&span)),
-                        binding_span: Some(span),
                         type_override: None,
                     });
                 }
@@ -974,7 +961,6 @@ impl StateStructLayoutWalker<'_> {
                 self.scope.push(ScopeEntry {
                     name: name.clone(),
                     span_key: Some(crate::resolver::SpanKey::from_span(name_span)),
-                    binding_span: Some(*name_span),
                     type_override: None,
                 });
             }
@@ -990,7 +976,6 @@ impl StateStructLayoutWalker<'_> {
                     self.scope.push(ScopeEntry {
                         name,
                         span_key: Some(crate::resolver::SpanKey::from_span(&span)),
-                        binding_span: Some(span),
                         type_override: None,
                     });
                 }
@@ -1098,7 +1083,6 @@ impl StateStructLayoutWalker<'_> {
                             self.scope.push(ScopeEntry {
                                 name,
                                 span_key: Some(crate::resolver::SpanKey::from_span(&span)),
-                                binding_span: Some(span),
                                 type_override: None,
                             });
                         }
@@ -2330,51 +2314,6 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 span: &err.closure_span,
                 suggestion: None,
                 extra_json: None,
-                lint_name: None,
-                fix_it: None,
-                class: None,
-                expected: None,
-                got: None,
-                stub_hint_json: None,
-            });
-        }
-    }
-
-    if let Some(ref raii) = pipeline.raii_errors {
-        for err in raii {
-            id_counter += 1;
-            let message = err.message();
-            let mut extra_parts: Vec<String> = Vec::new();
-            if let Some(ref bs) = err.binding_span {
-                extra_parts.push(format!(
-                    "\"binding_span\":{{{}}}",
-                    span_to_json(bs, filename)
-                ));
-            }
-            if let Some(ref sv) = err.state_violation {
-                extra_parts.push(format!(
-                    "\"state_violation\":{{\"soiling_method\":{},\"clear_method_name\":{},\"soil_span\":{{{}}}}}",
-                    json_string(&sv.soiling_method),
-                    json_string(&sv.clear_method_name),
-                    span_to_json(&sv.soil_span, filename),
-                ));
-            }
-            let extra_json = if extra_parts.is_empty() {
-                None
-            } else {
-                Some(extra_parts.join(","))
-            };
-            diags.add(DiagEntry {
-                id: &format!("d{id_counter}"),
-                severity: "error",
-                phase: "raii_check",
-                code: "E_RAII_ACROSS_YIELD",
-                category: "raii_across_yield",
-                message: &message,
-                filename,
-                span: &err.yield_span,
-                suggestion: None,
-                extra_json,
                 lint_name: None,
                 fix_it: None,
                 class: None,

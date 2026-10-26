@@ -327,7 +327,6 @@ pub(super) fn run_multi_file_late_phases(
         ownership: None,
         concurrency: None,
         provider_escape: None,
-        raii_errors: None,
         simd_errors: None,
         comptime_errors: None,
         profile: crate::manifest::CompileProfile::Default,

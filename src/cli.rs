@@ -1038,11 +1038,6 @@ struct Pipeline {
     ownership: Option<OwnershipCheckResult>,
     concurrency: Option<ConcurrencyAnalysis>,
     provider_escape: Option<Vec<crate::provider_escape::EscapeError>>,
-    /// RAII-across-yield rejections (`E_RAII_ACROSS_YIELD`). The rule is
-    /// withdrawn (core-semantics §11.9: a task is torn down at its wait,
-    /// so no rule restricts what is held across one), and no pass fills
-    /// this any more; it goes with src/raii_check.rs.
-    raii_errors: Option<Vec<crate::raii_check::RaiiAcrossYieldError>>,
     /// Phase-7-codegen.md line 308 slice 5a: `#[require_simd]` violations —
     /// one per `Vector[T, N]` op that would scalarize on the target inside a
     /// `#[require_simd]` function. Populated by [`Pipeline::simd_check`] after
@@ -1125,7 +1120,6 @@ impl Pipeline {
             ownership: None,
             concurrency: None,
             provider_escape: None,
-            raii_errors: None,
             simd_errors: None,
             comptime_errors: None,
             profile: crate::manifest::CompileProfile::Default,
@@ -1277,9 +1271,6 @@ impl Pipeline {
         }
         if let Some(v) = self.provider_escape.as_mut() {
             v.retain(|e| user(&e.escape_span));
-        }
-        if let Some(v) = self.raii_errors.as_mut() {
-            v.retain(|e| user(e.binding_span.as_ref().unwrap_or(&e.yield_span)));
         }
         if let Some(v) = self.simd_errors.as_mut() {
             v.retain(|e| user(&e.span));
@@ -2412,9 +2403,6 @@ impl Pipeline {
         if let Some(ref esc) = self.provider_escape {
             n += esc.len();
         }
-        if let Some(ref r) = self.raii_errors {
-            n += r.len();
-        }
         if let Some(ref s) = self.simd_errors {
             n += s.len();
         }
@@ -2832,35 +2820,6 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 err.closure_span.column,
                 err.message()
             ));
-        }
-    }
-    if let Some(ref raii) = pipeline.raii_errors {
-        for err in raii {
-            let mut block = format!(
-                "error[E_RAII_ACROSS_YIELD]: {}:{}:{}: {}",
-                filename,
-                err.yield_span.line,
-                err.yield_span.column,
-                err.message(),
-            );
-            if let Some(ref bs) = err.binding_span {
-                write!(
-                    block,
-                    "\n  note: binding declared here at {}:{}:{}",
-                    filename, bs.line, bs.column,
-                )
-                .unwrap();
-            }
-            if let Some(ref sv) = err.state_violation {
-                write!(
-                    block,
-                    "\n  note: soiled by `.{}()` here at {}:{}:{}",
-                    sv.soiling_method, filename, sv.soil_span.line, sv.soil_span.column,
-                )
-                .unwrap();
-            }
-            write!(block, "\n  help: {}", err.help()).unwrap();
-            out.push(block);
         }
     }
     if let Some(ref simd) = pipeline.simd_errors {

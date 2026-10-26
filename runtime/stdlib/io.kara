@@ -235,17 +235,7 @@ impl File {
     #[compiler_builtin]
     fn read(ref self, buf: mut Slice[u8]) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
-    // `write` soils the cancel-safe state of the receiver: buffered
-    // OS-level writes may remain unflushed, and cancelling between
-    // `write` and `flush` would discard the pending bytes silently.
-    // The slice-3 RAII-across-yield walker reads this attribute and
-    // rejects a yield while any `File` binding has an unflushed
-    // write. Clear methods are a comma-separated list, first name is
-    // the one the diagnostic suggests: `flush` is the cheapest, and
-    // `sync_all` / `sync_data` also clear because they are strictly
-    // stronger (they flush *and* fsync).
     #[compiler_builtin]
-    #[cancel_unsafe_until(method: "flush,sync_all,sync_data")]
     fn write(ref self, buf: Slice[u8]) -> Result[i64, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]

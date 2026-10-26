@@ -1124,9 +1124,7 @@ impl<'a> super::TypeChecker<'a> {
                 .insert(SpanKey::from_span(&pattern.span), "bool".to_string());
         } else if matches!(expected, Type::Pointer { .. }) {
             // Match-arm parallel to the `bind_pattern_types`
-            // pointer case — record `*const T` / `*mut T` so
-            // `raii_check` can detect raw-pointer-typed bindings
-            // held across a yield point.
+            // pointer case — record `*const T` / `*mut T`.
             self.pattern_binding_types
                 .insert(SpanKey::from_span(&pattern.span), type_display(expected));
         } else if let Some(narrow) = narrow_int_surface_name(expected) {
@@ -3334,13 +3332,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), "bool".to_string());
                 } else if matches!(ty, Type::Pointer { .. }) {
-                    // Raw-pointer surface name (`*const T` / `*mut T`) so
-                    // `raii_check` can recognise raw-pointer-typed
-                    // bindings held across a yield point and reject them
-                    // as NOT-CancelSafe per the design spec (raw pointers
-                    // carry no Drop hook — a cancel during their live
-                    // range leaks whatever they reference). Codegen
-                    // ignores this entry; raw-pointer layout is fixed.
+                    // Raw-pointer surface name (`*const T` / `*mut T`).
+                    // Codegen ignores this entry; raw-pointer layout is
+                    // fixed.
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_display(ty));
                 } else if let Type::Existential { origin, .. } = ty {

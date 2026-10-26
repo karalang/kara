@@ -1077,8 +1077,7 @@ impl<'a> super::TypeChecker<'a> {
     // `program.items` — `synthetic_prelude_items` clones the
     // StructDef only, so the walker reaches into STDLIB_PROGRAMS
     // explicitly to pick up `impl[T] ScopeLocal for TaskHandle[T]`
-    // from `runtime/stdlib/task_group.kara`). Same precedent as
-    // `raii_check::collect_cancel_unsafe_annotations`.
+    // from `runtime/stdlib/task_group.kara`).
 
     /// Collect type names with an `impl ScopeLocal for T {}` opt-in,
     /// across the user `program.items` AND the baked stdlib.
