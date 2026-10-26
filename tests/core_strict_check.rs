@@ -15000,3 +15000,16 @@ fn a_str_retyped_literal_let_reports_no_move() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// B-2026-10-24-28: a bare `None` passed to a `ref Option[T]` parameter
+/// names no place, so a second `None` passed by value beside it is not a
+/// move of a borrowed value.
+#[test]
+fn none_beside_a_ref_none_argument_is_no_borrowed_move() {
+    accepted_and_runs(
+        "none-ref-and-owned",
+        "fn g(a: ref Option[String], b: Option[i64]) -> i64 {\n    7\n}\n\
+         fn main() {\n    println(f\"{g(None, None)}\");\n}\n",
+        "7\n",
+    );
+}

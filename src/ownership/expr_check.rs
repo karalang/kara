@@ -437,8 +437,12 @@ impl<'a> super::OwnershipChecker<'a> {
                     } else if let Some(borrow_kind) = self.arg_formal_ref_borrow_kind(callee, i) {
                         // Slice 2 follow-up — non-slice ref formal cross-
                         // borrow push; see `check_expr_reading`'s Call arm
-                        // for rationale.
-                        if let Some(place) = self.place_expr_root(&arg.value) {
+                        // for rationale. A bare `None` names no place
+                        // (B-2026-10-24-28).
+                        if let Some(place) = self
+                            .place_expr_root(&arg.value)
+                            .filter(|p| states.contains_key(&p.root))
+                        {
                             self.push_active_borrow(borrow_kind, place, arg.value.span);
                         }
                     }
@@ -702,8 +706,12 @@ impl<'a> super::OwnershipChecker<'a> {
                         // formal at this position. Push a transient borrow
                         // on the arg's root so cross-borrow detection fires
                         // against any live slice on the same source. The
-                        // borrow drops at the call's snapshot-restore.
-                        if let Some(place) = self.place_expr_root(&arg.value) {
+                        // borrow drops at the call's snapshot-restore. A
+                        // bare `None` names no place (B-2026-10-24-28).
+                        if let Some(place) = self
+                            .place_expr_root(&arg.value)
+                            .filter(|p| states.contains_key(&p.root))
+                        {
                             self.push_active_borrow(borrow_kind, place, arg.value.span);
                         }
                     }
