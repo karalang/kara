@@ -1632,7 +1632,8 @@ impl Parser {
         }
         // Only where the NEXT token reads as something that follows a name
         // (`;`, `,`, a closer, `:`, `.`, `(`, `[`, an operator, an
-        // assignment). Malformed code also puts keywords here -- the `let` of
+        // assignment, a bitwise operator), and in a pattern also `in`, `=>`,
+        // `if` and `@`. Malformed code also puts keywords here -- the `let` of
         // an unsupported `if let ... and let Some(x) = e` chain, a stray
         // `else {` -- and retyping those as names would trade one honest
         // error for a cascade from a binding the author never meant.
@@ -1669,8 +1670,20 @@ impl Parser {
                     | Token::GreaterThanOrEqual
                     | Token::And
                     | Token::Or
+                    | Token::Amp
+                    | Token::Pipe
+                    | Token::Caret
+                    | Token::LessLess
+                    | Token::GreaterGreater
             )
-        );
+        ) || (expected == "pattern"
+            // What follows a binding in a pattern: a `for` binding's `in`,
+            // an arm's `=>` or guard, an `@` binding
+            // (B-2026-10-24-31).
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.token),
+                Some(Token::In | Token::FatArrow | Token::If | Token::At)
+            ));
         if !follows_a_name {
             return false;
         }
