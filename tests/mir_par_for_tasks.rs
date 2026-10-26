@@ -124,23 +124,25 @@ fn main() {
     }
 }
 
-/// The iterations wait at once: four sleeps of 400, 300, 200 and 100 ms
-/// end in about the longest, not their 1000 ms sum, and the values still
+/// The iterations wait at once: four sleeps of 800, 600, 400 and 200 ms
+/// end in about the longest, not their 2000 ms sum, and the values still
 /// come back in iteration order. With `limit: 1` they run one at a time.
+/// The time includes the debug `karac`'s own check and lowering, which a
+/// loaded machine has pushed past 100 ms, hence the 700 ms margin.
 #[test]
 fn mir_par_for_iterations_wait_concurrently() {
     let src = r#"fn main() {
-    let v: Vec[i64] = par for i in 0..4 { sleep_ms((4 - i) * 100); i };
+    let v: Vec[i64] = par for i in 0..4 { sleep_ms((4 - i) * 200); i };
     println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
 }
 "#;
     for (out, took) in runs("concurrent", src) {
         assert_eq!(out, "0 1 2 3\n");
-        assert!(took < Duration::from_millis(900), "{took:?}");
+        assert!(took < Duration::from_millis(1500), "{took:?}");
     }
     let one = src.replace("par for", "par(limit: 1) for");
     for (out, took) in runs("limit", &one) {
         assert_eq!(out, "0 1 2 3\n");
-        assert!(took >= Duration::from_millis(1000), "{took:?}");
+        assert!(took >= Duration::from_millis(2000), "{took:?}");
     }
 }
