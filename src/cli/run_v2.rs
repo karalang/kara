@@ -424,6 +424,9 @@ pub(super) struct RuntimeReports {
     /// Each frame's place and the `?` expression it returned through.
     trace: Vec<((String, usize, usize), Option<String>)>,
     truncated: bool,
+    /// Why the trace has no frames to show: its `?` chain ran across
+    /// tasks (design.md § Error return traces, B-2026-10-25-30).
+    unavailable: Option<String>,
     /// Everything else the program wrote.
     pub(super) passthrough: String,
 }
@@ -473,6 +476,11 @@ impl RuntimeReports {
                 r.faults.push(Fault { message, at });
                 continue;
             }
+            if let Some(why) = line.strip_prefix("Error return trace: unavailable ") {
+                r.unavailable = Some(why.trim_matches(['(', ')']).to_string());
+                i += 1;
+                continue;
+            }
             if line == "Error return trace:" {
                 i += 1;
                 while let Some(l) = lines.get(i).and_then(|l| l.strip_prefix("  ")) {
@@ -492,7 +500,7 @@ impl RuntimeReports {
                     // Only the last thing the program wrote, the trace aside.
                     let rest_is_trace = lines[i + 1..]
                         .first()
-                        .is_none_or(|l| *l == "Error return trace:");
+                        .is_none_or(|l| l.starts_with("Error return trace:"));
                     if rest_is_trace {
                         r.error = Some(message.to_string());
                         i += 1;
@@ -550,6 +558,12 @@ impl RuntimeReports {
                         .join(",");
                     println!("{{\"runtime_errors\":[{arr}]}}");
                 }
+                if let Some(why) = &self.unavailable {
+                    println!(
+                        "{{\"error_return_trace\":{{\"frames\":[],\"unavailable\":{}}}}}",
+                        json_string(why)
+                    );
+                }
                 if !self.trace.is_empty() {
                     let trace = if self.truncated {
                         format!("{{\"frames\":[{frames}],\"truncated\":true}}")
@@ -571,6 +585,12 @@ impl RuntimeReports {
                             json_string(&f.message),
                             at_json(&f.at)
                         ),
+                    );
+                }
+                if let Some(why) = &self.unavailable {
+                    emit_jsonl_event(
+                        "error_return_trace",
+                        &format!("\"frames\":[],\"unavailable\":{}", json_string(why)),
                     );
                 }
                 if !self.trace.is_empty() {

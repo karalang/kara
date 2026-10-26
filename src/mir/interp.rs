@@ -1163,7 +1163,7 @@ struct Interp<'a> {
     /// The error return trace: the `file:line:col` of each `?` that
     /// returned an error since the last one that succeeded, oldest first,
     /// at most [`ERROR_TRACE_DEPTH`] (design.md § Error return traces).
-    error_trace: Vec<String>,
+    error_trace: Vec<(String, usize)>,
     /// Whether the trace dropped its oldest frames to stay that deep.
     error_trace_truncated: bool,
     /// Whether an abort has been reported on stderr: the innermost frame
@@ -1394,9 +1394,14 @@ impl<'a> Interp<'a> {
     fn native(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty], ret: Ty) -> R<Value> {
         // A `?` succeeded: the error, if any, was handled. First, as every
         // `?` that succeeds calls it (B-2026-10-25-3).
+        // Only the running task's frames go: another task's chain may
+        // still be on its way (B-2026-10-25-30).
         if name == "error_trace_clear" {
-            self.error_trace.clear();
-            self.error_trace_truncated = false;
+            let task = self.cur_task;
+            self.error_trace.retain(|f| f.1 != task);
+            if self.error_trace.is_empty() {
+                self.error_trace_truncated = false;
+            }
             return Ok(Value::Unit);
         }
         let program: &'a Program = self.program;
@@ -11100,7 +11105,7 @@ impl<'a> Interp<'a> {
             self.error_trace.remove(0);
             self.error_trace_truncated = true;
         }
-        self.error_trace.push(frame);
+        self.error_trace.push((frame, self.cur_task));
     }
 
     /// The error return trace as the diagnostic it goes with prints it,
@@ -11108,7 +11113,17 @@ impl<'a> Interp<'a> {
     /// when it has no frame (design.md § Error return traces, § Panic
     /// record).
     fn error_trace_text(&self, last: Option<&str>) -> String {
-        let mut frames: Vec<&str> = self.error_trace.iter().map(String::as_str).collect();
+        // Frames of more than one task: no one order of them is the chain
+        // (design.md § Error return traces, B-2026-10-25-30).
+        if self
+            .error_trace
+            .iter()
+            .any(|f| f.1 != self.error_trace[0].1)
+        {
+            return "Error return trace: unavailable (the ? chain was split across parallel tasks)\n"
+                .to_string();
+        }
+        let mut frames: Vec<&str> = self.error_trace.iter().map(|f| f.0.as_str()).collect();
         let mut truncated = self.error_trace_truncated;
         if let Some(at) = last {
             if frames.len() >= ERROR_TRACE_DEPTH {

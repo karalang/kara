@@ -2504,13 +2504,17 @@ fn abort_message(msg: String) -> String {
 /// (design.md § Error return traces).
 const ERROR_TRACE_DEPTH: usize = 64;
 
+/// What the trace reads when its `?` chain ran across tasks.
+const ERROR_TRACE_SPLIT: &str = "unavailable (the ? chain was split across parallel tasks)";
+
 /// The thread's error return trace (the program's under the pool, whose
 /// tasks move between workers): the place (`file:line:col`, a string
 /// constant of the program, as its address and length) of each `?` that
-/// returned an error since the last one that succeeded, oldest first; and
-/// whether it dropped its oldest frames to stay [`ERROR_TRACE_DEPTH`] deep.
+/// returned an error since the last one that succeeded, oldest first, with
+/// the task that ran it (`None` outside a task); and whether it dropped its
+/// oldest frames to stay [`ERROR_TRACE_DEPTH`] deep.
 struct ErrorTrace {
-    frames: Vec<(usize, usize)>,
+    frames: Vec<(usize, usize, Option<u64>)>,
     truncated: bool,
 }
 
@@ -2535,6 +2539,7 @@ pub unsafe extern "C" fn karac_mir_error_trace_push(
     at_len: u64,
     live: *const std::sync::atomic::AtomicU64,
 ) {
+    let task = crate::mir_task::current_task();
     ERROR_TRACE.with(|t| {
         if t.frames.is_empty() {
             // SAFETY: the caller's contract.
@@ -2544,19 +2549,25 @@ pub unsafe extern "C" fn karac_mir_error_trace_push(
             t.frames.remove(0);
             t.truncated = true;
         }
-        t.frames.push((at as usize, at_len as usize));
+        t.frames.push((at as usize, at_len as usize, task));
     });
 }
 
-/// A `?` succeeded: the error, if any, was handled.
+/// A `?` succeeded: the error, if any, was handled. Only the running
+/// task's frames go; another task's chain may still be on its way
+/// (B-2026-10-25-30).
 ///
 /// # Safety
 /// `live` is as for [`karac_mir_error_trace_push`].
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_error_trace_clear(live: *const std::sync::atomic::AtomicU64) {
+    let task = crate::mir_task::current_task();
     ERROR_TRACE.with(|t| {
         if !t.frames.is_empty() {
-            t.frames.clear();
+            t.frames.retain(|f| f.2 != task);
+            if !t.frames.is_empty() {
+                return;
+            }
             t.truncated = false;
             // SAFETY: the caller's contract.
             unsafe { &*live }.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -2569,11 +2580,16 @@ pub unsafe extern "C" fn karac_mir_error_trace_clear(live: *const std::sync::ato
 /// no frame (design.md § Error return traces, § Panic record).
 fn error_trace_text(last: Option<&str>) -> String {
     ERROR_TRACE.with(|t| {
+        // Frames of more than one task: no one order of them is the chain
+        // (design.md § Error return traces, B-2026-10-25-30).
+        if t.frames.iter().any(|f| f.2 != t.frames[0].2) {
+            return format!("Error return trace: {ERROR_TRACE_SPLIT}\n");
+        }
         let mut frames: Vec<std::borrow::Cow<'_, str>> = t
             .frames
             .iter()
             // SAFETY: `karac_mir_error_trace_push`'s contract.
-            .map(|&(p, n)| String::from_utf8_lossy(unsafe { bytes(p as *const u8, n) }))
+            .map(|&(p, n, _)| String::from_utf8_lossy(unsafe { bytes(p as *const u8, n) }))
             .collect();
         let mut truncated = t.truncated;
         if let Some(at) = last {
