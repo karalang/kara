@@ -762,7 +762,7 @@ fn curve_of(sec: ref Section, c: i64, rows: ref Vec[Row], sec_of: ref Vec[i64]) 
 // left out, the lowest homeworks are dropped, the tests are curved, and
 // a category with nothing left gives its weight to the others.
 fn percent_of(row: ref Row, sec: ref Section, bump: i64) -> i64 {
-    let mut pts: Vec[Vec[i64]] = Vec[Vec.new(), Vec.new(), Vec.new(), Vec.new()];
+    let mut pts: Vec[Vec[i64]] = [Vec.new(), Vec.new(), Vec.new(), Vec.new()].to_vec();
     let mut outs: Vec[i64] = [0, 0, 0, 0].to_vec();
     for t in 0..N_ITEMS {
         let mut v = row.scores[t];

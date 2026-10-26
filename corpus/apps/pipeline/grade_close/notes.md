@@ -127,6 +127,10 @@ it matched the mirror on the first run under the MIR interpreter, the
 LLVM backend, the ASan build and the native binary, with nothing on
 stderr.
 
+Kara fixed B-2026-10-25-6 in fd8b172278, so the literal is back to
+`[Vec.new(), Vec.new(), Vec.new(), Vec.new()].to_vec()`. It still matches
+the mirror on all four backends (`karac` at a6d57a78ee).
+
 ## Scope
 
 One term at four schools, with no transfers in or out, no schedule
