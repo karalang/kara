@@ -61,8 +61,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 42 |
 | diagnostics | 37 |
 | missing-feature | 30 |
+| perf | 12 |
 | soundness | 12 |
-| perf | 11 |
 | run-vs-build | 9 |
 | miscompile | 8 |
 | other | 3 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 66 |
-| mir | 30 |
+| mir | 31 |
 | codegen | 22 |
 | interp | 19 |
 | ownership | 16 |
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-26-11 | 2026-10-26 | ownership | medium | `karac check` accepts an escaping closure created inside a loop that captures an outer non-`Copy` binding, which moves it on every iteration; `karac run` stops at an internal MIR move-check error instead of a diagnostic | — |
 | B-2026-10-26-12 | 2026-10-26 | ownership | medium | `karac check` counts a capture of an ESCAPING closure as moved when a nested closure in its body reads it (`is.iter().map(|i| look(p, *i)).sum()`, with `p: ref Prog` in `look`): a later read of `p`, or a read in another `match` arm, is 'moved into an escaping closure, used again here', while both MIR backends run it and the same body in a plain function checks | — |
 | B-2026-10-26-13 | 2026-10-26 | typecheck+mir-llvm | high | A `shared` handle crosses a task boundary inside a function value: a closure capturing a `shared` struct, erased to `Fn` and captured by a `TaskGroup.spawn` closure, passes `karac check` (E_NOT_CROSS_TASK does not look through `Fn`), and under `KARAC_THREADS=4` its non-atomic count double-frees | — |
+| B-2026-10-26-14 | 2026-10-26 | mir | medium | `KARAC_AUTO_PAR=1` builds run 36 of the 129 M4b programs (28 kata loop-list programs, 8 stmt-par apps) under 0.9x their own seq build on today's single-threaded executor, worst apps/pipeline/thumb_render 0.22x, kata 28 brute_force 0.30x and kata 4 0.36x: the builder makes tasks of loops and statement groups whose work does not pay for them (M4 item 13 cost gate) | — |
 
 ### Fixed
 
