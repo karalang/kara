@@ -134,11 +134,12 @@ failed check twice: writing the cache's fields makes it `MutFn`
 (B-2026-10-26-10, open), and the nested
 `gs.iter().map(|g| group_val(prog, ...))` in one `match` arm was called a
 move of the program that the other arms read (B-2026-10-26-12). Kara
-fixed B-2026-10-26-12 in 6f363a1aa2, so the closure captures the compiled
-program again and passes it to `search`; only the matcher and its stream
-id stay in the cache, until B-2026-10-26-10 is fixed. It still matches
-the oracle on all four backends with nothing on stderr (`karac` at
-b5230d6642).
+fixed B-2026-10-26-12 in 6f363a1aa2 and B-2026-10-26-10 in 0c3f03df1f,
+so the regex closure is back as first written: it captures the compiled
+program and updates the cache's matcher and stream id itself, with no
+`search` method. It still matches the oracle on all four backends with
+nothing on stderr (`karac` at aec61f30b3), so no workaround for a fixed
+row remains.
 
 Later `karac fix` dropped 95 `*`s on `Copy` parts bound out of borrowed
 values, which are copies rather than views (kara B-2026-10-24-36); the

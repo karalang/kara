@@ -3109,16 +3109,6 @@ shared struct Matching {
     mut m: Matcher,
 }
 
-impl Matching {
-    fn search(self, prog: ref Program, s: ref Stream, index: i64) -> Option[Found] {
-        if self.stream != s.id {
-            self.m = new_matcher(prog, s.chars);
-            self.stream = s.id;
-        }
-        find(mut self.m, prog, index, false, 1)
-    }
-}
-
 fn regex(exp: Str) -> Parser {
     regex_g(exp, 0, Group.Num(0))
 }
@@ -3136,7 +3126,11 @@ fn regex_g(exp: Str, flags: i64, group: own Group) -> Parser {
         if not s.is_text {
             panic("cannot use a string pattern on a list");
         }
-        match cache.search(prog, s, index) {
+        if cache.stream != s.id {
+            cache.m = new_matcher(prog, s.chars);
+            cache.stream = s.id;
+        }
+        match find(mut cache.m, prog, index, false, 1) {
             Some(found) => {
                 let value = match group {
                     Group.Num(g) => group_val(prog, s.chars, found, g),
