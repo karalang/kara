@@ -3414,6 +3414,11 @@ pub struct TypeChecker<'a> {
     /// `E_ONCE_FN_INTO_FN_SLOT` can name the consumed binding when a closure
     /// literal is rejected at a `Fn` slot. Round 12.45 (Step 3).
     pub(super) closure_once_reasons: FxHashMap<SpanKey, OnceReason>,
+    /// The closures the body being walked for its closure kind returns, and
+    /// how many of them the walk is inside: there every capture moves
+    /// (core §9.3, B-2026-10-26-9).
+    pub(super) returned_closure_spans: std::cell::RefCell<HashSet<SpanKey>>,
+    pub(super) capture_walk_by_move: std::cell::Cell<u32>,
     /// B-2026-07-15-16 — pre-seeds for a closure literal's UN-annotated
     /// params, keyed by the closure expression's span. Set just before
     /// `infer_expr` on a closure argument of a direct collection/Result method
@@ -3785,6 +3790,8 @@ impl<'a> TypeChecker<'a> {
             current_body_dim_scope: Vec::new(),
             enclosing_trait: None,
             closure_once_reasons: FxHashMap::default(),
+            returned_closure_spans: Default::default(),
+            capture_walk_by_move: Default::default(),
             closure_param_seeds: FxHashMap::default(),
             core_view_closure_params: FxHashMap::default(),
             copy_item_closure_params: FxHashMap::default(),

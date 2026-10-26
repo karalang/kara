@@ -14414,3 +14414,42 @@ fn an_escaping_closure_reads_its_capture_again() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// B-2026-10-26-9: a closure that returns a closure hands it to its caller,
+/// so the returned closure escapes and moves what it captures (§9.3); the
+/// outer closure then moves that capture out and is an `OnceFn` (§9.6). A
+/// second call, or a use of the capture after the outer closure is made, is
+/// refused; one call checks and runs.
+#[test]
+fn a_closure_returning_a_capturing_closure_is_once() {
+    accepted_and_runs(
+        "returned-closure-once-call",
+        "fn main() {\n    let base = vec![1, 2, 3];\n    \
+         let make = |n: i64| |x: i64| x + n + base.len();\n    \
+         let f = make(1);\n    println(f\"{f(0)}\");\n}\n",
+        "4\n",
+    );
+    for (tag, tail, want) in [
+        (
+            "returned-closure-second-call",
+            "let f = make(1);\n    let g = make(2);\n    println(f\"{f(0)} {g(0)}\");",
+            "an OnceFn is called once",
+        ),
+        (
+            "returned-closure-capture-used-after",
+            "let f = make(1);\n    println(f\"{f(0)} {base.len()}\");",
+            "value 'base' was moved into an escaping closure",
+        ),
+    ] {
+        let src = format!(
+            "fn main() {{\n    let base = vec![1, 2, 3];\n    \
+             let make = |n: i64| |x: i64| x + n + base.len();\n    {tail}\n}}\n"
+        );
+        let (dir, path) = fixture(tag, &src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(err.contains(want), "{tag}: expected `{want}` in: {err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

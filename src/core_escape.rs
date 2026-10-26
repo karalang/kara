@@ -52,6 +52,13 @@ enum Pos {
     Other,
 }
 
+/// A closure's result goes to its caller, so a closure literal there
+/// escapes (core semantics §9.3: "it, or a value containing it, is
+/// returned", B-2026-10-26-9). A parameter or function value handed back
+/// stays inside the function that holds the closure, so this reason
+/// escapes closures only.
+const CLOSURE_RESULT: &str = "returned from a closure";
+
 const STORE_METHODS: &[&str] = &["push", "push_back", "push_front", "insert", "set", "append"];
 
 pub fn analyze(program: &Program) -> CoreEscape {
@@ -248,10 +255,12 @@ impl Walker<'_> {
                     self.out.escaping_closures.insert(k);
                     self.out.reasons.insert(k, why);
                 }
-                (None, Pos::Escape(why)) if self.sigs.contains_key(n) => {
+                (None, Pos::Escape(why)) if why != CLOSURE_RESULT && self.sigs.contains_key(n) => {
                     self.out.escaping_fn_values.push((e.span, n.clone(), why));
                 }
-                (Some(Bound::NonEscParam), Pos::Escape(why)) => self.non_escaping(e, n, why),
+                (Some(Bound::NonEscParam), Pos::Escape(why)) if why != CLOSURE_RESULT => {
+                    self.non_escaping(e, n, why)
+                }
                 (Some(Bound::NonEscParam), Pos::Bind) => {
                     self.non_escaping(e, n, "bound to a variable")
                 }
@@ -270,7 +279,7 @@ impl Walker<'_> {
                     }
                 }
                 self.scopes.push(scope);
-                self.walk_expr(body, Pos::Other);
+                self.walk_expr(body, Pos::Escape(CLOSURE_RESULT));
                 self.scopes.pop();
             }
             ExprKind::Call { callee, args } => {

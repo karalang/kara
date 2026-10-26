@@ -252,6 +252,9 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             CaptureWalkMode::Reading
         };
+        let returned = returned_closure_spans(body);
+        let saved = self.returned_closure_spans.replace(returned);
+        let saved_by_move = self.capture_walk_by_move.replace(0);
         self.walk_capture_consume(
             body,
             body_mode,
@@ -259,6 +262,8 @@ impl<'a> super::TypeChecker<'a> {
             &mut shadow_stack,
             &mut reason,
         );
+        self.capture_walk_by_move.set(saved_by_move);
+        self.returned_closure_spans.replace(saved);
         reason
     }
 
@@ -462,7 +467,12 @@ impl<'a> super::TypeChecker<'a> {
         }
         match &expr.kind {
             ExprKind::Identifier(name) => {
-                if mode == CaptureWalkMode::Consuming && !Self::name_is_shadowed(name, shadows) {
+                // Inside a closure the body returns, every capture moves
+                // (core §9.3, B-2026-10-26-9).
+                let by_move = self.capture_walk_by_move.get() > 0;
+                if (mode == CaptureWalkMode::Consuming || by_move)
+                    && !Self::name_is_shadowed(name, shadows)
+                {
                     if let Some(ty) = outer.get(name) {
                         // A `shared` handle used as a value is retained, and
                         // the capture stays usable (core §6.1), so the
@@ -479,7 +489,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             ExprKind::SelfValue => {
-                if mode == CaptureWalkMode::Consuming && !Self::name_is_shadowed("self", shadows) {
+                let by_move = self.capture_walk_by_move.get() > 0;
+                if (mode == CaptureWalkMode::Consuming || by_move)
+                    && !Self::name_is_shadowed("self", shadows)
+                {
                     if let Some(ty) = outer.get("self") {
                         if !self.is_copy_type_during_check(ty) {
                             *reason = Some(OnceReason {
@@ -812,6 +825,14 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 shadows.push(nested_scope);
+                // A closure the body returns escapes and moves what it
+                // captures out of this closure (core §9.3, B-2026-10-26-9).
+                let returned = self
+                    .returned_closure_spans
+                    .borrow()
+                    .contains(&SpanKey::from_span(&expr.span));
+                self.capture_walk_by_move
+                    .set(self.capture_walk_by_move.get() + u32::from(returned));
                 self.walk_capture_consume(
                     nested_body,
                     CaptureWalkMode::Reading,
@@ -819,6 +840,8 @@ impl<'a> super::TypeChecker<'a> {
                     shadows,
                     reason,
                 );
+                self.capture_walk_by_move
+                    .set(self.capture_walk_by_move.get() - u32::from(returned));
                 shadows.pop();
             }
 
@@ -898,4 +921,39 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
     }
+}
+
+/// The closure literals in the value a closure body returns, followed
+/// through block, `if` and `match` tails, `return`, and tuple, collection
+/// and struct literals, as the MIR builder's `returned_closures_of` does.
+fn returned_closure_spans(body: &Expr) -> HashSet<SpanKey> {
+    let mut out = HashSet::new();
+    let mut work = vec![body];
+    while let Some(e) = work.pop() {
+        match &e.kind {
+            ExprKind::Closure { .. } => {
+                out.insert(SpanKey::from_span(&e.span));
+            }
+            ExprKind::Block(b) => work.extend(b.final_expr.as_deref()),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                work.extend(then_block.final_expr.as_deref());
+                work.extend(else_branch.as_deref());
+            }
+            ExprKind::Match { arms, .. } => work.extend(arms.iter().map(|a| &a.body)),
+            ExprKind::Return(Some(x)) => work.push(x),
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => work.extend(es),
+            ExprKind::StructLiteral { fields, .. } => work.extend(fields.iter().map(|f| &f.value)),
+            _ => {}
+        }
+    }
+    out
 }
