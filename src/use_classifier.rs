@@ -263,6 +263,7 @@ pub fn classify_function_body_with(
         closure_span_stack: Vec::new(),
         closure_local_stack: Vec::new(),
         escaping_closure_depth: 0,
+        borrow_escaping_depth: 0,
         escaping_closure_flags: Vec::new(),
         task_moved_captures: Vec::new(),
         arm_consumed_names: Vec::new(),
@@ -339,6 +340,9 @@ struct UseClassifier<'a> {
     /// an ESCAPING closure. Inside one, every outer binding the body names is
     /// captured by move, so its leaf is classified as a consume.
     escaping_closure_depth: u32,
+    /// The closures counted in `escaping_closure_depth` that escape further
+    /// than another closure's result.
+    borrow_escaping_depth: u32,
     /// Whether each closure on `closure_span_stack` escapes.
     escaping_closure_flags: Vec<bool>,
     /// v2 core §9.1/§9.5: for each enclosing `TaskGroup.spawn` closure, the
@@ -438,7 +442,10 @@ impl<'a> UseClassifier<'a> {
     /// the borrow (§3.7). `|x| x + p.n` copies `p.n`; `size(p)` and
     /// `p.s.len()` capture `p` and `p.s` (B-2026-10-25-20).
     fn note_escaping_borrow_capture(&mut self, place: &Expr) {
-        if self.escaping_closure_depth == 0 || !crate::ownership::core_rules() {
+        // A closure that escapes only as another closure's result copies a
+        // reference whose borrow MIR keeps checking where that result lives
+        // (B-2026-10-24-9); a closure escaping further cannot keep it.
+        if self.borrow_escaping_depth == 0 || !crate::ownership::core_rules() {
             return;
         }
         let mut root = place;
@@ -1494,7 +1501,13 @@ impl<'a> UseClassifier<'a> {
                         .tc
                         .core_escaping_closures
                         .contains(&SpanKey::from_span(&expr.span));
+                let far = escaping
+                    && !self
+                        .tc
+                        .core_closure_result_only
+                        .contains(&SpanKey::from_span(&expr.span));
                 self.escaping_closure_depth += u32::from(escaping);
+                self.borrow_escaping_depth += u32::from(far);
                 self.escaping_closure_flags.push(escaping);
                 let moved: Vec<String> = if crate::ownership::core_rules() {
                     self.tc
@@ -1515,6 +1528,7 @@ impl<'a> UseClassifier<'a> {
                 self.unshadow_locals(shadowed);
                 self.task_moved_captures.pop();
                 self.escaping_closure_depth -= u32::from(escaping);
+                self.borrow_escaping_depth -= u32::from(far);
                 self.escaping_closure_flags.pop();
                 self.closure_local_stack.pop();
                 self.closure_span_stack.pop();

@@ -31,6 +31,11 @@ pub struct CoreEscape {
     /// A named function used as a value in an escaping position, with the
     /// reason: `return tick` takes `tick` as a value (core §14.3, §14.5).
     pub escaping_fn_values: Vec<(Span, String, &'static str)>,
+    /// The closures in [`Self::escaping_closures`] whose only way out is
+    /// being returned from another closure: their result stays where the
+    /// outer closure's caller keeps it, so the borrows they copy are checked
+    /// there (B-2026-10-24-9).
+    pub closure_result_only: FxHashSet<SpanKey>,
 }
 
 /// Per parameter: `Some(true)` for `escaping Fn(..)`, `Some(false)` for a
@@ -237,6 +242,16 @@ impl Walker<'_> {
         }
     }
 
+    fn escapes(&mut self, k: SpanKey, why: &'static str) {
+        if why != CLOSURE_RESULT {
+            self.out.closure_result_only.remove(&k);
+        } else if !self.out.escaping_closures.contains(&k) {
+            self.out.closure_result_only.insert(k);
+        }
+        self.out.escaping_closures.insert(k);
+        self.out.reasons.insert(k, why);
+    }
+
     fn walk_args(&mut self, args: &[CallArg], sig: Option<&Sig>, all: Option<&'static str>) {
         for (i, a) in args.iter().enumerate() {
             let pos = match (all, sig.and_then(|s| s.get(i).copied().flatten())) {
@@ -251,10 +266,7 @@ impl Walker<'_> {
     fn walk_expr(&mut self, e: &Expr, pos: Pos) {
         match &e.kind {
             ExprKind::Identifier(n) => match (self.lookup(n), pos) {
-                (Some(Bound::Closure(k)), Pos::Escape(why)) => {
-                    self.out.escaping_closures.insert(k);
-                    self.out.reasons.insert(k, why);
-                }
+                (Some(Bound::Closure(k)), Pos::Escape(why)) => self.escapes(k, why),
                 (None, Pos::Escape(why)) if why != CLOSURE_RESULT && self.sigs.contains_key(n) => {
                     self.out.escaping_fn_values.push((e.span, n.clone(), why));
                 }
@@ -268,9 +280,7 @@ impl Walker<'_> {
             },
             ExprKind::Closure { params, body, .. } => {
                 if let Pos::Escape(why) = pos {
-                    let k = SpanKey::from_span(&e.span);
-                    self.out.escaping_closures.insert(k);
-                    self.out.reasons.insert(k, why);
+                    self.escapes(SpanKey::from_span(&e.span), why);
                 }
                 let mut scope = FxHashMap::default();
                 for p in params {

@@ -1800,6 +1800,9 @@ pub struct TypeCheckResult {
     /// to a task, passed to an `escaping` parameter), keyed by span. They
     /// capture every place by move. Empty outside the strict commands.
     pub core_escaping_closures: FxHashSet<SpanKey>,
+    /// The closures in [`Self::core_escaping_closures`] that escape only by
+    /// being returned from another closure (B-2026-10-26-9).
+    pub core_closure_result_only: FxHashSet<SpanKey>,
     /// v2 core §9.1/§9.5: places a `TaskGroup.spawn` closure takes by move
     /// because they drop before the group, keyed by the closure's span, each
     /// with the group's name and whether the group is a parameter. Empty
@@ -4126,15 +4129,16 @@ impl<'a> TypeChecker<'a> {
             core_task_moved_captures = self.core_taskgroup_pass(&node_types, true);
             self.core_once_calls = self.emit_core_ref_write_errors(&node_types);
         }
-        let core_escaping_closures = if self.cli_lint_overrides.strict_core {
-            let esc = crate::core_escape::analyze(self.program);
-            for (span, message) in esc.errors {
-                self.type_error(message, span, TypeErrorKind::TypeMismatch);
-            }
-            esc.escaping_closures
-        } else {
-            FxHashSet::default()
-        };
+        let (core_escaping_closures, core_closure_result_only) =
+            if self.cli_lint_overrides.strict_core {
+                let esc = crate::core_escape::analyze(self.program);
+                for (span, message) in esc.errors {
+                    self.type_error(message, span, TypeErrorKind::TypeMismatch);
+                }
+                (esc.escaping_closures, esc.closure_result_only)
+            } else {
+                Default::default()
+            };
         // A library type kept private to its module reads by its path
         // (`std.time.Duration`, B-2026-10-19-10).
         for e in &mut self.errors {
@@ -4168,6 +4172,7 @@ impl<'a> TypeChecker<'a> {
             core_for_into_iter_receivers: self.core_for_into_iter_receivers,
             core_fresh_index_reads: self.index_read_is_fresh_value.clone(),
             core_escaping_closures,
+            core_closure_result_only,
             core_task_moved_captures,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
