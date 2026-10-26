@@ -129,6 +129,7 @@ enum ParseError {
 `Display` for `f32` and `f64` prints the shortest digits that read back as the same value, so float output round-trips:
 - **Always a `.` or an exponent**, so a float never reads as an integer: `println(1.0)` prints `1.0`, `println(0.1)` prints `0.1`, and `println([1.0, 2.5])` prints `[1.0, 2.5]`.
 - **Exponent form when the decimal exponent is below −4 or at least 16**, as Python's `repr` does: `1e16` prints `1e+16`, and `0.00001` prints `1e-05`. Otherwise plain decimal: `0.0001` prints `0.0001`.
+- **A tie goes to the even last digit**, as Python's `repr` does. When two equally short decimals both read back and are equally near the value, the one whose last digit is even is printed: `-75455689800034.625` prints `-75455689800034.62`, not `.63`. Ties occur only where the value has few fraction bits (B-2026-10-23-4, decided 2026-10-26).
 - **The special values** print `NaN`, `inf` and `-inf`.
 
 `to_string()` and f-string interpolation use the same rendering.
