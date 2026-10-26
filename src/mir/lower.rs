@@ -420,6 +420,7 @@ fn lower_program_inner<'a>(
         par_for_task_exprs: FxHashMap::default(),
         counted_whiles: FxHashMap::default(),
         auto_par_wides: FxHashMap::default(),
+        const_lets: FxHashMap::default(),
         next_synthetic_node: u32::MAX - 1,
         auto_par,
         next_synthetic_sym: usize::MAX - 1,
@@ -977,6 +978,11 @@ struct Lcx<'a> {
     /// Each auto-par loop body's signed-sum sites, by the body (see
     /// [`AutoRed::wide`]).
     auto_par_wides: FxHashMap<*const Block, &'a [WideSum<'a>]>,
+    /// A `let` without `mut` whose value is a literal, by its symbol: an
+    /// auto-par task binds it to the constant rather than reading it
+    /// through its environment, so the task's code folds it as the
+    /// sequential loop's does.
+    const_lets: FxHashMap<SymbolId, Const>,
     /// The next id for a node the builder makes up (counting down from
     /// the top, clear of the checker's ids).
     next_synthetic_node: u32,
@@ -4801,7 +4807,10 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn stmt_here(&mut self, s: &'a Stmt) -> R<()> {
         match &s.kind {
             StmtKind::Let {
-                pattern, value, ty, ..
+                is_mut,
+                pattern,
+                value,
+                ty,
             } => {
                 // The value's temporaries are the statement's; the bindings
                 // belong to the enclosing block.
@@ -4859,6 +4868,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.pop_scope()?;
                     self.let_scope = outer;
                     self.declare(l, t);
+                    if !is_mut && !matches!(self.lcx.auto_par, AutoPar::Off) {
+                        if let (Some(c), Some(&sym)) = (
+                            self.constant(value)?,
+                            self.lcx.binding_syms.get(&(pattern.id, name.clone())),
+                        ) {
+                            if c.ty == t {
+                                self.lcx.const_lets.insert(sym, c);
+                            }
+                        }
+                    }
                     return Ok(());
                 }
                 // `let _ = place;` binds nothing, so it moves nothing. A
@@ -19221,6 +19240,24 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => Place::local(env).project(ProjElem::Deref),
         };
         for (k, &(sym, cm, ft)) in job.caps.iter().enumerate() {
+            // An auto-par task's constant capture is the constant (see
+            // `const_lets`): kata 4's bounds, read through the environment,
+            // left its binary search unfolded, 0.38x on one worker.
+            if job.chunk.is_some() && job.fields[k].is_none() {
+                if let Some(c) = self.lcx.const_lets.get(&sym).cloned() {
+                    let vt = match (cm, self.tys().tcx().kind(ft)) {
+                        (CapMode::Ref, HK::Ref(i)) if !job.lent[k] => Some(i),
+                        (CapMode::Value, _) => Some(ft),
+                        _ => None,
+                    };
+                    if vt == Some(c.ty) {
+                        let l = self.temp(c.ty);
+                        self.assign(l, Rvalue::Use(Operand::Const(c)));
+                        self.locals.insert(sym, l);
+                        continue;
+                    }
+                }
+            }
             let p = base.field(k as u32, ft);
             let p = match cm {
                 CapMode::Ref | CapMode::Mut if !job.lent[k] => p.project(ProjElem::Deref),
