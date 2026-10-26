@@ -156,6 +156,16 @@ impl<'ctx> Cx<'ctx, '_> {
             false,
         );
         f.set_subprogram(sp);
+        if line == 0 {
+            // A body the lowering made (a task's root) has no source line,
+            // and its statements none either, so nothing would set a
+            // location; a call with none fails the verifier in a function
+            // with a subprogram. Line 0 says the code is the compiler's
+            // (B-2026-10-26-6).
+            let loc =
+                d.di.create_debug_location(self.llcx, 0, 0, sp.as_debug_info_scope(), None);
+            self.builder.set_current_debug_location(loc);
+        }
         self.debug_at(span);
     }
 
