@@ -2,119 +2,24 @@
 //! LLVM IR module through `LLJITEngine` and exits with the JIT'd
 //! `main`'s return code.
 //!
-//! Two modes:
+//! `karac_jit_runner <ir-path>` runs one IR module and exits with its
+//! `main`'s return code, for `karac run`
+//! (`run_check_cmds::run_ir_via_jit_subprocess_with`) and the corpus
+//! runner's `__mir-llvm-run`. Process termination per run is the
+//! panic-isolation story. The pre-M3 `--repl-mode` and `--test-batch`
+//! modes, persistent engines for the legacy REPL and `karac test`, went
+//! with the legacy pipeline: v2's REPL and test runner run on MIR
+//! (B-2026-10-23-21).
 //!
-//!   - **One-shot** (`karac_jit_runner <ir-path>`): the W3.4 form used
-//!     by `tests/codegen.rs::jit_dispatch` and `cmd_test`'s JIT
-//!     dispatch (slice c.3). Runs one IR module, exits with its
-//!     `main`'s return code. Process termination per cell is the
-//!     panic-isolation story.
-//!
-//!   - **REPL** (`karac_jit_runner --repl-mode`): the Option B
-//!     persistent-subprocess form (slice c-repl.B.A). Holds a single
-//!     `LLJITEngine` across cells; reads framed `cell <id>
-//!     <ir_byte_count>\n<ir bytes>` commands from stdin, installs each
-//!     under its own `ResourceTracker`, redirects stdout/stderr to
-//!     per-cell tempfiles via dup2 so the captured bytes can be
-//!     framed back to the parent. Outcome wire shape:
-//!
-//!         result <id> <exit> <stdout_byte_count> <stderr_byte_count>\n
-//!         <stdout bytes><stderr bytes>
-//!
-//!     `quit\n` shuts down. EOF on stdin shuts down. Panics inside a
-//!     cell terminate the runner (the JIT'd `emit_panic` does
-//!     `printf + exit(1)`); the parent re-spawns and replays prior
-//!     cells if it wants to continue.
-//!
-//! Exit codes (one-shot only — repl mode exits 0 on graceful shutdown):
+//! Exit codes:
 //!   - `0..=N` — whatever the JIT'd `main` returned (0 = success,
 //!     1 = `emit_panic`'s `exit(1)`, other = explicit user return).
 //!   - `2` — helper setup failure (could not read IR, JIT init or
 //!     `main` lookup failed). Diagnostic to stderr.
 
-use std::io::{BufRead, Read, Write};
-use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::Mutex;
 
 use karac::backend::lljit::LLJITEngine;
-
-// ── Panic-salvage for REPL mode (B-2026-07-09-4) ─────────────────────
-//
-// A faulting cell lowers to codegen's `emit_panic` → libc `exit(101)`,
-// which terminates the runner mid-`call_main` — before
-// `capture_via_redirect` restores the fds, reads the per-cell redirect
-// tempfiles, and frames the captured bytes back to the parent. Those
-// bytes (the cell's pre-fault prints AND the `panic at …` message —
-// stdout and stderr respectively, both already landed in the redirect
-// tempfiles by dup2) would be lost, so an interactive faulting cell showed
-// nothing at all.
-//
-// libc `exit` runs `atexit` handlers before terminating, so we register
-// `salvage_faulted_cell_output`: when a cell is in flight (`SALVAGE_ARMED`),
-// it flushes the JIT'd libc stdio, reads the two tempfiles, and writes a
-// `faulted <id> <exit> <stdout_len> <stderr_len>\n<bytes>` frame to the
-// SAVED parent-stdout fd — the original pipe, dup'd aside before the
-// redirect (fd 1 itself is still the tempfile on the fault path, never
-// restored). The parent recognizes `faulted`, surfaces the salvaged
-// output via its existing runner-died path, and re-spawns. Disarmed the
-// instant `call_main` returns normally, so a clean cell's own
-// `write_cell_outcome` stays the only frame.
-static SALVAGE_ARMED: AtomicBool = AtomicBool::new(false);
-static SALVAGE_SAVED_FD: AtomicI32 = AtomicI32::new(-1);
-static SALVAGE_CELL_ID: AtomicU64 = AtomicU64::new(0);
-static SALVAGE_PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
-
-extern "C" fn salvage_faulted_cell_output() {
-    // Only fire when a cell is mid-flight; a clean cell disarms before any
-    // cleanup, and normal runner shutdown never armed. `swap` makes this
-    // idempotent (exactly one salvage).
-    if !SALVAGE_ARMED.swap(false, Ordering::SeqCst) {
-        return;
-    }
-    // Flush the JIT'd libc stdio so the redirect tempfiles hold every byte
-    // (the `panic at …` fprintf may still be buffered at exit time — stderr
-    // is unbuffered on a tty but NOT when dup2'd onto a regular file).
-    unsafe {
-        libc::fflush(std::ptr::null_mut());
-    }
-    let fd = SALVAGE_SAVED_FD.load(Ordering::SeqCst);
-    if fd < 0 {
-        return;
-    }
-    let paths = SALVAGE_PATHS.lock().ok().and_then(|g| g.clone());
-    let (out_path, err_path) = match paths {
-        Some(p) => p,
-        None => return,
-    };
-    let stdout = std::fs::read(&out_path).unwrap_or_default();
-    let stderr = std::fs::read(&err_path).unwrap_or_default();
-    let _ = std::fs::remove_file(&out_path);
-    let _ = std::fs::remove_file(&err_path);
-    let id = SALVAGE_CELL_ID.load(Ordering::SeqCst);
-    // Exit code is emit_panic's `exit(101)` (design.md § Entry Point,
-    // B-2026-08-23-17); frame it as 101. The parent discards this field on
-    // the faulted path — it re-spawns regardless — so it is a record of what
-    // happened, not a control signal.
-    let header = format!("faulted {} 101 {} {}\n", id, stdout.len(), stderr.len());
-    write_all_fd(fd, header.as_bytes());
-    write_all_fd(fd, &stdout);
-    write_all_fd(fd, &stderr);
-}
-
-/// Raw `libc::write` loop to a saved fd — used from the atexit salvage
-/// handler, where the buffered `std::io::Stdout` (and fd 1 itself) point
-/// at the per-cell tempfile, not the parent pipe.
-fn write_all_fd(fd: i32, mut buf: &[u8]) {
-    while !buf.is_empty() {
-        let n = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
-        if n <= 0 {
-            break;
-        }
-        buf = &buf[n as usize..];
-    }
-}
 
 // ── KARAC_SPAWN_SITES stand-ins ──────────────────────────────────────
 // Mirror of the test-binary stand-ins in `tests/codegen.rs` and
@@ -181,7 +86,7 @@ fn restore_default_sigpipe() {}
 
 /// Remove the handoff IR file the spawner left for us, when the spawner asked
 /// us to own it (`KARAC_JIT_IR_UNLINK`, set only by
-/// `run_check_cmds::run_ir_via_jit_subprocess`).
+/// `run_check_cmds::run_ir_via_jit_subprocess_with`).
 ///
 /// B-2026-09-10-10: `oneshot_main` already unlinks, immediately after
 /// `read_to_string`, and that covers every path where this process gets as far
@@ -196,8 +101,7 @@ fn restore_default_sigpipe() {}
 /// with the file still there.
 ///
 /// argv[1] is the path, which is also why this declines a `--`-prefixed first
-/// argument: `--repl-mode` and `--test-batch` name a mode rather than a file,
-/// and their callers manage their own temp paths.
+/// argument: that is a flag, not a file.
 #[cfg(unix)]
 fn unlink_handoff_ir_if_ours() {
     if std::env::var_os("KARAC_JIT_IR_UNLINK").is_none() {
@@ -224,7 +128,7 @@ fn unlink_handoff_ir_if_ours() {
 /// every later timing measurement on the host. That is how it was found.
 ///
 /// The parent forwards SIGINT/SIGTERM/SIGHUP to us (see
-/// `run_check_cmds::run_ir_via_jit_subprocess`), which covers the signals a
+/// `run_check_cmds::run_ir_via_jit_subprocess_with`), which covers the signals a
 /// parent can handle. SIGKILL it cannot, so the child has to notice on its own
 /// — and this watchdog is also the backstop for the parent dying of anything
 /// else at all (its own panic, an OOM kill, the terminal going away), including
@@ -236,8 +140,7 @@ fn unlink_handoff_ir_if_ours() {
 /// the same effect) and it must be armed by the parent between fork and exec,
 /// so it would protect only the call sites that opt in. Reparenting is visible
 /// identically on both platforms with no parent-side cooperation at all, so one
-/// mechanism here covers the one-shot, `--repl-mode` and `--test-batch` entries
-/// and every current and future spawn site. The cost is a sleeping thread and
+/// mechanism here covers every current and future spawn site. The cost is a sleeping thread and
 /// up to one poll interval of latency, which is nothing against a run that was
 /// going to spin forever.
 ///
@@ -308,10 +211,9 @@ fn watch_for_parent_death() {
             // spawner was reaped — pid reuse cannot fake this, because the
             // process we get reparented to already existed under its own pid.
             if unsafe { libc::getppid() } != spawner {
-                // `_exit`, not `exit`: skip atexit handlers (REPL mode
-                // registers one that writes a salvage frame to a parent that
-                // is by definition gone) and skip every destructor in a
-                // process whose JIT'd program is mid-flight on another thread.
+                // `_exit`, not `exit`: skip atexit handlers and every
+                // destructor in a process whose JIT'd program is mid-flight
+                // on another thread.
                 //
                 // 129 is the shell's `128 + SIGHUP` — "the thing this process
                 // was attached to went away", which is exactly what happened.
@@ -330,13 +232,12 @@ fn watch_for_parent_death() {
 fn watch_for_parent_death() {}
 
 fn main() -> ExitCode {
-    // Before anything else, and before any path that runs user code: the
-    // oneshot, `--repl-mode` and `--test-batch` entries all execute JIT'd
-    // programs, so all three need the AOT signal disposition.
+    // Before anything else, and before the JIT'd program runs: it needs the
+    // AOT signal disposition.
     restore_default_sigpipe();
 
-    // Same reasoning, same three entries: a runner whose spawner has died has
-    // nothing left to hand its result to, so none of them should outlive it.
+    // A runner whose spawner has died has nothing left to hand its result
+    // to, so it should not outlive it.
     watch_for_parent_death();
 
     // Belt-and-suspenders: ensure the runtime's `#[no_mangle]` symbol
@@ -344,30 +245,10 @@ fn main() -> ExitCode {
     // JIT's process-symbol-search generator runs `dlsym`.
     let _ = force_link_karac_runtime();
 
-    let mut args = std::env::args();
-    let _prog = args.next();
-    let first = match args.next() {
-        Some(s) => s,
-        None => {
-            eprintln!("karac_jit_runner: missing argv[1] (either an IR path or --repl-mode)");
-            return ExitCode::from(2);
-        }
+    let Some(first) = std::env::args().nth(1).filter(|a| !a.starts_with("--")) else {
+        eprintln!("karac_jit_runner: usage: karac_jit_runner <ir-path>");
+        return ExitCode::from(2);
     };
-
-    if first == "--repl-mode" {
-        return repl_main();
-    }
-
-    if first == "--test-batch" {
-        let prefix = match args.next() {
-            Some(s) => s,
-            None => {
-                eprintln!("karac_jit_runner: --test-batch requires a tempfile path prefix");
-                return ExitCode::from(2);
-            }
-        };
-        return test_batch_main(&prefix);
-    }
 
     oneshot_main(&first)
 }
@@ -381,9 +262,8 @@ fn oneshot_main(ir_path: &str) -> ExitCode {
     // we do, so every interrupted run leaked a `/tmp/karac_run_<pid>_jit.ll`.
     // The bytes are ours the moment the read returns, so unlink here instead
     // and let the parent's own `remove_file` be the no-op it now is. Opt-in via
-    // the env var rather than unconditional: the other one-shot callers
-    // (`tests/codegen.rs::jit_dispatch`, `cmd_test`'s dispatch) pass paths they
-    // manage themselves, and a runner that deletes its caller's files would be
+    // the env var rather than unconditional: the other caller
+    // (`__mir-llvm-run`) passes a path it manages itself, and a runner that deletes its caller's files would be
     // a surprise in the other direction.
     if std::env::var_os("KARAC_JIT_IR_UNLINK").is_some() {
         let _ = std::fs::remove_file(ir_path);
@@ -431,17 +311,15 @@ fn oneshot_main(ir_path: &str) -> ExitCode {
     // program's `println` lowers to libc `fwrite`/`printf` against the
     // process-resolved `stdout` FILE*, which is fully buffered when
     // stdout is a pipe (the norm under `Command::output` capture and
-    // `karac run … | …`). The repl and test-batch modes flush explicitly
-    // via `capture_via_redirect`; the one-shot path had been relying on
-    // libc's implicit at-exit flush instead. That implicit flush does
+    // `karac run … | …`). It had been relying on libc's implicit at-exit
+    // flush. That implicit flush does
     // NOT reliably run here on Linux/glibc — returning `ExitCode` from
     // `main` unwinds through Rust's lang-start rather than a plain libc
     // `exit()`, so the buffered bytes are dropped and every executed
     // program appears to print nothing (empty stdout, correct exit code).
     // macOS masked this. Flush libc's buffers (and Rust's, for symmetry)
     // explicitly so `karac run` and the codegen/lljit E2E suites capture
-    // output on every platform. See `capture_via_redirect`'s matching
-    // `fflush(NULL)`.
+    // output on every platform.
     unsafe {
         libc::fflush(std::ptr::null_mut());
     }
@@ -455,587 +333,6 @@ fn oneshot_main(ir_path: &str) -> ExitCode {
         255
     };
     ExitCode::from(code)
-}
-
-/// REPL mode (slice c-repl.B.A). Persistent engine; reads framed cell
-/// commands from stdin; writes framed responses to stdout. Stdout is
-/// the bidirectional response channel — anything the runner needs to
-/// say *outside* the framed protocol goes to stderr.
-fn repl_main() -> ExitCode {
-    // Register the panic-salvage atexit handler once. It's a no-op unless a
-    // cell is mid-flight (SALVAGE_ARMED), so it's inert for the ready/quit
-    // paths and only fires when a faulting cell's `exit(1)` unwinds here.
-    unsafe {
-        libc::atexit(salvage_faulted_cell_output);
-    }
-
-    let engine = match LLJITEngine::new() {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("karac_jit_runner: LLJITEngine::new: {e}");
-            return ExitCode::from(2);
-        }
-    };
-
-    // Acknowledge readiness so the parent's first send doesn't race
-    // engine init. Parent reads this single line before sending the
-    // first `cell` command.
-    {
-        let stdout = std::io::stdout();
-        let mut stdout_lock = stdout.lock();
-        let _ = writeln!(stdout_lock, "ready");
-        let _ = stdout_lock.flush();
-    }
-
-    // Slice c-repl.B.4: every installed cell's tracker is held for
-    // the session lifetime. Cell N's items stay live so cell N+1
-    // can `declare`-only reference them and the JIT linker resolves
-    // to cell N's definitions. The REPL codegen entry renames
-    // `main` per cell (`cell_main_<id>`) so no symbol collisions.
-    // Pre-B.4 (slice-B.A) the runner removed each prior tracker
-    // before installing the next to clear cell N's `main` — that
-    // forced cell N+1 to re-emit every item the parser saw, defeating
-    // cross-cell amortization. The new model keeps items alive AND
-    // avoids the shadowing requirement.
-    //
-    // The unbounded vec is the v1 simplification: `:reset` /
-    // session shutdown clears everything. Pruning the vec when an
-    // item is shadowed (cell N+1 redefines cell N's `fn foo`) is a
-    // follow-on; today the parser rejects same-scope redeclaration
-    // at typecheck before reaching the runner.
-    let mut cell_trackers: Vec<karac::backend::lljit::ResourceTracker<'_>> = Vec::new();
-
-    let stdin = std::io::stdin();
-    let mut stdin_lock = stdin.lock();
-
-    loop {
-        let mut header = String::new();
-        let n = match stdin_lock.read_line(&mut header) {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("karac_jit_runner: stdin read: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        if n == 0 {
-            // EOF — parent closed stdin. Clean exit.
-            return ExitCode::from(0);
-        }
-        let trimmed = header.trim_end_matches(['\r', '\n']);
-        if trimmed == "quit" {
-            return ExitCode::from(0);
-        }
-
-        // Parse "cell <id> <ir_byte_count>"
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() != 3 || parts[0] != "cell" {
-            write_protocol_error(&format!("unrecognized command: {trimmed:?}"));
-            continue;
-        }
-        let id: u64 = match parts[1].parse() {
-            Ok(v) => v,
-            Err(_) => {
-                write_protocol_error(&format!("bad cell id: {:?}", parts[1]));
-                continue;
-            }
-        };
-        let ir_len: usize = match parts[2].parse() {
-            Ok(v) => v,
-            Err(_) => {
-                write_protocol_error(&format!("bad ir byte count: {:?}", parts[2]));
-                continue;
-            }
-        };
-
-        let mut ir_buf = vec![0u8; ir_len];
-        if let Err(e) = stdin_lock.read_exact(&mut ir_buf) {
-            eprintln!("karac_jit_runner: failed to read {ir_len} IR bytes: {e}");
-            return ExitCode::from(2);
-        }
-        let ir = match String::from_utf8(ir_buf) {
-            Ok(s) => s,
-            Err(_) => {
-                write_cell_setup_error(id, "IR bytes were not valid UTF-8");
-                continue;
-            }
-        };
-
-        // Slice c-repl.B.4: keep every prior cell's tracker alive.
-        // The REPL JIT codegen path now names each cell's `main` as
-        // `cell_main_<id>` (passed through the AST-side
-        // `main_symbol_override`), so multiple cells' main fns
-        // coexist in the JITDylib without collision. Items emitted
-        // by prior cells stay live so cell N+1's `declare`-only
-        // re-references resolve against them, cutting per-cell
-        // codegen + jitlink cost.
-        //
-        // A protocol caller that doesn't use the REPL convention
-        // (existing slice-B.A tests with literal `fn main()`) still
-        // works because their cells' main symbols collide — the
-        // first cell's main wins the JITDylib's first-defined-wins
-        // resolution. For multi-cell sessions the protocol caller
-        // should use the codegen entry that renames main.
-        let (outcome, new_tracker) = run_one_cell(&engine, id, &ir);
-        if let Some(t) = new_tracker {
-            cell_trackers.push(t);
-        }
-        write_cell_outcome(id, &outcome);
-    }
-}
-
-/// Wraps the per-cell install/capture/execute cycle. `setup_err` is
-/// `Some` when something went wrong before `main` could run (IR parse
-/// failed, no `main` symbol, etc.) — caller surfaces it on stderr in
-/// the framed response. Otherwise `exit` is the JIT'd `main`'s return
-/// value.
-struct CellOutcome {
-    exit: i32,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-fn run_one_cell<'a>(
-    engine: &'a LLJITEngine,
-    id: u64,
-    ir: &str,
-) -> (
-    CellOutcome,
-    Option<karac::backend::lljit::ResourceTracker<'a>>,
-) {
-    let tracker = match engine.add_ir_module_with_tracker(ir) {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                CellOutcome {
-                    exit: 2,
-                    stdout: Vec::new(),
-                    stderr: format!("karac_jit_runner: add_ir_module: {e}\n").into_bytes(),
-                },
-                None,
-            );
-        }
-    };
-    publish_spawn_sites(engine);
-    // Slice c-repl.B.4: try the per-cell `cell_main_<id>` symbol
-    // first (the REPL JIT path's amortization-friendly entry shape,
-    // where multiple cells coexist in one JITDylib), then fall back
-    // to the bare "main" name (slice-B.A behavior, still used by the
-    // protocol's existing tests that emit `fn main()` directly).
-    let preferred = format!("cell_main_{id}");
-    let addr = match engine
-        .lookup_address(&preferred)
-        .or_else(|_| engine.lookup_address("main"))
-    {
-        Ok(a) => a,
-        Err(e) => {
-            return (
-                CellOutcome {
-                    exit: 2,
-                    stdout: Vec::new(),
-                    stderr: format!("karac_jit_runner: lookup ({preferred} or main): {e}\n")
-                        .into_bytes(),
-                },
-                Some(tracker),
-            );
-        }
-    };
-
-    // Redirect stdout/stderr to tempfiles so the JIT'd `printf` calls
-    // land in per-cell buffers we can frame back to the parent. See
-    // also `tests/lljit_e2e.rs` for the pre-W3.4 in-process capture
-    // path that this mirrors. `Some(id)` arms the atexit panic-salvage
-    // for this cell (B-2026-07-09-4) so a fault's captured output is
-    // framed back before `exit(1)` tears the runner down.
-    let captured = capture_via_redirect(Some(id), || call_main(addr));
-
-    (
-        CellOutcome {
-            exit: captured.rc,
-            stdout: captured.stdout,
-            stderr: captured.stderr,
-        },
-        // Return the tracker so the caller can release it before
-        // the next cell installs (shadowing the `main` symbol).
-        Some(tracker),
-    )
-}
-
-/// Test-batch mode (cold-start amortization for `karac test`). A single
-/// persistent engine runs every test in the suite, paying LLVM target
-/// init + engine construction ONCE instead of per-test (the one-shot
-/// `karac test` JIT path spawns a fresh runner per test — ~15 ms each,
-/// dominated by that init). Protocol on stdin/stdout, one frame per test:
-///
-///   parent → `test <id> <ir_byte_count>\n<ir bytes>`
-///   runner → `done <id> <rc>\n`   (only on SURVIVAL — the test's `main`
-///                                  returned; rc is its return value)
-///
-/// The test's own stdout/stderr are redirected to parent-known tempfiles
-/// (`<prefix>.<id>.out` / `.err`) for the run's duration, so the parent
-/// reads them whether the runner survives or dies. **Death is the failure
-/// path:** a failing `assert` / contract fault / `unreachable()` lowers to
-/// `emit_panic` → `exit(1)`, which terminates the whole runner — there is
-/// no `done` frame. The parent detects the closed pipe, reads the `.err`
-/// file for the `KARAC_TEST_FAILURE` marker, reaps the real exit code, and
-/// re-spawns a fresh runner for the next test (mirroring the repl client's
-/// re-spawn-on-death). Each test's module is installed under its own
-/// resource tracker and REMOVED after the run (unlike repl mode, which
-/// keeps cells alive for cross-cell symbol resolution) so test N+1's
-/// module — which re-includes the same `main` + user items — installs
-/// without duplicate-symbol collisions.
-fn test_batch_main(prefix: &str) -> ExitCode {
-    let engine = match LLJITEngine::new() {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("karac_jit_runner: LLJITEngine::new: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    {
-        let stdout = std::io::stdout();
-        let mut lock = stdout.lock();
-        let _ = writeln!(lock, "ready");
-        let _ = lock.flush();
-    }
-
-    // The persistent shared module (all the suite's user items + test fns +
-    // the Debugger-Contract globals), installed once via the `module`
-    // command and kept alive for the session. Per-test `main` modules
-    // reference its symbols `declare`-only, so the suite's functions are
-    // JIT-compiled ONCE instead of per test — the cold-start amortization.
-    // Re-sent (and re-installed here, dropping the prior tracker) when the
-    // parent moves to a new source module.
-    // Held in a Vec (rather than `Option`) so `clear()` + `push()` read the
-    // binding — a write-only `Option` reassignment trips `unused_assignments`
-    // since the tracker is kept only for its `Drop`/remove side effect, never
-    // read. At most one element; `clear()` drops the prior module.
-    let mut module_trackers: Vec<karac::backend::lljit::ResourceTracker<'_>> = Vec::new();
-
-    let stdin = std::io::stdin();
-    let mut stdin_lock = stdin.lock();
-    loop {
-        let mut header = String::new();
-        let n = match stdin_lock.read_line(&mut header) {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("karac_jit_runner: stdin read: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        if n == 0 {
-            return ExitCode::from(0); // parent closed stdin — clean exit
-        }
-        let trimmed = header.trim_end_matches(['\r', '\n']);
-        if trimmed == "quit" {
-            return ExitCode::from(0);
-        }
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        // Two commands: `module <ir_len>` installs/replaces the persistent
-        // shared module; `test <id> <ir_len>` installs + runs one per-test
-        // `main` module that references the shared module declare-only.
-        let (kind, id, ir_len): (&str, u64, usize) = match parts.as_slice() {
-            ["module", len] => match len.parse() {
-                Ok(l) => ("module", 0, l),
-                Err(_) => {
-                    write_protocol_error(&format!("bad module ir byte count: {:?}", len));
-                    continue;
-                }
-            },
-            ["test", id, len] => match (id.parse(), len.parse()) {
-                (Ok(i), Ok(l)) => ("test", i, l),
-                _ => {
-                    write_protocol_error(&format!("bad test id/len: {:?}", &parts[1..]));
-                    continue;
-                }
-            },
-            _ => {
-                write_protocol_error(&format!("unrecognized command: {trimmed:?}"));
-                continue;
-            }
-        };
-
-        let mut ir_buf = vec![0u8; ir_len];
-        if let Err(e) = stdin_lock.read_exact(&mut ir_buf) {
-            eprintln!("karac_jit_runner: failed to read {ir_len} IR bytes: {e}");
-            return ExitCode::from(2);
-        }
-        let ir = match String::from_utf8(ir_buf) {
-            Ok(s) => s,
-            Err(_) => {
-                if kind == "module" {
-                    write_protocol_error("module IR not valid UTF-8");
-                } else {
-                    let err_path = format!("{prefix}.{id}.err");
-                    let _ = std::fs::write(&err_path, b"karac_jit_runner: IR not valid UTF-8\n");
-                    write_test_done(id, 2);
-                }
-                continue;
-            }
-        };
-
-        if kind == "module" {
-            // Drop the prior module first (its `Drop`/remove runs here) so
-            // its symbols/globals don't collide with the replacement on a
-            // source-module change.
-            module_trackers.clear();
-            match engine.add_ir_module_with_tracker(&ir) {
-                Ok(t) => {
-                    module_trackers.push(t);
-                    publish_spawn_sites(&engine);
-                    let stdout = std::io::stdout();
-                    let mut lock = stdout.lock();
-                    let _ = writeln!(lock, "moduleok");
-                    let _ = lock.flush();
-                }
-                Err(e) => {
-                    eprintln!("karac_jit_runner: install module: {e}");
-                    let stdout = std::io::stdout();
-                    let mut lock = stdout.lock();
-                    let _ = writeln!(lock, "moduleerr");
-                    let _ = lock.flush();
-                }
-            }
-            continue;
-        }
-
-        let out_path = format!("{prefix}.{id}.out");
-        let err_path = format!("{prefix}.{id}.err");
-        let rc = run_one_test(&engine, &ir, &out_path, &err_path);
-        // Reached only on SURVIVAL (test `main` returned). A failing test
-        // exits the process inside `run_one_test`, so the parent sees the
-        // pipe close instead of this frame.
-        write_test_done(id, rc);
-    }
-}
-
-/// Install `ir` under a fresh tracker, redirect the test's stdout/stderr
-/// to `out_path` / `err_path`, run `main`, restore fds, drop the tracker
-/// (removing the module so the next test's identical symbols don't
-/// collide), and return `main`'s exit code. Does NOT return if the test
-/// faults — `emit_panic` → `exit(1)` tears down the process with the
-/// redirect still in place, leaving the marker in `err_path` for the
-/// parent. A setup failure (bad IR / missing `main`) writes a diagnostic
-/// to `err_path` and returns 2 without running anything.
-/// The symbol a `--test-batch` client emits each test's `main` under.
-const TEST_MAIN_SYMBOL: &str = "__karac_test_entry";
-
-fn run_one_test(engine: &LLJITEngine, ir: &str, out_path: &str, err_path: &str) -> i32 {
-    let tracker = match engine.add_ir_module_with_tracker(ir) {
-        Ok(t) => t,
-        Err(e) => {
-            let _ = std::fs::write(err_path, format!("karac_jit_runner: add_ir_module: {e}\n"));
-            return 2;
-        }
-    };
-    // Spawn-site metadata is published once when the persistent module is
-    // installed (the per-test `main` module suppresses those globals), so
-    // there's no per-test `publish_spawn_sites` here.
-    //
-    // The per-test `main` is emitted under `TEST_MAIN_SYMBOL` (not `main`,
-    // which would collide with the process's C `_main`).
-    let entry = TEST_MAIN_SYMBOL;
-    let addr = match engine.lookup_address(entry) {
-        Ok(a) => a,
-        Err(e) => {
-            let _ = std::fs::write(err_path, format!("karac_jit_runner: lookup {entry}: {e}\n"));
-            let _ = tracker.remove();
-            return 2;
-        }
-    };
-
-    // SAFETY: dup/dup2/close/open are POSIX fd primitives used with valid
-    // arguments; saved fds are closed exactly once after restoration. The
-    // redirect is in place across `call_main`; if the test faults and
-    // `exit()`s, the OS flushes + closes the file fds, so the marker the
-    // test wrote to fd 2 lands in `err_path`.
-    unsafe {
-        libc::fflush(std::ptr::null_mut());
-    }
-    let _ = std::io::stdout().lock().flush();
-    let _ = std::io::stderr().lock().flush();
-
-    let saved_out = unsafe { libc::dup(1) };
-    let saved_err = unsafe { libc::dup(2) };
-    let out_fd = open_trunc_fd(out_path);
-    let err_fd = open_trunc_fd(err_path);
-    if out_fd >= 0 {
-        unsafe { libc::dup2(out_fd, 1) };
-        unsafe { libc::close(out_fd) };
-    }
-    if err_fd >= 0 {
-        unsafe { libc::dup2(err_fd, 2) };
-        unsafe { libc::close(err_fd) };
-    }
-
-    let rc = call_main(addr);
-
-    unsafe {
-        libc::fflush(std::ptr::null_mut());
-        libc::dup2(saved_out, 1);
-        libc::dup2(saved_err, 2);
-        libc::close(saved_out);
-        libc::close(saved_err);
-    }
-    let _ = tracker.remove();
-    rc
-}
-
-/// `open(path, O_WRONLY|O_CREAT|O_TRUNC)` returning the raw fd or -1.
-fn open_trunc_fd(path: &str) -> std::os::fd::RawFd {
-    use std::os::fd::IntoRawFd;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
-    {
-        Ok(f) => f.into_raw_fd(),
-        Err(_) => -1,
-    }
-}
-
-/// Frame a `done <id> <rc>` response on stdout (the protocol channel,
-/// restored to the parent pipe by the time this runs).
-fn write_test_done(id: u64, rc: i32) {
-    let stdout = std::io::stdout();
-    let mut lock = stdout.lock();
-    let _ = writeln!(lock, "done {id} {rc}");
-    let _ = lock.flush();
-}
-
-struct CapturedRun {
-    rc: i32,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-fn capture_via_redirect<F: FnOnce() -> i32>(salvage_id: Option<u64>, f: F) -> CapturedRun {
-    // We use dup2 to redirect fds 1 + 2 to tempfiles. The dance is
-    // safe because all JIT'd printf calls go through libc, which
-    // writes to fd 1 / 2 directly; Rust's `println!` uses its own
-    // buffered stream, but we don't expect the JIT'd code to emit
-    // via that path. Buffers are flushed at both ends of the
-    // redirect.
-
-    // SAFETY: dup/dup2/close are POSIX fd primitives; the calls
-    // below preserve their preconditions (valid fd argument, the
-    // saved fds are closed exactly once after restoration).
-    use std::os::fd::RawFd;
-
-    fn dup_fd(fd: RawFd) -> RawFd {
-        unsafe { libc::dup(fd) }
-    }
-    fn dup2_fd(src: RawFd, dst: RawFd) {
-        unsafe {
-            libc::dup2(src, dst);
-        }
-    }
-    fn close_fd(fd: RawFd) {
-        unsafe {
-            libc::close(fd);
-        }
-    }
-
-    // Flush before redirect so any prior output goes to the real
-    // streams, not the per-cell tempfile.
-    unsafe {
-        libc::fflush(std::ptr::null_mut());
-    }
-    let _ = std::io::stdout().lock().flush();
-    let _ = std::io::stderr().lock().flush();
-
-    let saved_stdout = dup_fd(1);
-    let saved_stderr = dup_fd(2);
-
-    let stdout_tmp = match tempfile_for_redirect("karac_jit_runner_cell_stdout") {
-        Ok(f) => f,
-        Err(e) => {
-            return CapturedRun {
-                rc: 2,
-                stdout: Vec::new(),
-                stderr: format!("karac_jit_runner: stdout tempfile: {e}\n").into_bytes(),
-            };
-        }
-    };
-    let stderr_tmp = match tempfile_for_redirect("karac_jit_runner_cell_stderr") {
-        Ok(f) => f,
-        Err(e) => {
-            return CapturedRun {
-                rc: 2,
-                stdout: Vec::new(),
-                stderr: format!("karac_jit_runner: stderr tempfile: {e}\n").into_bytes(),
-            };
-        }
-    };
-    let stdout_fd = stdout_tmp.fd;
-    let stderr_fd = stderr_tmp.fd;
-    let stdout_path = stdout_tmp.path.clone();
-    let stderr_path = stderr_tmp.path.clone();
-
-    dup2_fd(stdout_fd, 1);
-    dup2_fd(stderr_fd, 2);
-    close_fd(stdout_fd);
-    close_fd(stderr_fd);
-
-    // Arm the atexit panic-salvage (B-2026-07-09-4) for the duration of
-    // `f()`: if `f` faults (`emit_panic` → libc `exit(1)`), the handler
-    // reads these tempfiles and frames them to `saved_stdout` (the parent
-    // pipe) before the process dies. Disarmed the instant `f` returns
-    // normally, below, so a clean cell salvages nothing. Only repl-mode
-    // passes `Some(id)`; the test-batch/one-shot paths pass `None`.
-    if let Some(id) = salvage_id {
-        if let Ok(mut g) = SALVAGE_PATHS.lock() {
-            *g = Some((stdout_path.clone(), stderr_path.clone()));
-        }
-        SALVAGE_SAVED_FD.store(saved_stdout, Ordering::SeqCst);
-        SALVAGE_CELL_ID.store(id, Ordering::SeqCst);
-        SALVAGE_ARMED.store(true, Ordering::SeqCst);
-    }
-
-    let rc = f();
-
-    // Cell survived — disarm before any cleanup so the handler is inert on
-    // the eventual clean shutdown (and doesn't reference freed tempfiles).
-    SALVAGE_ARMED.store(false, Ordering::SeqCst);
-
-    // Flush again so JIT'd output reaches the tempfile before we
-    // restore the saved fds.
-    unsafe {
-        libc::fflush(std::ptr::null_mut());
-    }
-
-    dup2_fd(saved_stdout, 1);
-    dup2_fd(saved_stderr, 2);
-    close_fd(saved_stdout);
-    close_fd(saved_stderr);
-
-    let stdout = std::fs::read(&stdout_path).unwrap_or_default();
-    let stderr = std::fs::read(&stderr_path).unwrap_or_default();
-    let _ = std::fs::remove_file(&stdout_path);
-    let _ = std::fs::remove_file(&stderr_path);
-
-    CapturedRun { rc, stdout, stderr }
-}
-
-struct RedirectTempfile {
-    path: std::path::PathBuf,
-    fd: std::os::fd::RawFd,
-}
-
-fn tempfile_for_redirect(prefix: &str) -> std::io::Result<RedirectTempfile> {
-    use std::os::fd::IntoRawFd;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("{prefix}_{}_{}", std::process::id(), id));
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&path)?;
-    let fd = file.into_raw_fd();
-    Ok(RedirectTempfile { path, fd })
 }
 
 fn publish_spawn_sites(engine: &LLJITEngine) {
@@ -1074,40 +371,6 @@ fn call_main(addr: u64) -> i32 {
         let main_fn: MainFn = std::mem::transmute(addr as usize);
         main_fn()
     }
-}
-
-/// Write a framed result response on fd 1 (stdout). Buffered locally
-/// then written in one shot so the parent's `read` sees the whole
-/// frame.
-fn write_cell_outcome(id: u64, outcome: &CellOutcome) {
-    let header = format!(
-        "result {} {} {} {}\n",
-        id,
-        outcome.exit,
-        outcome.stdout.len(),
-        outcome.stderr.len()
-    );
-    let stdout = std::io::stdout();
-    let mut stdout_lock = stdout.lock();
-    let _ = stdout_lock.write_all(header.as_bytes());
-    let _ = stdout_lock.write_all(&outcome.stdout);
-    let _ = stdout_lock.write_all(&outcome.stderr);
-    let _ = stdout_lock.flush();
-}
-
-fn write_cell_setup_error(id: u64, msg: &str) {
-    let bytes = msg.as_bytes();
-    let header = format!("result {} 2 0 {}\n", id, bytes.len() + 1);
-    let stdout = std::io::stdout();
-    let mut stdout_lock = stdout.lock();
-    let _ = stdout_lock.write_all(header.as_bytes());
-    let _ = stdout_lock.write_all(bytes);
-    let _ = stdout_lock.write_all(b"\n");
-    let _ = stdout_lock.flush();
-}
-
-fn write_protocol_error(msg: &str) {
-    eprintln!("karac_jit_runner: protocol error: {msg}");
 }
 
 /// Opens the libraries of the program's `[link]` table, which `karac` hands

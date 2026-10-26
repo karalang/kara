@@ -4145,14 +4145,14 @@ fn an_orphaned_jit_runner_unlinks_the_handoff_ir_before_exiting() {
         handoff.display()
     );
 
-    // Cell 3: argv[1] is a MODE, not a path, so there is nothing to unlink and
+    // Cell 3: argv[1] is a flag, not a path, so there is nothing to unlink and
     // the neighbouring file must survive.
     write(&handoff, "; placeholder\n");
-    let rc = spawn(&["--repl-mode"], Some(not_our_parent), true);
+    let rc = spawn(&["--not-a-path"], Some(not_our_parent), true);
     assert_eq!(rc, Some(129), "expected the orphan exit path");
     assert!(
         handoff.exists(),
-        "--repl-mode orphan exit removed an unrelated file ({})",
+        "a flag's orphan exit removed an unrelated file ({})",
         handoff.display()
     );
 }
