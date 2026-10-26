@@ -1507,10 +1507,8 @@ fn build_message(frame_dbc: i64, name: own String, length: i64, senders: own Vec
             return Err(fail("Error", f"The signal {s.name} length {s.length} is not greater than 0 in message {name}."));
         }
     }
-    // The root node has no parent multiplexer. (A literal None in both
-    // places trips B-2026-10-24-28 in karac check.)
-    let root: Option[String] = None;
-    let codec = create_codec(sorted, root, None);
+    // The root node has no parent multiplexer.
+    let codec = create_codec(sorted, None, None);
     let m = Msg {
         frame_id: frame_id,
         extended: extended,

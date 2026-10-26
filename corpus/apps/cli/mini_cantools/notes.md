@@ -96,16 +96,20 @@ other parts import); it wrote `expected.out`. `mk.py` wrote the data.
 
 ## Compiler gaps
 
-One, filed as `B-2026-10-24-28` (false positive, open): the codec
-builder is called for the root as `create_codec(sorted, None, None)`, its
-parent a `ref Option[String]` and its page an owned `Option[i64]`, and
-`karac check`, `karac build` and `karac run` refuse it with "cannot move
+One, filed as `B-2026-10-24-28` (false positive): the codec builder is
+called for the root as `create_codec(sorted, None, None)`, its parent a
+`ref Option[String]` and its page an owned `Option[i64]`, and
+`karac check`, `karac build` and `karac run` refused it with "cannot move
 `None` while a borrow into it ... is still live", taking the two literal
-`None`s for one place. `__mir-run` runs it. The port names the first one
+`None`s for one place. `__mir-run` ran it. The port named the first one
 (`let root: Option[String] = None;`). Everything else `karac check`
 flagged, 30 parameter and index moves, `karac fix` fixed; the port then
 matched the oracle on its first run under the MIR interpreter, the LLVM
 backend, the ASan build and the native binary, with nothing on stderr.
+
+Kara fixed B-2026-10-24-28 in f7bccfcbbb, so the call is back to
+`create_codec(sorted, None, None)`. It still matches the oracle on all
+four backends with nothing on stderr (`karac` at 946c6e5575).
 
 ## Scope
 
