@@ -2348,6 +2348,19 @@ impl<'a> OwnershipChecker<'a> {
                 derive_copy.map(|(_, edit)| Box::new(edit))
             };
         }
+        // A move of a string-literal binding that check offers `: Str` for
+        // is gone once it is a `Str`, which is `Copy`: reporting it would
+        // offer a `.clone()` that turns the `Str` back into a `String`
+        // (B-2026-10-25-19).
+        let retyped = &self.typecheck_result.str_retyped_uses;
+        if !retyped.is_empty() {
+            self.errors.retain(|e| {
+                e.kind != OwnershipErrorKind::UseAfterMove
+                    || !(retyped.contains(&SpanKey::from_span(&e.span))
+                        || e.consume_span
+                            .is_some_and(|c| retyped.contains(&SpanKey::from_span(&c))))
+            });
+        }
         let core_errors = self.core_move_errors();
         OwnershipCheckResult {
             param_modes: self.param_modes,

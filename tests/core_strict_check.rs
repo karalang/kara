@@ -14927,3 +14927,76 @@ fn a_nested_derive_fix_is_named_a_first_step() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-25-19: a string-literal `let` used as a `Str` is offered
+/// `: Str`, which makes it `Copy`, so check does not also report its move
+/// (whose `.clone()` fix-it would make it a `String` again). One `karac fix`
+/// run gives a program that checks. A binding that also holds a `String`,
+/// and a plain `String` moved twice, still report the move.
+#[test]
+fn a_str_retyped_literal_let_reports_no_move() {
+    let retyped = "fn take(v: own Vec[(i64, Str)]) -> i64 {\n\
+             v.len()\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let s = \"x\";\n\
+             let a = take(vec![(0, s)]);\n\
+             let b = take(vec![(1, s)]);\n\
+             println(f\"{a} {b}\");\n\
+         }\n";
+    let (dir, path) = fixture("str-retyped-no-move", retyped);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("declare it `s: Str`") && !err.contains("moved here"),
+        "str-retyped-no-move: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    rejected_then_fixed_in(
+        "str-retyped-fixed",
+        retyped,
+        "declare it `s: Str`",
+        "let s: Str",
+        1,
+    );
+    for (tag, src) in [
+        (
+            "str-reassigned-moves",
+            "fn take(v: own Vec[(i64, Str)]) -> i64 {\n\
+             v.len()\n\
+         }\n\
+         \n\
+         fn name() -> String {\n\
+             \"y\".to_string()\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let mut s = \"x\";\n\
+             s = name();\n\
+             let a = take(vec![(0, s)]);\n\
+             let b = take(vec![(1, s)]);\n\
+             println(f\"{a} {b}\");\n\
+         }\n",
+        ),
+        (
+            "string-moves",
+            "fn eat(s: own String) -> i64 {\n\
+             s.len()\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let s = \"x\";\n\
+             let a = eat(s);\n\
+             let b = eat(s);\n\
+             println(f\"{a} {b}\");\n\
+         }\n",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("value 's' moved here"), "{tag}: {err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

@@ -1770,6 +1770,10 @@ pub struct TypeCheckResult {
     /// after it (`Prog { ops: Vec[Op] }` derives `Copy` on `Op`, then `Clone`
     /// on `Prog`, B-2026-10-25-15).
     pub copy_derive_first_steps: FxHashSet<SpanKey>,
+    /// Uses of a string-literal `let` that check offers `: Str` for. A `Str`
+    /// is `Copy`, so a move of it that the ownership pass sees while it is
+    /// still a `String` goes away with that fix (B-2026-10-25-19).
+    pub str_retyped_uses: FxHashSet<SpanKey>,
     /// v2 core (strict commands only): the callee of each call of an
     /// `OnceFn` value. Calling one moves it (§9.6), and the ownership pass
     /// words a second call's E0500 by it.
@@ -3490,6 +3494,8 @@ pub struct TypeChecker<'a> {
     pub(super) str_lit_lets: FxHashMap<String, StrLitLet>,
     /// The spans of identifiers that read a [`StrLitLet`] binding.
     pub(super) str_lit_let_uses: FxHashMap<SpanKey, String>,
+    /// The uses reported for a [`StrLitLet`] that is offered `: Str`.
+    pub(super) str_retyped_uses: FxHashSet<SpanKey>,
     /// The type of a value just checked into a `weak` slot, for typed HIR
     /// (B-2026-10-13-23).
     pub(super) weak_store_actual: Option<Type>,
@@ -3813,6 +3819,7 @@ impl<'a> TypeChecker<'a> {
             iter_let_uses: FxHashMap::default(),
             str_lit_lets: FxHashMap::default(),
             str_lit_let_uses: FxHashMap::default(),
+            str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,
             baked_impls: FxHashSet::default(),
             reported_uninferrable_empty_literal: false,
@@ -4175,6 +4182,7 @@ impl<'a> TypeChecker<'a> {
             clonable_expr_spans,
             copy_derivable_expr_spans,
             copy_derive_first_steps,
+            str_retyped_uses: std::mem::take(&mut self.str_retyped_uses),
             core_once_calls: std::mem::take(&mut self.core_once_calls),
             core_ref_copy_spans: self.core_ref_copy_spans,
             core_consuming_for_iterables: self.core_consuming_for_iterables,
@@ -6469,6 +6477,7 @@ impl<'a> TypeChecker<'a> {
                 };
                 e.message.push_str(&because);
                 if rec.literal_only {
+                    self.str_retyped_uses.insert(SpanKey::from_span(&e.span));
                     e.message.push_str(&format!("; declare it `{name}: Str`"));
                     if i == 0 {
                         e.fix_it = fix.clone();
