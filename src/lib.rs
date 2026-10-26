@@ -219,8 +219,7 @@ pub fn tokenize(source: &str) -> Vec<SpannedToken> {
 /// Parse source code into an AST with error reporting.
 pub fn parse(source: &str) -> ParseResult {
     let tokens = tokenize(source);
-    let parser = Parser::new(tokens);
-    parser.parse()
+    Parser::new(tokens).with_source(source, 0).parse()
 }
 
 /// Like [`parse`], with every span's offset moved up by `base`: text parsed
@@ -232,7 +231,7 @@ pub fn parse_at_offset(source: &str, base: usize) -> ParseResult {
     for t in &mut tokens {
         t.span.offset += base;
     }
-    Parser::new(tokens).parse()
+    Parser::new(tokens).with_source(source, base).parse()
 }
 
 /// Like [`parse`], but for ITEM-ONLY contexts (module files loaded via
@@ -240,7 +239,10 @@ pub fn parse_at_offset(source: &str, base: usize) -> ParseResult {
 /// error instead of synthesizing a script-mode `fn main()`.
 pub fn parse_items_only(source: &str) -> ParseResult {
     let tokens = tokenize(source);
-    Parser::new(tokens).items_only().parse()
+    Parser::new(tokens)
+        .with_source(source, 0)
+        .items_only()
+        .parse()
 }
 
 /// Resolve names in a parsed program.

@@ -385,6 +385,12 @@ pub struct Parser {
     /// recognizers see the same `!` when recovery re-parses it (`expect` and
     /// the prefix parser), and each reported it (B-2026-10-20-5).
     pub(crate) macro_bangs_reported: rustc_hash::FxHashSet<usize>,
+    /// The text the tokens were lexed from, and the offset its first byte
+    /// has in span coordinates, when the caller supplied it
+    /// ([`Self::with_source`]). A fix that moves source text (the
+    /// `format!` rewrite carries each argument into the literal) reads it
+    /// here; without it, that fix is not offered.
+    pub(crate) source: Option<(std::sync::Arc<str>, usize)>,
 }
 
 /// The Rust macros whose name is also a Kāra function, so deleting the `!`
@@ -466,7 +472,15 @@ impl Parser {
             let_pattern: None,
             pattern_muts: Vec::new(),
             macro_bangs_reported: rustc_hash::FxHashSet::default(),
+            source: None,
         }
+    }
+
+    /// Supply the text the tokens came from, whose first byte sits at span
+    /// offset `base`. See [`Self::source`].
+    pub fn with_source(mut self, source: &str, base: usize) -> Self {
+        self.source = Some((std::sync::Arc::from(source), base));
+        self
     }
 
     /// Push an `impl Trait` rejection reason — see
@@ -998,9 +1012,19 @@ impl Parser {
             }
             return;
         }
+        if name == "format" {
+            self.error_at(
+                "Kāra has no macros; `format!(...)` is Rust syntax: write an f-string, \
+                 `f\"{x} and {y}\"`",
+                bang_span,
+            );
+            if let Some(edit) = self.format_macro_rewrite() {
+                self.fix_edits.insert(key, edit);
+            }
+            return;
+        }
         if !MACRO_FUNCTION_TWINS.contains(&name) {
             let instead = match name {
-                "format" => "write an f-string, `f\"{x} and {y}\"`".to_string(),
                 "vec" => "write a list literal, `[a, b]`, or `Vec.new()`".to_string(),
                 _ => format!("there is no `{name}` function, so write it without the macro"),
             };
@@ -1084,6 +1108,131 @@ impl Parser {
                 replacement: " => true, _ => false }".to_string(),
             },
         ])
+    }
+
+    /// The edit that turns `format!("..{}..{:spec}..", a, b)` (the `!` being
+    /// the current token) into `f"..{a}..{b:spec}.."` (B-2026-10-24-12).
+    /// Each `{}` / `{:spec}` hole takes the next argument's text, and `{{` /
+    /// `}}` carry over, since an f-string doubles braces the same way. There
+    /// is no fix when the first argument is not a one-line `"..."` literal,
+    /// when a hole names its argument (`{0}`, `{name}`) or its spec is not
+    /// one an f-string accepts, when the counts disagree, or when an
+    /// argument's text could not sit inside a hole as written (a quote, a
+    /// brace, a `:`, a backslash, a comment or a line break in it).
+    fn format_macro_rewrite(&self) -> Option<crate::resolver::TextEdit> {
+        let (source, base) = self.source.as_ref()?;
+        let text = |span: &Span| {
+            source.get(span.offset.checked_sub(*base)?..span.offset - base + span.length)
+        };
+        let name = &self.tokens.get(self.pos.checked_sub(1)?)?.span;
+        if !matches!(self.tokens.get(self.pos + 1)?.token, Token::LeftParen) {
+            return None;
+        }
+        let lit = self.tokens.get(self.pos + 2)?;
+        if !matches!(lit.token, Token::StringLiteral(_)) {
+            return None;
+        }
+        let raw = text(&lit.span)?;
+        let body = raw.strip_prefix('"')?.strip_suffix('"')?;
+        if body.starts_with("\"\"") || body.contains('\n') {
+            return None;
+        }
+        // The argument token runs after the literal, split at depth-0 commas.
+        let mut args: Vec<(Span, Span)> = Vec::new();
+        let mut depth = 0usize;
+        let mut first: Option<Span> = None;
+        let mut last: Option<Span> = None;
+        let mut i = self.pos + 3;
+        let close = loop {
+            let t = self.tokens.get(i)?;
+            match t.token {
+                Token::EOF => return None,
+                Token::RightParen if depth == 0 => break t.span,
+                Token::Comma if depth == 0 => {
+                    if i != self.pos + 3 {
+                        args.push((first.take()?, last.take()?));
+                    }
+                }
+                _ => {
+                    if i == self.pos + 3 {
+                        return None;
+                    }
+                    match t.token {
+                        Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                        Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                            depth = depth.checked_sub(1)?
+                        }
+                        _ => {}
+                    }
+                    first.get_or_insert(t.span);
+                    last = Some(t.span);
+                }
+            }
+            i += 1;
+        };
+        if let (Some(f), Some(l)) = (first, last) {
+            args.push((f, l));
+        }
+        let mut args = args.into_iter().map(|(f, l)| {
+            let start = f.offset.checked_sub(*base)?;
+            let arg = source.get(start..l.offset - base + l.length)?;
+            let bad = ['"', '{', '}', ':', '\\', '\n'];
+            (!arg.contains(bad) && !arg.contains("//") && !arg.contains("/*")).then_some(arg)
+        });
+        let mut out = String::from("f\"");
+        let mut chars = body.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => {
+                    out.push(c);
+                    out.push(chars.next()?);
+                }
+                '{' if chars.peek() == Some(&'{') => {
+                    chars.next();
+                    out.push_str("{{");
+                }
+                '}' if chars.peek() == Some(&'}') => {
+                    chars.next();
+                    out.push_str("}}");
+                }
+                '}' => return None,
+                '{' => {
+                    let mut hole = String::new();
+                    loop {
+                        match chars.next()? {
+                            '}' => break,
+                            '{' => return None,
+                            h => hole.push(h),
+                        }
+                    }
+                    let spec = match hole.strip_prefix(':') {
+                        Some(spec) => {
+                            crate::format_spec::FormatSpec::parse(spec).ok()?;
+                            Some(spec)
+                        }
+                        None if hole.is_empty() => None,
+                        None => return None,
+                    };
+                    out.push('{');
+                    out.push_str(args.next()??);
+                    if let Some(spec) = spec {
+                        out.push(':');
+                        out.push_str(spec);
+                    }
+                    out.push('}');
+                }
+                c => out.push(c),
+            }
+        }
+        if args.next().is_some() {
+            return None;
+        }
+        out.push('"');
+        Some(crate::resolver::TextEdit {
+            offset: name.offset,
+            length: close.offset + close.length - name.offset,
+            replacement: out,
+        })
     }
 
     /// Consume a bracketed group starting at the current token, through its

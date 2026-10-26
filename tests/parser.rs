@@ -13558,8 +13558,9 @@ fn matches_macro_is_rewritten_to_a_match_and_reported_once() {
 
 /// The `!`-deleting fix is only right for a macro whose name is a Kāra
 /// function. Each name in the twin list must resolve, and `format!` (which
-/// has none: Kāra writes an f-string) is named with no fix rather than
-/// rewritten to an undefined `format(...)` (B-2026-10-20-5).
+/// has none: Kāra writes an f-string) is not rewritten to an undefined
+/// `format(...)` (B-2026-10-20-5). Its fix writes the f-string instead
+/// (B-2026-10-24-12, pinned in `tests/format_macro_fix.rs`).
 #[test]
 fn macro_bang_is_deleted_only_when_the_function_exists() {
     let resolves = |name: &str| {
@@ -13593,9 +13594,11 @@ fn macro_bang_is_deleted_only_when_the_function_exists() {
         msgs[0].contains("f-string"),
         "names the Kāra spelling: {msgs:?}"
     );
+    let edits: Vec<_> = result.fix_edits.values().collect();
     assert!(
-        result.fix_edits.is_empty() && result.fix_diffs.is_empty(),
-        "no fix that would leave an undefined `format`: {:?} {:?}",
+        result.fix_diffs.is_empty()
+            && matches!(edits.as_slice(), [e] if e.replacement == "f\"{1}\""),
+        "the fix writes the f-string, not an undefined `format`: {:?} {:?}",
         result.fix_edits,
         result.fix_diffs
     );
