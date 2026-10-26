@@ -7501,8 +7501,9 @@ impl<'a> Interp<'a> {
             }
             ("index" | "index_mut", [key]) if is_map => {
                 // `m[k]`: a missing key panics (design.md § Collection
-                // Core Methods).
+                // Core Methods), saying so (B-2026-10-25-1).
                 let Some(i) = self.table_find(sorted, id, key, key_ty, true)? else {
+                    self.panic_message = Some(KEY_NOT_FOUND.to_string());
                     if self.trace {
                         self.events.push(Event::Abort(AbortReason::Panic));
                     }
@@ -15300,6 +15301,10 @@ struct GroupSlot {
     /// It contains its tasks' panics (`TaskGroup.isolating`, §11.12).
     isolating: bool,
 }
+
+/// What indexing a `Map` with a missing key reports, as the compiled
+/// backend does (B-2026-10-25-1).
+const KEY_NOT_FOUND: &str = "key not found";
 
 /// What an abort for `reason` reports when no message was given.
 fn abort_text(reason: &AbortReason) -> &'static str {

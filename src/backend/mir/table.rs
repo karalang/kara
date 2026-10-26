@@ -670,7 +670,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 let kp = self.key_arg(k, t.key)?;
                 let (at, _) = self.lookup(h, kp, t)?;
                 let found = self.builder.build_is_not_null(at, "").map_err(e)?;
-                self.abort_unless(found, "explicit panic")?;
+                // As the interpreter says it (B-2026-10-25-1).
+                self.abort_unless(found, "key not found")?;
                 let v = self.offset(at, self.val_off(t)?)?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, v.into())?;
