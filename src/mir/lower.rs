@@ -109,6 +109,12 @@ fn reduction_stmt(b: &Block, r: Span) -> Option<&Stmt> {
             } => reduction_stmt(then_block, r)
                 .or_else(|| else_branch.as_deref().and_then(|e| in_expr(e, r))),
             ExprKind::Match { arms, .. } => arms.iter().find_map(|a| in_expr(&a.body, r)),
+            // A reduction in an inner loop (kata 332's `sink`, summed over
+            // each path's characters) is the outer loop's too.
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::For { body, .. } => reduction_stmt(body, r),
             _ => None,
         }
     }

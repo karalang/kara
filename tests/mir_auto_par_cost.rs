@@ -33,7 +33,7 @@ fn main() {
     }
     let t = two(dp);
     let mut out: Vec[i64] = Vec.new();
-    for x in 0..40 {
+    for x in 0..40 { // pixels
         for c in 0..3 { // channels
             let mut s = 0;
             for d in 0..3 {
@@ -149,10 +149,17 @@ fn mir_auto_par_small_work_stays_in_order() {
     let par = interp_run("par", true, true);
     assert_eq!(stdout(&par), want);
     let report = String::from_utf8_lossy(&par.stderr).to_string();
-    let rounds = format!("main@{}", line("rounds"));
+    // The pixel loop's iterations loop, so it runs as tasks, its push in
+    // the channels loop folded in order; until B-2026-10-26-14 the builder
+    // missed a reduction inside an inner loop and kept it in order.
+    let mut tasked = vec![
+        format!("main@{}", line("pixels")),
+        format!("main@{}", line("rounds")),
+    ];
+    tasked.sort();
     assert_eq!(
         listed(&report, "auto-par: loops as tasks: "),
-        std::slice::from_ref(&rounds),
+        tasked,
         "{report}"
     );
     assert!(
@@ -176,13 +183,14 @@ fn mir_auto_par_small_work_stays_in_order() {
         let want = format!("auto-par: in order: {at}: Cost(\"{why}\")");
         assert!(report.lines().any(|l| l == want), "{want} in {report}");
     }
-    // With the size half turned down, the fill, the channels and the two passes
-    // run as tasks too, and the output stays the same.
+    // With the size half turned down, the fill and the two passes run as
+    // tasks too (the channels loop runs inside the pixel loop's tasks), and
+    // the output stays the same.
     let free = interp_run("free", true, false);
     assert_eq!(stdout(&free), want);
     let report = String::from_utf8_lossy(&free.stderr).to_string();
     let loops = listed(&report, "auto-par: loops as tasks: ");
-    for at in ["fill", "channels", "rounds"] {
+    for at in ["fill", "pixels", "rounds"] {
         let at = format!("main@{}", line(at));
         assert!(loops.contains(&at), "{at} in {report}");
     }
@@ -199,6 +207,6 @@ fn mir_auto_par_small_work_stays_in_order() {
         assert_eq!(stdout(&seq), want);
         assert_eq!(stdout(&par), want);
         assert_eq!(stdout(&free), want);
-        assert_eq!(listed(&built, "auto-par: loops as tasks: "), [rounds]);
+        assert_eq!(listed(&built, "auto-par: loops as tasks: "), tasked);
     }
 }
