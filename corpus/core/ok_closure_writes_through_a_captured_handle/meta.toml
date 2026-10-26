@@ -1,0 +1,11 @@
+source = "corpus/core/ok_closure_writes_through_a_captured_handle"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "shared"]
+class = "a"
+expected_from = "spec"
+rules = ["6.2", "9.6"]
+backends = []
+env = {}
+note = "B-2026-10-26-10: a closure that writes a `mut` field of a captured `shared` handle, directly or through a struct field holding one, leaves the capture as it was and is an `Fn`. Expected output worked by hand: f(1) pushes 10 and sets n to 1 (len 1 + 1), f(2) pushes 20 and sets n to 3 (len 2 + 3), so 2 + 5 = 7, then 2 items and n = 3."

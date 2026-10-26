@@ -540,7 +540,7 @@ Pins: `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`, `err_taskgro
 - **`MutFn(A) -> R`** may be called any number of times, and a call may mutate its captures. It can be called only through an access that is unique: an owned binding, an `own` parameter or a `mut ref`. A shared borrow of a `MutFn` (a `ref`, or a bare parameter) cannot call it, which rules out a call re-entering the same closure.
 - **`OnceFn(A) -> R`** may be called once. The call moves the value (§3), so a second call is E0500.
 - **Kinds of closures and functions.**
-  - A closure literal gets the most permissive kind its body allows: `Fn` if it only reads its captures, `MutFn` if it mutates one, `OnceFn` if it moves one out.
+  - A closure literal gets the most permissive kind its body allows: `Fn` if it only reads its captures, `MutFn` if it mutates one, `OnceFn` if it moves one out. Writing a `mut` field through a captured `shared` handle (`cache.n = 1`, `cache.items.push(x)`) leaves the capture, the handle, as it was (§6.2), so it is a read and the closure stays `Fn`; assigning the handle itself mutates it (B-2026-10-26-10).
   - A named function is an `Fn`.
   - An `Fn` may be passed where a `MutFn` or `OnceFn` is expected, and a `MutFn` where an `OnceFn` is expected. Passing a closure where a more permissive kind is expected is an error that names the capture responsible.
 - **Orthogonal parts.** The kind is independent of `escaping` (§9.3) and of the effect clause, so `escaping MutFn(Event) with writes(Log)` is one type.

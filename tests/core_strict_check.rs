@@ -14611,3 +14611,110 @@ fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// B-2026-10-26-10: writing a `mut` field through a captured `shared`
+/// handle leaves the capture, the handle, as it was (§6.2), so the closure
+/// is an `Fn` (§9.6), directly and through a struct field holding a handle.
+/// Writing a field of an owned capture, or assigning the handle itself,
+/// still makes it a `MutFn`.
+#[test]
+fn a_closure_writing_through_a_captured_handle_is_fn() {
+    accepted_and_runs(
+        "handle-write-field",
+        "shared struct C {\n\
+             mut stream: i64,\n\
+         }\n\
+         \n\
+         fn twice(f: Fn(i64) -> i64) -> i64 {\n\
+             f(1) + f(2)\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let cache = C { stream: 0 };\n\
+             println(twice(|i| {\n\
+                 cache.stream = cache.stream + i;\n\
+                 cache.stream\n\
+             }));\n\
+             println(cache.stream);\n\
+         }\n",
+        "4\n3\n",
+    );
+    accepted_and_runs(
+        "handle-write-push",
+        "shared struct Log {\n\
+             mut items: Vec[i64],\n\
+             mut n: i64,\n\
+         }\n\
+         \n\
+         struct Box2 {\n\
+             h: Log,\n\
+         }\n\
+         \n\
+         fn twice(f: Fn(i64) -> i64) -> i64 {\n\
+             f(1) + f(2)\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let log = Log { items: Vec.new(), n: 0 };\n\
+             let b = Box2 { h: log.clone() };\n\
+             println(twice(|i| {\n\
+                 log.items.push(i * 10);\n\
+                 b.h.n = b.h.n + i;\n\
+                 log.items.len() + b.h.n\n\
+             }));\n\
+             println(f\"{log.items.len()} {log.n}\");\n\
+         }\n",
+        "7\n2 3\n",
+    );
+    for (tag, src, name) in [
+        (
+            "owned-field-write",
+            "struct P {\n\
+             mut n: i64,\n\
+         }\n\
+         \n\
+         fn twice(f: Fn(i64) -> i64) -> i64 {\n\
+             f(1) + f(2)\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let mut p = P { n: 0 };\n\
+             println(twice(|i| {\n\
+                 p.n = p.n + i;\n\
+                 p.n\n\
+             }));\n\
+         }\n",
+            "mutates p",
+        ),
+        (
+            "handle-rebind",
+            "shared struct C {\n\
+             mut stream: i64,\n\
+         }\n\
+         \n\
+         fn twice(f: Fn(i64) -> i64) -> i64 {\n\
+             f(1) + f(2)\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let mut cache = C { stream: 0 };\n\
+             println(twice(|i| {\n\
+                 cache = C { stream: i };\n\
+                 cache.stream\n\
+             }));\n\
+         }\n",
+            "mutates cache",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(
+            err.contains(name) && err.contains("MutFn"),
+            "{tag}: expected a MutFn error naming {name} in: {err}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

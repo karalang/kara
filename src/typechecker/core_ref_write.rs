@@ -1534,6 +1534,9 @@ impl Walk<'_, '_> {
         let Some(root) = place_root(p) else {
             return;
         };
+        if self.writes_through_a_handle(p) {
+            return;
+        }
         let depth = if root == "self" {
             0
         } else {
@@ -1548,6 +1551,31 @@ impl Walk<'_, '_> {
         };
         for frame in self.closures.iter_mut().filter(|f| f.0 > depth) {
             frame.1.get_or_insert_with(|| root.to_string());
+        }
+    }
+
+    /// A write into the object behind a `shared` handle (`cache.stream = ..`,
+    /// `cache.items.push(..)`) leaves every captured place as it was: the
+    /// capture is the handle, and any handle may write a `mut` field
+    /// (§6.2), as a borrowed-`self` method does. So it reads the capture,
+    /// and the closure stays an `Fn` (B-2026-10-26-10).
+    fn writes_through_a_handle(&self, place: &Expr) -> bool {
+        let mut p = place;
+        loop {
+            match &p.kind {
+                ExprKind::FieldAccess { object, .. } => {
+                    let mut t = self.node_types.get(&object.id).map(|(t, _)| t);
+                    while let Some(Type::Ref(i) | Type::MutRef(i)) = t {
+                        t = Some(i);
+                    }
+                    if t.is_some_and(|t| self.tc.is_shared_handle(t)) {
+                        return true;
+                    }
+                    p = object;
+                }
+                ExprKind::TupleIndex { object, .. } | ExprKind::Index { object, .. } => p = object,
+                _ => return false,
+            }
         }
     }
 

@@ -1,0 +1,25 @@
+// Core semantics §9.6 with §6.2: writing a `mut` field through a captured
+// `shared` handle reads the capture, so the closure is an `Fn`.
+shared struct Log {
+    mut items: Vec[i64],
+    mut n: i64,
+}
+
+struct Box2 {
+    h: Log,
+}
+
+fn twice(f: Fn(i64) -> i64) -> i64 {
+    f(1) + f(2)
+}
+
+fn main() {
+    let log = Log { items: Vec.new(), n: 0 };
+    let b = Box2 { h: log.clone() };
+    println(twice(|i| {
+        log.items.push(i * 10);
+        b.h.n = b.h.n + i;
+        log.items.len() + b.h.n
+    }));
+    println(f"{log.items.len()} {log.n}");
+}
