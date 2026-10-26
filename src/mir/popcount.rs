@@ -420,13 +420,13 @@ fn rewrite(body: &mut Body, tys: &TyInterner, m: Match) {
 
 #[cfg(test)]
 mod tests {
-    use crate::mir::lower::build_source;
+    use crate::mir::lower::build_sequential_source;
     use crate::mir::lower::tests::run_source;
     use crate::mir::TerminatorKind;
 
     /// Whether `f`'s body calls `count_ones`, which only the rewrite adds.
     fn counts(src: &str, f: &str) -> bool {
-        let l = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let l = build_sequential_source(src).unwrap_or_else(|e| panic!("{e}"));
         let body = l
             .program
             .bodies

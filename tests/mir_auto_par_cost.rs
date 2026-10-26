@@ -65,7 +65,7 @@ fn karac(auto: bool, size: bool) -> Command {
         c.env("KARAC_AUTO_PAR", "1")
             .env("KARAC_AUTO_PAR_DEBUG", "1");
     } else {
-        c.env_remove("KARAC_AUTO_PAR");
+        c.env("KARAC_AUTO_PAR", "0");
     }
     if size {
         c.env_remove("KARAC_AUTO_PAR_SIZE");

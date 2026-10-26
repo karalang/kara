@@ -21982,10 +21982,21 @@ fn user_operator_trait(bin: BinOp) -> Option<(&'static str, &'static str)> {
 }
 
 /// Check one source file, build its MIR and elaborate drops; or the first
-/// stage that refused it.
+/// stage that refused it. Loops and statements run as tasks unless
+/// `KARAC_AUTO_PAR=0`.
 pub fn build_source(src: &str) -> Result<Lowered, String> {
+    build_source_with(src, crate::par_cost::auto_par_enabled())
+}
+
+/// [`build_source`] as `KARAC_AUTO_PAR=0` builds it, for a caller that
+/// reads the sequential MIR without setting the process-wide variable.
+pub fn build_sequential_source(src: &str) -> Result<Lowered, String> {
+    build_source_with(src, false)
+}
+
+fn build_source_with(src: &str, auto_par: bool) -> Result<Lowered, String> {
     let (_, renames) = rename_compiler_name_shadows(src);
-    build_renamed_source(src).map_err(|mut e| {
+    build_renamed_source(src, auto_par).map_err(|mut e| {
         for (new, old) in &renames {
             e = e.replace(new.as_str(), old);
         }
@@ -21993,8 +22004,8 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     })
 }
 
-fn build_renamed_source(src: &str) -> Result<Lowered, String> {
-    if std::env::var("KARAC_AUTO_PAR").as_deref() != Ok("1") {
+fn build_renamed_source(src: &str, auto_par: bool) -> Result<Lowered, String> {
+    if !auto_par {
         return finish_build(lower_source_for_checks(src, false, AutoPar::Off)?);
     }
     // M4 item 14: built once recording the candidates, whose verdicts
@@ -23099,7 +23110,7 @@ fn main() {
         assert_eq!(runs.len(), 1, "{c:?}");
         assert_eq!(runs[0].branches.len(), 5);
         assert!(runs[0].branches.iter().all(|b| !b.is_empty()));
-        let plain = super::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let plain = super::build_sequential_source(src).unwrap_or_else(|e| panic!("{e}"));
         assert!(plain.program.bodies["main"].auto_par_candidates.is_empty());
         assert_eq!(run_source(src), Ok(("12 2\n".to_string(), Some(0))));
     }

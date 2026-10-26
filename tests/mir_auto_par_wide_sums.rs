@@ -32,7 +32,7 @@ fn karac(auto: bool, size: bool) -> Command {
             c.env("KARAC_AUTO_PAR_SIZE", "0");
         }
     } else {
-        c.env_remove("KARAC_AUTO_PAR");
+        c.env("KARAC_AUTO_PAR", "0");
     }
     c
 }

@@ -1009,7 +1009,8 @@ mod tests {
         kind: ParKind,
         branches: &[RangeInclusive<usize>],
     ) -> AutoParVerdict {
-        let mut l = crate::mir::lower::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let mut l =
+            crate::mir::lower::build_sequential_source(src).unwrap_or_else(|e| panic!("{e}"));
         let body = l.program.bodies.get_mut(name).expect("no such body");
         let mut taken = BTreeSet::new();
         let mut out = Vec::new();

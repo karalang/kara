@@ -1,6 +1,6 @@
 //! The M4 ThreadSanitizer lane for the compiled MIR backend
-//! (`karac __mir-llvm-tsan`, item 11), which the pool (`KARAC_THREADS`)
-//! must be clean under before it is on by default.
+//! (`karac __mir-llvm-tsan`, item 11), which the pool (on by default,
+//! `KARAC_THREADS` workers) must be clean under.
 //!
 //! The first two tests prove the instrument reports: hand-written IR in
 //! which two threads write one global goes through

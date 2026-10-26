@@ -385,7 +385,7 @@ fn rewrite(body: &mut Body, table: &Table, idx: u32) {
 
 #[cfg(test)]
 mod tests {
-    use crate::mir::lower::build_source;
+    use crate::mir::lower::build_sequential_source;
     use crate::mir::lower::tests::run_source;
     use crate::mir::{ConstKind, Operand, TerminatorKind};
 
@@ -426,7 +426,7 @@ fn main() {
 
     /// The calls a body makes, by callee name.
     fn calls(src: &str, f: &str) -> Vec<String> {
-        let l = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let l = build_sequential_source(src).unwrap_or_else(|e| panic!("{e}"));
         let body = &l.program.bodies[f];
         body.blocks
             .iter()

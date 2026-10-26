@@ -13,7 +13,7 @@
 //! freed pointer is reported, not only a double free or a leak.
 //!
 //! [`compile_tsan_object`] does the same for ThreadSanitizer, which the pool
-//! (`KARAC_THREADS`) must be clean under before it is on by default. Its
+//! (on by default, `KARAC_THREADS` workers) must be clean under. Its
 //! link takes `-fsanitize=thread`, which picks the TSan-built runtime
 //! archive (`libkarac_runtime_tsan.a`): the pool's lock and queues are
 //! the runtime's, and TSan sees the order they impose only in instrumented

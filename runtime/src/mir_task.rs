@@ -418,10 +418,11 @@ impl Exec {
     }
 }
 
-/// The executor's state (M4 item 10). With one worker, the default, it is
-/// the thread's own, as it always was; under the pool (`KARAC_THREADS`
-/// above 1) it is one for the process, every worker takes the same lock,
-/// and runs its task's poll with the lock released. Both keep the
+/// The executor's state (M4 item 10). With one worker (`KARAC_THREADS=1`,
+/// or one core) it is the thread's own, as it always was; under the pool
+/// (more than one worker, the default) it is one for the process, every
+/// worker takes the same lock, and runs its task's poll with the lock
+/// released. Both keep the
 /// thread-local `RefCell`'s `with` / `borrow_mut` shape it replaced, so a
 /// nested borrow, which panics on one worker, would deadlock on several:
 /// the code never nests one.
@@ -551,7 +552,8 @@ thread_local! {
 static SHARED: LazyLock<ExecLock> = LazyLock::new(ExecLock::new);
 
 /// Whether the pool runs tasks on more than one worker thread: decided
-/// once, from `KARAC_THREADS`, before the first task runs.
+/// once, from `KARAC_THREADS` (else the core count), before the first task
+/// runs.
 #[inline(always)]
 pub(crate) fn pooled() -> bool {
     static MODE: AtomicU8 = AtomicU8::new(0);
@@ -568,14 +570,24 @@ fn pooled_first(mode: &AtomicU8) -> bool {
     let n = std::env::var("KARAC_THREADS")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(1);
+        .unwrap_or_else(default_threads);
     let pooled = n > 1;
     THREADS.store(n.max(1), Ordering::Relaxed);
     mode.store(if pooled { 2 } else { 1 }, Ordering::Relaxed);
     pooled
 }
 
-/// How many workers the pool runs (`KARAC_THREADS`, 1 by default).
+/// The workers a program runs on when `KARAC_THREADS` is unset: one per
+/// core the process may use (M4, Gowtham 2026-10-26); `KARAC_THREADS=1`
+/// opts out. One on wasm, where the pool has no threads to start.
+fn default_threads() -> usize {
+    if cfg!(target_family = "wasm") {
+        return 1;
+    }
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// How many workers the pool runs (`KARAC_THREADS`, else the core count).
 static THREADS: AtomicUsize = AtomicUsize::new(1);
 
 fn threads() -> usize {
@@ -1377,7 +1389,7 @@ thread_local! {
     static WOKEN: std::sync::Arc<AtomicBool> = std::sync::Arc::new(AtomicBool::new(false));
 }
 
-/// Starts the pool's other workers once, under `KARAC_THREADS` above 1.
+/// Starts the pool's other workers once, when it runs more than one.
 fn start_workers() {
     static STARTED: AtomicBool = AtomicBool::new(false);
     if !pooled() || STARTED.swap(true, Ordering::AcqRel) {

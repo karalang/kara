@@ -135,9 +135,9 @@ fn test_auto_par_disabled_is_reflected_in_fanned_out() {
     // codegen checks first — describing a binary that does not exist.
     //
     // Both callers now read `par_cost::auto_par_enabled()`, so they cannot
-    // disagree. This asserts BOTH directions: without the var the loop still
-    // reports fanned out, so the test cannot pass by reporting `false`
-    // unconditionally.
+    // disagree. This asserts BOTH directions: with the var on or unset the
+    // loop still reports fanned out, so the test cannot pass by reporting
+    // `false` unconditionally.
     const SRC: &str = "\n\
 fn work(k: i64) -> i64 {\n\
     let mut acc: i64 = 0;\n\
@@ -159,8 +159,9 @@ fn main() {\n\
     let path = dir.join("ap.kara");
     std::fs::write(&path, SRC).unwrap();
 
-    // `None` = the variable unset, i.e. the default, which is OFF since the
-    // 2026-10-06 v2 redesign (C9); `Some("1")` opts in.
+    // `None` = the variable unset, i.e. the default, which is ON again since
+    // 2026-10-26 (Gowtham, with the pool's per-core default); `Some("0")`
+    // opts out.
     let run = |setting: Option<&str>| -> String {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
         cmd.args(["query", "concurrency", path.to_str().unwrap()]);
@@ -172,29 +173,29 @@ fn main() {\n\
         String::from_utf8_lossy(&out.stdout).to_string()
     };
 
-    let on = run(Some("1"));
-    assert!(
-        on.contains("\"fanned_out\":true"),
-        "with auto-par ON this loop must report fanned out, else the disabled \
-         case below proves nothing; got:\n{on}"
-    );
-
     for (label, setting) in [
-        ("KARAC_AUTO_PAR=0", Some("0")),
+        ("KARAC_AUTO_PAR=1", Some("1")),
         ("KARAC_AUTO_PAR unset", None),
     ] {
-        let off = run(setting);
+        let on = run(setting);
         assert!(
-            !off.contains("\"fanned_out\":true"),
-            "with {label} nothing is dispatched, so no loop may report \
-             fanned_out: true; got:\n{off}"
-        );
-        assert!(
-            off.contains("declined_auto_par_disabled"),
-            "with {label} the report must name the gate that declined it, not \
-             report a cost-model verdict it never reached; got:\n{off}"
+            on.contains("\"fanned_out\":true"),
+            "with {label} this loop must report fanned out, else the disabled \
+             case below proves nothing; got:\n{on}"
         );
     }
+
+    let off = run(Some("0"));
+    assert!(
+        !off.contains("\"fanned_out\":true"),
+        "with KARAC_AUTO_PAR=0 nothing is dispatched, so no loop may report \
+         fanned_out: true; got:\n{off}"
+    );
+    assert!(
+        off.contains("declined_auto_par_disabled"),
+        "with KARAC_AUTO_PAR=0 the report must name the gate that declined it, \
+         not report a cost-model verdict it never reached; got:\n{off}"
+    );
 }
 
 #[test]
