@@ -2238,6 +2238,10 @@ impl<'a> super::TypeChecker<'a> {
         // load/store/compare_exchange/fetch_* family. Extracted to
         // `method_iterator_agg.rs`; it keeps this position in the
         // first-match-wins chain and the block order within it.
+        // A `VecDeque` has only collections.md's surface (B-2026-10-26-18).
+        if let Some(t) = self.reject_vec_method_on_deque(object, method, args, span, &obj_ty) {
+            return t;
+        }
         if let Some(t) = self.try_iterator_agg_atomic_method(object, method, args, span, &obj_ty) {
             return t;
         }

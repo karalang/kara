@@ -15262,3 +15262,79 @@ fn collections_md_library_borrows_hold_in_check() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-26-18: a `VecDeque` has collections.md's surface (857e45825),
+/// not `Vec`'s. The page's `contains`, `remove`, `swap`, `retain`,
+/// `truncate` and `extend` run (written in the library, over the native
+/// ends); `push` / `pop` / `first` / `last` are fixed to the deque's names,
+/// and a method that needs one slice points at `Vec.from_iter(dq)`.
+#[test]
+fn a_vecdeque_has_the_page_surface_not_vecs() {
+    accepted_and_runs(
+        "deque-page-methods",
+        "fn show(d: VecDeque[String]) -> String {\n\
+             let mut s = \"\";\n\
+             for x in d.iter() { s = s + x + \" \"; }\n\
+             s\n\
+         }\n\
+         fn main() {\n\
+             let mut d: VecDeque[String] = VecDeque.new();\n\
+             for w in [\"a\", \"bb\", \"c\", \"dd\"] { d.push_back(w.to_string()); }\n\
+             d.push_front(\"z\".to_string());\n\
+             println(f\"{d.contains(\"c\".to_string())} {d.contains(\"q\".to_string())}\");\n\
+             let r = d.remove(2);\n\
+             println(f\"{r} | {show(d)}\");\n\
+             d.swap(0, 2);\n\
+             println(show(d));\n\
+             d.retain(|x| x.len() == 1);\n\
+             println(show(d));\n\
+             let v: Vec[String] = [\"p\".to_string(), \"qq\".to_string()];\n\
+             d.extend(v);\n\
+             let mut set: SortedSet[String] = SortedSet.new();\n\
+             set.insert(\"s1\".to_string());\n\
+             set.insert(\"s2\".to_string());\n\
+             d.extend(set);\n\
+             let mut e: VecDeque[String] = VecDeque.new();\n\
+             e.push_back(\"e\".to_string());\n\
+             d.extend(e);\n\
+             let w = [\"i1\", \"i2\"];\n\
+             d.extend(w.iter().map(|x| x.to_string()));\n\
+             println(show(d));\n\
+             d.truncate(2);\n\
+             println(f\"{show(d)} {d.len()}\");\n\
+         }\n",
+        "true false\nbb | z a c dd \nc a z dd \nc a z \nc a z p qq s1 s2 e i1 i2 \nc a  2\n",
+    );
+    rejected_then_fixed_in(
+        "deque-vec-names",
+        "fn main() {\n\
+             let mut d: VecDeque[i64] = VecDeque.new();\n\
+             d.push(3);\n\
+             d.push(1);\n\
+             println(f\"{d.first()}\");\n\
+             let x = d.pop();\n\
+             println(f\"{x}\");\n\
+         }\n",
+        "no method 'push' on type 'VecDeque': a `VecDeque` names it `push_back`",
+        "d.pop_back()",
+        1,
+    );
+    let (dir, path) = fixture(
+        "deque-slice-methods",
+        "fn main() {\n\
+             let mut d: VecDeque[i64] = VecDeque.new();\n\
+             d.push_back(3);\n\
+             d.sort();\n\
+             println(f\"{d.max()}\");\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no method 'sort' on type 'VecDeque'")
+            && err.contains("`Vec.from_iter(dq)`")
+            && err.contains("`dq.iter().max()`"),
+        "deque-slice-methods: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

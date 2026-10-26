@@ -20113,28 +20113,41 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<bool> {
         let st = self.expr_ty(&src.value)?;
         let tcx = self.tys().tcx();
-        let HK::Intrinsic {
-            kind: IntrinsicKind::Vec,
-            args: vargs,
-        } = tcx.kind(recv)
-        else {
-            return Ok(false);
+        let (deque, vargs) = match tcx.kind(recv) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => (false, args),
+            // A deque has no native `extend`: every source goes through a
+            // library helper (B-2026-10-26-18).
+            HK::Intrinsic {
+                kind: IntrinsicKind::VecDeque,
+                args,
+            } => (true, args),
+            _ => return Ok(false),
         };
         let elem = tcx.list(vargs)[0];
         let (helper, inst_args) = match tcx.kind(st) {
             HK::Ref(_) | HK::MutRef(_) | HK::Slice { .. } | HK::Array { .. } => return Ok(false),
             HK::Intrinsic { kind, args } => {
                 let sargs = tcx.list(args);
-                let helper = match kind {
-                    IntrinsicKind::Vec => return Ok(false),
-                    IntrinsicKind::Set => "vec_extend_set",
-                    IntrinsicKind::SortedSet => "vec_extend_sorted_set",
-                    IntrinsicKind::VecDeque => "vec_extend_deque",
-                    IntrinsicKind::Map => "vec_extend_map",
-                    IntrinsicKind::SortedMap => "vec_extend_sorted_map",
+                let helper = match (deque, kind) {
+                    (false, IntrinsicKind::Vec) => return Ok(false),
+                    (false, IntrinsicKind::Set) => "vec_extend_set",
+                    (false, IntrinsicKind::SortedSet) => "vec_extend_sorted_set",
+                    (false, IntrinsicKind::VecDeque) => "vec_extend_deque",
+                    (false, IntrinsicKind::Map) => "vec_extend_map",
+                    (false, IntrinsicKind::SortedMap) => "vec_extend_sorted_map",
+                    (true, IntrinsicKind::Vec) => "deque_extend_vec",
+                    (true, IntrinsicKind::Set) => "deque_extend_set",
+                    (true, IntrinsicKind::SortedSet) => "deque_extend_sorted_set",
+                    (true, IntrinsicKind::VecDeque) => "deque_extend_deque",
+                    (true, IntrinsicKind::Map) => "deque_extend_map",
+                    (true, IntrinsicKind::SortedMap) => "deque_extend_sorted_map",
                 };
                 (helper, sargs.to_vec())
             }
+            _ if deque => ("deque_extend_iter", vec![elem, st]),
             _ => ("vec_extend_iter", vec![elem, st]),
         };
         let Some(d) = self.lcx.defs.lookup(0, helper) else {
@@ -21837,6 +21850,13 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "vec_extend_deque",
     "vec_extend_map",
     "vec_extend_sorted_map",
+    "deque_extend_iter",
+    "deque_extend_vec",
+    "deque_extend_set",
+    "deque_extend_sorted_set",
+    "deque_extend_deque",
+    "deque_extend_map",
+    "deque_extend_sorted_map",
     "parse_result_int",
     "parse_result_float",
 ];

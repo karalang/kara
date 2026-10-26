@@ -366,12 +366,13 @@ impl<'a> super::TypeChecker<'a> {
         // Vec.new(); v.extend_from_slice(other);`) gets pinned to the
         // source's element type, mirroring `push`'s behavior.
         if matches!(method, "extend_from_slice" | "extend") && args.len() == 1 {
+            // A `VecDeque` takes `extend` too, not `extend_from_slice`
+            // (collections.md, B-2026-10-26-18).
+            let seq = |name: &str| name == "Vec" || (name == "VecDeque" && method == "extend");
             let element_ty = match obj_ty {
-                Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
-                    Some(args[0].clone())
-                }
+                Type::Named { name, args } if seq(name) && args.len() == 1 => Some(args[0].clone()),
                 Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
-                    Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                    Type::Named { name, args } if seq(name) && args.len() == 1 => {
                         Some(args[0].clone())
                     }
                     _ => None,
@@ -818,6 +819,121 @@ impl<'a> super::TypeChecker<'a> {
         Some(Type::Error)
     }
 
+    /// The `Vec` / `Slice` methods collections.md does not give a
+    /// `VecDeque[T]` (B-2026-10-26-18, the page's surface at 857e45825).
+    /// Refused by name on v2: `push` / `pop` / `first` / `last` are fixed to
+    /// the deque's own `push_back` / `pop_back` / `front` / `back`, and the
+    /// methods that need one contiguous slice point at `Vec.from_iter(dq)`.
+    pub(super) fn reject_vec_method_on_deque(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+        obj_ty: &Type,
+    ) -> Option<Type> {
+        if !self.library_methods_from_source {
+            return None;
+        }
+        let is_deque = |t: &Type| matches!(t, Type::Named { name, .. } if name == "VecDeque");
+        let is_deque = match obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => is_deque(inner),
+            t => is_deque(t),
+        };
+        let vec_surface = super::expr_method_call::VEC_METHOD_NAMES.contains(&method)
+            || super::expr_method_call::SLICE_BUILTIN_METHODS.contains(&method)
+            || super::expr_method_call::SLICE_MUTATING_METHODS.contains(&method);
+        if !is_deque || !vec_surface || DEQUE_METHODS.contains(&method) {
+            return None;
+        }
+        for arg in args {
+            self.infer_expr(&arg.value);
+        }
+        let msg = format!("no method '{method}' on type 'VecDeque'");
+        let renamed = match method {
+            "push" => Some("push_back"),
+            "pop" => Some("pop_back"),
+            "first" => Some("front"),
+            "last" => Some("back"),
+            _ => None,
+        };
+        if let Some(to_name) = renamed {
+            // The edit replaces `.push(` with `.push_back(` (or `.pop()` with
+            // `.pop_back()`), offered only when that text sits there.
+            let object_end = object.span.offset + object.span.length;
+            let fix = match args {
+                [arg] => {
+                    let to = arg.value.span.offset;
+                    (to == object_end + method.len() + 2)
+                        .then(|| (object_end, to, format!(".{to_name}(")))
+                }
+                [] => {
+                    let to = span.offset + span.length;
+                    let from = to.saturating_sub(method.len() + 3);
+                    (from == object_end).then(|| (from, to, format!(".{to_name}()")))
+                }
+                _ => None,
+            };
+            let text = format!("{msg}: a `VecDeque` names it `{to_name}`");
+            match fix {
+                Some((from, to, replacement)) => self.type_error_with_fix_it(
+                    text,
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                    FixIt {
+                        span: Span {
+                            line: object.span.line,
+                            column: object.span.column,
+                            offset: from,
+                            length: to - from,
+                        },
+                        replacement,
+                    },
+                ),
+                None => self.type_error(text, *span, TypeErrorKind::NoMethodFound),
+            }
+            return Some(Type::Error);
+        }
+        let contiguous = matches!(
+            method,
+            "sort"
+                | "sort_by"
+                | "sort_by_key"
+                | "sorted"
+                | "sorted_by"
+                | "is_sorted"
+                | "dedup"
+                | "binary_search"
+                | "reverse"
+                | "as_slice"
+                | "as_slice_mut"
+                | "split_at"
+                | "split_at_mut"
+                | "split_off"
+                | "chunks"
+                | "windows"
+                | "fill"
+                | "to_vec"
+                | "clone_from_slice"
+                | "get_unchecked"
+        );
+        let text = if contiguous {
+            format!(
+                "{msg}: a `VecDeque` is not one contiguous slice; collect it into a `Vec` \
+                 first (`Vec.from_iter(dq)`)"
+            )
+        } else if matches!(
+            method,
+            "max" | "min" | "sum" | "product" | "join" | "concat"
+        ) {
+            format!("{msg}: aggregate its iterator (`dq.iter().{method}()`)")
+        } else {
+            msg
+        };
+        self.type_error(text, *span, TypeErrorKind::NoMethodFound);
+        Some(Type::Error)
+    }
+
     fn reject_extend_from_a_borrow(&mut self, arg: &Expr, inner: &Type) {
         let shown = type_display(inner);
         let postfix = matches!(
@@ -904,3 +1020,32 @@ fn only_number_literals(e: &Expr) -> bool {
         _ => false,
     }
 }
+
+/// collections.md's `VecDeque[T]` table (857e45825) plus iteration, the
+/// traits and the fallible twins the page cites for it.
+const DEQUE_METHODS: &[&str] = &[
+    "back",
+    "clear",
+    "clone",
+    "contains",
+    "extend",
+    "front",
+    "get",
+    "insert",
+    "into_iter",
+    "is_empty",
+    "iter",
+    "iter_mut",
+    "len",
+    "pop_back",
+    "pop_front",
+    "push_back",
+    "push_front",
+    "remove",
+    "retain",
+    "swap",
+    "to_string",
+    "truncate",
+    "try_insert",
+    "try_reserve",
+];

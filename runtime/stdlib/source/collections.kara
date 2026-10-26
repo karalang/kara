@@ -1177,6 +1177,63 @@ fn vec_extend_sorted_map[K, V](v: mut ref Vec[(K, V)], items: own SortedMap[K, V
     }
 }
 
+/// Moves the front `k` elements of `d` to its back, in order.
+fn deque_rotate_front[T](d: mut ref VecDeque[T], k: i64) {
+    let mut i = 0;
+    while i < k {
+        let x = d.pop_front().unwrap();
+        d.push_back(x);
+        i = i + 1;
+    }
+}
+
+// `d.extend(items)` on a `VecDeque`, which has no native `extend`: each
+// item is pushed onto the back in order (B-2026-10-26-18).
+fn deque_extend_iter[T, I: Iterator](d: mut ref VecDeque[T], items: own I) {
+    let mut it = items;
+    while let Some(x) = it.next() {
+        let y: T = iter_read_value(x);
+        d.push_back(y);
+    }
+}
+
+fn deque_extend_vec[T](d: mut ref VecDeque[T], items: own Vec[T]) {
+    for x in items.into_iter() {
+        d.push_back(x);
+    }
+}
+
+fn deque_extend_set[T](d: mut ref VecDeque[T], items: own Set[T]) {
+    for x in items.into_iter() {
+        d.push_back(x);
+    }
+}
+
+fn deque_extend_sorted_set[T](d: mut ref VecDeque[T], items: own SortedSet[T]) {
+    for x in items.into_iter() {
+        d.push_back(x);
+    }
+}
+
+fn deque_extend_deque[T](d: mut ref VecDeque[T], items: own VecDeque[T]) {
+    let mut src = items;
+    while let Some(x) = src.pop_front() {
+        d.push_back(x);
+    }
+}
+
+fn deque_extend_map[K, V](d: mut ref VecDeque[(K, V)], items: own Map[K, V]) {
+    for (k, x) in items.into_iter() {
+        d.push_back((k, x));
+    }
+}
+
+fn deque_extend_sorted_map[K, V](d: mut ref VecDeque[(K, V)], items: own SortedMap[K, V]) {
+    for (k, x) in items.into_iter() {
+        d.push_back((k, x));
+    }
+}
+
 // The collections' `default()`, empty: what `T: Default` calls (`Default`
 // is a builtin, satisfied by a type's `default` associated function), and
 // what a `#[serde(skip)]` collection field reads back as.
@@ -1205,6 +1262,74 @@ impl[T] VecDeque[T] {
             v.push(x);
         }
         v.into_iter()
+    }
+
+    // The rest of collections.md's surface (B-2026-10-26-18), on the
+    // native ends: an element moves by rotating the ring through
+    // `pop_front` / `push_back`, which never reallocates.
+
+    /// Removes and returns the element at `idx` (0 is the front). An index
+    /// out of bounds aborts, as `Vec.remove` does.
+    fn remove(mut ref self, idx: i64) -> T {
+        let n = self.len();
+        if idx < 0 or idx >= n {
+            panic("index out of bounds");
+        }
+        deque_rotate_front(mut self, idx);
+        let out = self.pop_front().unwrap();
+        deque_rotate_front(mut self, n - 1 - idx);
+        out
+    }
+
+    /// Exchanges the elements at `i` and `j`, as `Vec.swap` does.
+    fn swap(mut ref self, i: i64, j: i64) {
+        let n = self.len();
+        if i < 0 or i >= n or j < 0 or j >= n {
+            panic("index out of bounds");
+        }
+        if i == j {
+            return;
+        }
+        let lo = if i < j { i } else { j };
+        let hi = if i < j { j } else { i };
+        let y = self.remove(hi);
+        let x = self.remove(lo);
+        self.insert(lo, y);
+        self.insert(hi, x);
+    }
+
+    /// Keeps the elements `pred` accepts, front to back.
+    fn retain(mut ref self, pred: own MutFn(T) -> bool) {
+        let mut f = pred;
+        let n = self.len();
+        let mut i = 0;
+        while i < n {
+            let x = self.pop_front().unwrap();
+            if f(x) {
+                self.push_back(x);
+            }
+            i = i + 1;
+        }
+    }
+
+    /// Drops the elements from index `len` to the back; nothing when `len`
+    /// is at least the length.
+    fn truncate(mut ref self, len: i64) {
+        while self.len() > len {
+            let _ = self.pop_back();
+        }
+    }
+}
+
+impl[T: PartialEq] VecDeque[T] {
+    /// Whether some element equals `x`.
+    fn contains(ref self, x: ref T) -> bool {
+        for e in self.iter() {
+            if e == x {
+                return true;
+            }
+        }
+        false
     }
 }
 

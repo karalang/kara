@@ -1,6 +1,1 @@
-5
-max=5
-1
-sum=9
-prod=15
-dmax=9
+source.kara:3:9: no method 'max' on a collection: `max` is an iterator method, so write `.iter().max()` (docs/library/iterators.md)
