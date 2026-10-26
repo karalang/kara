@@ -1,0 +1,11 @@
+source = "corpus/core/err_escaping_capture_in_loop"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure"]
+class = "a"
+expected_from = "spec"
+rules = ["9.3", "3.3"]
+backends = []
+env = {}
+note = "B-2026-10-26-11: an escaping closure created inside a loop that captures an outer non-`Copy` binding moves it on every iteration. The expected.out wording of an error pin is guidance, not a byte oracle."

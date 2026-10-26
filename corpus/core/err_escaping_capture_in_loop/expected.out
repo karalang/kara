@@ -1,0 +1,1 @@
+ERROR at line 18: value 'prog' was moved into an escaping closure in an earlier iteration of the loop

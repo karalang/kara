@@ -282,6 +282,10 @@ pub struct Cfg {
     /// `after_call` sibling, where control really goes once the owned
     /// argument is stored (B-2026-10-15-20).
     pub sink_continuations: FxHashMap<BlockId, BlockId>,
+    /// The block each closure literal is created in, keyed by its span: where
+    /// an escaping or task closure moves its captures in (core semantics
+    /// §9.3, B-2026-10-26-11).
+    pub closure_creations: FxHashMap<SpanKey, BlockId>,
 }
 
 impl Cfg {
@@ -345,6 +349,7 @@ pub fn build_cfg_with_classification<'a>(
         exit,
         closure_body_blocks: builder.closure_body_blocks,
         sink_continuations: builder.sink_continuations,
+        closure_creations: builder.closure_creations,
     }
 }
 
@@ -485,6 +490,7 @@ struct CfgBuilder<'a> {
     closure_body_blocks: FxHashSet<BlockId>,
     closure_depth: usize,
     sink_continuations: FxHashMap<BlockId, BlockId>,
+    closure_creations: FxHashMap<SpanKey, BlockId>,
 }
 
 impl<'a> CfgBuilder<'a> {
@@ -499,6 +505,7 @@ impl<'a> CfgBuilder<'a> {
             closure_body_blocks: FxHashSet::default(),
             closure_depth: 0,
             sink_continuations: FxHashMap::default(),
+            closure_creations: FxHashMap::default(),
         }
     }
 
@@ -1513,6 +1520,8 @@ impl<'a> CfgBuilder<'a> {
                 // the other — the predicate fires (round 12.11).
                 let closure_body_block = self.new_block();
                 let after_creation = self.new_block();
+                self.closure_creations
+                    .insert(SpanKey::from_span(&expr.span), cur);
                 self.add_edge(cur, closure_body_block);
                 self.add_edge(cur, after_creation);
                 // Tag the body root + every block minted while lowering `body`

@@ -1,0 +1,21 @@
+// Core semantics §9.3: an escaping closure moves its captures in when it is
+// created, so creating one in a loop moves `prog` again each iteration.
+struct Prog {
+    ops: Vec[i64],
+}
+
+fn size(p: ref Prog) -> i64 {
+    p.ops.len()
+}
+
+fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {
+    Vec[f]
+}
+
+fn main() {
+    let prog = Prog { ops: Vec[1, 2, 3] };
+    for _ in 0..2 {
+        let fs = keep(|x| x + size(prog));
+        println((fs[0])(1));
+    }
+}

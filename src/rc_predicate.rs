@@ -946,13 +946,21 @@ pub(crate) fn loop_of_consume_candidates_from_sites(
     let mut witnesses = HashMap::new();
     for (binding, uses) in sites {
         for (cb, _ci, c) in uses.iter() {
+            if c.kind != UseKind::Consume {
+                continue;
+            }
             // A read an escaping or task closure's capture makes a consume
             // moves nothing on its own: the capture moved in at the
             // closure's creation, outside every loop its body holds
-            // (B-2026-10-25-14).
-            if c.kind != UseKind::Consume || c.capture_scope.is_some() {
-                continue;
-            }
+            // (B-2026-10-25-14). A loop around the creation moves it in
+            // again each iteration (B-2026-10-26-11).
+            let creation = match c.capture_scope {
+                Some(k) => match cfg.closure_creations.get(&k) {
+                    Some(b) if crate::ownership::core_rules() => Some(*b),
+                    _ => continue,
+                },
+                None => None,
+            };
             // Per-loop precision: the Consume fires loop-of-consume
             // iff at least one natural loop contains its block AND
             // that same loop has no Reassign of the binding. A
@@ -964,6 +972,7 @@ pub(crate) fn loop_of_consume_candidates_from_sites(
             // off the call (`cfg.rs`, round 12.12), outside every loop; the
             // call site is the sink's predecessor, which the loop holds.
             let call_site = match cfg.predecessors(*cb).as_slice() {
+                _ if creation.is_some() => creation,
                 [p] if c.consume_origin == ConsumeOrigin::ContainerStore => Some(*p),
                 _ => None,
             };

@@ -14718,3 +14718,153 @@ fn a_closure_writing_through_a_captured_handle_is_fn() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// B-2026-10-26-11: an escaping closure moves its captures in when it is
+/// created (§9.3), so one created in a loop moves an outer non-`Copy`
+/// capture again each iteration (§3.3), in a `for` or a `while`, even when
+/// its body only reads it in a loop of its own. A clone made inside the
+/// loop, a non-escaping closure and a task closure that borrows check and
+/// run.
+#[test]
+fn an_escaping_closure_made_in_a_loop_moves_its_capture_each_time() {
+    accepted_and_runs(
+        "loop-escaping-clone",
+        "#[derive(Clone)]\n\
+         struct Prog {\n\
+             ops: Vec[i64],\n\
+         }\n\
+         \n\
+         fn size(p: ref Prog) -> i64 {\n\
+             p.ops.len()\n\
+         }\n\
+         \n\
+         fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {\n\
+             Vec[f]\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let prog = Prog { ops: Vec[1, 2, 3] };\n\
+             for _ in 0..2 {\n\
+                 let p = prog.clone();\n\
+                 let fs = keep(|x| x + size(p));\n\
+                 println((fs[0])(1));\n\
+             }\n\
+         }\n",
+        "4\n4\n",
+    );
+    accepted_and_runs(
+        "loop-nonescaping",
+        "struct Prog {\n\
+             ops: Vec[i64],\n\
+         }\n\
+         \n\
+         fn size(p: ref Prog) -> i64 {\n\
+             p.ops.len()\n\
+         }\n\
+         \n\
+         fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {\n\
+             Vec[f]\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let prog = Prog { ops: Vec[1, 2, 3] };\n\
+             for _ in 0..2 {\n\
+                 let f = |x: i64| x + size(prog);\n\
+                 println(f(1));\n\
+             }\n\
+         }\n",
+        "4\n4\n",
+    );
+    accepted_and_runs(
+        "loop-spawn-borrows",
+        "struct Prog {\n\
+             ops: Vec[i64],\n\
+         }\n\
+         \n\
+         fn size(p: ref Prog) -> i64 {\n\
+             p.ops.len()\n\
+         }\n\
+         \n\
+         fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {\n\
+             Vec[f]\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let prog = Prog { ops: Vec[1, 2, 3] };\n\
+             let g = TaskGroup.new();\n\
+             let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n\
+             for _ in 0..2 {\n\
+                 hs.push(g.spawn(|| size(prog)));\n\
+             }\n\
+             for h in hs.into_iter() {\n\
+                 println(h.join());\n\
+             }\n\
+         }\n",
+        "3\n3\n",
+    );
+    for (tag, src) in [
+        (
+            "loop-escaping-for",
+            "struct Prog {\n\
+             ops: Vec[i64],\n\
+         }\n\
+         \n\
+         fn size(p: ref Prog) -> i64 {\n\
+             p.ops.len()\n\
+         }\n\
+         \n\
+         fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {\n\
+             Vec[f]\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let prog = Prog { ops: Vec[1, 2, 3] };\n\
+             for _ in 0..2 {\n\
+                 let fs = keep(|x| x + size(prog));\n\
+                 println((fs[0])(1));\n\
+             }\n\
+         }\n",
+        ),
+        (
+            "loop-escaping-while",
+            "struct Prog {\n\
+             ops: Vec[i64],\n\
+         }\n\
+         \n\
+         fn size(p: ref Prog) -> i64 {\n\
+             p.ops.len()\n\
+         }\n\
+         \n\
+         fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {\n\
+             Vec[f]\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let prog = Prog { ops: Vec[1, 2, 3] };\n\
+             let mut i = 0;\n\
+             while i < 2 {\n\
+                 let fs = keep(|x| {\n\
+                     let mut t = x;\n\
+                     for _ in 0..2 {\n\
+                         t += size(prog);\n\
+                     }\n\
+                     t\n\
+                 });\n\
+                 println((fs[0])(1));\n\
+                 i = i + 1;\n\
+             }\n\
+         }\n",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(
+            err.contains("value 'prog' was moved into an escaping closure"),
+            "{tag}: expected the escaping-capture error in: {err}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
