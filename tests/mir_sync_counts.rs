@@ -6,7 +6,8 @@
 //! every `shared` box hold one weak count together (item 10a-2), so a weak
 //! release never reads the strong count, and `Atomic[T]` is sequentially
 //! consistent atomics (item 10a-3). Each program prints the same on the
-//! interpreter, built, and under ASan.
+//! interpreter, built (on one worker and with the executor's state the
+//! pool's, item 10b-2), and under ASan.
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -96,17 +97,23 @@ fn stdout_on_both(name: &str, src: &str) -> String {
         Err(err)
     });
     if linked.is_some() {
-        let out = run(name, Command::new(&exe));
-        assert!(
-            out.status.success(),
-            "{name} built: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert_eq!(
-            String::from_utf8(out.stdout).unwrap(),
-            interp,
-            "{name}: the build and the interpreter differ"
-        );
+        // On one worker, and with the executor's state the pool's
+        // (`KARAC_THREADS` above 1), which must print the same.
+        for threads in ["1", "2"] {
+            let mut cmd = Command::new(&exe);
+            cmd.env("KARAC_THREADS", threads);
+            let out = run(name, cmd);
+            assert!(
+                out.status.success(),
+                "{name} built, KARAC_THREADS={threads}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(out.stdout).unwrap(),
+                interp,
+                "{name}: the build (KARAC_THREADS={threads}) and the interpreter differ"
+            );
+        }
     }
     let _ = std::fs::remove_dir_all(&dir);
     interp

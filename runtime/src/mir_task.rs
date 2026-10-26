@@ -68,9 +68,12 @@
 //! reactor until the nearest deadline, waking only the tasks the events
 //! name.
 
+use std::cell::UnsafeCell;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 /// A task's poll function: resumes the task once, and answers 1 when it
@@ -99,7 +102,8 @@ enum Wait {
 
 /// A `TaskGroup` (B-2026-10-15-30): how many of its tasks may run at once
 /// and how many do. Its handle is a pointer to this, freed once the group
-/// has dropped and its last task has returned.
+/// has dropped and its last task has returned. Its fields change under the
+/// executor's lock.
 struct Group {
     /// Never reused, so a deadline that names a group already freed names
     /// none.
@@ -316,8 +320,229 @@ impl Exec {
     }
 }
 
+/// The executor's state (M4 item 10). With one worker, the default, it is
+/// the thread's own, as it always was; under the pool (`KARAC_THREADS`
+/// above 1) it is one for the process, every worker takes the same lock,
+/// and runs its task's poll with the lock released. Both keep the
+/// thread-local `RefCell`'s `with` / `borrow_mut` shape it replaced, so a
+/// nested borrow, which panics on one worker, would deadlock on several:
+/// the code never nests one.
+///
+/// The lock is a flag of its own rather than a `Mutex`: one worker sets
+/// and clears it with plain stores, so a borrow costs what the `RefCell`'s
+/// did. A `Mutex` on every access cost a one-worker program about 2x on a
+/// task-switching bench, and a choice between a `RefCell` and a `Mutex`
+/// at each access still cost it about 18% in instructions.
+struct ExecLock {
+    held: AtomicBool,
+    exec: UnsafeCell<Exec>,
+}
+
+// SAFETY: `exec` is reached only through a guard, which holds `held`. The
+// raw pointers an `Exec` holds (groups, task frames) are the tasks' own,
+// each touched under the lock or by the one worker running its task.
+unsafe impl Sync for ExecLock {}
+// SAFETY: as for `Sync`: the state moves between workers only under the
+// lock.
+unsafe impl Send for ExecLock {}
+
+impl ExecLock {
+    fn new() -> ExecLock {
+        ExecLock {
+            held: AtomicBool::new(false),
+            exec: UnsafeCell::new(Exec::default()),
+        }
+    }
+
+    /// Takes the lock: with a compare-and-swap under the pool, and on one
+    /// worker by plain stores, refusing a nested borrow as the `RefCell`
+    /// did.
+    #[inline(always)]
+    fn lock(&self, shared: bool) -> ExecGuard<'_> {
+        if shared {
+            self.lock_shared();
+        } else {
+            if self.held.load(Ordering::Relaxed) {
+                nested_borrow();
+            }
+            self.held.store(true, Ordering::Relaxed);
+        }
+        ExecGuard { lock: self }
+    }
+
+    /// Kept out of line, so a one-worker borrow carries none of it.
+    #[inline(never)]
+    fn lock_shared(&self) {
+        let mut spins = 0u32;
+        loop {
+            if !self.held.load(Ordering::Relaxed)
+                && self
+                    .held
+                    .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+            {
+                return;
+            }
+            spins += 1;
+            if spins < 64 {
+                std::hint::spin_loop();
+            } else {
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    /// The lock, unless this worker holds it now. Under the pool another
+    /// worker's hold is waited out: it is only ever brief, and a caller
+    /// that skipped its work then (a group's unregistering) would leave
+    /// the state wrong.
+    fn try_lock(&self, shared: bool) -> Option<ExecGuard<'_>> {
+        if shared {
+            self.lock_shared();
+        } else {
+            if self.held.load(Ordering::Relaxed) {
+                return None;
+            }
+            self.held.store(true, Ordering::Relaxed);
+        }
+        Some(ExecGuard { lock: self })
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn nested_borrow() -> ! {
+    panic!("the task executor's state is already borrowed")
+}
+
+/// A borrow of the executor's state.
+struct ExecGuard<'a> {
+    lock: &'a ExecLock,
+}
+
+impl std::ops::Deref for ExecGuard<'_> {
+    type Target = Exec;
+    #[inline(always)]
+    fn deref(&self) -> &Exec {
+        // SAFETY: the guard holds the lock.
+        unsafe { &*self.lock.exec.get() }
+    }
+}
+
+impl std::ops::DerefMut for ExecGuard<'_> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Exec {
+        // SAFETY: the guard holds the lock, so no other reference exists.
+        unsafe { &mut *self.lock.exec.get() }
+    }
+}
+
+impl Drop for ExecGuard<'_> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        // One store for both kinds: a release store is a plain store on
+        // one worker's own flag.
+        self.lock.held.store(false, Ordering::Release);
+    }
+}
+
 thread_local! {
-    static EXEC: RefCell<Exec> = RefCell::new(Exec::default());
+    static LOCAL: ExecLock = ExecLock::new();
+}
+
+static SHARED: LazyLock<ExecLock> = LazyLock::new(ExecLock::new);
+
+/// Whether the pool runs tasks on more than one worker thread: decided
+/// once, from `KARAC_THREADS`, before the first task runs.
+#[inline(always)]
+fn pooled() -> bool {
+    static MODE: AtomicU8 = AtomicU8::new(0);
+    match MODE.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => pooled_first(&MODE),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn pooled_first(mode: &AtomicU8) -> bool {
+    let n = std::env::var("KARAC_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(1);
+    let pooled = n > 1;
+    mode.store(if pooled { 2 } else { 1 }, Ordering::Relaxed);
+    pooled
+}
+
+/// The executor's state as one access sees it: this thread's own, or the
+/// pool's.
+struct ExecRef {
+    lock: &'static ExecLock,
+    shared: bool,
+}
+
+impl ExecRef {
+    #[inline(always)]
+    fn borrow(&self) -> ExecGuard<'static> {
+        self.lock.lock(self.shared)
+    }
+
+    #[inline(always)]
+    fn borrow_mut(&self) -> ExecGuard<'static> {
+        self.borrow()
+    }
+
+    /// The state, unless this worker holds it now ([`ExecLock::try_lock`]).
+    fn try_borrow_mut(&self) -> Result<ExecGuard<'static>, ()> {
+        self.lock.try_lock(self.shared).ok_or(())
+    }
+}
+
+/// The executor's state, reached as the thread-local `RefCell` it replaced
+/// was: `EXEC.with(|e| e.borrow_mut() ..)`.
+struct ExecCell;
+
+impl ExecCell {
+    #[inline(always)]
+    fn get(&self) -> Option<ExecRef> {
+        if pooled() {
+            return Some(ExecRef {
+                lock: &SHARED,
+                shared: true,
+            });
+        }
+        // SAFETY: the thread's own state lives as long as the thread;
+        // `try_with` fails once its destructors have begun.
+        let lock = LOCAL
+            .try_with(|l| unsafe { &*(l as *const ExecLock) })
+            .ok()?;
+        Some(ExecRef {
+            lock,
+            shared: false,
+        })
+    }
+
+    #[inline(always)]
+    fn with<R>(&self, f: impl FnOnce(&ExecRef) -> R) -> R {
+        match self.get() {
+            Some(e) => f(&e),
+            None => panic!("the task executor's state is gone"),
+        }
+    }
+
+    /// As `with`, failing once the thread's own state is torn down at
+    /// exit.
+    #[inline(always)]
+    fn try_with<R>(&self, f: impl FnOnce(&ExecRef) -> R) -> Result<R, ()> {
+        self.get().map(|e| f(&e)).ok_or(())
+    }
+}
+
+static EXEC: ExecCell = ExecCell;
+
+thread_local! {
     /// Set by a native that answered `IO_NOT_READY` ([`set_again`]) and
     /// taken by the `__io_again` after it.
     static AGAIN: Cell<bool> = const { Cell::new(false) };
@@ -331,6 +556,11 @@ fn bump() {
 /// tasks run at once.
 #[no_mangle]
 pub extern "C" fn karac_mir_group_new(limit: i64) -> *mut u8 {
+    group_new(limit, false)
+}
+
+/// A group of at most `limit` running tasks, registered.
+fn group_new(limit: i64, isolating: bool) -> *mut u8 {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
         e.group_ids += 1;
@@ -341,7 +571,7 @@ pub extern "C" fn karac_mir_group_new(limit: i64) -> *mut u8 {
             dropped: false,
             owner: e.cur.map_or(0, |c| c.id),
             deadline: None,
-            isolating: false,
+            isolating,
         }));
         let id = e.group_ids;
         e.groups.insert(id, g);
@@ -354,10 +584,7 @@ pub extern "C" fn karac_mir_group_new(limit: i64) -> *mut u8 {
 /// the process.
 #[no_mangle]
 pub extern "C" fn karac_mir_group_isolating(limit: i64) -> *mut u8 {
-    let g = karac_mir_group_new(limit);
-    // SAFETY: just made, and live.
-    unsafe { (*(g as *mut Group)).isolating = true };
-    g
+    group_new(limit, true)
 }
 
 /// A panic (core-semantics §11.12): when the running task is a task of an
@@ -461,11 +688,15 @@ pub unsafe extern "C" fn karac_mir_group_cancel(g: *mut u8) {
 pub unsafe extern "C" fn karac_mir_group_deadline(g: *mut u8, at_ns: i64) {
     let left = at_ns - crate::karac_runtime_clock_monotonic_ns();
     let at = Instant::now() + Duration::from_nanos(left.max(0) as u64);
-    // SAFETY: the caller's contract.
-    let g = unsafe { &mut *(g as *mut Group) };
-    let at = g.deadline.map_or(at, |d| d.min(at));
-    g.deadline = Some(at);
-    EXEC.with(|e| e.borrow_mut().deadlines.push((at, g.id)));
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        // SAFETY: the caller's contract; a group's fields change under the
+        // executor's lock.
+        let g = unsafe { &mut *(g as *mut Group) };
+        let at = g.deadline.map_or(at, |d| d.min(at));
+        g.deadline = Some(at);
+        e.deadlines.push((at, g.id));
+    });
 }
 
 /// A group's drop. Under the executor its tasks have all returned (the
@@ -477,13 +708,16 @@ pub unsafe extern "C" fn karac_mir_group_deadline(g: *mut u8, at_ns: i64) {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_group_drop(g: *mut u8) {
     let g = g as *mut Group;
-    // SAFETY: the caller's contract.
-    unsafe {
-        if (*g).live == 0 {
-            free_group(g);
-        } else {
+    let free = EXEC.with(|e| {
+        let _held = e.borrow_mut();
+        // SAFETY: the caller's contract, under the executor's lock.
+        unsafe {
             (*g).dropped = true;
+            (*g).live == 0
         }
+    });
+    if free {
+        free_group(g);
     }
 }
 
@@ -495,13 +729,16 @@ pub unsafe extern "C" fn karac_mir_group_drop(g: *mut u8) {
 /// `g` is a live group handle.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_ready_group(g: *mut u8, end: u8) -> u8 {
-    // SAFETY: the caller's contract.
-    let g = unsafe { &*(g as *const Group) };
-    let ready = if end != 0 {
-        g.live == 0
-    } else {
-        g.live < g.limit
-    };
+    let ready = EXEC.with(|e| {
+        let _held = e.borrow();
+        // SAFETY: the caller's contract, under the executor's lock.
+        let g = unsafe { &*(g as *const Group) };
+        if end != 0 {
+            g.live == 0
+        } else {
+            g.live < g.limit
+        }
+    });
     note(ready, Wait::Task)
 }
 
@@ -510,12 +747,17 @@ pub unsafe extern "C" fn karac_mir_ready_group(g: *mut u8, end: u8) -> u8 {
 fn task_done(t: &Task) {
     let group = t.group;
     if !group.is_null() {
-        // SAFETY: a group outlives its tasks (`karac_mir_group_drop`).
-        unsafe {
-            (*group).live -= 1;
-            if (*group).dropped && (*group).live == 0 {
-                free_group(group);
+        let free = EXEC.with(|e| {
+            let _held = e.borrow_mut();
+            // SAFETY: a group outlives its tasks (`karac_mir_group_drop`);
+            // its fields change under the executor's lock.
+            unsafe {
+                (*group).live -= 1;
+                (*group).dropped && (*group).live == 0
             }
+        });
+        if free {
+            free_group(group);
         }
     }
     bump();
@@ -751,12 +993,12 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
     b: *mut u8,
 ) {
     let group = group as *mut Group;
-    if !group.is_null() {
-        // SAFETY: the caller's contract.
-        unsafe { (*group).live += 1 };
-    }
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
+        if !group.is_null() {
+            // SAFETY: the caller's contract, under the executor's lock.
+            unsafe { (*group).live += 1 };
+        }
         e.ids += 1;
         let id = e.ids;
         e.queue.push_back(Task {
