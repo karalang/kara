@@ -93,7 +93,7 @@ open). Both of those were dropped. The rest were by hand:
 - A `ref` to a `shared enum` is refused where a handle is wanted
   (B-2026-10-25-12): seven `.clone()`s on a `Val`.
 - The closure-kind check calls three things a consume that move nothing
-  (B-2026-10-25-13, open): a captured parser passed to `g.take`, a
+  (B-2026-10-25-13): a captured parser passed to `g.take`, a
   captured `Val` returned, and `match group` on a captured value. These
   are `.clone()`s and `match ref group`.
 - The regex parser's closure used the compiled program four times, which
@@ -123,6 +123,11 @@ are gone too. The seventh, in `enum_class`'s
 tuple built in a closure to read the `ref Val` as the handle
 (B-2026-10-26-3), fixed in 99e5f3ff2f, so it is gone as well. It still
 matches the oracle on all four backends (`karac` at 98f1efe3fb).
+
+B-2026-10-25-13 was fixed in 2928490eee, so the sixteen `.clone()`s inside
+closures and the `match ref group` are reverted too. Check is clean and
+the output still matches the oracle on all four backends (`karac` at
+8f312bbd5c). The regex parser's cache (B-2026-10-25-14, open) stays.
 
 Later `karac fix` dropped 95 `*`s on `Copy` parts bound out of borrowed
 values, which are copies rather than views (kara B-2026-10-24-36); the

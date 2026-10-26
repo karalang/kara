@@ -2768,7 +2768,7 @@ impl Parser {
     }
 
     fn optional_or(self, default: Val) -> Parser {
-        self.times(0, 1).map(|v| if truthy(v) { at(v, 0) } else { default.clone() })
+        self.times(0, 1).map(|v| if truthy(v) { at(v, 0) } else { default })
     }
 
     fn until(self, other: Parser, min: i64, max: i64, consume_other: bool) -> Parser {
@@ -2845,7 +2845,7 @@ impl Parser {
         let me = self;
         generate(|g| {
             let start = g.take(line_info())?;
-            let body = g.take(me.clone())?;
+            let body = g.take(me)?;
             let end = g.take(line_info())?;
             Some(Out.Value(Val.Tuple(Vec[start, body, end])))
         })
@@ -2979,7 +2979,7 @@ fn seq_kw(parsers: own Vec[(Str, Parser)]) -> Parser {
                 return r;
             }
             at = r.index;
-            values.push((name.clone(), r.value));
+            values.push((name, r.value));
             result = Some(r);
         }
         Res.success(at, Val.Dict(values)).aggregate(result)
@@ -3049,7 +3049,7 @@ fn line_info() -> Parser {
 }
 
 fn success(value: Val) -> Parser {
-    new_parser(|_, index| Res.success(index, value.clone()))
+    new_parser(|_, index| Res.success(index, value))
 }
 
 fn fail(expected: Str) -> Parser {
@@ -3141,7 +3141,7 @@ fn regex_g(exp: Str, flags: i64, group: own Group) -> Parser {
         match cache.search(s, index) {
             Some(found) => {
                 let prog = ref cache.prog;
-                let value = match ref group {
+                let value = match group {
                     Group.Num(g) => group_val(prog, s.chars, found, g),
                     Group.Name(ref name) => group_val(prog, s.chars, found, group_number(prog, name)),
                     Group.Several(ref gs) => Val.Tuple(gs.iter().map(|g| group_val(prog, s.chars, found, *g)).collect()),
@@ -3199,7 +3199,7 @@ fn match_item_desc(item: Val, description: Str) -> Parser {
 fn string_from(strings: own Vec[Str], transform: Transform) -> Parser {
     let mut sorted: Vec[Vec[i64]] = strings.iter().map(|s| codepoints(s.bytes())).collect();
     sorted.sort_by(|a, b| b.len().cmp(a.len()));
-    alt(sorted.into_iter().map(|s| string_text(s, transform.clone())).collect())
+    alt(sorted.into_iter().map(|s| string_text(s, transform)).collect())
 }
 
 fn char_from(chars: Str) -> Parser {
@@ -3300,7 +3300,7 @@ fn from_enum(cls: ref EnumClass, transform: Transform) -> Parser {
         items.push((codepoints(py_str(v).bytes()), Val.Member(cls.name.clone(), n.clone(), v)));
     }
     items.sort_by(|a, b| b.0.len().cmp(a.0.len()));
-    alt(items.into_iter().map(|(value, m)| string_text(value, transform.clone()).result(m)).collect())
+    alt(items.into_iter().map(|(value, m)| string_text(value, transform).result(m)).collect())
 }
 
 
@@ -3457,14 +3457,14 @@ fn sexpr_grammar() -> Grammar {
     let atom = truth | falsity | number | symbol;
     let expr = forward_declaration();
     let form = generate_desc("a form", |g| {
-        g.take(lparen.clone())?;
+        g.take(lparen)?;
         let els = g.take(expr.many())?;
-        g.take(rparen.clone())?;
+        g.take(rparen)?;
         Some(Out.Value(els))
     });
     let quote = generate(|g| {
         g.take(string("'"))?;
-        let e = g.take(expr.clone())?;
+        let e = g.take(expr)?;
         Some(Out.Value(Val.List(Vec[pystr("quote"), e])))
     });
     become_or_panic(expr, form | quote | atom);
@@ -3570,14 +3570,14 @@ fn eval_tokens() -> Grammar {
     });
     let simple = (lparen >> expr << rparen) | number;
     let multiplicative = generate(|g| {
-        let mut res = g.take(simple.clone())?;
+        let mut res = g.take(simple)?;
         let op = match_item(pystr("*")) | match_item(pystr("/"));
         loop {
             let operation = g.take(op | success(pystr("")))?;
             if not truthy(operation) {
                 break;
             }
-            let operand = g.take(simple.clone())?;
+            let operand = g.take(simple)?;
             if is_op(operation, "*") {
                 res = arith("*", res, operand);
             } else if is_op(operation, "/") {
@@ -3587,14 +3587,14 @@ fn eval_tokens() -> Grammar {
         Some(Out.Value(res))
     });
     let additive = generate(|g| {
-        let mut res = g.take(multiplicative.clone())?;
+        let mut res = g.take(multiplicative)?;
         let sign = match_item(pystr("+")) | match_item(pystr("-"));
         loop {
             let operation = g.take(sign | success(pystr("")))?;
             if not truthy(operation) {
                 break;
             }
-            let operand = g.take(multiplicative.clone())?;
+            let operand = g.take(multiplicative)?;
             if is_op(operation, "+") {
                 res = arith("+", res, operand);
             } else if is_op(operation, "-") {
@@ -3780,7 +3780,7 @@ fn query_parser() -> Grammar {
         Some(Out.Value(node))
     });
     let conj = generate(|g| {
-        let first = g.take(unary.clone())?;
+        let first = g.take(unary)?;
         let rest = g.take((tok("AND").optional() >> unary).many())?;
         if not truthy(rest) {
             return Some(Out.Value(first));
@@ -3788,7 +3788,7 @@ fn query_parser() -> Grammar {
         Some(Out.Value(tuple2(pystr("and"), py_add(Val.List(Vec[first]), rest))))
     });
     let disj = generate(|g| {
-        let first = g.take(conj.clone())?;
+        let first = g.take(conj)?;
         let rest = g.take((tok("OR") >> conj).many())?;
         if not truthy(rest) {
             return Some(Out.Value(first));
@@ -3805,7 +3805,7 @@ fn generated_xy(last: Val) -> Parser {
     generate(|g| {
         g.take(string("x"))?;
         g.take(string("y"))?;
-        Some(Out.Value(last.clone()))
+        Some(Out.Value(last))
     })
 }
 
