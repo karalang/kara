@@ -316,6 +316,11 @@ pub struct ParConflict {
 
 /// Compute every body's effects.
 pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
+    analyze_with(program, tys, auto_par::size_gate())
+}
+
+/// [`analyze`], with the size half of the auto-par cost gate on or off.
+pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool) -> EffectReport {
     let a = Analysis { program, tys };
     let names: Vec<&String> = program.bodies.keys().collect();
     let index: BTreeMap<&str, usize> = names
@@ -401,7 +406,7 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
         .values()
         .any(|b| !b.auto_par_candidates.is_empty())
     {
-        let cost = auto_par::Cost::of(&a);
+        let cost = auto_par::Cost::of(&a, size_gate);
         for (i, name) in names.iter().enumerate() {
             let body = &program.bodies[*name];
             for r in &body.auto_par_candidates {

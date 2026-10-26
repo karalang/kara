@@ -53,18 +53,30 @@
 //!   order against one that does something others see, and one that can
 //!   return early against one that also writes what the caller sees
 //!   (through a reference, or a parameter).
-//! - **A statement group must pay for its spawn** (the review thread's
-//!   ruling for item 13, with katas 165, 222 and 2 as pins). Legacy lost
-//!   most where it spawned a group inside a hot function: 318x slower on
-//!   kata 165 and 152x on kata 222. The measure is static: a group runs in
-//!   parallel only when at least two of its statements do real work (a
-//!   loop of their own, or a call that loops or recurses), and only when
-//!   it runs rarely: not inside a loop of its function, and not in a
-//!   function that is recursive or reached from a loop. A loop's cost
-//!   gate is that second half only (its blocks always lie on its own
-//!   cycle): in a function that runs many times, its tasks would be
-//!   spawned again and again (kata 52's recursive search ran 160x slower).
-//!   Otherwise the builder sizes it.
+//! - **A candidate must pay for its tasks** (the review thread's ruling
+//!   for item 13, with katas 165, 222 and 2 as pins: none may run slower
+//!   with auto-par on). The measure is static, in two halves. How often:
+//!   nothing runs as tasks in a function that is recursive or reached
+//!   from a loop, since its tasks would be spawned again and again
+//!   (legacy ran kata 165 318x slower and kata 222 152x, and kata 52's
+//!   recursive search 160x), and no statement group inside a loop of its
+//!   own function. How much, by how deep a body's work nests (its weight:
+//!   0 straight-line, 1 a loop of straight-line iterations, 2 a loop with
+//!   a loop or a looping call in it, or recursion): a loop runs as tasks
+//!   only when its body has weight 1 or more, and a group only when at
+//!   least two of its statements have weight 2. A loop of straight-line
+//!   iterations (a fill, a copy) is too little work for its tasks, and
+//!   the first spawn has a lasting price: one idle thread alone made kata
+//!   2's sequential list loop 1.36x slower (glibc's allocator works
+//!   atomically once a second thread exists, inferred), so building its
+//!   two 100-element inputs as tasks cost more than it saved. A loop
+//!   inside another one is refused too when it makes a literal count of
+//!   trips no greater than the builder's tasks: thumb_render spawned its
+//!   three colour channels as tasks for every pixel, 76x slower on four
+//!   workers. `KARAC_AUTO_PAR_SIZE=0` turns the second half down to the
+//!   gate it replaced: a loop needs no work, a group two statements that
+//!   loop at all.
+//!   Otherwise the builder sizes a loop's tasks.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -154,48 +166,133 @@ pub struct AutoParVerdict {
 
 /// What the cost gate knows about the program's bodies.
 pub(super) struct Cost {
-    /// The blocks of each body that lie on a cycle of its control flow,
-    /// one set per cycle (strongly connected component).
-    cycles: BTreeMap<String, Vec<BTreeSet<BasicBlock>>>,
+    /// The natural loops of each body, one per header.
+    loops: BTreeMap<String, Vec<NatLoop>>,
     /// The bodies each block of a body can run.
     calls: BTreeMap<String, Vec<Vec<String>>>,
-    /// Bodies that loop or recurse, or call one that does.
-    heavy: BTreeSet<String>,
+    /// How deep each body's work nests, up to 2: 0 for straight-line code,
+    /// 1 for a loop whose iterations are straight-line (a fill, a copy, a
+    /// scan), 2 for a loop with a loop in it, or a call to a body that
+    /// loops, and for recursion.
+    weight: BTreeMap<String, u8>,
     /// Bodies that can run many times: recursive, called from a loop, or
     /// called from a body that is.
     hot: BTreeSet<String>,
+    /// Whether the size half of the gate is on (see [`size_gate`]).
+    size: bool,
+}
+
+/// Whether the size half of the cost gate is on. `KARAC_AUTO_PAR_SIZE=0`
+/// turns it down to the gate it replaced (a loop needs no work of its own,
+/// and a group two statements that loop at all), which tests of the
+/// builder's parallel forms use on small loops.
+pub(super) fn size_gate() -> bool {
+    std::env::var("KARAC_AUTO_PAR_SIZE").map_or(true, |v| v != "0")
+}
+
+/// The builder's most tasks for one loop (`AUTO_PAR_TASKS` in `lower.rs`):
+/// a loop inside a loop with no more trips than this is refused.
+const FEW_TRIPS: u128 = 16;
+
+/// The trips of the loop headed by `header` when its bounds are literals:
+/// the header tests `i < bound` (or `i <= bound`), `bound` a literal or a
+/// local written once with one, and `i` written once with a literal (and
+/// otherwise only stepped).
+fn constant_trips(body: &Body, header: BasicBlock) -> Option<u128> {
+    let data = &body.blocks[header.index()];
+    let TerminatorKind::SwitchInt {
+        discr: Operand::Copy(d),
+        ..
+    } = &data.terminator.kind
+    else {
+        return None;
+    };
+    let (op, i, bound) = data.statements.iter().rev().find_map(|s| match &s.kind {
+        StatementKind::Assign(p, Rvalue::BinaryOp(op @ (BinOp::Lt | BinOp::Le), i, b))
+            if p == d =>
+        {
+            Some((*op, i, b))
+        }
+        _ => None,
+    })?;
+    // The literals `l` is written with, and how many other writes it has
+    // (`None` when a call writes it).
+    let writes = |l: Local| -> Option<(Vec<u128>, usize)> {
+        let (mut lits, mut others) = (Vec::new(), 0);
+        for bb in &body.blocks {
+            for s in &bb.statements {
+                match &s.kind {
+                    StatementKind::Assign(p, rv) if p.local == l => match rv {
+                        Rvalue::Use(Operand::Const(Const {
+                            kind: ConstKind::Scalar(v),
+                            ..
+                        })) => lits.push(*v),
+                        _ => others += 1,
+                    },
+                    _ => {}
+                }
+            }
+            if let TerminatorKind::Call { destination, .. } = &bb.terminator.kind {
+                if destination.local == l {
+                    return None;
+                }
+            }
+        }
+        Some((lits, others))
+    };
+    // A literal, or a local written once with one (`stepped`: and maybe
+    // also otherwise, as a counter is).
+    let value = |o: &Operand, stepped: bool| -> Option<u128> {
+        match o {
+            Operand::Const(Const {
+                kind: ConstKind::Scalar(v),
+                ..
+            }) => Some(*v),
+            Operand::Copy(p) if p.projection.is_empty() => match writes(p.local)? {
+                (lits, others) if lits.len() == 1 && (stepped || others == 0) => Some(lits[0]),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    let end = value(bound, false)?;
+    let start = value(i, true)?;
+    let trips = end.checked_sub(start)?;
+    Some(if op == BinOp::Le { trips + 1 } else { trips })
+}
+
+/// A natural loop: its header and every block on a cycle back to it.
+struct NatLoop {
+    header: BasicBlock,
+    blocks: BTreeSet<BasicBlock>,
 }
 
 impl Cost {
-    pub(super) fn of(a: &Analysis) -> Cost {
+    pub(super) fn of(a: &Analysis, size: bool) -> Cost {
+        use crate::mir::counters::{dominators, natural_loops, predecessors};
         let names: Vec<&String> = a.program.bodies.keys().collect();
         let index: BTreeMap<&str, usize> = names
             .iter()
             .enumerate()
             .map(|(i, n)| (n.as_str(), i))
             .collect();
-        let mut cycles = BTreeMap::new();
+        let mut loops = BTreeMap::new();
         let mut calls = BTreeMap::new();
         for n in &names {
             let body = &a.program.bodies[*n];
-            let succ: Vec<Vec<usize>> = body
-                .blocks
-                .iter()
-                .map(|bb| {
-                    bb.terminator
-                        .kind
-                        .successors()
-                        .iter()
-                        .map(|s| s.index())
-                        .collect()
+            let preds = predecessors(body);
+            let idom = dominators(body, &preds);
+            let nat: Vec<NatLoop> = natural_loops(body, &preds, &idom)
+                .into_iter()
+                .map(|l| NatLoop {
+                    header: BasicBlock(l.header as u32),
+                    blocks: (0..l.blocks.len())
+                        .filter(|&b| l.blocks[b])
+                        .map(|b| BasicBlock(b as u32))
+                        .collect(),
                 })
                 .collect();
-            let cyc: Vec<BTreeSet<BasicBlock>> = tarjan(&succ)
-                .into_iter()
-                .filter(|c| c.len() > 1 || succ[c[0]].contains(&c[0]))
-                .map(|c| c.into_iter().map(|b| BasicBlock(b as u32)).collect())
-                .collect();
-            cycles.insert((*n).clone(), cyc);
+            loops.insert((*n).clone(), nat);
             let per: Vec<Vec<String>> = body
                 .blocks
                 .iter()
@@ -216,72 +313,128 @@ impl Cost {
                 out
             })
             .collect();
-        let mut heavy = BTreeSet::new();
-        let mut hot = BTreeSet::new();
+        let mut cost = Cost {
+            loops,
+            calls,
+            weight: BTreeMap::new(),
+            hot: BTreeSet::new(),
+            size,
+        };
         // Callee components come first, so a caller sees its callees' weight.
         for scc in tarjan(&edges) {
             let recursive = scc.len() > 1 || edges[scc[0]].contains(&scc[0]);
-            let loops = scc.iter().any(|&i| !cycles[names[i]].is_empty());
-            let calls_heavy = scc
-                .iter()
-                .any(|&i| edges[i].iter().any(|&j| heavy.contains(names[j])));
-            if recursive || loops || calls_heavy {
-                heavy.extend(scc.iter().map(|&i| names[i].clone()));
+            for &i in &scc {
+                let n = names[i];
+                let w = if recursive {
+                    2
+                } else {
+                    let all: BTreeSet<BasicBlock> = (0..cost.calls[n].len())
+                        .map(|b| BasicBlock(b as u32))
+                        .collect();
+                    cost.weight_of(n, &all)
+                };
+                cost.weight.insert(n.clone(), w);
             }
             if recursive {
-                hot.extend(scc.iter().map(|&i| names[i].clone()));
+                cost.hot.extend(scc.iter().map(|&i| names[i].clone()));
             }
         }
         for n in &names {
-            let looping: BTreeSet<BasicBlock> = cycles[*n].iter().flatten().copied().collect();
-            for (b, cs) in calls[*n].iter().enumerate() {
+            let looping: BTreeSet<BasicBlock> = cost.loops[*n]
+                .iter()
+                .flat_map(|l| l.blocks.iter().copied())
+                .collect();
+            let mut reached = Vec::new();
+            for (b, cs) in cost.calls[*n].iter().enumerate() {
                 if looping.contains(&BasicBlock(b as u32)) {
-                    hot.extend(
+                    reached.extend(
                         cs.iter()
                             .filter(|c| index.contains_key(c.as_str()))
                             .cloned(),
                     );
                 }
             }
+            cost.hot.extend(reached);
         }
-        let mut work: Vec<String> = hot.iter().cloned().collect();
+        let mut work: Vec<String> = cost.hot.iter().cloned().collect();
         while let Some(n) = work.pop() {
             for &j in &edges[index[n.as_str()]] {
-                if hot.insert(names[j].clone()) {
+                if cost.hot.insert(names[j].clone()) {
                     work.push(names[j].clone());
                 }
             }
         }
-        Cost {
-            cycles,
-            calls,
-            heavy,
-            hot,
+        cost
+    }
+
+    /// How deep the work of blocks `set` of body `name` nests, up to 2:
+    /// a loop headed in `set` counts 1, and 2 when another loop or a call
+    /// to a body of weight 1 or more lies in it; a call counts its body's
+    /// weight.
+    fn weight_of(&self, name: &str, set: &BTreeSet<BasicBlock>) -> u8 {
+        let loops: Vec<&NatLoop> = self.loops[name]
+            .iter()
+            .filter(|l| set.contains(&l.header))
+            .collect();
+        let mut w = 0;
+        for l in &loops {
+            let nested = loops
+                .iter()
+                .any(|m| m.header != l.header && l.blocks.contains(&m.header));
+            w = w.max(if nested { 2 } else { 1 });
         }
+        for &b in set {
+            let in_loop = loops.iter().any(|l| l.blocks.contains(&b));
+            for c in self.calls[name].get(b.index()).into_iter().flatten() {
+                let cw = self.weight.get(c).copied().unwrap_or(0);
+                w = w.max((cw + u8::from(in_loop && cw > 0)).min(2));
+            }
+        }
+        w
     }
 
-    /// Does branch `blocks` of a candidate in `name` do real work: a loop
-    /// of its own, or a call into a body that loops or recurses?
-    fn heavy_branch(&self, name: &str, blocks: &[BasicBlock]) -> bool {
-        let own: BTreeSet<BasicBlock> = blocks.iter().copied().collect();
-        self.cycles[name].iter().any(|c| c.is_subset(&own))
-            || blocks.iter().any(|b| {
-                self.calls[name]
-                    .get(b.index())
-                    .is_some_and(|cs| cs.iter().any(|c| self.heavy.contains(c)))
-            })
+    /// Why loop candidate `blocks` of `name` (entry first) does not pay
+    /// for its tasks: a body that neither loops nor calls a body that does
+    /// is too little work for a task, and a loop inside another one with
+    /// no more trips than the builder makes tasks spawns a handful of tiny
+    /// ones on every trip of the loop around it.
+    fn loop_refusal(&self, name: &str, body: &Body, blocks: &[BasicBlock]) -> Option<String> {
+        if self.hot.contains(name) {
+            return Some(format!("{name} is recursive or reached from a loop"));
+        }
+        if !self.size {
+            return None;
+        }
+        let set: BTreeSet<BasicBlock> = blocks.iter().copied().collect();
+        if self.weight_of(name, &set) == 0 {
+            return Some("its body neither loops nor calls a body that does".to_string());
+        }
+        let loops = &self.loops[name];
+        // The candidate's own loop: the innermost headed outside its body
+        // that holds its entry.
+        let own = blocks.first().and_then(|e| {
+            loops
+                .iter()
+                .filter(|l| !set.contains(&l.header) && l.blocks.contains(e))
+                .min_by_key(|l| l.blocks.len())
+        })?;
+        let nested = loops
+            .iter()
+            .any(|m| m.header != own.header && m.blocks.contains(&own.header));
+        let trips = constant_trips(body, own.header)?;
+        (nested && trips <= FEW_TRIPS)
+            .then(|| format!("it is inside a loop and makes {trips} trips"))
     }
 
-    /// Why a candidate in `name` covering `blocks` may run many times: in
-    /// a hot body, or inside a loop of its own body (a cycle through one of
-    /// its blocks and a block outside it).
+    /// Why a statement group in `name` covering `blocks` may run many
+    /// times: in a hot body, or inside a loop of its own body.
     fn hot_reason(&self, name: &str, blocks: &BTreeSet<BasicBlock>) -> Option<String> {
         if self.hot.contains(name) {
             return Some(format!("{name} is recursive or reached from a loop"));
         }
-        self.cycles[name]
+        self.loops[name]
             .iter()
-            .any(|c| !c.is_disjoint(blocks) && !c.is_subset(blocks))
+            .any(|l| !blocks.contains(&l.header) && !l.blocks.is_disjoint(blocks))
             .then(|| "it is inside a loop".to_string())
     }
 }
@@ -471,11 +624,10 @@ pub(super) fn verdict(
                     Some(c) => Err(Refusal::Conflict(c)),
                     None => match stopped(0, 0) {
                         Some(why) => Err(why),
-                        // Its tasks would be spawned again and again.
-                        None if cost.hot.contains(name) => Err(Refusal::Cost(format!(
-                            "{name} is recursive or reached from a loop"
-                        ))),
-                        None => Ok(reductions),
+                        None => match cost.loop_refusal(name, body, &r.branches[0]) {
+                            Some(why) => Err(Refusal::Cost(why)),
+                            None => Ok(reductions),
+                        },
                     },
                 }
             };
@@ -559,12 +711,22 @@ pub(super) fn verdict(
                 let refused = match cost.hot_reason(name, &blocks) {
                     Some(why) => Some(why),
                     None => {
+                        // Off, the size half asks only that the work loop.
+                        let (need, what) = if cost.size {
+                            (2, "nest loops")
+                        } else {
+                            (1, "loop")
+                        };
                         let heavy = g
                             .iter()
-                            .filter(|&&k| cost.heavy_branch(name, &r.branches[k]))
+                            .filter(|&&k| {
+                                let set: BTreeSet<BasicBlock> =
+                                    r.branches[k].iter().copied().collect();
+                                cost.weight_of(name, &set) >= need
+                            })
                             .count();
                         (heavy < 2).then(|| {
-                            format!("{heavy} of its {} statements loop or recurse", g.len())
+                            format!("{heavy} of its {} statements {what} or recurse", g.len())
                         })
                     }
                 };
@@ -811,7 +973,20 @@ mod tests {
     /// `for` and a run of statements. A written `par for` runs its
     /// iterations as tasks (M4 item 14), so it stands for the plain loop
     /// in its place, whose candidate the builder records.
+    ///
+    /// The size half of the cost gate is turned down, so that a small loop
+    /// shows its reductions and conflicts; [`written_sized`] has it on.
     fn written(src: &str) -> Vec<AutoParVerdict> {
+        written_with(src, false)
+    }
+
+    /// [`written`] with the size half of the cost gate on, as a build has
+    /// it by default.
+    fn written_sized(src: &str) -> Vec<AutoParVerdict> {
+        written_with(src, true)
+    }
+
+    fn written_with(src: &str, size: bool) -> Vec<AutoParVerdict> {
         let plain = src.replace("par for ", "    for ");
         let loops: BTreeSet<usize> = src.match_indices("par for ").map(|(i, _)| i + 4).collect();
         let mut l =
@@ -822,7 +997,7 @@ mod tests {
             let blocks = b.par_regions.clone();
             b.auto_par_candidates.extend(blocks);
         }
-        analyze(&l.program, &l.tys).auto_par
+        analyze_with(&l.program, &l.tys, size).auto_par
     }
 
     /// The verdicts on `src` with one candidate in `name` made by source
@@ -858,7 +1033,7 @@ mod tests {
             span: body.span,
             branches: out,
         }];
-        let mut v = analyze(&l.program, &l.tys).auto_par;
+        let mut v = analyze_with(&l.program, &l.tys, false).auto_par;
         assert_eq!(v.len(), 1);
         v.remove(0)
     }
@@ -1283,7 +1458,7 @@ fn main() {{
     /// records itself, one per function named.
     fn recorded_runs(src: &str) -> Vec<AutoParVerdict> {
         let l = crate::mir::lower::build_source_recording(src).unwrap_or_else(|e| panic!("{e}"));
-        analyze(&l.program, &l.tys)
+        analyze_with(&l.program, &l.tys, false)
             .auto_par
             .into_iter()
             .filter(|v| matches!(v.kind, VerdictKind::Statements { .. }))
@@ -1401,19 +1576,29 @@ fn main() {
         assert_eq!(r[0].op, ReduceOp::Op(BinOp::Add));
     }
 
-    /// Two statements that each loop run together; two that only do
-    /// arithmetic stay in order, safe or not, because a spawn would cost
-    /// more than they do.
+    /// Two statements whose work nests (a loop calling a loop) run
+    /// together; two that only do arithmetic stay in order, safe or not,
+    /// because a spawn would cost more than they do, and so do two that
+    /// each make one pass of straight-line steps (kata 2's two
+    /// 100-element inputs).
     #[test]
     fn auto_par_statements_need_work_on_two_sides() {
-        let v = written(&format!(
+        let v = written_sized(&format!(
             "{WORK}
+fn rows(v: ref Vec[i64], n: i64) -> i64 {{
+    let mut s = 0;
+    for i in 0..n {{
+        s = s + work(v) + i;
+    }}
+    s
+}}
+
 fn heavy(v: ref Vec[i64]) -> i64 {{
     let mut a = 0;
     let mut b = 0;
     par {{
-        a = work(v);
-        b = work(v);
+        a = rows(v, 5);
+        b = rows(v, 7);
     }}
     a + b
 }}
@@ -1432,8 +1617,18 @@ fn one_side(v: ref Vec[i64]) -> i64 {{
     let mut a = 0;
     let mut b = 0;
     par {{
-        a = work(v);
+        a = rows(v, 5);
         b = 3 * 4;
+    }}
+    a + b
+}}
+
+fn one_pass(v: ref Vec[i64]) -> i64 {{
+    let mut a = 0;
+    let mut b = 0;
+    par {{
+        a = work(v);
+        b = work(v);
     }}
     a + b
 }}
@@ -1443,6 +1638,7 @@ fn main() {{
     println(heavy(v));
     println(light());
     println(one_side(v));
+    println(one_pass(v));
 }}
 "
         ));
@@ -1451,11 +1647,117 @@ fn main() {{
         assert_eq!(groups(h), [vec![0, 1]]);
         let l = only(&v, "light");
         assert_eq!(groups(l), Vec::<Vec<usize>>::new());
-        assert_eq!(cost_reason(l), "0 of its 2 statements loop or recurse");
+        assert_eq!(
+            cost_reason(l),
+            "0 of its 2 statements nest loops or recurse"
+        );
         assert_eq!(
             cost_reason(only(&v, "one_side")),
-            "1 of its 2 statements loop or recurse"
+            "1 of its 2 statements nest loops or recurse"
         );
+        assert_eq!(
+            cost_reason(only(&v, "one_pass")),
+            "0 of its 2 statements nest loops or recurse"
+        );
+        // With the size half turned down, two statements that each loop
+        // run together.
+        let v = written(&format!(
+            "{WORK}
+fn one_pass(v: ref Vec[i64]) -> i64 {{
+    let mut a = 0;
+    let mut b = 0;
+    par {{
+        a = work(v);
+        b = work(v);
+    }}
+    a + b
+}}
+
+fn main() {{
+    let v: Vec[i64] = vec![1, 2, 3];
+    println(one_pass(v));
+}}
+"
+        ));
+        assert_eq!(groups(only(&v, "one_pass")), [vec![0, 1]]);
+    }
+
+    /// A loop runs as tasks when its iterations do work of their own (a
+    /// loop, or a call that loops), even inside another loop (kata 141's
+    /// shape: a sweep over 1000 lists, once per pass). A loop of
+    /// straight-line iterations stays in order (kata 312's table filled
+    /// with zeros), and so does a loop inside another that makes a literal
+    /// handful of trips (thumb_render's three colour channels per pixel).
+    #[test]
+    fn auto_par_loops_need_work_in_each_trip() {
+        let src = format!(
+            "{WORK}
+fn sweep(v: ref Vec[i64], passes: i64, lists: i64) -> i64 {{
+    let mut sink = 0;
+    for p in 0..passes {{
+        let mut s = 0;
+        par for k in 0..lists {{
+            s += work(v) + k;
+        }}
+        sink = sink + s * p;
+    }}
+    sink
+}}
+
+fn fill(n: i64) -> i64 {{
+    let mut dp: Vec[i64] = Vec.new();
+    par for i in 0..n {{
+        dp.push(0);
+    }}
+    dp.len() as i64
+}}
+
+fn channels(v: ref Vec[i64], w: i64) -> i64 {{
+    let mut out: Vec[i64] = Vec.new();
+    for x in 0..w {{
+        par for c in 0..3 {{
+            let mut s = 0;
+            for d in 0..3 {{
+                s = s + v[d] * (x + c);
+            }}
+            out.push(s);
+        }}
+    }}
+    out.len() as i64
+}}
+
+fn top(v: ref Vec[i64]) -> i64 {{
+    let mut s = 0;
+    par for c in 0..3 {{
+        s += work(v) * c;
+    }}
+    s
+}}
+
+fn main() {{
+    let v: Vec[i64] = vec![1, 2, 3];
+    println(sweep(v, 3, 1000));
+    println(fill(100));
+    println(channels(v, 4));
+    println(top(v));
+}}
+"
+        );
+        let v = written_sized(&src);
+        assert!(only(&v, "sweep").verdict.is_ok(), "{v:#?}");
+        assert_eq!(
+            cost_reason(only(&v, "fill")),
+            "its body neither loops nor calls a body that does"
+        );
+        assert_eq!(
+            cost_reason(only(&v, "channels")),
+            "it is inside a loop and makes 3 trips"
+        );
+        assert!(only(&v, "top").verdict.is_ok(), "{v:#?}");
+        // With the size half turned down, the small loops run as tasks.
+        let v = written(&src);
+        assert!(only(&v, "fill").verdict.is_ok(), "{v:#?}");
+        assert!(only(&v, "channels").verdict.is_ok(), "{v:#?}");
     }
 
     /// The pins of the review thread's ruling: a group in a function

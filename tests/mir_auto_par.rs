@@ -24,8 +24,12 @@ fn karac(auto: bool) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_karac"));
     c.env("KARAC_HASH_SEED", "1");
     if auto {
+        // These tests exercise the parallel forms on small loops, so the
+        // size half of the cost gate is turned down to the gate it replaced
+        // (`tests/mir_auto_par_cost.rs` pins it).
         c.env("KARAC_AUTO_PAR", "1")
-            .env("KARAC_AUTO_PAR_DEBUG", "1");
+            .env("KARAC_AUTO_PAR_DEBUG", "1")
+            .env("KARAC_AUTO_PAR_SIZE", "0");
     } else {
         c.env_remove("KARAC_AUTO_PAR");
     }
