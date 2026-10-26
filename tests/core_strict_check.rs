@@ -14868,3 +14868,62 @@ fn an_escaping_closure_made_in_a_loop_moves_its_capture_each_time() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// B-2026-10-25-15: reusing a moved `Prog { ops: Vec[Op] }` takes two
+/// derives, `Copy` on `Op` and then `Clone` on `Prog`. The hint calls the
+/// first a first step instead of saying `prog` is then copied, and three
+/// `karac fix` runs (the two derives, then the `.clone()`) give a program
+/// that checks. A one-derive type still says the value is copied.
+#[test]
+fn a_nested_derive_fix_is_named_a_first_step() {
+    let nested = "enum Op {\n\
+             A(i64),\n\
+             B,\n\
+         }\n\
+         \n\
+         struct Prog {\n\
+             ops: Vec[Op],\n\
+         }\n\
+         \n\
+         fn eat(p: own Prog) -> i64 {\n\
+             p.ops.len()\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let prog = Prog { ops: Vec[Op.A(1), Op.B] };\n\
+             let a = eat(prog);\n\
+             let b = eat(prog);\n\
+             println(f\"{a} {b}\");\n\
+         }\n";
+    rejected_then_fixed_in(
+        "nested-derive-first-step",
+        nested,
+        "add `#[derive(Copy)]` to 'Op' (its fields are all `Copy`), the first of the derives 'prog' needs before it can be cloned",
+        "#[derive(Clone)]\nstruct Prog",
+        3,
+    );
+    let (dir, path) = fixture(
+        "one-derive-copies",
+        "struct P {\n\
+             n: i64,\n\
+         }\n\
+         \n\
+         fn eat(p: own P) -> i64 {\n\
+             p.n\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let p = P { n: 2 };\n\
+             let a = eat(p);\n\
+             let b = eat(p);\n\
+             println(f\"{a} {b}\");\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("add `#[derive(Copy)]` to 'P' (its fields are all `Copy`, so 'p' is copied instead of moved)"),
+        "one-derive-copies: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

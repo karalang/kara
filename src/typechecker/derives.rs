@@ -756,9 +756,14 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn copy_derivable_expr_spans(
         &self,
         clonable: &FxHashSet<SpanKey>,
-    ) -> FxHashMap<SpanKey, (String, crate::resolver::TextEdit)> {
+    ) -> (
+        FxHashMap<SpanKey, (String, crate::resolver::TextEdit)>,
+        FxHashSet<SpanKey>,
+    ) {
         let decls = self.copy_derive_decls();
-        self.expr_types
+        let mut first_steps = FxHashSet::default();
+        let edits = self
+            .expr_types
             .iter()
             .filter(|(key, _)| !clonable.contains(*key))
             .filter_map(|(key, ty)| {
@@ -766,9 +771,38 @@ impl<'a> super::TypeChecker<'a> {
                     return Some((*key, (param, edit)));
                 }
                 let (name, (edit, _)) = Self::derive_target(ty, &decls, &mut Vec::new())?;
+                let mut all = Vec::new();
+                Self::derive_names(ty, &decls, &mut all);
+                if all.len() > 1 {
+                    first_steps.insert(*key);
+                }
                 Some((*key, (name.to_string(), edit.clone())))
             })
-            .collect()
+            .collect();
+        (edits, first_steps)
+    }
+
+    /// Every type [`Self::derive_target`] would derive on, one `karac fix`
+    /// run at a time, before a value of `ty` copies or clones.
+    fn derive_names(ty: &Type, decls: &FxHashMap<&str, DeriveDecl>, out: &mut Vec<String>) {
+        match ty {
+            Type::Named { name, args } => {
+                for a in args {
+                    Self::derive_names(a, decls, out);
+                }
+                if let Some(decl) = decls.get(name.as_str()) {
+                    if !out.contains(name) {
+                        out.push(name.clone());
+                        for f in &decl.fields {
+                            Self::derive_names(f, decls, out);
+                        }
+                    }
+                }
+            }
+            Type::Tuple(ts) => ts.iter().for_each(|t| Self::derive_names(t, decls, out)),
+            Type::Ref(t) | Type::MutRef(t) => Self::derive_names(t, decls, out),
+            _ => {}
+        }
     }
 
     /// A type parameter in `ty` whose declaration (on the function or impl

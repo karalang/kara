@@ -242,18 +242,12 @@ impl<'a> super::OwnershipChecker<'a> {
                 derive_copy.map(|(_, edit)| Box::new(edit.clone()))
             };
             let suggestion = if let Some((ty, edit)) = derive_copy {
-                if edit.replacement.contains("Clone") {
-                    let step = crate::ownership::clone_step(ty, edit);
-                    format!(
-                        "{step} and clone '{binding}' at the move site \
-                         (`{binding}.clone()`), or restructure to avoid the reuse"
-                    )
-                } else {
-                    format!(
-                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so \
-                         '{binding}' is copied instead of moved), or restructure to avoid the reuse"
-                    )
-                }
+                let first = self
+                    .typecheck_result
+                    .copy_derive_first_steps
+                    .contains(&SpanKey::from_span(&moved_span));
+                let advice = crate::ownership::derive_advice(ty, edit, &binding, first);
+                format!("{advice}, or restructure to avoid the reuse")
             } else if capture && supports_clone {
                 format!(
                     "clone '{binding}' into a new binding before the closure and capture that, \

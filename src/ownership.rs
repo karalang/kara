@@ -1887,6 +1887,37 @@ pub(crate) fn clone_step(ty: &str, edit: &crate::resolver::TextEdit) -> String {
     }
 }
 
+/// The derive fix-it's advice for reusing moved `binding`. When the derive
+/// is only the first of several (`first_step`: `Prog { ops: Vec[Op] }` takes
+/// `Copy` on `Op` before `Clone` on `Prog`), it says so rather than claim the
+/// value then copies (B-2026-10-25-15).
+pub(crate) fn derive_advice(
+    ty: &str,
+    edit: &crate::resolver::TextEdit,
+    binding: &str,
+    first_step: bool,
+) -> String {
+    let clone = edit.replacement.contains("Clone");
+    let add = if clone {
+        clone_step(ty, edit)
+    } else {
+        format!("add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`)")
+    };
+    if first_step {
+        format!(
+            "{add}, the first of the derives '{binding}' needs before it can be cloned \
+             (`karac fix` adds the next one)"
+        )
+    } else if clone {
+        format!("{add} and clone '{binding}' at the move site (`{binding}.clone()`)")
+    } else {
+        format!(
+            "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so '{binding}' is \
+             copied instead of moved)"
+        )
+    }
+}
+
 impl<'a> OwnershipChecker<'a> {
     /// Emit a "wrote to a non-`mut` binding" diagnostic (B-2026-07-27-9).
     ///
@@ -2298,18 +2329,12 @@ impl<'a> OwnershipChecker<'a> {
                      avoid reuse"
                 )
             } else if let Some((ty, edit)) = &derive_copy {
-                if edit.replacement.contains("Clone") {
-                    let step = crate::ownership::clone_step(ty, edit);
-                    format!(
-                        "{step} and clone '{text}' at the move site \
-                         (`{text}.clone()`), or restructure to avoid reuse"
-                    )
-                } else {
-                    format!(
-                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so '{text}' \
-                         is copied instead of moved), or restructure to avoid reuse"
-                    )
-                }
+                let first = self
+                    .typecheck_result
+                    .copy_derive_first_steps
+                    .contains(&SpanKey::from_span(&moved));
+                let advice = crate::ownership::derive_advice(ty, edit, &text, first);
+                format!("{advice}, or restructure to avoid reuse")
             } else {
                 format!("restructure to avoid reuse ('{text}' has no `.clone()`)")
             });
@@ -3416,20 +3441,15 @@ impl<'a> OwnershipChecker<'a> {
                         binding, binding
                     )
                 } else if let Some((ty, edit)) = derive_copy {
-                    if edit.replacement.contains("Clone") {
-                        let step = crate::ownership::clone_step(ty, edit);
-                        format!(
-                            "{step} and clone '{binding}' at the \
-                             move site (`{binding}.clone()`), declare the callee parameter \
-                             `ref` if it only reads, or restructure to avoid reuse"
-                        )
-                    } else {
-                        format!(
-                            "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so \
-                             '{binding}' is copied instead of moved), declare the callee \
-                             parameter `ref` if it only reads, or restructure to avoid reuse"
-                        )
-                    }
+                    let first = self
+                        .typecheck_result
+                        .copy_derive_first_steps
+                        .contains(&SpanKey::from_span(&w.consume_span));
+                    let advice = crate::ownership::derive_advice(ty, edit, binding, first);
+                    format!(
+                        "{advice}, declare the callee parameter `ref` if it only reads, or \
+                         restructure to avoid reuse"
+                    )
                 } else {
                     format!(
                         "declare the callee parameter `ref` if it only reads, or \

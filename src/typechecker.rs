@@ -1765,6 +1765,11 @@ pub struct TypeCheckResult {
     /// to its declaration. The ownership pass offers it as the fix for
     /// reusing a moved value of that type.
     pub copy_derivable_expr_spans: FxHashMap<SpanKey, (String, crate::resolver::TextEdit)>,
+    /// The spans in [`Self::copy_derivable_expr_spans`] whose derive is only
+    /// the first of several: the moved value's own type needs another derive
+    /// after it (`Prog { ops: Vec[Op] }` derives `Copy` on `Op`, then `Clone`
+    /// on `Prog`, B-2026-10-25-15).
+    pub copy_derive_first_steps: FxHashSet<SpanKey>,
     /// v2 core (strict commands only): the callee of each call of an
     /// `OnceFn` value. Calling one moves it (§9.6), and the ownership pass
     /// words a second call's E0500 by it.
@@ -4103,11 +4108,12 @@ impl<'a> TypeChecker<'a> {
             })
             .map(|(key, _)| *key)
             .collect();
-        let copy_derivable_expr_spans = if self.cli_lint_overrides.strict_core {
-            self.copy_derivable_expr_spans(&clonable_expr_spans)
-        } else {
-            FxHashMap::default()
-        };
+        let (copy_derivable_expr_spans, copy_derive_first_steps) =
+            if self.cli_lint_overrides.strict_core {
+                self.copy_derivable_expr_spans(&clonable_expr_spans)
+            } else {
+                Default::default()
+            };
         // B-2026-09-10-13 — drain the instantiation-side nested-enum-payload
         // offenders gathered during body inference. Must run before `errors`
         // moves into the result below.
@@ -4168,6 +4174,7 @@ impl<'a> TypeChecker<'a> {
             expr_types: self.expr_types,
             clonable_expr_spans,
             copy_derivable_expr_spans,
+            copy_derive_first_steps,
             core_once_calls: std::mem::take(&mut self.core_once_calls),
             core_ref_copy_spans: self.core_ref_copy_spans,
             core_consuming_for_iterables: self.core_consuming_for_iterables,
