@@ -15111,3 +15111,54 @@ fn an_ascii_char_literal_cast_to_u8_is_fixed_to_a_byte_literal() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-25-28: each binding of a destructuring `let` is its own place,
+/// so a task's capture of `rx` (from `let (tx, rx) = channel(1)`) does not
+/// make a later use of `tx` a use of what the task borrows (§9.5). Writing
+/// the captured half while the group is open is still refused.
+#[test]
+fn a_task_capturing_one_half_of_a_tuple_let_leaves_the_other_free() {
+    accepted_and_runs(
+        "task-captures-rx-moves-tx",
+        "fn count(rxs: own Vec[Receiver[String]]) -> i64 {\n\
+             rxs.len()\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let (tx, rx): (Sender[String], Receiver[String]) = channel(1);\n\
+             let group = TaskGroup.new();\n\
+             let h = group.spawn(|| count([rx]));\n\
+             println(f\"{h.join()}\");\n\
+             let _ = tx;\n\
+         }\n",
+        "1\n",
+    );
+    accepted_and_runs(
+        "task-captures-a-writes-b",
+        "fn main() {\n\
+             let mut (a, b) = (Vec[1, 2], Vec[3]);\n\
+             let g = TaskGroup.new();\n\
+             let h = g.spawn(|| a.len());\n\
+             b.push(9);\n\
+             println(f\"{h.join()} {b.len()}\");\n\
+         }\n",
+        "2 2\n",
+    );
+    let (dir, path) = fixture(
+        "task-captures-a-writes-a",
+        "fn main() {\n\
+             let mut (a, b) = (Vec[1, 2], Vec[3]);\n\
+             let g = TaskGroup.new();\n\
+             let h = g.spawn(|| a.len());\n\
+             a.push(9);\n\
+             println(f\"{h.join()} {b.len()}\");\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("`a` is written while a task of `g` borrows it"),
+        "task-captures-a-writes-a: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

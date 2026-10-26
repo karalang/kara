@@ -245,9 +245,11 @@ impl Walk<'_, '_> {
                 if let ExprKind::Identifier(n) = &value.kind {
                     self.moved(n, value);
                 }
-                let names = pattern.binding_names();
-                for n in names {
-                    self.declare(n, pattern.span);
+                // Each binding is its own place: `let (tx, rx) = ..` must not
+                // tie a use of `tx` to a task's capture of `rx`
+                // (B-2026-10-25-28).
+                for (n, at) in pattern.binding_name_spans() {
+                    self.declare(n, at);
                 }
                 if let PatternKind::Binding(name) = &pattern.kind {
                     if Self::is_taskgroup_new(value) {
@@ -275,8 +277,8 @@ impl Walk<'_, '_> {
             } => {
                 self.expr(value);
                 self.block(else_block);
-                for n in pattern.binding_names() {
-                    self.declare(n, pattern.span);
+                for (n, at) in pattern.binding_name_spans() {
+                    self.declare(n, at);
                 }
             }
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.block(body),
