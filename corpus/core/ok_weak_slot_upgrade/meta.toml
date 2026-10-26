@@ -1,0 +1,11 @@
+source = "corpus/core/ok_weak_slot_upgrade"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["weak", "shared"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "B-2026-10-26-4/-5: design.md § Cycles and `weak` (`.upgrade()` does the same as reading the field; a strong handle passes where a `weak` type is expected). Expected output worked by hand: `gone` and holder's referent are dropped before their reads."

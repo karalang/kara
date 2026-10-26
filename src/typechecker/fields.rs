@@ -423,6 +423,8 @@ impl<'a> super::TypeChecker<'a> {
                     // (the downgrade); only a read upgrades.
                     if !is_lhs {
                         if let Type::Weak(inner) = &resolved {
+                            self.weak_slot_reads
+                                .insert(crate::resolver::SpanKey::from_span(span));
                             return Type::Named {
                                 name: "Option".to_string(),
                                 args: vec![(**inner).clone()],

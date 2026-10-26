@@ -3294,6 +3294,10 @@ pub struct TypeChecker<'a> {
     pub(super) collection_literal_spans:
         FxHashMap<SpanKey, (crate::ids::NodeId, &'static str, Vec<Span>)>,
     pub(super) weak_elem_read_sites: FxHashSet<SpanKey>,
+    /// Reads of a `weak` slot (a local, parameter, field or element), each
+    /// typed the `Option` it upgrades to: `.upgrade()` on one is that read
+    /// (design.md § Cycles and `weak`, B-2026-10-26-4).
+    pub(super) weak_slot_reads: FxHashSet<SpanKey>,
     /// B-2026-08-26-21 — index expressions whose read produces a FRESH
     /// value rather than an alias of a stored element: a range slice
     /// (`s[a..b]`, `v[a..b]`), a `Column` positional read
@@ -3754,6 +3758,7 @@ impl<'a> TypeChecker<'a> {
             string_literal_spans: FxHashMap::default(),
             tuple_literal_spans: FxHashMap::default(),
             collection_literal_spans: FxHashMap::default(),
+            weak_slot_reads: FxHashSet::default(),
             weak_elem_read_sites: FxHashSet::default(),
             index_read_is_fresh_value: FxHashSet::default(),
             call_type_subs_mangle: FxHashMap::default(),
@@ -7816,8 +7821,9 @@ impl<'a> TypeChecker<'a> {
             else {
                 continue;
             };
-            if let [elem @ Type::Ref(inner)] = args.as_slice() {
-                if **inner == *v {
+            // A tuple holding the references keeps them too (B-2026-10-26-3).
+            if let [elem] = args.as_slice() {
+                if elem != v && self.read_as_value(elem) == *v {
                     let elem = elem.clone();
                     frame.insert("ItemV".to_string(), elem);
                 }

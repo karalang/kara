@@ -6453,6 +6453,9 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn copy_is_only_an_rc_retain(&self, ty: &Type) -> bool {
         match ty {
             Type::Shared(_) => true,
+            // A `weak` slot is read through an upgrade and stored through a
+            // downgrade: only counts move (B-2026-10-26-5).
+            Type::Weak(_) => true,
             // A `sync` enum is as counted as a `shared` one (B-2026-10-25-12).
             Type::Named { name, args } if self.name_is_rc_backed_decl(name) => {
                 let _ = args;

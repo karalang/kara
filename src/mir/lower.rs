@@ -16725,6 +16725,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.comptime_native(e, &dest)? {
             return Ok(());
         }
+        // `slot.upgrade()` on a `weak` slot: the checker typed it as the
+        // slot's read, an `Option`, and the read upgrades (design.md § Cycles
+        // and `weak`; B-2026-10-26-4). An `Option` has no `upgrade` of its own.
+        if method == "upgrade" && args.is_empty() {
+            let t = self.expr_ty(object)?;
+            if let HK::Adt { def, .. } = self.tys().tcx().kind(t) {
+                if self.lcx.def_name(def) == "Option" {
+                    return self.expr_into(object, dest);
+                }
+            }
+        }
         // `critical_section.acquire()`: the guard whose drop ends the
         // section. Interrupts are not masked here, so it holds no token.
         if let (ExprKind::Identifier(m), "acquire", []) = (&object.kind, method, args) {

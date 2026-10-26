@@ -14170,3 +14170,43 @@ fn a_mut_ref_vec_passes_to_a_slice_parameter() {
          v.push(1u8);\n    let mut a: Array[u8, 2] = [1u8, 2u8];\n    println(f\"{total(v)} {grow(mut v, mut a)}\");\n}\n",
     );
 }
+
+#[test]
+fn a_ref_handle_in_a_collected_tuple_reads_as_the_handle() {
+    // B-2026-10-26-3: `collect` reads a `ref` handle in a tuple as the handle
+    // (§6.1), as a pushed tuple does. The run is pinned by
+    // corpus/core/ok_ref_handle_collects_as_the_handle.
+    accepted(
+        "collect-a-ref-handle-in-a-tuple",
+        "shared struct S {\n    x: i64,\n}\nfn pairs(items: ref Vec[(Str, S)]) -> Vec[(String, S)] {\n    \
+         items.iter().map(|(n, v)| (n.to_string(), v)).collect()\n}\nfn main() {\n    \
+         let items: Vec[(Str, S)] = Vec[(\"a\", S { x: 4 }), (\"b\", S { x: 0 })];\n    \
+         let p = pairs(items);\n    println(f\"{p.len()} {p[0].1.x}\");\n}\n",
+    );
+}
+
+#[test]
+fn a_weak_slot_upgrades_and_passes_to_a_weak_parameter() {
+    // B-2026-10-26-4: `.upgrade()` on a `weak` slot is its read; on any other
+    // `Option` there is no such method. B-2026-10-26-5: a `weak` field passes
+    // straight to a `weak` parameter. The run is pinned by
+    // corpus/core/ok_weak_slot_upgrade.
+    let n = "shared struct N {\n    id: i64,\n    mut me: weak N,\n}\n\
+             fn id_of(p: weak N) -> i64 {\n    match p.upgrade() {\n        Some(n) => n.id,\n        \
+             None => -1,\n    }\n}\n";
+    accepted(
+        "weak-slot-upgrade",
+        &format!(
+            "{n}fn main() {{\n    let a = N {{ id: 1, me: None }};\n    a.me = a;\n    \
+             println(a.me.upgrade().is_some());\n    println(id_of(a.me));\n}}\n"
+        ),
+    );
+    rejected(
+        "upgrade-on-an-option",
+        &format!(
+            "{n}fn main() {{\n    let a = N {{ id: 1, me: None }};\n    let o: Option[N] = Some(a);\n    \
+             println(o.upgrade().is_some());\n}}\n"
+        ),
+        "no method 'upgrade' on type 'Option'",
+    );
+}

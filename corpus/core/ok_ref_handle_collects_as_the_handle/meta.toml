@@ -1,0 +1,11 @@
+source = "corpus/core/ok_ref_handle_collects_as_the_handle"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["iterator", "shared", "collect"]
+class = "a"
+expected_from = "spec"
+rules = ["6.1"]
+backends = []
+env = {}
+note = "B-2026-10-26-3: core-semantics §6.1 (storing a handle read from a borrow uses it as a value) and iterators.md (collect reads items as values). Expected output worked by hand from the literals."

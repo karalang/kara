@@ -1,0 +1,45 @@
+// B-2026-10-26-4 and -5 (design.md § Cycles and `weak`): `.upgrade()` on a
+// `weak` slot (field, local, parameter, element) does the same as reading
+// it, and a `weak` field passes straight to a `weak` parameter, a fresh
+// weak reference made for the call. A referent that is gone reads `None`.
+
+shared struct N {
+    id: i64,
+    mut me: weak N,
+}
+
+fn via(p: weak N) -> i64 {
+    match p.upgrade() {
+        Some(n) => n.id,
+        None => -1,
+    }
+}
+
+fn id_of(p: weak N) -> i64 {
+    match p {
+        Some(n) => n.id,
+        None => -1,
+    }
+}
+
+fn holder() -> N {
+    let gone = N { id: 9, me: None };
+    let h = N { id: 2, me: None };
+    h.me = gone;
+    println(id_of(h.me));
+    h
+}
+
+fn main() {
+    let a = N { id: 1, me: None };
+    a.me = a;
+    let w: weak N = a;
+    let mut ws: Vec[weak N] = Vec.new();
+    ws.push(a);
+    let gone: weak N = N { id: 7, me: None };
+    println(f"{a.me.upgrade().is_some()} {a.me.upgrade().expect("live").id} {w.upgrade().is_some()}");
+    println(f"{via(a)} {ws[0].upgrade().is_some()} {gone.upgrade().is_none()}");
+    println(id_of(a.me));
+    let h = holder();
+    println(f"{id_of(h.me)} {via(h.me)}");
+}

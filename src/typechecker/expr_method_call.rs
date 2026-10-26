@@ -1283,6 +1283,9 @@ impl<'a> super::TypeChecker<'a> {
                         {
                             (**t).clone()
                         }
+                        // A `ref` handle, alone or as a tuple's part, reads
+                        // as the handle (§6.1, B-2026-10-26-3).
+                        other if method.name != "cloned" => self.read_as_value(other),
                         other => other.clone(),
                     };
                     let v: HashMap<String, SubstValue> =
@@ -1774,6 +1777,28 @@ impl<'a> super::TypeChecker<'a> {
                         self.check_cross_task_safe_captures(&args[0].value, span, &what);
                     }
                 }
+            }
+        }
+
+        // `slot.upgrade()` on a `weak` slot is the slot's read, which already
+        // upgrades it to an `Option` (design.md § Cycles and `weak`:
+        // "`.upgrade()` does the same as reading the field";
+        // B-2026-10-26-4). The receiver must be the slot itself, not a value
+        // computed from one.
+        if method == "upgrade"
+            && args.is_empty()
+            && matches!(
+                object.kind,
+                ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
+            )
+        {
+            let recv_ty = self.infer_expr(object);
+            if self
+                .weak_slot_reads
+                .contains(&SpanKey::from_span(&object.span))
+            {
+                self.record_expr_type(span, &recv_ty);
+                return recv_ty;
             }
         }
 

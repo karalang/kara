@@ -1030,6 +1030,9 @@ impl<'a> super::TypeChecker<'a> {
                         {
                             (**t).clone()
                         }
+                        // A `ref` handle, alone or as a tuple's part, reads
+                        // as the handle (§6.1, B-2026-10-26-3).
+                        _ if method != "cloned" => self.read_as_value(&item),
                         _ => item,
                     };
                     if !matches!(value, Type::AssocProjection { .. }) {

@@ -2180,13 +2180,15 @@ fn main() -> () {
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;
         // `TaskGroup.isolating` is declared in isolating.kara; a `weak`
-        // local reads as the library's `Option`). The build in
-        // `built_core_pins_match_their_expected_output` runs them with the
-        // library, through the same move and borrow checks.
+        // local reads as the library's `Option`; `collect` is iter.kara's).
+        // The build in `built_core_pins_match_their_expected_output` runs
+        // them with the library, through the same move and borrow checks.
         let needs_library = [
             "select_source_order",
             "isolating_panic_ends_its_task",
             "ok_weak_local_reads_as_option",
+            "ok_ref_handle_collects_as_the_handle",
+            "ok_weak_slot_upgrade",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

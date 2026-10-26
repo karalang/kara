@@ -1,0 +1,40 @@
+// B-2026-10-26-3: `collect` reads each item as a value (iterators.md), and a
+// `ref` to a handle reads as the handle (core-semantics §6.1), alone or as a
+// tuple's part. A collection that holds the references keeps them.
+
+shared struct S {
+    x: i64,
+}
+
+shared enum Val {
+    Num(i64),
+    Name(String),
+}
+
+fn show(v: Val) -> String {
+    match v {
+        Val.Num(n) => f"{n}",
+        Val.Name(s) => s.clone(),
+    }
+}
+
+fn pairs(items: ref Vec[(Str, S)]) -> Vec[(String, S)] {
+    items.iter().map(|(n, v)| (n.to_string(), v)).collect()
+}
+
+fn main() {
+    let v: Vec[S] = Vec[S { x: 5 }, S { x: 6 }];
+    let keep: Vec[(i64, ref S)] = v.iter().enumerate().collect();
+    let refs: Vec[ref S] = v.iter().collect();
+    let owned: Vec[S] = v.iter().collect();
+    let numbered: Vec[(i64, S)] = v.iter().enumerate().collect();
+    let total: i64 = v.iter().map(|s| s.x).sum();
+    println(f"{keep.len()} {keep[1].1.x} {refs[0].x} {owned[1].x} {numbered[0].1.x} {total}");
+    let items: Vec[(Str, S)] = Vec[("a", S { x: 4 }), ("b", S { x: 0 })];
+    let p = pairs(items);
+    let xs: Vec[S] = items.iter().map(|(_, s)| s).collect();
+    println(f"{p.len()} {p[0].0} {p[0].1.x} {xs[1].x}");
+    let members: Vec[(Str, Val)] = Vec[("a", Val.Num(1)), ("b", Val.Name("bee".to_string()))];
+    let named: Vec[(String, Val)] = members.iter().map(|(n, m)| (n.to_string(), m)).collect();
+    println(f"{named[1].0} {show(named[1].1)} {show(named[0].1)}");
+}

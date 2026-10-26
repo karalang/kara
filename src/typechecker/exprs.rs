@@ -5092,11 +5092,13 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// `t` read as a value: a `ref` to a `Copy` type, alone or as a tuple's
-    /// part, is that type.
-    fn read_as_value(&self, t: &Type) -> Type {
+    /// `t` read as a value: a `ref` to a `Copy` type or a handle, alone or as
+    /// a tuple's part, is that type.
+    pub(super) fn read_as_value(&self, t: &Type) -> Type {
         match t {
-            Type::Ref(inner) | Type::MutRef(inner) if self.is_copy_type_during_check(inner) => {
+            // A handle reads as itself too (§6.1): `(n.to_string(), v)` with
+            // `v: ref S` collects into a `Vec[(String, S)]` (B-2026-10-26-3).
+            Type::Ref(inner) | Type::MutRef(inner) if self.reads_as_value(inner) => {
                 self.read_as_value(inner)
             }
             Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| self.read_as_value(t)).collect()),
@@ -8416,6 +8418,7 @@ impl<'a> super::TypeChecker<'a> {
                 // (design.md § Cycles and `weak`, B-2026-10-25-45).
                 if !self.assigning_lhs {
                     if let Type::Weak(inner) = &ty {
+                        self.weak_slot_reads.insert(SpanKey::from_span(&expr.span));
                         return Type::Named {
                             name: "Option".to_string(),
                             args: vec![(**inner).clone()],
@@ -9375,6 +9378,7 @@ impl<'a> super::TypeChecker<'a> {
                         // (see the store twin in `infer_method_call`).
                         self.weak_elem_read_sites
                             .insert(SpanKey::from_span(&expr.span));
+                        self.weak_slot_reads.insert(SpanKey::from_span(&expr.span));
                         self.index_read_is_fresh_value
                             .insert(SpanKey::from_span(&expr.span));
                         return Type::Named {
