@@ -47,7 +47,13 @@ fn build_and_run(name: &str, src: &str) -> Option<(Output, Duration)> {
         Err(err)
     })?;
     let start = Instant::now();
-    let out = Command::new(&exe).output().unwrap();
+    // One worker: several tests pin the FIFO executor's interleaving, an
+    // order core-semantics §11.1 does not promise on several workers, so a
+    // `KARAC_THREADS` in the caller's environment must not reach them.
+    let out = Command::new(&exe)
+        .env("KARAC_THREADS", "1")
+        .output()
+        .unwrap();
     let took = start.elapsed();
     let _ = std::fs::remove_dir_all(&dir);
     Some((out, took))

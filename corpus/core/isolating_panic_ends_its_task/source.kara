@@ -25,17 +25,27 @@ fn show(name: String, r: Result[i64, TaskFailed]) {
     }
 }
 
+// Only task b prints: §11.1 orders nothing between tasks, so prints from
+// several tasks have no specified order on more than one worker. Every
+// handle is joined before main prints.
+fn steady(n: i64) -> i64 {
+    n * 10
+}
+
 fn main() {
     let g = TaskGroup.isolating();
-    let a = g.spawn(|| risky(1));
+    let a = g.spawn(|| steady(1));
     let b = g.spawn(|| {
         defer println("defer in b");
         let _h = Noisy { name: "b's own" };
         risky(2)
     });
-    let c = g.spawn(|| risky(3));
-    show("a", a.join());
-    show("b", b.join());
-    show("c", c.join());
+    let c = g.spawn(|| steady(3));
+    let ra = a.join();
+    let rb = b.join();
+    let rc = c.join();
+    show("a", ra);
+    show("b", rb);
+    show("c", rc);
     println("main goes on");
 }

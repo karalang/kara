@@ -9,8 +9,8 @@ legacy_backend = "legacy-build"
 legacy_exit = 1
 rules = []
 backends = []
-env = {}
-note = "e-spec: legacy differs from the drop model; v2 matches it"
+env = { KARAC_THREADS = "1" }
+note = "e-spec: legacy differs from the drop model; v2 matches it. KARAC_THREADS=1: the expected output is the one-worker executor's FIFO order, which core-semantics §11.1 does not promise on several workers (review ruling 2026-10-26)"
 bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "8b604df9"
