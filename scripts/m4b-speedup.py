@@ -12,6 +12,11 @@ Timing runs the two binaries interleaved (seq, par, seq, par, ...) after one
 untimed warm-up each, and reports the median wall time and the median
 CPU-per-wall of each. A ratio is seq/par: above 1 the parallel build is
 faster. The M4b floor is 0.9: no program slower than 0.9x its own seq build.
+A ratio under 0.9 in one pass is a candidate, not a failure. On 4 workers a
+program fails only if the median of three 21-run timings (`--runs 21`, run
+three times) is under 0.9x and outside the band of a program with no task
+site (such as apps/pipeline/sensor_merge) timed in the same runs: on a 5..25 ms
+app one 21-run median swings by 0.15..0.45 (Gowtham's call, 2026-10-26).
 
     python3 scripts/m4b-speedup.py --karac target/release/karac \\
         --katas ../kara-katas --out /mnt/attach/project-files/review/m4b-speedup --threads 4
