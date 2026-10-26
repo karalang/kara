@@ -349,7 +349,7 @@ fn main() {
 "#;
     assert_eq!(
         stdout_on_both("errors", src),
-        "a panicked: division by zero\nb ok 4\nc panicked: explicit panic\n\
+        "a panicked: division by zero\nb ok 4\nc panicked: key not found\n\
          d panicked: index out of bounds\ne panicked: integer overflow\nf ok 1\ndone\n"
     );
 }
