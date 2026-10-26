@@ -28,11 +28,14 @@ struct Inflight {
     wake: Arc<UnixStream>,
 }
 
-/// A task, by the thread whose executor runs it and its id there.
-type TaskKey = (std::thread::ThreadId, u64);
+/// A task, by the thread whose executor runs it (none under the pool,
+/// whose workers share one executor and move a task between them) and its
+/// id there.
+type TaskKey = (Option<std::thread::ThreadId>, u64);
 
 fn key(task: u64) -> TaskKey {
-    (std::thread::current().id(), task)
+    let thread = (!crate::mir_task::pooled()).then(|| std::thread::current().id());
+    (thread, task)
 }
 
 static INFLIGHT: Mutex<Vec<Inflight>> = Mutex::new(Vec::new());

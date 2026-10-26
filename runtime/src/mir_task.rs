@@ -72,7 +72,7 @@ use std::cell::UnsafeCell;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -147,6 +147,22 @@ struct Task {
     /// A frame of its chain is leaving by its cancel exit
     /// ([`karac_mir_unwind`]).
     unwind: bool,
+    /// The progress count when its last poll began: a task waiting on
+    /// another is worth polling again once the count moved.
+    seen: u64,
+}
+
+/// Whether a queued task can get anywhere if polled now, with the progress
+/// count at `progress`: it is runnable, or waits on another task and
+/// something happened since its last poll began, or its wait's deadline
+/// passed. `now` is the clock, read once a deadline needs it.
+fn worth(t: &Task, progress: u64, now: &mut Option<Instant>) -> bool {
+    match t.wait {
+        Wait::None => true,
+        Wait::Task => t.seen != progress,
+        Wait::TaskBy(at) => t.seen != progress || at <= *now.get_or_insert_with(Instant::now),
+        _ => false,
+    }
 }
 
 /// The running task's own state, while it runs.
@@ -207,12 +223,24 @@ struct Exec {
     /// parked.
     parked: HashMap<i32, Vec<u64>>,
     reactor: Reactor,
+    /// The running task of the thread that called `karac_mir_task_run`,
+    /// worker 0, the only one on one worker.
     cur: Option<Cur>,
-    /// The tasks a teardown interrupted ([`poll_nested`]), outermost first.
-    outer: Vec<Cur>,
+    /// The pool's other workers' running tasks, by worker ([`worker`]);
+    /// slot 0 is unused.
+    curs: Vec<Option<Cur>>,
+    /// Each worker's tasks a teardown interrupted ([`poll_nested`]),
+    /// outermost first.
+    outers: Vec<Vec<Cur>>,
     /// Bumped whenever something may have made a waiting task ready: a
     /// readiness check that passed, a spawn, or a task that returned.
     progress: u64,
+    /// How many tasks the pool's workers are polling now, the thread that
+    /// runs `karac_mir_task_run` included.
+    running: usize,
+    /// The pool's workers napping on an empty queue: a task queued wakes
+    /// one.
+    sleepers: Vec<Sleeper>,
     /// The last task id given out.
     ids: u64,
     /// The live groups, by id.
@@ -231,10 +259,59 @@ struct Exec {
 }
 
 impl Exec {
+    /// The task this worker runs now.
+    #[inline(always)]
+    fn cur(&self) -> Option<Cur> {
+        match worker() {
+            0 => self.cur,
+            w => self.curs.get(w).copied().flatten(),
+        }
+    }
+
+    /// The slot of the task this worker runs.
+    #[inline(always)]
+    fn cur_mut(&mut self) -> &mut Option<Cur> {
+        let w = worker();
+        if w == 0 {
+            return &mut self.cur;
+        }
+        if self.curs.len() <= w {
+            self.curs.resize(w + 1, None);
+        }
+        &mut self.curs[w]
+    }
+
+    /// This worker's interrupted tasks.
+    fn outer_mut(&mut self) -> &mut Vec<Cur> {
+        let w = worker();
+        if self.outers.len() <= w {
+            self.outers.resize_with(w + 1, Vec::new);
+        }
+        &mut self.outers[w]
+    }
+
     /// Queues `t`, runnable.
     fn wake(&mut self, mut t: Task) {
         t.wait = Wait::None;
+        self.push(t);
+    }
+
+    /// Something a waiting task may wait on happened. No napping worker
+    /// wakes for it: the worker that made it happen polls the tasks it
+    /// made worth polling once its own task settles, which keeps a pair of
+    /// tasks that wait on each other on one worker.
+    #[inline]
+    fn progressed(&mut self) {
+        self.progress += 1;
+    }
+
+    /// Queues `t`, waking a napping worker for it.
+    #[inline]
+    fn push(&mut self, t: Task) {
         self.queue.push_back(t);
+        if let Some(w) = self.sleepers.pop() {
+            rouse(w);
+        }
     }
 
     /// Takes `t` off the queue, waking by a timer or a descriptor; answers
@@ -299,6 +376,9 @@ impl Exec {
 
     /// Queues the tasks whose deadline has passed; answers how many.
     fn wake_timers(&mut self) -> usize {
+        if self.timers.is_empty() {
+            return 0;
+        }
         let now = Instant::now();
         let mut n = 0;
         while let Some(at) = self.next_deadline() {
@@ -455,7 +535,7 @@ static SHARED: LazyLock<ExecLock> = LazyLock::new(ExecLock::new);
 /// Whether the pool runs tasks on more than one worker thread: decided
 /// once, from `KARAC_THREADS`, before the first task runs.
 #[inline(always)]
-fn pooled() -> bool {
+pub(crate) fn pooled() -> bool {
     static MODE: AtomicU8 = AtomicU8::new(0);
     match MODE.load(Ordering::Relaxed) {
         1 => false,
@@ -472,8 +552,17 @@ fn pooled_first(mode: &AtomicU8) -> bool {
         .and_then(|v| v.trim().parse::<usize>().ok())
         .unwrap_or(1);
     let pooled = n > 1;
+    THREADS.store(n.max(1), Ordering::Relaxed);
     mode.store(if pooled { 2 } else { 1 }, Ordering::Relaxed);
     pooled
+}
+
+/// How many workers the pool runs (`KARAC_THREADS`, 1 by default).
+static THREADS: AtomicUsize = AtomicUsize::new(1);
+
+fn threads() -> usize {
+    pooled();
+    THREADS.load(Ordering::Relaxed)
 }
 
 /// The executor's state as one access sees it: this thread's own, or the
@@ -542,6 +631,66 @@ impl ExecCell {
 
 static EXEC: ExecCell = ExecCell;
 
+/// State a native keeps for the whole program, as the executor's is: this
+/// thread's own on one worker, and one copy behind a lock under the pool,
+/// where a task can suspend on one worker and resume on another. Declared
+/// with [`program_state!`].
+pub(crate) struct ProgramState<T: 'static> {
+    local: &'static std::thread::LocalKey<RefCell<T>>,
+    shared: &'static std::sync::Mutex<T>,
+}
+
+impl<T> ProgramState<T> {
+    pub(crate) const fn new(
+        local: &'static std::thread::LocalKey<RefCell<T>>,
+        shared: &'static std::sync::Mutex<T>,
+    ) -> ProgramState<T> {
+        ProgramState { local, shared }
+    }
+
+    /// `f` of the state. The pool's lock is no `RefCell`: a nested `with`
+    /// of the same state waits for ever, so none nests one.
+    #[inline]
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        if pooled() {
+            f(&mut self.shared.lock().unwrap_or_else(|p| p.into_inner()))
+        } else {
+            self.local.with(|c| f(&mut c.borrow_mut()))
+        }
+    }
+}
+
+/// `static NAME: T = init;` as a [`ProgramState`] (`init` is constant).
+macro_rules! program_state {
+    ($(#[$m:meta])* $vis:vis static $name:ident: $t:ty = $init:expr;) => {
+        $(#[$m])*
+        $vis static $name: $crate::mir_task::ProgramState<$t> = {
+            thread_local! {
+                static LOCAL: std::cell::RefCell<$t> = const { std::cell::RefCell::new($init) };
+            }
+            static SHARED: std::sync::Mutex<$t> = std::sync::Mutex::new($init);
+            $crate::mir_task::ProgramState::new(&LOCAL, &SHARED)
+        };
+    };
+}
+pub(crate) use program_state;
+
+thread_local! {
+    /// This thread's worker number in the pool: 0 for the thread that ran
+    /// `karac_mir_task_run`, and for any thread outside the pool.
+    static WORKER: Cell<usize> = const { Cell::new(0) };
+}
+
+/// This thread's worker number ([`WORKER`]).
+#[inline(always)]
+fn worker() -> usize {
+    if pooled() {
+        WORKER.with(Cell::get)
+    } else {
+        0
+    }
+}
+
 thread_local! {
     /// Set by a native that answered `IO_NOT_READY` ([`set_again`]) and
     /// taken by the `__io_again` after it.
@@ -549,7 +698,7 @@ thread_local! {
 }
 
 fn bump() {
-    EXEC.with(|e| e.borrow_mut().progress += 1);
+    EXEC.with(|e| e.borrow_mut().progressed());
 }
 
 /// `TaskGroup.new(limit: n)`: a group that lets at most `limit` of its
@@ -569,7 +718,7 @@ fn group_new(limit: i64, isolating: bool) -> *mut u8 {
             limit,
             live: 0,
             dropped: false,
-            owner: e.cur.map_or(0, |c| c.id),
+            owner: e.cur().map_or(0, |c| c.id),
             deadline: None,
             isolating,
         }));
@@ -597,7 +746,7 @@ pub extern "C" fn karac_mir_group_isolating(limit: i64) -> *mut u8 {
 pub(crate) fn contain_panic(message: impl FnOnce() -> String, location: &str) -> bool {
     let Some(id) = EXEC.with(|e| {
         let e = e.borrow();
-        let c = e.cur?;
+        let c = e.cur()?;
         // SAFETY: a group outlives its tasks.
         (!c.group.is_null() && unsafe { (*c.group).isolating }).then_some(c.id)
     }) else {
@@ -626,7 +775,7 @@ pub(crate) fn contain_panic(message: impl FnOnce() -> String, location: &str) ->
         }
     }
     EXEC.with(|e| {
-        if let Some(c) = e.borrow_mut().cur.as_mut() {
+        if let Some(c) = e.borrow_mut().cur_mut().as_mut() {
             c.unwind = true;
         }
     });
@@ -640,7 +789,7 @@ pub(crate) fn contain_panic(message: impl FnOnce() -> String, location: &str) ->
 pub(crate) fn task_failure() -> (u8, Option<(String, String)>) {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        let Some(c) = e.cur else {
+        let Some(c) = e.cur() else {
             return (0, None);
         };
         // SAFETY: a group outlives its tasks.
@@ -771,7 +920,7 @@ fn task_done(t: &Task) {
 /// The running task's id, inside the executor.
 #[allow(dead_code)] // for the natives that keep per-task state (M4 item 5)
 pub(crate) fn current_task() -> Option<u64> {
-    EXEC.with(|e| e.borrow().cur.map(|c| c.id))
+    EXEC.with(|e| e.borrow().cur().map(|c| c.id))
 }
 
 /// Calls `f` with a task's id whenever a task ends, returned or torn down.
@@ -794,7 +943,12 @@ fn cancel_where(doomed: impl Fn(&Cur) -> bool) {
     let mut tasks: Vec<Task> = EXEC.with(|e| {
         let mut e = e.borrow_mut();
         let e = &mut *e;
-        for c in e.cur.iter_mut().chain(e.outer.iter_mut()) {
+        for c in e
+            .cur
+            .iter_mut()
+            .chain(e.curs.iter_mut().flatten())
+            .chain(e.outers.iter_mut().flatten())
+        {
             if doomed(c) && !c.torn {
                 c.cancel = true;
             }
@@ -862,10 +1016,10 @@ fn tear_down(mut t: Task) {
 fn poll_nested(t: &mut Task) -> bool {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        if let Some(c) = e.cur.take() {
-            e.outer.push(c);
+        if let Some(c) = e.cur_mut().take() {
+            e.outer_mut().push(c);
         }
-        e.cur = Some(t.cur());
+        *e.cur_mut() = Some(t.cur());
     });
     let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
     // SAFETY: the task has not answered 1 yet.
@@ -873,8 +1027,8 @@ fn poll_nested(t: &mut Task) -> bool {
     t.spans = crate::mir::swap_spans(outer);
     let cur = EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        let cur = e.cur.take();
-        e.cur = e.outer.pop();
+        let cur = e.cur_mut().take();
+        *e.cur_mut() = e.outer_mut().pop();
         cur
     });
     if let Some(cur) = cur {
@@ -908,6 +1062,8 @@ fn settle(t: Task) -> bool {
             false
         }
         _ => {
+            // Back on the queue, for this worker or the first that looks:
+            // no napping worker wakes for a task that was queued already.
             EXEC.with(|e| e.borrow_mut().queue.push_back(t));
             true
         }
@@ -951,7 +1107,7 @@ fn fire_deadlines() {
 /// running task was cancelled, once, when its teardown begins.
 #[no_mangle]
 pub extern "C" fn karac_mir_cancelled() -> u8 {
-    EXEC.with(|e| match e.borrow_mut().cur.as_mut() {
+    EXEC.with(|e| match e.borrow_mut().cur_mut().as_mut() {
         Some(c) if c.cancel && !c.torn => {
             c.torn = true;
             c.deadline = None;
@@ -967,14 +1123,14 @@ pub extern "C" fn karac_mir_cancelled() -> u8 {
 /// cancel exit.
 #[no_mangle]
 pub extern "C" fn karac_mir_unwinding() -> u8 {
-    EXEC.with(|e| u8::from(e.borrow().cur.is_some_and(|c| c.unwind)))
+    EXEC.with(|e| u8::from(e.borrow().cur().is_some_and(|c| c.unwind)))
 }
 
 /// `__unwind(on)`: a cancel exit begins (`on` 0) or ends (`on` 1).
 #[no_mangle]
 pub extern "C" fn karac_mir_unwind(on: u8) {
     EXEC.with(|e| {
-        if let Some(c) = e.borrow_mut().cur.as_mut() {
+        if let Some(c) = e.borrow_mut().cur_mut().as_mut() {
             c.unwind = on != 0;
         }
     });
@@ -1001,7 +1157,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
         }
         e.ids += 1;
         let id = e.ids;
-        e.queue.push_back(Task {
+        e.push(Task {
             id,
             group,
             poll,
@@ -1015,6 +1171,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             cancel: false,
             torn: false,
             unwind: false,
+            seen: 0,
         });
         e.progress += 1;
     });
@@ -1029,9 +1186,13 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
 pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut u8) {
     // SAFETY: the caller's contract.
     unsafe { karac_mir_task_spawn(std::ptr::null_mut(), poll, a, b) };
+    start_workers();
     // Tasks that waited on another task in a row with nothing happening in
     // between.
     let mut idle = 0usize;
+    // The progress count when that run began: another worker's progress
+    // meanwhile ends it too.
+    let mut quiet = 0u64;
     // Tasks run since the reactor was last asked.
     let mut since = 0usize;
     loop {
@@ -1051,21 +1212,60 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
         if woken > 0 {
             idle = 0;
         }
-        let Some(mut t) = EXEC.with(|e| {
+        // Under the pool, only a task worth polling: with none, every
+        // queued task waits on another and was polled since the last
+        // progress, so it waits for more.
+        let popped = EXEC.with(|e| {
             let mut e = e.borrow_mut();
-            let t = e.queue.pop_front();
-            if let Some(t) = &t {
-                e.cur = Some(t.cur());
+            let t = if pooled() {
+                let progress = e.progress;
+                let mut now = None;
+                match e.queue.iter().position(|t| worth(t, progress, &mut now)) {
+                    Some(i) => e.queue.remove(i),
+                    None if e.queue.is_empty() => None,
+                    None => return Err(Some(progress)),
+                }
+            } else {
+                e.queue.pop_front()
+            };
+            let t = t.ok_or(None)?;
+            *e.cur_mut() = Some(t.cur());
+            if pooled() {
+                e.running += 1;
             }
-            t
-        }) else {
-            // Nothing can run: every task left sleeps or waits on a
-            // descriptor, or none is left.
-            if !idle_wait(None) {
-                return;
+            Ok(t)
+        });
+        let mut t = match popped {
+            Ok(t) => t,
+            Err(Some(quiet)) => {
+                block(quiet);
+                idle = 0;
+                continue;
             }
-            idle = 0;
-            continue;
+            Err(None) => {
+                // Nothing can run here: another worker runs a task, or every
+                // task left sleeps or waits on a descriptor, or none is left.
+                // The queue is looked at again with the running count: a task
+                // another worker settled since the pop is queued by now.
+                let (queued, others) = EXEC.with(|e| {
+                    let e = e.borrow();
+                    (!e.queue.is_empty(), pooled() && e.running > 0)
+                });
+                if queued {
+                    continue;
+                }
+                if others {
+                    if !idle_wait(None) {
+                        nap(None);
+                    }
+                    continue;
+                }
+                if !idle_wait(None) {
+                    return;
+                }
+                idle = 0;
+                continue;
+            }
         };
         since += 1;
         let before = EXEC.with(|e| e.borrow().progress);
@@ -1075,19 +1275,21 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
         t.spans = crate::mir::swap_spans(outer);
         let (after, cur) = EXEC.with(|e| {
             let mut e = e.borrow_mut();
-            (e.progress, e.cur.take())
+            (e.progress, e.cur_mut().take())
         });
         if let Some(cur) = cur {
             t.keep(cur);
         }
         if done {
             task_done(&t);
+            finished_polling();
             idle = 0;
             continue;
         }
         // Cancelled while it ran, it is torn down at the wait it reached.
         if t.cancel && !t.torn {
             tear_down(t);
+            finished_polling();
             idle = 0;
             continue;
         }
@@ -1095,24 +1297,201 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             idle = 0;
         }
         if matches!(t.wait, Wait::Task | Wait::TaskBy(_)) && after == before {
+            if idle == 0 {
+                quiet = before;
+            }
             idle += 1;
         }
-        if !settle(t) {
+        t.seen = before;
+        let queued = settle(t);
+        finished_polling();
+        if !queued {
             continue;
         }
-        let stuck = EXEC.with(|e| idle >= e.borrow().queue.len());
+        let stuck = EXEC.with(|e| {
+            let e = e.borrow();
+            if e.progress != quiet {
+                idle = 0;
+            }
+            idle > 0 && idle >= e.queue.len()
+        });
         if stuck {
-            block();
+            block(quiet);
             idle = 0;
         }
+    }
+}
+
+/// How long an idle worker, or the first one waiting on timers and the
+/// reactor, waits before it looks again, under the pool.
+const POOL_NAP: Duration = Duration::from_micros(200);
+
+/// How long a napping worker waits for a task at most: a task queued
+/// wakes it sooner.
+const POOL_PARK: Duration = Duration::from_millis(10);
+
+/// How many times a napping worker looks for a wake before it parks.
+const POOL_SPINS: u32 = 4096;
+
+/// A napping worker: its number, its thread, and the flag [`rouse`] sets,
+/// which it watches while it spins before it parks.
+struct Sleeper {
+    worker: usize,
+    thread: std::thread::Thread,
+    woken: std::sync::Arc<AtomicBool>,
+}
+
+/// Wakes the napping worker `w`, one alone, so a wake brings one worker
+/// to the lock rather than all of them.
+fn rouse(w: Sleeper) {
+    w.woken.store(true, Ordering::Release);
+    w.thread.unpark();
+}
+
+thread_local! {
+    /// This worker's [`Sleeper::woken`].
+    static WOKEN: std::sync::Arc<AtomicBool> = std::sync::Arc::new(AtomicBool::new(false));
+}
+
+/// Starts the pool's other workers once, under `KARAC_THREADS` above 1.
+fn start_workers() {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if !pooled() || STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    for w in 1..threads() {
+        let spawned = std::thread::Builder::new()
+            .name(format!("karac-worker-{w}"))
+            // As deep as the main thread's: a poll runs the task's whole
+            // call chain.
+            .stack_size(8 << 20)
+            .spawn(move || worker_loop(w));
+        if spawned.is_err() {
+            break;
+        }
+    }
+}
+
+/// A task this worker polled is settled: it no longer counts as running.
+#[inline(always)]
+fn finished_polling() {
+    if !pooled() {
+        return;
+    }
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        e.running -= 1;
+        // The first worker naps while others run: the last of them done
+        // with nothing left worth polling, it may be the one to finish the
+        // program or find the tasks deadlocked.
+        let progress = e.progress;
+        let mut now = None;
+        if e.running == 0 && !e.queue.iter().any(|t| worth(t, progress, &mut now)) {
+            if let Some(i) = e.sleepers.iter().position(|s| s.worker == 0) {
+                let w = e.sleepers.swap_remove(i);
+                rouse(w);
+            }
+        }
+    });
+}
+
+/// Whether a worker other than this one polls a task now.
+fn others_running() -> bool {
+    pooled() && EXEC.with(|e| e.borrow().running > 0)
+}
+
+/// Naps until a task is queued, progress is made or [`POOL_PARK`] passes:
+/// the worker joins the sleepers unless the queue holds a runnable task
+/// now, or, with `quiet`, the progress count moved from it.
+fn nap(quiet: Option<u64>) {
+    let woken = WOKEN.with(std::sync::Arc::clone);
+    let me = worker();
+    let napping = EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let progress = e.progress;
+        let mut now = None;
+        let napping = !e.queue.iter().any(|t| worth(t, progress, &mut now))
+            && quiet.is_none_or(|q| progress == q);
+        if napping {
+            woken.store(false, Ordering::Relaxed);
+            e.sleepers.push(Sleeper {
+                worker: me,
+                thread: std::thread::current(),
+                woken: std::sync::Arc::clone(&woken),
+            });
+        }
+        napping
+    });
+    if napping {
+        // A while spinning first: a task that waits on another one running
+        // now is usually ready again within microseconds, sooner than a
+        // parked thread wakes.
+        let mut spins = 0;
+        while !woken.load(Ordering::Acquire) {
+            spins += 1;
+            if spins > POOL_SPINS {
+                std::thread::park_timeout(POOL_PARK);
+                break;
+            }
+            if spins % 64 == 0 {
+                std::thread::yield_now();
+            } else {
+                std::hint::spin_loop();
+            }
+        }
+        EXEC.with(|e| e.borrow_mut().sleepers.retain(|s| s.worker != me));
+    }
+}
+
+/// One of the pool's other workers: runs what the queue holds, and naps
+/// when it holds nothing. The first worker alone wakes sleepers, asks the
+/// reactor and reports a deadlock. It lives as long as the process, napping
+/// once no task is left.
+fn worker_loop(w: usize) {
+    WORKER.with(|c| c.set(w));
+    loop {
+        // Only a task worth polling: the first worker polls every waiting
+        // one again, so it alone can tell they all wait for ever.
+        let Some((mut t, before)) = EXEC.with(|e| {
+            let mut e = e.borrow_mut();
+            let progress = e.progress;
+            let mut now = None;
+            let at = e.queue.iter().position(|t| worth(t, progress, &mut now));
+            let t = at.and_then(|i| e.queue.remove(i))?;
+            *e.cur_mut() = Some(t.cur());
+            e.running += 1;
+            Some((t, progress))
+        }) else {
+            nap(None);
+            continue;
+        };
+        let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
+        // SAFETY: the task has not answered 1 yet.
+        let done = unsafe { (t.poll)(t.a, t.b) } != 0;
+        t.spans = crate::mir::swap_spans(outer);
+        if let Some(cur) = EXEC.with(|e| e.borrow_mut().cur_mut().take()) {
+            t.keep(cur);
+        }
+        if done {
+            task_done(&t);
+        } else if t.cancel && !t.torn {
+            tear_down(t);
+        } else {
+            t.seen = before;
+            settle(t);
+        }
+        finished_polling();
     }
 }
 
 /// Every task in the queue waits on another, with nothing having happened
 /// since each last ran: waits for a sleeper, a descriptor or a timed
 /// wait's deadline, or reports the deadlock when there is none.
-fn block() {
-    let (by, runnable) = EXEC.with(|e| {
+///
+/// `quiet` is the progress count when the run of waiting tasks began: a
+/// change since, on any worker, means they may not all wait any more.
+fn block(quiet: u64) {
+    let (others, by, runnable) = EXEC.with(|e| {
         let e = e.borrow();
         let by = e
             .queue
@@ -1122,8 +1501,24 @@ fn block() {
                 _ => None,
             })
             .min();
-        (by, e.queue.iter().any(|t| t.wait == Wait::None))
+        // A task polled since the last progress, on any worker, that still
+        // waits needs more progress; one that was not may be ready.
+        let progress = e.progress;
+        let mut now = None;
+        (
+            pooled() && e.running > 0,
+            by,
+            e.queue.iter().any(|t| worth(t, progress, &mut now)),
+        )
     });
+    // A task another worker polls now may be what the queue waits on;
+    // meanwhile this worker still wakes sleepers and asks the reactor.
+    if others {
+        if !idle_wait(by) {
+            nap(Some(quiet));
+        }
+        return;
+    }
     if runnable {
         return;
     }
@@ -1151,7 +1546,13 @@ fn idle_wait(by: Option<Instant>) -> bool {
     if until.is_none() && !parked {
         return false;
     }
-    let timeout = until.map(|t| t.saturating_duration_since(Instant::now()));
+    let mut timeout = until.map(|t| t.saturating_duration_since(Instant::now()));
+    if others_running() {
+        // Other workers put tasks to sleep or park them meanwhile, and only
+        // this one wakes sleepers: wait a little at a time. With none
+        // running and the queue empty, nothing else can change.
+        timeout = Some(timeout.map_or(POOL_NAP, |d| d.min(POOL_NAP)));
+    }
     if parked {
         wait_reactor(timeout);
     } else if let Some(d) = timeout {
@@ -1192,9 +1593,11 @@ fn park(t: Task, fd: i32, events: i16) -> Option<u64> {
 /// ready), and queues the tasks parked on each ready descriptor; answers
 /// how many.
 fn wait_reactor(timeout: Option<Duration>) -> usize {
-    let ready = EXEC.with(|e| e.borrow_mut().reactor.wait(timeout));
+    let waiter = EXEC.with(|e| e.borrow().reactor.waiter());
+    let ready = waiter.wait(timeout);
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
+        e.reactor.took(&ready);
         ready.into_iter().map(|fd| e.wake_fd(fd)).sum()
     })
 }
@@ -1232,7 +1635,7 @@ pub extern "C" fn karac_mir_io_again() -> u8 {
 #[cfg_attr(not(all(feature = "net", unix)), allow(dead_code))]
 pub(crate) fn set_inflight(fd: i32) {
     EXEC.with(|e| {
-        if let Some(cur) = e.borrow_mut().cur.as_mut() {
+        if let Some(cur) = e.borrow_mut().cur_mut().as_mut() {
             cur.inflight = Some(fd);
         }
     });
@@ -1241,7 +1644,12 @@ pub(crate) fn set_inflight(fd: i32) {
 /// The socket of the running task's connect under way, taken.
 #[cfg_attr(not(all(feature = "net", unix)), allow(dead_code))]
 pub(crate) fn take_inflight() -> Option<i32> {
-    EXEC.with(|e| e.borrow_mut().cur.as_mut().and_then(|c| c.inflight.take()))
+    EXEC.with(|e| {
+        e.borrow_mut()
+            .cur_mut()
+            .as_mut()
+            .and_then(|c| c.inflight.take())
+    })
 }
 
 #[cfg(unix)]
@@ -1350,8 +1758,26 @@ impl Reactor {
         }
     }
 
-    fn wait(&mut self, timeout: Option<Duration>) -> Vec<i32> {
-        let Some(ep) = self.ep else {
+    /// What a wait needs, taken under the executor's lock so the wait
+    /// itself runs without it.
+    fn waiter(&self) -> Waiter {
+        Waiter(self.ep)
+    }
+
+    /// Takes note of the descriptors a wait found ready.
+    fn took(&mut self, _ready: &[i32]) {}
+}
+
+/// A wait on the Linux reactor, run without the executor's lock: the
+/// `epoll` set is the kernel's, and a task that parks meanwhile registers
+/// with it on another worker.
+#[cfg(all(feature = "net", target_os = "linux"))]
+struct Waiter(Option<i32>);
+
+#[cfg(all(feature = "net", target_os = "linux"))]
+impl Waiter {
+    fn wait(self, timeout: Option<Duration>) -> Vec<i32> {
+        let Some(ep) = self.0 else {
             if let Some(d) = timeout {
                 std::thread::sleep(d);
             }
@@ -1389,12 +1815,32 @@ impl Reactor {
         self.fds.remove(&fd);
     }
 
+    /// What a wait needs, taken under the executor's lock so the wait
+    /// itself runs without it: the parked descriptors.
+    fn waiter(&self) -> Waiter {
+        Waiter(self.fds.iter().map(|(&fd, &ev)| (fd, ev)).collect())
+    }
+
+    /// Takes the descriptors a wait found ready off the watch list.
+    fn took(&mut self, ready: &[i32]) {
+        for fd in ready {
+            self.fds.remove(fd);
+        }
+    }
+}
+
+/// A wait over the parked descriptors, run without the executor's lock.
+#[cfg(not(all(feature = "net", target_os = "linux")))]
+struct Waiter(Vec<(i32, i16)>);
+
+#[cfg(not(all(feature = "net", target_os = "linux")))]
+impl Waiter {
     #[cfg(unix)]
-    fn wait(&mut self, timeout: Option<Duration>) -> Vec<i32> {
+    fn wait(self, timeout: Option<Duration>) -> Vec<i32> {
         let mut p: Vec<PollFd> = self
-            .fds
+            .0
             .iter()
-            .map(|(&fd, &events)| PollFd {
+            .map(|&(fd, events)| PollFd {
                 fd,
                 events,
                 revents: 0,
@@ -1402,17 +1848,13 @@ impl Reactor {
             .collect();
         // SAFETY: `p` holds `p.len()` initialized entries.
         unsafe { poll(p.as_mut_ptr(), p.len() as u64, timeout_ms(timeout)) };
-        let ready: Vec<i32> = p.iter().filter(|p| p.revents != 0).map(|p| p.fd).collect();
-        for fd in &ready {
-            self.fds.remove(fd);
-        }
-        ready
+        p.iter().filter(|p| p.revents != 0).map(|p| p.fd).collect()
     }
 
     #[cfg(not(unix))]
-    fn wait(&mut self, timeout: Option<Duration>) -> Vec<i32> {
+    fn wait(self, timeout: Option<Duration>) -> Vec<i32> {
         std::thread::sleep(timeout.unwrap_or(Duration::from_millis(1)));
-        self.fds.drain().map(|(fd, _)| fd).collect()
+        self.0.into_iter().map(|(fd, _)| fd).collect()
     }
 }
 
@@ -1421,7 +1863,7 @@ impl Reactor {
 fn note(ready: bool, wait: Wait) -> u8 {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        let Some(cur) = e.cur.as_mut() else {
+        let Some(cur) = e.cur_mut().as_mut() else {
             return 1;
         };
         if ready {
@@ -1449,7 +1891,7 @@ pub extern "C" fn karac_mir_ready(ready: u8) -> u8 {
 pub extern "C" fn karac_mir_ready_sleep(ms: i64) -> u8 {
     let at = EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        let cur = e.cur.as_mut()?;
+        let cur = e.cur_mut().as_mut()?;
         let now = Instant::now();
         let at = *cur
             .deadline
@@ -1469,7 +1911,7 @@ pub extern "C" fn karac_mir_ready_sleep(ms: i64) -> u8 {
 /// Whether the running task waits by a deadline (a pool's `acquire`, as
 /// [`ready_by`] keeps it), or `None` outside the executor.
 pub(crate) fn deadline_set() -> Option<bool> {
-    EXEC.with(|e| e.borrow().cur.as_ref().map(|cur| cur.deadline.is_some()))
+    EXEC.with(|e| e.borrow().cur().as_ref().map(|cur| cur.deadline.is_some()))
 }
 
 /// `__ready` of a call that waits up to `ns` nanoseconds for a condition
@@ -1480,7 +1922,7 @@ pub(crate) fn deadline_set() -> Option<bool> {
 pub(crate) fn ready_by(ready: bool, ns: i64) -> (u8, bool) {
     let at = EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        let cur = e.cur.as_mut()?;
+        let cur = e.cur_mut().as_mut()?;
         if ready {
             cur.deadline = None;
             return None;
@@ -1512,7 +1954,7 @@ pub(crate) fn chan_changed() {
     CHAN_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     EXEC.with(|e| {
         if let Ok(mut e) = e.try_borrow_mut() {
-            e.progress += 1;
+            e.progressed();
         }
     });
 }
@@ -1548,7 +1990,7 @@ pub extern "C" fn karac_mir_ready_select(epoch: i64, until: i64) -> u8 {
 /// deadline, and with none the program can never go on.
 #[no_mangle]
 pub extern "C" fn karac_mir_select_park(epoch: i64, until: i64) {
-    if EXEC.with(|e| e.borrow().cur.is_some()) || karac_mir_select_epoch() != epoch {
+    if EXEC.with(|e| e.borrow().cur().is_some()) || karac_mir_select_epoch() != epoch {
         return;
     }
     if until < 0 {
@@ -1567,7 +2009,7 @@ pub extern "C" fn karac_mir_select_park(epoch: i64, until: i64) {
 pub(crate) fn take_slept() -> bool {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        match e.cur.as_mut() {
+        match e.cur_mut().as_mut() {
             Some(cur) => std::mem::take(&mut cur.slept),
             None => false,
         }
@@ -1590,7 +2032,7 @@ fn arm() {
 #[no_mangle]
 pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     let events: i16 = if write != 0 { 4 } else { 1 }; // POLLOUT, POLLIN
-    if EXEC.with(|e| e.borrow().cur.is_none()) {
+    if EXEC.with(|e| e.borrow().cur().is_none()) {
         return 1;
     }
     if fd < 0 {
@@ -1626,7 +2068,7 @@ pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
 /// socket is writable.
 #[no_mangle]
 pub extern "C" fn karac_mir_ready_connect() -> u8 {
-    match EXEC.with(|e| e.borrow().cur.map(|c| c.inflight)) {
+    match EXEC.with(|e| e.borrow().cur().map(|c| c.inflight)) {
         None => 1,
         Some(Some(fd)) => karac_mir_ready_fd(i64::from(fd), 1),
         Some(None) => {
@@ -1636,31 +2078,48 @@ pub extern "C" fn karac_mir_ready_connect() -> u8 {
     }
 }
 
-thread_local! {
-    /// The mutexes a task holds, by their cells' addresses (B-2026-10-19-23):
-    /// kept here so a `Mutex[T]` is its value alone.
-    static HELD: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+program_state! {
+    /// The mutexes tasks hold, by their cells' addresses (B-2026-10-19-23),
+    /// each with the task holding it: kept here so a `Mutex[T]` is its
+    /// value alone.
+    static HELD: Vec<(usize, u64)> = Vec::new();
+}
+
+/// The running task's id, or 0 outside the executor.
+fn task_id() -> u64 {
+    current_task().unwrap_or(0)
 }
 
 /// `__ready("Mutex[T].acquire", m)`: whether no task holds the mutex at
-/// `cell`; only another task's release can change that.
+/// `cell`; only another task's release can change that. Under the pool the
+/// `__ready` that finds it free takes it for the running task, so another
+/// worker's task cannot take it before this one's `acquire` runs.
 #[no_mangle]
 pub extern "C" fn karac_mir_mutex_ready(cell: *mut u8) -> u8 {
-    let free = HELD.with(|h| !h.borrow().contains(&(cell as usize)));
+    let cell = cell as usize;
+    let me = if pooled() { task_id() } else { 0 };
+    let free = HELD.with(|h| {
+        let free = h.iter().all(|&(c, _)| c != cell);
+        if free && pooled() {
+            h.push((cell, me));
+        }
+        free
+    });
     note(free, Wait::Task)
 }
 
 /// `Mutex[T].acquire`, run once its `__ready` saw the mutex free: marks it
-/// held.
+/// held (under the pool, its `__ready` did).
 #[no_mangle]
 pub extern "C" fn karac_mir_mutex_acquire(cell: *mut u8) {
-    let taken = HELD.with(|h| {
-        let mut h = h.borrow_mut();
-        let held = h.contains(&(cell as usize));
-        if !held {
-            h.push(cell as usize);
+    let cell = cell as usize;
+    let me = if pooled() { task_id() } else { 0 };
+    let taken = HELD.with(|h| match h.iter().find(|&&(c, _)| c == cell) {
+        Some(&(_, t)) => !(pooled() && t == me),
+        None => {
+            h.push((cell, me));
+            false
         }
-        held
     });
     if taken {
         crate::mir::deadlock("lock of a mutex that is already held");
@@ -1672,8 +2131,7 @@ pub extern "C" fn karac_mir_mutex_acquire(cell: *mut u8) {
 #[no_mangle]
 pub extern "C" fn karac_mir_mutex_release(cell: *mut u8) {
     let held = HELD.with(|h| {
-        let mut h = h.borrow_mut();
-        let at = h.iter().position(|&c| c == cell as usize);
+        let at = h.iter().position(|&(c, _)| c == cell as usize);
         at.map(|i| h.swap_remove(i))
     });
     if held.is_none() {
@@ -1716,7 +2174,7 @@ fn ready_read_by(fd: i32, t: Duration) -> u8 {
 /// that deadline at most, as [`ready_read_by`]'s.
 #[cfg(all(feature = "tls", unix))]
 pub(crate) fn ready_io(fd: i32, ready: bool, out: bool, by: Option<Duration>) -> u8 {
-    if EXEC.with(|e| e.borrow().cur.is_none()) {
+    if EXEC.with(|e| e.borrow().cur().is_none()) {
         return 1;
     }
     let events: i16 = if out { 4 } else { 1 }; // POLLOUT, POLLIN
@@ -1732,7 +2190,7 @@ fn read_by(fd: i32, readable: bool, events: i16, t: Duration) -> u8 {
     let now = Instant::now();
     let at = EXEC.with(|e| {
         let mut e = e.borrow_mut();
-        let cur = e.cur.as_mut().expect("asked inside the executor");
+        let cur = e.cur_mut().as_mut().expect("asked inside the executor");
         let at = *cur.deadline.get_or_insert(now + t);
         if readable || now >= at {
             cur.deadline = None;

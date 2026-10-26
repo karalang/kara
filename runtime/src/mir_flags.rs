@@ -5,16 +5,18 @@
 //! (`src/mir/flags.rs`) places the operations; this keeps the flags, by the
 //! field's address.
 //!
-//! `shared` values never cross threads, so each thread keeps its own flags.
-//! Few are held at once (one per live loan of a flagged field), so they sit
+//! `shared` values never cross tasks, but under the pool a task can move
+//! between workers at a suspension, so the flags are program state
+//! (`mir_task::program_state!`): each thread's own on one worker, one table
+//! behind a lock under the pool. Few are held at once (one per live loan of a flagged field), so they sit
 //! in a short list, and a check with none held returns at once.
 //!
 //! A coroutine's resume body has no frame slots of its own to remember
 //! what it took, so the `_in` entry points keep that here, by the
 //! coroutine frame's address and the slot's index, across suspensions
-//! (B-2026-10-20-14). The MIR executor runs every task on one thread.
+//! (B-2026-10-20-14).
 
-use std::cell::RefCell;
+use crate::mir_task::program_state;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// One flagged field: how many readers hold it, or whether a writer does.
@@ -28,13 +30,15 @@ struct Flag {
 struct Hold {
     frame: usize,
     slot: u32,
-    addr: *const u8,
+    addr: usize,
     mutable: u8,
 }
 
-thread_local! {
-    static FLAGS: RefCell<Vec<Flag>> = const { RefCell::new(Vec::new()) };
-    static HOLDS: RefCell<Vec<Hold>> = const { RefCell::new(Vec::new()) };
+program_state! {
+    static FLAGS: Vec<Flag> = Vec::new();
+}
+program_state! {
+    static HOLDS: Vec<Hold> = Vec::new();
 }
 
 /// How many flags any thread holds: a check with none held is one load.
@@ -51,7 +55,6 @@ pub extern "C" fn karac_mir_flag_acquire(addr: *const u8, mutable: u8) -> u8 {
     let addr = addr as usize;
     let mutable = mutable != 0;
     FLAGS.with(|fl| {
-        let mut fl = fl.borrow_mut();
         match fl.iter_mut().find(|f| f.addr == addr) {
             Some(f) if conflicts(f, mutable) => return 1,
             Some(f) => {
@@ -80,7 +83,6 @@ pub extern "C" fn karac_mir_flag_acquire(addr: *const u8, mutable: u8) -> u8 {
 pub extern "C" fn karac_mir_flag_release(addr: *const u8, mutable: u8) {
     let addr = addr as usize;
     FLAGS.with(|fl| {
-        let mut fl = fl.borrow_mut();
         let Some(i) = fl.iter().position(|f| f.addr == addr) else {
             return;
         };
@@ -106,7 +108,6 @@ pub extern "C" fn karac_mir_flag_check(addr: *const u8, mutable: u8) -> u8 {
     }
     let addr = addr as usize;
     FLAGS.with(|fl| {
-        let fl = fl.borrow();
         u8::from(
             fl.iter()
                 .any(|f| f.addr == addr && conflicts(f, mutable != 0)),
@@ -130,10 +131,10 @@ pub extern "C" fn karac_mir_flag_acquire_in(
         return 1;
     }
     HOLDS.with(|h| {
-        h.borrow_mut().push(Hold {
+        h.push(Hold {
             frame: frame as usize,
             slot,
-            addr,
+            addr: addr as usize,
             mutable,
         })
     });
@@ -146,12 +147,11 @@ pub extern "C" fn karac_mir_flag_acquire_in(
 pub extern "C" fn karac_mir_flag_release_in(frame: *const u8, slot: u32) {
     let frame = frame as usize;
     let held = HOLDS.with(|h| {
-        let mut h = h.borrow_mut();
         let i = h.iter().position(|x| x.frame == frame && x.slot == slot)?;
         Some(h.swap_remove(i))
     });
     if let Some(x) = held {
-        karac_mir_flag_release(x.addr, x.mutable);
+        karac_mir_flag_release(x.addr as *const u8, x.mutable);
     }
 }
 
@@ -161,15 +161,14 @@ pub extern "C" fn karac_mir_flag_release_in(frame: *const u8, slot: u32) {
 pub extern "C" fn karac_mir_flag_release_frame(frame: *const u8) {
     let frame = frame as usize;
     let held: Vec<Hold> = HOLDS.with(|h| {
-        let mut h = h.borrow_mut();
-        let (mine, rest) = std::mem::take(&mut *h)
+        let (mine, rest) = std::mem::take(h)
             .into_iter()
             .partition(|x| x.frame == frame);
         *h = rest;
         mine
     });
     for x in held {
-        karac_mir_flag_release(x.addr, x.mutable);
+        karac_mir_flag_release(x.addr as *const u8, x.mutable);
     }
 }
 

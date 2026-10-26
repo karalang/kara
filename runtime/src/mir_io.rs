@@ -1182,12 +1182,11 @@ pub unsafe extern "C" fn karac_mir_ws_accept_key(p: *const u8, n: i64, out: *mut
 mod http1;
 
 #[cfg(feature = "net")]
-thread_local! {
+crate::mir_task::program_state! {
     /// The request each task's handler is answering, by task id (0 outside
     /// the executor), which `Request`'s methods read: a server answers each
     /// connection in a task of its own (B-2026-10-25-41).
-    static MIR_REQUESTS: std::cell::RefCell<std::collections::HashMap<u64, http1::Request>> =
-        Default::default();
+    static MIR_REQUESTS: Option<std::collections::HashMap<u64, http1::Request>> = None;
 }
 
 /// The running task's key in [`MIR_REQUESTS`].
@@ -1206,10 +1205,10 @@ fn set_request(req: http1::Request) {
     // Each executor's own tasks end on its thread.
     if key != 0 && !HOOKED.with(|h| h.replace(true)) {
         crate::mir_task::on_task_end(|task| {
-            MIR_REQUESTS.with(|r| r.borrow_mut().remove(&task));
+            MIR_REQUESTS.with(|r| r.as_mut().map(|r| r.remove(&task)));
         });
     }
-    MIR_REQUESTS.with(|r| r.borrow_mut().insert(key, req));
+    MIR_REQUESTS.with(|r| r.get_or_insert_with(Default::default).insert(key, req));
 }
 
 /// `f` of the running task's request, or of an empty one before it has
@@ -1217,7 +1216,7 @@ fn set_request(req: http1::Request) {
 #[cfg(feature = "net")]
 fn with_request<T>(f: impl FnOnce(&http1::Request) -> T) -> T {
     let key = request_key();
-    MIR_REQUESTS.with(|r| match r.borrow().get(&key) {
+    MIR_REQUESTS.with(|r| match r.as_ref().and_then(|r| r.get(&key)) {
         Some(req) => f(req),
         None => f(&http1::Request::default()),
     })

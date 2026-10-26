@@ -57,11 +57,15 @@ thread_local! {
             starts: Vec::new(),
         })
     };
-    /// Standard output, flushed at exit, at an abort, and before anything
-    /// is written to standard error so the two stay in order on a terminal.
-    static OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     /// The message `panic(msg)` set for the abort that follows it.
     static PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+crate::mir_task::program_state! {
+    /// Standard output, flushed at exit, at an abort, and before anything
+    /// is written to standard error so the two stay in order on a terminal.
+    /// One buffer for the program, so the pool's workers write in order.
+    static OUT: Vec<u8> = Vec::new();
 }
 
 const OUT_LIMIT: usize = 1 << 16;
@@ -84,10 +88,9 @@ fn fmt_pop<T>(f: impl FnOnce(&[u8]) -> T) -> T {
 
 pub(crate) fn out_flush() {
     OUT.with(|o| {
-        let mut o = o.borrow_mut();
         if !o.is_empty() {
             let mut so = std::io::stdout().lock();
-            let _ = so.write_all(&o);
+            let _ = so.write_all(o);
             let _ = so.flush();
             o.clear();
         }
@@ -99,16 +102,15 @@ fn write(stderr: bool, bytes: &[u8]) {
         out_flush();
         let _ = std::io::stderr().write_all(bytes);
     } else {
-        OUT.with(|o| {
-            let mut o = o.borrow_mut();
+        let full = OUT.with(|o| {
             o.extend_from_slice(bytes);
             // A terminal sees each line as it ends (docs/library/io.md §
             // Buffering); a pipe or file gets the block.
-            if o.len() >= OUT_LIMIT || (bytes.contains(&b'\n') && stdout_is_terminal()) {
-                drop(o);
-                out_flush();
-            }
+            o.len() >= OUT_LIMIT || (bytes.contains(&b'\n') && stdout_is_terminal())
         });
+        if full {
+            out_flush();
+        }
     }
 }
 
@@ -1491,11 +1493,13 @@ pub unsafe extern "C" fn karac_mir_cstr_to_string(out: *mut RawVec, p: *const u8
     }
 }
 
-thread_local! {
+crate::mir_task::program_state! {
     /// Each `Semaphore`'s `(available, initial)` permits, by id - 1.
-    static SEMAPHORES: std::cell::RefCell<Vec<(i64, i64)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static SEMAPHORES: Vec<(i64, i64)> = Vec::new();
+}
+crate::mir_task::program_state! {
     /// Each `RateLimiter`'s rate, capacity and per-key `(tokens, last)`.
-    static LIMITERS: std::cell::RefCell<Vec<Limiter>> = const { std::cell::RefCell::new(Vec::new()) };
+    static LIMITERS: Vec<Limiter> = Vec::new();
 }
 
 struct Limiter {
@@ -1510,7 +1514,6 @@ struct Limiter {
 pub extern "C" fn karac_mir_sem_new(n: i64) -> i64 {
     let n = n.max(0);
     SEMAPHORES.with(|s| {
-        let mut s = s.borrow_mut();
         s.push((n, n));
         s.len() as i64
     })
@@ -1520,23 +1523,21 @@ pub extern "C" fn karac_mir_sem_new(n: i64) -> i64 {
 /// none is left or the id names no semaphore.
 #[no_mangle]
 pub extern "C" fn karac_mir_sem_acquire(id: i64) -> u8 {
-    SEMAPHORES.with(|s| {
-        let mut s = s.borrow_mut();
-        match usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i)) {
+    SEMAPHORES.with(
+        |s| match usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i)) {
             Some((avail, _)) if *avail > 0 => {
                 *avail -= 1;
                 1
             }
             _ => 0,
-        }
-    })
+        },
+    )
 }
 
 /// `Semaphore.release`: a permit back, never above the initial count.
 #[no_mangle]
 pub extern "C" fn karac_mir_sem_release(id: i64) {
     SEMAPHORES.with(|s| {
-        let mut s = s.borrow_mut();
         if let Some((avail, max)) = usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i)) {
             if *avail < *max {
                 *avail += 1;
@@ -1549,7 +1550,6 @@ pub extern "C" fn karac_mir_sem_release(id: i64) {
 #[no_mangle]
 pub extern "C" fn karac_mir_limiter_new(rate: i64, cap: i64) -> i64 {
     LIMITERS.with(|l| {
-        let mut l = l.borrow_mut();
         l.push(Limiter {
             rate: rate.max(0) as f64,
             capacity: cap.max(0) as f64,
@@ -1571,7 +1571,6 @@ pub unsafe extern "C" fn karac_mir_limiter_try(id: i64, p: *const u8, n: u64) ->
     // SAFETY: the caller's contract.
     let key = unsafe { bytes(p, n) }.to_vec();
     LIMITERS.with(|l| {
-        let mut l = l.borrow_mut();
         let Some(l) = usize::try_from(id - 1).ok().and_then(|i| l.get_mut(i)) else {
             return 0;
         };
@@ -2505,7 +2504,8 @@ fn abort_message(msg: String) -> String {
 /// (design.md § Error return traces).
 const ERROR_TRACE_DEPTH: usize = 64;
 
-/// The thread's error return trace: the place (`file:line:col`, a string
+/// The thread's error return trace (the program's under the pool, whose
+/// tasks move between workers): the place (`file:line:col`, a string
 /// constant of the program, as its address and length) of each `?` that
 /// returned an error since the last one that succeeded, oldest first; and
 /// whether it dropped its oldest frames to stay [`ERROR_TRACE_DEPTH`] deep.
@@ -2514,12 +2514,10 @@ struct ErrorTrace {
     truncated: bool,
 }
 
-thread_local! {
-    static ERROR_TRACE: RefCell<ErrorTrace> = const {
-        RefCell::new(ErrorTrace {
-            frames: Vec::new(),
-            truncated: false,
-        })
+crate::mir_task::program_state! {
+    static ERROR_TRACE: ErrorTrace = ErrorTrace {
+        frames: Vec::new(),
+        truncated: false,
     };
 }
 
@@ -2538,7 +2536,6 @@ pub unsafe extern "C" fn karac_mir_error_trace_push(
     live: *const std::sync::atomic::AtomicU64,
 ) {
     ERROR_TRACE.with(|t| {
-        let mut t = t.borrow_mut();
         if t.frames.is_empty() {
             // SAFETY: the caller's contract.
             unsafe { &*live }.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2558,7 +2555,6 @@ pub unsafe extern "C" fn karac_mir_error_trace_push(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_error_trace_clear(live: *const std::sync::atomic::AtomicU64) {
     ERROR_TRACE.with(|t| {
-        let mut t = t.borrow_mut();
         if !t.frames.is_empty() {
             t.frames.clear();
             t.truncated = false;
@@ -2573,7 +2569,6 @@ pub unsafe extern "C" fn karac_mir_error_trace_clear(live: *const std::sync::ato
 /// no frame (design.md § Error return traces, § Panic record).
 fn error_trace_text(last: Option<&str>) -> String {
     ERROR_TRACE.with(|t| {
-        let t = t.borrow();
         let mut frames: Vec<std::borrow::Cow<'_, str>> = t
             .frames
             .iter()
@@ -3521,6 +3516,22 @@ pub struct MirPool {
     waiting: i64,
 }
 
+/// Every pool's state changes under this lock: a `Pool` crosses tasks, and
+/// under the pool's workers two tasks can reach one at once. Drop glue and
+/// the executor run outside it.
+static POOL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// `f` of the pool at `h`, under [`POOL_LOCK`].
+///
+/// # Safety
+/// `h` is a live pool.
+unsafe fn with_pool<T>(h: *mut MirPool, f: impl FnOnce(&mut MirPool) -> T) -> T {
+    let _held = POOL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // SAFETY: the caller's contract; the lock keeps every other worker's
+    // reference out.
+    f(unsafe { &mut *h })
+}
+
 impl MirPool {
     /// Whether `acquire` can complete now: an idle value, room for a new
     /// one, or a closed pool.
@@ -3551,18 +3562,26 @@ pub unsafe extern "C" fn karac_mir_ready_pool(h: *mut MirPool, ns: i64) -> u8 {
         return 1;
     }
     // SAFETY: the caller's contract.
-    let p = unsafe { &mut *h };
-    let free = p.free();
-    if !free && !waiting {
-        if p.waiting >= p.max_waiters {
-            POOL_VERDICT.with(|v| v.set(Some(1)));
-            return crate::mir_task::ready_by(true, ns).0;
-        }
-        p.waiting += 1;
+    let (free, turned) = unsafe {
+        with_pool(h, |p| {
+            let free = p.free();
+            if !free && !waiting {
+                if p.waiting >= p.max_waiters {
+                    return (free, true);
+                }
+                p.waiting += 1;
+            }
+            (free, false)
+        })
+    };
+    if turned {
+        POOL_VERDICT.with(|v| v.set(Some(1)));
+        return crate::mir_task::ready_by(true, ns).0;
     }
     let (ready, timed_out) = crate::mir_task::ready_by(free, ns);
     if ready != 0 && (waiting || !free) {
-        p.waiting -= 1;
+        // SAFETY: as above.
+        unsafe { with_pool(h, |p| p.waiting -= 1) };
     }
     if timed_out {
         POOL_VERDICT.with(|v| v.set(Some(0)));
@@ -3582,7 +3601,7 @@ pub unsafe extern "C" fn karac_mir_pool_full(h: *mut MirPool, ns: i64) -> u8 {
         return v;
     }
     // SAFETY: the caller's contract.
-    if unsafe { &*h }.waiting >= unsafe { &*h }.max_waiters {
+    if unsafe { with_pool(h, |p| p.waiting >= p.max_waiters) } {
         return 1;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -3634,10 +3653,13 @@ pub unsafe extern "C" fn karac_mir_pool_new(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pool_close(h: *mut MirPool) {
     // SAFETY: the caller's contract.
-    let p = unsafe { &mut *h };
-    p.closed = true;
-    let slots = std::mem::take(&mut p.slots);
-    if let Some(d) = p.drop {
+    let (slots, drop) = unsafe {
+        with_pool(h, |p| {
+            p.closed = true;
+            (std::mem::take(&mut p.slots), p.drop)
+        })
+    };
+    if let Some(d) = drop {
         for mut b in slots {
             // SAFETY: the bytes are a value the glue drops.
             unsafe { d(b.as_mut_ptr()) };
@@ -3652,7 +3674,7 @@ pub unsafe extern "C" fn karac_mir_pool_close(h: *mut MirPool) {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pool_closed(h: *mut MirPool) -> u8 {
     // SAFETY: the caller's contract.
-    u8::from(unsafe { &*h }.closed)
+    u8::from(unsafe { with_pool(h, |p| p.closed) })
 }
 
 /// Another `Pool` value for `h`; `check` (when not null, moved in)
@@ -3666,13 +3688,16 @@ pub unsafe extern "C" fn karac_mir_pool_share(
     check: *const MirFnBytes,
 ) -> *mut MirPool {
     // SAFETY: the caller's contract.
-    let p = unsafe { &mut *h };
-    p.refs += 1;
-    if !check.is_null() {
-        // SAFETY: as above.
-        if let Some(old) = p.check.replace(unsafe { check.read_unaligned() }) {
-            unsafe { drop_mir_fn(&old) };
-        }
+    let old = unsafe {
+        with_pool(h, |p| {
+            p.refs += 1;
+            // SAFETY: as above.
+            (!check.is_null()).then(|| p.check.replace(check.read_unaligned()))
+        })
+    };
+    if let Some(Some(old)) = old {
+        // SAFETY: the pool owned the replaced check.
+        unsafe { drop_mir_fn(&old) };
     }
     h
 }
@@ -3685,11 +3710,12 @@ pub unsafe extern "C" fn karac_mir_pool_share(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pool_fn(h: *mut MirPool, which: u8) -> *const MirFnBytes {
     // SAFETY: the caller's contract.
-    let p = unsafe { &*h };
-    match (which, &p.check) {
-        (0, _) => &p.create,
-        (_, Some(c)) => c,
-        _ => std::ptr::null(),
+    unsafe {
+        with_pool(h, |p| match (which, &p.check) {
+            (0, _) => &p.create as *const MirFnBytes,
+            (_, Some(c)) => c,
+            _ => std::ptr::null(),
+        })
     }
 }
 
@@ -3700,11 +3726,10 @@ pub unsafe extern "C" fn karac_mir_pool_fn(h: *mut MirPool, which: u8) -> *const
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pool_pop(h: *mut MirPool, out: *mut u8) -> u8 {
     // SAFETY: the caller's contract.
-    let p = unsafe { &mut *h };
-    match p.slots.pop() {
-        Some(b) => {
+    match unsafe { with_pool(h, |p| p.slots.pop().map(|b| (b, p.size))) } {
+        Some((b, size)) => {
             // SAFETY: as above.
-            unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, p.size) };
+            unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, size) };
             1
         }
         None => 0,
@@ -3719,12 +3744,15 @@ pub unsafe extern "C" fn karac_mir_pool_pop(h: *mut MirPool, out: *mut u8) -> u8
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pool_count(h: *mut MirPool, delta: i64) -> u8 {
     // SAFETY: the caller's contract.
-    let p = unsafe { &mut *h };
-    if delta == 0 {
-        return u8::from(p.active < p.max);
+    unsafe {
+        with_pool(h, |p| {
+            if delta == 0 {
+                return u8::from(p.active < p.max);
+            }
+            p.active = (p.active + delta).max(0);
+            1
+        })
     }
-    p.active = (p.active + delta).max(0);
-    1
 }
 
 /// A new connection id, recorded as checked out; the connection holds a
@@ -3735,12 +3763,15 @@ pub unsafe extern "C" fn karac_mir_pool_count(h: *mut MirPool, delta: i64) -> u8
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pool_check_out(h: *mut MirPool) -> i64 {
     // SAFETY: the caller's contract.
-    let p = unsafe { &mut *h };
-    let c = p.next_conn;
-    p.next_conn += 1;
-    p.out.insert(c);
-    p.refs += 1;
-    c
+    unsafe {
+        with_pool(h, |p| {
+            let c = p.next_conn;
+            p.next_conn += 1;
+            p.out.insert(c);
+            p.refs += 1;
+            c
+        })
+    }
 }
 
 /// Hands back the value at `val` of connection `conn` from pool `h`, to
@@ -3758,16 +3789,17 @@ pub unsafe extern "C" fn karac_mir_pool_return(
     conn: i64,
     val: *const u8,
 ) -> u8 {
-    let took = {
-        // SAFETY: the caller's contract.
-        let p = unsafe { &mut *h };
-        if p.out.remove(&conn) && (into.is_null() || into == h) && !p.closed {
-            // SAFETY: as above.
-            p.slots.push(unsafe { bytes(val, p.size) }.into());
-            1
-        } else {
-            0
-        }
+    // SAFETY: the caller's contract.
+    let took = unsafe {
+        with_pool(h, |p| {
+            if p.out.remove(&conn) && (into.is_null() || into == h) && !p.closed {
+                // SAFETY: as above.
+                p.slots.push(bytes(val, p.size).into());
+                1
+            } else {
+                0
+            }
+        })
     };
     // SAFETY: the connection's reference.
     unsafe { karac_mir_pool_drop(h) };
@@ -3784,13 +3816,15 @@ pub unsafe extern "C" fn karac_mir_pool_drop(h: *mut MirPool) {
     if h.is_null() {
         return;
     }
-    {
-        // SAFETY: the caller's contract.
-        let p = unsafe { &mut *h };
-        p.refs -= 1;
-        if p.refs > 0 {
-            return;
-        }
+    // SAFETY: the caller's contract.
+    let left = unsafe {
+        with_pool(h, |p| {
+            p.refs -= 1;
+            p.refs
+        })
+    };
+    if left > 0 {
+        return;
     }
     // SAFETY: the last reference; the pool came from `Box::into_raw`.
     let p = unsafe { Box::from_raw(h) };
