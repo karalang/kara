@@ -15013,3 +15013,61 @@ fn none_beside_a_ref_none_argument_is_no_borrowed_move() {
         "7\n",
     );
 }
+
+/// B-2026-10-24-38: a destructuring `let (a, b) = cases[i];` whose parts
+/// are only read is fixed with the `ref cases[i]` borrow, as a plain
+/// `let t = v[i];` is (B-2026-10-24-18); a part that is moved still gets
+/// `.clone()`.
+#[test]
+fn a_read_only_destructured_index_let_is_fixed_by_a_borrow() {
+    rejected_then_fixed_in(
+        "index-let-tuple-borrow",
+        "fn total(v: Vec[i64]) -> i64 {\n\
+             let mut s = 0;\n\
+             for x in v.iter() {\n\
+                 s += x;\n\
+             }\n\
+             s\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let mut cases: Vec[(Vec[i64], Vec[i64])] = Vec.new();\n\
+             cases.push((vec![1, 2], vec![3]));\n\
+             cases.push((vec![4], vec![5, 6]));\n\
+             let mut sum = 0;\n\
+             for i in 0..2 {\n\
+                 let (a, b) = cases[i];\n\
+                 sum += total(a) + total(b);\n\
+             }\n\
+             println(f\"{sum}\");\n\
+         }\n",
+        "The binding is only read, so the fix borrows it",
+        "let (a, b) = ref cases[i];",
+        1,
+    );
+    rejected_then_fixed_in(
+        "index-let-tuple-moved",
+        "fn total(v: own Vec[i64]) -> i64 {\n\
+             let mut s = 0;\n\
+             for x in v.iter() {\n\
+                 s += x;\n\
+             }\n\
+             s\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let mut cases: Vec[(Vec[i64], Vec[i64])] = Vec.new();\n\
+             cases.push((vec![1, 2], vec![3]));\n\
+             cases.push((vec![4], vec![5, 6]));\n\
+             let mut sum = 0;\n\
+             for i in 0..2 {\n\
+                 let (a, b) = cases[i];\n\
+                 sum += total(a) + total(b);\n\
+             }\n\
+             println(f\"{sum}\");\n\
+         }\n",
+        "E_INDEX_MOVE_NON_COPY",
+        "let (a, b) = cases[i].clone();",
+        3,
+    );
+}

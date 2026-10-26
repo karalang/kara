@@ -29,7 +29,7 @@ const READING_METHODS: &[&str] = &[
     "as_slice",
 ];
 
-use crate::ast::{Block, Expr, ExprKind, PatternKind, StmtKind, UnaryOp};
+use crate::ast::{Block, Expr, ExprKind, Pattern, PatternKind, StmtKind, UnaryOp};
 use crate::cfg::{Classification, UseKind};
 use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
 use crate::resolver::SpanKey;
@@ -48,14 +48,18 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
         else {
             continue;
         };
-        let (PatternKind::Binding(name), ExprKind::Index { .. }) = (&pattern.kind, &value.kind)
-        else {
+        // A destructuring `let (a, b) = v[i];` borrows the same way when
+        // every part is only read (B-2026-10-24-38).
+        let mut names = Vec::new();
+        if !matches!(value.kind, ExprKind::Index { .. }) || !simple_bindings(pattern, &mut names) {
             continue;
-        };
+        }
         // The uses after the `let` are the ones past its initializer.
         let end = value.span.offset + value.span.length;
         let mut uses = Vec::new();
-        uses_in_block(body, name, &mut uses);
+        for name in &names {
+            uses_in_block(body, name, &mut uses);
+        }
         uses.retain(|k| k.0 >= end);
         if !uses
             .iter()
@@ -91,6 +95,20 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
         out.insert(SpanKey::from_span(&value.span));
     }
     for_each_block_child(body, &mut |ch| nested(ch, c, out));
+}
+
+/// The names a pattern of plain bindings, `_` and tuples of them binds, or
+/// `false` for any other pattern.
+fn simple_bindings<'p>(p: &'p Pattern, out: &mut Vec<&'p str>) -> bool {
+    match &p.kind {
+        PatternKind::Binding(n) => {
+            out.push(n.as_str());
+            true
+        }
+        PatternKind::Wildcard => true,
+        PatternKind::Tuple(ps) => ps.iter().all(|p| simple_bindings(p, out)),
+        _ => false,
+    }
 }
 
 fn nested(ch: Child<'_>, c: &Classification, out: &mut HashSet<SpanKey>) {
