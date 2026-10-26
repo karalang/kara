@@ -456,13 +456,120 @@ impl FormatSpec {
 /// 16, as Python's `repr` (`1e+16`, `1e-05`); the special values are `NaN`,
 /// `inf` and `-inf`. The MIR interpreter and the compiled MIR backend's
 /// runtime both print through this.
+///
+/// When two equally short decimals both read back and the value lies exactly
+/// halfway between them, the one with the even last digit is shown, as
+/// Python's `repr` does: -75455689800034.625 prints -75455689800034.62
+/// (B-2026-10-23-4). Rust's shortest digits round that last digit up.
 pub fn display_f64(v: f64) -> String {
-    shown_float(v, format!("{v:e}"), v.to_string())
+    let sci = format!("{v:e}");
+    match even_tie(v, &sci, |t| t.parse::<f64>() == Ok(v)) {
+        Some((sci, plain)) => shown_float(v, sci, plain),
+        None => shown_float(v, sci, v.to_string()),
+    }
 }
 
 /// [`display_f64`] with an `f32`'s own shortest digits.
 pub fn display_f32(v: f32) -> String {
-    shown_float(f64::from(v), format!("{v:e}"), v.to_string())
+    let sci = format!("{v:e}");
+    match even_tie(f64::from(v), &sci, |t| t.parse::<f32>() == Ok(v)) {
+        Some((sci, plain)) => shown_float(f64::from(v), sci, plain),
+        None => shown_float(f64::from(v), sci, v.to_string()),
+    }
+}
+
+/// The `{:e}` and plain forms of the even-ending neighbour of `sci`'s
+/// shortest digits, when `v` lies exactly halfway between the two and the
+/// neighbour also `reads_back` as `v`; None otherwise. Only an odd last
+/// digit can lose such a tie, and its neighbours differ in that digit
+/// alone (a 9's upper neighbour would carry to a shorter decimal, which
+/// the shortest digits would already be).
+fn even_tie(v: f64, sci: &str, reads_back: impl Fn(&str) -> bool) -> Option<(String, String)> {
+    if !v.is_finite() || v == 0.0 {
+        return None;
+    }
+    // A cheap necessary condition, which nearly every value fails: `v` is
+    // M * 2^q with M odd, so when q < 0 it has exactly -q decimal places,
+    // and the midpoint after the n shortest digits has n - exp of them. It
+    // is first bounded from the bits alone (n is at most 17, and exp is at
+    // least the binary exponent's decimal floor less one), so a typical
+    // value is turned away before any text is read.
+    let bits = v.abs().to_bits();
+    let (m, q, e2) = match (bits >> 52) as i32 {
+        0 => (bits, -1074, -1075),
+        e => (bits & ((1 << 52) - 1) | 1 << 52, e - 1075, e - 1023),
+    };
+    let q = q + m.trailing_zeros() as i32;
+    if q < 0 && -q > 17 - ((e2 * 30103).div_euclid(100000) - 1) {
+        return None;
+    }
+    let (mantissa, exp) = sci.split_once('e')?;
+    let exp: i32 = exp.parse().ok()?;
+    let (neg, mantissa) = match mantissa.strip_prefix('-') {
+        Some(m) => (true, m),
+        None => (false, mantissa),
+    };
+    if mantissa
+        .bytes()
+        .last()
+        .is_none_or(|b| (b - b'0').is_multiple_of(2))
+    {
+        return None;
+    }
+    let n = mantissa.bytes().filter(u8::is_ascii_digit).count() as i32;
+    if q < 0 && -q != n - exp {
+        return None;
+    }
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let last = digits.bytes().last()? - b'0';
+    let stem = &digits[..digits.len() - 1];
+    let sign = if neg { "-" } else { "" };
+    let sci_of = |d: &str| match d.split_at(1) {
+        (lead, "") => format!("{sign}{lead}e{exp}"),
+        (lead, rest) => format!("{sign}{lead}.{rest}e{exp}"),
+    };
+    // `v` is exactly halfway when its exact decimal expansion (finite for a
+    // double; 1100 places hold the longest) is the midpoint. Reading the
+    // midpoint back as `v` is checked first: it is cheap, and a value that
+    // is nowhere near a tie never pays for the expansion.
+    for (neighbour, midpoint) in [
+        (last - 1, format!("{stem}{}5", last - 1)),
+        (last + 1, format!("{stem}{last}5")),
+    ] {
+        let alt = format!("{stem}{neighbour}");
+        if neighbour > 9
+            || sci_of(&midpoint).trim_start_matches('-').parse::<f64>() != Ok(v.abs())
+            || !reads_back(&sci_of(&alt))
+        {
+            continue;
+        }
+        let exact = format!("{:.1100e}", v.abs());
+        let (exact_digits, exact_exp) = exact.split_once('e')?;
+        let exact_digits: String = exact_digits.chars().filter(|c| *c != '.').collect();
+        let halfway = exact_exp.parse::<i32>() == Ok(exp)
+            && exact_digits
+                .strip_prefix(midpoint.as_str())
+                .is_some_and(|rest| rest.bytes().all(|b| b == b'0'));
+        if halfway {
+            return Some((sci_of(&alt), plain_of(sign, &alt, exp)));
+        }
+    }
+    None
+}
+
+/// `digits` (the first one before the point) times ten to `exp`, written
+/// out in decimal.
+fn plain_of(sign: &str, digits: &str, exp: i32) -> String {
+    let point = exp + 1;
+    if point <= 0 {
+        let zeros = "0".repeat(point.unsigned_abs() as usize);
+        return format!("{sign}0.{zeros}{digits}");
+    }
+    let point = point as usize;
+    if digits.len() <= point {
+        return format!("{sign}{digits}{}", "0".repeat(point - digits.len()));
+    }
+    format!("{sign}{}.{}", &digits[..point], &digits[point..])
 }
 
 /// `v` shown from its shortest digits in Rust's `{:e}` (`sci`: `1e16`,
@@ -492,6 +599,9 @@ fn shown_float(v: f64, sci: String, plain: String) -> String {
 
 #[cfg(test)]
 mod tests {
+    // The tie cases are exact doubles written out in full: the digits past
+    // the shortest ones are what makes each a tie.
+    #[allow(clippy::excessive_precision)]
     #[test]
     fn display_f64_follows_the_printing_rules() {
         let cases: [(f64, &str); 18] = [
@@ -515,6 +625,18 @@ mod tests {
             (f64::NEG_INFINITY, "-inf"),
         ];
         for (v, want) in cases {
+            assert_eq!(display_f64(v), want, "{v:?}");
+        }
+        // A tie between two equally short decimals keeps the even last
+        // digit (B-2026-10-23-4).
+        for (v, want) in [
+            (-75455689800034.625, "-75455689800034.62"),
+            (75455689800034.125, "75455689800034.12"),
+            (75455689800034.375, "75455689800034.38"),
+            (75455689800034.875, "75455689800034.88"),
+            (0.5, "0.5"),
+            (2.5e-5, "2.5e-05"),
+        ] {
             assert_eq!(display_f64(v), want, "{v:?}");
         }
         assert_eq!(display_f32(0.1), "0.1");

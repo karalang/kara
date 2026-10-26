@@ -1,0 +1,14 @@
+// library/core-types.md § Printing: when two equally short decimals both
+// read back and the value lies exactly halfway between them, the even last
+// digit is shown, as Python's repr does (B-2026-10-23-4).
+fn main() {
+    // -75455689800034.625 exactly.
+    println(f"{-76034228193651.2 + 578538393616.5771}");
+    let ties: Vec[f64] = [75455689800034.125, 75455689800034.375, 75455689800034.875, 1e23];
+    for x in ties {
+        println(f"{x}");
+    }
+    // No tie: the shortest digits as before.
+    println(f"{0.1 + 0.2}");
+    println(f"{2.5}");
+}

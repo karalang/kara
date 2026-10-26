@@ -1,0 +1,11 @@
+source = "corpus/fixtures/mir_library/float_display_ties_to_even"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:float"]
+class = "a"
+expected_from = "decision"
+rules = []
+backends = []
+env = {}
+note = "pins library/core-types.md § Printing's tie rule (551b7e6630, B-2026-10-23-4); the ruling is the review thread's; expected.out is Python's repr of the same values"
