@@ -3105,18 +3105,17 @@ enum Group {
 // A regex parser's matcher, kept from one call to the next on the same
 // stream so the text is copied in once.
 shared struct Matching {
-    prog: Program,
     mut stream: i64,
     mut m: Matcher,
 }
 
 impl Matching {
-    fn search(self, s: ref Stream, index: i64) -> Option[Found] {
+    fn search(self, prog: ref Program, s: ref Stream, index: i64) -> Option[Found] {
         if self.stream != s.id {
-            self.m = new_matcher(self.prog, s.chars);
+            self.m = new_matcher(prog, s.chars);
             self.stream = s.id;
         }
-        find(mut self.m, self.prog, index, false, 1)
+        find(mut self.m, prog, index, false, 1)
     }
 }
 
@@ -3132,15 +3131,13 @@ fn regex_g(exp: Str, flags: i64, group: own Group) -> Parser {
     };
     let what = exp.to_string();
     let empty: Vec[i64] = Vec.new();
-    let m = new_matcher(prog, empty);
-    let cache = Matching { prog: prog, stream: -1, m: m };
+    let cache = Matching { stream: -1, m: new_matcher(prog, empty) };
     new_parser(|s, index| {
         if not s.is_text {
             panic("cannot use a string pattern on a list");
         }
-        match cache.search(s, index) {
+        match cache.search(prog, s, index) {
             Some(found) => {
-                let prog = ref cache.prog;
                 let value = match group {
                     Group.Num(g) => group_val(prog, s.chars, found, g),
                     Group.Name(ref name) => group_val(prog, s.chars, found, group_number(prog, name)),

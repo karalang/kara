@@ -129,11 +129,16 @@ closures and the `match ref group` are reverted too. Check is clean and
 the output still matches the oracle on all four backends (`karac` at
 8f312bbd5c).
 
-B-2026-10-25-14 was fixed in 1b9edf0601, but the regex parser's cache
-stays. Put back, the closure still fails check twice: writing the
-cache's fields makes it `MutFn` (B-2026-10-26-10, open), and the nested
-`gs.iter().map(|g| group_val(prog, ...))` in one `match` arm is called a
-move of the program that the other arms read (B-2026-10-26-12, open).
+B-2026-10-25-14 was fixed in 1b9edf0601. Put back, the closure still
+failed check twice: writing the cache's fields makes it `MutFn`
+(B-2026-10-26-10, open), and the nested
+`gs.iter().map(|g| group_val(prog, ...))` in one `match` arm was called a
+move of the program that the other arms read (B-2026-10-26-12). Kara
+fixed B-2026-10-26-12 in 6f363a1aa2, so the closure captures the compiled
+program again and passes it to `search`; only the matcher and its stream
+id stay in the cache, until B-2026-10-26-10 is fixed. It still matches
+the oracle on all four backends with nothing on stderr (`karac` at
+b5230d6642).
 
 Later `karac fix` dropped 95 `*`s on `Copy` parts bound out of borrowed
 values, which are copies rather than views (kara B-2026-10-24-36); the
