@@ -52,10 +52,19 @@ cp target/wasm32-wasip1-threads/release/libkarac_runtime.a target/release/libkar
 cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
 cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
 cargo rustc -p karac-runtime --release --crate-type staticlib
-# OPTIONAL, ThreadSanitizer (`karac __mir-llvm-tsan`); its own target dir, so nothing above is rebuilt:
-RUSTC_BOOTSTRAP=1 cargo rustc -p karac-runtime --release --target-dir target/tsan --crate-type staticlib -- -Zsanitizer=thread -Cunsafe-allow-abi-mismatch=sanitizer
-cp target/tsan/release/libkarac_runtime.a target/release/libkarac_runtime_tsan.a
+# OPTIONAL, ThreadSanitizer (`karac __mir-llvm-tsan`); its own target dir, so nothing above is rebuilt.
+# std is rebuilt instrumented (`rustup component add rust-src` once): see the bullet below.
+RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime --release --target-dir target/tsan --crate-type staticlib
+cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan.a
+rm -rf target/tsan
 ```
+
+- **The TSan archive's std must be instrumented too.** Against the
+  precompiled std, TSan cannot see `std::sync::Mutex` take its lock, so every
+  `program_state!` access (borrow flags, stdout, channels) can read as a
+  race: 15 of 17 corpus reports re-run at f5689254b4 were that, and went away
+  with `-Zbuild-std`. A report that names no `Mutex M…` on a lock-guarded global
+  is the sign of a plain-std archive.
 
 - **`cargo rustc … --crate-type staticlib`, never `cargo build -p karac-runtime`.**
   The crate is `["staticlib", "rlib"]`; emitting both under fat LTO keeps std's

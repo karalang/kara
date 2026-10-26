@@ -1493,11 +1493,13 @@ pub(crate) fn resolve_runtime_path(
     if special == SpecialArchive::Tsan {
         return Err(
             "a ThreadSanitizer build (`__mir-llvm-tsan`) needs the TSan runtime archive \
-             `libkarac_runtime_tsan.a` — not found. Build it with `RUSTC_BOOTSTRAP=1 cargo rustc \
-             -p karac-runtime --release --target-dir target/tsan --crate-type staticlib -- \
-             -Zsanitizer=thread -Cunsafe-allow-abi-mismatch=sanitizer` then `cp \
-             target/tsan/release/libkarac_runtime.a target/release/libkarac_runtime_tsan.a` (its \
-             own target dir, so the other archives stay as they are). Or set KARAC_RUNTIME to an \
+             `libkarac_runtime_tsan.a` — not found. Build it, with std instrumented too, with \
+             `RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc \
+             -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime \
+             --release --target-dir target/tsan --crate-type staticlib` then `cp \
+             target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a \
+             target/release/libkarac_runtime_tsan.a` (its own target dir, so the other archives \
+             stay as they are; `rustup component add rust-src` once). Or set KARAC_RUNTIME to an \
              explicit TSan archive path."
                 .to_string(),
         );
