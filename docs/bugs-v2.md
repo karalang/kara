@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 40 |
+| false-positive | 41 |
 | diagnostics | 37 |
 | missing-feature | 30 |
 | perf | 11 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen | 22 |
 | interp | 19 |
 | cli | 16 |
-| ownership | 13 |
+| ownership | 14 |
 | runtime | 9 |
 | mir-llvm | 9 |
 | parser | 6 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-26-6 | 2026-10-26 | mir-llvm | medium | `KARAC_DEBUG_INFO=1 karac build` of any program that spawns a task fails in the LLVM verifier: the call to a coroutine's `#resume` carries no `!dbg` location in a function that has a subprogram | — |
 | B-2026-10-26-8 | 2026-10-26 | mir | medium | A closure returned from a closure that captures one of the outer closure's own non-`Copy` captures passes `karac check` but the MIR build refuses it: `let base = vec![1, 2, 3]; let make = |n: i64| |x: i64| x + n + base.len(); let f = make(1);` gives `cannot move a non-Copy value out of a borrowed place` (§3.7) | — |
 | B-2026-10-26-10 | 2026-10-26 | typecheck | low | Writing a `mut` field of a captured `shared` handle makes a closure `MutFn` (E0518 at an `Fn` slot), though the capture itself is unchanged and a borrowed-`self` method doing the same write is callable from an `Fn` closure | — |
+| B-2026-10-26-9 | 2026-10-26 | ownership | medium | `karac check` treats a closure that returns a closure as an `Fn` that borrows its captures, when the returned closure escapes and moves a non-`Copy` capture out (§9.3), which makes the outer closure move that place in and an `OnceFn` (§9.1, §9.4): a second call, or a use of the place after the outer closure is made, passes check and the MIR build refuses it with an internal move-check error | — |
 
 ### Fixed
 

@@ -4577,6 +4577,13 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// and calls whose result can hold a function; a call whose result
     /// cannot (`.sum()`) consumes its closures.
     fn note_returned_closures(&mut self, e: &Expr) {
+        let out: Vec<NodeId> = self.returned_closures_of(e).iter().map(|c| c.id).collect();
+        self.returned_closures.extend(out);
+    }
+
+    /// The closure literals inside the value the body whose tail is `e`
+    /// returns ([`Self::note_returned_closures`]).
+    fn returned_closures_of<'e>(&self, e: &'e Expr) -> Vec<&'e Expr> {
         let tcx = self.tys().tcx();
         let holds_fn = |t: Ty| {
             let mut seen = FxHashSet::default();
@@ -4598,13 +4605,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             false
         };
-        let mut out = FxHashSet::default();
+        let mut out = Vec::new();
         let mut work = vec![e];
         while let Some(e) = work.pop() {
             match &e.kind {
-                ExprKind::Closure { .. } => {
-                    out.insert(e.id);
-                }
+                ExprKind::Closure { .. } => out.push(e),
                 ExprKind::Block(b) => work.extend(b.final_expr.as_deref()),
                 ExprKind::If {
                     then_block,
@@ -4636,7 +4641,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 _ => {}
             }
         }
-        self.returned_closures.extend(out);
+        out
     }
 
     /// Record the `let f = |..| ..` bindings of `block` whose closure escapes.
@@ -18913,7 +18918,31 @@ impl<'l, 'a> Bx<'l, 'a> {
         captured.extend(extra_caps);
         self.assigned_caps.borrow_mut().clear();
         self.task_moves = task;
-        let moved = self.moved_captures(body, &captured);
+        let mut moved = self.moved_captures(body, &captured);
+        // A closure the body returns escapes and takes its captures by
+        // move (core semantics §9.3), so a non-`Copy` place of this
+        // closure's that it uses is moved out of this one's environment:
+        // this closure captures the place by move too, and is an `OnceFn`
+        // (§9.1, §9.4, B-2026-10-26-8). A handle is counted, not moved.
+        for inner in self.returned_closures_of(body) {
+            let ExprKind::Closure { body: inner, .. } = &inner.kind else {
+                continue;
+            };
+            for sym in self.closure_captures(inner) {
+                let Some(&l) = self.locals.get(&sym) else {
+                    continue;
+                };
+                let t = self.place_type(&Place::local(l));
+                if captured.contains(&sym)
+                    && !self.is_copy(t)
+                    && !self.is_handle(t)
+                    && !self.is_handle_aggregate(t)
+                    && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
+                {
+                    moved.insert(sym);
+                }
+            }
+        }
         self.task_moves = false;
         let assigned = std::mem::take(&mut *self.assigned_caps.borrow_mut());
         // The places a task takes by move because they drop before its
