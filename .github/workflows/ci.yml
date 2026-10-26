@@ -566,8 +566,9 @@ jobs:
           cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan.a
           rm -rf target/tsan
 
+      # The instrument, then frozen handles counting nothing (B-2026-10-26-15).
       - name: TSan instrument tests
-        run: cargo test --features llvm --test mir_tsan
+        run: cargo test --features llvm --test mir_tsan --test mir_frozen_uncounted
 
       - name: Build karac (llvm)
         run: cargo build --features llvm

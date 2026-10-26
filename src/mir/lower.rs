@@ -211,6 +211,19 @@ pub struct Lowered {
     /// Whether this is auto-par's recording build, whose bodies only the
     /// verdicts read.
     pub auto_par_record: bool,
+    /// Each body's locals the ownership check proved frozen (design.md §
+    /// Frozen handles), which `frozen::uncount` makes count nothing.
+    pub frozen_locals: FxHashMap<String, crate::mir::frozen::FrozenLocals>,
+}
+
+/// The `let`s the ownership check's frozen walk admitted, by their
+/// initializer's span: non-counting aliases of a frozen place
+/// (`let k = n.kids[i];`, `let g = freeze root;`), and `Vec` locals whose
+/// every element is one (`let mut q: Vec[Node] = Vec.new();`).
+#[derive(Default, Clone)]
+pub struct FrozenHints {
+    pub aliases: FxHashSet<SpanKey>,
+    pub containers: FxHashSet<SpanKey>,
 }
 
 /// What an `extern "C"` signature with a type no backend passes to C yet
@@ -263,6 +276,7 @@ pub fn lower_program_with_library<'a>(
         rr,
         hir,
         capture_modes,
+        &FrozenHints::default(),
         None,
         None,
         AutoPar::Off,
@@ -286,6 +300,7 @@ fn lower_program_inner<'a>(
     rr: &ResolveResult,
     hir: TypedHir,
     capture_modes: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    frozen: &FrozenHints,
     signatures_only_from: Option<usize>,
     roots: Option<&[String]>,
     auto_par: AutoPar,
@@ -412,6 +427,8 @@ fn lower_program_inner<'a>(
         proj_instances: FxHashSet::default(),
         keep_param_projs: false,
         capture_modes,
+        frozen: frozen.clone(),
+        frozen_locals: FxHashMap::default(),
         next_closure: defs.table.len() as u32,
         closures: FxHashMap::default(),
         closure_exprs: FxHashMap::default(),
@@ -554,6 +571,7 @@ fn lower_program_inner<'a>(
         auto_par_groups: lcx.auto_par_groups,
         auto_par_reductions: lcx.auto_par_reduced,
         auto_par_record: matches!(lcx.auto_par, AutoPar::Record),
+        frozen_locals: lcx.frozen_locals,
     }
 }
 
@@ -960,6 +978,10 @@ struct Lcx<'a> {
     generic_drops: FxHashMap<DefId, DefId>,
     /// The ownership checker's capture modes, by the closure's span.
     capture_modes: &'a FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    /// The ownership checker's frozen `let`s.
+    frozen: FrozenHints,
+    /// The locals of each body lowered so far that those `let`s bind.
+    frozen_locals: FxHashMap<String, crate::mir::frozen::FrozenLocals>,
     /// Closures get DefIds past the definition table's.
     next_closure: u32,
     /// Each closure's body name and how it takes its environment.
@@ -4804,6 +4826,26 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// Records `l`, bound by a `let` of `value`, when the ownership check
+    /// proved that `let` frozen ([`FrozenHints`]).
+    fn note_frozen(&mut self, value: &Expr, l: Local) {
+        let key = SpanKey::from_span(&value.span);
+        let (alias, container) = (
+            self.lcx.frozen.aliases.contains(&key),
+            self.lcx.frozen.containers.contains(&key),
+        );
+        if !alias && !container {
+            return;
+        }
+        let at = self.lcx.frozen_locals.entry(self.name.clone()).or_default();
+        if alias {
+            at.aliases.push(l);
+        }
+        if container {
+            at.containers.push(l);
+        }
+    }
+
     fn stmt_here(&mut self, s: &'a Stmt) -> R<()> {
         match &s.kind {
             StmtKind::Let {
@@ -4844,6 +4886,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                     }
                     let l = self.user_local(name, t, pattern.id);
+                    self.note_frozen(value, l);
                     let outer = self.let_scope.replace(self.scopes.len() - 1);
                     self.push_scope();
                     // `let idx: i64 = m.get(k).unwrap()` reads the `ref i64`
@@ -22149,6 +22192,7 @@ pub fn checked_borrow_errors(
         tc,
         r,
         captures,
+        &FrozenHints::default(),
         true,
         AutoPar::Off,
     ) else {
@@ -22422,6 +22466,10 @@ fn lower_source_for_checks(
     phase_time("comptime", &mut t);
     let own = crate::ownershipcheck(&program, &tc);
     phase_time("ownershipcheck", &mut t);
+    let frozen = FrozenHints {
+        aliases: own.frozen_alias_bindings.clone(),
+        containers: own.frozen_element_containers.clone(),
+    };
     lower_typed(
         &program,
         &src,
@@ -22429,6 +22477,7 @@ fn lower_source_for_checks(
         &tc,
         &r,
         &own.closure_captures,
+        &frozen,
         check_only,
         auto_par,
     )
@@ -22461,6 +22510,7 @@ pub fn lower_program_with_roots(
         r,
         hir,
         &captures,
+        &FrozenHints::default(),
         None,
         Some(roots),
         AutoPar::Off,
@@ -22565,6 +22615,7 @@ fn lower_typed(
     tc: &TypeCheckResult,
     r: &ResolveResult,
     captures: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    frozen: &FrozenHints,
     check_only: bool,
     auto_par: AutoPar,
 ) -> Result<Lowered, String> {
@@ -22586,6 +22637,7 @@ fn lower_typed(
             r,
             hir,
             captures,
+            frozen,
             check_only.then_some(user_len),
             None,
             auto_par.clone(),
@@ -22733,6 +22785,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         // §6.2's run-time borrow flags, on the elaborated body.
         crate::mir::insert_borrow_flags(body, &lowered.tys, &has_receiver);
         crate::mir::flags::narrow_call_flags(body, &lowered.tys, &|n| !names.contains(n));
+        if let Some(f) = lowered.frozen_locals.get(&body.instance.name) {
+            crate::mir::frozen::uncount(body, &lowered.tys, f);
+        }
         if rc_pairs && !coroutines.contains(&body.instance.name) {
             crate::mir::rc_pairs::elide_retains(body, &lowered.tys);
         }

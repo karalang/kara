@@ -1535,6 +1535,26 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Char(c))
             }
+            // `frozen::uncount`'s push of a frozen handle, which copies
+            // it without a count, and the drop that gives back none of
+            // the counts it never took (core semantics §6).
+            ("Vec", "__push_frozen") => {
+                let [v, Value::Ref(a)] = args.as_slice() else {
+                    return err(format!("{name} takes a vector and a reference"));
+                };
+                let x = self.slot(a)?;
+                let id = self.box_behind(v)?;
+                self.vec_elems(id)?.push(x);
+                Ok(Value::Unit)
+            }
+            ("Vec", "__forget_items") => {
+                let [v] = args.as_slice() else {
+                    return err(format!("{name} takes one argument"));
+                };
+                let id = self.box_behind(v)?;
+                self.vec_elems(id)?.clear();
+                Ok(Value::Unit)
+            }
             ("Vec", "push") if args.len() == 2 => {
                 let mut args = args.into_iter();
                 let (Some(v), Some(val)) = (args.next(), args.next()) else {

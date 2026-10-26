@@ -418,7 +418,7 @@ fn rewrite(body: &mut Body, tys: &TyInterner) {
 }
 
 /// `x.f..` as `(*x).f..`.
-fn deref_through(q: &mut Place, x: Local) {
+pub(super) fn deref_through(q: &mut Place, x: Local) {
     if q.local == x {
         q.projection.insert(0, ProjElem::Deref);
     }
@@ -430,7 +430,7 @@ fn operand_places(o: &mut Operand, f: &mut dyn FnMut(&mut Place)) {
     }
 }
 
-fn statement_places(s: &mut StatementKind, f: &mut dyn FnMut(&mut Place)) {
+pub(super) fn statement_places(s: &mut StatementKind, f: &mut dyn FnMut(&mut Place)) {
     match s {
         StatementKind::Assign(d, rv) => {
             f(d);
@@ -461,7 +461,7 @@ fn statement_places(s: &mut StatementKind, f: &mut dyn FnMut(&mut Place)) {
     }
 }
 
-fn terminator_places(t: &mut TerminatorKind, f: &mut dyn FnMut(&mut Place)) {
+pub(super) fn terminator_places(t: &mut TerminatorKind, f: &mut dyn FnMut(&mut Place)) {
     match t {
         TerminatorKind::SwitchInt { discr, .. } => operand_places(discr, f),
         TerminatorKind::Call {

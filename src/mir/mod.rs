@@ -18,6 +18,7 @@ pub mod elaborate;
 pub mod flags;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 pub mod foreign;
+pub mod frozen;
 pub mod fs;
 pub mod interp;
 pub mod layout;

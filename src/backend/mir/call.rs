@@ -1104,6 +1104,19 @@ impl<'ctx> Cx<'ctx, '_> {
                 let x = self.operand_as(&args[1], et)?;
                 self.vec_push(v, x, et)
             }
+            // `frozen::uncount`'s push of the handle behind a reference,
+            // uncounted, and the drop of a frozen container's elements,
+            // which releases nothing (core semantics §6).
+            ("Vec", "__push_frozen") => {
+                let v = self.ref_arg(&args[0])?;
+                let et = self.vec_elem(name, &args[0])?;
+                let x = self.ref_arg(&args[1])?;
+                self.vec_push(v, x, et)
+            }
+            ("Vec", "__forget_items") => {
+                let v = self.ref_arg(&args[0])?;
+                self.store(self.offset(v, 8)?, self.i64(0).into())
+            }
             ("String", "push_str") => {
                 let v = self.ref_arg(&args[0])?;
                 let (s, n) = self.str_parts(&args[1])?;
