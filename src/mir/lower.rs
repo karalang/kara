@@ -2721,6 +2721,9 @@ struct Bx<'l, 'a> {
     old_vals: FxHashMap<NodeId, Local>,
     /// This function's `ensures` clauses, checked at every return.
     ensures: &'a [EnsuresClause],
+    /// Its declared return type is a table that names a hasher: the table
+    /// it returns walks in a fixed order (B-2026-10-25-31).
+    ret_hashed: bool,
     /// The impl this function belongs to and its generic parameter count.
     impl_target: Option<(DefId, usize)>,
     /// Subscripts of an assignment's target, evaluated before its value.
@@ -2785,6 +2788,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             par_try: Vec::new(),
             old_vals: FxHashMap::default(),
             ensures: &[],
+            ret_hashed: false,
             impl_target: None,
             pre_indices: FxHashMap::default(),
             eq_stack: Vec::new(),
@@ -4167,6 +4171,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // A destructuring parameter is an argument of its own; its names
         // bind once every argument is declared, as a `let` would.
         let mut destructured = Vec::new();
+        let mut hashed = Vec::new();
         for (i, p) in f.params.iter().enumerate() {
             let t = match fn_params.get(i).copied().flatten() {
                 Some(t) => t,
@@ -4190,6 +4195,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             if self.needs_drop(t) {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
+            // An owned table whose parameter type names a hasher walks in
+            // a fixed order from here on (B-2026-10-25-31); a borrowed one
+            // is the caller's.
+            if !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
+                && self.names_a_hasher(&p.ty)
+            {
+                hashed.push(l);
+            }
         }
         self.bind_destructured(destructured)?;
         if self
@@ -4203,6 +4216,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             // Parameters only: the body ends unreachable (`finish`).
             self.scopes.clear();
             return Ok(());
+        }
+        for l in hashed {
+            self.unkey_table(Place::local(l));
         }
         self.contracts_on_entry(f)?;
         // The body's own scope sits inside the parameters' (D6). Falling
@@ -4287,6 +4303,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.old_vals.insert(o.id, l);
         }
         self.ensures = &f.ensures;
+        self.ret_hashed = f
+            .return_type
+            .as_ref()
+            .is_some_and(|te| self.names_a_hasher(te));
         Ok(())
     }
 
@@ -6979,20 +6999,22 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let Some((idx, ft)) = self.field_of(t, variant, &fi.name) else {
                         return self.unsupported(fi.span, "this field");
                     };
-                    let op = self.operand_at(&fi.value, ft)?;
+                    let mut op = self.operand_at(&fi.value, ft)?;
+                    // A field whose type names a hasher gets its table
+                    // marked before the literal stores it, so a `shared`
+                    // struct's handle needs no write through it.
+                    if variant.is_none() && self.hashed_field(t, &fi.name).is_some() {
+                        let l = self.temp(ft);
+                        self.assign(l, Rvalue::Use(op));
+                        self.unkey_table(Place::local(l));
+                        op = Operand::Move(Place::local(l));
+                    }
                     vals.push((idx, op));
                 }
                 vals.sort_by_key(|(i, _)| *i);
                 let ops = vals.into_iter().map(|(_, o)| o).collect();
                 let kind = self.adt_aggregate(t, variant.unwrap_or(0));
                 self.assign(dest.clone(), Rvalue::Aggregate(kind, ops));
-                if variant.is_none() && matches!(self.tys().tcx().kind(t), HK::Adt { .. }) {
-                    for fi in fields {
-                        if let Some(at) = self.hashed_field(t, &fi.name) {
-                            self.unkey_table(dest.field(at.0, at.1));
-                        }
-                    }
-                }
                 Ok(())
             }
             ExprKind::Block(b) => self.block_into(b, dest),
@@ -12148,6 +12170,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// the function's error; a branch that ends with its own value runs
     /// none (core semantics §11.7).
     fn return_exit(&mut self) -> R<()> {
+        if self.ret_hashed && self.par_exit.is_none() {
+            self.unkey_table(Place::local(Local::RETURN_PLACE));
+        }
         for clause in self.ensures {
             self.contract_check(&clause.body, "ensures")?;
         }
