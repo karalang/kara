@@ -519,11 +519,16 @@ pub(crate) fn link_executable_impl(
         && !references_arrow
         && !references_regex
         && object_references_unicode(obj_path);
-    // A ThreadSanitizer link takes the TSan-built archive, whatever the
-    // program references: TSan sees the order the pool's lock imposes only
-    // in instrumented code (`mir_asan.rs`).
+    // A ThreadSanitizer link takes a TSan-built archive: TSan sees the
+    // order the pool's lock imposes only in instrumented code
+    // (`mir_asan.rs`). A program that normalizes takes the TSan build of
+    // the unicode archive.
     let special = if extra_cc_args.contains(&"-fsanitize=thread") {
-        SpecialArchive::Tsan
+        if references_unicode {
+            SpecialArchive::TsanUnicode
+        } else {
+            SpecialArchive::Tsan
+        }
     } else if references_gpu {
         SpecialArchive::Gpu
     } else if references_arrow {
@@ -1341,6 +1346,9 @@ pub(crate) enum SpecialArchive {
     /// A `-fsanitize=thread` link — `libkarac_runtime_tsan.a`, the full
     /// archive built with `-Zsanitizer=thread`.
     Tsan,
+    /// A `-fsanitize=thread` link of a `karac_unicode_*` program —
+    /// `libkarac_runtime_tsan_unicode.a`, the unicode archive built so.
+    TsanUnicode,
 }
 
 pub(crate) fn resolve_runtime_path(
@@ -1364,6 +1372,8 @@ pub(crate) fn resolve_runtime_path(
     const UNICODE: &str = "karac_runtime_unicode.lib";
     #[cfg(windows)]
     const TSAN: &str = "karac_runtime_tsan.lib";
+    #[cfg(windows)]
+    const TSAN_UNICODE: &str = "karac_runtime_tsan_unicode.lib";
     #[cfg(not(windows))]
     const FULL: &str = "libkarac_runtime.a";
     #[cfg(not(windows))]
@@ -1378,6 +1388,8 @@ pub(crate) fn resolve_runtime_path(
     const UNICODE: &str = "libkarac_runtime_unicode.a";
     #[cfg(not(windows))]
     const TSAN: &str = "libkarac_runtime_tsan.a";
+    #[cfg(not(windows))]
+    const TSAN_UNICODE: &str = "libkarac_runtime_tsan_unicode.a";
 
     // Pick the archive name within a directory. An opt-in superset archive
     // (GPU / regex / Arrow) is a distinct artifact: only it resolves the symbol
@@ -1391,6 +1403,7 @@ pub(crate) fn resolve_runtime_path(
             SpecialArchive::Arrow => Some(ARROW),
             SpecialArchive::Unicode => Some(UNICODE),
             SpecialArchive::Tsan => Some(TSAN),
+            SpecialArchive::TsanUnicode => Some(TSAN_UNICODE),
             SpecialArchive::None => None,
         };
         if let Some(name) = special_name {
@@ -1501,6 +1514,20 @@ pub(crate) fn resolve_runtime_path(
              target/release/libkarac_runtime_tsan.a` (its own target dir, so the other archives \
              stay as they are; `rustup component add rust-src` once). Or set KARAC_RUNTIME to an \
              explicit TSan archive path."
+                .to_string(),
+        );
+    }
+    if special == SpecialArchive::TsanUnicode {
+        return Err(
+            "a ThreadSanitizer build (`__mir-llvm-tsan`) of a program that calls \
+             `String.normalize(form)` needs the TSan unicode runtime archive \
+             `libkarac_runtime_tsan_unicode.a` — not found. Build it, with std instrumented \
+             too, with `RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc \
+             -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime \
+             --release --features unicode --target-dir target/tsan --crate-type staticlib` then \
+             `cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a \
+             target/release/libkarac_runtime_tsan_unicode.a` (its own target dir, so the other \
+             archives stay as they are). Or set KARAC_RUNTIME to an explicit archive path."
                 .to_string(),
         );
     }

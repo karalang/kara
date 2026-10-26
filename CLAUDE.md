@@ -56,6 +56,9 @@ cargo rustc -p karac-runtime --release --crate-type staticlib
 # std is rebuilt instrumented (`rustup component add rust-src` once): see the bullet below.
 RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime --release --target-dir target/tsan --crate-type staticlib
 cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan.a
+# The TSan link of a program that normalizes takes the unicode feature's TSan build:
+RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Zsanitizer=thread cargo rustc -Zbuild-std=std,panic_abort --target x86_64-unknown-linux-gnu -p karac-runtime --release --features unicode --target-dir target/tsan --crate-type staticlib
+cp target/tsan/x86_64-unknown-linux-gnu/release/libkarac_runtime.a target/release/libkarac_runtime_tsan_unicode.a
 rm -rf target/tsan
 ```
 
