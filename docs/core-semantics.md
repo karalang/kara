@@ -343,6 +343,7 @@ Pins: `err_write_through_ref`, `ok_shared_field_through_ref`.
 Pins: `ok_shared_peek_then_mutate`, `err_shared_field_same_handle`, `panic_shared_field_alias`.
 
 **6.3 Across tasks.** Shared handles never cross a task boundary (`E_NOT_CROSS_TASK`).
+- A function value is `CrossTask` only when everything its environment reaches is, through any depth of nested closures and erased `Fn` / `MutFn` / `OnceFn` values. A closure that captures a `shared` value cannot be spawned, captured by a spawned closure, or passed as a server handler, since a server runs its handler in a task per connection. State that tasks share is a `sync` type with `Mutex[T]` or `Atomic[T]` inside (B-2026-10-26-13, ruling 2026-10-26). This holds on one worker as on many: the rule is about the task boundary, not the thread count.
 - `sync struct` and `sync enum` (formerly `par struct` and `par enum`) use an atomic count. Their fields are never `mut` and must be `CrossTask`; mutation goes through `Atomic[T]` and `Mutex[T]`, whose methods borrow.
 - `frozen T` is read-only and may be shared by any number of tasks.
 
