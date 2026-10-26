@@ -126,7 +126,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
 | B-2026-10-26-10 | 2026-10-26 | typecheck | low | Writing a `mut` field of a captured `shared` handle makes a closure `MutFn` (E0518 at an `Fn` slot), though the capture itself is unchanged and a borrowed-`self` method doing the same write is callable from an `Fn` closure | — |
 | B-2026-10-26-11 | 2026-10-26 | ownership | medium | `karac check` accepts an escaping closure created inside a loop that captures an outer non-`Copy` binding, which moves it on every iteration; `karac run` stops at an internal MIR move-check error instead of a diagnostic | — |
-| B-2026-10-26-13 | 2026-10-26 | typecheck+mir-llvm | high | A `shared` handle crosses a task boundary inside a function value: a closure capturing a `shared` struct, erased to `Fn` and captured by a `TaskGroup.spawn` closure, passes `karac check` (E_NOT_CROSS_TASK does not look through `Fn`), and under `KARAC_THREADS=4` its non-atomic count double-frees | — |
 | B-2026-10-26-14 | 2026-10-26 | mir | medium | At the M4 item 13 cost gate (0563970557), `KARAC_AUTO_PAR=1` builds still run 6 of the 129 M4b programs under 0.9x their own seq build with 4 workers in three timings (9, 21 and 21 runs): kata 332 reconstruct_itinerary 0.53..0.66x and the stmt-par apps grade_close 0.69..0.84x, grain_intake 0.75..0.87x, milk_collect 0.81..0.84x, fare_cap 0.79..0.86x and rx_adjudicate 0.84..0.86x, each 2..12 ms slower on a 9..30 ms run (blood_bank, meter_settle and hotel_audit cross 0.9 between timings; payroll_run was noise), a per-run cost of the 4-worker executor for all but grade_close (on one worker those four run at 0.98..1.01x), where before the gate (905c25d3e2) 22 were, worst thumb_render 0.02x; on one worker (the default) 36 were under 0.9x before the gate, the parallel form's one-worker overhead (item 14 builder, Thread B), not the cost gate | — |
 
 ### Fixed
@@ -258,6 +257,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-26-8 | mir | medium | A closure returned from a closure that captures one of the outer closure's own non-`Copy` captures passes `karac check` but the MIR build refuses it:… | a5ec3ea61c |
 | B-2026-10-26-9 | ownership | medium | `karac check` treats a closure that returns a closure as an `Fn` that borrows its captures, when the returned closure escapes and moves a non-`Copy`… | 016b5608ec |
 | B-2026-10-26-12 | ownership | medium | `karac check` counts a capture of an ESCAPING closure as moved when a nested closure in its body reads it (`is.iter().map(\|i\| look(p, *i)).sum()`, wi… | 6f363a1aa2 |
+| B-2026-10-26-13 | typecheck+mir-llvm | high | A `shared` handle crosses a task boundary inside a function value: a closure capturing a `shared` struct, erased to `Fn` and captured by a `TaskGroup… | 6cfb8ff699 |
 
 </details>
 
