@@ -60,8 +60,12 @@ impl Server {
         }
     }
 
-    // Answers each request with `handler`'s response.
-    fn serve(addr: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    // Answers each request with `handler`'s response. The handler borrows
+    // the request: io.md's `Fn(Request)`, as a user's bare parameter reads
+    // (core-semantics.md §4.1). The library's own signatures are not
+    // rewritten that way, so they spell the borrow `ref Request`; with a
+    // bare `Request` a closure handler took it by value (B-2026-10-25-48).
+    fn serve(addr: own String, handler: own Fn(ref Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         match TcpListener.bind(addr) {
             Ok(l) => Server.__serve(HttpListener.Plain(l), handler, Server.__no_session, false),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
@@ -71,7 +75,7 @@ impl Server {
     // `serve` over TLS, with the certificate chain `cert_pem` and the
     // private key `key_pem` (PEM text, as `TlsListener.bind_tls` takes).
     // A connection whose handshake fails is dropped.
-    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(ref Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         match TlsListener.bind_tls(addr, cert_pem, key_pem) {
             Ok(l) => Server.__serve(HttpListener.Tls(l), handler, Server.__no_session, false),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
@@ -82,7 +86,7 @@ impl Server {
     // with status 101 upgrades the connection: the server sends the
     // handshake's own 101 and runs `ws_handler` on the connection, in the
     // connection's task.
-    fn serve_ws(addr: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn serve_ws(addr: own String, handler: own Fn(ref Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         match TcpListener.bind(addr) {
             Ok(l) => Server.__serve(HttpListener.Plain(l), handler, ws_handler, true),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
@@ -90,7 +94,7 @@ impl Server {
     }
 
     // `serve_ws` over TLS.
-    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(ref Request) -> Response, ws_handler: own Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         match TlsListener.bind_tls(addr, cert_pem, key_pem) {
             Ok(l) => Server.__serve(HttpListener.Tls(l), handler, ws_handler, true),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
@@ -99,14 +103,14 @@ impl Server {
 
     // Serves the connections `l` accepts. The accept loop is a task of its
     // own, so the connections' tasks run while it waits.
-    fn __serve(l: own HttpListener, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket), upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn __serve(l: own HttpListener, handler: own Fn(ref Request) -> Response, ws_handler: own Fn(own WebSocket), upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         Server.__announce(l);
         let group = TaskGroup.new();
         let accepting = group.spawn(|| Server.__connections(l, handler, ws_handler, upgrades));
         accepting.join()
     }
 
-    fn __connections(l: own HttpListener, handler: own Fn(Request) -> Response, ws_handler: own Fn(own WebSocket), upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn __connections(l: own HttpListener, handler: own Fn(ref Request) -> Response, ws_handler: own Fn(own WebSocket), upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         let connections = TaskGroup.isolating();
         loop {
             let conn = match l.accept() {
@@ -134,7 +138,7 @@ impl Server {
     // the client closes it or asks to. With `upgrades`, a 101 to a
     // WebSocket handshake request is the upgrade instead: the connection,
     // past the request, goes to `ws_handler` as a `WebSocket`.
-    fn __connection(conn: own WsConn, handler: Fn(Request) -> Response, ws_handler: Fn(own WebSocket), upgrades: bool) with sends(Network) receives(Network) blocks suspends {
+    fn __connection(conn: own WsConn, handler: Fn(ref Request) -> Response, ws_handler: Fn(own WebSocket), upgrades: bool) with sends(Network) receives(Network) blocks suspends {
         let mut buf: Vec[u8] = Vec.new();
         loop {
             let used = Server.__next(conn, mut buf);
@@ -142,10 +146,9 @@ impl Server {
                 return;
             }
             let req = Request { };
-            let key = if upgrades { Server.__handshake_key(req) } else { None };
             let resp = handler(req);
-            if resp.status == 101 {
-                match key {
+            if upgrades and resp.status == 101 {
+                match Server.__handshake_key(req) {
                     Some(key) => {
                         let accept = WebSocket.__accept_key(key);
                         let reply = f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n";
