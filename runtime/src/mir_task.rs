@@ -150,6 +150,12 @@ struct Task {
     /// The progress count when its last poll began: a task waiting on
     /// another is worth polling again once the count moved.
     seen: u64,
+    /// The root task, which only the first worker polls: it runs most of
+    /// a program, whose data the first worker's caches and allocator
+    /// arena hold, and the first worker would nap while another worker
+    /// ran it (measured: fare_cap's root ran 29 of its 37 ms on other
+    /// workers, the first napping, 0.75x of its seq build).
+    root: bool,
 }
 
 /// Whether a queued task can get anywhere if polled now, with the progress
@@ -305,11 +311,23 @@ impl Exec {
         self.progress += 1;
     }
 
-    /// Queues `t`, waking a napping worker for it.
+    /// Queues `t`, waking a napping worker for it: the first one for the
+    /// root task, which no other polls.
     #[inline]
     fn push(&mut self, t: Task) {
+        let root = t.root;
         self.queue.push_back(t);
-        if let Some(w) = self.sleepers.pop() {
+        if root {
+            self.rouse_first();
+        } else if let Some(w) = self.sleepers.pop() {
+            rouse(w);
+        }
+    }
+
+    /// Wakes the first worker, if it naps.
+    fn rouse_first(&mut self) {
+        if let Some(i) = self.sleepers.iter().position(|s| s.worker == 0) {
+            let w = self.sleepers.swap_remove(i);
             rouse(w);
         }
     }
@@ -1172,6 +1190,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             torn: false,
             unwind: false,
             seen: 0,
+            root: false,
         });
         e.progress += 1;
     });
@@ -1186,6 +1205,11 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
 pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut u8) {
     // SAFETY: the caller's contract.
     unsafe { karac_mir_task_spawn(std::ptr::null_mut(), poll, a, b) };
+    EXEC.with(|e| {
+        if let Some(t) = e.borrow_mut().queue.back_mut() {
+            t.root = true;
+        }
+    });
     start_workers();
     // Tasks that waited on another task in a row with nothing happening in
     // between.
@@ -1383,14 +1407,16 @@ fn finished_polling() {
         e.running -= 1;
         // The first worker naps while others run: the last of them done
         // with nothing left worth polling, it may be the one to finish the
-        // program or find the tasks deadlocked.
+        // program or find the tasks deadlocked. And the root task, which
+        // only it polls, may be worth polling now.
         let progress = e.progress;
         let mut now = None;
-        if e.running == 0 && !e.queue.iter().any(|t| worth(t, progress, &mut now)) {
-            if let Some(i) = e.sleepers.iter().position(|s| s.worker == 0) {
-                let w = e.sleepers.swap_remove(i);
-                rouse(w);
-            }
+        let root = e
+            .queue
+            .iter()
+            .any(|t| t.root && worth(t, progress, &mut now));
+        if root || e.running == 0 && !e.queue.iter().any(|t| worth(t, progress, &mut now)) {
+            e.rouse_first();
         }
     });
 }
@@ -1401,8 +1427,8 @@ fn others_running() -> bool {
 }
 
 /// Naps until a task is queued, progress is made or [`POOL_PARK`] passes:
-/// the worker joins the sleepers unless the queue holds a runnable task
-/// now, or, with `quiet`, the progress count moved from it.
+/// the worker joins the sleepers unless the queue holds a task it would
+/// run now ([`mine`]), or, with `quiet`, the progress count moved from it.
 fn nap(quiet: Option<u64>) {
     let woken = WOKEN.with(std::sync::Arc::clone);
     let me = worker();
@@ -1410,7 +1436,10 @@ fn nap(quiet: Option<u64>) {
         let mut e = e.borrow_mut();
         let progress = e.progress;
         let mut now = None;
-        let napping = !e.queue.iter().any(|t| worth(t, progress, &mut now))
+        let napping = !e
+            .queue
+            .iter()
+            .any(|t| mine(t, me) && worth(t, progress, &mut now))
             && quiet.is_none_or(|q| progress == q);
         if napping {
             woken.store(false, Ordering::Relaxed);
@@ -1443,6 +1472,13 @@ fn nap(quiet: Option<u64>) {
     }
 }
 
+/// Whether worker `w` polls `t`: the first polls every task, the others
+/// all but the root.
+#[inline(always)]
+fn mine(t: &Task, w: usize) -> bool {
+    w == 0 || !t.root
+}
+
 /// One of the pool's other workers: runs what the queue holds, and naps
 /// when it holds nothing. The first worker alone wakes sleepers, asks the
 /// reactor and reports a deadlock. It lives as long as the process, napping
@@ -1456,7 +1492,10 @@ fn worker_loop(w: usize) {
             let mut e = e.borrow_mut();
             let progress = e.progress;
             let mut now = None;
-            let at = e.queue.iter().position(|t| worth(t, progress, &mut now));
+            let at = e
+                .queue
+                .iter()
+                .position(|t| mine(t, w) && worth(t, progress, &mut now));
             let t = at.and_then(|i| e.queue.remove(i))?;
             *e.cur_mut() = Some(t.cur());
             e.running += 1;
