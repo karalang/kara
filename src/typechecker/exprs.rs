@@ -10341,7 +10341,33 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Cast { expr: inner, ty } => {
                 let from_ty = self.infer_expr(inner);
                 let to_ty = self.lower_type_expr(ty, &[]);
-                self.check_cast_pair(&from_ty, &to_ty, &inner.span);
+                match (&inner.kind, &to_ty) {
+                    // An ASCII char literal cast to `u8` is that byte exactly,
+                    // which the byte literal spells (B-2026-10-26-16).
+                    (ExprKind::CharLit(c), Type::UInt(UIntSize::U8)) if c.is_ascii() => {
+                        let byte = byte_literal(*c as u8);
+                        let end = ty.span.offset + ty.span.length;
+                        self.type_error_with_fix_it(
+                            format!(
+                                "error[E_CHAR_AS_NARROW_INT]: cannot cast `char` to `u8` \
+                                 directly because the Unicode scalar range (`0..=0x10FFFF`) \
+                                 does not fit in 8 bits; help: {:?} is ASCII, so write the \
+                                 byte literal `{byte}`",
+                                c
+                            ),
+                            inner.span,
+                            TypeErrorKind::InvalidCast,
+                            FixIt {
+                                span: Span {
+                                    length: end.saturating_sub(inner.span.offset),
+                                    ..inner.span
+                                },
+                                replacement: byte,
+                            },
+                        );
+                    }
+                    _ => self.check_cast_pair(&from_ty, &to_ty, &inner.span),
+                }
                 // B-2026-08-14-3 — record whether the SOURCE is unsigned, so
                 // codegen can pick zext over sext on the widening lane. It
                 // cannot read that off `expr_types`: the parser gives a `Cast`
@@ -11078,5 +11104,20 @@ fn copied_item(t: &Type) -> bool {
         Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => true,
         Type::Tuple(ts) => !ts.is_empty() && ts.iter().all(copied_item),
         _ => false,
+    }
+}
+
+/// The byte literal spelling `b`: `b'#'`, `b'\''`, `b'\\'`, `b'\n'` and the
+/// other named escapes, or `b'\xHH'` for any other control byte.
+fn byte_literal(b: u8) -> String {
+    match b {
+        b'\'' => "b'\\''".to_string(),
+        b'\\' => "b'\\\\'".to_string(),
+        b'\n' => "b'\\n'".to_string(),
+        b'\t' => "b'\\t'".to_string(),
+        b'\r' => "b'\\r'".to_string(),
+        0 => "b'\\0'".to_string(),
+        0x20..=0x7e => format!("b'{}'", b as char),
+        _ => format!("b'\\x{b:02X}'"),
     }
 }

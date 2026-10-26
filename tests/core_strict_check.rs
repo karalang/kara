@@ -15071,3 +15071,43 @@ fn a_read_only_destructured_index_let_is_fixed_by_a_borrow() {
         3,
     );
 }
+
+/// B-2026-10-26-16: an ASCII char literal cast to `u8` is that byte exactly,
+/// so E_CHAR_AS_NARROW_INT names the byte literal and `karac fix` writes it
+/// (`'#' as u8` to `b'#'`, with the quote, backslash and tab escapes). A
+/// non-ASCII literal keeps the truncation help and gets no edit.
+#[test]
+fn an_ascii_char_literal_cast_to_u8_is_fixed_to_a_byte_literal() {
+    rejected_then_fixed_in(
+        "char-literal-as-u8",
+        "fn main() {\n\
+             let s = \"a#b'c\\\\d\\te\";\n\
+             let bs = s.bytes();\n\
+             let mut n = 0;\n\
+             for b in bs.iter() {\n\
+                 if *b == '#' as u8 or *b == '\\'' as u8 or *b == '\\\\' as u8 or *b == '\\t' as u8 {\n\
+                     n += 1;\n\
+                 }\n\
+             }\n\
+             let c = 'é';\n\
+             println(f\"{n} {c as u32 as u8}\");\n\
+         }\n",
+        "'#' is ASCII, so write the byte literal `b'#'`",
+        "*b == b'#' or *b == b'\\'' or *b == b'\\\\' or *b == b'\\t'",
+        1,
+    );
+    let (dir, path) = fixture(
+        "non-ascii-char-as-u8",
+        "fn main() {\n\
+             let x = 'é' as u8;\n\
+             println(x);\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("`c as u32 as u8` for explicit truncation") && !err.contains("byte literal"),
+        "non-ascii-char-as-u8: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
