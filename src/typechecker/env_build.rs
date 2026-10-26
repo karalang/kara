@@ -544,6 +544,7 @@ impl<'a> super::TypeChecker<'a> {
         // origin-keyed impl alone leaves `Widget` method-less.
         let mut imported_impls: Vec<crate::ast::ImplBlock> = Vec::new();
         let mut imported_fns: Vec<String> = Vec::new();
+        let mut imported_fn_types: Vec<(String, Function, Vec<String>)> = Vec::new();
         for item in &self.program.items {
             let Item::Import(imp) = item else { continue };
             for ii in &imp.items {
@@ -564,13 +565,21 @@ impl<'a> super::TypeChecker<'a> {
                 // name here, over the baked library function of that name
                 // (`import ast.{take}` is not `std.mem`'s generic `take`), as
                 // it does in the package's combined source (B-2026-10-25-34).
-                if !origin_module.is_synthetic
-                    && origin_module
-                        .items
-                        .iter()
-                        .any(|it| matches!(it, Item::Function(f) if f.name == origin_name))
-                {
-                    imported_fns.push(ii.alias.clone().unwrap_or_else(|| ii.name.clone()));
+                if !origin_module.is_synthetic {
+                    if let Some(f) = origin_module.items.iter().find_map(|it| match it {
+                        Item::Function(f) if f.name == origin_name => Some(f),
+                        _ => None,
+                    }) {
+                        imported_fns.push(ii.alias.clone().unwrap_or_else(|| ii.name.clone()));
+                        // The types its signature names, resolved from ITS
+                        // module: `mk() -> P` types `mk()` as `P` here even
+                        // when `P` is not imported (B-2026-10-26-1).
+                        imported_fn_types.push((
+                            ii.alias.clone().unwrap_or_else(|| ii.name.clone()),
+                            f.clone(),
+                            origin_path.clone(),
+                        ));
+                    }
                 }
                 if let Some(vis) = find_item_visibility(origin_module, &origin_name) {
                     let bound = ii.alias.clone().unwrap_or_else(|| ii.name.clone());
@@ -715,6 +724,25 @@ impl<'a> super::TypeChecker<'a> {
             if !local {
                 self.env.functions.remove(&name);
             }
+        }
+        for (bound, f, origin_path) in imported_fn_types {
+            if self
+                .program
+                .items
+                .iter()
+                .any(|it| matches!(it, Item::Function(g) if g.name == bound))
+            {
+                continue;
+            }
+            self.register_transitive_type_deps(
+                tree,
+                fn_referenced_names(&f),
+                &origin_path,
+                &local_type_names,
+            );
+            let mut sig = f;
+            sig.name = bound;
+            self.env_add_function(&sig);
         }
         for (bound_name, item, origin_path) in imported_items {
             if local_type_names.contains(&bound_name) {
@@ -3867,6 +3895,25 @@ fn struct_referenced_names(s: &StructDef) -> Vec<String> {
     for f in &s.fields {
         collect_type_names(&f.ty, &mut out);
     }
+    out
+}
+
+/// Type names an imported function's signature references, less its own
+/// generic parameters.
+fn fn_referenced_names(f: &Function) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in &f.params {
+        collect_type_names(&p.ty, &mut out);
+    }
+    if let Some(r) = &f.return_type {
+        collect_type_names(r, &mut out);
+    }
+    let generics: Vec<&str> = f
+        .generic_params
+        .iter()
+        .flat_map(|g| g.params.iter().map(|p| p.name.as_str()))
+        .collect();
+    out.retain(|n| !generics.contains(&n.as_str()));
     out
 }
 

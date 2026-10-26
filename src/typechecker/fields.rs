@@ -547,7 +547,9 @@ impl<'a> super::TypeChecker<'a> {
         // Find the defining module. For a local struct, origin == current.
         let origin_path: Vec<String> = match self.type_origins.get(struct_name) {
             Some((path, _, _)) => path.clone(),
-            None => current_path.clone(),
+            None => self
+                .unimported_struct_origin(struct_name)
+                .unwrap_or_else(|| current_path.clone()),
         };
         if origin_path == current_path {
             // Same-module access — non-pub fields are always reachable to
@@ -564,6 +566,27 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// The module of the package that defines struct `name`, for a struct the
+    /// current module neither defines nor imports: one it reaches only
+    /// through another module's signature or field (`mk().secret` with only
+    /// `mk` imported; B-2026-10-26-1). `None` for a local or a library struct.
+    fn unimported_struct_origin(&self, name: &str) -> Option<Vec<String>> {
+        let tree = self.tree?;
+        let current_id = self.current_module?;
+        let defines = |m: &crate::module::Module| {
+            m.items
+                .iter()
+                .any(|it| matches!(it, Item::StructDef(sd) if sd.name == name))
+        };
+        if defines(tree.module(current_id)) {
+            return None;
+        }
+        tree.modules
+            .iter()
+            .find(|m| !m.is_synthetic && defines(m))
+            .map(|m| m.path.clone())
+    }
+
     /// Access a field on a struct that isn't registered in the local env —
     /// typically an imported struct from another module. Consults the
     /// `ProgramTree` so we can (a) return the field type and (b) enforce
@@ -572,7 +595,14 @@ impl<'a> super::TypeChecker<'a> {
         let Some(tree) = self.tree else {
             return Type::Error;
         };
-        let Some((origin_path, canonical_name, _vis)) = self.type_origins.get(struct_name).cloned()
+        let Some((origin_path, canonical_name)) = self
+            .type_origins
+            .get(struct_name)
+            .map(|(path, name, _)| (path.clone(), name.clone()))
+            .or_else(|| {
+                self.unimported_struct_origin(struct_name)
+                    .map(|path| (path, struct_name.to_string()))
+            })
         else {
             return Type::Error;
         };
@@ -608,7 +638,8 @@ impl<'a> super::TypeChecker<'a> {
 
         if !field_def.is_pub {
             // `origin_path` is guaranteed to differ from `current_module`'s
-            // path because `type_origins` only holds cross-module entries.
+            // path: `type_origins` only holds cross-module entries, and
+            // `unimported_struct_origin` answers only for another module.
             self.type_error(
                 format!(
                     "private field '{}' of struct '{}' is not visible outside its defining module",

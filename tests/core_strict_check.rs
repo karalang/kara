@@ -14210,3 +14210,70 @@ fn a_weak_slot_upgrades_and_passes_to_a_weak_parameter() {
         "no method 'upgrade' on type 'Option'",
     );
 }
+
+#[test]
+fn a_library_index_argument_drops_an_as_usize() {
+    // B-2026-10-26-2: a `Vec` method's index or count argument is an `i64`,
+    // so an `as usize` on an `i64` is refused there as at `Vec.filled`, and
+    // `karac fix` drops it.
+    rejected_then_fixed_by(
+        "vec-swap-as-usize",
+        "fn main() {\n    let mut v: Vec[i64] = Vec[3, 1, 2];\n    let k: i64 = 2;\n    \
+         v.swap(k as usize, 0);\n    v.truncate(k as usize);\n    println(f\"{v.len()} {v[0]}\");\n}\n",
+        "implicit coercion from 'usize' to 'i64' would change sign",
+        "v.swap(k, 0);\n    v.truncate(k);",
+    );
+}
+
+#[test]
+fn a_private_field_is_refused_through_an_imported_call() {
+    // B-2026-10-26-1: a struct reached only through an imported function's
+    // result keeps its fields private: `mk().secret` and `let p = mk();
+    // p.secret` are refused as the read through an imported `P` is, while
+    // a `pub` field and the defining module's own read pass.
+    let (dir, _) = fixture("private-field-through-a-call", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"pf\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/ast.kara"),
+        "pub struct P {\n    secret: i64,\n    pub open: i64,\n}\npub fn mk() -> P {\n    \
+         P { secret: 1, open: 2 }\n}\npub fn peek(p: P) -> i64 {\n    p.secret\n}\n",
+    )
+    .unwrap();
+    let check_with = |body: &str| {
+        std::fs::write(
+            dir.join("src/main.kara"),
+            format!("import ast.{{mk, peek}};\nfn main() {{\n{body}}}\n"),
+        )
+        .unwrap();
+        let out = karac().arg("check").current_dir(&dir).output().unwrap();
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    let (ok, out) = check_with("    let p = mk();\n    println(f\"{p.open} {peek(p)}\");\n");
+    assert!(ok, "{out}");
+    for body in [
+        "    println(mk().secret);\n",
+        "    let p = mk();\n    println(p.secret);\n",
+    ] {
+        let (ok, out) = check_with(body);
+        assert!(!ok, "{body}: must be refused: {out}");
+        assert!(
+            out.contains(
+                "private field 'secret' of struct 'P' is not visible outside its defining module"
+            ),
+            "{body}: {out}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
