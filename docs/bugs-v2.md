@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | miscompile | 8 |
 | run-vs-build | 7 |
 | other | 3 |
-| codegen-gap | 2 |
+| codegen-gap | 3 |
 | crash | 1 |
 
 ### By surface
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 16 |
 | ownership | 13 |
 | runtime | 9 |
-| mir-llvm | 7 |
+| mir-llvm | 8 |
 | parser | 6 |
 | other | 2 |
 | resolver | 2 |
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher reaches v2 only as a fixed walk key, on an annotated `let` or a plain struct's field (built in its literal or assigned): a user `BuildHasher`'s build/write/finish never run, FxBuildHasher hashes with the default, and a hasher named on a `shared` struct's field, a parameter, a return type or a turbofish is dropped | — |
 | B-2026-10-25-40 | 2026-10-25 | resolver+effect | low | A channel operation's effect cannot be declared: the effect checker charges a stored callback that receives on a channel with `receives(Channel)` and asks the slot's clause for it, but a clause naming `receives(Channel)` is refused by the resolver (`'Channel' is not an effect resource (it is a prelude type or trait)`) | — |
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
+| B-2026-10-26-6 | 2026-10-26 | mir-llvm | medium | `KARAC_DEBUG_INFO=1 karac build` of any program that spawns a task fails in the LLVM verifier: the call to a coroutine's `#resume` carries no `!dbg` location in a function that has a subprogram | — |
 
 ### Fixed
 
