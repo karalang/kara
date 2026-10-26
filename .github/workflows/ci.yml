@@ -8,12 +8,13 @@ on:
   # Nightly backfill: `cancel-in-progress` (below) deliberately trades
   # per-commit signal on `main` for queue health, so a push burst can leave
   # the final main state as the only tested commit — and a red intermediate
-  # state invisible. One scheduled full run a day guarantees main gets a
-  # complete, uncancelled verdict regardless of the day's push pattern
-  # (project-review-2026-08-16 item 6). 03:17 UTC — off the :00 spike, quiet
-  # for this repo's push hours.
+  # state invisible. A scheduled full run every 6 hours guarantees main gets
+  # a complete, uncancelled verdict regardless of the push pattern
+  # (project-review-2026-08-16 item 6; every 6 h since 2026-10-26, ADR-1
+  # revisit: a daily run covered ~200 commits and let a red sit ~19 h).
+  # :17 past the hour, off the :00 spike.
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 env:
