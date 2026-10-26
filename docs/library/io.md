@@ -335,6 +335,25 @@ Each server binds `addr` and answers every request with what `handler` returns f
 
 Each connection is served by a task of its own, in an isolating group ([core semantics §11.12](../core-semantics.md)), so a client that is slow to send its request, or holds its connection open, holds up no other, and a handler that panics ends only the connection it was answering. A connection is kept for the client's next request until the client closes it or asks to (`Connection: close`, or HTTP/1.0 without `keep-alive`); the response to a request that asks gets `connection: close`. Requests on one connection are answered in the order they came, pipelined ones included.
 
+Since every connection's task calls the handler, the handler must be `CrossTask` ([core semantics §6.3](../core-semantics.md#6-sharing-c7)), and so must everything it captures: state that requests share is a `sync` type, never a `shared` one, even when only one worker runs the tasks. A store the requests change keeps its plain state behind a `Mutex`, and each request holds the lock while it reads or writes:
+
+```kara
+struct Counts { hits: Map[String, i64] }
+sync struct Store { state: Mutex[Counts] }
+
+fn handle(store: Store, req: Request) -> Response {
+    let g = store.state.lock();
+    let n = g.value.hits.get(req.path()).unwrap_or(0) + 1;
+    g.value.hits.insert(req.path(), n);
+    Response { status: 200, body: n.to_string() }
+}
+
+fn main() {
+    let store = Store { state: Mutex.new(Counts { hits: Map.new() }) };
+    let _ = Server.serve("127.0.0.1:8080", |req| handle(store, req));
+}
+```
+
 `serve_tls` serves HTTPS with the certificate chain `cert_pem` and the private key `key_pem`, PEM text as `TlsListener.bind_tls` takes them. A certificate or key that does not parse fails the bind with `invalid input`, and a connection whose handshake fails is dropped.
 
 `serve_ws` adds WebSocket. When `handler` answers status 101 to a request that is a WebSocket opening handshake (a `GET` with `Upgrade: websocket` and a `Sec-WebSocket-Key`), the server sends the handshake's own 101, not the handler's response, and runs `ws_handler` on the upgraded connection, in that connection's task; the bytes the client sent after the request are its first frames. The server goes on serving requests while the sessions run ([core semantics §11.8](../core-semantics.md)). A 101 to a request that is not a handshake is sent as it is, and any other status to a handshake is sent normally. The connection closes when `ws_handler` drops its `WebSocket`. `serve_ws_tls` is `serve_ws` over TLS, as `serve_tls` is `serve`'s.
