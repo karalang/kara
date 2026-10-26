@@ -3200,6 +3200,28 @@ fn mir_check_message(e: &crate::mir::BorrowError) -> String {
                  `.cloned()`, `*r` for a `Copy` value) where it is borrowed"
             )
         }
+        // A temporary has no name the program spells, so it is named by
+        // where its expression is (B-2026-10-24-10).
+        ("E0516", None) if e.temporary.is_some() => {
+            let holder = match &e.holder {
+                Some(h) => format!("`{h}` still borrows it"),
+                None => "it is still borrowed".to_string(),
+            };
+            format!(
+                "cannot {} the temporary value of the expression{} while {holder} (the borrow \
+                 is taken{}; core-semantics.md §5.5) [E0516]. Bind the expression to a \
+                 variable first, so the value lives as long as the borrow",
+                match e.access {
+                    "write" => "write to",
+                    "mutable borrow" => "mutably borrow",
+                    "shared borrow" => "borrow",
+                    "end of storage" => "end",
+                    other => other,
+                },
+                at(e.temporary),
+                at(e.loan_at)
+            )
+        }
         ("E0517", Some(place)) => format!(
             "cannot {} {place}: it is reached through a shared `ref`, which is read-only \
              (core-semantics.md §5.9) [E0517]",
@@ -3218,13 +3240,61 @@ fn mir_check_message(e: &crate::mir::BorrowError) -> String {
 }
 
 /// `text` without its leading `line:column:` and the MIR block positions
-/// (`bb4[3]: `, and ` (borrow at bb0[1] at 16:21)` becomes ` (borrow at 16:21)`).
+/// (`bb4[3]: `, and ` (borrow at bb0[1] at 16:21)` becomes ` (borrow at 16:21)`),
+/// and with a MIR temporary's place (`_2`, `(*_2).1`), which the program has
+/// no name for, read as "a temporary value" (B-2026-10-24-10).
 fn mir_check_text(text: &str) -> String {
     let lead = regex::Regex::new(r"^\d+:\d+: (bb\d+\[(\d+|term)\]: )?").unwrap();
     let block = regex::Regex::new(r"bb\d+\[(\d+|term)\]( at)? ?").unwrap();
+    let temp = regex::Regex::new(r"\(\*_\d+\)(\.\d+)*|\b_\d+(\.\d+)*\b").unwrap();
     let t = lead.replace(text, "");
-    block
+    let t = block
         .replace_all(&t, "")
         .replace("(borrow at )", "")
-        .replace("  ", " ")
+        .replace("  ", " ");
+    temp.replace_all(&t, "a temporary value").into_owned()
+}
+
+#[cfg(test)]
+mod mir_message_tests {
+    use super::{mir_check_message, mir_check_text};
+
+    /// B-2026-10-24-10: no MIR temporary's name reaches `karac check`.
+    #[test]
+    fn mir_check_text_reads_a_temporary_as_one() {
+        assert_eq!(
+            mir_check_text("3:5: bb2[term]: drop of _2 while it is borrowed (borrow at bb1[0] at 3:13) [E0516]"),
+            "drop of a temporary value while it is borrowed (borrow at 3:13) [E0516]"
+        );
+        assert_eq!(
+            mir_check_text("7:9: a view of (*_12).1 is stored in an escaping closure"),
+            "a view of a temporary value is stored in an escaping closure"
+        );
+        assert_eq!(
+            mir_check_text("move of x_2 out of v"),
+            "move of x_2 out of v"
+        );
+    }
+
+    #[test]
+    fn mir_check_message_names_a_temporary_by_its_expression() {
+        let e = crate::mir::BorrowError {
+            text:
+                "3:5: bb2[term]: drop of _2 while it is borrowed (borrow at bb1[0] at 3:13) [E0516]"
+                    .to_string(),
+            code: "E0516",
+            at: Some((3, 5)),
+            access: "drop",
+            place: None,
+            loan_at: Some((3, 13)),
+            holder: Some("f".to_string()),
+            temporary: Some((3, 18)),
+        };
+        assert_eq!(
+            mir_check_message(&e),
+            "cannot drop the temporary value of the expression at 3:18 while `f` still borrows \
+             it (the borrow is taken at 3:13; core-semantics.md §5.5) [E0516]. Bind the \
+             expression to a variable first, so the value lives as long as the borrow"
+        );
+    }
 }

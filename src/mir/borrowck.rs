@@ -269,6 +269,10 @@ pub struct BorrowError {
     pub loan_at: Option<(usize, usize)>,
     /// A named local still holding that borrow at the access.
     pub holder: Option<String>,
+    /// When the place is a temporary's: the source `line:column` of the
+    /// expression whose value it holds, which the program does not name
+    /// (B-2026-10-24-10).
+    pub temporary: Option<(usize, usize)>,
 }
 
 impl BorrowError {
@@ -281,6 +285,7 @@ impl BorrowError {
             place: None,
             loan_at: None,
             holder: None,
+            temporary: None,
         }
     }
 }
@@ -376,6 +381,7 @@ pub fn borrow_errors(
                             place: source_place(body, tys, &place),
                             loan_at: source_at(body, loan.at),
                             holder,
+                            temporary: temporary_at(body, &place),
                             ..BorrowError::new(text, "E0516", site_at(body, at, Some(loan.at)))
                         });
                     }
@@ -642,6 +648,15 @@ fn local_name(body: &Body, l: Local) -> Option<String> {
         LocalKind::Arg { name, .. } | LocalKind::User { name, .. } => Some(name.clone()),
         _ => None,
     }
+}
+
+/// Where the expression a temporary `place` holds is, for a place the
+/// program has no name for.
+fn temporary_at(body: &Body, p: &Place) -> Option<(usize, usize)> {
+    let decl = body.local(p.local);
+    let span = decl.source_info.span;
+    (matches!(decl.kind, LocalKind::Temp) && p.projection.is_empty() && span.line > 0)
+        .then_some((span.line, span.column))
 }
 
 /// `place` as the program would write it (`self.index`), when its local is

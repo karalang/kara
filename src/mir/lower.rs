@@ -22272,6 +22272,7 @@ impl SourceBorrowError {
                 place: None,
                 loan_at: None,
                 holder: None,
+                temporary: None,
             },
         }
     }
