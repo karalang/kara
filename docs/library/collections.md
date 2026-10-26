@@ -244,6 +244,15 @@ A ring buffer with O(1) push and pop at both ends.
 | `len` | `fn len(self) -> i64` | |
 | `is_empty` | `fn is_empty(self) -> bool` | |
 | `clear` | `fn clear(mut ref self)` | |
+| `contains` | `fn contains(self, val: T) -> bool where T: PartialEq` | Linear search |
+| `insert` | `fn insert(mut ref self, idx: i64, val: own T)` | Inserts at `idx` (0 is the front), shifting toward the nearer end. Panics if `idx > self.len()` |
+| `remove` | `fn remove(mut ref self, idx: i64) -> T` | Removes at `idx`, shifting from the nearer end. Panics if out of bounds |
+| `swap` | `fn swap(mut ref self, i: i64, j: i64)` | As `Vec.swap` |
+| `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred`, front to back |
+| `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from index `len` to the back. Does nothing if `len >= self.len()` |
+| `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Pushes every item onto the back, in order |
+
+These are the whole surface, with iteration and the traits below. A `VecDeque` is not contiguous, so the methods that need one slice (`sort`, `dedup`, `binary_search`, `reverse`, ranges and `as_slice`) are refused with a diagnostic; collect into a `Vec` for them (`Vec.from_iter(dq)`), as Rust's `make_contiguous` would (review-thread ruling 2026-10-26, from the ADR-3 collections audit).
 
 ## `PriorityQueue[T]`
 
