@@ -210,13 +210,13 @@ impl Server {
     // holds no more requests.
     fn __next(conn: WsConn, buf: mut ref Vec[u8]) -> i64 with sends(Network) receives(Network) blocks suspends {
         let mut chunk = [0u8; 8192];
-        let mut used = Server.__install(buf.as_slice(), false);
+        let mut used = Server.__install(buf, false);
         while used == 0 {
             match conn.read(mut chunk) {
-                Ok(0) => used = Server.__install(buf.as_slice(), true),
+                Ok(0) => used = Server.__install(buf, true),
                 Ok(n) => {
                     buf.extend_from_slice(chunk[0..n]);
-                    used = Server.__install(buf.as_slice(), false);
+                    used = Server.__install(buf, false);
                 }
                 Err(NetError.Interrupted) => {}
                 Err(_) => return -1,
