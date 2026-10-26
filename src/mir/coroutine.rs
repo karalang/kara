@@ -1297,13 +1297,26 @@ pub struct CoroutineLayout {
     pub frame: Vec<Local>,
 }
 
-/// The suspension points of `body`, a member of `coroutines`, and its frame.
-///
-/// The frame over-approximates in one way: a local that is ever borrowed is
-/// in it, because a reference to it may be live across a point when the
-/// local itself is not used again. Narrowing that needs the borrow check's
-/// loan liveness, and only costs frame size.
+/// The suspension points of `body`, a member of `coroutines`, and its frame,
+/// which holds every local that is ever borrowed: a reference to it may be
+/// live across a point when the local itself is not used again.
 pub fn layout(body: &Body, coroutines: &BTreeSet<String>) -> CoroutineLayout {
+    layout_with(body, coroutines, None)
+}
+
+/// What the result of a call of each body borrows.
+pub type CallBorrows<'a> = dyn Fn(&InstanceId) -> super::borrowck::ResultBorrows + 'a;
+
+/// [`layout`], with the frame narrowed to the borrowed locals some loan of
+/// which is live at a point, when `loans` gives what each call's result
+/// borrows (the borrow check's loan liveness): live just before the call,
+/// as the callee may hold an argument's borrow while it is pending, or
+/// when it returns.
+pub fn layout_with(
+    body: &Body,
+    coroutines: &BTreeSet<String>,
+    loans: Option<(&TyInterner, &CallBorrows)>,
+) -> CoroutineLayout {
     let live_out = liveness(body);
     let mut points = Vec::new();
     let mut frame: BTreeSet<Local> = BTreeSet::new();
@@ -1339,11 +1352,28 @@ pub fn layout(body: &Body, coroutines: &BTreeSet<String>) -> CoroutineLayout {
             across,
         });
     }
-    if !points.is_empty() {
-        for b in &body.blocks {
-            for s in &b.statements {
-                if let StatementKind::Assign(_, Rvalue::Ref(_, p)) = &s.kind {
-                    frame.insert(p.local);
+    match loans {
+        _ if points.is_empty() => {}
+        Some((tys, has_receiver)) => {
+            let (sites, live) =
+                super::borrowck::loan_liveness(body, tys, has_receiver, &|_, _| true);
+            for p in &points {
+                // No loan at all leaves the table empty.
+                let before = live.get(p.block.index()).and_then(|b| b.last());
+                let after = live.get(p.resume.index()).and_then(|b| b.first());
+                for point in before.into_iter().chain(after) {
+                    for (li, _) in point.iter().enumerate().filter(|(_, &on)| on) {
+                        frame.insert(sites[li].1.local);
+                    }
+                }
+            }
+        }
+        None => {
+            for b in &body.blocks {
+                for s in &b.statements {
+                    if let StatementKind::Assign(_, Rvalue::Ref(_, p)) = &s.kind {
+                        frame.insert(p.local);
+                    }
                 }
             }
         }
@@ -1511,7 +1541,7 @@ pub fn transform(
     bodies: &[Body],
     tys: &TyInterner,
 ) -> Result<(Vec<Body>, BTreeMap<String, FrameInfo>), String> {
-    transform_from(bodies, tys, &BTreeSet::new())
+    transform_from(bodies, tys, &BTreeSet::new(), None)
 }
 
 /// [`transform`], with the coroutines found from `suspending`, the
@@ -1520,6 +1550,7 @@ pub fn transform_from(
     bodies: &[Body],
     tys: &TyInterner,
     suspending: &BTreeSet<String>,
+    borrows: Option<&crate::mir::lower::BorrowSummary>,
 ) -> Result<(Vec<Body>, BTreeMap<String, FrameInfo>), String> {
     // A spawned closure runs as a task: its task body is a task root, and
     // a coroutine, whether or not the closure suspends.
@@ -1579,8 +1610,24 @@ pub fn transform_from(
         .filter(|b| set.contains(&b.instance.name))
         .map(|b| (b.instance.name.as_str(), b))
         .collect();
-    let layouts: BTreeMap<&str, CoroutineLayout> =
-        by_name.iter().map(|(&n, b)| (n, layout(b, &set))).collect();
+    // What each call's result borrows, for the frame's loans: the program
+    // bodies' as the borrow check saw them. `KARAC_MIR_NARROW_FRAMES=0`
+    // keeps every borrowed local in the frame.
+    let names: rustc_hash::FxHashSet<String> =
+        bodies.iter().map(|b| b.instance.name.clone()).collect();
+    let borrows =
+        borrows.filter(|_| std::env::var("KARAC_MIR_NARROW_FRAMES").as_deref() != Ok("0"));
+    let has_receiver = borrows.map(|s| move |i: &InstanceId| s.result_borrows(&names, i));
+    let loans = has_receiver.as_ref().map(|h| {
+        (
+            tys,
+            h as &dyn Fn(&InstanceId) -> super::borrowck::ResultBorrows,
+        )
+    });
+    let layouts: BTreeMap<&str, CoroutineLayout> = by_name
+        .iter()
+        .map(|(&n, b)| (n, layout_with(b, &set, loans)))
+        .collect();
     // A frame holds its callees' frames, so every frame type is named
     // before any is defined: a recursive coroutine's frame holds its own
     // type, which the compiled backends box (`layout::boxed_field`) and the

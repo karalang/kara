@@ -22241,6 +22241,36 @@ fn result_borrows(
     }
 }
 
+/// What each callee's result borrows, kept with the program for the passes
+/// after the borrow check that ask it again: the coroutine transform's frame
+/// holds a borrowed local only while one of its loans is live
+/// ([`crate::mir::coroutine::layout`]).
+#[derive(Debug, Default)]
+pub struct BorrowSummary {
+    pub receivers: FxHashSet<String>,
+    pub views: FxHashSet<String>,
+    pub pointee_views: FxHashSet<String>,
+    pub closure_results: FxHashSet<String>,
+}
+
+impl BorrowSummary {
+    /// [`result_borrows`] of `i`, where `names` are the program's bodies.
+    pub fn result_borrows(
+        &self,
+        names: &FxHashSet<String>,
+        i: &InstanceId,
+    ) -> crate::mir::ResultBorrows {
+        result_borrows(
+            names,
+            &self.receivers,
+            &self.views,
+            &self.pointee_views,
+            &self.closure_results,
+            i,
+        )
+    }
+}
+
 /// [`build_source`] up to the MIR checks: the program with the library,
 /// parsed, checked and lowered, with §3.7's forbidden moves refused.
 /// `KARAC_MIR_TIME=1` prints each build phase's wall time to stderr.
@@ -22584,6 +22614,12 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     // `KARAC_MIR_DUMP=built` or `=elaborated` prints every body to stderr.
     let dump = std::env::var("KARAC_MIR_DUMP").ok();
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
+    lowered.program.borrows = Some(std::sync::Arc::new(BorrowSummary {
+        receivers: lowered.receivers.clone(),
+        views: lowered.views.clone(),
+        pointee_views: lowered.pointee_views.clone(),
+        closure_results: lowered.closure_results.clone(),
+    }));
     let borrowck = std::env::var("KARAC_MIR_BORROWCK").as_deref() != Ok("0");
     // `KARAC_MIR_RC_PAIRS=0` keeps every retain (`rc_pairs`).
     let rc_pairs = std::env::var("KARAC_MIR_RC_PAIRS").as_deref() != Ok("0");

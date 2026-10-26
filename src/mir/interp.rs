@@ -61,6 +61,10 @@ pub struct Program {
     /// for a program made otherwise (from MIR text), whose coroutines the
     /// transform finds from the bodies alone.
     pub suspending: Option<std::collections::BTreeSet<String>>,
+    /// What each callee's result borrows, as the borrow check saw it; `None`
+    /// for a program made otherwise (from MIR text), whose coroutine frames
+    /// then hold every borrowed local.
+    pub borrows: Option<std::sync::Arc<super::lower::BorrowSummary>>,
 }
 
 /// An `extern "C"` function's declared parameter and return types.
@@ -576,7 +580,7 @@ pub fn coroutines_flag() -> bool {
 pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, String> {
     let bodies: Vec<Body> = program.bodies.values().cloned().collect();
     let seed = program.suspending.clone().unwrap_or_default();
-    let (bodies, _) = coroutine::transform_from(&bodies, tys, &seed)?;
+    let (bodies, _) = coroutine::transform_from(&bodies, tys, &seed, program.borrows.as_deref())?;
     // `KARAC_MIR_DUMP=coroutines` prints every body after the transform.
     if std::env::var("KARAC_MIR_DUMP").as_deref() == Ok("coroutines") {
         for b in &bodies {
