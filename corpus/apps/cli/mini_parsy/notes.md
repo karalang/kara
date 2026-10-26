@@ -91,7 +91,7 @@ open). Both of those were dropped. The rest were by hand:
   were `String` arrays (`let names = [...]` makes `String`s; now
   `Array[Str, 12]`).
 - A `ref` to a `shared enum` is refused where a handle is wanted
-  (B-2026-10-25-12, open): seven `.clone()`s on a `Val`.
+  (B-2026-10-25-12): seven `.clone()`s on a `Val`.
 - The closure-kind check calls three things a consume that move nothing
   (B-2026-10-25-13, open): a captured parser passed to `g.take`, a
   captured `Val` returned, and `match group` on a captured value. These
@@ -116,6 +116,13 @@ closures capture the forward declaration itself, the ten parameters
 borrow again and the six are `let me = self;`. It still matches the
 oracle on all four backends with nothing on stderr (a debug `karac`
 built at 11956dad75).
+
+B-2026-10-25-12 was fixed in 92a0f23874, so six of its seven `.clone()`s
+are gone too. The seventh stays: in `enum_class`,
+`members.iter().map(|(n, v)| (n.to_string(), v)).collect()` types the
+tuple from the closure body, so `v` stays a `ref Val` and the collect into
+`Vec[(String, Val)]` is refused (B-2026-10-26-3, open). It still matches
+the oracle on all four backends (`karac` at deeff0cc67).
 
 Later `karac fix` dropped 95 `*`s on `Copy` parts bound out of borrowed
 values, which are copies rather than views (kara B-2026-10-24-36); the

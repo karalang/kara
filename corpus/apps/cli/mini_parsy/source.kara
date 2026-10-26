@@ -2203,7 +2203,7 @@ fn all_eq(a: ref Vec[Val], b: ref Vec[Val]) -> bool {
 fn lookup(kv: ref Vec[(Val, Val)], key: ref Val) -> Option[Val] {
     for (k, v) in kv {
         if py_eq(k, key) {
-            return Some(v.clone());
+            return Some(v);
         }
     }
     None
@@ -2310,14 +2310,14 @@ fn py_add(a: ref Val, b: ref Val) -> Val {
         (Val.List(xs), Val.List(ys)) => {
             let mut zs = xs.clone();
             for y in ys {
-                zs.push(y.clone());
+                zs.push(y);
             }
             Val.List(zs)
         }
         (Val.Tuple(xs), Val.Tuple(ys)) => {
             let mut zs = xs.clone();
             for y in ys {
-                zs.push(y.clone());
+                zs.push(y);
             }
             Val.Tuple(zs)
         }
@@ -3339,7 +3339,7 @@ fn become_or_panic(f: Parser, p: Parser) {
 fn kwarg(kwargs: ref Vec[(String, Val)], name: Str) -> Val {
     for (k, v) in kwargs {
         if k == name {
-            return v.clone();
+            return v;
         }
     }
     panic(f"missing required argument: '{name}'")
@@ -4141,7 +4141,7 @@ fn outcome(r: Result[Val, PyErr]) -> String {
 
 fn outcome_partial(r: Result[(Val, Val), PyErr]) -> String {
     match r {
-        Ok((v, rest)) => f"  {repr(tuple2(v.clone(), rest.clone()))}",
+        Ok((v, rest)) => f"  {repr(tuple2(v, rest))}",
         Err(e) => f"  ! {e.kind}: {e.msg}",
     }
 }
