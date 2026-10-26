@@ -3359,7 +3359,7 @@ fn record1(name: Str, field: Str, v: Val) -> Val {
 }
 
 fn enum_class(name: Str, members: ref Vec[(Str, Val)]) -> EnumClass {
-    EnumClass { name: name.to_string(), members: members.iter().map(|(n, v)| (n.to_string(), v.clone())).collect() }
+    EnumClass { name: name.to_string(), members: members.iter().map(|(n, v)| (n.to_string(), v)).collect() }
 }
 
 fn pet() -> EnumClass {

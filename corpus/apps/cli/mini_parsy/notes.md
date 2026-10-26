@@ -118,11 +118,11 @@ oracle on all four backends with nothing on stderr (a debug `karac`
 built at 11956dad75).
 
 B-2026-10-25-12 was fixed in 92a0f23874, so six of its seven `.clone()`s
-are gone too. The seventh stays: in `enum_class`,
-`members.iter().map(|(n, v)| (n.to_string(), v)).collect()` types the
-tuple from the closure body, so `v` stays a `ref Val` and the collect into
-`Vec[(String, Val)]` is refused (B-2026-10-26-3, open). It still matches
-the oracle on all four backends (`karac` at deeff0cc67).
+are gone too. The seventh, in `enum_class`'s
+`members.iter().map(|(n, v)| (n.to_string(), v)).collect()`, needed the
+tuple built in a closure to read the `ref Val` as the handle
+(B-2026-10-26-3), fixed in 99e5f3ff2f, so it is gone as well. It still
+matches the oracle on all four backends (`karac` at 98f1efe3fb).
 
 Later `karac fix` dropped 95 `*`s on `Copy` parts bound out of borrowed
 values, which are copies rather than views (kara B-2026-10-24-36); the
