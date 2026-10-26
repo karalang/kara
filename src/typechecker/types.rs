@@ -1799,8 +1799,9 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             mut_ok && generic_arg_compatible(crate::ast::Variance::Invariant, a_el, b_el)
         }
         // Coercion at call boundaries: `Slice[T]` accepts `Vec[T]` / `Array[T, N]`,
-        // and their `ref` borrows. One-directional — the reverse is not compatible.
-        // See design.md § Slices.
+        // and their `ref` and `mut ref` borrows (a place reached through a
+        // `mut ref` is still a `Vec` place, read here; B-2026-10-25-47).
+        // One-directional — the reverse is not compatible. See design.md § Slices.
         (
             Type::Slice {
                 element: slice_el,
@@ -1824,7 +1825,7 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                 element: slice_el,
                 mutable: false,
             },
-            Type::Ref(inner),
+            Type::Ref(inner) | Type::MutRef(inner),
         ) => match inner.as_ref() {
             Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
                 generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, &args[0])

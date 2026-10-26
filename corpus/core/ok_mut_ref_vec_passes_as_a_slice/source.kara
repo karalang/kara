@@ -1,0 +1,49 @@
+// B-2026-10-25-47: a `Slice[T]` parameter takes a place reached through a
+// `mut ref Vec[T]` or `mut ref Array[T, N]`, read-only, as it takes an owned
+// or `ref` one (design.md § Slices). The binding stays usable after.
+fn lens(xs: Slice[String]) -> i64 {
+    let mut t = 0;
+    for x in xs {
+        t = t + x.len();
+    }
+    t
+}
+
+fn first[T](xs: Slice[T]) -> i64 {
+    xs.len()
+}
+
+fn sum3(xs: Slice[i64]) -> i64 {
+    xs[0] + xs[1] + xs[2]
+}
+
+struct Bag {
+    items: Vec[String],
+}
+
+impl Bag {
+    fn count(ref self, xs: Slice[String]) -> i64 {
+        xs.len() + self.items.len()
+    }
+}
+
+fn grow(buf: mut ref Vec[String], arr: mut ref Array[i64, 3], bag: ref Bag) -> i64 {
+    buf.push("abc".to_string());
+    let a = lens(buf);
+    let b = first(buf);
+    buf.push("de".to_string());
+    let c = lens(buf);
+    arr[0] = 10;
+    let d = sum3(arr);
+    let e = bag.count(buf);
+    a * 10000 + b * 1000 + c * 100 + d + e
+}
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("x".to_string());
+    let mut a: Array[i64, 3] = [1, 2, 3];
+    let bag = Bag { items: Vec.new() };
+    let r = grow(mut v, mut a, bag);
+    println(f"{r} {v.len()} {v[2]} {a[0]}");
+}

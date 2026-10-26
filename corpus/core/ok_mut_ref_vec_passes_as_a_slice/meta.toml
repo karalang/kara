@@ -1,0 +1,11 @@
+source = "corpus/core/ok_mut_ref_vec_passes_as_a_slice"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["slice", "borrow"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "B-2026-10-25-47: design.md § Slices, a `Slice[T]` parameter accepts a `Vec[T]` / `Array[T, N]` place, borrowed; a place reached through `mut ref` passes read-only. Expected output worked by hand: lens 4, len 2, lens 6, sum 15, count 3."

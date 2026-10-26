@@ -14121,3 +14121,52 @@ fn a_copy_part_of_a_borrowed_scrutinee_is_a_copy_in_every_pattern() {
         "26\n",
     );
 }
+
+#[test]
+fn an_associated_function_call_checks_its_closure_kinds() {
+    // B-2026-10-25-49: §9.6's kind check covers `Type.f(..)` as it covers a
+    // free function: a MutFn closure where `own Fn` is declared is refused,
+    // naming the capture; a closure that only reads passes.
+    let prelude = "struct Tally {\n    n: i64,\n}\nstruct Runner { }\nimpl Runner {\n    \
+                   fn apply(f: own Fn(i64) -> i64) -> i64 {\n        f(1) + f(2)\n    }\n}\n\
+                   fn note(t: mut ref Tally, k: i64) -> i64 {\n    t.n = t.n + k;\n    t.n\n}\n";
+    rejected(
+        "assoc-fn-mutfn-for-fn",
+        &format!(
+            "{prelude}fn main() {{\n    let mut t = Tally {{ n: 0 }};\n    \
+             let total = Runner.apply(|k| note(mut t, k));\n    println(f\"{{total}} {{t.n}}\");\n}}\n"
+        ),
+        "the closure mutates t, so it is a MutFn, but Runner.apply expects Fn (§9.6)",
+    );
+    accepted(
+        "assoc-fn-fn-for-fn",
+        &format!(
+            "{prelude}fn main() {{\n    let t = Tally {{ n: 5 }};\n    \
+             let total = Runner.apply(|k| k + t.n);\n    println(f\"{{total}}\");\n}}\n"
+        ),
+    );
+    // A library associated function is checked the same way.
+    rejected(
+        "library-assoc-fn-mutfn-for-fn",
+        "struct Store {\n    hits: i64,\n}\nfn handle(s: mut ref Store, req: Request) -> Response {\n    \
+         s.hits = s.hits + 1;\n    Response { status: 200, body: f\"{s.hits}\" }\n}\nfn main() {\n    \
+         let mut store = Store { hits: 0 };\n    \
+         let _ = Server.serve(\"127.0.0.1:0\", |req| handle(mut store, req));\n}\n",
+        "the closure mutates store, so it is a MutFn, but Server.serve expects Fn (§9.6)",
+    );
+}
+
+#[test]
+fn a_mut_ref_vec_passes_to_a_slice_parameter() {
+    // B-2026-10-25-47: a place reached through `mut ref Vec[T]` (or
+    // `mut ref Array[T, N]`) passes to a read-only `Slice[T]` parameter, as an
+    // owned or `ref` one does (design.md § Slices). The run is pinned by
+    // corpus/core/ok_mut_ref_vec_passes_as_a_slice.
+    accepted(
+        "mut-ref-vec-to-a-slice",
+        "fn total(xs: Slice[u8]) -> i64 {\n    let mut t = 0;\n    for x in xs {\n        \
+         t = t + x as i64;\n    }\n    t\n}\nfn grow(buf: mut ref Vec[u8], a: mut ref Array[u8, 2]) -> i64 {\n    \
+         buf.push(3u8);\n    total(buf) + total(a)\n}\nfn main() {\n    let mut v: Vec[u8] = Vec.new();\n    \
+         v.push(1u8);\n    let mut a: Array[u8, 2] = [1u8, 2u8];\n    println(f\"{total(v)} {grow(mut v, mut a)}\");\n}\n",
+    );
+}
