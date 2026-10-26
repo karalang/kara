@@ -12,11 +12,15 @@ __mir-llvm-run`; it needs a karac built with `--features llvm` and a
 current `karac_jit_runner` beside it), and mir-llvm-asan (the same IR
 compiled with AddressSanitizer into a native binary, `karac __mir-llvm-asan`;
 a leak, double free or bad access fails the entry with the report's first
-line, whatever the stdout), and mir-build (the same IR compiled ahead of time
-by `karac build`, then the binary run).
+line, whatever the stdout), mir-llvm-tsan (the same IR under ThreadSanitizer,
+`karac __mir-llvm-tsan`, on four workers (`KARAC_THREADS=4`); a data race
+fails the entry the same way; it needs `libkarac_runtime_tsan.a`, CLAUDE.md
+§ Runtime archives), and mir-build (the same IR compiled ahead of time by
+`karac build`, then the binary run).
 
 --filter matches a tag exactly or a substring of the entry path; repeat it to
-widen. Each entry is judged by its meta.toml `expect`:
+widen. --tag matches a tag only (`--tag par` without every path holding
+"par"). Each entry is judged by its meta.toml `expect`:
 
     stdout        runs; stdout == expected.out and exit == `exit` (an entry not
                   yet classified has no expected.out and is held to legacy.out)
@@ -64,7 +68,9 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     backend = args.backend
     base = {"name": rel, "class": meta.get("class", "unknown"), "tags": meta.get("tags", []),
             "model": meta.get("model_verdict", "(none)")}
-    if expect == "skip" or (meta.get("backends") and backend not in meta["backends"]):
+    # A sanitizer lane runs the same IR as mir-llvm, so it runs wherever mir-llvm does.
+    listed = "mir-llvm" if backend == "mir-llvm-tsan" else backend
+    if expect == "skip" or (meta.get("backends") and listed not in meta["backends"]):
         return {**base, "verdict": "SKIP", "why": expect if expect == "skip" else "backend excluded", "ran": False}
     mir = backend.startswith("mir-")
     if not mir and meta.get("legacy_expect"):
@@ -131,7 +137,7 @@ def judge(entry: Path, corpus: Path, args) -> dict:
         if res["status"] == "refused":
             why = f"refused (exit {res['exit']}): {first_line(res['stderr'])}"
         elif sanitizer_report(res) and not declared_leak(meta, res):
-            why = f"asan: {sanitizer_report(res)}"
+            why = f"{'tsan' if backend == 'mir-llvm-tsan' else 'asan'}: {sanitizer_report(res)}"
         elif exp is None:
             why = "no expected.out"
         elif as_set and sorted(res["stdout"].splitlines()) == sorted(exp.splitlines()):
@@ -161,14 +167,15 @@ def check_codes(entry: Path, args) -> list:
 
 
 def sanitizer_report(res: dict) -> str:
-    """The kind of AddressSanitizer or LeakSanitizer report on stderr, or ""."""
+    """The kind of AddressSanitizer, LeakSanitizer or ThreadSanitizer report on
+    stderr, or ""."""
     if res["exit"] != 86:
         return ""
-    m = re.search(rb"ERROR: (?:Address|Leak)Sanitizer: ([^\n]*)", res["stderr"])
+    m = re.search(rb"(?:ERROR|WARNING): (?:Address|Leak|Thread)Sanitizer: ([^\n]*)", res["stderr"])
     if not m:
         return ""
-    # Drop addresses and thread ids so equal reports read equal.
-    return re.sub(r" on (?:unknown )?address 0x[0-9a-f]+.*| in thread T\d+.*", "",
+    # Drop addresses, thread ids and pids so equal reports read equal.
+    return re.sub(r" on (?:unknown )?address 0x[0-9a-f]+.*| in thread T\d+.*| \(pid=\d+\)", "",
                   m.group(1).decode(errors="replace")).strip()[:120]
 
 
@@ -192,6 +199,8 @@ def main() -> int:
     ap.add_argument("--karac", default=str(ROOT / "target/debug/karac"))
     ap.add_argument("--corpus", default=str(ROOT / "corpus"))
     ap.add_argument("--filter", action="append", default=[], help="tag or path substring; repeatable")
+    ap.add_argument("--tag", action="append", default=[],
+                    help="tag, matched exactly (never as a path); repeatable, widens like --filter")
     ap.add_argument("--exclude", action="append", default=[],
                     help="tag or path substring to leave out; repeatable")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
@@ -204,9 +213,10 @@ def main() -> int:
     todo = []
     for e in entries(corpus):
         rel = str(e.relative_to(corpus))
-        if args.filter or args.exclude:
+        if args.filter or args.tag or args.exclude:
             tags = set(read_toml(e / "meta.toml").get("tags", []))
-            if args.filter and not any(f in tags or f in rel for f in args.filter):
+            if (args.filter or args.tag) and not any(f in tags or f in rel for f in args.filter) \
+                    and not tags.intersection(args.tag):
                 continue
             if any(f in tags or f in rel for f in args.exclude):
                 continue

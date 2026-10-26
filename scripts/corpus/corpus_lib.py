@@ -27,11 +27,14 @@ META_ORDER = ["source", "dedup_of", "expect", "exit", "tags", "class",
 # `mir-interp` is the hidden `karac __mir-run` (single-file programs: MIR
 # builder, drop elaboration, MIR interpreter); `mir-llvm` is the hidden
 # `karac __mir-llvm-run` (the same MIR compiled to LLVM IR and run under
-# `karac_jit_runner`).
+# `karac_jit_runner`). `mir-llvm-tsan` is `karac __mir-llvm-tsan` on the
+# pool's four workers (M4 item 11): a lane on one worker has no second
+# thread to race with.
 BACKENDS = {
     "mir-interp": {"check": True, "run": ["__mir-run"]},
     "mir-llvm": {"check": True, "run": ["__mir-llvm-run"]},
     "mir-llvm-asan": {"check": True, "run": ["__mir-llvm-asan"]},
+    "mir-llvm-tsan": {"check": True, "run": ["__mir-llvm-tsan"], "env": {"KARAC_THREADS": "4"}},
     "mir-build": {"check": True, "build": ["build"]},
 }
 
