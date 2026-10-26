@@ -9108,7 +9108,7 @@ fn mir_by_ref_items_borrow_the_source_not_the_iterator() {
             assert_eq!(out, want, "at -O{opt}");
         }
     }
-    let lending = r#"struct Own { v: Vec[i64], i: usize }
+    let lending = r#"struct Own { v: Vec[i64], i: i64 }
 impl Iterator for Own {
     type Item = ref i64;
     fn next(mut ref self) -> Option[ref i64] {

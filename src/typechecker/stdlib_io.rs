@@ -781,7 +781,7 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     } else {
                         let at = self.infer_expr(&args[0].value);
-                        self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                        self.check_i64_arg(&args[0].value, &at);
                     }
                     Type::Unit
                 }
@@ -802,7 +802,7 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     } else {
                         let at = self.infer_expr(&args[0].value);
-                        self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                        self.check_i64_arg(&args[0].value, &at);
                     }
                     Type::Unit
                 }

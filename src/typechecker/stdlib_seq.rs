@@ -870,7 +870,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let at = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                    self.check_i64_arg(&args[0].value, &at);
                 }
                 Type::Unit
             }
@@ -1250,7 +1250,7 @@ impl<'a> super::TypeChecker<'a> {
             "get" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 option_elem
             }
@@ -1265,7 +1265,7 @@ impl<'a> super::TypeChecker<'a> {
             "get_unchecked" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 elem
             }
@@ -1338,7 +1338,7 @@ impl<'a> super::TypeChecker<'a> {
             "split_at" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 Type::Tuple(vec![slice_elem.clone(), slice_elem])
             }
@@ -1363,7 +1363,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 let mut_slice = Type::Slice {
                     element: Box::new(elem.clone()),
@@ -1374,7 +1374,7 @@ impl<'a> super::TypeChecker<'a> {
             "chunks" | "windows" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 vec_slice
             }
@@ -1515,7 +1515,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 Type::Unit
             }
@@ -1736,7 +1736,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let at = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                    self.check_i64_arg(&args[0].value, &at);
                 }
                 Type::Unit
             }
@@ -1761,7 +1761,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let at = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                    self.check_i64_arg(&args[0].value, &at);
                     let vt = self.infer_expr(&args[1].value);
                     self.check_assignable(&elem, &vt, args[1].value.span);
                 }
@@ -1825,7 +1825,7 @@ impl<'a> super::TypeChecker<'a> {
             "get" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 option_elem
             }
@@ -1898,7 +1898,7 @@ impl<'a> super::TypeChecker<'a> {
             "split_at" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 Type::Tuple(vec![slice_elem.clone(), slice_elem])
             }
@@ -1910,7 +1910,7 @@ impl<'a> super::TypeChecker<'a> {
             "split_at_mut" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 let mut_slice = Type::Slice {
                     element: Box::new(elem.clone()),
@@ -1931,7 +1931,7 @@ impl<'a> super::TypeChecker<'a> {
             "chunks" | "windows" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 vec_slice
             }
@@ -1978,7 +1978,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let at = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                    self.check_i64_arg(&args[0].value, &at);
                 }
                 Type::Unit
             }
@@ -2024,7 +2024,7 @@ impl<'a> super::TypeChecker<'a> {
             "swap" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+                    self.check_i64_arg(&arg.value, &at);
                 }
                 Type::Unit
             }
@@ -2058,7 +2058,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         for arg in args {
             let at = self.infer_expr(&arg.value);
-            self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+            self.check_i64_arg(&arg.value, &at);
         }
     }
 

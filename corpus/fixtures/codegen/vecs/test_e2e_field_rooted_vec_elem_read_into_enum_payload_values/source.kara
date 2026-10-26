@@ -3,12 +3,12 @@ struct Doc { lines: Vec[String] }
 fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
 match c {
 Insert(at, text) => {
-d.lines.insert(at as usize, text.clone());
+d.lines.insert(at, text.clone());
 Cmd.Delete(at, d.lines[at as usize].clone())
 }
 Delete(at, _text) => {
 let gone = d.lines[at as usize].clone();
-d.lines.remove(at as usize);
+d.lines.remove(at);
 Cmd.Insert(at, gone)
 }
 }

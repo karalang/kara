@@ -22,7 +22,7 @@
 use crate::ast::*;
 
 use super::inference::{resolve_type_var_top, resolve_type_vars, unify_types};
-use super::types::{type_display, IntSize, Type};
+use super::types::{type_display, Type};
 use super::{FixIt, TypeErrorKind};
 use crate::token::Span;
 use std::collections::HashMap;
@@ -326,7 +326,7 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let idx_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(&Type::Int(IntSize::I64), &idx_ty, args[0].value.span);
+                self.check_i64_arg(&args[0].value, &idx_ty);
                 let val_ty = self.infer_element_arg(&args[1].value, &elem);
                 unify_types(
                     &elem,
@@ -545,7 +545,7 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(&Type::Int(IntSize::I64), &arg_ty, args[0].value.span);
+                self.check_i64_arg(&args[0].value, &arg_ty);
                 return Some(resolve_type_var_top(&elem, &self.env.substitutions));
             }
         }
@@ -591,7 +591,7 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(&Type::Int(IntSize::I64), &arg_ty, args[0].value.span);
+                self.check_i64_arg(&args[0].value, &arg_ty);
                 return Some(resolve_type_var_top(&elem, &self.env.substitutions));
             }
         }

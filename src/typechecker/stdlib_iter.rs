@@ -1110,7 +1110,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let arg_ty = self.infer_expr(&args[0].value);
-                self.check_assignable(&Type::Int(IntSize::I64), &arg_ty, args[0].value.span);
+                self.check_i64_arg(&args[0].value, &arg_ty);
                 Type::Named {
                     name: "Iterator".to_string(),
                     args: vec![Type::Named {

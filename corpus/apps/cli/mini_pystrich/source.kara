@@ -1718,7 +1718,7 @@ fn az_choose(bits: ref Vec[i64], ecc: i64, kind: ref String, layers: i64) -> Res
             let mut k = cands.len() as i64;
             cands.push(c);
             while k > 0 and (cands[k - 1].0 > cands[k].0 or (cands[k - 1].0 == cands[k].0 and cands[k - 1].1 > cands[k].1)) {
-                cands.swap((k - 1) as usize, k as usize);
+                cands.swap((k - 1), k);
                 k -= 1;
             }
         }
