@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 39 |
+| false-positive | 40 |
 | diagnostics | 37 |
 | missing-feature | 30 |
 | perf | 11 |
@@ -73,7 +73,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 64 |
+| typecheck | 65 |
 | mir | 30 |
 | codegen | 22 |
 | interp | 19 |
@@ -121,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-11 | 2026-10-24 | mir | low | A `match` on a tuple of handle LOCALS that outlive it (`match (top_left, top_right, bottom_left, bottom_right) { (Quad.Leaf(p), ..) => .. }`, kata 558's `intersect`) still counts each handle into the built tuple and releases the tuple after the match, although the arms only read discriminants and Copy payloads | — |
 | B-2026-10-24-28 | 2026-10-24 | ownership | medium | `f(None, None)` with a `ref Option[T]` first parameter and an owned second one is refused by `karac check`, `karac build` and `karac run`: "cannot move `None` while a borrow into it (a returned reference still points at it) is still live". The two literal `None`s are taken for one place named `None`; `__mir-run` runs the program | — |
 | B-2026-10-24-38 | 2026-10-24 | cli | low | `karac fix` still answers E_INDEX_MOVE_NON_COPY on a DESTRUCTURING `let (a, b) = cases[i];` (both parts only read) with `.clone()`, a deep copy of the element, instead of the `ref cases[i]` borrow the message lists first; B-2026-10-24-18's borrow fix covers only a plain `let t = v[i];` | — |
-| B-2026-10-25-13 | 2026-10-25 | typecheck | medium | The closure-kind walker calls three uses that move nothing a consume, so the closure is `OnceFn` and refused for an `Fn` slot: a capture passed to a user METHOD's parameter (bare or `ref`), a captured `shared` handle used as a value, and a `match` on a captured place whose arms bind nothing by move | — |
 | B-2026-10-25-14 | 2026-10-25 | ownership | low | `karac check` reports a capture of an ESCAPING closure as moved by its first use inside the body: two `size(prog)` calls (`p: ref Prog`) in one escaping closure are 'value prog moved here, used again here', while both MIR backends accept the program and print the right answer | — |
 | B-2026-10-25-15 | 2026-10-25 | ownership | low | The E0500 fix-it on a struct whose `Vec` element type is all-`Copy` inserts `#[derive(Copy)]` on the ELEMENT type ('add #[derive(Copy)] to Op ... so prog is copied'), which leaves the struct move-only; `karac fix` applies it and the same error remains | — |
 | B-2026-10-25-19 | 2026-10-25 | ownership | low | `karac fix` applies both the `: Str` fix-it on a string-literal `let` (B-2026-10-24-33) and the ownership pass's `.clone()` fix-it for a 'moved' error on the same binding, and the combined result fails check: `Str.clone()` is a `String`, and the move only existed while the binding was a `String` | — |
@@ -131,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
 | B-2026-10-26-6 | 2026-10-26 | mir-llvm | medium | `KARAC_DEBUG_INFO=1 karac build` of any program that spawns a task fails in the LLVM verifier: the call to a coroutine's `#resume` carries no `!dbg` location in a function that has a subprogram | — |
 | B-2026-10-26-8 | 2026-10-26 | mir | medium | A closure returned from a closure that captures one of the outer closure's own non-`Copy` captures passes `karac check` but the MIR build refuses it: `let base = vec![1, 2, 3]; let make = |n: i64| |x: i64| x + n + base.len(); let f = make(1);` gives `cannot move a non-Copy value out of a borrowed place` (§3.7) | — |
+| B-2026-10-26-10 | 2026-10-26 | typecheck | low | Writing a `mut` field of a captured `shared` handle makes a closure `MutFn` (E0518 at an `Fn` slot), though the capture itself is unchanged and a borrowed-`self` method doing the same write is callable from an `Fn` closure | — |
 
 ### Fixed
 
@@ -216,6 +216,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-10 | typecheck | low | `cannot mix integer types 'i64' and 'usize'` on `n * DAYS as usize` (n a `len()`) tells the writer to add an `as` cast, though the cast is the error:… | 1484ebcbba |
 | B-2026-10-25-11 | typecheck | low | `Vec.filled(n, v)` and `Vec.with_capacity(n)` accept a `usize` length with no error, though passing the same `usize` to a user function's `i64` param… | 1484ebcbba |
 | B-2026-10-25-12 | typecheck | medium | A `ref` to a `shared enum` cannot be used as a handle: returning it, wrapping it in `Some`, or passing it to a bare parameter is refused ('expected E… | 92a0f23874 |
+| B-2026-10-25-13 | typecheck | medium | The closure-kind walker calls three uses that move nothing a consume, so the closure is `OnceFn` and refused for an `Fn` slot: a capture passed to a… | 2928490eee |
 | B-2026-10-25-16 | mir | medium | The MIR move check treats a `shared` handle captured by an ESCAPING closure as moved, so a second closure over it, or any later use, is 'use of _1, w… | f6b4ec231b |
 | B-2026-10-25-17 | mir+mir-llvm | high | A closure passed to a user function's `escaping` parameter that captures a BARE (borrowed) parameter of non-Copy type, or a field of one, captures it… | f6b4ec231b |
 | B-2026-10-25-18 | mir | low | v2 project build (`karac build` with no file) does not print the legacy project-build reports (discovered modules, JSON output with resolve diagnosti… | 1ed4f406c2 |
