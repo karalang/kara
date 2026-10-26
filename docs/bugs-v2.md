@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 41 |
+| false-positive | 42 |
 | diagnostics | 37 |
 | missing-feature | 30 |
+| soundness | 12 |
 | perf | 11 |
-| soundness | 11 |
 | run-vs-build | 9 |
 | miscompile | 8 |
 | other | 3 |
@@ -73,14 +73,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 65 |
+| typecheck | 66 |
 | mir | 30 |
 | codegen | 22 |
 | interp | 19 |
+| ownership | 16 |
 | cli | 16 |
-| ownership | 15 |
+| mir-llvm | 10 |
 | runtime | 9 |
-| mir-llvm | 9 |
 | parser | 6 |
 | other | 2 |
 | resolver | 2 |
@@ -125,10 +125,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher reaches v2 only as a fixed walk key, on an annotated `let` or a plain struct's field (built in its literal or assigned): a user `BuildHasher`'s build/write/finish never run, FxBuildHasher hashes with the default, and a hasher named on a `shared` struct's field, a parameter, a return type or a turbofish is dropped | — |
 | B-2026-10-25-40 | 2026-10-25 | resolver+effect | low | A channel operation's effect cannot be declared: the effect checker charges a stored callback that receives on a channel with `receives(Channel)` and asks the slot's clause for it, but a clause naming `receives(Channel)` is refused by the resolver (`'Channel' is not an effect resource (it is a prelude type or trait)`) | — |
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
-| B-2026-10-26-6 | 2026-10-26 | mir-llvm | medium | `KARAC_DEBUG_INFO=1 karac build` of any program that spawns a task fails in the LLVM verifier: the call to a coroutine's `#resume` carries no `!dbg` location in a function that has a subprogram | — |
 | B-2026-10-26-10 | 2026-10-26 | typecheck | low | Writing a `mut` field of a captured `shared` handle makes a closure `MutFn` (E0518 at an `Fn` slot), though the capture itself is unchanged and a borrowed-`self` method doing the same write is callable from an `Fn` closure | — |
 | B-2026-10-26-9 | 2026-10-26 | ownership | medium | `karac check` treats a closure that returns a closure as an `Fn` that borrows its captures, when the returned closure escapes and moves a non-`Copy` capture out (§9.3), which makes the outer closure move that place in and an `OnceFn` (§9.1, §9.4): a second call, or a use of the place after the outer closure is made, passes check and the MIR build refuses it with an internal move-check error | — |
 | B-2026-10-26-11 | 2026-10-26 | ownership | medium | `karac check` accepts an escaping closure created inside a loop that captures an outer non-`Copy` binding, which moves it on every iteration; `karac run` stops at an internal MIR move-check error instead of a diagnostic | — |
+| B-2026-10-26-12 | 2026-10-26 | ownership | medium | `karac check` counts a capture of an ESCAPING closure as moved when a nested closure in its body reads it (`is.iter().map(|i| look(p, *i)).sum()`, with `p: ref Prog` in `look`): a later read of `p`, or a read in another `match` arm, is 'moved into an escaping closure, used again here', while both MIR backends run it and the same body in a plain function checks | — |
+| B-2026-10-26-13 | 2026-10-26 | typecheck+mir-llvm | high | A `shared` handle crosses a task boundary inside a function value: a closure capturing a `shared` struct, erased to `Fn` and captured by a `TaskGroup.spawn` closure, passes `karac check` (E_NOT_CROSS_TASK does not look through `Fn`), and under `KARAC_THREADS=4` its non-atomic count double-frees | — |
 
 ### Fixed
 
@@ -253,6 +254,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-26-3 | typecheck | medium | A `ref` to a `shared` handle placed in a tuple built by a closure stays `ref S`, so `items.iter().map(\|(n, v)\| (n.to_string(), v)).collect()` into a… | 99e5f3ff2f |
 | B-2026-10-26-4 | typecheck | low | `.upgrade()` on a `weak` slot has no working spelling: `a.me.upgrade()` on a `weak` field is "no method 'upgrade' on type 'Option'", though design.md… | 99e5f3ff2f |
 | B-2026-10-26-5 | ownership | low | Passing a `weak` field straight to a `weak` parameter (`id_of(a.me)` with `fn id_of(p: weak N)`) is refused as "cannot move a non-`Copy` value out of… | 99e5f3ff2f |
+| B-2026-10-26-6 | mir-llvm | medium | `KARAC_DEBUG_INFO=1 karac build` of any program that spawns a task fails in the LLVM verifier: the call to a coroutine's `#resume` carries no `!dbg`… | f73d059f33 |
 | B-2026-10-26-7 | mir-llvm | high | Auto-par loops that call into the library run slower than seq on the pool: the compiled program records each library call's place in ONE process-wide… | da5bdc59fc |
 | B-2026-10-26-8 | mir | medium | A closure returned from a closure that captures one of the outer closure's own non-`Copy` captures passes `karac check` but the MIR build refuses it:… | a5ec3ea61c |
 
