@@ -1,1 +1,1 @@
-0 3 3 0
+source.kara:4:47: cannot mutably borrow `v` while `a` still holds a borrow of it, taken at 3:47 (core-semantics.md §5.6) [E0516]. Finish using the borrow first, or take a copy of the value (`.clone()`, `.cloned()`, `*r` for a `Copy` value) where it is borrowed

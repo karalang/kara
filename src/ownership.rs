@@ -2760,9 +2760,12 @@ impl<'a> OwnershipChecker<'a> {
         {
             return true;
         }
-        self.binding_types
-            .get(name)
-            .is_some_and(|t| self.type_is_shared_handle(t))
+        // A `mut Slice[T]` binding (a `split_at_mut` half) is a view too, but
+        // only as a binding: `v[0..2].reverse()` still writes `v`
+        // (B-2026-10-21-29).
+        self.binding_types.get(name).is_some_and(|t| {
+            self.type_is_shared_handle(t) || matches!(t, Type::Slice { mutable: true, .. })
+        })
     }
 
     /// The `Type`-level half of [`Self::expr_is_shared_handle`]. Every arm is
@@ -3924,6 +3927,19 @@ pub(crate) fn collect_method_param_modes(
         "Vec.contains",
         "VecDeque.contains",
         "String.contains",
+    ] {
+        map.insert(key.to_string(), vec![OwnershipMode::Ref]);
+    }
+    // Set algebra reads `other` (collections.md: `other: Set[T, H]`, bare, so a
+    // borrow under D5) and builds a fresh result; `a.union(b)` then
+    // `a.intersection(b)` reuses `b` (B-2026-10-21-29).
+    for key in [
+        "Set.union",
+        "Set.intersection",
+        "Set.difference",
+        "SortedSet.union",
+        "SortedSet.intersection",
+        "SortedSet.difference",
     ] {
         map.insert(key.to_string(), vec![OwnershipMode::Ref]);
     }

@@ -69,6 +69,30 @@ impl<'a> super::TypeChecker<'a> {
         // codebase's normal posture for a partially-lowered construct — unlike
         // the silent nothing this used to be.
         if method == "iter_mut" {
+            // collections.md: a set has no `iter_mut`, since writing an element
+            // in place would break its hash or its order (B-2026-10-21-29).
+            let mut base = obj_ty;
+            while let Type::Ref(t) | Type::MutRef(t) = base {
+                base = t;
+            }
+            if let Type::Named { name, .. } = base {
+                if matches!(name.as_str(), "Set" | "SortedSet") {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    let why = if name == "Set" { "hash" } else { "order" };
+                    self.type_error(
+                        format!(
+                            "no method 'iter_mut' on type '{name}': changing an element in \
+                             place would break the set's {why}; iterate with `iter()`, and \
+                             `remove` then `insert` to change an element"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    return Some(Type::Error);
+                }
+            }
             if let Some(item_ty) = iterator_item_type_for(obj_ty) {
                 if !args.is_empty() {
                     self.type_error(

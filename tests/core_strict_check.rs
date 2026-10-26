@@ -15162,3 +15162,103 @@ fn a_task_capturing_one_half_of_a_tuple_let_leaves_the_other_free() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-21-29: `karac check` follows collections.md on library borrows.
+/// Set algebra borrows `other` (bare, so a borrow under D5); a `split_at_mut`
+/// half is a `mut Slice` that takes an index write without `let mut`, and the
+/// sequence is not read while either half is live; a set has no `iter_mut`.
+#[test]
+fn collections_md_library_borrows_hold_in_check() {
+    accepted_and_runs(
+        "set-algebra-reuses-other",
+        "fn sorted(s: Set[i64]) -> Vec[i64] {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             for x in s { v.push(x); }\n\
+             v.sort();\n\
+             v\n\
+         }\n\
+         fn main() {\n\
+             let mut a: Set[i64] = Set.new();\n\
+             let mut b: Set[i64] = Set.new();\n\
+             a.insert(1); a.insert(2); a.insert(3);\n\
+             b.insert(2); b.insert(3); b.insert(4);\n\
+             println(f\"{sorted(a.union(b))}\");\n\
+             println(f\"{sorted(a.intersection(b))}\");\n\
+             println(f\"{sorted(a.difference(b))}\");\n\
+             println(f\"{a.len()} {b.len()}\");\n\
+         }\n",
+        "[1, 2, 3, 4]\n[2, 3]\n[1]\n3 3\n",
+    );
+    accepted_and_runs(
+        "sortedset-algebra-reuses-other",
+        "fn main() {\n\
+             let mut a: SortedSet[i64] = SortedSet.new();\n\
+             let mut b: SortedSet[i64] = SortedSet.new();\n\
+             for x in [3, 1, 2] { a.insert(x); }\n\
+             for x in [4, 3, 2] { b.insert(x); }\n\
+             println(f\"{a.union(b)}\");\n\
+             println(f\"{a.intersection(b)}\");\n\
+             println(f\"{a.difference(b)}\");\n\
+             println(f\"{a} {b}\");\n\
+         }\n",
+        "{1, 2, 3, 4}\n{2, 3}\n{1}\n{1, 2, 3} {2, 3, 4}\n",
+    );
+    accepted_and_runs(
+        "split-at-mut-half-index-write",
+        "fn main() {\n\
+             let mut v: Vec[i64] = [1, 2, 3, 4];\n\
+             let (a, b) = v.split_at_mut(2);\n\
+             a[0] = 10;\n\
+             b[0] = 30;\n\
+             println(f\"{v}\");\n\
+         }\n",
+        "[10, 2, 30, 4]\n",
+    );
+    let (dir, path) = fixture(
+        "len-while-halves-live",
+        "fn main() {\n\
+             let mut v: Vec[i64] = [1, 2, 3, 4];\n\
+             let (a, b) = v.split_at_mut(2);\n\
+             println(f\"{v.len()}\");\n\
+             a.fill(10);\n\
+             b.fill(30);\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("cannot borrow `v` while `b` still holds a borrow of it"),
+        "len-while-halves-live: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    let (dir, path) = fixture(
+        "set-iter-mut",
+        "fn main() {\n\
+             let mut s: Set[i64] = Set.new();\n\
+             s.insert(1);\n\
+             for x in s.iter_mut() { println(f\"{x}\"); }\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no method 'iter_mut' on type 'Set'"),
+        "set-iter-mut: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    let (dir, path) = fixture(
+        "sortedset-iter-mut",
+        "fn main() {\n\
+             let mut s: SortedSet[i64] = SortedSet.new();\n\
+             s.insert(1);\n\
+             for x in s.iter_mut() { println(f\"{x}\"); }\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no method 'iter_mut' on type 'SortedSet'"),
+        "sortedset-iter-mut: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

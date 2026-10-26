@@ -18836,7 +18836,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     Some(d) => matches!(self.lcx.fns[&d].f.self_param, Some(SelfParam::MutRef)),
                     None => {
                         crate::ast::is_mutating_collection_method(method)
-                            || matches!(method.as_str(), "push_str" | "set" | "entry")
+                            || matches!(
+                                method.as_str(),
+                                "push_str" | "set" | "entry" | "split_at_mut"
+                            )
                     }
                 };
                 if writes {
@@ -20460,6 +20463,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                                     | "sort_unstable_by"
                                     | "entry"
                                     | "drain_entries"
+                                    // Its halves hold a mutable loan of the
+                                    // sequence (B-2026-10-21-29).
+                                    | "split_at_mut"
                             ));
                     self.recv_place(object, mutates)?
                 };
