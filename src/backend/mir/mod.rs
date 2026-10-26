@@ -130,6 +130,16 @@ pub fn compile_mir_ir(program: &Program, tys: &TyInterner) -> R<String> {
 pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> {
     let llcx = Context::create();
     let module = compile_mir(&llcx, "main", program, tys)?;
+    // RuntimeDyldMachO is not known to link a thread-local, so on Apple
+    // the JIT keeps the call-site globals plain: the pool's workers then
+    // share them, which costs speed only (B-2026-10-26-7).
+    if cfg!(target_vendor = "apple") {
+        for name in ["karac.site", "karac.site.len"] {
+            if let Some(g) = module.get_global(name) {
+                g.set_thread_local(false);
+            }
+        }
+    }
     if std::env::var("KARAC_MIR_JIT_SROA").as_deref() != Ok("0") {
         let tm = super::driver::create_target_machine()?;
         // Inlining as well: every argument is passed by pointer, and a

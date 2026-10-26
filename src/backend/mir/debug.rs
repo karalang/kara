@@ -234,6 +234,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 let g = self.module.add_global(ty, None, name);
                 g.set_initializer(&ty.const_zero());
                 g.set_linkage(Linkage::Internal);
+                // One pair per thread: every task writes it before its
+                // library calls, and one pair for the whole pool is one
+                // cache line all its workers write, and lets an abort on
+                // one worker report another's call (B-2026-10-26-7).
+                g.set_thread_local(true);
                 g
             })
         };
