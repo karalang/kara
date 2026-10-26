@@ -14453,3 +14453,27 @@ fn a_closure_returning_a_capturing_closure_is_once() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// B-2026-10-26-12: a closure nested in an escaping closure's body reads the
+/// escaping closure's own copy of a capture (§9.3), so a later read, or a
+/// read in another `match` arm, is no use after a move.
+#[test]
+fn a_nested_closure_reads_an_escaping_closures_capture() {
+    accepted_and_runs(
+        "nested-closure-reads-escaping-capture",
+        "struct Prog {\n    w: Vec[i64],\n}\n\
+         enum G {\n    One(i64),\n    Many(Vec[i64]),\n}\n\
+         fn wrap(run: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {\n    Vec[run]\n}\n\
+         fn look(p: ref Prog, g: i64) -> i64 {\n    p.w[g]\n}\n\
+         fn main() {\n\
+             let p = Prog { w: Vec[10, 20, 30] };\n\
+             let is: Vec[i64] = Vec[0, 2];\n\
+             let fs = wrap(|x| {\n        let b: i64 = is.iter().map(|i| look(p, *i)).sum();\n        let a = look(p, 1);\n        a + b + x\n    });\n\
+             let q = Prog { w: Vec[10, 20, 30] };\n\
+             let g1 = G.One(1);\n\
+             let gs = wrap(|x| match g1 {\n        G.One(i) => look(q, i) + x,\n        G.Many(ref js) => js.iter().map(|i| look(q, *i)).sum() + x,\n    });\n\
+             println(f\"{(fs[0])(1)} {(gs[0])(1)}\");\n\
+         }\n",
+        "61 21\n",
+    );
+}

@@ -263,6 +263,7 @@ pub fn classify_function_body_with(
         closure_span_stack: Vec::new(),
         closure_local_stack: Vec::new(),
         escaping_closure_depth: 0,
+        escaping_closure_flags: Vec::new(),
         task_moved_captures: Vec::new(),
         arm_consumed_names: Vec::new(),
     };
@@ -338,6 +339,8 @@ struct UseClassifier<'a> {
     /// an ESCAPING closure. Inside one, every outer binding the body names is
     /// captured by move, so its leaf is classified as a consume.
     escaping_closure_depth: u32,
+    /// Whether each closure on `closure_span_stack` escapes.
+    escaping_closure_flags: Vec<bool>,
     /// v2 core §9.1/§9.5: for each enclosing `TaskGroup.spawn` closure, the
     /// places it takes by move because they drop before the group.
     task_moved_captures: Vec<Vec<String>>,
@@ -1492,6 +1495,7 @@ impl<'a> UseClassifier<'a> {
                         .core_escaping_closures
                         .contains(&SpanKey::from_span(&expr.span));
                 self.escaping_closure_depth += u32::from(escaping);
+                self.escaping_closure_flags.push(escaping);
                 let moved: Vec<String> = if crate::ownership::core_rules() {
                     self.tc
                         .core_task_moved_captures
@@ -1511,6 +1515,7 @@ impl<'a> UseClassifier<'a> {
                 self.unshadow_locals(shadowed);
                 self.task_moved_captures.pop();
                 self.escaping_closure_depth -= u32::from(escaping);
+                self.escaping_closure_flags.pop();
                 self.closure_local_stack.pop();
                 self.closure_span_stack.pop();
                 self.consume_origin_ctx = saved;
@@ -1838,10 +1843,19 @@ impl<'a> UseClassifier<'a> {
         if mode != Mode::Reading || kind != UseKind::Consume || !self.captured_by_move(name) {
             return;
         }
-        if let Some(&closure) = self.closure_span_stack.last() {
+        // The outermost closure that moves `name` in: a closure nested in its
+        // body reads the same copy (B-2026-10-26-12).
+        let mover = (0..self.closure_span_stack.len()).find(|&i| {
+            self.escaping_closure_flags.get(i).copied().unwrap_or(false)
+                || self
+                    .task_moved_captures
+                    .get(i)
+                    .is_some_and(|m| m.iter().any(|n| n == name))
+        });
+        if let Some(i) = mover {
             self.classification
                 .core_capture_scopes
-                .insert(SpanKey::from_span(span), closure);
+                .insert(SpanKey::from_span(span), self.closure_span_stack[i]);
         }
     }
 
