@@ -7,6 +7,7 @@ import span.Span;
 // One `{…}` interpolation hole in an f-string: the verbatim expression source
 // plus the ABSOLUTE source position of its first byte (so the parser can rebase
 // the re-parsed sub-expression's spans — mirrors token.rs InterpolationPart::Expr).
+#[derive(Clone)]
 pub struct InterpExpr {
     pub raw: String,
     pub offset: i64,

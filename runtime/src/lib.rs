@@ -10204,13 +10204,13 @@ pub extern "C" fn karac_float_cmp(a: f64, b: f64) -> i64 {
     }
 }
 
-/// Format `val` the way Rust's `{}` does — the *shortest* decimal string that
-/// round-trips — into `buf` (up to `buf_len` bytes), returning the number of
-/// bytes written. This is exactly the tree-walk interpreter's float rendering
-/// (`Value::Float(v) => write!(f, "{}", v)` in `src/interpreter/value.rs`), so
-/// AOT-compiled `println` / interpolation / `Display` print floats identically
-/// to `karac run`. C's `printf("%g")` (6 significant figures, lowercase `nan`)
-/// is what this replaces and the source of the prior interp-vs-AOT mismatch.
+/// Format `val` the way Kāra's `Display` does (`display_f64`, core-types.md
+/// § Printing: shortest round-trip digits, always a `.` or an exponent) into
+/// `buf` (up to `buf_len` bytes), returning the number of bytes written. The
+/// MIR interpreter and backend print through the same function, so a module
+/// calling this (the self-hosted emitter's `f64.to_string`) prints floats as
+/// `karac run` does. It rendered Rust's `{}` (`7` for `7.0`) until the v2
+/// pipeline adopted `display_f64` (B-2026-10-23-20).
 ///
 /// # Safety
 /// `buf` must point to at least `buf_len` writable bytes (a stack buffer at
@@ -10219,7 +10219,8 @@ pub extern "C" fn karac_float_cmp(a: f64, b: f64) -> i64 {
 /// length (the `%.*s` / append-raw convention).
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_f64_to_str(val: f64, buf: *mut u8, buf_len: i64) -> i64 {
-    unsafe { write_display_into(buf, buf_len, format_args!("{val}")) }
+    let shown = crate::fmt::format_spec::display_f64(val);
+    unsafe { write_display_into(buf, buf_len, format_args!("{shown}")) }
 }
 
 /// A `core::fmt::Write` sink over a caller-supplied RAW buffer.

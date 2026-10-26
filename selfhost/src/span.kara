@@ -2,6 +2,7 @@
 // DAG root: no imports. Mirrors the Span half of src/token.rs.
 //
 
+#[derive(Copy)]
 pub struct Span {
     pub line: i64,
     pub column: i64,

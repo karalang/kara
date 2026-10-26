@@ -260,13 +260,13 @@ impl Checker {
         for it in items {
             match it {
                 Struct(s) => {
-                    self.struct_names.push(s.name);
+                    self.struct_names.push(s.name.clone());
                 }
                 Func(f) => {
-                    self.fn_names.push(f.name);
+                    self.fn_names.push(f.name.clone());
                 }
                 Enum(e) => {
-                    self.enum_names.push(e.name);
+                    self.enum_names.push(e.name.clone());
                 }
                 _ => {}
             }
@@ -295,7 +295,7 @@ impl Checker {
                         }
                         let fc = self.cat_of_type(s.fields[fi].ty);
                         self.fld_owner.push(owner);
-                        self.fld_names.push(s.fields[fi].name);
+                        self.fld_names.push(s.fields[fi].name.clone());
                         self.fld_cats.push(fc);
                         fi = fi + 1;
                     }
@@ -323,7 +323,7 @@ impl Checker {
                             break;
                         }
                         self.var_owner.push(owner);
-                        self.var_names.push(e.variants[vi].name);
+                        self.var_names.push(e.variants[vi].name.clone());
                         vi = vi + 1;
                     }
                 }
@@ -526,7 +526,7 @@ impl Checker {
     // name (shadowing) is just another entry — `lookup_cat` scans newest-first.
     fn define(mut ref self, name: String, category: i64) {
         self.binds.push(TypeBind {
-            name: name,
+            name: name.clone(),
             category: category,
             scope: self.current,
         });
@@ -1254,7 +1254,7 @@ impl Checker {
             BindingPat(bp) => {
                 let BindingPattern { name, span } = bp;
                 if self.enum_has_variant(eidx, name) {
-                    PatClass { code: 1, variant: name }
+                    PatClass { code: 1, variant: name.clone() }
                 } else {
                     PatClass { code: 0, variant: "".to_string() }
                 }
@@ -1358,7 +1358,7 @@ fn last_seg(segments: Vec[String]) -> String {
     if n == 0 {
         return "".to_string();
     }
-    segments[n - 1]
+    segments[n - 1].clone()
 }
 
 // True iff a payload sub-pattern is IRREFUTABLE for the exhaustiveness subset:

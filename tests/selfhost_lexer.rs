@@ -590,10 +590,11 @@ fn render_rust(t: &SpannedToken) -> String {
         // the SAME ` i32` text, so the oracle now diffs suffix capture, not just
         // the numeric value.
         Token::Integer(v, sfx) => return body_with(s, &format!("INT {v}{}", int_suffix_str(*sfx))),
-        // Display for f64 matches Kāra's f64.to_string (both use Rust's
-        // formatter): 100.0→"100", 1.0e-5→"0.00001", etc.
+        // Kāra's f64.to_string prints through `display_f64` on both
+        // backends (core-types.md § Printing): 100.0→"100.0", 1.0e-5→"1e-05".
         Token::Float(v, sfx) => {
-            return body_with(s, &format!("FLOAT {v}{}", float_suffix_str(*sfx)))
+            let v = karac::format_spec::display_f64(*v);
+            return body_with(s, &format!("FLOAT {v}{}", float_suffix_str(*sfx)));
         }
         // String / char values go through escape_for_render (shared with the
         // Kāra `render`) so control chars don't break the line-based compare.
@@ -768,7 +769,6 @@ fn escape_for_render(s: &str) -> String {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 build refuses this selfhost/ port (it is legacy dialect), and the legacy build that accepted it is gone"]
 fn selfhost_lexer_matches_rust_lexer() {
     // 1. Build the generated program: the crate-root module of the split
     //    self-hosted lexer (`selfhost/src/main.kara` = imports + `render` +
@@ -789,7 +789,7 @@ fn selfhost_lexer_matches_rust_lexer() {
     let mut prog = lib_src;
     prog.push_str(
         "\n\
-         fn lex_and_print(src: String) {\n\
+         fn lex_and_print(src: own String) {\n\
          \x20   let toks = lex_all(src);\n\
          \x20   for t in toks { println(render(t)); }\n\
          }\n\

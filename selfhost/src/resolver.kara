@@ -428,7 +428,7 @@ impl Resolver {
     }
 
     fn seed_prim(mut ref self, name: String) {
-        self.binds.push(NameBinding { name: name, line: 0, scope: 0 });
+        self.binds.push(NameBinding { name: name.clone(), line: 0, scope: 0 });
     }
 
     // ── Scope machinery (mirrors resolver.rs:317-458) ──
@@ -509,7 +509,7 @@ impl Resolver {
             return;
         }
         self.binds.push(NameBinding {
-            name: name,
+            name: name.clone(),
             line: span.line,
             scope: self.current,
         });
@@ -529,7 +529,7 @@ impl Resolver {
             return;
         }
         self.binds.push(NameBinding {
-            name: name,
+            name: name.clone(),
             line: span.line,
             scope: self.current,
         });
@@ -545,7 +545,7 @@ impl Resolver {
             return;
         }
         self.binds.push(NameBinding {
-            name: name,
+            name: name.clone(),
             line: span.line,
             scope: self.current,
         });
@@ -585,7 +585,7 @@ impl Resolver {
     // linearly scans (innermost-last, like `Parser.label_known`). A `break` /
     // `continue` to a name NOT in scope is UndefinedLabel (kind 4).
     fn push_label(mut ref self, name: String) {
-        self.labels.push(name);
+        self.labels.push(name.clone());
     }
 
     fn pop_label(mut ref self) {
@@ -1344,7 +1344,7 @@ impl Resolver {
             return;
         }
         self.binds.push(NameBinding {
-            name: name,
+            name: name.clone(),
             line: span.line,
             scope: self.current,
         });

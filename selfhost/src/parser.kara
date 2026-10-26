@@ -160,7 +160,7 @@ struct Parser {
 }
 
 impl Parser {
-    fn new(tokens: Vec[SpannedToken]) -> Parser {
+    fn new(tokens: own Vec[SpannedToken]) -> Parser {
         Parser { tokens: tokens, pos: 0, loop_labels: Vec.new(), no_struct_literal: false }
     }
 
@@ -340,7 +340,7 @@ impl Parser {
             // Consuming read of the doc body (like `take_member_name`) — one
             // read of this element, then `advance` past it.
             let line = match self.tokens[self.pos].token {
-                DocComment(t) => t,
+                DocComment(t) => t.clone(),
                 _ => break,
             };
             self.advance();
@@ -446,7 +446,7 @@ impl Parser {
                 // One consuming read of the string body, then advance.
                 match self.tokens[self.pos].token {
                     StringLiteral(s) => {
-                        string_value = Some(s);
+                        string_value = Some(s.clone());
                         self.advance();
                     }
                     _ => {}
@@ -686,7 +686,7 @@ impl Parser {
                             span: clone_span(tsp),
                         });
                         let left2 = Expr.Ident(IdentExpr {
-                            name: tn,
+                            name: tn.clone(),
                             span: clone_span(tsp),
                         });
                         stmts.push(Stmt.Assign(AssignStmt {
@@ -930,7 +930,7 @@ impl Parser {
     // keyword in `parse_*_expr_with_label_and_attrs`).
 
     // `while cond { … }`. `while let` is deferred to Slice 3.
-    fn parse_while(mut ref self, label: Option[String], start: Span) -> Expr {
+    fn parse_while(mut ref self, label: own Option[String], start: Span) -> Expr {
         self.advance(); // while
         let saved = self.no_struct_literal;
         self.no_struct_literal = true;
@@ -946,7 +946,7 @@ impl Parser {
     }
 
     // `for var in iter { … }` — `var` is a single identifier (slice 2b).
-    fn parse_for(mut ref self, label: Option[String], start: Span) -> Expr {
+    fn parse_for(mut ref self, label: own Option[String], start: Span) -> Expr {
         self.advance(); // for
         let var = self.take_member_name();
         self.eat_in();
@@ -965,7 +965,7 @@ impl Parser {
     }
 
     // `loop { … }` (infinite loop; exits via `break`).
-    fn parse_loop(mut ref self, label: Option[String], start: Span) -> Expr {
+    fn parse_loop(mut ref self, label: own Option[String], start: Span) -> Expr {
         self.advance(); // loop
         let body = self.parse_block();
         Expr.Loop(LoopExpr {
@@ -988,12 +988,12 @@ impl Parser {
         };
         let result = if kw == 0 {
             let kw_start = self.current_span();
-            self.parse_while(Some(name), kw_start)
+            self.parse_while(Some(name.clone()), kw_start)
         } else if kw == 1 {
             let kw_start = self.current_span();
-            self.parse_for(Some(name), kw_start)
+            self.parse_for(Some(name.clone()), kw_start)
         } else {
-            self.parse_loop(Some(name), label_start)
+            self.parse_loop(Some(name.clone()), label_start)
         };
         self.loop_labels.pop();
         result
@@ -1027,7 +1027,7 @@ impl Parser {
             return "".to_string();
         }
         match self.tokens[self.pos].token {
-            Label(n) => n,
+            Label(n) => n.clone(),
             _ => "".to_string(),
         }
     }
@@ -1230,8 +1230,9 @@ impl Parser {
         }
         match self.tokens[self.pos].token {
             Identifier(n) => {
+                let n = n.clone();
                 self.advance();
-                n
+                n.clone()
             }
             Const => {
                 self.advance();
@@ -1322,7 +1323,7 @@ impl Parser {
             return None;
         }
         let name = match self.tokens[self.pos].token {
-            Identifier(n) => n,
+            Identifier(n) => n.clone(),
             _ => "".to_string(),
         };
         self.advance(); // identifier
@@ -1605,10 +1606,11 @@ impl Parser {
 
             // Literals.
             Integer(v, sfx) => {
+                let sfx = sfx.clone();
                 self.advance();
                 Expr.Int(IntLit {
                     value: v,
-                    suffix: sfx,
+                    suffix: sfx.clone(),
                     span: self.span_from(start),
                 })
             }
@@ -1618,21 +1620,24 @@ impl Parser {
             // (`parser/exprs.rs`, B-2026-08-06-16 / B-2026-08-19-23); see
             // `out_of_range_value` for the carrier encoding. B-2026-09-19-27.
             IntegerOutOfRange(mag, sfx) => {
+                let mag = mag.clone();
+                let sfx = sfx.clone();
                 self.advance();
                 match out_of_range_value(mag, sfx.clone()) {
                     Some(v) => Expr.Int(IntLit {
                         value: v,
-                        suffix: sfx,
+                        suffix: sfx.clone(),
                         span: self.span_from(start),
                     }),
                     None => Expr.Error(SpanNode { span: self.span_from(start) }),
                 }
             }
             Float(v, sfx) => {
+                let sfx = sfx.clone();
                 self.advance();
                 Expr.Float(FloatLit {
                     value: v,
-                    suffix: sfx,
+                    suffix: sfx.clone(),
                     span: self.span_from(start),
                 })
             }
@@ -1651,9 +1656,10 @@ impl Parser {
                 })
             }
             StringLiteral(s) => {
+                let s = s.clone();
                 self.advance();
                 Expr.Str(StrLit {
-                    value: s,
+                    value: s.clone(),
                     span: self.span_from(start),
                 })
             }
@@ -1732,6 +1738,7 @@ impl Parser {
             // A labeled loop `'name: while/for/loop`. `start` is the label's
             // span (the labeled-`loop` span anchor).
             Label(name) => {
+                let name = name.clone();
                 self.advance();
                 if self.at_loop_label() {
                     self.parse_labeled_loop(name, start)
@@ -1743,14 +1750,15 @@ impl Parser {
             // Bare identifier (paths / struct literals / generic-args land in
             // later slices).
             Identifier(name) => {
+                let name = name.clone();
                 self.advance();
                 if starts_upper(name) and self.at_dot() {
-                    self.parse_path_expr(name, start)
+                    self.parse_path_expr(name.clone(), start)
                 } else if self.at_struct_literal_open(name) {
-                    self.parse_struct_literal_body(name, start)
+                    self.parse_struct_literal_body(name.clone(), start)
                 } else {
                     Expr.Ident(IdentExpr {
-                        name: name,
+                        name: name.clone(),
                         span: self.span_from(start),
                     })
                 }
@@ -1778,9 +1786,9 @@ impl Parser {
         let hit = match self.tokens[self.pos].token {
             IntegerOutOfRange(mag, sfx) => {
                 if mag == "9223372036854775808" {
-                    Some((0i128 - 9223372036854775807i128 - 1, sfx))
+                    Some((0i128 - 9223372036854775807i128 - 1, sfx.clone()))
                 } else if mag == "170141183460469231731687303715884105728" and sfx == "i128" {
-                    Some((0i128 - 170141183460469231731687303715884105727i128 - 1, sfx))
+                    Some((0i128 - 170141183460469231731687303715884105727i128 - 1, sfx.clone()))
                 } else {
                     None
                 }
@@ -1809,7 +1817,7 @@ impl Parser {
     // branch (src/parser/exprs.rs): collect `.Ident` segments greedily, then —
     // `Path(args)` → a `Call` with a `Path` callee (both spanning the whole
     // `Vec.new()` incl. args, seed parity), otherwise a bare `Path` value.
-    fn parse_path_expr(mut ref self, first: String, start: Span) -> Expr {
+    fn parse_path_expr(mut ref self, first: own String, start: Span) -> Expr {
         let mut segments: Vec[String] = Vec.new();
         segments.push(first);
         loop {
@@ -1949,7 +1957,7 @@ impl Parser {
     // seed's `parse_struct_literal_body`: explicit `name: value` fields, `name`
     // shorthand (value = a synthesized identifier), and a trailing `..expr`
     // struct-update spread which must come last.
-    fn parse_struct_literal_body(mut ref self, name: String, start: Span) -> Expr {
+    fn parse_struct_literal_body(mut ref self, name: own String, start: Span) -> Expr {
         self.expect_lbrace(); // consume {
         let mut fields: Vec[StructLitField] = Vec.new();
         let mut spread: Option[Expr] = None;
@@ -2261,7 +2269,7 @@ impl Parser {
     // arm and the single-peek note on `current_ident_matches`. `start` is the
     // first token's span; the PathType span covers segments + generic args
     // (the seed's `span_from(start)`).
-    fn parse_path_type_from(mut ref self, start: Span, first: String) -> PathType {
+    fn parse_path_type_from(mut ref self, start: Span, first: own String) -> PathType {
         let mut segs: Vec[String] = Vec.new();
         segs.push(first);
         loop {
@@ -2282,7 +2290,7 @@ impl Parser {
             }
             let got = match self.tokens[self.pos].token {
                 Identifier(name) => {
-                    segs.push(name);
+                    segs.push(name.clone());
                     true
                 }
                 _ => false,
@@ -2496,6 +2504,7 @@ impl Parser {
             // The name is bound once here, then consumed; `parse_fn_type_rest`
             // and `parse_path_type_from` continue WITHOUT re-reading this token.
             Identifier(name) => {
+                let name = name.clone();
                 self.advance(); // consume the identifier
                 let probe = dup_str(name);
                 if probe == "Fn".to_string() {
@@ -2505,7 +2514,7 @@ impl Parser {
                     if probe2 == "OnceFn".to_string() {
                         self.parse_fn_type_rest(start, true)
                     } else {
-                        let p = self.parse_path_type_from(start, name);
+                        let p = self.parse_path_type_from(start, name.clone());
                         TypeExpr.PathTy(p)
                     }
                 }
@@ -2614,10 +2623,11 @@ impl Parser {
                 })
             }
             Integer(v, sfx) => {
+                let sfx = sfx.clone();
                 self.advance();
                 Pattern.IntPat(PatInt {
                     value: v,
-                    suffix: sfx,
+                    suffix: sfx.clone(),
                     span: self.span_from(start),
                 })
             }
@@ -2625,21 +2635,24 @@ impl Parser {
             // encoding, so a pattern and its scrutinee compare as the same bits
             // (`parser/patterns.rs` `pattern_int_on_carrier`, B-2026-08-20-1).
             IntegerOutOfRange(mag, sfx) => {
+                let mag = mag.clone();
+                let sfx = sfx.clone();
                 self.advance();
                 match out_of_range_value(mag, sfx.clone()) {
                     Some(v) => Pattern.IntPat(PatInt {
                         value: v,
-                        suffix: sfx,
+                        suffix: sfx.clone(),
                         span: self.span_from(start),
                     }),
                     None => Pattern.ErrPat(SpanNode { span: self.span_from(start) }),
                 }
             }
             Float(v, sfx) => {
+                let sfx = sfx.clone();
                 self.advance();
                 Pattern.FloatPat(PatFloat {
                     value: v,
-                    suffix: sfx,
+                    suffix: sfx.clone(),
                     span: self.span_from(start),
                 })
             }
@@ -2658,9 +2671,10 @@ impl Parser {
                 })
             }
             StringLiteral(s) => {
+                let s = s.clone();
                 self.advance();
                 Pattern.StrPat(PatStr {
-                    value: s,
+                    value: s.clone(),
                     span: self.span_from(start),
                 })
             }
@@ -2670,6 +2684,7 @@ impl Parser {
             // deferred (see ast.kara). The name is bound ONCE here; the
             // binding-vs-variant choice peeks the NEXT token only.
             Identifier(name) => {
+                let name = name.clone();
                 self.advance(); // consume the identifier
                 let is_lparen = if self.pos < self.tokens.len() {
                     match self.tokens[self.pos].token {
@@ -2707,7 +2722,7 @@ impl Parser {
                     }
                     self.expect_rparen();
                     let mut segs: Vec[String] = Vec.new();
-                    segs.push(name);
+                    segs.push(name.clone());
                     Pattern.TupleVariantPat(TupleVariantPattern {
                         segments: segs,
                         elems: elems,
@@ -2716,10 +2731,10 @@ impl Parser {
                 } else if starts_upper(name) and is_lbrace {
                     // `Name { f0, f1: sub, .. }` struct pattern — an uppercase
                     // constructor followed by a brace field list.
-                    self.parse_struct_pattern(name, start)
+                    self.parse_struct_pattern(name.clone(), start)
                 } else {
                     Pattern.BindingPat(BindingPattern {
-                        name: name,
+                        name: name.clone(),
                         span: self.span_from(start),
                     })
                 }
@@ -2762,7 +2777,7 @@ impl Parser {
     // the constructor `name`/`start` already captured. Fields are shorthand
     // (`name`, a fresh binding) or `name: subpattern`; a trailing `..` sets
     // `has_rest`. Mirrors the seed's struct-pattern parse.
-    fn parse_struct_pattern(mut ref self, name: String, start: Span) -> Pattern {
+    fn parse_struct_pattern(mut ref self, name: own String, start: Span) -> Pattern {
         self.expect_lbrace(); // consume {
         let mut segs: Vec[String] = Vec.new();
         segs.push(name);
@@ -3019,7 +3034,7 @@ impl Parser {
     // `Token::Shared` / `Token::Par` dispatch arms: consume the modifier
     // keyword, then route to the struct / enum parser (whose `start` is captured
     // at its OWN keyword — the modifier does not shift the definition span).
-    fn parse_shared_or_par(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+    fn parse_shared_or_par(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> Item {
         self.advance(); // consume `shared` / `par`
         if self.pos >= self.tokens.len() {
             return Item.ErrItem(SpanNode { span: self.current_span() });
@@ -3145,7 +3160,7 @@ impl Parser {
     }
 
     // `const NAME: TYPE = VALUE;`
-    fn parse_const_decl(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+    fn parse_const_decl(mut ref self, is_pub: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `const`
         let name = self.take_member_name();
@@ -3214,7 +3229,7 @@ impl Parser {
 
     // `type NAME[T, ...] = TYPE;` — 3c-i covered the no-generics form; 3c-v adds
     // the optional generics clause (`where` refinement still deferred).
-    fn parse_type_alias_decl(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+    fn parse_type_alias_decl(mut ref self, is_pub: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `type`
         let name = self.take_member_name();
@@ -3235,7 +3250,7 @@ impl Parser {
 
     // `struct NAME[T, ...] { [pub] [mut] field: TYPE, ... }` — `start` at
     // `struct` (3c-ii; generics added in 3c-v, `where` still deferred).
-    fn parse_struct_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+    fn parse_struct_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `struct`
         let name = self.take_member_name();
@@ -3260,7 +3275,7 @@ impl Parser {
     // named fields. `start` is at `union`. Mirrors the seed's `parse_union_def`
     // happy path; the generic/tuple/`where`/empty-union DIAGNOSTICS are a later
     // increment (the corpus stays well-formed and non-generic).
-    fn parse_union_def(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+    fn parse_union_def(mut ref self, is_pub: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `union`
         let name = self.take_member_name();
@@ -3369,7 +3384,7 @@ impl Parser {
 
     // `enum NAME[T, ...] { VARIANT, ... }` — `start` at `enum` (3c-ii; generics
     // added in 3c-v).
-    fn parse_enum_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+    fn parse_enum_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `enum`
         let name = self.take_member_name();
@@ -3465,7 +3480,7 @@ impl Parser {
 
     // `fn NAME(self?, name: TYPE, ...) [-> R] { body }` — `start` at `fn`
     // (3c-iii; generics + effects/contracts/`where` deferred).
-    fn parse_fn_def(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+    fn parse_fn_def(mut ref self, is_pub: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> Item {
         Item.Func(self.parse_fn_def_node(is_pub, attrs, doc))
     }
 
@@ -3478,7 +3493,7 @@ impl Parser {
             return "".to_string();
         }
         match self.tokens[self.pos + off].token {
-            Identifier(n) => n,
+            Identifier(n) => n.clone(),
             _ => "".to_string(),
         }
     }
@@ -3572,7 +3587,7 @@ impl Parser {
     // `Function` span (which excludes the visibility keyword). A top-level fn
     // passes its collected `attrs`/`doc`; an impl method passes empty/None
     // (per-method meta is a later slice).
-    fn parse_fn_def_node(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> FnDefNode {
+    fn parse_fn_def_node(mut ref self, is_pub: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> FnDefNode {
         let start = self.current_span();
         self.advance(); // `fn`
         let name = self.take_member_name();
@@ -3613,7 +3628,7 @@ impl Parser {
     // `trait NAME { method... }`. Methods are required signatures (`fn m(...);`)
     // or default bodies (`fn m(...) { ... }`); `parse_trait_method` returns the
     // optional-body node. `start` is captured at `trait` (after any `pub`).
-    fn parse_trait_def(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+    fn parse_trait_def(mut ref self, is_pub: bool, attrs: own Vec[AttrNode], doc: own Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `trait`
         let name = self.take_member_name();
@@ -3696,7 +3711,7 @@ impl Parser {
     // `impl TYPE { ... }` (inherent) or `impl TRAIT for TYPE { ... }`. The first
     // parsed type is the trait when a `for` follows, otherwise the target. Each
     // body item is an optionally-`pub` free function (reusing `parse_fn_def_node`).
-    fn parse_impl_block(mut ref self, attrs: Vec[AttrNode]) -> Item {
+    fn parse_impl_block(mut ref self, attrs: own Vec[AttrNode]) -> Item {
         let start = self.current_span();
         self.advance(); // `impl`
         let generics = self.parse_optional_generics();
@@ -3897,7 +3912,7 @@ impl Parser {
 // Parse `src` as a single expression and return its AST root. The differential
 // oracle (`tests/selfhost_parser.rs`) diffs the rendered tree against the Rust
 // seed's `karac::parse`.
-pub fn parse_expr(src: String) -> Expr with panics {
+pub fn parse_expr(src: own String) -> Expr with panics {
     let toks = lex_all(src);
     let mut p = Parser.new(toks);
     p.parse_expr_bp(0)
@@ -3907,7 +3922,7 @@ pub fn parse_expr(src: String) -> Expr with panics {
 // 3a). The differential oracle (`tests/selfhost_parser_types.rs`) wraps the
 // type as `const __t__: <src> = 0;` on the Rust seed side (a 13-byte prefix,
 // matching `parse_expr`'s OFFSET_SHIFT) and diffs the rendered `TypeExpr`.
-pub fn parse_type_str(src: String) -> TypeExpr with panics {
+pub fn parse_type_str(src: own String) -> TypeExpr with panics {
     let toks = lex_all(src);
     let mut p = Parser.new(toks);
     p.parse_type()
@@ -3917,7 +3932,7 @@ pub fn parse_type_str(src: String) -> TypeExpr with panics {
 // The differential oracle (`tests/selfhost_parser_items.rs`) parses the SAME
 // bare source as a program on the Rust seed side and diffs the rendered item —
 // items are top-level, so there is no wrapper and the span offset shift is 0.
-pub fn parse_item_str(src: String) -> Item with panics {
+pub fn parse_item_str(src: own String) -> Item with panics {
     let toks = lex_all(src);
     let mut p = Parser.new(toks);
     p.parse_item()
@@ -3930,7 +3945,7 @@ pub fn parse_item_str(src: String) -> Item with panics {
 // Rust seed side and diffs the resolver output. `parse_item` already recovers
 // from an unrecognized leading token (it emits an `ErrItem` after consuming one
 // token), so the loop always makes progress and terminates at `Eof`.
-pub fn parse_program(src: String) -> Vec[Item] with panics {
+pub fn parse_program(src: own String) -> Vec[Item] with panics {
     let toks = lex_all(src);
     let mut p = Parser.new(toks);
     let mut items: Vec[Item] = Vec.new();

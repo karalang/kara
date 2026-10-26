@@ -494,7 +494,7 @@ impl Emitter {
         for it in items {
             match it {
                 Struct(sd) => {
-                    self.st_names.push(sd.name);
+                    self.st_names.push(sd.name.clone());
                 }
                 _ => {}
             }
@@ -541,7 +541,7 @@ impl Emitter {
         for it in items {
             match it {
                 Enum(ed) => {
-                    self.en_names.push(ed.name);
+                    self.en_names.push(ed.name.clone());
                     // `en_shared` must be filled here too: `ty_text` consults it
                     // to render a shared handle as `ptr`, and Pass A resolves
                     // payload kinds that can reach it.
@@ -564,7 +564,7 @@ impl Emitter {
                     let cnt = sd.fields.len();
                     let mut fi = 0;
                     while fi < cnt {
-                        self.st_field_names.push(sd.fields[fi].name);
+                        self.st_field_names.push(sd.fields[fi].name.clone());
                         let fk = self.kind_of_ty(sd.fields[fi].ty);
                         self.st_field_kinds.push(fk);
                         fi = fi + 1;
@@ -583,7 +583,7 @@ impl Emitter {
                     let cnt = ed.variants.len();
                     let mut vi = 0;
                     while vi < cnt {
-                        self.en_var_names.push(ed.variants[vi].name);
+                        self.en_var_names.push(ed.variants[vi].name.clone());
                         if ed.variants[vi].tuple_types.len() == 0 {
                             self.en_var_pl.push(0 - 1);
                         } else {
@@ -643,7 +643,7 @@ impl Emitter {
         for it in items {
             match it {
                 Func(f) => {
-                    self.sig_names.push(f.name);
+                    self.sig_names.push(f.name.clone());
                     let rk = match f.ret {
                         Some(t) => self.kind_of_ty(t),
                         None => 0 - 1,
@@ -1609,7 +1609,7 @@ impl Emitter {
     // This is what "make an owned copy" means for an RC handle — the sibling of
     // `emit_materialize`'s malloc+memcpy for a String. Null-safe, matching
     // `@sh_release_*`, so an un-initialized handle slot retains harmlessly.
-    fn sh_emit_retain(mut ref self, hop: String) -> String {
+    fn sh_emit_retain(mut ref self, hop: own String) -> String {
         let lid = self.nlbl;
         self.nlbl = self.nlbl + 1;
         let lr = "shret" + lid.to_string();
@@ -1833,7 +1833,7 @@ impl Emitter {
             let RefKind { kind: pk, is_ref: pref, is_mut: pmut } = rk3;
             let pty = self.ty_text(pk);
             let idx = self.locals.len();
-            self.locals.push(pn);
+            self.locals.push(pn.clone());
             self.locals_kind.push(pk);
             // A `ref` param is a BORROW (Slice 19): the callee never frees it.
             let mut owns = pk == 2 or pk == 3 or pk == 4 or pk >= 2000;
@@ -1913,7 +1913,7 @@ impl Emitter {
                         }
                     } else {
                         if kind == rk {
-                            tv = op;
+                            tv = op.clone();
                             if rk >= 10 and rk < 1000 and not heap {
                                 // A returned BORROW of a heap-bearing struct
                                 // (Slice 15): the caller receives an owned
@@ -2043,7 +2043,7 @@ impl Emitter {
     // kind by vec kind: Vec[i64]→i64, Vec[String]→String, Vec[struct]→struct,
     // Vec[enum]→enum. The binding is non-owning (the vec keeps ownership; a
     // body-level `let y = x` deep-copies via the element path).
-    fn emit_for_vec(mut ref self, var: String, sop: String, sk: i64, fbody: Block) {
+    fn emit_for_vec(mut ref self, var: own String, sop: String, sk: i64, fbody: Block) {
         let mut ek = 0;
         if sk == 4 {
             ek = 2;
@@ -2225,7 +2225,7 @@ impl Emitter {
                         }
                         let vk = vk2;
                         let idx = self.locals.len();
-                        self.locals.push(name);
+                        self.locals.push(name.clone());
                         self.locals_kind.push(vk);
                         self.locals_heap.push(vh);
                         let ty = self.ty_text(vk);
@@ -2309,7 +2309,7 @@ impl Emitter {
                                             BindingPat(ibp) => {
                                                 let BindingPattern { name: iname, span: isp } =
                                                     ibp;
-                                                bindname = iname;
+                                                bindname = iname.clone();
                                             }
                                             _ => {}
                                         }
@@ -2385,7 +2385,8 @@ impl Emitter {
             }
             Assign(asn) => {
                 // `name = <int-expr>`: evaluate, store into the existing slot.
-                let AssignStmt { target, value, span } = asn;
+                let AssignStmt { target: target0, value, span } = asn;
+                let target = assign_place(target0);
                 match target {
                     Field(fa2) => {
                         // FIELD assignment `p.x = v` (Slice 21): GEP the
@@ -2647,7 +2648,7 @@ impl Emitter {
                 match callee {
                     Ident(ie) => {
                         let IdentExpr { name, span: isp } = ie;
-                        cname = name;
+                        cname = name.clone();
                     }
                     _ => {}
                 }
@@ -3796,7 +3797,7 @@ impl Emitter {
                 if is_range {
                     // Loop var slot seeded with lo; header tests < hi.
                     let vidx = self.locals.len();
-                    self.locals.push(var);
+                    self.locals.push(var.clone());
                     self.locals_kind.push(0);
                     self.locals_heap.push(false);
                     self.body = self.body + "  %v" + vidx.to_string() + " = alloca i64, align 8\n";
@@ -3849,7 +3850,7 @@ impl Emitter {
                     // element as a BORROW (the vec keeps ownership; a binding
                     // deep-copies via the element path), bind, run body. A
                     // heap-temp vec (fn result) is freed after the loop.
-                    self.emit_for_vec(var, sop.clone(), sk2, fbody);
+                    self.emit_for_vec(var.clone(), sop.clone(), sk2, fbody);
                     if sh2 {
                         self.emit_free_vec_val(sop, sk2);
                     }
@@ -3872,7 +3873,7 @@ impl Emitter {
                         + ", 1\n";
                     // loop-var slot + index slot
                     let vidx = self.locals.len();
-                    self.locals.push(var);
+                    self.locals.push(var.clone());
                     self.locals_kind.push(0);
                     self.locals_heap.push(false);
                     self.body =
@@ -4102,7 +4103,7 @@ impl Emitter {
                 match value {
                     Str(sl) => {
                         let StrLit { value: sv, span: ssp } = sl;
-                        lit = sv;
+                        lit = sv.clone();
                         has_lit = true;
                     }
                     _ => {}
@@ -4252,7 +4253,7 @@ impl Emitter {
     // borrowed result was already materializing it one step later. What
     // changes is that the copy now happens BEFORE the scrutinee's release
     // instead of after.
-    fn arm_own(mut ref self, op: String, k: i64, h: bool) -> Val {
+    fn arm_own(mut ref self, op: own String, k: i64, h: bool) -> Val {
         if h {
             return Val { op: op, kind: k, heap: true };
         }
@@ -4399,7 +4400,7 @@ impl Emitter {
                     }
                     BindingPat(bp) => {
                         let BindingPattern { name: bn, span: bsp } = bp;
-                        bind_name = bn;
+                        bind_name = bn.clone();
                         is_catch = true;
                     }
                     WildcardPat(sn2) => {
@@ -4682,9 +4683,9 @@ impl Emitter {
                                 // POSITIONAL (Slice 35): elem 0 binds the
                                 // first payload, elem 1 the second.
                                 if pei == 0 {
-                                    bind_payload = bn;
+                                    bind_payload = bn.clone();
                                 } else {
-                                    bind_payload2 = bn;
+                                    bind_payload2 = bn.clone();
                                 }
                             }
                             _ => {}
@@ -5965,7 +5966,7 @@ impl Emitter {
     // passes through untouched (the payload slot is only read under the tag
     // guard, so unit/int variants never touch it). Result routed through a
     // stack slot — the copy is conditional, so no single SSA name works.
-    fn emit_materialize_enum(mut ref self, op: String, ei: i64) -> Val {
+    fn emit_materialize_enum(mut ref self, op: own String, ei: i64) -> Val {
         // Slice 65: a `shared` enum is an RC handle, not a by-value aggregate.
         // Everything below reads the by-value layout (tag at 0, String slot at
         // 2), which on a `ptr` produced `extractvalue ptr %h, 0` — invalid IR.
@@ -6438,7 +6439,7 @@ impl Emitter {
     // every existing bool condition emits byte-identical IR. The typechecker
     // guarantees the only kind-0 value reaching a boolean position is a
     // bool-stored-as-i64 (0/1), so the low-bit `trunc` is exact.
-    fn to_i1(mut ref self, op: String, kind: i64) -> String {
+    fn to_i1(mut ref self, op: own String, kind: i64) -> String {
         if kind == 1 {
             return op;
         }
@@ -6451,7 +6452,7 @@ impl Emitter {
     // Vec[i64]-layout vec (kind 3, shared by Vec[bool]) uses for `push` and
     // indexed assignment. A value already in an i64 lane (kind 0) passes
     // through, so a Vec[i64] element store is byte-identical.
-    fn to_i64_lane(mut ref self, op: String, kind: i64) -> String {
+    fn to_i64_lane(mut ref self, op: own String, kind: i64) -> String {
         if kind == 1 {
             let r = self.fresh();
             self.body = self.body + "  " + r.clone() + " = zext i1 " + op + " to i64\n";
@@ -7062,7 +7063,7 @@ impl Emitter {
                 match callee {
                     Ident(ie) => {
                         let IdentExpr { name, span: isp } = ie;
-                        cname = name;
+                        cname = name.clone();
                     }
                     Path(pe) => {
                         // `Vec.new()` / `Enum.Variant(payload)` both parse as a
@@ -7936,7 +7937,7 @@ impl Emitter {
                         let Val { op: mop, kind: mk, heap: mh } = mv;
                         fop2 = mop;
                     }
-                    lit_names.push(fname);
+                    lit_names.push(fname.clone());
                     lit_ops.push(fop2);
                 }
                 let off = self.st_off[si];
@@ -8620,6 +8621,19 @@ impl Emitter {
 // constants use `0x<bits>` — exact by construction, unlike decimal FP text
 // (which LLVM rejects when inexact). The `& 15` mask cleans the arithmetic
 // shift's sign extension, so negative bit patterns (sign-bit doubles) work.
+// The place an assignment writes. `*n = v` through a `mut ref` param stores
+// into `n`'s slot, which is the caller's aliased slot: the same store a bare
+// `n = v` made before D5 made the explicit deref its only spelling.
+fn assign_place(t: Expr) -> Expr {
+    match t {
+        Unary(u) => match u.op {
+            Deref => u.operand.clone(),
+            _ => t.clone(),
+        },
+        _ => t.clone(),
+    }
+}
+
 fn hex_u64(bits: i64) -> String {
     let mut s = "".to_string();
     let mut i = 0;

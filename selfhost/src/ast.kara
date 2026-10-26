@@ -362,6 +362,7 @@ pub fn is_loop_block_expr(e: ref Expr) -> bool {
 // edges, so no infinite size.
 
 // `target = value;`
+#[derive(Clone)]
 pub struct AssignStmt {
     pub target: Expr,
     pub value: Expr,
@@ -370,6 +371,7 @@ pub struct AssignStmt {
 
 // `let [mut] name = value;` — slice 2a restricts the binding to a single
 // identifier; full patterns + `: T` annotations land with later slices.
+#[derive(Clone)]
 pub struct LetStmt {
     pub is_mut: bool,
     // The bound pattern — a plain binding (`let x = …`) or a destructuring

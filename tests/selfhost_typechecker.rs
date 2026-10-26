@@ -550,13 +550,12 @@ fn build_and_run_driver(tag: &str, driver: &str) -> Option<Vec<String>> {
 /// typechecker into a temp project with a per-input driver over `parse_program`
 /// + `typecheck_program`, runs, and diffs each line against the Rust seed.
 #[test]
-#[ignore = "v2 gap after M3: the v2 build refuses selfhost/ (moves out of a collection element), and the legacy build that accepted it is gone"]
 fn selfhost_typechecker_matches_rust_typechecker() {
     let mut driver = String::from(
         "import parser.parse_program;\n\
          import typechecker.{typecheck_program, render_errors};\n\
          \n\
-         fn check(src: String) with panics {\n\
+         fn check(src: own String) with panics {\n\
          \x20   println(render_errors(typecheck_program(parse_program(src))));\n\
          }\n\
          fn main() {\n",

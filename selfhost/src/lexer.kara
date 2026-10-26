@@ -50,7 +50,7 @@ struct Lexer {
 }
 
 impl Lexer {
-    fn new(src: String) -> Lexer {
+    fn new(src: own String) -> Lexer {
         let mut bytes: Vec[u8] = Vec.new();
         for b in src.bytes() {
             bytes.push(b);
@@ -114,7 +114,7 @@ impl Lexer {
         }
     }
 
-    fn make_spanned(ref self, token: Token) -> SpannedToken {
+    fn make_spanned(ref self, token: own Token) -> SpannedToken {
         SpannedToken {
             token: token,
             span: Span {
@@ -518,7 +518,7 @@ impl Lexer {
             // after suffix consumption so the span still covers it.
             let text = strip_underscores(self.src.substring(self.start, self.current));
             let sfx = self.try_float_suffix();
-            match f64.parse(text) {
+            match f64.parse(text).ok() {
                 Some(v) => self.make_spanned(Token.Float(v, sfx)),
                 None => self.make_spanned(Token.Error("Invalid float literal".to_string())),
             }
@@ -528,7 +528,7 @@ impl Lexer {
             // `i64.parse` consumes `text`, and the out-of-range path needs the
             // digits again, so keep a copy across the match.
             let digits = text.substring(0, text.len());
-            match i64.parse(text) {
+            match i64.parse(text).ok() {
                 Some(v) => self.make_spanned(Token.Integer(v as i128, sfx)),
                 None => {
                     let t = out_of_range_int(digits, 10, sfx);
@@ -654,6 +654,31 @@ impl Lexer {
         "".to_string()
     }
 
+    // A string literal's error, found at an escape inside it: the rest of the
+    // literal, through its closing quote, goes with it, so lexing goes on after
+    // the literal rather than from inside it. Mirrors `src/lexer.rs`
+    // `literal_error` (B-2026-10-24-27).
+    fn literal_error(mut ref self, msg: own String) -> SpannedToken {
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'\\' {
+                self.advance();
+                if not self.is_at_end() and self.peek() != b'\n' {
+                    self.consume_codepoint();
+                }
+            } else if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+                self.advance();
+            } else {
+                self.consume_codepoint();
+            }
+        }
+        if not self.is_at_end() {
+            self.advance();
+        }
+        self.make_spanned(Token.Error(msg))
+    }
+
     // `"..."` string literal. The opening `"` is consumed. Literal runs are
     // appended via substring (so multi-byte UTF-8 copies through without a
     // byte→char conversion); recognized escapes push the specific char,
@@ -690,12 +715,12 @@ impl Lexer {
                     self.advance();
                 } else if e == b'{' or e == b'}' {
                     self.advance();
-                    return self.make_spanned(Token.Error(brace_escape_msg(e)));
+                    return self.literal_error(brace_escape_msg(e));
                 } else if e == b'x' {
                     self.advance();
                     let esc = self.text_hex_escape();
                     if not esc.ok {
-                        return self.make_spanned(Token.Error(esc.msg));
+                        return self.literal_error(esc.msg);
                     }
                     value.push(esc.c);
                 } else if e == b'u' {
@@ -704,13 +729,13 @@ impl Lexer {
                     let cp = self.scan_unicode_escape();
                     if cp < 0 {
                         let m = self.unicode_escape_error_msg(u_brace);
-                        return self.make_spanned(Token.Error(m));
+                        return self.literal_error(m);
                     }
                     match char.try_from(cp) {
                         Ok(c) => value.push(c),
                         Err(_) => {
                             let m = self.unicode_scalar_error_msg(u_brace);
-                            return self.make_spanned(Token.Error(m));
+                            return self.literal_error(m);
                         }
                     }
                 } else {
@@ -719,7 +744,7 @@ impl Lexer {
                     let bad = self.consume_codepoint();
                     let mut m = "Unknown escape sequence: \\".to_string();
                     m.push(bad);
-                    return self.make_spanned(Token.Error(m));
+                    return self.literal_error(m);
                 }
                 run_start = self.current;
             } else if self.peek() == b'\n' {
@@ -1395,7 +1420,7 @@ impl Lexer {
                     let v = self.scan_hex_byte_escape();
                     if v < 0 {
                         let m = self.hex_escape_error_msg();
-                        return self.make_spanned(Token.Error(m));
+                        return self.literal_error(m);
                     }
                     bytes.push(byte_of(v));
                 } else if e == b'u' {
@@ -1418,7 +1443,7 @@ impl Lexer {
                     let bad = self.consumed_escape_char(e);
                     let mut m = "Unknown escape sequence in byte literal: \\".to_string();
                     m.push(bad);
-                    return self.make_spanned(Token.Error(m));
+                    return self.literal_error(m);
                 }
             } else if c == b'\n' {
                 return self.make_spanned(Token.Error("Unterminated byte string literal: a raw newline is not permitted; use \\n".to_string()));
@@ -1431,7 +1456,7 @@ impl Lexer {
                 let mut m = "non-ASCII character `".to_string();
                 m.push(bad);
                 m.push_str("` in byte string literal — use \\xHH for byte values above 0x7F");
-                return self.make_spanned(Token.Error(m));
+                return self.literal_error(m);
             } else {
                 self.advance();
                 bytes.push(c);
@@ -1450,7 +1475,12 @@ impl Lexer {
             _ => false,
         };
         if failed {
-            return self.make_spanned(tok);
+            // The rest of the literal goes with the error, as the seed does.
+            let msg = match tok {
+                Error(m) => m.clone(),
+                _ => "".to_string(),
+            };
+            return self.literal_error(msg);
         }
         if self.is_at_end() {
             return self.make_spanned(Token.Error("Unterminated interpolated string".to_string()));
@@ -1637,16 +1667,16 @@ impl Lexer {
                     bytes.push(b'"');
                     self.advance();
                 } else if e == b'0' {
-                    return self.make_spanned(Token.Error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\0` escape".to_string()));
+                    return self.literal_error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\0` escape".to_string());
                 } else if e == b'x' {
                     self.advance();
                     let v = self.scan_hex_byte_escape();
                     if v < 0 {
                         let m = self.hex_escape_error_msg();
-                        return self.make_spanned(Token.Error(m));
+                        return self.literal_error(m);
                     }
                     if v == 0 {
-                        return self.make_spanned(Token.Error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\x00` escape".to_string()));
+                        return self.literal_error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\x00` escape".to_string());
                     }
                     bytes.push(byte_of(v));
                 } else if e == b'u' {
@@ -1655,11 +1685,11 @@ impl Lexer {
                     let cp = self.scan_unicode_escape();
                     if cp < 0 {
                         let m = self.unicode_escape_error_msg(u_brace);
-                        return self.make_spanned(Token.Error(m));
+                        return self.literal_error(m);
                     }
                     // `\u{0}` would embed a NUL — same rejection as `\0` / `\x00`.
                     if cp == 0 {
-                        return self.make_spanned(Token.Error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\u{0}` escape".to_string()));
+                        return self.literal_error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\u{0}` escape".to_string());
                     }
                     match char.try_from(cp) {
                         Ok(c) => {
@@ -1674,14 +1704,14 @@ impl Lexer {
                         }
                         Err(_) => {
                             let m = self.unicode_scalar_error_msg(u_brace);
-                            return self.make_spanned(Token.Error(m));
+                            return self.literal_error(m);
                         }
                     }
                 } else {
                     let bad = self.consume_codepoint();
                     let mut m = "Unknown escape sequence in C-string: \\".to_string();
                     m.push(bad);
-                    return self.make_spanned(Token.Error(m));
+                    return self.literal_error(m);
                 }
             } else {
                 // ASCII copies through verbatim; a multi-byte codepoint encodes
@@ -1931,7 +1961,7 @@ impl Lexer {
 // Keyword lookup mirroring `src/lexer.rs::identifier`'s `match text`. A
 // non-keyword falls through to `Token.Identifier`. (Reserved-word and
 // reserved-fragment-specifier diagnostics are slice E.)
-fn keyword_or_ident(text: String) -> Token {
+fn keyword_or_ident(text: own String) -> Token {
     match text {
         // Declarations
         "fn" => Token.Fn,
@@ -2258,7 +2288,7 @@ fn invalid_int_literal_msg(radix: i64) -> String {
 // The second band needed `Token.Integer` to carry an `i128`, which it does
 // since B-2026-09-19-28; before that it returned the invalid-literal error, a
 // different token from the seed's for the same input.
-fn out_of_range_int(text: String, radix: i64, sfx: String) -> Token {
+fn out_of_range_int(text: String, radix: i64, sfx: own String) -> Token {
     let mag = radix_to_decimal(text, radix);
     if mag.len() == 0 {
         return Token.Error(invalid_int_literal_msg(radix));
@@ -2307,7 +2337,7 @@ fn escape_ok(c: char) -> Escaped {
     Escaped { ok: true, c: c, msg: "".to_string() }
 }
 
-fn escape_err(msg: String) -> Escaped {
+fn escape_err(msg: own String) -> Escaped {
     Escaped { ok: false, c: '?', msg: msg }
 }
 
@@ -2334,11 +2364,11 @@ struct TripleLayout {
     close_end: i64,
 }
 
-fn layout_err(msg: String, resume: i64) -> TripleLayout {
+fn layout_err(msg: own String, resume: i64) -> TripleLayout {
     TripleLayout { ok: false, msg: msg, resume: resume, body_end: 0, indent: 0, close_end: 0 }
 }
 
-pub fn lex_all(src: String) -> Vec[SpannedToken] with panics {
+pub fn lex_all(src: own String) -> Vec[SpannedToken] with panics {
     let mut lx = Lexer.new(src);
     let mut out: Vec[SpannedToken] = Vec.new();
     loop {

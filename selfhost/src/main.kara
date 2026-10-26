@@ -41,7 +41,7 @@ fn render(tok: SpannedToken) -> String {
     let ln = tok.span.line;
     let col = tok.span.column;
     let mut line = f"{off} {len} {ln} {col} ";
-    let tk = tok.token;
+    let tk = ref tok.token;
     match tk {
         // Keywords
         Fn => line.push_str("KW fn"),

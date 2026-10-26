@@ -202,7 +202,6 @@ fn rust_render(src: &str) -> String {
 // clone-on-extract + the `Option[String]` shallow-clone /
 // `te_owns_option_heap_payload` copy-gate fix.
 #[test]
-#[ignore = "v2 gap after M3: the v2 build refuses selfhost/ (moves out of a collection element), and the legacy build that accepted it is gone"]
 fn selfhost_parser_matches_rust_parser_types() {
     // 1. Crate-root program: a driver over the Kāra `parse_type_str` +
     //    `render_type`. The six selfhost modules are copied verbatim (step 2).
@@ -211,7 +210,7 @@ fn selfhost_parser_matches_rust_parser_types() {
          import parser.parse_type_str;\n\
          import ast_render.render_type;\n\
          \n\
-         fn parse_and_print(src: String) with panics {\n\
+         fn parse_and_print(src: own String) with panics {\n\
          \x20   println(render_type(parse_type_str(src)));\n\
          }\n\
          fn main() {\n",
