@@ -14,7 +14,10 @@ CPU-per-wall of each. A ratio is seq/par: above 1 the parallel build is
 faster. The M4b floor is 0.9: no program slower than 0.9x its own seq build.
 
     python3 scripts/m4b-speedup.py --karac target/release/karac \\
-        --katas ../kara-katas --out /mnt/attach/project-files/review/m4b-speedup
+        --katas ../kara-katas --out /mnt/attach/project-files/review/m4b-speedup --threads 4
+
+`--threads` sets `KARAC_THREADS` for both arms; without it the runtime runs
+its tasks on one worker, and the ratio is then the parallel form's overhead.
 
 Builds run up to `--jobs` at a time before any timing starts; timing runs one
 binary at a time, so nothing else of the harness shares the cores with it.
@@ -47,6 +50,14 @@ def git_sha(repo: Path) -> str:
     dirty = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
                            capture_output=True, text=True).stdout.strip()
     return r.stdout.strip() + ("-dirty" if dirty else "")
+
+
+def karac_sha(karac: str) -> str:
+    """The commit the binary was built at, from `karac --version`
+    (`... +g<sha>`), which is not the checkout's HEAD once it moves on."""
+    v = subprocess.run([karac, "--version"], capture_output=True, text=True).stdout
+    m = re.search(r"\+g([0-9a-f]+)", v)
+    return m.group(1)[:10] if m else "unknown"
 
 
 def programs(args) -> list[dict]:
@@ -126,6 +137,8 @@ def measure(prog: dict, seq: Path, par: Path, args) -> dict:
     for k in ("KARAC_AUTO_PAR", "KARAC_AUTO_PAR_DEBUG"):
         env.pop(k, None)
     env["KARAC_HASH_SEED"] = str(args.seed)
+    if args.threads is not None:
+        env["KARAC_THREADS"] = str(args.threads)
     env.update(prog.get("env", {}))
     with tempfile.TemporaryDirectory(prefix="m4b-run-") as tmp:
         cwd = prog["cwd"] or Path(tmp)
@@ -166,7 +179,7 @@ def markdown(report: dict) -> str:
     rows = report["programs"]
     lines = [f"# M4b speedup: seq `karac build` vs `KARAC_AUTO_PAR=1`", "",
              f"- karac `{report['karac_sha']}`, kara-katas `{report['katas_sha']}`, "
-             f"{report['nproc']} cores, {report['runs']} interleaved runs (medians), "
+             f"{report['nproc']} cores, `KARAC_THREADS={report['threads'] or 'unset (1)'}`, {report['runs']} interleaved runs (medians), "
              f"`KARAC_HASH_SEED={report['seed']}`, started {report['started']}.",
              f"- Ratio is seq/par: above 1 the parallel build is faster. Floor {FLOOR}.", ""]
     ran = [r for r in rows if r.get("ratio") is not None]
@@ -212,6 +225,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=120.0, help="seconds per run")
     ap.add_argument("--build-timeout", type=float, default=600.0)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--threads", type=int, help="KARAC_THREADS for both arms (the runtime's default is 1)")
     ap.add_argument("--filter", action="append", help="substring of a program's name (repeatable)")
     args = ap.parse_args()
 
@@ -219,12 +233,12 @@ def main() -> int:
     if not progs:
         print("no program matched", file=sys.stderr)
         return 2
-    report = {"karac": args.karac, "karac_sha": git_sha(REPO), "katas_sha": git_sha(Path(args.katas)),
-              "nproc": os.cpu_count(), "runs": args.runs, "seed": args.seed, "floor": FLOOR,
+    report = {"karac": args.karac, "karac_sha": karac_sha(args.karac), "checkout_sha": git_sha(REPO), "katas_sha": git_sha(Path(args.katas)),
+              "nproc": os.cpu_count(), "threads": args.threads, "runs": args.runs, "seed": args.seed, "floor": FLOOR,
               "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "programs": []}
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    stem = out / f"m4b-speedup-{report['karac_sha']}"
+    stem = out / f"m4b-speedup-{report['karac_sha']}{'' if args.threads is None else f'-t{args.threads}'}"
     work = Path(tempfile.mkdtemp(prefix="m4b-bins-"))
     try:
         def both(i_p):
