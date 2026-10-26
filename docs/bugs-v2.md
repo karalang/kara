@@ -59,10 +59,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 42 |
-| diagnostics | 37 |
+| diagnostics | 38 |
 | missing-feature | 30 |
+| perf | 13 |
 | soundness | 13 |
-| perf | 12 |
 | run-vs-build | 9 |
 | miscompile | 8 |
 | other | 3 |
@@ -73,13 +73,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 66 |
-| mir | 31 |
+| typecheck | 67 |
+| mir | 32 |
 | codegen | 22 |
 | interp | 19 |
 | ownership | 16 |
 | cli | 16 |
-| mir-llvm | 11 |
+| mir-llvm | 12 |
 | runtime | 9 |
 | parser | 6 |
 | other | 2 |
@@ -121,8 +121,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher reaches v2 only as a fixed walk key, on an annotated `let` or a plain struct's field (built in its literal or assigned): a user `BuildHasher`'s build/write/finish never run, FxBuildHasher hashes with the default, and a hasher named on a `shared` struct's field, a parameter, a return type or a turbofish is dropped (fields, returns, owned params FIXED; the rest needs the hasher in the type, which the parser strips) | — |
 | B-2026-10-25-40 | 2026-10-25 | resolver+effect | low | A channel operation's effect cannot be declared: the effect checker charges a stored callback that receives on a channel with `receives(Channel)` and asks the slot's clause for it, but a clause naming `receives(Channel)` is refused by the resolver (`'Channel' is not an effect resource (it is a prelude type or trait)`) | — |
 | B-2026-10-25-44 | 2026-10-25 | mir | low | An error return trace frame's `context` is always null: design.md § Errors fills it from a `.context(msg)` site's message, but the v2 library has no `.context()` or `AnyError` (B-2026-10-21-22), so no site can carry one | — |
-| B-2026-10-26-14 | 2026-10-26 | mir | medium | At the M4 item 13 cost gate (0563970557), `KARAC_AUTO_PAR=1` builds still run 6 of the 129 M4b programs under 0.9x their own seq build with 4 workers in three timings (9, 21 and 21 runs): kata 332 reconstruct_itinerary 0.53..0.66x (FIXED in a95f6b5457: a builder bug, now 2.6x) and the stmt-par apps grade_close 0.69..0.84x, grain_intake 0.75..0.87x, milk_collect 0.81..0.84x, fare_cap 0.79..0.86x and rx_adjudicate 0.84..0.86x, each 2..12 ms slower on a 9..30 ms run (blood_bank, meter_settle and hotel_audit cross 0.9 between timings; payroll_run was noise), a per-run cost of the 4-worker executor for all but grade_close (on one worker those four run at 0.98..1.01x), where before the gate (905c25d3e2) 22 were, worst thumb_render 0.02x; on one worker (the default) 36 were under 0.9x before the gate, the parallel form's one-worker overhead (item 14 builder, Thread B), not the cost gate | — |
 | B-2026-10-26-15 | 2026-10-26 | mir-llvm | high | Two `par` branches that walk one `frozen` graph of a `shared struct` race on its reference counts on the pool (KARAC_THREADS=4): ThreadSanitizer reports the count write in the traversal (`kara.sum`, `kara.main.c0`) against `drop.shared Node` on another worker, where core-semantics §6 says a `frozen` handle is never counted and §11.3 lets frozen handles into tasks | — |
+| B-2026-10-26-16 | 2026-10-26 | typecheck | low | E_CHAR_AS_NARROW_INT on an ASCII char LITERAL (`'#' as u8`) carries no edit and its help does not name the byte literal `b'#'`, so `karac fix` leaves each one for the author, though the literal fits and the rewrite is exact (23 hand edits in mini_markdown) | — |
+| B-2026-10-26-17 | 2026-10-26 | mir+mir-llvm | medium | After B-2026-10-26-14's fixes, at 9030678cd0 `KARAC_AUTO_PAR=1` builds still run under the M4b floor of 0.9x their own seq build: apps/pipeline/hotel_audit on 4 workers in three timings (0.89 / 0.85 / 0.90, freight_audit at the line), and on one worker, the default, kata 28 brute_force 0.26x, 191 popcount 0.36x, 4 binary_search_partition 0.56x, 9 palindrome 0.70x and 8 atoi 0.75x (11 programs under 0.9x in all) | — |
 
 ### Fixed
 
@@ -259,6 +260,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-26-11 | ownership | medium | `karac check` accepts an escaping closure created inside a loop that captures an outer non-`Copy` binding, which moves it on every iteration; `karac… | 647464dbbb |
 | B-2026-10-26-12 | ownership | medium | `karac check` counts a capture of an ESCAPING closure as moved when a nested closure in its body reads it (`is.iter().map(\|i\| look(p, *i)).sum()`, wi… | 6f363a1aa2 |
 | B-2026-10-26-13 | typecheck+mir-llvm | high | A `shared` handle crosses a task boundary inside a function value: a closure capturing a `shared` struct, erased to `Fn` and captured by a `TaskGroup… | 6cfb8ff699 |
+| B-2026-10-26-14 | mir | medium | `KARAC_AUTO_PAR=1` builds ran M4b programs under 0.9x their own seq build: at 905c25d3e2, 22 of 129 on 4 workers (worst apps/pipeline/thumb_render 0.… | 66ebdb23b7 |
 
 </details>
 
