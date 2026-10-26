@@ -89,10 +89,9 @@ were dropped: a `Str` is `Copy`, so the move they answer only existed
 because the binding was a `String` before the other fix, and `Str.clone()`
 is a `String`, which the next check refused (kara B-2026-10-25-19, since
 fixed in e1228ca6d3). The rest by hand: 23 byte comparisons written
-`'#' as u8` became `'#' as u32 as u8`, as the diagnostic says (it has no
-edit for an ASCII literal and does not name `b'#'`: kara B-2026-10-26-16,
-open), and three discarded `Option`s from an attribute delete became
-`let _ =`.
+`'#' as u8` became `'#' as u32 as u8`, as the diagnostic said (it had no
+edit for an ASCII literal and did not name `b'#'`: kara B-2026-10-26-16),
+and three discarded `Option`s from an attribute delete became `let _ =`.
 
 Then check was clean, and on the MIR interpreter 806 of the 809 sections
 matched the oracle at once. The three that did not were mine: the
@@ -107,7 +106,10 @@ had 101 of them, so check failed on it. One `karac fix` run removed all
 101, check is clean, and it still matches the oracle on all four
 backends (`karac` at 946c6e5575). Run again from mini_markdown.orig.kara,
 `karac fix` now converges in one run, and only the 23 byte comparisons
-are left for a hand edit.
+were left for a hand edit. Kara fixed B-2026-10-26-16 in a418ad6c44, so
+`karac fix` writes those as byte literals (`b'#'`) and the hand casts are
+gone; from the original source it now reaches a clean check by itself,
+and the output still matches on all four backends (`karac` at 53d04a609a).
 
 ## Running
 

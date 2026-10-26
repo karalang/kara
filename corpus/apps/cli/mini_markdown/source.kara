@@ -2874,20 +2874,20 @@ fn is_hex_b(b: u8) -> bool {
 fn amp_is_entity(bs: ref Slice[u8], i: i64) -> bool {
     let n = bs.len();
     let mut k = i + 1;
-    if k < n and bs[k] == '#' as u32 as u8 {
+    if k < n and bs[k] == b'#' {
         let mut j = k + 1;
         while j < n and is_digit_b(bs[j]) {
             j += 1;
         }
-        if j > k + 1 and j < n and bs[j] == ';' as u32 as u8 {
+        if j > k + 1 and j < n and bs[j] == b';' {
             return true;
         }
-        if k + 1 < n and (bs[k + 1] == 'x' as u32 as u8 or bs[k + 1] == 'X' as u32 as u8) {
+        if k + 1 < n and (bs[k + 1] == b'x' or bs[k + 1] == b'X') {
             j = k + 2;
             while j < n and is_hex_b(bs[j]) {
                 j += 1;
             }
-            if j > k + 2 and j < n and bs[j] == ';' as u32 as u8 {
+            if j > k + 2 and j < n and bs[j] == b';' {
                 return true;
             }
         }
@@ -2896,7 +2896,7 @@ fn amp_is_entity(bs: ref Slice[u8], i: i64) -> bool {
     while k < n and is_alnum_b(bs[k]) {
         k += 1;
     }
-    k > i + 1 and k < n and bs[k] == ';' as u32 as u8
+    k > i + 1 and k < n and bs[k] == b';'
 }
 
 fn escape_into(s: ref String, attr: bool, newline: bool, out: mut ref String) {
@@ -2905,15 +2905,15 @@ fn escape_into(s: ref String, attr: bool, newline: bool, out: mut ref String) {
     let mut k = 0;
     while k < bs.len() {
         let b = bs[k];
-        let rep = if b == '&' as u32 as u8 {
+        let rep = if b == b'&' {
             if amp_is_entity(bs, k) { "" } else { "&amp;" }
-        } else if b == '<' as u32 as u8 {
+        } else if b == b'<' {
             "&lt;"
-        } else if b == '>' as u32 as u8 {
+        } else if b == b'>' {
             "&gt;"
-        } else if attr and b == '"' as u32 as u8 {
+        } else if attr and b == b'"' {
             "&quot;"
-        } else if newline and b == '\n' as u32 as u8 {
+        } else if newline and b == b'\n' {
             "&#10;"
         } else {
             ""
@@ -3172,10 +3172,10 @@ fn blank_line_at(s: ref String, pos: i64) -> bool {
     let mut k = if pos < 0 { 0 } else { pos };
     let mut lines = 0;
     while lines < 2 {
-        while k < n and bs[k] == ' ' as u32 as u8 {
+        while k < n and bs[k] == b' ' {
             k += 1;
         }
-        if k < n and bs[k] == '\n' as u32 as u8 {
+        if k < n and bs[k] == b'\n' {
             k += 1;
             lines += 1;
         } else {
@@ -3191,12 +3191,12 @@ fn inner_blank(s: ref String) -> (i64, i64) {
     let n = bs.len();
     let mut i = 0;
     while i < n {
-        if bs[i] == '\n' as u32 as u8 {
+        if bs[i] == b'\n' {
             let mut k = i + 1;
-            while k < n and (bs[k] == ' ' as u32 as u8 or bs[k] == '\t' as u32 as u8) {
+            while k < n and (bs[k] == b' ' or bs[k] == b'\t') {
                 k += 1;
             }
-            if k < n and bs[k] == '\n' as u32 as u8 {
+            if k < n and bs[k] == b'\n' {
                 return (i, k + 1);
             }
         }
@@ -3315,7 +3315,7 @@ fn goahead(p: mut ref Hp, md: mut ref Md, end: bool) {
         let mut j = n;
         if p.interesting < 0 {
             let mut k = i;
-            while k < n and bs[k] != '&' as u32 as u8 and bs[k] != '<' as u32 as u8 {
+            while k < n and bs[k] != b'&' and bs[k] != b'<' {
                 k += 1;
             }
             j = k;
@@ -3337,7 +3337,7 @@ fn goahead(p: mut ref Hp, md: mut ref Md, end: bool) {
         if i == n {
             break;
         }
-        if bs[i] == '<' as u32 as u8 {
+        if bs[i] == b'<' {
             let mut k = 0;
             let sto = md.re.id(P_HP_STARTTAGOPEN, F_HP_STARTTAGOPEN);
             if md.re.match_at(sto, rawdata, i).is_some() {
@@ -3424,7 +3424,7 @@ fn goahead(p: mut ref Hp, md: mut ref Md, end: bool) {
             } else {
                 break;
             }
-        } else if bs[i] == '&' as u32 as u8 {
+        } else if bs[i] == b'&' {
             let er = md.re.id(P_HP_ENTITYREF, F_HP_ENTITYREF);
             match md.re.match_at(er, rawdata, i) {
                 Some(m) => {
@@ -6633,7 +6633,7 @@ fn backtick_match(md: mut ref Md, m: ref M, data: ref String) -> Hm {
     let last = bs.len();
     let mut start = begin;
     let mut max_ticks = 0;
-    while start < last and bs[start] == '`' as u32 as u8 {
+    while start < last and bs[start] == b'`' {
         max_ticks += 1;
         start += 1;
     }
@@ -6648,7 +6648,7 @@ fn backtick_match(md: mut ref Md, m: ref M, data: ref String) -> Hm {
     let mut res_end = 0;
     while i < last {
         let mut span = 0;
-        while i < last and bs[i] == '`' as u32 as u8 {
+        while i < last and bs[i] == b'`' {
             span += 1;
             i += 1;
         }
