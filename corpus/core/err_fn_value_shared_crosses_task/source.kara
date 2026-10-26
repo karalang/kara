@@ -1,0 +1,17 @@
+// Core semantics §6.3: a function value is CrossTask only when everything
+// its environment reaches is. `bump` captures the `shared` handle `s`, so
+// the spawned closure that holds `bump` cannot cross a task boundary.
+shared struct Store {
+    mut n: i64,
+}
+
+fn main() {
+    let s = Store { n: 0 };
+    let bump: Fn() -> i64 = || {
+        let t = s.clone();
+        t.n
+    };
+    let g = TaskGroup.new();
+    let h = g.spawn(|| bump());
+    println(h.join());
+}

@@ -1,0 +1,1 @@
+ERROR at line 15: the spawned closure holds a function value whose environment captures `s` (type `Store`), which cannot cross a task boundary (E_NOT_CROSS_TASK)

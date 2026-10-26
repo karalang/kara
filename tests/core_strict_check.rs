@@ -14477,3 +14477,137 @@ fn a_nested_closure_reads_an_escaping_closures_capture() {
         "61 21\n",
     );
 }
+
+/// B-2026-10-26-13: a function value is CrossTask only when everything its
+/// environment reaches is (core semantics §6.3), through nested closures
+/// and erased `Fn` values. A spawned closure holding one that captures a
+/// `shared` handle, the same passed to a function whose parameter is
+/// spawned, and a `Server.serve` handler over a `shared` store are refused;
+/// a `sync` store and a plain capture check and run.
+#[test]
+fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
+    accepted_and_runs(
+        "fn-env-sync-store",
+        "sync struct Store {\n\
+             n: Atomic[i64],\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let s = Store { n: Atomic.new(0) };\n\
+             let bump: Fn() -> i64 = || s.n.load() + 1;\n\
+             let g = TaskGroup.new();\n\
+             let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n\
+             let mut i = 0;\n\
+             while i < 4 {\n\
+                 hs.push(g.spawn(|| bump()));\n\
+                 i = i + 1;\n\
+             }\n\
+             let mut t = 0;\n\
+             for h in hs.into_iter() {\n\
+                 t = t + h.join();\n\
+             }\n\
+             println(t);\n\
+         }\n",
+        "4\n",
+    );
+    accepted_and_runs(
+        "fn-env-plain-capture",
+        "fn twice(f: Fn(i64) -> i64, x: i64) -> i64 {\n\
+             f(f(x))\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let k = 3;\n\
+             let add: Fn(i64) -> i64 = |x| x + k;\n\
+             let g = TaskGroup.new();\n\
+             let h = g.spawn(|| twice(add, 1));\n\
+             println(h.join());\n\
+         }\n",
+        "7\n",
+    );
+    for (tag, src, name) in [
+        (
+            "fn-env-spawned-fn-value",
+            "// Core semantics §6.3: a function value is CrossTask only when everything\n\
+         // its environment reaches is. `bump` captures the `shared` handle `s`, so\n\
+         // the spawned closure that holds `bump` cannot cross a task boundary.\n\
+         shared struct Store {\n\
+             mut n: i64,\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let s = Store { n: 0 };\n\
+             let bump: Fn() -> i64 = || {\n\
+                 let t = s.clone();\n\
+                 t.n\n\
+             };\n\
+             let g = TaskGroup.new();\n\
+             let h = g.spawn(|| bump());\n\
+             println(h.join());\n\
+         }\n",
+            "`s`",
+        ),
+        (
+            "fn-env-spawned-param",
+            "shared struct Store {\n\
+             mut n: i64,\n\
+         }\n\
+         \n\
+         fn run_all(f: Fn() -> i64) -> i64 {\n\
+             let g = TaskGroup.new();\n\
+             let h = g.spawn(|| f());\n\
+             h.join()\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let s = Store { n: 2 };\n\
+             println(run_all(|| s.n));\n\
+         }\n",
+            "`s`",
+        ),
+        (
+            "fn-env-nested-fn-value",
+            "shared struct Store {\n\
+             mut n: i64,\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let s = Store { n: 2 };\n\
+             let inner: Fn() -> i64 = || s.n;\n\
+             let outer: Fn() -> i64 = || inner() + 1;\n\
+             let g = TaskGroup.new();\n\
+             let h = g.spawn(|| outer());\n\
+             println(h.join());\n\
+         }\n",
+            "`s`",
+        ),
+        (
+            "fn-env-server-handler",
+            "shared struct Hits {\n\
+             mut n: i64,\n\
+         }\n\
+         \n\
+         fn handle(h: Hits, req: Request) -> Response {\n\
+             h.n = h.n + 1;\n\
+             Response { status: 200, body: f\"{h.n}\" }\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let hits = Hits { n: 0 };\n\
+             let _ = Server.serve(\"127.0.0.1:8080\", |req| handle(hits, req));\n\
+         }\n",
+            "`hits`",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(
+            err.contains("E_NOT_CROSS_TASK") && err.contains(name),
+            "{tag}: expected E_NOT_CROSS_TASK naming {name} in: {err}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

@@ -2195,8 +2195,12 @@ fn main() -> () {
             ("err_taskgroup_origin_declared_after", false, "borrow check"),
             ("err_taskgroup_write_while_borrowed", false, "borrow check"),
         ];
-        // Rules checked before MIR: `par` effects and Drop-type moves.
-        let not_mir = ["err_par_conflict", "err_partial_move_drop_type"];
+        // Rules checked before MIR: `par` effects, Drop-type moves and §6.3.
+        let not_mir = [
+            "err_par_conflict",
+            "err_partial_move_drop_type",
+            "err_fn_value_shared_crosses_task",
+        ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;
         // `TaskGroup.isolating` is declared in isolating.kara; a `weak`

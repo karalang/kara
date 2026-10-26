@@ -1,0 +1,11 @@
+source = "corpus/core/err_fn_value_shared_crosses_task"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "concurrency"]
+class = "a"
+expected_from = "spec"
+rules = ["6.3"]
+backends = []
+env = {}
+note = "B-2026-10-26-13: a closure capturing a `shared` handle, erased to `Fn` and held by a TaskGroup.spawn closure, is not CrossTask (core-semantics §6.3). The expected.out wording of an error pin is guidance, not a byte oracle."

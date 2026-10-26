@@ -57,6 +57,7 @@ pub mod env;
 mod env_build;
 mod expr_call;
 mod expr_method_call;
+mod fn_env_cross_task;
 mod provider_share;
 pub(crate) use expr_method_call::STRING_BUILTIN_METHODS;
 mod expr_method_tensor;
@@ -4119,6 +4120,9 @@ impl<'a> TypeChecker<'a> {
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
         self.emit_core_generic_move_errors(&node_call_subs);
+        if self.cli_lint_overrides.strict_core || self.library_methods_from_source {
+            self.fn_env_cross_task_pass(&node_types);
+        }
         let mut core_task_moved_captures = FxHashMap::default();
         if self.library_methods_from_source && !self.cli_lint_overrides.strict_core {
             // The MIR builder reads which captures move from this table; its
