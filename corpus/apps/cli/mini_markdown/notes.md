@@ -87,10 +87,12 @@ on four entity bindings for smarty and `.clone()` at their second use,
 two `ref` pattern bindings and one `.to_string()` (kept). The `.clone()`s
 were dropped: a `Str` is `Copy`, so the move they answer only existed
 because the binding was a `String` before the other fix, and `Str.clone()`
-is a `String`, which the next check refused (kara B-2026-10-25-19, open).
-The rest by hand: 23 byte comparisons written `'#' as u8` became
-`'#' as u32 as u8`, as the diagnostic says, and three discarded `Option`s
-from an attribute delete became `let _ =`.
+is a `String`, which the next check refused (kara B-2026-10-25-19, since
+fixed in e1228ca6d3). The rest by hand: 23 byte comparisons written
+`'#' as u8` became `'#' as u32 as u8`, as the diagnostic says (it has no
+edit for an ASCII literal and does not name `b'#'`: kara B-2026-10-26-16,
+open), and three discarded `Option`s from an attribute delete became
+`let _ =`.
 
 Then check was clean, and on the MIR interpreter 806 of the 809 sections
 matched the oracle at once. The three that did not were mine: the
@@ -98,6 +100,14 @@ emphasis builder tested `el.text is None` with the tree's truthiness test,
 so an empty text was filled in again. With `text_none` it matches the
 oracle under the MIR interpreter, the LLVM backend, the ASan build and
 the native binary, with nothing on stderr.
+
+Later Kara made a `*` on a `Copy` part bound out of a borrowed value the
+§5.10 error (kara B-2026-10-24-36), and this port, written before that,
+had 101 of them, so check failed on it. One `karac fix` run removed all
+101, check is clean, and it still matches the oracle on all four
+backends (`karac` at 946c6e5575). Run again from mini_markdown.orig.kara,
+`karac fix` now converges in one run, and only the 23 byte comparisons
+are left for a hand edit.
 
 ## Running
 
