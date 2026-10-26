@@ -54,6 +54,7 @@ LLVM_CFG = 'cfg(feature = "llvm")'
 # decision that should be visible in review — that is the point.
 ALLOWLIST = {
     "selfhost_codegen": "1 test, ~181 s; wants its own runtime-budget decision",
+    "mir_tsan": "needs libkarac_runtime_tsan.a, which the TSan leg (M4 item 11) builds and runs it with",
 }
 
 

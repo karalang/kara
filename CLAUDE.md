@@ -52,6 +52,9 @@ cp target/wasm32-wasip1-threads/release/libkarac_runtime.a target/release/libkar
 cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
 cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
 cargo rustc -p karac-runtime --release --crate-type staticlib
+# OPTIONAL, ThreadSanitizer (`karac __mir-llvm-tsan`); its own target dir, so nothing above is rebuilt:
+RUSTC_BOOTSTRAP=1 cargo rustc -p karac-runtime --release --target-dir target/tsan --crate-type staticlib -- -Zsanitizer=thread -Cunsafe-allow-abi-mismatch=sanitizer
+cp target/tsan/release/libkarac_runtime.a target/release/libkarac_runtime_tsan.a
 ```
 
 - **`cargo rustc … --crate-type staticlib`, never `cargo build -p karac-runtime`.**
@@ -61,7 +64,11 @@ cargo rustc -p karac-runtime --release --crate-type staticlib
 - The driver picks the archive from the emitted object's symbols: the lean one
   unless a TLS symbol is referenced, and an opt-in archive when a
   `karac_runtime_gpu_*` / `karac_arrow_*` / `karac_regex_*` / `karac_unicode_*`
-  symbol is. A missing opt-in archive fails at link with the recipe.
+  symbol is, and the TSan one for a `-fsanitize=thread` link. A missing opt-in
+  archive fails at link with the recipe. The TSan archive must be the
+  instrumented one: TSan sees the order the pool's lock imposes only in
+  instrumented code, and against the plain archive a clean task program
+  reports dozens of races.
   `KARAC_RUNTIME=<path>` is honored verbatim; `KARAC_FORCE_FULL_RUNTIME=1`
   forces the full archive.
 

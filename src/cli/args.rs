@@ -188,10 +188,23 @@ pub fn parse_args(args: &[String]) -> Command {
         // AddressSanitizer into a native binary linked with `-fsanitize=address`
         // and run. A sanitizer report exits 86 with the report on stderr;
         // otherwise the program's own code, or 3 with the refusing stage.
+        // `__mir-llvm-tsan` (M4 item 11) is the same with ThreadSanitizer,
+        // linked against the TSan-built runtime archive; `KARAC_THREADS`
+        // reaches the program, so it runs on the pool.
         #[cfg(feature = "llvm")]
-        "__mir-llvm-asan" => {
+        cmd @ ("__mir-llvm-asan" | "__mir-llvm-tsan") => {
+            let tsan = cmd == "__mir-llvm-tsan";
+            let (san, flag, vars): (_, _, &[&str]) = if tsan {
+                ("tsan", "-fsanitize=thread", &["TSAN_OPTIONS"])
+            } else {
+                (
+                    "asan",
+                    "-fsanitize=address",
+                    &["ASAN_OPTIONS", "LSAN_OPTIONS"],
+                )
+            };
             let Some(path) = args.get(2) else {
-                eprintln!("error: __mir-llvm-asan requires a file argument");
+                eprintln!("error: {cmd} requires a file argument");
                 process::exit(1);
             };
             let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
@@ -211,25 +224,30 @@ pub fn parse_args(args: &[String]) -> Command {
                         .map_err(|e| format!("llvm: {e}"))
                 })
                 .unwrap_or_else(|e| fail(e));
-            let dir = std::env::temp_dir().join(format!("karac-mir-asan-{}", process::id()));
+            let dir = std::env::temp_dir().join(format!("karac-mir-{san}-{}", process::id()));
             if let Err(e) = std::fs::create_dir_all(&dir) {
-                fail(format!("asan: {}: {e}", dir.display()));
+                fail(format!("{san}: {}: {e}", dir.display()));
             }
             let obj = dir.join("main.o");
             let exe = dir.join("main");
-            let built = crate::backend::mir_asan::compile_asan_object(&ir, &obj).and_then(|()| {
+            let compiled = if tsan {
+                crate::backend::mir_asan::compile_tsan_object(&ir, &obj)
+            } else {
+                crate::backend::mir_asan::compile_asan_object(&ir, &obj)
+            };
+            let built = compiled.and_then(|()| {
                 crate::backend::driver::link_executable_with_sanitizer(
                     &obj.to_string_lossy(),
                     &exe.to_string_lossy(),
-                    &["-fsanitize=address"],
+                    &[flag],
                 )
             });
             if let Err(e) = built {
                 let _ = std::fs::remove_dir_all(&dir);
-                fail(format!("asan: {e}"));
+                fail(format!("{san}: {e}"));
             }
             let mut cmd = process::Command::new(&exe);
-            for var in ["ASAN_OPTIONS", "LSAN_OPTIONS"] {
+            for var in vars {
                 if std::env::var_os(var).is_none() {
                     cmd.env(var, "exitcode=86");
                 }
@@ -239,7 +257,7 @@ pub fn parse_args(args: &[String]) -> Command {
             let _ = std::fs::remove_dir_all(&dir);
             match status {
                 Ok(s) => process::exit(s.code().unwrap_or(101)),
-                Err(e) => fail(format!("asan: {}: {e}", exe.display())),
+                Err(e) => fail(format!("{san}: {}: {e}", exe.display())),
             }
         }
         // Hidden plumbing for the C10 effect pass (redesign M1): check one

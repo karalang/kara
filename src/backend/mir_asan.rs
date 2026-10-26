@@ -1,4 +1,5 @@
-//! An AddressSanitizer build of the MIR backend's IR (redesign M2).
+//! Sanitizer builds of the MIR backend's IR: AddressSanitizer (redesign M2)
+//! and ThreadSanitizer (M4 item 11).
 //!
 //! M2's gate asks the compiled backend to be ASan/LSan clean on the corpus.
 //! [`compile_asan_object`] takes the textual IR that
@@ -10,6 +11,14 @@
 //! Unlike the legacy harness (see `link_executable_with_sanitizer`), the
 //! emitted code is COMPILED with the sanitizer, so a load or store through a
 //! freed pointer is reported, not only a double free or a leak.
+//!
+//! [`compile_tsan_object`] does the same for ThreadSanitizer, which the pool
+//! (`KARAC_THREADS`) must be clean under before it is on by default. Its
+//! link takes `-fsanitize=thread`, which picks the TSan-built runtime
+//! archive (`libkarac_runtime_tsan.a`): the pool's lock and queues are
+//! the runtime's, and TSan sees the order they impose only in instrumented
+//! code, so an uninstrumented runtime would report every task's handoff
+//! as a race.
 
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
@@ -33,6 +42,19 @@ use std::path::Path;
 ///   the module lacks it. Legacy codegen emits it; the MIR backend does not,
 ///   and the JIT runner fills it in at run time instead.
 pub fn compile_asan_object(ir: &str, obj: &Path) -> Result<(), String> {
+    compile_sanitized_object(ir, obj, "sanitize_address", "asan")
+}
+
+/// Instrument `ir` for ThreadSanitizer and write it to `obj`, as
+/// [`compile_asan_object`] does for AddressSanitizer: every defined function
+/// gets `sanitize_thread`, which is what the pass instruments.
+pub fn compile_tsan_object(ir: &str, obj: &Path) -> Result<(), String> {
+    compile_sanitized_object(ir, obj, "sanitize_thread", "tsan-module,function(tsan)")
+}
+
+/// Gives every function `ir` defines the attribute `attr`, runs the
+/// sanitizer's `passes` and writes the object.
+fn compile_sanitized_object(ir: &str, obj: &Path, attr: &str, passes: &str) -> Result<(), String> {
     let llcx = Context::create();
     // The IR parser reads a NUL-terminated buffer.
     let mut bytes = Vec::with_capacity(ir.len() + 1);
@@ -48,7 +70,7 @@ pub fn compile_asan_object(ir: &str, obj: &Path) -> Result<(), String> {
 
     // Frame pointers let the sanitizer's fast unwinder walk through emitted
     // code, so a report names the Kāra functions that allocated.
-    let kind = Attribute::get_named_enum_kind_id("sanitize_address");
+    let kind = Attribute::get_named_enum_kind_id(attr);
     for f in module.get_functions() {
         if f.count_basic_blocks() > 0 {
             f.add_attribute(AttributeLoc::Function, llcx.create_enum_attribute(kind, 0));
@@ -82,8 +104,8 @@ pub fn compile_asan_object(ir: &str, obj: &Path) -> Result<(), String> {
         // observes, which hides exactly the faults this lane is for, and it
         // changes the output of some programs (reported to the MIR backend's
         // owner), which would make the lane disagree with `__mir-llvm-run`.
-        .run_passes("asan", &tm, PassBuilderOptions::create())
-        .map_err(|e| format!("asan passes: {}", e.to_string()))?;
+        .run_passes(passes, &tm, PassBuilderOptions::create())
+        .map_err(|e| format!("{passes} passes: {}", e.to_string()))?;
     tm.write_to_file(&module, FileType::Object, obj)
         .map_err(|e| format!("write {}: {}", obj.display(), e.to_string()))
 }
