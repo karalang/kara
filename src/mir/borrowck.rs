@@ -216,6 +216,11 @@ pub enum ResultBorrows {
     /// (`IterByRef.next`), so the result borrows what the referenced
     /// iterator holds, not the reference to it (B-2026-10-21-59).
     ReceiverPointeeValue,
+    /// A closure body that returns a closure, called with its environment
+    /// first: what the environment holds and what the other arguments
+    /// hold, never the environment itself, since the returned closure
+    /// owns its captures (core semantics §9.3; B-2026-10-24-9).
+    EnvAndArgs,
 }
 
 /// Checks `body`; the errors name each conflicting access by block and
@@ -1030,6 +1035,21 @@ impl Cx<'_> {
                 self.pointee_origins(o, &args[0], &mut val)
             }
             ResultBorrows::Receiver => self.operand_origins(o, &args[0], &mut val),
+            ResultBorrows::EnvAndArgs => {
+                let env_ref = args[0].place().is_some_and(|p| {
+                    place_ty(self.body, self.tys, p).is_ok_and(|pt| {
+                        matches!(self.tys.kind(pt.ty), TyKind::Ref(_) | TyKind::MutRef(_))
+                    })
+                });
+                if env_ref {
+                    self.pointee_origins(o, &args[0], &mut val);
+                } else {
+                    self.operand_origins(o, &args[0], &mut val);
+                }
+                for a in &args[1..] {
+                    self.operand_origins(o, a, &mut val);
+                }
+            }
             ResultBorrows::ReceiverValue => self.pointee_origins(o, &args[0], &mut val),
             ResultBorrows::ReceiverPointeeValue => {
                 let mut held = LoanSet::default();

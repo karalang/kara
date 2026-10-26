@@ -184,6 +184,11 @@ pub struct Lowered {
     /// The views whose result borrows through their receiver's references
     /// ([`through_ref_fields`]).
     pub pointee_views: FxHashSet<String>,
+    /// The closure bodies that return a closure. A returned closure owns
+    /// its captures (core semantics §9.3), so a call's result borrows what
+    /// the environment holds, never the closure value that lent it
+    /// (B-2026-10-24-9).
+    pub closure_results: FxHashSet<String>,
     /// For a program that binds a resource (core semantics §14), the
     /// effects of the program as built, before provider specialisation
     /// replaced its calls on resources: what `par_check` reports from.
@@ -470,6 +475,7 @@ fn lower_program_inner<'a>(
     }
     let mut receivers = FxHashSet::default();
     let mut views = FxHashSet::default();
+    let mut closure_results = FxHashSet::default();
     loop {
         if let Some((def, args, name)) = lcx.queue.pop() {
             let has_self = lcx.fns.get(&def).is_some_and(|i| i.f.self_param.is_some());
@@ -502,7 +508,17 @@ fn lower_program_inner<'a>(
                 receivers.insert(name.clone());
             }
         } else if let Some(job) = lcx.closure_queue.pop() {
+            let name = job.name.clone();
             lcx.lower_closure(job);
+            let returns_closure = lcx.program.bodies.get(&name).is_some_and(|b| {
+                matches!(
+                    lcx.tys.tcx().kind(b.locals[0].ty),
+                    HK::Closure { .. } | HK::Fn { .. } | HK::FnDef { .. }
+                )
+            });
+            if returns_closure {
+                closure_results.insert(name);
+            }
         } else if let Some((def, name)) = lcx.static_queue.pop() {
             lcx.lower_static(def, &name);
         } else if let Some((e, t, name)) = lcx.literal_queue.pop() {
@@ -525,6 +541,7 @@ fn lower_program_inner<'a>(
         receivers,
         views,
         pointee_views,
+        closure_results,
         effects: None,
         auto_par_tasks: lcx.auto_par_done,
         auto_par_groups: lcx.auto_par_groups,
@@ -22084,6 +22101,7 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
                 &lowered.receivers,
                 &lowered.views,
                 &lowered.pointee_views,
+                &lowered.closure_results,
                 i,
             )
         };
@@ -22139,8 +22157,12 @@ fn result_borrows(
     receivers: &FxHashSet<String>,
     views: &FxHashSet<String>,
     pointee_views: &FxHashSet<String>,
+    closure_results: &FxHashSet<String>,
     i: &InstanceId,
 ) -> crate::mir::ResultBorrows {
+    if closure_results.contains(&i.name) {
+        return crate::mir::ResultBorrows::EnvAndArgs;
+    }
     if pointee_views.contains(&i.name) {
         return crate::mir::ResultBorrows::ReceiverPointeeValue;
     }
@@ -22571,8 +22593,10 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         let receivers = &lowered.receivers;
         let views = &lowered.views;
         let pointee_views = &lowered.pointee_views;
-        let has_receiver =
-            |i: &InstanceId| result_borrows(&names, receivers, views, pointee_views, i);
+        let closure_results = &lowered.closure_results;
+        let has_receiver = |i: &InstanceId| {
+            result_borrows(&names, receivers, views, pointee_views, closure_results, i)
+        };
         if borrowck {
             crate::mir::check_borrows(body, &lowered.tys, &has_receiver)
                 .map_err(|e| format!("borrow check {}: {}", body.instance.name, e.join("; ")))?;
