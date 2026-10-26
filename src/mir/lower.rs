@@ -18575,11 +18575,30 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn owned_node(&self, id: NodeId) -> bool {
         self.lcx.node_types.get(&id).is_some_and(|&t| {
             !self.is_copy(t)
+                && !self.hir_handle(t)
                 && !matches!(
                     self.tys().tcx().kind(t),
                     HK::Shared { .. } | HK::Ref(_) | HK::MutRef(_)
                 )
         })
+    }
+
+    /// Whether the typed-HIR type `t` is a `shared` (or `par`) ADT, which
+    /// typed HIR writes as its plain `Adt`: a use copies the handle, so a
+    /// closure returning one moves nothing out (B-2026-10-25-13).
+    fn hir_handle(&self, t: Ty) -> bool {
+        let HK::Adt { def, .. } = self.tys().tcx().kind(t) else {
+            return false;
+        };
+        let name = self.lcx.def_name(def);
+        let tc = self.lcx.tc;
+        match tc.struct_info.get(&name) {
+            Some(s) => s.is_shared || s.is_par,
+            None => tc
+                .enum_info
+                .get(&name)
+                .is_some_and(|e| e.is_shared || e.is_par),
+        }
     }
 
     /// Whether the user function `d`'s parameter `i` takes its argument by

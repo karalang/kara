@@ -1457,6 +1457,26 @@ impl<'a> super::TypeChecker<'a> {
                         },
                     });
                 }
+                // The closure-kind walker's question, on both pipelines: could
+                // this binding move its part out? A bare type parameter's
+                // value counts, its move being decided per instantiation
+                // (B-2026-10-25-13).
+                if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                    && matches!(mode, ScrutineeMode::Owned)
+                    && self.core_shared_depth == 0
+                    && !self
+                        .program
+                        .ref_binding_spans
+                        .contains(&SpanKey::from_span(&pattern.span))
+                    && !matches!(
+                        expected,
+                        Type::Ref(_) | Type::MutRef(_) | Type::Error | Type::Never
+                    )
+                    && !self.is_copy_type_during_check(expected)
+                    && !self.copy_is_only_an_rc_retain(expected)
+                {
+                    self.pattern_may_move = true;
+                }
                 self.record_pattern_binding_borrow_mode(&pattern.span, mode, expected);
                 self.record_pattern_binding_surface_types(pattern, expected);
             }
@@ -1981,6 +2001,7 @@ impl<'a> super::TypeChecker<'a> {
         scrutinee: &Expr,
     ) {
         let prev = std::mem::take(&mut self.core_pattern_moves);
+        let prev_may_move = std::mem::take(&mut self.pattern_may_move);
         // A tuple literal scrutinee lends each element it borrows on its own:
         // `(Some(i), Some(j))` over `(m.get(a), m.get(b))` binds `ref`s,
         // as `Some(i)` over `m.get(a)` does (B-2026-10-12-16).
@@ -2037,6 +2058,10 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.mark_d5_parts(pattern, scrutinee);
         let moves = std::mem::replace(&mut self.core_pattern_moves, prev);
+        if std::mem::replace(&mut self.pattern_may_move, prev_may_move) {
+            self.moving_scrutinees
+                .insert(SpanKey::from_span(&scrutinee.span));
+        }
         if !moves.is_empty() {
             self.core_moving_scrutinees
                 .entry(SpanKey::from_span(&scrutinee.span))

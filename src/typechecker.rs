@@ -2684,6 +2684,12 @@ pub struct TypeChecker<'a> {
     pub(super) forking: Option<provider_share::Forking>,
     /// See [`TypeCheckResult::core_moving_scrutinees`].
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// Set while a pattern binds a part that could move out of an owned
+    /// scrutinee (a non-`Copy` value, or a bare type parameter's).
+    pub(super) pattern_may_move: bool,
+    /// The scrutinees such a binding was found under, so the closure-kind
+    /// walker counts only their `match` as a move (B-2026-10-25-13).
+    pub(super) moving_scrutinees: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::core_borrowed_receivers`].
     pub(super) core_borrowed_receivers: FxHashSet<SpanKey>,
     /// `collect` calls whose context type stores borrows
@@ -3628,6 +3634,8 @@ impl<'a> TypeChecker<'a> {
             core_once_calls: FxHashSet::default(),
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),
+            pattern_may_move: false,
+            moving_scrutinees: FxHashSet::default(),
             core_borrowed_receivers: FxHashSet::default(),
             core_collect_keeps_refs: FxHashSet::default(),
             core_try_companion: false,

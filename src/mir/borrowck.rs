@@ -2209,6 +2209,7 @@ fn main() -> () {
             "ok_weak_local_reads_as_option",
             "ok_ref_handle_collects_as_the_handle",
             "ok_weak_slot_upgrade",
+            "ok_closure_reads_method_args_handles_and_matches",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

@@ -14303,3 +14303,62 @@ fn a_literals_open_element_types_meet_as_a_join_does() {
         "expected 'Vec[?T0]', found 'Option[i64]'",
     );
 }
+
+/// B-2026-10-25-13: three uses that move nothing out of a capture keep a
+/// closure `Fn`: lending it to a user method's bare or `ref` parameter
+/// (§4.1), using a captured `shared` handle as a value (§6.1), and a
+/// `match` whose arms bind only `Copy` parts or `ref`s (§4.6). A method's
+/// `own` parameter and an arm that binds a part by move still consume.
+#[test]
+fn a_closure_that_lends_counts_or_matches_a_capture_stays_fn() {
+    accepted_and_runs(
+        "closure-reads-not-consumes",
+        "shared struct P {\n    n: i64,\n}\n\
+         enum G {\n    Num(i64),\n    Name(String),\n}\n\
+         struct H {\n    k: i64,\n}\n\
+         impl H {\n    fn peek(self, p: P) -> i64 {\n        p.n + self.k\n    }\n}\n\
+         fn twice(f: Fn(i64) -> i64) -> i64 {\n    f(1) + f(2)\n}\n\
+         fn twice_p(f: Fn(i64) -> P) -> i64 {\n    f(1).n + f(2).n\n}\n\
+         fn main() {\n\
+             let a = P { n: 5 };\n\
+             let h = H { k: 1 };\n\
+             let x = twice(|i| i + h.peek(a));\n\
+             let y = twice_p(|_| a);\n\
+             let g = G.Name(\"ab\".to_string());\n\
+             let z = twice(|i| match g {\n        G.Num(n) => n,\n        G.Name(_) => i,\n    });\n\
+             println(f\"{x} {y} {z} {a.n}\");\n\
+         }\n",
+        "15 10 3 5\n",
+    );
+    for (tag, body, name) in [
+        ("closure-own-method-arg", "i + h.eat(q)", "q"),
+        (
+            "closure-match-moves-part",
+            "match g { G.Num(n) => n, G.Name(s) => s.len() + i }",
+            "g",
+        ),
+    ] {
+        let src = format!(
+            "struct Q {{\n    n: i64,\n}}\n\
+             struct H {{\n    k: i64,\n}}\n\
+             impl H {{\n    fn eat(self, q: own Q) -> i64 {{\n        q.n + self.k\n    }}\n}}\n\
+             enum G {{\n    Num(i64),\n    Name(String),\n}}\n\
+             fn twice(f: Fn(i64) -> i64) -> i64 {{\n    f(1) + f(2)\n}}\n\
+             fn main() {{\n\
+                 let q = Q {{ n: 4 }};\n\
+                 let h = H {{ k: 2 }};\n\
+                 let g = G.Name(\"ab\".to_string());\n\
+                 println(twice(|i| {body}));\n\
+             }}\n"
+        );
+        let (dir, path) = fixture(tag, &src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(
+            err.contains(&format!("consumes captured binding '{name}'")),
+            "{tag}: expected the consumed `{name}` in: {err}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

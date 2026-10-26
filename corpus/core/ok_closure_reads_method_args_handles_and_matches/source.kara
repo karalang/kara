@@ -1,0 +1,83 @@
+struct Q {
+    n: i64,
+}
+
+shared enum E {
+    A(i64),
+    B,
+}
+
+shared struct P {
+    n: i64,
+}
+
+struct H {
+    k: i64,
+}
+
+impl H {
+    fn peek(self, q: Q) -> i64 {
+        q.n + self.k
+    }
+    fn peek_ref(self, q: ref Q) -> i64 {
+        q.n * self.k
+    }
+}
+
+struct Acc {
+    t: i64,
+}
+
+impl Acc {
+    fn take(mut ref self, q: Q) -> i64 {
+        self.t += q.n;
+        self.t
+    }
+}
+
+fn keep(p: own P) -> i64 {
+    p.n
+}
+
+fn twice(f: Fn(i64) -> i64) -> i64 {
+    f(1) + f(2)
+}
+
+fn twice_e(f: Fn(i64) -> E) -> i64 {
+    let mut s = 0;
+    for _ in 0..2 {
+        match f(1) {
+            E.A(n) => s += n,
+            E.B => s += 100,
+        }
+    }
+    s
+}
+
+fn twice_m(f: Fn(mut ref Acc) -> i64, a: mut ref Acc) -> i64 {
+    f(mut a) + f(mut a)
+}
+
+enum G {
+    Num(i64),
+    Name(String),
+}
+
+fn main() {
+    let q = Q { n: 4 };
+    let h = H { k: 2 };
+    let p = P { n: 7 };
+    let e = E.A(3);
+    let g = G.Name("ab".to_string());
+    println(twice(|i| i + h.peek(q)));
+    println(twice(|i| i + h.peek_ref(q)));
+    println(twice_e(|_| e));
+    println(twice(|i| i + keep(p)));
+    println(twice(|i| match g {
+        G.Num(n) => n,
+        G.Name(ref s) => s.len() + i,
+    }));
+    let mut acc = Acc { t: 0 };
+    println(twice_m(|a| a.take(q), mut acc));
+    println(f"{q.n} {p.n} {h.k}");
+}

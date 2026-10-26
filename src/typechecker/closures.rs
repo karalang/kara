@@ -313,6 +313,21 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Which of a user method's parameters borrow, by the receiver's type:
+    /// all but the `own` ones under D5. `None` (an unknown receiver, or a
+    /// method this cannot find) leaves every argument consuming.
+    fn user_method_borrow_positions(&self, recv: &Type, method: &str) -> Option<Vec<bool>> {
+        let mut t = recv;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        let (Type::Named { name, .. } | Type::Shared(name)) = t else {
+            return None;
+        };
+        let own = self.d5_own_params(&format!("{name}.{method}"))?;
+        Some(own.iter().map(|o| !o).collect())
+    }
+
     fn walk_capture_consume_block(
         &self,
         block: &Block,
@@ -449,7 +464,12 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Identifier(name) => {
                 if mode == CaptureWalkMode::Consuming && !Self::name_is_shadowed(name, shadows) {
                     if let Some(ty) = outer.get(name) {
-                        if !self.is_copy_type_during_check(ty) {
+                        // A `shared` handle used as a value is retained, and
+                        // the capture stays usable (core §6.1), so the
+                        // closure moves nothing out (B-2026-10-25-13).
+                        if !self.is_copy_type_during_check(ty)
+                            && !self.copy_is_only_an_rc_retain(ty)
+                        {
                             *reason = Some(OnceReason {
                                 consumed_binding: name.clone(),
                                 consumed_span: expr.span,
@@ -557,11 +577,21 @@ impl<'a> super::TypeChecker<'a> {
                 // list — was rejected as `OnceFn` with no spelling that compiles.
                 let recv_ty = match &object.kind {
                     ExprKind::Identifier(n) => outer.get(n.as_str()),
+                    ExprKind::SelfValue => outer.get("self"),
                     _ => None,
                 };
                 let arg_is_read_only = Self::builtin_read_only_arg_method(recv_ty, method);
-                for arg in args {
-                    let arg_mode = if arg.mut_marker || arg_is_read_only {
+                // A user method's parameter borrows unless it is `own`, as a
+                // free function's does in the `Call` arm (B-2026-10-25-13).
+                let borrow_modes =
+                    recv_ty.and_then(|t| self.user_method_borrow_positions(t, method));
+                for (i, arg) in args.iter().enumerate() {
+                    let is_borrow = borrow_modes
+                        .as_ref()
+                        .and_then(|m| m.get(i))
+                        .copied()
+                        .unwrap_or(false);
+                    let arg_mode = if arg.mut_marker || arg_is_read_only || is_borrow {
                         CaptureWalkMode::Reading
                     } else {
                         CaptureWalkMode::Consuming
@@ -616,13 +646,20 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
-                self.walk_capture_consume(
-                    scrutinee,
-                    CaptureWalkMode::Consuming,
-                    outer,
-                    shadows,
-                    reason,
-                );
+                // A `match` moves its scrutinee only where an arm binds a part
+                // that could move (core §4.6); one whose arms bind `Copy`
+                // parts, handles, `ref`s or nothing reads it (B-2026-10-25-13).
+                let scrutinee_mode = if !(self.cli_lint_overrides.strict_core
+                    || self.library_methods_from_source)
+                    || self
+                        .moving_scrutinees
+                        .contains(&SpanKey::from_span(&scrutinee.span))
+                {
+                    CaptureWalkMode::Consuming
+                } else {
+                    CaptureWalkMode::Reading
+                };
+                self.walk_capture_consume(scrutinee, scrutinee_mode, outer, shadows, reason);
                 for arm in arms {
                     let mut arm_scope: HashSet<String> = HashSet::new();
                     for n in arm.pattern.binding_names() {

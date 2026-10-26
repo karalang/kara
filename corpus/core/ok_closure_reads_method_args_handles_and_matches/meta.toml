@@ -1,0 +1,11 @@
+source = "corpus/core/ok_closure_reads_method_args_handles_and_matches"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "spec"
+rules = ["4.1", "4.6", "6.1", "9.6"]
+backends = []
+env = {}
+note = "B-2026-10-25-13: a closure that lends a capture to a user method's bare or `ref` parameter, uses a captured `shared` handle as a value, or matches a capture with arms that bind only Copy parts or `ref`s moves nothing out, so it is an `Fn` and runs twice. Expected output worked by hand from core-semantics §4.1, §4.6, §6.1 and §9.6."
