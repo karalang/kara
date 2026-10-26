@@ -3282,7 +3282,12 @@ impl super::Parser {
             return;
         }
         let start = self.current_span();
+        let method = match self.pos.checked_sub(1).map(|i| &self.tokens[i].token) {
+            Some(Token::Identifier { name, .. }) => name.clone(),
+            _ => String::new(),
+        };
         self.advance();
+        let open = self.pos;
         // One depth counter for both bracket kinds: the list is a type, so
         // `<` and `[` only ever nest properly, and `>>` closes two.
         let mut depth: i64 = 0;
@@ -3301,6 +3306,8 @@ impl super::Parser {
         }
         let last = self.tokens[self.pos - 1].span;
         let end = last.offset + last.length;
+        let ty = self.turbofish_binding_type(open, self.pos);
+        self.turbofishes.push((start, method, self.pos, ty));
         self.error_at(
             "`::<..>` after a method name is Rust's turbofish; Kāra has no call-site type \
              arguments -- remove it and annotate the binding instead \
@@ -3315,6 +3322,48 @@ impl super::Parser {
                 replacement: String::new(),
             },
         );
+    }
+
+    /// The Kāra spelling of the turbofish list whose tokens run from `open`
+    /// (its `<` or `[`) to just before `after`, when it is one type a `let`
+    /// annotation can carry: `<Vec<char>>` is `Vec[char]`. None for two or
+    /// more arguments, a `_` (an annotation takes no placeholder), an
+    /// unclosed list, or a parser without its source text.
+    fn turbofish_binding_type(&self, open: usize, after: usize) -> Option<String> {
+        let (source, base) = self.source.as_ref()?;
+        let first = self.tokens.get(open + 1)?.span;
+        let close = self.tokens.get(after.checked_sub(1)?)?;
+        if after <= open + 2
+            || !matches!(
+                close.token,
+                Token::GreaterThan | Token::RightBracket | Token::GreaterGreater
+            )
+        {
+            return None;
+        }
+        let mut depth = 0usize;
+        for t in &self.tokens[open + 1..after - 1] {
+            match t.token {
+                Token::LessThan | Token::LeftBracket | Token::LeftParen => depth += 1,
+                Token::GreaterThan | Token::RightBracket | Token::RightParen => {
+                    depth = depth.checked_sub(1)?
+                }
+                Token::GreaterGreater => depth = depth.checked_sub(2)?,
+                Token::Comma if depth == 0 => return None,
+                Token::Underscore => return None,
+                _ => {}
+            }
+        }
+        // `>>` closes the list and one inner level: keep the inner half.
+        let end = match close.token {
+            Token::GreaterGreater => close.span.offset + 1,
+            _ => close.span.offset,
+        };
+        let text = source.get(first.offset.checked_sub(*base)?..end.checked_sub(*base)?)?;
+        if text.contains(['\n', '/', '"']) {
+            return None;
+        }
+        Some(text.replace('<', "[").replace('>', "]"))
     }
 
     /// `Name[Args] { field: value }` — a struct literal carrying EXPLICIT

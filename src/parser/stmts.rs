@@ -749,6 +749,75 @@ impl super::Parser {
         })
     }
 
+    /// `let v = it.collect::<Vec<char>>();`: the turbofish's fix deletes the
+    /// list, and on its own that leaves `let v = it.collect();`, which cannot
+    /// infer the collection. When the call is the whole initializer of a
+    /// `let` binding one name with no annotation, the fix also writes the
+    /// type onto the binding, as the message asks (B-2026-10-24-13). Only for
+    /// `collect`, `sum` and `product`, whose type argument IS what they
+    /// return; for any other method, or a call inside a larger expression,
+    /// deleting the list stays the whole fix. `since` is how many turbofishes
+    /// had been seen before the initializer.
+    fn move_turbofish_to_binding(&mut self, since: usize, pattern: &Pattern, value: &Expr) {
+        let PatternKind::Binding(_) = pattern.kind else {
+            return;
+        };
+        if !matches!(value.kind, ExprKind::MethodCall { .. }) {
+            return;
+        }
+        let value_end = value.span.offset + value.span.length;
+        let mut found = None;
+        for (span, method, after, ty) in &self.turbofishes[since..] {
+            if !matches!(
+                self.tokens.get(*after).map(|t| &t.token),
+                Some(Token::LeftParen)
+            ) {
+                continue;
+            }
+            let mut depth = 0usize;
+            let mut close = None;
+            for t in &self.tokens[*after..] {
+                match t.token {
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(t.span);
+                            break;
+                        }
+                    }
+                    Token::EOF => break,
+                    _ => {}
+                }
+            }
+            if close.is_some_and(|c| c.offset + c.length == value_end) {
+                found = Some((*span, method.clone(), ty.clone()));
+            }
+        }
+        let Some((span, method, Some(ty))) = found else {
+            return;
+        };
+        if !matches!(method.as_str(), "collect" | "sum" | "product") {
+            return;
+        }
+        let key = crate::resolver::SpanKey::from_span(&span);
+        let Some(delete) = self.fix_edits.remove(&key) else {
+            return;
+        };
+        let name_end = pattern.span.offset + pattern.span.length;
+        self.fix_diffs.insert(
+            key,
+            vec![
+                crate::resolver::TextEdit {
+                    offset: name_end,
+                    length: 0,
+                    replacement: format!(": {ty}"),
+                },
+                delete,
+            ],
+        );
+    }
+
     fn parse_let_statement(&mut self) -> Option<Stmt> {
         let start = self.current_span();
         self.expect(&Token::Let)?;
@@ -820,7 +889,11 @@ impl super::Parser {
         if freeze_kw {
             self.advance();
         }
+        let turbofishes = self.turbofishes.len();
         let value = self.parse_expression()?;
+        if ty.is_none() {
+            self.move_turbofish_to_binding(turbofishes, &pattern, &value);
+        }
         if freeze_kw {
             // Recorded against the FROZEN PLACE's span, which is the span the
             // ownership pass and codegen both already key on for an alias

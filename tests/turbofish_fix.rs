@@ -1,0 +1,86 @@
+//! The turbofish fix deletes `::<T>` / `::[T]`, and in a `let` with no
+//! annotation that alone left `let v = it.collect();`, which cannot infer the
+//! collection. When the call is the whole initializer of a `let` binding one
+//! name, the fix also writes the type onto the binding, as the message asks
+//! (B-2026-10-24-13). Anywhere else deleting the list stays the whole fix.
+
+fn fixed(src: &str) -> String {
+    let result = karac::parse(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .all(|e| e.message.contains("Rust's turbofish")),
+        "only turbofish errors: {:?}",
+        result.errors
+    );
+    let mut edits: Vec<_> = result.fix_edits.values().cloned().collect();
+    edits.extend(result.fix_diffs.values().flatten().cloned());
+    edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
+    let mut out = src.to_string();
+    for e in edits {
+        out.replace_range(e.offset..e.offset + e.length, &e.replacement);
+    }
+    out
+}
+
+#[test]
+fn turbofish_in_an_unannotated_let_moves_its_type_to_the_binding() {
+    let src = "fn main() {\n\
+               let marks = \"ab\".chars().collect::<Vec<char>>();\n\
+               let mut more = \"cd\".chars().collect::[Vec[char]]();\n\
+               let total = (1..4).sum::<i64>();\n\
+               let ways = (1..4).product::[i64]();\n\
+               more.push('e');\n\
+               println(f\"{marks.len()} {more.len()} {total} {ways}\");\n\
+               }\n";
+    let out = fixed(src);
+    for want in [
+        "let marks: Vec[char] = \"ab\".chars().collect();",
+        "let mut more: Vec[char] = \"cd\".chars().collect();",
+        "let total: i64 = (1..4).sum();",
+        "let ways: i64 = (1..4).product();",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    let parsed = karac::parse(&out);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let run = karac::mir::lower::run_source(&out).unwrap_or_else(|e| panic!("build: {e}"));
+    assert_eq!(run.output, "2 3 6 6\n");
+}
+
+#[test]
+fn turbofish_outside_a_whole_let_initializer_is_only_deleted() {
+    for (src, want) in [
+        // Not the whole initializer.
+        (
+            "let n = \"ab\".chars().collect::<Vec<char>>().len();",
+            "let n = \"ab\".chars().collect().len();",
+        ),
+        // Inside an argument.
+        (
+            "let n = f(\"ab\".chars().collect::<Vec<char>>());",
+            "let n = f(\"ab\".chars().collect());",
+        ),
+        // A placeholder, which an annotation cannot carry.
+        (
+            "let w = \"ab\".chars().collect::<Vec<_>>();",
+            "let w = \"ab\".chars().collect();",
+        ),
+        // A method whose type argument is not what it returns.
+        ("let r = \"4\".parse::<i64>();", "let r = \"4\".parse();"),
+        // A destructuring pattern, and an annotated binding.
+        (
+            "let (a, b) = p.unzip::<Vec<i64>>();",
+            "let (a, b) = p.unzip();",
+        ),
+        (
+            "let v: Vec[i64] = it.collect::<Vec<i64>>();",
+            "let v: Vec[i64] = it.collect();",
+        ),
+    ] {
+        let src = format!("fn main() {{\n{src}\n}}\n");
+        let out = fixed(&src);
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+}

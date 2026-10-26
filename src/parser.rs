@@ -391,6 +391,12 @@ pub struct Parser {
     /// `format!` rewrite carries each argument into the literal) reads it
     /// here; without it, that fix is not offered.
     pub(crate) source: Option<(std::sync::Arc<str>, usize)>,
+    /// Each turbofish rejected so far (`collect::<Vec<char>>`): the
+    /// diagnostic's span, the method's name, the index of the token after
+    /// the list, and the list's Kāra spelling when it is one type a binding
+    /// annotation can carry. A `let` whose whole initializer is that call
+    /// moves the type onto its binding (B-2026-10-24-13).
+    pub(crate) turbofishes: Vec<(Span, String, usize, Option<String>)>,
 }
 
 /// The Rust macros whose name is also a Kāra function, so deleting the `!`
@@ -473,6 +479,7 @@ impl Parser {
             pattern_muts: Vec::new(),
             macro_bangs_reported: rustc_hash::FxHashSet::default(),
             source: None,
+            turbofishes: Vec::new(),
         }
     }
 
