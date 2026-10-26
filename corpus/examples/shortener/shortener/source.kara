@@ -32,14 +32,19 @@ struct Response {
     headers: Vec[(String, String)],
 }
 
+struct LinkTable {
+    targets: Map[String, String],
+    hits: Map[String, i64],
+    seq: i64,
+}
+
 // The service's state, built in `main` and shared by every request
 // (design.md § Constants: Kāra has no mutable globals). The server answers
-// its connections concurrently, so the handler is an `Fn` that reaches
-// the state through a `shared` handle (core-semantics §9.6).
-shared struct Links {
-    mut targets: Map[String, String],
-    mut hits: Map[String, i64],
-    mut seq: i64,
+// each connection in a task of its own, so the handler must be `CrossTask`
+// (core-semantics §6.3): it reaches the state through a `sync` handle, and
+// a request holds the table's lock while it reads or changes it.
+sync struct Links {
+    table: Mutex[LinkTable],
 }
 
 const CODE_ALPHABET: Str = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -87,6 +92,11 @@ fn text(status: i64, body: own String) -> Response {
 }
 
 fn handle(links: Links, req: Request) -> Response {
+    let g = links.table.lock();
+    route(mut g.value, req)
+}
+
+fn route(links: mut ref LinkTable, req: Request) -> Response {
     let path = req.path();
     let method = req.method();
 
@@ -144,6 +154,6 @@ fn handle(links: Links, req: Request) -> Response {
 
 fn main() {
     println("shortener listening on 127.0.0.1:8080");
-    let links = Links { targets: Map.new(), hits: Map.new(), seq: 0 };
+    let links = Links { table: Mutex.new(LinkTable { targets: Map.new(), hits: Map.new(), seq: 0 }) };
     let _ = Server.serve("127.0.0.1:8080", |req| handle(links, req));
 }
