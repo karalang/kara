@@ -2009,7 +2009,14 @@ impl Pipeline {
             }
             ownership.errors.sort_by_key(|e| e.span.offset);
         }
-        let clean = ownership.errors.is_empty();
+        // An error in a library body is dropped (`drop_library_diagnostics`),
+        // so it must not stop the MIR checks of the program either: one in
+        // the serde bodies a `std.log` import reaches hid every `par`
+        // conflict (B-2026-10-27-31).
+        let user = self
+            .library_len
+            .unwrap_or_else(|| crate::prelude::gated_span_base(0));
+        let clean = ownership.errors.iter().all(|e| e.span.offset >= user);
         self.ownership = Some(ownership);
         if self.strict_core && clean {
             self.mir_borrow_errors();
