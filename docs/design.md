@@ -4175,6 +4175,16 @@ trait IntoIterator {
 }
 ```
 
+**Every iterator is `IntoIterator` of itself.** The standard library has the blanket `impl[I: Iterator] IntoIterator for I`, with `Item = I.Item` and an `into_iter` that returns `self`, so an iterator chain or a range goes wherever an `IntoIterator` does (review-thread ruling 2026-10-27, as Rust does).
+
+```kara
+trait Extend[T] {
+    fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I);
+}
+```
+
+- **`Extend[T]`** adds every item of a collection, iterator chain or range, in order. `Vec`, `VecDeque`, `Set` and `SortedSet` implement `Extend[T]` for their element type, `Map` and `SortedMap` implement `Extend[(K, V)]` (a later pair replaces an earlier value, as `insert` does), and `String` implements `Extend[char]` and `Extend[String]`. A collection's `extend` method is this trait's method (review-thread ruling 2026-10-27).
+
 - **`Iterator`** produces items one at a time with `next`. Its adaptors (`map`, `filter`, `zip` and so on) are provided methods that return adapter structs. They are listed in [library/iterators.md](library/iterators.md).
 - **`Iterable`** is a collection that can be iterated by borrowing it: `iter` takes a borrowed `self`.
 - **`IntoIterator`** is for consuming iteration: `into_iter` takes `own self`. `for` never calls it.
