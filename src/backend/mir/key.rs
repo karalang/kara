@@ -36,6 +36,9 @@ pub(super) enum KeyOp {
     Total,
     /// The order of the type's own `cmp` body.
     User,
+    /// The hash a table naming this hasher (`None`: the default) gives the
+    /// key by Kāra code ([`crate::mir::interp::TableHash`]).
+    UserHash(Option<Ty>),
 }
 
 #[derive(Default)]
@@ -62,7 +65,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let p = self.ptr_ty();
         let c = self.llcx;
         let fn_ty = match op {
-            KeyOp::Hash => c.i64_type().fn_type(&[p.into()], false),
+            KeyOp::Hash | KeyOp::UserHash(_) => c.i64_type().fn_type(&[p.into()], false),
             KeyOp::Eq => c.bool_type().fn_type(&[p.into(), p.into()], false),
             KeyOp::Cmp | KeyOp::Total | KeyOp::User => {
                 c.i32_type().fn_type(&[p.into(), p.into()], false)
@@ -70,12 +73,20 @@ impl<'ctx> Cx<'ctx, '_> {
         };
         let prefix = match op {
             KeyOp::Hash => "hash",
+            KeyOp::UserHash(_) => "hash.with",
             KeyOp::Eq => "eq",
             KeyOp::Cmp => "cmp",
             KeyOp::Total => "cmp.total",
             KeyOp::User => "cmp.user",
         };
-        let name = format!("{prefix}.{}", self.tys.display(ty));
+        let name = match op {
+            KeyOp::UserHash(h) => format!(
+                "{prefix}.{}.{}",
+                h.map_or("default".into(), |h| self.tys.display(h)),
+                self.tys.display(ty)
+            ),
+            _ => format!("{prefix}.{}", self.tys.display(ty)),
+        };
         let f = self
             .module
             .add_function(&name, fn_ty, Some(Linkage::Internal));
@@ -95,6 +106,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 .ok_or("key glue has no parameter")?
                 .into_pointer_value();
             match op {
+                KeyOp::UserHash(h) => {
+                    let h = self.user_hash_value(a, ty, h)?;
+                    self.builder.build_return(Some(&h)).map_err(e)?;
+                }
                 // A key with a user `eq` is found by calling it on every
                 // entry, as the interpreter's `find_key` does: one bucket.
                 KeyOp::Hash if self.user_eq_body(ty).is_some() => {
@@ -593,6 +608,282 @@ impl<'ctx> Cx<'ctx, '_> {
         } else {
             Ok(q)
         }
+    }
+
+    /// The key at `p` of type `ty` hashed by the hasher `h` names
+    /// (B-2026-10-25-31): `h.build()` makes the state, the key is fed to
+    /// it as the interpreter's `feed_key` feeds it, and `finish` is the
+    /// digest. A native hasher's state is a `TableKeyBytes`, whose bytes it
+    /// digests. Builds in the current function.
+    fn user_hash_value(
+        &mut self,
+        p: PointerValue<'ctx>,
+        ty: Ty,
+        h: Option<Ty>,
+    ) -> R<IntValue<'ctx>> {
+        let th = self
+            .program
+            .table_hashes
+            .get(&(ty, h))
+            .cloned()
+            .ok_or_else(|| format!("no hash glue recorded for `{}`", self.tys.display(ty)))?;
+        let state = self.temp(th.state, "hasher")?;
+        if th.native.is_some() {
+            self.call_body_by_mode(&th.build, state, &[])?;
+        } else {
+            // The builder has no fields: any place stands for it.
+            let builder = self.entry_slot(1, "builder")?;
+            self.call_body_by_mode(&th.build, state, &[builder])?;
+        }
+        self.feed(&th, state, p, ty)?;
+        let digest = self.entry_slot(8, "digest")?;
+        let finish = th
+            .methods
+            .get("finish")
+            .filter(|_| th.native.is_none())
+            .cloned();
+        let owned = finish
+            .as_ref()
+            .is_some_and(|f| !self.body_param_is_ref(f, 0));
+        match (&finish, th.native) {
+            (Some(f), _) => self.call_body_by_mode(f, digest, &[state])?,
+            (None, Some(native)) => {
+                // The sink's one field is its `Vec[u8]` of bytes.
+                let (off, bytes_ty, boxed) = self
+                    .parts_of(th.state, None)?
+                    .first()
+                    .copied()
+                    .ok_or("a key sink with no bytes")?;
+                let q = self.part_ptr(state, off, boxed)?;
+                let (q, _) = self.key_place(q, bytes_ty)?;
+                let (buf, n) = self.seq_parts(q)?;
+                let pt = self.ptr_ty();
+                let i64t = self.llcx.i64_type();
+                let f = self.extern_fn(native, i64t.fn_type(&[pt.into(), i64t.into()], false));
+                let v = self
+                    .builder
+                    .build_call(f, &[buf.into(), n.into()], "")
+                    .map_err(e)?;
+                let v = v.try_as_basic_value().unwrap_basic();
+                self.store(digest, v)?;
+            }
+            (None, None) => self.store(digest, self.i64(0).into())?,
+        }
+        if !owned && !self.tys.is_copy(th.state) {
+            self.call_glue(state, th.state)?;
+        }
+        self.load_i64(digest)
+    }
+
+    /// Whether parameter `i` of body `name` is a reference held as a
+    /// pointer: a reference to text or a slice is its view itself.
+    fn body_param_is_ref(&self, name: &str, i: usize) -> bool {
+        self.program.bodies.get(name).is_some_and(|b| {
+            b.locals
+                .get(i + 1)
+                .is_some_and(|l| match self.tys.kind(l.ty) {
+                    TyKind::Ref(t) | TyKind::MutRef(t) => {
+                        !matches!(self.tys.kind(t), TyKind::Str | TyKind::Slice(_))
+                    }
+                    _ => false,
+                })
+        })
+    }
+
+    /// Call body `name` with its result at `ret` and each argument the
+    /// value at `args[i]`, passed as a reference to it where the parameter
+    /// is one.
+    fn call_body_by_mode(
+        &mut self,
+        name: &str,
+        ret: PointerValue<'ctx>,
+        args: &[PointerValue<'ctx>],
+    ) -> R<()> {
+        let func = self.function(name)?;
+        let mut passed: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![ret.into()];
+        for (i, &a) in args.iter().enumerate() {
+            if self.body_param_is_ref(name, i) {
+                let slot = self.entry_slot(8, "arg")?;
+                self.store(slot, a.into())?;
+                passed.push(slot.into());
+            } else {
+                passed.push(a.into());
+            }
+        }
+        self.builder.build_call(func, &passed, "").map_err(e)?;
+        Ok(())
+    }
+
+    /// Feed the key part at `p` of type `ty` to the hasher state at
+    /// `state`: by its own `Hash` body, else as collections.md § "What
+    /// the built-in types feed" says.
+    fn feed(
+        &mut self,
+        th: &crate::mir::interp::TableHash,
+        state: PointerValue<'ctx>,
+        p: PointerValue<'ctx>,
+        ty: Ty,
+    ) -> R<()> {
+        let (p, ty) = self.key_place(p, ty)?;
+        if let Some(body) = th.own.get(&ty).cloned() {
+            let unit = self.entry_slot(1, "unit")?;
+            return self.call_body_by_mode(&body, unit, &[p, state]);
+        }
+        let int = |bits: u32| match bits {
+            8 => crate::mir::ty::IntTy::U8,
+            16 => crate::mir::ty::IntTy::U16,
+            32 => crate::mir::ty::IntTy::U32,
+            _ => crate::mir::ty::IntTy::U64,
+        };
+        match self.tys.kind(ty) {
+            TyKind::Unit => Ok(()),
+            TyKind::Int(it) => {
+                let v = self.load(p, ty)?.into_int_value();
+                self.feed_int(th, state, it, v)
+            }
+            TyKind::Bool => {
+                let v = self.load(p, ty)?.into_int_value();
+                let v = self
+                    .builder
+                    .build_int_z_extend_or_bit_cast(v, self.llcx.i8_type(), "")
+                    .map_err(e)?;
+                self.feed_int(th, state, crate::mir::ty::IntTy::U8, v)
+            }
+            TyKind::Char => {
+                let v = self.load(p, ty)?.into_int_value();
+                self.feed_int(th, state, crate::mir::ty::IntTy::U32, v)
+            }
+            TyKind::Float(_) => {
+                let f = self.load(p, ty)?.into_float_value();
+                let bits = f.get_type().get_bit_width();
+                let it = self.int_ty(bits);
+                let raw = self
+                    .builder
+                    .build_bit_cast(f, it, "")
+                    .map_err(e)?
+                    .into_int_value();
+                self.feed_int(th, state, int(bits), raw)
+            }
+            _ if self.seq_elem(ty) == Some(None) => {
+                let (buf, n) = self.seq_parts(p)?;
+                self.feed_bytes(th, state, buf, n)?;
+                let ff = self.llcx.i8_type().const_int(0xff, false);
+                self.feed_int(th, state, crate::mir::ty::IntTy::U8, ff)
+            }
+            _ if self.seq_elem(ty).is_some() => {
+                let el = self
+                    .seq_elem(ty)
+                    .flatten()
+                    .ok_or("a sequence of no element")?;
+                let (buf, n) = self.seq_parts(p)?;
+                self.feed_elems(th, state, buf, n, el)
+            }
+            TyKind::Array(el, n) => self.feed_elems(th, state, p, self.i64(n), el),
+            TyKind::Tuple(_) => self.feed_parts(th, state, p, ty, None),
+            TyKind::Adt(_) => match layout::enum_tag(self.tys, ty) {
+                None => self.feed_parts(th, state, p, ty, None),
+                Some(_) => {
+                    let t = self.tag_at(p, ty)?;
+                    let t32 = self
+                        .builder
+                        .build_int_z_extend_or_bit_cast(t, self.llcx.i32_type(), "")
+                        .map_err(e)?;
+                    self.feed_int(th, state, crate::mir::ty::IntTy::U32, t32)?;
+                    let th = th.clone();
+                    self.each_variant(t, ty, |cx, v| cx.feed_parts(&th, state, p, ty, Some(v)))
+                }
+            },
+            _ => Err(format!(
+                "MIR to LLVM: feeding a `{}` to a hasher is not lowered yet",
+                self.tys.display(ty)
+            )),
+        }
+    }
+
+    fn feed_parts(
+        &mut self,
+        th: &crate::mir::interp::TableHash,
+        state: PointerValue<'ctx>,
+        p: PointerValue<'ctx>,
+        ty: Ty,
+        v: Option<u32>,
+    ) -> R<()> {
+        for (off, t, boxed) in self.parts_of(ty, v)? {
+            let q = self.part_ptr(p, off, boxed)?;
+            self.feed(th, state, q, t)?;
+        }
+        Ok(())
+    }
+
+    /// `write_usize` of the length `n`, then each of the `n` elements at
+    /// `buf`.
+    fn feed_elems(
+        &mut self,
+        th: &crate::mir::interp::TableHash,
+        state: PointerValue<'ctx>,
+        buf: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        el: Ty,
+    ) -> R<()> {
+        let usize_t = self.int_ty(if crate::target::active_target_is_wasm() {
+            32
+        } else {
+            64
+        });
+        let len = self
+            .builder
+            .build_int_truncate_or_bit_cast(n, usize_t, "")
+            .map_err(e)?;
+        self.feed_int(th, state, crate::mir::ty::IntTy::Usize, len)?;
+        let size = self.layout(el)?.size;
+        let th = th.clone();
+        self.count_loop(n, |cx, i| {
+            let off = cx.builder.build_int_mul(i, cx.i64(size), "").map_err(e)?;
+            let q = unsafe {
+                cx.builder
+                    .build_gep(cx.llcx.i8_type(), buf, &[off], "")
+                    .map_err(e)?
+            };
+            cx.feed(&th, state, q, el)
+        })
+    }
+
+    /// `write_<width>` of the integer `v` of type `it`, or `write` of its
+    /// native-endian bytes when the hasher has no such method.
+    fn feed_int(
+        &mut self,
+        th: &crate::mir::interp::TableHash,
+        state: PointerValue<'ctx>,
+        it: crate::mir::ty::IntTy,
+        v: IntValue<'ctx>,
+    ) -> R<()> {
+        let slot = self.entry_slot(16, "byte")?;
+        self.store(slot, v.into())?;
+        if let Some(m) = th.methods.get(&format!("write_{}", it.name())).cloned() {
+            let unit = self.entry_slot(1, "unit")?;
+            return self.call_body_by_mode(&m, unit, &[state, slot]);
+        }
+        let width = u64::from(v.get_type().get_bit_width() / 8);
+        self.feed_bytes(th, state, slot, self.i64(width))
+    }
+
+    /// `write` of the `n` bytes at `buf`, as a `Slice[u8]`.
+    fn feed_bytes(
+        &mut self,
+        th: &crate::mir::interp::TableHash,
+        state: PointerValue<'ctx>,
+        buf: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> R<()> {
+        let Some(m) = th.methods.get("write").cloned() else {
+            return Ok(());
+        };
+        // A slice is its data pointer and its length.
+        let view = self.entry_slot(16, "bytes")?;
+        self.store(view, buf.into())?;
+        self.store(self.offset(view, 8)?, n.into())?;
+        let unit = self.entry_slot(1, "unit")?;
+        self.call_body_by_mode(&m, unit, &[state, view])
     }
 
     fn hash_value(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<IntValue<'ctx>> {

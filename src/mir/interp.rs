@@ -70,6 +70,36 @@ pub struct Program {
     /// `LogCall.emit`), whose instances (`init[JsonBackend]`) a call to
     /// adds no effect.
     pub transparent: std::collections::BTreeSet<String>,
+    /// How a hashed table runs Kāra code to hash a key, by its key type
+    /// and the `BuildHasher` it names, `None` for the default
+    /// (collections.md § Hashing, B-2026-10-25-31). A table with no entry
+    /// here hashes its keys with the native glue alone.
+    pub table_hashes: BTreeMap<(Ty, Option<Ty>), TableHash>,
+}
+
+/// The bodies a table hashes a key by when that runs Kāra code: the
+/// builder's `build` makes a `Hasher`, the key's bytes are fed to it (the
+/// key's own `Hash` impl where it has one, the bytes collections.md §
+/// "What the built-in types feed" gives otherwise), and `finish` is the
+/// digest. A table of a native hasher whose key has its own `Hash` feeds
+/// a `TableKeyBytes` instead, and the native hash of the bytes it collects
+/// is the digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableHash {
+    /// `B.build`, or for a native hasher the function making the sink.
+    pub build: String,
+    /// `B.Hasher`, the state a hash runs through.
+    pub state: Ty,
+    /// The state's `Hasher` methods by name: `write`, `finish` and each
+    /// `write_<width>`.
+    pub methods: BTreeMap<String, String>,
+    /// The `hash` body of each type in the key with its own `Hash` impl,
+    /// instantiated at `state`; its parts are fed by that body alone.
+    pub own: BTreeMap<Ty, String>,
+    /// For a native hasher, the runtime function that hashes the bytes
+    /// the sink collected (`karac_hash_bytes`); `build` then takes no
+    /// builder and `finish` is not called.
+    pub native: Option<&'static str>,
 }
 
 /// An `extern "C"` function's declared parameter and return types.
@@ -7547,6 +7577,30 @@ impl<'a> Interp<'a> {
                 kv
             }
         };
+        // A keyed operation hashes its key once, through the table's
+        // user hasher when it names one (B-2026-10-25-31).
+        if !sorted
+            && matches!(
+                method,
+                "get"
+                    | "get_mut_by_view"
+                    | "contains_key"
+                    | "contains"
+                    | "index"
+                    | "index_mut"
+                    | "insert"
+                    | "remove"
+                    | "get_or"
+                    | "entry"
+                    | "entry_or_insert"
+                    | "entry_or_insert_with"
+            )
+        {
+            if let (Some(t), Some(k)) = (arg_tys.first(), args.get(1)) {
+                let k = k.clone();
+                self.run_table_hasher(*t, &k)?;
+            }
+        }
         match (method, &args[1..]) {
             ("len", []) => Ok(Value::Int(self.table_len(id)? as i128)),
             ("is_empty", []) => Ok(Value::Bool(self.table_len(id)? == 0)),
@@ -9177,6 +9231,269 @@ impl<'a> Interp<'a> {
             }));
         }
         Ok((refs, scratch))
+    }
+
+    /// Run the user `BuildHasher` of the table type `table` over `key`, as
+    /// a keyed operation on that table does (B-2026-10-25-31): build a
+    /// `Hasher`, feed it the key, and take its `finish`. The interpreter
+    /// finds keys by their values, so the digest itself goes unused; the
+    /// hasher's own code runs, as it does on the compiled backend.
+    fn run_table_hasher(&mut self, table: Ty, key: &Value) -> R<()> {
+        let mut t = table;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            t = i;
+        }
+        let k = match self.tys.kind(t) {
+            TyKind::Intrinsic(IntrinsicTy::Map(k, _) | IntrinsicTy::Set(k)) => k,
+            _ => return Ok(()),
+        };
+        let h = self.tys.hasher(t);
+        let Some(th) = self.program.table_hashes.get(&(k, h)).cloned() else {
+            return Ok(());
+        };
+        let builder = match th.native {
+            Some(_) => vec![],
+            None => vec![Value::Agg(Vec::new())],
+        };
+        let state = self.call_by_mode(&th.build, builder)?;
+        let slot = self.alloc(HeapObj {
+            count: 1,
+            weak: 0,
+            value: state,
+        });
+        let sref = Value::Ref(Addr {
+            root: Root::Heap(slot),
+            path: Path::new(),
+        });
+        self.feed_key(&th, &sref, key, k)?;
+        // A sink's bytes are the native hasher's to digest.
+        let finish = th
+            .methods
+            .get("finish")
+            .filter(|_| th.native.is_none())
+            .cloned();
+        let owned = finish.as_ref().is_some_and(|f| !self.param_is_ref(f, 0));
+        if let Some(f) = &finish {
+            let arg = if owned {
+                std::mem::replace(&mut self.live(slot)?.value, Value::Uninit)
+            } else {
+                sref.clone()
+            };
+            let digest = self.call_by_mode(f, vec![arg])?;
+            let dt = self.program.bodies[f].return_ty();
+            self.drop_value(digest, dt)?;
+        }
+        if !owned {
+            let st = std::mem::replace(&mut self.live(slot)?.value, Value::Uninit);
+            self.drop_value(st, th.state)?;
+        }
+        self.free_slot(slot);
+        Ok(())
+    }
+
+    /// Whether parameter `i` of body `name` is a reference.
+    fn param_is_ref(&self, name: &str, i: usize) -> bool {
+        self.program.bodies.get(name).is_some_and(|b| {
+            b.locals
+                .get(i + 1)
+                .is_some_and(|l| matches!(self.tys.kind(l.ty), TyKind::Ref(_) | TyKind::MutRef(_)))
+        })
+    }
+
+    /// Call body `name` with `args`, each passed by reference where its
+    /// parameter is one and the value is not already.
+    fn call_by_mode(&mut self, name: &str, args: Vec<Value>) -> R<Value> {
+        let mut scratch = Vec::new();
+        let mut passed = Vec::with_capacity(args.len());
+        for (i, v) in args.into_iter().enumerate() {
+            if self.param_is_ref(name, i) && !matches!(v, Value::Ref(_)) {
+                let slot = self.alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: v,
+                });
+                scratch.push(slot);
+                passed.push(Value::Ref(Addr {
+                    root: Root::Heap(slot),
+                    path: Path::new(),
+                }));
+            } else {
+                passed.push(v);
+            }
+        }
+        let r = self.call(name, passed);
+        // The copies share the values' allocations, so they go undropped.
+        for slot in scratch {
+            self.free_slot(slot);
+        }
+        r
+    }
+
+    /// Feed `v`, a key part of type `t`, to the hasher state at `sref`:
+    /// through its own `Hash` body where it has one, else the bytes
+    /// collections.md § "What the built-in types feed" gives.
+    fn feed_key(&mut self, th: &TableHash, sref: &Value, v: &Value, t: Ty) -> R<()> {
+        if let Value::Ref(addr) = v {
+            let inner = self.slot(addr)?;
+            let t = match self.tys.kind(t) {
+                TyKind::Ref(i) | TyKind::MutRef(i) => i,
+                _ => t,
+            };
+            return self.feed_key(th, sref, &inner, t);
+        }
+        if let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            return self.feed_key(th, sref, v, i);
+        }
+        if let Some(body) = th.own.get(&t).cloned() {
+            let unit = self.call_by_mode(&body, vec![v.clone(), sref.clone()])?;
+            drop(unit);
+            return Ok(());
+        }
+        match (self.tys.kind(t), v) {
+            (TyKind::Int(it), Value::Int(n)) => self.feed_int(th, sref, it, *n),
+            (TyKind::Bool, Value::Bool(b)) => self.feed_int(th, sref, IntTy::U8, i128::from(*b)),
+            (TyKind::Char, Value::Char(c)) => {
+                self.feed_int(th, sref, IntTy::U32, i128::from(u32::from(*c)))
+            }
+            (TyKind::Float(ft), Value::Float(x)) => match ft {
+                crate::mir::ty::FloatTy::F64 => {
+                    self.feed_int(th, sref, IntTy::U64, i128::from(x.to_bits()))
+                }
+                crate::mir::ty::FloatTy::F32 => {
+                    self.feed_int(th, sref, IntTy::U32, i128::from((*x as f32).to_bits()))
+                }
+                crate::mir::ty::FloatTy::F16 => {
+                    let bits = crate::mir::ty::f32_to_f16_bits(*x as f32);
+                    self.feed_int(th, sref, IntTy::U16, i128::from(bits))
+                }
+                crate::mir::ty::FloatTy::BF16 => {
+                    let bits = (*x as f32).to_bits() >> 16;
+                    self.feed_int(th, sref, IntTy::U16, i128::from(bits))
+                }
+            },
+            // A `String` table is searched by a `Str` view as well.
+            (TyKind::Str | TyKind::Intrinsic(IntrinsicTy::String), Value::Str(text)) => {
+                let bytes = text.as_bytes().to_vec();
+                self.feed_bytes(th, sref, &bytes)?;
+                self.feed_int(th, sref, IntTy::U8, 0xff)
+            }
+            (TyKind::Str | TyKind::Intrinsic(IntrinsicTy::String), Value::Box(id)) => {
+                let Value::Str(text) = self.live(*id)?.value.clone() else {
+                    return err("a String key that holds no text");
+                };
+                self.feed_bytes(th, sref, text.as_bytes())?;
+                self.feed_int(th, sref, IntTy::U8, 0xff)
+            }
+            // A sequence key, or a view searching one (lookups by view).
+            (
+                TyKind::Intrinsic(IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e))
+                | TyKind::Array(e, _)
+                | TyKind::Slice(e),
+                _,
+            ) => {
+                let elems = match v {
+                    Value::Box(id) if self.deque_front.contains_key(id) => {
+                        let off = self.deque_off(*id);
+                        self.vec_elems(*id)?[off..].to_vec()
+                    }
+                    Value::Box(id) => self.vec_elems(*id)?.clone(),
+                    Value::Agg(fs) => fs.clone(),
+                    Value::Slice { base, lo, len } => {
+                        let mut fs = Vec::with_capacity(*len as usize);
+                        for i in *lo..*lo + *len {
+                            fs.push(self.slot(&base.child(i))?);
+                        }
+                        fs
+                    }
+                    _ => return Ok(()),
+                };
+                self.feed_seq(th, sref, &elems, e)
+            }
+            (TyKind::Tuple(ts), Value::Agg(fs)) => {
+                for (f, ft) in fs.clone().iter().zip(ts) {
+                    self.feed_key(th, sref, f, ft)?;
+                }
+                Ok(())
+            }
+            (TyKind::Adt(_) | TyKind::Shared(_), Value::Shared(id)) => {
+                let inner = self.live(*id)?.value.clone();
+                self.feed_key(th, sref, &inner, t)
+            }
+            (TyKind::Adt(_) | TyKind::Shared(_), Value::Agg(fs)) => {
+                for (i, f) in fs.clone().iter().enumerate() {
+                    if let Some(ft) = self.tys.field_ty(t, None, i as u32) {
+                        self.feed_key(th, sref, f, ft)?;
+                    }
+                }
+                Ok(())
+            }
+            (TyKind::Adt(_) | TyKind::Shared(_), Value::Variant(k, fs)) => {
+                self.feed_int(th, sref, IntTy::U32, i128::from(*k))?;
+                for (i, f) in fs.clone().iter().enumerate() {
+                    if let Some(ft) = self.tys.field_ty(t, Some(*k), i as u32) {
+                        self.feed_key(th, sref, f, ft)?;
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// `write_usize` of the length, then each element.
+    fn feed_seq(&mut self, th: &TableHash, sref: &Value, elems: &[Value], e: Ty) -> R<()> {
+        self.feed_int(th, sref, IntTy::Usize, elems.len() as i128)?;
+        for x in elems {
+            self.feed_key(th, sref, x, e)?;
+        }
+        Ok(())
+    }
+
+    /// `write_<width>` of `n`, an integer of type `it`; its native-endian
+    /// bytes through `write` when the hasher has no such method (and for
+    /// the 128-bit widths, which have none).
+    fn feed_int(&mut self, th: &TableHash, sref: &Value, it: IntTy, n: i128) -> R<()> {
+        if let Some(m) = th.methods.get(&format!("write_{}", it.name())).cloned() {
+            self.call_by_mode(&m, vec![sref.clone(), Value::Int(n)])?;
+            return Ok(());
+        }
+        let width = match it {
+            IntTy::I8 | IntTy::U8 => 1,
+            IntTy::I16 | IntTy::U16 => 2,
+            IntTy::I32 | IntTy::U32 => 4,
+            IntTy::I64 | IntTy::U64 | IntTy::Isize | IntTy::Usize => 8,
+            IntTy::I128 | IntTy::U128 => 16,
+        };
+        let bytes = n.to_ne_bytes();
+        let bytes = if cfg!(target_endian = "little") {
+            bytes[..width].to_vec()
+        } else {
+            bytes[16 - width..].to_vec()
+        };
+        self.feed_bytes(th, sref, &bytes)
+    }
+
+    /// `write` of `bytes`, as a `Slice[u8]` over a scratch array.
+    fn feed_bytes(&mut self, th: &TableHash, sref: &Value, bytes: &[u8]) -> R<()> {
+        let Some(m) = th.methods.get("write").cloned() else {
+            return Ok(());
+        };
+        let slot = self.alloc(HeapObj {
+            count: 1,
+            weak: 0,
+            value: Value::Agg(bytes.iter().map(|&b| Value::Int(i128::from(b))).collect()),
+        });
+        let view = Value::Slice {
+            base: Box::new(Addr {
+                root: Root::Heap(slot),
+                path: Path::new(),
+            }),
+            lo: 0,
+            len: bytes.len() as u64,
+        };
+        let r = self.call_by_mode(&m, vec![sref.clone(), view]);
+        self.free_slot(slot);
+        r.map(drop)
     }
 
     /// `a == b` by the user `eq` body `name`, which takes both by

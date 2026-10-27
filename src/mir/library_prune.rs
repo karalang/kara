@@ -44,6 +44,9 @@ const ALWAYS_KEPT: &[&str] = &[
     "min",
     "max",
     "hash",
+    // A table's hash glue calls its hasher's (B-2026-10-25-31).
+    "write",
+    "finish",
     "clone",
     "cloned",
     "drop",

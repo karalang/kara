@@ -408,6 +408,8 @@ fn lower_program_inner<'a>(
         literal_queue: Vec::new(),
         eq_queue: Vec::new(),
         eq_queued: FxHashSet::default(),
+        hash_scanned: FxHashSet::default(),
+        hash_noted: FxHashSet::default(),
         self_tys: FxHashMap::default(),
         queue: Vec::new(),
         queued: FxHashSet::default(),
@@ -542,7 +544,7 @@ fn lower_program_inner<'a>(
             lcx.lower_literal_static(e, t, &name);
         } else if let Some((t, name)) = lcx.eq_queue.pop() {
             lcx.lower_derived_eq(t, &name);
-        } else {
+        } else if !lcx.note_table_hashes() {
             break;
         }
     }
@@ -568,6 +570,24 @@ fn lower_program_inner<'a>(
         frozen_locals: lcx.frozen_locals,
     }
 }
+
+/// The `Hasher` methods a table's hash glue calls on a user hasher's
+/// state: `write`, `finish`, and the `write_<width>` the built-in types
+/// feed through (collections.md § "What the built-in types feed").
+const HASHER_METHODS: [&str; 12] = [
+    "write",
+    "finish",
+    "write_u8",
+    "write_u16",
+    "write_u32",
+    "write_u64",
+    "write_usize",
+    "write_i8",
+    "write_i16",
+    "write_i32",
+    "write_i64",
+    "write_isize",
+];
 
 /// Whether a method's result, of declared type `t`, can hold a reference
 /// only through a type parameter of its impl (`params`) or an associated type
@@ -948,6 +968,11 @@ struct Lcx<'a> {
     /// itself (`shared struct Node { next: Option[Node] }`).
     eq_queue: Vec<(Ty, String)>,
     eq_queued: FxHashSet<Ty>,
+    /// The bodies [`Lcx::note_table_hashes`] has looked at.
+    hash_scanned: FxHashSet<String>,
+    /// The tables, by key type and hasher, [`Lcx::note_table_hash`] has
+    /// looked at.
+    hash_noted: FxHashSet<(Ty, Option<Ty>)>,
     /// The receiver type a method of a non-generic impl was called with:
     /// its `self` type when the impl names a concrete instance of a
     /// generic type (`impl Joiner for Vec[String]`).
@@ -1622,6 +1647,146 @@ impl<'a> Lcx<'a> {
             self.queue.push((def, args, name.clone()));
         }
         name
+    }
+
+    /// Method `method` of the first `impl <tr> for t`, with its instance
+    /// arguments (the impl's, read off `t`'s).
+    fn trait_method_of(&self, t: Ty, tr: &str, method: &str) -> Option<(DefId, Vec<Ty>)> {
+        let (adt, args) = self.tys.tcx().adt_of(t)?;
+        let mut path = self.defs.table.get(adt.def).path.segments.clone();
+        path.push(format!("impl {tr}#0"));
+        path.push(method.to_string());
+        let d = self.defs.table.lookup(&DefPath::new(path))?;
+        let d = self.lowered_def(d)?;
+        let item = self.fns.get(&d)?;
+        Some((d, item.impl_args(&args)?))
+    }
+
+    /// Record and queue what each hashed table the bodies lowered so far
+    /// use needs to hash its keys through a user `BuildHasher`
+    /// ([`interp::TableHash`]). Whether anything new was queued.
+    fn note_table_hashes(&mut self) -> bool {
+        let fresh: Vec<String> = self
+            .program
+            .bodies
+            .keys()
+            .filter(|n| !self.hash_scanned.contains(*n))
+            .cloned()
+            .collect();
+        let before = self.queue.len();
+        for name in fresh {
+            self.hash_scanned.insert(name.clone());
+            let tys: Vec<Ty> = self.program.bodies[&name]
+                .locals
+                .iter()
+                .map(|l| l.ty)
+                .collect();
+            for t in tys {
+                self.note_table_hash(t);
+            }
+        }
+        self.queue.len() > before
+    }
+
+    /// Record how a table of type `t` hashes its keys when that runs Kāra
+    /// code: through a user `BuildHasher` it names, or, for a native
+    /// hasher, through the key's own `Hash` impls feeding a `TableKeyBytes`
+    /// (collections.md § Hashing).
+    fn note_table_hash(&mut self, mut t: Ty) {
+        while let HK::Ref(i) | HK::MutRef(i) = self.tys.tcx().kind(t) {
+            t = i;
+        }
+        let HK::Intrinsic { kind, args } = self.tys.tcx().kind(t) else {
+            return;
+        };
+        if !matches!(kind, IntrinsicKind::Map | IntrinsicKind::Set) {
+            return;
+        }
+        let Some(&key) = self.tys.tcx().list(args).first() else {
+            return;
+        };
+        let h = self.tys.hasher(t);
+        if !self.hash_noted.insert((key, h)) {
+            return;
+        }
+        let native = match h {
+            None => Some("karac_hash_bytes"),
+            Some(h) if self.tys.display(h) == "FxBuildHasher" => Some("karac_hash_bytes_fx"),
+            Some(_) => None,
+        };
+        let (build_def, bargs) = match h {
+            Some(h) if native.is_none() => match self.trait_method_of(h, "BuildHasher", "build") {
+                Some(b) => b,
+                None => return,
+            },
+            _ => match self
+                .defs
+                .lookup(0, "table_key_bytes")
+                .and_then(|d| self.lowered_def(d))
+            {
+                Some(d) => (d, Vec::new()),
+                None => return,
+            },
+        };
+        let Ok(state) = self.fn_return(build_def, &bargs) else {
+            return;
+        };
+        // The key's parts with their own `Hash`, which feed themselves.
+        let mut own = std::collections::BTreeMap::new();
+        let mut seen = FxHashSet::default();
+        let mut work = vec![key];
+        while let Some(t) = work.pop() {
+            if !seen.insert(t) {
+                continue;
+            }
+            let tcx = self.tys.tcx();
+            match tcx.kind(t) {
+                HK::Ref(x) | HK::MutRef(x) => work.push(x),
+                HK::Tuple(l) => work.extend(tcx.list(l)),
+                HK::Array { elem, .. } | HK::Slice { elem, .. } => work.push(elem),
+                HK::Intrinsic { args, .. } => work.extend(tcx.list(args)),
+                HK::Adt { args, .. } | HK::Shared { args, .. } => {
+                    if let Some((d, mut a)) = self.trait_method_of(t, "Hash", "hash") {
+                        a.push(state);
+                        own.insert(t, self.instance(d, a));
+                        continue;
+                    }
+                    let tcx = self.tys.tcx();
+                    work.extend(tcx.list(args));
+                    if let Some((adt, _)) = tcx.adt_of(t) {
+                        for (k, v) in adt.variants.iter().enumerate() {
+                            let variant = adt.is_enum.then_some(k as u32);
+                            for i in 0..v.fields.len() {
+                                work.extend(tcx.field_ty(t, variant, i as u32));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A native hasher over a key with no `Hash` of its own runs no
+        // Kāra code: its glue hashes the key's parts itself.
+        if native.is_some() && own.is_empty() {
+            return;
+        }
+        let build = self.instance(build_def, bargs);
+        let mut methods = std::collections::BTreeMap::new();
+        for m in HASHER_METHODS {
+            if let Some((d, a)) = self.trait_method_of(state, "Hasher", m) {
+                methods.insert(m.to_string(), self.instance(d, a));
+            }
+        }
+        self.program.table_hashes.insert(
+            (key, h),
+            interp::TableHash {
+                build,
+                state,
+                methods,
+                own,
+                native,
+            },
+        );
     }
 
     /// Queue the instance `def[args]` if it is new, and return its name.

@@ -895,6 +895,10 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         "source/comptime.kara",
         include_str!("../runtime/stdlib/source/comptime.kara"),
     ),
+    (
+        "source/table_hash.kara",
+        include_str!("../runtime/stdlib/source/table_hash.kara"),
+    ),
 ];
 
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to

@@ -1,0 +1,26 @@
+// The sink a `Map` / `Set` of a native hasher hands a key's own `impl Hash`
+// (collections.md § Hashing, B-2026-10-25-31).
+//
+// The MIR pipeline appends this file to the program. A table of the default
+// hasher, or of `FxBuildHasher`, whose key has a part with its own `Hash`
+// runs that impl on one of these, as a user `BuildHasher`'s state would be,
+// then digests the bytes it collected with the native hash. The legacy
+// backends do not read it.
+
+struct TableKeyBytes { mut bytes: Vec[u8] }
+
+impl Hasher for TableKeyBytes {
+    fn write(mut ref self, bytes: ref Slice[u8]) {
+        let mut i = 0;
+        while i < bytes.len() {
+            self.bytes.push(bytes[i]);
+            i = i + 1;
+        }
+    }
+    fn finish(ref self) -> u64 { 0 }
+}
+
+/// An empty sink, made where a user hasher's `build` is called.
+fn table_key_bytes() -> TableKeyBytes {
+    return TableKeyBytes { bytes: [] };
+}

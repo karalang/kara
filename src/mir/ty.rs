@@ -474,13 +474,16 @@ impl TyInterner {
     }
 
     /// The hasher the `Map` / `Set` type `t` names, `None` when it names
-    /// none and so has the default (B-2026-10-25-31).
+    /// none, or the default by name, and so has the default
+    /// (B-2026-10-25-31).
     pub fn hasher(&self, t: Ty) -> Option<Ty> {
         let SharedKind::Intrinsic { kind, args } = self.tcx.kind(t) else {
             return None;
         };
         match (kind, self.tcx.list(args).as_slice()) {
-            (IntrinsicKind::Map, [_, _, h]) | (IntrinsicKind::Set, [_, h]) => Some(*h),
+            (IntrinsicKind::Map, [_, _, h]) | (IntrinsicKind::Set, [_, h]) => {
+                Some(*h).filter(|&h| self.display(h) != "SipHash13BuildHasher")
+            }
             _ => None,
         }
     }

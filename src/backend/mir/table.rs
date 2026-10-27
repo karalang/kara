@@ -25,6 +25,10 @@ pub(super) struct Table {
     pub sorted: bool,
     /// The entry type: `(K, V)` for a map, `K` for a set.
     pub entry: Ty,
+    /// The hasher it names, when its keys are hashed by Kāra code the
+    /// program records (`Some(None)` for the default hasher over a key
+    /// with its own `Hash`, B-2026-10-25-31).
+    pub hasher: Option<Option<Ty>>,
 }
 
 impl<'ctx> Cx<'ctx, '_> {
@@ -44,11 +48,14 @@ impl<'ctx> Cx<'ctx, '_> {
             Some(v) => self.tys.intern(TyKind::Tuple(vec![key, v])),
             None => key,
         };
+        let hasher = Some(self.tys.hasher(ty))
+            .filter(|&h| self.program.table_hashes.contains_key(&(key, h)));
         Some(Table {
             key,
             val,
             sorted,
             entry,
+            hasher,
         })
     }
 
@@ -87,6 +94,17 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
     }
 
+    /// The hash of the key at `p` in the table `t`: by glue that runs the
+    /// program's code when its hashing does, called as any function is.
+    fn table_hash(&mut self, p: PointerValue<'ctx>, t: Table) -> R<IntValue<'ctx>> {
+        let Some(h) = t.hasher else {
+            return self.hash_call(p, t.key);
+        };
+        let f = self.key_fn(KeyOp::UserHash(h), t.key);
+        let v = self.builder.build_call(f, &[p.into()], "").map_err(e)?;
+        Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
+    }
+
     /// The `hash`, `eq` and `cmp` glue pointers a table of `t` searches
     /// with: `cmp` alone for a sorted one, `hash` and `eq` otherwise.
     fn glue_ptrs(&mut self, t: Table) -> [PointerValue<'ctx>; 3] {
@@ -95,8 +113,12 @@ impl<'ctx> Cx<'ctx, '_> {
         if t.sorted {
             [null, null, ptr(self.key_fn(self.own_order(t.key), t.key))]
         } else {
+            let hash = match t.hasher {
+                Some(h) => KeyOp::UserHash(h),
+                None => KeyOp::Hash,
+            };
             [
-                ptr(self.key_fn(KeyOp::Hash, t.key)),
+                ptr(self.key_fn(hash, t.key)),
                 ptr(self.key_fn(KeyOp::Eq, t.key)),
                 null,
             ]
@@ -181,7 +203,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 None,
             )
         } else {
-            let hv = self.hash_call(key, t.key)?;
+            let hv = self.table_hash(key, t)?;
             if self.probe_in_line(t.key) {
                 return Ok((self.probe(h, key, hv, t)?, Some(hv)));
             }
@@ -197,7 +219,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let call = self.builder.build_call(f, &args, "").map_err(e)?;
         // A search with glue that runs no user code only reads, so the
         // key's slot and the table's handle are not reloaded after it.
-        if self.plain_key(t.key) {
+        if self.plain_key(t.key) && t.hasher.is_none() {
             self.read_only(call);
         }
         let at = call
@@ -351,7 +373,7 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         let hv = match hv {
             Some(hv) => hv,
-            None => self.hash_call(entry, t.key)?,
+            None => self.table_hash(entry, t)?,
         };
         self.mrt_ptr(
             "map_insert_hv",
