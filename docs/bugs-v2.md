@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | false-positive | 49 |
 | diagnostics | 39 |
-| missing-feature | 38 |
+| missing-feature | 39 |
 | soundness | 20 |
 | perf | 13 |
 | miscompile | 12 |
@@ -74,12 +74,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 81 |
-| mir | 41 |
+| mir | 42 |
 | codegen | 22 |
 | interp | 21 |
+| mir-llvm | 19 |
 | ownership | 18 |
 | cli | 18 |
-| mir-llvm | 18 |
 | runtime | 11 |
 | parser | 8 |
 | resolver | 3 |
@@ -99,13 +99,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-6 | 2026-10-24 | mir-llvm+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 79 per word hash (93 before db4018cfb6), against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
 | B-2026-10-26-17 | 2026-10-26 | mir+mir-llvm | medium | After B-2026-10-26-14's fixes, at 9030678cd0 `KARAC_AUTO_PAR=1` builds still run under the M4b floor of 0.9x their own seq build: on one worker, the default, kata 28 brute_force 0.26x, 191 popcount 0.36x, 4 binary_search_partition 0.56x, 9 palindrome 0.70x and 8 atoi 0.75x (11 programs under 0.9x in all) (CORRECTED: hotel_audit, under on 4 workers in the first three timings, ran 0.97 / 0.98 / 0.92 in three more 21-run timings, inside the swing of a no-site control; no 4-worker app is reliably under at this box's resolution) (Thread B: hotel_audit's two small tasked loops are not the cause either, re-timed in three 31-run passes; the one-worker katas pay for the task form itself, see detail) | — |
 | B-2026-10-27-21 | 2026-10-27 | typecheck | low | `std.log.init` accepts a backend that cannot cross tasks: docs/library/log.md requires `B` to be `CrossTask` (core-semantics §6.3), since `emit` runs on whichever task logs, but `init[B: Backend]` checks nothing, so a backend holding a `shared` value is installed and its `emit` runs from every task. | — |
-| B-2026-10-27-22 | 2026-10-27 | mir+mir-llvm | medium | Auto-par is not yet invisible to logging (docs/library/log.md, ruled 2026-10-27): the interim keeps every statement and loop that logs out of auto-par, so adding a log line can change what runs in parallel. Target: an auto-par task's records carry the enclosing task's `task_id` and span and reach the backend in sequential order, held per auto-par task and released in statement order at the join. | — |
 | B-2026-10-27-23 | 2026-10-27 | resolver | low | Renaming a type imported from a gated library module (`import std.encoding.{DecodeError as DE}`, `import std.log.{Level as L}`) makes a second, distinct type: `let r: Result[Vec[u8], DE] = hex_decode("zz")` fails with "expected 'Result[Vec[u8], DE]', found 'Result[Vec[u8], DecodeError]'". | — |
 | B-2026-10-27-25 | 2026-10-27 | typecheck | low | The `K: Hash + Eq` bound on a table's key is checked only at a Map / Set method call and passes a type parameter, a type-only use and a generic ADT's arguments, where collections.md makes it a bound of every table (default hasher included); the target is a refusal naming the missing impl, with a `karac fix` that adds `#[derive(Hash)]` (owner Thread A) | — |
 | B-2026-10-27-26 | 2026-10-27 | interp+mir-llvm | medium | A table key whose PART has a hand-written PartialEq is compared structurally, so `Set[(Name, i64)]` with a case-insensitive `impl PartialEq for Name` misses `(Name { text: "BO" }, 3)` after inserting `(Name { text: "Bo" }, 3)` while `==` on the same tuples says true (both backends) | — |
 | B-2026-10-27-27 | 2026-10-27 | typecheck | medium | A variant pattern spelled through the WRONG enum is accepted and matches the scrutinee's own variant of that name: with `enum Mode { Slow, P(i64) }` and `enum Other { Slow, P(i64) }`, `match Mode.Slow { Other.Slow => .. }` takes the arm, and `Other.P(x)` against `Mode.P(4)` binds x = 4. Only the last segment of a dotted variant path is read. | — |
 | B-2026-10-27-28 | 2026-10-27 | typecheck+mir | low | The standard collections are not `Iterable`: `fn total[C: Iterable[Item = ref i64]](c: C)` refuses `total(vec![1, 2, 3])` with "trait bound `C: Iterable` is not satisfied; `Vec[i64]` does not implement `Iterable`", though design.md § `Iterator` and `Iterable` and library/collections.md say every collection is | — |
 | B-2026-10-27-29 | 2026-10-27 | typecheck+mir | medium | A program function named like a builtin the library calls (`fn panic(s: Str) -> i64 { 7 }`) replaces it inside library bodies: `let o: Option[i64] = None; println(o.expect("boom"))` prints 7 instead of panicking, on `karac run --interp`. | — |
+| B-2026-10-27-30 | 2026-10-27 | mir+mir-llvm | low | Auto-par and std.log, remainder of B-2026-10-27-22: a record an earlier auto-par statement would log can be missing when a later one panics first. Target (review-thread ruling 2026-10-27): before a panic ends the program, the runtime drains every held record in statement order to the backend, then reports the panic | — |
 
 ### Relocated
 
@@ -299,6 +299,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-18 | typecheck | medium | An associated-type projection on a type parameter (`T.Output`) is keyed by the parameter, not by the trait that declares it, so under `T: Add[Output… | 5fc21d28ff |
 | B-2026-10-27-19 | typecheck | medium | A rigid type parameter is a wildcard in `types_compatible`, so `fn f[T](x: own T) -> T { 5 }` passes check and only the MIR validator refuses it ("in… | d7caf55aa6 |
 | B-2026-10-27-20 | typecheck+mir+runtime | medium | All of `std.log` (docs/library/log.md, fcb3ddf9c) is specified but not implemented: the four level functions with open `key: value` fields, `Level`,… | 0b968aee09 |
+| B-2026-10-27-22 | mir+mir-llvm | medium | Auto-par is not yet invisible to logging (docs/library/log.md, ruled 2026-10-27): the interim keeps every statement and loop that logs out of auto-pa… | 4fc726165c |
 | B-2026-10-27-24 | parser | low | A match pattern cannot name a variant through a module binding: `import std.log;` then `match record.level { log.Level.Debug => . | ef19081ebc |
 
 </details>
