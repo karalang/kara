@@ -2,7 +2,8 @@
 //! A call through a function value whose type declares no effects has every
 //! effect (core-semantics §12), so two such branches conflict, and the
 //! refusal says which call it could not see through instead of a bare
-//! `unknown` and `unknown`.
+//! `unknown` and `unknown`. One whose type declares its effects has exactly
+//! those, so two calls that only read run together.
 
 use std::process::Command;
 
@@ -50,10 +51,38 @@ fn mir_par_stored_callback_without_a_clause_names_the_call() {
 }
 
 #[test]
-fn mir_par_stored_callback_with_a_clause_is_refused_for_now() {
-    // PREDICTS B-2026-10-27-2: the slot declares only `reads(Clock)`, and
-    // two reads do not conflict, so the fix lets this `par` check.
+fn mir_par_stored_callback_with_a_clause_has_its_effects() {
+    // The slot declares only `reads(Clock)`, and two reads do not conflict.
     let src = SRC.replace("Fn(i64) -> i64 }", "Fn(i64) -> i64 with reads(Clock) }");
-    let err = check("clause", &src);
+    assert_eq!(check("clause", &src), "");
+    let r = karac::mir::lower::run_source(&src).unwrap_or_else(|e| panic!("build: {e}"));
+    assert_eq!(r.output, "25\n", "stderr: {}", r.stderr);
+    // Two writes of the declared resource keep their order.
+    let src = SRC.replace("Fn(i64) -> i64 }", "Fn(i64) -> i64 with writes(Stdout) }");
+    let err = check("writes", &src);
+    assert!(
+        err.contains("conflict: `writes(Stdout)` and `writes(Stdout)`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn mir_par_stored_callback_captured_from_a_let_is_refused_for_now() {
+    let src = r#"
+fn sq(x: i64) -> i64 { x * x }
+
+fn pick(n: i64) -> Fn(i64) -> i64 with reads(Clock) {
+    sq
+}
+
+fn main() {
+    let f: Fn(i64) -> i64 with reads(Clock) = pick(0);
+    let (a, b) = par { f(3), f(4) };
+    println(f"{a + b}");
+}
+"#;
+    // PREDICTS B-2026-10-27-8: inside a `par` branch `f` is a capture, and
+    // the call through it does not carry the binding's clause yet.
+    let err = check("let", src);
     assert!(err.contains("`unknown (a call through a value)`"), "{err}");
 }

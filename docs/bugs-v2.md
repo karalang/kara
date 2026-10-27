@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 46 |
+| false-positive | 47 |
 | diagnostics | 38 |
 | missing-feature | 32 |
 | perf | 13 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 69 |
-| mir | 33 |
+| mir | 34 |
 | codegen | 22 |
 | interp | 20 |
 | cli | 18 |
@@ -109,6 +109,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-2 | 2026-10-27 | mir | low | A `par` over calls through a stored callback ignores the callback type's effect clause: `struct Job { run: Fn(i64) -> i64 with reads(Clock) }` and `par { (j.run)(3), (j.run)(4) }` is refused as `unknown` and `unknown`, where core-semantics §12 says a call through an escaping function value has the effects its type declares | — |
 | B-2026-10-27-4 | 2026-10-27 | cli | low | The v2 build refuses `--enable-hot-swap` on a default-profile project and a cross `--target` / `[build].target` by name, where legacy honoured both; 4 cli tests stay ignored | — |
 | B-2026-10-27-7 | 2026-10-27 | typecheck | low | A `let p: P = Json.deserialize(s).map_err(f)?` (or `.context(msg)?`) is refused with "cannot infer type parameter 'T' of `Result[T, DeserializeError]`": the annotation on the `let` does not reach the receiver of a method whose `Ok` type is the receiver's, through the `?` | — |
+| B-2026-10-27-8 | 2026-10-27 | mir | low | A `par` branch that calls a captured, annotated `let` (`let f: Fn(i64) -> i64 with reads(Clock) = ..; par { f(3), f(4) }`) is still refused as `unknown (a call through a value)`: the declared clause reaches a call through a field and through a let in its own body, not through a capture | — |
 
 ### Relocated
 

@@ -1939,10 +1939,16 @@ impl<'p> Analysis<'p> {
                 Some(Key::Param(p, path)) if path.is_empty() => {
                     eff.calls.insert(p);
                 }
-                _ => eff.union(EffectSet::unknown(format!(
-                    "{}: a call through a value",
-                    body.instance.name
-                ))),
+                _ => match func
+                    .place()
+                    .and_then(|p| declared_fn_value_effects(body, p))
+                {
+                    Some(declared) => eff.union(declared),
+                    None => eff.union(EffectSet::unknown(format!(
+                        "{}: a call through a value",
+                        body.instance.name
+                    ))),
+                },
             }
             return;
         };
@@ -2145,10 +2151,15 @@ impl<'p> Analysis<'p> {
                 calls: BTreeSet::from([p]),
                 ..EffectSet::default()
             },
-            _ => EffectSet::unknown(format!(
-                "{}: a function value that cannot be resolved",
-                body.instance.name
-            )),
+            _ => arg
+                .place()
+                .and_then(|p| declared_fn_value_effects(body, p))
+                .unwrap_or_else(|| {
+                    EffectSet::unknown(format!(
+                        "{}: a function value that cannot be resolved",
+                        body.instance.name
+                    ))
+                }),
         }
     }
 
@@ -2196,6 +2207,45 @@ impl<'p> Analysis<'p> {
 /// into its parameter (`f(p.next)`) still reaches a fixpoint. A shorter path
 /// names an enclosing value, which overlaps more: sound.
 const MAX_PATH: usize = 4;
+
+/// The effects of a call through the local `p` names, when its function
+/// type declares them (B-2026-10-27-2): a call through an escaping function
+/// value has the effects its type declares (core §12). The builder records
+/// the clause in [`Body::fn_value_effects`]; no entry means no clause, which
+/// is every effect. A declared resource is a class with no value to key it,
+/// so it overlaps every value of the class, `Network` and `FileSystem` being
+/// capabilities (core §12 item 5). `panics` and `allocates(Heap)` are
+/// default-permitted and a clause need not write them, so they are always
+/// charged: neither conflicts, and auto-par must see the panic.
+fn declared_fn_value_effects(body: &Body, p: &Place) -> Option<EffectSet> {
+    if !p.projection.is_empty() {
+        return None;
+    }
+    let (_, declared) = body.fn_value_effects.iter().find(|(l, _)| *l == p.local)?;
+    let mut out = EffectSet::default();
+    out.add(Effect::new(Verb::Panics, "", Key::Any));
+    out.add(Effect::new(Verb::Allocates, "Heap", Key::Any));
+    for d in declared {
+        let verb = match d.verb.as_str() {
+            "reads" => Verb::Reads,
+            "writes" => Verb::Writes,
+            "sends" => Verb::Sends,
+            "receives" => Verb::Receives,
+            "allocates" => Verb::Allocates,
+            "panics" => Verb::Panics,
+            "blocks" => Verb::Blocks,
+            "suspends" => Verb::Suspends,
+            _ => return None,
+        };
+        let key = if matches!(d.resource.as_str(), "Network" | "FileSystem") {
+            Key::Fresh
+        } else {
+            Key::Any
+        };
+        out.add(Effect::new(verb, &d.resource, key));
+    }
+    Some(out)
+}
 
 /// A function value whose effects are not tracked: a closure's capture
 /// environment, or the receiver of a Drop body.
