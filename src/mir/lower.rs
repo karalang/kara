@@ -17463,20 +17463,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(());
             }
             // In a generic body a trait method is found once the receiver's
-            // type is known: the impl of the trait the bound names, which an
-            // inherent method of the same name does not hide
-            // (B-2026-10-20-32), else the one impl method of that name.
+            // type is known: the one impl method of that name for it.
             let rt = self.expr_ty(object)?;
-            let bound = self
-                .lcx
-                .tc
-                .method_typeparam_trait_key
-                .get(&SpanKey::from_span(&e.span))
-                .and_then(|k| k.split_once('.'))
-                .and_then(|(tr, m)| self.user_impl_method(rt, tr, m));
-            if let Some((d, inst_args)) = bound {
-                return self.user_method_call(e, object, d, inst_args, args, dest);
-            }
             if let Some((d, inst_args)) = self.method_by_receiver(rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
@@ -20513,7 +20501,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 (helper, sargs.to_vec())
             }
             // A type that is `IntoIterator` and no iterator (B-2026-10-20-32).
-            HK::Adt { def, .. } if self.into_iterator_only(def) => {
+            HK::Adt { def, .. } if self.only_into_iterator(def) => {
                 let helper = if deque {
                     "deque_extend_into"
                 } else {
@@ -20551,7 +20539,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// Whether the ADT `def` implements `IntoIterator` and not `Iterator`.
-    fn into_iterator_only(&self, def: DefId) -> bool {
+    fn only_into_iterator(&self, def: DefId) -> bool {
         let name = self.lcx.def_name(def);
         let has = |tr: &str| {
             self.lcx.tc.impl_trait_assoc_types.contains_key(&(

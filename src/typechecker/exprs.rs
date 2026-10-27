@@ -9759,7 +9759,7 @@ impl<'a> super::TypeChecker<'a> {
                 // `for` never calls `into_iter` (design.md § `Iterator` and
                 // `Iterable`): a type that is only `IntoIterator` is consumed
                 // explicitly, which the fix writes (B-2026-10-20-32).
-                if self.cli_lint_overrides.strict_core && self.into_iterator_only(&iter_ty) {
+                if self.cli_lint_overrides.strict_core && self.only_into_iterator(&iter_ty) {
                     elem_ty = Type::Error;
                     let message = format!(
                         "type '{}' cannot be iterated by a `for` loop: it implements `IntoIterator` but not `Iterator`, and `for` never calls `into_iter`; consume it with `.into_iter()`",

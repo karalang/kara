@@ -1596,7 +1596,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// A named type that implements `IntoIterator` and not `Iterator`: a
     /// value `for` cannot take (B-2026-10-20-32).
-    pub(super) fn into_iterator_only(&self, ty: &Type) -> bool {
+    pub(super) fn only_into_iterator(&self, ty: &Type) -> bool {
         match ty {
             // A collection is `IntoIterator` and borrowed by `for`.
             Type::Named { name, .. }
