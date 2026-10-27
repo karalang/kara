@@ -67,7 +67,7 @@ fn mir_par_stored_callback_with_a_clause_has_its_effects() {
 }
 
 #[test]
-fn mir_par_stored_callback_captured_from_a_let_is_refused_for_now() {
+fn mir_par_stored_callback_captured_from_a_let_has_its_effects() {
     let src = r#"
 fn sq(x: i64) -> i64 { x * x }
 
@@ -81,8 +81,15 @@ fn main() {
     println(f"{a + b}");
 }
 "#;
-    // PREDICTS B-2026-10-27-8: inside a `par` branch `f` is a capture, and
-    // the call through it does not carry the binding's clause yet.
-    let err = check("let", src);
-    assert!(err.contains("`unknown (a call through a value)`"), "{err}");
+    // Inside a `par` branch `f` is a capture, and the call through it has
+    // the binding's clause (B-2026-10-27-8).
+    assert_eq!(check("let", src), "");
+    let r = karac::mir::lower::run_source(src).unwrap_or_else(|e| panic!("build: {e}"));
+    assert_eq!(r.output, "25\n", "stderr: {}", r.stderr);
+    let writes = src.replace("reads(Clock)", "writes(Stdout)");
+    let err = check("let-writes", &writes);
+    assert!(
+        err.contains("conflict: `writes(Stdout)` and `writes(Stdout)`"),
+        "{err}"
+    );
 }

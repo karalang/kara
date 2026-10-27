@@ -76,3 +76,38 @@ println(f\"{f(2) + g(3) + h(4)}\");\n}\n";
     assert_eq!(got.len(), 3, "{got:?}");
     assert_eq!(got.iter().filter(|c| c.is_some()).count(), 1, "{got:?}");
 }
+
+#[test]
+fn mir_a_call_through_a_captured_let_carries_its_declared_clause() {
+    let src = "fn sq(x: i64) -> i64 {\n    x * x\n}\n\
+fn pick(n: i64) -> Fn(i64) -> i64 with reads(Clock) {\n    sq\n}\n\
+fn main() {\n    let f: Fn(i64) -> i64 with reads(Clock) = pick(0);\n    \
+let (a, b) = par { f(3), f(4) };\n    println(f\"{a + b}\");\n}\n";
+    for branch in ["main.c0", "main.c1"] {
+        assert_eq!(
+            clauses(src, branch),
+            vec![Some(vec!["reads(Clock)".to_string()])],
+            "{branch}"
+        );
+    }
+}
+
+#[test]
+fn mir_a_call_through_a_once_field_keys_its_clause_by_its_own_local() {
+    let src = "struct Job {\n    run: OnceFn(i64) -> i64 with reads(Clock),\n    other: OnceFn(i64) -> i64,\n}\n\
+fn sq(x: i64) -> i64 {\n    x * x\n}\n\
+fn go(j: own Job) -> i64 {\n    (j.run)(3)\n}\n\
+fn main() {\n    println(go(Job { run: sq, other: sq }));\n}\n";
+    let l = karac::mir::lower::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+    let body = &l.program.bodies["go"];
+    assert_eq!(
+        call_clauses(body),
+        vec![Some(vec!["reads(Clock)".to_string()])]
+    );
+    // Not the struct's own local: a second field's call would share it.
+    assert!(
+        body.fn_value_effects.iter().all(|(l, _)| l.0 > 1),
+        "{:?}",
+        body.fn_value_effects
+    );
+}

@@ -362,6 +362,7 @@ fn lower_program_inner<'a>(
                 })
             })
             .collect(),
+        let_fn_effects: FxHashMap::default(),
         user_types,
         refined: program
             .items
@@ -891,6 +892,10 @@ struct Lcx<'a> {
     /// (struct, field): a call through one has those effects (core
     /// semantics §12, B-2026-10-27-2).
     fn_field_effects: FxHashMap<(String, String), Vec<DeclaredEffect>>,
+    /// The `let` bindings whose written function type declares an effect
+    /// clause, by symbol, so a closure that captures one finds it too
+    /// (B-2026-10-27-8).
+    let_fn_effects: FxHashMap<SymbolId, Vec<DeclaredEffect>>,
     /// The structs and enums the user's program declares, as opposed to
     /// the appended library's (`lower_program_with_library`).
     user_types: FxHashSet<String>,
@@ -4911,7 +4916,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                         let (op, t) = self.fn_value(value)?;
                         let l = self.user_local(name, t, pattern.id);
-                        self.note_declared_effects(l, ty.as_ref());
+                        self.note_declared_effects(l, (pattern.id, name), ty.as_ref());
                         self.assign(l, Rvalue::Use(op));
                         self.pop_scope()?;
                         self.declare(l, t);
@@ -4927,7 +4932,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                     }
                     let l = self.user_local(name, t, pattern.id);
-                    self.note_declared_effects(l, ty.as_ref());
+                    self.note_declared_effects(l, (pattern.id, name), ty.as_ref());
                     self.note_frozen(value, l);
                     let outer = self.let_scope.replace(self.scopes.len() - 1);
                     self.push_scope();
@@ -19970,10 +19975,18 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// A `let` binding `l` written with a function type that declares an
-    /// effect clause: a call through `l` has those effects
-    /// (B-2026-10-27-2).
-    fn note_declared_effects(&mut self, l: Local, ty: Option<&ast::TypeExpr>) {
+    /// effect clause: a call through `l`, or through a capture of it, has
+    /// those effects (B-2026-10-27-2, B-2026-10-27-8).
+    fn note_declared_effects(
+        &mut self,
+        l: Local,
+        (node, name): (NodeId, &str),
+        ty: Option<&ast::TypeExpr>,
+    ) {
         if let Some(declared) = ty.and_then(declared_effects) {
+            if let Some(&sym) = self.lcx.binding_syms.get(&(node, name.to_string())) {
+                self.lcx.let_fn_effects.insert(sym, declared.clone());
+            }
             self.b.fn_value_effects.push((l, declared));
         }
     }
@@ -19994,17 +20007,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     .get(&(adt.name.clone(), field.clone()))
                     .cloned()
             }
-            ExprKind::Identifier(_) if self.is_local(callee) => {
-                let p = self.expr_place(callee, false).ok()?;
-                if !p.projection.is_empty() {
-                    return None;
-                }
-                self.b
-                    .fn_value_effects
-                    .iter()
-                    .find(|(l, _)| *l == p.local)
-                    .map(|(_, d)| d.clone())
-            }
+            ExprKind::Identifier(_) => match self.lcx.res.get(&callee.id) {
+                Some(Res::Local(sym)) => self.lcx.let_fn_effects.get(sym).cloned(),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -20068,7 +20074,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if peeled != ct {
                     p = p.project(ProjElem::Deref);
                 }
-                let func = if once {
+                let declared = self.callee_effects(callee);
+                let func = if once && declared.is_some() && !p.projection.is_empty() {
+                    // The clause is keyed by a local of the value's own.
+                    let t = self.temp(peeled);
+                    self.assign(t, Rvalue::Use(Operand::Move(p)));
+                    Operand::Move(Place::local(t))
+                } else if once {
                     Operand::Move(p)
                 } else {
                     let rt = self.tys().tcx().reference(peeled, mutable);
@@ -20081,8 +20093,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.assign(r, Rvalue::Ref(kind, p));
                     Operand::Copy(Place::local(r))
                 };
-                if let (Some(l), Some(declared)) = (func.place(), self.callee_effects(callee)) {
-                    self.b.fn_value_effects.push((l.local, declared));
+                if let (Some(l), Some(declared)) = (func.place(), declared) {
+                    if l.projection.is_empty() {
+                        self.b.fn_value_effects.push((l.local, declared));
+                    }
                 }
                 let pts = self.tys().tcx().list(params).to_vec();
                 (func, Vec::new(), pts)
