@@ -118,5 +118,4 @@ ERROR request failed err="token expired" status=500 task_id=3
 
 ## Not yet implemented
 
-- `init` does not yet refuse a backend that cannot cross tasks (B-2026-10-27-21).
 - Renaming a type of `std.log` on import (`import std.log.{Level as L}`) makes a second type, which the library's functions do not accept; import the types under their own names (B-2026-10-27-23).

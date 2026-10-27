@@ -339,7 +339,11 @@ impl<'a> super::TypeChecker<'a> {
 /// needed (the slice-3a single-line shape carried the same tokens; this
 /// only reflows them onto labelled lines). Downstream consumers still
 /// pivot on the `E0254` code and the fix-it text.
-fn format_cross_task_diagnostic(lead: &str, value_ty: &Type, path: &CrossTaskUnsafePath) -> String {
+pub(super) fn format_cross_task_diagnostic(
+    lead: &str,
+    value_ty: &Type,
+    path: &CrossTaskUnsafePath,
+) -> String {
     let path_suffix = if path.path.is_empty() {
         String::new()
     } else {

@@ -6015,6 +6015,24 @@ impl<'a> super::TypeChecker<'a> {
         concrete_ty: &Type,
         bound: &crate::ast::TraitBound,
     ) -> String {
+        // A failed `CrossTask` bound is the one error code for a value that
+        // may not enter a task (core-semantics §6.3), with the path to the
+        // task-local leaf (B-2026-10-27-21).
+        if trait_name == "CrossTask" {
+            if let Err(path) =
+                is_cross_task_safe_with(concrete_ty, &self.env.structs, &self.env.enums)
+            {
+                let lead = format!(
+                    "`{type_name}: CrossTask` is not satisfied: `{}` cannot cross a task boundary",
+                    type_display(concrete_ty)
+                );
+                return super::cross_task_check::format_cross_task_diagnostic(
+                    &lead,
+                    concrete_ty,
+                    &path,
+                );
+            }
+        }
         let default = format!(
             "trait bound `{}: {}` is not satisfied; `{}` does not implement `{}`",
             type_name,
@@ -6994,6 +7012,11 @@ impl<'a> super::TypeChecker<'a> {
             // walk the `#[gpu]` signature check uses, so the explicit
             // `T: GpuSafe` bound and the implicit `#[gpu]` constraint agree.
             "GpuSafe" => return self.is_gpu_safe_type(ty),
+            // design.md § `CrossTask`, computed by the compiler: satisfied
+            // unless the type reaches a task-local leaf (B-2026-10-27-21).
+            "CrossTask" => {
+                return is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums).is_ok()
+            }
             _ => {}
         }
         // A blanket impl over its own parameter (`impl[I: Iterator]

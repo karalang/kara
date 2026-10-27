@@ -510,6 +510,25 @@ impl<'a> super::Resolver<'a> {
                     replacement: None,
                     stub_hint: None,
                 });
+            } else if trait_path.segments.len() == 1 && trait_path.segments[0] == "CrossTask" {
+                // design.md § `CrossTask`: the compiler computes it, and "an
+                // `impl CrossTask for T` is an error" (B-2026-10-27-21).
+                let target = self.type_expr_name(&imp.target_type).unwrap_or_default();
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "`impl CrossTask for {target}` is not allowed: `CrossTask` is computed by \
+                         the compiler, and holds unless the type reaches a `shared` handle or \
+                         another task-local type"
+                    ),
+                    span: trait_path.span,
+                    kind: ResolveErrorKind::OperatorTraitImplRestricted,
+                    suggestion: Some(format!(
+                        "remove the impl; to share `{target}` across tasks, make its `shared` \
+                         parts `sync` types"
+                    )),
+                    replacement: None,
+                    stub_hint: None,
+                });
             } else {
                 self.resolve_path_expr(trait_path);
             }

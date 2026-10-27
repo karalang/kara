@@ -39,6 +39,12 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(trait_name, "Numeric" | "GpuSafe") {
             return true;
         }
+        // `CrossTask` is the one bound the compiler computes (design.md §
+        // `CrossTask`): `T: CrossTask` holds unless `T` reaches a `shared`
+        // handle or another task-local type, by `cross_task_safe`'s walk.
+        if trait_name == "CrossTask" {
+            return true;
+        }
         // Function-trait bounds (`F: MutFn(own T) -> U`, design.md § 7):
         // the bound's signature is checked where a value of `F` is called
         // and where an argument is passed for it.

@@ -85,7 +85,7 @@ impl Backend for TextBackend {
 /// Replaces the backend and the lowest level kept. Records already emitted
 /// stay where they went.
 #[observability]
-pub fn init[B: Backend](backend: own B; level: Level = Level.Info) {
+pub fn init[B: Backend + CrossTask](backend: own B; level: Level = Level.Info) {
     log_install(backend, __log_rank(level), __log_record);
 }
 
