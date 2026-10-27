@@ -29,31 +29,86 @@ fn handle_request(req: Request) -> Result[Response, AuthError] {
 }
 ```
 
+### Fields
+
+A field is written `key: value` after the message. It looks like a named argument ([design.md § Named and default parameters](../design.md#named-and-default-parameters)), but the four level functions are the only functions whose labels are open: any label is accepted, and no user function can declare such a parameter list.
+
+- **Labels.** A label is an identifier. A label used twice in one call is an error, and so is one of the five names a record already carries: `level`, `msg`, `trace_id`, `span_id`, `task_id`.
+- **Values.** A value is any type that implements `Serialize` ([design.md § Serialize and Deserialize](../design.md#serialize-and-deserialize)): the integers, floats, `bool`, `char`, `String`, `Str`, `Option`, `Vec`, `Map` and any `#[derive(Serialize)]` type. A value of another type is an error, whose fix-it formats it as text with `f"{v}"` when it implements `Display`. The value is borrowed, so logging it does not move it.
+- **Evaluation.** The message and the values are ordinary arguments: they are evaluated at every call, in the order written ([core-semantics.md §8.1](../core-semantics.md#8-evaluation-order)), whether or not the record is kept. Turning a value into a `Json` tree happens only for a kept record, so a filtered `debug` line costs its argument evaluation and nothing more.
+- **Conversion.** A kept record's field holds the `Json` tree that the value's `Serialize` impl builds ([json.md](json.md)): the tree `Json.parse` would return from the text `Json.serialize` writes. An integer that fits an `i64` is `Json.Int`; a float is `Json.Number`.
+
+### Filtering
+
+Each record has a `Level`, ordered `Debug < Info < Warn < Error`. `log.init` sets the lowest level kept, `Info` by default, so `debug` lines are dropped until a program asks for them with `log.init(backend, level: log.Level.Debug)`. A dropped record never reaches the backend.
+
 ## Span context
 
-The runtime keeps a span context (trace ID, span ID, task ID) for each task. When a `par` block, a `par for` loop or a `TaskGroup` starts tasks, the runtime passes the parent's span context to each child. Log entries carry this context without the program threading it by hand:
+Each record carries the span context of the task that logged it: a trace ID, a span ID and a task ID. When a `par` block, a `par for` loop or a `TaskGroup` starts tasks, each child inherits its parent's trace and span, so log entries carry them without the program threading them by hand.
+
+- **`task_id`** is a positive `i64` the runtime gives each task when it starts. It is unique within the process and never reused, and the numbers say nothing about the order tasks started in. Code outside every task, such as `main` before it starts one, has `task_id` `None`.
+- **`trace_id` and `span_id`** are `None` until the program starts a trace. An API to start a trace or a span, and to read one from an incoming request's `traceparent` header, is deferred ([deferred.md](../deferred.md)); until it lands both are always `None`.
+
+```json
+{"level":"info","msg":"request received","method":"GET","path":"/users/42","task_id":null}
+{"level":"debug","msg":"authenticated","user_id":42,"task_id":3}
+```
+
+Once traces exist, the same lines carry them:
 
 ```json
 {"level":"info","msg":"request received","method":"GET","path":"/users/42","trace_id":"abc123","span_id":"s1","task_id":null}
-{"level":"debug","msg":"authenticated","user_id":42,"trace_id":"abc123","span_id":"s2","task_id":3}
 ```
 
 ## Backends
 
-The backend is configured once, at program start, with `log.init`:
+The backend is configured with `log.init`, normally once, at program start:
 
 ```kara
 import std.log;
 
 fn main() {
-    log.init(log.json_backend(stdout));          // JSON to stdout
-    // or: log.init(log.text_backend(stderr));   // human-readable text to stderr
-    // or: log.init(my_backend);                 // any impl of log.Backend
+    log.init(log.json_backend(log.Stream.Stdout));                       // JSON to stdout
+    // or: log.init(log.text_backend(log.Stream.Stderr));                // human-readable text to stderr
+    // or: log.init(my_backend, level: log.Level.Debug);                 // any impl of log.Backend, keeping debug lines
     serve();
 }
 ```
 
-The `Backend` trait has one method, `fn emit(mut ref self, record: log.Record)`. Custom backends (file rotation, external collectors, buffered batching) implement it. If `log.init` is never called, the default backend writes JSON to stderr.
+If `log.init` is never called, records at `Info` and above go to `log.json_backend(log.Stream.Stderr)`. A later `log.init` replaces the backend and the level; records already emitted stay where they went.
+
+### Items
+
+| Item | Signature | Notes |
+|---|---|---|
+| `debug`, `info`, `warn`, `error` | `fn info(msg: Str)`, then open `key: value` fields | See [Fields](#fields) |
+| `Level` | `enum Level { Debug, Info, Warn, Error }` | Ordered as written; `Copy`, `Eq`, `Ord` |
+| `Record` | `struct Record { level: Level, msg: String, fields: Vec[(String, Json)], trace_id: Option[String], span_id: Option[String], task_id: Option[i64] }` | `fields` in the order the call wrote them. `Json` is [`std.json.Json`](json.md) |
+| `Backend` | `trait Backend: Send { fn emit(mut ref self, record: Record); }` | `record` is borrowed |
+| `init` | `fn init[B: Backend](backend: own B; level: Level = Level.Info)` | Replaces the backend and the lowest level kept |
+| `Stream` | `enum Stream { Stdout, Stderr }` | Where a built-in backend writes |
+| `json_backend` | `fn json_backend(to: Stream) -> JsonBackend` | One JSON object per line |
+| `text_backend` | `fn text_backend(to: Stream) -> TextBackend` | One line of text per record |
+
+**One record at a time.** The runtime holds a lock around `emit`, so a backend never sees two records at once and a line is never torn. Records from concurrent tasks reach the backend in an order the program does not choose ([core-semantics.md §11.1](../core-semantics.md#11-concurrency-c9)); records from one task arrive in the order it logged them.
+
+**A backend's own effects are hidden.** `emit` may write a file or a socket, but the log call that reached it still has no effects (see the top of this page). A backend that fails to write drops the record; it must not panic.
+
+### The JSON format
+
+`json_backend` writes each record as one compact JSON object and a newline. The keys come in this order: `level` (the level's name in lower case), `msg`, the fields in call order, then `trace_id` and `span_id` when they are set, then `task_id`, which is written as `null` outside a task. Each field value is written as `Json.stringify` writes it. Nothing else is added: in particular no timestamp, because the collectors that read a service's stdout or stderr (journald, Docker, Kubernetes) stamp each line as it arrives, and an unstamped line keeps a program's log output reproducible in tests. A backend that wants a timestamp reads the clock in `emit`.
+
+### The text format
+
+`text_backend` writes each record as one line: the level in upper case padded to five characters (`DEBUG`, `INFO `, `WARN `, `ERROR`), a space, the message, then ` key=value` for each field in call order, then ` trace_id=…` and ` span_id=…` when they are set and ` task_id=n` inside a task.
+
+A field value that is a `Json.String` is written as its text when the text is not empty and holds no space, `"`, `=` or control character; otherwise it is written quoted, as `Json.stringify` quotes it. Any other value is written as `Json.stringify` writes it.
+
+```
+INFO  request received method=GET path=/users/42
+DEBUG authenticated user_id=42 task_id=3
+ERROR request failed err="token expired" status=500 task_id=3
+```
 
 ## `dbg` and `log`
 

@@ -2473,7 +2473,7 @@ connect("db", timeout_ms: 1000, port: 8443);    // named arguments in any order
 - **Order.** Named arguments come after all positional arguments, in any order. They are evaluated in the order they are written at the call site ([core-semantics.md §8.1](core-semantics.md#8-evaluation-order)).
 - **Defaults.** A named parameter may have a default, written `= expr` after its type. A named parameter without a default is required, and omitting it is an error that names it.
 - **Defaults are constant expressions**: whatever a `const` initializer allows ([§4 Constants](#constants)). A function name is one; a closure literal is not. A default may not refer to another parameter. Each call that omits the argument gets a fresh value of the default.
-- **Labels must match.** A label that names no named parameter, or names one twice, is an error.
+- **Labels must match.** A label that names no named parameter, or names one twice, is an error. The one exception is `std.log`'s four level functions, whose trailing `key: value` fields take any label ([library/log.md](library/log.md#fields)); no user function can declare open labels.
 - **Receivers are positional.** In a method, `self` is the first positional parameter, so `fn get(self, key: K; fallback: i64 = 0)` is called as `m.get(k, fallback: 7)`.
 - **As a value**, a function with named parameters takes only its positional parameters ([Function values](#function-values)).
 

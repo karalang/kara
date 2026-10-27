@@ -800,6 +800,7 @@ These additions to the v1 tooling contract ([design.md §17](design.md#17-toolin
 - **Error return traces exclude `Cancelled`.** See [Cooperative Cancellation](#cooperative-cancellation).
 - **Provider stack in the panic record.** The active `with_provider` bindings at panic time: for each provider-rooted resource, which provider value was bound and at which `with_provider` site. Lets crash analyzers see which provider configuration produced the failure.
 - **`karac run` stops on execution-soundness violations.** Provider-rooted resource escape (E0600) exits 1 before execution, same as `check`/`build`. (RAII-across-yield, `E_RAII_ACROSS_YIELD`, is withdrawn: a task is torn down at its wait, core-semantics §11.9.)
+- **Traces and spans for `std.log`.** Starting a trace, opening a child span around a block, and reading the W3C `traceparent` header of an incoming request into the task's span context. Until then every record's `trace_id` and `span_id` are `None` ([library/log.md](library/log.md#span-context)).
 
 ### Effect Variables for Stored Callbacks
 
