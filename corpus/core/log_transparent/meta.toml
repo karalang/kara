@@ -1,0 +1,9 @@
+source = "B-2026-10-27-20"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["log", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/log.md (top) and design.md § Observability: a public fn declared with no effects may log, two par branches that log do not conflict, and one task's lines keep source order (statement auto-par moves no statement that logs)."

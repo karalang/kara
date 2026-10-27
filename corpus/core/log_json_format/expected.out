@@ -1,0 +1,6 @@
+{"level":"info","msg":"request received","method":"GET","path":"/users/42","task_id":null}
+{"level":"info","msg":"typed","n":7,"neg":-3,"x":1.5,"whole":2.0,"ok":true,"c":"z","task_id":null}
+{"level":"info","msg":"nested","user":{"id":42,"name":"ada"},"tags":["a","b"],"some":5,"none":null,"task_id":null}
+{"level":"warn","msg":"no fields","task_id":null}
+{"level":"error","msg":"quoted \"msg\"\twith a tab","err":"line\nbreak","task_id":null}
+ada 2

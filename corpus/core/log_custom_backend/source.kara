@@ -1,0 +1,51 @@
+// A user backend (docs/library/log.md § Backends): any `log.Backend`,
+// handed every kept record with its fields in call order, `Json` values,
+// `trace_id` and `span_id` always `None`, and `task_id` `None` in `main`
+// and set inside a task. `emit` takes `mut ref self`, so a backend keeps
+// state across records.
+import std.log;
+import std.json.{Json};
+import std.log.{Level};
+
+struct Numbered {
+    seen: i64,
+}
+
+impl log.Backend for Numbered {
+    fn emit(mut ref self, record: log.Record) {
+        self.seen += 1;
+        let mut keys = String.new();
+        for f in record.fields.iter() {
+            keys.push_str(f" {f.0}");
+            match f.1 {
+                Json.Int(n) => keys.push_str(f"=int {n}"),
+                Json.String(s) => keys.push_str(f"=string {s}"),
+                _ => keys.push_str("=other"),
+            }
+        }
+        let task = match record.task_id {
+            Some(n) => if n > 0 { "in a task" } else { "a task id that is not positive" },
+            None => "outside every task",
+        };
+        let traced = record.trace_id.is_some() or record.span_id.is_some();
+        let level = match record.level {
+            Level.Debug => "Debug",
+            Level.Info => "Info",
+            Level.Warn => "Warn",
+            Level.Error => "Error",
+        };
+        println(f"#{self.seen} {level} {record.msg}{keys} | {task} | traced={traced}");
+    }
+}
+
+fn main() {
+    log.init(Numbered { seen: 0 }, level: log.Level.Debug);
+    log.debug("start", port: 8080, host: "localhost");
+    log.error("failed", flag: true);
+    {
+        let mut g = TaskGroup.new();
+        g.spawn(|| { log.info("worker"); });
+        g.spawn(|| { log.info("worker"); });
+    }
+    log.info("done");
+}

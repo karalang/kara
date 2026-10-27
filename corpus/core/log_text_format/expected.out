@@ -1,0 +1,6 @@
+DEBUG authenticated user_id=42
+INFO  request received method=GET path=/users/42
+WARN  plain
+ERROR request failed err="token expired" status=500
+INFO  quoting empty="" quote="a\"b" eq="a=b" tab="a\tb" bare=ünïcode
+INFO  values ok=false x=0.5 none=null v=[1,2] p={"x":1,"y":-2}

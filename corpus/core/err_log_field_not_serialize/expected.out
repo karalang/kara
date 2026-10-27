@@ -1,0 +1,1 @@
+ERROR at line 18: the log field `port` is a `Port`, which does not implement `Serialize`: a field's value is any `Serialize` type (docs/library/log.md § Fields); `Port` implements `Display`, so log it as text: `f"{p}"`

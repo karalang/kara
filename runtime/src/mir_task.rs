@@ -183,12 +183,15 @@ struct Cur {
     cancel: bool,
     torn: bool,
     unwind: bool,
+    /// The root task, which `std.log` counts as outside every task.
+    root: bool,
 }
 
 impl Task {
     /// Its state while it runs.
     fn cur(&self) -> Cur {
         Cur {
+            root: self.root,
             id: self.id,
             group: self.group,
             deadline: self.deadline,
@@ -954,6 +957,12 @@ fn task_done(t: &Task) {
 #[allow(dead_code)] // for the natives that keep per-task state (M4 item 5)
 pub(crate) fn current_task() -> Option<u64> {
     EXEC.with(|e| e.borrow().cur().map(|c| c.id))
+}
+
+/// The running task's id, unless it is the root task: `std.log`'s
+/// `task_id`, which code outside every task (`main`) does not have.
+pub(crate) fn current_task_unless_root() -> Option<u64> {
+    EXEC.with(|e| e.borrow().cur().filter(|c| !c.root).map(|c| c.id))
 }
 
 /// Calls `f` with a task's id whenever a task ends, returned or torn down.

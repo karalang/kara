@@ -65,6 +65,11 @@ pub struct Program {
     /// for a program made otherwise (from MIR text), whose coroutine frames
     /// then hold every borrowed local.
     pub borrows: Option<std::sync::Arc<super::lower::BorrowSummary>>,
+    /// The functions transparent to effects (design.md § Observability):
+    /// the library's `#[observability]` functions, by name (`info`,
+    /// `LogCall.emit`), whose instances (`init[JsonBackend]`) a call to
+    /// adds no effect.
+    pub transparent: std::collections::BTreeSet<String>,
 }
 
 /// An `extern "C"` function's declared parameter and return types.
@@ -89,6 +94,12 @@ pub enum DisplayStyle {
 }
 
 impl Program {
+    /// Whether the instance `name` is of a function transparent to effects.
+    pub fn is_transparent(&self, name: &str) -> bool {
+        let base = name.split('[').next().unwrap_or(name);
+        self.transparent.contains(base)
+    }
+
     pub fn add(&mut self, body: Body) {
         self.bodies.insert(body.instance.name.clone(), body);
     }
@@ -716,6 +727,8 @@ fn run_with(
         inline_tasks: Vec::new(),
         root_unwind: false,
         tracing_sink: None,
+        log_sink: None,
+        log_min: 1,
         active_spans: Vec::new(),
         interners: Vec::new(),
         http_builders: Vec::new(),
@@ -1189,6 +1202,12 @@ struct Interp<'a> {
     /// The exporter `Log.set_exporter` registered, and its type; `None`
     /// sends events to the default `StdoutExporter`.
     tracing_sink: Option<(Value, Ty)>,
+    /// `std.log`'s backend: the value `log.init` installed, its type, and
+    /// the function that builds the record it receives. `None` sends
+    /// records to the default backend.
+    log_sink: Option<(Value, Ty, Value)>,
+    /// `std.log`'s lowest level kept, by rank (debug 0 .. error 3).
+    log_min: i128,
     /// The ids of the spans `with_span` made active, innermost last.
     active_spans: Vec<i128>,
     /// The tables behind `Interner` values, by handle - 1: each interned
@@ -2010,6 +2029,9 @@ impl<'a> Interp<'a> {
                     self.drop_value(old, ot)?;
                 }
                 Ok(Value::Unit)
+            }
+            (b, "") if log_native(b).is_some() => {
+                self.log_native(log_native(b).unwrap(), args, arg_tys)
             }
             ("tracing_emit_event", "") => {
                 let (Some(event), Some(&t)) = (args.into_iter().next(), arg_tys.first()) else {
@@ -14742,6 +14764,104 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// `std.log`'s natives (runtime/stdlib/std_log.kara).
+    fn log_native(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty]) -> R<Value> {
+        match name {
+            "log_enabled" => match args.as_slice() {
+                [Value::Int(rank)] => Ok(Value::Bool(*rank >= self.log_min)),
+                _ => err("log_enabled takes a rank".to_string()),
+            },
+            "log_task_id" => Ok(Value::Int(self.log_task_id())),
+            "log_install" => {
+                let mut it = args.into_iter();
+                let (Some(backend), Some(Value::Int(rank)), Some(record), Some(&t)) =
+                    (it.next(), it.next(), it.next(), arg_tys.first())
+                else {
+                    return err("log_install takes a backend, a rank and a function".to_string());
+                };
+                let record = match record {
+                    Value::Ref(at) => self.slot(&at)?,
+                    v => v,
+                };
+                self.log_min = rank;
+                if let Some((old, ot, _)) = self.log_sink.replace((backend, t, record)) {
+                    self.drop_value(old, ot)?;
+                }
+                Ok(Value::Unit)
+            }
+            "log_dispatch" => {
+                let mut it = args.into_iter();
+                let (Some(call), Some(default)) = (it.next(), it.next()) else {
+                    return err("log_dispatch takes a call and a default".to_string());
+                };
+                let Some((sink, sink_ty, record)) = self.log_sink.clone() else {
+                    self.call_erased(default, vec![call])?;
+                    return Ok(Value::Unit);
+                };
+                let Value::Erased {
+                    body: ref record_fn,
+                    ..
+                } = record
+                else {
+                    return err(format!("a log record function is {record:?}"));
+                };
+                let program: &'a Program = self.program;
+                let record_ty = program
+                    .bodies
+                    .get(record_fn)
+                    .map(|b| b.locals[0].ty)
+                    .ok_or_else(|| Stop::Error(format!("no body for {record_fn}")))?;
+                let rec = self.call_erased(record, vec![call])?;
+                let name = format!("{}.emit", self.tys.adt_name(sink_ty));
+                let body = program
+                    .bodies
+                    .get(&name)
+                    .ok_or_else(|| Stop::Error(format!("no body for {name}")))?;
+                let takes_ref = matches!(
+                    self.tys.kind(body.locals[2].ty),
+                    TyKind::Ref(_) | TyKind::MutRef(_)
+                );
+                let (recv, recv_id) = self.scratch_ref(sink);
+                let mut scratch = vec![recv_id];
+                let arg = if takes_ref {
+                    let (r, id) = self.scratch_ref(rec.clone());
+                    scratch.push(id);
+                    r
+                } else {
+                    rec.clone()
+                };
+                let out = self.call(&name, vec![recv, arg]);
+                // The backend may have changed itself: keep what it holds now.
+                let at = Addr {
+                    root: Root::Heap(recv_id),
+                    path: Path::new(),
+                };
+                let now = self.slot(&at)?;
+                if let Some(slot) = self.log_sink.as_mut() {
+                    slot.0 = now;
+                }
+                for id in scratch {
+                    self.free_slot(id);
+                }
+                out?;
+                if takes_ref {
+                    self.drop_value(rec, record_ty)?;
+                }
+                Ok(Value::Unit)
+            }
+            _ => err(format!("no std.log native `{name}`")),
+        }
+    }
+
+    /// The running task's `std.log` id: positive inside a task, 0 outside
+    /// every task.
+    fn log_task_id(&self) -> i128 {
+        if !self.tasks.is_empty() && self.cur_task != 0 && self.cur_task != usize::MAX {
+            return self.cur_task as i128;
+        }
+        0
+    }
+
     /// `tracing_emit_event`: the registered exporter's `export_event`
     /// receives the event, or the default `StdoutExporter` prints it as its
     /// body does: `[level] message`, each ` key=value`, then a non-zero
@@ -14855,6 +14975,7 @@ impl<'a> Interp<'a> {
         }
         todo.extend(&self.statics);
         todo.extend(self.tracing_sink.iter().map(|(v, _)| v));
+        todo.extend(self.log_sink.iter().map(|(v, _, _)| v));
         for c in &self.channels {
             todo.extend(&c.queue);
         }
@@ -14910,6 +15031,7 @@ impl<'a> Interp<'a> {
             .iter()
             .chain(self.forgotten.iter())
             .chain(self.tracing_sink.iter().map(|(v, _)| v))
+            .chain(self.log_sink.iter().map(|(v, _, _)| v))
             .chain(self.pools.iter().flat_map(|p| {
                 std::iter::once(&p.create)
                     .chain(p.check.iter())
@@ -16261,6 +16383,13 @@ fn http_tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
             Ok(std::sync::Arc::new(config))
         })
         .clone()
+}
+
+/// The `std.log` native `name` stands for (`log_enabled$std_log` is
+/// `log_enabled`), or `None` for another.
+fn log_native(name: &str) -> Option<&str> {
+    let (base, module) = name.split_once('$')?;
+    (module == "std_log").then_some(base)
 }
 
 #[cfg(test)]

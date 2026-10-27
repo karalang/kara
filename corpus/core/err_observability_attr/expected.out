@@ -1,0 +1,1 @@
+ERROR at line 3: `#[observability]` is reserved for stdlib source baked into the compiler binary

@@ -1,0 +1,26 @@
+// std.log's JSON format (docs/library/log.md § The JSON format): `level`,
+// `msg`, the fields in call order, then `task_id`, `null` in `main`. Each
+// value is the `Json` tree its `Serialize` impl builds, written as
+// `Json.stringify` writes it. No timestamp.
+import std.log;
+import std.log.{info, warn, error};
+
+#[derive(Serialize)]
+struct User {
+    id: i64,
+    name: String,
+}
+
+fn main() {
+    log.init(log.json_backend(log.Stream.Stdout));
+    let user = User { id: 42, name: "ada" };
+    let tags = vec!["a", "b"];
+    let none: Option[i64] = None;
+    info("request received", method: "GET", path: "/users/42");
+    info("typed", n: 7, neg: -3, x: 1.5, whole: 2.0, ok: true, c: 'z');
+    info("nested", user: user, tags: tags, some: Some(5), none: none);
+    warn("no fields");
+    error("quoted \"msg\"\twith a tab", err: "line\nbreak");
+    // The values are borrowed: still usable after the calls.
+    println(f"{user.name} {tags.len()}");
+}

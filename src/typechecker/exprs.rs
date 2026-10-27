@@ -5002,6 +5002,11 @@ impl<'a> super::TypeChecker<'a> {
                         if self.hint_into_iter_for_bound(type_name, trait_name, &concrete, d.span) {
                             continue;
                         }
+                        if trait_name == "Serialize"
+                            && self.log_field_unserializable(&concrete, d.span)
+                        {
+                            continue;
+                        }
                         let message = self.render_unsatisfied_bound_message(
                             type_name, trait_name, &concrete, bound,
                         );
@@ -5541,6 +5546,11 @@ impl<'a> super::TypeChecker<'a> {
                     ) {
                         continue;
                     }
+                    if trait_name == "Serialize"
+                        && self.log_field_unserializable(concrete_ty, *discharge_span)
+                    {
+                        continue;
+                    }
                     let message = self.render_unsatisfied_bound_message(
                         type_name,
                         trait_name,
@@ -5971,6 +5981,43 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::TypeMismatch,
             );
         }
+    }
+
+    /// A `std.log` field whose value is not `Serialize`
+    /// (docs/library/log.md § Fields): said in the field's words, with a
+    /// fix-it that formats a `Display` value as text. `false` when the call
+    /// at `span` is not a log field.
+    fn log_field_unserializable(&mut self, concrete: &Type, span: Span) -> bool {
+        let Some((label, at, text)) = self.log_fields.get(&SpanKey::from_span(&span)).cloned()
+        else {
+            return false;
+        };
+        let shown = type_display(concrete);
+        let mut message = format!(
+            "the log field `{label}` is a `{shown}`, which does not implement `Serialize`: \
+             a field's value is any `Serialize` type (docs/library/log.md § Fields)"
+        );
+        if self.type_satisfies_bound(concrete, "Display") {
+            let replacement = format!("f\"{{{text}}}\"");
+            message.push_str(&format!(
+                "; `{shown}` implements `Display`, so log it as text: `{replacement}`"
+            ));
+            self.type_error_with_fix_it(
+                message,
+                at,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: at,
+                    replacement,
+                },
+            );
+        } else {
+            message.push_str(&format!(
+                "; derive it with `#[derive(Serialize)]` on `{shown}`"
+            ));
+            self.type_error(message, at, TypeErrorKind::TypeMismatch);
+        }
+        true
     }
 
     /// Render the message for an unsatisfied `type_name: trait_name`

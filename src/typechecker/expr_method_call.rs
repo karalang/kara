@@ -1607,6 +1607,23 @@ impl<'a> super::TypeChecker<'a> {
         // arms below.
         args_close_span: &Span,
     ) -> Type {
+        // A `std.log` field call the rewrite made (`crate::log_calls`): its
+        // key literal is the label, at the call's own start, which no
+        // written call can be.
+        if let ("field", [key, value]) = (method, args) {
+            if let ExprKind::StringLit(label) = &key.value.kind {
+                if key.value.span.offset == span.offset && key.value.span.length == label.len() {
+                    self.log_fields.insert(
+                        SpanKey::from_span(span),
+                        (
+                            label.clone(),
+                            value.value.span,
+                            crate::formatter::render_expr(&value.value),
+                        ),
+                    );
+                }
+            }
+        }
         // Comptime stdlib modules (substrate 3): `ast.expr(s)` /
         // `compiler.error(msg)` parse as method calls on the lowercase module
         // identifier. Route them to the comptime-module typing (which gates on

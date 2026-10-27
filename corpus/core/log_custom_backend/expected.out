@@ -1,0 +1,5 @@
+#1 Debug start port=int 8080 host=string localhost | outside every task | traced=false
+#2 Error failed flag=other | outside every task | traced=false
+#3 Info worker | in a task | traced=false
+#4 Info worker | in a task | traced=false
+#5 Info done | outside every task | traced=false

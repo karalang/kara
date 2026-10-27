@@ -201,7 +201,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// Runs `build` in the new function `name` of type `void(ptrs..., i8?)`,
     /// then puts the builder back where it was.
-    fn side_fn(
+    pub(super) fn side_fn(
         &mut self,
         name: &str,
         ptrs: usize,

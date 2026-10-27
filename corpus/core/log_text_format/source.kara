@@ -1,0 +1,24 @@
+// std.log's text format (docs/library/log.md § The text format): the
+// level upper-cased and padded to five, the message, ` key=value` per
+// field, and no `task_id` outside a task. A string value is bare unless it
+// is empty or holds a space, `"`, `=` or a control character; then it and
+// every other value are written as `Json.stringify` writes them.
+import std.log;
+import std.log.{debug, info, warn, error};
+
+#[derive(Serialize)]
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn main() {
+    log.init(log.text_backend(log.Stream.Stdout), level: log.Level.Debug);
+    debug("authenticated", user_id: 42);
+    info("request received", method: "GET", path: "/users/42");
+    warn("plain");
+    error("request failed", err: "token expired", status: 500);
+    info("quoting", empty: "", quote: "a\"b", eq: "a=b", tab: "a\tb", bare: "ünïcode");
+    let missing: Option[i64] = None;
+    info("values", ok: false, x: 0.5, none: missing, v: vec![1, 2], p: Point { x: 1, y: -2 });
+}

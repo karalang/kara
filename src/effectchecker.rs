@@ -820,6 +820,9 @@ pub struct EffectChecker<'a> {
     pub(crate) inferred_effects: FxHashMap<Symbol, EffectSet>,
     /// Whether each function is public.
     pub(crate) function_visibility: FxHashMap<Symbol, bool>,
+    /// The library's `#[observability]` functions (`std.log`): a call to
+    /// one adds no effect (design.md § Observability).
+    pub(crate) observability: FxHashSet<Symbol>,
     /// Function spans for error reporting.
     pub(crate) function_spans: FxHashMap<Symbol, Span>,
     /// Functions carrying `#[allow(mutual_recursion_note)]`
@@ -1091,6 +1094,7 @@ impl<'a> EffectChecker<'a> {
             declared_effects: FxHashMap::default(),
             inferred_effects: FxHashMap::default(),
             function_visibility: FxHashMap::default(),
+            observability: FxHashSet::default(),
             function_spans: FxHashMap::default(),
             mutual_recursion_allow: FxHashSet::default(),
             channel_param_names: std::collections::HashSet::new(),
@@ -2280,6 +2284,9 @@ impl<'a> EffectChecker<'a> {
                     self.declared_effects.insert(sym, decl);
                     self.function_visibility.insert(sym, f.is_pub);
                     self.function_spans.insert(sym, f.span);
+                    if f.stdlib_origin && f.attributes.iter().any(|a| a.is_bare("observability")) {
+                        self.observability.insert(sym);
+                    }
                     if fn_allows_mutual_recursion_note(&f.attributes) {
                         self.mutual_recursion_allow.insert(sym);
                     }
@@ -2317,6 +2324,11 @@ impl<'a> EffectChecker<'a> {
                         self.declared_effects.insert(key, decl);
                         self.function_visibility.insert(key, method.is_pub);
                         self.function_spans.insert(key, method.span);
+                        if method.stdlib_origin
+                            && method.attributes.iter().any(|a| a.is_bare("observability"))
+                        {
+                            self.observability.insert(key);
+                        }
                         // A method's group member is named `Type.method`, so
                         // the allow is recorded under that key (B-2026-10-20-28).
                         if fn_allows_mutual_recursion_note(&method.attributes) {

@@ -77,6 +77,9 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // source; `no_rc` opts a `shared struct` out of RC.
     "compiler_builtin",
     "no_rc",
+    // `#[observability]`: a library function transparent to effects
+    // (design.md § Observability); stdlib source only.
+    "observability",
     // General item annotations.
     "derive",
     "must_use",

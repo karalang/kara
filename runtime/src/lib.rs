@@ -122,6 +122,7 @@ pub mod map;
 pub mod mir;
 pub mod mir_flags;
 pub mod mir_io;
+pub mod mir_log;
 pub mod mir_map;
 pub mod mir_process;
 #[cfg(all(feature = "net", unix))]
@@ -316,6 +317,10 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_sort_int,
         mir::karac_mir_deque_alloc,
         mir::karac_mir_fs,
+        mir_log::karac_mir_log_enabled,
+        mir_log::karac_mir_log_install,
+        mir_log::karac_mir_log_dispatch,
+        mir_log::karac_mir_log_task_id,
         mir_task::karac_mir_task_spawn,
         mir_task::karac_mir_task_run,
         mir_task::karac_mir_ready,

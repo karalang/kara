@@ -77,6 +77,7 @@ pub mod layout_queries;
 pub mod lexer;
 pub mod lints;
 pub mod lockfile;
+pub mod log_calls;
 pub mod logical_lint;
 pub mod lowering;
 pub mod manifest;

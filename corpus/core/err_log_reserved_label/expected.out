@@ -1,0 +1,1 @@
+ERROR at line 7: `task_id` cannot label a log field: every record already carries `task_id` (the reserved labels are `level`, `msg`, `trace_id`, `span_id` and `task_id`)

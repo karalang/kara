@@ -40,6 +40,7 @@ mod foreign;
 mod hot_swap;
 mod io;
 mod key;
+mod log;
 mod num;
 mod pool;
 mod seq;

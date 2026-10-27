@@ -1,0 +1,339 @@
+// `std.log`: production logging (docs/library/log.md; B-2026-10-27-20).
+//
+// The four level functions take open `key: value` fields. A call with
+// fields is rewritten before resolution (`src/log_calls.rs`) into
+// `__log_begin(rank, msg).field("key", value)...emit()`, so the message and
+// the values are evaluated as ordinary arguments, in order, and a value is
+// turned into a `Json` tree only when the record is kept. A call that the
+// rewrite leaves alone (a reserved or repeated label) is reported by the
+// checker.
+//
+// Logging is transparent to the effect system: the items marked
+// `#[observability]` add no effect to their caller and conflict with
+// nothing (design.md § Observability). The backend lives in the runtime:
+// `log_install` keeps a heap copy of it beside the level, and
+// `log_dispatch` hands each kept record to its `emit` under a lock, or to
+// the default JSON-to-stderr backend when no `init` has run.
+
+/// A record's severity, ordered `Debug < Info < Warn < Error`.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Level {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// One log record, as a backend receives it. `fields` are in the order the
+/// call wrote them.
+pub struct Record {
+    level: Level,
+    msg: String,
+    fields: Vec[(String, Json)],
+    trace_id: Option[String],
+    span_id: Option[String],
+    task_id: Option[i64],
+}
+
+/// Where log records go. The runtime holds a lock around `emit`, so a
+/// backend never sees two records at once.
+pub trait Backend {
+    fn emit(mut ref self, record: Record);
+}
+
+/// Where a built-in backend writes.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Stream {
+    Stdout,
+    Stderr,
+}
+
+/// Writes each record as one compact JSON object and a newline.
+pub struct JsonBackend {
+    to: Stream,
+}
+
+/// Writes each record as one line of text.
+pub struct TextBackend {
+    to: Stream,
+}
+
+/// A backend that writes one JSON object per line to `to`.
+pub fn json_backend(to: Stream) -> JsonBackend {
+    JsonBackend { to: to }
+}
+
+/// A backend that writes one line of text per record to `to`.
+pub fn text_backend(to: Stream) -> TextBackend {
+    TextBackend { to: to }
+}
+
+impl Backend for JsonBackend {
+    fn emit(mut ref self, record: Record) {
+        let line = __log_json_line(__log_rank(record.level), record.msg, record.fields, record.trace_id, record.span_id, record.task_id);
+        __log_write(self.to, line);
+    }
+}
+
+impl Backend for TextBackend {
+    fn emit(mut ref self, record: Record) {
+        let line = __log_text_line(__log_rank(record.level), record.msg, record.fields, record.trace_id, record.span_id, record.task_id);
+        __log_write(self.to, line);
+    }
+}
+
+/// Replaces the backend and the lowest level kept. Records already emitted
+/// stay where they went.
+#[observability]
+pub fn init[B: Backend](backend: own B; level: Level = Level.Info) {
+    log_install(backend, __log_rank(level), __log_record);
+}
+
+/// Logs `msg` at `Debug`, with the `key: value` fields that follow it.
+#[observability]
+pub fn debug(msg: Str) {
+    __log_begin(0, msg).emit();
+}
+
+/// Logs `msg` at `Info`, with the `key: value` fields that follow it.
+#[observability]
+pub fn info(msg: Str) {
+    __log_begin(1, msg).emit();
+}
+
+/// Logs `msg` at `Warn`, with the `key: value` fields that follow it.
+#[observability]
+pub fn warn(msg: Str) {
+    __log_begin(2, msg).emit();
+}
+
+/// Logs `msg` at `Error`, with the `key: value` fields that follow it.
+#[observability]
+pub fn error(msg: Str) {
+    __log_begin(3, msg).emit();
+}
+
+// ── The level calls' rewrite ────────────────────────────────────────
+
+/// A level call under way: `on` when its level is kept, and then the
+/// record's parts so far.
+pub struct LogCall {
+    on: bool,
+    level: i64,
+    msg: String,
+    fields: Vec[(String, Json)],
+    task_id: i64,
+}
+
+/// Starts a level call of `level` (0 = debug .. 3 = error).
+#[observability]
+pub fn __log_begin(level: i64, msg: Str) -> LogCall {
+    if log_enabled(level) {
+        LogCall { on: true, level: level, msg: msg.to_string(), fields: Vec.new(), task_id: log_task_id() }
+    } else {
+        LogCall { on: false, level: level, msg: String.new(), fields: Vec.new(), task_id: 0 }
+    }
+}
+
+impl LogCall {
+    /// Adds the field `key: value`, converted to `Json` only when the call
+    /// is kept.
+    #[observability]
+    fn field[T: Serialize](own self, key: Str, value: ref T) -> LogCall {
+        let mut call = self;
+        if call.on {
+            let tree = match Json.parse(Json.serialize(value)) {
+                Ok(j) => j,
+                Err(_) => Json.Null,
+            };
+            call.fields.push((key.to_string(), tree));
+        }
+        call
+    }
+
+    /// Hands a kept call's record to the backend.
+    #[observability]
+    fn emit(own self) {
+        if self.on {
+            log_dispatch(self, __log_default);
+        }
+    }
+}
+
+/// The record a kept call stands for.
+fn __log_record(call: own LogCall) -> Record {
+    let level = if call.level == 0 {
+        Level.Debug
+    } else if call.level == 1 {
+        Level.Info
+    } else if call.level == 2 {
+        Level.Warn
+    } else {
+        Level.Error
+    };
+    let task_id = if call.task_id == 0 { None } else { Some(call.task_id) };
+    Record { level: level, msg: call.msg, fields: call.fields, trace_id: None, span_id: None, task_id: task_id }
+}
+
+/// The backend before any `init`: JSON to standard error.
+fn __log_default(call: own LogCall) {
+    let task_id = if call.task_id == 0 { None } else { Some(call.task_id) };
+    let none: Option[String] = None;
+    __log_write(Stream.Stderr, __log_json_line(call.level, call.msg, call.fields, none, none, task_id));
+}
+
+fn __log_rank(level: Level) -> i64 {
+    match level {
+        Level.Debug => 0,
+        Level.Info => 1,
+        Level.Warn => 2,
+        Level.Error => 3,
+    }
+}
+
+fn __log_write(to: Stream, line: String) {
+    match to {
+        Stream.Stdout => println(line),
+        Stream.Stderr => eprintln(line),
+    }
+}
+
+/// `s` as `Json.stringify` writes a string.
+fn __log_quote(s: ref String) -> String {
+    Json.String(s.clone()).stringify()
+}
+
+fn __log_json_line(level: i64, msg: String, fields: Vec[(String, Json)], trace_id: Option[String], span_id: Option[String], task_id: Option[i64]) -> String {
+    let names = ["debug", "info", "warn", "error"];
+    let mut line = String.new();
+    line.push_str("{\"level\":\"");
+    line.push_str(names[level]);
+    line.push_str("\",\"msg\":");
+    line.push_str(__log_quote(msg));
+    for f in fields.iter() {
+        line.push(',');
+        line.push_str(__log_quote(f.0));
+        line.push(':');
+        line.push_str(__log_copy(f.1).stringify());
+    }
+    match trace_id {
+        Some(t) => {
+            line.push_str(",\"trace_id\":");
+            line.push_str(__log_quote(t));
+        }
+        None => {}
+    }
+    match span_id {
+        Some(s) => {
+            line.push_str(",\"span_id\":");
+            line.push_str(__log_quote(s));
+        }
+        None => {}
+    }
+    match task_id {
+        Some(n) => line.push_str(f",\"task_id\":{n}"),
+        None => line.push_str(",\"task_id\":null"),
+    }
+    line.push('}');
+    line
+}
+
+/// A text-format value: a string bare when it is not empty and holds no
+/// space, `"`, `=` or control character, else as `Json.stringify` writes it.
+fn __log_text_value(v: ref Json) -> String {
+    match v {
+        Json.String(s) => {
+            let mut bare = not s.is_empty();
+            for c in s.chars() {
+                let n = c as u32;
+                if c == ' ' or c == '"' or c == '=' or n < 32 or (n >= 127 and n < 160) {
+                    bare = false;
+                }
+            }
+            if bare { s.clone() } else { __log_quote(s) }
+        }
+        _ => __log_copy(v).stringify(),
+    }
+}
+
+/// A copy of `v`, for `Json.stringify`, which takes its tree.
+fn __log_copy(v: ref Json) -> Json {
+    match v {
+        Json.Null => Json.Null,
+        Json.Bool(b) => Json.Bool(b),
+        Json.Int(n) => Json.Int(n),
+        Json.Number(x) => Json.Number(x),
+        Json.String(s) => Json.String(s.clone()),
+        Json.Array(items) => {
+            let mut out = Vec.new();
+            for item in items.iter() {
+                out.push(__log_copy(item));
+            }
+            Json.Array(out)
+        }
+        Json.Object(entries) => {
+            let mut out = Vec.new();
+            for e in entries.iter() {
+                out.push((e.0.clone(), __log_copy(e.1)));
+            }
+            Json.Object(out)
+        }
+    }
+}
+
+fn __log_text_line(level: i64, msg: String, fields: Vec[(String, Json)], trace_id: Option[String], span_id: Option[String], task_id: Option[i64]) -> String {
+    let names = ["DEBUG", "INFO ", "WARN ", "ERROR"];
+    let mut line = String.new();
+    line.push_str(names[level]);
+    line.push(' ');
+    line.push_str(msg);
+    for f in fields.iter() {
+        line.push(' ');
+        line.push_str(f.0);
+        line.push('=');
+        line.push_str(__log_text_value(f.1));
+    }
+    match trace_id {
+        Some(t) => line.push_str(f" trace_id={t}"),
+        None => {}
+    }
+    match span_id {
+        Some(s) => line.push_str(f" span_id={s}"),
+        None => {}
+    }
+    match task_id {
+        Some(n) => line.push_str(f" task_id={n}"),
+        None => {}
+    }
+    line
+}
+
+// ── Natives ─────────────────────────────────────────────────────────
+//
+// `#[compiler_builtin]`: the interpreter answers them in src/mir/interp.rs
+// and the compiled backend in src/backend/mir/log.rs, over the runtime's
+// `karac_mir_log_*` (runtime/src/mir_log.rs).
+
+/// Whether a record of `rank` is kept.
+#[compiler_builtin]
+fn log_enabled(rank: i64) -> bool {
+    true
+}
+
+/// The current task's id, or 0 outside every task.
+#[compiler_builtin]
+fn log_task_id() -> i64 {
+    0
+}
+
+/// Installs `backend`, dropping the one before it, and keeps records of
+/// `rank` and above. `record` builds the record a backend receives.
+#[compiler_builtin]
+fn log_install[B: Backend](backend: own B, rank: i64, record: Fn(own LogCall) -> Record) {
+}
+
+/// Under the lock, hands `call`'s record to the installed backend, or
+/// `call` to `default` when there is none.
+#[compiler_builtin]
+fn log_dispatch(call: own LogCall, default: Fn(own LogCall)) {
+}

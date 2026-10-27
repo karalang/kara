@@ -2475,6 +2475,23 @@ impl<'a> super::TypeChecker<'a> {
             _ => None,
         };
 
+        // A `std.log` level call whose fields the rewrite left alone
+        // (docs/library/log.md § Fields).
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if args.len() > 1
+                && self.log_level_fns.contains(name)
+                && self.local_scope.lookup(name).is_none()
+            {
+                if let Some((msg, at)) = crate::log_calls::label_error(args) {
+                    self.type_error(msg, at, TypeErrorKind::LabelMismatch);
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Unit;
+                }
+            }
+        }
+
         // A function with named parameters (design.md § Named and default
         // parameters): the default fill already completed and ordered every
         // well-formed call, so one that reaches here unfilled is wrong, and

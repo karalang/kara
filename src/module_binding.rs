@@ -149,10 +149,16 @@ pub fn expand_single_file_std_module_bindings(program: &mut Program) {
         .items
         .iter()
         .any(|it| matches!(it, Item::Import(imp) if imp.is_wildcard));
+    // `import std.log.{Level};` beside `import std.log;` names the same
+    // item `log.Level` reaches, so it contests nothing.
+    let mut same: HashSet<(Vec<String>, String)> = HashSet::new();
     for it in &program.items {
         let Item::Import(imp) = it else { continue };
         for ii in &imp.items {
             spoken.insert(ii.alias.clone().unwrap_or_else(|| ii.name.clone()));
+            if ii.alias.is_none() {
+                same.insert((imp.path.clone(), ii.name.clone()));
+            }
         }
     }
     let mut providers: HashMap<String, usize> = HashMap::new();
@@ -168,7 +174,8 @@ pub fn expand_single_file_std_module_bindings(program: &mut Program) {
     paths.sort();
     for path in paths {
         for name in refs[path].keys() {
-            if has_wildcard || providers[name] > 1 || spoken.contains(name) {
+            let contested = spoken.contains(name) && !same.contains(&(path.clone(), name.clone()));
+            if has_wildcard || providers[name] > 1 || contested {
                 let alias = crate::module_rename::qualified_name(name, path, &mut taken);
                 aliases.insert((path.clone(), name.clone()), alias);
             }

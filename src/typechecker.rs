@@ -3099,6 +3099,12 @@ pub struct TypeChecker<'a> {
     /// default fill declined gets a diagnostic about its labels rather than
     /// an arity count.
     pub(super) named_fns: std::collections::HashMap<String, crate::default_args::FnDefaultInfo>,
+    /// `std.log`'s level functions by the names the program calls them
+    /// ([`crate::log_calls`]): a call left with fields broke a label rule.
+    pub(super) log_level_fns: std::collections::HashSet<String>,
+    /// The `field` calls the `std.log` rewrite made, by span: the field's
+    /// label, and its value's span and text (for the `Serialize` error).
+    pub(super) log_fields: std::collections::HashMap<SpanKey, (String, Span, String)>,
     /// Working half of `TypeCheckResult::method_impl_type_subs`.
     pub(super) method_impl_type_subs: FxHashMap<(SpanKey, String), FxHashMap<String, String>>,
     /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
@@ -3732,6 +3738,8 @@ impl<'a> TypeChecker<'a> {
             method_default_fills: FxHashMap::default(),
             method_defaults: crate::default_args::method_default_table(program),
             named_fns: crate::default_args::named_param_table(program),
+            log_level_fns: crate::log_calls::level_fns(program).into_keys().collect(),
+            log_fields: std::collections::HashMap::new(),
             method_impl_type_subs: FxHashMap::default(),
             impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::default(),
             checked_container_hashers: FxHashSet::default(),

@@ -482,6 +482,35 @@ pub(super) fn verdict(
                 .map(Effect::display)
         })
         .collect();
+    // The first block of a branch that logs. Auto-par moves none: lines
+    // keep their order, and a line logged from a task carries its id
+    // (docs/library/log.md § Span context), so a statement or loop that
+    // logs stays where it was written. A written `par` is not affected.
+    // Interim: the spec makes auto-par invisible to logging instead
+    // (B-2026-10-27-22).
+    let logs: Vec<Option<BasicBlock>> = sets
+        .iter()
+        .map(|set| {
+            set.iter()
+                .copied()
+                .find(|b| at.get(b).is_some_and(|e| e.logs))
+        })
+        .collect();
+    let visible: Vec<Option<String>> = visible
+        .into_iter()
+        .zip(&logs)
+        .map(|(v, l)| v.or_else(|| l.map(|_| "logs".to_string())))
+        .collect();
+    let in_order = |i: usize, j: usize| -> Option<ParConflict> {
+        let (a, b) = (logs[i]?, logs[j]?);
+        Some(ParConflict {
+            region: 0,
+            line: r.span.line,
+            branches: (i, j),
+            first: (a, "logs".to_string()),
+            second: (b, "logs".to_string()),
+        })
+    };
     let panic: Vec<Option<String>> = sets
         .iter()
         .map(|set| {
@@ -620,7 +649,7 @@ pub(super) fn verdict(
                     .filter(|a| !carried.contains(&a.place.local.0))
                     .cloned()
                     .collect()];
-                match conflict(&rest, 0, 0) {
+                match conflict(&rest, 0, 0).or_else(|| in_order(0, 0)) {
                     Some(c) => Err(Refusal::Conflict(c)),
                     None => match stopped(0, 0) {
                         Some(why) => Err(why),
@@ -675,6 +704,7 @@ pub(super) fn verdict(
                     });
                 }
                 conflict(&touched, i, j)
+                    .or_else(|| in_order(first, second))
                     .map(Refusal::Conflict)
                     .or_else(|| stopped(i, j))
                     .or_else(|| stopped(j, i))
@@ -696,6 +726,9 @@ pub(super) fn verdict(
                     first_refusal.get_or_insert(Refusal::Unknown(u.clone()));
                 } else if let Some(c) = &crossing[k] {
                     first_refusal.get_or_insert(Refusal::Crossing(c.clone()));
+                } else if let Some(c) = in_order(k, k) {
+                    // Moved into a task, its lines would carry that task's id.
+                    first_refusal.get_or_insert(Refusal::Conflict(c));
                 } else {
                     cur.push(k);
                 }

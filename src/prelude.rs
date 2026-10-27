@@ -1312,6 +1312,11 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "process"],
         include_str!("../runtime/stdlib/std_process.kara"),
     ),
+    // `std.log` (docs/library/log.md; B-2026-10-27-20).
+    (
+        &["std", "log"],
+        include_str!("../runtime/stdlib/std_log.kara"),
+    ),
 ];
 
 /// Whether a library source (the prelude's or a gated module's) declares
@@ -1787,6 +1792,7 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
             Item::Function(f) => Some(f.name.clone()),
             Item::StructDef(s) => Some(s.name.clone()),
             Item::EnumDef(e) => Some(e.name.clone()),
+            Item::TraitDef(t) => Some(t.name.clone()),
             _ => None,
         }
     };
@@ -1841,6 +1847,7 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
                     e.stdlib_origin = true;
                     spliced_type_names.insert(e.name.clone());
                 }
+                Item::TraitDef(t) => t.stdlib_origin = true,
                 _ => {}
             }
             if matches!(cloned, Item::StructDef(_) | Item::EnumDef(_)) {
@@ -2175,6 +2182,7 @@ pub fn dedup_spliced_items(items: &mut Vec<Item>) {
             Item::Function(f) if f.stdlib_origin => (0, f.name.clone()),
             Item::StructDef(s) if s.stdlib_origin => (1, s.name.clone()),
             Item::EnumDef(e) if e.stdlib_origin => (1, e.name.clone()),
+            Item::TraitDef(t) if t.stdlib_origin => (1, t.name.clone()),
             Item::ImplBlock(b)
                 if b.items
                     .iter()
@@ -2288,21 +2296,6 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "Output",
         ],
         &[],
-    ),
-    (
-        &["std", "log"],
-        &[],
-        &[
-            "debug",
-            "info",
-            "warn",
-            "error",
-            "init",
-            "Backend",
-            "Record",
-            "json_backend",
-            "text_backend",
-        ],
     ),
 ];
 
@@ -2466,6 +2459,8 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
     }
     program.items.extend(appended);
     dedup_spliced_items(&mut program.items);
+    // `std.log`'s level calls with fields become their call chains.
+    crate::log_calls::rewrite_log_calls(program);
 }
 
 /// A baked-stdlib method's stability annotations: the `#[unstable]` payload

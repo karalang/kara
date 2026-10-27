@@ -83,7 +83,7 @@ Everything else is imported from a `std.*` module:
 | `std.crypto.sha2` | `sha256`, `sha384`, `sha512`, `Sha256`, `Sha384`, `Sha512` |
 | `std.crypto.hmac` | `hmac_sha256`, `hmac_sha384`, `hmac_sha512`, `HmacSha256`, `HmacSha384`, `HmacSha512` |
 | `std.crypto.legacy` | `sha1`, `Sha1` |
-| `std.log` | `debug`, `info`, `warn`, `error`, `init`, `Backend`, `Record`, `json_backend`, `text_backend` |
+| `std.log` | `debug`, `info`, `warn`, `error`, `init`, `Level`, `Record`, `Backend`, `Stream`, `json_backend`, `text_backend` |
 | `std.secret` | `Secret`, `ConstantTimeEq`, `Zeroize` |
 
 Domain names (an HTTP `Response`, a parser's `Parser` and `Span`, JSON types) live under `std.*` as well and are never in the prelude. A local binding may shadow any prelude name; a lint flags the likely-unintended cases.

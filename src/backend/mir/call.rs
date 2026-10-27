@@ -749,6 +749,11 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if let (Some(name), "") = (base.strip_suffix("$std_log"), method) {
+            if self.log_native(name, args, dest)?.is_some() {
+                return Ok(());
+            }
+        }
         if base == "Vector" && self.vector_native(method, args, dest)?.is_some() {
             return Ok(());
         }

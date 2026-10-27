@@ -1,0 +1,9 @@
+source = "B-2026-10-27-20"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["log", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/log.md § Filtering: Info kept by default, init sets the lowest level and replaces the backend; a dropped record never reaches the backend but its arguments are evaluated in order. Level is ordered Debug < Info < Warn < Error."

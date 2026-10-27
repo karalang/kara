@@ -1,0 +1,11 @@
+source = "B-2026-10-27-20"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["log", "library"]
+class = "a"
+expected_from = "pin"
+backends = []
+env = {}
+note = "docs/library/log.md § Fields: a field after the message is written key: value."
+bucket = "a:refused"

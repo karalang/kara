@@ -170,6 +170,10 @@ pub struct EffectSet {
     /// each caller substitutes the effects of the argument it passes
     /// (core §12, D6). Never escapes a body as anything but a parameter.
     pub calls: BTreeSet<u32>,
+    /// Logs through `std.log`: no effect and no conflict with anything
+    /// (design.md § Observability), but two statements that log keep
+    /// their order, so statement auto-par never reorders the lines.
+    pub logs: bool,
 }
 
 impl EffectSet {
@@ -177,8 +181,7 @@ impl EffectSet {
         EffectSet {
             unknown: true,
             why: BTreeSet::from([why]),
-            effects: BTreeSet::new(),
-            calls: BTreeSet::new(),
+            ..EffectSet::default()
         }
     }
 
@@ -191,10 +194,11 @@ impl EffectSet {
         self.why.extend(other.why);
         self.effects.extend(other.effects);
         self.calls.extend(other.calls);
+        self.logs |= other.logs;
     }
 
     fn is_empty(&self) -> bool {
-        !self.unknown && self.effects.is_empty() && self.calls.is_empty()
+        !self.unknown && self.effects.is_empty() && self.calls.is_empty() && !self.logs
     }
 
     pub fn display(&self) -> Vec<String> {
@@ -1525,6 +1529,8 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("fence" | "compiler_fence", "") => vec![],
         ("list_par_blocks" | "list_tasks", "") => vec![(Reads, "Scheduler", None), HEAP],
         ("has_debug_metadata", "") => vec![],
+        // `std.log`'s natives, called only from its transparent functions.
+        (b, "") if b.ends_with("$std_log") => vec![],
         _ => return None,
     })
 }
@@ -1959,6 +1965,12 @@ impl<'p> Analysis<'p> {
             }
         };
         let arg_fn = |i: usize| self.fn_value_effects(body, defs, args.get(i), summaries);
+        // Observability adds no effect and conflicts with nothing
+        // (design.md § Observability): `std.log`'s functions.
+        if self.program.is_transparent(&inst.name) {
+            eff.logs = true;
+            return;
+        }
         if self.program.bodies.contains_key(&inst.name) {
             if let Some(callee) = summaries.get(&inst.name) {
                 eff.union(substitute(callee, &arg_key, &arg_fn));
@@ -2265,6 +2277,7 @@ fn substitute(
     let mut out = EffectSet {
         unknown: callee.unknown,
         why: callee.why.clone(),
+        logs: callee.logs,
         ..EffectSet::default()
     };
     for p in &callee.calls {

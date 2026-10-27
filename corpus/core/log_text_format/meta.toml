@@ -1,0 +1,9 @@
+source = "B-2026-10-27-20"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["log", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/log.md § The text format: level upper-cased and padded to five, key=value per field, no task_id outside a task; a string bare unless empty or holding a space, a quote, = or a control character."

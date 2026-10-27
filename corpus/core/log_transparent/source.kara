@@ -1,0 +1,34 @@
+// std.log is transparent to effects (docs/library/log.md, design.md
+// § Observability): a public function declared with no effects may log,
+// two `par` branches that log do not conflict, and the lines of one task
+// keep their source order, which statement auto-par must not change.
+import std.log;
+import std.log.{info};
+
+pub fn add(a: i64, b: i64) -> i64 {
+    info("adding", a: a, b: b);
+    a + b
+}
+
+struct Lines { }
+
+impl log.Backend for Lines {
+    fn emit(mut ref self, record: log.Record) {
+        let mut line = record.msg.clone();
+        for f in record.fields.iter() {
+            line.push_str(f" {f.0}");
+        }
+        println(line);
+    }
+}
+
+fn main() {
+    log.init(Lines { });
+    par { info("branch", side: 1), info("branch", side: 2) };
+    let xs = vec![3, 1, 2];
+    let ys = vec!["b", "a"];
+    info("first", xs: xs);
+    info("second", ys: ys);
+    info("third", n: xs.len() + ys.len());
+    println(f"{add(2, 3)}");
+}

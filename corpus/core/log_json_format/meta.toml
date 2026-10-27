@@ -1,0 +1,9 @@
+source = "B-2026-10-27-20"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["log", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/log.md § The JSON format: key order level, msg, fields in call order, task_id null in main; each field the Json tree its Serialize impl builds, written as Json.stringify writes it; no timestamp. Values are borrowed."

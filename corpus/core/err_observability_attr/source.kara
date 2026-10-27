@@ -1,0 +1,10 @@
+// `#[observability]` marks the standard library's logging functions as
+// transparent to effects; user code cannot write it (docs/library/log.md).
+#[observability]
+fn quiet() {
+    println("not transparent");
+}
+
+fn main() {
+    quiet();
+}

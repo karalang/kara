@@ -1008,15 +1008,25 @@ impl<'a> super::Resolver<'a> {
             return;
         }
         for attr in attrs {
-            if attr.is_bare("compiler_builtin") {
+            // `#[observability]` marks the library's logging as transparent
+            // to effects (design.md § Observability); user code cannot.
+            let name = if attr.is_bare("compiler_builtin") {
+                "compiler_builtin"
+            } else if attr.is_bare("observability") {
+                "observability"
+            } else {
+                continue;
+            };
+            {
                 self.errors.push(ResolveError {
-                    message: "`#[compiler_builtin]` is reserved for stdlib source baked into the compiler binary"
-                        .to_string(),
+                    message: format!(
+                        "`#[{name}]` is reserved for stdlib source baked into the compiler binary"
+                    ),
                     span: attr.span,
                     kind: ResolveErrorKind::CompilerBuiltinReserved,
                     suggestion: None,
                     replacement: None,
-                stub_hint: None,
+                    stub_hint: None,
                 });
             }
         }

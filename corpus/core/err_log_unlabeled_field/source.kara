@@ -1,0 +1,8 @@
+// A log field after the message is written `key: value`
+// (docs/library/log.md § Fields).
+import std.log.{error};
+
+fn main() {
+    let status = 500;
+    error("failed", status);
+}

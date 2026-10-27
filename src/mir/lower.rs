@@ -551,6 +551,7 @@ fn lower_program_inner<'a>(
         .filter(|n| through_ref_fields(&lcx.program, &lcx.tys, &views, n))
         .cloned()
         .collect();
+    lcx.program.transparent = observability_fns(program);
     Lowered {
         program: lcx.program,
         tys: lcx.tys,
@@ -13973,6 +13974,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
+        // `std.log`'s installed backend receives each kept record through
+        // its `emit`.
+        if name.starts_with("log_install$") {
+            if let Some(op) = args.first() {
+                let (_, t) = self.strip_ty_full(self.operand_ty(op));
+                if let Some((d, inst)) = self.user_impl_method(t, "Backend", "emit") {
+                    self.lcx.instance(d, inst);
+                }
+            }
+        }
         if name.starts_with("Log[") && name.ends_with(".set_exporter") {
             if let Some(op) = args.first() {
                 let (_, t) = self.strip_ty_full(self.operand_ty(op));
@@ -14632,9 +14643,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // stores nothing: its path is a `Str`.
                     // `forget(value)` takes the value and drops nothing
                     // (B-2026-10-22-38).
+                    // `std.log`'s backend and call move into the runtime
+                    // (runtime/stdlib/std_log.kara).
                     let stores = (stores_argument(&name)
                         && self.lcx.def_owner(d).as_deref() != Some("File"))
-                        || (name == "forget" && self.lcx.def_owner(d).is_none());
+                        || (name == "forget" && self.lcx.def_owner(d).is_none())
+                        || (matches!(
+                            name.as_str(),
+                            "log_install$std_log" | "log_dispatch$std_log"
+                        ) && self.lcx.def_owner(d).is_none());
                     // A library handle declared `own` moves in, as into a
                     // library method (`BufReader.new(file)` keeps the file).
                     let owns = self
@@ -21622,6 +21639,9 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
             "DeserializeError",
             "Json.serialize",
             "Json.deserialize",
+            // A log call's field is converted through `Json.serialize`
+            // (runtime/stdlib/std_log.kara).
+            "std.log",
         ],
         &[],
     ),
@@ -21630,7 +21650,7 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         // keeps them `#[compiler_builtin]` in runtime/stdlib/json.kara. A
         // program's own `Json` is not the library's.
         JSON_SOURCE,
-        &["Json", "JsonError"],
+        &["Json", "JsonError", "std.log"],
         &["Json"],
     ),
     (
@@ -22939,6 +22959,40 @@ pub fn lower_program_with_roots(
     );
     lowered.program.user_source_len = user_len;
     lowered
+}
+
+/// The library's `#[observability]` functions and methods (`info`,
+/// `LogCall.emit`), which add no effect to their caller (design.md
+/// § Observability).
+fn observability_fns(program: &ast::Program) -> std::collections::BTreeSet<String> {
+    let marked = |attrs: &[ast::Attribute], stdlib: bool| {
+        stdlib && attrs.iter().any(|a| a.is_bare("observability"))
+    };
+    let mut out = std::collections::BTreeSet::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) if marked(&f.attributes, f.stdlib_origin) => {
+                out.insert(f.name.clone());
+            }
+            Item::ImplBlock(imp) => {
+                let ast::TypeKind::Path(p) = &imp.target_type.kind else {
+                    continue;
+                };
+                let Some(target) = p.segments.last() else {
+                    continue;
+                };
+                for it in &imp.items {
+                    if let ast::ImplItem::Method(m) = it {
+                        if marked(&m.attributes, m.stdlib_origin) {
+                            out.insert(format!("{target}.{}", m.name));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// When `lowered` cancels tasks (a `TaskGroup.cancel`, or a group's

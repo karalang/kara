@@ -1,0 +1,19 @@
+// A log field's value is any `Serialize` type; another type is an error,
+// whose fix-it writes it as text when it is `Display`
+// (docs/library/log.md § Fields).
+import std.log.{info};
+
+struct Port {
+    n: i64,
+}
+
+impl Display for Port {
+    fn to_string(ref self) -> String {
+        f"port {self.n}"
+    }
+}
+
+fn main() {
+    let p = Port { n: 80 };
+    info("listening", port: p);
+}

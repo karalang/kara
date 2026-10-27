@@ -736,6 +736,9 @@ impl<'a> super::EffectChecker<'a> {
     /// propagated because `collect_calls_in_expr` walks into closure
     /// bodies at the call site.
     pub(crate) fn callee_effect_sets(&self, callee_name: Symbol) -> CalleeEffectSets<'_> {
+        if self.observability.contains(&callee_name) {
+            return CalleeEffectSets::None;
+        }
         let is_pub = self
             .function_visibility
             .get(&callee_name)
@@ -964,6 +967,11 @@ impl<'a> super::EffectChecker<'a> {
         calls: &mut Vec<(Symbol, Span)>,
     ) {
         self.note_bound_event(BoundEvent::Generic { callee, node });
+        // An observability function's calls through bounds are its own
+        // (`std.log`'s `field` serializing a value).
+        if self.observability.contains(&callee) {
+            return;
+        }
         let Some(pairs) = self.bound_calls.get(&callee) else {
             return;
         };

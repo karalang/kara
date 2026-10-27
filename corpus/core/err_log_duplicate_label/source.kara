@@ -1,0 +1,7 @@
+// A label used twice in one log call is an error (docs/library/log.md
+// § Fields).
+import std.log.{warn};
+
+fn main() {
+    warn("retry", attempt: 1, attempt: 2);
+}

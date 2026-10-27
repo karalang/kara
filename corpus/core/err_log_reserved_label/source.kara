@@ -1,0 +1,8 @@
+// A log field may not use a label every record already carries
+// (docs/library/log.md § Fields).
+import std.log.{info};
+
+fn main() {
+    let id = 3;
+    info("start", task_id: id);
+}

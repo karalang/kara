@@ -4,6 +4,8 @@
 
 Logging is observability, so it is transparent to the effect system ([design.md §12](../design.md#observability)). The functions of `std.log` are declared with no effects: a call never changes a function's effect set and never conflicts with anything, so adding a log line cannot change a signature or forbid parallelism. The standard library marks them with an internal attribute that user code cannot write, as it does with `#[compiler_builtin]`. Because log output does not conflict, lines from concurrent branches may interleave; within one branch they follow source order.
 
+The compiler's own parallelization (statement and loop auto-par) is invisible to logging. A task it creates is not a task to the program: its records carry the enclosing task's `task_id` and span, not a new id, and they reach the backend in the order the sequential program would emit them, held per auto-par task and released in statement order where the tasks join. A task the program starts itself, with `par` or a `TaskGroup`, is a real task, with its own id and no order relative to its siblings.
+
 ## Severity levels
 
 `debug`, `info`, `warn` and `error` each take a message followed by zero or more `key: value` structured fields. The field values are borrowed, so logging a value does not move it.
@@ -84,13 +86,13 @@ If `log.init` is never called, records at `Info` and above go to `log.json_backe
 | `debug`, `info`, `warn`, `error` | `fn info(msg: Str)`, then open `key: value` fields | See [Fields](#fields) |
 | `Level` | `enum Level { Debug, Info, Warn, Error }` | Ordered as written; `Copy`, `Eq`, `Ord` |
 | `Record` | `struct Record { level: Level, msg: String, fields: Vec[(String, Json)], trace_id: Option[String], span_id: Option[String], task_id: Option[i64] }` | `fields` in the order the call wrote them. `Json` is [`std.json.Json`](json.md) |
-| `Backend` | `trait Backend: Send { fn emit(mut ref self, record: Record); }` | `record` is borrowed |
-| `init` | `fn init[B: Backend](backend: own B; level: Level = Level.Info)` | Replaces the backend and the lowest level kept |
+| `Backend` | `trait Backend { fn emit(mut ref self, record: Record); }` | `record` is borrowed |
+| `init` | `fn init[B: Backend](backend: own B; level: Level = Level.Info)` | Replaces the backend and the lowest level kept. `B` must cross tasks (`CrossTask`, [core-semantics.md §6.3](../core-semantics.md#6-sharing-c7)), since `emit` runs on whichever task logs |
 | `Stream` | `enum Stream { Stdout, Stderr }` | Where a built-in backend writes |
 | `json_backend` | `fn json_backend(to: Stream) -> JsonBackend` | One JSON object per line |
 | `text_backend` | `fn text_backend(to: Stream) -> TextBackend` | One line of text per record |
 
-**One record at a time.** The runtime holds a lock around `emit`, so a backend never sees two records at once and a line is never torn. Records from concurrent tasks reach the backend in an order the program does not choose ([core-semantics.md §11.1](../core-semantics.md#11-concurrency-c9)); records from one task arrive in the order it logged them.
+**One record at a time.** The runtime holds a lock around `emit`, so a backend never sees two records at once and a line is never torn. A record logged from inside a backend's own `emit` goes to the default backend, `json_backend(Stream.Stderr)`, rather than waiting on the lock its task holds. Records from concurrent tasks reach the backend in an order the program does not choose ([core-semantics.md §11.1](../core-semantics.md#11-concurrency-c9)); records from one task arrive in the order it logged them.
 
 **A backend's own effects are hidden.** `emit` may write a file or a socket, but the log call that reached it still has no effects (see the top of this page). A backend that fails to write drops the record; it must not panic.
 
@@ -116,5 +118,6 @@ ERROR request failed err="token expired" status=500 task_id=3
 
 ## Not yet implemented
 
-- All of `std.log`. `karac check` refuses each item with "`std.log.<name>` is in the library spec but not implemented yet" (B-2026-10-15-10).
-- `import std.log;` as the Backends example writes it: a whole-module import of `std.log` is refused today ("`std.log` is imported item by item"; B-2026-10-15-10).
+- `init` does not yet refuse a backend that cannot cross tasks (B-2026-10-27-21).
+- Auto-par is not yet invisible to logging. Until it is, auto-par moves no statement or loop that logs, so a program's lines and their `task_id` are those of the program as written (B-2026-10-27-22).
+- Renaming a type of `std.log` on import (`import std.log.{Level as L}`) makes a second type, which the library's functions do not accept; import the types under their own names (B-2026-10-27-23).

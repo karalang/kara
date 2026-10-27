@@ -1,0 +1,24 @@
+// std.log's filtering (docs/library/log.md § Filtering): `Info` and above
+// are kept until `log.init` sets another level; a dropped record never
+// reaches the backend, but its arguments are still evaluated, in order. A
+// later `init` replaces the backend and the level.
+import std.log;
+import std.log.{Level, debug, info, warn, error};
+
+fn counted(label: Str, n: i64) -> i64 {
+    println(f"evaluated {label}");
+    n
+}
+
+fn main() {
+    println(f"{Level.Debug < Level.Info} {Level.Warn < Level.Error} {Level.Error > Level.Info}");
+    log.init(log.text_backend(log.Stream.Stdout));
+    debug("dropped at the default level", n: counted("first", 1), m: counted("second", 2));
+    info("kept at the default level", n: counted("third", 3));
+    log.init(log.text_backend(log.Stream.Stdout), level: Level.Debug);
+    debug("kept at Debug");
+    log.init(log.json_backend(log.Stream.Stdout), level: Level.Warn);
+    info("dropped at Warn");
+    warn("kept at Warn");
+    error("kept at Warn too");
+}

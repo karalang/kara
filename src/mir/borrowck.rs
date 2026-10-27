@@ -2373,6 +2373,12 @@ fn main() -> () {
             "err_enum_payload_drop_type_into_constructor",
             "err_fn_value_shared_crosses_task",
             "err_fn_kind_mismatch",
+            // `std.log`'s fields and its attribute (B-2026-10-27-20).
+            "err_log_reserved_label",
+            "err_log_duplicate_label",
+            "err_log_unlabeled_field",
+            "err_log_field_not_serialize",
+            "err_observability_attr",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;
@@ -2391,6 +2397,12 @@ fn main() -> () {
             "for_into_iter_consumes",
             "ok_ref_copied_from_a_tuple_element",
             "ok_error_anyerror",
+            // `std.log` is spliced from the library with `std.json`.
+            "log_custom_backend",
+            "log_filtering",
+            "log_json_format",
+            "log_text_format",
+            "log_transparent",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)
