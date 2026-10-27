@@ -1,0 +1,11 @@
+source = "corpus/core/ok_ref_copied_from_a_tuple_element"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["borrow"]
+class = "a"
+expected_from = "spec"
+rules = ["1.1", "5.3"]
+backends = []
+env = {}
+note = "B-2026-10-14-29: a `ref Node` copied out of a `Vec[(ref Node, i64)]` element keeps the node's origin, so the vector can be popped or cleared while the copy is live."

@@ -1,0 +1,45 @@
+// A `(ref Node, i64)` is `Copy`, and copying the `ref Node` out of a
+// vector's element keeps the node's origin, not the vector's (core-semantics
+// §1.1, §5.3), so the vector can change while the copy is live.
+// B-2026-10-14-29.
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn destructured(t: Node) -> i64 {
+    let mut v: Vec[(ref Node, i64)] = Vec.new();
+    for c in t.children.iter() {
+        v.push((c, 1));
+    }
+    let (a, n) = v[0];
+    v.pop();
+    a.val + n
+}
+
+fn by_field(t: Node) -> i64 {
+    let mut v: Vec[(ref Node, i64)] = Vec.new();
+    for c in t.children.iter() {
+        v.push((c, 1));
+    }
+    let a = v[0].0;
+    let n = v[0].1;
+    v.clear();
+    a.val + n
+}
+
+fn whole_tuple(t: Node) -> i64 {
+    let mut v: Vec[(ref Node, i64)] = Vec.new();
+    for c in t.children.iter() {
+        v.push((c, 1));
+    }
+    let pair = v[1];
+    v.pop();
+    v.pop();
+    pair.0.val + pair.1
+}
+
+fn main() {
+    let t = Node { val: 1, children: vec![Node { val: 2, children: Vec.new() }, Node { val: 3, children: Vec.new() }] };
+    println(f"{destructured(t)} {by_field(t)} {whole_tuple(t)}");
+}
