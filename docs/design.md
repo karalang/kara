@@ -3443,6 +3443,8 @@ where I.Item: Add[Output = I.Item]
 
 The caller does not name `Item` at the call; it comes from `I`.
 
+**A projection names one trait's type.** `T.Name` belongs to the one bound on `T` that declares `Name`. When two bounds declare it (`T: Add + Mul` both declare `Output`; `I: Iterator + IntoIterator` both declare `Item`), `T.Name` is ambiguous and an error where it is written (`E_AMBIGUOUS_ASSOC_TYPE`), and so is the `where T.Name = X` form. Each bound fixes its own instead, `T: Add[Output = T] + Mul[Output = i64]`; when the type must stay open, a type parameter names it: `fn f[T: Add[Output = A] + Mul[Output = M], A, M](a: T, b: T) -> (A, M)`. There is no qualified spelling such as `T.Add.Output`. An operator's result carries its trait, so under `T: Add[Output = T] + Mul[Output = i64]` the expression `a * b` is an `i64` and `a + b` a `T` (review-thread ruling 2026-10-27, B-2026-10-27-18).
+
 **Equality constraints.** A `where` clause may fix an associated type to a type:
 
 ```kara
