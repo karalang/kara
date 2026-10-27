@@ -681,6 +681,23 @@ impl<'a> super::Resolver<'a> {
                 {
                     continue;
                 }
+                // B-2026-10-25-40 — the channel a clause cannot name. A
+                // function type's parameters have no names, so a slot such as
+                // `Fn(ref Receiver[String]) -> String` has no `rx` to root
+                // `receives(rx)` at, and the effect checker charges a callback
+                // that receives on its parameter with the collapsed resource
+                // `CHANNEL_RESOURCE_CANONICAL`. `sends(Channel)` /
+                // `receives(Channel)` spell that resource: some channel, the
+                // clause cannot say which, so it conflicts with every channel
+                // (core-semantics.md §12 item 5). Only under the two channel
+                // verbs: `writes(Channel)` still names the prelude type.
+                if resource.path.len() == 1
+                    && first == crate::ast::CHANNEL_RESOURCE_CANONICAL
+                    && matches!(sym.kind, SymbolKind::Primitive)
+                    && matches!(verb.kind, EffectVerbKind::Sends | EffectVerbKind::Receives)
+                {
+                    continue;
+                }
                 let kind_label = match &sym.kind {
                     SymbolKind::EffectResource | SymbolKind::Import { .. } => None,
                     // Dotted resource paths (`reads(net.Conn)`) resolve

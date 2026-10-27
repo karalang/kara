@@ -5155,6 +5155,7 @@ A resource may be rooted at a value: `sends(tx)` on a channel sender, `receives(
 - when the compiler cannot tell whether two such values are the same, they conflict;
 - a resource rooted at a parameter (`writes(f)`, `sends(tx)`) is substituted by the argument at each call, and keyed by that argument;
 - effects on a function's own locals are not effects of the function: they never appear in its signature. Inside its body they still decide which `par` branches conflict, as `one_channel` below shows.
+- a function type's parameters have no names, so its clause writes a channel effect as `sends(Channel)` or `receives(Channel)`: some channel, which the clause cannot name, so it conflicts with every channel. A stored callback that receives on its parameter is `Fn(ref Receiver[String]) -> String with receives(Channel) blocks`.
 
 ```kara
 fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] {
