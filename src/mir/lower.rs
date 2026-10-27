@@ -11839,6 +11839,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                     dest,
                 );
             }
+            // A type with an `Iterable` impl is borrowed through its
+            // `iter` (design.md § `Iterator` and `Iterable`).
+            HK::Adt { .. } if mode == Mode::Ref && idx.is_none() => {
+                if let Some(iter) = self.iterable_iter(coll, e.span)? {
+                    return self.for_iterable(label, pattern, src, src_is_ref, iter, body, dest);
+                }
+                return self.unsupported(e.span, "a `for` loop over a collection");
+            }
             _ => return self.unsupported(e.span, "a `for` loop over a collection"),
         };
         if src_is_ref && mode == Mode::Owned {
@@ -13130,6 +13138,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.errors.truncate(before);
             return Ok(None);
         };
+        self.iterator_next_of(t, iterable.span)
+    }
+
+    /// [`Self::iterator_next`] for a value of type `t`.
+    fn iterator_next_of(&mut self, t: Ty, span: Span) -> R<Option<NextFn>> {
         let tcx = self.tys().tcx();
         let HK::Adt { def, args } = tcx.kind(t) else {
             return Ok(None);
@@ -13156,7 +13169,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let ret = match self.lcx.fn_return(d, &args) {
             Ok(r) => r,
-            Err(err) => return self.unsupported(iterable.span, &err),
+            Err(err) => return self.unsupported(span, &err),
         };
         let name = self.lcx.instance(d, args.clone());
         Ok(Some((d, args, name, ret)))
@@ -13206,6 +13219,121 @@ impl<'l, 'a> Bx<'l, 'a> {
             format!("{iter}.next"),
             ret,
         )))
+    }
+
+    /// The `iter` of `coll`'s `Iterable` impl, instanced for `coll`'s
+    /// arguments, when it has one that borrows its receiver.
+    fn iterable_iter(&mut self, coll: Ty, span: Span) -> R<Option<NextFn>> {
+        let tcx = self.tys().tcx();
+        let HK::Adt { def, args } = tcx.kind(coll) else {
+            return Ok(None);
+        };
+        let args = tcx.list(args).to_vec();
+        let Some(cands) = self.lcx.defs.methods.get(&def).and_then(|m| m.get("iter")) else {
+            return Ok(None);
+        };
+        let Some(d) = cands.iter().copied().find(|&d| {
+            let path = &self.lcx.defs.table.get(d).path.segments;
+            self.lcx.fns.contains_key(&d)
+                && path.len() >= 2
+                && path[path.len() - 2].starts_with("impl Iterable#")
+        }) else {
+            return Ok(None);
+        };
+        let info = &self.lcx.fns[&d];
+        let f = info.f;
+        let Some(args) = info.impl_args(&args) else {
+            return Ok(None);
+        };
+        if !f.params.is_empty() || f.self_param != Some(SelfParam::Ref) {
+            return Ok(None);
+        }
+        let ret = match self.lcx.fn_return(d, &args) {
+            Ok(r) => r,
+            Err(err) => return self.unsupported(span, &err),
+        };
+        let name = self.lcx.instance(d, args.clone());
+        Ok(Some((d, args, name, ret)))
+    }
+
+    /// `for pattern in c` over a type with an `Iterable` impl: the loop
+    /// calls `c.iter()`, which borrows `c`, and consumes the iterator it
+    /// returns as [`Self::for_iterator`] does.
+    #[allow(clippy::too_many_arguments)]
+    fn for_iterable(
+        &mut self,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        src: &'a Expr,
+        src_is_ref: bool,
+        (d, args, name, it_t): NextFn,
+        body: &'a Block,
+        dest: Place,
+    ) -> R<()> {
+        let Some(next) = self.iterator_next_of(it_t, src.span)? else {
+            return self.unsupported(src.span, "an `Iterable` whose `iter` returns no `Iterator`");
+        };
+        let Some(some) = self
+            .error_variant(next.3)
+            .filter(|_| {
+                self.tys()
+                    .tcx()
+                    .adt_of(next.3)
+                    .is_some_and(|(a, _)| a.name == "Option")
+            })
+            .map(|none| 1 - none)
+        else {
+            return self.unsupported(src.span, "a `next` that returns no `Option`");
+        };
+        let Some(item_t) = self.tys().tcx().field_ty(next.3, Some(some), 0) else {
+            return self.unsupported(src.span, "a `next` with no payload");
+        };
+        self.push_scope();
+        let st = self.expr_ty(src)?;
+        let coll = match self.tys().tcx().kind(st) {
+            HK::Ref(t) | HK::MutRef(t) => t,
+            _ => st,
+        };
+        let rt = self.tys().tcx().reference(coll, false);
+        let r = self.temp(rt);
+        let p = self.expr_place(src, false)?;
+        let p = if src_is_ref {
+            p.project(ProjElem::Deref)
+        } else {
+            p
+        };
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+        let it = self.scoped_temp(it_t);
+        let func = self.fn_operand(&name, d, args);
+        let after = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: vec![Operand::Move(Place::local(r))],
+                destination: Place::local(it),
+                target: Some(after),
+                unwind: UnwindAction::Abort,
+            },
+            after,
+        );
+        let head = self.b.new_block();
+        let exit = self.b.new_block();
+        self.goto(head);
+        self.cur = head;
+        self.loops.push(LoopCx {
+            label: label.clone(),
+            break_bb: exit,
+            continue_bb: head,
+            depth: self.scopes.len(),
+            dest: None,
+        });
+        let r = self.for_iterator_round(pattern, it, next, some, item_t, body, head, exit);
+        self.loops.pop();
+        r?;
+        self.cur = exit;
+        self.pop_scope()?;
+        self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+        Ok(())
     }
 
     /// `for pattern in it` over an `Iterator`: the loop owns `it` and calls

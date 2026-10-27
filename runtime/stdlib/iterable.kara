@@ -1,0 +1,11 @@
+// runtime/stdlib/iterable.kara
+//
+// design.md § `Iterator` and `Iterable`: `Iterable` is a lang-item trait for
+// a collection that can be iterated by borrowing it. `for x in c` over a type
+// that is not an `Iterator` means `let mut it = c.iter(); while let Some(x) =
+// it.next() { ... }`. Each impl's `impl Iterator` is its own type.
+
+trait Iterable {
+    type Item;
+    fn iter(self) -> impl Iterator[Item = Self.Item];
+}

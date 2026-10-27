@@ -487,6 +487,7 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     // CR-202 slice 5g.
     "Debug",
     "Iterator",
+    "Iterable",
     "IntoIterator",
     // Slice F (`std.json`): `ToJson` / `FromJson` are user-impl-only in
     // v1 (no derived form); making them prelude-visible lets user types
@@ -1049,6 +1050,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "into_iterator.kara",
         include_str!("../runtime/stdlib/into_iterator.kara"),
+    ),
+    (
+        "iterable.kara",
+        include_str!("../runtime/stdlib/iterable.kara"),
     ),
     ("not.kara", include_str!("../runtime/stdlib/not.kara")),
     // Phase 7 user-`impl Drop` dispatch — Prereq.1. Bakes the `Drop`

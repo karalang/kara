@@ -307,6 +307,22 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// The item a `for` over `ty` binds when `ty` is (a borrow of) a type
+    /// parameter whose bounds say `P: Iterable[Item = T]`: that `T`.
+    pub(super) fn iterable_param_item(&mut self, ty: &Type) -> Option<Type> {
+        let mut base = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = base {
+            base = inner;
+        }
+        let param = self.type_param_name(base)?.clone();
+        let te = self
+            .enclosing_assoc_eqs
+            .get(&(param, "Item".to_string(), Some("Iterable".to_string())))?
+            .clone();
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        Some(self.lower_type_expr(&te, &scope))
+    }
+
     /// `t` with each projection the enclosing function's bounds fix
     /// (`I.Item` under `I: Iterator[Item = i64]`) replaced by its type, so a
     /// closure handed to a method reached through `I` takes an `i64`

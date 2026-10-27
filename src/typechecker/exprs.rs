@@ -9938,6 +9938,14 @@ impl<'a> super::TypeChecker<'a> {
                 // covering Vec, Map, SortedSet, Set, Slice, Array, Range* and
                 // any user type that has registered an "Item" assoc binding.
                 let mut elem_ty = self.element_type_of(&iter_ty);
+                // A parameter bounded by `Iterable[Item = T]` yields `T`
+                // (design.md § `Iterator` and `Iterable`, B-2026-10-27-11).
+                if let Some(item) = self
+                    .iterable_item(&iter_ty)
+                    .or_else(|| self.iterable_param_item(&iter_ty))
+                {
+                    elem_ty = item;
+                }
                 // `for` never calls `into_iter` (design.md § `Iterator` and
                 // `Iterable`): a type that is only `IntoIterator` is consumed
                 // explicitly, which the fix writes (B-2026-10-20-32).
@@ -9981,16 +9989,17 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                 }
-                // A `for` iterates a collection, an iterator or an
-                // `IntoIterator`; anything else is refused rather than bound
-                // whole to the pattern (B-2026-10-21-76).
+                // A `for` consumes an `Iterator` and borrows an `Iterable`
+                // or a collection; anything else is refused rather than bound
+                // whole to the pattern (B-2026-10-21-76), naming the traits
+                // design.md § `Iterator` and `Iterable` gives (B-2026-10-27-11).
                 else if self.cli_lint_overrides.strict_core
                     && !self.for_iterable_may_iterate(&iter_ty)
                 {
                     elem_ty = Type::Error;
                     self.type_error(
                         format!(
-                            "type '{}' cannot be iterated by a `for` loop: it implements neither `Iterator` nor `IntoIterator`",
+                            "type '{}' cannot be iterated by a `for` loop: it implements neither `Iterator` nor `Iterable`",
                             type_display(&iter_ty)
                         ),
                         iterable.span,

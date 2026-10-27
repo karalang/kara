@@ -1771,6 +1771,46 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The item a `for` over `ty` binds when `ty` (or the type a borrow of
+    /// it names) has an `Iterable` impl and is not an `Iterator`: the impl's
+    /// `Item`, as written, whatever the borrow (design.md § `Iterator` and
+    /// `Iterable`, B-2026-10-27-11).
+    pub(super) fn iterable_item(&self, ty: &Type) -> Option<Type> {
+        let mut base = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = base {
+            base = inner;
+        }
+        let Type::Named { name, args } = base else {
+            return None;
+        };
+        if self.env.has_impl("Iterator", name, args) {
+            return None;
+        }
+        let (i, _) = self.env.impls.iter().enumerate().find(|(_, imp)| {
+            imp.trait_name.as_deref() == Some("Iterable") && &imp.target_type == name
+        })?;
+        let item = self
+            .env
+            .impl_own_assoc_types
+            .get(&i)?
+            .iter()
+            .find(|(n, _)| n == "Item")?
+            .1
+            .clone();
+        let generic_params: &[String] = self
+            .env
+            .structs
+            .get(name)
+            .map(|s| s.generic_params.as_slice())
+            .unwrap_or(&[]);
+        let subs: HashMap<String, SubstValue> = generic_params
+            .iter()
+            .zip(args.iter())
+            .map(|(p, a)| (p.clone(), SubstValue::Type(a.clone())))
+            .collect();
+        Some(self.resolve_assoc_projections(&substitute_type_params(&item, &subs)))
+    }
+
     pub(super) fn element_type_of(&self, ty: &Type) -> Type {
         // Strings iterate as `char` BY VALUE — a `char` is a Copy scalar decoded
         // from the UTF-8 storage, not a borrow into it — so `for c in s` and
