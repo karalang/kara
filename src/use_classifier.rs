@@ -2250,6 +2250,14 @@ impl<'a> UseClassifier<'a> {
     fn core_moves_out_of_place(&self, expr: &Expr) -> bool {
         match self.tc.expr_types.get(&SpanKey::from_span(&expr.span)) {
             Some(Type::Weak(_)) => false,
+            // A value of a written function type is move-only (core §1.1:
+            // only a `Fn` closure whose captures are all `Copy` is `Copy`,
+            // and the type does not say what was captured), though the
+            // legacy rules read it as `Copy` (B-2026-07-02-24). Moving one
+            // out of an element is refused here, in the element's words,
+            // rather than by the MIR borrow check's E0517 over the temporary
+            // the index lowers to (B-2026-10-22-43).
+            Some(Type::Function { .. }) => true,
             Some(t) => !self.is_copy_type(t),
             None => false,
         }

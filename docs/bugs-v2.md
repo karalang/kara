@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 47 |
+| false-positive | 48 |
 | diagnostics | 38 |
 | missing-feature | 33 |
 | soundness | 14 |
@@ -74,11 +74,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 71 |
-| mir | 36 |
+| mir | 37 |
 | codegen | 22 |
 | interp | 20 |
+| ownership | 18 |
 | cli | 18 |
-| ownership | 17 |
 | mir-llvm | 14 |
 | runtime | 10 |
 | parser | 6 |
@@ -109,6 +109,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-9 | 2026-10-27 | typecheck | high | An impl method's signature is not checked against its trait's: `impl Mk2 for S { type A = bool; fn mk2(self) -> Option[i64] { Some(7) } }` under `trait Mk2 { type A; fn mk2(self) -> Option[Self.A]; }` passes check, and `fn get[T: Mk2[A = bool]](t: T) -> bool { t.mk2().unwrap() }` prints `7` for a `bool`; an impl binding an associated type its trait does not declare (`type B = bool`) is accepted too | — |
 | B-2026-10-27-10 | 2026-10-27 | mir | medium | A trait impl's method named like an inherent method of the same type shares its MIR instance name (`Bag.into_iter`), so a call through the bound (`c.into_iter()` under `C: IntoIterator`) runs the inherent body: prints 7 where the trait impl's body gives 100 | — |
 | B-2026-10-27-11 | 2026-10-27 | typecheck+mir | medium | `Iterable` (design.md § `Iterator` and `Iterable`, a lang-item trait: `type Item; fn iter(self) -> impl Iterator[Item = Self.Item]`) does not exist, so `for x in c` over a user collection cannot borrow it: `impl Iterable for Bag` is 'undefined type Iterable' | — |
+| B-2026-10-27-12 | 2026-10-27 | ownership+mir | low | Passing a function value held in a collection element to a non-escaping function-typed parameter (`apply(v[0], 4)` over `fn apply(f: Fn(i64) -> i64, x: i64)`) is refused as a move out of the element, where core-semantics §4.1 / §9.3 make a bare `Fn` parameter a borrow | — |
 
 ### Relocated
 

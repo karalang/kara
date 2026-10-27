@@ -1,0 +1,15 @@
+source = "ledger/B-2026-09-28-33"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["drop", "partial-move"]
+class = "a"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = ["3.7"]
+backends = []
+env = {}
+note = "Moving a payload out of an enum with a Drop body is an error (C3), also when it goes straight into a prelude constructor. Legacy accepted this shape and the backends disagreed about the enum's Drop body."
+bucket = "a:refused"
+classified_with = "dcd242dbc"

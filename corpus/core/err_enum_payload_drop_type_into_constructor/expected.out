@@ -1,0 +1,1 @@
+ERROR at line 6: cannot move 'r' out of 'E', which has a `Drop` body (§3.7); bind it as `ref r` or `.clone()` it inside the arm

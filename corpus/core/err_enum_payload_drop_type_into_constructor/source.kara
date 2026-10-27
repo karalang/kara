@@ -1,0 +1,15 @@
+struct R { name: String }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE"); } }
+fn first(e: own E) -> Option[R] {
+    match e {
+        E.A(r) => { return Some(r); }
+        E.B => { return None; }
+    }
+}
+fn main() {
+    match first(E.A(R { name: "a" })) {
+        Some(r) => println(r.name),
+        None => println("none"),
+    }
+}
