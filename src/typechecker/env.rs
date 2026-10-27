@@ -424,6 +424,10 @@ pub struct TypeEnv {
     /// `lower_generic_args` to accept a `GenericArg::Shape` at that
     /// position (Phase 11 Q1; design.md § Numerical Types > Shape kind).
     pub shape_param_positions: FxHashMap<String, Vec<bool>>,
+    /// A struct's or enum's generic parameters, in order, with their
+    /// defaults (design.md § Default generic arguments), for a type with at
+    /// least one default. An omitted trailing argument takes its default.
+    pub generic_defaults: FxHashMap<String, Vec<(String, Option<crate::ast::TypeExpr>)>>,
     /// `union NAME { ... }` declarations. See [`UnionInfo`].
     pub unions: FxHashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
@@ -602,6 +606,7 @@ impl TypeEnv {
             enums: FxHashMap::default(),
             user_type_decl_spans: FxHashMap::default(),
             shape_param_positions: FxHashMap::default(),
+            generic_defaults: FxHashMap::default(),
             unions: FxHashMap::default(),
             distinct_types: FxHashMap::default(),
             distinct_bases: FxHashMap::default(),

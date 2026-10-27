@@ -200,8 +200,9 @@ pub struct Parser {
     /// is sticky (stage 2), and accepting them now would let programs depend
     /// on a spelling whose semantics are still undecided. Fail-closed.
     pub(crate) frozen_ok: bool,
-    /// `true` only while parsing a trait declaration's own generic list, the
-    /// one place a parameter may name a default (`trait Add[Rhs = Self]`).
+    /// `true` only while parsing a trait's, struct's or enum's own generic
+    /// list, the places a parameter may name a default (`trait Add[Rhs =
+    /// Self]`, `struct Map[K, V, H = SipHash13BuildHasher]`).
     pub(crate) generic_defaults_ok: bool,
     /// `true` only for the outermost type of a function parameter, the one
     /// position `escaping Fn(...)` is accepted (`docs/core-semantics.md`

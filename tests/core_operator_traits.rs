@@ -122,7 +122,7 @@ fn main() { println(M { c: 1 }.plus(2).c); }
 }
 
 #[test]
-fn a_default_generic_argument_is_a_traits_only() {
+fn a_functions_generic_parameters_take_no_default() {
     let (ok, _, err) = karac(
         "fn-default",
         "check",
@@ -131,7 +131,8 @@ fn a_default_generic_argument_is_a_traits_only() {
     assert!(!ok);
     assert!(
         err.contains(
-            "a default generic argument (`T = Type`) is allowed on a trait's type parameters only"
+            "a default generic argument (`T = Type`) is allowed on the type parameters of a \
+             trait, struct or enum only: a function's generic parameters take no defaults"
         ),
         "{err}"
     );

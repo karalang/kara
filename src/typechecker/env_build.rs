@@ -81,6 +81,7 @@ impl<'a> super::TypeChecker<'a> {
                             .shape_param_positions
                             .insert(s.name.clone(), positions);
                     }
+                    self.record_generic_defaults(&s.name, &s.generic_params);
                     let derived_traits = extract_derived_traits(&s.attributes);
                     let must_use_message = extract_must_use_message(&s.attributes);
                     if !s.stdlib_origin {
@@ -113,6 +114,7 @@ impl<'a> super::TypeChecker<'a> {
                             .shape_param_positions
                             .insert(e.name.clone(), positions);
                     }
+                    self.record_generic_defaults(&e.name, &e.generic_params);
                     let derived_traits = extract_derived_traits(&e.attributes);
                     let must_use_message = extract_must_use_message(&e.attributes);
                     if !e.stdlib_origin {
@@ -2322,6 +2324,23 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+    }
+
+    /// Records `name`'s generic parameters in `env.generic_defaults` when
+    /// one of them has a default.
+    fn record_generic_defaults(&mut self, name: &str, params: &Option<GenericParams>) {
+        let Some(params) = params else {
+            return;
+        };
+        if params.params.iter().all(|p| p.default.is_none()) {
+            return;
+        }
+        let defaults = params
+            .params
+            .iter()
+            .map(|p| (p.name.clone(), p.default.clone()))
+            .collect();
+        self.env.generic_defaults.insert(name.to_string(), defaults);
     }
 
     fn env_add_struct(&mut self, s: &StructDef) {

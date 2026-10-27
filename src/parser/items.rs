@@ -2087,7 +2087,9 @@ impl super::Parser {
         // field-level doc collection inside `parse_struct_body` would
         // otherwise overwrite it.
         let doc_comment = self.take_pending_doc();
+        self.generic_defaults_ok = true;
         let generic_params = self.parse_optional_generic_params();
+        self.generic_defaults_ok = false;
         let where_clause = self.parse_optional_where_clause();
 
         // Unit struct: `struct Name;` is sugar for `struct Name {}`.
@@ -2338,7 +2340,9 @@ impl super::Parser {
         // — variant-level doc collection inside `parse_variant` would
         // otherwise overwrite it.
         let doc_comment = self.take_pending_doc();
+        self.generic_defaults_ok = true;
         let generic_params = self.parse_optional_generic_params();
+        self.generic_defaults_ok = false;
         let where_clause = self.parse_optional_where_clause();
 
         self.expect(&Token::LeftBrace)?;

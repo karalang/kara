@@ -435,6 +435,42 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or_default()
     }
 
+    /// `args` written for the struct or enum `name`, with each omitted
+    /// trailing argument its parameter's default (design.md § Default
+    /// generic arguments): `P[i64]` of `struct P[A, B = Vec[A]]` is
+    /// `P[i64, Vec[i64]]`. A default may name the parameters before it. A
+    /// write with no arguments is left alone: it is the form a type's
+    /// arguments are inferred from (`P.new()`), and a write that omits an
+    /// argument with no default keeps its arity for the check that reports
+    /// it.
+    pub(super) fn fill_default_generic_args(
+        &mut self,
+        name: &str,
+        mut args: Vec<Type>,
+    ) -> Vec<Type> {
+        let Some(params) = self.env.generic_defaults.get(name).cloned() else {
+            return args;
+        };
+        if args.is_empty()
+            || args.len() >= params.len()
+            || params[args.len()..].iter().any(|(_, d)| d.is_none())
+        {
+            return args;
+        }
+        for i in args.len()..params.len() {
+            let scope: Vec<String> = params[..i].iter().map(|(n, _)| n.clone()).collect();
+            let subs: HashMap<String, SubstValue> = scope
+                .iter()
+                .cloned()
+                .zip(args.iter().cloned().map(SubstValue::Type))
+                .collect();
+            let default = params[i].1.as_ref().expect("checked above");
+            let lowered = self.lower_type_expr(default, &scope);
+            args.push(substitute_type_params(&lowered, &subs));
+        }
+        args
+    }
+
     /// The two hasher SELECTORS a `Map` / `Set` may name in its trailing type
     /// argument (`runtime/stdlib/hash.kara`). design.md § `Hash` and `Hasher`
     /// spells both.
@@ -750,6 +786,7 @@ impl<'a> super::TypeChecker<'a> {
             // Named type (struct/enum/import)
             let mut args =
                 self.lower_generic_args_named(&path.generic_args, generic_scope, Some(name));
+            args = self.fill_default_generic_args(name, args);
             // `Map[K, V, H]` / `Set[T, H]` — validate the trailing hasher
             // selector and STRIP it, so every downstream consumer keeps seeing
             // the two-ary `Map` / one-ary `Set` it always has (B-2026-08-21-6).
@@ -828,6 +865,7 @@ impl<'a> super::TypeChecker<'a> {
             let name = path.segments.last().unwrap().clone();
             let args =
                 self.lower_generic_args_named(&path.generic_args, generic_scope, Some(&name));
+            let args = self.fill_default_generic_args(&name, args);
             Type::Named { name, args }
         }
     }

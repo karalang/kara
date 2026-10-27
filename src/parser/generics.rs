@@ -190,10 +190,10 @@ impl super::Parser {
                     let ty = self.parse_type()?;
                     if !self.generic_defaults_ok {
                         self.error_at(
-                            "a default generic argument (`T = Type`) is allowed on a trait's \
-                             type parameters only: a function's generic parameters take no \
-                             defaults (design.md § Default generic arguments), and a type's \
-                             are not supported yet",
+                            "a default generic argument (`T = Type`) is allowed on the type \
+                             parameters of a trait, struct or enum only: a function's generic \
+                             parameters take no defaults (design.md § Default generic \
+                             arguments)",
                             self.span_from(&dstart),
                         );
                     }

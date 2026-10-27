@@ -288,9 +288,10 @@ pub struct GenericParam {
     /// (like the structural `Effect` marker).
     pub is_variadic_shape: bool,
     /// `Rhs = Self`: the argument an omitted one takes (design.md § Default
-    /// generic arguments). Parsed on a trait's type parameters only
-    /// (`Parser::generic_defaults_ok`); `Self` in it is the type the trait
-    /// is for.
+    /// generic arguments). Parsed on a trait's, struct's or enum's type
+    /// parameters only (`Parser::generic_defaults_ok`); `Self` in a trait's
+    /// is the type the trait is for, and a type's fills an omitted trailing
+    /// argument where the type is lowered (`fill_default_generic_args`).
     pub default: Option<TypeExpr>,
     pub span: Span,
 }

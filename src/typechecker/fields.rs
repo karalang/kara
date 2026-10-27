@@ -859,7 +859,10 @@ impl<'a> super::TypeChecker<'a> {
             );
             return None;
         }
-        if args.len() != arity {
+        let defaulted = self.env.generic_defaults.get(enum_name).map_or(0, |ps| {
+            ps.iter().rev().take_while(|(_, d)| d.is_some()).count()
+        });
+        if args.len() > arity || args.len() + defaulted < arity {
             self.type_error(
                 format!(
                     "`{enum_name}` takes {arity} type argument{}, but {} {} supplied here",
@@ -889,7 +892,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
-        Some(out)
+        Some(self.fill_default_generic_args(enum_name, out))
     }
 
     pub(super) fn lower_literal_generic_args(
@@ -907,7 +910,10 @@ impl<'a> super::TypeChecker<'a> {
             );
             return None;
         }
-        if args.len() != arity {
+        let defaulted = self.env.generic_defaults.get(struct_name).map_or(0, |ps| {
+            ps.iter().rev().take_while(|(_, d)| d.is_some()).count()
+        });
+        if args.len() > arity || args.len() + defaulted < arity {
             self.type_error(
                 format!(
                     "`{struct_name}` takes {arity} type argument{}, but {} {} supplied here",
@@ -937,7 +943,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
-        Some(out)
+        Some(self.fill_default_generic_args(struct_name, out))
     }
 
     /// design.md § Struct literals: the base of a struct update "must have
