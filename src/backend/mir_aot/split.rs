@@ -128,6 +128,7 @@ pub(super) fn plan(m: LLVMModuleRef) -> Option<Plan> {
     if requested == Some(1)
         || !cfg!(unix)
         || crate::target::active_target() != "native"
+        || crate::target::cross_triple().is_some()
         || std::env::var("KARAC_DEBUG_INFO").as_deref() == Ok("1")
     {
         return None;

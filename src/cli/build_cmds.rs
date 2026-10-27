@@ -1442,8 +1442,20 @@ impl PackageCheck {
 /// build it is supposed to predict would be the B-2026-08-20-16 divergence in
 /// a new place.
 pub(super) fn walk_platform_for_target(build_target: &str) -> walker::Platform {
-    if build_target == "wasm_wasi" || build_target == "wasm_browser" {
+    // A triple names its platform's modules (a cross build takes the
+    // target's `_windows` / `_macos` / `_linux` files, not the host's).
+    let os = build_target.split('-').skip(1).collect::<Vec<_>>();
+    if build_target == "wasm_wasi"
+        || build_target == "wasm_browser"
+        || build_target.starts_with("wasm32-")
+    {
         walker::Platform::Wasm
+    } else if os.contains(&"windows") {
+        walker::Platform::Windows
+    } else if os.contains(&"darwin") {
+        walker::Platform::Macos
+    } else if os.contains(&"linux") {
+        walker::Platform::Linux
     } else {
         walker::Platform::host()
     }

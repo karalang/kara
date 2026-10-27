@@ -37,6 +37,7 @@ mod drop;
 mod flag;
 mod fmt;
 mod foreign;
+mod hot_swap;
 mod io;
 mod key;
 mod num;
@@ -88,6 +89,21 @@ pub fn compile_mir<'ctx>(
     program: &Program,
     tys: &TyInterner,
 ) -> R<Module<'ctx>> {
+    compile_mir_with(llcx, name, program, tys, &[])
+}
+
+/// [`compile_mir`] with `--enable-hot-swap` (deferred.md § Continuous PGO
+/// with Shared-Object Hot-Swap): each body named in `hot_swap` gets a slot
+/// in `karac_hotswap_table`, which a constructor fills with its function,
+/// and every direct call of it loads its slot and calls through it. With
+/// none named the module is [`compile_mir`]'s.
+pub fn compile_mir_with<'ctx>(
+    llcx: &'ctx Context,
+    name: &str,
+    program: &Program,
+    tys: &TyInterner,
+    hot_swap: &[String],
+) -> R<Module<'ctx>> {
     let transformed;
     let program = if interp::coroutines_flag() {
         transformed = interp::with_coroutines(program, tys)?;
@@ -99,9 +115,11 @@ pub fn compile_mir<'ctx>(
     if let Some(source) = interp::source_name() {
         cx.debug_init(source);
     }
+    cx.hot_swap_init(hot_swap)?;
     cx.c_main()?;
     cx.drain()?;
     cx.mark_noalias();
+    cx.hot_swap_finish()?;
     cx.debug_finish();
     cx.module.verify().map_err(|e| e.to_string())?;
     Ok(cx.module)
@@ -241,6 +259,16 @@ pub struct Cx<'ctx, 'p> {
     site: crate::token::Span,
     /// Whether each body can abort, as found so far (`debug.rs`).
     aborts: HashMap<String, bool>,
+    /// `--enable-hot-swap`: the slot of each registered body in
+    /// `karac_hotswap_table`, with the function the slot holds
+    /// ([`compile_mir_with`]).
+    hot_swap: HashMap<String, (u32, FunctionValue<'ctx>)>,
+    /// The table, when a body is registered.
+    hot_swap_table: Option<inkwell::values::GlobalValue<'ctx>>,
+    /// Each call made through a slot, with the function the slot holds,
+    /// whose attributes and calling convention the call takes once they
+    /// are final ([`Cx::hot_swap_finish`]).
+    hot_swap_calls: Vec<(inkwell::values::CallSiteValue<'ctx>, FunctionValue<'ctx>)>,
 }
 
 impl<'ctx, 'p> Cx<'ctx, 'p> {
@@ -276,6 +304,9 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             debug: None,
             site: crate::token::Span::default(),
             aborts: HashMap::new(),
+            hot_swap: HashMap::new(),
+            hot_swap_table: None,
+            hot_swap_calls: Vec::new(),
         }
     }
 

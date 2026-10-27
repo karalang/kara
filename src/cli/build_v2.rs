@@ -33,6 +33,7 @@ pub(super) struct BuildArgs<'a> {
 /// `karac build <file>` on v2.
 pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
     refuse_unsupported(&a);
+    set_cross_triple(a.target);
     let output = a.output;
     let manifest = run_manifest_preamble(filename, output, None, false);
     refuse_hot_swap(&a, manifest.as_ref().map(|m| m.profile));
@@ -83,28 +84,16 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     if !super::build_cmds::enforce_toolchain_pin(&root, output) {
         process::exit(1);
     }
-    let host = crate::build_cache::host_target_triple();
-    // `[build].target` stands in for `--target` (the dependency overlay
-    // follows it); a cross target is refused by name, as the flag's is
-    // (B-2026-10-23-16).
-    if let Some(t) = raw
-        .build_default_target
-        .as_deref()
-        .filter(|_| a.target.is_none())
-    {
-        if t != "native" && t != host {
-            fail_with(
-                &format!("error: the v2 build does not honour `[build].target = \"{t}\"` yet"),
-                output,
-            );
-            process::exit(1);
-        }
-    }
-    let overlay = if is_wasm_wasi(&a) {
-        "wasm32-wasip1".to_string()
-    } else {
-        host
+    // The target: `--target`, else `[build].target`, else the host. A
+    // triple selects the `[target.<triple>.*]` overlay and, when it is not
+    // the host's, is what the build emits and links for (B-2026-10-27-4).
+    let target = a.target.or(raw.build_default_target.as_deref());
+    let overlay = match target {
+        _ if is_wasm_wasi(&a) => "wasm32-wasip1".to_string(),
+        Some(t) if !crate::target::is_v1_target_name(t) => t.to_string(),
+        _ => crate::build_cache::host_target_triple(),
     };
+    set_cross_triple(Some(overlay.as_str()));
     let mf = manifest::merge_target_overlay(&raw, Some(overlay.as_str()));
     refuse_hot_swap(&a, Some(mf.profile));
     if output == OutputMode::Text {
@@ -150,7 +139,7 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     // The walk follows the build target: a wasm build takes the `_wasm`
     // platform modules.
     let walk = WalkerOpts {
-        target: walk_platform_for_target(a.target.unwrap_or("native")),
+        target: walk_platform_for_target(target.unwrap_or("native")),
         ..WalkerOpts::default()
     };
     let walked = walker::walk_project(&root, walk).unwrap_or_else(|e| {
@@ -221,11 +210,30 @@ fn is_wasm_wasi(a: &BuildArgs) -> bool {
 
 /// The output's extension when `-o` does not name it.
 fn exe_suffix(a: &BuildArgs) -> &'static str {
+    let windows = match crate::target::cross_triple() {
+        Some(t) => t.contains("-windows"),
+        None => cfg!(windows),
+    };
     if is_wasm_wasi(a) {
         ".wasm"
+    } else if windows {
+        ".exe"
     } else {
         ""
     }
+}
+
+/// Makes `target`, when it is a triple other than the host's, the triple
+/// the build emits and links for.
+fn set_cross_triple(target: Option<&str>) {
+    if let Some(t) = target.filter(|t| !crate::target::is_v1_target_name(t) && *t != host_triple())
+    {
+        crate::target::set_cross_triple(t);
+    }
+}
+
+fn host_triple() -> String {
+    crate::build_cache::host_target_triple()
 }
 
 /// Makes wasm32-wasip1 the active target for `--target=wasm_wasi`; true
@@ -243,16 +251,18 @@ fn set_wasm_target(a: &BuildArgs) -> bool {
 }
 
 /// `--enable-hot-swap` (deferred.md § Continuous PGO with Shared-Object
-/// Hot-Swap) is not built on v2 yet, so it is refused, naming the target or
-/// `[package].profile` that can never take it before the gap.
+/// Hot-Swap) needs dynamic symbol resolution at run time, so it is refused
+/// on a wasm target and on a `[package].profile` that has none.
 fn refuse_hot_swap(a: &BuildArgs, profile: Option<manifest::CompileProfile>) {
     if !a.enable_hot_swap {
         return;
     }
     let msg = match profile {
-        _ if is_wasm_wasi(a) => "error: --enable-hot-swap is incompatible with --target=wasm_wasi \
-             (no dynamic-symbol-resolution machinery on wasm hosts)"
-            .to_string(),
+        _ if is_wasm_wasi(a) || a.target.is_some_and(|t| t.starts_with("wasm32-")) => format!(
+            "error: --enable-hot-swap is incompatible with --target={} \
+             (no dynamic-symbol-resolution machinery on wasm hosts)",
+            a.target.unwrap_or("wasm_wasi")
+        ),
         Some(p @ (manifest::CompileProfile::Embedded | manifest::CompileProfile::Kernel)) => {
             format!(
                 "error: --enable-hot-swap is incompatible with [package].profile = \"{}\" \
@@ -260,20 +270,42 @@ fn refuse_hot_swap(a: &BuildArgs, profile: Option<manifest::CompileProfile>) {
                 p.as_str()
             )
         }
-        _ => "error: the v2 build does not honour `--enable-hot-swap` yet".to_string(),
+        _ => return,
     };
     fail_with(&msg, a.output);
     process::exit(1);
 }
 
+/// The bodies `--enable-hot-swap` calls through `karac_hotswap_table`: the
+/// program's own non-generic `pub fn`s at module scope (a generic one has
+/// no single symbol to swap), `main` aside.
+#[cfg(feature = "llvm")]
+fn hot_swap_names(source: &str) -> Vec<String> {
+    crate::parse(source)
+        .program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            crate::ast::Item::Function(f)
+                if f.is_pub
+                    && f.generic_params.is_none()
+                    && f.self_param.is_none()
+                    && f.name != "main" =>
+            {
+                Some(f.name.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// A flag the v2 build does not honour yet: refused by name, exit 1.
 fn refuse_unsupported(a: &BuildArgs) {
-    let target = a.target.filter(|t| {
-        *t != "native"
-            && *t != "wasm_wasi"
-            && (crate::target::is_v1_target_name(t)
-                || *t != crate::build_cache::host_target_triple())
-    });
+    // A triple is built for (a cross one included); of the v1 names,
+    // `native` and `wasm_wasi` are.
+    let target = a
+        .target
+        .filter(|t| *t != "native" && *t != "wasm_wasi" && crate::target::is_v1_target_name(t));
     // B-2026-10-22-21: a feature that went to the archive with the legacy
     // backend is refused by name rather than as an unknown flag.
     let archived_target = match target {
@@ -575,12 +607,18 @@ fn build(
                 Ok(l)
             })
             .unwrap_or_else(|e| super::run_v2::refused(&e, output));
-        let built = crate::backend::mir_aot::compile_program_object(
+        let hot_swap = if a.enable_hot_swap {
+            hot_swap_names(&source)
+        } else {
+            Vec::new()
+        };
+        let built = crate::backend::mir_aot::compile_program_object_with(
             &lowered.program,
             &lowered.tys,
             &obj,
             opt,
             keep_ll.as_deref(),
+            &hot_swap,
         )
         .map_err(|e| format!("llvm: {e}"))
         .and_then(|()| {

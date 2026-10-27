@@ -129,7 +129,7 @@ impl<'ctx> Cx<'ctx, '_> {
             };
             vals.push(slot.into());
         }
-        self.builder.build_call(f, &vals, "").map_err(e)?;
+        self.call_function(name, f, &vals)?;
         let d = self.place_ptr(dest)?;
         self.copy(d, ret, dty)
     }
@@ -172,7 +172,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             vals.push(x.into());
         }
-        let r = self.builder.build_call(v, &vals, "").map_err(e)?;
+        let r = self.call_function(name, v, &vals)?;
         if ret.is_some() {
             let x = r.try_as_basic_value().unwrap_basic();
             let dty = self.place_type(dest)?;

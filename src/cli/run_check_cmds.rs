@@ -1597,7 +1597,11 @@ pub(super) fn resolve_native_cpu_baseline(
         return (None, None);
     }
     let level = explicit.unwrap_or("v3");
-    crate::manifest::cpu_baseline_native_override(level, std::env::consts::ARCH)
+    // A cross build's baseline is its target's architecture's.
+    let arch = crate::target::cross_triple()
+        .and_then(|t| t.split('-').next())
+        .unwrap_or(std::env::consts::ARCH);
+    crate::manifest::cpu_baseline_native_override(level, arch)
 }
 
 /// Act on the resolved `--target-cpu` value (phase-10; design.md § CPU

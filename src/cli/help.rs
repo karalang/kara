@@ -266,7 +266,7 @@ OPTIONS:
                             and KARAC_STRIP_ERROR_TRACE env vars.
     --mir                   The v2 build, now the default (accepted so
                             scripts that ask for it keep working).
-    --enable-hot-swap       Not on v2. Emit PLT-style indirection for extern-public
+    --enable-hot-swap       Emit PLT-style indirection for extern-public
                             module symbols so the AOT artifact format stays
                             forward-compatible with the post-v1 continuous-
                             PGO + shared-object reload story. Off by default.
@@ -285,9 +285,7 @@ OPTIONS:
                             `./vendor/` from the current resolution.
                             Implies --no-proxy (the redundant note is
                             suppressed). See the OFFLINE section below.
-    --target=<name|triple>  Compilation target; v2 builds `native` (or
-                            the host triple) and wasm_wasi only; the rest is
-                            not on v2. A v1 target NAME
+    --target=<name|triple>  Compilation target. A v1 target NAME
                             (native, wasm_wasi, wasm_browser; gpu is
                             recognized but not standalone-buildable)
                             selects the cross-compile target:
@@ -300,7 +298,14 @@ OPTIONS:
                             Project mode (no file argument) lands the
                             same set as `dist/wasm/<pkg>.{wasm,js,d.ts}`
                             with the package name from kara.toml.
-                            Any other value is a target TRIPLE selecting which
+                            Any other value is a target TRIPLE: the
+                            executable is built for it (the linker is
+                            KARAC_LINKER, else the triple's GNU cross gcc
+                            on PATH, else `clang --target=<triple>`, and
+                            the runtime archive is the one built with
+                            `cargo rustc -p karac-runtime --release
+                            --target <triple> --crate-type staticlib`),
+                            and it selects which
                             `[target.<triple>.*]` overlay merges onto
                             the manifest (dependencies, dev-
                             dependencies, profile). Precedence:
@@ -410,8 +415,14 @@ TARGETS:
     archive (`libkarac_runtime_wasm.a`) and a wasm linker (wasm-ld
     or rust-lld; override with KARAC_WASM_LD).
 
-    Any other `--target=<triple>` value selects the active target
-    triple for overlay merge. Any `[target.\"<triple>\".dependencies]`,
+    Any other `--target=<triple>` value is built for: the object is
+    compiled for the triple, linked with KARAC_LINKER (else the
+    triple's GNU cross gcc on PATH, `x86_64-w64-mingw32-gcc` for
+    `x86_64-pc-windows-gnu`, else `clang --target=<triple>`) against
+    the runtime archive built for it (KARAC_RUNTIME, else
+    `<karac>/../lib/<triple>/`, else the workspace's
+    `target/<triple>/release/`). A Windows triple gets `<stem>.exe`.
+    The triple is also the active target triple for overlay merge. Any `[target.\"<triple>\".dependencies]`,
     `[target.\"<triple>\".dev-dependencies]`, and
     `[target.\"<triple>\".profile]` table that matches the active
     triple is merged into the corresponding base table before dep

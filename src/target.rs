@@ -271,6 +271,24 @@ pub fn is_v1_target_name(name: &str) -> bool {
     V1_TARGETS.contains(&name)
 }
 
+/// A cross build's target triple: `--target=<triple>` (or `[build].target`)
+/// naming a triple other than the host's. The native code generator emits
+/// for it and the link takes that triple's runtime archive and linker
+/// (`backend/driver.rs`). `None`, the default, builds for the host. Plain
+/// data, so the CLI sets it with or without the llvm feature; first set
+/// wins, as for [`set_target_cpu_override`].
+static CROSS_TRIPLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Install the cross build's target triple.
+pub fn set_cross_triple(triple: &str) {
+    let _ = CROSS_TRIPLE.set(triple.to_string());
+}
+
+/// The cross build's target triple, if this process builds for one.
+pub fn cross_triple() -> Option<&'static str> {
+    CROSS_TRIPLE.get().map(|s| s.as_str())
+}
+
 /// User-selected CPU baseline override (phase-10 `--target-cpu`;
 /// design.md § CPU Baseline Targeting). `None` (the default) keeps the
 /// per-target-triple table in `backend/driver.rs::default_cpu_and_features`.

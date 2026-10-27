@@ -495,6 +495,9 @@ pub(crate) fn link_executable_impl(
     exe_path: &str,
     extra_cc_args: &[&str],
 ) -> Result<(), String> {
+    if let Some(triple) = crate::target::cross_triple() {
+        return link_executable_cross(obj_path, exe_path, triple, extra_cc_args);
+    }
     // Binary-size phase 4 (Part B): pick the lean, rustls-free runtime
     // archive (`libkarac_runtime_min.a`) for programs that reference none
     // of the TLS-only runtime symbols. The lean archive omits the
@@ -675,6 +678,141 @@ pub(crate) fn link_executable_impl(
         }
         Ok(())
     }
+}
+
+/// A cross build's link (`--target=<triple>` naming a triple other than
+/// the host's, B-2026-10-27-4): the object, the runtime archive built for
+/// that triple, and that target's system libraries, through a linker for
+/// it. The archive is `KARAC_RUNTIME`, else `<karac>/../lib/<triple>/` or
+/// the workspace's `target/<triple>/release/`, where `cargo rustc
+/// --target <triple>` leaves it. The linker is `KARAC_LINKER`, else the
+/// target's GNU cross `gcc` when it is installed, else `clang
+/// --target=<triple>`. The executable is not stripped: the host's `strip`
+/// may not read the target's format.
+fn link_executable_cross(
+    obj_path: &str,
+    exe_path: &str,
+    triple: &str,
+    extra_cc_args: &[&str],
+) -> Result<(), String> {
+    let runtime_path = resolve_cross_runtime_path(triple)?;
+    let os: Vec<&str> = triple.split('-').skip(1).collect();
+    let (linker, mut cmd) = cross_linker(triple);
+    for arg in extra_cc_args {
+        cmd.arg(arg);
+    }
+    cmd.args([obj_path, &runtime_path, "-o", exe_path]);
+    if os.contains(&"windows") {
+        // `legacy_stdio_definitions` is MSVC's alone.
+        for lib in WINDOWS_SYSTEM_LIBS
+            .iter()
+            .filter(|l| os.contains(&"msvc") || **l != "legacy_stdio_definitions")
+        {
+            cmd.arg(format!("-l{lib}"));
+        }
+    } else {
+        cmd.args(["-lm", "-lpthread"]);
+        if os.contains(&"linux") {
+            cmd.arg("-ldl");
+        }
+    }
+    if let Some(link) = crate::target::native_link_config() {
+        for dir in &link.search_paths {
+            cmd.arg(format!("-L{dir}"));
+        }
+        for lib in &link.libs {
+            cmd.arg(format!("-l{lib}"));
+        }
+    }
+    if !is_sanitizer_link(extra_cc_args) {
+        if os.contains(&"darwin") {
+            cmd.arg("-Wl,-dead_strip");
+        } else if os.contains(&"msvc") {
+            cmd.arg("-Wl,/OPT:REF");
+        } else {
+            cmd.arg("-Wl,--gc-sections");
+        }
+    }
+    let output = cmd.output().map_err(|e| {
+        format!(
+            "Failed to invoke the linker `{linker}` for `{triple}`: {e}. Install a linker for \
+             the target, or name one with KARAC_LINKER"
+        )
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "Linker `{linker}` failed for `{triple}`: {stderr}(a cross link needs the target's \
+             C library and system libraries; KARAC_LINKER names another linker)"
+        ));
+    }
+    Ok(())
+}
+
+/// The linker a cross build for `triple` runs, with its name.
+fn cross_linker(triple: &str) -> (String, std::process::Command) {
+    if let Ok(l) = std::env::var("KARAC_LINKER") {
+        return (l.clone(), std::process::Command::new(l));
+    }
+    let arch = triple.split('-').next().unwrap_or("");
+    // The GNU toolchains' names for the Rust triples.
+    let gnu = if triple.ends_with("-windows-gnu") {
+        Some(format!("{arch}-w64-mingw32-gcc"))
+    } else if triple.ends_with("-linux-gnu") {
+        Some(format!("{arch}-linux-gnu-gcc"))
+    } else {
+        None
+    };
+    let on_path = |name: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
+    };
+    match gnu.filter(|g| on_path(g)) {
+        Some(g) => (g.clone(), std::process::Command::new(g)),
+        None => {
+            let mut cmd = std::process::Command::new("clang");
+            cmd.arg(format!("--target={triple}"));
+            (format!("clang --target={triple}"), cmd)
+        }
+    }
+}
+
+/// The runtime archive a cross build for `triple` links.
+fn resolve_cross_runtime_path(triple: &str) -> Result<String, String> {
+    if let Ok(p) = std::env::var("KARAC_RUNTIME") {
+        return if std::path::Path::new(&p).exists() {
+            Ok(p)
+        } else {
+            Err(format!("KARAC_RUNTIME set to {p} but file does not exist"))
+        };
+    }
+    let mut dirs = Vec::new();
+    if let Some(bin) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+    {
+        dirs.push(bin.join("../lib").join(triple));
+    }
+    dirs.push(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(triple)
+            .join("release"),
+    );
+    for d in &dirs {
+        for n in ["libkarac_runtime.a", "karac_runtime.lib"] {
+            let p = d.join(n);
+            if p.exists() {
+                return Ok(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    Err(format!(
+        "a build for `{triple}` needs the runtime archive built for it — not found. Build it \
+         with `rustup target add {triple}` and `cargo rustc -p karac-runtime --release --target \
+         {triple} --crate-type staticlib` in the karac workspace (it lands in \
+         target/{triple}/release/), or set KARAC_RUNTIME to its path"
+    ))
 }
 
 // ── Producer-mode library artifacts (additive-interop Slice 2) ──────
@@ -1007,8 +1145,7 @@ fn link_shared_library_unix(
 /// userenv, ntdll, dbghelp (backtrace), kernel32, winmm (high-res timer),
 /// legacy_stdio_definitions (the UCRT `printf` shim codegen references). Shared
 /// by the executable and shared-library Windows link paths; `clang` passes each
-/// to the linker as `<name>.lib`.
-#[cfg(windows)]
+/// to the linker as `<name>.lib`. A cross build for Windows links them too.
 const WINDOWS_SYSTEM_LIBS: &[&str] = &[
     "ws2_32",
     "bcrypt",
@@ -1590,7 +1727,7 @@ pub fn print_target_cpu_listing() {
     // and the features table together.
     eprintln!(
         "Supported CPUs and features for target `{}`:",
-        crate::target::active_target()
+        target_label()
     );
     let _ = create_target_machine_with_cpu(Some("help"));
 }
@@ -1656,12 +1793,22 @@ fn create_native_target_machine_at(
     cpu_override: Option<&str>,
     level: OptimizationLevel,
 ) -> Result<TargetMachine, String> {
-    Target::initialize_native(&InitializationConfig::default())
-        .map_err(|e| format!("Failed to initialize native target: {}", e))?;
-
-    let triple = TargetMachine::get_default_triple();
-    let target =
-        Target::from_triple(&triple).map_err(|e| format!("Failed to get target: {}", e))?;
+    let triple = match crate::target::cross_triple() {
+        // Only a cross build pays for initialising the other targets.
+        Some(t) => {
+            Target::initialize_all(&InitializationConfig::default());
+            inkwell::targets::TargetTriple::create(t)
+        }
+        None => {
+            Target::initialize_native(&InitializationConfig::default())
+                .map_err(|e| format!("Failed to initialize native target: {}", e))?;
+            TargetMachine::get_default_triple()
+        }
+    };
+    let target = Target::from_triple(&triple).map_err(|e| match crate::target::cross_triple() {
+        Some(t) => format!("LLVM has no target for the triple `{t}`: {e}"),
+        None => format!("Failed to get target: {}", e),
+    })?;
 
     let triple_str = triple.as_str().to_str().unwrap_or("");
     // A CPU override swaps the CPU only; the table's default *features*
@@ -1761,9 +1908,15 @@ pub fn validate_target_cpu(cpu: &str) -> Result<(), String> {
     Err(format!(
         "error: unknown CPU '{}' for target `{}`.\nSupported CPUs: {}\nhint: run `karac build --target-cpu=help` for the annotated listing",
         cpu,
-        crate::target::active_target(),
+        target_label(),
         known.join(", "),
     ))
+}
+
+/// The target a CPU or feature is named against: a cross build's triple,
+/// else the v1 target name.
+fn target_label() -> &'static str {
+    crate::target::cross_triple().unwrap_or_else(crate::target::active_target)
 }
 
 /// Validate a `--target-features` value against LLVM's feature registry
@@ -1795,7 +1948,7 @@ pub fn validate_target_features(features: &str) -> Result<(), String> {
                 return Err(format!(
                     "error: unknown feature '{}' for target `{}`.\nSupported features: {}\nhint: run `karac build --target-features=help` for the annotated listing",
                     name,
-                    crate::target::active_target(),
+                    target_label(),
                     known.join(", "),
                 ));
             }
@@ -1833,10 +1986,12 @@ fn supported_target_features() -> Option<Vec<String>> {
 /// table). `None` on spawn failure.
 fn capture_help_listing() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
-    let out = std::process::Command::new(exe)
-        .args(["__list-target-cpus", crate::target::active_target()])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["__list-target-cpus", crate::target::active_target()]);
+    if let Some(t) = crate::target::cross_triple() {
+        cmd.arg(t);
+    }
+    let out = cmd.output().ok()?;
     Some(String::from_utf8_lossy(&out.stderr).into_owned())
 }
 

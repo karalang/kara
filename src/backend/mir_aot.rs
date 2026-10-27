@@ -47,9 +47,23 @@ pub fn compile_program_object(
     opt: u8,
     keep_ll: Option<&Path>,
 ) -> Result<(), String> {
+    compile_program_object_with(program, tys, obj, opt, keep_ll, &[])
+}
+
+/// [`compile_program_object`] with the bodies `hot_swap` names called
+/// through `karac_hotswap_table` (`--enable-hot-swap`,
+/// [`super::mir::compile_mir_with`]).
+pub fn compile_program_object_with(
+    program: &crate::mir::interp::Program,
+    tys: &crate::mir::TyInterner,
+    obj: &Path,
+    opt: u8,
+    keep_ll: Option<&Path>,
+    hot_swap: &[String],
+) -> Result<(), String> {
     let mut t = std::time::Instant::now();
     let llcx = Context::create();
-    let module = super::mir::compile_mir(&llcx, "main", program, tys)?;
+    let module = super::mir::compile_mir_with(&llcx, "main", program, tys, hot_swap)?;
     crate::mir::lower::phase_time("compile_mir", &mut t);
     if let Some(path) = keep_ll {
         let _ = std::fs::write(path, module.print_to_string().to_string());
@@ -89,7 +103,9 @@ fn compile_module<'ctx>(
     );
     empty_global(module, "KARAC_SPAWN_SITES", entry.into());
 
-    if let Some(plan) = split::plan(module.as_mut_ptr()) {
+    // The hot-swap table and its constructor stay in one unit.
+    let hot_swap = module.get_global("karac_hotswap_table").is_some();
+    if let Some(plan) = split::plan(module.as_mut_ptr()).filter(|_| !hot_swap) {
         crate::mir::lower::phase_time("plan codegen units", &mut t);
         let units = plan.units();
         let r = split::compile_units(module.as_mut_ptr(), &plan, obj, &|m, part| {

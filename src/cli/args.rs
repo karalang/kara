@@ -84,6 +84,10 @@ pub fn parse_args(args: &[String]) -> Command {
                 // contract is "print a listing or print nothing".
                 let _ = crate::target::set_active_target(name);
             }
+            // A cross build's triple, after the name.
+            if let Some(triple) = args.get(3) {
+                crate::target::set_cross_triple(triple);
+            }
             #[cfg(feature = "llvm")]
             crate::backend::driver::print_target_cpu_listing();
             process::exit(0);

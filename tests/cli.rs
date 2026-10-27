@@ -6054,7 +6054,6 @@ fn test_build_project_hot_swap_rejected_with_kernel_profile() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not honour `--enable-hot-swap` yet"]
 fn test_build_project_hot_swap_accepted_with_default_profile() {
     let tmp = scratch_project("hotswap-default");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -15715,8 +15714,16 @@ fn target_tempdir(slug: &str) -> std::path::PathBuf {
     tmp
 }
 
+/// Whether a build for another triple succeeded, or stopped only at the
+/// link because this host has no runtime archive built for that triple
+/// (with the llvm feature): the overlay walk and the dependency resolution
+/// these tests pin run before it, and the lockfile is written by then.
+fn cross_build_done(out: &std::process::Output) -> bool {
+    out.status.success()
+        || String::from_utf8_lossy(&out.stderr).contains("needs the runtime archive built for it")
+}
+
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not honour a cross `--target` yet"]
 fn test_build_target_flag_activates_overlay_dep() {
     // The base manifest declares no deps; `[target.X.dependencies]` adds
     // a path-dep keyed on a specific triple. Building with --target=X
@@ -15755,7 +15762,7 @@ name = "mac-only"
     let stderr = String::from_utf8_lossy(&out.stderr);
     let lock_with_target = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
     assert!(
-        out.status.success(),
+        cross_build_done(&out),
         "build with --target=mac should succeed; stderr={stderr}",
     );
     assert!(
@@ -15776,7 +15783,7 @@ name = "mac-only"
     let lock_after_other = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
-        out2.status.success(),
+        cross_build_done(&out2),
         "build with --target=linux should succeed (no deps to resolve); stderr={stderr2}",
     );
     assert!(
@@ -15786,7 +15793,6 @@ name = "mac-only"
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not honour a cross `--target` yet"]
 fn test_build_target_space_separated_form_parses() {
     // The `--target <triple>` (space) form must parse identically to
     // `--target=<triple>` (equals). Pins both surface shapes.
@@ -15809,7 +15815,7 @@ name = "solo"
     let stderr = String::from_utf8_lossy(&out.stderr);
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
-        out.status.success(),
+        cross_build_done(&out),
         "space-separated --target should parse; stderr={stderr}",
     );
 }
@@ -15831,10 +15837,6 @@ fn test_build_target_empty_value_diagnostic() {
 }
 
 #[test]
-#[cfg_attr(
-    not(all(target_os = "macos", target_arch = "x86_64")),
-    ignore = "v2 gap after M3: the v2 build refuses a cross `[build].target` by name (B-2026-10-23-16); on an x86_64 macOS host the target is the host"
-)]
 fn test_build_target_from_manifest_build_section() {
     // With no --target flag, `[build].target` from the manifest selects
     // the active triple. Pins that the manifest fallback is honored.
@@ -15873,7 +15875,7 @@ name = "mac-only"
     let lock = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
-        out.status.success(),
+        cross_build_done(&out),
         "build with [build].target = ... should succeed; stderr={stderr}",
     );
     assert!(
@@ -15883,10 +15885,6 @@ name = "mac-only"
 }
 
 #[test]
-#[cfg_attr(
-    not(all(target_os = "linux", target_arch = "x86_64")),
-    ignore = "v2 gap after M3: the v2 build refuses a cross `--target` (B-2026-10-23-16); on an x86_64 Linux host the target is the host"
-)]
 fn test_build_target_flag_overrides_manifest_default() {
     // --target on the CLI must beat `[build].target` in the manifest.
     // Set them to different triples; only one overlay should activate.
@@ -15933,7 +15931,7 @@ linux-only = { path = "libs/linux-only" }
     let lock = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
-        out.status.success(),
+        cross_build_done(&out),
         "build with CLI-override target should succeed; stderr={stderr}",
     );
     assert!(

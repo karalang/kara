@@ -56,11 +56,13 @@ fn project_v2_lone_module_unknown_import_is_refused() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// `[build].target` naming another platform's triple is refused by name: the
-/// v2 build makes a binary for the host only (B-2026-10-23-16), and building
-/// one for the host with that target's dependencies would be wrong silently.
+/// `[build].target` naming another platform's triple builds for that triple
+/// (B-2026-10-27-4; while the v2 build made host binaries only it was refused
+/// by name, B-2026-10-23-16). With the llvm feature the build goes on to the
+/// link, which on a host without the runtime archive built for that triple
+/// stops naming the recipe; without it the build is the check.
 #[test]
-fn project_v2_cross_build_target_is_refused_by_name() {
+fn project_v2_cross_build_target_builds_for_that_triple() {
     let cross = if cfg!(target_os = "macos") {
         "x86_64-unknown-linux-gnu"
     } else {
@@ -72,10 +74,9 @@ fn project_v2_cross_build_target_is_refused_by_name() {
         "fn main() {}\n",
     );
     let (code, _, stderr) = karac(&dir, &["build"]);
-    assert_eq!(code, 1, "{stderr}");
     assert!(
-        stderr.contains(&format!("`[build].target = \"{cross}\"`")),
-        "{stderr}"
+        code == 0 || stderr.contains(&format!("a build for `{cross}` needs the runtime archive")),
+        "{code}: {stderr}"
     );
     let _ = std::fs::remove_dir_all(dir);
 }
