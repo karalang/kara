@@ -61,9 +61,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 49 |
 | diagnostics | 39 |
 | missing-feature | 37 |
-| soundness | 18 |
+| soundness | 19 |
 | perf | 13 |
-| miscompile | 10 |
+| miscompile | 11 |
 | run-vs-build | 9 |
 | other | 5 |
 | codegen-gap | 4 |
@@ -73,13 +73,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 77 |
+| typecheck | 78 |
 | mir | 39 |
 | codegen | 22 |
-| interp | 20 |
+| interp | 21 |
 | ownership | 18 |
 | cli | 18 |
-| mir-llvm | 17 |
+| mir-llvm | 18 |
 | runtime | 11 |
 | parser | 8 |
 | resolver | 3 |
@@ -97,7 +97,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-02-39 | 2026-10-02 | runtime+codegen | low | A growth-heavy `Map[i64, i64]` workload runs 1.63x Rust's `HashMap` at equal hashing (SipHash-1-3 both), and ties a plain C linear-probing table: kata:325's bench, 857.5 ms against 520.6 for rust_ovf | — |
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
 | B-2026-10-24-6 | 2026-10-24 | mir-llvm+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 79 per word hash (93 before db4018cfb6), against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
-| B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher is not part of its type on v2, where collections.md makes `H` the last type parameter of `Map[K, V, H]` / `Set[T, H]`: the parser strips it, so a table built without the annotation in sight walks in the seeded order, and no BuildHasher's own code runs (a user hasher's build/write/finish never run, and an Fx table hashes with SipHash). RULED 10-27 by the review thread: `H` becomes a real type parameter. Stage 1 is the type, with the default filled in where `H` is omitted; stage 2 runs the builder's code. STAGE 1 LANDED at 6b724b5025 (H is in the type, and a table walks in the order its type names wherever it is built); the remainder is stage 2, running the builder's own Kāra code | — |
 | B-2026-10-26-17 | 2026-10-26 | mir+mir-llvm | medium | After B-2026-10-26-14's fixes, at 9030678cd0 `KARAC_AUTO_PAR=1` builds still run under the M4b floor of 0.9x their own seq build: on one worker, the default, kata 28 brute_force 0.26x, 191 popcount 0.36x, 4 binary_search_partition 0.56x, 9 palindrome 0.70x and 8 atoi 0.75x (11 programs under 0.9x in all) (CORRECTED: hotel_audit, under on 4 workers in the first three timings, ran 0.97 / 0.98 / 0.92 in three more 21-run timings, inside the swing of a no-site control; no 4-worker app is reliably under at this box's resolution) (Thread B: hotel_audit's two small tasked loops are not the cause either, re-timed in three 31-run passes; the one-worker katas pay for the task form itself, see detail) | — |
 | B-2026-10-27-11 | 2026-10-27 | typecheck+mir | medium | `Iterable` (design.md § `Iterator` and `Iterable`, a lang-item trait: `type Item; fn iter(self) -> impl Iterator[Item = Self.Item]`) does not exist, so `for x in c` over a user collection cannot borrow it: `impl Iterable for Bag` is 'undefined type Iterable' | — |
 | B-2026-10-27-19 | 2026-10-27 | typecheck | medium | A rigid type parameter is a wildcard in `types_compatible`, so `fn f[T](x: own T) -> T { 5 }` passes check and only the MIR validator refuses it ("invalid MIR: f[String]: assigning i64 to _0 of type String") | — |
@@ -105,6 +104,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-22 | 2026-10-27 | mir+mir-llvm | medium | Auto-par is not yet invisible to logging (docs/library/log.md, ruled 2026-10-27): the interim keeps every statement and loop that logs out of auto-par, so adding a log line can change what runs in parallel. Target: an auto-par task's records carry the enclosing task's `task_id` and span and reach the backend in sequential order, held per auto-par task and released in statement order at the join. | — |
 | B-2026-10-27-23 | 2026-10-27 | resolver | low | Renaming a type imported from a gated library module (`import std.encoding.{DecodeError as DE}`, `import std.log.{Level as L}`) makes a second, distinct type: `let r: Result[Vec[u8], DE] = hex_decode("zz")` fails with "expected 'Result[Vec[u8], DE]', found 'Result[Vec[u8], DecodeError]'". | — |
 | B-2026-10-27-24 | 2026-10-27 | parser | low | A match pattern cannot name a variant through a module binding: `import std.log;` then `match record.level { log.Level.Debug => .. }` fails to parse with "Expected FatArrow, found Dot", though `log.Level.Debug` works as an expression. | — |
+| B-2026-10-27-25 | 2026-10-27 | typecheck | low | The `K: Hash + Eq` bound on a table's key is checked only at a Map / Set method call and passes a type parameter, a type-only use and a generic ADT's arguments, where collections.md makes it a bound of every table (default hasher included); the target is a refusal naming the missing impl, with a `karac fix` that adds `#[derive(Hash)]` (owner Thread A) | — |
+| B-2026-10-27-26 | 2026-10-27 | interp+mir-llvm | medium | A table key whose PART has a hand-written PartialEq is compared structurally, so `Set[(Name, i64)]` with a case-insensitive `impl PartialEq for Name` misses `(Name { text: "BO" }, 3)` after inserting `(Name { text: "Bo" }, 3)` while `==` on the same tuples says true (both backends) | — |
 
 ### Relocated
 
@@ -242,6 +243,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-25-28 | typecheck | low | A spawned closure that moves one half of a destructured tuple into an array literal (`group.spawn(\|\| count([rx]))` after `let (tx, rx) = channel(1)`)… | e121bf2159 |
 | B-2026-10-25-29 | mir | low | The error return trace's JSON frames carry `file`, `line` and `column` but not design.md's `expr` (the `?` expression's text) or `context` (a `.conte… | 42614fb9d9 |
 | B-2026-10-25-30 | mir | low | A `?` chain that crosses a task boundary prints the frames left on the exiting thread instead of design.md's `Error return trace: unavailable (the ?… | e790115219 |
+| B-2026-10-25-31 | mir+mir-llvm | low | A table's hasher is not part of its type on v2, where collections.md makes `H` the last type parameter of `Map[K, V, H]` / `Set[T, H]`, and no BuildH… | a1e167c756 |
 | B-2026-10-25-32 | typecheck+mir | medium | A method call on a value of an associated type of a generic bound (`let h = b.build(); h.finish()` with `B: BuildHasher`) passes `karac check` but th… | 2fb98ebc8d |
 | B-2026-10-25-33 | typecheck | medium | `karac check` refuses a bare use of a program's own variant named like a `std.regex` / `std.json` item (a pattern `Match(n)` on `enum E { Match(i64)… | 66683e8bf5 |
 | B-2026-10-25-34 | typecheck | high | In a package, a function a module imports from a sibling (`import ast.{take}`) is typed as the library's generic `take(mut ref T) -> T` in the import… | 01e8f145bb |
