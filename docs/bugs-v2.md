@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 49 |
 | diagnostics | 39 |
 | missing-feature | 37 |
-| soundness | 19 |
+| soundness | 20 |
 | perf | 13 |
 | miscompile | 11 |
 | run-vs-build | 9 |
@@ -73,7 +73,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 78 |
+| typecheck | 79 |
 | mir | 39 |
 | codegen | 22 |
 | interp | 21 |
@@ -106,6 +106,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-24 | 2026-10-27 | parser | low | A match pattern cannot name a variant through a module binding: `import std.log;` then `match record.level { log.Level.Debug => .. }` fails to parse with "Expected FatArrow, found Dot", though `log.Level.Debug` works as an expression. | — |
 | B-2026-10-27-25 | 2026-10-27 | typecheck | low | The `K: Hash + Eq` bound on a table's key is checked only at a Map / Set method call and passes a type parameter, a type-only use and a generic ADT's arguments, where collections.md makes it a bound of every table (default hasher included); the target is a refusal naming the missing impl, with a `karac fix` that adds `#[derive(Hash)]` (owner Thread A) | — |
 | B-2026-10-27-26 | 2026-10-27 | interp+mir-llvm | medium | A table key whose PART has a hand-written PartialEq is compared structurally, so `Set[(Name, i64)]` with a case-insensitive `impl PartialEq for Name` misses `(Name { text: "BO" }, 3)` after inserting `(Name { text: "Bo" }, 3)` while `==` on the same tuples says true (both backends) | — |
+| B-2026-10-27-27 | 2026-10-27 | typecheck | medium | A variant pattern spelled through the WRONG enum is accepted and matches the scrutinee's own variant of that name: with `enum Mode { Slow, P(i64) }` and `enum Other { Slow, P(i64) }`, `match Mode.Slow { Other.Slow => .. }` takes the arm, and `Other.P(x)` against `Mode.P(4)` binds x = 4. Only the last segment of a dotted variant path is read. | — |
 
 ### Relocated
 
