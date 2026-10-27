@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 50 |
+| false-positive | 51 |
 | diagnostics | 39 |
 | missing-feature | 39 |
-| soundness | 21 |
+| soundness | 22 |
 | perf | 13 |
 | miscompile | 12 |
 | run-vs-build | 9 |
@@ -77,9 +77,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 42 |
 | codegen | 22 |
 | interp | 21 |
+| ownership | 19 |
+| cli | 19 |
 | mir-llvm | 19 |
-| ownership | 18 |
-| cli | 18 |
 | runtime | 11 |
 | parser | 8 |
 | resolver | 3 |
@@ -106,6 +106,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-29 | 2026-10-27 | typecheck+mir | medium | A program function named like a builtin the library calls (`fn panic(s: Str) -> i64 { 7 }`) replaces it inside library bodies: `let o: Option[i64] = None; println(o.expect("boom"))` prints 7 instead of panicking, on `karac run --interp`. | — |
 | B-2026-10-27-33 | 2026-10-27 | typecheck | medium | A generic function that spawns or sends a value of a type parameter need not require `T: CrossTask`, so a `shared` value enters a task through it: `fn run_all[U](x: own U) -> i64 { let g = TaskGroup.new(); g.spawn(|| { let y = x; 1 }).join() }` passes check and runs with `run_all(Cell { n: 1 })` over a `shared struct Cell`, where design.md § `CrossTask` says such a function "must itself require `T: CrossTask`" and the error is at that generic signature | — |
 | B-2026-10-27-34 | 2026-10-27 | typecheck | medium | A caller's type parameter named like a library generic's own leaks into the library call: inside `fn run_all[T](x: own T)`, `g.spawn(|| { let y = x; 1 })` is refused with "expected 'T', found 'i64': inside this item `T` stands for whatever type the caller picks" (TaskGroup.spawn's own `T` is read as the caller's), while the same program with the parameter renamed `U` checks and runs | — |
+| B-2026-10-27-31 | 2026-10-27 | cli | high | `karac check` reports no `par` conflict and no MIR borrow error in a program that imports std.log: `import std.log.{info}; fn main() { par { println("a"), println("b") }; }` passes check while `karac run` refuses it. | — |
+| B-2026-10-27-32 | 2026-10-27 | ownership | medium | A `mut ref S` parameter passed to a static method of a type parameter (`T.make(s)`, the serde `T.deserialize(d)`) is read as a move by `karac check`: inside a loop it is 'moved inside a loop and not assigned again', twice it is 'moved here, used again'. `karac run` accepts the program and prints the right answer. | — |
 
 ### Relocated
 
