@@ -110,8 +110,17 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-1 | 2026-10-27 | ownership | low | `karac check` refuses returning a `Vec[(ref Node, i64)]` whose pushed tuples hold a borrow of a parameter ("returned borrowed collection holds an element that borrows function-local storage"), because the pinning check reads the tuple literal `(c, 1)` as a local source; the same push of a bare `c` into a `Vec[ref Node]` passes, and the MIR borrow checker accepts both | — |
 | B-2026-10-27-2 | 2026-10-27 | mir | low | A `par` over calls through a stored callback ignores the callback type's effect clause: `struct Job { run: Fn(i64) -> i64 with reads(Clock) }` and `par { (j.run)(3), (j.run)(4) }` is refused as `unknown` and `unknown`, where core-semantics §12 says a call through an escaping function value has the effects its type declares | — |
 | B-2026-10-27-4 | 2026-10-27 | cli | low | The v2 build refuses `--enable-hot-swap` on a default-profile project and a cross `--target` / `[build].target` by name, where legacy honoured both; 4 cli tests stay ignored | — |
-| B-2026-10-27-6 | 2026-10-27 | mir-llvm | low | The v2 wasm build always emits a core module: `--bindings=component` (the wasm_wasi project default) does not embed the WIT world or componentize, `[toolchain] wasm-tools` is never consulted, and a `host fn` imports from `kara_host` instead of the canonical-ABI `kara:<pkg>/host`; 2 cli tests ignored | — |
 | B-2026-10-27-7 | 2026-10-27 | typecheck | low | A `let p: P = Json.deserialize(s).map_err(f)?` (or `.context(msg)?`) is refused with "cannot infer type parameter 'T' of `Result[T, DeserializeError]`": the annotation on the `let` does not reach the receiver of a method whose `Ok` type is the receiver's, through the `?` | — |
+
+### Relocated
+
+<details><summary>Relocated — real and still scheduled, but with no action item today and a concrete external trigger, so the work now lives on a canonical tracker. Not wontfix (that is 'measured to a standstill'); follow the tracker column.</summary>
+
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-10-27-6 | 2026-10-27 | mir-llvm | low | The v2 wasm build always emits a core module: `--bindings=component` (the wasm_wasi project default) does not embed the WIT world or componentize, `[toolchain] wasm-tools` is never consulted, and a `host fn` imports from `kara_host` instead of the canonical-ABI `kara:<pkg>/host`; 2 cli tests ignored | docs/deferred.md § Web: Bindings, component model, entry points |
+
+</details>
 
 ### Fixed
 
