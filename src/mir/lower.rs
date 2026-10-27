@@ -15334,7 +15334,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 || self.ref_fn_param_takes_closure(&a.value, p)?
             {
                 let want = self.generic_fn_param_want(&a.value, p, &inst_args)?;
-                let (op, t) = self.fn_arg(&a.value, want)?;
+                let (op, t) = self.fn_arg(&a.value, want, d5_params() && !p.is_own)?;
                 ops.push(PendingRecv::Ready(op));
                 fn_tys.push(Some(t));
                 continue;
@@ -18078,7 +18078,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         || self.ref_fn_param_takes_closure(&a.value, p)?
                     {
                         let want = self.generic_fn_param_want(&a.value, p, &inst_args)?;
-                        let (op, t) = self.fn_arg(&a.value, want)?;
+                        let (op, t) = self.fn_arg(&a.value, want, d5_params() && !p.is_own)?;
                         rest.push(PendingRecv::Ready(op));
                         fn_tys.push(Some(t));
                         continue;
@@ -20043,10 +20043,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// An argument for a function-typed parameter: the closure borrowed
-    /// the way its body takes its environment (moved when called once), or
-    /// the function item as a constant. The parameter then has the type
+    /// the way its body takes its environment (moved when called once), the
+    /// function item as a constant, or an erased value lent when `lend`
+    /// (the parameter is not `own`). The parameter then has the type
     /// returned here in that instance of the callee.
-    fn fn_arg(&mut self, a: &'a Expr, want: Option<Ty>) -> R<(Operand, Ty)> {
+    fn fn_arg(&mut self, a: &'a Expr, want: Option<Ty>, lend: bool) -> R<(Operand, Ty)> {
         let (op, t) = match &a.kind {
             ExprKind::Closure { .. } => {
                 let (op, t) = self.closure_value(a)?;
@@ -20073,6 +20074,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => t,
         };
         match tcx.kind(inner) {
+            // An erased `Fn` or `MutFn` value is lent to a parameter that
+            // borrows it (core semantics §9.3), so a value in a collection
+            // element or a local passed twice stays where it is
+            // (B-2026-10-27-12). A `OnceFn` is consumed.
+            HK::Fn { once, mutable, .. } if lend && t == inner && !once => {
+                let rt = tcx.reference(inner, mutable);
+                let r = self.temp(rt);
+                let kind = if mutable {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Shared
+                };
+                self.assign(r, Rvalue::Ref(kind, op));
+                Ok((Operand::Move(Place::local(r)), rt))
+            }
             // A function item, or an erased `Fn` value: passed as it is.
             HK::FnDef { .. } | HK::Fn { .. } => Ok((self.use_place(op, t), t)),
             HK::Closure { def, .. } => {
