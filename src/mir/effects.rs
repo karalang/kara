@@ -942,10 +942,23 @@ pub fn conflict_witness(
 }
 
 /// What makes a set conflict with everything: an unknown callee, or a call
-/// through a parameter's function value.
+/// through a parameter's function value. An unknown names its first reason,
+/// so a refused `par` says which call it could not see through
+/// (B-2026-10-27-2); a bare `unknown` gave a reader nothing to change.
 fn top(s: &EffectSet) -> Option<String> {
     if s.unknown {
-        return Some("unknown".to_string());
+        // A reason starts with the body it arose in (`main.c0: a call
+        // through a value`), a name the program never wrote.
+        return Some(match s.why.iter().next() {
+            Some(why) => {
+                let why = match why.split_once(": ") {
+                    Some((body, rest)) if !body.contains(' ') => rest,
+                    _ => why,
+                };
+                format!("unknown ({why})")
+            }
+            None => "unknown".to_string(),
+        });
     }
     s.calls.iter().next().map(|p| format!("calls(p{p})"))
 }
