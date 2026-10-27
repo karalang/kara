@@ -6006,7 +6006,6 @@ fn test_build_project_emits_built_line_or_no_llvm_note() {
 // ── Phase-7 line 5 slice 1: --enable-hot-swap plumbing + gating ─
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not honour `--enable-hot-swap` yet"]
 fn test_build_project_hot_swap_rejected_with_embedded_profile() {
     let tmp = scratch_project("hotswap-embedded");
     write(
@@ -6031,7 +6030,6 @@ fn test_build_project_hot_swap_rejected_with_embedded_profile() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not honour `--enable-hot-swap` yet"]
 fn test_build_project_hot_swap_rejected_with_kernel_profile() {
     let tmp = scratch_project("hotswap-kernel");
     write(
@@ -10312,9 +10310,9 @@ fn test_query_monomorphization_help_and_kind_routing() {
 /// are Copy, so the warn/default variants link cleanly.
 #[cfg(feature = "llvm")]
 const MONO_BUDGET_FIXTURE: &str = r#"
-fn identity[T](x: T) -> T { x }
+fn identity[T](x: own T) -> T { x }
 fn main() {
-    let _ = identity(1i64);
+    let _ = identity(1);
     let _ = identity(true);
     let _ = identity('c');
 }
@@ -10431,7 +10429,6 @@ fn test_monomorphization_budget_listed_in_build_help() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not honour `--monomorphization-budget` yet"]
 fn test_monomorphization_budget_error_fails_build() {
     let path = mono_budget_scratch("err", MONO_BUDGET_FIXTURE);
     let out = karac_bin()
@@ -10465,7 +10462,6 @@ fn test_monomorphization_budget_error_fails_build() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not honour `--monomorphization-budget` yet"]
 fn test_monomorphization_budget_warn_emits_note_but_builds() {
     let path = mono_budget_scratch("warn", MONO_BUDGET_FIXTURE);
     let out = karac_bin()
@@ -10493,7 +10489,6 @@ fn test_monomorphization_budget_warn_emits_note_but_builds() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not honour `--monomorphization-budget` yet"]
 fn test_monomorphization_budget_error_supersedes_warn() {
     let path = mono_budget_scratch("super", MONO_BUDGET_FIXTURE);
     let out = karac_bin()
@@ -10521,7 +10516,6 @@ fn test_monomorphization_budget_error_supersedes_warn() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse"]
 fn test_monomorphization_budget_disabled_without_flag() {
     let path = mono_budget_scratch("off", MONO_BUDGET_FIXTURE);
     let out = karac_bin()
@@ -22531,7 +22525,6 @@ fn target_cpu_skip_reason(stderr: &str) -> Option<&'static str> {
 /// any project (the listing needs only the active target, so it's
 /// handled before manifest discovery).
 #[test]
-#[ignore = "v2 gap after M3: the v2 build asks for a project before the `--target-cpu=help` listing"]
 fn target_cpu_help_lists_cpus() {
     let tmp = wasm_test_dir("cpuhelp");
     let path = tmp.join("p.kara");
@@ -22574,7 +22567,6 @@ fn target_cpu_help_lists_cpus() {
 /// the active target. Needs no wasm archive/linker: only a target
 /// machine is constructed.
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not print the wasm32 `--target-cpu=help` table"]
 fn target_cpu_help_is_per_target() {
     let tmp = wasm_test_dir("cpuwasm");
     let path = tmp.join("w.kara");
@@ -23084,7 +23076,6 @@ fn target_features_manifest_tier_and_independence() {
 /// end-to-end. The feature name is read from the target's own `help`
 /// listing so the test is portable across host architectures.
 #[test]
-#[ignore = "v2 gap after M3: a v2 build with a `--target-features` override fails in the assembler"]
 fn target_features_valid_override_builds() {
     let tmp = wasm_test_dir("featok");
     let path = tmp.join("featbuild.kara");
@@ -23106,7 +23097,9 @@ fn target_features_valid_override_builds() {
         .skip_while(|l| !l.starts_with("Available features"))
         .skip(1)
         .filter_map(|l| l.strip_prefix("  ")?.split_whitespace().next())
-        .next()
+        // x86's first entries are `16bit-mode` and `32bit-mode`, which switch
+        // the instruction encoding a 64-bit object cannot be assembled in.
+        .find(|f| !f.ends_with("-mode"))
         .map(str::to_string);
     let Some(feature) = feature else {
         eprintln!("skip: target_features_valid_override_builds — no feature parsed from listing");
@@ -25508,7 +25501,6 @@ fn build_renders_warnings_on_a_successful_build() {
 /// `status`/`output` sees no new key on a clean build, which is what keeps the
 /// kata corpus and the Mend baselines reading this exactly as before.
 #[test]
-#[ignore = "v2 gap after M3: the v2 build JSON does not carry typecheck warnings yet"]
 fn build_json_carries_warnings_only_when_there_are_some() {
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-build-warnings-json-{}-{}",
@@ -25563,8 +25555,10 @@ fn build_json_carries_warnings_only_when_there_are_some() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    // Without the llvm feature a clean file build prints no object at all.
+    let built = tmp.join("clean.bin").exists();
     assert!(
-        stdout.contains("\"status\":\"ok\"") && !stdout.contains("diagnostics"),
+        (stdout.contains("\"status\":\"ok\"") || !built) && !stdout.contains("diagnostics"),
         "a clean build's JSON must gain no `diagnostics` key: {stdout}"
     );
     let _ = std::fs::remove_dir_all(&tmp);
@@ -25694,7 +25688,6 @@ fn run_prints_must_use_exactly_once() {
 /// path could not: `cmd_build_project` never received the CLI lint levels at
 /// all, building its per-module overrides from `default()` plus the manifest.
 #[test]
-#[ignore = "v2 gap after M3: the v2 build JSON does not carry typecheck warnings yet"]
 fn project_build_renders_and_suppresses_typecheck_warnings() {
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-proj-warnings-{}-{}",

@@ -103,7 +103,7 @@ pub(super) fn check_v2(
     manifest: Option<&manifest::Manifest>,
     lint_overrides: crate::lints::CliLintOverrides,
     output: OutputMode,
-) {
+) -> Pipeline {
     let pipeline = check_v2_or_exit(filename, source, project, manifest, lint_overrides, output);
     if let Some(pc) = project.and_then(|a| a.refusal.as_ref()) {
         super::run_check_cmds::render_package_refusal(pc, output);
@@ -112,6 +112,7 @@ pub(super) fn check_v2(
         // Warnings only: the check passed.
         print_diagnostics(&pipeline, project);
     }
+    pipeline
 }
 
 /// [`check_v2`]'s check: an error fails the command with exit 1, its

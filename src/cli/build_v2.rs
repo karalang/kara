@@ -23,7 +23,7 @@ pub(super) struct BuildArgs<'a> {
     #[cfg_attr(not(feature = "llvm"), allow(dead_code))]
     pub target_features: Option<&'a str>,
     pub wasm_threads: bool,
-    pub monomorphization_budget: bool,
+    pub monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
     pub release: bool,
     pub crate_type: NativeCrateType,
     pub out_path: Option<&'a str>,
@@ -35,8 +35,11 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
     refuse_unsupported(&a);
     let output = a.output;
     let manifest = run_manifest_preamble(filename, output, None, false);
+    refuse_hot_swap(&a, manifest.as_ref().map(|m| m.profile));
     #[cfg(feature = "llvm")]
-    if !set_wasm_target(&a) {
+    if set_wasm_target(&a) {
+        list_cpus_if_asked(&a);
+    } else {
         apply_cpu(&a, |pick| {
             manifest_release_field_for(filename, output, pick)
         });
@@ -59,6 +62,12 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
 /// from its `src/main.kara`, into `<root>/<package name>` (or `-o`).
 pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     refuse_unsupported(&a);
+    // The CPU listing needs no package.
+    #[cfg(feature = "llvm")]
+    {
+        set_wasm_target(&a);
+        list_cpus_if_asked(&a);
+    }
     let output = a.output;
     let cwd = std::env::current_dir().unwrap_or_else(|e| {
         fail_with(
@@ -97,6 +106,7 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         host
     };
     let mf = manifest::merge_target_overlay(&raw, Some(overlay.as_str()));
+    refuse_hot_swap(&a, Some(mf.profile));
     if output == OutputMode::Text {
         for w in &mf.warnings {
             eprintln!("warning[manifest]: {}", w.message);
@@ -232,6 +242,30 @@ fn set_wasm_target(a: &BuildArgs) -> bool {
     true
 }
 
+/// `--enable-hot-swap` (deferred.md § Continuous PGO with Shared-Object
+/// Hot-Swap) is not built on v2 yet, so it is refused, naming the target or
+/// `[package].profile` that can never take it before the gap.
+fn refuse_hot_swap(a: &BuildArgs, profile: Option<manifest::CompileProfile>) {
+    if !a.enable_hot_swap {
+        return;
+    }
+    let msg = match profile {
+        _ if is_wasm_wasi(a) => "error: --enable-hot-swap is incompatible with --target=wasm_wasi \
+             (no dynamic-symbol-resolution machinery on wasm hosts)"
+            .to_string(),
+        Some(p @ (manifest::CompileProfile::Embedded | manifest::CompileProfile::Kernel)) => {
+            format!(
+                "error: --enable-hot-swap is incompatible with [package].profile = \"{}\" \
+                 (no dynamic-symbol-resolution machinery on this profile)",
+                p.as_str()
+            )
+        }
+        _ => "error: the v2 build does not honour `--enable-hot-swap` yet".to_string(),
+    };
+    fail_with(&msg, a.output);
+    process::exit(1);
+}
+
 /// A flag the v2 build does not honour yet: refused by name, exit 1.
 fn refuse_unsupported(a: &BuildArgs) {
     let target = a.target.filter(|t| {
@@ -250,14 +284,9 @@ fn refuse_unsupported(a: &BuildArgs) {
     let refused: Vec<String> = [
         (a.concurrency_report, "--concurrency-report".to_string()),
         (a.simd_report, "--simd-report".to_string()),
-        (a.enable_hot_swap, "--enable-hot-swap".to_string()),
         (
             target.is_some() && archived_target.is_none(),
             format!("--target={}", target.unwrap_or("")),
-        ),
-        (
-            a.monomorphization_budget,
-            "--monomorphization-budget".to_string(),
         ),
     ]
     .into_iter()
@@ -310,6 +339,16 @@ fn refuse_unsupported(a: &BuildArgs) {
     }
 }
 
+/// `--target-cpu=help` or `--target-features=help`: the active target's
+/// CPU and feature tables, then exit 0.
+#[cfg(feature = "llvm")]
+fn list_cpus_if_asked(a: &BuildArgs) {
+    if a.target_cpu == Some("help") || a.target_features == Some("help") {
+        crate::backend::driver::print_target_cpu_listing();
+        process::exit(0);
+    }
+}
+
 /// The CPU baseline, as `karac build` sets it: the flag, then
 /// `KARAC_TARGET_CPU`, then the manifest's `[release] target-cpu`, then its
 /// `cpu-baseline` (`v3` when absent); the feature string likewise.
@@ -318,10 +357,7 @@ fn apply_cpu(
     a: &BuildArgs,
     manifest_field: impl Fn(fn(&manifest::Manifest) -> Option<String>) -> Option<String>,
 ) {
-    if a.target_cpu == Some("help") || a.target_features == Some("help") {
-        crate::backend::driver::print_target_cpu_listing();
-        process::exit(0);
-    }
+    list_cpus_if_asked(a);
     let (baseline_cpu, baseline_features) =
         resolve_native_cpu_baseline(manifest_field(|m| m.release_cpu_baseline.clone()).as_deref());
     apply_target_cpu_override(
@@ -469,14 +505,44 @@ fn build(
             process::exit(1);
         }),
     };
-    super::run_v2::check_v2(
+    let checked = super::run_v2::check_v2(
         filename,
         &source,
         project.as_ref(),
         manifest,
-        a.lint_overrides,
+        a.lint_overrides.clone(),
         output,
     );
+    if a.monomorphization_budget.is_enabled() {
+        enforce_monomorphization_budget(
+            &checked,
+            project.as_ref(),
+            &a.monomorphization_budget,
+            output,
+        );
+    }
+    // The check's warnings ride the JSON success object under `diagnostics`,
+    // only when there are some; a package's summary already has the key.
+    let warnings: Vec<String> = match output {
+        OutputMode::Text => Vec::new(),
+        _ => collect_diagnostics(&checked)
+            .entries
+            .iter()
+            .map(|d| match &project {
+                Some(p) => p.remap_json_text(filename, d),
+                None => d.clone(),
+            })
+            .collect(),
+    };
+    let fields: Option<String> = match fields {
+        Some(f) => Some(f.replace(
+            "\"diagnostics\":[],",
+            &format!("\"diagnostics\":[{}],", warnings.join(",")),
+        )),
+        None if !warnings.is_empty() => Some(format!("\"diagnostics\":[{}],", warnings.join(","))),
+        None => None,
+    };
+    let fields = fields.as_deref();
     crate::mir::interp::set_source_name(filename);
     if let Some(p) = &project {
         p.install();
@@ -557,4 +623,74 @@ fn fail_with(msg: &str, output: OutputMode) {
         OutputMode::Text => eprintln!("{msg}"),
         _ => emit_build_error(msg, output),
     }
+}
+
+/// `--monomorphization-budget` after the check, as legacy enforced it: each
+/// generic whose instantiations meet a threshold is reported on stderr as
+/// `warning[monomorphization-budget]` or `error[…]`, and an error fails the
+/// build before code generation (in JSON mode with a diagnostics envelope on
+/// stdout). B-2026-10-23-16.
+fn enforce_monomorphization_budget(
+    pipeline: &Pipeline,
+    project: Option<&super::project_v2::Amalgam>,
+    budget: &crate::monomorphization::MonomorphizationBudget,
+    output: OutputMode,
+) {
+    use crate::monomorphization::{BudgetLevel, BudgetViolation};
+
+    let Some(tc) = pipeline.typed.as_ref() else {
+        return;
+    };
+    let table =
+        crate::monomorphization::analyze(&pipeline.parsed.program, tc, pipeline.effects.as_ref());
+    let violations = table.budget_violations(budget);
+    if violations.is_empty() {
+        return;
+    }
+    let at = |v: &BudgetViolation| {
+        let place = format!("{}:{}:{}", pipeline.filename, v.site.line, v.site.column);
+        match project {
+            Some(a) => a.remap_text(&pipeline.filename, &place),
+            None => place,
+        }
+    };
+    for v in &violations {
+        let kind = match v.level {
+            BudgetLevel::Error => "error",
+            BudgetLevel::Warning => "warning",
+        };
+        eprintln!(
+            "{kind}[monomorphization-budget]: {}: generic `{}` has {} instantiations (limit {})",
+            at(v),
+            v.generic,
+            v.count,
+            v.threshold
+        );
+    }
+    let errors: Vec<&BudgetViolation> = violations
+        .iter()
+        .filter(|v| v.level == BudgetLevel::Error)
+        .collect();
+    if errors.is_empty() {
+        return;
+    }
+    if output != OutputMode::Text {
+        let diags: Vec<String> = errors
+            .iter()
+            .map(|v| {
+                format!(
+                    "{{\"severity\":\"error\",\"phase\":\"monomorphization-budget\",\"generic\":{},\"count\":{},\"limit\":{},\"site\":{}}}",
+                    json_string(&v.generic),
+                    v.count,
+                    v.threshold,
+                    json_string(&at(v)),
+                )
+            })
+            .collect();
+        println!(
+            "{{\"status\":\"error\",\"diagnostics\":[{}]}}",
+            diags.join(",")
+        );
+    }
+    process::exit(1);
 }
