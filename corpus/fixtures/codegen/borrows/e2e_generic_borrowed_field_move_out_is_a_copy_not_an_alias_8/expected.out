@@ -1,2 +1,1 @@
-3
-2
+ERROR at line 2: expected 'T', found 'i64': inside this item `T` stands for whatever type the caller picks, so it is never 'i64' (only a `T` is a `T`)

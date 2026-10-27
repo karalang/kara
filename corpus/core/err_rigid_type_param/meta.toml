@@ -1,0 +1,11 @@
+source = "B-2026-10-27-19"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["generics"]
+class = "a"
+expected_from = "pin"
+backends = []
+env = {}
+note = "A generic item's own type parameter is rigid in its body: a concrete value where `T` is expected is refused at check. Before, the TypeParam wildcard let it through to the MIR validator (\"invalid MIR: f[String]: assigning i64 to _0 of type String\")."
+bucket = "a:refused"

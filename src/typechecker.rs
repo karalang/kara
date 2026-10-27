@@ -6779,6 +6779,81 @@ impl<'a> TypeChecker<'a> {
         read && types::is_subtype(&rebuild(wp2, wr, w_once), &rebuild(hp2, hr, h_once))
     }
 
+    /// `ty` when it names a type parameter of the enclosing item (rigid in
+    /// its body), not one a call is solving.
+    fn rigid_param(&self, ty: &Type) -> Option<String> {
+        let name = self.type_param_name(ty)?;
+        (name != "Self" && self.enclosing_bounds.contains_key(name)).then(|| name.clone())
+    }
+
+    /// Where `a` and `b` put a rigid parameter of the enclosing item against
+    /// a concrete type, at the same place in both: that parameter and the
+    /// concrete type.
+    fn rigid_mismatch(&self, a: &Type, b: &Type) -> Option<(String, Type)> {
+        // A found value whose whole type is the parameter is a `T`. Inside
+        // a found type, a parameter may be a callee's that no argument
+        // solved (`None` is an `Option[T]` of `Option`'s `T`), so only the
+        // expected side is read there.
+        if let Some(p) = self.rigid_param(b) {
+            return self.is_concrete(a).then(|| (p, a.clone()));
+        }
+        self.rigid_expected(a, b)
+    }
+
+    fn rigid_expected(&self, a: &Type, b: &Type) -> Option<(String, Type)> {
+        if let Some(p) = self.rigid_param(a) {
+            return self.is_concrete(b).then(|| (p, b.clone()));
+        }
+        let pairs = |xs: &[Type], ys: &[Type]| {
+            (xs.len() == ys.len())
+                .then(|| {
+                    xs.iter()
+                        .zip(ys)
+                        .find_map(|(x, y)| self.rigid_expected(x, y))
+                })
+                .flatten()
+        };
+        match (a, b) {
+            (Type::Named { name: n, args: xs }, Type::Named { name: m, args: ys }) if n == m => {
+                pairs(xs, ys)
+            }
+            (Type::Tuple(xs), Type::Tuple(ys)) => pairs(xs, ys),
+            (Type::Ref(x), Type::Ref(y)) | (Type::MutRef(x), Type::MutRef(y)) => {
+                self.rigid_expected(x, y)
+            }
+            (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+            | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
+                self.rigid_expected(x, y)
+            }
+            _ => None,
+        }
+    }
+
+    /// A type with nothing left to solve and no type parameter in it.
+    fn is_concrete(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Tuple(ts) => ts.iter().all(|t| self.is_concrete(t)),
+            Type::Ref(t) | Type::MutRef(t) => self.is_concrete(t),
+            Type::Array { element, .. } | Type::Slice { element, .. } => self.is_concrete(element),
+            // A name may be a callee's parameter no argument solved (a
+            // trait method's `Rhs`), so only a declared type counts.
+            Type::Named { name, args } => {
+                name != "Self"
+                    && !self.enclosing_bounds.contains_key(name)
+                    && self.is_known_type_name(name)
+                    && args.iter().all(|t| self.is_concrete(t))
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         // B-2026-10-27-14: an operator's result on a `T: Add` is the bound's
         // `T.Output`, which the `TypeParam` wildcard of `types_compatible`
@@ -6801,6 +6876,42 @@ impl<'a> TypeChecker<'a> {
                     return false;
                 }
             }
+        }
+        // B-2026-10-27-19: inside a generic item its own parameter `T` is a
+        // rigid type. Only a `T` is a `T`, so a concrete value is never one,
+        // however permissive `types_compatible`'s `TypeParam` wildcard is
+        // toward a parameter still being solved.
+        let have = inference::resolve_type_vars(
+            found,
+            &self.env.substitutions,
+            &std::collections::HashMap::new(),
+            &self.env.const_substitutions,
+            &std::collections::HashMap::new(),
+        );
+        // A library body is read with the program's own items in scope, so
+        // a program `fn panic(..) -> i64` stands in for the builtin there
+        // (B-2026-10-27-29); the check is for the program's own items.
+        let library = self.current_fn_stdlib_origin
+            || span.offset >= self.program.library_start.unwrap_or(usize::MAX);
+        let rigid = if library {
+            None
+        } else {
+            self.rigid_mismatch(expected, &have)
+        };
+        if let Some((param, other)) = rigid {
+            self.type_error(
+                format!(
+                    "expected '{}', found '{}': inside this item `{param}` stands for \
+                     whatever type the caller picks, so it is never '{}' (only a `{param}` is a \
+                     `{param}`)",
+                    type_display(expected),
+                    type_display(&have),
+                    type_display(&other),
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return false;
         }
         // design.md § String literals: a literal is a `Str` wherever a `Str`
         // is expected, including the slots whose check infers the argument

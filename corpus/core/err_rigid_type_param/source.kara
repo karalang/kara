@@ -1,0 +1,9 @@
+// Inside a generic item its own type parameter is rigid: only a `T` is a
+// `T`, so a concrete value is never one (B-2026-10-27-19).
+fn f[T](x: own T) -> T {
+    5
+}
+
+fn main() {
+    println(f("a"));
+}
