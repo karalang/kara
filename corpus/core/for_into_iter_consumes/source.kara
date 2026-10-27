@@ -1,0 +1,56 @@
+// `for x in c.into_iter()` moves `c` and each item (core-semantics §4.6):
+// each element the body does not move on drops at the end of its own
+// iteration, and an element moved on drops with its new owner. A loop over
+// a temporary collection borrows it, and the temporary drops at loop exit
+// (§7.4). B-2026-09-27-76.
+struct D {
+    id: i64,
+}
+
+impl Drop for D {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}");
+    }
+}
+
+fn two(a: i64) -> Vec[D] {
+    vec![D { id: a }, D { id: a + 1 }]
+}
+
+fn main() {
+    println("-- read");
+    let v = two(10);
+    for g in v.into_iter() {
+        println(f"g {g.id}");
+    }
+    println("-- moved to a local");
+    let v = two(20);
+    for g in v.into_iter() {
+        let h = g;
+        println(f"h {h.id}");
+    }
+    println("-- pushed");
+    let v = two(30);
+    let mut w: Vec[D] = Vec.new();
+    for g in v.into_iter() {
+        w.push(g);
+    }
+    println(f"kept {w.len()}");
+    println("-- bound first");
+    let v = two(40);
+    let it = v.into_iter();
+    for g in it {
+        println(f"g {g.id}");
+    }
+    println("-- destructured");
+    let v: Vec[(Vec[D], i64)] = vec![(vec![D { id: 50 }], 1), (vec![D { id: 51 }], 2)];
+    for (a, j) in v.into_iter() {
+        let b = a;
+        println(f"{j} {b.len()}");
+    }
+    println("-- temporary");
+    for g in two(60) {
+        println(f"g {g.id}");
+    }
+    println("-- end");
+}

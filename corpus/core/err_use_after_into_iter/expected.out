@@ -1,0 +1,1 @@
+error[E0500]: value `v` moved by `.into_iter()` and used after the loop

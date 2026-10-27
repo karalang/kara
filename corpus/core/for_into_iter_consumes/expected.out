@@ -1,0 +1,30 @@
+-- read
+g 10
+drop 10
+g 11
+drop 11
+-- moved to a local
+h 20
+drop 20
+h 21
+drop 21
+-- pushed
+kept 2
+-- bound first
+g 40
+drop 40
+g 41
+drop 41
+-- destructured
+1 1
+drop 50
+2 1
+drop 51
+-- temporary
+g 60
+g 61
+drop 60
+drop 61
+-- end
+drop 30
+drop 31

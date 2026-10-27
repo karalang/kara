@@ -1,0 +1,11 @@
+source = "corpus/core/err_use_after_into_iter"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["loop"]
+class = "a"
+expected_from = "spec"
+rules = ["4.6"]
+backends = []
+env = {}
+note = "B-2026-09-27-76: `.into_iter()` moves the collection, so a use after the loop is a use after move. The expected.out wording of an error pin is guidance, not a byte oracle."

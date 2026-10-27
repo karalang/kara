@@ -1,0 +1,9 @@
+// `.into_iter()` moves the collection (core-semantics §4.6), so using it
+// after the loop is a use after move. B-2026-09-27-76.
+fn main() {
+    let v = vec![1, 2];
+    for g in v.into_iter() {
+        println(f"{g}");
+    }
+    println(f"{v.len()}");
+}

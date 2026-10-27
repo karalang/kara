@@ -1,0 +1,11 @@
+source = "corpus/core/for_into_iter_consumes"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "loop"]
+class = "a"
+expected_from = "spec"
+rules = ["4.6", "7.4"]
+backends = []
+env = {}
+note = "B-2026-09-27-76: `for x in c.into_iter()` moves `c` and each item, so an element the body keeps drops at the end of its iteration and one moved on drops with its new owner; a loop over a temporary collection borrows it, and it drops at loop exit."
