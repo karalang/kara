@@ -1067,6 +1067,56 @@ pub(crate) fn hold_log(h: crate::mir_log::Held) {
     }
 }
 
+/// A panic is about to end the program (B-2026-10-27-30): every record a
+/// [`Hold`] still holds goes to the backend, in statement order, before
+/// the panic is reported. A task still running gives what it logged so
+/// far. A hold's own records come first, then those of the groups whose
+/// tasks it spawned, in the order the groups were made, each group's in
+/// its tasks' order.
+pub(crate) fn drain_logs() {
+    // A panic inside a backend's `emit` while records were being let go:
+    // the drain would wait on itself.
+    let Ok(_order) = LOG_ORDER.try_lock() else {
+        return;
+    };
+    let mut out = Vec::new();
+    let _ = EXEC.try_with(|e| {
+        let Ok(mut e) = e.try_borrow_mut() else {
+            return;
+        };
+        // The holds under each spawner's hold, by group and place.
+        let mut under: HashMap<u64, Vec<(u64, usize, u64)>> = HashMap::new();
+        for (&key, hold) in &e.holds {
+            // SAFETY: a group outlives its tasks' holds.
+            let group = unsafe { (*hold.group).id };
+            under
+                .entry(hold.up)
+                .or_default()
+                .push((group, hold.seq, key));
+        }
+        for holds in under.values_mut() {
+            holds.sort_unstable();
+        }
+        fn drain(
+            e: &mut Exec,
+            under: &HashMap<u64, Vec<(u64, usize, u64)>>,
+            up: u64,
+            out: &mut Vec<crate::mir_log::Held>,
+        ) {
+            for &(_, _, key) in under.get(&up).map_or(&[][..], Vec::as_slice) {
+                if let Some(hold) = e.holds.get_mut(&key) {
+                    out.append(&mut hold.held);
+                }
+                drain(e, under, key, out);
+            }
+        }
+        drain(&mut e, &under, 0, &mut out);
+    });
+    for h in out {
+        h.release();
+    }
+}
+
 /// The task with hold `key` finished: while its group's first unfinished
 /// task has finished, the next one is the first, and the records the new
 /// first one held go on.

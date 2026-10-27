@@ -163,3 +163,93 @@ fn mir_written_par_logs_as_its_tasks() {
     ids.dedup();
     assert_eq!(ids.len(), 2, "{recs}");
 }
+
+/// A later statement's panic ends the program while an earlier
+/// statement's task still holds its record: the record reaches the
+/// backend before the panic is reported, as it would run in order
+/// (B-2026-10-27-30).
+const PANICS: &str = r#"import std.log.{info};
+
+fn inner(k: i64) -> i64 {
+    let mut s = 0;
+    let mut j = 0;
+    while j < 3 {
+        s = s + (k + j) % 7;
+        j = j + 1;
+    }
+    s
+}
+
+fn work(n: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        s = s + inner(i);
+        i = i + 1;
+    }
+    s
+}
+
+fn step(tag: i64, n: i64) -> i64 {
+    let r = work(n);
+    info("step", tag: tag);
+    r
+}
+
+fn boom(n: i64) -> i64 {
+    let r = work(n);
+    let v: Vec[i64] = Vec.new();
+    r + v[r]
+}
+
+fn main() {
+    let a = step(1, 10);
+    let b = boom(3000000);
+    println(a + b);
+}
+"#;
+
+#[test]
+fn mir_auto_par_logs_before_a_later_panic() {
+    let path = write("panics", PANICS);
+    let record = "{\"level\":\"info\",\"msg\":\"step\",\"tag\":1,\"task_id\":null}\n";
+    let check = |lane: &str, out: &Output| {
+        let err = text(&out.stderr);
+        assert_eq!(out.status.code(), Some(101), "{lane}: {err}");
+        let at = err
+            .find(record)
+            .unwrap_or_else(|| panic!("{lane}: no record in:\n{err}"));
+        let panic = err.find("runtime error: index out of bounds").unwrap();
+        assert!(at < panic, "{lane}: the record after the panic:\n{err}");
+    };
+    for lane in [&["run"][..], &["run", "--interp"]] {
+        let out = karac(lane, &path);
+        let err = text(&out.stderr);
+        assert!(
+            err.contains("auto-par: statements as tasks: main@"),
+            "{lane:?}: {err}"
+        );
+        check(&format!("{lane:?}"), &out);
+    }
+    // Built, the first statement's own group holds the record while its
+    // long loop runs, and the second statement panics at once.
+    let src = PANICS
+        .replace("step(1, 10)", "step(1, 30000000)")
+        .replace("boom(3000000)", "boom(10)");
+    let path = write("panics-built", &src);
+    let bin = path.with_file_name("main.out");
+    let out = karac(&["build", "-o", bin.to_str().unwrap()], &path);
+    let err = text(&out.stderr);
+    if !out.status.success() && (err.contains("Linker failed") || err.contains("not found")) {
+        eprintln!("skipped: no runtime archive");
+        return;
+    }
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains("auto-par: statements as tasks: main@"),
+        "{err}"
+    );
+    for _ in 0..3 {
+        check("built", &Command::new(&bin).output().unwrap());
+    }
+}

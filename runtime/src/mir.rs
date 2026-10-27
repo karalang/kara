@@ -2454,6 +2454,7 @@ pub unsafe extern "C" fn karac_mir_panic_info(out: *mut RawVec, which: i32) {
 /// {what}` on standard error, the panic handler, then exit 101.
 pub(crate) fn deadlock(what: &str) -> ! {
     if panic_begins() {
+        crate::mir_task::drain_logs();
         karac_mir_flush();
         eprintln!("error: deadlock: {what}");
         run_panic_handler(&format!("deadlock: {what}"), "");
@@ -2655,6 +2656,7 @@ pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: u64) -> ! {
     if !panic_begins() {
         karac_mir_exit(101)
     }
+    crate::mir_task::drain_logs();
     let msg = abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
         // SAFETY: the caller's contract.
         String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned()
@@ -2682,6 +2684,7 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     if !panic_begins() {
         karac_mir_exit(101)
     }
+    crate::mir_task::drain_logs();
     let msg = abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
         // SAFETY: the caller's contract.
         String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned()

@@ -11506,6 +11506,7 @@ impl<'a> Interp<'a> {
         if let Stop::Abort(reason) = &s {
             if !self.abort_reported && !in_library {
                 self.abort_reported = true;
+                self.drain_logs();
                 let msg = self.abort_message(reason);
                 let (file, line) = source_at(span.line);
                 let at = format!("{file}:{line}:{}", span.column);
@@ -11606,6 +11607,7 @@ impl<'a> Interp<'a> {
     fn deadlock(&mut self, what: &str) -> Stop {
         if !self.abort_reported {
             self.abort_reported = true;
+            self.drain_logs();
             self.write_out(true, &format!("error: deadlock: {what}\n"));
             self.run_panic_handler(format!("deadlock: {what}"), String::new());
         }
@@ -15241,6 +15243,44 @@ impl<'a> Interp<'a> {
             key = t.log_up;
         }
         self.log_emit(call, default)
+    }
+
+    /// A panic is about to end the program (B-2026-10-27-30): every call
+    /// a task of a hidden group still holds goes to the backend, in
+    /// statement order, before the panic is reported. A task's own calls
+    /// come first, then those of the groups whose tasks it spawned, in the
+    /// order the groups were made, each group's in its tasks' order. A
+    /// backend that fails here is not reported over the panic.
+    fn drain_logs(&mut self) {
+        // The tasks of hidden groups under each spawner's hold, by group
+        // and place.
+        type Under = rustc_hash::FxHashMap<Option<usize>, Vec<(usize, usize, usize)>>;
+        let mut under = Under::default();
+        for (i, t) in self.tasks.iter().enumerate() {
+            if t.log_hold == Some(i) {
+                under
+                    .entry(t.log_up)
+                    .or_default()
+                    .push((t.group, t.log_seq, i));
+            }
+        }
+        for holds in under.values_mut() {
+            holds.sort_unstable();
+        }
+        // Depth first: a hold's calls, then those under it.
+        fn walk(under: &Under, up: Option<usize>, order: &mut Vec<usize>) {
+            for &(_, _, i) in under.get(&up).map_or(&[][..], Vec::as_slice) {
+                order.push(i);
+                walk(under, Some(i), order);
+            }
+        }
+        let mut order = Vec::new();
+        walk(&under, None, &mut order);
+        for i in order {
+            for (call, default) in std::mem::take(&mut self.tasks[i].log_held) {
+                let _ = self.log_emit(call, default);
+            }
+        }
     }
 
     /// Task `t` of a hidden group finished: while its group's first
