@@ -22428,9 +22428,14 @@ fn user_operator_trait(bin: BinOp) -> Option<(&'static str, &'static str)> {
 
 /// Check one source file, build its MIR and elaborate drops; or the first
 /// stage that refused it. Loops and statements run as tasks unless
-/// `KARAC_AUTO_PAR=0`.
+/// `KARAC_AUTO_PAR=0`, or the build is for wasm: its pool runs one worker,
+/// where the tasks only cost (kata 28's brute force ran 3.1x slower as
+/// tasks on `--target=wasm_wasi`, B-2026-10-26-17).
 pub fn build_source(src: &str) -> Result<Lowered, String> {
-    build_source_with(src, crate::par_cost::auto_par_enabled())
+    build_source_with(
+        src,
+        crate::par_cost::auto_par_enabled() && !crate::target::active_target_is_wasm(),
+    )
 }
 
 /// [`build_source`] as `KARAC_AUTO_PAR=0` builds it, for a caller that
