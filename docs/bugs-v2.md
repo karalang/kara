@@ -60,8 +60,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | false-positive | 48 |
 | diagnostics | 38 |
-| missing-feature | 33 |
-| soundness | 15 |
+| missing-feature | 34 |
+| soundness | 16 |
 | perf | 13 |
 | miscompile | 10 |
 | run-vs-build | 9 |
@@ -73,7 +73,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 72 |
+| typecheck | 73 |
 | mir | 37 |
 | codegen | 22 |
 | interp | 20 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 18 |
 | mir-llvm | 14 |
 | runtime | 10 |
-| parser | 6 |
+| parser | 7 |
 | other | 2 |
 | resolver | 2 |
 | effect | 2 |
@@ -102,7 +102,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-26-17 | 2026-10-26 | mir+mir-llvm | medium | After B-2026-10-26-14's fixes, at 9030678cd0 `KARAC_AUTO_PAR=1` builds still run under the M4b floor of 0.9x their own seq build: on one worker, the default, kata 28 brute_force 0.26x, 191 popcount 0.36x, 4 binary_search_partition 0.56x, 9 palindrome 0.70x and 8 atoi 0.75x (11 programs under 0.9x in all) (CORRECTED: hotel_audit, under on 4 workers in the first three timings, ran 0.97 / 0.98 / 0.92 in three more 21-run timings, inside the swing of a no-site control; no 4-worker app is reliably under at this box's resolution) (Thread B: hotel_audit's two small tasked loops are not the cause either, re-timed in three 31-run passes; the one-worker katas pay for the task form itself, see detail) | — |
 | B-2026-10-27-11 | 2026-10-27 | typecheck+mir | medium | `Iterable` (design.md § `Iterator` and `Iterable`, a lang-item trait: `type Item; fn iter(self) -> impl Iterator[Item = Self.Item]`) does not exist, so `for x in c` over a user collection cannot borrow it: `impl Iterable for Bag` is 'undefined type Iterable' | — |
 | B-2026-10-27-12 | 2026-10-27 | ownership+mir | low | Passing a function value held in a collection element to a non-escaping function-typed parameter (`apply(v[0], 4)` over `fn apply(f: Fn(i64) -> i64, x: i64)`) is refused as a move out of the element, where core-semantics §4.1 / §9.3 make a bare `Fn` parameter a borrow | — |
-| B-2026-10-27-13 | 2026-10-27 | typecheck | medium | The library's operator traits are declared without the spec's `Rhs` parameter and `Output` type (runtime/stdlib/add.kara: `trait Add { fn add(own self, rhs: own Self) -> Self; }`; design.md § Operator Traits: `trait Add[Rhs = Self] { type Output; fn add(own self, rhs: own Rhs) -> Self.Output; }`), so an operator impl's signature cannot be checked against its trait: `impl Add for I { type Output = I; fn add(own self, rhs: own D) -> I }` (the spec needs `Add[D]`) passes check and `I + D` runs | — |
+| B-2026-10-27-14 | 2026-10-27 | typecheck | medium | Arithmetic on a `T: Add` (`Sub`, `Mul`, ...) type parameter is typed `T`, not the bound's `T.Output`, so `fn g[T: Sub](a: own T, b: own T) -> T { a - b }` passes check and, at a type whose `Output` is another type, reads the result as a `T`; and a mixed-operand bound (`T: Add[D, Output = T]`, `a + d`) is refused as 'both operands must have the same type' | — |
+| B-2026-10-27-15 | 2026-10-27 | parser | low | A type's generic parameters take no default (`struct Map[K, V, H = SipHash13BuildHasher]`, design.md § Default generic arguments): the parser refuses it by name; only a trait's parameters take defaults | — |
 
 ### Relocated
 
@@ -284,6 +285,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-8 | mir | low | A `par` branch that calls a captured, annotated `let` (`let f: Fn(i64) -> i64 with reads(Clock) = ..; par { f(3), f(4) }`) is still refused as `unkno… | 802932ff9d |
 | B-2026-10-27-9 | typecheck | high | An impl method's signature is not checked against its trait's: `impl Mk2 for S { type A = bool; fn mk2(self) -> Option[i64] { Some(7) } }` under `tra… | 75990e74c3 |
 | B-2026-10-27-10 | mir | medium | A trait impl's method named like an inherent method of the same type shares its MIR instance name (`Bag.into_iter`), so a call through the bound (`c.… | c264a31df1 |
+| B-2026-10-27-13 | typecheck | medium | The library's operator traits are declared without the spec's `Rhs` parameter and `Output` type (runtime/stdlib/add.kara: `trait Add { fn add(own sel… | f91c8a7d29 |
 
 </details>
 
