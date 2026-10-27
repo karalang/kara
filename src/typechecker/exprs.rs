@@ -2054,6 +2054,27 @@ impl<'a> super::TypeChecker<'a> {
                 return actual;
             }
         }
+        // `let p: P = Json.deserialize(s).map_err(f)?;` (B-2026-10-27-7): the
+        // `?` operand is a method that keeps its receiver's payload, so the
+        // annotation is the payload of the call at the root of the chain,
+        // which takes it as an `.unwrap()`'s receiver does.
+        if let ExprKind::Question(inner) = &expr.kind {
+            let root = match &inner.kind {
+                ExprKind::MethodCall { .. } => payload_preserving_root(inner),
+                _ => None,
+            };
+            let fixed = *expected != Type::Error
+                && (expectation_is_concrete(expected)
+                    || (!contains_type_var(expected) && !self.mentions_foreign_param(expected)));
+            if let (Some(call), true, true) = (root, self.library_methods_from_source, fixed) {
+                self.pending_expected_call_payload =
+                    Some((SpanKey::from_span(&call.span), expected.clone()));
+                let actual = self.infer_expr(expr);
+                self.pending_expected_call_payload = None;
+                self.check_assignable(expected, &actual, expr.span);
+                return actual;
+            }
+        }
         // B-2026-08-08-7 — the `.unwrap()` sibling of the `?` arm above.
         // `let v: Vec[i64] = Vec.try_with_capacity(0)?` pinned its element and
         // `let v: Vec[i64] = Vec.try_with_capacity(0).unwrap()` did not, purely
@@ -3316,17 +3337,34 @@ impl<'a> super::TypeChecker<'a> {
         {
             let unwraps =
                 (method == "unwrap" && args.is_empty()) || (method == "expect" && args.len() == 1);
-            let seedable_receiver = matches!(
-                &object.kind,
-                ExprKind::Call { callee, .. }
-                    if matches!(&callee.kind, ExprKind::Path { .. } | ExprKind::Identifier(_))
-            );
+            // Through methods that keep the payload (`.map_err(f).unwrap()`,
+            // B-2026-10-27-7).
+            let seedable_receiver = payload_preserving_root(object);
             let fixed = *expected != Type::Error
                 && (expectation_is_concrete(expected)
                     || (!contains_type_var(expected) && !self.mentions_foreign_param(expected)));
-            if unwraps && seedable_receiver && self.library_methods_from_source && fixed {
+            if let (true, Some(call), true, true) = (
+                unwraps,
+                seedable_receiver,
+                self.library_methods_from_source,
+                fixed,
+            ) {
                 self.pending_expected_call_payload =
-                    Some((SpanKey::from_span(&object.span), expected.clone()));
+                    Some((SpanKey::from_span(&call.span), expected.clone()));
+            }
+            // The chain checked against its own `Option` / `Result`
+            // (`let r: Result[P, String] = Json.deserialize(s).map_err(f);`):
+            // the expectation's payload is the root call's.
+            if let (Type::Named { name, args: targs }, Some(call), true, true) = (
+                expected,
+                payload_preserving_root(expr).filter(|c| !std::ptr::eq(*c, expr)),
+                self.library_methods_from_source,
+                fixed,
+            ) {
+                if (name == "Option" || name == "Result") && !targs.is_empty() {
+                    self.pending_expected_call_payload =
+                        Some((SpanKey::from_span(&call.span), targs[0].clone()));
+                }
             }
             if self.library_methods_from_source && fixed {
                 self.pending_expected_method_return =
@@ -11251,5 +11289,44 @@ fn byte_literal(b: u8) -> String {
         0 => "b'\\0'".to_string(),
         0x20..=0x7e => format!("b'{}'", b as char),
         _ => format!("b'\\x{b:02X}'"),
+    }
+}
+
+/// The generic call at the root of a chain of methods that keep an
+/// `Option` / `Result` payload (`Json.deserialize(s).map_err(f)`), or the
+/// expression itself when it is such a call: what an `.unwrap()`, an
+/// `.expect(..)` or a `?` over the chain learns its payload type through
+/// (B-2026-10-27-7). `None` for any other shape.
+fn payload_preserving_root(mut e: &Expr) -> Option<&Expr> {
+    loop {
+        match &e.kind {
+            ExprKind::Call { callee, .. }
+                if matches!(
+                    &callee.kind,
+                    ExprKind::Path { .. } | ExprKind::Identifier(_)
+                ) =>
+            {
+                return Some(e);
+            }
+            ExprKind::MethodCall { object, method, .. }
+                if matches!(
+                    method.as_str(),
+                    "map_err"
+                        | "context"
+                        | "with_context"
+                        | "or_else"
+                        | "or"
+                        | "inspect"
+                        | "inspect_err"
+                        | "ok"
+                        | "ok_or"
+                        | "ok_or_else"
+                        | "filter"
+                ) =>
+            {
+                e = object;
+            }
+            _ => return None,
+        }
     }
 }
