@@ -216,11 +216,15 @@ impl<'ctx> Cx<'ctx, '_> {
         self.program.bodies.contains_key(&name).then_some(name)
     }
 
-    /// The lowered body of `ty`'s user `PartialEq.eq`, if it has one.
+    /// The lowered body of `ty`'s user `PartialEq.eq`, if it has one, or
+    /// of its `==` when a part of it has one (B-2026-10-27-26).
     fn user_eq_body(&self, ty: Ty) -> Option<String> {
         let mut ty = ty;
         while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ty) {
             ty = i;
+        }
+        if let Some(name) = self.program.key_eqs.get(&ty) {
+            return Some(name.clone());
         }
         if !matches!(self.tys.kind(ty), TyKind::Adt(_) | TyKind::Shared(_)) {
             return None;

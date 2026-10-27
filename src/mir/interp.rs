@@ -75,6 +75,11 @@ pub struct Program {
     /// (collections.md § Hashing, B-2026-10-25-31). A table with no entry
     /// here hashes its keys with the native glue alone.
     pub table_hashes: BTreeMap<(Ty, Option<Ty>), TableHash>,
+    /// The `eq` body a hashed table compares keys of each type by when a
+    /// part of the key, not the key itself, has a hand-written
+    /// `PartialEq` (collections.md § Hashing, B-2026-10-27-26): `==` on
+    /// the key, built as its own body taking both by reference.
+    pub key_eqs: BTreeMap<Ty, String>,
 }
 
 /// The bodies a table hashes a key by when that runs Kāra code: the
@@ -9177,6 +9182,9 @@ impl<'a> Interp<'a> {
         let mut ty = ty;
         while let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(ty) {
             ty = inner;
+        }
+        if let Some(name) = self.program.key_eqs.get(&ty) {
+            return Some(name.clone());
         }
         if !matches!(self.tys.kind(ty), TyKind::Adt(_) | TyKind::Shared(_)) {
             return None;

@@ -410,6 +410,7 @@ fn lower_program_inner<'a>(
         eq_queued: FxHashSet::default(),
         hash_scanned: FxHashSet::default(),
         hash_noted: FxHashSet::default(),
+        key_eq_noted: FxHashSet::default(),
         self_tys: FxHashMap::default(),
         queue: Vec::new(),
         queued: FxHashSet::default(),
@@ -973,6 +974,8 @@ struct Lcx<'a> {
     /// The tables, by key type and hasher, [`Lcx::note_table_hash`] has
     /// looked at.
     hash_noted: FxHashSet<(Ty, Option<Ty>)>,
+    /// The key types [`Lcx::note_key_eq`] has looked at.
+    key_eq_noted: FxHashSet<Ty>,
     /// The receiver type a method of a non-generic impl was called with:
     /// its `self` type when the impl names a concrete instance of a
     /// generic type (`impl Joiner for Vec[String]`).
@@ -1663,8 +1666,9 @@ impl<'a> Lcx<'a> {
     }
 
     /// Record and queue what each hashed table the bodies lowered so far
-    /// use needs to hash its keys through a user `BuildHasher`
-    /// ([`interp::TableHash`]). Whether anything new was queued.
+    /// use needs to hash its keys by Kāra code ([`interp::TableHash`]) and
+    /// to compare them ([`interp::Program::key_eqs`]). Whether anything new
+    /// was queued.
     fn note_table_hashes(&mut self) -> bool {
         let fresh: Vec<String> = self
             .program
@@ -1685,7 +1689,7 @@ impl<'a> Lcx<'a> {
                 self.note_table_hash(t);
             }
         }
-        self.queue.len() > before
+        self.queue.len() > before || !self.eq_queue.is_empty()
     }
 
     /// Record how a table of type `t` hashes its keys when that runs Kāra
@@ -1705,6 +1709,7 @@ impl<'a> Lcx<'a> {
         let Some(&key) = self.tys.tcx().list(args).first() else {
             return;
         };
+        self.note_key_eq(key);
         let h = self.tys.hasher(t);
         if !self.hash_noted.insert((key, h)) {
             return;
@@ -1787,6 +1792,93 @@ impl<'a> Lcx<'a> {
                 native,
             },
         );
+    }
+
+    /// Record, for a hashed table's key type `key`, the `==` body it is
+    /// compared by when a part of it, not the key itself, has a
+    /// hand-written `PartialEq`, as collections.md § Hashing says keys are
+    /// compared (B-2026-10-27-26). A key with its own `eq` is found by that
+    /// body already, and one with no hand-written part structurally.
+    fn note_key_eq(&mut self, key: Ty) {
+        let mut key = key;
+        while let HK::Ref(i) | HK::MutRef(i) = self.tys.tcx().kind(key) {
+            key = i;
+        }
+        if self.program.key_eqs.contains_key(&key) || !self.key_eq_noted.insert(key) {
+            return;
+        }
+        if self.trait_method_of(key, "PartialEq", "eq").is_some() {
+            return;
+        }
+        let mut seen = FxHashSet::default();
+        let mut work = vec![key];
+        let mut found = false;
+        while let Some(t) = work.pop() {
+            if !seen.insert(t) {
+                continue;
+            }
+            let tcx = self.tys.tcx();
+            match tcx.kind(t) {
+                HK::Ref(x) | HK::MutRef(x) => work.push(x),
+                HK::Tuple(l) => work.extend(tcx.list(l)),
+                HK::Array { elem, .. } | HK::Slice { elem, .. } => work.push(elem),
+                HK::Intrinsic { args, .. } => work.extend(tcx.list(args)),
+                HK::Adt { args, .. } | HK::Shared { args, .. } => {
+                    if self.trait_method_of(t, "PartialEq", "eq").is_some() {
+                        found = true;
+                        break;
+                    }
+                    let tcx = self.tys.tcx();
+                    work.extend(tcx.list(args));
+                    if let Some((adt, _)) = tcx.adt_of(t) {
+                        for (k, v) in adt.variants.iter().enumerate() {
+                            let variant = adt.is_enum.then_some(k as u32);
+                            for i in 0..v.fields.len() {
+                                work.extend(tcx.field_ty(t, variant, i as u32));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !found {
+            return;
+        }
+        let name = format!("{}.eq#key", self.tys.display(key));
+        self.lower_key_eq(key, &name);
+        self.program.key_eqs.insert(key, name);
+    }
+
+    /// `T.eq#key(a: ref T, b: ref T) -> bool`: `*a == *b`, as `==` on a
+    /// `T` lowers, built as its own body for a table's key search.
+    fn lower_key_eq(&mut self, t: Ty, name: &str) {
+        let bool_t = self.tys.bool();
+        let rt = self.tys.tcx().reference(t, false);
+        let instance = InstanceId {
+            def: DefId(u32::MAX),
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let mut bx = Bx::new(self, instance, bool_t, Vec::new());
+        let a = bx.b.arg("a", rt);
+        let b = bx.b.arg("b", rt);
+        let r = bx.eq_places(
+            Span::default(),
+            Place::local(a).project(ProjElem::Deref),
+            Place::local(b).project(ProjElem::Deref),
+            t,
+            Place::local(Local::RETURN_PLACE),
+        );
+        if r.is_ok() {
+            let cur = bx.cur;
+            bx.b.terminate(cur, TerminatorKind::Return);
+        }
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
     }
 
     /// Queue the instance `def[args]` if it is new, and return its name.
