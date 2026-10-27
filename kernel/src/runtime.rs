@@ -1459,7 +1459,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "v2 gap after M3: `%show` refuses on the v2 REPL (B-2026-10-24-1)"]
     fn execute_request_show_magic_broadcasts_display_data() {
         // `%show <expr>` carries a rich mime bundle on
         // `MagicOutput.rich`; the kernel routes it through
@@ -1505,7 +1504,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "v2 gap after M3: `%show` refuses on the v2 REPL (B-2026-10-24-1)"]
     fn execute_request_show_magic_vec_struct_emits_html_bundle() {
         // A `%show` over a `Vec[Struct]` value emits both `text/plain`
         // and `text/html` mimes in one `display_data` broadcast. The

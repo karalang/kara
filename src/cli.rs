@@ -483,9 +483,7 @@ pub enum Command {
     /// Launch the interactive REPL over the tree-walk interpreter. P0
     /// delivery item per `roadmap.md § Interactive Development`. See
     /// `src/repl.rs` for the cell-scope semantics. Flags mirror
-    /// `repl::ReplOptions` and are surfaced through the `--auto-clone`
-    /// CLI form (and, eventually, `%set auto-clone on` once the kernel
-    /// magic ships).
+    /// `repl::ReplOptions`; `--auto-clone` is also `%set auto-clone on`.
     Repl {
         /// `--auto-clone`: opt-in cross-cell ownership ergonomics — the
         /// REPL auto-inserts `.clone()` at consume sites flagged by a
@@ -930,12 +928,6 @@ pub fn execute(cmd: Command) {
             interp,
         } => test_v2::cmd_test_v2(filter, all, interp),
         Command::Repl { auto_clone, interp } => {
-            if auto_clone {
-                eprintln!(
-                    "error: --auto-clone is not supported: it went with the legacy REPL at M3"
-                );
-                process::exit(1);
-            }
             // `--interp` is what v2 does already: cells run on the MIR
             // interpreter.
             crate::repl::run_with_options(crate::repl::ReplOptions { auto_clone, interp })

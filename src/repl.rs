@@ -1,4 +1,4 @@
-//! Line-based REPL over the tree-walk interpreter.
+//! Line-based REPL over the MIR interpreter.
 //!
 //! Implements `karac repl` (P0 delivery item per `roadmap.md § Interactive
 //! Development`). Each cell is wrapped as the body of an implicit
@@ -12,26 +12,21 @@
 //! - Meta-commands: `:help`, `:quit`, `:type <expr>`, `:effects`, `:save <file>`.
 //! - Last expression in a cell auto-prints if it's not `Unit`.
 //!
-//! Persistent `let` bindings (v1 source-replay model):
-//! - Top-level `let` / `let mut` statements from a successfully-evaluated
-//!   statement cell are extracted (verbatim source) and prepended to every
-//!   subsequent synthetic `fn main()` body. A later cell that references
-//!   `x` resolves it against the replayed `let x = ...;` from cell N.
-//! - Caveat: side effects on the RHS re-run on every cell (the value is
-//!   recomputed, not snapshotted). Pure literal / arithmetic bindings
-//!   behave like a notebook; `let x = read_file(...)` re-reads the file.
-//!   Full value-snapshot semantics ship with the Jupyter kernel CR
-//!   (interpreter surgery scheduled separately).
-//! - `:reset` clears the persistent-let buffer for users who want to
-//!   recover from an expensive replay.
-//!
-//! Other v1 limitations (called out in `:help`):
-//! - Mutation in a statement cell (`x += 1;`) does not survive to the
-//!   next cell — only `let` source replays. Re-binding (`let x = x + 1;`)
-//!   is the supported idiom for now.
-//! - `--auto-clone`, notebook-aware use-after-move hints, and rich Jupyter
-//!   display all ship as separate items in the Interactive Development
-//!   chapter of `roadmap.md`.
+//! Bindings across cells (v2):
+//! - A cell's program ends by recording each top-level binding it leaves
+//!   (`crate::mir::interp::REPL_SNAPSHOT_FN`), and the next cell starts from
+//!   those values written as source, so no earlier cell runs again
+//!   (`Session::v2_values`). A value with no source form (a function, a
+//!   `shared` value, a handle) makes the next cell replay the earlier cells
+//!   instead, dropping what the replay prints.
+//! - A binding a cell moved away is left out; a later use of it is refused
+//!   naming the cell that moved it, unless `--auto-clone` /
+//!   `%set auto-clone on` clones it there (`Session::auto_clone_moves`).
+//! - `:provide R = expr` runs later cells under a provider; they start from
+//!   the values the scope opened with, and their `let`s replay inside it.
+//! - `:reset` clears the bindings.
+//! - `%show <expr>` renders a value as `text/plain` (and `text/html` for a
+//!   list of structs) from the same source form (`display::render_source`).
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -45,10 +40,6 @@ mod util;
 pub use display::DisplayBundle;
 use util::*;
 
-/// A v2 statement cell as a run of statements: a cell may end in an
-/// expression without its `;` (`println(x)`), which a later cell's replay
-/// would run into. The `;` goes on a line of its own, past any trailing
-/// comment, and only where it makes the cell parse.
 /// A top-level binding a v2 cell ended with, written as source
 /// (`Session::v2_values`).
 #[derive(Clone, Debug)]
@@ -125,6 +116,14 @@ fn moved_at_snapshot(synthetic: &str, errs: &[String]) -> Vec<String> {
     names
 }
 
+/// The place a `%show` expression's source takes in
+/// `Session::cell_byte_ranges`, in place of a cell's number.
+const SHOW_CELL: usize = usize::MAX;
+
+/// A v2 statement cell as a run of statements: a cell may end in an
+/// expression without its `;` (`println(x)`), which a later cell's replay
+/// would run into. The `;` goes on a line of its own, past any trailing
+/// comment, and only where it makes the cell parse.
 fn terminated(cell_src: &str) -> String {
     let src = cell_src.trim_end();
     let with = format!("{src}\n;");
@@ -140,9 +139,9 @@ fn terminated(cell_src: &str) -> String {
 /// historical bare-`karac repl` behavior so existing callers keep working.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ReplOptions {
-    /// `--auto-clone`: the legacy REPL's cross-cell `.clone()` insertion.
-    /// It went with that REPL at M3; `karac repl` refuses the flag, and
-    /// the session records it without acting on it.
+    /// `--auto-clone`: a binding an earlier cell moved away and a later
+    /// cell uses is cloned where it moved, with a `perf[auto-clone-in-repl]`
+    /// note (`Session::auto_clone_moves`).
     pub auto_clone: bool,
     /// `--interp`: accepted for compatibility; v2 cells always run on the
     /// MIR interpreter.
@@ -489,6 +488,17 @@ pub struct Session {
     /// What the running cell's [`Session::v2_values`] become if it is
     /// accepted.
     v2_pending: Option<Vec<V2Value>>,
+    /// The values the running cell started from, when it moved a binding
+    /// away: kept, if it is accepted, in [`Session::v2_move_starts`].
+    v2_pending_move_start: Option<Vec<V2Value>>,
+    /// For each cell that moved a binding away, the values it started from.
+    /// Auto-clone rewrites such a cell, and the cells from it on run again
+    /// from these ([`Session::v2_replay_from`]).
+    v2_move_starts: BTreeMap<usize, Vec<V2Value>>,
+    /// While [`Session::v2_values`] is `None` after an auto-clone rewrite:
+    /// the first rewritten cell and the values it started from. A program
+    /// starts from these and replays only the cells from that one on.
+    v2_replay_from: Option<(usize, Vec<V2Value>)>,
     /// 1-based origin cell index for each entry in `persistent_lets`. Length
     /// is invariant-equal to `persistent_lets.len()`. Recorded so the
     /// REPL-aware diagnostic-rendering path can map a span landing inside
@@ -656,6 +666,9 @@ impl Session {
             persistent_lets: Vec::new(),
             v2_values: Some(Vec::new()),
             v2_pending: None,
+            v2_pending_move_start: None,
+            v2_move_starts: BTreeMap::new(),
+            v2_replay_from: None,
             persistent_let_origin: Vec::new(),
             cell_byte_ranges: Vec::new(),
             auto_clone: false,
@@ -867,10 +880,19 @@ impl Session {
             .split_once(char::is_whitespace)
             .map_or(rest, |(k, _)| k)
             .trim();
+        let value = rest[key.len()..].trim();
         match key {
-            "auto-clone" => MagicOutput::error(
-                "`%set auto-clone` is not supported: auto-clone went with the legacy REPL at M3",
-            ),
+            "auto-clone" => match value {
+                "on" | "true" | "1" => {
+                    self.auto_clone = true;
+                    MagicOutput::ok("auto-clone: on")
+                }
+                "off" | "false" | "0" => {
+                    self.auto_clone = false;
+                    MagicOutput::ok("auto-clone: off")
+                }
+                _ => MagicOutput::error("usage: %set auto-clone on|off"),
+            },
             "" => MagicOutput::error("usage: %set <key> <value>"),
             other => {
                 MagicOutput::error(format!("unknown setting `{other}`. Supported: auto-clone."))
@@ -878,14 +900,61 @@ impl Session {
         }
     }
 
-    /// `%show <expr>` — rich-display the given expression. It rendered the
-    /// legacy interpreter's values, which went with that pipeline at M3, and
-    /// the v2 REPL does not carry values across cells yet.
-    fn magic_show(&self, rest: &str) -> MagicOutput {
+    /// `%show <expr>` — rich-display the given expression: `text/plain`
+    /// always, `text/html` for a list of structs of one type
+    /// ([`display::render_source`]). The expression runs as a cell would,
+    /// from the values the cells left and under the open providers, and its
+    /// value is recorded as a cell's bindings are; the session is not
+    /// changed. What it prints comes before the value.
+    fn magic_show(&mut self, rest: &str) -> MagicOutput {
         if rest.is_empty() {
             return MagicOutput::error("usage: %show <expression>");
         }
-        MagicOutput::error("`%show` is not supported yet")
+        let snap_fn = crate::mir::interp::REPL_SNAPSHOT_FN;
+        let mut s = strip_main(&self.items_source);
+        if !s.is_empty() && !s.ends_with('\n') {
+            s.push('\n');
+        }
+        s.push_str(&format!("fn {snap_fn}[T](name: Str, value: T) {{}}\n"));
+        s.push_str("fn main() {\n");
+        let mut ranges = Vec::new();
+        self.push_cell_start(&mut s, &mut ranges, true);
+        let head = "let __karac_show = (\n";
+        let body = format!("{head}{rest}\n);\n{snap_fn}(\"__karac_show\", __karac_show);");
+        let at = self.push_in_scopes(&mut s, &mut ranges, &body, true).start + head.len();
+        ranges.push((SHOW_CELL, at..at + rest.len()));
+        s.push_str("}\n");
+        let saved = std::mem::replace(&mut self.cell_byte_ranges, ranges);
+        let r = crate::cli::repl_v2::run_cell(&s);
+        let relabel = |me: &Self, text: &str| me.relabel_v2(&s, text);
+        let out = match r {
+            Ok(ran) => {
+                let shown = ran
+                    .bindings
+                    .first()
+                    .and_then(|(_, v)| v.as_ref())
+                    .and_then(|(_, source)| display::render_source(source));
+                match shown {
+                    Some(bundle) => {
+                        let value = bundle.get("text/plain").unwrap_or_default();
+                        let text = format!("{}{value}", ran.stdout);
+                        let mut rich = DisplayBundle::new().with("text/plain", text.clone());
+                        rich.mimes.extend(bundle.mimes.into_iter().skip(1));
+                        MagicOutput::ok_rich(text, rich)
+                    }
+                    None => MagicOutput::error(format!(
+                        "{}`%show` cannot display this value: it has no written form (a function, a `shared` value, a handle)",
+                        ran.stdout
+                    )),
+                }
+            }
+            Err(f) => {
+                let errors: Vec<String> = f.errors.iter().map(|e| relabel(self, e)).collect();
+                MagicOutput::error(format!("{}{}", f.stdout, errors.join("\n")))
+            }
+        };
+        self.cell_byte_ranges = saved;
+        out
     }
 
     /// `%timeline` — render the per-cell effect set with cross-cell
@@ -1394,12 +1463,123 @@ impl Session {
     /// Run a wrapper cell on v2, optionally capturing its stdout. The
     /// returned `WrapperOutcome` carries either captured stdout lines (`Ok`
     /// shape) or diagnostic strings (`Err` shape).
+    ///
+    /// With auto-clone on, a cell refused only because it uses bindings an
+    /// earlier cell moved away runs again after [`Session::auto_clone_moves`]
+    /// clones them where they moved, with a note for each.
     fn run_with_wrapper_inner(
         &mut self,
         cell_src: &str,
         capture: bool,
     ) -> Result<WrapperOutcome, WrapperOutcome> {
-        self.run_cell_v2(&terminated(cell_src), capture)
+        let mut notes = Vec::new();
+        let mut r = self.run_cell_v2(&terminated(cell_src), capture);
+        // Each round clones at least one more binding, so a bound on the
+        // rounds only stops a cell whose errors keep naming new moves.
+        for _ in 0..8 {
+            let Err(out) = &r else { break };
+            if !self.auto_clone {
+                break;
+            }
+            match self.auto_clone_moves(&out.errors) {
+                Some(more) => notes.extend(more),
+                None => break,
+            }
+            r = self.run_cell_v2(&terminated(cell_src), capture);
+        }
+        match &mut r {
+            Ok(out) | Err(out) => out.notes.splice(0..0, notes),
+        };
+        r
+    }
+
+    /// Auto-clone: when every error in `errors` is a use of a binding an
+    /// earlier cell moved away, rewrites each moving cell to clone the
+    /// binding where it moved (in `cell_history`, for `:save`, and in its
+    /// replayed source), and returns one `perf[auto-clone-in-repl]` note
+    /// per clone. The next cell starts from a replay of the rewritten
+    /// cells. `None`, changing nothing, when any error is something else
+    /// or a move cannot be rewritten (a move inside a provider scope's
+    /// cell, whose `let`s replay apart).
+    fn auto_clone_moves(&mut self, errors: &[String]) -> Option<Vec<String>> {
+        let moved = regex::Regex::new(
+            r"value '(\w+)' moved here, used again here \(moved at cell (\d+):(\d+):(\d+)\)",
+        )
+        .expect("valid regex");
+        let current = self.cell_history.len();
+        let mut edits: BTreeMap<usize, Vec<(usize, String)>> = BTreeMap::new();
+        for e in errors {
+            let c = moved.captures(e)?;
+            let name = c[1].to_string();
+            let [cell, line, col] = [&c[2], &c[3], &c[4]].map(|n| n.parse::<usize>().ok());
+            let (cell, line, col) = (cell?, line?, col?);
+            if cell == 0 || cell >= current {
+                return None;
+            }
+            let src = &self.cell_history[cell - 1];
+            let line_start = if line == 1 {
+                0
+            } else {
+                src.match_indices('\n').nth(line - 2)?.0 + 1
+            };
+            let at = src[line_start..]
+                .char_indices()
+                .nth(col.checked_sub(1)?)
+                .map(|(i, _)| line_start + i)?;
+            let ident = |ch: char| ch.is_alphanumeric() || ch == '_';
+            let end = at + name.len();
+            if !src[at..].starts_with(&name) || src[end..].starts_with(ident) {
+                return None;
+            }
+            let at_cell = edits.entry(cell).or_default();
+            if !at_cell.iter().any(|(p, _)| *p == end) {
+                at_cell.push((end, name));
+            }
+        }
+        if edits.is_empty() {
+            return None;
+        }
+        let mut rewritten = Vec::new();
+        for (&cell, at_cell) in &edits {
+            let old = &self.cell_history[cell - 1];
+            let slot = (0..self.persistent_lets.len()).find(|&i| {
+                self.persistent_let_origin.get(i) == Some(&cell)
+                    && self.persistent_lets[i] == terminated(old)
+            })?;
+            let mut new = old.clone();
+            let mut at_cell = at_cell.clone();
+            at_cell.sort_by(|a, b| b.0.cmp(&a.0));
+            for (end, _) in &at_cell {
+                new.insert_str(*end, ".clone()");
+            }
+            rewritten.push((cell, slot, new));
+        }
+        let mut notes = Vec::new();
+        for (cell, slot, new) in rewritten {
+            self.persistent_lets[slot] = terminated(&new);
+            self.cell_history[cell - 1] = new;
+            let mut names: Vec<&String> = edits[&cell].iter().map(|(_, n)| n).collect();
+            names.sort();
+            for name in names {
+                notes.push(format!(
+                    "perf[auto-clone-in-repl]: inserted `.clone()` on `{name}` at consume site (cell {cell}, used in cell {current}); cross-cell binding kept alive — `%set auto-clone off` surfaces the underlying use-after-move diagnostic instead"
+                ));
+            }
+        }
+        // The values the cells left were taken with the bindings moved: the
+        // cells from the first rewritten one on run again, from the values
+        // it started from (all of them, when those were not kept).
+        let first = *edits.keys().next().expect("an edit");
+        self.v2_replay_from = match (&self.v2_values, self.v2_replay_from.take()) {
+            (None, Some((k, vs))) if k <= first => Some((k, vs)),
+            (None, None) => None,
+            _ => self
+                .v2_move_starts
+                .get(&first)
+                .map(|vs| (first, vs.clone())),
+        };
+        self.v2_values = None;
+        Some(notes)
     }
 
     /// Test helper: evaluate a cell and return any captured output and
@@ -1521,6 +1701,7 @@ impl Session {
         let lines =
             |s: &str| -> Vec<String> { s.split_inclusive('\n').map(|l| l.to_string()).collect() };
         self.v2_pending = None;
+        self.v2_pending_move_start = None;
         let mut run = None;
         // The cell's program with its bindings recorded at its end, unless
         // a provider scope is open. A binding the cell moved away cannot be
@@ -1530,6 +1711,7 @@ impl Session {
         // (a use of a moved binding names the cell that moved it).
         if self.provider_stack.is_empty() {
             let mut live = self.v2_live_bindings(cell_src);
+            let mut moved_any = false;
             for _ in 0..2 {
                 let synthetic = self.build_synthetic_cell(cell_src, Some(&live));
                 if !crate::parse(&synthetic).errors.is_empty() {
@@ -1540,6 +1722,9 @@ impl Session {
                         let r = crate::cli::repl_v2::run_checked(&synthetic);
                         if let Ok(ran) = &r {
                             self.v2_pending = v2_values_of(&live, &ran.bindings);
+                            if moved_any {
+                                self.v2_pending_move_start = self.v2_values.clone();
+                            }
                         }
                         run = Some((synthetic, r));
                         break;
@@ -1550,6 +1735,7 @@ impl Session {
                             break;
                         }
                         live.retain(|(n, _)| !moved.contains(n));
+                        moved_any = true;
                     }
                 }
             }
@@ -1624,6 +1810,7 @@ impl Session {
                     _ => (&c[3], &c[4]),
                 };
                 match place(line.parse().unwrap_or(0)) {
+                    Some((SHOW_CELL, l)) => format!("%show:{l}:{col}"),
                     Some((cell, l)) => format!("cell {cell}:{l}:{col}"),
                     None => c[0].to_string(),
                 }
@@ -1656,13 +1843,16 @@ impl Session {
             }
         }
         let mut live: Vec<(String, bool)> = Vec::new();
-        match &self.v2_values {
-            Some(vs) => live.extend(vs.iter().map(|v| (v.name.clone(), v.mutable))),
-            None => {
-                for prior in &self.persistent_lets {
-                    for l in scan_top_level_lets(prior) {
-                        bind(&mut live, &l);
-                    }
+        let (from, values) = match (&self.v2_values, &self.v2_replay_from) {
+            (Some(vs), _) => (usize::MAX, &vs[..]),
+            (None, Some((k, vs))) => (*k, &vs[..]),
+            (None, None) => (0, &[][..]),
+        };
+        live.extend(values.iter().map(|v| (v.name.clone(), v.mutable)));
+        for (i, prior) in self.persistent_lets.iter().enumerate() {
+            if self.persistent_let_origin.get(i).copied().unwrap_or(0) >= from {
+                for l in scan_top_level_lets(prior) {
+                    bind(&mut live, &l);
                 }
             }
         }
@@ -1670,6 +1860,57 @@ impl Session {
             bind(&mut live, &l);
         }
         live
+    }
+
+    /// The bindings a program in the session starts from, written into
+    /// `s`: with `values`, the values the last cell outside a provider
+    /// ended with ([`Session::v2_values`]), so no earlier cell runs again;
+    /// otherwise, or when some value has no source form, a replay of the
+    /// earlier cells. The `let`s of the open provider scopes' cells replay
+    /// inside the scopes ([`Session::push_in_scopes`]). Each replayed
+    /// slice's place goes in `ranges`, with its cell.
+    fn push_cell_start(
+        &self,
+        s: &mut String,
+        ranges: &mut Vec<(usize, Range<usize>)>,
+        values: bool,
+    ) {
+        // The cells from `from` on replay after the values (all of them
+        // when there are none).
+        let (from, values) = match (&self.v2_values, &self.v2_replay_from) {
+            _ if !values => (0, None),
+            (Some(vs), _) => (usize::MAX, Some(vs)),
+            (None, Some((k, vs))) => (*k, Some(vs)),
+            (None, None) => (0, None),
+        };
+        for v in values.into_iter().flatten() {
+            let m = if v.mutable { "mut " } else { "" };
+            s.push_str(&format!("let {m}{}: {} = {};\n", v.name, v.ty, v.value));
+        }
+        for (i, prior_let) in self.persistent_lets.iter().enumerate() {
+            let scoped = self
+                .persistent_let_provider_scope
+                .get(i)
+                .is_some_and(|scope| !scope.is_empty());
+            let origin = self.persistent_let_origin.get(i).copied().unwrap_or(0);
+            if scoped || origin < from {
+                continue;
+            }
+            let start = s.len();
+            s.push_str(prior_let);
+            if !prior_let.ends_with('\n') {
+                s.push('\n');
+            }
+            let end = s.len();
+            // Origin index 0 (a sentinel) means "unknown cell" — should
+            // not occur with correct upkeep but if it does, skip the
+            // mapping rather than synthesize a misleading number.
+            if let Some(&cell_idx) = self.persistent_let_origin.get(i) {
+                if cell_idx > 0 {
+                    ranges.push((cell_idx, start..end));
+                }
+            }
+        }
     }
 
     /// The program a cell runs as. With `snap` (v2), the bindings in scope
@@ -1689,62 +1930,19 @@ impl Session {
         }
         s.push_str("fn main() {\n");
         let mut ranges: Vec<(usize, Range<usize>)> = Vec::new();
-        let values = self.v2_values.as_ref().filter(|_| snap.is_some());
-        for v in values.into_iter().flatten() {
-            let m = if v.mutable { "mut " } else { "" };
-            s.push_str(&format!("let {m}{}: {} = {};\n", v.name, v.ty, v.value));
-        }
-        let replayed = if values.is_some() {
-            &[][..]
-        } else {
-            &self.persistent_lets[..]
-        };
-        for (i, prior_let) in replayed.iter().enumerate() {
-            let start = s.len();
-            s.push_str(prior_let);
-            if !prior_let.ends_with('\n') {
-                s.push('\n');
-            }
-            let end = s.len();
-            // Origin index 0 (a sentinel) means "unknown cell" — should
-            // not occur with correct upkeep but if it does, skip the
-            // mapping rather than synthesize a misleading number.
-            if let Some(&cell_idx) = self.persistent_let_origin.get(i) {
-                if cell_idx > 0 {
-                    ranges.push((cell_idx, start..end));
-                }
-            }
-        }
+        // Under a provider the cell is not recorded, but it still starts
+        // from the values; a refused snapshot program falls back to the
+        // replay, whose diagnostics name the cells.
+        let values = snap.is_some() || !self.provider_stack.is_empty();
+        self.push_cell_start(&mut s, &mut ranges, values);
         // The cell currently being evaluated occupies the next contiguous
         // slice of the wrapper body. Its 1-based index is one past the
         // current `cell_history` length (the entry has already been pushed
         // by the caller before `build_synthetic_cell` runs).
-        //
-        // When the provider stack is non-empty, the cell body is wrapped
-        // in one `with_provider[R](expr, || { … })` block per active
-        // frame (innermost-first nesting so outermost ends up on the
-        // outside). The wrap rides into the same byte-range the cell
-        // would occupy unwrapped, so UAM spans landing anywhere inside
-        // the wrap still map back to the current cell via
-        // `cell_for_span`. Persistent-let replay continues to sit OUTSIDE
-        // every wrap — bindings declared while a scope was open keep
-        // replaying after `:end-provide` until slice 4's pruning lands.
         let cell_idx = self.cell_history.len();
-        // The output before this line is the replay's (v2 replays every
-        // `let`'s right-hand side), and `repl_v2::run_cell` drops it.
-        s.push_str(&format!(
-            "println(\"{}\");\n",
-            crate::cli::repl_v2::CELL_START
-        ));
-        let body_start = s.len();
-        let wrapped_body = self.wrap_in_active_providers(cell_src);
-        s.push_str(&wrapped_body);
-        if !wrapped_body.ends_with('\n') {
-            s.push('\n');
-        }
-        let body_end = s.len();
+        let body = self.push_in_scopes(&mut s, &mut ranges, cell_src, true);
         if cell_idx > 0 {
-            ranges.push((cell_idx, body_start..body_end));
+            ranges.push((cell_idx, body));
         }
         for (name, _) in snap.into_iter().flatten() {
             s.push_str(&format!("{snap_fn}(\"{name}\", {name});\n"));
@@ -1767,10 +1965,22 @@ impl Session {
     /// a span landing inside the replayed slice back to the originating
     /// cell.
     fn capture_new_lets(&mut self, cell_src: &str) {
-        self.v2_values = self.v2_pending.take();
+        // A cell under a provider is not recorded: the values stay those
+        // the scope opened with, and its `let`s replay after them.
+        let pending = self.v2_pending.take();
+        let move_start = self.v2_pending_move_start.take();
         // Cell index = `cell_history.len()` because the caller pushed the
         // current cell's source before invoking the wrapper pipeline.
         let cell_idx = self.cell_history.len();
+        if self.provider_stack.is_empty() {
+            if pending.is_some() {
+                self.v2_replay_from = None;
+            }
+            self.v2_values = pending;
+            if let Some(start) = move_start {
+                self.v2_move_starts.insert(cell_idx, start);
+            }
+        }
         // Snapshot the active provider scope (resource names) so a future
         // `:end-provide R` knows whether each binding was declared inside
         // its scope. Empty Vec for bindings captured outside any scope.
@@ -1784,8 +1994,8 @@ impl Session {
             // this one whole: its statements as well as its `let`s, so a
             // mutation (`v.push(x)`, `n = 5`) reaches the cells after it.
             // What the replay prints is dropped (`repl_v2::CELL_START`).
-            // Under a provider the cell's `let`s alone are replayed, outside
-            // the provider's closure, as on the legacy REPL.
+            // Under a provider the cell's `let`s alone are replayed, inside
+            // the provider's closure (`Session::push_in_scopes`).
             self.persistent_lets.push(terminated(cell_src));
             self.persistent_let_origin.push(cell_idx);
             self.persistent_let_provider_scope.push(active_scope);
@@ -1814,6 +2024,8 @@ impl Session {
     pub fn reset_persistent_lets(&mut self) {
         self.persistent_lets.clear();
         self.v2_values = Some(Vec::new());
+        self.v2_move_starts.clear();
+        self.v2_replay_from = None;
         self.persistent_let_origin.clear();
         self.persistent_let_provider_scope.clear();
         self.pruned_provider_lets.clear();
@@ -1936,13 +2148,15 @@ impl Session {
         // timeline-aware path only kicks in for sessions that touched
         // `:provide` / `:end-provide`.
         let body = if self.provider_history.is_empty() {
-            let stmt_cells: Vec<&str> = self
+            // A cell's final `;` may be missing, which the cell after it
+            // would run into.
+            let stmt_cells: Vec<String> = self
                 .cell_history
                 .iter()
-                .filter(|c| classify_input(c) != CellShape::PureItems)
-                .map(String::as_str)
+                .filter(|c| self.classify(c) != CellShape::PureItems)
+                .map(|c| terminated(c))
                 .collect();
-            render_main_body(&stmt_cells)
+            render_main_body(&stmt_cells.iter().map(String::as_str).collect::<Vec<_>>())
         } else {
             self.render_exported_main_body_with_providers()
         };
@@ -2015,7 +2229,7 @@ impl Session {
                 }
                 event_idx += 1;
             }
-            if classify_input(cell_src) != CellShape::PureItems {
+            if self.classify(cell_src) != CellShape::PureItems {
                 merged.push(Item::Cell(cell_src.as_str()));
             }
         }
@@ -2038,7 +2252,7 @@ impl Session {
                     children_stack
                         .last_mut()
                         .expect("root frame always present")
-                        .push(ExportNode::Statement((*src).to_string()));
+                        .push(ExportNode::Statement(terminated(src)));
                 }
                 Item::Open { resource, expr_src } => {
                     meta_stack.push(((*resource).to_string(), (*expr_src).to_string()));
@@ -2309,9 +2523,9 @@ impl Session {
                 kept_scope.push(scope.clone());
             }
         }
+        // The bindings the scope's cells made are gone; the values the
+        // scope opened with are where the next cell starts again.
         self.persistent_lets = kept_lets;
-        // The bindings the scope's cells made are gone: replay what is left.
-        self.v2_values = None;
         self.persistent_let_origin = kept_origin;
         self.persistent_let_provider_scope = kept_scope;
 
@@ -2323,17 +2537,19 @@ impl Session {
 
     /// Eagerly evaluate the construction expression for `:provide R =
     /// expr` so a panicking constructor leaves the scope un-opened.
-    /// Runs the v2 REPL's cell pipeline against a synthetic program built from the
-    /// current session view, with the expression wrapped in any
-    /// already-active provider scopes (so nested `:provide` forms that
-    /// depend on outer providers validate correctly). Returns
-    /// `Err(message)` on any pipeline failure or runtime error; `Ok(())` indicates a clean construction. This
-    /// method intentionally does NOT mutate session state — no
-    /// `persistent_lets` capture, no `cell_byte_ranges` update — so
-    /// the construction check is a pure validation step.
+    /// The expression runs as the provider of `R` over an empty body, under
+    /// any already-active provider scopes (so nested `:provide` forms that
+    /// depend on outer providers validate correctly), so a provider that
+    /// does not implement `R`'s trait is refused here rather than at the
+    /// next cell. The program starts from the values the cells left
+    /// ([`Session::push_cell_start`]), so the earlier cells do not run
+    /// again. Returns `Err(message)` on any pipeline failure or runtime
+    /// error; `Ok(())` indicates a clean construction. This method
+    /// intentionally does NOT mutate session state — no `persistent_lets`
+    /// capture, no `cell_byte_ranges` update — so the construction check
+    /// is a pure validation step.
     fn try_construct_provider(&self, resource: &str, expr_src: &str) -> Result<(), String> {
-        let inner = format!("let __karac_provide_{resource}__ = {expr_src};\n");
-        let body = self.wrap_in_active_providers(&inner);
+        let inner = format!("with_provider[{resource}]({expr_src}, || {{}});");
 
         let mut synth = String::new();
         if !self.items_source.trim().is_empty() {
@@ -2343,16 +2559,9 @@ impl Session {
             }
         }
         synth.push_str("fn main() {\n");
-        for prior_let in &self.persistent_lets {
-            synth.push_str(prior_let);
-            if !prior_let.ends_with('\n') {
-                synth.push('\n');
-            }
-        }
-        synth.push_str(&body);
-        if !body.ends_with('\n') {
-            synth.push('\n');
-        }
+        let mut ranges = Vec::new();
+        self.push_cell_start(&mut synth, &mut ranges, true);
+        self.push_in_scopes(&mut synth, &mut ranges, &inner, false);
         synth.push_str("}\n");
 
         crate::cli::repl_v2::run_cell(&synth)
@@ -2365,23 +2574,59 @@ impl Session {
             })
     }
 
-    /// Wrap a cell-body source fragment in the active provider scopes,
-    /// innermost-first so the rendered nesting matches stack push order
-    /// (outermost on the outside). Returns the input unchanged when
-    /// `provider_stack` is empty. Slice 3 uses this for every
-    /// subsequent statement-cell run; slice 2 uses it in
-    /// `try_construct_provider` to validate the nested-`:provide` case.
-    pub(crate) fn wrap_in_active_providers(&self, body: &str) -> String {
-        if self.provider_stack.is_empty() {
-            return body.to_string();
+    /// `body` written into `s` inside the open provider scopes, one
+    /// `with_provider[R](expr, || { … })` per frame, outermost on the
+    /// outside, each scope's closure starting with the `let`s its cells
+    /// made, so they replay under its provider and are seen only in it.
+    /// With `marker`, the [`crate::cli::repl_v2::CELL_START`] line comes
+    /// just before `body`, so what the replay prints is dropped. Each
+    /// replayed `let`'s place goes in `ranges`, with its cell; returns
+    /// `body`'s place.
+    fn push_in_scopes(
+        &self,
+        s: &mut String,
+        ranges: &mut Vec<(usize, Range<usize>)>,
+        body: &str,
+        marker: bool,
+    ) -> Range<usize> {
+        for (depth, frame) in self.provider_stack.iter().enumerate() {
+            s.push_str(&format!(
+                "with_provider[{}]({}, || {{\n",
+                frame.resource, frame.expr_src
+            ));
+            for (i, prior_let) in self.persistent_lets.iter().enumerate() {
+                let in_frame = self
+                    .persistent_let_provider_scope
+                    .get(i)
+                    .is_some_and(|scope| scope.len() == depth + 1);
+                if !in_frame {
+                    continue;
+                }
+                let start = s.len();
+                s.push_str(prior_let);
+                if !prior_let.ends_with('\n') {
+                    s.push('\n');
+                }
+                if let Some(&cell) = self.persistent_let_origin.get(i).filter(|&&c| c > 0) {
+                    ranges.push((cell, start..s.len()));
+                }
+            }
         }
-        let mut wrapped = body.to_string();
-        for frame in self.provider_stack.iter().rev() {
-            wrapped = format!(
-                "with_provider[{}]({}, || {{\n{}\n}});",
-                frame.resource, frame.expr_src, wrapped
-            );
+        if marker {
+            s.push_str(&format!(
+                "println(\"{}\");\n",
+                crate::cli::repl_v2::CELL_START
+            ));
         }
-        wrapped
+        let start = s.len();
+        s.push_str(body);
+        if !body.ends_with('\n') {
+            s.push('\n');
+        }
+        let end = s.len();
+        for _ in &self.provider_stack {
+            s.push_str("});\n");
+        }
+        start..end
     }
 }

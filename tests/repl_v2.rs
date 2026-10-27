@@ -167,16 +167,21 @@ fn repl_v2_runs_a_cell_under_a_provider() {
     assert_eq!(r.stdout, "42\n");
 }
 
-/// `%show` and auto-clone went with the legacy REPL at M3; on v2 they say
-/// so rather than doing nothing.
+/// `%show` renders a value from the cells' bindings, and `%set auto-clone`
+/// turns auto-clone on and off (B-2026-10-24-1).
 #[test]
-fn repl_v2_show_and_auto_clone_say_they_are_unsupported() {
+fn repl_v2_show_and_auto_clone_are_supported() {
     let mut s = session();
-    let show = format!("{:?}", s.dispatch_magic("%show 1"));
-    assert!(show.contains("`%show` is not supported yet"), "{show}");
-    let set = format!("{:?}", s.dispatch_magic("%set auto-clone on"));
-    assert!(set.contains("`%set auto-clone` is not supported"), "{set}");
+    let show = s.dispatch_magic("%show 1 + 2");
+    assert!(show.ok, "{show:?}");
+    assert_eq!(show.text, "3");
+    let set = s.dispatch_magic("%set auto-clone on");
+    assert!(set.ok, "{set:?}");
+    assert!(s.auto_clone());
+    let set = s.dispatch_magic("%set auto-clone off");
+    assert!(set.ok, "{set:?}");
     assert!(!s.auto_clone());
+    assert!(!s.dispatch_magic("%set auto-clone maybe").ok);
 }
 
 fn karac_repl(args: &[&str], input: &str, legacy_env: bool) -> std::process::Output {
@@ -230,12 +235,21 @@ fn repl_v2_is_the_default_and_legacy_is_gone() {
     assert!(stderr.contains("--legacy is gone"), "{stderr}");
 }
 
+/// `karac repl --auto-clone` clones a binding where an earlier cell moved
+/// it when a later cell uses it, and says so.
 #[test]
-fn repl_v2_refuses_auto_clone() {
-    let out = karac_repl(&["--auto-clone"], ":quit\n", false);
-    assert_eq!(out.status.code(), Some(1));
+fn repl_v2_auto_clone_flag_clones_a_moved_binding() {
+    let input = "fn eat(s: own String) -> i64 { s.len() }\n\
+                 let s = String.from(\"hi\");\n\
+                 let n = eat(s);\n\
+                 println(s);\n:quit\n";
+    let out = karac_repl(&["--auto-clone"], input, false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("--auto-clone is not supported"), "{stderr}");
+    assert_eq!(out.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("auto-clone on"), "{stdout}");
+    assert!(stdout.contains("hi\n"), "{stdout}\n{stderr}");
+    assert!(stderr.contains("perf[auto-clone-in-repl]"), "{stderr}");
 }
 
 /// The number of times the cells have appended to the file `path`.
@@ -336,5 +350,166 @@ fn repl_v2_carries_each_kind_of_value() {
         "7\n"
     );
     assert_eq!(appended(&path), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// B-2026-10-24-1: `%show`, auto-clone, and `:provide`'s construction on v2.
+
+/// `:provide` checks the provider against the resource's trait when the
+/// scope opens, so a provider that does not implement it leaves the scope
+/// closed rather than failing the next cell.
+#[test]
+fn repl_v2_provide_refuses_a_provider_without_the_trait() {
+    let mut s = session();
+    s.evaluate_cell_captured("struct FakeClock {}");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    assert!(s.provider_stack().is_empty());
+    let r = s.evaluate_cell_captured("println(1);");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.stdout, "1\n");
+}
+
+/// Opening a provider, the cells under it, and closing it do not run the
+/// cells before it again, and the bindings they left are still there
+/// after the scope closes.
+#[test]
+fn repl_v2_provide_does_not_run_an_earlier_cell_again() {
+    let dir = std::env::temp_dir().join(format!("karac-repl-v2-provide-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("once.txt");
+    let _ = std::fs::remove_file(&path);
+    let p = path.display().to_string().replace('\\', "/");
+    let mut s = session();
+    s.evaluate_cell_captured("struct FakeClock {}");
+    s.evaluate_cell_captured("impl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }");
+    let r = s.evaluate_cell_captured(&format!(
+        "let n: i64 = {{ File.append(\"{p}\").unwrap().write(\"x\".bytes()).unwrap(); 5 }};"
+    ));
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    assert_eq!(s.provider_stack().len(), 1);
+    let r = s.evaluate_cell_captured("let k = n + Clock.now();");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(s.evaluate_cell_captured("println(k);").stdout, "47\n");
+    s.dispatch_meta(":end-provide Clock");
+    assert_eq!(s.evaluate_cell_captured("println(n);").stdout, "5\n");
+    assert_eq!(appended(&path), 1, "the cell before the provider ran again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `%show` renders a value as `text/plain` without number suffixes, nested
+/// values one item to a line, and a list of one struct type as a
+/// `text/html` table; the session is left as it was.
+#[test]
+fn repl_v2_show_renders_values() {
+    let mut s = session();
+    for cell in [
+        "struct P { x: i64, y: i64 }",
+        "struct Line { a: P, b: P }",
+        "let ps = [P { x: 1, y: 2 }, P { x: -3, y: 4 }];",
+        "let l = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 4 } };",
+    ] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+    }
+    let cells = s.cell_history().len();
+    let show = s.dispatch_magic("%show l");
+    assert!(show.ok, "{show:?}");
+    assert_eq!(
+        show.text,
+        "Line {\n  a: P { x: 1, y: 2 },\n  b: P { x: 3, y: 4 }\n}"
+    );
+    let show = s.dispatch_magic("%show ps");
+    let bundle = show.rich.expect("a bundle");
+    assert_eq!(
+        bundle.get("text/plain"),
+        Some("[\n  P { x: 1, y: 2 },\n  P { x: -3, y: 4 }\n]")
+    );
+    let html = bundle.get("text/html").expect("a table");
+    assert!(html.contains("<th>x</th><th>y</th>"), "{html}");
+    assert!(html.contains("<td>-3</td><td>4</td>"), "{html}");
+    let show = s.dispatch_magic("%show \"a<b\"");
+    assert_eq!(show.text, "\"a<b\"");
+    assert!(show.rich.unwrap().get("text/html").is_none());
+    let show = s.dispatch_magic("%show ps.len() * 10");
+    assert_eq!(show.text, "20");
+    assert_eq!(s.cell_history().len(), cells, "%show is not a cell");
+    assert_eq!(s.evaluate_cell_captured("println(ps.len());").stdout, "2\n");
+}
+
+/// `%show` of an expression that prints shows the printing first; an
+/// error names the expression's place; a value with no written form is
+/// refused; under a provider the expression runs under it.
+#[test]
+fn repl_v2_show_prints_errors_and_providers() {
+    let mut s = session();
+    let show = s.dispatch_magic("%show { println(\"side\"); 7 }");
+    assert_eq!(show.text, "side\n7");
+    let show = s.dispatch_magic("%show nope + 1");
+    assert!(!show.ok);
+    assert!(show.text.contains("%show:1:1"), "{}", show.text);
+    assert!(show.text.contains("undefined name 'nope'"), "{}", show.text);
+    let show = s.dispatch_magic("%show |x: i64| x + 1");
+    assert!(!show.ok);
+    assert!(show.text.contains("no written form"), "{}", show.text);
+    s.evaluate_cell_captured("struct FakeClock {}");
+    s.evaluate_cell_captured("impl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let show = s.dispatch_magic("%show Clock.now() + 1");
+    assert_eq!(show.text, "43");
+}
+
+/// With auto-clone on, a binding an earlier cell moved away is cloned
+/// there when a later cell uses it: the use runs, a note says so, the
+/// export carries the clone, and no cell before the moving one runs again.
+/// Off, the use is refused naming the moving cell.
+#[test]
+fn repl_v2_auto_clone_clones_where_the_binding_moved() {
+    let dir = std::env::temp_dir().join(format!("karac-repl-v2-clone-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("once.txt");
+    let _ = std::fs::remove_file(&path);
+    let p = path.display().to_string().replace('\\', "/");
+    let cells = [
+        "fn eat(s: own String) -> i64 { s.len() }".to_string(),
+        format!(
+            "let mut k: i64 = {{ File.append(\"{p}\").unwrap().write(\"x\".bytes()).unwrap(); 5 }};"
+        ),
+        "let s = String.from(\"hi\");".to_string(),
+        "let n = eat(s);".to_string(),
+        "k = k + n;".to_string(),
+    ];
+    let mut off = session();
+    let mut on = session();
+    assert!(on.dispatch_magic("%set auto-clone on").ok);
+    for cell in &cells {
+        for s in [&mut off, &mut on] {
+            let r = s.evaluate_cell_captured(cell);
+            assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+        }
+    }
+    let r = off.evaluate_cell_captured("println(s);");
+    assert!(
+        r.errors.join("\n").contains("moved at cell 4:1:13"),
+        "{:?}",
+        r.errors
+    );
+    let r = on.evaluate_cell_captured("println(s);");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.stdout, "hi\n");
+    assert_eq!(r.notes.len(), 1, "{:?}", r.notes);
+    assert!(
+        r.notes[0].starts_with("perf[auto-clone-in-repl]")
+            && r.notes[0].contains("`s`")
+            && r.notes[0].contains("cell 4, used in cell 6"),
+        "{:?}",
+        r.notes
+    );
+    assert_eq!(on.cell_history()[3], "let n = eat(s.clone());");
+    assert!(on.render_exported_session().contains("eat(s.clone())"));
+    assert_eq!(on.evaluate_cell_captured("println(k + n);").stdout, "9\n");
+    assert_eq!(on.evaluate_cell_captured("println(s);").stdout, "hi\n");
+    // Each session ran the second cell once.
+    assert_eq!(appended(&path), 2, "a cell before the moving one ran again");
     let _ = std::fs::remove_dir_all(&dir);
 }
