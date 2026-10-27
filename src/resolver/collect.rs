@@ -1810,6 +1810,25 @@ impl<'a> super::Resolver<'a> {
         // one that resolves without splicing still carries them.
         if crate::prelude::is_gated_stdlib_module(&imp.path) && !imp.is_wildcard {
             for it in &imp.items {
+                if let Some(alias) = &it.alias {
+                    if crate::prelude::gated_module_trait(&imp.path, &it.name) {
+                        self.errors.push(ResolveError {
+                            message: format!(
+                                "`{}.{}` is a trait, and a trait cannot be renamed (`as {alias}`) \
+                                 yet; import it as `{}`",
+                                imp.path.join("."),
+                                it.name,
+                                it.name
+                            ),
+                            span: it.span,
+                            kind: ResolveErrorKind::UnknownItemInModule,
+                            suggestion: None,
+                            replacement: None,
+                            stub_hint: None,
+                        });
+                        continue;
+                    }
+                }
                 if crate::prelude::gated_module_defines(&imp.path, &it.name) {
                     continue;
                 }

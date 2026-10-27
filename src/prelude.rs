@@ -1683,6 +1683,20 @@ pub fn gated_module_defines(path: &[String], name: &str) -> bool {
         })
 }
 
+/// Whether the gated module at `path` defines a trait `name`: one an import
+/// may not rename yet (B-2026-10-27-23).
+pub fn gated_module_trait(path: &[String], name: &str) -> bool {
+    GATED_STDLIB_PROGRAMS
+        .iter()
+        .find(|(p, _)| p.as_slice() == path)
+        .is_some_and(|(_, program)| {
+            program
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::TraitDef(t) if t.name == name))
+        })
+}
+
 /// Why `import <path>.{name}` from the gated module at `path` does not
 /// resolve, once [`expand_gated_stdlib_imports`] has spliced every name the
 /// module defines: the message, and the name to write instead when one is
@@ -1730,6 +1744,12 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
     // so their `impl` blocks can be auto-spliced below.
     let mut spliced_type_names: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    // A renamed struct or enum (`{Level as L}`) is spliced under its own
+    // name, which the module's functions and impls spell, and the new name
+    // is a type alias of it: one type, two names (B-2026-10-27-23). Spliced
+    // under the new name, the module's `Level` was a second, distinct type.
+    let mut type_aliases: Vec<Item> = Vec::new();
+    let mut aliased_types: std::collections::HashSet<String> = std::collections::HashSet::new();
     for ii in items {
         let found = program.items.iter().find(|item| match item {
             Item::Function(f) => f.name == ii.name,
@@ -1740,7 +1760,16 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
             _ => false,
         });
         let Some(found) = found else { continue };
-        if ii.alias.is_none() {
+        // A renamed trait is refused at resolve (`gated_module_trait`): a
+        // trait has no alias form, so it would be a second trait.
+        if ii.alias.is_some() && matches!(found, Item::TraitDef(_)) {
+            continue;
+        }
+        if let (Some(alias), Item::StructDef(_) | Item::EnumDef(_)) = (&ii.alias, found) {
+            aliased_types.insert(ii.name.clone());
+            type_aliases.push(type_alias_of(alias, found, ii.span));
+        }
+        if ii.alias.is_none() || aliased_types.contains(&ii.name) {
             match found {
                 Item::StructDef(s) => {
                     spliced_type_names.insert(s.name.clone());
@@ -1752,7 +1781,10 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
             }
         }
         let mut cloned = found.clone();
-        let bound = ii.alias.as_ref().unwrap_or(&ii.name);
+        let bound = match &ii.alias {
+            Some(alias) if !aliased_types.contains(&ii.name) => alias,
+            _ => &ii.name,
+        };
         match &mut cloned {
             Item::Function(f) => {
                 f.stdlib_origin = true;
@@ -1807,13 +1839,14 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
     };
     let mut included: std::collections::HashSet<String> = items
         .iter()
-        .filter(|ii| ii.alias.is_none())
+        .filter(|ii| ii.alias.is_none() || aliased_types.contains(&ii.name))
         .map(|ii| ii.name.clone())
         .collect();
     // An aliased item names its own original name in its source text; that is
     // the item itself, not a helper to splice beside it under the old name.
     let aliased_from: std::collections::HashMap<&String, &String> = items
         .iter()
+        .filter(|ii| !aliased_types.contains(&ii.name))
         .filter_map(|ii| ii.alias.as_ref().map(|a| (a, &ii.name)))
         .collect();
     let mut helpers: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1979,6 +2012,8 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         }
     }
 
+    out.extend(type_aliases);
+
     // What the module imports from another gated module (`std.pool`'s
     // `import std.time.{Duration};`) is spliced beside it, as an item the
     // import did not list: the program need not import it too, and its own
@@ -1995,12 +2030,58 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
     Some(out)
 }
 
+/// `type Alias[T..] = Type[T..];` for an import that renames a module's
+/// struct or enum (`import std.log.{Level as L}`).
+fn type_alias_of(alias: &str, ty: &Item, span: Span) -> Item {
+    let (name, generic_params) = match ty {
+        Item::StructDef(s) => (&s.name, &s.generic_params),
+        Item::EnumDef(e) => (&e.name, &e.generic_params),
+        _ => unreachable!("only a struct or enum is aliased"),
+    };
+    let generic_args = generic_params.as_ref().map(|g| {
+        g.params
+            .iter()
+            .map(|p| {
+                crate::ast::GenericArg::Type(crate::ast::TypeExpr {
+                    kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
+                        segments: vec![p.name.clone()],
+                        generic_args: None,
+                        span,
+                    }),
+                    span,
+                })
+            })
+            .collect()
+    });
+    Item::TypeAlias(crate::ast::TypeAliasDef {
+        span,
+        attributes: Vec::new(),
+        doc_comment: None,
+        is_pub: false,
+        is_private: false,
+        name: alias.to_string(),
+        generic_params: generic_params.clone(),
+        ty: crate::ast::TypeExpr {
+            kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
+                segments: vec![name.clone()],
+                generic_args,
+                span,
+            }),
+            span,
+        },
+        refinement: None,
+        deprecation: None,
+        unstable: None,
+        lint_overrides: Vec::new(),
+    })
+}
+
 /// A module type the import did not list (`std.time`'s `Duration`, reached
 /// through `sleep`) stays private to its module (design.md § Visibility):
 /// when the program declares an item of the same name, the module's type
 /// is renamed to a name no program can write, together with every use of
 /// it in the spliced items, so the two do not meet (B-2026-10-19-10). The
-/// name is the type's own, then `$` and the module path, which
+/// name is the type's own, then `$` and the module path joined by `$`, which
 /// [`display_private_names`] shows as `std.time.Duration`. A type with no
 /// such collision keeps its name, so nothing else about the splice changes.
 fn privatize_unlisted_types(
@@ -2022,7 +2103,9 @@ fn privatize_unlisted_types(
                 .iter()
                 .any(|ii| ii.alias.as_ref().unwrap_or(&ii.name) == *name)
         })
-        .map(|name| (name.clone(), format!("{name}${}", path.join("."))))
+        // No `.` in the name: a unit variant pattern is its dotted path in
+        // one string (`Duration$std$time.Zero`), split at the first `.`.
+        .map(|name| (name.clone(), format!("{name}${}", path.join("$"))))
         .collect();
     if renames.is_empty() {
         return;
@@ -2084,13 +2167,22 @@ impl crate::span_visitor::MutVisitor for RenameTypes<'_> {
         match &mut p.kind {
             crate::ast::PatternKind::Struct { path, .. }
             | crate::ast::PatternKind::TupleVariant { path, .. } => self.head(path),
+            // A unit variant parses as a binding of its dotted path
+            // (`Level.Debug`).
+            crate::ast::PatternKind::Binding(name) => {
+                if let Some((ty, variant)) = name.split_once('.') {
+                    if let Some(private) = self.0.get(ty) {
+                        *name = format!("{private}.{variant}");
+                    }
+                }
+            }
             _ => {}
         }
     }
 }
 
 /// A diagnostic's text with each private module type
-/// ([`privatize_unlisted_types`]) shown by its path: `Duration$std.time`
+/// ([`privatize_unlisted_types`]) shown by its path: `Duration$std$time`
 /// reads `std.time.Duration`.
 pub fn display_private_names(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.contains('$') {
@@ -2105,17 +2197,17 @@ pub fn display_private_names(text: &str) -> std::borrow::Cow<'_, str> {
             .map_or(0, |i| i + 1);
         let after = &rest[at + 1..];
         let module_len = after
-            .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+            .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
             .unwrap_or(after.len());
-        let module = after[..module_len].trim_end_matches('.');
+        let module = &after[..module_len];
         let name = &before[name_start..];
-        if name.is_empty() || !module.contains('.') {
+        if name.is_empty() || !module.contains('$') {
             out.push_str(&rest[..=at]);
             rest = after;
             continue;
         }
         out.push_str(&before[..name_start]);
-        out.push_str(module);
+        out.push_str(&module.replace('$', "."));
         out.push('.');
         out.push_str(name);
         rest = &after[module.len()..];
@@ -2421,6 +2513,7 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
                 Item::EnumDef(e) => e.name.as_str(),
                 Item::TraitDef(t) => t.name.as_str(),
                 Item::EffectResource(r) => r.name.as_str(),
+                Item::TypeAlias(a) => a.name.as_str(),
                 _ => "",
             })
             .collect();

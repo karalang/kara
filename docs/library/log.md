@@ -118,4 +118,4 @@ ERROR request failed err="token expired" status=500 task_id=3
 
 ## Not yet implemented
 
-- Renaming a type of `std.log` on import (`import std.log.{Level as L}`) makes a second type, which the library's functions do not accept; import the types under their own names (B-2026-10-27-23).
+- The trait `Backend` cannot be renamed on import (`import std.log.{Backend as B}` is refused: a trait has no alias form yet). A struct or enum can be: `import std.log.{Level as L}` makes `L` a second name for `Level` (B-2026-10-27-23).
