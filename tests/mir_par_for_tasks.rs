@@ -127,8 +127,9 @@ fn main() {
 /// The iterations wait at once: four sleeps of 800, 600, 400 and 200 ms
 /// end in about the longest, not their 2000 ms sum, and the values still
 /// come back in iteration order. With `limit: 1` they run one at a time.
-/// The time includes the debug `karac`'s own check and lowering, which a
-/// loaded machine has pushed past 100 ms, hence the 700 ms margin.
+/// The interpreter's time includes the debug `karac`'s own check and
+/// lowering, which now takes most of a second, so each run is measured
+/// against the same program with no sleep.
 #[test]
 fn mir_par_for_iterations_wait_concurrently() {
     let src = r#"fn main() {
@@ -136,9 +137,13 @@ fn mir_par_for_iterations_wait_concurrently() {
     println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
 }
 "#;
-    for (out, took) in runs("concurrent", src) {
+    let base = runs("base", &src.replace("(4 - i) * 200", "0 * i"));
+    for ((out, took), (_, base)) in runs("concurrent", src).into_iter().zip(base) {
         assert_eq!(out, "0 1 2 3\n");
-        assert!(took < Duration::from_millis(1500), "{took:?}");
+        assert!(
+            took < base + Duration::from_millis(1300),
+            "{took:?} against {base:?} with no sleep"
+        );
     }
     let one = src.replace("par for", "par(limit: 1) for");
     for (out, took) in runs("limit", &one) {
