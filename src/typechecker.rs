@@ -109,6 +109,11 @@ pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv, U
 pub(crate) use expr_method_call::SLICE_MUTATING_METHODS;
 #[cfg(test)]
 use inference::substitute_type_params;
+
+/// A key of `TypeChecker::enclosing_assoc_eqs`: the parameter, the
+/// associated type, and the trait that declares it (`None` when no single
+/// bound does).
+pub(super) type AssocEqKey = (String, String, Option<String>);
 pub use types::{
     const_arg_display, type_display, type_to_concrete_or_param_name, ConstArg, ConstVarId, DimArg,
     FloatSize, IntSize, SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
@@ -3406,12 +3411,16 @@ pub struct TypeChecker<'a> {
     /// path. Used to resolve bare `method(args)` calls at expected-type
     /// positions when the expected type is a generic param.
     pub(super) enclosing_bounds: FxHashMap<String, Vec<crate::ast::TraitBound>>,
-    /// The associated-type equalities in scope, `(param, assoc) -> type`:
-    /// the `Item = i64` of `I: Iterator[Item = i64]`, which the desugar pass
-    /// hoists into a `where I.Item = i64`. Saved and restored with
-    /// `enclosing_bounds`, and read to normalize `I.Item` in a method's
-    /// signature when the receiver is that parameter.
-    pub(super) enclosing_assoc_eqs: FxHashMap<(String, String), crate::ast::TypeExpr>,
+    /// The associated-type equalities in scope, `(param, assoc, trait) ->
+    /// type`: the `Item = i64` of `I: Iterator[Item = i64]`, which the
+    /// desugar pass hoists into a `where I.Item = i64`. Saved and restored
+    /// with `enclosing_bounds`, and read to normalize `I.Item` in a method's
+    /// signature when the receiver is that parameter. The trait is the one
+    /// whose type the equality fixes (B-2026-10-27-18).
+    pub(super) enclosing_assoc_eqs: FxHashMap<AssocEqKey, crate::ast::TypeExpr>,
+    /// Where an ambiguous `T.Name` was reported, so a type written once and
+    /// lowered several times is reported once (B-2026-10-27-18).
+    pub(super) ambiguous_assoc_reported: FxHashSet<SpanKey>,
     /// The projection bounds in scope, `(param, assoc) -> bounds`: the
     /// `Clone` of `where I.Item: Clone`, read to dispatch a method on a
     /// value of that projection (B-2026-10-19-8). Saved and restored with
@@ -3822,6 +3831,7 @@ impl<'a> TypeChecker<'a> {
             freshened_scrutinee_vars: std::collections::HashSet::new(),
             enclosing_bounds: FxHashMap::default(),
             enclosing_assoc_eqs: FxHashMap::default(),
+            ambiguous_assoc_reported: FxHashSet::default(),
             enclosing_proj_bounds: FxHashMap::default(),
             current_body_dim_scope: Vec::new(),
             enclosing_trait: None,
@@ -6067,6 +6077,7 @@ impl<'a> TypeChecker<'a> {
                 assoc: assoc.clone(),
                 args: Vec::new(),
                 receiver_args: recv_args.clone(),
+                trait_name: None,
             };
             let actual = self.resolve_assoc_projections(&projection);
             if matches!(actual, Type::AssocProjection { .. } | Type::Error) {
@@ -6347,6 +6358,7 @@ impl<'a> TypeChecker<'a> {
             assoc: "Item".to_string(),
             args: Vec::new(),
             receiver_args: args.clone(),
+            trait_name: None,
         });
         match inference::resolve_type_var_top(&item, &self.env.substitutions) {
             Type::AssocProjection { .. } => None,

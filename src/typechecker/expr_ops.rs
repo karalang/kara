@@ -2562,6 +2562,7 @@ impl<'a> super::TypeChecker<'a> {
             assoc: "Output".to_string(),
             args: Vec::new(),
             receiver_args: Vec::new(),
+            trait_name: Some(tr.to_string()),
         };
         (rhs, self.normalize_enclosing_assoc_eqs(&projection))
     }
@@ -2584,7 +2585,11 @@ impl<'a> super::TypeChecker<'a> {
             "Not",
         ];
         let Type::AssocProjection {
-            param, assoc, args, ..
+            param,
+            assoc,
+            args,
+            trait_name: of,
+            ..
         } = ty
         else {
             return None;
@@ -2592,10 +2597,17 @@ impl<'a> super::TypeChecker<'a> {
         if assoc != "Output" || !args.is_empty() {
             return None;
         }
-        if self
-            .enclosing_assoc_eqs
-            .contains_key(&(param.clone(), "Output".to_string()))
-        {
+        // The projection's own trait, when it carries one, is the bound to
+        // fix (B-2026-10-27-18).
+        let tr = of.as_deref().or(tr);
+        if self.enclosing_assoc_eqs.keys().any(|(p, a, eq_of)| {
+            p == param
+                && a == "Output"
+                && match (eq_of, tr) {
+                    (Some(eq_of), Some(tr)) => eq_of == tr,
+                    _ => true,
+                }
+        }) {
             return None;
         }
         let bounds: Vec<TraitBound> = self

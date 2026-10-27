@@ -371,6 +371,7 @@ impl super::Parser {
                         assoc_name,
                         ty,
                         span: self.span_from(&cstart),
+                        trait_name: None,
                     });
                 } else if self.eat(&Token::Colon) {
                     // `T.Assoc[...]: Trait + ...` — projection bound.

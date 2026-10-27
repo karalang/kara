@@ -10,7 +10,8 @@ use crate::ast::*;
 use crate::token::Span;
 
 use super::types::{type_display, IntSize, Type, VariantTypeInfo};
-use super::{ConstEvalError, TypeErrorKind};
+use super::{AssocEqKey, ConstEvalError, TypeErrorKind};
+use std::collections::HashSet;
 
 impl<'a> super::TypeChecker<'a> {
     /// Validate where clause constraints: type params exist, trait names are known.
@@ -189,6 +190,123 @@ impl<'a> super::TypeChecker<'a> {
         Some(self.normalize_enclosing_assoc_eqs(&t))
     }
 
+    /// The traits among `bounds` and their supertraits that declare the
+    /// associated type `assoc`, each once: the traits a projection `T.assoc`
+    /// can name (design.md § Associated types, "A projection names one
+    /// trait's type"; B-2026-10-27-18).
+    pub(super) fn assoc_declaring_traits<'b>(
+        &self,
+        bounds: impl IntoIterator<Item = &'b str>,
+        assoc: &str,
+    ) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = bounds.into_iter().map(str::to_string).collect();
+        while let Some(t) = stack.pop() {
+            if !seen.insert(t.clone()) {
+                continue;
+            }
+            let Some(info) = self.env.traits.get(t.as_str()) else {
+                continue;
+            };
+            if info.assoc_types.iter().any(|a| a == assoc) {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+                continue;
+            }
+            stack.extend(info.supertraits.iter().cloned());
+        }
+        out.sort();
+        out
+    }
+
+    /// The one trait among `param`'s in-scope bounds that declares `assoc`.
+    pub(super) fn enclosing_assoc_trait(&self, param: &str, assoc: &str) -> Option<String> {
+        let bounds = self.enclosing_bounds.get(param)?;
+        let traits = self.assoc_declaring_traits(
+            bounds
+                .iter()
+                .filter(|b| b.fn_sig.is_none())
+                .filter_map(|b| b.path.last().map(String::as_str)),
+            assoc,
+        );
+        let [t] = traits.as_slice() else {
+            return None;
+        };
+        Some(t.clone())
+    }
+
+    /// The trait a written `param.assoc` names: the one among `param`'s
+    /// in-scope bounds that declares `assoc`. When several do, the
+    /// projection is ambiguous, an error where it is written
+    /// (`E_AMBIGUOUS_ASSOC_TYPE`, design.md § Associated types).
+    pub(super) fn written_assoc_trait(
+        &mut self,
+        param: &str,
+        assoc: &str,
+        span: Span,
+    ) -> Option<String> {
+        let bounds = self.enclosing_bounds.get(param)?;
+        let traits = self.assoc_declaring_traits(
+            bounds
+                .iter()
+                .filter(|b| b.fn_sig.is_none())
+                .filter_map(|b| b.path.last().map(String::as_str)),
+            assoc,
+        );
+        match traits.as_slice() {
+            [t] => Some(t.clone()),
+            [] => None,
+            _ => {
+                self.report_ambiguous_assoc(param, assoc, &traits, span);
+                None
+            }
+        }
+    }
+
+    /// `E_AMBIGUOUS_ASSOC_TYPE` for `param.assoc`, which each of `traits`
+    /// declares; once per written span.
+    pub(super) fn report_ambiguous_assoc(
+        &mut self,
+        param: &str,
+        assoc: &str,
+        traits: &[String],
+        span: Span,
+    ) {
+        if !self
+            .ambiguous_assoc_reported
+            .insert(crate::resolver::SpanKey::from_span(&span))
+        {
+            return;
+        }
+        let names: Vec<String> = traits.iter().map(|t| format!("`{t}`")).collect();
+        let (last, rest) = names.split_last().expect("two or more");
+        let fixes: Vec<String> = traits
+            .iter()
+            .enumerate()
+            .map(|(i, t)| format!("{t}[{assoc} = A{i}]"))
+            .collect();
+        self.type_error(
+            format!(
+                "error[E_AMBIGUOUS_ASSOC_TYPE]: `{param}.{assoc}` is ambiguous: {} and {last} on \
+                 '{param}' each declare `{assoc}`, and a projection names one trait's type \
+                 (design.md § Associated types). Fix each on its bound instead, `{}`; when the \
+                 type must stay open, name it with a type parameter: `{param}: {}` with `{}` \
+                 among the generic parameters",
+                rest.join(", "),
+                fixes[0],
+                fixes.join(" + "),
+                (0..traits.len())
+                    .map(|i| format!("A{i}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            span,
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
     /// `t` with each projection the enclosing function's bounds fix
     /// (`I.Item` under `I: Iterator[Item = i64]`) replaced by its type, so a
     /// closure handed to a method reached through `I` takes an `i64`
@@ -198,17 +316,18 @@ impl<'a> super::TypeChecker<'a> {
             return t.clone();
         }
         let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
-        let eqs: Vec<((String, String), TypeExpr)> = self
+        let eqs: Vec<(AssocEqKey, TypeExpr)> = self
             .enclosing_assoc_eqs
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let mut out = t.clone();
-        for ((param, assoc), te) in eqs {
+        for ((param, assoc, of), te) in eqs {
             let bound = self.lower_type_expr(&te, &scope);
-            out = super::types::substitute_existential_assoc_bindings(
+            out = super::types::substitute_assoc_bindings_of(
                 &out,
                 &param,
+                of.as_deref(),
                 &[(assoc, bound)],
             );
         }
@@ -429,6 +548,42 @@ impl<'a> super::TypeChecker<'a> {
         self.validate_const_param_types(generics, generic_scope);
         if let Some(ref wc) = where_clause {
             self.validate_where_clause(wc, generic_scope);
+            self.check_where_assoc_eqs_name_one_trait(generics, wc);
+        }
+    }
+
+    /// A written `where T.Name = X` names the one bound on `T` that declares
+    /// `Name`; with several, it is ambiguous (design.md § Associated types,
+    /// B-2026-10-27-18).
+    fn check_where_assoc_eqs_name_one_trait(
+        &mut self,
+        generics: &Option<GenericParams>,
+        wc: &WhereClause,
+    ) {
+        let bounds = Self::collect_param_bounds(generics, &Some(wc.clone()));
+        for c in &wc.constraints {
+            let WhereConstraint::AssocTypeEq {
+                type_name,
+                assoc_name,
+                span,
+                trait_name: None,
+                ..
+            } = c
+            else {
+                continue;
+            };
+            let traits = self.assoc_declaring_traits(
+                bounds
+                    .get(type_name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|b| b.fn_sig.is_none())
+                    .filter_map(|b| b.path.last().map(String::as_str)),
+                assoc_name,
+            );
+            if traits.len() > 1 {
+                self.report_ambiguous_assoc(type_name, assoc_name, &traits, *span);
+            }
         }
     }
 

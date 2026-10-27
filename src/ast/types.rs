@@ -404,6 +404,11 @@ pub enum WhereConstraint {
         assoc_name: String,
         ty: TypeExpr,
         span: Span,
+        /// The trait the equality fixes the type of: the bound it was
+        /// hoisted from (`T: Add[Output = T]` is Add's), `None` for one
+        /// written in a `where` clause, which names the one bound that
+        /// declares it (design.md § Associated types; B-2026-10-27-18).
+        trait_name: Option<String>,
     },
     /// `F.Mapped[i64]: FromIterator[i64]` — bound on an associated-type
     /// projection. Distinct from `TypeBound` because the LHS is a full

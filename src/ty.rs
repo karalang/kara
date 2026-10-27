@@ -1161,11 +1161,15 @@ impl TyCtxt {
                 assoc,
                 args,
                 receiver_args,
+                trait_name,
             } if args.is_empty() => {
                 let (base, trait_) = if receiver_args.is_empty() && param(base).is_some() {
                     (
                         self.intern(TyKind::Param(param_ty(base)?)),
-                        proj_trait(base, assoc).map(|t| self.param_name(&t)),
+                        trait_name
+                            .clone()
+                            .or_else(|| proj_trait(base, assoc))
+                            .map(|t| self.param_name(&t)),
                     )
                 } else {
                     match lookup(base) {

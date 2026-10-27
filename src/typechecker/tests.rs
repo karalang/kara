@@ -1084,6 +1084,7 @@ mod gat_slice4_assoc_projection_args_tests {
             assoc: assoc.to_string(),
             args,
             receiver_args: vec![],
+            trait_name: None,
         }
     }
 
@@ -1306,6 +1307,7 @@ mod gat_slice5_assoc_projection_resolution_tests {
             assoc: assoc.to_string(),
             args,
             receiver_args,
+            trait_name: None,
         }
     }
 

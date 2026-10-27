@@ -132,12 +132,17 @@ pub enum Type {
     /// `resolve_assoc_projections` look up the impl entry by bare name AND
     /// substitute the impl-block's generic params, while the projection's
     /// own `args` substitute the GAT params. Slice 5 wires the two-sided
-    /// substitution.
+    /// substitution. `trait_name` is the trait whose `assoc` this is
+    /// (design.md § Associated types, "A projection names one trait's
+    /// type"; B-2026-10-27-18): `a * b` under `T: Add + Mul` is Mul's
+    /// `T.Output`, never Add's. `None` where the projection was built
+    /// without one, which then matches any trait's.
     AssocProjection {
         param: String,
         assoc: String,
         args: Vec<Type>,
         receiver_args: Vec<Type>,
+        trait_name: Option<String>,
     },
 
     /// Return-position `impl Trait` — an opaque existential whose witness
@@ -893,6 +898,7 @@ pub fn type_display(ty: &Type) -> String {
             assoc,
             args,
             receiver_args,
+            ..
         } => {
             let recv_str = if receiver_args.is_empty() {
                 param.clone()
@@ -962,18 +968,36 @@ pub(super) fn substitute_existential_assoc_bindings(
     trait_name: &str,
     bindings: &[(String, Type)],
 ) -> Type {
+    substitute_assoc_bindings_of(ty, trait_name, None, bindings)
+}
+
+/// [`substitute_existential_assoc_bindings`] for the bindings of one trait,
+/// `of_trait`: a projection that names another trait's associated type is
+/// left alone (`Mul`'s `T.Output` under `T: Add[Output = T]`;
+/// B-2026-10-27-18). `None` takes any.
+pub(super) fn substitute_assoc_bindings_of(
+    ty: &Type,
+    trait_name: &str,
+    of_trait: Option<&str>,
+    bindings: &[(String, Type)],
+) -> Type {
     if bindings.is_empty() {
         return ty.clone();
     }
-    let go = |t: &Type| substitute_existential_assoc_bindings(t, trait_name, bindings);
+    let go = |t: &Type| substitute_assoc_bindings_of(t, trait_name, of_trait, bindings);
     match ty {
         Type::AssocProjection {
             param,
             assoc,
             args,
             receiver_args,
+            trait_name: of,
         } => {
-            if param == trait_name && args.is_empty() {
+            let same_trait = match (of_trait, of) {
+                (Some(want), Some(of)) => want == of,
+                _ => true,
+            };
+            if param == trait_name && args.is_empty() && same_trait {
                 if let Some((_, bound)) = bindings.iter().find(|(n, _)| n == assoc) {
                     return bound.clone();
                 }
@@ -983,6 +1007,7 @@ pub(super) fn substitute_existential_assoc_bindings(
                 assoc: assoc.clone(),
                 args: args.iter().map(&go).collect(),
                 receiver_args: receiver_args.iter().map(&go).collect(),
+                trait_name: of.clone(),
             }
         }
         Type::Tuple(elems) => Type::Tuple(elems.iter().map(&go).collect()),
@@ -1709,16 +1734,19 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                 assoc: aa,
                 args: aas,
                 receiver_args: ar,
+                trait_name: at,
             },
             Type::AssocProjection {
                 param: bp,
                 assoc: ba,
                 args: bas,
                 receiver_args: br,
+                trait_name: bt,
             },
         ) => {
             ap == bp
                 && aa == ba
+                && (at.is_none() || bt.is_none() || at == bt)
                 && aas.len() == bas.len()
                 && aas
                     .iter()

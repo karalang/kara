@@ -489,7 +489,7 @@ impl<'a> super::TypeChecker<'a> {
         // And their `Output = T`s (B-2026-10-27-14).
         let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
         self.enclosing_assoc_eqs
-            .extend(Self::collect_assoc_eqs(&t.where_clause));
+            .extend(self.collect_assoc_eqs(&t.where_clause));
         if !t.supertraits.is_empty() {
             self.enclosing_bounds
                 .entry("Self".to_string())
@@ -1929,6 +1929,7 @@ impl<'a> super::TypeChecker<'a> {
                 assoc,
                 args,
                 receiver_args,
+                trait_name,
             } => match concrete {
                 Type::Named {
                     name,
@@ -1938,12 +1939,14 @@ impl<'a> super::TypeChecker<'a> {
                     assoc,
                     args: args.into_iter().map(rec).collect(),
                     receiver_args: target_args.clone(),
+                    trait_name: trait_name.clone(),
                 },
                 _ => Type::AssocProjection {
                     param,
                     assoc,
                     args: args.into_iter().map(rec).collect(),
                     receiver_args: receiver_args.into_iter().map(rec).collect(),
+                    trait_name,
                 },
             },
             other => other,
@@ -2163,7 +2166,7 @@ impl<'a> super::TypeChecker<'a> {
         self.node_generic_frame_proj_traits.push(projs);
         let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
         self.enclosing_assoc_eqs
-            .extend(Self::collect_assoc_eqs(&f.where_clause));
+            .extend(self.collect_assoc_eqs(&f.where_clause));
         let saved_proj_bounds = self.enclosing_proj_bounds.clone();
         self.enclosing_proj_bounds
             .extend(Self::collect_proj_bounds(&f.where_clause));
@@ -4580,7 +4583,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
         self.enclosing_assoc_eqs
-            .extend(Self::collect_assoc_eqs(&imp.where_clause));
+            .extend(self.collect_assoc_eqs(&imp.where_clause));
         let saved_proj_bounds = self.enclosing_proj_bounds.clone();
         self.enclosing_proj_bounds
             .extend(Self::collect_proj_bounds(&imp.where_clause));

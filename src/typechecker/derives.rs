@@ -599,6 +599,7 @@ impl<'a> super::TypeChecker<'a> {
                 assoc,
                 args,
                 receiver_args,
+                ..
             } if args.is_empty() && receiver_args.is_empty() => self
                 .enclosing_proj_bounds
                 .get(&(param.clone(), assoc.clone()))

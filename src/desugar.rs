@@ -154,6 +154,7 @@ fn drain_bound(owner: &str, bound: &mut TraitBound, out: &mut Vec<WhereConstrain
             assoc_name: binding.name,
             ty: binding.ty,
             span: binding.span,
+            trait_name: bound.path.last().cloned(),
         });
     }
 }
@@ -2797,6 +2798,7 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
                 assoc_name: binding.name.clone(),
                 ty: binding.ty.clone(),
                 span: binding.span,
+                trait_name: trait_path.segments.last().cloned(),
             });
         }
 

@@ -854,11 +854,17 @@ impl<'a> super::TypeChecker<'a> {
                 // as a bare type param. `substitute_type_params` populates
                 // `receiver_args` once `F` is solved to a concrete generic
                 // receiver like `Wrapper[String]`.
+                let trait_name = if path.segments[0] == "Self" {
+                    None
+                } else {
+                    self.written_assoc_trait(&path.segments[0], &assoc, path.span)
+                };
                 return Type::AssocProjection {
                     param: path.segments[0].clone(),
                     assoc,
                     args,
                     receiver_args: vec![],
+                    trait_name,
                 };
             }
             // Multi-segment module path — use last segment as type name
@@ -1477,10 +1483,12 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// The `where P.Assoc = T` equalities of a where clause, keyed by
-    /// `(P, Assoc)`; see `enclosing_assoc_eqs`.
+    /// `(P, Assoc, Trait)`; see `enclosing_assoc_eqs`. One written in the
+    /// `where` clause names the one bound on `P` that declares `Assoc`.
     pub(super) fn collect_assoc_eqs(
+        &self,
         where_clause: &Option<WhereClause>,
-    ) -> Vec<((String, String), crate::ast::TypeExpr)> {
+    ) -> Vec<(super::AssocEqKey, crate::ast::TypeExpr)> {
         let Some(wc) = where_clause else {
             return Vec::new();
         };
@@ -1491,11 +1499,60 @@ impl<'a> super::TypeChecker<'a> {
                     type_name,
                     assoc_name,
                     ty,
+                    trait_name,
                     ..
-                } => Some(((type_name.clone(), assoc_name.clone()), ty.clone())),
+                } => {
+                    let of = trait_name
+                        .clone()
+                        .or_else(|| self.declaring_bound_trait(wc, type_name, assoc_name))
+                        .or_else(|| self.enclosing_assoc_trait(type_name, assoc_name));
+                    Some(((type_name.clone(), assoc_name.clone(), of), ty.clone()))
+                }
                 _ => None,
             })
             .collect()
+    }
+
+    /// `assoc` of the impl of `tr` for the type named `name` with
+    /// `receiver_args`, its own generic parameters bound to them: the one
+    /// impl whose written target matches the receiver. `None` when there is
+    /// no such impl, more than one, or the impl does not bind `assoc` itself.
+    fn trait_impl_assoc(
+        &self,
+        name: &str,
+        tr: &str,
+        assoc: &str,
+        receiver_args: &[Type],
+    ) -> Option<Type> {
+        let mut found = self.env.impls.iter().enumerate().filter_map(|(i, imp)| {
+            if imp.target_type != name || imp.trait_name.as_deref() != Some(tr) {
+                return None;
+            }
+            if !imp.target_args.is_empty()
+                && !super::types::impl_args_match(&imp.target_args, receiver_args)
+            {
+                return None;
+            }
+            let t = self
+                .env
+                .impl_own_assoc_types
+                .get(&i)?
+                .iter()
+                .find(|(a, _)| a == assoc)
+                .map(|(_, t)| t.clone())?;
+            let subs: HashMap<String, SubstValue> = imp
+                .target_generic_args
+                .iter()
+                .zip(receiver_args)
+                .filter_map(|(w, r)| match w {
+                    Type::TypeParam(p) => Some((p.clone(), SubstValue::Type(r.clone()))),
+                    _ => None,
+                })
+                .collect();
+            Some(substitute_type_params(&t, &subs))
+        });
+        let t = found.next()?;
+        found.next().is_none().then_some(t)
     }
 
     /// Walk `ty` and resolve any `AssocProjection { param, assoc, args,
@@ -1526,6 +1583,7 @@ impl<'a> super::TypeChecker<'a> {
                 assoc,
                 args,
                 receiver_args,
+                trait_name,
             } => {
                 let resolved_args: Vec<Type> = args
                     .iter()
@@ -1535,6 +1593,15 @@ impl<'a> super::TypeChecker<'a> {
                     .iter()
                     .map(|a| self.resolve_assoc_projections(a))
                     .collect();
+                // A projection that names its trait reads that trait's impl
+                // (B-2026-10-27-18): `V`'s `Add` and `Mul` impls each bind
+                // an `Output`, which the type-keyed table holds one of.
+                if let Some(t) = trait_name
+                    .as_deref()
+                    .and_then(|tr| self.trait_impl_assoc(param, tr, assoc, &resolved_recv_args))
+                {
+                    return self.resolve_assoc_projections(&t);
+                }
                 if let Some(entry) = self
                     .env
                     .impl_assoc_types
@@ -1581,6 +1648,7 @@ impl<'a> super::TypeChecker<'a> {
                         assoc: assoc.clone(),
                         args: resolved_args,
                         receiver_args: resolved_recv_args,
+                        trait_name: trait_name.clone(),
                     }
                 }
             }

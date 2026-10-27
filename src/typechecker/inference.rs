@@ -176,6 +176,7 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
             assoc,
             args,
             receiver_args,
+            trait_name,
         } => {
             let new_args: Vec<Type> = args
                 .iter()
@@ -217,6 +218,7 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
                     assoc: assoc.clone(),
                     args: new_args,
                     receiver_args: captured_recv_args,
+                    trait_name: trait_name.clone(),
                 }
             } else {
                 Type::AssocProjection {
@@ -224,6 +226,7 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
                     assoc: assoc.clone(),
                     args: new_args,
                     receiver_args: walked_receiver_args,
+                    trait_name: trait_name.clone(),
                 }
             }
         }
@@ -493,6 +496,7 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                 assoc,
                 args,
                 receiver_args,
+                trait_name,
             } => Type::AssocProjection {
                 param: param.clone(),
                 assoc: assoc.clone(),
@@ -504,6 +508,7 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                     .iter()
                     .map(|a| substitute(a, name_to_id, name_to_const_id))
                     .collect(),
+                trait_name: trait_name.clone(),
             },
             Type::Existential { .. } => {
                 map_existential(ty, |t| substitute(t, name_to_id, name_to_const_id))

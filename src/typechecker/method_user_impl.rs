@@ -368,6 +368,7 @@ impl<'a> super::TypeChecker<'a> {
                 assoc,
                 args: pargs,
                 receiver_args,
+                ..
             } if pargs.is_empty()
                 && receiver_args.is_empty()
                 && self
@@ -1069,6 +1070,7 @@ impl<'a> super::TypeChecker<'a> {
                         assoc: "Item".to_string(),
                         args: Vec::new(),
                         receiver_args: Vec::new(),
+                        trait_name: None,
                     };
                     let item =
                         self.resolve_assoc_projections(&substitute_type_params(&item, &self_subs));

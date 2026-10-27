@@ -1,6 +1,6 @@
 fn add_gen[T: Add](a: T, b: T) -> T { a + b }
 fn neg_gen[T: Neg](a: T) -> T { -a }
-trait Foldy[T: Add[Output = T] + Mul] {
+trait Foldy[T: Add[Output = T] + Mul[Output = T]] {
     fn a(ref self) -> T;
     fn b(ref self) -> T;
     fn sum2(ref self) -> T { self.a() + self.b() }

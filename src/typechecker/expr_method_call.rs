@@ -705,11 +705,19 @@ impl<'a> super::TypeChecker<'a> {
                 // that bound is an `Option[T]`, not an abstract projection
                 // nothing can add or compare, and a closure argument of
                 // `fold` or `map` takes a `T` (B-2026-10-21-60).
+                // Only the equalities of this bound's own associated types
+                // (B-2026-10-27-18): `Add[Output = T]` says nothing of a
+                // `Mul` method's `Output`.
+                let of_bound =
+                    |a: &str| self.assoc_declaring_traits(bound.path.last().map(String::as_str), a);
                 let eqs: Vec<(String, crate::ast::TypeExpr)> = self
                     .enclosing_assoc_eqs
                     .iter()
-                    .filter(|((p, _), _)| p == type_param_name)
-                    .map(|((_, a), te)| (a.clone(), te.clone()))
+                    .filter(|((p, a, of), _)| {
+                        p == type_param_name
+                            && of.as_ref().is_none_or(|of| of_bound(a).contains(of))
+                    })
+                    .map(|((_, a, _), te)| (a.clone(), te.clone()))
                     .collect();
                 let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
                 let bindings: Vec<(String, Type)> = eqs
@@ -980,6 +988,7 @@ impl<'a> super::TypeChecker<'a> {
                     assoc: assoc.clone(),
                     args: Vec::new(),
                     receiver_args: args.clone(),
+                    trait_name: None,
                 };
                 let t = self.resolve_assoc_projections(&p);
                 (!matches!(t, Type::AssocProjection { .. })).then_some((assoc, t))
@@ -1175,16 +1184,21 @@ impl<'a> super::TypeChecker<'a> {
             return ty.clone();
         }
         let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
-        let mut eqs: Vec<(String, String, crate::ast::TypeExpr)> = self
+        let mut eqs: Vec<(super::AssocEqKey, crate::ast::TypeExpr)> = self
             .enclosing_assoc_eqs
             .iter()
-            .map(|((p, a), te)| (p.clone(), a.clone(), te.clone()))
+            .map(|(k, te)| (k.clone(), te.clone()))
             .collect();
-        eqs.sort_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+        eqs.sort_by(|x, y| x.0.cmp(&y.0));
         let mut out = ty.clone();
-        for (param, assoc, te) in eqs {
+        for ((param, assoc, of), te) in eqs {
             let bound = self.lower_type_expr(&te, &scope);
-            out = substitute_existential_assoc_bindings(&out, &param, &[(assoc, bound)]);
+            out = super::types::substitute_assoc_bindings_of(
+                &out,
+                &param,
+                of.as_deref(),
+                &[(assoc, bound)],
+            );
         }
         out
     }
