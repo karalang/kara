@@ -127,6 +127,12 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             }
             let gp = Self::generic_param_names(&imp.generic_params);
+            // A blanket impl's target is its own parameter, not a type: its
+            // bindings are the bound's (`type Item = I.Item`), which the
+            // receiver's own impl already gives.
+            if gp.contains(&type_name) {
+                continue;
+            }
             for impl_item in &imp.items {
                 let ImplItem::AssocType(binding) = impl_item else {
                     continue;
@@ -4766,6 +4772,11 @@ impl<'a> super::TypeChecker<'a> {
                         };
                     let where_clause_clone = trait_decl.and_then(|d| d.where_clause.clone());
 
+                    // A blanket impl's target is its own parameter, not a
+                    // type (see `preregister_impl_assoc_types`).
+                    if gp.contains(&type_name) {
+                        continue;
+                    }
                     self.env.impl_assoc_types.insert(
                         (type_name.clone(), binding.name.clone()),
                         crate::typechecker::env::ImplAssocTypeEntry {

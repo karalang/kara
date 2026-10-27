@@ -78,6 +78,7 @@ const ALWAYS_KEPT: &[&str] = &[
     "try_from",
     "try_into",
     "from_iter",
+    "extend",
     "collect",
     "unwrap",
     "expect",

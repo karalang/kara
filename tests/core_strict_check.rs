@@ -4438,9 +4438,10 @@ fn question_then_member_access_propagates() {
 
 /// The library module paths of docs/library/README.md resolve to the
 /// globals the implementation keeps (B-2026-10-14-48): `import std.sync`,
-/// `std.io`, `std.net`, `std.hash` check and run. A specified name that is
-/// not implemented yet, an unknown one and a rename each get their own
-/// error rather than "unknown module".
+/// `std.io`, `std.net`, `std.hash` check and run. An unknown name and a
+/// rename each get their own error rather than "unknown module". (No
+/// specified name is unimplemented since `std.log` and `Extend` landed,
+/// B-2026-10-27-20 and B-2026-10-15-10, so that error has no program.)
 #[test]
 fn library_module_paths_resolve() {
     let src = "import std.sync.{TaskGroup, Sender, Receiver, Mutex};\n\
@@ -4469,7 +4470,6 @@ fn library_module_paths_resolve() {
     let _ = std::fs::remove_dir_all(&dir);
 
     let src = "import std.sync.{Mutx};\n\
-               import std.iter.{Extend};\n\
                import std.io.{File as F};\n\
                fn main() {}\n";
     let (dir, path) = fixture("library-paths-bad", src);
@@ -4477,7 +4477,6 @@ fn library_module_paths_resolve() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     for want in [
-        "`std.iter.Extend` is in the library spec (docs/library) but not implemented yet",
         "`std.sync` has no item `Mutx`, did you mean `Mutex`?",
         "`std.io.File` cannot be renamed (`as F`) yet",
     ] {
@@ -8397,7 +8396,7 @@ fn main() {
 }
 
 /// B-2026-10-15-10: `std.time` splices its Kāra items beside its globals, and
-/// still reports an unknown item and one that is specified but missing.
+/// still reports an unknown item.
 #[test]
 fn std_time_reports_unknown_and_missing_items() {
     rejected(
@@ -8405,16 +8404,12 @@ fn std_time_reports_unknown_and_missing_items() {
         "import std.time.{Duration, Bogus};\nfn main() { println(f\"{Duration.ms(2).as_ms()}\"); }\n",
         "`std.time` has no item `Bogus`",
     );
-    // `Instant` landed (B-2026-10-15-112), and `MutexGuard`
-    // (B-2026-10-19-23); `Extend` keeps the missing case covered.
+    // `Instant` landed (B-2026-10-15-112), `MutexGuard` (B-2026-10-19-23),
+    // `Extend` (B-2026-10-15-10) and `std.log` (B-2026-10-27-20), so no
+    // specified item is left to pin the missing case with.
     accepted(
         "std-time-instant",
         "import std.time.{Instant};\nfn main() { let i = Instant.now(); println(f\"{i.elapsed().as_ms() >= 0}\"); }\n",
-    );
-    rejected(
-        "std-iter-extend",
-        "import std.iter.{Extend};\nfn main() { }\n",
-        "`std.iter.Extend` is in the library spec (docs/library) but not implemented yet",
     );
 }
 

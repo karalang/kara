@@ -1275,6 +1275,12 @@ impl<'a> super::TypeChecker<'a> {
             ret = bind(substitute_type_params(&ret, &subs));
             let mut receiver: HashMap<String, SubstValue> =
                 std::iter::once(("Self".to_string(), SubstValue::Type(ex.clone()))).collect();
+            // The trait's own parameters as the bound binds them (`T` of
+            // `C: Extend[i64]`), which a method's bound names too
+            // (`fn extend[I: IntoIterator[Item = T]]`).
+            for (name, ty) in trait_subs {
+                receiver.insert(name.clone(), SubstValue::Type(ty.clone()));
+            }
             let mut generic_names = generic_names;
             // `sum`, `product`, `reduce`, `collect` and `cloned` read their
             // items as values, as on a named receiver (iterators.md).

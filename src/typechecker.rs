@@ -2452,6 +2452,11 @@ pub struct TypeCheckResult {
     /// Each trait method's `-> impl Trait` by its origin in the trait:
     /// `(trait, method)` (B-2026-10-20-32).
     pub trait_rpit_origins: FxHashMap<SpanKey, (String, String)>,
+    /// Each blanket trait impl over its own parameter (`impl[I: Iterator]
+    /// IntoIterator for I`), as `(trait, parameter)`. Its bindings in
+    /// `impl_trait_assoc_types` are keyed by the parameter's name; the MIR
+    /// builder reads them at a receiver with no impl of its own.
+    pub blanket_impls: Vec<(String, String)>,
     /// Sibling table to `pattern_binding_types` carrying the inner element
     /// `TypeExpr` for `Vec[T]` / `Slice[T]` pattern bindings only. Keyed by
     /// the same `SpanKey` (the pattern's span). Populated alongside the
@@ -4146,6 +4151,19 @@ impl<'a> TypeChecker<'a> {
         let distinct_bases = self.env.distinct_bases.clone();
         let impl_trait_assoc_types = self.impl_trait_assoc_types();
         let trait_rpit_origins = self.trait_rpit_origins();
+        let blanket_impls = self
+            .env
+            .impls
+            .iter()
+            .filter_map(|imp| {
+                let tr = imp.trait_name.as_ref()?;
+                let gp = imp.generic_params.as_ref()?;
+                gp.params
+                    .iter()
+                    .any(|p| p.name == imp.target_type)
+                    .then(|| (tr.clone(), imp.target_type.clone()))
+            })
+            .collect();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
@@ -4290,6 +4308,7 @@ impl<'a> TypeChecker<'a> {
             pattern_binding_types: self.pattern_binding_types,
             impl_trait_witness_types: self.impl_trait_return_witnesses.clone(),
             trait_rpit_origins,
+            blanket_impls,
             impl_trait_return_witnesses: self
                 .impl_trait_return_witnesses
                 .iter()

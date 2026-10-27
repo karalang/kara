@@ -756,6 +756,12 @@ const SPEC_AHEAD_STRING_METHODS: &[(&str, &str)] = &[
     ("split_once", "a `(Str, Str)` around the first match"),
     ("rsplit_once", "a `(Str, Str)` around the last match"),
     ("splitn", "at most n `Str` pieces"),
+    // B-2026-10-15-10: `String`'s `Extend[char]` and `Extend[String]` impls,
+    // in the Kāra library the v2 check and MIR read.
+    (
+        "extend",
+        "every char or string of a collection or iterator, appended",
+    ),
 ];
 
 #[test]

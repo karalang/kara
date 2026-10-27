@@ -21,7 +21,9 @@ use crate::token::Span;
 
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::{resolve_type_var_top, substitute_type_params};
-use super::types::{method_callee_type_name, type_display, IntSize, SubstValue, Type};
+use super::types::{
+    method_callee_type_name, type_display, types_compatible, IntSize, SubstValue, Type,
+};
 use super::{FixIt, TypeErrorKind};
 use crate::typechecker::type_to_concrete_or_param_name;
 use rustc_hash::FxHashMap;
@@ -721,9 +723,50 @@ impl<'a> super::TypeChecker<'a> {
         // detect Step-4 ambiguity (slice 3): >1 surviving candidate at
         // the same priority tier (e.g. two trait impls when no inherent
         // matches) emits AmbiguousMethod and returns Type::Error.
-        let candidates = self
+        // Impls of one generic trait at different arguments (`impl
+        // Extend[char] for String` beside `impl Extend[String] for String`):
+        // the one whose argument is the call's first argument, or the item
+        // it yields.
+        let same_trait = {
+            let c = self
+                .env
+                .find_methods_with_args(&type_name, &type_args, method);
+            c.len() > 1
+                && c.iter().all(|(imp, _)| {
+                    imp.trait_name.is_some()
+                        && imp.trait_name == c[0].0.trait_name
+                        && imp.trait_args.len() == 1
+                })
+        };
+        let first_arg = match args.first() {
+            Some(first) if same_trait => {
+                let mark = (self.errors.len(), self.warnings.len());
+                let at = self.infer_expr(&first.value);
+                self.errors.truncate(mark.0);
+                self.warnings.truncate(mark.1);
+                let at = self.read_as_value(&at);
+                let item = self.element_type_of(&at);
+                Some((at, item))
+            }
+            _ => None,
+        };
+        let mut candidates = self
             .env
             .find_methods_with_args(&type_name, &type_args, method);
+        if let Some((at, item)) = &first_arg {
+            let fits: Vec<_> = candidates
+                .iter()
+                .filter(|(imp, _)| {
+                    let want = &imp.trait_args[0];
+                    types_compatible(want, at)
+                        || (!matches!(item, Type::Error) && types_compatible(want, item))
+                })
+                .cloned()
+                .collect();
+            if fits.len() == 1 {
+                candidates = fits;
+            }
+        }
         let method_pick: Option<(ImplInfo, FunctionSig)> = if candidates.len() > 1 {
             // Render each candidate as `Trait.method(receiver)` (or
             // `Type.method(receiver)` for the rare inherent-vs-inherent

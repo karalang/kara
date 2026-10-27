@@ -5941,7 +5941,13 @@ impl<'a> super::TypeChecker<'a> {
             // reference to an as-yet-unsolved sibling param read as an
             // undefined type and emit a spurious diagnostic here, on a line
             // the user did not write.
-            let required = self.lower_type_expr(ty, all_param_names);
+            // A method's bound may name its impl's parameters too (`T` of
+            // `impl[T] Extend[T] for Set[T]`), which the receiver binds.
+            let mut scope = all_param_names.to_vec();
+            if let Some(receiver_subs) = &self.call_bound_receiver_subs {
+                scope.extend(receiver_subs.keys().filter(|k| *k != "Self").cloned());
+            }
+            let required = self.lower_type_expr(ty, &scope);
             // A method's bound names its receiver as `Self`
             // (`fn chain[J: Iterator[Item = Self.Item]]`), which the call's
             // receiver substitution supplies.
@@ -7016,6 +7022,30 @@ impl<'a> super::TypeChecker<'a> {
             // `T: GpuSafe` bound and the implicit `#[gpu]` constraint agree.
             "GpuSafe" => return self.is_gpu_safe_type(ty),
             _ => {}
+        }
+        // A blanket impl over its own parameter (`impl[I: Iterator]
+        // IntoIterator for I`, design.md §9) covers every type meeting the
+        // parameter's bounds. A bound naming the trait itself would only
+        // restate the question, so such an impl is not one.
+        if let Some(ix) = self.env.impls_by_trait.get(trait_name) {
+            let blanket = ix.iter().map(|&i| &self.env.impls[i]).any(|imp| {
+                let Some(p) = imp
+                    .generic_params
+                    .as_ref()
+                    .and_then(|g| g.params.iter().find(|p| p.name == imp.target_type))
+                else {
+                    return false;
+                };
+                !p.bounds.is_empty()
+                    && p.bounds.iter().all(|b| {
+                        b.path
+                            .last()
+                            .is_some_and(|b| b != trait_name && self.type_satisfies_bound(ty, b))
+                    })
+            });
+            if blanket {
+                return true;
+            }
         }
         // Other traits: explicit impl in the table, with supertrait closure.
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {

@@ -924,3 +924,19 @@ impl MulIdentity for f64 {
         1.0
     }
 }
+
+// design.md §9: every iterator is `IntoIterator` of itself, so an iterator
+// chain or a range goes wherever an `IntoIterator` does.
+impl[I: Iterator] IntoIterator for I {
+    type Item = I.Item;
+    fn into_iter(own self) -> I {
+        self
+    }
+}
+
+/// A collection that takes every item of a collection, an iterator chain or
+/// a range, in order (design.md §9). Each collection's `extend` is its impl
+/// of this trait.
+trait Extend[T] {
+    fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I);
+}

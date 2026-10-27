@@ -2816,6 +2816,11 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 (name, vec![(**element).clone()])
             }
+            // A blanket trait impl over its own parameter (`impl[I: Iterator]
+            // IntoIterator for I`, design.md §9) registers under the
+            // parameter's name; a bound asks it through the parameter's
+            // bounds (`type_satisfies_bound`), never by that name.
+            Type::TypeParam(name) if imp.trait_name.is_some() => (name.clone(), Vec::new()),
             // Non-path target types (`impl Foo for (i32, i32)` etc.) are
             // unsupported in v1; bail without registering. Matches the
             // pre-Theme-4 behavior of the path-only short-circuit.

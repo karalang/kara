@@ -111,6 +111,7 @@ Build a `Vec` from an iterator with `collect` ([iterators.md](iterators.md)).
 | `new` | `fn new() -> Map[K, V, H]` | Empty map |
 | `from` | `fn from(pairs: own Vec[(K, V)]) -> Map[K, V, H]` | Builds a map from key-value pairs |
 | `insert` | `fn insert(mut ref self, key: own K, val: own V) -> Option[V]` | Returns the previous value if the key was present |
+| `extend` | `fn extend[I: IntoIterator[Item = (K, V)]](mut ref self, items: own I)` | Inserts every pair, in order; a later pair replaces an earlier value, as `insert` does |
 | `get` | `fn get(self, key: K) -> Option[ref V]` | Lookup. For a `Copy` value, `m.get(k) ?? d` supplies a default and yields a `V` (`counts.get(word) ?? 0`); otherwise write `m.get(k).cloned() ?? d` |
 | `get_mut` | `fn get_mut(mut ref self, key: K) -> Option[mut ref V]` | Lookup for in-place change |
 | `remove` | `fn remove(mut ref self, key: K) -> Option[V]` | Removes and returns the value |
@@ -161,6 +162,7 @@ self.table.entry(key).or_insert_with(Vec.new).push(row);
 | `new` | `fn new() -> Set[T, H]` | Empty set |
 | `from` | `fn from(items: own Vec[T]) -> Set[T, H]` | Builds a set from a list; duplicates collapse |
 | `insert` | `fn insert(mut ref self, val: own T) -> bool` | `false` if already present |
+| `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Inserts every item |
 | `remove` | `fn remove(mut ref self, val: T) -> bool` | `true` if it was present |
 | `contains` | `fn contains(self, val: T) -> bool` | Membership test |
 | `len` | `fn len(self) -> i64` | Number of elements |
@@ -179,6 +181,7 @@ A B-tree map, `K: Ord`. Iteration is in ascending key order.
 |---|---|---|
 | `new` | `fn new() -> SortedMap[K, V]` | Empty map |
 | `insert` | `fn insert(mut ref self, key: own K, val: own V) -> Option[V]` | Returns the previous value if the key was present |
+| `extend` | `fn extend[I: IntoIterator[Item = (K, V)]](mut ref self, items: own I)` | Inserts every pair, in order; a later pair replaces an earlier value |
 | `get` | `fn get(self, key: K) -> Option[ref V]` | |
 | `remove` | `fn remove(mut ref self, key: K) -> Option[V]` | |
 | `contains_key` | `fn contains_key(self, key: K) -> bool` | |
@@ -202,6 +205,7 @@ A B-tree set, `T: Ord`. Every operation is O(log n), and iteration is in ascendi
 |---|---|---|
 | `new` | `fn new() -> SortedSet[T]` | Empty set |
 | `insert` | `fn insert(mut ref self, val: own T) -> bool` | `false` if already present |
+| `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Inserts every item |
 | `remove` | `fn remove(mut ref self, val: T) -> bool` | `true` if it was present |
 | `contains` | `fn contains(self, val: T) -> bool` | |
 | `min` | `fn min(self) -> Option[ref T]` | Smallest element |
@@ -300,7 +304,7 @@ Every collection works with `for`. A collection is `Iterable`, so `for x in c` b
 | `SortedMap[K, V]` | `(ref K, ref V)` | `(ref K, mut ref V)` | `(K, V)` | Ascending key |
 | `SortedSet[T]` | `ref T` | none | `T` | Ascending |
 
-`Set` and `SortedSet` have no `iter_mut`, because changing an element in place would break the hash or the ordering. `iter()` borrows the collection, `iter_mut()` borrows it mutably for the whole iteration, and `into_iter()` consumes it. Each returns `impl Iterator` with the item shown. `into_iter` is each collection's `IntoIterator` impl ([design.md § `Iterator` and `Iterable`](../design.md#iterator-and-iterable)), so a generic `C: IntoIterator[Item = T]` takes any of them.
+`Set` and `SortedSet` have no `iter_mut`, because changing an element in place would break the hash or the ordering. `iter()` borrows the collection, `iter_mut()` borrows it mutably for the whole iteration, and `into_iter()` consumes it. Each returns `impl Iterator` with the item shown. `into_iter` is each collection's `IntoIterator` impl ([design.md § `Iterator` and `Iterable`](../design.md#iterator-and-iterable)), so a generic `C: IntoIterator[Item = T]` takes any of them, and an iterator or range as well: every `Iterator` is `IntoIterator` of itself. Each collection's `extend` is likewise its `Extend` impl (`std.iter.Extend`, [design.md §9](../design.md#9-traits)), so `fn fill[C: Extend[i64]](c: mut ref C)` takes a `Vec`, `VecDeque`, `Set` or `SortedSet` of `i64`.
 
 ## Common traits
 

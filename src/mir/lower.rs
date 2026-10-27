@@ -1363,7 +1363,18 @@ impl<'a> Lcx<'a> {
                         })
                     });
                     let slice = target.is_none() && prim.is_none() && is_slice_impl(b);
-                    if target.is_none() && prim.is_none() && !slice {
+                    // A blanket trait impl over its own parameter (`impl[I:
+                    // Iterator] IntoIterator for I`): its methods are
+                    // instanced at a receiver (`blanket_method`).
+                    let blanket = target.is_none()
+                        && b.trait_name.is_some()
+                        && matches!(
+                            (&b.target_type.kind, &b.generic_params),
+                            (ast::TypeKind::Path(p), Some(g))
+                                if p.segments.len() == 1
+                                    && g.params.iter().any(|q| q.name == p.segments[0])
+                        );
+                    if target.is_none() && prim.is_none() && !slice && !blanket {
                         continue;
                     }
                     let impl_dispatch = dispatch_names
@@ -1568,6 +1579,26 @@ impl<'a> Lcx<'a> {
             _ => return None,
         };
         self.defs.lookup(0, wrapper)
+    }
+
+    /// Whether `d` is a method of a blanket trait impl over its own
+    /// parameter (`impl[I: Iterator] IntoIterator for I`), whose path is
+    /// `["<builtin>", "I", "impl IntoIterator#0", method]`.
+    fn is_blanket_fn(&self, d: DefId) -> bool {
+        let Some(i) = self.fns.get(&d) else {
+            return false;
+        };
+        let Some([p]) = i.impl_generics.map(|g| g.params.as_slice()) else {
+            return false;
+        };
+        let path = &self.defs.table.get(d).path.segments;
+        let n = path.len();
+        i.impl_target.is_none()
+            && i.impl_prim.is_none()
+            && n == 4
+            && path[0] == "<builtin>"
+            && path[1] == p.name
+            && path[2].starts_with("impl ")
     }
 
     fn def_name(&self, d: DefId) -> String {
@@ -2205,6 +2236,22 @@ impl<'a> Lcx<'a> {
                 }
             }
         };
+        // A blanket impl (`impl[I: Iterator] IntoIterator for I`) answers
+        // for a receiver with no impl of the trait of its own, with its
+        // parameter standing for the whole receiver.
+        if by_trait.is_none() {
+            if let Some(t) = trait_ {
+                let t = tcx.resolve_name(t).to_string();
+                let blanket = tc.blanket_impls.iter().find_map(|(bt, p)| {
+                    let key = (p.clone(), t.clone(), assoc.clone());
+                    (*bt == t).then(|| tc.impl_trait_assoc_types.get(&key).map(|e| (p, e)))?
+                });
+                if let Some((p, (bound, projs))) = blanket {
+                    let hir = self.lower_legacy(bound, std::slice::from_ref(p), Some(projs))?;
+                    return self.mir_ty(hir, &[base]);
+                }
+            }
+        }
         let (bound, projs) = match by_trait {
             Some((bound, projs)) => (bound, Some(projs)),
             None => match tc.impl_assoc_types.get(&(name.clone(), assoc.clone())) {
@@ -4193,6 +4240,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .flatten();
             let t = match seen {
                 Some(t) => t,
+                // A blanket impl's `self` is its parameter, the receiver.
+                None if self.lcx.is_blanket_fn(self.b.instance().def) => self.args[0],
                 None if self.lcx.fns[&self.b.instance().def].impl_slice => {
                     let elem = self.args[0];
                     self.tys().tcx().intern(HK::Slice {
@@ -17373,7 +17422,43 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let substs = self.lcx.tys.tcx().list(rc.substs);
                         self.instance_args(e.span, &substs)?
                     }
-                    None => Vec::new(),
+                    // A method with generics of its own (`extend[I]` of
+                    // `impl Extend[char] for String`) reads them off the
+                    // arguments, after the impl's off the receiver.
+                    None => {
+                        let rt = self.expr_ty(object)?;
+                        let item = &self.lcx.fns[&d];
+                        let own = item
+                            .f
+                            .generic_params
+                            .as_ref()
+                            .is_some_and(|g| !g.params.is_empty());
+                        let targs = match self.strip_ty_full(rt).0 {
+                            HK::Adt { args, .. }
+                            | HK::Shared { args, .. }
+                            | HK::Intrinsic { args, .. } => self.tys().tcx().list(args).to_vec(),
+                            _ => Vec::new(),
+                        };
+                        let inst = if item.impl_params == 0 {
+                            Vec::new()
+                        } else {
+                            item.impl_args(&targs).unwrap_or_default()
+                        };
+                        let ret = if self.lcx.node_types.contains_key(&e.id) {
+                            Some(self.expr_ty(e)?)
+                        } else {
+                            None
+                        };
+                        match own {
+                            true => {
+                                match self.own_generics_from_args(d, inst.clone(), args, ret)? {
+                                    Some((_, full)) => full,
+                                    None => inst,
+                                }
+                            }
+                            false => inst,
+                        }
+                    }
                 };
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
@@ -17412,6 +17497,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 None
             };
             if let Some((d, inst_args)) = self.generic_method_by_receiver(rt, method, args, ret)? {
+                return self.user_method_call(e, object, d, inst_args, args, dest);
+            }
+            if let Some((d, inst_args)) = self.blanket_method(e, rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
             // `c.try_into()` into a `Result[K, E]`: the user's `impl TryFrom
@@ -17691,6 +17779,34 @@ impl<'l, 'a> Bx<'l, 'a> {
             return None;
         }
         Some((d, item.impl_args(&targs)?))
+    }
+
+    /// A trait method called through a bound (`c.into_iter()` under `C:
+    /// IntoIterator`) on a receiver with no impl of the trait of its own: the
+    /// method of the trait's blanket impl over its own parameter
+    /// (`impl[I: Iterator] IntoIterator for I`), instanced at the receiver.
+    /// The checker has held the parameter's bounds.
+    fn blanket_method(&self, e: &Expr, recv: Ty, method: &str) -> Option<(DefId, Vec<Ty>)> {
+        let key = self
+            .lcx
+            .tc
+            .method_typeparam_trait_key
+            .get(&SpanKey::from_span(&e.span))?;
+        let tr = key.strip_suffix(&format!(".{method}"))?;
+        let label = format!("impl {tr}#");
+        let recv = match self.tys().tcx().kind(recv) {
+            HK::Ref(inner) | HK::MutRef(inner) => inner,
+            _ => recv,
+        };
+        let mut found = self.lcx.fns.iter().filter(|(&d, i)| {
+            let path = &self.lcx.defs.table.get(d).path.segments;
+            i.f.name == method
+                && self.lcx.is_blanket_fn(d)
+                && path.len() >= 2
+                && path[path.len() - 2].starts_with(&label)
+        });
+        let (&d, _) = found.next()?;
+        found.next().is_none().then(|| (d, vec![recv]))
     }
 
     /// The one impl method `method` of `recv` when it has generic parameters
