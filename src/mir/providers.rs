@@ -899,4 +899,7 @@ fn renumber(body: &mut Body, f: &impl Fn(Local) -> Local) {
     for p in &mut body.provided {
         p.local = f(p.local);
     }
+    for (l, _) in &mut body.fn_value_effects {
+        *l = f(*l);
+    }
 }

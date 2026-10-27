@@ -349,6 +349,19 @@ fn lower_program_inner<'a>(
                     .map(|f| (s.name.clone(), f.name.clone()))
             })
             .collect(),
+        fn_field_effects: program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::StructDef(s) => Some(s),
+                _ => None,
+            })
+            .flat_map(|s| {
+                s.fields.iter().filter_map(|f| {
+                    Some(((s.name.clone(), f.name.clone()), declared_effects(&f.ty)?))
+                })
+            })
+            .collect(),
         user_types,
         refined: program
             .items
@@ -874,6 +887,10 @@ struct Lcx<'a> {
     /// (struct, field): a table stored there walks as an annotated `let`'s
     /// does (B-2026-10-25-31).
     hashed_fields: FxHashSet<(String, String)>,
+    /// The struct fields whose function type declares an effect clause, as
+    /// (struct, field): a call through one has those effects (core
+    /// semantics §12, B-2026-10-27-2).
+    fn_field_effects: FxHashMap<(String, String), Vec<DeclaredEffect>>,
     /// The structs and enums the user's program declares, as opposed to
     /// the appended library's (`lower_program_with_library`).
     user_types: FxHashSet<String>,
@@ -4873,6 +4890,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                         let (op, t) = self.fn_value(value)?;
                         let l = self.user_local(name, t, pattern.id);
+                        self.note_declared_effects(l, ty.as_ref());
                         self.assign(l, Rvalue::Use(op));
                         self.pop_scope()?;
                         self.declare(l, t);
@@ -4888,6 +4906,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                     }
                     let l = self.user_local(name, t, pattern.id);
+                    self.note_declared_effects(l, ty.as_ref());
                     self.note_frozen(value, l);
                     let outer = self.let_scope.replace(self.scopes.len() - 1);
                     self.push_scope();
@@ -19913,6 +19932,46 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok((op, inner, name))
     }
 
+    /// A `let` binding `l` written with a function type that declares an
+    /// effect clause: a call through `l` has those effects
+    /// (B-2026-10-27-2).
+    fn note_declared_effects(&mut self, l: Local, ty: Option<&ast::TypeExpr>) {
+        if let Some(declared) = ty.and_then(declared_effects) {
+            self.b.fn_value_effects.push((l, declared));
+        }
+    }
+
+    /// The effect clause of the function value `callee` names, when its
+    /// written type declares one: a struct field's (`(j.run)(3)`) or an
+    /// annotated `let`'s (B-2026-10-27-2).
+    fn callee_effects(&mut self, callee: &'a Expr) -> Option<Vec<DeclaredEffect>> {
+        match &callee.kind {
+            ExprKind::FieldAccess { object, field } => {
+                let mut t = self.expr_ty(object).ok()?;
+                if let HK::Ref(i) | HK::MutRef(i) = self.tys().tcx().kind(t) {
+                    t = i;
+                }
+                let (adt, _) = self.tys().tcx().adt_of(t)?;
+                self.lcx
+                    .fn_field_effects
+                    .get(&(adt.name.clone(), field.clone()))
+                    .cloned()
+            }
+            ExprKind::Identifier(_) if self.is_local(callee) => {
+                let p = self.expr_place(callee, false).ok()?;
+                if !p.projection.is_empty() {
+                    return None;
+                }
+                self.b
+                    .fn_value_effects
+                    .iter()
+                    .find(|(l, _)| *l == p.local)
+                    .map(|(_, d)| d.clone())
+            }
+            _ => None,
+        }
+    }
+
     /// `f(args)` where `f` is a value: a closure (its body, with the
     /// environment first) or a function item (a direct call).
     fn call_value(
@@ -19985,6 +20044,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.assign(r, Rvalue::Ref(kind, p));
                     Operand::Copy(Place::local(r))
                 };
+                if let (Some(l), Some(declared)) = (func.place(), self.callee_effects(callee)) {
+                    self.b.fn_value_effects.push((l.local, declared));
+                }
                 let pts = self.tys().tcx().list(params).to_vec();
                 (func, Vec::new(), pts)
             }
@@ -21839,6 +21901,54 @@ fn token_texts(src: &str) -> Vec<String> {
 /// The appended library's `#[compiler_builtin]` functions are stdlib items,
 /// which the resolver lets carry the attribute; their bodies are
 /// placeholders, so they stay the interpreter's (`index_functions`).
+/// The effects a function type written `Fn(..) -> R with verb(Res), ..`
+/// declares, or `None` when it is not a function type, has no clause, or
+/// its clause names something other than plain verbs on plain resources
+/// (a group, an effect variable, `_`, a user verb, a keyed resource): a
+/// call through such a value keeps every effect (core semantics §12).
+fn declared_effects(te: &ast::TypeExpr) -> Option<Vec<DeclaredEffect>> {
+    let ast::TypeKind::FnType {
+        effect_spec: Some(ast::EffectSpec::Specific(list)),
+        ..
+    } = &te.kind
+    else {
+        return None;
+    };
+    let mut out = Vec::new();
+    for item in &list.items {
+        let ast::EffectItem::Verb(v) = item else {
+            return None;
+        };
+        let verb = match &v.kind {
+            ast::EffectVerbKind::Reads => "reads",
+            ast::EffectVerbKind::Writes => "writes",
+            ast::EffectVerbKind::Sends => "sends",
+            ast::EffectVerbKind::Receives => "receives",
+            ast::EffectVerbKind::Allocates => "allocates",
+            ast::EffectVerbKind::Panics => "panics",
+            ast::EffectVerbKind::Blocks => "blocks",
+            ast::EffectVerbKind::Suspends => "suspends",
+            ast::EffectVerbKind::UserDefined(_) => return None,
+        };
+        if v.resources.is_empty() {
+            out.push(DeclaredEffect {
+                verb: verb.to_string(),
+                resource: String::new(),
+            });
+        }
+        for r in &v.resources {
+            if r.param.is_some() {
+                return None;
+            }
+            out.push(DeclaredEffect {
+                verb: verb.to_string(),
+                resource: r.path.join("."),
+            });
+        }
+    }
+    Some(out)
+}
+
 pub(crate) fn mark_library_builtins(program: &mut ast::Program, user_len: usize) {
     let mark = |f: &mut ast::Function| {
         if f.span.offset >= user_len && f.attributes.iter().any(|a| a.is_bare("compiler_builtin")) {

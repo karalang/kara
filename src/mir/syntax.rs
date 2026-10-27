@@ -152,6 +152,24 @@ pub struct Body {
     /// after it can drop a maybe-initialized place the same way
     /// (`coroutine` does, in `drop_frame`). Empty before elaboration.
     pub drop_flags: Vec<(Place, Local)>,
+    /// The locals holding a function value whose written type declares an
+    /// effect clause (`run: Fn(i64) -> i64 with reads(Clock)`, core
+    /// semantics §12), with the clause: each local a call's `func` operand
+    /// names, and each annotated `let` binding. A call through a value with
+    /// no entry has every effect, as one with no clause does: a clause the
+    /// builder cannot carry (a keyed resource, a user-defined verb) leaves
+    /// none (B-2026-10-27-2).
+    pub fn_value_effects: Vec<(Local, Vec<DeclaredEffect>)>,
+}
+
+/// One effect of a function type's `with` clause, as written: the verb's
+/// name (`reads`) and the resource's path joined by `.` (`Clock`, empty
+/// for a verb written with none, such as `panics`). A resource is a class
+/// here, never a value: a type names no value to key it by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredEffect {
+    pub verb: String,
+    pub resource: String,
 }
 
 impl Body {

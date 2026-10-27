@@ -308,6 +308,7 @@ fn dstart(body: &Body, tys: &TyInterner, polls: &mut BTreeMap<Ty, Ty>) -> Body {
         par_regions: Vec::new(),
         suspends: false,
         drop_flags: Vec::new(),
+        fn_value_effects: Vec::new(),
     }
 }
 
@@ -1225,6 +1226,7 @@ fn task_body(c: &Body, tys: &TyInterner, handed: bool) -> Result<Body, String> {
         provided: Vec::new(),
         suspends: false,
         drop_flags: vec![],
+        fn_value_effects: Vec::new(),
     })
 }
 
@@ -2548,6 +2550,7 @@ impl<'a> Resume<'a> {
                 .collect(),
             suspends: false,
             drop_flags: Vec::new(),
+            fn_value_effects: Vec::new(),
         })
     }
 }
@@ -2789,6 +2792,7 @@ fn drop_frame(
         provided: Vec::new(),
         suspends: false,
         drop_flags: Vec::new(),
+        fn_value_effects: Vec::new(),
     })
 }
 

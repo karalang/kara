@@ -633,6 +633,7 @@ impl Parser {
             provided: Vec::new(),
             suspends,
             drop_flags: Vec::new(),
+            fn_value_effects: Vec::new(),
         };
         for line in par_lines {
             let r = self

@@ -336,6 +336,7 @@ fn init_body(body: &Body, table: &Table, name: &str) -> Body {
         provided: Vec::new(),
         suspends: false,
         drop_flags: Vec::new(),
+        fn_value_effects: Vec::new(),
     }
 }
 

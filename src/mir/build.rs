@@ -22,6 +22,8 @@ pub struct BodyBuilder {
     pub provided: Vec<ProvidedRegion>,
     /// See [`Body::suspends`].
     pub suspends: bool,
+    /// See [`Body::fn_value_effects`].
+    pub fn_value_effects: Vec<(Local, Vec<DeclaredEffect>)>,
 }
 
 impl BodyBuilder {
@@ -53,6 +55,7 @@ impl BodyBuilder {
             auto_par_candidates: Vec::new(),
             provided: Vec::new(),
             suspends: false,
+            fn_value_effects: Vec::new(),
         }
     }
 
@@ -202,6 +205,7 @@ impl BodyBuilder {
             provided: self.provided,
             suspends: self.suspends,
             drop_flags: Vec::new(),
+            fn_value_effects: self.fn_value_effects,
         })
     }
 }
