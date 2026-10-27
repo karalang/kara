@@ -2370,6 +2370,7 @@ fn main() -> () {
         let not_mir = [
             "err_par_conflict",
             "err_partial_move_drop_type",
+            "err_enum_payload_drop_type_into_constructor",
             "err_fn_value_shared_crosses_task",
             "err_fn_kind_mismatch",
         ];
