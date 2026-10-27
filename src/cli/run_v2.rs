@@ -422,8 +422,9 @@ pub(super) struct RuntimeReports {
     /// after it).
     pub(super) error: Option<String>,
     pub(super) faults: Vec<Fault>,
-    /// Each frame's place and the `?` expression it returned through.
-    trace: Vec<((String, usize, usize), Option<String>)>,
+    /// Each frame's place, the `?` expression it returned through, and
+    /// its `.context()` message.
+    trace: Vec<TraceFrame>,
     truncated: bool,
     /// Why the trace has no frames to show: its `?` chain ran across
     /// tasks (design.md § Error return traces, B-2026-10-25-30).
@@ -441,13 +442,40 @@ fn location(s: &str) -> Option<(String, usize, usize)> {
     Some((file, line, col))
 }
 
-/// `FILE:LINE:COL  EXPR`, a trace frame; a frame from a build without the
-/// expression's text has the place alone.
-fn trace_frame(s: &str) -> Option<((String, usize, usize), Option<String>)> {
-    match s.split_once("  ") {
-        Some((place, expr)) => Some((location(place)?, Some(expr.to_string()))),
-        None => Some((location(s)?, None)),
+/// A trace frame: its place, the `?` expression and a `.context(msg)`
+/// site's message.
+type TraceFrame = ((String, usize, usize), Option<String>, Option<String>);
+
+/// `FILE:LINE:COL  EXPR`, a trace frame, with `  context: MSG` after it at a
+/// `.context(msg)` site (`\\` and `\n` escaped, B-2026-10-25-44); a frame
+/// from a build without the expression's text has the place alone.
+fn trace_frame(s: &str) -> Option<TraceFrame> {
+    let mut parts = s.splitn(3, "  ");
+    let at = location(parts.next()?)?;
+    let expr = parts.next().map(str::to_string);
+    let context = match parts.next() {
+        Some(c) => Some(unescape_context(c.strip_prefix("context: ")?)),
+        None => None,
+    };
+    Some((at, expr, context))
+}
+
+/// A context message as a trace frame writes it, read back.
+fn unescape_context(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
     }
+    out
 }
 
 impl RuntimeReports {
@@ -527,13 +555,13 @@ impl RuntimeReports {
         let frames = self
             .trace
             .iter()
-            .map(|((file, line, column), expr)| {
-                // No `.context()` exists in the v2 library yet, so a frame
-                // never carries one.
+            .map(|((file, line, column), expr, context)| {
+                let or_null = |s: &Option<String>| s.as_deref().map_or("null".to_string(), json_string);
                 format!(
-                    "{{\"file\":{},\"line\":{line},\"column\":{column},\"expr\":{},\"context\":null}}",
+                    "{{\"file\":{},\"line\":{line},\"column\":{column},\"expr\":{},\"context\":{}}}",
                     json_string(file),
-                    expr.as_deref().map_or("null".to_string(), json_string)
+                    or_null(expr),
+                    or_null(context)
                 )
             })
             .collect::<Vec<_>>()

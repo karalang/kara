@@ -145,6 +145,10 @@ const ALWAYS_KEPT: &[&str] = &[
     "__closed",
     "try_recv",
     "try_send",
+    // The builder recognises a `?` on `Result.context(msg)` by name, to put
+    // `msg` in the error return trace (B-2026-10-25-44). It calls nothing,
+    // and a program that writes `.context(` keeps it anyway.
+    "context",
 ];
 
 pub fn enabled() -> bool {

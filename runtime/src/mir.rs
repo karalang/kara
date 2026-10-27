@@ -2479,14 +2479,19 @@ const ERROR_TRACE_DEPTH: usize = 64;
 /// What the trace reads when its `?` chain ran across tasks.
 const ERROR_TRACE_SPLIT: &str = "unavailable (the ? chain was split across parallel tasks)";
 
+/// A trace frame: its place's address and length, its task, and its
+/// `.context()` message.
+type TraceFrame = (usize, usize, Option<u64>, Option<Box<str>>);
+
 /// The thread's error return trace (the program's under the pool, whose
 /// tasks move between workers): the place (`file:line:col`, a string
 /// constant of the program, as its address and length) of each `?` that
 /// returned an error since the last one that succeeded, oldest first, with
-/// the task that ran it (`None` outside a task); and whether it dropped its
-/// oldest frames to stay [`ERROR_TRACE_DEPTH`] deep.
+/// the task that ran it (`None` outside a task) and the message of a
+/// `.context(msg)` site; and whether it dropped its oldest frames to stay
+/// [`ERROR_TRACE_DEPTH`] deep.
 struct ErrorTrace {
-    frames: Vec<(usize, usize, Option<u64>)>,
+    frames: Vec<TraceFrame>,
     truncated: bool,
 }
 
@@ -2511,6 +2516,38 @@ pub unsafe extern "C" fn karac_mir_error_trace_push(
     at_len: u64,
     live: *const std::sync::atomic::AtomicU64,
 ) {
+    // SAFETY: the caller's contract.
+    unsafe { error_trace_push(at, at_len, live, None) }
+}
+
+/// [`karac_mir_error_trace_push`] for a `.context(msg)` site: the frame
+/// keeps a copy of `msg` (design.md § Errors, B-2026-10-25-44).
+///
+/// # Safety
+/// As for [`karac_mir_error_trace_push`], and `msg` is readable for
+/// `msg_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_error_trace_push_context(
+    at: *const u8,
+    at_len: u64,
+    live: *const std::sync::atomic::AtomicU64,
+    msg: *const u8,
+    msg_len: u64,
+) {
+    // SAFETY: the caller's contract.
+    let msg = String::from_utf8_lossy(unsafe { bytes(msg, msg_len as usize) });
+    // SAFETY: the caller's contract.
+    unsafe { error_trace_push(at, at_len, live, Some(msg.into())) }
+}
+
+/// # Safety
+/// As for [`karac_mir_error_trace_push`].
+unsafe fn error_trace_push(
+    at: *const u8,
+    at_len: u64,
+    live: *const std::sync::atomic::AtomicU64,
+    context: Option<Box<str>>,
+) {
     let task = crate::mir_task::current_task();
     ERROR_TRACE.with(|t| {
         if t.frames.is_empty() {
@@ -2521,7 +2558,7 @@ pub unsafe extern "C" fn karac_mir_error_trace_push(
             t.frames.remove(0);
             t.truncated = true;
         }
-        t.frames.push((at as usize, at_len as usize, task));
+        t.frames.push((at as usize, at_len as usize, task, context));
     });
 }
 
@@ -2560,8 +2597,19 @@ fn error_trace_text(last: Option<&str>) -> String {
         let mut frames: Vec<std::borrow::Cow<'_, str>> = t
             .frames
             .iter()
-            // SAFETY: `karac_mir_error_trace_push`'s contract.
-            .map(|&(p, n, _)| String::from_utf8_lossy(unsafe { bytes(p as *const u8, n) }))
+            .map(|(p, n, _, context)| {
+                // SAFETY: `karac_mir_error_trace_push`'s contract.
+                let at = String::from_utf8_lossy(unsafe { bytes(*p as *const u8, *n) });
+                match context {
+                    // `run`'s JSON reads the message back from this text.
+                    Some(c) => format!(
+                        "{at}  context: {}",
+                        c.replace('\\', "\\\\").replace('\n', "\\n")
+                    )
+                    .into(),
+                    None => at,
+                }
+            })
             .collect();
         let mut truncated = t.truncated;
         if let Some(at) = last {

@@ -12405,7 +12405,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         );
         let traced = self.traces_question(e.span);
         if traced {
-            self.error_trace("error_trace_push", e.span);
+            let context = self.trace_context(inner, &p, it, err);
+            self.error_trace("error_trace_push", e.span, context);
         }
         // Error path: rebuild the error in the return type.
         let ret_ty = self.fn_ret_ty();
@@ -12480,7 +12481,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // Success path: move the payload out.
         self.cur = ok_bb;
         if traced {
-            self.error_trace("error_trace_clear", e.span);
+            self.error_trace("error_trace_clear", e.span, None);
         }
         let Some(pt) = self.tys().tcx().field_ty(it, Some(ok), 0) else {
             self.assign(dest, Rvalue::Use(unit_const(self.unit())));
@@ -14059,9 +14060,52 @@ impl<'l, 'a> Bx<'l, 'a> {
             && !release_strips("KARAC_STRIP_ERROR_TRACE")
     }
 
+    /// The message of `r.context(msg)?`, the `?`'s operand being the
+    /// library's `context` on a `Result[T, AnyError]`: a `ref` to the last
+    /// context message of the error at `p` (of type `it`, variant `err`),
+    /// which that call has just pushed (design.md § Errors, "A site with
+    /// `.context()` fills `\"context\"`", B-2026-10-25-44). `None` for any
+    /// other `?`.
+    fn trace_context(&mut self, inner: &Expr, p: &Place, it: Ty, err: u32) -> Option<Operand> {
+        let ExprKind::MethodCall { method, .. } = &inner.kind else {
+            return None;
+        };
+        // The library's own `context`, which pushes the message it is
+        // given; a program's method of that name may not.
+        let library = |d: &DefId| {
+            self.lcx
+                .fns
+                .get(d)
+                .is_some_and(|i| self.lcx.user_len.is_some_and(|n| i.f.span.offset >= n))
+        };
+        if method != "context"
+            || !matches!(self.lcx.calls.get(&inner.id), Some(rc) if matches!(&rc.callee, Callee::Def(d) if library(d)))
+        {
+            return None;
+        }
+        let tcx = self.tys().tcx();
+        let any = tcx.field_ty(it, Some(err), 0)?;
+        let (adt, _) = tcx.adt_of(any)?;
+        if adt.name != "AnyError" {
+            return None;
+        }
+        let (idx, msgs) = self.field_of(any, None, "context")?;
+        let (string, _) = self.seq_of(msgs)?;
+        let error = p
+            .project(ProjElem::Downcast(VariantIdx(err)))
+            .field(0, any)
+            .field(idx, msgs);
+        let last = self.seq_elem(&error, msgs, SeqPos::End(1)).ok()?;
+        let rt = self.tys().tcx().reference(string, false);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, last));
+        Some(Operand::Move(Place::local(r)))
+    }
+
     /// `error_trace_push(line, col, expr)` of the `?` at `at`, on its error
-    /// path, or `error_trace_clear()` on its success path.
-    fn error_trace(&mut self, name: &str, at: Span) {
+    /// path, with the `.context()` message of its site when it has one, or
+    /// `error_trace_clear()` on its success path.
+    fn error_trace(&mut self, name: &str, at: Span, context: Option<Operand>) {
         let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
         let int = |n: usize| {
             Operand::Const(Const {
@@ -14080,7 +14124,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ");
-            vec![int(at.line), int(at.column), self.static_str(&expr)]
+            let mut args = vec![int(at.line), int(at.column), self.static_str(&expr)];
+            args.extend(context);
+            args
         } else {
             Vec::new()
         };

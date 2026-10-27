@@ -927,7 +927,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             // A `?`'s record in the error return trace: its place on the
             // error path, a clear on the success path (B-2026-10-25-3).
-            ("error_trace_push", "") if args.len() == 3 => {
+            ("error_trace_push", "") if matches!(args.len(), 3 | 4) => {
                 let int = |a: &Operand| match a {
                     Operand::Const(Const {
                         kind: ConstKind::Scalar(n),
@@ -951,7 +951,18 @@ impl<'ctx> Cx<'ctx, '_> {
                 };
                 let (text, len) = self.str_const(&frame)?;
                 let live = self.error_trace_live();
-                self.rt("error_trace_push", &[text.into(), len.into(), live.into()])
+                // A `.context(msg)` site's message, a `ref String` the
+                // runtime copies (B-2026-10-25-44).
+                match args.get(3) {
+                    Some(msg) => {
+                        let (m, n) = self.str_parts(msg)?;
+                        self.rt(
+                            "error_trace_push_context",
+                            &[text.into(), len.into(), live.into(), m.into(), n.into()],
+                        )
+                    }
+                    None => self.rt("error_trace_push", &[text.into(), len.into(), live.into()]),
+                }
             }
             // A table whose type names a hasher walks in an order no
             // process key moves (B-2026-10-24-29).
