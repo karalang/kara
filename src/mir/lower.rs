@@ -1961,6 +1961,19 @@ impl<'a> Lcx<'a> {
         }
     }
 
+    /// The name of `name`'s in-order twin, queued on first ask
+    /// ([`Bx::one_worker_twin`]).
+    fn seq_twin(&mut self, def: DefId, args: &[Ty], name: &str) -> String {
+        let seq = format!("{name}{SEQ_TWIN}");
+        if self.queued.insert(seq.clone()) {
+            if let Some(p) = self.fn_param_tys.get(name).cloned() {
+                self.fn_param_tys.insert(seq.clone(), p);
+            }
+            self.queue.push((def, args.to_vec(), seq.clone()));
+        }
+        seq
+    }
+
     fn lower_instance(&mut self, def: DefId, args: &[Ty], name: &str) {
         let Some(item) = self.fns.get(&def) else {
             self.errors.push(format!("no body for `{name}`"));
@@ -3804,6 +3817,7 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// End the current block with `kind`; continue in `next`.
     fn goto_with(&mut self, mut kind: TerminatorKind, next: BasicBlock) {
+        self.seq_world_call(&mut kind);
         let cancel = self.cancel_point(&mut kind);
         let bb = self.cur;
         self.b.terminate(bb, kind);
@@ -4473,6 +4487,94 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// In an in-order twin, a call of a function calls that function's
+    /// twin ([`Self::one_worker_twin`]).
+    fn seq_world_call(&mut self, kind: &mut TerminatorKind) {
+        if !self.name.ends_with(SEQ_TWIN) {
+            return;
+        }
+        let TerminatorKind::Call {
+            func:
+                Operand::Const(Const {
+                    kind: ConstKind::FnDef(callee),
+                    ..
+                }),
+            ..
+        } = kind
+        else {
+            return;
+        };
+        if !self.lcx.fns.contains_key(&callee.def) {
+            return;
+        }
+        callee.name = self.lcx.seq_twin(callee.def, &callee.args, &callee.name);
+    }
+
+    /// A function with auto-par sites is built twice (B-2026-10-26-17): as
+    /// written here, and as `<name>#seq`, which has no hints and so is the
+    /// body `KARAC_AUTO_PAR=0` builds. This one starts by asking the pool
+    /// whether it runs more than one worker (`KARAC_THREADS`, else the core
+    /// count) and, when it does not, returns what the twin returns. On one
+    /// worker the tasks only cost, and not at the sites alone: a value a
+    /// task captures escapes, so even the function's other loops lose what
+    /// the in-order build keeps (kata 28's needle stays in registers), and
+    /// a reduction tracks its wide sum per term; every caller of a
+    /// function with tasks is a coroutine; and a function a task calls has
+    /// one caller more, which changes what is inlined where (kata 8's
+    /// `my_atoi` stayed a call). So a function that has a site, or calls
+    /// one that does, starts with the question, and a twin calls only
+    /// twins ([`Bx::seq_world_call`]): a one-worker run enters an in-order
+    /// copy of the program at the first such function, `main` when it is
+    /// one, and runs the instructions the in-order build runs (kata 28's
+    /// KMP: 4,602,427,749 in order, 4,602,440,804 through the twins). A
+    /// closure's sites keep the task form.
+    fn one_worker_twin(&mut self, arg_locals: &[Local]) {
+        let AutoPar::Apply(hints) = &self.lcx.auto_par else {
+            return;
+        };
+        if self.name.ends_with(SEQ_TWIN)
+            || self.par_exit.is_some()
+            || !hints.affected.contains(&self.name)
+        {
+            return;
+        }
+        let InstanceId { def, args, .. } = self.b.instance().clone();
+        let seq = self.lcx.seq_twin(def, &args, &self.name);
+        let bool_t = self.tys().bool();
+        let pooled = self.temp(bool_t);
+        self.call_native(POOLED, Vec::new(), Place::local(pooled));
+        let (par, alone, done) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(pooled)),
+                targets: SwitchTargets::if_else(par, alone),
+            },
+            alone,
+        );
+        // Every argument goes to the twin: a borrow is copied, a value
+        // moved, so this exit has nothing left to drop.
+        let ops = arg_locals
+            .iter()
+            .map(|&l| match self.tys().tcx().kind(self.b.local_ty(l)) {
+                HK::Ref(_) | HK::MutRef(_) => Operand::Copy(Place::local(l)),
+                _ => Operand::Move(Place::local(l)),
+            })
+            .collect();
+        let func = self.fn_operand(&seq, def, args);
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: Place::local(Local::RETURN_PLACE),
+                target: Some(done),
+                unwind: UnwindAction::Abort,
+            },
+            done,
+        );
+        self.b.terminate(self.cur, TerminatorKind::Return);
+        self.cur = par;
+    }
+
     fn lower_fn(
         &mut self,
         f: &'a Function,
@@ -4490,6 +4592,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         self.impl_target = impl_target;
         self.push_scope();
+        let mut arg_locals = Vec::new();
         if let Some(mode) = &f.self_param {
             let seen = impl_target
                 .is_none_or(|(_, n)| n == 0)
@@ -4535,6 +4638,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             let l = self.b.arg("self", t);
             self.self_local = Some(l);
+            arg_locals.push(l);
             if self.needs_drop(t) {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
@@ -4552,6 +4656,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             let PatternKind::Binding(name) = &p.pattern.kind else {
                 let l = self.b.arg("arg", t);
+                arg_locals.push(l);
                 if self.needs_drop(t) {
                     self.schedule(ScopeEntry::Drop(Place::local(l)));
                 }
@@ -4559,6 +4664,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 continue;
             };
             let l = self.b.arg(name, t);
+            arg_locals.push(l);
             if let Some(&sym) = self.lcx.binding_syms.get(&(p.pattern.id, name.clone())) {
                 self.locals.insert(sym, l);
             }
@@ -4566,6 +4672,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
         }
+        self.one_worker_twin(&arg_locals);
         self.bind_destructured(destructured)?;
         if self
             .lcx
@@ -22972,6 +23079,7 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<Lowered, String> {
     let mut hints = AutoParHints::of(&verdicts);
     hints.observes_capacity = src.contains("capacity(");
     while !hints.is_empty() {
+        hints.note_affected(&first.program);
         let second = match lower_source_for_checks(src, false, AutoPar::Apply(hints.clone()))
             .and_then(finish_build)
         {
@@ -23056,6 +23164,13 @@ pub fn build_source_recording(src: &str) -> Result<Lowered, String> {
     finish_build(lower_source_for_checks(src, false, AutoPar::Record)?)
 }
 
+/// The suffix of a function's in-order twin ([`Bx::one_worker_twin`]).
+pub(crate) const SEQ_TWIN: &str = "#seq";
+
+/// `__pooled()`: whether the task pool runs more than one worker
+/// ([`Bx::one_worker_twin`]).
+pub(crate) const POOLED: &str = "__pooled";
+
 /// What a build does about automatic parallelism (M4 item 14).
 #[derive(Clone)]
 pub(crate) enum AutoPar {
@@ -23079,6 +23194,10 @@ pub(crate) struct AutoParHints {
     /// tasks would change: they grow their own `Vec`s, which the join then
     /// appends, where the loop grew one by its pushes.
     observes_capacity: bool,
+    /// The instances that have a site or call one that does, directly or
+    /// through other functions: each gets an in-order twin
+    /// ([`Bx::one_worker_twin`]).
+    affected: FxHashSet<String>,
 }
 
 impl AutoParHints {
@@ -23102,7 +23221,48 @@ impl AutoParHints {
             loops,
             stmts,
             observes_capacity: false,
+            affected: FxHashSet::default(),
         }
+    }
+
+    /// Fill [`Self::affected`] from the calls of `program`, the in-order
+    /// build: the instances with a site, and every function that calls one
+    /// of those, by name, transitively.
+    fn note_affected(&mut self, program: &interp::Program) {
+        let mut callers: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
+        for (name, body) in &program.bodies {
+            for bb in &body.blocks {
+                if let TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(callee),
+                            ..
+                        }),
+                    ..
+                } = &bb.terminator.kind
+                {
+                    callers.entry(callee.name.as_str()).or_default().push(name);
+                }
+            }
+        }
+        let mut affected: FxHashSet<String> = FxHashSet::default();
+        let mut work: Vec<String> = self
+            .loops
+            .keys()
+            .chain(self.stmts.keys())
+            .map(|(n, ..)| n.clone())
+            .collect();
+        while let Some(n) = work.pop() {
+            if !affected.insert(n.clone()) {
+                continue;
+            }
+            for c in callers.get(n.as_str()).into_iter().flatten() {
+                if !affected.contains(*c) {
+                    work.push(c.to_string());
+                }
+            }
+        }
+        self.affected = affected;
     }
 
     fn is_empty(&self) -> bool {

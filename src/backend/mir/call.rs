@@ -858,8 +858,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 let again = self.rt_flag("io_again", &[])?;
                 self.store_bool(dest, again)
             }
-            // A task's teardown (core-semantics §11.9, `coroutine::CANCELLED`).
-            ("__cancelled" | "__unwinding", "") => {
+            // A task's teardown (core-semantics §11.9, `coroutine::CANCELLED`),
+            // and whether the pool runs more than one worker (`lower::POOLED`).
+            ("__cancelled" | "__unwinding" | "__pooled", "") => {
                 let name = &base[2..];
                 let on = self.rt_flag(name, &[])?;
                 self.store_bool(dest, on)

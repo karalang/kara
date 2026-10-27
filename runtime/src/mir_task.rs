@@ -614,6 +614,14 @@ fn pooled_first(mode: &AtomicU8) -> bool {
     pooled
 }
 
+/// `__pooled()`: whether the pool runs more than one worker, which a
+/// function with auto-par sites asks on entry and, when not, runs its
+/// in-order twin instead (B-2026-10-26-17).
+#[no_mangle]
+pub extern "C" fn karac_mir_pooled() -> u8 {
+    pooled() as u8
+}
+
 /// The workers a program runs on when `KARAC_THREADS` is unset: one per
 /// core the process may use (M4, Gowtham 2026-10-26); `KARAC_THREADS=1`
 /// opts out. One on wasm, where the pool has no threads to start. One in

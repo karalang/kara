@@ -337,6 +337,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_group_deadline,
         mir_task::karac_mir_cancelled,
         mir_task::karac_mir_unwinding,
+        mir_task::karac_mir_pooled,
         mir_task::karac_mir_unwind,
         mir_task::karac_mir_mutex_ready,
         mir_task::karac_mir_mutex_acquire,
