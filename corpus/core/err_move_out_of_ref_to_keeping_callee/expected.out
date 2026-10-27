@@ -1,0 +1,1 @@
+ERROR at line 11: cannot move `w.r` out of a borrowed place into an owned parameter; take a copy with `.clone()` or keep using it in place (§3.7)

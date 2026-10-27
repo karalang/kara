@@ -1,0 +1,15 @@
+source = "ledger/B-2026-09-26-56"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["move-from-borrow"]
+class = "a"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = ["3.7"]
+backends = []
+env = {}
+note = "A borrowed field passed to an own parameter that keeps it is an error (C3). Legacy copied the field, ran its Drop body twice and warned only for Vec.push and trait associated functions."
+bucket = "a:refused"
+classified_with = "1857b7091"

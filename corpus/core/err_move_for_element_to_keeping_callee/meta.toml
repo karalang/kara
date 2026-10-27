@@ -1,0 +1,15 @@
+source = "ledger/B-2026-09-27-80"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["move-from-borrow"]
+class = "a"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = ["3.7"]
+backends = []
+env = {}
+note = "A bare for element passed to an own parameter that keeps it is an error (C3). Legacy copied the element, ran its Drop body twice and gave no warning for a free-function callee."
+bucket = "a:refused"
+classified_with = "1857b7091"

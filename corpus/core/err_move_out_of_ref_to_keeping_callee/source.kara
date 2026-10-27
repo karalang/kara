@@ -1,0 +1,18 @@
+struct D { id: i64 }
+impl Drop for D {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+struct W { r: D }
+struct K { items: Vec[D] }
+impl K {
+    fn put(mut ref self, x: own D) { self.items.push(x); }
+}
+fn k(w: ref W, kk: mut ref K) {
+    kk.put(w.r);
+}
+fn main() {
+    let w = W { r: D { id: 1 } };
+    let mut kk = K { items: Vec.new() };
+    k(w, mut kk);
+    println(f"{kk.items.len()}");
+}

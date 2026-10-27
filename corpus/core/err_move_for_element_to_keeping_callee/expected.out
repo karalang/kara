@@ -1,0 +1,1 @@
+ERROR at line 9: cannot move `g` into an owned parameter: a bare `for` element borrows its value; iterate with `v.into_iter()` to move the elements out (§3.7)

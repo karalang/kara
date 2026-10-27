@@ -1,0 +1,12 @@
+struct D { id: i64 }
+impl Drop for D {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+fn keep(x: own D) -> D { x }
+fn main() {
+    let v = vec![D { id: 1 }, D { id: 2 }];
+    for g in v {
+        let o = keep(g);
+        println(f"kept {o.id}");
+    }
+}
