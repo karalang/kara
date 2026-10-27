@@ -210,8 +210,11 @@ fn main() {
     println("done");
 }
 "#;
+    // One worker: task `r` prints `drop r` as it ends, and on the pool
+    // whether that comes before or after main's `q err` line is
+    // unspecified (core-semantics §11.1; 1 in 300 runs, B-2026-10-27-17).
     assert_eq!(
-        stdout_on_both("every", src),
+        stdout_on_both_env("every", src, &[("KARAC_THREADS", "1")]),
         "drop r\nq err not a number\nr ok 7\nu panicked: called unwrap() on None\n\
          o panicked: integer overflow\ni panicked: index out of bounds\nm panicked: no twos\n\
          t 5\ndone\n"
