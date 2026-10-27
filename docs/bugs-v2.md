@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 48 |
 | diagnostics | 38 |
 | missing-feature | 33 |
-| soundness | 14 |
+| soundness | 15 |
 | perf | 13 |
 | miscompile | 10 |
 | run-vs-build | 9 |
@@ -73,7 +73,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 71 |
+| typecheck | 72 |
 | mir | 37 |
 | codegen | 22 |
 | interp | 20 |
@@ -108,6 +108,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-10 | 2026-10-27 | mir | medium | A trait impl's method named like an inherent method of the same type shares its MIR instance name (`Bag.into_iter`), so a call through the bound (`c.into_iter()` under `C: IntoIterator`) runs the inherent body: prints 7 where the trait impl's body gives 100 | — |
 | B-2026-10-27-11 | 2026-10-27 | typecheck+mir | medium | `Iterable` (design.md § `Iterator` and `Iterable`, a lang-item trait: `type Item; fn iter(self) -> impl Iterator[Item = Self.Item]`) does not exist, so `for x in c` over a user collection cannot borrow it: `impl Iterable for Bag` is 'undefined type Iterable' | — |
 | B-2026-10-27-12 | 2026-10-27 | ownership+mir | low | Passing a function value held in a collection element to a non-escaping function-typed parameter (`apply(v[0], 4)` over `fn apply(f: Fn(i64) -> i64, x: i64)`) is refused as a move out of the element, where core-semantics §4.1 / §9.3 make a bare `Fn` parameter a borrow | — |
+| B-2026-10-27-13 | 2026-10-27 | typecheck | medium | The library's operator traits are declared without the spec's `Rhs` parameter and `Output` type (runtime/stdlib/add.kara: `trait Add { fn add(own self, rhs: own Self) -> Self; }`; design.md § Operator Traits: `trait Add[Rhs = Self] { type Output; fn add(own self, rhs: own Rhs) -> Self.Output; }`), so an operator impl's signature cannot be checked against its trait: `impl Add for I { type Output = I; fn add(own self, rhs: own D) -> I }` (the spec needs `Add[D]`) passes check and `I + D` runs | — |
 
 ### Relocated
 
