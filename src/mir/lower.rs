@@ -1259,6 +1259,11 @@ impl<'a> Lcx<'a> {
         let mut impl_ids = self.defs.module_impls.first().into_iter().flatten();
         let dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(program);
         self.bound_resources = bound_resources(program);
+        // Each inherent method by its type and name, and each trait impl's
+        // method with its trait: a trait's method named like an inherent
+        // one of the same type is named apart (B-2026-10-27-10).
+        let mut inherent = FxHashSet::default();
+        let mut trait_methods = Vec::new();
         for item in &program.items {
             let externs: Vec<&ast::ExternFunction> = match item {
                 // A `host fn` is called the same way: its host provides the
@@ -1425,10 +1430,26 @@ impl<'a> Lcx<'a> {
                                     impl_suffix: impl_suffix.clone(),
                                 },
                             );
+                            let key = (target, prim, slice, impl_dispatch.clone(), &f.name);
+                            match b.trait_name.as_ref().and_then(|t| t.segments.last()) {
+                                Some(tr) => trait_methods.push((d, key, tr)),
+                                None => {
+                                    inherent.insert(key);
+                                }
+                            }
                         }
                     }
                 }
                 _ => {}
+            }
+        }
+        for (d, key, tr) in trait_methods {
+            if inherent.contains(&key) {
+                if let Some(item) = self.fns.get_mut(&d) {
+                    let k = item.impl_suffix.get_or_insert_with(String::new);
+                    k.push('#');
+                    k.push_str(tr);
+                }
             }
         }
     }
@@ -17463,8 +17484,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(());
             }
             // In a generic body a trait method is found once the receiver's
-            // type is known: the one impl method of that name for it.
+            // type is known: the one impl method of that name for it, or,
+            // when an inherent method has the name too, the method of the
+            // impl of the trait the bound names (B-2026-10-27-10).
             let rt = self.expr_ty(object)?;
+            let bound = self
+                .lcx
+                .tc
+                .method_typeparam_trait_key
+                .get(&SpanKey::from_span(&e.span))
+                .and_then(|k| k.split_once('.'))
+                .and_then(|(tr, m)| {
+                    let (d, inst_args) = self.user_impl_method(self.strip_ty_full(rt).1, tr, m)?;
+                    let apart = self.lcx.fns.get(&d)?.impl_suffix.as_deref()?;
+                    apart.ends_with(&format!("#{tr}")).then_some((d, inst_args))
+                });
+            if let Some((d, inst_args)) = bound {
+                return self.user_method_call(e, object, d, inst_args, args, dest);
+            }
             if let Some((d, inst_args)) = self.method_by_receiver(rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
