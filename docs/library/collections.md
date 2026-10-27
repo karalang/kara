@@ -106,6 +106,8 @@ Build a `Vec` from an iterator with `collect` ([iterators.md](iterators.md)).
 
 `Map[K, V, H = SipHash13BuildHasher]` where `K: Hash + Eq` and `H: BuildHasher`. The third parameter picks the hasher; see [Hashing](#hashing).
 
+The bound holds wherever a table type is written, not only where a table is built. A key that is a type parameter needs the bound on the item that declares the parameter: `struct Matcher[T] { b2j: Map[T, Vec[i64]] }` is an error, and `struct Matcher[T: Hash + Eq]` is required there and on every impl or function that writes `Map[T, _]`. `karac fix` adds the bound. The same holds for `Set[T]`.
+
 | Method | Signature | Notes |
 |---|---|---|
 | `new` | `fn new() -> Map[K, V, H]` | Empty map |
