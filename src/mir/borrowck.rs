@@ -2210,11 +2210,13 @@ fn main() -> () {
             ("err_taskgroup_origin_declared_after", false, "borrow check"),
             ("err_taskgroup_write_while_borrowed", false, "borrow check"),
         ];
-        // Rules checked before MIR: `par` effects, Drop-type moves and §6.3.
+        // Rules checked before MIR: `par` effects, Drop-type moves, §6.3 and
+        // the closure kinds (§9.6).
         let not_mir = [
             "err_par_conflict",
             "err_partial_move_drop_type",
             "err_fn_value_shared_crosses_task",
+            "err_fn_kind_mismatch",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;
@@ -2229,6 +2231,9 @@ fn main() -> () {
             "ok_ref_handle_collects_as_the_handle",
             "ok_weak_slot_upgrade",
             "ok_closure_reads_method_args_handles_and_matches",
+            // `into_iter`, `iter` and `vec!` are the library's.
+            "for_into_iter_consumes",
+            "ok_ref_copied_from_a_tuple_element",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)
