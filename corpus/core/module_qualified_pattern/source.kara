@@ -1,0 +1,28 @@
+// A pattern names a variant through a module binding exactly as an
+// expression does (design.md § Imports: `import std.log;` binds `log`, and
+// `log.Level.Debug` reaches the item `Level.Debug`). Here in a match arm, an
+// or-pattern and an `if let`.
+import std.log;
+
+fn level_name(l: log.Level) -> String {
+    match l {
+        log.Level.Debug => "debug",
+        log.Level.Info => "info",
+        log.Level.Warn | log.Level.Error => "loud",
+    }
+}
+
+fn main() {
+    println(level_name(log.Level.Debug));
+    println(level_name(log.Level.Info));
+    println(level_name(log.Level.Warn));
+    println(level_name(log.Level.Error));
+    if let log.Level.Warn = log.Level.Warn {
+        println("warn");
+    }
+    if let log.Level.Info = log.Level.Error {
+        println("wrong");
+    } else {
+        println("not info");
+    }
+}

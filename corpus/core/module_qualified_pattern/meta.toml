@@ -1,0 +1,9 @@
+source = "B-2026-10-27-24"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["patterns", "imports", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Imports: a module binding reaches its items by `<bound>.NAME`; a match, or-pattern or if-let pattern spelling a variant through it (`log.Level.Debug`) names the same variant as the expression does."

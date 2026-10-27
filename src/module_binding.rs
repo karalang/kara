@@ -50,13 +50,11 @@
 //! and redirecting one would be a miscompile. Over-approximating only
 //! declines the rewrite, which is the pre-existing behaviour.
 //!
-//! # Not covered
+//! # Patterns
 //!
-//! A module-qualified PATTERN path (`connection.Mode.Fast` in match position)
-//! does not lex today — the parser caps pattern paths at two segments, so
-//! `Mode.Fast` is already the deepest spelling reachable, with or without a
-//! module binding. Pattern paths are walked here anyway so the pass is
-//! complete the day that cap lifts.
+//! A module-qualified pattern path (`connection.Mode.Fast =>`, a struct or
+//! tuple variant, a range bound `limits.LOW..=limits.HIGH`) is stripped like
+//! the expression it mirrors (B-2026-10-27-24).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -710,10 +708,22 @@ impl Stripper<'_> {
                 }
             }
             PatternKind::AtBinding { pattern, .. } => self.pattern(pattern),
-            PatternKind::Wildcard
-            | PatternKind::Binding(_)
-            | PatternKind::Literal(_)
-            | PatternKind::RangePattern { .. } => {}
+            // A qualified unit variant or const is stored joined
+            // (`log.Level.Debug`); a plain binding has no `.`.
+            PatternKind::Binding(name) if name.contains('.') => {
+                let mut segments: Vec<String> = name.split('.').map(str::to_string).collect();
+                self.segments(&mut segments, span);
+                *name = segments.join(".");
+            }
+            PatternKind::RangePattern { start, end, .. } => {
+                for bound in [start, end].into_iter().flatten() {
+                    if let RangeBound::Path { segments, span } = bound {
+                        let span = *span;
+                        self.segments(segments, span);
+                    }
+                }
+            }
+            PatternKind::Wildcard | PatternKind::Binding(_) | PatternKind::Literal(_) => {}
         }
     }
 

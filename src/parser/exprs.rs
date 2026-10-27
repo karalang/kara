@@ -2731,11 +2731,23 @@ impl super::Parser {
         // in the postfix loop. The brace must also open a struct literal's
         // body, and the root must not be a primitive type: before a block,
         // `if n == i64.MAX { .. }` is the constant and then the `if` body
-        // (B-2026-10-13-8).
+        // (B-2026-10-13-8). The type segment may continue to a struct
+        // variant: `module.Enum.Variant { .. }` (B-2026-10-27-24).
         let module_qualified_struct_lit = !starts_upper(&name)
             && !is_primitive_type_name(&name)
             && matches!(self.peek_token_ref_at(1), Token::Identifier { name: ref seg, .. } if starts_upper(seg))
-            && self.looks_like_struct_literal_at(self.pos + 2);
+            && {
+                let mut brace = self.pos + 2;
+                while matches!(self.tokens.get(brace).map(|t| &t.token), Some(Token::Dot))
+                    && matches!(
+                        self.tokens.get(brace + 1).map(|t| &t.token),
+                        Some(Token::Identifier { name: seg, .. }) if starts_upper(seg)
+                    )
+                {
+                    brace += 2;
+                }
+                self.looks_like_struct_literal_at(brace)
+            };
         if self.check(&Token::Dot) && (starts_upper(&name) || module_qualified_struct_lit) {
             let mut path = vec![name];
             while self.eat(&Token::Dot) {

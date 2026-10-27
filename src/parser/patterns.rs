@@ -15,7 +15,7 @@ use crate::ast::*;
 use crate::lexer::IdentClass;
 use crate::token::{IntSuffix, Token};
 
-use super::{starts_upper, ParseError};
+use super::ParseError;
 
 impl super::Parser {
     /// The `mut`s reported inside the pattern just parsed, from `from` on.
@@ -580,9 +580,12 @@ impl super::Parser {
                     })
                 }
                 // Check for qualified path: Name.Variant ...
-                // Only Type/Const-class idents (uppercase leading) root a path in
-                // pattern position; lowercase is always a plain binding.
-                else if self.check(&Token::Dot) && starts_upper(&name) {
+                // An uppercase root names a type or const (`Mode.Fast`); a
+                // lowercase one followed by `.` can only be a module binding
+                // (`import std.log;` then `log.Level.Debug`), since a plain
+                // binding is never followed by `.` in pattern position
+                // (B-2026-10-27-24). The module-binding desugar strips the root.
+                else if self.check(&Token::Dot) {
                     let mut path = vec![name];
                     while self.eat(&Token::Dot) {
                         path.push(self.expect_identifier()?);

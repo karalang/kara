@@ -298,6 +298,14 @@ impl<'a> super::Resolver<'a> {
                 // `None` written in the arm's body is still the variant.
                 match self.pattern_variant_ref(name) {
                     Some((id, rest)) => self.record_node_ref(pattern.id, id, &rest),
+                    // A dotted name is a path, never a fresh binding: an
+                    // unknown root (`zzz.Mode.Slow`, a module that is not
+                    // bound) is reported as the struct and tuple paths are,
+                    // not bound as a catch-all (B-2026-10-27-24).
+                    None if name.contains('.') => {
+                        let first = name.split('.').next().unwrap_or(name);
+                        self.error_undefined_name(first, pattern.span);
+                    }
                     None => {
                         let defined = self.table.define(
                             name.clone(),
