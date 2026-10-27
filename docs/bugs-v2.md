@@ -62,8 +62,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 39 |
 | missing-feature | 39 |
 | soundness | 22 |
+| miscompile | 13 |
 | perf | 13 |
-| miscompile | 12 |
 | run-vs-build | 9 |
 | other | 5 |
 | codegen-gap | 4 |
@@ -73,13 +73,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 83 |
+| typecheck | 84 |
 | mir | 42 |
 | codegen | 22 |
 | interp | 21 |
+| mir-llvm | 20 |
 | ownership | 19 |
 | cli | 19 |
-| mir-llvm | 19 |
 | runtime | 11 |
 | parser | 8 |
 | resolver | 3 |
@@ -107,6 +107,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-33 | 2026-10-27 | typecheck | medium | A generic function that spawns or sends a value of a type parameter need not require `T: CrossTask`, so a `shared` value enters a task through it: `fn run_all[U](x: own U) -> i64 { let g = TaskGroup.new(); g.spawn(|| { let y = x; 1 }).join() }` passes check and runs with `run_all(Cell { n: 1 })` over a `shared struct Cell`, where design.md § `CrossTask` says such a function "must itself require `T: CrossTask`" and the error is at that generic signature | — |
 | B-2026-10-27-34 | 2026-10-27 | typecheck | medium | A caller's type parameter named like a library generic's own leaks into the library call: inside `fn run_all[T](x: own T)`, `g.spawn(|| { let y = x; 1 })` is refused with "expected 'T', found 'i64': inside this item `T` stands for whatever type the caller picks" (TaskGroup.spawn's own `T` is read as the caller's), while the same program with the parameter renamed `U` checks and runs | — |
 | B-2026-10-27-32 | 2026-10-27 | ownership | medium | A `mut ref S` parameter passed to a static method of a type parameter (`T.make(s)`, the serde `T.deserialize(d)`) is read as a move by `karac check`: inside a loop it is 'moved inside a loop and not assigned again', twice it is 'moved here, used again'. `karac run` accepts the program and prints the right answer. | — |
+| B-2026-10-27-35 | 2026-10-27 | typecheck+mir-llvm | medium | `None` (or `Some(x)` / `Ok(x)` / `Err(e)`) given to a table's `insert`, `contains`, `remove`, `get` or `contains_key` is typed alone as `Option[()]`, so the compiled table reads its element out of a one-byte slot (ASan stack-buffer-overflow on `Set[Option[String]]`'s `insert(None)`) | — |
 
 ### Relocated
 
