@@ -3858,7 +3858,7 @@ fn collect_callee_param_modes_into(
     for item in &program.items {
         match item {
             Item::Function(f) => {
-                map.insert(f.name.clone(), param_modes_from_signature(&f.params));
+                map.insert(f.name.clone(), call_param_modes(f, program));
             }
             Item::ImplBlock(impl_block) => {
                 let Some(target_name) = impl_target_name(&impl_block.target_type) else {
@@ -3871,7 +3871,7 @@ fn collect_callee_param_modes_into(
                         if method.self_param.is_none() {
                             map.insert(
                                 format!("{target_name}.{}", method.name),
-                                param_modes_from_signature(&method.params),
+                                call_param_modes(method, program),
                             );
                         }
                     }
@@ -4020,7 +4020,7 @@ fn collect_method_param_modes_into(
                         if method.self_param.is_some() || ambient {
                             map.insert(
                                 format!("{target_name}.{}", method.name),
-                                param_modes_from_signature(&method.params),
+                                call_param_modes(method, program),
                             );
                         }
                     }
@@ -4216,6 +4216,31 @@ fn collect_impl_trait_spans<'t>(ty: &'t TypeExpr, out: &mut Vec<&'t Span>) {
 /// how it ended up in the catch-all. `slice_kind_from_type` is the shared
 /// answer to "is this formal a slice", already used by
 /// `arg_formal_slice_kind`, so the two cannot drift.
+/// A call's parameter modes: the declared ones, except that a user
+/// function's bare, non-`escaping` `Fn` or `MutFn` parameter borrows under
+/// D5 (core-semantics §4.1, §9.3: the callee may only call it or pass it
+/// on), so the argument moves nothing, an element `v[0]` included
+/// (B-2026-10-27-12). The MIR builder lends the same set. An `OnceFn`
+/// parameter stays owned, since calling it consumes it, and so does a
+/// standard-library function's, whose bodies store their closures.
+fn call_param_modes(f: &Function, program: &Program) -> Vec<OwnershipMode> {
+    let mut modes = param_modes_from_signature(&f.params);
+    if f.stdlib_origin || !crate::d5_params::on() {
+        return modes;
+    }
+    for (m, p) in modes.iter_mut().zip(&f.params) {
+        if !p.is_own
+            && matches!(p.ty.kind, TypeKind::FnType { is_once: false, .. })
+            && !program
+                .escaping_fn_types
+                .contains(&crate::resolver::SpanKey::from_span(&p.ty.span))
+        {
+            *m = OwnershipMode::Ref;
+        }
+    }
+    modes
+}
+
 fn param_modes_from_signature(params: &[Param]) -> Vec<OwnershipMode> {
     params
         .iter()

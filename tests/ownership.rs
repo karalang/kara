@@ -6235,12 +6235,12 @@ fn step7_let_bound_nested_struct_then_return_fires() {
 #[test]
 fn step7_fn_arg_pass_to_own_fn_slot_with_ref_capture_fires() {
     // Closure body reads `cfg.value` (Copy projection) → `cfg`
-    // captured by `ref`. Closure passed to `run_fn(f: Fn() -> ())`
-    // (Own-mode slot). The receiving function may or may not invoke
-    // the closure synchronously — we conservatively fire.
+    // captured by `ref`. Closure passed to `run_fn(f: escaping Fn() -> i64)`
+    // (an Own-mode slot: core-semantics §4.1). The receiving function may
+    // store the closure, so this fires.
     let errors = step7_e0508_errors(
         "struct Config { value: i64 }\n\
-         fn run_fn(f: Fn() -> i64) -> i64 { f() }\n\
+         fn run_fn(f: escaping Fn() -> i64) -> i64 { f() }\n\
          fn use_cfg(cfg: Config) -> i64 {\n\
              let h = || cfg.value;\n\
              run_fn(h)\n\
@@ -6260,7 +6260,7 @@ fn step7_fn_arg_pass_direct_closure_literal_fires() {
     // in the call-arg position (no let binding).
     let errors = step7_e0508_errors(
         "struct Config { value: i64 }\n\
-         fn run_fn(f: Fn() -> i64) -> i64 { f() }\n\
+         fn run_fn(f: escaping Fn() -> i64) -> i64 { f() }\n\
          fn use_cfg(cfg: Config) -> i64 {\n\
              run_fn(|| cfg.value)\n\
          }",
@@ -6271,6 +6271,31 @@ fn step7_fn_arg_pass_direct_closure_literal_fires() {
         "direct closure literal as Own-mode Fn arg should fire; got {:?}",
         errors
     );
+}
+
+#[test]
+fn step7_fn_arg_pass_to_bare_fn_slot_does_not_fire() {
+    // A bare function-typed parameter is non-escaping and borrows its
+    // argument (core-semantics §4.1, §9.3; B-2026-10-27-12): the callee
+    // may only call it or pass it on, so a `ref` capture cannot outlive
+    // its source through it.
+    for call in ["let h = || cfg.value;\n run_fn(h)", "run_fn(|| cfg.value)"] {
+        let parsed = parse(&format!(
+            "struct Config {{ value: i64 }}\n\
+             fn run_fn(f: Fn() -> i64) -> i64 {{ f() }}\n\
+             fn use_cfg(cfg: Config) -> i64 {{\n {call}\n}}"
+        ));
+        assert!(parsed.errors.is_empty(), "{call}: {:?}", parsed.errors);
+        let resolved = resolve(&parsed.program);
+        let typed = typecheck(&parsed.program, &resolved);
+        let result = ownershipcheck(&parsed.program, &typed);
+        let e0508s: Vec<_> = result
+            .errors
+            .iter()
+            .filter(|e| matches!(e.kind, OwnershipErrorKind::RefCaptureEscapesScope))
+            .collect();
+        assert!(e0508s.is_empty(), "{call}: {e0508s:?}");
+    }
 }
 
 #[test]
