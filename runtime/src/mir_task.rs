@@ -579,9 +579,12 @@ fn pooled_first(mode: &AtomicU8) -> bool {
 
 /// The workers a program runs on when `KARAC_THREADS` is unset: one per
 /// core the process may use (M4, Gowtham 2026-10-26); `KARAC_THREADS=1`
-/// opts out. One on wasm, where the pool has no threads to start.
+/// opts out. One on wasm, where the pool has no threads to start. One in
+/// this crate's unit tests too: they pin the one-worker executor's FIFO
+/// order, and the count is decided once per process, so no test can ask
+/// for one worker itself (the pool is tested through compiled programs).
 fn default_threads() -> usize {
-    if cfg!(target_family = "wasm") {
+    if cfg!(target_family = "wasm") || cfg!(test) {
         return 1;
     }
     std::thread::available_parallelism().map_or(1, |n| n.get())
