@@ -75,6 +75,9 @@ pub(super) enum Shim {
     /// `i8 (ptr a, ptr b)`: the poll function of a task whose root is the
     /// resume body `resume` (`task.rs`).
     TaskPoll { resume: String, spawned: bool },
+    /// `void (ptr out, i64 v)`: `f"{v}"` of a (`signed`) integer, written
+    /// into a `String` from a `malloc` LLVM can see (`call.rs`).
+    StringOfInt { signed: bool },
 }
 
 #[derive(Default)]
@@ -207,6 +210,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 format!("poll.{}{resume}", if *spawned { "" } else { "root." }),
                 self.llcx.i8_type().fn_type(&[p.into(), p.into()], false),
             ),
+            Shim::StringOfInt { signed } => (
+                format!("string_of.{}64", if *signed { "i" } else { "u" }),
+                self.llcx
+                    .void_type()
+                    .fn_type(&[p.into(), self.llcx.i64_type().into()], false),
+            ),
         };
         let f = self.module.add_function(&name, ty, Some(Linkage::Internal));
         self.shims.fns.insert(s.clone(), f);
@@ -318,6 +327,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 Shim::TaskPoll { resume, spawned } => {
                     self.build_task_poll(f, &resume, spawned)?;
+                }
+                Shim::StringOfInt { signed } => {
+                    let v = f
+                        .get_nth_param(1)
+                        .ok_or("string_of has no value")?
+                        .into_int_value();
+                    self.build_string_of_int(f, param(0)?, v, signed)?;
+                    self.builder.build_return(None).map_err(e)?;
                 }
             }
         }

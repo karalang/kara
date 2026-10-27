@@ -365,34 +365,6 @@ unsafe fn string_of(out: *mut RawVec, b: &[u8]) {
     unsafe { out.write(RawVec::new(ptr, b.len(), b.len())) };
 }
 
-/// `f"{v}"` for a signed integer `v`, as a `String` at `out`.
-///
-/// # Safety
-/// `out` is writable for a `String`.
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_string_of_i64(out: *mut RawVec, v: i64) {
-    let mut d = [0u8; 20];
-    let mut i = digits(v.unsigned_abs(), &mut d);
-    if v < 0 {
-        i -= 1;
-        d[i] = b'-';
-    }
-    // SAFETY: the caller's contract.
-    unsafe { string_of(out, &d[i..]) };
-}
-
-/// `f"{v}"` for an unsigned integer `v`, as a `String` at `out`.
-///
-/// # Safety
-/// `out` is writable for a `String`.
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_string_of_u64(out: *mut RawVec, v: u64) {
-    let mut d = [0u8; 20];
-    let i = digits(v, &mut d);
-    // SAFETY: the caller's contract.
-    unsafe { string_of(out, &d[i..]) };
-}
-
 /// `Env.args()`: the program's arguments as a `Vec[String]` at `out`. Under
 /// `karac run` the hosting process is the JIT runner, so the program's argv
 /// comes from `KARAC_PROGRAM_ARGS` (unit-separator joined, as

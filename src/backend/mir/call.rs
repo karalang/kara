@@ -6,9 +6,10 @@
 //! result comes back through a temporary that is then copied to the
 //! destination, so neither can alias a place the callee reads.
 
-use inkwell::values::{BasicMetadataValueEnum, BasicValue, IntValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
+use super::callable::Shim;
 use super::{Cx, R};
 use crate::mir::interp::split_method;
 use crate::mir::ty::{IntTy, IntrinsicTy};
@@ -364,12 +365,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 .build_int_cast_sign_flag(v, self.llcx.i64_type(), i.signed(), "")
                 .map_err(e)?;
             let d = self.place_ptr(dest)?;
-            let f = if i.signed() {
-                "string_of_i64"
-            } else {
-                "string_of_u64"
-            };
-            self.rt(f, &[d.into(), w.into()])?;
+            let f = self.shim_fn(Shim::StringOfInt { signed: i.signed() });
+            self.builder
+                .build_call(f, &[d.into(), w.into()], "")
+                .map_err(e)?;
             return Ok(true);
         }
         let mut parts = Vec::with_capacity(args.len());
@@ -409,6 +408,143 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(self.offset(d, 8)?, total.into())?;
         self.store(self.offset(d, 16)?, room.into())?;
         Ok(true)
+    }
+
+    /// The body of [`Shim::StringOfInt`]: counts `v`'s digits, takes that
+    /// many bytes (and one for a sign) from `malloc` and writes them from
+    /// the end, then the `String` at `out`. A runtime native did this
+    /// until B-2026-10-14-39, behind a call LLVM could not see into, so a
+    /// string whose bytes nothing read still cost an allocation and a free.
+    pub(super) fn build_string_of_int(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        out: PointerValue<'ctx>,
+        v: IntValue<'ctx>,
+        signed: bool,
+    ) -> R<()> {
+        let i64t = self.llcx.i64_type();
+        let i8t = self.llcx.i8_type();
+        let entry = self.builder.get_insert_block().ok_or("no block")?;
+        let (neg, mag) = if signed {
+            let neg = self
+                .builder
+                .build_int_compare(IntPredicate::SLT, v, i64t.const_zero(), "")
+                .map_err(e)?;
+            // `0 - i64::MIN` wraps to itself, which read unsigned is its
+            // magnitude.
+            let flip = self
+                .builder
+                .build_int_sub(i64t.const_zero(), v, "")
+                .map_err(e)?;
+            let mag = self
+                .builder
+                .build_select(neg, flip, v, "")
+                .map_err(e)?
+                .into_int_value();
+            (neg, mag)
+        } else {
+            (self.llcx.bool_type().const_zero(), v)
+        };
+        let count = self.llcx.append_basic_block(f, "count");
+        let more = self.llcx.append_basic_block(f, "more");
+        let counted = self.llcx.append_basic_block(f, "counted");
+        let write = self.llcx.append_basic_block(f, "write");
+        let written = self.llcx.append_basic_block(f, "written");
+        let sign = self.llcx.append_basic_block(f, "sign");
+        let done = self.llcx.append_basic_block(f, "done");
+        let ten = i64t.const_int(10, false);
+        self.builder.build_unconditional_branch(count).map_err(e)?;
+
+        self.builder.position_at_end(count);
+        let n = self.builder.build_phi(i64t, "n").map_err(e)?;
+        let t = self.builder.build_phi(i64t, "t").map_err(e)?;
+        let (nv, tv) = (
+            n.as_basic_value().into_int_value(),
+            t.as_basic_value().into_int_value(),
+        );
+        let big = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, tv, ten, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(big, more, counted)
+            .map_err(e)?;
+        self.builder.position_at_end(more);
+        let t2 = self
+            .builder
+            .build_int_unsigned_div(tv, ten, "")
+            .map_err(e)?;
+        let n2 = self
+            .builder
+            .build_int_add(nv, i64t.const_int(1, false), "")
+            .map_err(e)?;
+        self.builder.build_unconditional_branch(count).map_err(e)?;
+        n.add_incoming(&[(&i64t.const_int(1, false), entry), (&n2, more)]);
+        t.add_incoming(&[(&mag, entry), (&t2, more)]);
+
+        self.builder.position_at_end(counted);
+        let wide = self.builder.build_int_z_extend(neg, i64t, "").map_err(e)?;
+        let len = self.builder.build_int_add(nv, wide, "len").map_err(e)?;
+        let malloc = self.libc_fn("malloc");
+        let buf = self
+            .builder
+            .build_call(malloc, &[len.into()], "text")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_unconditional_branch(write).map_err(e)?;
+
+        self.builder.position_at_end(write);
+        let i = self.builder.build_phi(i64t, "i").map_err(e)?;
+        let u = self.builder.build_phi(i64t, "u").map_err(e)?;
+        let (iv, uv) = (
+            i.as_basic_value().into_int_value(),
+            u.as_basic_value().into_int_value(),
+        );
+        let i1 = self
+            .builder
+            .build_int_sub(iv, i64t.const_int(1, false), "")
+            .map_err(e)?;
+        let digit = self
+            .builder
+            .build_int_unsigned_rem(uv, ten, "")
+            .map_err(e)?;
+        let byte = self.builder.build_int_truncate(digit, i8t, "").map_err(e)?;
+        let byte = self
+            .builder
+            .build_int_add(byte, i8t.const_int(u64::from(b'0'), false), "")
+            .map_err(e)?;
+        let at = self.elem_ptr(buf, i1, 1)?;
+        self.builder.build_store(at, byte).map_err(e)?;
+        let u2 = self
+            .builder
+            .build_int_unsigned_div(uv, ten, "")
+            .map_err(e)?;
+        let left = self
+            .builder
+            .build_int_compare(IntPredicate::NE, u2, i64t.const_zero(), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(left, write, written)
+            .map_err(e)?;
+        i.add_incoming(&[(&len, counted), (&i1, write)]);
+        u.add_incoming(&[(&mag, counted), (&u2, write)]);
+
+        self.builder.position_at_end(written);
+        self.builder
+            .build_conditional_branch(neg, sign, done)
+            .map_err(e)?;
+        self.builder.position_at_end(sign);
+        self.builder
+            .build_store(buf, i8t.const_int(u64::from(b'-'), false))
+            .map_err(e)?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+
+        self.builder.position_at_end(done);
+        self.store(out, buf.into())?;
+        self.store(self.offset(out, 8)?, len.into())?;
+        self.store(self.offset(out, 16)?, len.into())
     }
 
     /// The `{ptr, len}` of a `str`, `ref str` or `String` operand.
