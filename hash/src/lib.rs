@@ -36,7 +36,9 @@ mod alloc_vec {
 }
 
 mod seed;
-pub use seed::{seed, seed_override_from_env, set_seed, SeedSource};
+#[doc(hidden)]
+pub use seed::INIT as SEED_READY;
+pub use seed::{seed, seed_override_from_env, set_seed, SeedSource, WORD_STATE};
 
 /// SipHash-1-3 over `bytes` with the process seed — the entry point both
 /// backends bottom out in.
@@ -280,6 +282,42 @@ pub fn fx_hash_u64(v: u64) -> u64 {
 pub fn hash_u64(v: u64) -> u64 {
     let (k0, k1) = seed();
     hash_int_with_key(v, 8, k0, k1)
+}
+
+/// What a word's SipHash-1-3 under the key `(k0, k1)` starts from, with the
+/// part of the first round that does not depend on the word already done:
+/// `[v0, v1, v1.rotate_left(17), v2, v3]` after the first round's `v0`/`v1`
+/// half. [`hash_u64_from_state`] finishes it; compiled code emits the same
+/// steps in line from the process's copy ([`seed::WORD_STATE`]).
+pub fn word_state(k0: u64, k1: u64) -> [u64; 5] {
+    let st = State::<1, 3>::new(k0, k1);
+    let v0 = st.v0.wrapping_add(st.v1);
+    let v1 = st.v1.rotate_left(13) ^ v0;
+    [v0.rotate_left(32), v1, v1.rotate_left(17), st.v2, st.v3]
+}
+
+/// [`hash_int_with_key`] of an 8-byte word from its [`word_state`]: the
+/// steps `src/backend/mir/key.rs`'s `hash_word` emits, in the same order.
+#[inline]
+pub fn hash_u64_from_state(s: &[u64; 5], v: u64) -> u64 {
+    let [a, b, b17, v2, v3] = *s;
+    // The rest of the first round, over the word.
+    let v3 = v3 ^ v;
+    let v2 = v2.wrapping_add(v3);
+    let v3 = v3.rotate_left(16) ^ v2;
+    let v0 = a.wrapping_add(v3);
+    let v3 = v3.rotate_left(21) ^ v0;
+    let v2 = v2.wrapping_add(b);
+    let v1 = b17 ^ v2;
+    let v2 = v2.rotate_left(32);
+    let mut st = State::<1, 3> {
+        v0: v0 ^ v,
+        v1,
+        v2,
+        v3,
+    };
+    st.round_msg(8 << 56);
+    st.finish()
 }
 
 /// [`hash_u64`] under a fixed key rather than the process's: the digest an
@@ -802,6 +840,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The in-line word hash's two halves (`word_state`, then the steps
+    /// compiled code emits) give the seeded hash, under a pinned key and
+    /// under the process's.
+    #[test]
+    fn hash_from_word_state_matches_hash_int() {
+        let keys = [
+            (0u64, 0u64),
+            (0x0706_0504_0302_0100, 0x0f0e_0d0c_0b0a_0908),
+            (u64::MAX, 1),
+        ];
+        for (k0, k1) in keys {
+            let s = word_state(k0, k1);
+            for v in [0u64, 1, 0xff, 0xdead_beef, u64::MAX, 0x8000_0000_0000_0000] {
+                assert_eq!(hash_u64_from_state(&s, v), hash_int_with_key(v, 8, k0, k1));
+            }
+        }
+        let want = hash_u64(42);
+        let s: [u64; 5] = core::array::from_fn(|i| {
+            seed::WORD_STATE[i].load(core::sync::atomic::Ordering::Relaxed)
+        });
+        assert_eq!(hash_u64_from_state(&s, 42), want);
     }
 
     /// The seeded entry points agree too, so the process-seed plumbing is the

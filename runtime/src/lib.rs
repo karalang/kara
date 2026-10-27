@@ -512,6 +512,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         hashing::karac_stable_siphash24,
         hashing::karac_hash_seed
     );
+    // Data the in-line word hash reads (src/backend/mir/key.rs `hash_word`).
+    acc = acc.wrapping_add(black_box(&karac_hash::WORD_STATE as *const _ as usize));
+    acc = acc.wrapping_add(black_box(&karac_hash::SEED_READY as *const _ as usize));
     #[cfg(feature = "regex")]
     keep!(
         regex::karac_regex_validate,

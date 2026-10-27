@@ -38,7 +38,18 @@ pub enum SeedSource {
 // wasm runtime targets, which `OnceLock` (std) would rule out.
 static K0: AtomicU64 = AtomicU64::new(0);
 static K1: AtomicU64 = AtomicU64::new(0);
-static INIT: AtomicU64 = AtomicU64::new(0);
+// Exported, with [`WORD_STATE`], for compiled code: a word key's hash is
+// emitted in line from these (src/backend/mir/key.rs `hash_word`), and
+// `karac_hash_word` is called only while this is not yet 2.
+#[export_name = "karac_hash_seed_ready"]
+#[doc(hidden)]
+pub static INIT: AtomicU64 = AtomicU64::new(0);
+
+/// [`crate::word_state`] of the live key, for compiled code that hashes a
+/// word in line ([`crate::hash_u64_from_state`]). Written before `INIT`
+/// becomes 2, so a reader that saw 2 reads the whole of it.
+#[export_name = "karac_hash_word_state"]
+pub static WORD_STATE: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
 /// The process seed, generating one on first use.
 ///
@@ -75,6 +86,9 @@ fn store(k0: u64, k1: u64, _src: SeedSource) -> bool {
     }
     K0.store(k0, Ordering::Relaxed);
     K1.store(k1, Ordering::Relaxed);
+    for (w, v) in WORD_STATE.iter().zip(crate::word_state(k0, k1)) {
+        w.store(v, Ordering::Relaxed);
+    }
     INIT.store(2, Ordering::Release);
     true
 }

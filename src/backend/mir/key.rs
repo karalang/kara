@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::module::Linkage;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::AtomicOrdering;
 use inkwell::IntPredicate;
 
 use super::{Cx, R};
@@ -364,14 +365,16 @@ impl<'ctx> Cx<'ctx, '_> {
             .map_err(e)
     }
 
-    /// The runtime's keyed hash of a word.
+    /// The runtime's keyed hash of a word: a call to `karac.hash.word`
+    /// ([`Self::hash_word_fn`]), marked as reading no memory. The seed is
+    /// fixed for the process, so the hash is a pure function of `v` to
+    /// compiled code, and a `get` and an `insert` of one key share it
+    /// (kata 219). The callee stays out of line for that reason: in line,
+    /// its loads of the seed state cannot be shared across the stores
+    /// between two probes, and kata 219 ran 1.25 s -> 1.65 s.
     fn hash_word(&self, v: IntValue<'ctx>) -> R<IntValue<'ctx>> {
-        let i64t = self.llcx.i64_type();
-        let f = self.extern_fn("karac_hash_word", i64t.fn_type(&[i64t.into()], false));
+        let f = self.hash_word_fn()?;
         let v = self.builder.build_call(f, &[v.into()], "").map_err(e)?;
-        // The seed is fixed for the process, so the hash is a pure function
-        // of `v` to compiled code, and a `get` and an `insert` of one key
-        // share it (kata 219).
         for name in ["memory", "nounwind", "willreturn"] {
             v.add_attribute(
                 AttributeLoc::Function,
@@ -380,6 +383,141 @@ impl<'ctx> Cx<'ctx, '_> {
             );
         }
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
+    }
+
+    /// `karac.hash.word(v)`: SipHash-1-3 of a word from the process's
+    /// [`karac_hash::word_state`], in the steps of
+    /// `karac_hash::hash_u64_from_state`; before the seed is live, a call
+    /// to `karac_hash_word` draws it. In the module rather than the
+    /// runtime so the state is read straight, not through the GOT, and
+    /// the key's constants are folded in once (B-2026-10-24-6: the
+    /// runtime's took about 93 instructions a hash).
+    fn hash_word_fn(&self) -> R<FunctionValue<'ctx>> {
+        let name = "karac.hash.word";
+        if let Some(f) = self.module.get_function(name) {
+            return Ok(f);
+        }
+        let i64t = self.llcx.i64_type();
+        let f = self.module.add_function(
+            name,
+            i64t.fn_type(&[i64t.into()], false),
+            Some(Linkage::Internal),
+        );
+        for attr in ["noinline", "nounwind", "willreturn"] {
+            f.add_attribute(
+                AttributeLoc::Function,
+                self.llcx
+                    .create_enum_attribute(Attribute::get_named_enum_kind_id(attr), 0),
+            );
+        }
+        let at = self.builder.get_insert_block();
+        let b = &self.builder;
+        b.position_at_end(self.llcx.append_basic_block(f, "entry"));
+        let v = f
+            .get_first_param()
+            .ok_or("karac.hash.word has no parameter")?
+            .into_int_value();
+        let global = |name: &str, ty: inkwell::types::BasicTypeEnum<'ctx>| {
+            self.module
+                .get_global(name)
+                .unwrap_or_else(|| {
+                    let g = self.module.add_global(ty, None, name);
+                    g.set_linkage(Linkage::External);
+                    g
+                })
+                .as_pointer_value()
+        };
+        let ready = global("karac_hash_seed_ready", i64t.into());
+        let state = global("karac_hash_word_state", i64t.array_type(5).into());
+        let (fast, slow, join) = (
+            self.llcx.append_basic_block(f, "hash.word"),
+            self.llcx.append_basic_block(f, "hash.seed"),
+            self.llcx.append_basic_block(f, "hash.done"),
+        );
+        let live = b.build_load(i64t, ready, "").map_err(e)?.into_int_value();
+        let i = live.as_instruction().ok_or("a load")?;
+        i.set_alignment(8).map_err(e)?;
+        i.set_atomic_ordering(AtomicOrdering::Acquire).map_err(e)?;
+        let live = b
+            .build_int_compare(IntPredicate::EQ, live, self.i64(2), "")
+            .map_err(e)?;
+        let br = b.build_conditional_branch(live, fast, slow).map_err(e)?;
+        let i32t = self.llcx.i32_type();
+        let weights = self.llcx.metadata_node(&[
+            self.llcx.metadata_string("branch_weights").into(),
+            i32t.const_int(2000, false).into(),
+            i32t.const_int(1, false).into(),
+        ]);
+        br.set_metadata(weights, self.llcx.get_kind_id("prof"))
+            .map_err(|_| "branch weights".to_string())?;
+        // The first hash of the process draws the seed.
+        b.position_at_end(slow);
+        let hf = self.extern_fn("karac_hash_word", i64t.fn_type(&[i64t.into()], false));
+        let drawn = b
+            .build_call(hf, &[v.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        b.build_unconditional_branch(join).map_err(e)?;
+        b.position_at_end(fast);
+        let word = |n: u64| -> R<IntValue<'ctx>> {
+            // SAFETY of the address: `n < 5`, inside the five-word array.
+            let p = unsafe { b.build_in_bounds_gep(i64t, state, &[self.i64(n)], "") }.map_err(e)?;
+            Ok(b.build_load(i64t, p, "").map_err(e)?.into_int_value())
+        };
+        let (a, w1, w17, s2, s3) = (word(0)?, word(1)?, word(2)?, word(3)?, word(4)?);
+        let add = |x, y| b.build_int_add(x, y, "").map_err(e);
+        let xor = |x, y| b.build_xor(x, y, "").map_err(e);
+        let rotl = |x: IntValue<'ctx>, n: u64| -> R<IntValue<'ctx>> {
+            let l = b.build_left_shift(x, self.i64(n), "").map_err(e)?;
+            let r = b
+                .build_right_shift(x, self.i64(64 - n), false, "")
+                .map_err(e)?;
+            b.build_or(l, r, "").map_err(e)
+        };
+        let round = |[v0, v1, v2, v3]: [IntValue<'ctx>; 4]| -> R<[IntValue<'ctx>; 4]> {
+            let v0 = add(v0, v1)?;
+            let v1 = xor(rotl(v1, 13)?, v0)?;
+            let v0 = rotl(v0, 32)?;
+            let v2 = add(v2, v3)?;
+            let v3 = xor(rotl(v3, 16)?, v2)?;
+            let v0 = add(v0, v3)?;
+            let v3 = xor(rotl(v3, 21)?, v0)?;
+            let v2 = add(v2, v1)?;
+            let v1 = xor(rotl(v1, 17)?, v2)?;
+            Ok([v0, v1, rotl(v2, 32)?, v3])
+        };
+        // The rest of the first round, over the word.
+        let v3 = xor(s3, v)?;
+        let v2 = add(s2, v3)?;
+        let v3 = xor(rotl(v3, 16)?, v2)?;
+        let v0 = add(a, v3)?;
+        let v3 = xor(rotl(v3, 21)?, v0)?;
+        let v2 = add(v2, w1)?;
+        let v1 = xor(w17, v2)?;
+        let v2 = rotl(v2, 32)?;
+        let mut st = [xor(v0, v)?, v1, v2, v3];
+        // The length word of an 8-byte key, then the finish.
+        let len = self.i64(8 << 56);
+        st[3] = xor(st[3], len)?;
+        st = round(st)?;
+        st[0] = xor(st[0], len)?;
+        st[2] = xor(st[2], self.i64(0xff))?;
+        for _ in 0..3 {
+            st = round(st)?;
+        }
+        let h = xor(xor(st[0], st[1])?, xor(st[2], st[3])?)?;
+        let fast_end = b.get_insert_block().ok_or("a block")?;
+        b.build_unconditional_branch(join).map_err(e)?;
+        b.position_at_end(join);
+        let phi = b.build_phi(i64t, "").map_err(e)?;
+        phi.add_incoming(&[(&h, fast_end), (&drawn, slow)]);
+        b.build_return(Some(&phi.as_basic_value())).map_err(e)?;
+        if let Some(at) = at {
+            b.position_at_end(at);
+        }
+        Ok(f)
     }
 
     /// Where the `{ptr, len}` of the sequence of type `ty` at `p` is: the
