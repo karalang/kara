@@ -15456,6 +15456,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     _ => pt,
                 };
                 let held = self.place_type(&p);
+                // A narrower number lent to a wider one (`vc.contains(b)`,
+                // `b: u8`, for a `ref f64`) widens into a temporary that is
+                // lent instead (design.md §5, lossless widening).
+                if kind == BorrowKind::Shared && self.lossless(held, fn_t) {
+                    if let Some(cast) = self.widening(held, fn_t) {
+                        let v = self.scoped_temp(fn_t);
+                        self.assign(v, Rvalue::Cast(cast, Operand::Copy(p), fn_t));
+                        let r = self.temp(pt);
+                        self.assign(r, Rvalue::Ref(kind, Place::local(v)));
+                        return Ok(Operand::Move(Place::local(r)));
+                    }
+                }
                 if self.erases(&Operand::Copy(p.clone()), fn_t) {
                     let op = if self.is_copy(held) {
                         Operand::Copy(p)
