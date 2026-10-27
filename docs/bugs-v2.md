@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 38 |
 | soundness | 20 |
 | perf | 13 |
-| miscompile | 11 |
+| miscompile | 12 |
 | run-vs-build | 9 |
 | other | 5 |
 | codegen-gap | 4 |
@@ -73,8 +73,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 80 |
-| mir | 40 |
+| typecheck | 81 |
+| mir | 41 |
 | codegen | 22 |
 | interp | 21 |
 | ownership | 18 |
@@ -106,6 +106,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-26 | 2026-10-27 | interp+mir-llvm | medium | A table key whose PART has a hand-written PartialEq is compared structurally, so `Set[(Name, i64)]` with a case-insensitive `impl PartialEq for Name` misses `(Name { text: "BO" }, 3)` after inserting `(Name { text: "Bo" }, 3)` while `==` on the same tuples says true (both backends) | — |
 | B-2026-10-27-27 | 2026-10-27 | typecheck | medium | A variant pattern spelled through the WRONG enum is accepted and matches the scrutinee's own variant of that name: with `enum Mode { Slow, P(i64) }` and `enum Other { Slow, P(i64) }`, `match Mode.Slow { Other.Slow => .. }` takes the arm, and `Other.P(x)` against `Mode.P(4)` binds x = 4. Only the last segment of a dotted variant path is read. | — |
 | B-2026-10-27-28 | 2026-10-27 | typecheck+mir | low | The standard collections are not `Iterable`: `fn total[C: Iterable[Item = ref i64]](c: C)` refuses `total(vec![1, 2, 3])` with "trait bound `C: Iterable` is not satisfied; `Vec[i64]` does not implement `Iterable`", though design.md § `Iterator` and `Iterable` and library/collections.md say every collection is | — |
+| B-2026-10-27-29 | 2026-10-27 | typecheck+mir | medium | A program function named like a builtin the library calls (`fn panic(s: Str) -> i64 { 7 }`) replaces it inside library bodies: `let o: Option[i64] = None; println(o.expect("boom"))` prints 7 instead of panicking, on `karac run --interp`. | — |
 
 ### Relocated
 
