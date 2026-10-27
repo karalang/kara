@@ -6755,9 +6755,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             span: e.span,
             ..outer
         });
-        let r = self.expr_into_here(e, dest);
+        let r = self.expr_into_here(e, dest.clone());
+        if r.is_ok() && self.builds_hashed_table(e) {
+            self.unkey_table(dest);
+        }
         self.b.set_source_info(outer);
         r
+    }
+
+    /// Whether `e` is `Map[K, V, H].new()`, `Set[T, H].with_capacity(n)` or
+    /// another constructor qualified with a container type that names a
+    /// hasher: the table it builds walks as an annotated `let`'s does
+    /// (B-2026-10-25-31).
+    fn builds_hashed_table(&self, e: &Expr) -> bool {
+        let ExprKind::MethodCall { object, .. } = &e.kind else {
+            return false;
+        };
+        let ExprKind::Path { segments, .. } = &object.kind else {
+            return false;
+        };
+        matches!(segments.as_slice(), [h] if h == "Map" || h == "Set")
+            && self
+                .lcx
+                .hashers
+                .get(&SpanKey::from_span(&object.span))
+                .is_some_and(|h| *h != crate::hasher_kind::HasherKind::default())
     }
 
     fn expr_into_here(&mut self, e: &'a Expr, dest: Place) -> R<()> {

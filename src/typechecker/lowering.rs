@@ -474,10 +474,17 @@ impl<'a> super::TypeChecker<'a> {
     /// — `PathExpr::span` covers the whole `Map[…]` write and is built once, in
     /// `parse_path_type`, before the argument is removed.
     fn check_recorded_container_hasher(&mut self, name: &str, path: &PathExpr) {
+        self.check_container_hasher_at(name, path.span);
+    }
+
+    /// [`Self::check_recorded_container_hasher`] of the container written at
+    /// `span`: a type path, or the receiver of `Map[K, V, H].new()`
+    /// (B-2026-10-25-31).
+    pub(super) fn check_container_hasher_at(&mut self, name: &str, span: crate::token::Span) {
         if name != "Map" && name != "Set" {
             return;
         }
-        let key = crate::resolver::SpanKey::from_span(&path.span);
+        let key = crate::resolver::SpanKey::from_span(&span);
         let Some(crate::hasher_kind::HasherKind::User(builder)) =
             self.program.container_hashers.get(&key).cloned()
         else {
@@ -496,7 +503,7 @@ impl<'a> super::TypeChecker<'a> {
                      `impl BuildHasher for {builder} {{ type Hasher = …; \
                      fn build(ref self) -> … }}`"
                 ),
-                path.span,
+                span,
                 TypeErrorKind::TypeMismatch,
             );
             return;
@@ -521,7 +528,7 @@ impl<'a> super::TypeChecker<'a> {
                          per-table configuration — construct the state inside \
                          `{builder}.build()` instead"
                     ),
-                    path.span,
+                    span,
                     TypeErrorKind::TypeMismatch,
                 );
             }

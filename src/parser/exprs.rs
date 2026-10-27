@@ -2829,12 +2829,18 @@ impl super::Parser {
             // UFCS path accepts mixed type / const args (const generics
             // slice 1b — call-site const-arg binding).
             let args = self.parse_generic_type_args()?;
+            let span = self.span_from(&start);
+            // `Map[K, V, H].new()` names its hasher as the type `Map[K, V, H]`
+            // does (B-2026-10-25-31).
+            let segments = vec![name];
+            let mut args = Some(args);
+            self.take_container_hasher_arg(&segments, &mut args, span);
             return Some(Expr {
                 id: crate::ids::NodeId::DUMMY,
-                span: self.span_from(&start),
+                span,
                 kind: ExprKind::Path {
-                    segments: vec![name],
-                    generic_args: Some(args),
+                    segments,
+                    generic_args: args,
                 },
             });
         }

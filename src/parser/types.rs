@@ -727,7 +727,7 @@ impl super::Parser {
     /// Still removes ONLY a bare path in exactly the trailing position, so
     /// `Map[K, V, H, X]`, `Map[K, V, Vec[u8]]` and `SortedMap[K, V, H]` all keep
     /// their arguments and reach `take_hasher_type_arg`, which reports them.
-    fn take_container_hasher_arg(
+    pub(super) fn take_container_hasher_arg(
         &mut self,
         segments: &[String],
         generic_args: &mut Option<Vec<GenericArg>>,

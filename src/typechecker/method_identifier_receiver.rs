@@ -903,6 +903,7 @@ impl<'a> super::TypeChecker<'a> {
         {
             if segments.len() == 1 {
                 let type_name = segments[0].clone();
+                self.check_container_hasher_at(&type_name, object.span);
                 // Concrete-type UFCS at slice 1b widens generic_args to
                 // `Vec<GenericArg>`; the dispatch surface still consumes
                 // type args only — const-arg binding for UFCS calls
